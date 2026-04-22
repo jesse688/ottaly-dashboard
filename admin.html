@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ottaly Admin</title>
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@400;500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+:root { --navy:#224388; --navy-dark:#050C29; --teal:#1F6F78; }
+body { font-family:'Inter',sans-serif; background:#F8F9FC; color:var(--navy-dark); }
+
+.header { background:var(--navy-dark); padding:1.25rem 2rem; border-bottom:3px solid var(--teal); }
+.header-inner { max-width:1100px; margin:0 auto; display:flex; align-items:center; justify-content:space-between; }
+.header-logo { height:36px; }
+.header-title { font-family:'Genos',sans-serif; font-size:16px; font-weight:600; color:rgba(255,255,255,0.6); letter-spacing:1px; }
+
+/* Auth gate */
+.auth-gate {
+  max-width:400px; margin:4rem auto; background:white;
+  border-radius:12px; padding:2rem; box-shadow:0 4px 20px rgba(5,12,41,0.1);
+}
+.auth-gate h2 { font-family:'Genos',sans-serif; font-size:22px; font-weight:700; margin-bottom:1.25rem; }
+.field { margin-bottom:1rem; }
+.field label { display:block; font-size:12px; font-weight:600; color:#6B7280; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px; }
+.field input, .field select {
+  width:100%; padding:9px 12px; border:1.5px solid #E5E7EB; border-radius:7px;
+  font-size:13px; font-family:'Inter',sans-serif; outline:none;
+}
+.field input:focus, .field select:focus { border-color:var(--teal); }
+.btn { padding:9px 18px; border:none; border-radius:7px; font-size:13px; font-weight:600; cursor:pointer; transition:all 0.15s; }
+.btn-primary { background:var(--navy); color:white; }
+.btn-primary:hover { background:var(--teal); }
+.btn-danger  { background:#FEF2F2; color:#DC2626; border:1px solid #FCA5A5; }
+.btn-danger:hover { background:#DC2626; color:white; }
+.btn-sm { padding:5px 12px; font-size:12px; }
+.error-msg { color:#DC2626; font-size:12px; margin-top:0.5rem; display:none; }
+.success-msg { color:#059669; font-size:12px; margin-top:0.5rem; display:none; }
+
+.container { max-width:1100px; margin:0 auto; padding:2rem; }
+
+.section-title {
+  font-family:'Genos',sans-serif; font-size:15px; font-weight:700;
+  color:var(--navy-dark); text-transform:uppercase; letter-spacing:2px;
+  margin-bottom:1rem; display:flex; align-items:center; gap:1rem;
+}
+.section-title::after { content:''; flex:1; height:2px; background:#E5E7EB; }
+
+.card { background:white; border-radius:12px; padding:1.5rem; box-shadow:0 1px 3px rgba(5,12,41,0.08); margin-bottom:2rem; }
+
+/* Create client form */
+.create-grid { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
+@media(max-width:600px) { .create-grid { grid-template-columns:1fr; } }
+
+/* Clients table */
+table { width:100%; border-collapse:collapse; }
+thead th { padding:10px 14px; text-align:left; font-size:11px; font-weight:700; color:#6B7280; text-transform:uppercase; letter-spacing:1px; border-bottom:2px solid #F3F4F6; background:#FAFBFC; }
+tbody td { padding:12px 14px; border-bottom:1px solid #F3F4F6; font-size:13px; }
+tbody tr:last-child td { border-bottom:none; }
+tbody tr:hover { background:#FAFBFC; }
+.mono { font-family:monospace; font-size:12px; color:#6B7280; }
+
+/* Workspaces */
+.ws-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:0.75rem; }
+.ws-card {
+  background:#F9FAFB; border:1.5px solid #E5E7EB; border-radius:8px;
+  padding:0.875rem 1rem; cursor:pointer; transition:all 0.15s;
+}
+.ws-card:hover { border-color:var(--teal); background:rgba(31,111,120,0.04); }
+.ws-name { font-weight:600; font-size:13px; color:var(--navy-dark); margin-bottom:4px; }
+.ws-id { font-family:monospace; font-size:11px; color:#9CA3AF; }
+.ws-copy { font-size:11px; color:var(--teal); font-weight:600; display:none; }
+.ws-card:hover .ws-copy { display:block; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-inner">
+    <img src="https://framerusercontent.com/images/nDSHQKnOUtpvlbArTv7AiTwZpcE.svg" alt="Ottaly" class="header-logo">
+    <span class="header-title">ADMIN</span>
+  </div>
+</div>
+
+<!-- Auth gate -->
+<div id="authGate">
+  <div class="auth-gate">
+    <h2>Admin Access</h2>
+    <div class="field">
+      <label>Admin Key</label>
+      <input type="password" id="adminKeyInput" placeholder="Enter admin key" onkeydown="if(event.key==='Enter')unlockAdmin()">
+    </div>
+    <button class="btn btn-primary" onclick="unlockAdmin()">Unlock</button>
+    <div class="error-msg" id="authError">Incorrect admin key</div>
+  </div>
+</div>
+
+<!-- Admin panel -->
+<div id="adminPanel" style="display:none;">
+  <div class="container">
+
+    <!-- Create client -->
+    <div class="section-title">Create Client Account</div>
+    <div class="card">
+      <div class="create-grid">
+        <div class="field">
+          <label>Username</label>
+          <input type="text" id="newUsername" placeholder="e.g. pestcontrol_uk">
+        </div>
+        <div class="field">
+          <label>Password</label>
+          <input type="password" id="newPassword" placeholder="Strong password">
+        </div>
+        <div class="field">
+          <label>Workspace ID</label>
+          <input type="text" id="newWorkspaceId" placeholder="Click workspace below to fill">
+        </div>
+        <div class="field">
+          <label>Workspace Name (display)</label>
+          <input type="text" id="newWorkspaceName" placeholder="e.g. PestControl UK">
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="createClient()">Create Client</button>
+      <div class="error-msg"   id="createError"></div>
+      <div class="success-msg" id="createSuccess"></div>
+    </div>
+
+    <!-- PlusVibe workspaces -->
+    <div class="section-title">PlusVibe Workspaces</div>
+    <div class="card">
+      <p style="font-size:13px;color:#9CA3AF;margin-bottom:1rem;">Click a workspace to fill the Workspace ID field above.</p>
+      <div class="ws-grid" id="wsGrid"><p style="color:#9CA3AF;font-size:13px;">Loading…</p></div>
+    </div>
+
+    <!-- Client accounts -->
+    <div class="section-title">Client Accounts</div>
+    <div class="card" style="overflow-x:auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>Username</th>
+            <th>Workspace</th>
+            <th>Workspace ID</th>
+            <th>Created</th>
+            <th>New Password</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="clientsTable"><tr><td colspan="6" style="color:#9CA3AF;padding:1rem;">Loading…</td></tr></tbody>
+      </table>
+    </div>
+
+  </div>
+</div>
+
+<script>
+let adminKey = '';
+
+function unlockAdmin() {
+  const key = document.getElementById('adminKeyInput').value.trim();
+  if (!key) return;
+  adminKey = key;
+  document.getElementById('authError').style.display = 'none';
+
+  // Verify by making a real API call
+  Promise.all([fetchClients(), fetchWorkspaces()]).then(() => {
+    document.getElementById('authGate').style.display  = 'none';
+    document.getElementById('adminPanel').style.display = 'block';
+  }).catch(() => {
+    document.getElementById('authError').style.display = 'block';
+    adminKey = '';
+  });
+}
+
+function adminHeaders() {
+  return { 'Content-Type':'application/json', 'x-admin-key': adminKey };
+}
+
+// ── Workspaces ────────────────────────────────────────────
+async function fetchWorkspaces() {
+  const r = await fetch('/api/admin/workspaces', { headers: adminHeaders() });
+  if (!r.ok) throw new Error('Bad key');
+  const ws = await r.json();
+  document.getElementById('wsGrid').innerHTML = (Array.isArray(ws) ? ws : []).map(w => `
+    <div class="ws-card" onclick="fillWorkspace('${w.id}','${escAttr(w.name)}')">
+      <div class="ws-name">${escHtml(w.name)}</div>
+      <div class="ws-id">${w.id}</div>
+      <div class="ws-copy">↑ Click to use</div>
+    </div>`).join('') || '<p style="color:#9CA3AF;font-size:13px;">No workspaces found.</p>';
+}
+
+function fillWorkspace(id, name) {
+  document.getElementById('newWorkspaceId').value   = id;
+  document.getElementById('newWorkspaceName').value = name;
+  document.getElementById('newWorkspaceId').focus();
+}
+
+// ── Clients ───────────────────────────────────────────────
+async function fetchClients() {
+  const r = await fetch('/api/admin/clients', { headers: adminHeaders() });
+  if (!r.ok) throw new Error('Bad key');
+  const clients = await r.json();
+  renderClients(clients);
+  return clients;
+}
+
+function renderClients(clients) {
+  if (!clients.length) {
+    document.getElementById('clientsTable').innerHTML =
+      '<tr><td colspan="6" style="color:#9CA3AF;padding:1rem;">No client accounts yet.</td></tr>';
+    return;
+  }
+  document.getElementById('clientsTable').innerHTML = clients.map(c => `
+    <tr>
+      <td><strong>${escHtml(c.username)}</strong></td>
+      <td>${escHtml(c.workspace_name)}</td>
+      <td class="mono">${escHtml(c.workspace_id)}</td>
+      <td style="color:#9CA3AF;">${c.created_at?.split('T')[0] || '—'}</td>
+      <td>
+        <div style="display:flex;gap:6px;">
+          <input type="password" id="pw_${c.id}" placeholder="New password" style="padding:5px 9px;border:1.5px solid #E5E7EB;border-radius:6px;font-size:12px;width:140px;outline:none;">
+          <button class="btn btn-sm btn-primary" onclick="resetPassword(${c.id})">Reset</button>
+        </div>
+      </td>
+      <td>
+        <button class="btn btn-sm btn-danger" onclick="deleteClient(${c.id}, '${escAttr(c.username)}')">Delete</button>
+      </td>
+    </tr>`).join('');
+}
+
+async function createClient() {
+  const username      = document.getElementById('newUsername').value.trim();
+  const password      = document.getElementById('newPassword').value;
+  const workspace_id  = document.getElementById('newWorkspaceId').value.trim();
+  const workspace_name= document.getElementById('newWorkspaceName').value.trim();
+  const errEl         = document.getElementById('createError');
+  const okEl          = document.getElementById('createSuccess');
+  errEl.style.display = 'none'; okEl.style.display = 'none';
+
+  if (!username || !password || !workspace_id || !workspace_name)
+    return showMsg(errEl, 'All fields are required');
+  if (password.length < 6)
+    return showMsg(errEl, 'Password must be at least 6 characters');
+
+  const r = await fetch('/api/admin/clients', {
+    method: 'POST', headers: adminHeaders(),
+    body: JSON.stringify({ username, password, workspace_id, workspace_name })
+  });
+  const data = await r.json();
+  if (!r.ok) return showMsg(errEl, data.error);
+
+  showMsg(okEl, `Client "${username}" created successfully`);
+  document.getElementById('newUsername').value = '';
+  document.getElementById('newPassword').value = '';
+  fetchClients();
+}
+
+async function resetPassword(id) {
+  const pw = document.getElementById(`pw_${id}`)?.value;
+  if (!pw || pw.length < 6) return alert('Password must be at least 6 characters');
+  const r = await fetch(`/api/admin/clients/${id}/password`, {
+    method: 'PUT', headers: adminHeaders(), body: JSON.stringify({ password: pw })
+  });
+  if (r.ok) { alert('Password updated'); document.getElementById(`pw_${id}`).value = ''; }
+}
+
+async function deleteClient(id, username) {
+  if (!confirm(`Delete client "${username}"? This cannot be undone.`)) return;
+  await fetch(`/api/admin/clients/${id}`, { method: 'DELETE', headers: adminHeaders() });
+  fetchClients();
+}
+
+// ── Helpers ───────────────────────────────────────────────
+function showMsg(el, msg) { el.textContent = msg; el.style.display = 'block'; }
+function escHtml(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function escAttr(s) { return (s||'').replace(/'/g,"\\'"); }
+</script>
+</body>
+</html>

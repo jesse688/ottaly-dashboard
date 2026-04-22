@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ottaly Client Portal</title>
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@400;500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+:root {
+  --navy:      #224388;
+  --navy-dark: #050C29;
+  --teal:      #1F6F78;
+  --purple:    #7C89CD;
+  --yellow:    #FFB700;
+}
+body { font-family:'Inter',sans-serif; background:#F8F9FC; color:var(--navy-dark); height:100vh; overflow:hidden; }
+
+/* ── Login ── */
+.login-screen {
+  position:fixed; inset:0; background:var(--navy-dark);
+  display:flex; align-items:center; justify-content:center; z-index:100;
+}
+.login-card {
+  background:white; border-radius:16px; padding:2.5rem 2rem;
+  width:380px; box-shadow:0 25px 60px rgba(0,0,0,0.4);
+}
+.login-logo { height:40px; margin-bottom:1.75rem; }
+.login-title { font-family:'Genos',sans-serif; font-size:24px; font-weight:700; color:var(--navy-dark); margin-bottom:4px; }
+.login-sub { font-size:13px; color:#9CA3AF; margin-bottom:2rem; }
+.field { margin-bottom:1rem; }
+.field label { display:block; font-size:12px; font-weight:600; color:#6B7280; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px; }
+.field input {
+  width:100%; padding:10px 14px; border:1.5px solid #E5E7EB; border-radius:8px;
+  font-size:14px; font-family:'Inter',sans-serif; outline:none; transition:border 0.15s;
+}
+.field input:focus { border-color:var(--teal); }
+.login-btn {
+  width:100%; padding:12px; background:var(--navy); color:white;
+  border:none; border-radius:8px; font-size:14px; font-weight:600;
+  cursor:pointer; transition:background 0.15s; margin-top:0.5rem;
+}
+.login-btn:hover { background:var(--teal); }
+.login-error { color:#DC2626; font-size:13px; margin-top:0.75rem; text-align:center; display:none; }
+
+/* ── App shell ── */
+.app { display:flex; flex-direction:column; height:100vh; }
+
+.app-header {
+  background:var(--navy-dark); border-bottom:3px solid var(--teal);
+  padding:0.875rem 1.5rem;
+  display:flex; align-items:center; justify-content:space-between;
+  flex-shrink:0;
+}
+.header-left { display:flex; align-items:center; gap:1rem; }
+.header-logo { height:36px; }
+.header-divider { width:1px; height:24px; background:rgba(255,255,255,0.15); }
+.header-workspace { font-family:'Genos',sans-serif; font-size:16px; font-weight:600; color:white; }
+.unread-badge {
+  background:var(--teal); color:white; font-size:11px; font-weight:700;
+  padding:2px 8px; border-radius:10px; display:none;
+}
+.header-right { display:flex; align-items:center; gap:1rem; }
+.header-user { font-size:13px; color:rgba(255,255,255,0.5); }
+.logout-btn {
+  padding:6px 14px; background:rgba(255,255,255,0.08); color:rgba(255,255,255,0.7);
+  border:1px solid rgba(255,255,255,0.15); border-radius:7px;
+  font-size:12px; font-weight:600; cursor:pointer; transition:all 0.15s;
+}
+.logout-btn:hover { background:rgba(255,255,255,0.15); color:white; }
+
+.app-body { display:flex; flex:1; overflow:hidden; }
+
+/* ── Leads sidebar ── */
+.sidebar {
+  width:320px; flex-shrink:0; background:white;
+  border-right:1px solid #E5E7EB;
+  display:flex; flex-direction:column; overflow:hidden;
+}
+.sidebar-header { padding:1rem 1.25rem; border-bottom:1px solid #F3F4F6; }
+.sidebar-title { font-family:'Genos',sans-serif; font-size:18px; font-weight:700; color:var(--navy-dark); }
+.sidebar-count { font-size:12px; color:#9CA3AF; margin-top:2px; }
+.search-wrap { padding:0.75rem 1rem; border-bottom:1px solid #F3F4F6; }
+.search-input {
+  width:100%; padding:8px 12px 8px 32px; border:1.5px solid #E5E7EB;
+  border-radius:8px; font-size:13px; outline:none; background:#F9FAFB;
+  font-family:'Inter',sans-serif; transition:border 0.15s;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%239CA3AF' stroke-width='2'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cpath d='m21 21-4.35-4.35'/%3E%3C/svg%3E");
+  background-repeat:no-repeat; background-position:10px center;
+}
+.search-input:focus { border-color:var(--teal); background:#fff; }
+
+.leads-list { flex:1; overflow-y:auto; }
+.lead-item {
+  padding:1rem 1.25rem; border-bottom:1px solid #F9FAFB;
+  cursor:pointer; transition:background 0.1s; border-left:3px solid transparent;
+}
+.lead-item:hover { background:#F9FAFB; }
+.lead-item.active { background:#EFF6FF; border-left-color:var(--navy); }
+.lead-item.unread .lead-name { font-weight:700; }
+.lead-name { font-size:13px; font-weight:600; color:var(--navy-dark); margin-bottom:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.lead-company { font-size:12px; color:#6B7280; margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.lead-snippet { font-size:11px; color:#9CA3AF; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.lead-meta { display:flex; justify-content:space-between; align-items:center; margin-top:6px; }
+.lead-date { font-size:11px; color:#9CA3AF; }
+.sentiment-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
+.sentiment-dot.POSITIVE { background:#059669; }
+.sentiment-dot.NEGATIVE { background:#DC2626; }
+.sentiment-dot.NEUTRAL  { background:#D97706; }
+
+.sidebar-empty { padding:2rem; text-align:center; color:#9CA3AF; font-size:13px; }
+
+/* ── Email pane ── */
+.email-pane {
+  flex:1; display:flex; flex-direction:column; overflow:hidden;
+}
+
+.pane-empty {
+  flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
+  color:#9CA3AF;
+}
+.pane-empty-icon { font-size:48px; margin-bottom:1rem; }
+.pane-empty-text { font-size:14px; }
+
+.lead-view { display:flex; flex-direction:column; height:100%; overflow:hidden; }
+
+.lead-header {
+  padding:1.25rem 1.75rem; border-bottom:1px solid #E5E7EB;
+  background:white; flex-shrink:0;
+}
+.lead-header-name { font-family:'Genos',sans-serif; font-size:22px; font-weight:700; color:var(--navy-dark); margin-bottom:2px; }
+.lead-header-meta { font-size:13px; color:#6B7280; display:flex; gap:1rem; flex-wrap:wrap; }
+.lead-header-meta span::before { content:'· '; }
+.lead-header-meta span:first-child::before { content:''; }
+
+.thread-scroll { flex:1; overflow-y:auto; padding:1.5rem; background:#F8F9FC; }
+
+.message-bubble {
+  background:white; border-radius:10px; padding:1.25rem 1.5rem;
+  box-shadow:0 1px 3px rgba(5,12,41,0.06); margin-bottom:1rem;
+  border-left:3px solid var(--teal);
+}
+.message-bubble.outbound { border-left-color:var(--navy); }
+.msg-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:0.75rem; }
+.msg-from { font-size:13px; font-weight:600; color:var(--navy-dark); }
+.msg-to { font-size:11px; color:#9CA3AF; margin-top:1px; }
+.msg-date { font-size:11px; color:#9CA3AF; white-space:nowrap; }
+.msg-subject { font-size:12px; font-weight:600; color:#6B7280; margin-bottom:0.75rem; padding-bottom:0.75rem; border-bottom:1px solid #F3F4F6; }
+.msg-body { font-size:14px; color:var(--navy-dark); line-height:1.6; }
+.msg-body a { color:var(--teal); }
+
+.thread-loading { padding:2rem; text-align:center; color:#9CA3AF; font-size:13px; }
+
+/* ── Reply box ── */
+.reply-box {
+  border-top:2px solid #E5E7EB; background:white; padding:1.25rem 1.75rem; flex-shrink:0;
+}
+.reply-label { font-size:11px; font-weight:700; color:#9CA3AF; text-transform:uppercase; letter-spacing:1px; margin-bottom:8px; }
+.reply-textarea {
+  width:100%; height:90px; padding:10px 14px;
+  border:1.5px solid #E5E7EB; border-radius:8px; resize:none;
+  font-size:14px; font-family:'Inter',sans-serif; outline:none; line-height:1.5;
+  transition:border 0.15s;
+}
+.reply-textarea:focus { border-color:var(--teal); }
+.reply-footer { display:flex; justify-content:space-between; align-items:center; margin-top:0.75rem; }
+.reply-hint { font-size:12px; color:#9CA3AF; }
+.reply-send {
+  padding:8px 20px; background:var(--navy); color:white;
+  border:none; border-radius:8px; font-size:13px; font-weight:600;
+  cursor:pointer; transition:background 0.15s; display:flex; align-items:center; gap:6px;
+}
+.reply-send:hover { background:var(--teal); }
+.reply-send:disabled { background:#9CA3AF; cursor:not-allowed; }
+.reply-success { color:#059669; font-size:12px; font-weight:600; display:none; }
+.reply-error   { color:#DC2626; font-size:12px; font-weight:600; display:none; }
+</style>
+</head>
+<body>
+
+<!-- Login screen -->
+<div class="login-screen" id="loginScreen">
+  <div class="login-card">
+    <img src="https://framerusercontent.com/images/nDSHQKnOUtpvlbArTv7AiTwZpcE.svg" alt="Ottaly" class="login-logo">
+    <div class="login-title">Client Portal</div>
+    <div class="login-sub">Sign in to view your leads</div>
+    <form id="loginForm" onsubmit="handleLogin(event)">
+      <div class="field">
+        <label>Username</label>
+        <input type="text" id="loginUser" autocomplete="username" required>
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="loginPass" autocomplete="current-password" required>
+      </div>
+      <button class="login-btn" type="submit" id="loginBtn">Sign In</button>
+      <div class="login-error" id="loginError"></div>
+    </form>
+  </div>
+</div>
+
+<!-- Portal -->
+<div class="app" id="app" style="display:none;">
+  <div class="app-header">
+    <div class="header-left">
+      <img src="https://framerusercontent.com/images/nDSHQKnOUtpvlbArTv7AiTwZpcE.svg" alt="Ottaly" class="header-logo">
+      <div class="header-divider"></div>
+      <span class="header-workspace" id="headerWorkspace">—</span>
+      <span class="unread-badge" id="unreadBadge">0 new</span>
+    </div>
+    <div class="header-right">
+      <span class="header-user" id="headerUser"></span>
+      <button class="logout-btn" onclick="logout()">Sign Out</button>
+    </div>
+  </div>
+
+  <div class="app-body">
+    <!-- Sidebar -->
+    <div class="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-title">Your Leads</div>
+        <div class="sidebar-count" id="leadsCount">Loading…</div>
+      </div>
+      <div class="search-wrap">
+        <input class="search-input" type="text" placeholder="Search leads…" id="searchInput" oninput="filterLeads()">
+      </div>
+      <div class="leads-list" id="leadsList"></div>
+    </div>
+
+    <!-- Email pane -->
+    <div class="email-pane" id="emailPane">
+      <div class="pane-empty" id="paneEmpty">
+        <div class="pane-empty-icon">📬</div>
+        <div class="pane-empty-text">Select a lead to view the conversation</div>
+      </div>
+      <div class="lead-view" id="leadView" style="display:none;">
+        <div class="lead-header">
+          <div class="lead-header-name" id="viewName">—</div>
+          <div class="lead-header-meta" id="viewMeta"></div>
+        </div>
+        <div class="thread-scroll" id="threadScroll">
+          <div class="thread-loading">Loading thread…</div>
+        </div>
+        <div class="reply-box">
+          <div class="reply-label">Reply</div>
+          <textarea class="reply-textarea" id="replyText" placeholder="Write your reply…"></textarea>
+          <div class="reply-footer">
+            <div>
+              <div class="reply-success" id="replySuccess">✓ Reply sent</div>
+              <div class="reply-error" id="replyError"></div>
+            </div>
+            <button class="reply-send" id="replyBtn" onclick="sendReply()">Send Reply ↗</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const BASE = '';  // same origin
+
+let token       = localStorage.getItem('ottaly_client_token');
+let leads       = [];
+let currentLead = null;
+let seenIds     = new Set(JSON.parse(localStorage.getItem('ottaly_seen') || '[]'));
+
+// ── Boot ────────────────────────────────────────────────
+(async function boot() {
+  if (!token) return;
+  try {
+    const me = parseToken(token);
+    if (!me) { clearAuth(); return; }
+    showPortal(me);
+    await loadLeads();
+  } catch {
+    clearAuth();
+  }
+})();
+
+function parseToken(t) {
+  try {
+    const payload = JSON.parse(atob(t.split('.')[1]));
+    if (payload.exp * 1000 < Date.now()) return null;
+    return payload;
+  } catch { return null; }
+}
+
+// ── Login ────────────────────────────────────────────────
+async function handleLogin(e) {
+  e.preventDefault();
+  const btn = document.getElementById('loginBtn');
+  const err = document.getElementById('loginError');
+  btn.disabled = true; btn.textContent = 'Signing in…';
+  err.style.display = 'none';
+
+  try {
+    const r = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: document.getElementById('loginUser').value.trim(),
+        password: document.getElementById('loginPass').value
+      })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Login failed');
+
+    token = data.token;
+    localStorage.setItem('ottaly_client_token', token);
+    showPortal(parseToken(token));
+    await loadLeads();
+  } catch (ex) {
+    err.textContent = ex.message;
+    err.style.display = 'block';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Sign In';
+  }
+}
+
+function showPortal(me) {
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('app').style.display = 'flex';
+  document.getElementById('headerWorkspace').textContent = me.workspace_name;
+  document.getElementById('headerUser').textContent = me.username;
+}
+
+function logout() {
+  clearAuth();
+  location.reload();
+}
+
+function clearAuth() {
+  localStorage.removeItem('ottaly_client_token');
+  token = null;
+}
+
+// ── Leads ────────────────────────────────────────────────
+async function loadLeads() {
+  try {
+    const r = await fetch('/api/leads', { headers: { Authorization: `Bearer ${token}` } });
+    if (!r.ok) { if (r.status === 401) { clearAuth(); location.reload(); } return; }
+    leads = await r.json();
+    renderLeadsList(leads);
+  } catch {}
+}
+
+function filterLeads() {
+  const q = document.getElementById('searchInput').value.toLowerCase();
+  const filtered = leads.filter(l =>
+    `${l.first_name} ${l.last_name} ${l.company_name} ${l.email}`.toLowerCase().includes(q)
+  );
+  renderLeadsList(filtered);
+}
+
+function renderLeadsList(items) {
+  const newIds = items.filter(l => !seenIds.has(l.id)).map(l => l.id);
+  document.getElementById('leadsCount').textContent =
+    `${items.length} lead${items.length !== 1 ? 's' : ''}`;
+
+  const badge = document.getElementById('unreadBadge');
+  if (newIds.length) {
+    badge.textContent = `${newIds.length} new`;
+    badge.style.display = 'inline';
+  } else {
+    badge.style.display = 'none';
+  }
+
+  if (!items.length) {
+    document.getElementById('leadsList').innerHTML =
+      '<div class="sidebar-empty">No leads yet.<br>You\'ll be notified when a lead arrives.</div>';
+    return;
+  }
+
+  document.getElementById('leadsList').innerHTML = items.map(l => {
+    const isNew   = !seenIds.has(l.id);
+    const sentCls = l.sentiment === 'POSITIVE' ? 'POSITIVE' : l.sentiment === 'NEGATIVE' ? 'NEGATIVE' : 'NEUTRAL';
+    const date    = l.received_at ? relDate(l.received_at) : '';
+    return `
+      <div class="lead-item ${isNew ? 'unread' : ''} ${currentLead?.id === l.id ? 'active' : ''}"
+           onclick="selectLead('${l.id}')">
+        <div class="lead-name">${l.first_name} ${l.last_name}</div>
+        <div class="lead-company">${l.company_name || '—'}</div>
+        <div class="lead-snippet">${l.subject || l.snippet || ''}</div>
+        <div class="lead-meta">
+          <span class="lead-date">${date}</span>
+          <span class="sentiment-dot ${sentCls}" title="${l.sentiment || ''}"></span>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+// ── Select lead ──────────────────────────────────────────
+async function selectLead(id) {
+  currentLead = leads.find(l => l.id === id);
+  if (!currentLead) return;
+
+  // Mark as seen
+  seenIds.add(id);
+  localStorage.setItem('ottaly_seen', JSON.stringify([...seenIds]));
+
+  // Update UI
+  document.getElementById('paneEmpty').style.display = 'none';
+  document.getElementById('leadView').style.display  = 'flex';
+  document.getElementById('viewName').textContent =
+    `${currentLead.first_name} ${currentLead.last_name}`;
+
+  const metaParts = [
+    currentLead.job_title,
+    currentLead.company_name,
+    currentLead.email,
+    [currentLead.city, currentLead.country].filter(Boolean).join(', ')
+  ].filter(Boolean);
+  document.getElementById('viewMeta').innerHTML =
+    metaParts.map((p, i) => `<span${i === 0 ? ' style="margin-left:0"' : ''}>${p}</span>`).join('');
+
+  document.getElementById('replyText').value = '';
+  document.getElementById('replySuccess').style.display = 'none';
+  document.getElementById('replyError').style.display   = 'none';
+  document.getElementById('replyBtn').disabled = false;
+
+  // Show webhook data immediately, then try to load full thread
+  renderThread([{
+    from:    currentLead.email,
+    to:      currentLead.email_account,
+    subject: currentLead.subject,
+    body:    currentLead.last_reply_html,
+    date:    currentLead.received_at,
+    inbound: true,
+  }]);
+
+  renderLeadsList(leads.filter(l =>
+    `${l.first_name} ${l.last_name} ${l.company_name} ${l.email}`
+      .toLowerCase()
+      .includes(document.getElementById('searchInput').value.toLowerCase())
+  ));
+
+  // Try to load full thread
+  try {
+    const r = await fetch(`/api/leads/${id}/thread`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (r.ok) {
+      const { source, data } = await r.json();
+      if (source === 'plusvibe' && data?.data?.length) {
+        renderThread(normalisePlusVibeThread(data.data));
+      }
+    }
+  } catch {}
+}
+
+function normalisePlusVibeThread(messages) {
+  return (Array.isArray(messages) ? messages : []).map(m => ({
+    from:    m.from_email || m.from || '',
+    to:      m.to_email   || m.to   || '',
+    subject: m.subject    || '',
+    body:    m.body       || m.html_body || '',
+    date:    m.created_at || m.date || '',
+    inbound: !m.is_sent,
+  }));
+}
+
+function renderThread(messages) {
+  if (!messages?.length) {
+    document.getElementById('threadScroll').innerHTML =
+      '<div class="thread-loading">No messages in thread.</div>';
+    return;
+  }
+  document.getElementById('threadScroll').innerHTML = messages.map(m => `
+    <div class="message-bubble ${m.inbound ? '' : 'outbound'}">
+      <div class="msg-header">
+        <div>
+          <div class="msg-from">${escHtml(m.from)}</div>
+          <div class="msg-to">to ${escHtml(m.to)}</div>
+        </div>
+        <div class="msg-date">${m.date ? fmtDate(m.date) : ''}</div>
+      </div>
+      ${m.subject ? `<div class="msg-subject">${escHtml(m.subject)}</div>` : ''}
+      <div class="msg-body">${m.body || ''}</div>
+    </div>`).join('');
+}
+
+// ── Reply ────────────────────────────────────────────────
+async function sendReply() {
+  if (!currentLead) return;
+  const body = document.getElementById('replyText').value.trim();
+  if (!body) return;
+
+  const btn = document.getElementById('replyBtn');
+  const ok  = document.getElementById('replySuccess');
+  const err = document.getElementById('replyError');
+  btn.disabled = true; btn.textContent = 'Sending…';
+  ok.style.display = 'none'; err.style.display = 'none';
+
+  try {
+    const r = await fetch(`/api/leads/${currentLead.id}/reply`, {
+      method:  'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to send');
+
+    ok.style.display = 'block';
+    document.getElementById('replyText').value = '';
+    btn.textContent = 'Send Reply ↗';
+
+    // Add reply to thread view optimistically
+    const thread = document.getElementById('threadScroll');
+    thread.insertAdjacentHTML('beforeend', `
+      <div class="message-bubble outbound">
+        <div class="msg-header">
+          <div>
+            <div class="msg-from">${escHtml(currentLead.email_account)}</div>
+            <div class="msg-to">to ${escHtml(currentLead.email)}</div>
+          </div>
+          <div class="msg-date">${fmtDate(new Date().toISOString())}</div>
+        </div>
+        <div class="msg-body">${body.replace(/\n/g, '<br>')}</div>
+      </div>`);
+    thread.scrollTop = thread.scrollHeight;
+  } catch (ex) {
+    err.textContent = ex.message;
+    err.style.display = 'block';
+    btn.disabled = false; btn.textContent = 'Send Reply ↗';
+  }
+}
+
+// ── Helpers ──────────────────────────────────────────────
+function escHtml(s) {
+  return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function relDate(iso) {
+  const d = new Date(iso), now = new Date();
+  const days = Math.floor((now - d) / 86400000);
+  if (days === 0) return d.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' });
+  if (days === 1) return 'Yesterday';
+  if (days < 7)  return `${days} days ago`;
+  return d.toLocaleDateString('en-GB', { day:'2-digit', month:'short' });
+}
+
+function fmtDate(iso) {
+  try {
+    return new Date(iso).toLocaleString('en-GB', {
+      day:'2-digit', month:'short', year:'numeric',
+      hour:'2-digit', minute:'2-digit'
+    });
+  } catch { return iso; }
+}
+
+// Auto-refresh leads every 60 seconds
+setInterval(loadLeads, 60000);
+</script>
+</body>
+</html>
