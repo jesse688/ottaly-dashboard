@@ -19,15 +19,15 @@ body { font-family:'Inter',sans-serif; background:#F8F9FC; color:var(--navy-dark
 /* ── Login ── */
 .login-screen {
   position:fixed; inset:0; background:var(--navy-dark);
-  display:flex; align-items:center; justify-content:center; z-index:100;
+  display:flex; align-items:center; justify-content:center; z-index:200;
 }
 .login-card {
   background:white; border-radius:16px; padding:2.5rem 2rem;
   width:380px; box-shadow:0 25px 60px rgba(0,0,0,0.4);
 }
-.login-logo { height:40px; margin-bottom:1.75rem; }
+.login-logo  { height:40px; margin-bottom:1.75rem; }
 .login-title { font-family:'Genos',sans-serif; font-size:24px; font-weight:700; color:var(--navy-dark); margin-bottom:4px; }
-.login-sub { font-size:13px; color:#9CA3AF; margin-bottom:2rem; }
+.login-sub   { font-size:13px; color:#9CA3AF; margin-bottom:2rem; }
 .field { margin-bottom:1rem; }
 .field label { display:block; font-size:12px; font-weight:600; color:#6B7280; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px; }
 .field input {
@@ -52,8 +52,8 @@ body { font-family:'Inter',sans-serif; background:#F8F9FC; color:var(--navy-dark
   display:flex; align-items:center; justify-content:space-between;
   flex-shrink:0;
 }
-.header-left { display:flex; align-items:center; gap:1rem; }
-.header-logo { height:36px; }
+.header-left  { display:flex; align-items:center; gap:1rem; }
+.header-logo  { height:36px; }
 .header-divider { width:1px; height:24px; background:rgba(255,255,255,0.15); }
 .header-workspace { font-family:'Genos',sans-serif; font-size:16px; font-weight:600; color:white; }
 .unread-badge {
@@ -61,7 +61,7 @@ body { font-family:'Inter',sans-serif; background:#F8F9FC; color:var(--navy-dark
   padding:2px 8px; border-radius:10px; display:none;
 }
 .header-right { display:flex; align-items:center; gap:1rem; }
-.header-user { font-size:13px; color:rgba(255,255,255,0.5); }
+.header-user  { font-size:13px; color:rgba(255,255,255,0.5); }
 .logout-btn {
   padding:6px 14px; background:rgba(255,255,255,0.08); color:rgba(255,255,255,0.7);
   border:1px solid rgba(255,255,255,0.15); border-radius:7px;
@@ -69,18 +69,47 @@ body { font-family:'Inter',sans-serif; background:#F8F9FC; color:var(--navy-dark
 }
 .logout-btn:hover { background:rgba(255,255,255,0.15); color:white; }
 
+/* ── Stats strip ── */
+.stats-strip {
+  background:var(--navy-dark); border-bottom:1px solid rgba(255,255,255,0.08);
+  padding:0.625rem 1.5rem; display:flex; align-items:center; gap:0; flex-shrink:0;
+}
+.stat-item { display:flex; flex-direction:column; gap:1px; padding:0 1.5rem; border-right:1px solid rgba(255,255,255,0.1); }
+.stat-item:first-child { padding-left:0; }
+.stat-val {
+  font-family:'Genos',sans-serif; font-size:20px; font-weight:700; color:white; line-height:1.1;
+}
+.stat-val.green { color:#34D399; }
+.stat-val.yellow { color:var(--yellow); }
+.stat-val.red { color:#F87171; }
+.stat-label { font-size:10px; color:rgba(255,255,255,0.4); text-transform:uppercase; letter-spacing:0.5px; }
+.stat-spacer { flex:1; }
+.stat-actions { display:flex; gap:8px; padding-left:1.5rem; }
+.stat-btn {
+  padding:6px 14px; background:var(--teal); color:white;
+  border:none; border-radius:6px; font-size:12px; font-weight:600;
+  cursor:pointer; transition:all 0.15s; white-space:nowrap;
+}
+.stat-btn:hover { filter:brightness(1.15); }
+.stat-btn-outline {
+  background:transparent; color:rgba(255,255,255,0.65);
+  border:1px solid rgba(255,255,255,0.2);
+}
+.stat-btn-outline:hover { background:rgba(255,255,255,0.08); color:white; filter:none; }
+
+/* ── App body ── */
 .app-body { display:flex; flex:1; overflow:hidden; }
 
-/* ── Leads sidebar ── */
+/* ── Sidebar ── */
 .sidebar {
-  width:320px; flex-shrink:0; background:white;
+  width:300px; flex-shrink:0; background:white;
   border-right:1px solid #E5E7EB;
   display:flex; flex-direction:column; overflow:hidden;
 }
 .sidebar-header { padding:1rem 1.25rem; border-bottom:1px solid #F3F4F6; }
-.sidebar-title { font-family:'Genos',sans-serif; font-size:18px; font-weight:700; color:var(--navy-dark); }
-.sidebar-count { font-size:12px; color:#9CA3AF; margin-top:2px; }
-.search-wrap { padding:0.75rem 1rem; border-bottom:1px solid #F3F4F6; }
+.sidebar-title  { font-family:'Genos',sans-serif; font-size:18px; font-weight:700; color:var(--navy-dark); }
+.sidebar-count  { font-size:12px; color:#9CA3AF; margin-top:2px; }
+.search-wrap    { padding:0.75rem 1rem; border-bottom:1px solid #F3F4F6; }
 .search-input {
   width:100%; padding:8px 12px 8px 32px; border:1.5px solid #E5E7EB;
   border-radius:8px; font-size:13px; outline:none; background:#F9FAFB;
@@ -92,28 +121,28 @@ body { font-family:'Inter',sans-serif; background:#F8F9FC; color:var(--navy-dark
 
 .leads-list { flex:1; overflow-y:auto; }
 .lead-item {
-  padding:1rem 1.25rem; border-bottom:1px solid #F9FAFB;
+  padding:0.875rem 1.25rem; border-bottom:1px solid #F9FAFB;
   cursor:pointer; transition:background 0.1s; border-left:3px solid transparent;
 }
 .lead-item:hover { background:#F9FAFB; }
 .lead-item.active { background:#EFF6FF; border-left-color:var(--navy); }
 .lead-item.unread .lead-name { font-weight:700; }
-.lead-name { font-size:13px; font-weight:600; color:var(--navy-dark); margin-bottom:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.lead-name    { font-size:13px; font-weight:600; color:var(--navy-dark); margin-bottom:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .lead-company { font-size:12px; color:#6B7280; margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .lead-snippet { font-size:11px; color:#9CA3AF; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.lead-meta { display:flex; justify-content:space-between; align-items:center; margin-top:6px; }
-.lead-date { font-size:11px; color:#9CA3AF; }
+.lead-meta    { display:flex; justify-content:space-between; align-items:center; margin-top:5px; gap:6px; }
+.lead-date    { font-size:11px; color:#9CA3AF; }
 .sentiment-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
 .sentiment-dot.POSITIVE { background:#059669; }
 .sentiment-dot.NEGATIVE { background:#DC2626; }
 .sentiment-dot.NEUTRAL  { background:#D97706; }
-
+.status-tag { font-size:10px; font-weight:600; padding:1px 6px; border-radius:4px; }
+.status-tag.pending  { background:#FEF3C7; color:#92400E; }
+.status-tag.nonlead  { background:#F3F4F6; color:#6B7280; }
 .sidebar-empty { padding:2rem; text-align:center; color:#9CA3AF; font-size:13px; }
 
 /* ── Email pane ── */
-.email-pane {
-  flex:1; display:flex; flex-direction:column; overflow:hidden;
-}
+.email-pane { flex:1; display:flex; flex-direction:column; overflow:hidden; }
 
 .pane-empty {
   flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
@@ -124,17 +153,53 @@ body { font-family:'Inter',sans-serif; background:#F8F9FC; color:var(--navy-dark
 
 .lead-view { display:flex; flex-direction:column; height:100%; overflow:hidden; }
 
+/* ── Lead header ── */
 .lead-header {
-  padding:1.25rem 1.75rem; border-bottom:1px solid #E5E7EB;
+  padding:1rem 1.5rem; border-bottom:1px solid #E5E7EB;
   background:white; flex-shrink:0;
 }
+.lead-header-top {
+  display:flex; align-items:flex-start; justify-content:space-between; gap:1rem;
+}
 .lead-header-name { font-family:'Genos',sans-serif; font-size:22px; font-weight:700; color:var(--navy-dark); margin-bottom:2px; }
-.lead-header-meta { font-size:13px; color:#6B7280; display:flex; gap:1rem; flex-wrap:wrap; }
+.lead-header-meta { font-size:13px; color:#6B7280; display:flex; gap:0.75rem; flex-wrap:wrap; }
 .lead-header-meta span::before { content:'· '; }
 .lead-header-meta span:first-child::before { content:''; }
 
-.thread-scroll { flex:1; overflow-y:auto; padding:1.5rem; background:#F8F9FC; }
+.lead-actions { display:flex; align-items:center; gap:8px; flex-shrink:0; padding-top:2px; }
+.deal-row { display:flex; align-items:center; gap:5px; }
+.deal-label { font-size:11px; color:#9CA3AF; white-space:nowrap; }
+.deal-wrap {
+  display:flex; align-items:center;
+  border:1.5px solid #E5E7EB; border-radius:6px; overflow:hidden;
+}
+.deal-currency {
+  padding:4px 6px; background:#F9FAFB; color:#6B7280;
+  font-size:12px; font-weight:600; border-right:1px solid #E5E7EB;
+}
+.deal-input {
+  width:80px; padding:4px 8px; border:none; outline:none;
+  font-size:13px; font-family:'Inter',sans-serif;
+}
+.deal-input::-webkit-inner-spin-button { display:none; }
+.deal-save {
+  padding:4px 10px; background:var(--navy); color:white;
+  border:none; font-size:11px; font-weight:600; cursor:pointer;
+  transition:background 0.15s;
+}
+.deal-save:hover { background:var(--teal); }
+.btn-details, .btn-nonlead {
+  padding:6px 12px; border-radius:6px; font-size:12px; font-weight:600;
+  cursor:pointer; transition:all 0.15s; white-space:nowrap;
+}
+.btn-details { background:#EFF6FF; color:var(--navy); border:1px solid #DBEAFE; }
+.btn-details:hover { background:#DBEAFE; }
+.btn-nonlead { background:#FEF2F2; color:#DC2626; border:1px solid #FCA5A5; }
+.btn-nonlead:hover { background:#DC2626; color:white; }
+.btn-nonlead:disabled { background:#F3F4F6; color:#9CA3AF; border-color:#E5E7EB; cursor:not-allowed; }
 
+/* ── Thread ── */
+.thread-scroll { flex:1; overflow-y:auto; padding:1.25rem 1.5rem; background:#F8F9FC; }
 .message-bubble {
   background:white; border-radius:10px; padding:1.25rem 1.5rem;
   box-shadow:0 1px 3px rgba(5,12,41,0.06); margin-bottom:1rem;
@@ -142,38 +207,148 @@ body { font-family:'Inter',sans-serif; background:#F8F9FC; color:var(--navy-dark
 }
 .message-bubble.outbound { border-left-color:var(--navy); }
 .msg-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:0.75rem; }
-.msg-from { font-size:13px; font-weight:600; color:var(--navy-dark); }
-.msg-to { font-size:11px; color:#9CA3AF; margin-top:1px; }
-.msg-date { font-size:11px; color:#9CA3AF; white-space:nowrap; }
+.msg-from   { font-size:13px; font-weight:600; color:var(--navy-dark); }
+.msg-to     { font-size:11px; color:#9CA3AF; margin-top:1px; }
+.msg-date   { font-size:11px; color:#9CA3AF; white-space:nowrap; }
 .msg-subject { font-size:12px; font-weight:600; color:#6B7280; margin-bottom:0.75rem; padding-bottom:0.75rem; border-bottom:1px solid #F3F4F6; }
-.msg-body { font-size:14px; color:var(--navy-dark); line-height:1.6; }
+.msg-body   { font-size:14px; color:var(--navy-dark); line-height:1.6; }
 .msg-body a { color:var(--teal); }
-
 .thread-loading { padding:2rem; text-align:center; color:#9CA3AF; font-size:13px; }
 
 /* ── Reply box ── */
-.reply-box {
-  border-top:2px solid #E5E7EB; background:white; padding:1.25rem 1.75rem; flex-shrink:0;
-}
+.reply-box { border-top:2px solid #E5E7EB; background:white; padding:1rem 1.5rem; flex-shrink:0; }
 .reply-label { font-size:11px; font-weight:700; color:#9CA3AF; text-transform:uppercase; letter-spacing:1px; margin-bottom:8px; }
 .reply-textarea {
-  width:100%; height:90px; padding:10px 14px;
+  width:100%; height:80px; padding:10px 14px;
   border:1.5px solid #E5E7EB; border-radius:8px; resize:none;
-  font-size:14px; font-family:'Inter',sans-serif; outline:none; line-height:1.5;
-  transition:border 0.15s;
+  font-size:14px; font-family:'Inter',sans-serif; outline:none; line-height:1.5; transition:border 0.15s;
 }
 .reply-textarea:focus { border-color:var(--teal); }
 .reply-footer { display:flex; justify-content:space-between; align-items:center; margin-top:0.75rem; }
-.reply-hint { font-size:12px; color:#9CA3AF; }
 .reply-send {
   padding:8px 20px; background:var(--navy); color:white;
   border:none; border-radius:8px; font-size:13px; font-weight:600;
-  cursor:pointer; transition:background 0.15s; display:flex; align-items:center; gap:6px;
+  cursor:pointer; transition:background 0.15s;
 }
 .reply-send:hover { background:var(--teal); }
 .reply-send:disabled { background:#9CA3AF; cursor:not-allowed; }
 .reply-success { color:#059669; font-size:12px; font-weight:600; display:none; }
 .reply-error   { color:#DC2626; font-size:12px; font-weight:600; display:none; }
+
+/* ── Details panel (fixed slide-in from right) ── */
+.details-panel {
+  position:fixed; top:0; right:0; bottom:0; width:380px;
+  background:white; border-left:1px solid #E5E7EB;
+  box-shadow:-6px 0 24px rgba(5,12,41,0.12);
+  transform:translateX(100%); transition:transform 0.25s ease;
+  z-index:100; display:flex; flex-direction:column; overflow:hidden;
+}
+.details-panel.open { transform:translateX(0); }
+.details-header {
+  padding:1rem 1.25rem; border-bottom:1px solid #E5E7EB;
+  display:flex; align-items:center; justify-content:space-between;
+  background:var(--navy-dark); flex-shrink:0;
+}
+.details-title { font-family:'Genos',sans-serif; font-size:16px; font-weight:700; color:white; letter-spacing:0.5px; }
+.details-close {
+  background:none; border:none; color:rgba(255,255,255,0.6);
+  font-size:18px; cursor:pointer; padding:2px 6px; border-radius:4px;
+  transition:color 0.15s; line-height:1;
+}
+.details-close:hover { color:white; }
+.details-body { flex:1; overflow-y:auto; padding:1.25rem; }
+.detail-section { margin-bottom:1.25rem; }
+.detail-section-title {
+  font-size:10px; font-weight:700; color:#9CA3AF; text-transform:uppercase;
+  letter-spacing:1.5px; margin-bottom:0.625rem; padding-bottom:6px;
+  border-bottom:1px solid #F3F4F6;
+}
+.detail-row { display:flex; justify-content:space-between; align-items:flex-start; padding:5px 0; gap:1rem; }
+.detail-key { font-size:12px; color:#6B7280; white-space:nowrap; flex-shrink:0; }
+.detail-val { font-size:12px; color:var(--navy-dark); font-weight:500; text-align:right; word-break:break-word; }
+.detail-link {
+  font-size:12px; color:var(--teal); font-weight:500; text-decoration:none; text-align:right;
+  display:flex; align-items:center; gap:4px;
+}
+.detail-link:hover { text-decoration:underline; }
+.detail-link::after { content:'↗'; font-size:10px; flex-shrink:0; }
+.detail-badge {
+  display:inline-block; font-size:11px; font-weight:600; padding:2px 8px; border-radius:4px;
+}
+.detail-badge.active   { background:#D1FAE5; color:#065F46; }
+.detail-badge.pending  { background:#FEF3C7; color:#92400E; }
+.detail-badge.nonlead  { background:#F3F4F6; color:#6B7280; }
+.detail-sentiment { display:flex; align-items:center; gap:6px; }
+.detail-sent-dot { width:8px; height:8px; border-radius:50%; }
+
+/* ── Modals ── */
+.modal-overlay {
+  position:fixed; inset:0; background:rgba(5,12,41,0.6);
+  display:none; align-items:center; justify-content:center; z-index:150;
+}
+.modal-overlay.open { display:flex; }
+.modal-card {
+  background:white; border-radius:14px; padding:1.75rem;
+  width:420px; max-width:calc(100vw - 2rem);
+  box-shadow:0 20px 60px rgba(5,12,41,0.25);
+}
+.modal-title { font-family:'Genos',sans-serif; font-size:20px; font-weight:700; color:var(--navy-dark); margin-bottom:0.5rem; }
+.modal-desc  { font-size:13px; color:#6B7280; margin-bottom:1.25rem; line-height:1.5; }
+.modal-textarea {
+  width:100%; padding:10px 14px; border:1.5px solid #E5E7EB; border-radius:8px;
+  font-size:13px; font-family:'Inter',sans-serif; resize:vertical; outline:none;
+  min-height:90px; transition:border 0.15s;
+}
+.modal-textarea:focus { border-color:var(--teal); }
+.modal-footer { display:flex; justify-content:flex-end; gap:8px; margin-top:1.25rem; }
+.modal-error  { color:#DC2626; font-size:12px; margin-top:0.5rem; display:none; }
+.btn-cancel {
+  padding:8px 18px; background:#F9FAFB; color:#6B7280;
+  border:1.5px solid #E5E7EB; border-radius:7px;
+  font-size:13px; font-weight:600; cursor:pointer; transition:all 0.15s;
+}
+.btn-cancel:hover { background:#F3F4F6; }
+.btn-submit {
+  padding:8px 18px; background:var(--navy); color:white;
+  border:none; border-radius:7px; font-size:13px; font-weight:600;
+  cursor:pointer; transition:background 0.15s;
+}
+.btn-submit:hover { background:var(--teal); }
+.btn-submit:disabled { background:#9CA3AF; cursor:not-allowed; }
+
+/* ── Top-up modal ── */
+.topup-qty {
+  display:flex; align-items:center; gap:6px; margin-bottom:1.25rem;
+}
+.qty-btn {
+  width:34px; height:34px; border:1.5px solid #E5E7EB; background:#F9FAFB;
+  border-radius:7px; font-size:14px; font-weight:700; color:#374151;
+  cursor:pointer; display:flex; align-items:center; justify-content:center;
+  transition:all 0.15s; flex-shrink:0;
+}
+.qty-btn:hover { border-color:var(--teal); background:#F0FDFA; color:var(--teal); }
+.qty-input {
+  flex:1; padding:8px 12px; border:1.5px solid #E5E7EB; border-radius:7px;
+  font-size:16px; font-weight:700; font-family:'Genos',sans-serif;
+  text-align:center; outline:none; transition:border 0.15s;
+}
+.qty-input:focus { border-color:var(--teal); }
+.qty-input::-webkit-inner-spin-button { display:none; }
+.topup-total {
+  background:#F8F9FC; border-radius:8px; padding:0.875rem 1rem;
+  text-align:center; margin-bottom:0.25rem;
+}
+.topup-total-label { font-size:11px; color:#9CA3AF; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px; }
+.topup-total-val { font-family:'Genos',sans-serif; font-size:28px; font-weight:700; color:var(--navy-dark); }
+
+/* ── Toast ── */
+.toast {
+  position:fixed; top:80px; right:1.5rem;
+  background:#065F46; color:white; font-size:13px; font-weight:600;
+  padding:10px 18px; border-radius:8px; box-shadow:0 4px 16px rgba(0,0,0,0.2);
+  display:none; z-index:300; animation:slideIn 0.2s ease;
+}
+@keyframes slideIn { from { opacity:0; transform:translateY(-10px); } to { opacity:1; transform:translateY(0); } }
 </style>
 </head>
 <body>
@@ -199,6 +374,56 @@ body { font-family:'Inter',sans-serif; background:#F8F9FC; color:var(--navy-dark
   </div>
 </div>
 
+<!-- Lead details panel -->
+<div class="details-panel" id="detailsPanel">
+  <div class="details-header">
+    <span class="details-title">Lead Details</span>
+    <button class="details-close" onclick="closeDetails()">✕</button>
+  </div>
+  <div class="details-body" id="detailsBody"></div>
+</div>
+
+<!-- Non-lead modal -->
+<div class="modal-overlay" id="nonleadModal" onclick="if(event.target===this)closeNonleadModal()">
+  <div class="modal-card">
+    <div class="modal-title">Flag as Not a Lead</div>
+    <div class="modal-desc">Explain why this shouldn't count as a lead. Jesse will review and approve your request.</div>
+    <textarea class="modal-textarea" id="nonleadReason" placeholder="e.g. Out of target market, no budget, existing customer, wrong contact…"></textarea>
+    <div class="modal-footer">
+      <button class="btn-cancel" onclick="closeNonleadModal()">Cancel</button>
+      <button class="btn-submit" id="nonleadSubmitBtn" onclick="submitNonlead()">Submit Request</button>
+    </div>
+    <div class="modal-error" id="nonleadError"></div>
+  </div>
+</div>
+
+<!-- Top-up modal -->
+<div class="modal-overlay" id="topupModal" onclick="if(event.target===this)closeTopupModal()">
+  <div class="modal-card">
+    <div class="modal-title">Top Up Leads</div>
+    <div class="modal-desc" id="topupDesc">Select how many leads you'd like to purchase.</div>
+    <div class="topup-qty">
+      <button class="qty-btn" onclick="adjustQty(-5)">−5</button>
+      <button class="qty-btn" onclick="adjustQty(-1)">−</button>
+      <input type="number" class="qty-input" id="topupQty" value="10" min="1" oninput="updateTopupTotal()">
+      <button class="qty-btn" onclick="adjustQty(1)">+</button>
+      <button class="qty-btn" onclick="adjustQty(5)">+5</button>
+    </div>
+    <div class="topup-total">
+      <div class="topup-total-label">Total</div>
+      <div class="topup-total-val" id="topupTotal">—</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-cancel" onclick="closeTopupModal()">Cancel</button>
+      <button class="btn-submit" id="topupBtn" onclick="proceedTopup()">Pay with Card ↗</button>
+    </div>
+    <div class="modal-error" id="topupError"></div>
+  </div>
+</div>
+
+<!-- Success toast -->
+<div class="toast" id="toast"></div>
+
 <!-- Portal -->
 <div class="app" id="app" style="display:none;">
   <div class="app-header">
@@ -211,6 +436,31 @@ body { font-family:'Inter',sans-serif; background:#F8F9FC; color:var(--navy-dark
     <div class="header-right">
       <span class="header-user" id="headerUser"></span>
       <button class="logout-btn" onclick="logout()">Sign Out</button>
+    </div>
+  </div>
+
+  <!-- Stats strip -->
+  <div class="stats-strip">
+    <div class="stat-item">
+      <div class="stat-val" id="statDelivered">—</div>
+      <div class="stat-label">Delivered</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-val" id="statRemaining">—</div>
+      <div class="stat-label">Remaining</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-val" id="statSpent">—</div>
+      <div class="stat-label">Total Spent</div>
+    </div>
+    <div class="stat-item" style="border-right:none;">
+      <div class="stat-val" id="statROI">—</div>
+      <div class="stat-label">Portfolio ROI</div>
+    </div>
+    <div class="stat-spacer"></div>
+    <div class="stat-actions">
+      <button class="stat-btn" onclick="openTopupModal()">+ Top Up</button>
+      <button class="stat-btn stat-btn-outline" onclick="manageBilling()">Manage Billing</button>
     </div>
   </div>
 
@@ -235,8 +485,24 @@ body { font-family:'Inter',sans-serif; background:#F8F9FC; color:var(--navy-dark
       </div>
       <div class="lead-view" id="leadView" style="display:none;">
         <div class="lead-header">
-          <div class="lead-header-name" id="viewName">—</div>
-          <div class="lead-header-meta" id="viewMeta"></div>
+          <div class="lead-header-top">
+            <div style="min-width:0;">
+              <div class="lead-header-name" id="viewName">—</div>
+              <div class="lead-header-meta" id="viewMeta"></div>
+            </div>
+            <div class="lead-actions">
+              <div class="deal-row">
+                <span class="deal-label">Deal value</span>
+                <div class="deal-wrap">
+                  <span class="deal-currency">£</span>
+                  <input type="number" class="deal-input" id="dealValueInput" placeholder="0" min="0" step="0.01">
+                  <button class="deal-save" onclick="saveDealValue()">Save</button>
+                </div>
+              </div>
+              <button class="btn-details" onclick="openDetails()">Details ↗</button>
+              <button class="btn-nonlead" id="nonleadBtn" onclick="openNonleadModal()">Not a Lead</button>
+            </div>
+          </div>
         </div>
         <div class="thread-scroll" id="threadScroll">
           <div class="thread-loading">Loading thread…</div>
@@ -247,7 +513,7 @@ body { font-family:'Inter',sans-serif; background:#F8F9FC; color:var(--navy-dark
           <div class="reply-footer">
             <div>
               <div class="reply-success" id="replySuccess">✓ Reply sent</div>
-              <div class="reply-error" id="replyError"></div>
+              <div class="reply-error"   id="replyError"></div>
             </div>
             <button class="reply-send" id="replyBtn" onclick="sendReply()">Send Reply ↗</button>
           </div>
@@ -258,58 +524,59 @@ body { font-family:'Inter',sans-serif; background:#F8F9FC; color:var(--navy-dark
 </div>
 
 <script>
-const BASE = '';  // same origin
-
+const BASE = '';
 let token       = localStorage.getItem('ottaly_client_token');
 let leads       = [];
 let currentLead = null;
+let clientStats = { price_per_lead: 0 };
 let seenIds     = new Set(JSON.parse(localStorage.getItem('ottaly_seen') || '[]'));
 
-// ── Boot ────────────────────────────────────────────────
+// ── Boot ──────────────────────────────────────────────────
 (async function boot() {
+  const params = new URLSearchParams(location.search);
+  if (params.get('payment') === 'success') {
+    history.replaceState({}, '', '/client.html');
+    // Wait for Stripe webhook to process, then refresh stats
+    setTimeout(() => { loadStats(); showToast('Payment successful! Your leads balance has been updated.'); }, 2000);
+  }
+
   if (!token) return;
   try {
     const me = parseToken(token);
     if (!me) { clearAuth(); return; }
     showPortal(me);
-    await loadLeads();
-  } catch {
-    clearAuth();
-  }
+    await Promise.all([loadLeads(), loadStats()]);
+  } catch { clearAuth(); }
 })();
 
 function parseToken(t) {
   try {
-    const payload = JSON.parse(atob(t.split('.')[1]));
-    if (payload.exp * 1000 < Date.now()) return null;
-    return payload;
+    const p = JSON.parse(atob(t.split('.')[1]));
+    return p.exp * 1000 < Date.now() ? null : p;
   } catch { return null; }
 }
 
-// ── Login ────────────────────────────────────────────────
+// ── Login ─────────────────────────────────────────────────
 async function handleLogin(e) {
   e.preventDefault();
   const btn = document.getElementById('loginBtn');
   const err = document.getElementById('loginError');
   btn.disabled = true; btn.textContent = 'Signing in…';
   err.style.display = 'none';
-
   try {
     const r = await fetch('/api/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         username: document.getElementById('loginUser').value.trim(),
-        password: document.getElementById('loginPass').value
+        password: document.getElementById('loginPass').value,
       })
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || 'Login failed');
-
     token = data.token;
     localStorage.setItem('ottaly_client_token', token);
     showPortal(parseToken(token));
-    await loadLeads();
+    await Promise.all([loadLeads(), loadStats()]);
   } catch (ex) {
     err.textContent = ex.message;
     err.style.display = 'block';
@@ -319,23 +586,46 @@ async function handleLogin(e) {
 }
 
 function showPortal(me) {
-  document.getElementById('loginScreen').style.display = 'none';
-  document.getElementById('app').style.display = 'flex';
+  document.getElementById('loginScreen').style.display  = 'none';
+  document.getElementById('app').style.display          = 'flex';
   document.getElementById('headerWorkspace').textContent = me.workspace_name;
-  document.getElementById('headerUser').textContent = me.username;
+  document.getElementById('headerUser').textContent      = me.username;
 }
 
-function logout() {
-  clearAuth();
-  location.reload();
+function logout() { clearAuth(); location.reload(); }
+function clearAuth() { localStorage.removeItem('ottaly_client_token'); token = null; }
+
+// ── Stats ─────────────────────────────────────────────────
+async function loadStats() {
+  try {
+    const r = await fetch('/api/stats', { headers: { Authorization: `Bearer ${token}` } });
+    if (!r.ok) return;
+    const s = await r.json();
+    clientStats = s;
+
+    document.getElementById('statDelivered').textContent = s.delivered;
+
+    const remEl = document.getElementById('statRemaining');
+    remEl.textContent = s.remaining;
+    remEl.className = 'stat-val ' + (s.remaining > 10 ? 'green' : s.remaining > 4 ? 'yellow' : 'red');
+
+    document.getElementById('statSpent').textContent =
+      s.spent > 0 ? `£${s.spent.toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : '£0';
+
+    const roiEl = document.getElementById('statROI');
+    if (s.roi !== null) {
+      roiEl.textContent = `${s.roi}%`;
+      roiEl.className   = 'stat-val ' + (s.roi >= 100 ? 'green' : s.roi >= 50 ? 'yellow' : 'red');
+    } else {
+      roiEl.textContent = '—';
+      roiEl.className   = 'stat-val';
+    }
+
+    updateTopupTotal();
+  } catch {}
 }
 
-function clearAuth() {
-  localStorage.removeItem('ottaly_client_token');
-  token = null;
-}
-
-// ── Leads ────────────────────────────────────────────────
+// ── Leads ─────────────────────────────────────────────────
 async function loadLeads() {
   try {
     const r = await fetch('/api/leads', { headers: { Authorization: `Bearer ${token}` } });
@@ -347,24 +637,18 @@ async function loadLeads() {
 
 function filterLeads() {
   const q = document.getElementById('searchInput').value.toLowerCase();
-  const filtered = leads.filter(l =>
+  renderLeadsList(leads.filter(l =>
     `${l.first_name} ${l.last_name} ${l.company_name} ${l.email}`.toLowerCase().includes(q)
-  );
-  renderLeadsList(filtered);
+  ));
 }
 
 function renderLeadsList(items) {
   const newIds = items.filter(l => !seenIds.has(l.id)).map(l => l.id);
-  document.getElementById('leadsCount').textContent =
-    `${items.length} lead${items.length !== 1 ? 's' : ''}`;
+  document.getElementById('leadsCount').textContent = `${items.length} lead${items.length !== 1 ? 's' : ''}`;
 
   const badge = document.getElementById('unreadBadge');
-  if (newIds.length) {
-    badge.textContent = `${newIds.length} new`;
-    badge.style.display = 'inline';
-  } else {
-    badge.style.display = 'none';
-  }
+  if (newIds.length) { badge.textContent = `${newIds.length} new`; badge.style.display = 'inline'; }
+  else               { badge.style.display = 'none'; }
 
   if (!items.length) {
     document.getElementById('leadsList').innerHTML =
@@ -375,51 +659,71 @@ function renderLeadsList(items) {
   document.getElementById('leadsList').innerHTML = items.map(l => {
     const isNew   = !seenIds.has(l.id);
     const sentCls = l.sentiment === 'POSITIVE' ? 'POSITIVE' : l.sentiment === 'NEGATIVE' ? 'NEGATIVE' : 'NEUTRAL';
-    const date    = l.received_at ? relDate(l.received_at) : '';
+    const statusTag = l.status === 'nonlead_pending'
+      ? '<span class="status-tag pending">Pending review</span>'
+      : l.status === 'nonlead'
+      ? '<span class="status-tag nonlead">Not a lead</span>'
+      : '';
     return `
       <div class="lead-item ${isNew ? 'unread' : ''} ${currentLead?.id === l.id ? 'active' : ''}"
            onclick="selectLead('${l.id}')">
-        <div class="lead-name">${l.first_name} ${l.last_name}</div>
-        <div class="lead-company">${l.company_name || '—'}</div>
-        <div class="lead-snippet">${l.subject || l.snippet || ''}</div>
+        <div class="lead-name">${escHtml(l.first_name)} ${escHtml(l.last_name)}</div>
+        <div class="lead-company">${escHtml(l.company_name || '—')}</div>
+        <div class="lead-snippet">${escHtml(l.subject || l.snippet || '')}</div>
         <div class="lead-meta">
-          <span class="lead-date">${date}</span>
-          <span class="sentiment-dot ${sentCls}" title="${l.sentiment || ''}"></span>
+          <span class="lead-date">${l.received_at ? relDate(l.received_at) : ''}</span>
+          <div style="display:flex;align-items:center;gap:5px;">
+            ${statusTag}
+            <span class="sentiment-dot ${sentCls}" title="${l.sentiment || ''}"></span>
+          </div>
         </div>
       </div>`;
   }).join('');
 }
 
-// ── Select lead ──────────────────────────────────────────
+// ── Select lead ───────────────────────────────────────────
 async function selectLead(id) {
   currentLead = leads.find(l => l.id === id);
   if (!currentLead) return;
 
-  // Mark as seen
   seenIds.add(id);
   localStorage.setItem('ottaly_seen', JSON.stringify([...seenIds]));
 
-  // Update UI
   document.getElementById('paneEmpty').style.display = 'none';
   document.getElementById('leadView').style.display  = 'flex';
+
   document.getElementById('viewName').textContent =
-    `${currentLead.first_name} ${currentLead.last_name}`;
+    `${currentLead.first_name || ''} ${currentLead.last_name || ''}`.trim();
 
   const metaParts = [
     currentLead.job_title,
     currentLead.company_name,
     currentLead.email,
-    [currentLead.city, currentLead.country].filter(Boolean).join(', ')
+    [currentLead.city, currentLead.country].filter(Boolean).join(', '),
   ].filter(Boolean);
   document.getElementById('viewMeta').innerHTML =
-    metaParts.map((p, i) => `<span${i === 0 ? ' style="margin-left:0"' : ''}>${p}</span>`).join('');
+    metaParts.map(p => `<span>${escHtml(p)}</span>`).join('');
 
-  document.getElementById('replyText').value = '';
+  // Deal value
+  const dvi = document.getElementById('dealValueInput');
+  dvi.value = currentLead.closed_value != null ? currentLead.closed_value : '';
+
+  // Non-lead button state
+  const nlBtn = document.getElementById('nonleadBtn');
+  if (currentLead.status === 'nonlead_pending') {
+    nlBtn.textContent = 'Pending Review…'; nlBtn.disabled = true;
+  } else if (currentLead.status === 'nonlead') {
+    nlBtn.textContent = 'Not a Lead'; nlBtn.disabled = true;
+  } else {
+    nlBtn.textContent = 'Not a Lead'; nlBtn.disabled = false;
+  }
+
+  document.getElementById('replyText').value          = '';
   document.getElementById('replySuccess').style.display = 'none';
   document.getElementById('replyError').style.display   = 'none';
-  document.getElementById('replyBtn').disabled = false;
+  document.getElementById('replyBtn').disabled           = false;
 
-  // Show webhook data immediately, then try to load full thread
+  // Show webhook data immediately
   renderThread([{
     from:    currentLead.email,
     to:      currentLead.email_account,
@@ -429,17 +733,11 @@ async function selectLead(id) {
     inbound: true,
   }]);
 
-  renderLeadsList(leads.filter(l =>
-    `${l.first_name} ${l.last_name} ${l.company_name} ${l.email}`
-      .toLowerCase()
-      .includes(document.getElementById('searchInput').value.toLowerCase())
-  ));
+  filterLeads();
 
   // Try to load full thread
   try {
-    const r = await fetch(`/api/leads/${id}/thread`, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
+    const r = await fetch(`/api/leads/${id}/thread`, { headers: { Authorization: `Bearer ${token}` } });
     if (r.ok) {
       const { source, data } = await r.json();
       if (source === 'plusvibe' && data?.data?.length) {
@@ -463,7 +761,7 @@ function normalisePlusVibeThread(messages) {
 function renderThread(messages) {
   if (!messages?.length) {
     document.getElementById('threadScroll').innerHTML =
-      '<div class="thread-loading">No messages in thread.</div>';
+      '<div class="thread-loading">No messages found.</div>';
     return;
   }
   document.getElementById('threadScroll').innerHTML = messages.map(m => `
@@ -480,7 +778,201 @@ function renderThread(messages) {
     </div>`).join('');
 }
 
-// ── Reply ────────────────────────────────────────────────
+// ── Deal value ────────────────────────────────────────────
+async function saveDealValue() {
+  if (!currentLead) return;
+  const raw = document.getElementById('dealValueInput').value;
+  const val = parseFloat(raw);
+  if (isNaN(val) || val < 0) return;
+  try {
+    await fetch(`/api/leads/${currentLead.id}/value`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: val })
+    });
+    currentLead.closed_value = val;
+    const idx = leads.findIndex(l => l.id === currentLead.id);
+    if (idx >= 0) leads[idx].closed_value = val;
+    showToast('Deal value saved ✓');
+    loadStats();
+  } catch {}
+}
+
+// ── Details panel ─────────────────────────────────────────
+function openDetails() {
+  if (!currentLead) return;
+  const l = currentLead;
+
+  const sentimentHtml = l.sentiment
+    ? `<div class="detail-sentiment">
+         <div class="detail-sent-dot sentiment-dot ${l.sentiment}"></div>
+         <span>${l.sentiment.charAt(0) + l.sentiment.slice(1).toLowerCase()}</span>
+       </div>`
+    : '—';
+
+  const statusLabel  = l.status === 'nonlead_pending' ? 'pending' : l.status === 'nonlead' ? 'nonlead' : 'active';
+  const statusText   = l.status === 'nonlead_pending' ? 'Pending review' : l.status === 'nonlead' ? 'Not a lead' : 'Active';
+
+  const makeRow = (key, val, href) => {
+    if (!val) return '';
+    const display = href
+      ? `<a href="${href}" target="_blank" class="detail-link">${escHtml(val)}</a>`
+      : `<span class="detail-val">${escHtml(String(val))}</span>`;
+    return `<div class="detail-row"><span class="detail-key">${key}</span>${display}</div>`;
+  };
+
+  document.getElementById('detailsBody').innerHTML = `
+    <div class="detail-section">
+      <div class="detail-section-title">Contact</div>
+      ${makeRow('Name', `${l.first_name||''} ${l.last_name||''}`.trim())}
+      ${makeRow('Email', l.email, `mailto:${l.email}`)}
+      ${makeRow('Phone', l.phone)}
+      ${l.linkedin ? makeRow('LinkedIn', 'View Profile', l.linkedin) : ''}
+      ${l.website  ? makeRow('Website',  l.website.replace(/^https?:\/\//, ''), l.website.startsWith('http') ? l.website : 'https://' + l.website) : ''}
+    </div>
+    <div class="detail-section">
+      <div class="detail-section-title">Company</div>
+      ${makeRow('Company',   l.company_name)}
+      ${makeRow('Job Title', l.job_title)}
+      ${makeRow('Location',  [l.city, l.country].filter(Boolean).join(', '))}
+    </div>
+    <div class="detail-section">
+      <div class="detail-section-title">Campaign</div>
+      ${makeRow('Campaign',        l.campaign_name)}
+      ${makeRow('Sender Account',  l.email_account)}
+      <div class="detail-row">
+        <span class="detail-key">Sentiment</span>
+        ${sentimentHtml}
+      </div>
+      ${makeRow('Received', l.received_at ? fmtDate(l.received_at) : '—')}
+      ${l.closed_value != null ? makeRow('Deal Value', `£${Number(l.closed_value).toLocaleString()}`) : ''}
+      <div class="detail-row">
+        <span class="detail-key">Status</span>
+        <span class="detail-badge ${statusLabel}">${statusText}</span>
+      </div>
+    </div>`;
+
+  document.getElementById('detailsPanel').classList.add('open');
+}
+
+function closeDetails() {
+  document.getElementById('detailsPanel').classList.remove('open');
+}
+
+// ── Non-lead modal ────────────────────────────────────────
+function openNonleadModal() {
+  if (!currentLead || currentLead.status !== 'active') return;
+  document.getElementById('nonleadReason').value      = '';
+  document.getElementById('nonleadError').style.display = 'none';
+  document.getElementById('nonleadSubmitBtn').disabled  = false;
+  document.getElementById('nonleadModal').classList.add('open');
+}
+
+function closeNonleadModal() {
+  document.getElementById('nonleadModal').classList.remove('open');
+}
+
+async function submitNonlead() {
+  const reason = document.getElementById('nonleadReason').value.trim();
+  const errEl  = document.getElementById('nonleadError');
+  const btn    = document.getElementById('nonleadSubmitBtn');
+  errEl.style.display = 'none';
+  if (!reason) { errEl.textContent = 'Please provide a reason.'; errEl.style.display = 'block'; return; }
+
+  btn.disabled = true; btn.textContent = 'Submitting…';
+  try {
+    const r = await fetch(`/api/leads/${currentLead.id}/nonlead`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed');
+
+    closeNonleadModal();
+    currentLead.status = 'nonlead_pending';
+    const idx = leads.findIndex(l => l.id === currentLead.id);
+    if (idx >= 0) leads[idx].status = 'nonlead_pending';
+
+    document.getElementById('nonleadBtn').textContent = 'Pending Review…';
+    document.getElementById('nonleadBtn').disabled    = true;
+    filterLeads();
+    showToast('Request submitted. Jesse will review shortly.');
+  } catch (ex) {
+    errEl.textContent = ex.message; errEl.style.display = 'block';
+    btn.disabled = false; btn.textContent = 'Submit Request';
+  }
+}
+
+// ── Top-up modal ──────────────────────────────────────────
+function openTopupModal() {
+  if (clientStats.price_per_lead > 0) {
+    document.getElementById('topupDesc').textContent =
+      `Each lead is priced at £${clientStats.price_per_lead.toFixed(2)}. Your balance will update automatically after payment.`;
+  } else {
+    document.getElementById('topupDesc').textContent = 'Contact us to configure your pricing before topping up.';
+  }
+  document.getElementById('topupQty').value     = '10';
+  document.getElementById('topupError').style.display = 'none';
+  document.getElementById('topupBtn').disabled  = false;
+  document.getElementById('topupBtn').textContent = 'Pay with Card ↗';
+  updateTopupTotal();
+  document.getElementById('topupModal').classList.add('open');
+}
+
+function closeTopupModal() {
+  document.getElementById('topupModal').classList.remove('open');
+}
+
+function adjustQty(delta) {
+  const input = document.getElementById('topupQty');
+  input.value = Math.max(1, (parseInt(input.value) || 0) + delta);
+  updateTopupTotal();
+}
+
+function updateTopupTotal() {
+  const qty   = parseInt(document.getElementById('topupQty')?.value) || 0;
+  const total = qty * (clientStats?.price_per_lead || 0);
+  const el    = document.getElementById('topupTotal');
+  if (el) el.textContent = total > 0 ? `£${total.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—';
+}
+
+async function proceedTopup() {
+  const qty    = parseInt(document.getElementById('topupQty').value);
+  const errEl  = document.getElementById('topupError');
+  const btn    = document.getElementById('topupBtn');
+  errEl.style.display = 'none';
+  if (!qty || qty < 1) { errEl.textContent = 'Enter a valid quantity.'; errEl.style.display = 'block'; return; }
+
+  btn.disabled = true; btn.textContent = 'Redirecting…';
+  try {
+    const r = await fetch('/api/stripe/checkout', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ leads_count: qty })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to start checkout');
+    window.location.href = data.url;
+  } catch (ex) {
+    errEl.textContent = ex.message; errEl.style.display = 'block';
+    btn.disabled = false; btn.textContent = 'Pay with Card ↗';
+  }
+}
+
+// ── Manage billing ────────────────────────────────────────
+async function manageBilling() {
+  try {
+    const r = await fetch('/api/stripe/portal', {
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+    });
+    const data = await r.json();
+    if (!r.ok) { showToast(data.error || 'Billing portal unavailable', true); return; }
+    window.location.href = data.url;
+  } catch { showToast('Could not open billing portal', true); }
+}
+
+// ── Reply ─────────────────────────────────────────────────
 async function sendReply() {
   if (!currentLead) return;
   const body = document.getElementById('replyText').value.trim();
@@ -494,25 +986,23 @@ async function sendReply() {
 
   try {
     const r = await fetch(`/api/leads/${currentLead.id}/reply`, {
-      method:  'POST',
+      method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ body })
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || 'Failed to send');
-
     ok.style.display = 'block';
     document.getElementById('replyText').value = '';
     btn.textContent = 'Send Reply ↗';
 
-    // Add reply to thread view optimistically
     const thread = document.getElementById('threadScroll');
     thread.insertAdjacentHTML('beforeend', `
       <div class="message-bubble outbound">
         <div class="msg-header">
           <div>
-            <div class="msg-from">${escHtml(currentLead.email_account)}</div>
-            <div class="msg-to">to ${escHtml(currentLead.email)}</div>
+            <div class="msg-from">${escHtml(currentLead.email_account || '')}</div>
+            <div class="msg-to">to ${escHtml(currentLead.email || '')}</div>
           </div>
           <div class="msg-date">${fmtDate(new Date().toISOString())}</div>
         </div>
@@ -520,13 +1010,21 @@ async function sendReply() {
       </div>`);
     thread.scrollTop = thread.scrollHeight;
   } catch (ex) {
-    err.textContent = ex.message;
-    err.style.display = 'block';
+    err.textContent = ex.message; err.style.display = 'block';
     btn.disabled = false; btn.textContent = 'Send Reply ↗';
   }
 }
 
-// ── Helpers ──────────────────────────────────────────────
+// ── Toast ─────────────────────────────────────────────────
+function showToast(msg, isError) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.background = isError ? '#991B1B' : '#065F46';
+  t.style.display = 'block';
+  setTimeout(() => { t.style.display = 'none'; }, 3500);
+}
+
+// ── Helpers ───────────────────────────────────────────────
 function escHtml(s) {
   return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
@@ -543,14 +1041,13 @@ function relDate(iso) {
 function fmtDate(iso) {
   try {
     return new Date(iso).toLocaleString('en-GB', {
-      day:'2-digit', month:'short', year:'numeric',
-      hour:'2-digit', minute:'2-digit'
+      day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit'
     });
-  } catch { return iso; }
+  } catch { return iso || ''; }
 }
 
-// Auto-refresh leads every 60 seconds
 setInterval(loadLeads, 60000);
+setInterval(loadStats, 120000);
 </script>
 </body>
 </html>
