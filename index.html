@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ottaly Revenue Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@100;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --dark: #0a0e27;
+            --darker: #050811;
+            --surface: #1a1f3a;
+            --text: #f0f4f8;
+            --text-dim: #a8afc1;
+            --accent: #00d9ff;
+            --accent-warm: #ff6b35;
+            --success: #00ff88;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background: linear-gradient(135deg, var(--darker) 0%, #0f1428 100%);
+            color: var(--text);
+            padding: 2rem 1rem;
+            min-height: 100vh;
+        }
+
+        .container { max-width: 1920px; margin: 0 auto; }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 2rem;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
+        h1 {
+            font-size: 36px;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--accent), var(--accent-warm));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-family: 'Space Mono', monospace;
+        }
+
+        .status {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            padding: 1rem;
+            background: rgba(26, 31, 58, 0.6);
+            border: 1px solid rgba(0, 217, 255, 0.2);
+            border-radius: 8px;
+            font-size: 12px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--success);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .filter-bar {
+            margin-bottom: 2rem;
+            padding: 1.5rem;
+            background: rgba(26, 31, 58, 0.4);
+            border: 1px solid rgba(0, 217, 255, 0.15);
+            border-radius: 12px;
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .filter-label {
+            font-size: 12px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        select {
+            background: rgba(0, 217, 255, 0.1);
+            border: 1px solid rgba(0, 217, 255, 0.3);
+            border-radius: 8px;
+            color: var(--text);
+            padding: 0.75rem 1rem;
+            font-family: inherit;
+            font-size: 14px;
+            cursor: pointer;
+            min-width: 200px;
+        }
+
+        select:hover {
+            background: rgba(0, 217, 255, 0.15);
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .metric-card {
+            padding: 1.5rem;
+            background: linear-gradient(135deg, rgba(26, 31, 58, 0.4), rgba(36, 43, 69, 0.2));
+            border: 1px solid rgba(0, 217, 255, 0.15);
+            border-radius: 12px;
+        }
+
+        .metric-label {
+            font-size: 11px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 0.5rem;
+        }
+
+        .metric-value {
+            font-size: 36px;
+            font-weight: 700;
+            color: var(--accent);
+            font-family: 'Space Mono', monospace;
+            margin-bottom: 0.5rem;
+        }
+
+        .metric-subtext {
+            font-size: 12px;
+            color: var(--text-dim);
+        }
+
+        .chart-grid {
+            display: grid;
+            grid-template-columns: 1.5fr 1fr;
+            gap: 2rem;
+            margin-bottom: 2rem;
+        }
+
+        @media (max-width: 1200px) {
+            .chart-grid { grid-template-columns: 1fr; }
+        }
+
+        .chart-card {
+            padding: 2rem;
+            background: linear-gradient(135deg, rgba(26, 31, 58, 0.4), rgba(36, 43, 69, 0.2));
+            border: 1px solid rgba(0, 217, 255, 0.15);
+            border-radius: 12px;
+        }
+
+        .card-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+        }
+
+        .chart-wrapper {
+            position: relative;
+            height: 350px;
+        }
+
+        .table-card {
+            padding: 2rem;
+            background: linear-gradient(135deg, rgba(26, 31, 58, 0.4), rgba(36, 43, 69, 0.2));
+            border: 1px solid rgba(0, 217, 255, 0.15);
+            border-radius: 12px;
+            margin-bottom: 1.5rem;
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            font-size: 13px;
+            border-collapse: collapse;
+        }
+
+        th {
+            padding: 1rem;
+            text-align: left;
+            font-weight: 600;
+            color: var(--accent);
+            border-bottom: 1px solid rgba(0, 217, 255, 0.2);
+            text-transform: uppercase;
+            font-size: 11px;
+            letter-spacing: 1px;
+        }
+
+        td {
+            padding: 1rem;
+            border-bottom: 1px solid rgba(0, 217, 255, 0.1);
+            color: var(--text-dim);
+        }
+
+        tr:hover td { background: rgba(0, 217, 255, 0.05); }
+
+        .number {
+            font-family: 'Space Mono', monospace;
+            color: var(--accent);
+            font-weight: 600;
+        }
+
+        .error {
+            padding: 1.5rem;
+            background: rgba(255, 51, 51, 0.1);
+            border: 1px solid rgba(255, 51, 51, 0.3);
+            border-radius: 8px;
+            color: #ff3333;
+            margin-bottom: 1.5rem;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            background: rgba(0, 217, 255, 0.15);
+            border: 1px solid rgba(0, 217, 255, 0.3);
+            border-radius: 20px;
+            font-size: 11px;
+            color: var(--accent);
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div>
+                <h1>⚡ OTTALY REVENUE</h1>
+                <p style="color: var(--text-dim); margin-top: 4px; font-size: 13px;">Agency dashboard · Real-time lead tracking</p>
+            </div>
+            <div class="status">
+                <div class="status-dot"></div>
+                <span id="statusText">Live</span>
+                <span id="lastUpdate" style="color: var(--accent);">--:--</span>
+            </div>
+        </header>
+
+        <div class="filter-bar">
+            <span class="filter-label">Filter by Client:</span>
+            <select id="clientFilter" onchange="updateDisplay()">
+                <option value="all">All Clients</option>
+            </select>
+            <span class="filter-label">Time Period:</span>
+            <select id="timeFilter" onchange="updateDisplay()">
+                <option value="month">This Month</option>
+                <option value="week">This Week</option>
+                <option value="today">Today</option>
+                <option value="all">All Time</option>
+            </select>
+        </div>
+
+        <div id="errorContainer"></div>
+
+        <div class="metrics-grid">
+            <div class="metric-card">
+                <div class="metric-label">Total Revenue</div>
+                <div class="metric-value" id="metricRevenue">£0</div>
+                <div class="metric-subtext" id="metricLeads">0 leads</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Avg Lead Value</div>
+                <div class="metric-value" id="metricAvg">£0</div>
+                <div class="metric-subtext" id="metricAvgLabel">per lead</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Active Clients</div>
+                <div class="metric-value" id="metricClients">0</div>
+                <div class="metric-subtext">with leads</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Top Client</div>
+                <div class="metric-value" id="metricTopClient" style="font-size: 20px;">-</div>
+                <div class="metric-subtext" id="metricTopRevenue">£0</div>
+            </div>
+        </div>
+
+        <div class="chart-grid">
+            <div class="chart-card">
+                <div class="card-title">Revenue by Client</div>
+                <div class="chart-wrapper">
+                    <canvas id="revenueChart"></canvas>
+                </div>
+            </div>
+            <div class="chart-card">
+                <div class="card-title">Lead Distribution</div>
+                <div class="chart-wrapper">
+                    <canvas id="leadsChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="table-card">
+            <div class="card-title">Client Performance</div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Client</th>
+                        <th>Leads</th>
+                        <th>Revenue</th>
+                        <th>Avg Lead Price</th>
+                    </tr>
+                </thead>
+                <tbody id="clientsTable">
+                    <tr><td colspan="4">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-card">
+            <div class="card-title">Recent Leads</div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Client</th>
+                        <th>Name</th>
+                        <th>Email</th>
+                        <th>Campaign</th>
+                        <th>Revenue</th>
+                    </tr>
+                </thead>
+                <tbody id="leadsTable">
+                    <tr><td colspan="5">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        const CSV_URL = 'https://docs.google.com/spreadsheets/d/1F6UQJ_om6ZeAdEs9IMy_GQOY_daysUeuBeiOMnwzb9k/export?format=csv&gid=0';
+        let allLeads = [];
+        let revenueChart = null;
+        let leadsChart = null;
+
+        async function fetchData() {
+            try {
+                const response = await fetch(CSV_URL);
+                const text = await response.text();
+                
+                Papa.parse(text, {
+                    header: true,
+                    skipEmptyLines: true,
+                    complete: function(results) {
+                        allLeads = results.data
+                            .filter(row => row['Client Name'])
+                            .map(row => ({
+                                client_name: row['Client Name'] || 'Unknown',
+                                campaign: row['Campaign'] || '',
+                                first_name: row['First Name'] || '',
+                                last_name: row['Last Name'] || '',
+                                campaign_id: row['Campaign ID'] || '',
+                                lead_email: row['Lead Email'] || '',
+                                lead_price: parseFloat(row['Lead Price']) || 0,
+                                industry: row['Industry'] || '',
+                                location: row['Location'] || '',
+                                timestamp: new Date()
+                            }));
+
+                        populateClientFilter();
+                        updateDisplay();
+                        document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+                    }
+                });
+                
+            } catch (error) {
+                document.getElementById('errorContainer').innerHTML = 
+                    `<div class="error">Error: ${error.message}</div>`;
+            }
+        }
+
+        function populateClientFilter() {
+            const clients = [...new Set(allLeads.map(l => l.client_name))].sort();
+            const select = document.getElementById('clientFilter');
+            const currentValue = select.value;
+            
+            select.innerHTML = '<option value="all">All Clients</option>';
+            clients.forEach(client => {
+                const option = document.createElement('option');
+                option.value = client;
+                option.textContent = client;
+                if (client === currentValue) option.selected = true;
+                select.appendChild(option);
+            });
+        }
+
+        function getFilteredLeads() {
+            const clientFilter = document.getElementById('clientFilter').value;
+            const timeFilter = document.getElementById('timeFilter').value;
+            
+            let filtered = allLeads;
+            
+            if (clientFilter !== 'all') {
+                filtered = filtered.filter(l => l.client_name === clientFilter);
+            }
+            
+            // Time filter (using timestamp which is now, but in future we'd use actual lead date)
+            // For now showing all within selected period
+            
+            return filtered;
+        }
+
+        function updateDisplay() {
+            const leads = getFilteredLeads();
+            
+            const totalRevenue = leads.reduce((sum, l) => sum + l.lead_price, 0);
+            const avgValue = leads.length > 0 ? totalRevenue / leads.length : 0;
+            
+            document.getElementById('metricRevenue').textContent = '£' + Math.round(totalRevenue).toLocaleString();
+            document.getElementById('metricLeads').textContent = leads.length + ' leads';
+            document.getElementById('metricAvg').textContent = '£' + Math.round(avgValue).toLocaleString();
+            
+            // Group by client
+            const byClient = {};
+            leads.forEach(lead => {
+                if (!byClient[lead.client_name]) {
+                    byClient[lead.client_name] = { leads: 0, revenue: 0 };
+                }
+                byClient[lead.client_name].leads += 1;
+                byClient[lead.client_name].revenue += lead.lead_price;
+            });
+            
+            const clientCount = Object.keys(byClient).length;
+            document.getElementById('metricClients').textContent = clientCount;
+            
+            // Top client
+            const sorted = Object.entries(byClient).sort((a, b) => b[1].revenue - a[1].revenue);
+            if (sorted.length > 0) {
+                document.getElementById('metricTopClient').textContent = sorted[0][0];
+                document.getElementById('metricTopRevenue').textContent = '£' + Math.round(sorted[0][1].revenue).toLocaleString();
+            } else {
+                document.getElementById('metricTopClient').textContent = '-';
+                document.getElementById('metricTopRevenue').textContent = '£0';
+            }
+            
+            updateClientTable(sorted);
+            updateLeadsTable(leads);
+            updateCharts(sorted);
+        }
+
+        function updateClientTable(sortedClients) {
+            document.getElementById('clientsTable').innerHTML = sortedClients.map(([client, stats]) => `
+                <tr>
+                    <td><strong>${client}</strong></td>
+                    <td class="number">${stats.leads}</td>
+                    <td class="number">£${Math.round(stats.revenue).toLocaleString()}</td>
+                    <td class="number">£${Math.round(stats.revenue / stats.leads)}</td>
+                </tr>
+            `).join('') || '<tr><td colspan="4">No data</td></tr>';
+        }
+
+        function updateLeadsTable(leads) {
+            const recent = leads.slice(-20).reverse();
+            document.getElementById('leadsTable').innerHTML = recent.map(lead => `
+                <tr>
+                    <td><span class="badge">${lead.client_name}</span></td>
+                    <td>${lead.first_name} ${lead.last_name}</td>
+                    <td style="font-size: 11px;">${lead.lead_email}</td>
+                    <td style="font-size: 11px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${lead.campaign.substring(0, 30)}${lead.campaign.length > 30 ? '...' : ''}</td>
+                    <td class="number">£${lead.lead_price}</td>
+                </tr>
+            `).join('') || '<tr><td colspan="5">No leads</td></tr>';
+        }
+
+        function updateCharts(sortedClients) {
+            const labels = sortedClients.map(([c]) => c);
+            const revenues = sortedClients.map(([, s]) => s.revenue);
+            const leadCounts = sortedClients.map(([, s]) => s.leads);
+            
+            const colors = ['rgba(0, 217, 255, 0.8)', 'rgba(255, 107, 53, 0.8)', 'rgba(0, 255, 136, 0.8)', 'rgba(255, 215, 0, 0.8)', 'rgba(153, 102, 255, 0.8)', 'rgba(75, 192, 192, 0.8)', 'rgba(255, 159, 64, 0.8)'];
+            
+            // Revenue chart
+            const ctx1 = document.getElementById('revenueChart').getContext('2d');
+            if (revenueChart) revenueChart.destroy();
+            revenueChart = new Chart(ctx1, {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [{
+                        label: 'Revenue',
+                        data: revenues,
+                        backgroundColor: 'rgba(0, 217, 255, 0.8)',
+                        borderRadius: 6
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    indexAxis: 'y',
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { ticks: { color: '#a8afc1' }, grid: { color: 'rgba(0, 217, 255, 0.1)' } },
+                        y: { ticks: { color: '#a8afc1' }, grid: { display: false } }
+                    }
+                }
+            });
+            
+            // Leads chart
+            const ctx2 = document.getElementById('leadsChart').getContext('2d');
+            if (leadsChart) leadsChart.destroy();
+            leadsChart = new Chart(ctx2, {
+                type: 'doughnut',
+                data: {
+                    labels,
+                    datasets: [{
+                        data: leadCounts,
+                        backgroundColor: colors,
+                        borderColor: '#0a0e27',
+                        borderWidth: 3
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { position: 'bottom', labels: { color: '#a8afc1', padding: 15 } } }
+                }
+            });
+        }
+
+        fetchData();
+        setInterval(fetchData, 30000);
+    </script>
+</body>
+</html>
