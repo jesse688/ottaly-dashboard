@@ -23,12 +23,17 @@ body { font-family:'Inter',sans-serif; background:#F8F9FC; color:var(--navy-dark
 .nav-tab:hover { background:rgba(255,255,255,0.1); color:white; }
 .nav-tab.active { background:var(--teal); color:white; }
 
-/* Auth gate */
-.auth-gate {
-  max-width:400px; margin:4rem auto; background:white;
-  border-radius:12px; padding:2rem; box-shadow:0 4px 20px rgba(5,12,41,0.1);
+/* Key prompt overlay (first-time only) */
+.key-overlay {
+  position:fixed; inset:0; background:rgba(5,12,41,0.7);
+  display:flex; align-items:center; justify-content:center; z-index:200;
 }
-.auth-gate h2 { font-family:'Genos',sans-serif; font-size:22px; font-weight:700; margin-bottom:1.25rem; }
+.key-card {
+  background:white; border-radius:14px; padding:2rem 2rem 1.75rem;
+  width:380px; box-shadow:0 20px 50px rgba(0,0,0,0.35);
+}
+.key-card h2 { font-family:'Genos',sans-serif; font-size:22px; font-weight:700; margin-bottom:0.5rem; }
+.key-card p  { font-size:13px; color:#9CA3AF; margin-bottom:1.25rem; }
 .field { margin-bottom:1rem; }
 .field label { display:block; font-size:12px; font-weight:600; color:#6B7280; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px; }
 .field input, .field select {
@@ -123,21 +128,21 @@ tbody tr:hover { background:#FAFBFC; }
   </div>
 </div>
 
-<!-- Auth gate -->
-<div id="authGate">
-  <div class="auth-gate">
-    <h2>Admin Access</h2>
+<!-- First-time key prompt -->
+<div class="key-overlay" id="keyOverlay" style="display:none;">
+  <div class="key-card">
+    <h2>Admin Key</h2>
+    <p>Enter once — it'll be saved for this browser.</p>
     <div class="field">
-      <label>Admin Key</label>
-      <input type="password" id="adminKeyInput" placeholder="Enter admin key" onkeydown="if(event.key==='Enter')unlockAdmin()">
+      <input type="password" id="adminKeyInput" placeholder="Enter admin key" onkeydown="if(event.key==='Enter')saveKey()">
     </div>
-    <button class="btn btn-primary" onclick="unlockAdmin()">Unlock</button>
-    <div class="error-msg" id="authError">Incorrect admin key</div>
+    <button class="btn btn-primary" style="width:100%;" onclick="saveKey()">Save &amp; Continue</button>
+    <div class="error-msg" id="authError" style="margin-top:0.75rem;">Incorrect key — try again</div>
   </div>
 </div>
 
 <!-- Admin panel -->
-<div id="adminPanel" style="display:none;">
+<div id="adminPanel">
   <div class="container">
 
     <!-- Non-lead requests -->
@@ -231,20 +236,40 @@ tbody tr:hover { background:#FAFBFC; }
 </div>
 
 <script>
-let adminKey = '';
+let adminKey = localStorage.getItem('ottaly_admin_key') || '';
 
-function unlockAdmin() {
+// ── Boot — auto-load if key is stored ─────────────────────
+(async function boot() {
+  if (adminKey) {
+    const ok = await tryLoad();
+    if (ok) return;
+    // Stored key is wrong (e.g. key changed) — clear and prompt
+    localStorage.removeItem('ottaly_admin_key');
+    adminKey = '';
+  }
+  document.getElementById('keyOverlay').style.display = 'flex';
+})();
+
+async function tryLoad() {
+  try {
+    await Promise.all([fetchClients(), fetchWorkspaces(), fetchNonleadRequests()]);
+    return true;
+  } catch { return false; }
+}
+
+async function saveKey() {
   const key = document.getElementById('adminKeyInput').value.trim();
   if (!key) return;
   adminKey = key;
   document.getElementById('authError').style.display = 'none';
-  Promise.all([fetchClients(), fetchWorkspaces(), fetchNonleadRequests()]).then(() => {
-    document.getElementById('authGate').style.display  = 'none';
-    document.getElementById('adminPanel').style.display = 'block';
-  }).catch(() => {
+  const ok = await tryLoad();
+  if (ok) {
+    localStorage.setItem('ottaly_admin_key', key);
+    document.getElementById('keyOverlay').style.display = 'none';
+  } else {
     document.getElementById('authError').style.display = 'block';
     adminKey = '';
-  });
+  }
 }
 
 function adminHeaders() {
