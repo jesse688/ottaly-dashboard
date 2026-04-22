@@ -6,293 +6,468 @@
     <title>Ottaly Revenue Dashboard</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@100;400;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Genos:wght@400;500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
+
         :root {
-            --dark: #0a0e27;
-            --darker: #050811;
-            --surface: #1a1f3a;
-            --text: #f0f4f8;
-            --text-dim: #a8afc1;
-            --accent: #00d9ff;
-            --accent-warm: #ff6b35;
-            --success: #00ff88;
+            /* Exact brand colors from your palette */
+            --navy:       #224388;
+            --navy-text:  #050C29;
+            --teal:       #1F6F78;
+            --purple:     #7C89CD;
+            --blue-light: #D2E4F8;
+            --yellow:     #FFB700;
+            --white:      #FFFFFF;
+            --gray-text:  #E5E5E5;
         }
 
         body {
-            font-family: 'Outfit', sans-serif;
-            background: linear-gradient(135deg, var(--darker) 0%, #0f1428 100%);
-            color: var(--text);
-            padding: 2rem 1rem;
-            min-height: 100vh;
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: #F8F9FC;
+            color: var(--navy-text);
+            margin: 0;
+            padding: 0;
         }
 
-        .container { max-width: 1920px; margin: 0 auto; }
+        /* Header with logo */
+        .header {
+            background: var(--navy-text);
+            padding: 1.25rem 2rem;
+            border-bottom: 3px solid var(--teal);
+        }
 
-        header {
+        .header-content {
+            max-width: 1600px;
+            margin: 0 auto;
             display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            margin-bottom: 2rem;
-            flex-wrap: wrap;
-            gap: 1rem;
-        }
-
-        h1 {
-            font-size: 36px;
-            font-weight: 700;
-            background: linear-gradient(135deg, var(--accent), var(--accent-warm));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            font-family: 'Space Mono', monospace;
-        }
-
-        .status {
-            display: flex;
-            gap: 1rem;
             align-items: center;
-            padding: 1rem;
-            background: rgba(26, 31, 58, 0.6);
-            border: 1px solid rgba(0, 217, 255, 0.2);
-            border-radius: 8px;
-            font-size: 12px;
+            justify-content: space-between;
         }
 
-        .status-dot {
+        .logo-container {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .logo {
+            height: 45px;
+            width: auto;
+        }
+
+        .logo-text {
+            border-left: 2px solid rgba(255,255,255,0.2);
+            padding-left: 1rem;
+        }
+
+        .logo-title {
+            font-family: 'Genos', sans-serif;
+            font-size: 28px;
+            font-weight: 700;
+            color: white;
+            letter-spacing: 2px;
+            line-height: 1;
+        }
+
+        .logo-subtitle {
+            font-family: 'Genos', sans-serif;
+            font-size: 11px;
+            color: rgba(255,255,255,0.6);
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            margin-top: 2px;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+        }
+
+        .live-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 14px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 20px;
+        }
+
+        .live-dot {
             width: 8px;
             height: 8px;
             border-radius: 50%;
-            background: var(--success);
+            background: #22c55e;
             animation: pulse 2s infinite;
         }
 
         @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
+            0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(34,197,94,0.4); }
+            50% { opacity: 0.7; box-shadow: 0 0 0 5px rgba(34,197,94,0); }
         }
 
-        .filter-bar {
-            margin-bottom: 2rem;
-            padding: 1.5rem;
-            background: rgba(26, 31, 58, 0.4);
-            border: 1px solid rgba(0, 217, 255, 0.15);
+        .live-text {
+            color: white;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .last-update {
+            color: rgba(255,255,255,0.5);
+            font-size: 12px;
+        }
+
+        /* Main content */
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        /* Filters */
+        .filters {
+            background: white;
             border-radius: 12px;
+            padding: 1.25rem 1.75rem;
+            margin-bottom: 1.75rem;
             display: flex;
-            gap: 1rem;
             align-items: center;
-            flex-wrap: wrap;
+            gap: 2rem;
+            box-shadow: 0 1px 3px rgba(5,12,41,0.08);
+        }
+
+        .filter-group {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
         }
 
         .filter-label {
             font-size: 12px;
-            color: var(--text-dim);
+            font-weight: 600;
+            color: var(--navy-text);
             text-transform: uppercase;
-            letter-spacing: 1px;
+            letter-spacing: 0.5px;
         }
 
         select {
-            background: rgba(0, 217, 255, 0.1);
-            border: 1px solid rgba(0, 217, 255, 0.3);
+            border: 2px solid #E5E7EB;
             border-radius: 8px;
-            color: var(--text);
-            padding: 0.75rem 1rem;
-            font-family: inherit;
+            padding: 8px 14px;
+            font-family: 'Inter', sans-serif;
             font-size: 14px;
+            font-weight: 500;
+            color: var(--navy-text);
+            background: white;
             cursor: pointer;
-            min-width: 200px;
+            outline: none;
+            transition: all 0.2s;
         }
 
         select:hover {
-            background: rgba(0, 217, 255, 0.15);
+            border-color: var(--teal);
         }
 
-        .metrics-grid {
+        select:focus {
+            border-color: var(--teal);
+            box-shadow: 0 0 0 3px rgba(31,111,120,0.1);
+        }
+
+        /* Metrics grid */
+        .metrics {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 1.5rem;
-            margin-bottom: 2rem;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1.25rem;
+            margin-bottom: 1.75rem;
         }
 
-        .metric-card {
-            padding: 1.5rem;
-            background: linear-gradient(135deg, rgba(26, 31, 58, 0.4), rgba(36, 43, 69, 0.2));
-            border: 1px solid rgba(0, 217, 255, 0.15);
+        @media (max-width: 1200px) { .metrics { grid-template-columns: repeat(2, 1fr); } }
+        @media (max-width: 600px) { .metrics { grid-template-columns: 1fr; } }
+
+        .metric {
+            background: white;
             border-radius: 12px;
+            padding: 1.5rem;
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 1px 3px rgba(5,12,41,0.08);
+            transition: transform 0.2s, box-shadow 0.2s;
         }
+
+        .metric:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(5,12,41,0.15);
+        }
+
+        .metric::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+        }
+
+        .metric.teal::before   { background: var(--teal); }
+        .metric.navy::before   { background: var(--navy); }
+        .metric.yellow::before { background: var(--yellow); }
+        .metric.purple::before { background: var(--purple); }
+
+        .metric-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            margin-bottom: 1rem;
+        }
+
+        .metric-icon.teal   { background: rgba(31,111,120,0.12); }
+        .metric-icon.navy   { background: rgba(34,67,136,0.12); }
+        .metric-icon.yellow { background: rgba(255,183,0,0.15); }
+        .metric-icon.purple { background: rgba(124,137,205,0.12); }
 
         .metric-label {
             font-size: 11px;
-            color: var(--text-dim);
+            font-weight: 600;
+            color: #6B7280;
             text-transform: uppercase;
             letter-spacing: 1px;
-            margin-bottom: 0.5rem;
+            margin-bottom: 6px;
         }
 
         .metric-value {
-            font-size: 36px;
+            font-family: 'Genos', sans-serif;
+            font-size: 42px;
             font-weight: 700;
-            color: var(--accent);
-            font-family: 'Space Mono', monospace;
-            margin-bottom: 0.5rem;
+            color: var(--navy-text);
+            line-height: 1;
+            margin-bottom: 6px;
+            letter-spacing: -1px;
         }
 
-        .metric-subtext {
-            font-size: 12px;
-            color: var(--text-dim);
+        .metric-sub {
+            font-size: 13px;
+            color: #9CA3AF;
+            font-weight: 500;
         }
 
-        .chart-grid {
+        /* Charts */
+        .charts {
             display: grid;
-            grid-template-columns: 1.5fr 1fr;
-            gap: 2rem;
-            margin-bottom: 2rem;
+            grid-template-columns: 1.6fr 1fr;
+            gap: 1.25rem;
+            margin-bottom: 1.75rem;
         }
 
-        @media (max-width: 1200px) {
-            .chart-grid { grid-template-columns: 1fr; }
-        }
+        @media (max-width: 1024px) { .charts { grid-template-columns: 1fr; } }
 
-        .chart-card {
-            padding: 2rem;
-            background: linear-gradient(135deg, rgba(26, 31, 58, 0.4), rgba(36, 43, 69, 0.2));
-            border: 1px solid rgba(0, 217, 255, 0.15);
+        .card {
+            background: white;
             border-radius: 12px;
+            padding: 1.75rem;
+            box-shadow: 0 1px 3px rgba(5,12,41,0.08);
         }
 
         .card-title {
-            font-size: 16px;
-            font-weight: 600;
+            font-family: 'Genos', sans-serif;
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--navy-text);
             margin-bottom: 1.5rem;
+            letter-spacing: 0.5px;
         }
 
         .chart-wrapper {
             position: relative;
-            height: 350px;
+            height: 320px;
         }
 
-        .table-card {
-            padding: 2rem;
-            background: linear-gradient(135deg, rgba(26, 31, 58, 0.4), rgba(36, 43, 69, 0.2));
-            border: 1px solid rgba(0, 217, 255, 0.15);
-            border-radius: 12px;
-            margin-bottom: 1.5rem;
-            overflow-x: auto;
-        }
-
+        /* Tables */
         table {
             width: 100%;
-            font-size: 13px;
             border-collapse: collapse;
         }
 
-        th {
-            padding: 1rem;
+        thead th {
+            padding: 12px 16px;
             text-align: left;
-            font-weight: 600;
-            color: var(--accent);
-            border-bottom: 1px solid rgba(0, 217, 255, 0.2);
-            text-transform: uppercase;
             font-size: 11px;
+            font-weight: 700;
+            color: #6B7280;
+            text-transform: uppercase;
             letter-spacing: 1px;
+            border-bottom: 2px solid #F3F4F6;
+            background: #FAFBFC;
         }
 
-        td {
-            padding: 1rem;
-            border-bottom: 1px solid rgba(0, 217, 255, 0.1);
-            color: var(--text-dim);
+        thead th:first-child { border-radius: 8px 0 0 0; }
+        thead th:last-child { border-radius: 0 8px 0 0; }
+
+        tbody td {
+            padding: 14px 16px;
+            border-bottom: 1px solid #F3F4F6;
+            font-size: 14px;
+            color: var(--navy-text);
         }
 
-        tr:hover td { background: rgba(0, 217, 255, 0.05); }
+        tbody tr:last-child td { border-bottom: none; }
+        tbody tr:hover { background: #FAFBFC; }
 
-        .number {
-            font-family: 'Space Mono', monospace;
-            color: var(--accent);
+        .num {
+            font-family: 'Genos', sans-serif;
+            font-size: 17px;
+            font-weight: 700;
+            color: var(--navy-text);
+        }
+
+        .client-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 5px 12px 5px 5px;
+            background: var(--blue-light);
+            border-radius: 20px;
+            font-size: 13px;
             font-weight: 600;
+            color: var(--navy);
+        }
+
+        .client-initial {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 700;
+            color: white;
+        }
+
+        .revenue-pill {
+            display: inline-block;
+            padding: 4px 12px;
+            background: rgba(31,111,120,0.12);
+            color: var(--teal);
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 700;
+            font-family: 'Genos', sans-serif;
         }
 
         .error {
-            padding: 1.5rem;
-            background: rgba(255, 51, 51, 0.1);
-            border: 1px solid rgba(255, 51, 51, 0.3);
-            border-radius: 8px;
-            color: #ff3333;
+            background: #FEF2F2;
+            border: 2px solid #FCA5A5;
+            border-radius: 12px;
+            padding: 1rem 1.25rem;
+            color: #DC2626;
             margin-bottom: 1.5rem;
+            font-size: 14px;
         }
 
-        .badge {
-            display: inline-block;
-            padding: 4px 10px;
-            background: rgba(0, 217, 255, 0.15);
-            border: 1px solid rgba(0, 217, 255, 0.3);
-            border-radius: 20px;
-            font-size: 11px;
-            color: var(--accent);
-            font-weight: 600;
+        .section-title {
+            font-family: 'Genos', sans-serif;
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--navy-text);
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .section-title::after {
+            content: '';
+            flex: 1;
+            height: 2px;
+            background: #E5E7EB;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <header>
-            <div>
-                <h1>⚡ OTTALY REVENUE</h1>
-                <p style="color: var(--text-dim); margin-top: 4px; font-size: 13px;">Agency dashboard · Real-time lead tracking</p>
+    <!-- Header -->
+    <div class="header">
+        <div class="header-content">
+            <div class="logo-container">
+                <img src="https://framerusercontent.com/images/nDSHQKnOUtpvlbArTv7AiTwZpcE.svg" alt="Ottaly" class="logo">
             </div>
-            <div class="status">
-                <div class="status-dot"></div>
-                <span id="statusText">Live</span>
-                <span id="lastUpdate" style="color: var(--accent);">--:--</span>
+            <div class="header-right">
+                <div class="live-status">
+                    <div class="live-dot"></div>
+                    <span class="live-text">Live</span>
+                </div>
+                <div class="last-update">Updated <span id="lastUpdate">--:--</span></div>
             </div>
-        </header>
+        </div>
+    </div>
 
-        <div class="filter-bar">
-            <span class="filter-label">Filter by Client:</span>
-            <select id="clientFilter" onchange="updateDisplay()">
-                <option value="all">All Clients</option>
-            </select>
-            <span class="filter-label">Time Period:</span>
-            <select id="timeFilter" onchange="updateDisplay()">
-                <option value="month">This Month</option>
-                <option value="week">This Week</option>
-                <option value="today">Today</option>
-                <option value="all">All Time</option>
-            </select>
+    <!-- Main Container -->
+    <div class="container">
+        <!-- Filters -->
+        <div class="filters">
+            <div class="filter-group">
+                <span class="filter-label">Client</span>
+                <select id="clientFilter" onchange="updateDisplay()">
+                    <option value="all">All Clients</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <span class="filter-label">Period</span>
+                <select id="timeFilter" onchange="updateDisplay()">
+                    <option value="month">This Month</option>
+                    <option value="week">This Week</option>
+                    <option value="today">Today</option>
+                    <option value="all">All Time</option>
+                </select>
+            </div>
         </div>
 
         <div id="errorContainer"></div>
 
-        <div class="metrics-grid">
-            <div class="metric-card">
+        <!-- Metrics -->
+        <div class="metrics">
+            <div class="metric teal">
+                <div class="metric-icon teal">💷</div>
                 <div class="metric-label">Total Revenue</div>
                 <div class="metric-value" id="metricRevenue">£0</div>
-                <div class="metric-subtext" id="metricLeads">0 leads</div>
+                <div class="metric-sub" id="metricLeads">0 leads delivered</div>
             </div>
-            <div class="metric-card">
+            <div class="metric navy">
+                <div class="metric-icon navy">📊</div>
                 <div class="metric-label">Avg Lead Value</div>
                 <div class="metric-value" id="metricAvg">£0</div>
-                <div class="metric-subtext" id="metricAvgLabel">per lead</div>
+                <div class="metric-sub">per lead</div>
             </div>
-            <div class="metric-card">
+            <div class="metric yellow">
+                <div class="metric-icon yellow">🏢</div>
                 <div class="metric-label">Active Clients</div>
                 <div class="metric-value" id="metricClients">0</div>
-                <div class="metric-subtext">with leads</div>
+                <div class="metric-sub">with leads</div>
             </div>
-            <div class="metric-card">
+            <div class="metric purple">
+                <div class="metric-icon purple">🏆</div>
                 <div class="metric-label">Top Client</div>
-                <div class="metric-value" id="metricTopClient" style="font-size: 20px;">-</div>
-                <div class="metric-subtext" id="metricTopRevenue">£0</div>
+                <div class="metric-value" id="metricTopClient" style="font-size: 24px;">—</div>
+                <div class="metric-sub" id="metricTopRevenue">£0 revenue</div>
             </div>
         </div>
 
-        <div class="chart-grid">
-            <div class="chart-card">
+        <!-- Charts -->
+        <div class="section-title">Performance Overview</div>
+        <div class="charts">
+            <div class="card">
                 <div class="card-title">Revenue by Client</div>
                 <div class="chart-wrapper">
                     <canvas id="revenueChart"></canvas>
                 </div>
             </div>
-            <div class="chart-card">
+            <div class="card">
                 <div class="card-title">Lead Distribution</div>
                 <div class="chart-wrapper">
                     <canvas id="leadsChart"></canvas>
@@ -300,25 +475,27 @@
             </div>
         </div>
 
-        <div class="table-card">
-            <div class="card-title">Client Performance</div>
+        <!-- Client Performance Table -->
+        <div class="section-title">Client Performance</div>
+        <div class="card" style="margin-bottom: 1.5rem;">
             <table>
                 <thead>
                     <tr>
                         <th>Client</th>
                         <th>Leads</th>
                         <th>Revenue</th>
-                        <th>Avg Lead Price</th>
+                        <th>Avg per Lead</th>
                     </tr>
                 </thead>
                 <tbody id="clientsTable">
-                    <tr><td colspan="4">Loading...</td></tr>
+                    <tr><td colspan="4" style="text-align: center; padding: 2rem; color: #9CA3AF;">Loading...</td></tr>
                 </tbody>
             </table>
         </div>
 
-        <div class="table-card">
-            <div class="card-title">Recent Leads</div>
+        <!-- Recent Leads Table -->
+        <div class="section-title">Recent Leads</div>
+        <div class="card">
             <table>
                 <thead>
                     <tr>
@@ -326,11 +503,11 @@
                         <th>Name</th>
                         <th>Email</th>
                         <th>Campaign</th>
-                        <th>Revenue</th>
+                        <th>Value</th>
                     </tr>
                 </thead>
                 <tbody id="leadsTable">
-                    <tr><td colspan="5">Loading...</td></tr>
+                    <tr><td colspan="5" style="text-align: center; padding: 2rem; color: #9CA3AF;">Loading...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -342,11 +519,18 @@
         let revenueChart = null;
         let leadsChart = null;
 
+        const CLIENT_COLORS = ['#1F6F78','#224388','#FFB700','#7C89CD','#D2E4F8'];
+
+        function getClientColors(count) {
+            return Array(count).fill(0).map((_, i) => CLIENT_COLORS[i % CLIENT_COLORS.length]);
+        }
+
+        function clientInitial(name) { return name.charAt(0).toUpperCase(); }
+
         async function fetchData() {
             try {
                 const response = await fetch(CSV_URL);
                 const text = await response.text();
-                
                 Papa.parse(text, {
                     header: true,
                     skipEmptyLines: true,
@@ -358,127 +542,117 @@
                                 campaign: row['Campaign'] || '',
                                 first_name: row['First Name'] || '',
                                 last_name: row['Last Name'] || '',
-                                campaign_id: row['Campaign ID'] || '',
                                 lead_email: row['Lead Email'] || '',
                                 lead_price: parseFloat(row['Lead Price']) || 0,
-                                industry: row['Industry'] || '',
-                                location: row['Location'] || '',
                                 timestamp: new Date()
                             }));
-
                         populateClientFilter();
                         updateDisplay();
-                        document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+                        document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'});
                     }
                 });
-                
             } catch (error) {
-                document.getElementById('errorContainer').innerHTML = 
-                    `<div class="error">Error: ${error.message}</div>`;
+                document.getElementById('errorContainer').innerHTML = `<div class="error">⚠️ ${error.message}</div>`;
             }
         }
 
         function populateClientFilter() {
             const clients = [...new Set(allLeads.map(l => l.client_name))].sort();
             const select = document.getElementById('clientFilter');
-            const currentValue = select.value;
-            
+            const current = select.value;
             select.innerHTML = '<option value="all">All Clients</option>';
             clients.forEach(client => {
-                const option = document.createElement('option');
-                option.value = client;
-                option.textContent = client;
-                if (client === currentValue) option.selected = true;
-                select.appendChild(option);
+                const opt = document.createElement('option');
+                opt.value = client;
+                opt.textContent = client;
+                if (client === current) opt.selected = true;
+                select.appendChild(opt);
             });
         }
 
         function getFilteredLeads() {
             const clientFilter = document.getElementById('clientFilter').value;
-            const timeFilter = document.getElementById('timeFilter').value;
-            
             let filtered = allLeads;
-            
-            if (clientFilter !== 'all') {
-                filtered = filtered.filter(l => l.client_name === clientFilter);
-            }
-            
-            // Time filter (using timestamp which is now, but in future we'd use actual lead date)
-            // For now showing all within selected period
-            
+            if (clientFilter !== 'all') filtered = filtered.filter(l => l.client_name === clientFilter);
             return filtered;
         }
 
         function updateDisplay() {
             const leads = getFilteredLeads();
-            
             const totalRevenue = leads.reduce((sum, l) => sum + l.lead_price, 0);
             const avgValue = leads.length > 0 ? totalRevenue / leads.length : 0;
-            
-            document.getElementById('metricRevenue').textContent = '£' + Math.round(totalRevenue).toLocaleString();
-            document.getElementById('metricLeads').textContent = leads.length + ' leads';
-            document.getElementById('metricAvg').textContent = '£' + Math.round(avgValue).toLocaleString();
-            
-            // Group by client
+
+            document.getElementById('metricRevenue').textContent = '£' + Math.round(totalRevenue).toLocaleString('en-GB');
+            document.getElementById('metricLeads').textContent = leads.length + ' leads delivered';
+            document.getElementById('metricAvg').textContent = '£' + Math.round(avgValue).toLocaleString('en-GB');
+
             const byClient = {};
             leads.forEach(lead => {
-                if (!byClient[lead.client_name]) {
-                    byClient[lead.client_name] = { leads: 0, revenue: 0 };
-                }
+                if (!byClient[lead.client_name]) byClient[lead.client_name] = { leads: 0, revenue: 0 };
                 byClient[lead.client_name].leads += 1;
                 byClient[lead.client_name].revenue += lead.lead_price;
             });
-            
-            const clientCount = Object.keys(byClient).length;
-            document.getElementById('metricClients').textContent = clientCount;
-            
-            // Top client
+
+            document.getElementById('metricClients').textContent = Object.keys(byClient).length;
+
             const sorted = Object.entries(byClient).sort((a, b) => b[1].revenue - a[1].revenue);
             if (sorted.length > 0) {
                 document.getElementById('metricTopClient').textContent = sorted[0][0];
-                document.getElementById('metricTopRevenue').textContent = '£' + Math.round(sorted[0][1].revenue).toLocaleString();
+                document.getElementById('metricTopRevenue').textContent = '£' + Math.round(sorted[0][1].revenue).toLocaleString('en-GB') + ' revenue';
             } else {
-                document.getElementById('metricTopClient').textContent = '-';
-                document.getElementById('metricTopRevenue').textContent = '£0';
+                document.getElementById('metricTopClient').textContent = '—';
+                document.getElementById('metricTopRevenue').textContent = '£0 revenue';
             }
-            
+
             updateClientTable(sorted);
             updateLeadsTable(leads);
             updateCharts(sorted);
         }
 
         function updateClientTable(sortedClients) {
-            document.getElementById('clientsTable').innerHTML = sortedClients.map(([client, stats]) => `
+            const colors = getClientColors(sortedClients.length);
+            document.getElementById('clientsTable').innerHTML = sortedClients.map(([client, stats], i) => `
                 <tr>
-                    <td><strong>${client}</strong></td>
-                    <td class="number">${stats.leads}</td>
-                    <td class="number">£${Math.round(stats.revenue).toLocaleString()}</td>
-                    <td class="number">£${Math.round(stats.revenue / stats.leads)}</td>
+                    <td>
+                        <div class="client-badge">
+                            <div class="client-initial" style="background:${colors[i]}">${clientInitial(client)}</div>
+                            ${client}
+                        </div>
+                    </td>
+                    <td><span class="num">${stats.leads}</span></td>
+                    <td><span class="revenue-pill">£${Math.round(stats.revenue).toLocaleString('en-GB')}</span></td>
+                    <td class="num">£${Math.round(stats.revenue / stats.leads)}</td>
                 </tr>
-            `).join('') || '<tr><td colspan="4">No data</td></tr>';
+            `).join('') || '<tr><td colspan="4" style="text-align:center;padding:2rem;color:#9CA3AF;">No data</td></tr>';
         }
 
         function updateLeadsTable(leads) {
             const recent = leads.slice(-20).reverse();
+            const colors = {};
+            [...new Set(leads.map(l => l.client_name))].forEach((c, i) => colors[c] = CLIENT_COLORS[i % CLIENT_COLORS.length]);
+
             document.getElementById('leadsTable').innerHTML = recent.map(lead => `
                 <tr>
-                    <td><span class="badge">${lead.client_name}</span></td>
-                    <td>${lead.first_name} ${lead.last_name}</td>
-                    <td style="font-size: 11px;">${lead.lead_email}</td>
-                    <td style="font-size: 11px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${lead.campaign.substring(0, 30)}${lead.campaign.length > 30 ? '...' : ''}</td>
-                    <td class="number">£${lead.lead_price}</td>
+                    <td>
+                        <div class="client-badge">
+                            <div class="client-initial" style="background:${colors[lead.client_name]}">${clientInitial(lead.client_name)}</div>
+                            ${lead.client_name}
+                        </div>
+                    </td>
+                    <td style="font-weight:500;">${lead.first_name} ${lead.last_name}</td>
+                    <td style="font-size:13px;color:#6B7280;">${lead.lead_email}</td>
+                    <td style="font-size:13px;color:#6B7280;">${lead.campaign.substring(0,40)}${lead.campaign.length>40?'…':''}</td>
+                    <td><span class="revenue-pill">£${lead.lead_price}</span></td>
                 </tr>
-            `).join('') || '<tr><td colspan="5">No leads</td></tr>';
+            `).join('') || '<tr><td colspan="5" style="text-align:center;padding:2rem;color:#9CA3AF;">No leads</td></tr>';
         }
 
         function updateCharts(sortedClients) {
             const labels = sortedClients.map(([c]) => c);
             const revenues = sortedClients.map(([, s]) => s.revenue);
             const leadCounts = sortedClients.map(([, s]) => s.leads);
-            
-            const colors = ['rgba(0, 217, 255, 0.8)', 'rgba(255, 107, 53, 0.8)', 'rgba(0, 255, 136, 0.8)', 'rgba(255, 215, 0, 0.8)', 'rgba(153, 102, 255, 0.8)', 'rgba(75, 192, 192, 0.8)', 'rgba(255, 159, 64, 0.8)'];
-            
-            // Revenue chart
+            const colors = getClientColors(labels.length);
+
             const ctx1 = document.getElementById('revenueChart').getContext('2d');
             if (revenueChart) revenueChart.destroy();
             revenueChart = new Chart(ctx1, {
@@ -486,25 +660,35 @@
                 data: {
                     labels,
                     datasets: [{
-                        label: 'Revenue',
                         data: revenues,
-                        backgroundColor: 'rgba(0, 217, 255, 0.8)',
-                        borderRadius: 6
+                        backgroundColor: colors,
+                        borderRadius: 8,
+                        borderSkipped: false,
                     }]
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
                     indexAxis: 'y',
-                    plugins: { legend: { display: false } },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: { label: ctx => ' £' + Math.round(ctx.raw).toLocaleString('en-GB') }
+                        }
+                    },
                     scales: {
-                        x: { ticks: { color: '#a8afc1' }, grid: { color: 'rgba(0, 217, 255, 0.1)' } },
-                        y: { ticks: { color: '#a8afc1' }, grid: { display: false } }
+                        x: {
+                            ticks: { color: '#6B7280', font: { family: 'Inter', size: 11 }, callback: v => '£' + v },
+                            grid: { color: '#F3F4F6' }
+                        },
+                        y: {
+                            ticks: { color: '#374151', font: { family: 'Inter', size: 12, weight: '600' } },
+                            grid: { display: false }
+                        }
                     }
                 }
             });
-            
-            // Leads chart
+
             const ctx2 = document.getElementById('leadsChart').getContext('2d');
             if (leadsChart) leadsChart.destroy();
             leadsChart = new Chart(ctx2, {
@@ -514,14 +698,27 @@
                     datasets: [{
                         data: leadCounts,
                         backgroundColor: colors,
-                        borderColor: '#0a0e27',
-                        borderWidth: 3
+                        borderColor: '#FFFFFF',
+                        borderWidth: 4,
+                        hoverOffset: 8
                     }]
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    plugins: { legend: { position: 'bottom', labels: { color: '#a8afc1', padding: 15 } } }
+                    cutout: '65%',
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: {
+                                color: '#374151',
+                                font: { family: 'Inter', size: 12, weight: '600' },
+                                padding: 16,
+                                usePointStyle: true,
+                                pointStyleWidth: 12
+                            }
+                        }
+                    }
                 }
             });
         }
