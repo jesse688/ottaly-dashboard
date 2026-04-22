@@ -1,0 +1,1229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ottaly Performance Tracker</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Genos:wght@400;500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --navy:       #224388;
+            --navy-text:  #050C29;
+            --teal:       #1F6F78;
+            --purple:     #7C89CD;
+            --blue-light: #D2E4F8;
+            --yellow:     #FFB700;
+        }
+        body { font-family: 'Inter', -apple-system, sans-serif; background: #F8F9FC; color: var(--navy-text); }
+
+        /* ── Header ── */
+        .header { background: var(--navy-text); padding: 1.25rem 2rem; border-bottom: 3px solid var(--teal); }
+        .header-content { max-width: 1600px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; }
+        .logo { height: 45px; width: auto; }
+        .header-left { display: flex; align-items: center; gap: 1.5rem; }
+        .header-right { display: flex; align-items: center; gap: 1.5rem; }
+
+        .nav-tabs { display: flex; gap: 0.25rem; }
+        .nav-tab {
+            padding: 8px 18px; border-radius: 8px;
+            font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 600;
+            color: rgba(255,255,255,0.55); text-decoration: none; transition: all 0.2s;
+        }
+        .nav-tab:hover { background: rgba(255,255,255,0.1); color: white; }
+        .nav-tab.active { background: var(--teal); color: white; }
+
+        .live-status { display: flex; align-items: center; gap: 8px; padding: 6px 14px; background: rgba(255,255,255,0.1); border-radius: 20px; }
+        .live-dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; animation: pulse 2s infinite; }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(34,197,94,0.4); }
+            50% { opacity: 0.7; box-shadow: 0 0 0 5px rgba(34,197,94,0); }
+        }
+        .live-text { color: white; font-size: 12px; font-weight: 500; }
+        .last-update { color: rgba(255,255,255,0.5); font-size: 12px; }
+        .countdown { font-size: 12px; color: rgba(255,255,255,0.35); }
+
+        /* ── Layout ── */
+        .container { max-width: 1600px; margin: 0 auto; padding: 2rem; }
+
+        .section-title {
+            font-family: 'Genos', sans-serif; font-size: 16px; font-weight: 700;
+            color: var(--navy-text); text-transform: uppercase; letter-spacing: 2px;
+            margin-bottom: 1rem; display: flex; align-items: center; gap: 1rem;
+        }
+        .section-title::after { content: ''; flex: 1; height: 2px; background: #E5E7EB; }
+
+        /* ── Alerts ── */
+        .alerts { display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1.5rem; }
+        .alert-banner {
+            display: flex; align-items: center; gap: 0.75rem;
+            padding: 0.875rem 1.25rem; border-radius: 10px; font-size: 14px; font-weight: 600;
+        }
+        .alert-banner.red  { background: #FEF2F2; border: 2px solid #FCA5A5; color: #DC2626; }
+        .alert-banner.amber { background: #FFFBEB; border: 2px solid #FCD34D; color: #B45309; }
+
+        /* ── Metric cards ── */
+        .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.25rem; margin-bottom: 1.75rem; }
+        @media (max-width: 1200px) { .metrics { grid-template-columns: repeat(2, 1fr); } }
+        @media (max-width: 600px)  { .metrics { grid-template-columns: 1fr; } }
+
+        .metric {
+            background: white; border-radius: 12px; padding: 1.5rem;
+            position: relative; overflow: hidden;
+            box-shadow: 0 1px 3px rgba(5,12,41,0.08);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .metric:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(5,12,41,0.15); }
+        .metric::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px; }
+        .metric.teal::before   { background: var(--teal); }
+        .metric.navy::before   { background: var(--navy); }
+        .metric.yellow::before { background: var(--yellow); }
+        .metric.purple::before { background: var(--purple); }
+        .metric.alert::before  { background: #DC2626; }
+
+        .metric-icon { width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 22px; margin-bottom: 1rem; }
+        .metric-icon.teal   { background: rgba(31,111,120,0.12); }
+        .metric-icon.navy   { background: rgba(34,67,136,0.12); }
+        .metric-icon.yellow { background: rgba(255,183,0,0.15); }
+        .metric-icon.purple { background: rgba(124,137,205,0.12); }
+
+        .metric-label { font-size: 11px; font-weight: 600; color: #6B7280; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+        .metric-value { font-family: 'Genos', sans-serif; font-size: 42px; font-weight: 700; color: var(--navy-text); line-height: 1; margin-bottom: 6px; letter-spacing: -1px; }
+        .metric-value.red { color: #DC2626; }
+        .metric-sub { font-size: 13px; color: #9CA3AF; font-weight: 500; }
+
+        /* ── Cards ── */
+        .card { background: white; border-radius: 12px; padding: 1.75rem; box-shadow: 0 1px 3px rgba(5,12,41,0.08); }
+        .card-title { font-family: 'Genos', sans-serif; font-size: 20px; font-weight: 700; color: var(--navy-text); margin-bottom: 1.5rem; letter-spacing: 0.5px; }
+
+        /* ── Two-col grid ── */
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin-bottom: 1.75rem; }
+        @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
+
+        /* ── Trend rows ── */
+        .trend-row { display: flex; justify-content: space-between; align-items: center; padding: 0.8rem 0; border-bottom: 1px solid #F3F4F6; }
+        .trend-row:last-child { border-bottom: none; }
+        .trend-label { font-size: 13px; color: #6B7280; font-weight: 500; }
+        .trend-val { font-family: 'Genos', sans-serif; font-size: 22px; font-weight: 700; display: flex; align-items: center; gap: 0.4rem; }
+        .trend-val.good   { color: var(--teal); }
+        .trend-val.warn   { color: #D97706; }
+        .trend-val.bad    { color: #DC2626; }
+        .trend-val.muted  { color: #9CA3AF; }
+        .arrow { font-size: 16px; }
+
+        /* ── Pipeline cards ── */
+        .pipeline-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1.25rem; margin-bottom: 1.75rem; }
+        @media (max-width: 1100px) { .pipeline-grid { grid-template-columns: repeat(3, 1fr); } }
+        @media (max-width: 700px)  { .pipeline-grid { grid-template-columns: repeat(2, 1fr); } }
+
+        .pipeline-card { background: white; border-radius: 10px; padding: 1.25rem; box-shadow: 0 1px 3px rgba(5,12,41,0.08); text-align: center; border-top: 4px solid transparent; }
+        .pipeline-label { font-size: 11px; font-weight: 600; color: #6B7280; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+        .pipeline-value { font-family: 'Genos', sans-serif; font-size: 36px; font-weight: 700; line-height: 1; }
+        .pipeline-pct { font-size: 12px; color: #9CA3AF; margin-top: 4px; }
+
+        /* ── Tables ── */
+        table { width: 100%; border-collapse: collapse; }
+        thead th { padding: 12px 16px; text-align: left; font-size: 11px; font-weight: 700; color: #6B7280; text-transform: uppercase; letter-spacing: 1px; border-bottom: 2px solid #F3F4F6; background: #FAFBFC; }
+        thead th:first-child { border-radius: 8px 0 0 0; }
+        thead th:last-child  { border-radius: 0 8px 0 0; }
+        tbody td { padding: 13px 16px; border-bottom: 1px solid #F3F4F6; font-size: 14px; }
+        tbody tr:last-child td { border-bottom: none; }
+        tbody tr:hover { background: #FAFBFC; }
+        .num { font-family: 'Genos', sans-serif; font-size: 17px; font-weight: 700; color: var(--navy-text); }
+
+        .badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+        .badge-dot { width: 6px; height: 6px; border-radius: 50%; }
+        .badge.active   { background: #ECFDF5; color: #059669; }
+        .badge.paused   { background: #FFFBEB; color: #D97706; }
+        .badge.inactive { background: #F3F4F6; color: #6B7280; }
+
+        /* ── Warmup big numbers ── */
+        .warmup-trio { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem; text-align: center; }
+        .wt-val { font-family: 'Genos', sans-serif; font-size: 48px; font-weight: 800; line-height: 1; }
+        .wt-label { font-size: 12px; color: #6B7280; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; margin-top: 4px; }
+
+        /* ── Domain list ── */
+        .domain-row { display: flex; justify-content: space-between; align-items: center; padding: 0.55rem 0; border-bottom: 1px solid #F9FAFB; font-size: 13px; }
+        .domain-row:last-child { border-bottom: none; }
+        .domain-name { font-weight: 600; color: var(--navy-text); }
+        .domain-count { font-family: 'Genos', sans-serif; font-size: 17px; font-weight: 700; color: var(--navy); }
+
+        .loading { color: #9CA3AF; text-align: center; padding: 2rem; font-size: 14px; }
+        .pct-good { color: var(--teal); }
+        .pct-warn { color: #D97706; }
+        .pct-bad  { color: #DC2626; }
+        .pct-good, .pct-warn, .pct-bad { font-family: 'Genos', sans-serif; font-size: 17px; font-weight: 700; }
+
+        /* ── Client tab bar ── */
+        .client-bar {
+            background: white;
+            border-bottom: 2px solid #E5E7EB;
+            padding: 0 2rem;
+            overflow-x: auto;
+            white-space: nowrap;
+        }
+        .client-bar-inner {
+            max-width: 1600px;
+            margin: 0 auto;
+            display: flex;
+            gap: 0;
+        }
+        .ws-tab {
+            padding: 14px 20px;
+            border: none;
+            background: transparent;
+            font-family: 'Inter', sans-serif;
+            font-size: 13px;
+            font-weight: 600;
+            color: #6B7280;
+            cursor: pointer;
+            border-bottom: 3px solid transparent;
+            margin-bottom: -2px;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+        .ws-tab:hover { color: var(--navy-text); background: #F9FAFB; }
+        .ws-tab.active { color: var(--navy); border-bottom-color: var(--navy); }
+        .ws-tab-loading { padding: 14px 20px; color: #9CA3AF; font-size: 13px; }
+
+        /* ── Actions tab button ── */
+        .actions-tab {
+            padding: 14px 20px;
+            border: none; background: transparent;
+            font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 700;
+            color: var(--teal); cursor: pointer;
+            border-bottom: 3px solid transparent; margin-bottom: -2px;
+            transition: all 0.15s; white-space: nowrap;
+            display: flex; align-items: center; gap: 6px; flex-shrink: 0;
+        }
+        .actions-tab:hover { background: rgba(31,111,120,0.06); }
+        .actions-tab.active { border-bottom-color: var(--teal); background: rgba(31,111,120,0.08); }
+        .client-bar-sep { width: 1px; background: #E5E7EB; margin: 8px 4px; flex-shrink: 0; }
+        .ws-tabs-list { display: flex; gap: 0; }
+
+        .manage-btn {
+            padding: 14px 16px; border: none; background: transparent;
+            font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 600;
+            color: #9CA3AF; cursor: pointer; border-bottom: 3px solid transparent;
+            margin-bottom: -2px; transition: all 0.15s; white-space: nowrap; flex-shrink: 0;
+        }
+        .manage-btn:hover { color: var(--navy-text); background: #F9FAFB; }
+
+        /* ── Manage modal ── */
+        .modal-backdrop {
+            position: fixed; inset: 0; background: rgba(5,12,41,0.45);
+            z-index: 100; display: flex; align-items: center; justify-content: center;
+        }
+        .manage-modal {
+            background: white; border-radius: 14px; width: 480px; max-width: 95vw;
+            max-height: 80vh; display: flex; flex-direction: column;
+            box-shadow: 0 20px 60px rgba(5,12,41,0.25);
+        }
+        .manage-modal-header {
+            padding: 1.5rem 1.75rem 1.25rem;
+            border-bottom: 1px solid #F3F4F6;
+            display: flex; align-items: center; justify-content: space-between;
+        }
+        .manage-modal-title { font-family: 'Genos', sans-serif; font-size: 22px; font-weight: 700; color: var(--navy-text); }
+        .manage-modal-sub { font-size: 12px; color: #9CA3AF; margin-top: 2px; }
+        .modal-close {
+            background: none; border: none; font-size: 20px; color: #9CA3AF;
+            cursor: pointer; padding: 4px 8px; border-radius: 6px; line-height: 1;
+        }
+        .modal-close:hover { background: #F3F4F6; color: var(--navy-text); }
+        .manage-modal-body { overflow-y: auto; padding: 0.75rem 0; flex: 1; }
+        .manage-ws-row {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 0.75rem 1.75rem; transition: background 0.1s;
+        }
+        .manage-ws-row:hover { background: #FAFBFC; }
+        .manage-ws-name { font-size: 13px; font-weight: 600; color: var(--navy-text); }
+        .manage-ws-hidden { font-size: 11px; color: #9CA3AF; margin-top: 1px; }
+
+        .toggle-wrap { position: relative; width: 40px; height: 22px; flex-shrink: 0; }
+        .toggle-wrap input { opacity: 0; width: 0; height: 0; position: absolute; }
+        .toggle-track {
+            position: absolute; inset: 0; border-radius: 11px; background: #E5E7EB;
+            cursor: pointer; transition: background 0.2s;
+        }
+        .toggle-track::after {
+            content: ''; position: absolute; top: 3px; left: 3px;
+            width: 16px; height: 16px; border-radius: 50%; background: white;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2); transition: transform 0.2s;
+        }
+        .toggle-wrap input:checked + .toggle-track { background: var(--teal); }
+        .toggle-wrap input:checked + .toggle-track::after { transform: translateX(18px); }
+
+        /* ── Scan progress ── */
+        .scan-progress {
+            background: white; border-radius: 12px; padding: 2.5rem;
+            box-shadow: 0 1px 3px rgba(5,12,41,0.08);
+            text-align: center; max-width: 520px; margin: 3rem auto;
+        }
+        .scan-title { font-family: 'Genos', sans-serif; font-size: 22px; font-weight: 700; color: var(--navy-text); margin-bottom: 1.5rem; }
+        .scan-bar-outer { background: #F3F4F6; border-radius: 8px; height: 8px; overflow: hidden; margin-bottom: 1rem; }
+        .scan-bar-inner { height: 100%; background: var(--teal); border-radius: 8px; transition: width 0.3s ease; width: 0%; }
+        .scan-status { font-size: 13px; color: #9CA3AF; }
+
+        /* ── Actions header ── */
+        .actions-header {
+            display: flex; align-items: flex-start; justify-content: space-between;
+            margin-bottom: 1.25rem; padding-bottom: 1.25rem; border-bottom: 2px solid #F3F4F6;
+        }
+        .actions-title { font-family: 'Genos', sans-serif; font-size: 26px; font-weight: 700; color: var(--navy-text); line-height: 1; margin-bottom: 4px; }
+        .actions-meta { font-size: 12px; color: #9CA3AF; }
+        .rescan-btn {
+            padding: 8px 18px; background: var(--navy); color: white;
+            border: none; border-radius: 8px; font-size: 13px; font-weight: 600;
+            cursor: pointer; transition: all 0.15s; flex-shrink: 0; margin-top: 4px;
+        }
+        .rescan-btn:hover { background: var(--teal); }
+
+        /* ── Health summary pills ── */
+        .health-pills { display: flex; gap: 0.75rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+        .health-pill {
+            display: flex; align-items: center; gap: 8px;
+            padding: 8px 18px; border-radius: 10px; font-size: 13px; font-weight: 600;
+        }
+        .health-pill.red   { background: #FEF2F2; color: #DC2626; }
+        .health-pill.amber { background: #FFFBEB; color: #B45309; }
+        .health-pill.green { background: #ECFDF5; color: #059669; }
+        .health-pill-count { font-family: 'Genos', sans-serif; font-size: 24px; font-weight: 800; line-height: 1; }
+
+        /* ── Client health table ── */
+        .ch-table-header {
+            display: grid;
+            grid-template-columns: 14px 180px 110px 120px 82px 120px 1fr 80px;
+            gap: 1rem; align-items: center;
+            padding: 0 1.5rem 0.5rem;
+            font-size: 10px; font-weight: 700; color: #9CA3AF;
+            text-transform: uppercase; letter-spacing: 1px;
+        }
+        .ch-list { display: flex; flex-direction: column; gap: 0.5rem; }
+        .ch-row {
+            background: white; border-radius: 10px;
+            display: grid;
+            grid-template-columns: 14px 180px 110px 120px 82px 120px 1fr 80px;
+            gap: 1rem; align-items: center;
+            padding: 1.1rem 1.5rem;
+            box-shadow: 0 1px 3px rgba(5,12,41,0.07);
+            border-left: 4px solid transparent;
+            transition: box-shadow 0.15s;
+        }
+        .ch-row:hover { box-shadow: 0 4px 12px rgba(5,12,41,0.12); }
+        .ch-row.red    { border-left-color: #DC2626; }
+        .ch-row.amber  { border-left-color: #D97706; }
+        .ch-row.green  { border-left-color: #059669; }
+
+        .ch-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+        .ch-row.red   .ch-dot { background: #DC2626; }
+        .ch-row.amber .ch-dot { background: #D97706; }
+        .ch-row.green .ch-dot { background: #059669; box-shadow: 0 0 0 3px rgba(5,150,105,0.15); }
+
+        .ch-name { font-size: 13px; font-weight: 700; color: var(--navy-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+        .ch-metric { display: flex; flex-direction: column; gap: 2px; }
+        .ch-metric-value { font-family: 'Genos', sans-serif; font-size: 18px; font-weight: 700; color: var(--navy-text); line-height: 1; display: flex; align-items: center; gap: 3px; }
+        .ch-metric-value.red    { color: #DC2626; }
+        .ch-metric-value.amber  { color: #D97706; }
+        .ch-metric-value.green  { color: #059669; }
+        .ch-metric-value.muted  { color: #D1D5DB; font-size: 16px; }
+        .ch-arrow { font-size: 13px; font-family: 'Inter', sans-serif; font-weight: 700; }
+        .ch-arrow.red   { color: #DC2626; }
+        .ch-arrow.green { color: #059669; }
+        .ch-sub { font-size: 11px; color: #9CA3AF; }
+        .ch-vol-bar { height: 3px; background: #F3F4F6; border-radius: 2px; overflow: hidden; margin-top: 3px; }
+        .ch-vol-fill { height: 100%; border-radius: 2px; }
+
+        .ch-flags { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+        .ch-flag {
+            padding: 2px 8px; border-radius: 10px;
+            font-size: 11px; font-weight: 700; white-space: nowrap;
+        }
+        .ch-flag.red    { background: #FEF2F2; color: #DC2626; }
+        .ch-flag.amber  { background: #FFFBEB; color: #B45309; }
+        .ch-healthy { font-size: 12px; color: #D1D5DB; font-weight: 500; }
+
+        .ch-view {
+            padding: 5px 12px; background: transparent; color: var(--navy);
+            border: 1.5px solid #D1D5DB; border-radius: 7px;
+            font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.15s;
+            white-space: nowrap; justify-self: end;
+        }
+        .ch-view:hover { background: var(--navy); color: white; border-color: var(--navy); }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <div class="header-content">
+        <div class="header-left">
+            <img src="https://framerusercontent.com/images/nDSHQKnOUtpvlbArTv7AiTwZpcE.svg" alt="Ottaly" class="logo">
+            <nav class="nav-tabs">
+                <a href="index.html"       class="nav-tab">Revenue</a>
+                <a href="performance.html" class="nav-tab active">Performance</a>
+            </nav>
+        </div>
+        <div class="header-right">
+            <div class="live-status">
+                <div class="live-dot"></div>
+                <span class="live-text">Live</span>
+            </div>
+            <div class="last-update">Updated <span id="lastUpdate">--:--</span></div>
+            <div class="countdown">Next in <span id="countdown">3:00</span></div>
+        </div>
+    </div>
+</div>
+
+<div class="client-bar">
+    <div class="client-bar-inner">
+        <button class="actions-tab" id="actionsBtn" onclick="toggleActionsView()">⚡ Actions</button>
+        <div class="client-bar-sep"></div>
+        <div id="workspaceTabs" class="ws-tabs-list"></div>
+        <div style="flex:1;"></div>
+        <button class="manage-btn" onclick="openManageModal()">⚙ Manage</button>
+        <div id="manageModal" class="modal-backdrop" style="display:none;" onclick="if(event.target===this)closeManageModal()">
+            <div class="manage-modal">
+                <div class="manage-modal-header">
+                    <div>
+                        <div class="manage-modal-title">Manage Clients</div>
+                        <div class="manage-modal-sub">Hidden clients are excluded from the dashboard and scans</div>
+                    </div>
+                    <button class="modal-close" onclick="closeManageModal()">✕</button>
+                </div>
+                <div class="manage-modal-body" id="manageModalBody"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="actionsView" style="display:none;"></div>
+
+<div id="clientView">
+<div class="container">
+
+    <div id="alerts" class="alerts"></div>
+
+    <!-- Today's overview -->
+    <div class="section-title">Today's Overview</div>
+    <div class="metrics">
+        <div class="metric teal">
+            <div class="metric-icon teal">📨</div>
+            <div class="metric-label">Sent Today</div>
+            <div class="metric-value" id="mSent">—</div>
+            <div class="metric-sub" id="mSentSub">loading…</div>
+        </div>
+        <div class="metric navy">
+            <div class="metric-icon navy">↩️</div>
+            <div class="metric-label">Reply Rate</div>
+            <div class="metric-value" id="mReply">—</div>
+            <div class="metric-sub" id="mReplySub">loading…</div>
+        </div>
+        <div class="metric yellow">
+            <div class="metric-icon yellow">⚠️</div>
+            <div class="metric-label">Bounce Rate</div>
+            <div class="metric-value" id="mBounce">—</div>
+            <div class="metric-sub" id="mBounceSub">loading…</div>
+        </div>
+        <div class="metric purple">
+            <div class="metric-icon purple">📬</div>
+            <div class="metric-label">Inbox Health</div>
+            <div class="metric-value" id="mInbox">—</div>
+            <div class="metric-sub" id="mInboxSub">loading…</div>
+        </div>
+    </div>
+
+    <!-- Rate trends -->
+    <div class="section-title">Rate Trends</div>
+    <div class="two-col" style="margin-bottom:1.75rem;">
+        <div class="card">
+            <div class="card-title">Reply Rate</div>
+            <div id="replyTrends"><p class="loading">Loading…</p></div>
+        </div>
+        <div class="card">
+            <div class="card-title">Bounce Rate</div>
+            <div id="bounceTrends"><p class="loading">Loading…</p></div>
+        </div>
+    </div>
+
+    <!-- Lead pipeline -->
+    <div class="section-title">Lead Pipeline</div>
+    <div class="pipeline-grid" id="pipelineGrid">
+        <div class="pipeline-card"><div class="loading">Loading…</div></div>
+    </div>
+
+    <!-- Campaign breakdown -->
+    <div class="section-title">Campaign Breakdown — This Month</div>
+    <div class="card" style="margin-bottom:1.75rem;overflow-x:auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Campaign</th>
+                    <th>Status</th>
+                    <th>Sent</th>
+                    <th>Replies</th>
+                    <th>Reply %</th>
+                    <th>Bounces</th>
+                    <th>Bounce %</th>
+                </tr>
+            </thead>
+            <tbody id="campaignTable"><tr><td colspan="7" class="loading">Loading…</td></tr></tbody>
+        </table>
+    </div>
+
+    <!-- Warmup health -->
+    <div class="section-title">Warmup & Inbox Health — Today</div>
+    <div class="two-col" style="margin-bottom:1.75rem;">
+        <div class="card">
+            <div class="card-title">Agency Inbox Rates</div>
+            <div id="warmupSummary"><p class="loading">Loading…</p></div>
+        </div>
+        <div class="card">
+            <div class="card-title">Mailboxes by Domain</div>
+            <div id="domainBreakdown"><p class="loading">Loading…</p></div>
+        </div>
+    </div>
+
+    <!-- Mailbox table -->
+    <div class="section-title">Mailbox Status</div>
+    <div class="card" style="overflow-x:auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Email</th>
+                    <th>Provider</th>
+                    <th>Status</th>
+                    <th>Warmup</th>
+                    <th>Daily Limit</th>
+                </tr>
+            </thead>
+            <tbody id="mailboxTable"><tr><td colspan="5" class="loading">Loading…</td></tr></tbody>
+        </table>
+    </div>
+
+</div>
+</div><!-- #clientView -->
+
+<script>
+    const CFG = {
+        API_KEY:   '6425e882-f33fb46a-2837ff5a-eb535a60',
+        BASE:      'https://api.plusvibe.ai/api/v1',
+        REFRESH_MS: 3 * 60 * 1000,
+        STORE_KEY:  'ottaly_perf_v2'
+    };
+
+    let workspaces    = [];
+    let activeWS      = null; // { id, name }
+
+    const THR = {
+        bounceMax:     5,   // % — alert above this
+        replyDropPct:  15,  // % drop vs 7d avg — alert below this
+        capacityHour:  16,  // 4 pm
+        capacityMin:   80   // % of capacity by 4pm
+    };
+
+    // ── Storage ──────────────────────────────────────────────
+    function loadHistory() {
+        try { return JSON.parse(localStorage.getItem(CFG.STORE_KEY) || '[]'); }
+        catch { return []; }
+    }
+
+    function saveSnapshot(snap) {
+        const h = loadHistory();
+        h.push(snap);
+        const cutoff = Date.now() - 32 * 86400000;
+        localStorage.setItem(CFG.STORE_KEY, JSON.stringify(h.filter(s => s.ts > cutoff).slice(-2000)));
+    }
+
+    function avgField(history, field, days) {
+        const cutoff = Date.now() - days * 86400000;
+        const items = history.filter(s => s.ts > cutoff && s[field] != null);
+        return items.length ? items.reduce((a, s) => a + s[field], 0) / items.length : null;
+    }
+
+    // ── API ───────────────────────────────────────────────────
+    async function get(path) {
+        const r = await fetch(`${CFG.BASE}${path}`, {
+            headers: { 'x-api-key': CFG.API_KEY, 'Content-Type': 'application/json' }
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status} — ${path}`);
+        return r.json();
+    }
+
+    function ds(date) { return date.toISOString().split('T')[0]; }
+
+    async function fetchAll() {
+        const today       = ds(new Date());
+        const month_start = ds(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+        const ws = activeWS.id;
+
+        const [todayCampaigns, monthCampaigns, accounts, warmup, leads] = await Promise.all([
+            get(`/analytics/campaign/stats?workspace_id=${ws}&start_date=${today}&end_date=${today}`),
+            get(`/analytics/campaign/stats?workspace_id=${ws}&start_date=${month_start}&end_date=${today}`),
+            get(`/account/list?workspace_id=${ws}&skip=0&limit=500`),
+            get(`/account/warmup-stats?workspace_id=${ws}&start_date=${today}&end_date=${today}`),
+            get(`/lead/count/lead-status?workspace_id=${ws}`)
+        ]);
+
+        return { todayCampaigns, monthCampaigns, accounts, warmup, leads };
+    }
+
+    // ── Helpers ───────────────────────────────────────────────
+    function agg(campaigns) {
+        return (campaigns || []).reduce((a, c) => ({
+            sent:    a.sent    + (c.sent_count    || 0),
+            replies: a.replies + (c.replied_count || 0),
+            bounces: a.bounces + (c.bounced_count || 0)
+        }), { sent: 0, replies: 0, bounces: 0 });
+    }
+
+    function pct(num, denom) { return denom > 0 ? (num / denom) * 100 : 0; }
+    function fmtPct(n, d = 1) { return n.toFixed(d) + '%'; }
+    function fmtN(n) { return Number(n).toLocaleString('en-GB'); }
+
+    function pctCls(v, higherGood) {
+        if (higherGood) {
+            if (v >= 3)   return 'pct-good';
+            if (v >= 1.5) return 'pct-warn';
+            return 'pct-bad';
+        } else {
+            if (v <= 2) return 'pct-good';
+            if (v <= 5) return 'pct-warn';
+            return 'pct-bad';
+        }
+    }
+
+    function arrow(current, prev, higherGood) {
+        if (prev == null || isNaN(prev)) return { sym: '➡', cls: 'muted' };
+        const diff = current - prev;
+        if (Math.abs(diff) < 0.3) return { sym: '➡', cls: 'muted' };
+        const improved = higherGood ? diff > 0 : diff < 0;
+        if (higherGood) return diff > 0 ? { sym: '↑', cls: 'good' } : { sym: '↓', cls: 'bad' };
+        return diff < 0 ? { sym: '↓', cls: 'good' } : { sym: '↑', cls: 'bad' };
+    }
+
+    function badge(status) {
+        const s = (status || '').toUpperCase();
+        const cls = s === 'ACTIVE' ? 'active' : s === 'PAUSED' ? 'paused' : 'inactive';
+        return `<span class="badge ${cls}"><span class="badge-dot" style="background:currentColor"></span>${status || '—'}</span>`;
+    }
+
+    function shortName(name) {
+        return (name || 'Unnamed').split(' - ')[0].replace(/https?:\/\/\S+/g, '').trim().substring(0, 45);
+    }
+
+    // ── Render alerts ─────────────────────────────────────────
+    function renderAlerts(todayAgg, history) {
+        const bounceRate = pct(todayAgg.bounces, todayAgg.sent);
+        const replyRate  = pct(todayAgg.replies, todayAgg.sent);
+        const avg7Reply  = avgField(history, 'replyRate', 7);
+        const alerts = [];
+
+        if (todayAgg.sent > 0 && bounceRate > THR.bounceMax) {
+            alerts.push({ cls: 'red', msg: `🔴 Bounce rate is ${fmtPct(bounceRate)} — above the ${THR.bounceMax}% threshold. Review sender reputation and list quality immediately.` });
+        }
+        if (avg7Reply && todayAgg.sent > 0 && replyRate < avg7Reply * (1 - THR.replyDropPct / 100)) {
+            alerts.push({ cls: 'amber', msg: `⚠️ Reply rate (${fmtPct(replyRate)}) is more than ${THR.replyDropPct}% below your 7-day average (${fmtPct(avg7Reply)}). Consider reviewing messaging.` });
+        }
+        const now = new Date();
+        if (now.getHours() >= THR.capacityHour && todayAgg.sent === 0) {
+            alerts.push({ cls: 'amber', msg: `⚠️ No sends recorded today and it's past ${THR.capacityHour}:00. Check campaign schedules.` });
+        }
+
+        document.getElementById('alerts').innerHTML = alerts.map(a =>
+            `<div class="alert-banner ${a.cls}">${a.msg}</div>`
+        ).join('');
+    }
+
+    // ── Render summary metrics ────────────────────────────────
+    function renderSummary(todayAgg, accounts, warmup) {
+        const replyRate  = pct(todayAgg.replies, todayAgg.sent);
+        const bounceRate = pct(todayAgg.bounces, todayAgg.sent);
+
+        const accs        = Array.isArray(accounts) ? accounts : (accounts?.accounts || accounts?.data || []);
+        const activeAccs  = accs.filter(a => a.status === 'ACTIVE');
+        const totalCap    = activeAccs.reduce((s, a) => s + (a.payload?.daily_limit || 0), 0);
+        const capPct      = totalCap > 0 ? Math.round((todayAgg.sent / totalCap) * 100) : 0;
+
+        document.getElementById('mSent').textContent    = fmtN(todayAgg.sent);
+        document.getElementById('mSentSub').textContent = `${capPct}% of ${fmtN(totalCap)} capacity`;
+
+        const replyEl = document.getElementById('mReply');
+        replyEl.textContent  = todayAgg.sent > 0 ? fmtPct(replyRate) : '—';
+        replyEl.className    = 'metric-value' + (replyRate < 1 && todayAgg.sent > 50 ? ' red' : '');
+        document.getElementById('mReplySub').textContent = `${fmtN(todayAgg.replies)} replies today`;
+
+        const bounceEl = document.getElementById('mBounce');
+        bounceEl.textContent = todayAgg.sent > 0 ? fmtPct(bounceRate) : '—';
+        bounceEl.className   = 'metric-value' + (bounceRate > THR.bounceMax ? ' red' : '');
+        document.getElementById('mBounceSub').textContent = `${fmtN(todayAgg.bounces)} bounces today`;
+
+        const ea       = warmup?.emailAcc;
+        const inboxPct = parseFloat(ea?.inbox_percent || 0);
+        const inboxEl  = document.getElementById('mInbox');
+        inboxEl.textContent = ea ? fmtPct(inboxPct) : '—';
+        inboxEl.className   = 'metric-value' + (inboxPct < 80 && ea ? ' red' : '');
+        document.getElementById('mInboxSub').textContent = `${ea?.total_inboxes || 0} mailboxes warming`;
+    }
+
+    // ── Render trend cards ────────────────────────────────────
+    function renderTrends(todayAgg, history) {
+        const replyRate  = pct(todayAgg.replies, todayAgg.sent);
+        const bounceRate = pct(todayAgg.bounces, todayAgg.sent);
+
+        const r3  = avgField(history, 'replyRate',  3);
+        const r7  = avgField(history, 'replyRate',  7);
+        const r30 = avgField(history, 'replyRate', 30);
+        const b3  = avgField(history, 'bounceRate',  3);
+        const b7  = avgField(history, 'bounceRate',  7);
+        const b30 = avgField(history, 'bounceRate', 30);
+
+        const rArr = arrow(replyRate,  r7,  true);
+        const bArr = arrow(bounceRate, b7, false);
+
+        function rows(periods, higherGood, todayVal, todayArr) {
+            return periods.map(([label, val], i) => {
+                const isToday = i === 0;
+                const v = isToday ? todayVal : val;
+                const cls = v != null ? pctCls(v, higherGood) : 'muted';
+                const valStr = v != null ? fmtPct(v) : '—';
+                return `
+                    <div class="trend-row">
+                        <span class="trend-label">${label}</span>
+                        <span class="trend-val ${cls}">
+                            ${valStr}
+                            ${isToday ? `<span class="arrow ${todayArr.cls}">${todayArr.sym}</span>` : ''}
+                        </span>
+                    </div>`;
+            }).join('');
+        }
+
+        document.getElementById('replyTrends').innerHTML = rows([
+            ['Today',    null],
+            ['3-day avg', r3],
+            ['7-day avg', r7],
+            ['30-day avg', r30]
+        ], true, replyRate, rArr);
+
+        document.getElementById('bounceTrends').innerHTML = rows([
+            ['Today',    null],
+            ['3-day avg', b3],
+            ['7-day avg', b7],
+            ['30-day avg', b30]
+        ], false, bounceRate, bArr);
+    }
+
+    // ── Render pipeline ───────────────────────────────────────
+    function renderPipeline(leads) {
+        const map = {};
+        if (Array.isArray(leads)) {
+            leads.forEach(l => map[l.status] = l.count);
+        } else if (leads && typeof leads === 'object') {
+            Object.assign(map, leads);
+        }
+        const total = Object.values(map).reduce((s, v) => s + (Number(v) || 0), 0);
+
+        const items = [
+            { label: 'Not Contacted', key: 'NOT_CONTACTED', color: '#9CA3AF' },
+            { label: 'Contacted',     key: 'CONTACTED',     color: '#224388' },
+            { label: 'Replied',       key: 'REPLIED',       color: '#1F6F78' },
+            { label: 'Bounced',       key: 'BOUNCED',       color: '#DC2626' },
+            { label: 'Completed',     key: 'COMPLETED',     color: '#7C89CD' }
+        ];
+
+        document.getElementById('pipelineGrid').innerHTML = items.map(it => {
+            const count = map[it.key] || 0;
+            const p = total > 0 ? ((count / total) * 100).toFixed(1) : '0.0';
+            return `
+                <div class="pipeline-card" style="border-top-color:${it.color};">
+                    <div class="pipeline-label">${it.label}</div>
+                    <div class="pipeline-value" style="color:${it.color};">${fmtN(count)}</div>
+                    <div class="pipeline-pct">${p}% of total</div>
+                </div>`;
+        }).join('');
+    }
+
+    // ── Render campaign table ─────────────────────────────────
+    function renderCampaigns(monthCampaigns) {
+        if (!monthCampaigns?.length) {
+            document.getElementById('campaignTable').innerHTML =
+                '<tr><td colspan="7" class="loading">No campaign data for this month</td></tr>';
+            return;
+        }
+
+        const sorted = [...monthCampaigns].sort((a, b) => (b.sent_count || 0) - (a.sent_count || 0));
+
+        document.getElementById('campaignTable').innerHTML = sorted.map(c => {
+            const sent    = c.sent_count    || 0;
+            const replies = c.replied_count || 0;
+            const bounces = c.bounced_count || 0;
+            const rr = pct(replies, sent);
+            const br = pct(bounces, sent);
+            return `
+                <tr>
+                    <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+                        title="${c.camp_name || ''}">${shortName(c.camp_name)}</td>
+                    <td>${badge(c.status)}</td>
+                    <td><span class="num">${fmtN(sent)}</span></td>
+                    <td><span class="num">${fmtN(replies)}</span></td>
+                    <td><span class="${pctCls(rr, true)}">${sent > 0 ? fmtPct(rr) : '—'}</span></td>
+                    <td><span class="num">${fmtN(bounces)}</span></td>
+                    <td><span class="${pctCls(br, false)}">${sent > 0 ? fmtPct(br) : '—'}</span></td>
+                </tr>`;
+        }).join('');
+    }
+
+    // ── Render warmup ─────────────────────────────────────────
+    function renderWarmup(warmup) {
+        const ea = warmup?.emailAcc || warmup?.data || warmup;
+        if (!ea || typeof ea !== 'object' || !ea.inbox_percent) {
+            document.getElementById('warmupSummary').innerHTML = '<p class="loading">No warmup data</p>';
+            return;
+        }
+
+        const inbox = parseFloat(ea.inbox_percent  || 0);
+        const spam  = parseFloat(ea.spam_percent   || 0);
+        const promo = parseFloat(ea.promotion_percent || 0);
+        const goog  = parseFloat(ea.google_percent    || 0);
+        const ms    = parseFloat(ea.microsoft_percent || 0);
+
+        document.getElementById('warmupSummary').innerHTML = `
+            <div class="warmup-trio">
+                <div>
+                    <div class="wt-val" style="color:var(--teal);">${inbox.toFixed(1)}%</div>
+                    <div class="wt-label">Inbox</div>
+                </div>
+                <div>
+                    <div class="wt-val" style="color:#DC2626;">${spam.toFixed(1)}%</div>
+                    <div class="wt-label">Spam</div>
+                </div>
+                <div>
+                    <div class="wt-val" style="color:#D97706;">${promo.toFixed(1)}%</div>
+                    <div class="wt-label">Promo</div>
+                </div>
+            </div>
+            <div class="trend-row">
+                <span class="trend-label">Google inbox rate</span>
+                <span class="${pctCls(goog, true)}">${goog.toFixed(1)}%</span>
+            </div>
+            <div class="trend-row">
+                <span class="trend-label">Microsoft inbox rate</span>
+                <span class="${pctCls(ms, true)}">${ms.toFixed(1)}%</span>
+            </div>
+            <div class="trend-row">
+                <span class="trend-label">Total warmup sent today</span>
+                <span class="num">${fmtN(ea.total_warmup_sent || 0)}</span>
+            </div>
+            <div class="trend-row" style="border-bottom:none;">
+                <span class="trend-label">Total inboxes / domains</span>
+                <span class="num">${ea.total_inboxes || 0} / ${ea.total_domains || 0}</span>
+            </div>`;
+
+        const domains = ea.email_domain_detail || {};
+        const entries = Object.entries(domains).sort((a, b) => b[1] - a[1]);
+        document.getElementById('domainBreakdown').innerHTML = entries.length
+            ? entries.map(([d, n]) => `
+                <div class="domain-row">
+                    <span class="domain-name">${d}</span>
+                    <span class="domain-count">${n}</span>
+                </div>`).join('')
+            : '<p class="loading">No domain data</p>';
+    }
+
+    // ── Render mailbox table ──────────────────────────────────
+    function renderMailboxes(accounts) {
+        const accs = (Array.isArray(accounts) ? accounts : (accounts?.accounts || accounts?.data || [])).sort((a, b) => {
+            if (a.status === 'ACTIVE' && b.status !== 'ACTIVE') return -1;
+            if (b.status === 'ACTIVE' && a.status !== 'ACTIVE') return 1;
+            return (a.email || '').localeCompare(b.email || '');
+        });
+
+        if (!accs.length) {
+            document.getElementById('mailboxTable').innerHTML =
+                '<tr><td colspan="5" class="loading">No mailboxes found</td></tr>';
+            return;
+        }
+
+        document.getElementById('mailboxTable').innerHTML = accs.map(a => `
+            <tr>
+                <td style="font-size:13px;font-weight:500;">${a.email || '—'}</td>
+                <td style="font-size:12px;color:#6B7280;">${(a.provider || '—').replace('365', '')}</td>
+                <td>${badge(a.status)}</td>
+                <td>${badge(a.warmup_status)}</td>
+                <td><span class="num">${a.payload?.daily_limit ?? '—'}</span></td>
+            </tr>`).join('');
+    }
+
+    // ── Countdown ─────────────────────────────────────────────
+    let secsLeft = CFG.REFRESH_MS / 1000;
+    setInterval(() => {
+        secsLeft = Math.max(0, secsLeft - 1);
+        const m = Math.floor(secsLeft / 60), s = secsLeft % 60;
+        document.getElementById('countdown').textContent = `${m}:${s.toString().padStart(2,'0')}`;
+    }, 1000);
+
+    // ── Main refresh ──────────────────────────────────────────
+    async function refresh() {
+        secsLeft = CFG.REFRESH_MS / 1000;
+        try {
+            const { todayCampaigns, monthCampaigns, accounts, warmup, leads } = await fetchAll();
+
+            const todayAgg = agg(todayCampaigns);
+            const history  = loadHistory();
+
+            if (todayAgg.sent > 0) {
+                saveSnapshot({
+                    ts:         Date.now(),
+                    replyRate:  pct(todayAgg.replies, todayAgg.sent),
+                    bounceRate: pct(todayAgg.bounces, todayAgg.sent),
+                    sent:       todayAgg.sent
+                });
+            }
+
+            renderAlerts(todayAgg, history);
+            renderSummary(todayAgg, accounts, warmup);
+            renderTrends(todayAgg, loadHistory());
+            renderPipeline(leads);
+            renderCampaigns(monthCampaigns);
+            renderWarmup(warmup);
+            renderMailboxes(accounts);
+
+            document.getElementById('lastUpdate').textContent =
+                new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+
+        } catch (err) {
+            const isCors = err.message.includes('fetch') || err.message.includes('NetworkError');
+            document.getElementById('alerts').innerHTML = `
+                <div class="alert-banner red">
+                    🔴 Failed to load data: <strong>${err.message}</strong>.
+                    ${isCors ? ' CORS error — the dashboard must be served from a web server (Easypanel), not opened as a local file.' : ''}
+                </div>`;
+        }
+    }
+
+    function renderWorkspaceTabs() {
+        const active = getActiveWorkspaces();
+        document.getElementById('workspaceTabs').innerHTML = active.length
+            ? active.map(ws => `
+                <button class="ws-tab ${ws.id === activeWS?.id ? 'active' : ''}"
+                        onclick="switchWorkspace('${ws.id}')">${ws.name}</button>`).join('')
+            : '<span class="ws-tab-loading">No active clients</span>';
+    }
+
+    function switchWorkspace(id) {
+        activeWS = workspaces.find(w => w.id === id);
+        renderWorkspaceTabs();
+        refresh();
+    }
+
+    // ── Hidden workspaces ────────────────────────────────────
+
+    const HIDDEN_KEY = 'ottaly_hidden_ws';
+
+    function loadHidden() {
+        try { return new Set(JSON.parse(localStorage.getItem(HIDDEN_KEY) || '[]')); }
+        catch { return new Set(); }
+    }
+
+    function saveHidden(set) {
+        localStorage.setItem(HIDDEN_KEY, JSON.stringify([...set]));
+    }
+
+    function getActiveWorkspaces() {
+        const hidden = loadHidden();
+        return workspaces.filter(ws => !hidden.has(ws.id));
+    }
+
+    function openManageModal() {
+        const hidden = loadHidden();
+        document.getElementById('manageModalBody').innerHTML = workspaces.map(ws => `
+            <div class="manage-ws-row">
+                <div>
+                    <div class="manage-ws-name">${ws.name}</div>
+                    ${hidden.has(ws.id) ? '<div class="manage-ws-hidden">Hidden</div>' : ''}
+                </div>
+                <label class="toggle-wrap">
+                    <input type="checkbox" ${!hidden.has(ws.id) ? 'checked' : ''}
+                           onchange="toggleWorkspaceVisibility('${ws.id}', this.checked)">
+                    <span class="toggle-track"></span>
+                </label>
+            </div>`).join('');
+        document.getElementById('manageModal').style.display = 'flex';
+    }
+
+    function closeManageModal() {
+        document.getElementById('manageModal').style.display = 'none';
+    }
+
+    function toggleWorkspaceVisibility(id, visible) {
+        const hidden = loadHidden();
+        if (visible) hidden.delete(id);
+        else hidden.add(id);
+        saveHidden(hidden);
+        // Update the "Hidden" label inline
+        openManageModal();
+        // Rebuild tab bar (keeps active workspace if it's still visible)
+        const active = getActiveWorkspaces();
+        if (active.length && !active.find(w => w.id === activeWS?.id)) {
+            activeWS = active[0];
+        }
+        renderWorkspaceTabs();
+    }
+
+    // ── Actions / Health Scan ─────────────────────────────────
+
+    const LEADS_CSV_URL = 'https://docs.google.com/spreadsheets/d/1F6UQJ_om6ZeAdEs9IMy_GQOY_daysUeuBeiOMnwzb9k/export?format=csv&gid=0';
+
+    let actionsViewOpen = false;
+    let scanRunning     = false;
+    let lastScanResults = null;
+    let lastScanTime    = 0;
+
+    function toggleActionsView() {
+        actionsViewOpen = !actionsViewOpen;
+        document.getElementById('actionsBtn').classList.toggle('active', actionsViewOpen);
+        document.getElementById('actionsView').style.display = actionsViewOpen ? 'block' : 'none';
+        document.getElementById('clientView').style.display  = actionsViewOpen ? 'none'  : 'block';
+    }
+
+    function jumpToWorkspace(id) {
+        actionsViewOpen = false;
+        document.getElementById('actionsBtn').classList.remove('active');
+        document.getElementById('actionsView').style.display = 'none';
+        document.getElementById('clientView').style.display  = 'block';
+        switchWorkspace(id);
+    }
+
+    async function fetchLastLeadDates() {
+        try {
+            const resp   = await fetch(LEADS_CSV_URL);
+            const text   = await resp.text();
+            const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
+            const map    = {};
+            parsed.data.forEach(row => {
+                const client   = (row['Client Name'] || '').trim();
+                const nonLead  = row['Non-Lead Status'] === 'TRUE';
+                if (!client || nonLead) return;
+                const d = new Date(row['Date'] || '');
+                if (!isNaN(d.getTime()) && (!map[client] || d > map[client])) map[client] = d;
+            });
+            return map;
+        } catch { return {}; }
+    }
+
+    function matchLeadDate(wsName, leadMap) {
+        if (!wsName || !leadMap) return null;
+        const lower = wsName.toLowerCase().trim();
+        for (const [k, v] of Object.entries(leadMap))
+            if (k.toLowerCase().trim() === lower) return v;
+        for (const [k, v] of Object.entries(leadMap)) {
+            const kl = k.toLowerCase().trim();
+            if (lower.includes(kl) || kl.includes(lower)) return v;
+        }
+        return null;
+    }
+
+    async function fetchWorkspaceHealth(ws) {
+        const today = ds(new Date());
+        const ago3  = ds(new Date(Date.now() - 3 * 86400000));
+        const [todayCamps, camps3d, accounts] = await Promise.all([
+            get(`/analytics/campaign/stats?workspace_id=${ws.id}&start_date=${today}&end_date=${today}`),
+            get(`/analytics/campaign/stats?workspace_id=${ws.id}&start_date=${ago3}&end_date=${today}`),
+            get(`/account/list?workspace_id=${ws.id}&skip=0&limit=500`)
+        ]);
+        return { ws, todayCamps, camps3d, accounts };
+    }
+
+    function buildClientHealth({ ws, todayCamps, camps3d, accounts }, lastLeadDate) {
+        const todayAgg = agg(todayCamps);
+        const agg3d    = agg(camps3d);
+
+        const accs      = Array.isArray(accounts) ? accounts : (accounts?.accounts || accounts?.data || []);
+        const activeAcc = accs.filter(a => a.status === 'ACTIVE');
+        const totalCap  = activeAcc.reduce((s, a) => s + (a.payload?.daily_limit || 0), 0);
+        const capPct    = totalCap > 0 ? (todayAgg.sent / totalCap) * 100 : null;
+
+        const replyToday  = pct(todayAgg.replies, todayAgg.sent);
+        const reply3d     = pct(agg3d.replies,    agg3d.sent);
+        const bounceToday = pct(todayAgg.bounces,  todayAgg.sent);
+
+        const lastLeadDays = lastLeadDate
+            ? Math.floor((Date.now() - lastLeadDate.getTime()) / 86400000)
+            : null;
+
+        const flags = [];
+        const nowH  = new Date().getHours();
+
+        if (capPct !== null && nowH >= THR.capacityHour && capPct < THR.capacityMin)
+            flags.push({ type: 'capacity', label: 'Low sends',     color: 'amber' });
+        if (todayAgg.sent > 20 && bounceToday > THR.bounceMax)
+            flags.push({ type: 'bounce',   label: 'High bounce',   color: 'red'   });
+        if (reply3d > 0.5 && todayAgg.sent > 20 && replyToday < reply3d * (1 - THR.replyDropPct / 100))
+            flags.push({ type: 'reply',    label: 'Reply dropping', color: 'amber' });
+        const hasActive = (todayCamps || []).some(c => (c.status || '').toUpperCase() === 'ACTIVE');
+        if (hasActive && agg3d.sent > 0 && agg3d.replies === 0)
+            flags.push({ type: 'silent',   label: 'Silent 3d',     color: 'red'   });
+
+        const hasCritical = flags.some(f => f.color === 'red')   || (lastLeadDays !== null && lastLeadDays > 14);
+        const hasWarning  = flags.some(f => f.color === 'amber') || (lastLeadDays !== null && lastLeadDays > 7);
+        const color       = hasCritical ? 'red' : hasWarning ? 'amber' : 'green';
+        const sortKey     = (color === 'red' ? 10000 : color === 'amber' ? 5000 : 0)
+                          + (lastLeadDays ?? 999) * 3
+                          + flags.length * 50;
+
+        return { ws, todayAgg, agg3d, capPct, totalCap, replyToday, reply3d,
+                 bounceToday, lastLeadDate, lastLeadDays, flags, color, sortKey };
+    }
+
+    async function runHealthScan() {
+        if (scanRunning) return;
+        scanRunning = true;
+
+        if (!lastScanResults) {
+            document.getElementById('actionsView').innerHTML = `
+                <div class="container">
+                    <div class="scan-progress">
+                        <div class="scan-title">Loading client data…</div>
+                        <div class="scan-bar-outer"><div class="scan-bar-inner" id="scanBar"></div></div>
+                        <div class="scan-status" id="scanStatus">Fetching lead history & workspace stats…</div>
+                    </div>
+                </div>`;
+        }
+
+        const leadMap = await fetchLastLeadDates();
+
+        const results  = [];
+        const BATCH    = 5;
+        const active   = getActiveWorkspaces();
+        const total    = active.length;
+
+        for (let i = 0; i < total; i += BATCH) {
+            const batch  = active.slice(i, i + BATCH);
+            const barEl  = document.getElementById('scanBar');
+            const statEl = document.getElementById('scanStatus');
+            if (barEl)  barEl.style.width  = Math.round((i / total) * 100) + '%';
+            if (statEl) statEl.textContent = `Checking ${i + 1}–${Math.min(i + BATCH, total)} of ${total} clients…`;
+
+            const settled = await Promise.allSettled(batch.map(fetchWorkspaceHealth));
+            settled.forEach(r => {
+                if (r.status === 'fulfilled') {
+                    const lastLeadDate = matchLeadDate(r.value.ws.name, leadMap);
+                    results.push(buildClientHealth(r.value, lastLeadDate));
+                }
+            });
+
+            if (i + BATCH < total) await new Promise(res => setTimeout(res, 1000));
+        }
+
+        const barEl = document.getElementById('scanBar');
+        if (barEl) barEl.style.width = '100%';
+        lastScanResults = results;
+        lastScanTime    = Date.now();
+        scanRunning     = false;
+        renderActions(results);
+    }
+
+    function renderActions(results) {
+        const el = document.getElementById('actionsView');
+        results.sort((a, b) => b.sortKey - a.sortKey);
+
+        const redCount   = results.filter(r => r.color === 'red').length;
+        const amberCount = results.filter(r => r.color === 'amber').length;
+        const greenCount = results.filter(r => r.color === 'green').length;
+        const scannedAt  = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+
+        function lastLeadHtml(days, date) {
+            if (days === null) return `<div class="ch-metric-value amber">No data</div>`;
+            const sub = date ? `<div class="ch-sub">${date.toLocaleDateString('en-GB',{day:'2-digit',month:'short'})}</div>` : '';
+            if (days === 0) return `<div class="ch-metric-value green">Today</div>${sub}`;
+            if (days === 1) return `<div class="ch-metric-value green">Yesterday</div>${sub}`;
+            const cls = days > 14 ? 'red' : days > 7 ? 'amber' : 'green';
+            return `<div class="ch-metric-value ${cls}">${days}d ago</div>${sub}`;
+        }
+
+        function sendVolHtml(capPct, sent) {
+            if (capPct === null) return `<div class="ch-metric-value muted">—</div><div class="ch-sub">${fmtN(sent)} sent</div>`;
+            const cls   = capPct < 50 ? 'red' : capPct < 80 ? 'amber' : 'green';
+            const fill  = capPct < 50 ? '#DC2626' : capPct < 80 ? '#D97706' : '#059669';
+            return `<div class="ch-metric-value ${cls}">${capPct.toFixed(0)}%</div>
+                    <div class="ch-vol-bar"><div class="ch-vol-fill" style="width:${Math.min(capPct,100).toFixed(0)}%;background:${fill};"></div></div>
+                    <div class="ch-sub">${fmtN(sent)} sent</div>`;
+        }
+
+        function replyHtml(replyToday, reply3d, sent) {
+            if (sent < 5) return `<div class="ch-metric-value muted">—</div><div class="ch-sub">No sends</div>`;
+            const cls     = replyToday >= 3 ? 'green' : replyToday >= 1 ? 'amber' : 'red';
+            const dropped = reply3d > 0.5 && replyToday < reply3d * (1 - THR.replyDropPct / 100);
+            const up      = reply3d > 0 && replyToday > reply3d * 1.1;
+            const arr     = dropped ? `<span class="ch-arrow red">↓</span>` : up ? `<span class="ch-arrow green">↑</span>` : '';
+            const sub     = reply3d > 0 ? `${fmtPct(reply3d)} 3d avg` : '';
+            return `<div class="ch-metric-value ${cls}">${fmtPct(replyToday)}${arr}</div>${sub ? `<div class="ch-sub">${sub}</div>` : ''}`;
+        }
+
+        function bounceHtml(rate, sent) {
+            if (sent < 5) return `<div class="ch-metric-value muted">—</div>`;
+            const cls = rate > THR.bounceMax ? 'red' : rate > 3 ? 'amber' : 'green';
+            return `<div class="ch-metric-value ${cls}">${fmtPct(rate)}</div>`;
+        }
+
+        function flagsHtml(flags) {
+            if (!flags.length) return `<span class="ch-healthy">✓ Healthy</span>`;
+            return flags.map(f => `<span class="ch-flag ${f.color}">${f.label}</span>`).join('');
+        }
+
+        el.innerHTML = `
+            <div class="container">
+                <div class="actions-header">
+                    <div>
+                        <div class="actions-title">Client Health Overview</div>
+                        <div class="actions-meta">${results.length} active workspaces · Scanned at ${scannedAt}</div>
+                    </div>
+                    <button class="rescan-btn" onclick="runHealthScan()">↻ Re-scan</button>
+                </div>
+                <div class="health-pills">
+                    ${redCount   ? `<div class="health-pill red"><span class="health-pill-count">${redCount}</span> Need attention</div>` : ''}
+                    ${amberCount ? `<div class="health-pill amber"><span class="health-pill-count">${amberCount}</span> Monitor</div>` : ''}
+                    ${greenCount ? `<div class="health-pill green"><span class="health-pill-count">${greenCount}</span> Healthy</div>` : ''}
+                </div>
+                <div class="ch-table-header">
+                    <div></div><div>Client</div><div>Send Vol</div>
+                    <div>Reply Rate</div><div>Bounce</div><div>Last Lead</div>
+                    <div>Status</div><div></div>
+                </div>
+                <div class="ch-list">
+                    ${results.map(r => `
+                        <div class="ch-row ${r.color}">
+                            <div class="ch-dot"></div>
+                            <div class="ch-name" title="${r.ws.name}">${r.ws.name}</div>
+                            <div class="ch-metric">${sendVolHtml(r.capPct, r.todayAgg.sent)}</div>
+                            <div class="ch-metric">${replyHtml(r.replyToday, r.reply3d, r.todayAgg.sent)}</div>
+                            <div class="ch-metric">${bounceHtml(r.bounceToday, r.todayAgg.sent)}</div>
+                            <div class="ch-metric">${lastLeadHtml(r.lastLeadDays, r.lastLeadDate)}</div>
+                            <div class="ch-flags">${flagsHtml(r.flags)}</div>
+                            <button class="ch-view" onclick="jumpToWorkspace('${r.ws.id}')">View →</button>
+                        </div>`).join('')}
+                </div>
+            </div>`;
+    }
+
+    async function init() {
+        try {
+            workspaces = await get('/workspaces');
+            activeWS   = workspaces[0];
+            renderWorkspaceTabs();
+        } catch (e) {
+            document.getElementById('workspaceTabs').innerHTML =
+                `<span class="ws-tab-loading" style="color:#DC2626;">Failed to load clients: ${e.message}</span>`;
+            return;
+        }
+        refresh();
+        setInterval(refresh, CFG.REFRESH_MS);
+        runHealthScan();
+        setInterval(runHealthScan, CFG.REFRESH_MS);
+    }
+
+    init();
+</script>
+</body>
+</html>
