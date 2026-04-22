@@ -735,43 +735,14 @@
 
     <script>
         const CSV_URL = 'https://docs.google.com/spreadsheets/d/1F6UQJ_om6ZeAdEs9IMy_GQOY_daysUeuBeiOMnwzb9k/export?format=csv&gid=0';
+        const WEBHOOK_URL = 'https://n8n1-n8n.xuobbb.easypanel.host/webhook/ottaly-nonlead';
+        
         let allLeads = [];
         let revenueChart = null;
         let leadsChart = null;
         let currentNonleadEmail = null;
 
         const CLIENT_COLORS = ['#1F6F78','#224388','#FFB700','#7C89CD','#D2E4F8'];
-
-        // Non-lead storage functions
-        function getNonleads() {
-            const stored = localStorage.getItem('ottaly_nonleads');
-            return stored ? JSON.parse(stored) : {};
-        }
-
-        function setNonleads(nonleads) {
-            localStorage.setItem('ottaly_nonleads', JSON.stringify(nonleads));
-        }
-
-        function isNonlead(email) {
-            const nonleads = getNonleads();
-            return nonleads.hasOwnProperty(email);
-        }
-
-        function markAsNonlead(email, reason) {
-            const nonleads = getNonleads();
-            nonleads[email] = {
-                reason: reason,
-                date: new Date().toISOString(),
-                markedBy: 'dashboard-user'
-            };
-            setNonleads(nonleads);
-        }
-
-        function restoreLead(email) {
-            const nonleads = getNonleads();
-            delete nonleads[email];
-            setNonleads(nonleads);
-        }
 
         // Modal functions
         function openNonleadModal(email, name) {
@@ -787,21 +758,61 @@
             currentNonleadEmail = null;
         }
 
-        function confirmNonlead() {
+        async function confirmNonlead() {
             const reason = document.getElementById('nonleadReason').value.trim();
             if (!reason) {
                 alert('Please enter a reason');
                 return;
             }
-            markAsNonlead(currentNonleadEmail, reason);
-            closeNonleadModal();
-            updateDisplay();
+
+            try {
+                const response = await fetch(WEBHOOK_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        lead_email: currentNonleadEmail,
+                        non_lead_status: 'TRUE',
+                        non_lead_reason: reason,
+                        non_lead_date: new Date().toISOString()
+                    })
+                });
+
+                if (response.ok) {
+                    closeNonleadModal();
+                    // Refresh data
+                    await fetchData();
+                } else {
+                    alert('Failed to update. Please try again.');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Network error. Please check your connection.');
+            }
         }
 
-        function handleRestore(email) {
-            if (confirm('Restore this lead to active status?')) {
-                restoreLead(email);
-                updateDisplay();
+        async function handleRestore(email) {
+            if (!confirm('Restore this lead to active status?')) return;
+
+            try {
+                const response = await fetch(WEBHOOK_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        lead_email: email,
+                        non_lead_status: 'FALSE',
+                        non_lead_reason: '',
+                        non_lead_date: ''
+                    })
+                });
+
+                if (response.ok) {
+                    await fetchData();
+                } else {
+                    alert('Failed to restore. Please try again.');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Network error. Please check your connection.');
             }
         }
 
@@ -895,6 +906,7 @@
                             .filter(row => row['Client Name'])
                             .map(row => {
                                 const dateObj = parseDate(row['Date']);
+                                const isNonLead = row['Non-Lead Status'] === 'TRUE';
                                 return {
                                     client_name: row['Client Name'] || 'Unknown',
                                     campaign: row['Campaign'] || '',
@@ -909,7 +921,10 @@
                                         year: 'numeric',
                                         hour: '2-digit',
                                         minute: '2-digit'
-                                    }) : 'N/A'
+                                    }) : 'N/A',
+                                    is_nonlead: isNonLead,
+                                    nonlead_reason: isNonLead ? (row['Non-Lead Reason'] || '') : '',
+                                    nonlead_date: isNonLead ? (row['Non-Lead Date'] || '') : ''
                                 };
                             });
                         populateClientFilter();
@@ -961,9 +976,9 @@
             
             // Status filter
             if (statusFilter === 'active') {
-                filtered = filtered.filter(l => !isNonlead(l.lead_email));
+                filtered = filtered.filter(l => !l.is_nonlead);
             } else if (statusFilter === 'nonlead') {
-                filtered = filtered.filter(l => isNonlead(l.lead_email));
+                filtered = filtered.filter(l => l.is_nonlead);
             }
             
             return filtered;
@@ -971,7 +986,7 @@
 
         function updateDisplay() {
             const leads = getFilteredLeads();
-            const activeLeads = leads.filter(l => !isNonlead(l.lead_email));
+            const activeLeads = leads.filter(l => !l.is_nonlead);
             const statusFilter = document.getElementById('statusFilter').value;
             
             // Use active leads for revenue calculations unless viewing non-leads
@@ -1028,11 +1043,8 @@
             const recent = leads.slice(-50).reverse();
             const colors = {};
             [...new Set(leads.map(l => l.client_name))].forEach((c, i) => colors[c] = CLIENT_COLORS[i % CLIENT_COLORS.length]);
-            const nonleads = getNonleads();
 
             document.getElementById('leadsTable').innerHTML = recent.map(lead => {
-                const isNL = isNonlead(lead.lead_email);
-                const nlData = isNL ? nonleads[lead.lead_email] : null;
                 const fullName = `${lead.first_name} ${lead.last_name}`;
                 
                 return `
@@ -1045,13 +1057,13 @@
                     </td>
                     <td>
                         <div style="font-weight:500;">${fullName}</div>
-                        ${isNL ? `<div class="nonlead-reason">Reason: ${nlData.reason}</div>` : ''}
+                        ${lead.is_nonlead ? `<div class="nonlead-reason">Reason: ${lead.nonlead_reason}</div>` : ''}
                     </td>
                     <td style="font-size:13px;color:#6B7280;">${lead.lead_email}</td>
-                    <td style="font-size:13px;color:#6B7280;">${lead.dateStr || 'N/A'}</td>
+                    <td style="font-size:13px;color:#6B7280;">${lead.dateStr}</td>
                     <td><span class="revenue-pill">£${lead.lead_price}</span></td>
                     <td>
-                        ${isNL 
+                        ${lead.is_nonlead
                             ? `<button class="action-btn restore" onclick="handleRestore('${lead.lead_email}')">Restore</button>`
                             : `<button class="action-btn nonlead" onclick="openNonleadModal('${lead.lead_email}', '${fullName}')">Non-Lead</button>`
                         }
