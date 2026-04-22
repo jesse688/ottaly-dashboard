@@ -174,6 +174,26 @@
             box-shadow: 0 0 0 3px rgba(31,111,120,0.1);
         }
 
+        input[type="date"] {
+            border: 2px solid #E5E7EB;
+            border-radius: 8px;
+            padding: 8px 14px;
+            font-family: 'Inter', sans-serif;
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--navy-text);
+            background: white;
+            cursor: pointer;
+            outline: none;
+            transition: all 0.2s;
+        }
+
+        input[type="date"]:hover,
+        input[type="date"]:focus {
+            border-color: var(--teal);
+            box-shadow: 0 0 0 3px rgba(31,111,120,0.1);
+        }
+
         /* Metrics grid */
         .metrics {
             display: grid;
@@ -388,6 +408,165 @@
             height: 2px;
             background: #E5E7EB;
         }
+
+        /* Non-lead modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal {
+            background: white;
+            border-radius: 16px;
+            padding: 2rem;
+            max-width: 500px;
+            width: 90%;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        .modal-title {
+            font-family: 'Genos', sans-serif;
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--navy-text);
+            margin-bottom: 0.5rem;
+        }
+
+        .modal-subtitle {
+            color: #6B7280;
+            font-size: 14px;
+            margin-bottom: 1.5rem;
+        }
+
+        .form-group {
+            margin-bottom: 1.25rem;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--navy-text);
+            margin-bottom: 0.5rem;
+        }
+
+        .form-input,
+        .form-textarea {
+            width: 100%;
+            border: 2px solid #E5E7EB;
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-family: 'Inter', sans-serif;
+            font-size: 14px;
+            color: var(--navy-text);
+            outline: none;
+            transition: all 0.2s;
+        }
+
+        .form-textarea {
+            min-height: 100px;
+            resize: vertical;
+        }
+
+        .form-input:focus,
+        .form-textarea:focus {
+            border-color: var(--teal);
+            box-shadow: 0 0 0 3px rgba(31,111,120,0.1);
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 0.75rem;
+            margin-top: 1.5rem;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-family: 'Inter', sans-serif;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            border: none;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: var(--navy);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--teal);
+        }
+
+        .btn-secondary {
+            background: #F3F4F6;
+            color: var(--navy-text);
+        }
+
+        .btn-secondary:hover {
+            background: #E5E7EB;
+        }
+
+        .action-btn {
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            border: none;
+            transition: all 0.2s;
+        }
+
+        .action-btn.nonlead {
+            background: #FEF2F2;
+            color: #DC2626;
+        }
+
+        .action-btn.nonlead:hover {
+            background: #FEE2E2;
+        }
+
+        .action-btn.restore {
+            background: #ECFDF5;
+            color: #059669;
+        }
+
+        .action-btn.restore:hover {
+            background: #D1FAE5;
+        }
+
+        .nonlead-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            background: #FEF2F2;
+            color: #DC2626;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+
+        .nonlead-reason {
+            font-size: 12px;
+            color: #6B7280;
+            font-style: italic;
+            margin-top: 4px;
+        }
     </style>
 </head>
 <body>
@@ -419,11 +598,28 @@
             </div>
             <div class="filter-group">
                 <span class="filter-label">Period</span>
-                <select id="timeFilter" onchange="updateDisplay()">
-                    <option value="month">This Month</option>
-                    <option value="week">This Week</option>
+                <select id="timeFilter" onchange="handlePeriodChange()">
                     <option value="today">Today</option>
+                    <option value="yesterday">Yesterday</option>
+                    <option value="week">This Week</option>
+                    <option value="lastWeek">Last Week</option>
+                    <option value="month" selected>This Month</option>
+                    <option value="lastMonth">Last Month</option>
                     <option value="all">All Time</option>
+                    <option value="custom">Custom Range...</option>
+                </select>
+            </div>
+            <div class="filter-group" id="customDateGroup" style="display: none;">
+                <input type="date" id="startDate" onchange="updateDisplay()">
+                <span style="color: #9CA3AF;">to</span>
+                <input type="date" id="endDate" onchange="updateDisplay()">
+            </div>
+            <div class="filter-group">
+                <span class="filter-label">Status</span>
+                <select id="statusFilter" onchange="updateDisplay()">
+                    <option value="active">Active Leads</option>
+                    <option value="nonlead">Non-Leads</option>
+                    <option value="all">All Leads</option>
                 </select>
             </div>
         </div>
@@ -502,8 +698,9 @@
                         <th>Client</th>
                         <th>Name</th>
                         <th>Email</th>
-                        <th>Campaign</th>
+                        <th>Date</th>
                         <th>Value</th>
+                        <th>Action</th>
                     </tr>
                 </thead>
                 <tbody id="leadsTable">
@@ -513,13 +710,172 @@
         </div>
     </div>
 
+    <!-- Non-Lead Modal -->
+    <div class="modal-overlay" id="nonleadModal">
+        <div class="modal">
+            <div class="modal-title">Mark as Non-Lead</div>
+            <div class="modal-subtitle" id="modalSubtitle">Are you sure you want to mark this lead as non-qualified?</div>
+            
+            <div class="form-group">
+                <label class="form-label">Lead Email</label>
+                <input type="text" class="form-input" id="nonleadEmail" readonly>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Reason *</label>
+                <textarea class="form-textarea" id="nonleadReason" placeholder="e.g., Not qualified, Wrong industry, Already customer, etc."></textarea>
+            </div>
+
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeNonleadModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="confirmNonlead()">Mark as Non-Lead</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const CSV_URL = 'https://docs.google.com/spreadsheets/d/1F6UQJ_om6ZeAdEs9IMy_GQOY_daysUeuBeiOMnwzb9k/export?format=csv&gid=0';
         let allLeads = [];
         let revenueChart = null;
         let leadsChart = null;
+        let currentNonleadEmail = null;
 
         const CLIENT_COLORS = ['#1F6F78','#224388','#FFB700','#7C89CD','#D2E4F8'];
+
+        // Non-lead storage functions
+        function getNonleads() {
+            const stored = localStorage.getItem('ottaly_nonleads');
+            return stored ? JSON.parse(stored) : {};
+        }
+
+        function setNonleads(nonleads) {
+            localStorage.setItem('ottaly_nonleads', JSON.stringify(nonleads));
+        }
+
+        function isNonlead(email) {
+            const nonleads = getNonleads();
+            return nonleads.hasOwnProperty(email);
+        }
+
+        function markAsNonlead(email, reason) {
+            const nonleads = getNonleads();
+            nonleads[email] = {
+                reason: reason,
+                date: new Date().toISOString(),
+                markedBy: 'dashboard-user'
+            };
+            setNonleads(nonleads);
+        }
+
+        function restoreLead(email) {
+            const nonleads = getNonleads();
+            delete nonleads[email];
+            setNonleads(nonleads);
+        }
+
+        // Modal functions
+        function openNonleadModal(email, name) {
+            currentNonleadEmail = email;
+            document.getElementById('nonleadEmail').value = email;
+            document.getElementById('modalSubtitle').textContent = `Mark "${name}" as non-qualified?`;
+            document.getElementById('nonleadReason').value = '';
+            document.getElementById('nonleadModal').classList.add('active');
+        }
+
+        function closeNonleadModal() {
+            document.getElementById('nonleadModal').classList.remove('active');
+            currentNonleadEmail = null;
+        }
+
+        function confirmNonlead() {
+            const reason = document.getElementById('nonleadReason').value.trim();
+            if (!reason) {
+                alert('Please enter a reason');
+                return;
+            }
+            markAsNonlead(currentNonleadEmail, reason);
+            closeNonleadModal();
+            updateDisplay();
+        }
+
+        function handleRestore(email) {
+            if (confirm('Restore this lead to active status?')) {
+                restoreLead(email);
+                updateDisplay();
+            }
+        }
+
+        // Date utility functions
+        function parseDate(dateStr) {
+            if (!dateStr) return null;
+            const d = new Date(dateStr);
+            return isNaN(d.getTime()) ? null : d;
+        }
+
+        function getDateRange(period) {
+            const now = new Date();
+            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            
+            switch(period) {
+                case 'today':
+                    return { start: today, end: new Date(today.getTime() + 86400000) };
+                
+                case 'yesterday':
+                    const yesterday = new Date(today.getTime() - 86400000);
+                    return { start: yesterday, end: today };
+                
+                case 'week':
+                    const weekStart = new Date(today);
+                    weekStart.setDate(today.getDate() - today.getDay());
+                    return { start: weekStart, end: new Date(now.getTime() + 86400000) };
+                
+                case 'lastWeek':
+                    const lastWeekEnd = new Date(today);
+                    lastWeekEnd.setDate(today.getDate() - today.getDay());
+                    const lastWeekStart = new Date(lastWeekEnd.getTime() - 7 * 86400000);
+                    return { start: lastWeekStart, end: lastWeekEnd };
+                
+                case 'month':
+                    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+                    return { start: monthStart, end: new Date(now.getTime() + 86400000) };
+                
+                case 'lastMonth':
+                    const lastMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+                    const lastMonthEnd = new Date(today.getFullYear(), today.getMonth(), 1);
+                    return { start: lastMonthStart, end: lastMonthEnd };
+                
+                case 'custom':
+                    const startInput = document.getElementById('startDate').value;
+                    const endInput = document.getElementById('endDate').value;
+                    if (startInput && endInput) {
+                        return {
+                            start: new Date(startInput),
+                            end: new Date(new Date(endInput).getTime() + 86400000)
+                        };
+                    }
+                    return null;
+                
+                default:
+                    return null;
+            }
+        }
+
+        function handlePeriodChange() {
+            const period = document.getElementById('timeFilter').value;
+            const customGroup = document.getElementById('customDateGroup');
+            
+            if (period === 'custom') {
+                customGroup.style.display = 'flex';
+                const today = new Date().toISOString().split('T')[0];
+                const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+                document.getElementById('startDate').value = weekAgo;
+                document.getElementById('endDate').value = today;
+            } else {
+                customGroup.style.display = 'none';
+            }
+            
+            updateDisplay();
+        }
 
         function getClientColors(count) {
             return Array(count).fill(0).map((_, i) => CLIENT_COLORS[i % CLIENT_COLORS.length]);
@@ -537,15 +893,25 @@
                     complete: function(results) {
                         allLeads = results.data
                             .filter(row => row['Client Name'])
-                            .map(row => ({
-                                client_name: row['Client Name'] || 'Unknown',
-                                campaign: row['Campaign'] || '',
-                                first_name: row['First Name'] || '',
-                                last_name: row['Last Name'] || '',
-                                lead_email: row['Lead Email'] || '',
-                                lead_price: parseFloat(row['Lead Price']) || 0,
-                                timestamp: new Date()
-                            }));
+                            .map(row => {
+                                const dateObj = parseDate(row['Date']);
+                                return {
+                                    client_name: row['Client Name'] || 'Unknown',
+                                    campaign: row['Campaign'] || '',
+                                    first_name: row['First Name'] || '',
+                                    last_name: row['Last Name'] || '',
+                                    lead_email: row['Lead Email'] || '',
+                                    lead_price: parseFloat(row['Lead Price']) || 0,
+                                    date: dateObj,
+                                    dateStr: dateObj ? dateObj.toLocaleDateString('en-GB', { 
+                                        day: '2-digit', 
+                                        month: 'short', 
+                                        year: 'numeric',
+                                        hour: '2-digit',
+                                        minute: '2-digit'
+                                    }) : 'N/A'
+                                };
+                            });
                         populateClientFilter();
                         updateDisplay();
                         document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'});
@@ -572,22 +938,54 @@
 
         function getFilteredLeads() {
             const clientFilter = document.getElementById('clientFilter').value;
+            const timeFilter = document.getElementById('timeFilter').value;
+            const statusFilter = document.getElementById('statusFilter').value;
+            
             let filtered = allLeads;
-            if (clientFilter !== 'all') filtered = filtered.filter(l => l.client_name === clientFilter);
+            
+            // Client filter
+            if (clientFilter !== 'all') {
+                filtered = filtered.filter(l => l.client_name === clientFilter);
+            }
+            
+            // Date filter
+            if (timeFilter !== 'all') {
+                const range = getDateRange(timeFilter);
+                if (range) {
+                    filtered = filtered.filter(l => {
+                        if (!l.date) return false;
+                        return l.date >= range.start && l.date < range.end;
+                    });
+                }
+            }
+            
+            // Status filter
+            if (statusFilter === 'active') {
+                filtered = filtered.filter(l => !isNonlead(l.lead_email));
+            } else if (statusFilter === 'nonlead') {
+                filtered = filtered.filter(l => isNonlead(l.lead_email));
+            }
+            
             return filtered;
         }
 
         function updateDisplay() {
             const leads = getFilteredLeads();
-            const totalRevenue = leads.reduce((sum, l) => sum + l.lead_price, 0);
-            const avgValue = leads.length > 0 ? totalRevenue / leads.length : 0;
+            const activeLeads = leads.filter(l => !isNonlead(l.lead_email));
+            const statusFilter = document.getElementById('statusFilter').value;
+            
+            // Use active leads for revenue calculations unless viewing non-leads
+            const calcLeads = statusFilter === 'nonlead' ? leads : activeLeads;
+            
+            const totalRevenue = calcLeads.reduce((sum, l) => sum + l.lead_price, 0);
+            const avgValue = calcLeads.length > 0 ? totalRevenue / calcLeads.length : 0;
 
             document.getElementById('metricRevenue').textContent = '£' + Math.round(totalRevenue).toLocaleString('en-GB');
-            document.getElementById('metricLeads').textContent = leads.length + ' leads delivered';
+            document.getElementById('metricLeads').textContent = calcLeads.length + ' leads delivered';
             document.getElementById('metricAvg').textContent = '£' + Math.round(avgValue).toLocaleString('en-GB');
 
             const byClient = {};
-            leads.forEach(lead => {
+            calcLeads.forEach(lead => {
                 if (!byClient[lead.client_name]) byClient[lead.client_name] = { leads: 0, revenue: 0 };
                 byClient[lead.client_name].leads += 1;
                 byClient[lead.client_name].revenue += lead.lead_price;
@@ -627,11 +1025,17 @@
         }
 
         function updateLeadsTable(leads) {
-            const recent = leads.slice(-20).reverse();
+            const recent = leads.slice(-50).reverse();
             const colors = {};
             [...new Set(leads.map(l => l.client_name))].forEach((c, i) => colors[c] = CLIENT_COLORS[i % CLIENT_COLORS.length]);
+            const nonleads = getNonleads();
 
-            document.getElementById('leadsTable').innerHTML = recent.map(lead => `
+            document.getElementById('leadsTable').innerHTML = recent.map(lead => {
+                const isNL = isNonlead(lead.lead_email);
+                const nlData = isNL ? nonleads[lead.lead_email] : null;
+                const fullName = `${lead.first_name} ${lead.last_name}`;
+                
+                return `
                 <tr>
                     <td>
                         <div class="client-badge">
@@ -639,12 +1043,22 @@
                             ${lead.client_name}
                         </div>
                     </td>
-                    <td style="font-weight:500;">${lead.first_name} ${lead.last_name}</td>
+                    <td>
+                        <div style="font-weight:500;">${fullName}</div>
+                        ${isNL ? `<div class="nonlead-reason">Reason: ${nlData.reason}</div>` : ''}
+                    </td>
                     <td style="font-size:13px;color:#6B7280;">${lead.lead_email}</td>
-                    <td style="font-size:13px;color:#6B7280;">${lead.campaign.substring(0,40)}${lead.campaign.length>40?'…':''}</td>
+                    <td style="font-size:13px;color:#6B7280;">${lead.dateStr || 'N/A'}</td>
                     <td><span class="revenue-pill">£${lead.lead_price}</span></td>
+                    <td>
+                        ${isNL 
+                            ? `<button class="action-btn restore" onclick="handleRestore('${lead.lead_email}')">Restore</button>`
+                            : `<button class="action-btn nonlead" onclick="openNonleadModal('${lead.lead_email}', '${fullName}')">Non-Lead</button>`
+                        }
+                    </td>
                 </tr>
-            `).join('') || '<tr><td colspan="5" style="text-align:center;padding:2rem;color:#9CA3AF;">No leads</td></tr>';
+                `;
+            }).join('') || '<tr><td colspan="6" style="text-align:center;padding:2rem;color:#9CA3AF;">No leads</td></tr>';
         }
 
         function updateCharts(sortedClients) {
@@ -722,6 +1136,11 @@
                 }
             });
         }
+
+        // Close modal when clicking outside
+        document.getElementById('nonleadModal').addEventListener('click', function(e) {
+            if (e.target === this) closeNonleadModal();
+        });
 
         fetchData();
         setInterval(fetchData, 30000);
