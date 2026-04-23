@@ -997,9 +997,17 @@
     </div>
 
     <script>
-        const CSV_URL = 'https://docs.google.com/spreadsheets/d/1F6UQJ_om6ZeAdEs9IMy_GQOY_daysUeuBeiOMnwzb9k/export?format=csv&gid=0';
-        const CLIENTS_CSV_URL = 'https://docs.google.com/spreadsheets/d/1F6UQJ_om6ZeAdEs9IMy_GQOY_daysUeuBeiOMnwzb9k/export?format=csv&gid=941443714';
-        const WEBHOOK_URL = 'https://n8n1-n8n.xuobbb.easypanel.host/webhook/ottaly-nonlead';
+        const PLUSVIBE_BASE = 'https://api.plusvibe.ai/api/v1';
+        const PLUSVIBE_KEY  = '6425e882-f33fb46a-2837ff5a-eb535a60';
+        const WEBHOOK_URL   = 'https://n8n1-n8n.xuobbb.easypanel.host/webhook/ottaly-nonlead';
+
+        async function pvGet(path) {
+            const r = await fetch(`${PLUSVIBE_BASE}${path}`, {
+                headers: { 'x-api-key': PLUSVIBE_KEY }
+            });
+            if (!r.ok) throw new Error(`PlusVibe ${r.status}: ${path}`);
+            return r.json();
+        }
 
 // Detect if running locally
 const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
@@ -1180,42 +1188,54 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
 
         async function fetchData() {
             try {
-                const response = await fetch(CSV_URL);
-                const text = await response.text();
-                Papa.parse(text, {
-                    header: true,
-                    skipEmptyLines: true,
-                    complete: function(results) {
-                        allLeads = results.data
-                            .filter(row => row['Client Name'])
-                            .map(row => {
-                                const dateObj = parseDate(row['Date']);
-                                const isNonLead = row['Non-Lead Status'] === 'TRUE';
-                                return {
-                                    client_name: row['Client Name'] || 'Unknown',
-                                    campaign: row['Campaign'] || '',
-                                    first_name: row['First Name'] || '',
-                                    last_name: row['Last Name'] || '',
-                                    lead_email: row['Lead Email'] || '',
-                                    lead_price: parseFloat(row['Lead Price']) || 0,
-                                    date: dateObj,
-                                    dateStr: dateObj ? dateObj.toLocaleDateString('en-GB', { 
-                                        day: '2-digit', 
-                                        month: 'short', 
-                                        year: 'numeric',
-                                        hour: '2-digit',
-                                        minute: '2-digit'
-                                    }) : 'N/A',
-                                    is_nonlead: isNonLead,
-                                    nonlead_reason: isNonLead ? (row['Non-Lead Reason'] || '') : '',
-                                    nonlead_date: isNonLead ? (row['Non-Lead Date'] || '') : ''
-                                };
+                // Fetch workspaces + prices in parallel
+                const [workspaces, prices] = await Promise.all([
+                    pvGet('/workspaces'),
+                    fetch('/api/workspace-prices').then(r => r.json()).catch(() => [])
+                ]);
+
+                // Build workspace_id → {name, price} map
+                const priceMap = {};
+                (prices || []).forEach(p => { priceMap[p.workspace_id] = p.price_per_lead || 0; });
+
+                const leads = [];
+                for (const ws of (workspaces || [])) {
+                    const wsPrice = priceMap[ws.id] || 0;
+                    // Fetch all INTERESTED leads for this workspace (paginated)
+                    for (let page = 1; page <= 20; page++) {
+                        let batch;
+                        try {
+                            batch = await pvGet(`/lead/workspace-leads?workspace_id=${ws.id}&label=INTERESTED&page=${page}&limit=100`);
+                        } catch { break; }
+                        if (!Array.isArray(batch) || !batch.length) break;
+                        batch.forEach(l => {
+                            const dateObj = parseDate(l.modified_at || l.created_at);
+                            leads.push({
+                                client_name: ws.name || ws.workspace_name || 'Unknown',
+                                campaign:    l.camp_name || '',
+                                first_name:  l.first_name  || l.firstName  || '',
+                                last_name:   l.last_name   || l.lastName   || '',
+                                lead_email:  l.email || '',
+                                lead_price:  wsPrice,
+                                date:    dateObj,
+                                dateStr: dateObj ? dateObj.toLocaleDateString('en-GB', {
+                                    day: '2-digit', month: 'short', year: 'numeric',
+                                    hour: '2-digit', minute: '2-digit'
+                                }) : 'N/A',
+                                is_nonlead:     false,
+                                nonlead_reason: '',
+                                nonlead_date:   ''
                             });
-                        populateClientFilter();
-                        updateDisplay();
-                        document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'});
+                        });
+                        if (batch.length < 100) break;
                     }
-                });
+                }
+
+                allLeads = leads;
+                populateClientFilter();
+                updateDisplay();
+                document.getElementById('lastUpdate').textContent =
+                    new Date().toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'});
             } catch (error) {
                 document.getElementById('errorContainer').innerHTML = `<div class="error">⚠️ ${error.message}</div>`;
             }

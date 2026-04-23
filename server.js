@@ -358,9 +358,13 @@ app.get('/api/agency/leads', (req, res) => {
     AND date(received_at) >= date(?)
     AND date(received_at) <= date(?)
   `).get(workspace_id, start_date, end_date);
-  const sample = db.prepare(`SELECT workspace_id, received_at, status FROM leads LIMIT 5`).all();
-  console.log(`[agency/leads] ws=${workspace_id} ${start_date}→${end_date} count=${row.count} sample=${JSON.stringify(sample)}`);
   res.json({ count: row.count });
+});
+
+// ── Workspace prices (public — used by Revenue page) ──────
+app.get('/api/workspace-prices', (req, res) => {
+  const rows = db.prepare(`SELECT workspace_id, workspace_name, price_per_lead FROM clients`).all();
+  res.json(rows);
 });
 
 // ── Admin — workspaces ─────────────────────────────────────
