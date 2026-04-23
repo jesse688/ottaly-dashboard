@@ -916,10 +916,10 @@
                 <div class="metric-sub" id="metricProjectionSub">at current pace</div>
             </div>
             <div class="metric" style="border-top-color:#F59E0B;">
-                <div class="metric-icon" style="background:rgba(245,158,11,0.12);">📉</div>
-                <div class="metric-label">30-Day Trend</div>
+                <div class="metric-icon" style="background:rgba(245,158,11,0.12);">🗓️</div>
+                <div class="metric-label">Next Month Est.</div>
                 <div class="metric-value" id="metricTrend">—</div>
-                <div class="metric-sub" id="metricTrendSub">vs prior 30 days</div>
+                <div class="metric-sub" id="metricTrendSub">weighted 3-month avg</div>
             </div>
         </div>
 
@@ -1605,114 +1605,121 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
         }
 
         function updateProjectionCards() {
-            const now   = new Date();
+            const now         = new Date();
             const activeLeads = allLeads.filter(l => !l.is_nonlead && l.date);
 
-            // ── MTD projection ──
-            const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+            // ── MTD projection (current month at today's pace) ──
+            const monthStart  = new Date(now.getFullYear(), now.getMonth(), 1);
             const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
             const daysElapsed = now.getDate();
             const mtdRev = activeLeads
                 .filter(l => l.date >= monthStart)
                 .reduce((s, l) => s + l.lead_price, 0);
-            const projected = daysElapsed > 0 ? (mtdRev / daysElapsed) * daysInMonth : 0;
-            document.getElementById('metricProjection').textContent = '£' + Math.round(projected).toLocaleString('en-GB');
+            const mtdProjected = daysElapsed > 0 ? (mtdRev / daysElapsed) * daysInMonth : 0;
+            document.getElementById('metricProjection').textContent =
+                '£' + Math.round(mtdProjected).toLocaleString('en-GB');
             document.getElementById('metricProjectionSub').textContent =
-                `£${Math.round(mtdRev).toLocaleString('en-GB')} earned · ${daysElapsed}/${daysInMonth} days`;
+                `£${Math.round(mtdRev).toLocaleString('en-GB')} so far · day ${daysElapsed}/${daysInMonth}`;
 
-            // ── 30-day trend vs prior 30 ──
-            const d30 = new Date(now); d30.setDate(d30.getDate() - 30);
-            const d60 = new Date(now); d60.setDate(d60.getDate() - 60);
-            const last30 = activeLeads.filter(l => l.date >= d30).reduce((s, l) => s + l.lead_price, 0);
-            const prev30 = activeLeads.filter(l => l.date >= d60 && l.date < d30).reduce((s, l) => s + l.lead_price, 0);
-            const trendEl   = document.getElementById('metricTrend');
-            const trendSub  = document.getElementById('metricTrendSub');
-            const trendIcon = document.getElementById('metricTrendIcon');
-            if (prev30 > 0) {
-                const pct = ((last30 - prev30) / prev30) * 100;
-                trendEl.textContent = (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%';
-                trendEl.style.color = pct >= 5 ? '#059669' : pct <= -5 ? '#DC2626' : '#F59E0B';
-                trendSub.textContent = `£${Math.round(last30).toLocaleString('en-GB')} vs £${Math.round(prev30).toLocaleString('en-GB')}`;
+            // ── 3-month average → next month estimate ──
+            // Look at the last 3 fully completed calendar months
+            const monthRevs = [];
+            for (let i = 1; i <= 3; i++) {
+                const mStart = new Date(now.getFullYear(), now.getMonth() - i, 1);
+                const mEnd   = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
+                const rev = activeLeads
+                    .filter(l => l.date >= mStart && l.date < mEnd)
+                    .reduce((s, l) => s + l.lead_price, 0);
+                if (rev > 0) monthRevs.push(rev);
+            }
+
+            const trendEl  = document.getElementById('metricTrend');
+            const trendSub = document.getElementById('metricTrendSub');
+
+            if (monthRevs.length >= 2) {
+                // Weighted average: most recent month counts double
+                const weights     = monthRevs.map((_, i) => monthRevs.length - i);
+                const weightedSum = monthRevs.reduce((s, v, i) => s + v * weights[i], 0);
+                const totalWeight = weights.reduce((s, w) => s + w, 0);
+                const nextEst     = weightedSum / totalWeight;
+
+                // Also show direction vs last month
+                const pct = monthRevs.length >= 2
+                    ? ((monthRevs[0] - monthRevs[1]) / monthRevs[1]) * 100 : 0;
+                const arrow = pct >= 3 ? '↑' : pct <= -3 ? '↓' : '→';
+                const arrowColor = pct >= 3 ? '#059669' : pct <= -3 ? '#DC2626' : '#F59E0B';
+
+                trendEl.innerHTML = `£${Math.round(nextEst).toLocaleString('en-GB')} <span style="font-size:16px;color:${arrowColor}">${arrow}</span>`;
+                trendEl.style.color = '';
+                const labels = monthRevs.map((v, i) => {
+                    const d = new Date(now.getFullYear(), now.getMonth() - 1 - i, 1);
+                    return d.toLocaleDateString('en-GB', { month: 'short' }) + ' £' + Math.round(v).toLocaleString('en-GB');
+                });
+                trendSub.textContent = labels.join(' · ');
             } else {
                 trendEl.textContent = '—';
-                trendSub.textContent = 'not enough history';
+                trendSub.textContent = 'need 2+ months of history';
             }
         }
 
         function addProjectionToChart(chart, leads, bucket) {
-            // Build daily buckets from last 90 days of all active leads
-            const now    = new Date();
-            const cutoff = new Date(now); cutoff.setDate(cutoff.getDate() - 90);
-            const daily  = {};
-            leads.filter(l => l.date >= cutoff).forEach(l => {
+            const now = new Date();
+
+            // ── 60-day rolling average daily rate ──
+            const cutoff60 = new Date(now); cutoff60.setDate(cutoff60.getDate() - 60);
+            const daily = {};
+            leads.filter(l => l.date >= cutoff60).forEach(l => {
                 const k = bucketKey(l.date, 'day');
                 daily[k] = (daily[k] || 0) + l.lead_price;
             });
-
             const dayKeys = Object.keys(daily).sort();
-            if (dayKeys.length < 7) return; // not enough data
+            if (dayKeys.length < 7) return;
 
-            // Regression on daily data
-            const origin = new Date(dayKeys[0]);
-            const points = dayKeys.map(k => ({
-                x: (new Date(k) - origin) / 86400000,
-                y: daily[k]
-            }));
-            const reg = linReg(points);
-            if (!reg) return;
+            // Average daily revenue over the 60-day window
+            const avgDaily = Object.values(daily).reduce((s, v) => s + v, 0) / 60;
 
-            // Generate future bucket labels + projected values
+            // Scale to bucket size
+            const daysPerBucket = bucket === 'day' ? 1 : bucket === 'week' ? 7 : 30;
+            const projValuePerBucket = Math.round(avgDaily * daysPerBucket);
+
+            // Generate future labels
             const extendBuckets = bucket === 'month' ? 3 : bucket === 'week' ? 8 : 30;
             const projLabels = [], projValues = [];
             const existingLabels = new Set(chart.data.labels);
 
             for (let i = 1; i <= extendBuckets; i++) {
                 const fd = new Date(now);
-                if (bucket === 'day')   fd.setDate(fd.getDate() + i);
-                else if (bucket === 'week') fd.setDate(fd.getDate() + i * 7);
-                else fd.setMonth(fd.getMonth() + i);
+                if (bucket === 'day')        fd.setDate(fd.getDate() + i);
+                else if (bucket === 'week')  fd.setDate(fd.getDate() + i * 7);
+                else                         fd.setMonth(fd.getMonth() + i);
 
                 const lbl = bucketLabel(bucketKey(fd, bucket), bucket);
                 if (existingLabels.has(lbl)) continue;
                 projLabels.push(lbl);
-
-                // Average over the projected bucket period
-                const daysInBucket = bucket === 'day' ? 1 : bucket === 'week' ? 7 : 30;
-                let bucketRev = 0;
-                for (let d = 0; d < daysInBucket; d++) {
-                    const dd = new Date(fd); dd.setDate(fd.getDate() + d);
-                    const x = (dd - origin) / 86400000;
-                    bucketRev += Math.max(0, reg.slope * x + reg.intercept);
-                }
-                projValues.push(Math.round(bucketRev));
+                projValues.push(projValuePerBucket);
             }
 
             if (!projLabels.length) return;
 
-            // Pad existing datasets with nulls, then append projection points
             const padLen = chart.data.labels.length;
             chart.data.labels.push(...projLabels);
-
-            // Pad revenue bars with nulls
             chart.data.datasets[0].data.push(...projValues.map(() => null));
-
-            // Pad leads line with nulls
             chart.data.datasets[1].data.push(...projValues.map(() => null));
 
-            // Add projection line dataset
-            const lastReal = chart.data.datasets[0].data.filter(v => v !== null).slice(-1)[0] || 0;
+            // Anchor projection line at the last real revenue bucket value
+            const lastReal = chart.data.datasets[0].data.filter(v => v !== null).slice(-1)[0] || projValuePerBucket;
             chart.data.datasets.push({
-                label: 'Projected Revenue',
-                type:  'line',
-                data:  [...Array(padLen).fill(null), lastReal, ...projValues],
+                label:           'Projected Revenue',
+                type:            'line',
+                data:            [...Array(padLen).fill(null), lastReal, ...projValues],
                 borderColor:     'rgba(5,150,105,0.7)',
-                backgroundColor: 'rgba(5,150,105,0.08)',
+                backgroundColor: 'rgba(5,150,105,0.06)',
                 borderDash:      [7, 4],
                 borderWidth:     2,
                 pointRadius:     0,
                 pointHoverRadius: 5,
                 fill:    true,
-                tension: 0.3,
+                tension: 0.2,
                 yAxisID: 'yRev',
                 order:   0
             });
