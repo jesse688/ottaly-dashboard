@@ -274,6 +274,15 @@
             font-weight: 500;
         }
 
+        /* Time-series bucket buttons */
+        .ts-btn {
+            padding: 5px 14px; border-radius: 20px; font-size: 12px; font-weight: 600;
+            cursor: pointer; border: 1.5px solid #E5E7EB; background: #fff;
+            color: #6B7280; transition: all 0.15s; font-family: 'Inter', sans-serif;
+        }
+        .ts-btn:hover { border-color: var(--teal); color: var(--teal); }
+        .ts-btn.active { background: var(--teal); border-color: var(--teal); color: #fff; }
+
         /* Charts */
         .charts {
             display: grid;
@@ -902,6 +911,29 @@
             </div>
         </div>
 
+        <!-- Time Series Charts -->
+        <div class="section-title">Revenue Over Time</div>
+        <div class="card" style="margin-bottom:1.25rem;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem;flex-wrap:wrap;gap:0.75rem;">
+                <div style="display:flex;gap:6px;flex-wrap:wrap;" id="tsBucketBtns">
+                    <button class="ts-btn active" data-bucket="day">Daily</button>
+                    <button class="ts-btn" data-bucket="week">Weekly</button>
+                    <button class="ts-btn" data-bucket="month">Monthly</button>
+                </div>
+                <div style="display:flex;gap:1.5rem;">
+                    <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#6B7280;">
+                        <span style="width:10px;height:10px;border-radius:2px;background:var(--teal);display:inline-block"></span>Revenue
+                    </div>
+                    <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#6B7280;">
+                        <span style="width:10px;height:10px;border-radius:50%;background:var(--purple);display:inline-block"></span>Leads
+                    </div>
+                </div>
+            </div>
+            <div class="chart-wrapper" style="height:280px;">
+                <canvas id="tsChart"></canvas>
+            </div>
+        </div>
+
         <!-- Charts -->
         <div class="section-title">Performance Overview</div>
         <div class="charts">
@@ -1014,6 +1046,8 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
         const unlockedEarners = new Set();
         let revenueChart = null;
         let leadsChart = null;
+        let tsChart = null;
+        let tsBucket = 'day';
         let currentNonleadEmail = null;
 
         const COMMISSION_RATE = 0.15;
@@ -1291,6 +1325,7 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
             updateClientTable(sorted);
             updateLeadsTable(leads);
             updateCharts(sorted);
+            updateTsChart(calcLeads);
             updateCommissionTracker();
         }
 
@@ -1420,6 +1455,114 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
                 }
             });
         }
+
+        function bucketKey(date, bucket) {
+            const y = date.getFullYear(), m = date.getMonth(), d = date.getDate();
+            if (bucket === 'day')   return `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+            if (bucket === 'week')  {
+                const day = new Date(y, m, d);
+                const mon = new Date(day); mon.setDate(d - ((day.getDay()+6)%7));
+                return `${mon.getFullYear()}-${String(mon.getMonth()+1).padStart(2,'0')}-${String(mon.getDate()).padStart(2,'0')}`;
+            }
+            return `${y}-${String(m+1).padStart(2,'0')}`;
+        }
+
+        function bucketLabel(key, bucket) {
+            const [y, m, d] = key.split('-').map(Number);
+            if (bucket === 'day')   return new Date(y, m-1, d).toLocaleDateString('en-GB', {day:'numeric', month:'short'});
+            if (bucket === 'week')  return 'w/c ' + new Date(y, m-1, d).toLocaleDateString('en-GB', {day:'numeric', month:'short'});
+            return new Date(y, m-1, 1).toLocaleDateString('en-GB', {month:'short', year:'numeric'});
+        }
+
+        function updateTsChart(leads) {
+            const buckets = {};
+            leads.forEach(l => {
+                if (!l.date) return;
+                const k = bucketKey(l.date, tsBucket);
+                if (!buckets[k]) buckets[k] = { revenue: 0, count: 0 };
+                buckets[k].revenue += l.lead_price;
+                buckets[k].count++;
+            });
+
+            const keys = Object.keys(buckets).sort();
+            const labels   = keys.map(k => bucketLabel(k, tsBucket));
+            const revenues = keys.map(k => buckets[k].revenue);
+            const counts   = keys.map(k => buckets[k].count);
+
+            const ctx = document.getElementById('tsChart').getContext('2d');
+            if (tsChart) tsChart.destroy();
+            tsChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [
+                        {
+                            label: 'Revenue',
+                            data: revenues,
+                            backgroundColor: 'rgba(31,111,120,0.85)',
+                            borderRadius: 6,
+                            borderSkipped: false,
+                            yAxisID: 'yRev',
+                            order: 2
+                        },
+                        {
+                            label: 'Leads',
+                            data: counts,
+                            type: 'line',
+                            borderColor: '#7C89CD',
+                            backgroundColor: 'rgba(124,137,205,0.12)',
+                            borderWidth: 2.5,
+                            pointRadius: counts.length > 60 ? 0 : 4,
+                            pointHoverRadius: 6,
+                            fill: true,
+                            tension: 0.35,
+                            yAxisID: 'yLeads',
+                            order: 1
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: ctx => ctx.datasetIndex === 0
+                                    ? ` £${Math.round(ctx.raw).toLocaleString('en-GB')} revenue`
+                                    : ` ${ctx.raw} leads`
+                            }
+                        }
+                    },
+                    scales: {
+                        yRev: {
+                            position: 'left',
+                            ticks: { color: '#6B7280', font: { family: 'Inter', size: 11 }, callback: v => '£' + v.toLocaleString('en-GB') },
+                            grid: { color: 'rgba(0,0,0,0.05)' }
+                        },
+                        yLeads: {
+                            position: 'right',
+                            grid: { display: false },
+                            ticks: { color: '#7C89CD', font: { family: 'Inter', size: 11 } }
+                        },
+                        x: {
+                            ticks: { color: '#6B7280', font: { family: 'Inter', size: 11 }, maxRotation: 45 },
+                            grid: { display: false }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Bucket toggle buttons
+        document.getElementById('tsBucketBtns').addEventListener('click', e => {
+            const btn = e.target.closest('.ts-btn');
+            if (!btn) return;
+            tsBucket = btn.dataset.bucket;
+            document.querySelectorAll('.ts-btn').forEach(b => b.classList.toggle('active', b === btn));
+            updateTsChart(getFilteredLeads().filter(l => !l.is_nonlead));
+        });
 
         function updateCommissionTracker() {
             const now = new Date();
