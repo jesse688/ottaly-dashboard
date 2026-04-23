@@ -996,15 +996,15 @@
     </div>
 
     <script>
-        const WEBHOOK_URL = 'https://n8n1-n8n.xuobbb.easypanel.host/webhook/ottaly-nonlead';
+        const PLUSVIBE_BASE = 'https://api.plusvibe.ai/api/v1';
+        const PLUSVIBE_KEY  = '6425e882-f33fb46a-2837ff5a-eb535a60';
+        const WEBHOOK_URL   = 'https://n8n1-n8n.xuobbb.easypanel.host/webhook/ottaly-nonlead';
 
         async function pvGet(path) {
-            // Route through server proxy to avoid CORS
-            const proxyPath = path.startsWith('/workspaces')
-                ? '/api/pv/workspaces'
-                : '/api/pv/workspace-leads' + (path.includes('?') ? path.slice(path.indexOf('?')) : '');
-            const r = await fetch(proxyPath);
-            if (!r.ok) throw new Error(`PlusVibe proxy ${r.status}: ${path}`);
+            const r = await fetch(`${PLUSVIBE_BASE}${path}`, {
+                headers: { 'x-api-key': PLUSVIBE_KEY, 'Content-Type': 'application/json' }
+            });
+            if (!r.ok) throw new Error(`PlusVibe ${r.status}: ${path}`);
             return r.json();
         }
 
@@ -1188,30 +1188,30 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
         async function fetchData() {
             try {
                 // Fetch workspaces + prices in parallel
-                const [workspaces, prices] = await Promise.all([
+                const [wsRaw, prices] = await Promise.all([
                     pvGet('/workspaces'),
                     fetch('/api/workspace-prices').then(r => r.json()).catch(() => [])
                 ]);
+                // PlusVibe may return array or {workspaces:[...]}
+                const workspaceList = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.workspaces || wsRaw?.data || []);
+                console.log(`[revenue] workspaces found: ${workspaceList.length}`, workspaceList.map(w=>w.name));
 
-                // Build workspace_id → {name, price} map
+                // Build workspace_id → price map
                 const priceMap = {};
                 (prices || []).forEach(p => { priceMap[p.workspace_id] = p.price_per_lead || 0; });
 
+                const NEGATIVE_LABELS = ['NOT_INTERESTED','OUT_OF_OFFICE','WRONG_PERSON','DO_NOT_CONTACT','BOUNCED','UNSUBSCRIBED'];
                 const leads = [];
-                for (const ws of (workspaces || [])) {
+                for (const ws of workspaceList) {
                     const wsPrice = priceMap[ws.id] || 0;
-                    // Fetch all leads for this workspace (no label filter), exclude known negatives
-                    const NEGATIVE_LABELS = ['NOT_INTERESTED','OUT_OF_OFFICE','WRONG_PERSON','DO_NOT_CONTACT','BOUNCED','UNSUBSCRIBED'];
                     for (let page = 1; page <= 20; page++) {
                         let raw;
                         try {
-                            raw = await pvGet(`/lead/workspace-leads?workspace_id=${ws.id}&page=${page}&limit=100`);
+                            raw = await pvGet(`/lead/workspace-leads?workspace_id=${ws.id}&label=INTERESTED&page=${page}&limit=100`);
                         } catch(e) { console.warn('[revenue] lead fetch error', ws.name, e.message); break; }
-                        // API may return array directly OR wrapped object
-                        const all = Array.isArray(raw) ? raw : (raw?.leads || raw?.data || []);
-                        const batch = all.filter(l => !NEGATIVE_LABELS.includes(l.label));
-                        if (page === 1) console.log(`[revenue] ${ws.name} total=${all.length} positive=${batch.length} labels=${[...new Set(all.map(l=>l.label))].join(',')}`);
-                        if (!all.length) break;
+                        const batch = Array.isArray(raw) ? raw : (raw?.leads || raw?.data || []);
+                        if (page === 1) console.log(`[revenue] ${ws.name} count=${batch.length}`);
+                        if (!batch.length) break;
                         batch.forEach(l => {
                             const dateObj = parseDate(l.modified_at || l.created_at);
                             leads.push({
@@ -1231,7 +1231,7 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
                                 nonlead_date:   ''
                             });
                         });
-                        if (all.length < 100) break;
+                        if (batch.length < 100) break;
                     }
                 }
 
