@@ -414,6 +414,8 @@
         .ag-stat.red    { border-top-color: #DC2626;        }
         .ag-stat.purple { border-top-color: var(--purple); }
         .ag-stat.yellow { border-top-color: var(--yellow); }
+        .ag-stat.green  { border-top-color: #16A34A;        }
+        .ag-stat.orange { border-top-color: #F97316;        }
         .ag-stat-val {
             font-family: 'Genos', sans-serif; font-size: 34px; font-weight: 700;
             color: var(--navy-text); line-height: 1; margin-bottom: 4px;
@@ -572,6 +574,16 @@
         <div class="ag-stat-label">Active Clients</div>
         <div class="ag-stat-sub" id="agStatClientsSub"></div>
       </div>
+      <div class="ag-stat green">
+        <div class="ag-stat-val" id="agStatLeads">—</div>
+        <div class="ag-stat-label">Marked as Lead</div>
+        <div class="ag-stat-sub" id="agStatLeadsSub"></div>
+      </div>
+      <div class="ag-stat orange">
+        <div class="ag-stat-val" id="agStatRTL">—</div>
+        <div class="ag-stat-label">RTL</div>
+        <div class="ag-stat-sub" id="agStatRTLSub">replies per lead</div>
+      </div>
     </div>
 
     <!-- Charts -->
@@ -591,6 +603,14 @@
       <div class="card ag-chart-card">
         <div class="ag-chart-title">Total Replies</div>
         <div class="ag-chart-wrap" id="agWrapReplies"><canvas id="agChartReplies"></canvas></div>
+      </div>
+      <div class="card ag-chart-card">
+        <div class="ag-chart-title">Marked as Lead</div>
+        <div class="ag-chart-wrap" id="agWrapLeads"><canvas id="agChartLeads"></canvas></div>
+      </div>
+      <div class="card ag-chart-card">
+        <div class="ag-chart-title">RTL (Replies per Lead)</div>
+        <div class="ag-chart-wrap" id="agWrapRTL"><canvas id="agChartRTL"></canvas></div>
       </div>
     </div>
 
@@ -769,10 +789,11 @@
     // ── Helpers ───────────────────────────────────────────────
     function agg(campaigns) {
         return (campaigns || []).reduce((a, c) => ({
-            sent:    a.sent    + (c.sent_count    || 0),
-            replies: a.replies + (c.replied_count || 0),
-            bounces: a.bounces + (c.bounced_count || 0)
-        }), { sent: 0, replies: 0, bounces: 0 });
+            sent:    a.sent    + (c.sent_count      || 0),
+            replies: a.replies + (c.replied_count   || 0),
+            bounces: a.bounces + (c.bounced_count   || 0),
+            leads:   a.leads   + (c.new_lead_count  || 0),
+        }), { sent: 0, replies: 0, bounces: 0, leads: 0 });
     }
 
     function pct(num, denom) { return denom > 0 ? (num / denom) * 100 : 0; }
@@ -1578,7 +1599,8 @@
 
         // Clear charts — use wrap IDs (canvas is replaced, so can't use canvas.parentElement)
         [['agChartSent','agWrapSent'],['agChartReply','agWrapReply'],
-         ['agChartBounce','agWrapBounce'],['agChartReplies','agWrapReplies']].forEach(([cid, wid]) => {
+         ['agChartBounce','agWrapBounce'],['agChartReplies','agWrapReplies'],
+         ['agChartLeads','agWrapLeads'],['agChartRTL','agWrapRTL']].forEach(([cid, wid]) => {
             if (agencyCharts[cid]) { agencyCharts[cid].destroy(); delete agencyCharts[cid]; }
             const wrap = document.getElementById(wid);
             if (wrap) wrap.innerHTML = `<div class="ag-loading-overlay">Loading…</div>`;
@@ -1591,7 +1613,7 @@
                 const wsData = await Promise.all(wslist.map(ws =>
                     get(`/analytics/campaign/stats?workspace_id=${ws.id}&start_date=${b.start}&end_date=${b.end}`)
                         .then(data => agg(data))
-                        .catch(() => ({ sent: 0, replies: 0, bounces: 0 }))
+                        .catch(() => ({ sent: 0, replies: 0, bounces: 0, leads: 0 }))
                 ));
                 bucketResults.push({
                     bucket: b,
@@ -1599,7 +1621,8 @@
                         sent:    acc.sent    + d.sent,
                         replies: acc.replies + d.replies,
                         bounces: acc.bounces + d.bounces,
-                    }), { sent: 0, replies: 0, bounces: 0 })
+                        leads:   acc.leads   + d.leads,
+                    }), { sent: 0, replies: 0, bounces: 0, leads: 0 })
                 });
                 const p = Math.round(((i + 1) / buckets.length) * 100);
                 progFill.style.width = p + '%';
@@ -1619,36 +1642,46 @@
         const labels     = bucketResults.map(r => r.bucket.label);
         const sentArr    = bucketResults.map(r => r.totals.sent);
         const repliesArr = bucketResults.map(r => r.totals.replies);
+        const leadsArr   = bucketResults.map(r => r.totals.leads);
         const replyRArr  = bucketResults.map(r => r.totals.sent > 0 ? pct(r.totals.replies, r.totals.sent) : 0);
         const bounceRArr = bucketResults.map(r => r.totals.sent > 0 ? pct(r.totals.bounces, r.totals.sent) : 0);
+        const rtlArr     = bucketResults.map(r => r.totals.leads > 0 ? r.totals.replies / r.totals.leads : 0);
 
         const totalSent    = sentArr.reduce((a, b) => a + b, 0);
         const totalReplies = repliesArr.reduce((a, b) => a + b, 0);
+        const totalLeads   = leadsArr.reduce((a, b) => a + b, 0);
         const totalBounces = bucketResults.reduce((a, r) => a + r.totals.bounces, 0);
         const avgReply     = totalSent > 0 ? pct(totalReplies, totalSent) : 0;
         const avgBounce    = totalSent > 0 ? pct(totalBounces, totalSent) : 0;
+        const overallRTL   = totalLeads > 0 ? totalReplies / totalLeads : null;
 
         // Stat cards
-        document.getElementById('agStatSent').textContent     = fmtN(totalSent);
-        document.getElementById('agStatSentSub').textContent  = `${fmtN(totalBounces)} bounces`;
-        document.getElementById('agStatReply').textContent    = fmtPct(avgReply);
-        document.getElementById('agStatReplySub').textContent = `${fmtN(totalReplies)} total`;
-        document.getElementById('agStatBounce').textContent   = fmtPct(avgBounce);
-        document.getElementById('agStatBounceSub').textContent= totalSent > 0 ? (avgBounce > 5 ? '⚠ Above threshold' : '✓ Within range') : '';
-        document.getElementById('agStatReplies').textContent  = fmtN(totalReplies);
-        document.getElementById('agStatRepliesSub').textContent = `across ${clientCount} clients`;
-        document.getElementById('agStatClients').textContent  = clientCount;
+        document.getElementById('agStatSent').textContent      = fmtN(totalSent);
+        document.getElementById('agStatSentSub').textContent   = `${fmtN(totalBounces)} bounces`;
+        document.getElementById('agStatReply').textContent     = fmtPct(avgReply);
+        document.getElementById('agStatReplySub').textContent  = `${fmtN(totalReplies)} total`;
+        document.getElementById('agStatBounce').textContent    = fmtPct(avgBounce);
+        document.getElementById('agStatBounceSub').textContent = totalSent > 0 ? (avgBounce > 5 ? '⚠ Above threshold' : '✓ Within range') : '';
+        document.getElementById('agStatReplies').textContent   = fmtN(totalReplies);
+        document.getElementById('agStatRepliesSub').textContent= `across ${clientCount} clients`;
+        document.getElementById('agStatClients').textContent   = clientCount;
         document.getElementById('agStatClientsSub').textContent= `active workspaces`;
+        document.getElementById('agStatLeads').textContent     = fmtN(totalLeads);
+        document.getElementById('agStatLeadsSub').textContent  = totalSent > 0 ? `${pct(totalLeads, totalSent).toFixed(2)}% of sent` : '';
+        document.getElementById('agStatRTL').textContent       = overallRTL !== null ? overallRTL.toFixed(1) : '—';
+        document.getElementById('agStatRTLSub').textContent    = overallRTL !== null ? `replies per lead` : 'no leads yet';
 
         // Charts
         const pt = labels.length <= 7 ? 4 : labels.length <= 14 ? 3 : 2;
-        buildChart('agChartSent',    labels, sentArr,    'bar',  '#224388', 'Sent',         false, pt);
-        buildChart('agChartReply',   labels, replyRArr,  'line', '#1F6F78', 'Reply Rate %', true,  pt);
-        buildChart('agChartBounce',  labels, bounceRArr, 'line', '#DC2626', 'Bounce Rate %',true,  pt);
-        buildChart('agChartReplies', labels, repliesArr, 'bar',  '#7C89CD', 'Replies',      false, pt);
+        buildChart('agChartSent',    labels, sentArr,    'bar',  '#224388', 'Sent',              false, pt);
+        buildChart('agChartReply',   labels, replyRArr,  'line', '#1F6F78', 'Reply Rate %',      true,  pt);
+        buildChart('agChartBounce',  labels, bounceRArr, 'line', '#DC2626', 'Bounce Rate %',     true,  pt);
+        buildChart('agChartReplies', labels, repliesArr, 'bar',  '#7C89CD', 'Replies',           false, pt);
+        buildChart('agChartLeads',   labels, leadsArr,   'bar',  '#16A34A', 'Marked as Lead',    false, pt);
+        buildChart('agChartRTL',     labels, rtlArr,     'line', '#F97316', 'RTL',               false, pt, true);
     }
 
-    function buildChart(canvasId, labels, data, type, color, label, isPercent, ptRadius) {
+    function buildChart(canvasId, labels, data, type, color, label, isPercent, ptRadius, isDecimal) {
         const wrapId = canvasId.replace('agChart', 'agWrap');
         const wrap   = document.getElementById(wrapId);
         if (!wrap) return;
@@ -1688,7 +1721,9 @@
                         callbacks: {
                             label: ctx => isPercent
                                 ? ` ${ctx.raw.toFixed(2)}%`
-                                : ` ${fmtN(ctx.raw)}`
+                                : isDecimal
+                                    ? ` ${ctx.raw.toFixed(1)}`
+                                    : ` ${fmtN(ctx.raw)}`
                         }
                     }
                 },
@@ -1702,7 +1737,7 @@
                         grid: { color: '#F5F5F7', lineWidth: 1 },
                         ticks: {
                             font: { size: 11, family: 'Inter' }, color: '#9CA3AF',
-                            callback: v => isPercent ? v.toFixed(1) + '%' : fmtN(v)
+                            callback: v => isPercent ? v.toFixed(1) + '%' : isDecimal ? v.toFixed(1) : fmtN(v)
                         }
                     }
                 }
