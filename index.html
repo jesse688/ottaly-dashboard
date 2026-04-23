@@ -909,6 +909,18 @@
                 <div class="metric-value" id="metricTopClient" style="font-size: 24px;">—</div>
                 <div class="metric-sub" id="metricTopRevenue">£0 revenue</div>
             </div>
+            <div class="metric" style="border-top-color:#059669;">
+                <div class="metric-icon" style="background:rgba(5,150,105,0.12);">📈</div>
+                <div class="metric-label">Month Projection</div>
+                <div class="metric-value" id="metricProjection">—</div>
+                <div class="metric-sub" id="metricProjectionSub">at current pace</div>
+            </div>
+            <div class="metric" style="border-top-color:#F59E0B;">
+                <div class="metric-icon" style="background:rgba(245,158,11,0.12);">📉</div>
+                <div class="metric-label">30-Day Trend</div>
+                <div class="metric-value" id="metricTrend">—</div>
+                <div class="metric-sub" id="metricTrendSub">vs prior 30 days</div>
+            </div>
         </div>
 
         <!-- Time Series Charts -->
@@ -920,12 +932,15 @@
                     <button class="ts-btn" data-bucket="week">Weekly</button>
                     <button class="ts-btn" data-bucket="month">Monthly</button>
                 </div>
-                <div style="display:flex;gap:1.5rem;">
+                <div style="display:flex;gap:1.5rem;flex-wrap:wrap;">
                     <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#6B7280;">
                         <span style="width:10px;height:10px;border-radius:2px;background:var(--teal);display:inline-block"></span>Revenue
                     </div>
                     <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#6B7280;">
                         <span style="width:10px;height:10px;border-radius:50%;background:var(--purple);display:inline-block"></span>Leads
+                    </div>
+                    <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#6B7280;">
+                        <span style="width:22px;border-top:2px dashed #059669;display:inline-block;margin-bottom:1px"></span>Projected
                     </div>
                 </div>
             </div>
@@ -1326,6 +1341,7 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
             updateLeadsTable(leads);
             updateCharts(sorted);
             updateTsChart(calcLeads);
+            updateProjectionCards();
             updateCommissionTracker();
         }
 
@@ -1553,6 +1569,10 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
                     }
                 }
             });
+
+            // Add dotted projection line using all active leads (not filtered by time)
+            const activeAll = allLeads.filter(l => !l.is_nonlead);
+            addProjectionToChart(tsChart, activeAll, tsBucket);
         }
 
         // Bucket toggle buttons
@@ -1563,6 +1583,137 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
             document.querySelectorAll('.ts-btn').forEach(b => b.classList.toggle('active', b === btn));
             updateTsChart(getFilteredLeads().filter(l => !l.is_nonlead));
         });
+
+        // ── Projection helpers ────────────────────────────────
+        function linReg(points) {
+            const n = points.length;
+            if (n < 2) return null;
+            const sx  = points.reduce((s, p) => s + p.x, 0);
+            const sy  = points.reduce((s, p) => s + p.y, 0);
+            const sxy = points.reduce((s, p) => s + p.x * p.y, 0);
+            const sx2 = points.reduce((s, p) => s + p.x * p.x, 0);
+            const d   = n * sx2 - sx * sx;
+            if (!d) return null;
+            const slope = (n * sxy - sx * sy) / d;
+            const intercept = (sy - slope * sx) / n;
+            return { slope, intercept };
+        }
+
+        function updateProjectionCards() {
+            const now   = new Date();
+            const activeLeads = allLeads.filter(l => !l.is_nonlead && l.date);
+
+            // ── MTD projection ──
+            const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+            const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+            const daysElapsed = now.getDate();
+            const mtdRev = activeLeads
+                .filter(l => l.date >= monthStart)
+                .reduce((s, l) => s + l.lead_price, 0);
+            const projected = daysElapsed > 0 ? (mtdRev / daysElapsed) * daysInMonth : 0;
+            document.getElementById('metricProjection').textContent = '£' + Math.round(projected).toLocaleString('en-GB');
+            document.getElementById('metricProjectionSub').textContent =
+                `£${Math.round(mtdRev).toLocaleString('en-GB')} earned · ${daysElapsed}/${daysInMonth} days`;
+
+            // ── 30-day trend vs prior 30 ──
+            const d30 = new Date(now); d30.setDate(d30.getDate() - 30);
+            const d60 = new Date(now); d60.setDate(d60.getDate() - 60);
+            const last30 = activeLeads.filter(l => l.date >= d30).reduce((s, l) => s + l.lead_price, 0);
+            const prev30 = activeLeads.filter(l => l.date >= d60 && l.date < d30).reduce((s, l) => s + l.lead_price, 0);
+            const trendEl   = document.getElementById('metricTrend');
+            const trendSub  = document.getElementById('metricTrendSub');
+            const trendIcon = document.getElementById('metricTrendIcon');
+            if (prev30 > 0) {
+                const pct = ((last30 - prev30) / prev30) * 100;
+                trendEl.textContent = (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%';
+                trendEl.style.color = pct >= 5 ? '#059669' : pct <= -5 ? '#DC2626' : '#F59E0B';
+                trendSub.textContent = `£${Math.round(last30).toLocaleString('en-GB')} vs £${Math.round(prev30).toLocaleString('en-GB')}`;
+            } else {
+                trendEl.textContent = '—';
+                trendSub.textContent = 'not enough history';
+            }
+        }
+
+        function addProjectionToChart(chart, leads, bucket) {
+            // Build daily buckets from last 90 days of all active leads
+            const now    = new Date();
+            const cutoff = new Date(now); cutoff.setDate(cutoff.getDate() - 90);
+            const daily  = {};
+            leads.filter(l => l.date >= cutoff).forEach(l => {
+                const k = bucketKey(l.date, 'day');
+                daily[k] = (daily[k] || 0) + l.lead_price;
+            });
+
+            const dayKeys = Object.keys(daily).sort();
+            if (dayKeys.length < 7) return; // not enough data
+
+            // Regression on daily data
+            const origin = new Date(dayKeys[0]);
+            const points = dayKeys.map(k => ({
+                x: (new Date(k) - origin) / 86400000,
+                y: daily[k]
+            }));
+            const reg = linReg(points);
+            if (!reg) return;
+
+            // Generate future bucket labels + projected values
+            const extendBuckets = bucket === 'month' ? 3 : bucket === 'week' ? 8 : 30;
+            const projLabels = [], projValues = [];
+            const existingLabels = new Set(chart.data.labels);
+
+            for (let i = 1; i <= extendBuckets; i++) {
+                const fd = new Date(now);
+                if (bucket === 'day')   fd.setDate(fd.getDate() + i);
+                else if (bucket === 'week') fd.setDate(fd.getDate() + i * 7);
+                else fd.setMonth(fd.getMonth() + i);
+
+                const lbl = bucketLabel(bucketKey(fd, bucket), bucket);
+                if (existingLabels.has(lbl)) continue;
+                projLabels.push(lbl);
+
+                // Average over the projected bucket period
+                const daysInBucket = bucket === 'day' ? 1 : bucket === 'week' ? 7 : 30;
+                let bucketRev = 0;
+                for (let d = 0; d < daysInBucket; d++) {
+                    const dd = new Date(fd); dd.setDate(fd.getDate() + d);
+                    const x = (dd - origin) / 86400000;
+                    bucketRev += Math.max(0, reg.slope * x + reg.intercept);
+                }
+                projValues.push(Math.round(bucketRev));
+            }
+
+            if (!projLabels.length) return;
+
+            // Pad existing datasets with nulls, then append projection points
+            const padLen = chart.data.labels.length;
+            chart.data.labels.push(...projLabels);
+
+            // Pad revenue bars with nulls
+            chart.data.datasets[0].data.push(...projValues.map(() => null));
+
+            // Pad leads line with nulls
+            chart.data.datasets[1].data.push(...projValues.map(() => null));
+
+            // Add projection line dataset
+            const lastReal = chart.data.datasets[0].data.filter(v => v !== null).slice(-1)[0] || 0;
+            chart.data.datasets.push({
+                label: 'Projected Revenue',
+                type:  'line',
+                data:  [...Array(padLen).fill(null), lastReal, ...projValues],
+                borderColor:     'rgba(5,150,105,0.7)',
+                backgroundColor: 'rgba(5,150,105,0.08)',
+                borderDash:      [7, 4],
+                borderWidth:     2,
+                pointRadius:     0,
+                pointHoverRadius: 5,
+                fill:    true,
+                tension: 0.3,
+                yAxisID: 'yRev',
+                order:   0
+            });
+
+            chart.update();
+        }
 
         function updateCommissionTracker() {
             const now = new Date();
