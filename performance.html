@@ -396,15 +396,14 @@
         .ag-custom input:focus { border-color: var(--teal); }
         .ag-custom span { font-size: 12px; color: #9CA3AF; }
         .ag-progress { display: flex; align-items: center; gap: 10px; margin-left: auto; }
-        .ag-progress-text { font-size: 12px; color: #9CA3AF; white-space: nowrap; }
+        .ag-progress-text { font-size: 12px; color: #4B5563; font-weight: 600; white-space: nowrap; }
         .ag-progress-track { width: 120px; height: 3px; background: #F3F4F6; border-radius: 2px; }
         .ag-progress-fill  { height: 100%; background: var(--teal); border-radius: 2px; transition: width 0.25s; }
 
         .ag-stats {
-            display: grid; grid-template-columns: repeat(5, 1fr);
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
             gap: 1rem; margin-bottom: 1.5rem;
         }
-        @media(max-width:900px) { .ag-stats { grid-template-columns: repeat(3,1fr); } }
         .ag-stat {
             background: white; border-radius: 10px; padding: 1.25rem 1.5rem;
             box-shadow: 0 1px 3px rgba(5,12,41,0.08); border-top: 3px solid transparent;
@@ -417,11 +416,11 @@
         .ag-stat.green  { border-top-color: #16A34A;        }
         .ag-stat.orange { border-top-color: #F97316;        }
         .ag-stat-val {
-            font-family: 'Genos', sans-serif; font-size: 34px; font-weight: 700;
-            color: var(--navy-text); line-height: 1; margin-bottom: 4px;
+            font-family: 'Genos', sans-serif; font-size: 32px; font-weight: 700;
+            color: var(--navy-text); line-height: 1; margin-bottom: 6px;
         }
-        .ag-stat-label { font-size: 11px; color: #9CA3AF; text-transform: uppercase; letter-spacing: 0.5px; }
-        .ag-stat-sub   { font-size: 12px; color: #6B7280; margin-top: 4px; }
+        .ag-stat-label { font-size: 11.5px; color: #4B5563; text-transform: uppercase; letter-spacing: 0.6px; font-weight: 600; }
+        .ag-stat-sub   { font-size: 12px; color: #374151; margin-top: 4px; font-weight: 500; }
 
         .ag-charts {
             display: grid; grid-template-columns: 1fr 1fr;
@@ -430,13 +429,13 @@
         @media(max-width:900px) { .ag-charts { grid-template-columns: 1fr; } }
         .ag-chart-card { padding: 1.25rem 1.5rem; }
         .ag-chart-title {
-            font-family: 'Genos', sans-serif; font-size: 17px; font-weight: 700;
+            font-family: 'Genos', sans-serif; font-size: 18px; font-weight: 700;
             color: var(--navy-text); margin-bottom: 1rem; letter-spacing: 0.3px;
         }
         .ag-chart-wrap { height: 210px; position: relative; }
         .ag-loading-overlay {
             display: flex; align-items: center; justify-content: center;
-            height: 100%; color: #9CA3AF; font-size: 13px;
+            height: 100%; color: #6B7280; font-size: 13px; font-weight: 500;
         }
 
         /* Client filter strip */
@@ -457,7 +456,7 @@
             border-color: var(--purple);
         }
         .ag-client-label {
-            font-size: 11px; font-weight: 700; color: #9CA3AF;
+            font-size: 11.5px; font-weight: 700; color: #4B5563;
             text-transform: uppercase; letter-spacing: 1px;
             white-space: nowrap; align-self: center;
         }
@@ -768,6 +767,13 @@
         return r.json();
     }
 
+    async function getLocal(path) {
+        const key = localStorage.getItem('ottaly_admin_key') || '';
+        const r = await fetch(path, { headers: { 'x-admin-key': key } });
+        if (!r.ok) throw new Error(`HTTP ${r.status} — ${path}`);
+        return r.json();
+    }
+
     function ds(date) { return date.toISOString().split('T')[0]; }
 
     async function fetchAll() {
@@ -789,11 +795,10 @@
     // ── Helpers ───────────────────────────────────────────────
     function agg(campaigns) {
         return (campaigns || []).reduce((a, c) => ({
-            sent:    a.sent    + (c.sent_count      || 0),
-            replies: a.replies + (c.replied_count   || 0),
-            bounces: a.bounces + (c.bounced_count   || 0),
-            leads:   a.leads   + (c.new_lead_count  || 0),
-        }), { sent: 0, replies: 0, bounces: 0, leads: 0 });
+            sent:    a.sent    + (c.sent_count    || 0),
+            replies: a.replies + (c.replied_count || 0),
+            bounces: a.bounces + (c.bounced_count || 0),
+        }), { sent: 0, replies: 0, bounces: 0 });
     }
 
     function pct(num, denom) { return denom > 0 ? (num / denom) * 100 : 0; }
@@ -1611,9 +1616,14 @@
             for (let i = 0; i < buckets.length; i++) {
                 const b = buckets[i];
                 const wsData = await Promise.all(wslist.map(ws =>
-                    get(`/analytics/campaign/stats?workspace_id=${ws.id}&start_date=${b.start}&end_date=${b.end}`)
-                        .then(data => agg(data))
-                        .catch(() => ({ sent: 0, replies: 0, bounces: 0, leads: 0 }))
+                    Promise.all([
+                        get(`/analytics/campaign/stats?workspace_id=${ws.id}&start_date=${b.start}&end_date=${b.end}`)
+                            .then(data => agg(data))
+                            .catch(() => ({ sent: 0, replies: 0, bounces: 0 })),
+                        getLocal(`/api/agency/leads?workspace_id=${ws.id}&start_date=${b.start}&end_date=${b.end}`)
+                            .then(d => d.count || 0)
+                            .catch(() => 0)
+                    ]).then(([pvData, leadCount]) => ({ ...pvData, leads: leadCount }))
                 ));
                 bucketResults.push({
                     bucket: b,

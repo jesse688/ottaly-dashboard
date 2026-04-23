@@ -69,6 +69,7 @@ for (const sql of [
   `ALTER TABLE clients ADD COLUMN stripe_customer_id TEXT`,
   `ALTER TABLE leads ADD COLUMN closed_value REAL`,
   `ALTER TABLE leads ADD COLUMN status TEXT DEFAULT 'active'`,
+  `ALTER TABLE leads ADD COLUMN received_at TEXT`,
 ]) { try { db.exec(sql); } catch {} }
 
 // ── Stripe webhook — MUST be before express.json() ────────
@@ -139,7 +140,7 @@ app.post('/webhook/lead', (req, res) => {
     db.prepare('UPDATE leads SET workspace_id = ?, data = ? WHERE id = ?')
       .run(payload.workspace_id, JSON.stringify(payload), payload._id);
   } else {
-    db.prepare('INSERT INTO leads (id, workspace_id, data) VALUES (?, ?, ?)')
+    db.prepare('INSERT INTO leads (id, workspace_id, data, received_at) VALUES (?, ?, ?, datetime(\'now\'))')
       .run(payload._id, payload.workspace_id, JSON.stringify(payload));
   }
   console.log(`Lead received: ${payload.first_name} ${payload.last_name} → ${payload.workspace_name}`);
@@ -339,6 +340,22 @@ app.post('/api/stripe/portal', requireAuth, async (req, res) => {
     return_url: `${APP_URL}/client.html`,
   });
   res.json({ url: session.url });
+});
+
+// ── Agency lead counts (uses SQLite received_at) ──────────
+app.get('/api/agency/leads', requireAdmin, (req, res) => {
+  const { workspace_id, start_date, end_date } = req.query;
+  if (!workspace_id || !start_date || !end_date)
+    return res.status(400).json({ error: 'Missing params' });
+  const row = db.prepare(`
+    SELECT COUNT(*) as count FROM leads
+    WHERE workspace_id = ?
+    AND (status IS NULL OR status NOT IN ('nonlead','nonlead_pending'))
+    AND received_at IS NOT NULL
+    AND date(received_at) >= date(?)
+    AND date(received_at) <= date(?)
+  `).get(workspace_id, start_date, end_date);
+  res.json({ count: row.count });
 });
 
 // ── Admin — workspaces ─────────────────────────────────────
