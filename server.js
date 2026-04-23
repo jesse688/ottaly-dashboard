@@ -72,6 +72,9 @@ for (const sql of [
   `ALTER TABLE leads ADD COLUMN received_at TEXT`,
 ]) { try { db.exec(sql); } catch {} }
 
+// Backfill any leads that arrived before received_at column existed
+db.exec(`UPDATE leads SET received_at = datetime('now') WHERE received_at IS NULL`);
+
 // ── Stripe webhook — MUST be before express.json() ────────
 app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   if (!stripe || !STRIPE_WEBHOOK_SECRET)
