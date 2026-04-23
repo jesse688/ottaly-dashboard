@@ -467,7 +467,7 @@ function renderApolloCard(name) {
   if (!a) return '';
 
   const row = (label, val, color) => val
-    ? `<div class="stat-row"><span class="label">${label}</span><span class="value" style="${color?`color:${color}`:''}; font-size:12px; max-width:300px; text-align:right">${esc(val)}</span></div>`
+    ? `<div class="stat-row"><span class="label">${label}</span><span class="value" style="${color ? 'color:' + color : ''}; font-size:12px; max-width:300px; text-align:right">${esc(val)}</span></div>`
     : '';
 
   return `<div class="detail-section" style="margin-bottom:1rem">
