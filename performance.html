@@ -768,33 +768,29 @@
         return r.json();
     }
 
-    const LEADS_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1F6UQJ_om6ZeAdEs9IMy_GQOY_daysUeuBeiOMnwzb9k/export?format=csv&gid=0';
+    // Cache labeled leads per workspace so we only fetch once per scan
+    const _pvLeadsCache = {};
 
-    async function fetchLeadsSheet() {
-        const res  = await fetch(LEADS_SHEET_URL);
-        const text = await res.text();
-        return new Promise(resolve => {
-            Papa.parse(text, {
-                header: true, skipEmptyLines: true,
-                complete: r => resolve(r.data.filter(row => row['Client Name'] && row['Date']))
-            });
-        });
+    async function fetchLabeledLeads(wsId) {
+        if (_pvLeadsCache[wsId] !== undefined) return _pvLeadsCache[wsId];
+        const labeled = [];
+        const limit   = 500;
+        for (let page = 0; page < 20; page++) {
+            const batch = await get(`/lead/workspace-leads?workspace_id=${wsId}&skip=${page * limit}&limit=${limit}`)
+                .catch(() => []);
+            if (!Array.isArray(batch) || !batch.length) break;
+            batch.forEach(l => { if (l.label && l.label.trim()) labeled.push(l); });
+            if (batch.length < limit) break; // last page
+        }
+        _pvLeadsCache[wsId] = labeled;
+        return labeled;
     }
 
-    function normName(s) { return (s || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
-
-    function clientMatch(wsName, sheetName) {
-        const a = normName(wsName), b = normName(sheetName);
-        return a === b || a.startsWith(b) || b.startsWith(a);
-    }
-
-    function countSheetLeads(rows, clientName, startStr, endStr) {
+    function countPvLeads(labeledLeads, startStr, endStr) {
         const start = new Date(startStr + 'T00:00:00');
         const end   = new Date(endStr   + 'T23:59:59');
-        return rows.filter(row => {
-            if (row['Non-Lead Status'] === 'TRUE') return false;
-            if (!clientMatch(clientName, row['Client Name'] || '')) return false;
-            const d = new Date(row['Date']);
+        return labeledLeads.filter(l => {
+            const d = new Date(l.modified_at || l.created_at);
             return !isNaN(d) && d >= start && d <= end;
         }).length;
     }
@@ -817,13 +813,6 @@
             get(`/account/warmup-stats?workspace_id=${ws}&start_date=${today}&end_date=${today}`),
             get(`/lead/count/lead-status?workspace_id=${ws}`)
         ]);
-
-        if (!window._wsLeadsLogged) {
-            window._wsLeadsLogged = true;
-            get(`/lead/workspace-leads?workspace_id=${ws}&limit=3`)
-                .then(r => console.log('[workspace-leads sample]', JSON.stringify(r).slice(0, 2000)))
-                .catch(e => console.log('[workspace-leads error]', e.message));
-        }
 
         return { todayCampaigns, monthCampaigns, accounts, warmup, leads };
     }
@@ -1624,6 +1613,8 @@
     async function runAgencyScan() {
         if (agRunning) return;
         agRunning = true;
+        // Clear lead cache so each scan gets fresh data
+        Object.keys(_pvLeadsCache).forEach(k => delete _pvLeadsCache[k]);
 
         const wslist  = agSelectedWS
             ? getActiveWorkspaces().filter(w => w.id === agSelectedWS)
@@ -1648,8 +1639,12 @@
         });
 
         try {
-            progText.textContent = `Fetching lead data…`;
-            const sheetRows = await fetchLeadsSheet().catch(() => []);
+            progText.textContent = `Fetching lead history…`;
+            // Pre-fetch all labeled leads per workspace in parallel (cached for session)
+            const wsLabeledLeads = {};
+            await Promise.all(wslist.map(async ws => {
+                wsLabeledLeads[ws.id] = await fetchLabeledLeads(ws.id);
+            }));
 
             const bucketResults = [];
             for (let i = 0; i < buckets.length; i++) {
@@ -1660,7 +1655,7 @@
                         .catch(() => ({ sent: 0, replies: 0, bounces: 0 }))
                         .then(pvData => ({
                             ...pvData,
-                            leads: countSheetLeads(sheetRows, ws.name, b.start, b.end)
+                            leads: countPvLeads(wsLabeledLeads[ws.id] || [], b.start, b.end)
                         }))
                 ));
                 bucketResults.push({
