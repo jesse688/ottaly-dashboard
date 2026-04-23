@@ -367,7 +367,75 @@ app.get('/api/workspace-prices', (req, res) => {
   res.json(rows);
 });
 
-// ── PlusVibe proxy (public — avoids CORS from browser) ────
+// ── Revenue leads cache (refreshed every 3 min server-side) ──
+const LEAD_LABELS = ['LEAD', 'MEETING_BOOKED', 'MEETING_COMPLETED', 'CLOSED'];
+let revenueCache = { leads: [], updatedAt: null };
+
+async function pvFetch(path) {
+  const r = await fetch(`https://api.plusvibe.ai/api/v1${path}`, {
+    headers: { 'x-api-key': PLUSVIBE_KEY }
+  });
+  if (!r.ok) throw new Error(`PlusVibe ${r.status}: ${path}`);
+  return r.json();
+}
+
+async function refreshRevenueCache() {
+  try {
+    const [wsRaw, prices] = await Promise.all([
+      pvFetch('/workspaces'),
+      Promise.resolve(db.prepare('SELECT workspace_id, price_per_lead FROM clients').all())
+    ]);
+    const workspaces = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.workspaces || wsRaw?.data || []);
+    const priceMap = {};
+    prices.forEach(p => { priceMap[p.workspace_id] = p.price_per_lead || 0; });
+
+    const leads = [];
+    for (const ws of workspaces) {
+      const wsPrice = priceMap[ws.id] || 0;
+      const seenIds = new Set();
+      for (const label of LEAD_LABELS) {
+        for (let page = 1; page <= 20; page++) {
+          let batch;
+          try {
+            const raw = await pvFetch(`/lead/workspace-leads?workspace_id=${ws.id}&label=${label}&page=${page}&limit=100`);
+            batch = Array.isArray(raw) ? raw : (raw?.leads || raw?.data || []);
+          } catch(e) { break; }
+          if (!batch.length) break;
+          batch.forEach(l => {
+            if (seenIds.has(l._id)) return;
+            seenIds.add(l._id);
+            leads.push({
+              client_name:    ws.name || ws.workspace_name || 'Unknown',
+              workspace_id:   ws.id,
+              campaign:       l.camp_name || '',
+              first_name:     l.first_name  || l.firstName  || '',
+              last_name:      l.last_name   || l.lastName   || '',
+              lead_email:     l.email || '',
+              lead_price:     wsPrice,
+              label:          l.label || '',
+              date:           l.modified_at || l.created_at || null,
+            });
+          });
+          if (batch.length < 100) break;
+        }
+      }
+    }
+    revenueCache = { leads, updatedAt: new Date().toISOString() };
+    console.log(`[revenue cache] refreshed — ${leads.length} total leads`);
+  } catch (err) {
+    console.error('[revenue cache] refresh failed:', err.message);
+  }
+}
+
+// Refresh on startup then every 3 minutes
+refreshRevenueCache();
+setInterval(refreshRevenueCache, 3 * 60 * 1000);
+
+app.get('/api/revenue/leads', (req, res) => {
+  res.json(revenueCache);
+});
+
+// ── PlusVibe proxy (kept for performance.html agency scan) ────
 app.get('/api/pv/workspaces', async (req, res) => {
   try {
     const r = await fetch('https://api.plusvibe.ai/api/v1/workspaces', {
