@@ -771,20 +771,18 @@
     // Cache labeled leads per workspace so we only fetch once per scan
     const _pvLeadsCache = {};
 
-    // No-label = newly marked leads; positive labels = leads that progressed.
-    // INTERESTED excluded — it matches unibox reply labels, not actual leads.
-    const LEAD_LABEL_QUERIES = [null, 'MEETING_BOOKED', 'MEETING_COMPLETED', 'CLOSED'];
+    // label=LEAD = marked as lead in PlusVibe UI
+    // Additional labels for leads that progressed after being marked
+    const LEAD_LABELS = ['LEAD', 'MEETING_BOOKED', 'MEETING_COMPLETED', 'CLOSED'];
 
     async function fetchLabeledLeads(wsId) {
         if (_pvLeadsCache[wsId] !== undefined) return _pvLeadsCache[wsId];
         const leads = [];
         const seenIds = new Set();
-        for (const label of LEAD_LABEL_QUERIES) {
+        for (const label of LEAD_LABELS) {
             for (let page = 1; page <= 20; page++) {
-                const qs = label
-                    ? `/lead/workspace-leads?workspace_id=${wsId}&label=${label}&page=${page}&limit=100`
-                    : `/lead/workspace-leads?workspace_id=${wsId}&page=${page}&limit=100`;
-                const raw = await get(qs).catch(() => []);
+                const raw = await get(`/lead/workspace-leads?workspace_id=${wsId}&label=${label}&page=${page}&limit=100`)
+                    .catch(() => []);
                 const batch = Array.isArray(raw) ? raw : (raw?.leads || raw?.data || []);
                 if (!batch.length) break;
                 batch.forEach(l => {

@@ -1200,21 +1200,20 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
                 const priceMap = {};
                 (prices || []).forEach(p => { priceMap[p.workspace_id] = p.price_per_lead || 0; });
 
-                // Fetch actual leads: no-label (newly marked) + positive follow-up labels.
-                // INTERESTED is intentionally excluded — it returns unibox reply labels, not leads.
-                const LEAD_LABEL_QUERIES = [null, 'MEETING_BOOKED', 'MEETING_COMPLETED', 'CLOSED'];
+                // label=LEAD = marked as lead in PlusVibe UI
+                // Additional labels for leads that progressed after being marked
+                const LEAD_LABELS = ['LEAD', 'MEETING_BOOKED', 'MEETING_COMPLETED', 'CLOSED'];
                 const leads = [];
                 for (const ws of workspaceList) {
                     const wsPrice = priceMap[ws.id] || 0;
                     const seenIds = new Set();
                     let wsTotal = 0;
-                    for (const label of LEAD_LABEL_QUERIES) {
+                    for (const label of LEAD_LABELS) {
                         for (let page = 1; page <= 20; page++) {
                             let raw;
-                            const qs = label
-                                ? `/lead/workspace-leads?workspace_id=${ws.id}&label=${label}&page=${page}&limit=100`
-                                : `/lead/workspace-leads?workspace_id=${ws.id}&page=${page}&limit=100`;
-                            try { raw = await pvGet(qs); } catch(e) { break; }
+                            try {
+                                raw = await pvGet(`/lead/workspace-leads?workspace_id=${ws.id}&label=${label}&page=${page}&limit=100`);
+                            } catch(e) { break; }
                             const batch = Array.isArray(raw) ? raw : (raw?.leads || raw?.data || []);
                             if (!batch.length) break;
                             batch.forEach(l => {
