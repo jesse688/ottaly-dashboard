@@ -771,18 +771,27 @@
     // Cache labeled leads per workspace so we only fetch once per scan
     const _pvLeadsCache = {};
 
-    const NEGATIVE_LABELS = ['NOT_INTERESTED','OUT_OF_OFFICE','WRONG_PERSON','DO_NOT_CONTACT','BOUNCED','UNSUBSCRIBED'];
+    // No-label = newly marked leads; positive labels = leads that progressed.
+    // INTERESTED excluded — it matches unibox reply labels, not actual leads.
+    const LEAD_LABEL_QUERIES = [null, 'MEETING_BOOKED', 'MEETING_COMPLETED', 'CLOSED'];
 
     async function fetchLabeledLeads(wsId) {
         if (_pvLeadsCache[wsId] !== undefined) return _pvLeadsCache[wsId];
         const leads = [];
-        for (let page = 1; page <= 20; page++) {
-            const raw = await get(`/lead/workspace-leads?workspace_id=${wsId}&page=${page}&limit=100`)
-                .catch(() => []);
-            const batch = Array.isArray(raw) ? raw : (raw?.leads || raw?.data || []);
-            if (!batch.length) break;
-            leads.push(...batch.filter(l => !NEGATIVE_LABELS.includes(l.label)));
-            if (batch.length < 100) break;
+        const seenIds = new Set();
+        for (const label of LEAD_LABEL_QUERIES) {
+            for (let page = 1; page <= 20; page++) {
+                const qs = label
+                    ? `/lead/workspace-leads?workspace_id=${wsId}&label=${label}&page=${page}&limit=100`
+                    : `/lead/workspace-leads?workspace_id=${wsId}&page=${page}&limit=100`;
+                const raw = await get(qs).catch(() => []);
+                const batch = Array.isArray(raw) ? raw : (raw?.leads || raw?.data || []);
+                if (!batch.length) break;
+                batch.forEach(l => {
+                    if (!seenIds.has(l._id)) { seenIds.add(l._id); leads.push(l); }
+                });
+                if (batch.length < 100) break;
+            }
         }
         _pvLeadsCache[wsId] = leads;
         return leads;
