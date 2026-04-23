@@ -436,6 +436,29 @@
             display: flex; align-items: center; justify-content: center;
             height: 100%; color: #9CA3AF; font-size: 13px;
         }
+
+        /* Client filter strip */
+        .ag-client-bar {
+            display: flex; align-items: center; gap: 6px;
+            padding-bottom: 1.25rem; flex-wrap: wrap;
+        }
+        .ag-client-pill {
+            padding: 5px 14px; border-radius: 20px;
+            border: 1.5px solid #E5E7EB; background: white;
+            font-size: 12px; font-weight: 600; color: #6B7280;
+            cursor: pointer; transition: all 0.15s;
+            font-family: 'Inter', sans-serif; white-space: nowrap;
+        }
+        .ag-client-pill:hover { border-color: var(--purple); color: var(--purple); }
+        .ag-client-pill.active {
+            background: var(--purple); color: white;
+            border-color: var(--purple);
+        }
+        .ag-client-label {
+            font-size: 11px; font-weight: 700; color: #9CA3AF;
+            text-transform: uppercase; letter-spacing: 1px;
+            white-space: nowrap; align-self: center;
+        }
     </style>
 </head>
 <body>
@@ -514,6 +537,12 @@
         <span class="ag-progress-text" id="agProgressText">Loading…</span>
         <div class="ag-progress-track"><div class="ag-progress-fill" id="agProgressFill" style="width:0%"></div></div>
       </div>
+    </div>
+
+    <!-- Client filter -->
+    <div class="ag-client-bar" id="agClientBar">
+      <span class="ag-client-label">Client</span>
+      <button class="ag-client-pill active" id="agPillAll" onclick="setAgClient(null)">All Clients</button>
     </div>
 
     <!-- Summary stats -->
@@ -1405,6 +1434,7 @@
     let agCustomStart  = null;
     let agCustomEnd    = null;
     let agRunning      = false;
+    let agSelectedWS   = null;  // null = all clients
 
     function toggleAgencyView() {
         agencyViewOpen = !agencyViewOpen;
@@ -1414,7 +1444,7 @@
         document.getElementById('agencyView').style.display  = agencyViewOpen ? 'block' : 'none';
         document.getElementById('actionsView').style.display = 'none';
         document.getElementById('clientView').style.display  = agencyViewOpen ? 'none'  : 'block';
-        if (agencyViewOpen) runAgencyScan();
+        if (agencyViewOpen) { renderAgClientFilter(); runAgencyScan(); }
     }
 
     function setAgPeriod(p) {
@@ -1533,7 +1563,9 @@
         if (agRunning) return;
         agRunning = true;
 
-        const wslist  = getActiveWorkspaces();
+        const wslist  = agSelectedWS
+            ? getActiveWorkspaces().filter(w => w.id === agSelectedWS)
+            : getActiveWorkspaces();
         const buckets = generateAgBuckets();
         if (!wslist.length || !buckets.length) { agRunning = false; return; }
 
@@ -1676,6 +1708,35 @@
                 }
             }
         });
+    }
+
+    function renderAgClientFilter() {
+        const bar    = document.getElementById('agClientBar');
+        const active = getActiveWorkspaces();
+        // Remove existing workspace pills (keep label + All pill)
+        [...bar.querySelectorAll('.ag-client-pill')].forEach(el => el.remove());
+
+        // Re-add All pill
+        const allPill = document.createElement('button');
+        allPill.className = 'ag-client-pill' + (agSelectedWS === null ? ' active' : '');
+        allPill.id        = 'agPillAll';
+        allPill.textContent = 'All Clients';
+        allPill.onclick   = () => setAgClient(null);
+        bar.appendChild(allPill);
+
+        active.forEach(ws => {
+            const pill = document.createElement('button');
+            pill.className  = 'ag-client-pill' + (agSelectedWS === ws.id ? ' active' : '');
+            pill.textContent = ws.name;
+            pill.onclick    = () => setAgClient(ws.id);
+            bar.appendChild(pill);
+        });
+    }
+
+    function setAgClient(wsId) {
+        agSelectedWS = wsId;
+        renderAgClientFilter();
+        runAgencyScan();
     }
 
     // Initialise today's date for custom range inputs
