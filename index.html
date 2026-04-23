@@ -1545,9 +1545,14 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
                         legend: { display: false },
                         tooltip: {
                             callbacks: {
-                                label: ctx => ctx.datasetIndex === 0
-                                    ? ` £${Math.round(ctx.raw).toLocaleString('en-GB')} revenue`
-                                    : ` ${ctx.raw} leads`
+                                label: ctx => {
+                                    if (ctx.raw === null) return null;
+                                    if (ctx.dataset.label === 'Projected Revenue')
+                                        return ` £${Math.round(ctx.raw).toLocaleString('en-GB')} projected`;
+                                    if (ctx.datasetIndex === 0)
+                                        return ` £${Math.round(ctx.raw).toLocaleString('en-GB')} revenue`;
+                                    return ` ${ctx.raw} leads`;
+                                }
                             }
                         }
                     },
