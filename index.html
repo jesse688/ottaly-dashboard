@@ -1200,39 +1200,46 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
                 const priceMap = {};
                 (prices || []).forEach(p => { priceMap[p.workspace_id] = p.price_per_lead || 0; });
 
-                const NEGATIVE_LABELS = ['NOT_INTERESTED','OUT_OF_OFFICE','WRONG_PERSON','DO_NOT_CONTACT','BOUNCED','UNSUBSCRIBED'];
+                const POSITIVE_LABELS = ['INTERESTED','MEETING_BOOKED','MEETING_COMPLETED','CLOSED'];
                 const leads = [];
                 for (const ws of workspaceList) {
                     const wsPrice = priceMap[ws.id] || 0;
-                    for (let page = 1; page <= 20; page++) {
-                        let raw;
-                        try {
-                            raw = await pvGet(`/lead/workspace-leads?workspace_id=${ws.id}&label=INTERESTED&page=${page}&limit=100`);
-                        } catch(e) { console.warn('[revenue] lead fetch error', ws.name, e.message); break; }
-                        const batch = Array.isArray(raw) ? raw : (raw?.leads || raw?.data || []);
-                        if (page === 1) console.log(`[revenue] ${ws.name} count=${batch.length}`);
-                        if (!batch.length) break;
-                        batch.forEach(l => {
-                            const dateObj = parseDate(l.modified_at || l.created_at);
-                            leads.push({
-                                client_name: ws.name || ws.workspace_name || 'Unknown',
-                                campaign:    l.camp_name || '',
-                                first_name:  l.first_name  || l.firstName  || '',
-                                last_name:   l.last_name   || l.lastName   || '',
-                                lead_email:  l.email || '',
-                                lead_price:  wsPrice,
-                                date:    dateObj,
-                                dateStr: dateObj ? dateObj.toLocaleDateString('en-GB', {
-                                    day: '2-digit', month: 'short', year: 'numeric',
-                                    hour: '2-digit', minute: '2-digit'
-                                }) : 'N/A',
-                                is_nonlead:     false,
-                                nonlead_reason: '',
-                                nonlead_date:   ''
+                    const seenIds = new Set();
+                    let wsTotal = 0;
+                    for (const label of POSITIVE_LABELS) {
+                        for (let page = 1; page <= 20; page++) {
+                            let raw;
+                            try {
+                                raw = await pvGet(`/lead/workspace-leads?workspace_id=${ws.id}&label=${label}&page=${page}&limit=100`);
+                            } catch(e) { break; }
+                            const batch = Array.isArray(raw) ? raw : (raw?.leads || raw?.data || []);
+                            if (!batch.length) break;
+                            batch.forEach(l => {
+                                if (seenIds.has(l._id)) return;
+                                seenIds.add(l._id);
+                                wsTotal++;
+                                const dateObj = parseDate(l.modified_at || l.created_at);
+                                leads.push({
+                                    client_name: ws.name || ws.workspace_name || 'Unknown',
+                                    campaign:    l.camp_name || '',
+                                    first_name:  l.first_name  || l.firstName  || '',
+                                    last_name:   l.last_name   || l.lastName   || '',
+                                    lead_email:  l.email || '',
+                                    lead_price:  wsPrice,
+                                    date:    dateObj,
+                                    dateStr: dateObj ? dateObj.toLocaleDateString('en-GB', {
+                                        day: '2-digit', month: 'short', year: 'numeric',
+                                        hour: '2-digit', minute: '2-digit'
+                                    }) : 'N/A',
+                                    is_nonlead:     false,
+                                    nonlead_reason: '',
+                                    nonlead_date:   ''
+                                });
                             });
-                        });
-                        if (batch.length < 100) break;
+                            if (batch.length < 100) break;
+                        }
                     }
+                    console.log(`[revenue] ${ws.name} total leads=${wsTotal}`);
                 }
 
                 allLeads = leads;

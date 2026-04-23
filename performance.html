@@ -771,18 +771,22 @@
     // Cache labeled leads per workspace so we only fetch once per scan
     const _pvLeadsCache = {};
 
-    const NEGATIVE_LABELS = ['NOT_INTERESTED','OUT_OF_OFFICE','WRONG_PERSON','DO_NOT_CONTACT','BOUNCED','UNSUBSCRIBED'];
+    const POSITIVE_LABELS = ['INTERESTED','MEETING_BOOKED','MEETING_COMPLETED','CLOSED'];
 
     async function fetchLabeledLeads(wsId) {
         if (_pvLeadsCache[wsId] !== undefined) return _pvLeadsCache[wsId];
         const leads = [];
-        const limit = 100;
-        for (let page = 1; page <= 20; page++) {
-            const all = await get(`/lead/workspace-leads?workspace_id=${wsId}&page=${page}&limit=${limit}`)
-                .catch(() => []);
-            if (!Array.isArray(all) || !all.length) break;
-            leads.push(...all.filter(l => !NEGATIVE_LABELS.includes(l.label)));
-            if (all.length < limit) break;
+        const seenIds = new Set();
+        for (const label of POSITIVE_LABELS) {
+            for (let page = 1; page <= 20; page++) {
+                const batch = await get(`/lead/workspace-leads?workspace_id=${wsId}&label=${label}&page=${page}&limit=100`)
+                    .catch(() => []);
+                if (!Array.isArray(batch) || !batch.length) break;
+                batch.forEach(l => {
+                    if (!seenIds.has(l._id)) { seenIds.add(l._id); leads.push(l); }
+                });
+                if (batch.length < 100) break;
+            }
         }
         _pvLeadsCache[wsId] = leads;
         return leads;
