@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ottaly Revenue Dashboard</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Genos:wght@400;500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -1614,38 +1613,13 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
             `;
         }
 
-        async function fetchClientsData() {
-            try {
-                const response = await fetch(CLIENTS_CSV_URL);
-                const text = await response.text();
-                Papa.parse(text, {
-                    header: true,
-                    skipEmptyLines: true,
-                    complete: function(results) {
-                        const updated = {};
-                        results.data.forEach(row => {
-                            const client = (row['Client Name'] || row['Client'] || '').trim();
-                            const earner = (row['Commission Earner'] || '').trim();
-                            if (client && earner) updated[client] = earner;
-                        });
-                        clientEarners = updated;
-                        updateCommissionTracker();
-                    }
-                });
-            } catch (e) {
-                console.error('Clients fetch failed:', e);
-            }
-        }
-
         // Close modal when clicking outside
         document.getElementById('nonleadModal').addEventListener('click', function(e) {
             if (e.target === this) closeNonleadModal();
         });
 
         fetchData();
-        fetchClientsData();
         setInterval(fetchData, 30000);
-        setInterval(fetchClientsData, 60000);
     </script>
 </body>
 </html>
