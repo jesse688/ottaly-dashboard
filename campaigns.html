@@ -292,10 +292,12 @@ function renderWorkspace() {
     const expanded = expandedIds.has(c.id);
     const allFlags = [...c.flags, ...c.variantInsights.map(v => ({ type: 'info', msg: v.msg }))];
 
+    const apolloSummary = apolloSummaryLine(c.name);
     rows.push(`<tr class="camp-row" onclick="toggleDetail('${c.id}')">
       <td><span class="chevron${expanded ? ' open' : ''}">▶</span></td>
       <td>
         <div class="camp-name" title="${esc(c.name)}">${esc(shortName(c.name))}</div>
+        ${apolloSummary ? `<div style="font-size:11px;color:var(--purple);margin-top:2px">${esc(apolloSummary)}</div>` : ''}
       </td>
       <td><span class="status-badge ${(c.status||'').toLowerCase()}">${c.status || '—'}</span></td>
       <td style="font-weight:600">${c.sent.toLocaleString()}</td>
@@ -372,8 +374,11 @@ function renderDetailPanel(c, wsAvg) {
     }
   }
 
+  const apolloCard = renderApolloCard(c.name);
+
   return `<div class="detail-grid">
     <div>
+      ${apolloCard}
       <div class="detail-section" style="margin-bottom:1rem">
         <div class="detail-section-title">Campaign Stats</div>
         <div class="stat-row"><span class="label">Total Sends</span><span class="value">${c.sent.toLocaleString()}</span></div>
@@ -405,9 +410,77 @@ function toggleDetail(id) {
 }
 
 function shortName(name) {
-  // Strip Apollo URLs from campaign names
   const cleaned = name.replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim();
   return cleaned.length > 55 ? cleaned.slice(0, 55) + '…' : cleaned || name.slice(0, 55);
+}
+
+function parseApolloUrl(name) {
+  const match = name.match(/https?:\/\/app\.apollo\.io[^\s]*/);
+  if (!match) return null;
+  try {
+    // Apollo uses hash-based routing — params are after the #
+    const raw = match[0];
+    const qPart = raw.includes('?') ? raw.split('?')[1] : '';
+    if (!qPart) return null;
+    const p = new URLSearchParams(qPart);
+
+    const get  = key => p.getAll(key).map(v => decodeURIComponent(v).replace(/\+/g,' '));
+    const fmt  = (arr, max=6) => arr.slice(0, max).join(', ') + (arr.length > max ? ` +${arr.length-max}` : '');
+    const clean = s => s.replace(/%2C/gi, ',').replace(/%20/gi, ' ').trim();
+
+    // Company size ranges
+    const sizeMap = { '1,10':'1-10','11,20':'11-20','21,50':'21-50','51,100':'51-100',
+                      '101,200':'101-200','201,500':'201-500','501,1000':'501-1k','1001,5000':'1k-5k' };
+    const sizes = get('organizationNumEmployeesRanges').map(s => sizeMap[s] || s);
+
+    const titles     = get('personTitles');
+    const seniority  = get('personSeniorities');
+    const persLocs   = get('personLocations').map(clean);
+    const orgLocs    = get('organizationLocations').map(clean);
+    const hqLocs     = get('accounthqLocations').map(clean);
+    const inclKws    = get('qOrganizationKeywordTags');
+    const exclKws    = get('qNotOrganizationKeywordTags');
+    const emailStatus = get('contactEmailStatusV2');
+    const allLocs    = [...new Set([...persLocs, ...orgLocs, ...hqLocs])];
+
+    return { titles, seniority, sizes, locations: allLocs, inclKws, exclKws, emailStatus };
+  } catch { return null; }
+}
+
+function apolloSummaryLine(name) {
+  const a = parseApolloUrl(name);
+  if (!a) return '';
+  const parts = [];
+  if (a.titles.length)    parts.push(a.titles.slice(0,3).join(', '));
+  else if (a.seniority.length) parts.push(a.seniority.slice(0,3).join(', '));
+  if (a.sizes.length)     parts.push(a.sizes.join(', ') + ' emp');
+  if (a.locations.length) parts.push(a.locations.slice(0,4).join(', '));
+  if (a.inclKws.length)   parts.push(a.inclKws.slice(0,3).join(', '));
+  return parts.join(' · ');
+}
+
+function renderApolloCard(name) {
+  const a = parseApolloUrl(name);
+  if (!a) return '';
+
+  const row = (label, val, color) => val
+    ? `<div class="stat-row"><span class="label">${label}</span><span class="value" style="${color?`color:${color}`:''}; font-size:12px; max-width:300px; text-align:right">${esc(val)}</span></div>`
+    : '';
+
+  return `<div class="detail-section" style="margin-bottom:1rem">
+    <div class="detail-section-title" style="display:flex;justify-content:space-between;align-items:center">
+      Apollo Targeting
+      <a href="${esc(name.match(/https?:\/\/app\.apollo\.io[^\s]*/)?.[0] || '#'))}" target="_blank"
+         style="font-size:11px;color:var(--purple);text-decoration:none;font-weight:400">Open in Apollo ↗</a>
+    </div>
+    ${row('Job Titles',     a.titles.join(', ')     || a.seniority.join(', '))}
+    ${row('Seniority',      a.titles.length && a.seniority.length ? a.seniority.join(', ') : '')}
+    ${row('Company Size',   a.sizes.join(', '))}
+    ${row('Locations',      a.locations.join(', '))}
+    ${row('Include Industries', a.inclKws.join(', '), 'var(--green)')}
+    ${row('Exclude Industries', a.exclKws.slice(0,10).join(', ') + (a.exclKws.length > 10 ? ` +${a.exclKws.length-10} more` : ''), 'var(--red)')}
+    ${row('Email Status',   a.emailStatus.join(', '))}
+  </div>`;
 }
 
 function esc(s) {
