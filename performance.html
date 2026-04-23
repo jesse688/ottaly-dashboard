@@ -771,16 +771,18 @@
     // Cache labeled leads per workspace so we only fetch once per scan
     const _pvLeadsCache = {};
 
+    const NEGATIVE_LABELS = ['NOT_INTERESTED','OUT_OF_OFFICE','WRONG_PERSON','DO_NOT_CONTACT','BOUNCED','UNSUBSCRIBED'];
+
     async function fetchLabeledLeads(wsId) {
         if (_pvLeadsCache[wsId] !== undefined) return _pvLeadsCache[wsId];
         const leads = [];
         const limit = 100;
         for (let page = 1; page <= 20; page++) {
-            const batch = await get(`/lead/workspace-leads?workspace_id=${wsId}&label=INTERESTED&page=${page}&limit=${limit}`)
+            const all = await get(`/lead/workspace-leads?workspace_id=${wsId}&page=${page}&limit=${limit}`)
                 .catch(() => []);
-            if (!Array.isArray(batch) || !batch.length) break;
-            leads.push(...batch);
-            if (batch.length < limit) break;
+            if (!Array.isArray(all) || !all.length) break;
+            leads.push(...all.filter(l => !NEGATIVE_LABELS.includes(l.label)));
+            if (all.length < limit) break;
         }
         _pvLeadsCache[wsId] = leads;
         return leads;

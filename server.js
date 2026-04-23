@@ -378,10 +378,11 @@ app.get('/api/pv/workspaces', async (req, res) => {
 });
 
 app.get('/api/pv/workspace-leads', async (req, res) => {
-  const { workspace_id, label, page, limit } = req.query;
+  const { workspace_id, page, limit } = req.query;
   if (!workspace_id) return res.status(400).json({ error: 'Missing workspace_id' });
   try {
-    const qs = new URLSearchParams({ workspace_id, label: label || 'INTERESTED', page: page || 1, limit: limit || 100 });
+    // No label filter — fetch all leads and let client filter negatives
+    const qs = new URLSearchParams({ workspace_id, page: page || 1, limit: limit || 100 });
     const r = await fetch(`https://api.plusvibe.ai/api/v1/lead/workspace-leads?${qs}`, {
       headers: { 'x-api-key': PLUSVIBE_KEY }
     });

@@ -1201,16 +1201,18 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
                 const leads = [];
                 for (const ws of (workspaces || [])) {
                     const wsPrice = priceMap[ws.id] || 0;
-                    // Fetch all INTERESTED leads for this workspace (paginated)
+                    // Fetch all leads for this workspace (no label filter), exclude known negatives
+                    const NEGATIVE_LABELS = ['NOT_INTERESTED','OUT_OF_OFFICE','WRONG_PERSON','DO_NOT_CONTACT','BOUNCED','UNSUBSCRIBED'];
                     for (let page = 1; page <= 20; page++) {
                         let raw;
                         try {
-                            raw = await pvGet(`/lead/workspace-leads?workspace_id=${ws.id}&label=INTERESTED&page=${page}&limit=100`);
+                            raw = await pvGet(`/lead/workspace-leads?workspace_id=${ws.id}&page=${page}&limit=100`);
                         } catch(e) { console.warn('[revenue] lead fetch error', ws.name, e.message); break; }
                         // API may return array directly OR wrapped object
-                        const batch = Array.isArray(raw) ? raw : (raw?.leads || raw?.data || []);
-                        if (page === 1) console.log(`[revenue] ${ws.name} raw type=${Array.isArray(raw)?'array':'object'} keys=${Object.keys(raw||{}).join(',')} count=${batch.length}`);
-                        if (!batch.length) break;
+                        const all = Array.isArray(raw) ? raw : (raw?.leads || raw?.data || []);
+                        const batch = all.filter(l => !NEGATIVE_LABELS.includes(l.label));
+                        if (page === 1) console.log(`[revenue] ${ws.name} total=${all.length} positive=${batch.length} labels=${[...new Set(all.map(l=>l.label))].join(',')}`);
+                        if (!all.length) break;
                         batch.forEach(l => {
                             const dateObj = parseDate(l.modified_at || l.created_at);
                             leads.push({
@@ -1230,7 +1232,7 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
                                 nonlead_date:   ''
                             });
                         });
-                        if (batch.length < 100) break;
+                        if (all.length < 100) break;
                     }
                 }
 
