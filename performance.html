@@ -794,6 +794,11 @@
 
     // ── Helpers ───────────────────────────────────────────────
     function agg(campaigns) {
+        if (campaigns?.length && !window._pvFieldsLogged) {
+            window._pvFieldsLogged = true;
+            console.log('[PlusVibe campaign fields]', Object.keys(campaigns[0]));
+            console.log('[PlusVibe campaign sample]', campaigns[0]);
+        }
         return (campaigns || []).reduce((a, c) => ({
             sent:    a.sent    + (c.sent_count    || 0),
             replies: a.replies + (c.replied_count || 0),
