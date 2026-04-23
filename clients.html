@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ottaly — Client Management</title>
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--purple:#7C89CD;
+  --yellow:#FFB700;--white:#fff;--bg:#F0F2F8;--card:#fff;
+  --border:#E2E6F0;--text:#050C29;--muted:#6B7280;
+}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text)}
+
+/* Header */
+.header{background:var(--navy-dark);padding:1rem 2rem;border-bottom:3px solid var(--teal);display:flex;align-items:center;justify-content:space-between}
+.logo{font-family:'Genos',sans-serif;font-size:1.6rem;font-weight:800;color:var(--white);letter-spacing:1px}
+.logo span{color:var(--teal)}
+.nav{display:flex;gap:0.5rem}
+.nav a{color:rgba(255,255,255,0.6);text-decoration:none;font-size:13px;font-weight:500;padding:6px 14px;border-radius:6px;transition:all 0.15s}
+.nav a:hover,.nav a.active{background:rgba(255,255,255,0.1);color:#fff}
+
+/* Page */
+.page{max-width:1400px;margin:0 auto;padding:2rem}
+.page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem;flex-wrap:gap}
+.page-title{font-size:1.4rem;font-weight:700}
+.page-sub{font-size:13px;color:var(--muted);margin-top:2px}
+
+/* Summary bar */
+.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1rem;margin-bottom:1.5rem}
+.sum-card{background:var(--card);border-radius:10px;padding:1rem 1.25rem;border:1px solid var(--border);border-top:3px solid var(--navy)}
+.sum-card.teal{border-top-color:var(--teal)}
+.sum-card.yellow{border-top-color:var(--yellow)}
+.sum-card.purple{border-top-color:var(--purple)}
+.sum-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+.sum-val{font-size:1.5rem;font-weight:700;margin-top:4px}
+
+/* Toolbar */
+.toolbar{display:flex;gap:0.75rem;margin-bottom:1.25rem;flex-wrap:wrap;align-items:center}
+.search-wrap{position:relative;flex:1;min-width:200px}
+.search-wrap input{width:100%;padding:8px 12px 8px 36px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:#fff;outline:none}
+.search-wrap input:focus{border-color:var(--purple)}
+.search-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:15px}
+.btn{padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;border:none;transition:all 0.15s}
+.btn-primary{background:var(--navy);color:#fff}
+.btn-primary:hover{background:#1a3370}
+.btn-sm{padding:5px 10px;font-size:12px}
+.btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--border)}
+.btn-ghost:hover{background:var(--bg);color:var(--text)}
+.btn-danger{background:#FEE2E2;color:#DC2626;border:1px solid #FECACA}
+.btn-danger:hover{background:#FECACA}
+
+/* Table */
+.table-wrap{background:var(--card);border-radius:12px;border:1px solid var(--border);overflow:hidden}
+table{width:100%;border-collapse:collapse}
+thead{background:#F8F9FC}
+th{padding:10px 14px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);border-bottom:1px solid var(--border)}
+td{padding:12px 14px;font-size:13px;border-bottom:1px solid var(--border);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#FAFBFF}
+.avatar{width:34px;height:34px;border-radius:8px;background:var(--navy);color:#fff;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.client-name{font-weight:600;font-size:13px}
+.client-ws{font-size:11px;color:var(--muted);margin-top:1px}
+.pill{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600}
+.pill-green{background:#D1FAE5;color:#065F46}
+.pill-blue{background:#DBEAFE;color:#1E40AF}
+.pill-gray{background:#F3F4F6;color:#4B5563}
+.contact-cell{font-size:12px;line-height:1.6;color:var(--text)}
+.contact-cell a{color:var(--navy);text-decoration:none}
+.contact-cell a:hover{text-decoration:underline}
+.notes-cell{font-size:12px;color:var(--muted);max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stat-cell{text-align:right}
+.stat-main{font-weight:700;font-size:14px}
+.stat-sub{font-size:11px;color:var(--muted)}
+.actions{display:flex;gap:6px;justify-content:flex-end}
+.no-clients{text-align:center;padding:3rem;color:var(--muted)}
+
+/* Modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(5,12,41,0.5);display:flex;align-items:center;justify-content:center;z-index:1000;opacity:0;pointer-events:none;transition:opacity 0.2s}
+.modal-overlay.active{opacity:1;pointer-events:all}
+.modal{background:#fff;border-radius:16px;width:600px;max-width:95vw;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.15)}
+.modal-header{padding:1.25rem 1.5rem;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.modal-title{font-size:1rem;font-weight:700}
+.modal-close{background:none;border:none;font-size:20px;cursor:pointer;color:var(--muted);line-height:1;padding:2px}
+.modal-close:hover{color:var(--text)}
+.modal-body{padding:1.5rem}
+.modal-footer{padding:1rem 1.5rem;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:0.75rem}
+.section-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin:1rem 0 0.5rem}
+.section-label:first-child{margin-top:0}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:0.75rem}
+.form-grid.one{grid-template-columns:1fr}
+.field{display:flex;flex-direction:column;gap:4px}
+.field label{font-size:12px;font-weight:600;color:var(--text)}
+.field input,.field textarea,.field select{padding:8px 10px;border:1px solid var(--border);border-radius:7px;font-size:13px;font-family:inherit;outline:none;transition:border 0.15s}
+.field input:focus,.field textarea:focus,.field select:focus{border-color:var(--purple)}
+.field textarea{resize:vertical;min-height:70px}
+
+/* Toast */
+.toast{position:fixed;bottom:1.5rem;right:1.5rem;background:var(--navy-dark);color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;font-weight:500;opacity:0;transform:translateY(10px);transition:all 0.3s;z-index:9999}
+.toast.show{opacity:1;transform:translateY(0)}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">Ott<span>a</span>ly</div>
+  <nav class="nav">
+    <a href="/index.html">Revenue</a>
+    <a href="/performance.html">Performance</a>
+    <a href="/clients.html" class="active">Clients</a>
+    <a href="/admin.html">Admin</a>
+  </nav>
+</div>
+
+<div class="page">
+  <div class="page-header">
+    <div>
+      <div class="page-title">Client Management</div>
+      <div class="page-sub" id="pageSubtitle">Loading…</div>
+    </div>
+    <button class="btn btn-primary" onclick="openModal()">+ Add Client</button>
+  </div>
+
+  <div class="summary">
+    <div class="sum-card">
+      <div class="sum-label">Total Clients</div>
+      <div class="sum-val" id="sumClients">—</div>
+    </div>
+    <div class="sum-card teal">
+      <div class="sum-label">Leads Delivered</div>
+      <div class="sum-val" id="sumDelivered">—</div>
+    </div>
+    <div class="sum-card yellow">
+      <div class="sum-label">Total Revenue</div>
+      <div class="sum-val" id="sumRevenue">—</div>
+    </div>
+    <div class="sum-card purple">
+      <div class="sum-label">Leads Bought</div>
+      <div class="sum-val" id="sumBought">—</div>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <div class="search-wrap">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="searchInput" placeholder="Search clients…" oninput="renderTable()">
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Client</th>
+          <th>Contact</th>
+          <th>Website</th>
+          <th>Lead Price</th>
+          <th style="text-align:right">Delivered</th>
+          <th style="text-align:right">Bought</th>
+          <th style="text-align:right">Revenue</th>
+          <th>Notes</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="clientsBody">
+        <tr><td colspan="9" class="no-clients">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Edit/Add Modal -->
+<div class="modal-overlay" id="modalOverlay" onclick="handleOverlayClick(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="modalTitle">Add Client</div>
+      <button class="modal-close" onclick="closeModal()">×</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="editId">
+
+      <div class="section-label">Account</div>
+      <div class="form-grid">
+        <div class="field">
+          <label>Client Name (workspace)</label>
+          <input type="text" id="fWorkspaceName" placeholder="e.g. Hydration Co">
+        </div>
+        <div class="field">
+          <label>PlusVibe Workspace ID</label>
+          <input type="text" id="fWorkspaceId" placeholder="e.g. 69525a0e…">
+        </div>
+        <div class="field">
+          <label>Login Username</label>
+          <input type="text" id="fUsername" placeholder="username">
+        </div>
+        <div class="field">
+          <label>Password <span id="pwHint" style="font-weight:400;color:var(--muted)">(leave blank to keep)</span></label>
+          <input type="password" id="fPassword" placeholder="••••••••">
+        </div>
+      </div>
+
+      <div class="section-label">Contact Details</div>
+      <div class="form-grid">
+        <div class="field">
+          <label>Contact Name</label>
+          <input type="text" id="fContactName" placeholder="John Smith">
+        </div>
+        <div class="field">
+          <label>Contact Email</label>
+          <input type="email" id="fContactEmail" placeholder="john@company.com">
+        </div>
+        <div class="field">
+          <label>Phone</label>
+          <input type="tel" id="fContactPhone" placeholder="+44 7700 000000">
+        </div>
+        <div class="field">
+          <label>Website</label>
+          <input type="text" id="fWebsite" placeholder="https://example.com">
+        </div>
+      </div>
+
+      <div class="section-label">Pricing & Plan</div>
+      <div class="form-grid">
+        <div class="field">
+          <label>Price Per Lead (£)</label>
+          <input type="number" id="fPricePerLead" placeholder="0.00" min="0" step="0.01">
+        </div>
+        <div class="field">
+          <label>Leads Bought</label>
+          <input type="number" id="fPlanLeads" placeholder="0" min="0">
+        </div>
+      </div>
+
+      <div class="section-label">Notes</div>
+      <div class="form-grid one">
+        <div class="field">
+          <textarea id="fNotes" placeholder="Internal notes about this client…"></textarea>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveClient()">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const ADMIN_KEY = localStorage.getItem('ottaly_admin_key') || '';
+const headers = { 'Content-Type': 'application/json', 'x-admin-key': ADMIN_KEY };
+
+let clients = [];
+let statsMap = {};
+
+async function load() {
+  try {
+    const [c, s] = await Promise.all([
+      fetch('/api/admin/clients', { headers }).then(r => r.json()),
+      fetch('/api/revenue/stats-by-workspace').then(r => r.json()).catch(() => ({}))
+    ]);
+    clients = Array.isArray(c) ? c : [];
+    statsMap = s || {};
+    renderSummary();
+    renderTable();
+    document.getElementById('pageSubtitle').textContent = `${clients.length} clients`;
+  } catch(e) {
+    document.getElementById('clientsBody').innerHTML =
+      `<tr><td colspan="9" class="no-clients">⚠️ ${e.message} — check admin key</td></tr>`;
+  }
+}
+
+function renderSummary() {
+  const totalDelivered = Object.values(statsMap).reduce((s, v) => s + v.delivered, 0);
+  const totalRevenue   = Object.values(statsMap).reduce((s, v) => s + v.revenue, 0);
+  const totalBought    = clients.reduce((s, c) => s + (c.plan_leads || 0), 0);
+  document.getElementById('sumClients').textContent   = clients.length;
+  document.getElementById('sumDelivered').textContent = totalDelivered.toLocaleString();
+  document.getElementById('sumRevenue').textContent   = '£' + Math.round(totalRevenue).toLocaleString('en-GB');
+  document.getElementById('sumBought').textContent    = totalBought.toLocaleString();
+}
+
+function renderTable() {
+  const q = document.getElementById('searchInput').value.toLowerCase();
+  const filtered = clients.filter(c =>
+    [c.workspace_name, c.contact_name, c.contact_email, c.website, c.notes, c.username]
+      .some(v => (v||'').toLowerCase().includes(q))
+  );
+
+  if (!filtered.length) {
+    document.getElementById('clientsBody').innerHTML =
+      `<tr><td colspan="9" class="no-clients">No clients found</td></tr>`;
+    return;
+  }
+
+  document.getElementById('clientsBody').innerHTML = filtered.map(c => {
+    const st = statsMap[c.workspace_id] || { delivered: 0, revenue: 0 };
+    const initial = (c.workspace_name || c.username || '?')[0].toUpperCase();
+    const websiteDisplay = (c.website || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    return `<tr>
+      <td>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div class="avatar">${initial}</div>
+          <div>
+            <div class="client-name">${esc(c.workspace_name || c.username)}</div>
+            <div class="client-ws">${esc(c.username)}</div>
+          </div>
+        </div>
+      </td>
+      <td class="contact-cell">
+        ${c.contact_name ? `<div>${esc(c.contact_name)}</div>` : ''}
+        ${c.contact_email ? `<div><a href="mailto:${esc(c.contact_email)}">${esc(c.contact_email)}</a></div>` : ''}
+        ${c.contact_phone ? `<div><a href="tel:${esc(c.contact_phone)}">${esc(c.contact_phone)}</a></div>` : ''}
+        ${!c.contact_name && !c.contact_email && !c.contact_phone ? '<span style="color:var(--muted)">—</span>' : ''}
+      </td>
+      <td>
+        ${c.website ? `<a href="${esc(c.website)}" target="_blank" style="color:var(--navy);font-size:12px;text-decoration:none">${esc(websiteDisplay)}</a>` : '<span style="color:var(--muted)">—</span>'}
+      </td>
+      <td><span class="pill pill-green">£${(c.price_per_lead||0).toFixed(0)}</span></td>
+      <td class="stat-cell">
+        <div class="stat-main">${st.delivered}</div>
+      </td>
+      <td class="stat-cell">
+        <div class="stat-main">${c.plan_leads || 0}</div>
+      </td>
+      <td class="stat-cell">
+        <div class="stat-main">£${Math.round(st.revenue).toLocaleString('en-GB')}</div>
+      </td>
+      <td class="notes-cell" title="${esc(c.notes||'')}">${c.notes ? esc(c.notes) : '<span style="color:var(--muted)">—</span>'}</td>
+      <td>
+        <div class="actions">
+          <button class="btn btn-ghost btn-sm" onclick="openModal(${c.id})">Edit</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteClient(${c.id},'${esc(c.workspace_name||c.username)}')">Delete</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function openModal(id) {
+  const isNew = !id;
+  document.getElementById('modalTitle').textContent = isNew ? 'Add Client' : 'Edit Client';
+  document.getElementById('pwHint').style.display = isNew ? 'none' : '';
+  document.getElementById('editId').value = id || '';
+
+  if (isNew) {
+    ['fWorkspaceName','fWorkspaceId','fUsername','fPassword','fContactName',
+     'fContactEmail','fContactPhone','fWebsite','fNotes'].forEach(f => document.getElementById(f).value = '');
+    document.getElementById('fPricePerLead').value = '';
+    document.getElementById('fPlanLeads').value = '';
+  } else {
+    const c = clients.find(x => x.id === id);
+    if (!c) return;
+    document.getElementById('fWorkspaceName').value  = c.workspace_name || '';
+    document.getElementById('fWorkspaceId').value    = c.workspace_id   || '';
+    document.getElementById('fUsername').value       = c.username       || '';
+    document.getElementById('fPassword').value       = '';
+    document.getElementById('fContactName').value    = c.contact_name   || '';
+    document.getElementById('fContactEmail').value   = c.contact_email  || '';
+    document.getElementById('fContactPhone').value   = c.contact_phone  || '';
+    document.getElementById('fWebsite').value        = c.website        || '';
+    document.getElementById('fPricePerLead').value   = c.price_per_lead || '';
+    document.getElementById('fPlanLeads').value      = c.plan_leads     || '';
+    document.getElementById('fNotes').value          = c.notes          || '';
+  }
+  document.getElementById('modalOverlay').classList.add('active');
+}
+
+function closeModal() {
+  document.getElementById('modalOverlay').classList.remove('active');
+}
+
+function handleOverlayClick(e) {
+  if (e.target === document.getElementById('modalOverlay')) closeModal();
+}
+
+async function saveClient() {
+  const id       = document.getElementById('editId').value;
+  const isNew    = !id;
+  const password = document.getElementById('fPassword').value;
+  const body = {
+    workspace_name: document.getElementById('fWorkspaceName').value.trim(),
+    workspace_id:   document.getElementById('fWorkspaceId').value.trim(),
+    username:       document.getElementById('fUsername').value.trim(),
+    contact_name:   document.getElementById('fContactName').value.trim(),
+    contact_email:  document.getElementById('fContactEmail').value.trim(),
+    contact_phone:  document.getElementById('fContactPhone').value.trim(),
+    website:        document.getElementById('fWebsite').value.trim(),
+    price_per_lead: document.getElementById('fPricePerLead').value,
+    plan_leads:     document.getElementById('fPlanLeads').value,
+    notes:          document.getElementById('fNotes').value.trim(),
+  };
+  if (isNew || password) body.password = password;
+
+  if (isNew && (!body.username || !body.password || !body.workspace_id || !body.workspace_name))
+    return toast('Fill in all required account fields', 'error');
+
+  const url    = isNew ? '/api/admin/clients' : `/api/admin/clients/${id}`;
+  const method = isNew ? 'POST' : 'PUT';
+  const r = await fetch(url, { method, headers, body: JSON.stringify(body) });
+  const j = await r.json();
+  if (!r.ok) return toast(j.error || 'Error', 'error');
+
+  if (!isNew && password) {
+    await fetch(`/api/admin/clients/${id}/password`, {
+      method: 'PUT', headers, body: JSON.stringify({ password })
+    });
+  }
+  closeModal();
+  toast(isNew ? 'Client added' : 'Saved');
+  load();
+}
+
+async function deleteClient(id, name) {
+  if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
+  await fetch(`/api/admin/clients/${id}`, { method: 'DELETE', headers });
+  toast('Client deleted');
+  load();
+}
+
+function toast(msg, type) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.background = type === 'error' ? '#DC2626' : 'var(--navy-dark)';
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+// Prompt for admin key if not set
+if (!ADMIN_KEY) {
+  const key = prompt('Enter admin key:');
+  if (key) { localStorage.setItem('ottaly_admin_key', key); location.reload(); }
+}
+
+load();
+</script>
+</body>
+</html>

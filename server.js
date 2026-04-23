@@ -67,6 +67,11 @@ for (const sql of [
   `ALTER TABLE clients ADD COLUMN plan_leads INTEGER DEFAULT 0`,
   `ALTER TABLE clients ADD COLUMN price_per_lead REAL DEFAULT 0`,
   `ALTER TABLE clients ADD COLUMN stripe_customer_id TEXT`,
+  `ALTER TABLE clients ADD COLUMN contact_name TEXT DEFAULT ''`,
+  `ALTER TABLE clients ADD COLUMN contact_email TEXT DEFAULT ''`,
+  `ALTER TABLE clients ADD COLUMN contact_phone TEXT DEFAULT ''`,
+  `ALTER TABLE clients ADD COLUMN website TEXT DEFAULT ''`,
+  `ALTER TABLE clients ADD COLUMN notes TEXT DEFAULT ''`,
   `ALTER TABLE leads ADD COLUMN closed_value REAL`,
   `ALTER TABLE leads ADD COLUMN status TEXT DEFAULT 'active'`,
   `ALTER TABLE leads ADD COLUMN received_at TEXT`,
@@ -74,6 +79,51 @@ for (const sql of [
 
 // Backfill any leads that arrived before received_at column existed
 db.exec(`UPDATE leads SET received_at = datetime('now') WHERE received_at IS NULL`);
+
+// ── Client seed — prices & commission earners ─────────────
+const CLIENT_SEED = [
+  { workspace_id: '690ee665bcb253de4fb44537', workspace_name: 'Ottaly',                    price_per_lead: 1,      contact_name: ''     },
+  { workspace_id: '6912ddfef9582848982b9a62', workspace_name: 'AccrueAccounting',           price_per_lead: 72.99,  contact_name: 'Joey' },
+  { workspace_id: '695259c3d6154e27d164bcf7', workspace_name: 'Indigo',                    price_per_lead: 79.99,  contact_name: ''     },
+  { workspace_id: '695259dc8de377db7577dc45', workspace_name: 'PPC',                       price_per_lead: 99.99,  contact_name: 'Joey' },
+  { workspace_id: '69525a0eceae00718efdaeaa', workspace_name: 'HydrationCompany',          price_per_lead: 72.99,  contact_name: ''     },
+  { workspace_id: '697e20f02db8460f8ba68792', workspace_name: 'Jumping Spider',            price_per_lead: 100,    contact_name: ''     },
+  { workspace_id: '6989ac90bb085fcd05167fc9', workspace_name: 'Josh - Commercial Flooring',price_per_lead: 189.99, contact_name: ''     },
+  { workspace_id: '699714b02f0830a7148fcf3e', workspace_name: 'Enviro',                    price_per_lead: 89,     contact_name: 'Joey' },
+  { workspace_id: '69a686632f5aaca7d9602c1f', workspace_name: 'Animo',                     price_per_lead: 195,    contact_name: ''     },
+  { workspace_id: '69a9db287af7ef2854f57636', workspace_name: 'GGRS',                      price_per_lead: 178,    contact_name: 'Joey' },
+  { workspace_id: '69a9db307af7ef2854f57637', workspace_name: 'ButterflyEco',              price_per_lead: 205,    contact_name: ''     },
+  { workspace_id: '69c43d1407bf312ff0026642', workspace_name: 'GXI',                       price_per_lead: 169,    contact_name: 'Joey' },
+  { workspace_id: '69c43d1e07bf312ff0026643', workspace_name: 'AuraaDesign',               price_per_lead: 100,    contact_name: ''     },
+];
+
+const upsertClient = db.prepare(`
+  INSERT INTO clients (username, password_hash, workspace_id, workspace_name, price_per_lead, contact_name)
+  VALUES (?, ?, ?, ?, ?, ?)
+  ON CONFLICT(username) DO UPDATE SET
+    price_per_lead = excluded.price_per_lead,
+    contact_name   = excluded.contact_name,
+    workspace_id   = excluded.workspace_id,
+    workspace_name = excluded.workspace_name
+`);
+const updateByWsId = db.prepare(`
+  UPDATE clients SET price_per_lead = ?, contact_name = ?, workspace_name = ?
+  WHERE workspace_id = ?
+`);
+
+for (const s of CLIENT_SEED) {
+  const existing = db.prepare('SELECT id FROM clients WHERE workspace_id = ?').get(s.workspace_id);
+  if (existing) {
+    updateByWsId.run(s.price_per_lead, s.contact_name, s.workspace_name, s.workspace_id);
+  } else {
+    // Create record with temp password — admin should update via Clients page
+    const tempHash = bcrypt.hashSync('Ottaly2025!', 10);
+    upsertClient.run(
+      s.workspace_name.toLowerCase().replace(/\s+/g, '_'),
+      tempHash, s.workspace_id, s.workspace_name, s.price_per_lead, s.contact_name
+    );
+  }
+}
 
 // ── Stripe webhook — MUST be before express.json() ────────
 app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
@@ -435,6 +485,16 @@ app.get('/api/revenue/leads', (req, res) => {
   res.json(revenueCache);
 });
 
+app.get('/api/revenue/stats-by-workspace', (req, res) => {
+  const counts = {};
+  (revenueCache.leads || []).forEach(l => {
+    if (!counts[l.workspace_id]) counts[l.workspace_id] = { delivered: 0, revenue: 0 };
+    counts[l.workspace_id].delivered++;
+    counts[l.workspace_id].revenue += l.lead_price || 0;
+  });
+  res.json(counts);
+});
+
 // ── PlusVibe proxy (kept for performance.html agency scan) ────
 app.get('/api/pv/workspaces', async (req, res) => {
   try {
@@ -471,31 +531,38 @@ app.get('/api/admin/workspaces', requireAdmin, async (req, res) => {
 // ── Admin — clients ────────────────────────────────────────
 app.get('/api/admin/clients', requireAdmin, (req, res) => {
   res.json(db.prepare(
-    'SELECT id, username, workspace_id, workspace_name, plan_leads, price_per_lead, stripe_customer_id, created_at FROM clients ORDER BY created_at DESC'
+    'SELECT id, username, workspace_id, workspace_name, plan_leads, price_per_lead, stripe_customer_id, contact_name, contact_email, contact_phone, website, notes, created_at FROM clients ORDER BY created_at DESC'
   ).all());
 });
 
 app.post('/api/admin/clients', requireAdmin, (req, res) => {
-  const { username, password, workspace_id, workspace_name, plan_leads, price_per_lead } = req.body || {};
+  const { username, password, workspace_id, workspace_name, plan_leads, price_per_lead,
+          contact_name, contact_email, contact_phone, website, notes } = req.body || {};
   if (!username || !password || !workspace_id || !workspace_name)
     return res.status(400).json({ error: 'All fields required' });
   try {
     db.prepare(
-      'INSERT INTO clients (username, password_hash, workspace_id, workspace_name, plan_leads, price_per_lead) VALUES (?,?,?,?,?,?)'
+      'INSERT INTO clients (username, password_hash, workspace_id, workspace_name, plan_leads, price_per_lead, contact_name, contact_email, contact_phone, website, notes) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
     ).run(username, bcrypt.hashSync(password, 10), workspace_id, workspace_name,
-         parseInt(plan_leads) || 0, parseFloat(price_per_lead) || 0);
+         parseInt(plan_leads) || 0, parseFloat(price_per_lead) || 0,
+         contact_name || '', contact_email || '', contact_phone || '', website || '', notes || '');
     res.json({ ok: true });
   } catch { res.status(400).json({ error: 'Username already exists' }); }
 });
 
 app.put('/api/admin/clients/:id', requireAdmin, (req, res) => {
-  const { plan_leads, price_per_lead } = req.body || {};
-  if (plan_leads !== undefined)
-    db.prepare('UPDATE clients SET plan_leads = ? WHERE id = ?')
-      .run(parseInt(plan_leads) || 0, req.params.id);
-  if (price_per_lead !== undefined)
-    db.prepare('UPDATE clients SET price_per_lead = ? WHERE id = ?')
-      .run(parseFloat(price_per_lead) || 0, req.params.id);
+  const { plan_leads, price_per_lead, contact_name, contact_email, contact_phone, website, notes } = req.body || {};
+  const updates = [];
+  const vals = [];
+  if (plan_leads     !== undefined) { updates.push('plan_leads = ?');     vals.push(parseInt(plan_leads) || 0); }
+  if (price_per_lead !== undefined) { updates.push('price_per_lead = ?'); vals.push(parseFloat(price_per_lead) || 0); }
+  if (contact_name   !== undefined) { updates.push('contact_name = ?');   vals.push(contact_name); }
+  if (contact_email  !== undefined) { updates.push('contact_email = ?');  vals.push(contact_email); }
+  if (contact_phone  !== undefined) { updates.push('contact_phone = ?');  vals.push(contact_phone); }
+  if (website        !== undefined) { updates.push('website = ?');        vals.push(website); }
+  if (notes          !== undefined) { updates.push('notes = ?');          vals.push(notes); }
+  if (updates.length)
+    db.prepare(`UPDATE clients SET ${updates.join(', ')} WHERE id = ?`).run(...vals, req.params.id);
   res.json({ ok: true });
 });
 
