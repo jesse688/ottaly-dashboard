@@ -997,15 +997,15 @@
     </div>
 
     <script>
-        const PLUSVIBE_BASE = 'https://api.plusvibe.ai/api/v1';
-        const PLUSVIBE_KEY  = '6425e882-f33fb46a-2837ff5a-eb535a60';
-        const WEBHOOK_URL   = 'https://n8n1-n8n.xuobbb.easypanel.host/webhook/ottaly-nonlead';
+        const WEBHOOK_URL = 'https://n8n1-n8n.xuobbb.easypanel.host/webhook/ottaly-nonlead';
 
         async function pvGet(path) {
-            const r = await fetch(`${PLUSVIBE_BASE}${path}`, {
-                headers: { 'x-api-key': PLUSVIBE_KEY }
-            });
-            if (!r.ok) throw new Error(`PlusVibe ${r.status}: ${path}`);
+            // Route through server proxy to avoid CORS
+            const proxyPath = path.startsWith('/workspaces')
+                ? '/api/pv/workspaces'
+                : '/api/pv/workspace-leads' + (path.includes('?') ? path.slice(path.indexOf('?')) : '');
+            const r = await fetch(proxyPath);
+            if (!r.ok) throw new Error(`PlusVibe proxy ${r.status}: ${path}`);
             return r.json();
         }
 
