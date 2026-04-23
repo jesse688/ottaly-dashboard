@@ -346,7 +346,7 @@ app.post('/api/stripe/portal', requireAuth, async (req, res) => {
 });
 
 // ── Agency lead counts (uses SQLite received_at) ──────────
-app.get('/api/agency/leads', requireAdmin, (req, res) => {
+app.get('/api/agency/leads', (req, res) => {
   const { workspace_id, start_date, end_date } = req.query;
   if (!workspace_id || !start_date || !end_date)
     return res.status(400).json({ error: 'Missing params' });
@@ -358,6 +358,8 @@ app.get('/api/agency/leads', requireAdmin, (req, res) => {
     AND date(received_at) >= date(?)
     AND date(received_at) <= date(?)
   `).get(workspace_id, start_date, end_date);
+  const sample = db.prepare(`SELECT workspace_id, received_at, status FROM leads LIMIT 5`).all();
+  console.log(`[agency/leads] ws=${workspace_id} ${start_date}→${end_date} count=${row.count} sample=${JSON.stringify(sample)}`);
   res.json({ count: row.count });
 });
 

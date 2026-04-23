@@ -769,8 +769,7 @@
     }
 
     async function getLocal(path) {
-        const key = localStorage.getItem('ottaly_admin_key') || '';
-        const r = await fetch(path, { headers: { 'x-admin-key': key } });
+        const r = await fetch(path);
         if (!r.ok) throw new Error(`HTTP ${r.status} — ${path}`);
         return r.json();
     }
