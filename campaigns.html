@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ottaly — Campaign Intelligence</title>
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--purple:#7C89CD;
+  --yellow:#FFB700;--bg:#F0F2F8;--card:#fff;--border:#E2E6F0;
+  --text:#050C29;--muted:#6B7280;
+  --green:#059669;--amber:#D97706;--red:#DC2626;--blue:#2563EB;
+}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+
+.header{background:var(--navy-dark);padding:1rem 2rem;border-bottom:3px solid var(--teal);display:flex;align-items:center;justify-content:space-between}
+.logo{font-family:'Genos',sans-serif;font-size:1.6rem;font-weight:800;color:#fff;letter-spacing:1px}
+.logo span{color:var(--teal)}
+.nav{display:flex;gap:0.5rem}
+.nav a{color:rgba(255,255,255,0.6);text-decoration:none;font-size:13px;font-weight:500;padding:6px 14px;border-radius:6px;transition:all 0.15s}
+.nav a:hover,.nav a.active{background:rgba(255,255,255,0.1);color:#fff}
+
+/* Alert banner */
+.alert-banner{background:#FEF3C7;border-bottom:2px solid #FCD34D;padding:10px 2rem;display:flex;align-items:center;gap:10px;font-size:13px;font-weight:500;color:#92400E}
+.alert-banner.hidden{display:none}
+
+/* Page layout */
+.page{max-width:1600px;margin:0 auto;padding:1.5rem 2rem}
+.page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem;flex-wrap:wrap;gap:0.5rem}
+.page-title{font-size:1.3rem;font-weight:700}
+.updated-at{font-size:12px;color:var(--muted)}
+
+/* Summary bar */
+.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1rem;margin-bottom:1.5rem}
+.sum-card{background:var(--card);border-radius:10px;padding:0.9rem 1.1rem;border:1px solid var(--border);border-top:3px solid var(--navy)}
+.sum-card.teal{border-top-color:var(--teal)}.sum-card.red{border-top-color:var(--red)}.sum-card.green{border-top-color:var(--green)}.sum-card.amber{border-top-color:var(--amber)}
+.sum-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+.sum-val{font-size:1.4rem;font-weight:700;margin-top:3px}
+
+/* Workspace tabs */
+.ws-tabs-wrap{overflow-x:auto;margin-bottom:1.25rem}
+.ws-tabs{display:flex;gap:6px;min-width:max-content;padding-bottom:2px}
+.ws-tab{padding:7px 14px;border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;border:1.5px solid var(--border);background:#fff;color:var(--muted);transition:all 0.15s;white-space:nowrap}
+.ws-tab:hover{border-color:var(--teal);color:var(--teal)}
+.ws-tab.active{background:var(--navy-dark);border-color:var(--navy-dark);color:#fff}
+.ws-tab .tab-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;vertical-align:middle}
+
+/* Campaign table */
+.table-wrap{background:var(--card);border-radius:12px;border:1px solid var(--border);overflow:hidden;margin-bottom:1.25rem}
+.table-header{padding:1rem 1.25rem;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem}
+.ws-stats-line{font-size:12px;color:var(--muted)}
+table{width:100%;border-collapse:collapse}
+thead{background:#F8F9FC}
+th{padding:9px 12px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);border-bottom:1px solid var(--border);white-space:nowrap}
+td{padding:11px 12px;font-size:13px;border-bottom:1px solid var(--border);vertical-align:middle}
+tr.camp-row{cursor:pointer}
+tr.camp-row:hover td{background:#FAFBFF}
+tr.camp-row:last-child td{border-bottom:none}
+tr.detail-row td{padding:0;border-bottom:1px solid var(--border);background:#F8FAFF}
+tr.detail-row.hidden{display:none}
+
+/* Campaign name */
+.camp-name{font-weight:600;font-size:13px;max-width:300px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.camp-name-full{font-size:11px;color:var(--muted);margin-top:2px;max-width:300px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* Status badge */
+.status-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:20px;font-size:11px;font-weight:600}
+.status-badge.active{background:#D1FAE5;color:#065F46}
+.status-badge.paused{background:#FEF3C7;color:#92400E}
+.status-badge.completed{background:#DBEAFE;color:#1E40AF}
+.status-badge.draft{background:#F3F4F6;color:#4B5563}
+
+/* Performance tier */
+.tier-bar{display:flex;align-items:center;gap:6px}
+.tier-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.tier-dot.top{background:var(--green)}
+.tier-dot.good{background:#10B981}
+.tier-dot.warning{background:var(--amber)}
+.tier-dot.critical{background:var(--red)}
+.tier-dot.new{background:#9CA3AF}
+.rate-val{font-weight:700;font-size:13px}
+.rate-val.top{color:var(--green)}
+.rate-val.good{color:#10B981}
+.rate-val.warning{color:var(--amber)}
+.rate-val.critical{color:var(--red)}
+.rate-val.new{color:var(--muted)}
+
+/* Flags */
+.flags{display:flex;flex-wrap:wrap;gap:4px;margin-top:2px}
+.flag{font-size:10px;font-weight:600;padding:2px 6px;border-radius:3px}
+.flag.critical{background:#FEE2E2;color:#DC2626}
+.flag.warning{background:#FEF3C7;color:#92400E}
+.flag.top{background:#D1FAE5;color:#065F46}
+.flag.positive{background:#DBEAFE;color:#1E40AF}
+
+/* Detail panel */
+.detail-panel{padding:1.25rem 1.5rem}
+.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:1.25rem}
+@media(max-width:800px){.detail-grid{grid-template-columns:1fr}}
+.detail-section{background:#fff;border-radius:8px;border:1px solid var(--border);padding:1rem}
+.detail-section-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:0.75rem}
+.stat-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #F3F4F6;font-size:13px}
+.stat-row:last-child{border-bottom:none}
+.stat-row .label{color:var(--muted)}
+.stat-row .value{font-weight:600}
+
+/* Variant table */
+.variant-table{width:100%;border-collapse:collapse;font-size:12px}
+.variant-table th{padding:5px 8px;text-align:left;color:var(--muted);font-weight:600;border-bottom:1px solid var(--border)}
+.variant-table td{padding:5px 8px;border-bottom:1px solid #F3F4F6}
+.variant-table tr:last-child td{border-bottom:none}
+.vt-best{background:#F0FDF4}
+.vt-rate-bar{display:inline-block;height:6px;border-radius:3px;background:var(--teal);vertical-align:middle;margin-right:4px}
+
+/* Insight cards */
+.insight-card{background:#EFF6FF;border:1px solid #BFDBFE;border-radius:7px;padding:0.75rem;margin-bottom:0.5rem;font-size:12px;color:#1E40AF;line-height:1.5}
+.insight-card.critical{background:#FEF2F2;border-color:#FECACA;color:#DC2626}
+.insight-card.warning{background:#FFFBEB;border-color:#FDE68A;color:#92400E}
+.insight-card.success{background:#F0FDF4;border-color:#BBF7D0;color:#065F46}
+
+/* Empty/loading */
+.empty{text-align:center;padding:3rem;color:var(--muted);font-size:14px}
+
+/* Chevron */
+.chevron{transition:transform 0.2s;font-size:12px;color:var(--muted)}
+.chevron.open{transform:rotate(90deg)}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">Ott<span>a</span>ly</div>
+  <nav class="nav">
+    <a href="/index.html">Revenue</a>
+    <a href="/performance.html">Performance</a>
+    <a href="/clients.html">Clients</a>
+    <a href="/campaigns.html" class="active">Campaigns</a>
+    <a href="/admin.html">Admin</a>
+  </nav>
+</div>
+
+<div class="alert-banner hidden" id="alertBanner"></div>
+
+<div class="page">
+  <div class="page-header">
+    <div>
+      <div class="page-title">Campaign Intelligence</div>
+      <div class="updated-at" id="updatedAt">Loading…</div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <input type="text" id="searchInput" placeholder="Search campaigns…"
+        style="padding:7px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;width:220px;outline:none"
+        oninput="renderWorkspace()">
+    </div>
+  </div>
+
+  <div class="summary">
+    <div class="sum-card"><div class="sum-label">Total Campaigns</div><div class="sum-val" id="sumTotal">—</div></div>
+    <div class="sum-card teal"><div class="sum-label">Active</div><div class="sum-val" id="sumActive">—</div></div>
+    <div class="sum-card green"><div class="sum-label">Top Performers</div><div class="sum-val" id="sumTop">—</div></div>
+    <div class="sum-card amber"><div class="sum-label">Need Attention</div><div class="sum-val" id="sumWarning">—</div></div>
+    <div class="sum-card red"><div class="sum-label">Critical</div><div class="sum-val" id="sumCritical">—</div></div>
+    <div class="sum-card"><div class="sum-label">Avg Reply Rate</div><div class="sum-val" id="sumAvgReply">—</div></div>
+  </div>
+
+  <div class="ws-tabs-wrap"><div class="ws-tabs" id="wsTabs"></div></div>
+
+  <div class="table-wrap">
+    <div class="table-header">
+      <div>
+        <span style="font-weight:700;font-size:14px" id="wsName">—</span>
+        <div class="ws-stats-line" id="wsStatsLine"></div>
+      </div>
+      <div style="font-size:12px;color:var(--muted)">Click a campaign to expand</div>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th></th>
+          <th>Campaign</th>
+          <th>Status</th>
+          <th>Sent</th>
+          <th>Reply Rate</th>
+          <th>Positive %</th>
+          <th>Leads</th>
+          <th>Flags / Insights</th>
+          <th style="text-align:right">Lead Rate</th>
+        </tr>
+      </thead>
+      <tbody id="campaignBody">
+        <tr><td colspan="9" class="empty">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+let data = null;
+let activeWsIdx = 0;
+let expandedIds = new Set();
+
+async function load() {
+  try {
+    data = await fetch('/api/campaigns/intelligence').then(r => r.json());
+    if (!data || !data.workspaces?.length) {
+      document.getElementById('campaignBody').innerHTML = '<tr><td colspan="9" class="empty">No campaign data yet — server is still scanning</td></tr>';
+      document.getElementById('updatedAt').textContent = 'Not yet scanned';
+      return;
+    }
+    renderSummary();
+    renderTabs();
+    renderWorkspace();
+    document.getElementById('updatedAt').textContent =
+      'Updated ' + new Date(data.updatedAt).toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'});
+  } catch(e) {
+    document.getElementById('campaignBody').innerHTML = `<tr><td colspan="9" class="empty">⚠️ ${e.message}</td></tr>`;
+  }
+}
+
+function renderSummary() {
+  const all = data.workspaces.flatMap(w => w.campaigns);
+  const total    = all.length;
+  const active   = all.filter(c => c.status === 'ACTIVE').length;
+  const top      = all.filter(c => c.tier === 'top').length;
+  const warning  = all.filter(c => c.tier === 'warning').length;
+  const critical = all.filter(c => c.tier === 'critical').length;
+  const withData = all.filter(c => c.sent >= 50);
+  const avgReply = withData.length
+    ? withData.reduce((s, c) => s + c.replyRate, 0) / withData.length : 0;
+
+  document.getElementById('sumTotal').textContent    = total;
+  document.getElementById('sumActive').textContent   = active;
+  document.getElementById('sumTop').textContent      = top;
+  document.getElementById('sumWarning').textContent  = warning;
+  document.getElementById('sumCritical').textContent = critical;
+  document.getElementById('sumAvgReply').textContent = (avgReply * 100).toFixed(2) + '%';
+
+  const critAlerts = data.workspaces.flatMap(w =>
+    w.campaigns.flatMap(c => c.flags.filter(f => f.type === 'critical').map(f => `${w.name} — ${shortName(c.name)}: ${f.msg}`))
+  );
+  const banner = document.getElementById('alertBanner');
+  if (critAlerts.length) {
+    banner.classList.remove('hidden');
+    banner.innerHTML = `⚠️ <strong>${critAlerts.length} campaign${critAlerts.length > 1 ? 's' : ''} need immediate attention:</strong> ${critAlerts.slice(0,3).join(' · ')}${critAlerts.length > 3 ? ` · +${critAlerts.length-3} more` : ''}`;
+  }
+}
+
+function renderTabs() {
+  const tabs = document.getElementById('wsTabs');
+  tabs.innerHTML = data.workspaces.map((ws, i) => {
+    const critCount = ws.campaigns.filter(c => c.tier === 'critical').length;
+    const dotColor  = critCount > 0 ? 'var(--red)' : ws.campaigns.some(c => c.tier === 'top') ? 'var(--green)' : 'var(--muted)';
+    return `<button class="ws-tab${i === activeWsIdx ? ' active' : ''}" onclick="switchWs(${i})">
+      <span class="tab-dot" style="background:${dotColor}"></span>${esc(ws.name)}
+      ${critCount > 0 ? `<span style="background:var(--red);color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;margin-left:4px">${critCount}</span>` : ''}
+    </button>`;
+  }).join('');
+}
+
+function switchWs(idx) {
+  activeWsIdx = idx;
+  expandedIds.clear();
+  renderTabs();
+  renderWorkspace();
+}
+
+function renderWorkspace() {
+  if (!data) return;
+  const ws = data.workspaces[activeWsIdx];
+  if (!ws) return;
+
+  document.getElementById('wsName').textContent = ws.name;
+  const avgRR = ws.avgReplyRate * 100;
+  document.getElementById('wsStatsLine').textContent =
+    `${ws.campaigns.length} campaigns · ${ws.activeCampaigns} active · ${ws.totalSent.toLocaleString()} total sends · avg reply rate ${avgRR.toFixed(2)}%`;
+
+  const q = document.getElementById('searchInput').value.toLowerCase();
+  const filtered = ws.campaigns.filter(c => !q || c.name.toLowerCase().includes(q));
+
+  if (!filtered.length) {
+    document.getElementById('campaignBody').innerHTML = '<tr><td colspan="9" class="empty">No campaigns match</td></tr>';
+    return;
+  }
+
+  const rows = [];
+  for (const c of filtered) {
+    const rr   = (c.replyRate * 100).toFixed(2);
+    const prr  = c.replies > 0 ? ((c.posReplies / c.replies) * 100).toFixed(0) : '—';
+    const lr   = c.replies > 0 ? ((c.leadRate) * 100).toFixed(0) + '%' : '—';
+    const expanded = expandedIds.has(c.id);
+    const allFlags = [...c.flags, ...c.variantInsights.map(v => ({ type: 'info', msg: v.msg }))];
+
+    rows.push(`<tr class="camp-row" onclick="toggleDetail('${c.id}')">
+      <td><span class="chevron${expanded ? ' open' : ''}">▶</span></td>
+      <td>
+        <div class="camp-name" title="${esc(c.name)}">${esc(shortName(c.name))}</div>
+      </td>
+      <td><span class="status-badge ${(c.status||'').toLowerCase()}">${c.status || '—'}</span></td>
+      <td style="font-weight:600">${c.sent.toLocaleString()}</td>
+      <td>
+        <div class="tier-bar">
+          <span class="tier-dot ${c.tier}"></span>
+          <span class="rate-val ${c.tier}">${c.sent < 50 ? '—' : rr + '%'}</span>
+        </div>
+      </td>
+      <td>${c.sent >= 50 && c.replies > 0 ? prr + '%' : '—'}</td>
+      <td style="font-weight:600">${c.leads}</td>
+      <td>
+        <div class="flags">
+          ${allFlags.slice(0,3).map(f => `<span class="flag ${f.type === 'info' ? 'positive' : f.type}">${f.msg.split('—')[0].trim()}</span>`).join('')}
+        </div>
+      </td>
+      <td style="text-align:right;font-weight:600">${lr}</td>
+    </tr>`);
+
+    if (expanded) {
+      rows.push(`<tr class="detail-row">
+        <td colspan="9">
+          <div class="detail-panel">
+            ${renderDetailPanel(c, ws.avgReplyRate)}
+          </div>
+        </td>
+      </tr>`);
+    }
+  }
+  document.getElementById('campaignBody').innerHTML = rows.join('');
+}
+
+function renderDetailPanel(c, wsAvg) {
+  const insights = [];
+  c.flags.forEach(f => insights.push({ cls: f.type === 'critical' ? 'critical' : f.type === 'warning' ? 'warning' : 'success', msg: f.msg }));
+  c.variantInsights.forEach(v => insights.push({ cls: 'success', msg: v.msg }));
+  if (!insights.length && c.sent >= 50) insights.push({ cls: 'success', msg: 'No issues detected — campaign is performing within normal range.' });
+
+  const insightHtml = insights.map(i => `<div class="insight-card ${i.cls}">${esc(i.msg)}</div>`).join('') || '<div class="insight-card">Not enough sends for analysis</div>';
+
+  // Build variant steps HTML
+  let varHtml = '';
+  if (c.variationSteps?.length) {
+    const activeSteps = c.variationSteps.filter(s => s.variations.some(v => v.sent >= 10));
+    if (activeSteps.length) {
+      varHtml = activeSteps.map(step => {
+        const vars = step.variations.filter(v => v.sent > 0);
+        if (!vars.length) return '';
+        const maxRate = Math.max(...vars.map(v => v.sent > 0 ? v.reply/v.sent : 0));
+        return `<div style="margin-bottom:10px">
+          <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:5px">STEP ${step.step}</div>
+          <table class="variant-table">
+            <thead><tr><th>Variant</th><th>Name</th><th>Sent</th><th>Reply Rate</th><th>Pos Replies</th></tr></thead>
+            <tbody>
+              ${vars.map(v => {
+                const rate = v.sent > 0 ? v.reply/v.sent : 0;
+                const isBest = rate === maxRate && maxRate > 0;
+                const barW = maxRate > 0 ? Math.round(rate/maxRate*80) : 0;
+                return `<tr class="${isBest ? 'vt-best' : ''}">
+                  <td><strong>${v.variation}</strong>${isBest ? ' 🏆' : ''}</td>
+                  <td style="color:var(--muted)">${esc(v.name === '-' ? '' : v.name)}</td>
+                  <td>${v.sent.toLocaleString()}</td>
+                  <td>
+                    <span class="vt-rate-bar" style="width:${barW}px"></span>
+                    <strong>${(rate*100).toFixed(2)}%</strong>
+                  </td>
+                  <td>${v.pos_reply}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>`;
+      }).join('');
+    }
+  }
+
+  return `<div class="detail-grid">
+    <div>
+      <div class="detail-section" style="margin-bottom:1rem">
+        <div class="detail-section-title">Campaign Stats</div>
+        <div class="stat-row"><span class="label">Total Sends</span><span class="value">${c.sent.toLocaleString()}</span></div>
+        <div class="stat-row"><span class="label">Total Replies</span><span class="value">${c.replies.toLocaleString()}</span></div>
+        <div class="stat-row"><span class="label">Reply Rate</span><span class="value ${c.tier}">${(c.replyRate*100).toFixed(2)}%</span></div>
+        <div class="stat-row"><span class="label">Workspace Avg</span><span class="value">${(wsAvg*100).toFixed(2)}%</span></div>
+        <div class="stat-row"><span class="label">Positive Replies</span><span class="value" style="color:var(--green)">${c.posReplies}</span></div>
+        <div class="stat-row"><span class="label">Negative Replies</span><span class="value" style="color:var(--red)">${c.negReplies}</span></div>
+        <div class="stat-row"><span class="label">Bounces</span><span class="value">${c.bounces}</span></div>
+        <div class="stat-row"><span class="label">Leads Generated</span><span class="value" style="color:var(--teal)">${c.leads}</span></div>
+        ${c.lastReplied ? `<div class="stat-row"><span class="label">Last Reply</span><span class="value">${new Date(c.lastReplied).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'})}</span></div>` : ''}
+      </div>
+      <div class="detail-section">
+        <div class="detail-section-title">Insights & Recommendations</div>
+        ${insightHtml}
+      </div>
+    </div>
+    <div class="detail-section">
+      <div class="detail-section-title">Variant Performance ${c.variationSteps?.length ? '' : '<span style="font-weight:400;color:var(--muted)">(needs 300+ sends)</span>'}</div>
+      ${varHtml || '<div style="color:var(--muted);font-size:13px;padding:0.5rem 0">No variant data available for this campaign</div>'}
+    </div>
+  </div>`;
+}
+
+function toggleDetail(id) {
+  if (expandedIds.has(id)) expandedIds.delete(id);
+  else expandedIds.add(id);
+  renderWorkspace();
+}
+
+function shortName(name) {
+  // Strip Apollo URLs from campaign names
+  const cleaned = name.replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim();
+  return cleaned.length > 55 ? cleaned.slice(0, 55) + '…' : cleaned || name.slice(0, 55);
+}
+
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+load();
+// Refresh every 5 minutes
+setInterval(load, 5 * 60 * 1000);
+</script>
+</body>
+</html>

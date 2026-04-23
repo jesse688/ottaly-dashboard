@@ -506,6 +506,141 @@ app.get('/api/revenue/stats-by-workspace', (req, res) => {
   res.json(counts);
 });
 
+// ── Campaign intelligence cache (refreshed every 30 min) ─────
+let campaignCache = { workspaces: [], updatedAt: null };
+
+function scoreCampaign(c, wsAvgReplyRate) {
+  const sent = c.sent_count || 0;
+  if (sent < 50) return { tier: 'new', replyRate: 0, posReplyRate: 0, leadRate: 0, flags: [] };
+  const replyRate    = sent > 0               ? (c.replied_count || 0) / sent : 0;
+  const posReplyRate = (c.replied_count || 0) > 0 ? (c.positive_reply_count || 0) / c.replied_count : 0;
+  const leadRate     = (c.replied_count || 0) > 0 ? (c.lead_count || 0) / c.replied_count : 0;
+  const flags = [];
+  if (replyRate < 0.005 && sent > 300)  flags.push({ type: 'critical', msg: 'Very low reply rate — copy likely needs refreshing' });
+  else if (replyRate < 0.01 && sent > 200) flags.push({ type: 'warning', msg: 'Below average reply rate' });
+  if (wsAvgReplyRate > 0 && replyRate > wsAvgReplyRate * 1.5) flags.push({ type: 'top', msg: 'Top performer — 50%+ above workspace average' });
+  if (posReplyRate > 0.4 && c.replied_count > 5) flags.push({ type: 'positive', msg: 'High quality — strong positive reply ratio' });
+  if (c.bounced_count > 0 && sent > 0 && c.bounced_count / sent > 0.05) flags.push({ type: 'critical', msg: 'High bounce rate — check email list quality' });
+  const tier = replyRate >= 0.025 ? 'top' : replyRate >= 0.01 ? 'good' : replyRate >= 0.005 ? 'warning' : 'critical';
+  return { tier, replyRate, posReplyRate, leadRate, flags };
+}
+
+function analyzeVariants(steps) {
+  const insights = [];
+  for (const step of (steps || [])) {
+    const vars = (step.variations || []).filter(v => v.sent >= 100);
+    if (vars.length < 2) continue;
+    vars.sort((a, b) => (b.reply / b.sent) - (a.reply / a.sent));
+    const best  = vars[0];
+    const worst = vars[vars.length - 1];
+    const bestRate  = best.reply  / best.sent;
+    const worstRate = worst.reply / worst.sent;
+    if (bestRate > worstRate * 1.5 && bestRate > 0.005) {
+      insights.push({
+        step: step.step,
+        winner: best.variation,
+        winnerRate: (bestRate * 100).toFixed(1),
+        loserRate:  (worstRate * 100).toFixed(1),
+        msg: `Step ${step.step}: Variant ${best.variation} (${(bestRate*100).toFixed(1)}% reply rate) outperforms Variant ${worst.variation} (${(worstRate*100).toFixed(1)}%) — consolidate around the winner`
+      });
+    }
+  }
+  return insights;
+}
+
+async function refreshCampaignCache() {
+  try {
+    const wsRaw = await pvFetch('/workspaces');
+    const workspaces = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.workspaces || []);
+    const result = [];
+
+    for (const ws of workspaces) {
+      try {
+        const campaigns = await pvFetch(`/campaign/list-all?workspace_id=${ws.id}`);
+        if (!Array.isArray(campaigns) || !campaigns.length) continue;
+
+        // Workspace-level average reply rate (campaigns with >50 sends)
+        const active = campaigns.filter(c => (c.sent_count || 0) >= 50);
+        const wsAvgReplyRate = active.length
+          ? active.reduce((s, c) => s + (c.replied_count || 0) / (c.sent_count || 1), 0) / active.length
+          : 0;
+
+        const scored = [];
+        for (const c of campaigns) {
+          const metrics = scoreCampaign(c, wsAvgReplyRate);
+
+          // Fetch variation stats for campaigns with >300 sends
+          let variantInsights = [];
+          let variationSteps  = [];
+          if ((c.sent_count || 0) >= 300) {
+            try {
+              const vstats = await pvFetch(`/campaign/get/variation-stats?campaign_id=${c.id}&workspace_id=${ws.id}`);
+              if (Array.isArray(vstats)) {
+                variationSteps = vstats;
+                variantInsights = analyzeVariants(vstats);
+              }
+            } catch {}
+          }
+
+          scored.push({
+            id:            c.id,
+            name:          c.camp_name || 'Unnamed',
+            status:        c.status,
+            sent:          c.sent_count || 0,
+            opens:         c.unique_opened_count || c.opened_count || 0,
+            replies:       c.replied_count || 0,
+            posReplies:    c.positive_reply_count || 0,
+            negReplies:    c.negative_reply_count || 0,
+            bounces:       c.bounced_count || 0,
+            leads:         c.lead_count || 0,
+            openRate:      c.open_rate   || 0,
+            replyRate:     metrics.replyRate,
+            posReplyRate:  metrics.posReplyRate,
+            leadRate:      metrics.leadRate,
+            tier:          metrics.tier,
+            flags:         metrics.flags,
+            variantInsights,
+            variationSteps,
+            lastSent:      c.last_lead_sent || null,
+            lastReplied:   c.last_lead_replied || null,
+          });
+        }
+
+        scored.sort((a, b) => b.replyRate - a.replyRate);
+
+        result.push({
+          id:            ws.id,
+          name:          ws.name || ws.workspace_name,
+          avgReplyRate:  wsAvgReplyRate,
+          campaigns:     scored,
+          totalSent:     scored.reduce((s, c) => s + c.sent, 0),
+          totalReplies:  scored.reduce((s, c) => s + c.replies, 0),
+          totalLeads:    scored.reduce((s, c) => s + c.leads, 0),
+          activeCampaigns: scored.filter(c => c.status === 'ACTIVE').length,
+        });
+
+      } catch (e) {
+        console.warn(`[campaign cache] ${ws.name} error:`, e.message);
+      }
+    }
+
+    campaignCache = { workspaces: result, updatedAt: new Date().toISOString() };
+    const totalCampaigns = result.reduce((s, w) => s + w.campaigns.length, 0);
+    const alerts = result.reduce((s, w) => s + w.campaigns.reduce((ss, c) => ss + c.flags.filter(f => f.type === 'critical').length, 0), 0);
+    console.log(`[campaign cache] refreshed — ${result.length} workspaces, ${totalCampaigns} campaigns, ${alerts} critical alerts`);
+  } catch (err) {
+    console.error('[campaign cache] refresh failed:', err.message);
+  }
+}
+
+// Refresh on startup then every 30 minutes
+refreshCampaignCache();
+setInterval(refreshCampaignCache, 30 * 60 * 1000);
+
+app.get('/api/campaigns/intelligence', (req, res) => {
+  res.json(campaignCache);
+});
+
 // ── PlusVibe proxy (kept for performance.html agency scan) ────
 app.get('/api/pv/workspaces', async (req, res) => {
   try {
