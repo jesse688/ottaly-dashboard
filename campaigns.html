@@ -120,6 +120,39 @@ tr.detail-row.hidden{display:none}
 .insight-card.warning{background:#FFFBEB;border-color:#FDE68A;color:#92400E}
 .insight-card.success{background:#F0FDF4;border-color:#BBF7D0;color:#065F46}
 
+/* Optimisation cards */
+.opt-card{background:#fff;border:1px solid var(--border);border-left:4px solid var(--amber);border-radius:8px;padding:0.9rem 1rem;margin-bottom:0.6rem;display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}
+.opt-card.high{border-left-color:var(--green)}
+.opt-card-info{flex:1;min-width:200px}
+.opt-card-title{font-weight:600;font-size:13px;margin-bottom:3px}
+.opt-card-detail{font-size:12px;color:var(--muted);line-height:1.5}
+.opt-badge{font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;margin-left:6px}
+.opt-badge.high{background:#D1FAE5;color:#065F46}
+.opt-badge.medium{background:#FEF3C7;color:#92400E}
+.opt-actions{display:flex;gap:6px;align-items:center;flex-shrink:0}
+.btn-apply{padding:6px 14px;background:var(--teal);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;transition:background 0.15s}
+.btn-apply:hover{background:#185e65}
+.btn-apply:disabled{background:#9CA3AF;cursor:not-allowed}
+.btn-applied{padding:6px 14px;background:#D1FAE5;color:#065F46;border:none;border-radius:6px;font-size:12px;font-weight:600}
+
+/* Targeting grid */
+.targeting-card{background:#fff;border:1px solid var(--border);border-radius:8px;padding:0.9rem 1rem}
+.targeting-card-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:0.5rem}
+.targeting-label{font-size:12px;font-weight:600}
+.targeting-rate{font-size:15px;font-weight:700}
+.targeting-rate.top{color:var(--green)}
+.targeting-rate.good{color:#10B981}
+.targeting-rate.warning{color:var(--amber)}
+.targeting-rate.critical{color:var(--red)}
+.targeting-campaigns{font-size:11px;color:var(--muted);margin-top:4px}
+.targeting-bar{height:4px;border-radius:2px;background:var(--border);margin:6px 0}
+.targeting-bar-fill{height:4px;border-radius:2px;background:var(--teal)}
+
+/* Exhaustion bar */
+.exhaust-wrap{display:flex;align-items:center;gap:6px}
+.exhaust-bar{width:50px;height:5px;border-radius:3px;background:var(--border);overflow:hidden}
+.exhaust-fill{height:100%;border-radius:3px}
+
 /* Empty/loading */
 .empty{text-align:center;padding:3rem;color:var(--muted);font-size:14px}
 
@@ -167,6 +200,21 @@ tr.detail-row.hidden{display:none}
     <div class="sum-card"><div class="sum-label">Avg Reply Rate</div><div class="sum-val" id="sumAvgReply">—</div></div>
   </div>
 
+  <!-- Suggested Optimisations -->
+  <div id="optimisationsSection" style="display:none;margin-bottom:1.25rem">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.6rem">
+      <div style="font-weight:700;font-size:14px">🎯 Suggested Optimisations <span id="optCount" style="background:#FEF3C7;color:#92400E;padding:2px 8px;border-radius:10px;font-size:12px;margin-left:6px"></span></div>
+      <button onclick="toggleOpts()" style="font-size:12px;color:var(--muted);background:none;border:none;cursor:pointer" id="optToggleBtn">Hide</button>
+    </div>
+    <div id="optimisationsList"></div>
+  </div>
+
+  <!-- Targeting Intelligence -->
+  <div id="targetingSection" style="display:none;margin-bottom:1.25rem">
+    <div style="font-weight:700;font-size:14px;margin-bottom:0.6rem">📊 Targeting Intelligence <span style="font-size:12px;font-weight:400;color:var(--muted)">— which Apollo targeting combinations perform best across all clients</span></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem" id="targetingGrid"></div>
+  </div>
+
   <div class="ws-tabs-wrap"><div class="ws-tabs" id="wsTabs"></div></div>
 
   <div class="table-wrap">
@@ -184,11 +232,11 @@ tr.detail-row.hidden{display:none}
           <th>Campaign</th>
           <th>Status</th>
           <th>Sent</th>
+          <th>Data Used</th>
           <th>Reply Rate</th>
           <th>Positive %</th>
           <th>Leads</th>
-          <th>Flags / Insights</th>
-          <th style="text-align:right">Lead Rate</th>
+          <th>Flags</th>
         </tr>
       </thead>
       <tbody id="campaignBody">
@@ -203,16 +251,20 @@ let data = null;
 let activeWsIdx = 0;
 let expandedIds = new Set();
 
+let optsVisible = true;
+
 async function load() {
   try {
     data = await fetch('/api/campaigns/intelligence').then(r => r.json());
     if (!data || !data.workspaces?.length) {
       document.getElementById('campaignBody').innerHTML = '<tr><td colspan="9" class="empty">⏳ Server is scanning all campaigns — this takes 3–5 minutes on first load. Page will auto-refresh.</td></tr>';
       document.getElementById('updatedAt').textContent = 'First scan in progress…';
-      setTimeout(load, 30000); // retry in 30s
+      setTimeout(load, 30000);
       return;
     }
     renderSummary();
+    renderOptimisations();
+    renderTargetingIntelligence();
     renderTabs();
     renderWorkspace();
     document.getElementById('updatedAt').textContent =
@@ -223,31 +275,104 @@ async function load() {
 }
 
 function renderSummary() {
-  const all = data.workspaces.flatMap(w => w.campaigns);
-  const total    = all.length;
-  const active   = all.filter(c => c.status === 'ACTIVE').length;
-  const top      = all.filter(c => c.tier === 'top').length;
-  const warning  = all.filter(c => c.tier === 'warning').length;
-  const critical = all.filter(c => c.tier === 'critical').length;
+  const all      = data.workspaces.flatMap(w => w.campaigns);
   const withData = all.filter(c => c.sent >= 50);
-  const avgReply = withData.length
-    ? withData.reduce((s, c) => s + c.replyRate, 0) / withData.length : 0;
-
-  document.getElementById('sumTotal').textContent    = total;
-  document.getElementById('sumActive').textContent   = active;
-  document.getElementById('sumTop').textContent      = top;
-  document.getElementById('sumWarning').textContent  = warning;
-  document.getElementById('sumCritical').textContent = critical;
+  const avgReply = withData.length ? withData.reduce((s,c) => s + c.replyRate, 0) / withData.length : 0;
+  document.getElementById('sumTotal').textContent    = all.length;
+  document.getElementById('sumActive').textContent   = all.filter(c => c.status === 'ACTIVE').length;
+  document.getElementById('sumTop').textContent      = all.filter(c => c.tier === 'top').length;
+  document.getElementById('sumWarning').textContent  = all.filter(c => c.tier === 'warning').length;
+  document.getElementById('sumCritical').textContent = all.filter(c => c.tier === 'critical').length;
   document.getElementById('sumAvgReply').textContent = (avgReply * 100).toFixed(2) + '%';
-
   const critAlerts = data.workspaces.flatMap(w =>
     w.campaigns.flatMap(c => c.flags.filter(f => f.type === 'critical').map(f => `${w.name} — ${shortName(c.name)}: ${f.msg}`))
   );
   const banner = document.getElementById('alertBanner');
   if (critAlerts.length) {
     banner.classList.remove('hidden');
-    banner.innerHTML = `⚠️ <strong>${critAlerts.length} campaign${critAlerts.length > 1 ? 's' : ''} need immediate attention:</strong> ${critAlerts.slice(0,3).join(' · ')}${critAlerts.length > 3 ? ` · +${critAlerts.length-3} more` : ''}`;
+    banner.innerHTML = `⚠️ <strong>${critAlerts.length} critical issue${critAlerts.length > 1 ? 's' : ''}:</strong> ${critAlerts.slice(0,3).join(' · ')}${critAlerts.length > 3 ? ` +${critAlerts.length-3} more` : ''}`;
   }
+}
+
+function renderOptimisations() {
+  const opts = data.optimisations || [];
+  const sec  = document.getElementById('optimisationsSection');
+  if (!opts.length) { sec.style.display = 'none'; return; }
+  sec.style.display = '';
+  document.getElementById('optCount').textContent = opts.length + ' found';
+  document.getElementById('optimisationsList').innerHTML = opts.map((o, i) => `
+    <div class="opt-card ${o.confidence}" id="optCard${i}">
+      <div class="opt-card-info">
+        <div class="opt-card-title">
+          ${esc(o.wsName)} — ${esc(o.campName)}
+          <span class="opt-badge ${o.confidence}">${o.confidence === 'high' ? 'High confidence' : 'Medium confidence'}</span>
+        </div>
+        <div class="opt-card-detail">
+          Step ${o.step} · Winner: <strong>Variant ${esc(o.winner.variation)}</strong>
+          (${(o.winner.rate*100).toFixed(2)}% reply rate, ${o.winner.reply} replies from ${o.winner.sent.toLocaleString()} sends) ·
+          Pause: ${o.losers.map(l => `Variant ${l.variation} (${(l.rate*100).toFixed(2)}%)`).join(', ')}
+        </div>
+      </div>
+      <div class="opt-actions">
+        <span id="optStatus${i}" style="font-size:12px;color:var(--muted)"></span>
+        <button class="btn-apply" onclick="applyOpt(${i})" id="optBtn${i}">Apply in PlusVibe</button>
+      </div>
+    </div>`).join('');
+}
+
+function toggleOpts() {
+  optsVisible = !optsVisible;
+  document.getElementById('optimisationsList').style.display = optsVisible ? '' : 'none';
+  document.getElementById('optToggleBtn').textContent = optsVisible ? 'Hide' : 'Show';
+}
+
+async function applyOpt(i) {
+  const o   = data.optimisations[i];
+  const btn = document.getElementById('optBtn' + i);
+  const st  = document.getElementById('optStatus' + i);
+  btn.disabled = true;
+  btn.textContent = 'Applying…';
+  try {
+    const adminKey = localStorage.getItem('ottaly_admin_key') || prompt('Admin key:');
+    const r = await fetch('/api/campaigns/apply-optimisation', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-admin-key': adminKey },
+      body: JSON.stringify({ wsId: o.wsId, campId: o.campId, step: o.step, loserVariations: o.losers.map(l => l.variation) })
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Failed');
+    btn.outerHTML = '<span class="btn-applied">✓ Applied</span>';
+    st.textContent = '';
+  } catch(e) {
+    btn.disabled = false;
+    btn.textContent = 'Apply in PlusVibe';
+    st.textContent = '⚠️ ' + e.message;
+    st.style.color = 'var(--red)';
+  }
+}
+
+function renderTargetingIntelligence() {
+  const patterns = (data.targetingPatterns || []).slice(0, 10);
+  const sec = document.getElementById('targetingSection');
+  if (!patterns.length) { sec.style.display = 'none'; return; }
+  sec.style.display = '';
+  const maxRate = patterns[0].avgReplyRate;
+  document.getElementById('targetingGrid').innerHTML = patterns.map(p => {
+    const rr   = (p.avgReplyRate * 100).toFixed(2);
+    const tier = p.avgReplyRate >= 0.025 ? 'top' : p.avgReplyRate >= 0.01 ? 'good' : p.avgReplyRate >= 0.005 ? 'warning' : 'critical';
+    const barW = maxRate > 0 ? Math.round(p.avgReplyRate / maxRate * 100) : 0;
+    const parts = [p.titleKey, p.sizeKey, p.kwKey].filter(Boolean);
+    return `<div class="targeting-card">
+      <div class="targeting-card-header">
+        <div class="targeting-label">${parts.map(s => `<span style="background:#F3F4F6;padding:2px 7px;border-radius:4px;margin-right:4px;font-size:11px">${esc(s)}</span>`).join('')}</div>
+        <div class="targeting-rate ${tier}">${rr}%</div>
+      </div>
+      <div class="targeting-bar"><div class="targeting-bar-fill" style="width:${barW}%"></div></div>
+      <div class="targeting-campaigns">${p.count} campaigns · ${p.totalSent.toLocaleString()} total sends
+        · ${p.campaigns.slice(0,2).map(c => esc(c.wsName)).join(', ')}${p.count > 2 ? ' +' + (p.count-2) + ' more' : ''}
+      </div>
+    </div>`;
+  }).join('');
 }
 
 function renderTabs() {
@@ -296,6 +421,8 @@ function renderWorkspace() {
     const allFlags = [...c.flags, ...c.variantInsights.map(v => ({ type: 'info', msg: v.msg }))];
 
     const apolloSummary = apolloSummaryLine(c.name);
+    const exPct  = c.exhaustion > 0 ? Math.round(c.exhaustion * 100) : 0;
+    const exColor = c.exhaustion >= 0.9 ? 'var(--red)' : c.exhaustion >= 0.75 ? 'var(--amber)' : 'var(--green)';
     rows.push(`<tr class="camp-row" onclick="toggleDetail('${c.id}')">
       <td><span class="chevron${expanded ? ' open' : ''}">▶</span></td>
       <td>
@@ -304,6 +431,12 @@ function renderWorkspace() {
       </td>
       <td><span class="status-badge ${(c.status||'').toLowerCase()}">${c.status || '—'}</span></td>
       <td style="font-weight:600">${c.sent.toLocaleString()}</td>
+      <td>
+        ${c.leadContacted > 0 ? `<div class="exhaust-wrap">
+          <div class="exhaust-bar"><div class="exhaust-fill" style="width:${Math.min(exPct,100)}%;background:${exColor}"></div></div>
+          <span style="font-size:11px;font-weight:600;color:${exColor}">${exPct}%</span>
+        </div>` : '<span style="color:var(--muted);font-size:11px">—</span>'}
+      </td>
       <td>
         <div class="tier-bar">
           <span class="tier-dot ${c.tier}"></span>
@@ -314,7 +447,7 @@ function renderWorkspace() {
       <td style="font-weight:600">${c.leads}</td>
       <td>
         <div class="flags">
-          ${allFlags.slice(0,3).map(f => `<span class="flag ${f.type === 'info' ? 'positive' : f.type}">${f.msg.split('—')[0].trim()}</span>`).join('')}
+          ${allFlags.slice(0,2).map(f => `<span class="flag ${f.type === 'info' ? 'positive' : f.type}">${f.msg.split('—')[0].trim()}</span>`).join('')}
         </div>
       </td>
       <td style="text-align:right;font-weight:600">${lr}</td>
@@ -392,9 +525,25 @@ function renderDetailPanel(c, wsAvg) {
         <div class="stat-row"><span class="label">Negative Replies</span><span class="value" style="color:var(--red)">${c.negReplies}</span></div>
         <div class="stat-row"><span class="label">Bounces</span><span class="value">${c.bounces}</span></div>
         <div class="stat-row"><span class="label">Leads Generated</span><span class="value" style="color:var(--teal)">${c.leads}</span></div>
+        <div class="stat-row"><span class="label">Data Used</span><span class="value">${c.leadContacted.toLocaleString()} / ${c.leads.toLocaleString()} leads (${c.exhaustion > 0 ? Math.round(c.exhaustion*100)+'%' : '—'})</span></div>
         ${c.lastReplied ? `<div class="stat-row"><span class="label">Last Reply</span><span class="value">${new Date(c.lastReplied).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'})}</span></div>` : ''}
       </div>
-      <div class="detail-section">
+      ${(c.stepReplies||[]).filter(s=>s.sent>0).length > 1 ? `
+      <div class="detail-section" style="margin-top:1rem">
+        <div class="detail-section-title">Step Drop-off</div>
+        ${(c.stepReplies||[]).filter(s=>s.sent>0).map(s => {
+          const sr = s.sent > 0 ? s.replies/s.sent : 0;
+          const barW = Math.round(sr * 100 / 0.05);
+          return `<div class="stat-row">
+            <span class="label">Step ${s.step}</span>
+            <span class="value" style="display:flex;align-items:center;gap:6px">
+              <span style="width:${Math.min(barW,80)}px;height:5px;border-radius:2px;background:var(--teal);display:inline-block"></span>
+              ${(sr*100).toFixed(2)}% (${s.replies}/${s.sent.toLocaleString()})
+            </span>
+          </div>`;
+        }).join('')}
+      </div>` : ''}
+      <div class="detail-section" style="margin-top:1rem">
         <div class="detail-section-title">Insights & Recommendations</div>
         ${insightHtml}
       </div>

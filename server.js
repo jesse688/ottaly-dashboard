@@ -507,22 +507,27 @@ app.get('/api/revenue/stats-by-workspace', (req, res) => {
 });
 
 // ── Campaign intelligence cache (refreshed every 30 min) ─────
-let campaignCache = { workspaces: [], updatedAt: null };
+let campaignCache = { workspaces: [], targetingPatterns: [], optimisations: [], updatedAt: null };
 
 function scoreCampaign(c, wsAvgReplyRate) {
   const sent = c.sent_count || 0;
   if (sent < 50) return { tier: 'new', replyRate: 0, posReplyRate: 0, leadRate: 0, flags: [] };
-  const replyRate    = sent > 0               ? (c.replied_count || 0) / sent : 0;
+  const replyRate    = sent > 0 ? (c.replied_count || 0) / sent : 0;
   const posReplyRate = (c.replied_count || 0) > 0 ? (c.positive_reply_count || 0) / c.replied_count : 0;
   const leadRate     = (c.replied_count || 0) > 0 ? (c.lead_count || 0) / c.replied_count : 0;
+  const contacted    = c.lead_contacted_count || 0;
+  const total        = c.lead_count || 0;
+  const exhaustion   = total > 0 ? contacted / total : 0;
   const flags = [];
   if (replyRate < 0.005 && sent > 300)  flags.push({ type: 'critical', msg: 'Very low reply rate — copy likely needs refreshing' });
   else if (replyRate < 0.01 && sent > 200) flags.push({ type: 'warning', msg: 'Below average reply rate' });
   if (wsAvgReplyRate > 0 && replyRate > wsAvgReplyRate * 1.5) flags.push({ type: 'top', msg: 'Top performer — 50%+ above workspace average' });
   if (posReplyRate > 0.4 && c.replied_count > 5) flags.push({ type: 'positive', msg: 'High quality — strong positive reply ratio' });
   if (c.bounced_count > 0 && sent > 0 && c.bounced_count / sent > 0.05) flags.push({ type: 'critical', msg: 'High bounce rate — check email list quality' });
+  if (exhaustion >= 0.9) flags.push({ type: 'critical', msg: `Data exhausted — ${Math.round(exhaustion*100)}% of leads contacted, needs fresh data` });
+  else if (exhaustion >= 0.75) flags.push({ type: 'warning', msg: `Data running low — ${Math.round(exhaustion*100)}% of leads contacted` });
   const tier = replyRate >= 0.025 ? 'top' : replyRate >= 0.01 ? 'good' : replyRate >= 0.005 ? 'warning' : 'critical';
-  return { tier, replyRate, posReplyRate, leadRate, flags };
+  return { tier, replyRate, posReplyRate, leadRate, exhaustion, flags };
 }
 
 function analyzeVariants(steps) {
@@ -537,15 +542,86 @@ function analyzeVariants(steps) {
     const worstRate = worst.reply / worst.sent;
     if (bestRate > worstRate * 1.5 && bestRate > 0.005) {
       insights.push({
-        step: step.step,
-        winner: best.variation,
-        winnerRate: (bestRate * 100).toFixed(1),
-        loserRate:  (worstRate * 100).toFixed(1),
-        msg: `Step ${step.step}: Variant ${best.variation} (${(bestRate*100).toFixed(1)}% reply rate) outperforms Variant ${worst.variation} (${(worstRate*100).toFixed(1)}%) — consolidate around the winner`
+        step: step.step, winner: best.variation,
+        winnerRate: (bestRate * 100).toFixed(1), loserRate: (worstRate * 100).toFixed(1),
+        msg: `Step ${step.step}: Variant ${best.variation} (${(bestRate*100).toFixed(1)}%) outperforms Variant ${worst.variation} (${(worstRate*100).toFixed(1)}%) — consolidate around the winner`
       });
     }
   }
   return insights;
+}
+
+function parseApolloParams(name) {
+  const match = (name || '').match(/https?:\/\/app\.apollo\.io[^\s]*/);
+  if (!match) return null;
+  try {
+    const qPart = match[0].split('?')[1] || '';
+    const p = new URLSearchParams(qPart);
+    const get = key => p.getAll(key).map(v => decodeURIComponent(v).replace(/\+/g,' ').replace(/%2C/gi,',').trim());
+    const sizeMap = {'1,10':'1-10','11,20':'11-20','21,50':'21-50','51,100':'51-100','101,200':'101-200','201,500':'201-500','501,1000':'501-1k','1001,5000':'1k-5k'};
+    return {
+      titles:    get('personTitles').slice(0,3),
+      seniority: get('personSeniorities').slice(0,3),
+      sizes:     get('organizationNumEmployeesRanges').map(s => sizeMap[s] || s),
+      locations: [...new Set([...get('personLocations'), ...get('organizationLocations'), ...get('accounthqLocations')])].slice(0,4),
+      inclKws:   get('qOrganizationKeywordTags').slice(0,5),
+    };
+  } catch { return null; }
+}
+
+function analyzeTargetingPatterns(workspaces) {
+  const groups = {};
+  for (const ws of workspaces) {
+    for (const c of ws.campaigns) {
+      if (c.sent < 200 || c.replyRate === 0) continue;
+      const a = parseApolloParams(c.name);
+      if (!a) continue;
+      const titleKey  = (a.titles.length ? a.titles : a.seniority).slice(0,2).join(', ') || '';
+      const sizeKey   = a.sizes.slice(0,2).join(', ') || '';
+      const kwKey     = a.inclKws.slice(0,3).join(', ') || '';
+      const key       = [titleKey, sizeKey, kwKey].filter(Boolean).join(' | ');
+      if (!key) continue;
+      if (!groups[key]) groups[key] = { label: key, titleKey, sizeKey, kwKey, campaigns: [], totalSent: 0, totalReplies: 0 };
+      groups[key].campaigns.push({ wsName: ws.name, name: c.name.replace(/https?:\/\/\S+/g,'').trim().slice(0,50), replyRate: c.replyRate, sent: c.sent, tier: c.tier });
+      groups[key].totalSent    += c.sent;
+      groups[key].totalReplies += c.replies;
+    }
+  }
+  return Object.values(groups)
+    .filter(g => g.campaigns.length >= 2)
+    .map(g => ({ ...g, avgReplyRate: g.totalSent > 0 ? g.totalReplies / g.totalSent : 0, count: g.campaigns.length }))
+    .sort((a, b) => b.avgReplyRate - a.avgReplyRate);
+}
+
+function generateOptimisations(workspaces) {
+  const opts = [];
+  for (const ws of workspaces) {
+    for (const c of ws.campaigns) {
+      if (c.status !== 'ACTIVE') continue;
+      for (const step of (c.variationSteps || [])) {
+        const active = (step.variations || []).filter(v => v.is_active !== false && v.sent >= 50);
+        if (active.length < 2) continue;
+        active.sort((a, b) => (b.reply / b.sent) - (a.reply / a.sent));
+        const winner = active[0];
+        const winnerRate = winner.reply / winner.sent;
+        const losers = active.slice(1).filter(v => {
+          const lr = v.reply / v.sent;
+          return winnerRate >= lr * 2 && winner.reply >= 5 && winner.sent >= 300;
+        });
+        if (!losers.length) continue;
+        opts.push({
+          wsId: ws.id, wsName: ws.name,
+          campId: c.id, campName: c.name.replace(/https?:\/\/\S+/g,'').trim().slice(0,60) || c.name.slice(0,60),
+          step: step.step,
+          winner: { variation: winner.variation, sent: winner.sent, reply: winner.reply, rate: winnerRate },
+          losers: losers.map(v => ({ variation: v.variation, sent: v.sent, reply: v.reply, rate: v.reply / v.sent })),
+          confidence: winner.sent >= 500 && winner.reply >= 10 ? 'high' : 'medium',
+          applied: false,
+        });
+      }
+    }
+  }
+  return opts;
 }
 
 async function refreshCampaignCache() {
@@ -558,87 +634,98 @@ async function refreshCampaignCache() {
       try {
         const campaigns = await pvFetch(`/campaign/list-all?workspace_id=${ws.id}`);
         if (!Array.isArray(campaigns) || !campaigns.length) continue;
-
-        // Workspace-level average reply rate (campaigns with >50 sends)
         const active = campaigns.filter(c => (c.sent_count || 0) >= 50);
         const wsAvgReplyRate = active.length
-          ? active.reduce((s, c) => s + (c.replied_count || 0) / (c.sent_count || 1), 0) / active.length
-          : 0;
+          ? active.reduce((s, c) => s + (c.replied_count || 0) / (c.sent_count || 1), 0) / active.length : 0;
 
         const scored = [];
         for (const c of campaigns) {
           const metrics = scoreCampaign(c, wsAvgReplyRate);
-
-          // Fetch variation stats for campaigns with >300 sends
-          let variantInsights = [];
-          let variationSteps  = [];
+          let variantInsights = [], variationSteps = [];
           if ((c.sent_count || 0) >= 300) {
             try {
               const vstats = await pvFetch(`/campaign/get/variation-stats?campaign_id=${c.id}&workspace_id=${ws.id}`);
-              if (Array.isArray(vstats)) {
-                variationSteps = vstats;
-                variantInsights = analyzeVariants(vstats);
-              }
+              if (Array.isArray(vstats)) { variationSteps = vstats; variantInsights = analyzeVariants(vstats); }
             } catch {}
           }
+          // Step drop-off: replies per step
+          const stepReplies = (variationSteps || []).map(st => ({
+            step: st.step,
+            sent:    st.variations.reduce((s, v) => s + (v.sent || 0), 0),
+            replies: st.variations.reduce((s, v) => s + (v.reply || 0), 0),
+          }));
 
           scored.push({
-            id:            c.id,
-            name:          c.camp_name || 'Unnamed',
-            status:        c.status,
-            sent:          c.sent_count || 0,
-            opens:         c.unique_opened_count || c.opened_count || 0,
-            replies:       c.replied_count || 0,
-            posReplies:    c.positive_reply_count || 0,
-            negReplies:    c.negative_reply_count || 0,
-            bounces:       c.bounced_count || 0,
-            leads:         c.lead_count || 0,
-            openRate:      c.open_rate   || 0,
-            replyRate:     metrics.replyRate,
-            posReplyRate:  metrics.posReplyRate,
-            leadRate:      metrics.leadRate,
-            tier:          metrics.tier,
-            flags:         metrics.flags,
-            variantInsights,
-            variationSteps,
-            lastSent:      c.last_lead_sent || null,
-            lastReplied:   c.last_lead_replied || null,
+            id: c.id, name: c.camp_name || 'Unnamed', status: c.status,
+            sent: c.sent_count || 0, opens: c.unique_opened_count || c.opened_count || 0,
+            replies: c.replied_count || 0, posReplies: c.positive_reply_count || 0,
+            negReplies: c.negative_reply_count || 0, bounces: c.bounced_count || 0,
+            leads: c.lead_count || 0, leadContacted: c.lead_contacted_count || 0,
+            openRate: c.open_rate || 0, replyRate: metrics.replyRate,
+            posReplyRate: metrics.posReplyRate, leadRate: metrics.leadRate,
+            exhaustion: metrics.exhaustion, tier: metrics.tier, flags: metrics.flags,
+            variantInsights, variationSteps, stepReplies,
+            lastSent: c.last_lead_sent || null, lastReplied: c.last_lead_replied || null,
           });
         }
-
         scored.sort((a, b) => b.replyRate - a.replyRate);
-
         result.push({
-          id:            ws.id,
-          name:          ws.name || ws.workspace_name,
-          avgReplyRate:  wsAvgReplyRate,
-          campaigns:     scored,
-          totalSent:     scored.reduce((s, c) => s + c.sent, 0),
-          totalReplies:  scored.reduce((s, c) => s + c.replies, 0),
-          totalLeads:    scored.reduce((s, c) => s + c.leads, 0),
+          id: ws.id, name: ws.name || ws.workspace_name,
+          avgReplyRate: wsAvgReplyRate, campaigns: scored,
+          totalSent:    scored.reduce((s, c) => s + c.sent, 0),
+          totalReplies: scored.reduce((s, c) => s + c.replies, 0),
+          totalLeads:   scored.reduce((s, c) => s + c.leads, 0),
           activeCampaigns: scored.filter(c => c.status === 'ACTIVE').length,
         });
-
-      } catch (e) {
-        console.warn(`[campaign cache] ${ws.name} error:`, e.message);
-      }
+      } catch (e) { console.warn(`[campaign cache] ${ws.name} error:`, e.message); }
     }
 
-    campaignCache = { workspaces: result, updatedAt: new Date().toISOString() };
-    const totalCampaigns = result.reduce((s, w) => s + w.campaigns.length, 0);
-    const alerts = result.reduce((s, w) => s + w.campaigns.reduce((ss, c) => ss + c.flags.filter(f => f.type === 'critical').length, 0), 0);
-    console.log(`[campaign cache] refreshed — ${result.length} workspaces, ${totalCampaigns} campaigns, ${alerts} critical alerts`);
-  } catch (err) {
-    console.error('[campaign cache] refresh failed:', err.message);
-  }
+    const targetingPatterns = analyzeTargetingPatterns(result);
+    const optimisations     = generateOptimisations(result);
+
+    campaignCache = { workspaces: result, targetingPatterns, optimisations, updatedAt: new Date().toISOString() };
+    console.log(`[campaign cache] refreshed — ${result.length} ws, ${result.reduce((s,w)=>s+w.campaigns.length,0)} campaigns, ${optimisations.length} optimisations, ${targetingPatterns.length} targeting patterns`);
+  } catch (err) { console.error('[campaign cache] refresh failed:', err.message); }
 }
 
 // Refresh on startup then every 30 minutes
 refreshCampaignCache();
 setInterval(refreshCampaignCache, 30 * 60 * 1000);
 
-app.get('/api/campaigns/intelligence', (req, res) => {
-  res.json(campaignCache);
+app.get('/api/campaigns/intelligence', (req, res) => res.json(campaignCache));
+
+// Apply variant optimisation — pauses losing variants via PlusVibe
+app.post('/api/campaigns/apply-optimisation', requireAdmin, async (req, res) => {
+  const { wsId, campId, step, loserVariations } = req.body;
+  if (!wsId || !campId || !step || !loserVariations?.length)
+    return res.status(400).json({ error: 'Missing params' });
+  try {
+    // Get current campaign sequence structure
+    const campaigns = await pvFetch(`/campaign/list-all?workspace_id=${wsId}`);
+    const camp = (Array.isArray(campaigns) ? campaigns : []).find(c => c.id === campId);
+    if (!camp) return res.status(404).json({ error: 'Campaign not found' });
+
+    // Build updated sequences with losing variants deactivated
+    const sequences = (camp.sequences || []).map(seq => {
+      if (seq.seq_number !== step && seq.step !== step) return seq;
+      return {
+        ...seq,
+        variants: (seq.variants || seq.variations || []).map(v => ({
+          ...v,
+          is_active: loserVariations.includes(v.variation) ? false : v.is_active
+        }))
+      };
+    });
+
+    const r = await fetch(`https://api.plusvibe.ai/api/v1/campaign/update/campaign`, {
+      method: 'PATCH',
+      headers: { 'x-api-key': PLUSVIBE_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspace_id: wsId, id: campId, sequences })
+    });
+    const result = await r.json();
+    if (!r.ok) return res.status(r.status).json({ error: result.message || 'PlusVibe error', raw: result });
+    res.json({ ok: true, result });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ── PlusVibe proxy (kept for performance.html agency scan) ────
