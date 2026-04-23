@@ -473,7 +473,7 @@ function renderApolloCard(name) {
   return `<div class="detail-section" style="margin-bottom:1rem">
     <div class="detail-section-title" style="display:flex;justify-content:space-between;align-items:center">
       Apollo Targeting
-      <a href="${esc(name.match(/https?:\/\/app\.apollo\.io[^\s]*/)?.[0] || '#'))}" target="_blank"
+      <a href="${esc(name.match(/https?:\/\/app\.apollo\.io[^\s]*/)?.[0] || '#')}" target="_blank"
          style="font-size:11px;color:var(--purple);text-decoration:none;font-weight:400">Open in Apollo ↗</a>
     </div>
     ${row('Job Titles',     a.titles.join(', ')     || a.seniority.join(', '))}
