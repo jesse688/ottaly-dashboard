@@ -1203,11 +1203,14 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
                     const wsPrice = priceMap[ws.id] || 0;
                     // Fetch all INTERESTED leads for this workspace (paginated)
                     for (let page = 1; page <= 20; page++) {
-                        let batch;
+                        let raw;
                         try {
-                            batch = await pvGet(`/lead/workspace-leads?workspace_id=${ws.id}&label=INTERESTED&page=${page}&limit=100`);
-                        } catch { break; }
-                        if (!Array.isArray(batch) || !batch.length) break;
+                            raw = await pvGet(`/lead/workspace-leads?workspace_id=${ws.id}&label=INTERESTED&page=${page}&limit=100`);
+                        } catch(e) { console.warn('[revenue] lead fetch error', ws.name, e.message); break; }
+                        // API may return array directly OR wrapped object
+                        const batch = Array.isArray(raw) ? raw : (raw?.leads || raw?.data || []);
+                        if (page === 1) console.log(`[revenue] ${ws.name} raw type=${Array.isArray(raw)?'array':'object'} keys=${Object.keys(raw||{}).join(',')} count=${batch.length}`);
+                        if (!batch.length) break;
                         batch.forEach(l => {
                             const dateObj = parseDate(l.modified_at || l.created_at);
                             leads.push({
