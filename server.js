@@ -429,7 +429,7 @@ app.get('/api/workspace-prices', (req, res) => {
 });
 
 // ── Revenue leads cache (refreshed every 3 min server-side) ──
-const LEAD_LABELS = ['LEAD', 'MEETING_BOOKED', 'MEETING_COMPLETED', 'CLOSED'];
+const LEAD_LABELS = ['LEAD', 'MEETING_BOOKED', 'MEETING_COMPLETED', 'CLOSED', 'ADDED_TO_ZOHO', 'AWAITING_REPLY', 'NON_LEAD', 'WEAK_LEAD'];
 let revenueCache = { leads: [], updatedAt: null };
 
 async function pvFetch(path) {

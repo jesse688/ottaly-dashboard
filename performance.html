@@ -773,7 +773,7 @@
 
     // label=LEAD = marked as lead in PlusVibe UI
     // Additional labels for leads that progressed after being marked
-    const LEAD_LABELS = ['LEAD', 'MEETING_BOOKED', 'MEETING_COMPLETED', 'CLOSED'];
+    const LEAD_LABELS = ['LEAD', 'MEETING_BOOKED', 'MEETING_COMPLETED', 'CLOSED', 'ADDED_TO_ZOHO', 'AWAITING_REPLY', 'NON_LEAD', 'WEAK_LEAD'];
 
     async function fetchLabeledLeads(wsId) {
         if (_pvLeadsCache[wsId] !== undefined) return _pvLeadsCache[wsId];
