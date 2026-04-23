@@ -781,20 +781,29 @@
         });
     }
 
+    function normName(s) { return (s || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
+
+    function clientMatch(wsName, sheetName) {
+        const a = normName(wsName), b = normName(sheetName);
+        return a === b || a.startsWith(b) || b.startsWith(a);
+    }
+
     function countSheetLeads(rows, clientName, startStr, endStr) {
         const start = new Date(startStr + 'T00:00:00');
         const end   = new Date(endStr   + 'T23:59:59');
-        const name  = clientName.trim().toLowerCase();
         return rows.filter(row => {
             if (row['Non-Lead Status'] === 'TRUE') return false;
-            const rName = (row['Client Name'] || '').trim().toLowerCase();
-            if (rName !== name) return false;
+            if (!clientMatch(clientName, row['Client Name'] || '')) return false;
             const d = new Date(row['Date']);
             return !isNaN(d) && d >= start && d <= end;
         }).length;
     }
 
-    function ds(date) { return date.toISOString().split('T')[0]; }
+    function ds(date) {
+        return date.getFullYear() + '-' +
+            String(date.getMonth() + 1).padStart(2, '0') + '-' +
+            String(date.getDate()).padStart(2, '0');
+    }
 
     async function fetchAll() {
         const today       = ds(new Date());
