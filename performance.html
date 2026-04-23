@@ -818,11 +818,11 @@
             get(`/lead/count/lead-status?workspace_id=${ws}`)
         ]);
 
-        if (!window._leadListLogged) {
-            window._leadListLogged = true;
-            get(`/lead/list?workspace_id=${ws}&skip=0&limit=3`)
-                .then(r => console.log('[PlusVibe lead list sample]', r))
-                .catch(e => console.log('[PlusVibe lead list error]', e.message));
+        if (!window._wsLeadsLogged) {
+            window._wsLeadsLogged = true;
+            get(`/lead/workspace-leads?workspace_id=${ws}&limit=3`)
+                .then(r => console.log('[workspace-leads sample]', JSON.stringify(r).slice(0, 2000)))
+                .catch(e => console.log('[workspace-leads error]', e.message));
         }
 
         return { todayCampaigns, monthCampaigns, accounts, warmup, leads };
@@ -981,7 +981,6 @@
         } else if (leads && typeof leads === 'object') {
             Object.assign(map, leads);
         }
-        if (!window._statusLogged) { window._statusLogged = true; console.log('[PlusVibe all statuses]', map); }
         const total = Object.values(map).reduce((s, v) => s + (Number(v) || 0), 0);
 
         const items = [
