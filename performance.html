@@ -356,13 +356,14 @@
 
         /* ── Agency View ──────────────────────────────────── */
         .agency-tab {
-            padding: 10px 20px; background: transparent; color: rgba(255,255,255,0.65);
-            border: none; border-bottom: 3px solid transparent;
-            font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 600;
+            padding: 14px 20px; background: transparent; color: var(--purple);
+            border: none; border-bottom: 3px solid transparent; margin-bottom: -2px;
+            font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 700;
             cursor: pointer; transition: all 0.15s; white-space: nowrap;
+            display: flex; align-items: center; gap: 6px; flex-shrink: 0;
         }
-        .agency-tab:hover { color: white; background: rgba(255,255,255,0.06); }
-        .agency-tab.active { color: white; border-bottom-color: var(--purple); background: rgba(124,137,205,0.1); }
+        .agency-tab:hover { background: rgba(124,137,205,0.08); }
+        .agency-tab.active { border-bottom-color: var(--purple); background: rgba(124,137,205,0.1); }
 
         .ag-controls {
             display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem;
