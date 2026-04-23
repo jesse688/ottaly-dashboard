@@ -131,14 +131,16 @@ tr.detail-row.hidden{display:none}
 <body>
 
 <div class="header">
-  <div class="logo">Ott<span>a</span>ly</div>
-  <nav class="nav">
-    <a href="/index.html">Revenue</a>
-    <a href="/performance.html">Performance</a>
-    <a href="/clients.html">Clients</a>
-    <a href="/campaigns.html" class="active">Campaigns</a>
-    <a href="/admin.html">Admin</a>
-  </nav>
+  <div style="display:flex;align-items:center">
+    <img src="https://framerusercontent.com/images/nDSHQKnOUtpvlbArTv7AiTwZpcE.svg" alt="Ottaly" style="height:36px;margin-right:1rem">
+    <nav style="display:flex;gap:0.25rem">
+      <a href="index.html"       style="padding:8px 18px;border-radius:8px;font-family:'Inter',sans-serif;font-size:13px;font-weight:600;color:rgba(255,255,255,0.55);text-decoration:none">Revenue</a>
+      <a href="performance.html" style="padding:8px 18px;border-radius:8px;font-family:'Inter',sans-serif;font-size:13px;font-weight:600;color:rgba(255,255,255,0.55);text-decoration:none">Performance</a>
+      <a href="campaigns.html"   style="padding:8px 18px;border-radius:8px;font-family:'Inter',sans-serif;font-size:13px;font-weight:600;background:var(--teal);color:#fff;text-decoration:none">Campaigns</a>
+      <a href="clients.html"     style="padding:8px 18px;border-radius:8px;font-family:'Inter',sans-serif;font-size:13px;font-weight:600;color:rgba(255,255,255,0.55);text-decoration:none">Clients</a>
+      <a href="admin.html"       style="padding:8px 18px;border-radius:8px;font-family:'Inter',sans-serif;font-size:13px;font-weight:600;color:rgba(255,255,255,0.55);text-decoration:none">Admin</a>
+    </nav>
+  </div>
 </div>
 
 <div class="alert-banner hidden" id="alertBanner"></div>
@@ -205,8 +207,9 @@ async function load() {
   try {
     data = await fetch('/api/campaigns/intelligence').then(r => r.json());
     if (!data || !data.workspaces?.length) {
-      document.getElementById('campaignBody').innerHTML = '<tr><td colspan="9" class="empty">No campaign data yet — server is still scanning</td></tr>';
-      document.getElementById('updatedAt').textContent = 'Not yet scanned';
+      document.getElementById('campaignBody').innerHTML = '<tr><td colspan="9" class="empty">⏳ Server is scanning all campaigns — this takes 3–5 minutes on first load. Page will auto-refresh.</td></tr>';
+      document.getElementById('updatedAt').textContent = 'First scan in progress…';
+      setTimeout(load, 30000); // retry in 30s
       return;
     }
     renderSummary();
