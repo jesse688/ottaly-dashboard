@@ -549,19 +549,19 @@
     <div class="ag-charts">
       <div class="card ag-chart-card">
         <div class="ag-chart-title">Emails Sent</div>
-        <div class="ag-chart-wrap"><canvas id="agChartSent"></canvas></div>
+        <div class="ag-chart-wrap" id="agWrapSent"><canvas id="agChartSent"></canvas></div>
       </div>
       <div class="card ag-chart-card">
         <div class="ag-chart-title">Reply Rate %</div>
-        <div class="ag-chart-wrap"><canvas id="agChartReply"></canvas></div>
+        <div class="ag-chart-wrap" id="agWrapReply"><canvas id="agChartReply"></canvas></div>
       </div>
       <div class="card ag-chart-card">
         <div class="ag-chart-title">Bounce Rate %</div>
-        <div class="ag-chart-wrap"><canvas id="agChartBounce"></canvas></div>
+        <div class="ag-chart-wrap" id="agWrapBounce"><canvas id="agChartBounce"></canvas></div>
       </div>
       <div class="card ag-chart-card">
         <div class="ag-chart-title">Total Replies</div>
-        <div class="ag-chart-wrap"><canvas id="agChartReplies"></canvas></div>
+        <div class="ag-chart-wrap" id="agWrapReplies"><canvas id="agChartReplies"></canvas></div>
       </div>
     </div>
 
@@ -1533,51 +1533,54 @@
         if (agRunning) return;
         agRunning = true;
 
-        const wslist = getActiveWorkspaces();
+        const wslist  = getActiveWorkspaces();
         const buckets = generateAgBuckets();
         if (!wslist.length || !buckets.length) { agRunning = false; return; }
 
-        // Show progress
-        const prog = document.getElementById('agProgress');
+        const prog     = document.getElementById('agProgress');
         const progText = document.getElementById('agProgressText');
         const progFill = document.getElementById('agProgressFill');
         prog.style.display = 'flex';
         progFill.style.width = '0%';
         progText.textContent = `Loading 0 / ${buckets.length} buckets…`;
 
-        // Clear charts to loading state
-        ['agChartSent','agChartReply','agChartBounce','agChartReplies'].forEach(id => {
-            if (agencyCharts[id]) { agencyCharts[id].destroy(); delete agencyCharts[id]; }
-            const wrap = document.getElementById(id)?.parentElement;
+        // Clear charts — use wrap IDs (canvas is replaced, so can't use canvas.parentElement)
+        [['agChartSent','agWrapSent'],['agChartReply','agWrapReply'],
+         ['agChartBounce','agWrapBounce'],['agChartReplies','agWrapReplies']].forEach(([cid, wid]) => {
+            if (agencyCharts[cid]) { agencyCharts[cid].destroy(); delete agencyCharts[cid]; }
+            const wrap = document.getElementById(wid);
             if (wrap) wrap.innerHTML = `<div class="ag-loading-overlay">Loading…</div>`;
         });
 
-        // Fetch per bucket (all workspaces in parallel per bucket)
-        const bucketResults = [];
-        for (let i = 0; i < buckets.length; i++) {
-            const b = buckets[i];
-            const wsData = await Promise.all(wslist.map(ws =>
-                get(`/analytics/campaign/stats?workspace_id=${ws.id}&start_date=${b.start}&end_date=${b.end}`)
-                    .then(data => agg(data))
-                    .catch(() => ({ sent: 0, replies: 0, bounces: 0 }))
-            ));
-            bucketResults.push({
-                bucket: b,
-                totals: wsData.reduce((acc, d) => ({
-                    sent:    acc.sent    + d.sent,
-                    replies: acc.replies + d.replies,
-                    bounces: acc.bounces + d.bounces,
-                }), { sent: 0, replies: 0, bounces: 0 })
-            });
-
-            const pct = Math.round(((i + 1) / buckets.length) * 100);
-            progFill.style.width  = pct + '%';
-            progText.textContent  = `Loading ${i + 1} / ${buckets.length} buckets…`;
+        try {
+            const bucketResults = [];
+            for (let i = 0; i < buckets.length; i++) {
+                const b = buckets[i];
+                const wsData = await Promise.all(wslist.map(ws =>
+                    get(`/analytics/campaign/stats?workspace_id=${ws.id}&start_date=${b.start}&end_date=${b.end}`)
+                        .then(data => agg(data))
+                        .catch(() => ({ sent: 0, replies: 0, bounces: 0 }))
+                ));
+                bucketResults.push({
+                    bucket: b,
+                    totals: wsData.reduce((acc, d) => ({
+                        sent:    acc.sent    + d.sent,
+                        replies: acc.replies + d.replies,
+                        bounces: acc.bounces + d.bounces,
+                    }), { sent: 0, replies: 0, bounces: 0 })
+                });
+                const p = Math.round(((i + 1) / buckets.length) * 100);
+                progFill.style.width = p + '%';
+                progText.textContent = `Loading ${i + 1} / ${buckets.length} buckets…`;
+            }
+            prog.style.display = 'none';
+            renderAgencyResults(bucketResults, wslist.length);
+        } catch (err) {
+            prog.style.display = 'none';
+            console.error('Agency scan error:', err);
+        } finally {
+            agRunning = false;
         }
-
-        prog.style.display = 'none';
-        agRunning = false;
-        renderAgencyResults(bucketResults, wslist.length);
     }
 
     function renderAgencyResults(bucketResults, clientCount) {
@@ -1614,8 +1617,8 @@
     }
 
     function buildChart(canvasId, labels, data, type, color, label, isPercent, ptRadius) {
-        // Restore canvas element
-        const wrap = document.getElementById(canvasId)?.parentElement;
+        const wrapId = canvasId.replace('agChart', 'agWrap');
+        const wrap   = document.getElementById(wrapId);
         if (!wrap) return;
         wrap.innerHTML = `<canvas id="${canvasId}"></canvas>`;
 
