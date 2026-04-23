@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ottaly Performance Tracker</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Genos:wght@400;500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -352,6 +353,89 @@
             white-space: nowrap; justify-self: end;
         }
         .ch-view:hover { background: var(--navy); color: white; border-color: var(--navy); }
+
+        /* ── Agency View ──────────────────────────────────── */
+        .agency-tab {
+            padding: 10px 20px; background: transparent; color: rgba(255,255,255,0.65);
+            border: none; border-bottom: 3px solid transparent;
+            font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 600;
+            cursor: pointer; transition: all 0.15s; white-space: nowrap;
+        }
+        .agency-tab:hover { color: white; background: rgba(255,255,255,0.06); }
+        .agency-tab.active { color: white; border-bottom-color: var(--purple); background: rgba(124,137,205,0.1); }
+
+        .ag-controls {
+            display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem;
+            padding: 1.25rem 0 1.5rem;
+        }
+        .ag-btn-group { display: flex; gap: 4px; }
+        .ag-btn {
+            padding: 7px 16px; background: #F9FAFB; color: #374151;
+            border: 1.5px solid #E5E7EB; border-radius: 8px;
+            font-size: 13px; font-weight: 600; cursor: pointer;
+            transition: all 0.15s; font-family: 'Inter', sans-serif;
+        }
+        .ag-btn:hover { border-color: var(--teal); color: var(--teal); }
+        .ag-btn.active { background: var(--navy); color: white; border-color: var(--navy); }
+        .ag-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .ag-sep { width: 1px; height: 28px; background: #E5E7EB; align-self: center; }
+        .ag-gran-btn {
+            padding: 6px 13px; background: transparent; color: #6B7280;
+            border: 1.5px solid #E5E7EB; border-radius: 7px;
+            font-size: 12px; font-weight: 600; cursor: pointer;
+            transition: all 0.15s; font-family: 'Inter', sans-serif;
+        }
+        .ag-gran-btn:hover { border-color: var(--purple); color: var(--purple); }
+        .ag-gran-btn.active { background: var(--purple); color: white; border-color: var(--purple); }
+        .ag-gran-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+        .ag-custom { display: flex; align-items: center; gap: 8px; }
+        .ag-custom input[type="date"] {
+            padding: 6px 10px; border: 1.5px solid #E5E7EB; border-radius: 7px;
+            font-size: 12px; font-family: 'Inter', sans-serif; outline: none; color: #374151;
+        }
+        .ag-custom input:focus { border-color: var(--teal); }
+        .ag-custom span { font-size: 12px; color: #9CA3AF; }
+        .ag-progress { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+        .ag-progress-text { font-size: 12px; color: #9CA3AF; white-space: nowrap; }
+        .ag-progress-track { width: 120px; height: 3px; background: #F3F4F6; border-radius: 2px; }
+        .ag-progress-fill  { height: 100%; background: var(--teal); border-radius: 2px; transition: width 0.25s; }
+
+        .ag-stats {
+            display: grid; grid-template-columns: repeat(5, 1fr);
+            gap: 1rem; margin-bottom: 1.5rem;
+        }
+        @media(max-width:900px) { .ag-stats { grid-template-columns: repeat(3,1fr); } }
+        .ag-stat {
+            background: white; border-radius: 10px; padding: 1.25rem 1.5rem;
+            box-shadow: 0 1px 3px rgba(5,12,41,0.08); border-top: 3px solid transparent;
+        }
+        .ag-stat.navy   { border-top-color: var(--navy);   }
+        .ag-stat.teal   { border-top-color: var(--teal);   }
+        .ag-stat.red    { border-top-color: #DC2626;        }
+        .ag-stat.purple { border-top-color: var(--purple); }
+        .ag-stat.yellow { border-top-color: var(--yellow); }
+        .ag-stat-val {
+            font-family: 'Genos', sans-serif; font-size: 34px; font-weight: 700;
+            color: var(--navy-text); line-height: 1; margin-bottom: 4px;
+        }
+        .ag-stat-label { font-size: 11px; color: #9CA3AF; text-transform: uppercase; letter-spacing: 0.5px; }
+        .ag-stat-sub   { font-size: 12px; color: #6B7280; margin-top: 4px; }
+
+        .ag-charts {
+            display: grid; grid-template-columns: 1fr 1fr;
+            gap: 1rem; margin-bottom: 2rem;
+        }
+        @media(max-width:900px) { .ag-charts { grid-template-columns: 1fr; } }
+        .ag-chart-card { padding: 1.25rem 1.5rem; }
+        .ag-chart-title {
+            font-family: 'Genos', sans-serif; font-size: 17px; font-weight: 700;
+            color: var(--navy-text); margin-bottom: 1rem; letter-spacing: 0.3px;
+        }
+        .ag-chart-wrap { height: 210px; position: relative; }
+        .ag-loading-overlay {
+            display: flex; align-items: center; justify-content: center;
+            height: 100%; color: #9CA3AF; font-size: 13px;
+        }
     </style>
 </head>
 <body>
@@ -379,7 +463,8 @@
 
 <div class="client-bar">
     <div class="client-bar-inner">
-        <button class="actions-tab" id="actionsBtn" onclick="toggleActionsView()">⚡ Actions</button>
+        <button class="actions-tab"  id="actionsBtn"  onclick="toggleActionsView()">⚡ Actions</button>
+        <button class="agency-tab"  id="agencyBtn"   onclick="toggleAgencyView()">🌐 Agency</button>
         <div class="client-bar-sep"></div>
         <div id="workspaceTabs" class="ws-tabs-list"></div>
         <div style="flex:1;"></div>
@@ -400,6 +485,88 @@
 </div>
 
 <div id="actionsView" style="display:none;"></div>
+
+<div id="agencyView" style="display:none;">
+  <div class="container">
+
+    <!-- Controls -->
+    <div class="ag-controls">
+      <div class="ag-btn-group">
+        <button class="ag-btn"        id="agBtnToday"     onclick="setAgPeriod('today')">Today</button>
+        <button class="ag-btn"        id="agBtnYesterday" onclick="setAgPeriod('yesterday')">Yesterday</button>
+        <button class="ag-btn active" id="agBtnWeek"      onclick="setAgPeriod('week')">1 Week</button>
+        <button class="ag-btn"        id="agBtnMonth"     onclick="setAgPeriod('month')">1 Month</button>
+        <button class="ag-btn"        id="agBtnCustom"    onclick="setAgPeriod('custom')">Custom</button>
+      </div>
+      <div class="ag-sep"></div>
+      <div class="ag-btn-group">
+        <button class="ag-gran-btn active" id="agGranDay"   onclick="setAgGran('day')">Day</button>
+        <button class="ag-gran-btn"        id="agGranWeek"  onclick="setAgGran('week')">Week</button>
+        <button class="ag-gran-btn"        id="agGranMonth" onclick="setAgGran('month')">Month</button>
+      </div>
+      <div class="ag-custom" id="agCustomRange" style="display:none;">
+        <input type="date" id="agCustomStart">
+        <span>to</span>
+        <input type="date" id="agCustomEnd">
+        <button class="ag-gran-btn active" onclick="applyAgCustom()">Apply</button>
+      </div>
+      <div class="ag-progress" id="agProgress" style="display:none;">
+        <span class="ag-progress-text" id="agProgressText">Loading…</span>
+        <div class="ag-progress-track"><div class="ag-progress-fill" id="agProgressFill" style="width:0%"></div></div>
+      </div>
+    </div>
+
+    <!-- Summary stats -->
+    <div class="ag-stats">
+      <div class="ag-stat navy">
+        <div class="ag-stat-val" id="agStatSent">—</div>
+        <div class="ag-stat-label">Total Sent</div>
+        <div class="ag-stat-sub" id="agStatSentSub"></div>
+      </div>
+      <div class="ag-stat teal">
+        <div class="ag-stat-val" id="agStatReply">—</div>
+        <div class="ag-stat-label">Avg Reply Rate</div>
+        <div class="ag-stat-sub" id="agStatReplySub"></div>
+      </div>
+      <div class="ag-stat red">
+        <div class="ag-stat-val" id="agStatBounce">—</div>
+        <div class="ag-stat-label">Avg Bounce Rate</div>
+        <div class="ag-stat-sub" id="agStatBounceSub"></div>
+      </div>
+      <div class="ag-stat purple">
+        <div class="ag-stat-val" id="agStatReplies">—</div>
+        <div class="ag-stat-label">Total Replies</div>
+        <div class="ag-stat-sub" id="agStatRepliesSub"></div>
+      </div>
+      <div class="ag-stat yellow">
+        <div class="ag-stat-val" id="agStatClients">—</div>
+        <div class="ag-stat-label">Active Clients</div>
+        <div class="ag-stat-sub" id="agStatClientsSub"></div>
+      </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="ag-charts">
+      <div class="card ag-chart-card">
+        <div class="ag-chart-title">Emails Sent</div>
+        <div class="ag-chart-wrap"><canvas id="agChartSent"></canvas></div>
+      </div>
+      <div class="card ag-chart-card">
+        <div class="ag-chart-title">Reply Rate %</div>
+        <div class="ag-chart-wrap"><canvas id="agChartReply"></canvas></div>
+      </div>
+      <div class="card ag-chart-card">
+        <div class="ag-chart-title">Bounce Rate %</div>
+        <div class="ag-chart-wrap"><canvas id="agChartBounce"></canvas></div>
+      </div>
+      <div class="card ag-chart-card">
+        <div class="ag-chart-title">Total Replies</div>
+        <div class="ag-chart-wrap"><canvas id="agChartReplies"></canvas></div>
+      </div>
+    </div>
+
+  </div>
+</div>
 
 <div id="clientView">
 <div class="container">
@@ -983,8 +1150,11 @@
 
     function toggleActionsView() {
         actionsViewOpen = !actionsViewOpen;
+        if (actionsViewOpen) { agencyViewOpen = false; }
         document.getElementById('actionsBtn').classList.toggle('active', actionsViewOpen);
+        document.getElementById('agencyBtn').classList.remove('active');
         document.getElementById('actionsView').style.display = actionsViewOpen ? 'block' : 'none';
+        document.getElementById('agencyView').style.display  = 'none';
         document.getElementById('clientView').style.display  = actionsViewOpen ? 'none'  : 'block';
     }
 
@@ -1225,6 +1395,296 @@
     }
 
     init();
+
+    // ── Agency View ───────────────────────────────────────────
+
+    let agencyViewOpen = false;
+    let agencyCharts   = {};
+    let agPeriod       = 'week';
+    let agGran         = 'day';
+    let agCustomStart  = null;
+    let agCustomEnd    = null;
+    let agRunning      = false;
+
+    function toggleAgencyView() {
+        agencyViewOpen = !agencyViewOpen;
+        if (agencyViewOpen) { actionsViewOpen = false; }
+        document.getElementById('agencyBtn').classList.toggle('active', agencyViewOpen);
+        document.getElementById('actionsBtn').classList.remove('active');
+        document.getElementById('agencyView').style.display  = agencyViewOpen ? 'block' : 'none';
+        document.getElementById('actionsView').style.display = 'none';
+        document.getElementById('clientView').style.display  = agencyViewOpen ? 'none'  : 'block';
+        if (agencyViewOpen) runAgencyScan();
+    }
+
+    function setAgPeriod(p) {
+        agPeriod = p;
+        ['today','yesterday','week','month','custom'].forEach(id =>
+            document.getElementById('agBtn' + id.charAt(0).toUpperCase() + id.slice(1))
+                .classList.toggle('active', id === p)
+        );
+        document.getElementById('agCustomRange').style.display = p === 'custom' ? 'flex' : 'none';
+
+        // Auto-set sensible default granularity
+        if (p === 'today' || p === 'yesterday') { setAgGran('day'); lockGran(true, true, true); }
+        else if (p === 'week')  { setAgGran('day');   lockGran(false, false, false); }
+        else if (p === 'month') { setAgGran('week');  lockGran(false, false, false); }
+        else                    {                     lockGran(false, false, false); }
+
+        if (p !== 'custom') runAgencyScan();
+    }
+
+    function lockGran(day, week, month) {
+        document.getElementById('agGranDay').disabled   = day;
+        document.getElementById('agGranWeek').disabled  = week;
+        document.getElementById('agGranMonth').disabled = month;
+    }
+
+    function setAgGran(g) {
+        agGran = g;
+        ['day','week','month'].forEach(id =>
+            document.getElementById('agGran' + id.charAt(0).toUpperCase() + id.slice(1))
+                .classList.toggle('active', id === g)
+        );
+    }
+
+    function applyAgCustom() {
+        agCustomStart = document.getElementById('agCustomStart').value;
+        agCustomEnd   = document.getElementById('agCustomEnd').value;
+        if (!agCustomStart || !agCustomEnd) return;
+        // Auto-gran based on range size
+        const days = Math.round((new Date(agCustomEnd) - new Date(agCustomStart)) / 86400000) + 1;
+        if (days <= 14) setAgGran('day');
+        else if (days <= 90) setAgGran('week');
+        else setAgGran('month');
+        runAgencyScan();
+    }
+
+    function agPeriodDates() {
+        const today = new Date(); today.setHours(0,0,0,0);
+        switch (agPeriod) {
+            case 'today':
+                return { start: ds(today), end: ds(today) };
+            case 'yesterday': {
+                const y = new Date(today); y.setDate(y.getDate() - 1);
+                return { start: ds(y), end: ds(y) };
+            }
+            case 'week': {
+                const w = new Date(today); w.setDate(w.getDate() - 6);
+                return { start: ds(w), end: ds(today) };
+            }
+            case 'month': {
+                const m = new Date(today); m.setDate(m.getDate() - 29);
+                return { start: ds(m), end: ds(today) };
+            }
+            case 'custom':
+                return { start: agCustomStart, end: agCustomEnd };
+        }
+    }
+
+    function generateAgBuckets() {
+        const { start, end } = agPeriodDates();
+        if (!start || !end) return [];
+        const s = new Date(start + 'T00:00:00');
+        const e = new Date(end   + 'T00:00:00');
+        const diffDays = Math.round((e - s) / 86400000) + 1;
+
+        // Clamp: force week view if day would produce > 14 points
+        let gran = agGran;
+        if (gran === 'day' && diffDays > 14) gran = 'week';
+        if (gran === 'week' && diffDays > 90) gran = 'month';
+
+        const buckets = [];
+        let cur = new Date(s);
+
+        if (gran === 'day') {
+            while (cur <= e) {
+                buckets.push({
+                    label: cur.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
+                    start: ds(cur), end: ds(cur)
+                });
+                cur.setDate(cur.getDate() + 1);
+            }
+        } else if (gran === 'week') {
+            while (cur <= e) {
+                const bEnd = new Date(Math.min(cur.getTime() + 6 * 86400000, e.getTime()));
+                buckets.push({
+                    label: cur.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }),
+                    start: ds(cur), end: ds(bEnd)
+                });
+                cur.setDate(cur.getDate() + 7);
+            }
+        } else {
+            while (cur <= e) {
+                const bEnd = new Date(Math.min(
+                    new Date(cur.getFullYear(), cur.getMonth() + 1, 0).getTime(), e.getTime()
+                ));
+                buckets.push({
+                    label: cur.toLocaleDateString('en-GB', { month: 'short', year: '2-digit' }),
+                    start: ds(cur), end: ds(bEnd)
+                });
+                cur = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+            }
+        }
+        return buckets;
+    }
+
+    async function runAgencyScan() {
+        if (agRunning) return;
+        agRunning = true;
+
+        const wslist = getActiveWorkspaces();
+        const buckets = generateAgBuckets();
+        if (!wslist.length || !buckets.length) { agRunning = false; return; }
+
+        // Show progress
+        const prog = document.getElementById('agProgress');
+        const progText = document.getElementById('agProgressText');
+        const progFill = document.getElementById('agProgressFill');
+        prog.style.display = 'flex';
+        progFill.style.width = '0%';
+        progText.textContent = `Loading 0 / ${buckets.length} buckets…`;
+
+        // Clear charts to loading state
+        ['agChartSent','agChartReply','agChartBounce','agChartReplies'].forEach(id => {
+            if (agencyCharts[id]) { agencyCharts[id].destroy(); delete agencyCharts[id]; }
+            const wrap = document.getElementById(id)?.parentElement;
+            if (wrap) wrap.innerHTML = `<div class="ag-loading-overlay">Loading…</div>`;
+        });
+
+        // Fetch per bucket (all workspaces in parallel per bucket)
+        const bucketResults = [];
+        for (let i = 0; i < buckets.length; i++) {
+            const b = buckets[i];
+            const wsData = await Promise.all(wslist.map(ws =>
+                get(`/analytics/campaign/stats?workspace_id=${ws.id}&start_date=${b.start}&end_date=${b.end}`)
+                    .then(data => agg(data))
+                    .catch(() => ({ sent: 0, replies: 0, bounces: 0 }))
+            ));
+            bucketResults.push({
+                bucket: b,
+                totals: wsData.reduce((acc, d) => ({
+                    sent:    acc.sent    + d.sent,
+                    replies: acc.replies + d.replies,
+                    bounces: acc.bounces + d.bounces,
+                }), { sent: 0, replies: 0, bounces: 0 })
+            });
+
+            const pct = Math.round(((i + 1) / buckets.length) * 100);
+            progFill.style.width  = pct + '%';
+            progText.textContent  = `Loading ${i + 1} / ${buckets.length} buckets…`;
+        }
+
+        prog.style.display = 'none';
+        agRunning = false;
+        renderAgencyResults(bucketResults, wslist.length);
+    }
+
+    function renderAgencyResults(bucketResults, clientCount) {
+        const labels     = bucketResults.map(r => r.bucket.label);
+        const sentArr    = bucketResults.map(r => r.totals.sent);
+        const repliesArr = bucketResults.map(r => r.totals.replies);
+        const replyRArr  = bucketResults.map(r => r.totals.sent > 0 ? pct(r.totals.replies, r.totals.sent) : 0);
+        const bounceRArr = bucketResults.map(r => r.totals.sent > 0 ? pct(r.totals.bounces, r.totals.sent) : 0);
+
+        const totalSent    = sentArr.reduce((a, b) => a + b, 0);
+        const totalReplies = repliesArr.reduce((a, b) => a + b, 0);
+        const totalBounces = bucketResults.reduce((a, r) => a + r.totals.bounces, 0);
+        const avgReply     = totalSent > 0 ? pct(totalReplies, totalSent) : 0;
+        const avgBounce    = totalSent > 0 ? pct(totalBounces, totalSent) : 0;
+
+        // Stat cards
+        document.getElementById('agStatSent').textContent     = fmtN(totalSent);
+        document.getElementById('agStatSentSub').textContent  = `${fmtN(totalBounces)} bounces`;
+        document.getElementById('agStatReply').textContent    = fmtPct(avgReply);
+        document.getElementById('agStatReplySub').textContent = `${fmtN(totalReplies)} total`;
+        document.getElementById('agStatBounce').textContent   = fmtPct(avgBounce);
+        document.getElementById('agStatBounceSub').textContent= totalSent > 0 ? (avgBounce > 5 ? '⚠ Above threshold' : '✓ Within range') : '';
+        document.getElementById('agStatReplies').textContent  = fmtN(totalReplies);
+        document.getElementById('agStatRepliesSub').textContent = `across ${clientCount} clients`;
+        document.getElementById('agStatClients').textContent  = clientCount;
+        document.getElementById('agStatClientsSub').textContent= `active workspaces`;
+
+        // Charts
+        const pt = labels.length <= 7 ? 4 : labels.length <= 14 ? 3 : 2;
+        buildChart('agChartSent',    labels, sentArr,    'bar',  '#224388', 'Sent',         false, pt);
+        buildChart('agChartReply',   labels, replyRArr,  'line', '#1F6F78', 'Reply Rate %', true,  pt);
+        buildChart('agChartBounce',  labels, bounceRArr, 'line', '#DC2626', 'Bounce Rate %',true,  pt);
+        buildChart('agChartReplies', labels, repliesArr, 'bar',  '#7C89CD', 'Replies',      false, pt);
+    }
+
+    function buildChart(canvasId, labels, data, type, color, label, isPercent, ptRadius) {
+        // Restore canvas element
+        const wrap = document.getElementById(canvasId)?.parentElement;
+        if (!wrap) return;
+        wrap.innerHTML = `<canvas id="${canvasId}"></canvas>`;
+
+        if (agencyCharts[canvasId]) agencyCharts[canvasId].destroy();
+
+        const ctx = document.getElementById(canvasId).getContext('2d');
+        agencyCharts[canvasId] = new Chart(ctx, {
+            type,
+            data: {
+                labels,
+                datasets: [{
+                    label,
+                    data,
+                    backgroundColor: type === 'bar' ? color + '28' : color + '18',
+                    borderColor: color,
+                    borderWidth: 2,
+                    fill: type === 'line',
+                    tension: 0.35,
+                    pointRadius: ptRadius,
+                    pointHoverRadius: ptRadius + 3,
+                    pointBackgroundColor: color,
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        backgroundColor: 'rgba(5,12,41,0.85)',
+                        titleFont: { family: 'Inter', size: 12 },
+                        bodyFont:  { family: 'Inter', size: 12 },
+                        padding: 10,
+                        callbacks: {
+                            label: ctx => isPercent
+                                ? ` ${ctx.raw.toFixed(2)}%`
+                                : ` ${fmtN(ctx.raw)}`
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: { display: false },
+                        ticks: { font: { size: 11, family: 'Inter' }, color: '#9CA3AF', maxRotation: 45 }
+                    },
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: '#F5F5F7', lineWidth: 1 },
+                        ticks: {
+                            font: { size: 11, family: 'Inter' }, color: '#9CA3AF',
+                            callback: v => isPercent ? v.toFixed(1) + '%' : fmtN(v)
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // Initialise today's date for custom range inputs
+    document.addEventListener('DOMContentLoaded', () => {
+        const today = new Date();
+        const w     = new Date(today); w.setDate(w.getDate() - 6);
+        const end   = ds(today), start = ds(w);
+        document.getElementById('agCustomStart').value = start;
+        document.getElementById('agCustomEnd').value   = end;
+        agCustomStart = start; agCustomEnd = end;
+    });
+
 </script>
 </body>
 </html>
