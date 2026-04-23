@@ -774,20 +774,18 @@
     async function fetchLabeledLeads(wsId) {
         if (_pvLeadsCache[wsId] !== undefined) return _pvLeadsCache[wsId];
         const labeled = [];
-        const limit   = 500;
-        let totalFetched = 0;
-        for (let page = 0; page < 20; page++) {
-            const batch = await get(`/lead/workspace-leads?workspace_id=${wsId}&skip=${page * limit}&limit=${limit}`)
+        const limit   = 100;
+        for (let page = 1; page <= 50; page++) {
+            const batch = await get(`/lead/workspace-leads?workspace_id=${wsId}&page=${page}&limit=${limit}`)
                 .catch(() => []);
             if (!Array.isArray(batch) || !batch.length) break;
-            totalFetched += batch.length;
             batch.forEach(l => { if (l.label && l.label.trim()) labeled.push(l); });
             if (batch.length < limit) break;
         }
         if (!window._labelDebugDone) {
             window._labelDebugDone = true;
             const allLabels = [...new Set(labeled.map(l => l.label))];
-            console.log(`[leads] ws=${wsId} fetched=${totalFetched} labeled=${labeled.length} labels=${JSON.stringify(allLabels)}`);
+            console.log(`[leads] ws=${wsId} labeled=${labeled.length} labels=${JSON.stringify(allLabels)}`);
             if (labeled.length) console.log('[leads sample]', labeled[0]);
         }
         _pvLeadsCache[wsId] = labeled;
