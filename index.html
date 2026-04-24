@@ -1215,9 +1215,9 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
                             day: '2-digit', month: 'short', year: 'numeric',
                             hour: '2-digit', minute: '2-digit'
                         }) : 'N/A',
-                        is_nonlead:     false,
-                        nonlead_reason: '',
-                        nonlead_date:   ''
+                        is_nonlead:     l.is_nonlead     || false,
+                        nonlead_reason: l.nonlead_reason || '',
+                        nonlead_date:   l.nonlead_date   || ''
                     };
                 });
                 populateClientFilter();
