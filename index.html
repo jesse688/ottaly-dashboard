@@ -1086,67 +1086,42 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
         }
 
         async function confirmNonlead() {
-    const reason = document.getElementById('nonleadReason').value.trim();
-    if (!reason) {
-        alert('Please enter a reason');
-        return;
-    }
-
-    // LOCAL TEST MODE
-    if (IS_LOCAL) {
-        alert('✅ LOCAL TEST: Would mark as non-lead!\n\nEmail: ' + currentNonleadEmail);
-        closeNonleadModal();
-        return;
-    }
-
-    // PRODUCTION MODE - Real webhook
-    try {
-        const response = await fetch(WEBHOOK_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                lead_email: currentNonleadEmail,
-                non_lead_status: 'TRUE',
-                non_lead_reason: reason,
-                non_lead_date: new Date().toISOString()
-            })
-        });
-
-        if (response.ok) {
-            closeNonleadModal();
-            await fetchData();
-        } else {
-            alert('Failed to update.');
+            const reason = document.getElementById('nonleadReason').value.trim();
+            if (!reason) { alert('Please enter a reason'); return; }
+            try {
+                const r = await fetch('/api/nonlead/mark', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email: currentNonleadEmail, reason })
+                });
+                if (!r.ok) throw new Error('Server error');
+                closeNonleadModal();
+                // Also fire n8n webhook in background (don't block on it)
+                fetch(WEBHOOK_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ lead_email: currentNonleadEmail, non_lead_status: 'TRUE', non_lead_reason: reason, non_lead_date: new Date().toISOString() })
+                }).catch(() => {});
+                await fetchData();
+            } catch (e) { alert('Failed: ' + e.message); }
         }
-    } catch (error) {
-        alert('Network error.');
-    }
-}
 
         async function handleRestore(email) {
             if (!confirm('Restore this lead to active status?')) return;
-
             try {
-                const response = await fetch(WEBHOOK_URL, {
+                const r = await fetch('/api/nonlead/restore', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        lead_email: email,
-                        non_lead_status: 'FALSE',
-                        non_lead_reason: '',
-                        non_lead_date: ''
-                    })
+                    body: JSON.stringify({ email })
                 });
-
-                if (response.ok) {
-                    await fetchData();
-                } else {
-                    alert('Failed to restore. Please try again.');
-                }
-            } catch (error) {
-                console.error('Error:', error);
-                alert('Network error. Please check your connection.');
-            }
+                if (!r.ok) throw new Error('Server error');
+                fetch(WEBHOOK_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ lead_email: email, non_lead_status: 'FALSE', non_lead_reason: '', non_lead_date: '' })
+                }).catch(() => {});
+                await fetchData();
+            } catch (e) { alert('Failed: ' + e.message); }
         }
 
         // Date utility functions

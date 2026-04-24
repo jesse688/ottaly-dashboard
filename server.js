@@ -62,6 +62,14 @@ db.exec(`
   );
 `);
 
+// Non-lead overrides (keyed by email — persists across restarts, survives cache rebuilds)
+db.exec(`CREATE TABLE IF NOT EXISTS nonlead_overrides (
+  email      TEXT PRIMARY KEY,
+  reason     TEXT DEFAULT '',
+  marked_at  TEXT DEFAULT (datetime('now')),
+  active     INTEGER DEFAULT 1
+)`);
+
 // Migrations for existing deployments
 for (const sql of [
   `ALTER TABLE clients ADD COLUMN plan_leads INTEGER DEFAULT 0`,
@@ -493,7 +501,37 @@ refreshRevenueCache();
 setInterval(refreshRevenueCache, 3 * 60 * 1000);
 
 app.get('/api/revenue/leads', (req, res) => {
-  res.json(revenueCache);
+  // Apply non-lead overrides from SQLite
+  const overrides = db.prepare(`SELECT email, reason, marked_at, active FROM nonlead_overrides`).all();
+  const nonleadMap = {};
+  overrides.forEach(o => { nonleadMap[o.email.toLowerCase()] = o; });
+
+  const leads = (revenueCache.leads || []).map(l => {
+    const o = nonleadMap[(l.lead_email || '').toLowerCase()];
+    if (o && o.active) {
+      return { ...l, is_nonlead: true, nonlead_reason: o.reason, nonlead_date: o.marked_at };
+    }
+    return l;
+  });
+  res.json({ ...revenueCache, leads });
+});
+
+// Mark lead as non-lead
+app.post('/api/nonlead/mark', (req, res) => {
+  const { email, reason } = req.body || {};
+  if (!email) return res.status(400).json({ error: 'Missing email' });
+  db.prepare(`INSERT INTO nonlead_overrides (email, reason, active) VALUES (?, ?, 1)
+    ON CONFLICT(email) DO UPDATE SET reason=excluded.reason, marked_at=datetime('now'), active=1`)
+    .run(email.toLowerCase(), reason || '');
+  res.json({ ok: true });
+});
+
+// Restore lead to active
+app.post('/api/nonlead/restore', (req, res) => {
+  const { email } = req.body || {};
+  if (!email) return res.status(400).json({ error: 'Missing email' });
+  db.prepare(`UPDATE nonlead_overrides SET active=0 WHERE email=?`).run(email.toLowerCase());
+  res.json({ ok: true });
 });
 
 app.get('/api/revenue/stats-by-workspace', (req, res) => {
