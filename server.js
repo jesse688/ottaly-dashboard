@@ -542,12 +542,21 @@ app.get('/api/revenue/leads', (req, res) => {
   const nonleadMap = {};
   overrides.forEach(o => { nonleadMap[o.email.toLowerCase()] = o; });
 
+  // Always use current price from DB — never trust cached lead_price
+  const currentPrices = db.prepare('SELECT workspace_id, price_per_lead FROM clients').all();
+  const livePriceMap = {};
+  currentPrices.forEach(p => { livePriceMap[p.workspace_id] = p.price_per_lead || 0; });
+
   const leads = (revenueCache.leads || []).map(l => {
-    const o = nonleadMap[(l.lead_email || '').toLowerCase()];
-    if (o && o.active) {
-      return { ...l, is_nonlead: true, nonlead_reason: o.reason, nonlead_date: o.marked_at };
-    }
-    return l;
+    const o        = nonleadMap[(l.lead_email || '').toLowerCase()];
+    const livePrice = livePriceMap[l.workspace_id] ?? l.lead_price ?? 0;
+    return {
+      ...l,
+      lead_price:     livePrice,
+      is_nonlead:     o?.active ? true  : false,
+      nonlead_reason: o?.active ? o.reason   : '',
+      nonlead_date:   o?.active ? o.marked_at: '',
+    };
   });
   res.json({ ...revenueCache, leads });
 });
@@ -571,11 +580,16 @@ app.post('/api/nonlead/restore', (req, res) => {
 });
 
 app.get('/api/revenue/stats-by-workspace', (req, res) => {
+  // Always use current price from DB so changing a price reflects immediately
+  const currentPrices = db.prepare('SELECT workspace_id, price_per_lead FROM clients').all();
+  const livePriceMap  = {};
+  currentPrices.forEach(p => { livePriceMap[p.workspace_id] = p.price_per_lead || 0; });
+
   const counts = {};
   (revenueCache.leads || []).forEach(l => {
     if (!counts[l.workspace_id]) counts[l.workspace_id] = { delivered: 0, revenue: 0 };
     counts[l.workspace_id].delivered++;
-    counts[l.workspace_id].revenue += l.lead_price || 0;
+    counts[l.workspace_id].revenue += livePriceMap[l.workspace_id] ?? l.lead_price ?? 0;
   });
   res.json(counts);
 });
