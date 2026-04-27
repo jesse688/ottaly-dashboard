@@ -139,17 +139,15 @@ const upsertClient = db.prepare(`
     workspace_id   = excluded.workspace_id,
     workspace_name = excluded.workspace_name
 `);
-const updateByWsId = db.prepare(`
-  UPDATE clients SET price_per_lead = ?, contact_name = ?, workspace_name = ?
-  WHERE workspace_id = ?
-`);
-
 for (const s of CLIENT_SEED) {
-  const existing = db.prepare('SELECT id FROM clients WHERE workspace_id = ?').get(s.workspace_id);
+  const existing = db.prepare('SELECT id, price_per_lead FROM clients WHERE workspace_id = ?').get(s.workspace_id);
   if (existing) {
-    updateByWsId.run(s.price_per_lead, s.contact_name, s.workspace_name, s.workspace_id);
+    // Never overwrite a manually-set price — only update if seed has a real price AND current is 0
+    const newPrice = (s.price_per_lead > 0 && (existing.price_per_lead || 0) === 0)
+      ? s.price_per_lead : existing.price_per_lead;
+    db.prepare(`UPDATE clients SET workspace_name=?, contact_name=?, price_per_lead=? WHERE workspace_id=?`)
+      .run(s.workspace_name, s.contact_name, newPrice, s.workspace_id);
   } else {
-    // Create record with temp password — admin should update via Clients page
     const tempHash = bcrypt.hashSync('Ottaly2025!', 10);
     upsertClient.run(
       s.workspace_name.toLowerCase().replace(/\s+/g, '_'),
