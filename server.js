@@ -457,6 +457,9 @@ app.post('/api/client-status/:id', requireAdmin, (req, res) => {
   db.prepare(`UPDATE clients SET client_status=?, restart_date=? WHERE id=?`)
     .run(client_status, restart_date || null, req.params.id);
   res.json({ ok: true });
+  // Trigger immediate cache refreshes so change takes effect right away
+  refreshRevenueCache().catch(() => {});
+  refreshCampaignCache().catch(() => {});
 });
 
 // ── Workspace prices (public — used by Revenue page) ──────

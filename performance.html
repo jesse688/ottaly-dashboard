@@ -733,6 +733,7 @@
     };
 
     let workspaces    = [];
+    let inactiveWsIds = new Set();
     let activeWS      = null; // { id, name }
 
     const THR = {
@@ -1191,7 +1192,7 @@
 
     function getActiveWorkspaces() {
         const hidden = loadHidden();
-        return workspaces.filter(ws => !hidden.has(ws.id));
+        return workspaces.filter(ws => !hidden.has(ws.id) && !inactiveWsIds.has(ws.id));
     }
 
     function openManageModal() {
@@ -1471,8 +1472,16 @@
 
     async function init() {
         try {
-            workspaces = await get('/workspaces');
-            activeWS   = workspaces[0];
+            // Load workspaces + client status in parallel
+            const [wsData, statusData] = await Promise.all([
+                get('/workspaces'),
+                fetch('/api/client-status').then(r => r.json()).catch(() => [])
+            ]);
+            workspaces = wsData;
+            inactiveWsIds = new Set(
+                (statusData || []).filter(c => c.client_status === 'inactive').map(c => c.workspace_id)
+            );
+            activeWS = workspaces.find(w => !inactiveWsIds.has(w.id)) || workspaces[0];
             renderWorkspaceTabs();
         } catch (e) {
             document.getElementById('workspaceTabs').innerHTML =
