@@ -750,15 +750,35 @@
     }
 
     function saveSnapshot(snap) {
+        // Don't save weekend snapshots — no sending Sat/Sun so they'd skew averages
+        if (isWeekend(snap.ts || Date.now())) return;
         const h = loadHistory();
         h.push(snap);
         const cutoff = Date.now() - 32 * 86400000;
         localStorage.setItem(CFG.STORE_KEY, JSON.stringify(h.filter(s => s.ts > cutoff).slice(-2000)));
     }
 
+    // Returns a Date N working days ago (skipping Sat/Sun)
+    function workdaysAgo(n) {
+        const d = new Date();
+        let count = 0;
+        while (count < n) {
+            d.setDate(d.getDate() - 1);
+            const day = d.getDay();
+            if (day !== 0 && day !== 6) count++;
+        }
+        return d;
+    }
+
+    function isWeekend(ts) {
+        const day = new Date(ts).getDay();
+        return day === 0 || day === 6;
+    }
+
     function avgField(history, field, days) {
         const cutoff = Date.now() - days * 86400000;
-        const items = history.filter(s => s.ts > cutoff && s[field] != null);
+        // Exclude weekend snapshots — no sending on Sat/Sun so they'd pull averages down
+        const items = history.filter(s => s.ts > cutoff && s[field] != null && !isWeekend(s.ts));
         return items.length ? items.reduce((a, s) => a + s[field], 0) / items.length : null;
     }
 
@@ -1289,7 +1309,7 @@
 
     async function fetchWorkspaceHealth(ws) {
         const today = ds(new Date());
-        const ago3  = ds(new Date(Date.now() - 3 * 86400000));
+        const ago3  = ds(workdaysAgo(3)); // 3 working days, skipping weekends
         const [todayCamps, camps3d, accounts] = await Promise.all([
             get(`/analytics/campaign/stats?workspace_id=${ws.id}&start_date=${today}&end_date=${today}`),
             get(`/analytics/campaign/stats?workspace_id=${ws.id}&start_date=${ago3}&end_date=${today}`),
