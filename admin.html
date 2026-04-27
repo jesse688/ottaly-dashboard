@@ -238,18 +238,14 @@ tbody tr:hover { background:#FAFBFC; }
 </div>
 
 <script>
-let adminKey = localStorage.getItem('ottaly_admin_key') || '';
-
-// ── Boot — auto-load if key is stored ─────────────────────
+// ── Boot — check session cookie, show login if not authenticated ──
 (async function boot() {
-  if (adminKey) {
-    const ok = await tryLoad();
-    if (ok) return;
-    // Stored key is wrong (e.g. key changed) — clear and prompt
-    localStorage.removeItem('ottaly_admin_key');
-    adminKey = '';
+  const r = await fetch('/api/admin/verify');
+  if (r.ok) {
+    await tryLoad();
+  } else {
+    document.getElementById('keyOverlay').style.display = 'flex';
   }
-  document.getElementById('keyOverlay').style.display = 'flex';
 })();
 
 async function tryLoad() {
@@ -262,20 +258,18 @@ async function tryLoad() {
 async function saveKey() {
   const key = document.getElementById('adminKeyInput').value.trim();
   if (!key) return;
-  adminKey = key;
   document.getElementById('authError').style.display = 'none';
-  const ok = await tryLoad();
-  if (ok) {
-    localStorage.setItem('ottaly_admin_key', key);
+  const r = await fetch('/api/admin/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }) });
+  if (r.ok) {
     document.getElementById('keyOverlay').style.display = 'none';
+    await tryLoad();
   } else {
     document.getElementById('authError').style.display = 'block';
-    adminKey = '';
   }
 }
 
 function adminHeaders() {
-  return { 'Content-Type':'application/json', 'x-admin-key': adminKey };
+  return { 'Content-Type': 'application/json' };
 }
 
 // ── Workspaces ─────────────────────────────────────────────

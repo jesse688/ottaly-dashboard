@@ -192,11 +192,43 @@ function requireAuth(req, res, next) {
   catch { res.status(401).json({ error: 'Invalid or expired session' }); }
 }
 
-function requireAdmin(req, res, next) {
-  if (req.headers['x-admin-key'] !== ADMIN_KEY)
-    return res.status(403).json({ error: 'Forbidden' });
-  next();
+// ── Admin session helpers ─────────────────────────────────
+function getAdminCookie(req) {
+  const raw = req.headers.cookie || '';
+  const m   = raw.match(/(?:^|;\s*)ottaly_admin=([^;]+)/);
+  return m ? m[1] : null;
 }
+
+function requireAdmin(req, res, next) {
+  const token = getAdminCookie(req);
+  if (token) {
+    try { jwt.verify(token, JWT_SECRET + ADMIN_KEY); return next(); } catch {}
+  }
+  if (req.headers['x-admin-key'] === ADMIN_KEY) return next();
+  return res.status(401).json({ error: 'Unauthorized' });
+}
+
+// Admin login — sets HttpOnly session cookie valid 30 days
+app.post('/api/admin/login', (req, res) => {
+  const { key } = req.body || {};
+  if (key !== ADMIN_KEY) return res.status(401).json({ error: 'Wrong key' });
+  const token = jwt.sign({ admin: true }, JWT_SECRET + ADMIN_KEY, { expiresIn: '30d' });
+  res.setHeader('Set-Cookie',
+    `ottaly_admin=${token}; HttpOnly; Path=/; Max-Age=${30*24*3600}; SameSite=Strict`);
+  res.json({ ok: true });
+});
+
+app.post('/api/admin/logout', (req, res) => {
+  res.setHeader('Set-Cookie', 'ottaly_admin=; HttpOnly; Path=/; Max-Age=0; SameSite=Strict');
+  res.json({ ok: true });
+});
+
+app.get('/api/admin/verify', (req, res) => {
+  const token = getAdminCookie(req);
+  if (!token) return res.status(401).json({ ok: false });
+  try { jwt.verify(token, JWT_SECRET + ADMIN_KEY); res.json({ ok: true }); }
+  catch { res.status(401).json({ ok: false }); }
+});
 
 // ── Auth ───────────────────────────────────────────────────
 app.post('/api/login', (req, res) => {

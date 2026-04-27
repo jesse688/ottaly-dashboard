@@ -333,10 +333,9 @@ async function applyOpt(i) {
   btn.disabled = true;
   btn.textContent = 'Applying…';
   try {
-    const adminKey = localStorage.getItem('ottaly_admin_key') || prompt('Admin key:');
     const r = await fetch('/api/campaigns/apply-optimisation', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-admin-key': adminKey },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ wsId: o.wsId, campId: o.campId, step: o.step, loserVariations: o.losers.map(l => l.variation) })
     });
     const j = await r.json();
