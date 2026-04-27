@@ -65,6 +65,14 @@ tr:hover td{background:#FAFBFF}
 .client-ws{font-size:11px;color:var(--muted);margin-top:1px}
 .pill{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600}
 .pill-green{background:#D1FAE5;color:#065F46}
+
+/* Status toggle */
+.toggle-wrap{position:relative;display:inline-block;width:36px;height:20px;cursor:pointer}
+.toggle-wrap input{opacity:0;width:0;height:0}
+.toggle-slider{position:absolute;inset:0;background:#D1D5DB;border-radius:20px;transition:.2s}
+.toggle-slider::before{content:'';position:absolute;width:14px;height:14px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s}
+.toggle-wrap input:checked + .toggle-slider{background:var(--green)}
+.toggle-wrap input:checked + .toggle-slider::before{transform:translateX(16px)}
 .pill-blue{background:#DBEAFE;color:#1E40AF}
 .pill-gray{background:#F3F4F6;color:#4B5563}
 .contact-cell{font-size:12px;line-height:1.6;color:var(--text)}
@@ -157,6 +165,7 @@ tr:hover td{background:#FAFBFF}
       <thead>
         <tr>
           <th>Client</th>
+          <th>Status</th>
           <th>Contact</th>
           <th>Website</th>
           <th>Lead Price</th>
@@ -236,6 +245,21 @@ tr:hover td{background:#FAFBFF}
         </div>
       </div>
 
+      <div class="section-label">Status</div>
+      <div class="form-grid">
+        <div class="field">
+          <label>Client Status</label>
+          <select id="fStatus">
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Restart Date <span style="font-weight:400;color:var(--muted)">(if inactive — auto-activates on this date)</span></label>
+          <input type="date" id="fRestartDate">
+        </div>
+      </div>
+
       <div class="section-label">Notes</div>
       <div class="form-grid one">
         <div class="field">
@@ -300,17 +324,29 @@ function renderTable() {
   }
 
   document.getElementById('clientsBody').innerHTML = filtered.map(c => {
-    const st = statsMap[c.workspace_id] || { delivered: 0, revenue: 0 };
-    const initial = (c.workspace_name || c.username || '?')[0].toUpperCase();
+    const st       = statsMap[c.workspace_id] || { delivered: 0, revenue: 0 };
+    const initial  = (c.workspace_name || c.username || '?')[0].toUpperCase();
     const websiteDisplay = (c.website || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
-    return `<tr>
+    const inactive = c.client_status === 'inactive';
+    const rowStyle = inactive ? 'opacity:0.45' : '';
+    return `<tr style="${rowStyle}">
       <td>
         <div style="display:flex;align-items:center;gap:10px">
-          <div class="avatar">${initial}</div>
+          <div class="avatar" style="${inactive ? 'background:#9CA3AF' : ''}">${initial}</div>
           <div>
             <div class="client-name">${esc(c.workspace_name || c.username)}</div>
             <div class="client-ws">${esc(c.username)}</div>
           </div>
+        </div>
+      </td>
+      <td>
+        <div style="display:flex;align-items:center;gap:8px">
+          <label class="toggle-wrap" title="${inactive ? 'Click to activate' : 'Click to deactivate'}">
+            <input type="checkbox" ${inactive ? '' : 'checked'} onchange="toggleStatus(${c.id}, this.checked)">
+            <span class="toggle-slider"></span>
+          </label>
+          <span style="font-size:11px;font-weight:600;color:${inactive ? 'var(--muted)' : 'var(--green)'}">${inactive ? 'Inactive' : 'Active'}</span>
+          ${inactive && c.restart_date ? `<span style="font-size:11px;color:var(--muted)">resumes ${c.restart_date}</span>` : ''}
         </div>
       </td>
       <td class="contact-cell">
@@ -323,15 +359,9 @@ function renderTable() {
         ${c.website ? `<a href="${esc(c.website)}" target="_blank" style="color:var(--navy);font-size:12px;text-decoration:none">${esc(websiteDisplay)}</a>` : '<span style="color:var(--muted)">—</span>'}
       </td>
       <td><span class="pill pill-green">£${(c.price_per_lead||0).toFixed(0)}</span></td>
-      <td class="stat-cell">
-        <div class="stat-main">${st.delivered}</div>
-      </td>
-      <td class="stat-cell">
-        <div class="stat-main">${c.plan_leads || 0}</div>
-      </td>
-      <td class="stat-cell">
-        <div class="stat-main">£${Math.round(st.revenue).toLocaleString('en-GB')}</div>
-      </td>
+      <td class="stat-cell"><div class="stat-main">${st.delivered}</div></td>
+      <td class="stat-cell"><div class="stat-main">${c.plan_leads || 0}</div></td>
+      <td class="stat-cell"><div class="stat-main">£${Math.round(st.revenue).toLocaleString('en-GB')}</div></td>
       <td class="notes-cell" title="${esc(c.notes||'')}">${c.notes ? esc(c.notes) : '<span style="color:var(--muted)">—</span>'}</td>
       <td>
         <div class="actions">
@@ -355,23 +385,26 @@ function openModal(id) {
 
   if (isNew) {
     ['fWorkspaceName','fWorkspaceId','fUsername','fPassword','fContactName',
-     'fContactEmail','fContactPhone','fWebsite','fNotes'].forEach(f => document.getElementById(f).value = '');
+     'fContactEmail','fContactPhone','fWebsite','fNotes','fRestartDate'].forEach(f => document.getElementById(f).value = '');
     document.getElementById('fPricePerLead').value = '';
     document.getElementById('fPlanLeads').value = '';
+    document.getElementById('fStatus').value = 'active';
   } else {
     const c = clients.find(x => x.id === id);
     if (!c) return;
-    document.getElementById('fWorkspaceName').value  = c.workspace_name || '';
-    document.getElementById('fWorkspaceId').value    = c.workspace_id   || '';
-    document.getElementById('fUsername').value       = c.username       || '';
+    document.getElementById('fWorkspaceName').value  = c.workspace_name  || '';
+    document.getElementById('fWorkspaceId').value    = c.workspace_id    || '';
+    document.getElementById('fUsername').value       = c.username        || '';
     document.getElementById('fPassword').value       = '';
-    document.getElementById('fContactName').value    = c.contact_name   || '';
-    document.getElementById('fContactEmail').value   = c.contact_email  || '';
-    document.getElementById('fContactPhone').value   = c.contact_phone  || '';
-    document.getElementById('fWebsite').value        = c.website        || '';
-    document.getElementById('fPricePerLead').value   = c.price_per_lead || '';
-    document.getElementById('fPlanLeads').value      = c.plan_leads     || '';
-    document.getElementById('fNotes').value          = c.notes          || '';
+    document.getElementById('fContactName').value    = c.contact_name    || '';
+    document.getElementById('fContactEmail').value   = c.contact_email   || '';
+    document.getElementById('fContactPhone').value   = c.contact_phone   || '';
+    document.getElementById('fWebsite').value        = c.website         || '';
+    document.getElementById('fPricePerLead').value   = c.price_per_lead  || '';
+    document.getElementById('fPlanLeads').value      = c.plan_leads      || '';
+    document.getElementById('fNotes').value          = c.notes           || '';
+    document.getElementById('fStatus').value         = c.client_status   || 'active';
+    document.getElementById('fRestartDate').value    = c.restart_date    || '';
   }
   document.getElementById('modalOverlay').classList.add('active');
 }
@@ -399,6 +432,8 @@ async function saveClient() {
     price_per_lead: document.getElementById('fPricePerLead').value,
     plan_leads:     document.getElementById('fPlanLeads').value,
     notes:          document.getElementById('fNotes').value.trim(),
+    client_status:  document.getElementById('fStatus').value,
+    restart_date:   document.getElementById('fRestartDate').value || null,
   };
   if (isNew || password) body.password = password;
 
@@ -418,6 +453,23 @@ async function saveClient() {
   }
   closeModal();
   toast(isNew ? 'Client added' : 'Saved');
+  load();
+}
+
+async function toggleStatus(id, makeActive) {
+  const status = makeActive ? 'active' : 'inactive';
+  let restart_date = null;
+  if (!makeActive) {
+    restart_date = prompt('Set a restart date (YYYY-MM-DD) — leave blank if unsure:', '');
+    if (restart_date === null) return; // cancelled
+    restart_date = restart_date.trim() || null;
+  }
+  const r = await fetch(`/api/client-status/${id}`, {
+    method: 'POST', headers,
+    body: JSON.stringify({ client_status: status, restart_date })
+  });
+  if (!r.ok) { toast('Failed to update status', 'error'); return; }
+  toast(makeActive ? 'Client activated' : 'Client set to inactive');
   load();
 }
 

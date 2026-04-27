@@ -80,6 +80,8 @@ for (const sql of [
   `ALTER TABLE clients ADD COLUMN contact_phone TEXT DEFAULT ''`,
   `ALTER TABLE clients ADD COLUMN website TEXT DEFAULT ''`,
   `ALTER TABLE clients ADD COLUMN notes TEXT DEFAULT ''`,
+  `ALTER TABLE clients ADD COLUMN client_status TEXT DEFAULT 'active'`,
+  `ALTER TABLE clients ADD COLUMN restart_date TEXT DEFAULT NULL`,
   `ALTER TABLE leads ADD COLUMN closed_value REAL`,
   `ALTER TABLE leads ADD COLUMN status TEXT DEFAULT 'active'`,
   `ALTER TABLE leads ADD COLUMN received_at TEXT`,
@@ -87,6 +89,18 @@ for (const sql of [
 
 // Backfill any leads that arrived before received_at column existed
 db.exec(`UPDATE leads SET received_at = datetime('now') WHERE received_at IS NULL`);
+
+// Auto-reactivate clients whose restart_date has passed
+function checkClientReactivations() {
+  const today = new Date().toISOString().split('T')[0];
+  const changed = db.prepare(`
+    UPDATE clients SET client_status='active', restart_date=NULL
+    WHERE client_status='inactive' AND restart_date IS NOT NULL AND restart_date <= ?
+  `).run(today);
+  if (changed.changes > 0) console.log(`[clients] Auto-reactivated ${changed.changes} client(s)`);
+}
+checkClientReactivations();
+setInterval(checkClientReactivations, 60 * 60 * 1000); // check hourly
 
 // ── Client seed — prices & commission earners ─────────────
 const CLIENT_SEED = [
@@ -430,9 +444,24 @@ app.get('/api/agency/leads', (req, res) => {
   res.json({ count: row.count });
 });
 
+// ── Client status (public — single source of truth for all pages) ──
+app.get('/api/client-status', (req, res) => {
+  const rows = db.prepare(`SELECT workspace_id, workspace_name, client_status, restart_date FROM clients`).all();
+  res.json(rows);
+});
+
+app.post('/api/client-status/:id', requireAdmin, (req, res) => {
+  const { client_status, restart_date } = req.body || {};
+  if (!['active','inactive'].includes(client_status))
+    return res.status(400).json({ error: 'Invalid status' });
+  db.prepare(`UPDATE clients SET client_status=?, restart_date=? WHERE id=?`)
+    .run(client_status, restart_date || null, req.params.id);
+  res.json({ ok: true });
+});
+
 // ── Workspace prices (public — used by Revenue page) ──────
 app.get('/api/workspace-prices', (req, res) => {
-  const rows = db.prepare(`SELECT workspace_id, workspace_name, price_per_lead FROM clients`).all();
+  const rows = db.prepare(`SELECT workspace_id, workspace_name, price_per_lead, client_status FROM clients`).all();
   res.json(rows);
 });
 
@@ -456,11 +485,16 @@ async function refreshRevenueCache() {
     ]);
     const workspaces = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.workspaces || wsRaw?.data || []);
     const priceMap = {};
-    prices.forEach(p => { priceMap[p.workspace_id] = p.price_per_lead || 0; });
+    const statusMap = {};
+    prices.forEach(p => {
+      priceMap[p.workspace_id]  = p.price_per_lead || 0;
+      statusMap[p.workspace_id] = p.client_status || 'active';
+    });
 
     const leads = [];
     for (const ws of workspaces) {
-      const wsPrice = priceMap[ws.id] || 0;
+      const wsPrice    = priceMap[ws.id]  || 0;
+      const wsInactive = statusMap[ws.id] === 'inactive';
       const seenIds = new Set();
       for (const label of LEAD_LABELS) {
         for (let page = 1; page <= 20; page++) {
@@ -483,6 +517,7 @@ async function refreshRevenueCache() {
               lead_price:     wsPrice,
               label:          l.label || '',
               date:           l.modified_at || l.created_at || null,
+              client_inactive: wsInactive,
             });
           });
           if (batch.length < 100) break;
@@ -666,9 +701,15 @@ async function refreshCampaignCache() {
   try {
     const wsRaw = await pvFetch('/workspaces');
     const workspaces = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.workspaces || []);
+
+    // Only scan active clients — inactive ones are excluded from intelligence
+    const clientRows = db.prepare(`SELECT workspace_id, client_status FROM clients`).all();
+    const inactiveIds = new Set(clientRows.filter(r => r.client_status === 'inactive').map(r => r.workspace_id));
+
     const result = [];
 
     for (const ws of workspaces) {
+      if (inactiveIds.has(ws.id)) continue; // skip inactive clients
       try {
         const campaigns = await pvFetch(`/campaign/list-all?workspace_id=${ws.id}`);
         if (!Array.isArray(campaigns) || !campaigns.length) continue;
@@ -802,7 +843,7 @@ app.get('/api/admin/workspaces', requireAdmin, async (req, res) => {
 // ── Admin — clients ────────────────────────────────────────
 app.get('/api/admin/clients', requireAdmin, (req, res) => {
   res.json(db.prepare(
-    'SELECT id, username, workspace_id, workspace_name, plan_leads, price_per_lead, stripe_customer_id, contact_name, contact_email, contact_phone, website, notes, created_at FROM clients ORDER BY created_at DESC'
+    'SELECT id, username, workspace_id, workspace_name, plan_leads, price_per_lead, stripe_customer_id, contact_name, contact_email, contact_phone, website, notes, client_status, restart_date, created_at FROM clients ORDER BY created_at DESC'
   ).all());
 });
 
@@ -822,7 +863,7 @@ app.post('/api/admin/clients', requireAdmin, (req, res) => {
 });
 
 app.put('/api/admin/clients/:id', requireAdmin, (req, res) => {
-  const { plan_leads, price_per_lead, contact_name, contact_email, contact_phone, website, notes } = req.body || {};
+  const { plan_leads, price_per_lead, contact_name, contact_email, contact_phone, website, notes, client_status, restart_date } = req.body || {};
   const updates = [];
   const vals = [];
   if (plan_leads     !== undefined) { updates.push('plan_leads = ?');     vals.push(parseInt(plan_leads) || 0); }
@@ -832,6 +873,8 @@ app.put('/api/admin/clients/:id', requireAdmin, (req, res) => {
   if (contact_phone  !== undefined) { updates.push('contact_phone = ?');  vals.push(contact_phone); }
   if (website        !== undefined) { updates.push('website = ?');        vals.push(website); }
   if (notes          !== undefined) { updates.push('notes = ?');          vals.push(notes); }
+  if (client_status  !== undefined) { updates.push('client_status = ?');  vals.push(client_status); }
+  if (restart_date   !== undefined) { updates.push('restart_date = ?');   vals.push(restart_date || null); }
   if (updates.length)
     db.prepare(`UPDATE clients SET ${updates.join(', ')} WHERE id = ?`).run(...vals, req.params.id);
   res.json({ ok: true });

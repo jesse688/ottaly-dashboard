@@ -1346,13 +1346,13 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
 
             document.getElementById('leadsTable').innerHTML = recent.map(lead => {
                 const fullName = `${lead.first_name} ${lead.last_name}`;
-                
+                const inactive = lead.client_inactive;
                 return `
-                <tr>
+                <tr style="${inactive ? 'opacity:0.45' : ''}">
                     <td>
                         <div class="client-badge">
-                            <div class="client-initial" style="background:${colors[lead.client_name]}">${clientInitial(lead.client_name)}</div>
-                            ${lead.client_name}
+                            <div class="client-initial" style="background:${inactive ? '#9CA3AF' : colors[lead.client_name]}">${clientInitial(lead.client_name)}</div>
+                            ${lead.client_name}${inactive ? ' <span style="font-size:10px;background:#F3F4F6;color:#6B7280;padding:1px 5px;border-radius:3px">Inactive</span>' : ''}
                         </div>
                     </td>
                     <td>
