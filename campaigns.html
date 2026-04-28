@@ -188,6 +188,7 @@ fetch('/api/session').then(r=>r.json()).then(s=>{
   if (s.role === 'manager') {
     document.querySelectorAll('a[href="index.html"]').forEach(a => a.style.display='none');
     document.querySelectorAll('a[href="admin.html"]').forEach(a => a.style.display='none');
+    document.querySelectorAll('a[href="clients.html"]').forEach(a => a.style.display='none');
     document.getElementById('signOutBtn').insertAdjacentHTML('beforebegin',
       '<a href="commission.html" style="padding:6px 14px;border-radius:7px;background:#1F6F78;color:#fff;text-decoration:none;font-size:12px;font-weight:600;margin-right:6px">My Commission</a>');
   }
