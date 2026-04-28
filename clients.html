@@ -84,6 +84,9 @@ tr:hover td{background:#FAFBFF}
 .stat-sub{font-size:11px;color:var(--muted)}
 .actions{display:flex;gap:6px;justify-content:flex-end}
 .no-clients{text-align:center;padding:3rem;color:var(--muted)}
+/* Financial columns hidden by default — only shown for admins */
+.fin-hide{display:none}
+body.admin-view .fin-hide{display:revert}
 
 /* Modal */
 .modal-overlay{position:fixed;inset:0;background:rgba(5,12,41,0.5);display:flex;align-items:center;justify-content:center;z-index:1000;opacity:0;pointer-events:none;transition:opacity 0.2s}
@@ -134,15 +137,14 @@ fetch('/api/session').then(r=>r.json()).then(s=>{
   if (!s.ok) { showLogin(); return; }
   document.getElementById('sessionName').textContent = s.name || '';
   document.getElementById('signOutBtn').style.display = '';
-  if (s.role === 'manager') {
+  if (s.role === 'admin') {
+    document.body.classList.add('admin-view'); // reveals fin-hide elements
+  } else {
     isManager = true;
     document.querySelectorAll('a[href="index.html"]').forEach(a => a.style.display='none');
     document.querySelectorAll('a[href="admin.html"]').forEach(a => a.style.display='none');
-    // Add commission link to nav
     document.getElementById('signOutBtn').insertAdjacentHTML('beforebegin',
       '<a href="commission.html" style="padding:8px 18px;border-radius:8px;font-family:\'Inter\',sans-serif;font-size:13px;font-weight:600;background:#1F6F78;color:#fff;text-decoration:none;margin-right:4px">My Commission</a>');
-    // Hide financial table headers and summary cards
-    document.querySelectorAll('.fin-hide').forEach(el => el.style.display='none');
   }
   load();
 }).catch(()=>{ showLogin(); });
