@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ottaly — My Commission</title>
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--purple:#7C89CD;--yellow:#FFB700;--bg:#F0F2F8;--card:#fff;--border:#E2E6F0;--text:#050C29;--muted:#6B7280;--green:#059669;--amber:#D97706}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text)}
+.header{background:var(--navy-dark);padding:1rem 2rem;border-bottom:3px solid var(--teal);display:flex;align-items:center;justify-content:space-between}
+.page{max-width:1000px;margin:0 auto;padding:2rem}
+.page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem;flex-wrap:wrap;gap:0.75rem}
+.page-title{font-size:1.4rem;font-weight:700}
+.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1rem;margin-bottom:1.5rem}
+.sum-card{background:var(--card);border-radius:10px;padding:1rem 1.1rem;border:1px solid var(--border);border-top:3px solid var(--teal)}
+.sum-card.green{border-top-color:var(--green)}.sum-card.amber{border-top-color:var(--amber)}
+.sum-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+.sum-val{font-size:1.5rem;font-weight:700;margin-top:4px}
+.card{background:var(--card);border-radius:12px;border:1px solid var(--border);overflow:hidden;margin-bottom:1.5rem}
+.card-header{padding:1rem 1.25rem;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem}
+.card-title{font-weight:700;font-size:14px}
+table{width:100%;border-collapse:collapse}
+thead{background:#F8F9FC}
+th{padding:9px 14px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);border-bottom:1px solid var(--border)}
+td{padding:12px 14px;font-size:13px;border-bottom:1px solid var(--border)}
+tr:last-child td{border-bottom:none}
+.pill{display:inline-block;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;background:#D1FAE5;color:#065F46}
+.period-sel{padding:7px 10px;border:1px solid var(--border);border-radius:7px;font-size:13px;font-family:'Inter',sans-serif;outline:none}
+.custom-range{display:none;gap:6px;align-items:center;flex-wrap:wrap}
+.custom-range input{padding:7px 8px;border:1px solid var(--border);border-radius:7px;font-size:12px;outline:none}
+.btn{padding:7px 14px;background:var(--navy-dark);color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer}
+.empty{text-align:center;padding:2.5rem;color:var(--muted)}
+.avatar{width:34px;height:34px;border-radius:8px;background:var(--teal);color:#fff;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div style="display:flex;align-items:center">
+    <img src="https://framerusercontent.com/images/nDSHQKnOUtpvlbArTv7AiTwZpcE.svg" alt="Ottaly" style="height:36px;margin-right:1rem">
+    <nav style="display:flex;gap:0.25rem" id="navLinks">
+      <a href="performance.html" style="padding:8px 18px;border-radius:8px;font-family:'Inter',sans-serif;font-size:13px;font-weight:600;color:rgba(255,255,255,0.55);text-decoration:none">Performance</a>
+      <a href="campaigns.html"   style="padding:8px 18px;border-radius:8px;font-family:'Inter',sans-serif;font-size:13px;font-weight:600;color:rgba(255,255,255,0.55);text-decoration:none">Campaigns</a>
+      <a href="clients.html"     style="padding:8px 18px;border-radius:8px;font-family:'Inter',sans-serif;font-size:13px;font-weight:600;color:rgba(255,255,255,0.55);text-decoration:none">Clients</a>
+      <a href="commission.html"  style="padding:8px 18px;border-radius:8px;font-family:'Inter',sans-serif;font-size:13px;font-weight:600;background:var(--teal);color:#fff;text-decoration:none">My Commission</a>
+    </nav>
+  </div>
+  <div style="display:flex;align-items:center;gap:10px">
+    <span id="sessionName" style="font-size:12px;color:rgba(255,255,255,0.6)"></span>
+    <a href="/login.html" onclick="fetch('/api/logout',{method:'POST'});return true;"
+       style="font-size:12px;color:rgba(255,255,255,0.4);text-decoration:none">Sign out</a>
+  </div>
+</div>
+
+<div class="page">
+  <div class="page-header">
+    <div>
+      <div class="page-title">My Commission</div>
+      <div style="font-size:13px;color:var(--muted)" id="pageSubtitle">Loading…</div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <select class="period-sel" id="period" onchange="handlePeriod()">
+        <option value="month" selected>This Month</option>
+        <option value="lastMonth">Last Month</option>
+        <option value="quarter">This Quarter</option>
+        <option value="year">This Year</option>
+        <option value="all">All Time</option>
+        <option value="custom">Custom Range</option>
+      </select>
+      <div class="custom-range" id="customRange">
+        <input type="date" id="startDate">
+        <span style="font-size:12px;color:var(--muted)">to</span>
+        <input type="date" id="endDate">
+        <button class="btn" onclick="render()">Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="summary">
+    <div class="sum-card green">
+      <div class="sum-label">Commission Earned</div>
+      <div class="sum-val" id="sumComm">£0</div>
+    </div>
+    <div class="sum-card">
+      <div class="sum-label">Leads Delivered</div>
+      <div class="sum-val" id="sumLeads">0</div>
+    </div>
+    <div class="sum-card amber">
+      <div class="sum-label">Active Clients</div>
+      <div class="sum-val" id="sumClients">0</div>
+    </div>
+    <div class="sum-card">
+      <div class="sum-label">Commission Rate</div>
+      <div class="sum-val" id="sumRate">—</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">Client Breakdown</div>
+      <div style="font-size:12px;color:var(--muted)" id="periodLabel"></div>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Client</th>
+          <th>Managing Since</th>
+          <th>Commission Rate</th>
+          <th style="text-align:right">Leads</th>
+          <th style="text-align:right">Commission Earned</th>
+        </tr>
+      </thead>
+      <tbody id="clientsBody">
+        <tr><td colspan="5" class="empty">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+let myName  = '';
+let myClients = []; // { workspace_name, commission_rate, manager_start_date }
+let allLeads  = [];
+
+function getRange() {
+  const p   = document.getElementById('period').value;
+  const now = new Date();
+  const y = now.getFullYear(), m = now.getMonth();
+  let start, end, label;
+  if (p === 'month')     { start = new Date(y,m,1);   end = new Date(y,m+1,1);   label = now.toLocaleDateString('en-GB',{month:'long',year:'numeric'}); }
+  else if (p === 'lastMonth') { start = new Date(y,m-1,1); end = new Date(y,m,1); label = new Date(y,m-1,1).toLocaleDateString('en-GB',{month:'long',year:'numeric'}); }
+  else if (p === 'quarter') { const q=Math.floor(m/3); start=new Date(y,q*3,1); end=new Date(y,q*3+3,1); label=`Q${q+1} ${y}`; }
+  else if (p === 'year')  { start = new Date(y,0,1);  end = new Date(y+1,0,1);  label = `${y}`; }
+  else if (p === 'all')   { start = new Date(2020,0,1); end = new Date(y+1,0,1); label = 'All Time'; }
+  else {
+    const s = document.getElementById('startDate').value;
+    const e = document.getElementById('endDate').value;
+    start = new Date(s+'T00:00:00'); end = new Date(e+'T23:59:59'); label = `${s} – ${e}`;
+  }
+  return { start, end, label };
+}
+
+function handlePeriod() {
+  const p = document.getElementById('period').value;
+  document.getElementById('customRange').style.display = p === 'custom' ? 'flex' : 'none';
+  if (p !== 'custom') render();
+}
+
+function render() {
+  const { start, end, label } = getRange();
+  document.getElementById('periodLabel').textContent = label;
+
+  const rows = [];
+  let totalComm = 0, totalLeads = 0;
+
+  for (const c of myClients) {
+    const rate     = (c.commission_rate ?? 15) / 100;
+    const mgrStart = c.manager_start_date ? new Date(c.manager_start_date + 'T00:00:00') : null;
+
+    const leads = allLeads.filter(l =>
+      l.client_name === c.workspace_name &&
+      l.date && l.date >= start && l.date < end &&
+      (!mgrStart || l.date >= mgrStart)
+    );
+
+    if (leads.length === 0) continue;
+
+    const revenue    = leads.reduce((s, l) => s + (l.lead_price || 0), 0);
+    const commission = revenue * rate;
+    totalComm  += commission;
+    totalLeads += leads.length;
+
+    rows.push({ name: c.workspace_name, since: c.manager_start_date, rate: c.commission_rate ?? 15, leads: leads.length, commission });
+  }
+
+  rows.sort((a, b) => b.commission - a.commission);
+
+  document.getElementById('sumComm').textContent    = '£' + totalComm.toFixed(2);
+  document.getElementById('sumLeads').textContent   = totalLeads;
+  document.getElementById('sumClients').textContent = rows.length;
+
+  // Show avg rate if all the same, otherwise "varies"
+  const rates = [...new Set(myClients.map(c => c.commission_rate ?? 15))];
+  document.getElementById('sumRate').textContent = rates.length === 1 ? rates[0] + '%' : 'Varies';
+
+  document.getElementById('clientsBody').innerHTML = rows.length ? rows.map(r => `
+    <tr>
+      <td>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div class="avatar">${r.name[0].toUpperCase()}</div>
+          <span style="font-weight:600">${esc(r.name)}</span>
+        </div>
+      </td>
+      <td style="color:var(--muted);font-size:12px">${r.since || '—'}</td>
+      <td><span class="pill">${r.rate}%</span></td>
+      <td style="text-align:right;font-weight:600">${r.leads}</td>
+      <td style="text-align:right;font-weight:700;color:var(--green)">£${r.commission.toFixed(2)}</td>
+    </tr>`).join('')
+    : `<tr><td colspan="5" class="empty">No commission in this period</td></tr>`;
+}
+
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+async function init() {
+  // Get session
+  const sess = await fetch('/api/session').then(r=>r.json()).catch(()=>({ok:false}));
+  if (!sess.ok) { location.href = '/login.html?next=/commission.html'; return; }
+  myName = sess.name;
+  document.getElementById('sessionName').textContent = myName;
+  document.getElementById('pageSubtitle').textContent = `Commission for ${myName}`;
+
+  // Admin: show Revenue tab too
+  if (sess.role === 'admin') {
+    const nav = document.getElementById('navLinks');
+    nav.insertAdjacentHTML('afterbegin', '<a href="index.html" style="padding:8px 18px;border-radius:8px;font-family:\'Inter\',sans-serif;font-size:13px;font-weight:600;color:rgba(255,255,255,0.55);text-decoration:none">Revenue</a>');
+  }
+
+  // Load clients assigned to this manager + all leads
+  const [prices, cache] = await Promise.all([
+    fetch('/api/workspace-prices').then(r=>r.json()).catch(()=>[]),
+    fetch('/api/revenue/leads').then(r=>r.json()).catch(()=>({leads:[]}))
+  ]);
+
+  // Filter to only clients managed by this person
+  myClients = (prices || []).filter(p =>
+    p.campaign_manager && p.campaign_manager.toLowerCase() === myName.toLowerCase()
+  );
+
+  allLeads = (cache.leads || [])
+    .filter(l => !l.is_nonlead)
+    .map(l => ({ ...l, date: l.date ? new Date(l.date) : null }));
+
+  render();
+}
+
+init();
+</script>
+</body>
+</html>

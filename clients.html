@@ -135,8 +135,14 @@ fetch('/api/session').then(r=>r.json()).then(s=>{
   document.getElementById('sessionName').textContent = s.name || '';
   document.getElementById('signOutBtn').style.display = '';
   if (s.role === 'manager') {
+    isManager = true;
     document.querySelectorAll('a[href="index.html"]').forEach(a => a.style.display='none');
     document.querySelectorAll('a[href="admin.html"]').forEach(a => a.style.display='none');
+    // Add commission link to nav
+    document.getElementById('signOutBtn').insertAdjacentHTML('beforebegin',
+      '<a href="commission.html" style="padding:8px 18px;border-radius:8px;font-family:\'Inter\',sans-serif;font-size:13px;font-weight:600;background:#1F6F78;color:#fff;text-decoration:none;margin-right:4px">My Commission</a>');
+    // Hide financial table headers and summary cards
+    document.querySelectorAll('.fin-hide').forEach(el => el.style.display='none');
   }
   load();
 }).catch(()=>{ showLogin(); });
@@ -156,15 +162,15 @@ fetch('/api/session').then(r=>r.json()).then(s=>{
       <div class="sum-label">Total Clients</div>
       <div class="sum-val" id="sumClients">—</div>
     </div>
-    <div class="sum-card teal">
+    <div class="sum-card teal fin-hide">
       <div class="sum-label">Leads Delivered</div>
       <div class="sum-val" id="sumDelivered">—</div>
     </div>
-    <div class="sum-card yellow">
+    <div class="sum-card yellow fin-hide">
       <div class="sum-label">Total Revenue</div>
       <div class="sum-val" id="sumRevenue">—</div>
     </div>
-    <div class="sum-card purple">
+    <div class="sum-card purple fin-hide">
       <div class="sum-label">Leads Bought</div>
       <div class="sum-val" id="sumBought">—</div>
     </div>
@@ -185,10 +191,10 @@ fetch('/api/session').then(r=>r.json()).then(s=>{
           <th>Status</th>
           <th>Contact</th>
           <th>Website</th>
-          <th>Lead Price</th>
-          <th style="text-align:right">Delivered</th>
-          <th style="text-align:right">Bought</th>
-          <th style="text-align:right">Revenue</th>
+          <th class="fin-hide">Lead Price</th>
+          <th class="fin-hide" style="text-align:right">Delivered</th>
+          <th class="fin-hide" style="text-align:right">Bought</th>
+          <th class="fin-hide" style="text-align:right">Revenue</th>
           <th>Notes</th>
           <th></th>
         </tr>
@@ -330,6 +336,7 @@ const headers = { 'Content-Type': 'application/json' };
 
 let clients = [];
 let statsMap = {};
+let isManager = false;
 
 async function load() {
   try {
@@ -407,10 +414,10 @@ function renderTable() {
       <td>
         ${c.website ? `<a href="${esc(c.website)}" target="_blank" style="color:var(--navy);font-size:12px;text-decoration:none">${esc(websiteDisplay)}</a>` : '<span style="color:var(--muted)">—</span>'}
       </td>
-      <td><span class="pill pill-green">£${(c.price_per_lead||0).toFixed(0)}</span></td>
-      <td class="stat-cell"><div class="stat-main">${st.delivered}</div></td>
-      <td class="stat-cell"><div class="stat-main">${c.plan_leads || 0}</div></td>
-      <td class="stat-cell"><div class="stat-main">£${Math.round(st.revenue).toLocaleString('en-GB')}</div></td>
+      <td class="fin-hide"><span class="pill pill-green">£${(c.price_per_lead||0).toFixed(0)}</span></td>
+      <td class="stat-cell fin-hide"><div class="stat-main">${st.delivered}</div></td>
+      <td class="stat-cell fin-hide"><div class="stat-main">${c.plan_leads || 0}</div></td>
+      <td class="stat-cell fin-hide"><div class="stat-main">£${Math.round(st.revenue).toLocaleString('en-GB')}</div></td>
       <td class="notes-cell" title="${esc(c.notes||'')}">${c.notes ? esc(c.notes) : '<span style="color:var(--muted)">—</span>'}</td>
       <td>
         <div class="actions">
