@@ -62,6 +62,14 @@ db.exec(`
   );
 `);
 
+// Manager accounts
+db.exec(`CREATE TABLE IF NOT EXISTS managers (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  name          TEXT UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,
+  created_at    TEXT DEFAULT (datetime('now'))
+)`);
+
 // Non-lead overrides (keyed by email — persists across restarts, survives cache rebuilds)
 db.exec(`CREATE TABLE IF NOT EXISTS nonlead_overrides (
   email      TEXT PRIMARY KEY,
@@ -199,42 +207,129 @@ function requireAuth(req, res, next) {
   catch { res.status(401).json({ error: 'Invalid or expired session' }); }
 }
 
-// ── Admin session helpers ─────────────────────────────────
-function getAdminCookie(req) {
+// ── Session helpers ───────────────────────────────────────
+function getSessionCookie(req) {
   const raw = req.headers.cookie || '';
-  const m   = raw.match(/(?:^|;\s*)ottaly_admin=([^;]+)/);
+  const m   = raw.match(/(?:^|;\s*)ottaly_session=([^;]+)/);
   return m ? m[1] : null;
 }
 
+function decodeSession(req) {
+  const token = getSessionCookie(req);
+  if (!token) return null;
+  try { return jwt.verify(token, JWT_SECRET); } catch { return null; }
+}
+
+function setSessionCookie(res, payload) {
+  const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '30d' });
+  res.setHeader('Set-Cookie',
+    `ottaly_session=${token}; HttpOnly; Path=/; Max-Age=${30*24*3600}; SameSite=Strict`);
+}
+
+function clearSessionCookie(res) {
+  res.setHeader('Set-Cookie', 'ottaly_session=; HttpOnly; Path=/; Max-Age=0; SameSite=Strict');
+}
+
 function requireAdmin(req, res, next) {
-  const token = getAdminCookie(req);
-  if (token) {
-    try { jwt.verify(token, JWT_SECRET + ADMIN_KEY); return next(); } catch {}
-  }
+  const s = decodeSession(req);
+  if (s?.role === 'admin') return next();
+  // Legacy header fallback
+  if (req.headers['x-admin-key'] === ADMIN_KEY) return next();
+  // Legacy admin cookie fallback
+  const raw = req.headers.cookie || '';
+  const m   = raw.match(/(?:^|;\s*)ottaly_admin=([^;]+)/);
+  if (m) { try { jwt.verify(m[1], JWT_SECRET + ADMIN_KEY); return next(); } catch {} }
+  return res.status(401).json({ error: 'Unauthorized' });
+}
+
+function requireSession(req, res, next) {
+  // Accepts admin OR manager session
+  const s = decodeSession(req);
+  if (s?.role === 'admin' || s?.role === 'manager') return next();
   if (req.headers['x-admin-key'] === ADMIN_KEY) return next();
   return res.status(401).json({ error: 'Unauthorized' });
 }
 
-// Admin login — sets HttpOnly session cookie valid 30 days
+// ── Auth endpoints ────────────────────────────────────────
+app.get('/api/session', (req, res) => {
+  const s = decodeSession(req);
+  if (!s) {
+    // Check legacy admin cookie
+    const raw = req.headers.cookie || '';
+    const m   = raw.match(/(?:^|;\s*)ottaly_admin=([^;]+)/);
+    if (m) { try { jwt.verify(m[1], JWT_SECRET + ADMIN_KEY); return res.json({ ok: true, role: 'admin', name: 'Admin' }); } catch {} }
+    return res.status(401).json({ ok: false });
+  }
+  res.json({ ok: true, role: s.role, name: s.name || 'Admin' });
+});
+
 app.post('/api/admin/login', (req, res) => {
   const { key } = req.body || {};
   if (key !== ADMIN_KEY) return res.status(401).json({ error: 'Wrong key' });
-  const token = jwt.sign({ admin: true }, JWT_SECRET + ADMIN_KEY, { expiresIn: '30d' });
-  res.setHeader('Set-Cookie',
-    `ottaly_admin=${token}; HttpOnly; Path=/; Max-Age=${30*24*3600}; SameSite=Strict`);
+  setSessionCookie(res, { role: 'admin', name: 'Admin' });
+  res.json({ ok: true, role: 'admin' });
+});
+
+app.post('/api/manager/login', (req, res) => {
+  const { name, password } = req.body || {};
+  if (!name || !password) return res.status(400).json({ error: 'Missing fields' });
+  const mgr = db.prepare('SELECT * FROM managers WHERE LOWER(name)=LOWER(?)').get(name.trim());
+  if (!mgr || !bcrypt.compareSync(password, mgr.password_hash))
+    return res.status(401).json({ error: 'Incorrect name or password' });
+  setSessionCookie(res, { role: 'manager', name: mgr.name });
+  res.json({ ok: true, role: 'manager', name: mgr.name });
+});
+
+app.post('/api/logout', (req, res) => {
+  clearSessionCookie(res);
+  res.setHeader('Set-Cookie', [
+    'ottaly_session=; HttpOnly; Path=/; Max-Age=0; SameSite=Strict',
+    'ottaly_admin=; HttpOnly; Path=/; Max-Age=0; SameSite=Strict'
+  ]);
   res.json({ ok: true });
 });
 
+// Legacy compat
 app.post('/api/admin/logout', (req, res) => {
+  clearSessionCookie(res);
   res.setHeader('Set-Cookie', 'ottaly_admin=; HttpOnly; Path=/; Max-Age=0; SameSite=Strict');
   res.json({ ok: true });
 });
-
 app.get('/api/admin/verify', (req, res) => {
-  const token = getAdminCookie(req);
-  if (!token) return res.status(401).json({ ok: false });
-  try { jwt.verify(token, JWT_SECRET + ADMIN_KEY); res.json({ ok: true }); }
-  catch { res.status(401).json({ ok: false }); }
+  const s = decodeSession(req);
+  if (s?.role === 'admin') return res.json({ ok: true });
+  const raw = req.headers.cookie || '';
+  const m   = raw.match(/(?:^|;\s*)ottaly_admin=([^;]+)/);
+  if (m) { try { jwt.verify(m[1], JWT_SECRET + ADMIN_KEY); return res.json({ ok: true }); } catch {} }
+  res.status(401).json({ ok: false });
+});
+
+// ── Manager management (admin only) ──────────────────────
+app.get('/api/admin/managers', requireAdmin, (req, res) => {
+  res.json(db.prepare('SELECT id, name, created_at FROM managers ORDER BY name').all());
+});
+
+app.post('/api/admin/managers', requireAdmin, (req, res) => {
+  const { name, password } = req.body || {};
+  if (!name || !password) return res.status(400).json({ error: 'Name and password required' });
+  try {
+    db.prepare('INSERT INTO managers (name, password_hash) VALUES (?,?)')
+      .run(name.trim(), bcrypt.hashSync(password, 10));
+    res.json({ ok: true });
+  } catch { res.status(400).json({ error: 'Name already exists' }); }
+});
+
+app.put('/api/admin/managers/:id/password', requireAdmin, (req, res) => {
+  const { password } = req.body || {};
+  if (!password) return res.status(400).json({ error: 'Password required' });
+  db.prepare('UPDATE managers SET password_hash=? WHERE id=?')
+    .run(bcrypt.hashSync(password, 10), req.params.id);
+  res.json({ ok: true });
+});
+
+app.delete('/api/admin/managers/:id', requireAdmin, (req, res) => {
+  db.prepare('DELETE FROM managers WHERE id=?').run(req.params.id);
+  res.json({ ok: true });
 });
 
 // ── Auth ───────────────────────────────────────────────────
@@ -908,7 +1003,7 @@ app.get('/api/admin/workspaces', requireAdmin, async (req, res) => {
 });
 
 // ── Admin — clients ────────────────────────────────────────
-app.get('/api/admin/clients', requireAdmin, (req, res) => {
+app.get('/api/admin/clients', requireSession, (req, res) => {
   res.json(db.prepare(
     'SELECT id, username, workspace_id, workspace_name, plan_leads, price_per_lead, stripe_customer_id, contact_name, contact_email, contact_phone, website, notes, client_status, restart_date, campaign_manager, commission_rate, manager_start_date, created_at FROM clients ORDER BY created_at DESC'
   ).all());

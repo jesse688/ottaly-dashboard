@@ -484,9 +484,25 @@
             </div>
             <div class="last-update">Updated <span id="lastUpdate">--:--</span></div>
             <div class="countdown">Next in <span id="countdown">3:00</span></div>
+            <div id="sessionBadge" style="font-size:12px;color:rgba(255,255,255,0.55);display:flex;align-items:center;gap:8px">
+                <span id="sessionName"></span>
+                <a href="/login.html" onclick="fetch('/api/logout',{method:'POST'});return true;"
+                   style="color:rgba(255,255,255,0.4);text-decoration:none;font-size:11px">Sign out</a>
+            </div>
         </div>
     </div>
 </div>
+<script>
+fetch('/api/session').then(r=>r.json()).then(s=>{
+  if (!s.ok) { location.href='/login.html?next=/performance.html'; return; }
+  document.getElementById('sessionName').textContent = s.name || '';
+  // Hide Revenue tab for managers
+  if (s.role === 'manager') {
+    document.querySelectorAll('a[href="index.html"]').forEach(a => a.style.display='none');
+    document.querySelectorAll('a[href="admin.html"]').forEach(a => a.style.display='none');
+  }
+}).catch(()=>{});
+</script>
 
 <div class="client-bar">
     <div class="client-bar-inner">

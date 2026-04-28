@@ -147,6 +147,25 @@ tbody tr:hover { background:#FAFBFC; }
 <div id="adminPanel">
   <div class="container">
 
+    <!-- Campaign Manager accounts -->
+    <div class="section-title">Campaign Managers</div>
+    <div class="card" style="margin-bottom:1.5rem">
+      <div style="display:flex;gap:10px;margin-bottom:1rem;flex-wrap:wrap">
+        <input type="text" id="mgrNameInput" placeholder="Manager name (e.g. Joey)"
+          style="flex:1;min-width:140px;padding:8px 10px;border:1px solid #E5E7EB;border-radius:7px;font-size:13px;outline:none">
+        <input type="password" id="mgrPassInput" placeholder="Password"
+          style="flex:1;min-width:140px;padding:8px 10px;border:1px solid #E5E7EB;border-radius:7px;font-size:13px;outline:none">
+        <button onclick="createManager()"
+          style="padding:8px 16px;background:#050C29;color:#fff;border:none;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer">
+          Add Manager
+        </button>
+      </div>
+      <table>
+        <thead><tr><th>Name</th><th>Created</th><th>New Password</th><th></th></tr></thead>
+        <tbody id="managersTable"><tr><td colspan="4" style="text-align:center;padding:1.5rem;color:#9CA3AF">Loading…</td></tr></tbody>
+      </table>
+    </div>
+
     <!-- Non-lead requests -->
     <div class="section-title">
       Non-Lead Requests
@@ -240,9 +259,13 @@ tbody tr:hover { background:#FAFBFC; }
 <script>
 // ── Boot — check session cookie, show login if not authenticated ──
 (async function boot() {
-  const r = await fetch('/api/admin/verify');
-  if (r.ok) {
+  const s = await fetch('/api/session').then(r=>r.json()).catch(()=>({ok:false}));
+  if (s.ok && s.role === 'admin') {
     await tryLoad();
+    fetchManagers();
+  } else if (s.ok && s.role === 'manager') {
+    // Managers shouldn't be on admin page
+    location.href = '/performance.html';
   } else {
     document.getElementById('keyOverlay').style.display = 'flex';
   }
@@ -475,8 +498,57 @@ function showToast(msg) {
   toastTimer = setTimeout(() => { t.style.display = 'none'; }, 3000);
 }
 
-// Auto-refresh non-lead requests every 30 seconds once logged in
-setInterval(() => { if (adminKey) fetchNonleadRequests(); }, 30000);
+// Auto-refresh non-lead requests every 30 seconds
+setInterval(() => fetchNonleadRequests(), 30000);
+
+// ── Manager management ────────────────────────────────────
+async function fetchManagers() {
+  const r = await fetch('/api/admin/managers', { headers: adminHeaders() });
+  if (!r.ok) return;
+  const managers = await r.json();
+  document.getElementById('managersTable').innerHTML = managers.length ? managers.map(m => `
+    <tr>
+      <td style="font-weight:600">${escHtml(m.name)}</td>
+      <td style="color:#6B7280;font-size:12px">${m.created_at?.split('T')[0] || '—'}</td>
+      <td>
+        <div style="display:flex;gap:6px">
+          <input type="password" id="mgrPw_${m.id}" placeholder="New password"
+            style="padding:5px 8px;border:1px solid #E5E7EB;border-radius:6px;font-size:12px;outline:none;width:140px">
+          <button onclick="updateMgrPassword(${m.id})"
+            style="padding:5px 10px;background:#1F6F78;color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer">Update</button>
+        </div>
+      </td>
+      <td>
+        <button onclick="deleteManager(${m.id},'${escAttr(m.name)}')"
+          style="padding:5px 10px;background:#FEE2E2;color:#DC2626;border:none;border-radius:6px;font-size:12px;cursor:pointer">Remove</button>
+      </td>
+    </tr>`).join('') : '<tr><td colspan="4" style="text-align:center;padding:1.5rem;color:#9CA3AF">No managers yet</td></tr>';
+}
+
+async function createManager() {
+  const name = document.getElementById('mgrNameInput').value.trim();
+  const pass = document.getElementById('mgrPassInput').value;
+  if (!name || !pass) return alert('Enter name and password');
+  const r = await fetch('/api/admin/managers', { method:'POST', headers: adminHeaders(), body: JSON.stringify({ name, password: pass }) });
+  const j = await r.json();
+  if (!r.ok) return alert(j.error || 'Error');
+  document.getElementById('mgrNameInput').value = '';
+  document.getElementById('mgrPassInput').value = '';
+  fetchManagers();
+}
+
+async function updateMgrPassword(id) {
+  const pass = document.getElementById('mgrPw_' + id).value;
+  if (!pass) return;
+  const r = await fetch(`/api/admin/managers/${id}/password`, { method:'PUT', headers: adminHeaders(), body: JSON.stringify({ password: pass }) });
+  if (r.ok) { document.getElementById('mgrPw_' + id).value = ''; alert('Password updated'); }
+}
+
+async function deleteManager(id, name) {
+  if (!confirm(`Remove ${name}?`)) return;
+  await fetch(`/api/admin/managers/${id}`, { method:'DELETE', headers: adminHeaders() });
+  fetchManagers();
+}
 </script>
 </body>
 </html>

@@ -1067,6 +1067,24 @@
     <script>
         const WEBHOOK_URL = 'https://n8n1-n8n.xuobbb.easypanel.host/webhook/ottaly-nonlead';
 
+        // Revenue page: admin only
+        (async () => {
+            const s = await fetch('/api/session').then(r => r.json()).catch(() => ({}));
+            if (!s.ok) { location.href = '/login.html?next=/index.html'; return; }
+            if (s.role === 'manager') {
+                document.body.innerHTML = `<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#F0F2F8;font-family:'Inter',sans-serif">
+                    <div style="text-align:center;padding:3rem">
+                        <div style="font-size:3rem;margin-bottom:1rem">🔒</div>
+                        <div style="font-size:1.2rem;font-weight:700;color:#050C29;margin-bottom:0.5rem">Access Restricted</div>
+                        <div style="color:#6B7280;margin-bottom:1.5rem">Revenue data is only visible to admins.</div>
+                        <a href="/performance.html" style="padding:10px 24px;background:#1F6F78;color:#fff;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px">Go to Performance →</a>
+                        <div style="margin-top:1rem"><a href="/login.html" style="color:#6B7280;font-size:12px">Sign in as Admin</a></div>
+                    </div>
+                </div>`;
+                return;
+            }
+        })();
+
 // Detect if running locally
 const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
         

@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ottaly — Sign In</title>
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Inter',sans-serif;background:#050C29;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.card{background:#fff;border-radius:16px;padding:2.5rem;width:380px;max-width:92vw;box-shadow:0 24px 80px rgba(0,0,0,0.4)}
+.logo{font-family:'Genos',sans-serif;font-size:2rem;font-weight:800;color:#050C29;letter-spacing:1px;text-align:center;margin-bottom:0.25rem}
+.logo span{color:#1F6F78}
+.subtitle{text-align:center;font-size:13px;color:#6B7280;margin-bottom:1.75rem}
+.tabs{display:flex;gap:0;margin-bottom:1.5rem;border:1.5px solid #E5E7EB;border-radius:9px;overflow:hidden}
+.tab{flex:1;padding:9px;font-size:13px;font-weight:600;cursor:pointer;background:#fff;border:none;color:#6B7280;font-family:'Inter',sans-serif;transition:all 0.15s}
+.tab.active{background:#050C29;color:#fff}
+.field{margin-bottom:1rem}
+.field label{display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:5px}
+.field input{width:100%;padding:10px 12px;border:1.5px solid #E5E7EB;border-radius:8px;font-size:14px;outline:none;font-family:'Inter',sans-serif;transition:border 0.15s}
+.field input:focus{border-color:#1F6F78}
+.btn{width:100%;padding:11px;background:#050C29;color:#fff;border:none;border-radius:9px;font-size:14px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif;transition:background 0.15s;margin-top:0.5rem}
+.btn:hover{background:#1a2a5e}
+.error{color:#DC2626;font-size:12px;min-height:18px;margin-bottom:0.5rem;text-align:center}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">Ott<span>a</span>ly</div>
+  <div class="subtitle">Sign in to continue</div>
+
+  <div class="tabs">
+    <button class="tab active" id="tabAdmin" onclick="setTab('admin')">Admin</button>
+    <button class="tab" id="tabManager" onclick="setTab('manager')">Campaign Manager</button>
+  </div>
+
+  <div id="formAdmin">
+    <div class="field">
+      <label>Admin Key</label>
+      <input type="password" id="adminKey" placeholder="••••••••" onkeydown="if(event.key==='Enter')login()">
+    </div>
+  </div>
+
+  <div id="formManager" style="display:none">
+    <div class="field">
+      <label>Your Name</label>
+      <input type="text" id="mgrName" placeholder="e.g. Joey" onkeydown="if(event.key==='Enter')login()">
+    </div>
+    <div class="field">
+      <label>Password</label>
+      <input type="password" id="mgrPass" placeholder="••••••••" onkeydown="if(event.key==='Enter')login()">
+    </div>
+  </div>
+
+  <div class="error" id="errMsg"></div>
+  <button class="btn" onclick="login()">Sign In</button>
+</div>
+
+<script>
+let activeTab = 'admin';
+const redir = new URLSearchParams(location.search).get('next') || '/performance.html';
+
+function setTab(t) {
+  activeTab = t;
+  document.getElementById('tabAdmin').classList.toggle('active', t === 'admin');
+  document.getElementById('tabManager').classList.toggle('active', t === 'manager');
+  document.getElementById('formAdmin').style.display    = t === 'admin'   ? '' : 'none';
+  document.getElementById('formManager').style.display  = t === 'manager' ? '' : 'none';
+  document.getElementById('errMsg').textContent = '';
+}
+
+async function login() {
+  const err = document.getElementById('errMsg');
+  err.textContent = '';
+  let res;
+  if (activeTab === 'admin') {
+    const key = document.getElementById('adminKey').value.trim();
+    if (!key) return;
+    res = await fetch('/api/admin/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ key }) });
+  } else {
+    const name = document.getElementById('mgrName').value.trim();
+    const pass = document.getElementById('mgrPass').value;
+    if (!name || !pass) return;
+    res = await fetch('/api/manager/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name, password: pass }) });
+  }
+  const j = await res.json();
+  if (res.ok) {
+    // Admin goes to revenue, manager goes to performance
+    location.href = j.role === 'admin' ? (redir === '/performance.html' ? '/index.html' : redir) : '/performance.html';
+  } else {
+    err.textContent = j.error || 'Incorrect credentials';
+  }
+}
+
+// If already logged in, redirect
+fetch('/api/session').then(r => r.ok ? r.json() : null).then(s => {
+  if (s?.ok) location.href = s.role === 'admin' ? '/index.html' : '/performance.html';
+});
+</script>
+</body>
+</html>
