@@ -82,6 +82,9 @@ for (const sql of [
   `ALTER TABLE clients ADD COLUMN notes TEXT DEFAULT ''`,
   `ALTER TABLE clients ADD COLUMN client_status TEXT DEFAULT 'active'`,
   `ALTER TABLE clients ADD COLUMN restart_date TEXT DEFAULT NULL`,
+  `ALTER TABLE clients ADD COLUMN campaign_manager TEXT DEFAULT ''`,
+  `ALTER TABLE clients ADD COLUMN commission_rate REAL DEFAULT 15`,
+  `ALTER TABLE clients ADD COLUMN manager_start_date TEXT DEFAULT NULL`,
   `ALTER TABLE leads ADD COLUMN closed_value REAL`,
   `ALTER TABLE leads ADD COLUMN status TEXT DEFAULT 'active'`,
   `ALTER TABLE leads ADD COLUMN received_at TEXT`,
@@ -102,56 +105,60 @@ function checkClientReactivations() {
 checkClientReactivations();
 setInterval(checkClientReactivations, 60 * 60 * 1000); // check hourly
 
-// ── Client seed — prices & commission earners ─────────────
+// ── Client seed — prices, campaign managers & commission rates ──
 const CLIENT_SEED = [
-  { workspace_id: '690ee665bcb253de4fb44538', workspace_name: 'Ottaly',                     price_per_lead: 1,      contact_name: ''     },
-  { workspace_id: '6912ddfef9582848982b9a62', workspace_name: 'AccrueAccounting',            price_per_lead: 72.99,  contact_name: 'Joey' },
-  { workspace_id: '691ed9eaa1b5035dd42b4d86', workspace_name: 'Volancy',                    price_per_lead: 0,      contact_name: ''     },
-  { workspace_id: '6932e1e2d3beeb70040857e7', workspace_name: 'AIVI',                       price_per_lead: 0,      contact_name: ''     },
-  { workspace_id: '693fc9d9fd3453ffb933c88c', workspace_name: 'FleetSauce',                 price_per_lead: 0,      contact_name: ''     },
-  { workspace_id: '695259b0d1677bc04d5a3aa8', workspace_name: 'Stribe',                     price_per_lead: 0,      contact_name: ''     },
-  { workspace_id: '695259c3d6154e27d164bcf7', workspace_name: 'Indigo',                     price_per_lead: 79.99,  contact_name: ''     },
-  { workspace_id: '695259dc8de377db7577dc45', workspace_name: 'PPC',                        price_per_lead: 99.99,  contact_name: 'Joey' },
-  { workspace_id: '695259ea8de377db7577dc46', workspace_name: 'JMC Accountants',            price_per_lead: 0,      contact_name: ''     },
-  { workspace_id: '69525a0eceae00718efdaeaa', workspace_name: 'HydrationCompany',           price_per_lead: 72.99,  contact_name: ''     },
-  { workspace_id: '6964c76a36e2bd2af31c7adf', workspace_name: 'V4One',                      price_per_lead: 0,      contact_name: ''     },
-  { workspace_id: '6964ec1b2364418165378b13', workspace_name: 'Rural & Country',            price_per_lead: 0,      contact_name: ''     },
-  { workspace_id: '6964ec4f693ae16dcb15b9f7', workspace_name: 'TangerineTax',               price_per_lead: 0,      contact_name: ''     },
-  { workspace_id: '6967e4b912a9eb99bbafe356', workspace_name: "Tristan's Workspace",        price_per_lead: 0,      contact_name: ''     },
-  { workspace_id: '696e3c1682c0ae8e5357c552', workspace_name: 'FAIT',                       price_per_lead: 0,      contact_name: ''     },
-  { workspace_id: '697e20f02db8460f8ba68792', workspace_name: 'Jumping Spider',             price_per_lead: 100,    contact_name: ''     },
-  { workspace_id: '6989ac90bb085fcd05167fc9', workspace_name: 'Josh - Commercial Flooring', price_per_lead: 189.99, contact_name: ''     },
-  { workspace_id: '699714b02f0830a7148fcf3e', workspace_name: 'Enviro',                     price_per_lead: 89,     contact_name: 'Joey' },
-  { workspace_id: '69a686632f5aaca7d9602c1f', workspace_name: 'Animo',                      price_per_lead: 195,    contact_name: ''     },
-  { workspace_id: '69a9db287af7ef2854f57636', workspace_name: 'GGRS',                       price_per_lead: 178,    contact_name: 'Joey' },
-  { workspace_id: '69a9db307af7ef2854f57637', workspace_name: 'ButterflyEco',               price_per_lead: 205,    contact_name: ''     },
-  { workspace_id: '69c43d1407bf312ff0026642', workspace_name: 'GXI',                        price_per_lead: 169,    contact_name: 'Joey' },
-  { workspace_id: '69c43d1e07bf312ff0026643', workspace_name: 'AuraaDesign',                price_per_lead: 100,    contact_name: ''     },
-  { workspace_id: '69ce40f616a9cc965746b1a6', workspace_name: 'Ottaly Test Account',        price_per_lead: 0,      contact_name: ''     },
+  { workspace_id: '690ee665bcb253de4fb44538', workspace_name: 'Ottaly',                     price_per_lead: 1,      campaign_manager: '',     commission_rate: 15 },
+  { workspace_id: '6912ddfef9582848982b9a62', workspace_name: 'AccrueAccounting',            price_per_lead: 72.99,  campaign_manager: 'Joey', commission_rate: 15 },
+  { workspace_id: '691ed9eaa1b5035dd42b4d86', workspace_name: 'Volancy',                    price_per_lead: 0,      campaign_manager: '',     commission_rate: 15 },
+  { workspace_id: '6932e1e2d3beeb70040857e7', workspace_name: 'AIVI',                       price_per_lead: 0,      campaign_manager: '',     commission_rate: 15 },
+  { workspace_id: '693fc9d9fd3453ffb933c88c', workspace_name: 'FleetSauce',                 price_per_lead: 0,      campaign_manager: '',     commission_rate: 15 },
+  { workspace_id: '695259b0d1677bc04d5a3aa8', workspace_name: 'Stribe',                     price_per_lead: 0,      campaign_manager: '',     commission_rate: 15 },
+  { workspace_id: '695259c3d6154e27d164bcf7', workspace_name: 'Indigo',                     price_per_lead: 79.99,  campaign_manager: '',     commission_rate: 15 },
+  { workspace_id: '695259dc8de377db7577dc45', workspace_name: 'PPC',                        price_per_lead: 99.99,  campaign_manager: 'Joey', commission_rate: 15 },
+  { workspace_id: '695259ea8de377db7577dc46', workspace_name: 'JMC Accountants',            price_per_lead: 0,      campaign_manager: '',     commission_rate: 15 },
+  { workspace_id: '69525a0eceae00718efdaeaa', workspace_name: 'HydrationCompany',           price_per_lead: 72.99,  campaign_manager: '',     commission_rate: 15 },
+  { workspace_id: '6964c76a36e2bd2af31c7adf', workspace_name: 'V4One',                      price_per_lead: 0,      campaign_manager: '',     commission_rate: 15 },
+  { workspace_id: '6964ec1b2364418165378b13', workspace_name: 'Rural & Country',            price_per_lead: 0,      campaign_manager: '',     commission_rate: 15 },
+  { workspace_id: '6964ec4f693ae16dcb15b9f7', workspace_name: 'TangerineTax',               price_per_lead: 0,      campaign_manager: '',     commission_rate: 15 },
+  { workspace_id: '6967e4b912a9eb99bbafe356', workspace_name: "Tristan's Workspace",        price_per_lead: 0,      campaign_manager: '',     commission_rate: 15 },
+  { workspace_id: '696e3c1682c0ae8e5357c552', workspace_name: 'FAIT',                       price_per_lead: 0,      campaign_manager: '',     commission_rate: 15 },
+  { workspace_id: '697e20f02db8460f8ba68792', workspace_name: 'Jumping Spider',             price_per_lead: 100,    campaign_manager: '',     commission_rate: 15 },
+  { workspace_id: '6989ac90bb085fcd05167fc9', workspace_name: 'Josh - Commercial Flooring', price_per_lead: 189.99, campaign_manager: '',     commission_rate: 15 },
+  { workspace_id: '699714b02f0830a7148fcf3e', workspace_name: 'Enviro',                     price_per_lead: 89,     campaign_manager: 'Joey', commission_rate: 15 },
+  { workspace_id: '69a686632f5aaca7d9602c1f', workspace_name: 'Animo',                      price_per_lead: 195,    campaign_manager: '',     commission_rate: 15 },
+  { workspace_id: '69a9db287af7ef2854f57636', workspace_name: 'GGRS',                       price_per_lead: 178,    campaign_manager: 'Joey', commission_rate: 15 },
+  { workspace_id: '69a9db307af7ef2854f57637', workspace_name: 'ButterflyEco',               price_per_lead: 205,    campaign_manager: '',     commission_rate: 15 },
+  { workspace_id: '69c43d1407bf312ff0026642', workspace_name: 'GXI',                        price_per_lead: 169,    campaign_manager: 'Joey', commission_rate: 15 },
+  { workspace_id: '69c43d1e07bf312ff0026643', workspace_name: 'AuraaDesign',                price_per_lead: 100,    campaign_manager: '',     commission_rate: 15 },
+  { workspace_id: '69ce40f616a9cc965746b1a6', workspace_name: 'Ottaly Test Account',        price_per_lead: 0,      campaign_manager: '',     commission_rate: 15 },
 ];
 
 const upsertClient = db.prepare(`
-  INSERT INTO clients (username, password_hash, workspace_id, workspace_name, price_per_lead, contact_name)
-  VALUES (?, ?, ?, ?, ?, ?)
+  INSERT INTO clients (username, password_hash, workspace_id, workspace_name, price_per_lead, campaign_manager, commission_rate)
+  VALUES (?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(username) DO UPDATE SET
-    price_per_lead = excluded.price_per_lead,
-    contact_name   = excluded.contact_name,
-    workspace_id   = excluded.workspace_id,
-    workspace_name = excluded.workspace_name
+    price_per_lead   = excluded.price_per_lead,
+    campaign_manager = excluded.campaign_manager,
+    commission_rate  = excluded.commission_rate,
+    workspace_id     = excluded.workspace_id,
+    workspace_name   = excluded.workspace_name
 `);
 for (const s of CLIENT_SEED) {
   const existing = db.prepare('SELECT id, price_per_lead FROM clients WHERE workspace_id = ?').get(s.workspace_id);
   if (existing) {
-    // Never overwrite a manually-set price — only update if seed has a real price AND current is 0
     const newPrice = (s.price_per_lead > 0 && (existing.price_per_lead || 0) === 0)
       ? s.price_per_lead : existing.price_per_lead;
-    db.prepare(`UPDATE clients SET workspace_name=?, contact_name=?, price_per_lead=? WHERE workspace_id=?`)
-      .run(s.workspace_name, s.contact_name, newPrice, s.workspace_id);
+    // Only set campaign_manager from seed if DB is currently blank (don't overwrite manual edits)
+    const cur = db.prepare('SELECT campaign_manager, commission_rate FROM clients WHERE workspace_id=?').get(s.workspace_id);
+    const mgr  = (cur?.campaign_manager || '') === '' && s.campaign_manager ? s.campaign_manager : (cur?.campaign_manager || '');
+    db.prepare(`UPDATE clients SET workspace_name=?, price_per_lead=?, campaign_manager=? WHERE workspace_id=?`)
+      .run(s.workspace_name, newPrice, mgr, s.workspace_id);
   } else {
     const tempHash = bcrypt.hashSync('Ottaly2025!', 10);
     upsertClient.run(
       s.workspace_name.toLowerCase().replace(/\s+/g, '_'),
-      tempHash, s.workspace_id, s.workspace_name, s.price_per_lead, s.contact_name
+      tempHash, s.workspace_id, s.workspace_name, s.price_per_lead,
+      s.campaign_manager || '', s.commission_rate || 15
     );
   }
 }
@@ -494,7 +501,7 @@ app.post('/api/client-status/:id', requireAdmin, (req, res) => {
 
 // ── Workspace prices (public — used by Revenue page) ──────
 app.get('/api/workspace-prices', (req, res) => {
-  const rows = db.prepare(`SELECT workspace_id, workspace_name, price_per_lead, client_status, contact_name FROM clients`).all();
+  const rows = db.prepare(`SELECT workspace_id, workspace_name, price_per_lead, client_status, contact_name, campaign_manager, commission_rate, manager_start_date FROM clients`).all();
   res.json(rows);
 });
 
@@ -903,7 +910,7 @@ app.get('/api/admin/workspaces', requireAdmin, async (req, res) => {
 // ── Admin — clients ────────────────────────────────────────
 app.get('/api/admin/clients', requireAdmin, (req, res) => {
   res.json(db.prepare(
-    'SELECT id, username, workspace_id, workspace_name, plan_leads, price_per_lead, stripe_customer_id, contact_name, contact_email, contact_phone, website, notes, client_status, restart_date, created_at FROM clients ORDER BY created_at DESC'
+    'SELECT id, username, workspace_id, workspace_name, plan_leads, price_per_lead, stripe_customer_id, contact_name, contact_email, contact_phone, website, notes, client_status, restart_date, campaign_manager, commission_rate, manager_start_date, created_at FROM clients ORDER BY created_at DESC'
   ).all());
 });
 
@@ -933,8 +940,11 @@ app.put('/api/admin/clients/:id', requireAdmin, (req, res) => {
   if (contact_phone  !== undefined) { updates.push('contact_phone = ?');  vals.push(contact_phone); }
   if (website        !== undefined) { updates.push('website = ?');        vals.push(website); }
   if (notes          !== undefined) { updates.push('notes = ?');          vals.push(notes); }
-  if (client_status  !== undefined) { updates.push('client_status = ?');  vals.push(client_status); }
-  if (restart_date   !== undefined) { updates.push('restart_date = ?');   vals.push(restart_date || null); }
+  if (client_status    !== undefined) { updates.push('client_status = ?');    vals.push(client_status); }
+  if (restart_date     !== undefined) { updates.push('restart_date = ?');     vals.push(restart_date || null); }
+  if (req.body.campaign_manager   !== undefined) { updates.push('campaign_manager = ?');   vals.push(req.body.campaign_manager); }
+  if (req.body.commission_rate    !== undefined) { updates.push('commission_rate = ?');    vals.push(parseFloat(req.body.commission_rate) || 15); }
+  if (req.body.manager_start_date !== undefined) { updates.push('manager_start_date = ?'); vals.push(req.body.manager_start_date || null); }
   if (updates.length)
     db.prepare(`UPDATE clients SET ${updates.join(', ')} WHERE id = ?`).run(...vals, req.params.id);
   res.json({ ok: true });

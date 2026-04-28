@@ -213,7 +213,23 @@ tr:hover td{background:#FAFBFF}
         </div>
       </div>
 
-      <div class="section-label">Contact Details</div>
+      <div class="section-label">Campaign Manager</div>
+      <div class="form-grid">
+        <div class="field">
+          <label>Assigned Manager</label>
+          <input type="text" id="fCampaignManager" placeholder="e.g. Joey">
+        </div>
+        <div class="field">
+          <label>Commission Rate (%)</label>
+          <input type="number" id="fCommissionRate" placeholder="15" min="0" max="100" step="0.5">
+        </div>
+        <div class="field">
+          <label>Managing Since <span style="font-weight:400;color:var(--muted)">(commission counts from this date)</span></label>
+          <input type="date" id="fManagerStartDate">
+        </div>
+      </div>
+
+      <div class="section-label">Client Contact Details</div>
       <div class="form-grid">
         <div class="field">
           <label>Contact Name</label>
@@ -401,26 +417,30 @@ function openModal(id) {
 
   if (isNew) {
     ['fWorkspaceName','fWorkspaceId','fUsername','fPassword','fContactName',
-     'fContactEmail','fContactPhone','fWebsite','fNotes','fRestartDate'].forEach(f => document.getElementById(f).value = '');
-    document.getElementById('fPricePerLead').value = '';
-    document.getElementById('fPlanLeads').value = '';
-    document.getElementById('fStatus').value = 'active';
+     'fContactEmail','fContactPhone','fWebsite','fNotes','fRestartDate','fCampaignManager','fManagerStartDate'].forEach(f => document.getElementById(f).value = '');
+    document.getElementById('fPricePerLead').value    = '';
+    document.getElementById('fPlanLeads').value       = '';
+    document.getElementById('fCommissionRate').value  = '15';
+    document.getElementById('fStatus').value          = 'active';
   } else {
     const c = clients.find(x => x.id === id);
     if (!c) return;
-    document.getElementById('fWorkspaceName').value  = c.workspace_name  || '';
-    document.getElementById('fWorkspaceId').value    = c.workspace_id    || '';
-    document.getElementById('fUsername').value       = c.username        || '';
-    document.getElementById('fPassword').value       = '';
-    document.getElementById('fContactName').value    = c.contact_name    || '';
-    document.getElementById('fContactEmail').value   = c.contact_email   || '';
-    document.getElementById('fContactPhone').value   = c.contact_phone   || '';
-    document.getElementById('fWebsite').value        = c.website         || '';
-    document.getElementById('fPricePerLead').value   = c.price_per_lead  || '';
-    document.getElementById('fPlanLeads').value      = c.plan_leads      || '';
-    document.getElementById('fNotes').value          = c.notes           || '';
-    document.getElementById('fStatus').value         = c.client_status   || 'active';
-    document.getElementById('fRestartDate').value    = c.restart_date    || '';
+    document.getElementById('fWorkspaceName').value   = c.workspace_name    || '';
+    document.getElementById('fWorkspaceId').value     = c.workspace_id      || '';
+    document.getElementById('fUsername').value        = c.username          || '';
+    document.getElementById('fPassword').value        = '';
+    document.getElementById('fCampaignManager').value  = c.campaign_manager   || '';
+    document.getElementById('fCommissionRate').value   = c.commission_rate    ?? 15;
+    document.getElementById('fManagerStartDate').value = c.manager_start_date || '';
+    document.getElementById('fContactName').value     = c.contact_name      || '';
+    document.getElementById('fContactEmail').value    = c.contact_email     || '';
+    document.getElementById('fContactPhone').value    = c.contact_phone     || '';
+    document.getElementById('fWebsite').value         = c.website           || '';
+    document.getElementById('fPricePerLead').value    = c.price_per_lead    || '';
+    document.getElementById('fPlanLeads').value       = c.plan_leads        || '';
+    document.getElementById('fNotes').value           = c.notes             || '';
+    document.getElementById('fStatus').value          = c.client_status     || 'active';
+    document.getElementById('fRestartDate').value     = c.restart_date      || '';
   }
   document.getElementById('modalOverlay').classList.add('active');
 }
@@ -445,11 +465,14 @@ async function saveClient() {
     contact_email:  document.getElementById('fContactEmail').value.trim(),
     contact_phone:  document.getElementById('fContactPhone').value.trim(),
     website:        document.getElementById('fWebsite').value.trim(),
-    price_per_lead: document.getElementById('fPricePerLead').value,
-    plan_leads:     document.getElementById('fPlanLeads').value,
-    notes:          document.getElementById('fNotes').value.trim(),
-    client_status:  document.getElementById('fStatus').value,
-    restart_date:   document.getElementById('fRestartDate').value || null,
+    price_per_lead:   document.getElementById('fPricePerLead').value,
+    plan_leads:       document.getElementById('fPlanLeads').value,
+    notes:            document.getElementById('fNotes').value.trim(),
+    client_status:    document.getElementById('fStatus').value,
+    restart_date:     document.getElementById('fRestartDate').value || null,
+    campaign_manager:   document.getElementById('fCampaignManager').value.trim(),
+    commission_rate:    document.getElementById('fCommissionRate').value,
+    manager_start_date: document.getElementById('fManagerStartDate').value || null,
   };
   if (isNew || password) body.password = password;
 

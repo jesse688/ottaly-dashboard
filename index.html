@@ -1086,7 +1086,8 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
         let tsBucket = 'day';
         let currentNonleadEmail = null;
 
-        const COMMISSION_RATE = 0.15;
+        const COMMISSION_RATE = 0.15; // global fallback
+        let commRateMap = {}; // workspace_name → commission rate %
 
         const CLIENT_COLORS = ['#1F6F78','#224388','#FFB700','#7C89CD','#D2E4F8'];
 
@@ -1228,10 +1229,16 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
                     fetch('/api/revenue/leads').then(r => r.json()),
                     fetch('/api/workspace-prices').then(r => r.json()).catch(() => [])
                 ]);
-                // Build clientName → commission earner from workspace prices
+                // Build client maps for commission tracker
                 clientEarners = {};
+                commRateMap   = {};
+                window._managerStartMap = {};
                 (prices || []).forEach(p => {
-                    if (p.contact_name) clientEarners[p.workspace_name] = p.contact_name;
+                    if (p.campaign_manager) {
+                        clientEarners[p.workspace_name]         = p.campaign_manager;
+                        window._managerStartMap[p.workspace_name] = p.manager_start_date || null;
+                    }
+                    commRateMap[p.workspace_name] = p.commission_rate ?? 15;
                 });
                 allLeads = (cache.leads || []).map(l => {
                     const dateObj = parseDate(l.date);
@@ -1779,23 +1786,27 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
                 l.date >= start && l.date < end
             );
 
-            // Build: { earnerName: { clientName: { leads, revenue } } }
+            // Build: { earnerName: { clientName: { leads, revenue, commRate, startDate } } }
             _earnerStats = {};
             monthLeads.forEach(lead => {
                 const earner = clientEarners[lead.client_name.trim()];
                 if (!earner) return;
+                // Only count leads on or after the manager's start date
+                const startDateStr = window._managerStartMap?.[lead.client_name.trim()];
+                if (startDateStr && lead.date && lead.date < new Date(startDateStr + 'T00:00:00')) return;
                 if (!_earnerStats[earner]) _earnerStats[earner] = {};
                 if (!_earnerStats[earner][lead.client_name]) {
-                    _earnerStats[earner][lead.client_name] = { leads: 0, revenue: 0 };
+                    const rate = (commRateMap[lead.client_name] ?? 15) / 100;
+                    _earnerStats[earner][lead.client_name] = { leads: 0, revenue: 0, commRate: rate, startDate: startDateStr };
                 }
                 _earnerStats[earner][lead.client_name].leads++;
                 _earnerStats[earner][lead.client_name].revenue += lead.lead_price;
             });
 
-            // Agency total
+            // Agency total using per-client commission rates
             let agencyTotal = 0;
             Object.values(_earnerStats).forEach(clients =>
-                Object.values(clients).forEach(s => agencyTotal += s.revenue * COMMISSION_RATE)
+                Object.values(clients).forEach(s => agencyTotal += s.revenue * (s.commRate ?? COMMISSION_RATE))
             );
             document.getElementById('agencyTotal').textContent = '£' + agencyTotal.toFixed(2);
 
@@ -1887,9 +1898,9 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
         function renderEarnerDetail(earner) {
             const clients = _earnerStats[earner] || {};
             const entries = Object.entries(clients).sort((a, b) => b[1].revenue - a[1].revenue);
-            const totalRevenue = entries.reduce((s, [, c]) => s + c.revenue, 0);
-            const totalLeads = entries.reduce((s, [, c]) => s + c.leads, 0);
-            const totalCommission = totalRevenue * COMMISSION_RATE;
+            const totalRevenue    = entries.reduce((s, [, c]) => s + c.revenue, 0);
+            const totalLeads      = entries.reduce((s, [, c]) => s + c.leads, 0);
+            const totalCommission = entries.reduce((s, [, c]) => s + c.revenue * (c.commRate ?? COMMISSION_RATE), 0);
 
             const allClients = Object.keys(clientEarners);
             document.getElementById('earnerDetail').innerHTML = `
@@ -1904,7 +1915,7 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
                     </div>
                 </div>
                 ${entries.map(([client, stats]) => {
-                    const commission = stats.revenue * COMMISSION_RATE;
+                    const commission = stats.revenue * (stats.commRate ?? COMMISSION_RATE);
                     const colorIdx = allClients.indexOf(client);
                     const color = CLIENT_COLORS[colorIdx % CLIENT_COLORS.length];
                     return `
@@ -1916,7 +1927,8 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
                             <div class="earner-client-stats">
                                 <span class="stat-pill">${stats.leads} lead${stats.leads !== 1 ? 's' : ''}</span>
                                 <span class="stat-value">£${Math.round(stats.revenue).toLocaleString('en-GB')}</span>
-                                <span class="revenue-pill">£${commission.toFixed(2)}</span>
+                                <span class="revenue-pill">£${commission.toFixed(2)} (${Math.round((stats.commRate ?? COMMISSION_RATE)*100)}%)</span>
+                                ${stats.startDate ? `<span style="font-size:11px;color:#9CA3AF">from ${stats.startDate}</span>` : ''}
                             </div>
                         </div>
                     `;
