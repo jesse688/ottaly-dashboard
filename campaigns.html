@@ -415,7 +415,7 @@ function renderWorkspace() {
   for (const c of filtered) {
     const rr   = (c.replyRate * 100).toFixed(2);
     const prr  = c.replies > 0 ? ((c.posReplies / c.replies) * 100).toFixed(0) : '—';
-    const lr   = c.replies > 0 ? ((c.leadRate) * 100).toFixed(0) + '%' : '—';
+    const lr   = c.sent > 0 && c.leads > 0 ? ((c.leads / c.sent) * 100).toFixed(2) + '%' : '—';
     const expanded = expandedIds.has(c.id);
     const allFlags = [...c.flags, ...c.variantInsights.map(v => ({ type: 'info', msg: v.msg }))];
 
@@ -523,8 +523,9 @@ function renderDetailPanel(c, wsAvg) {
         <div class="stat-row"><span class="label">Positive Replies</span><span class="value" style="color:var(--green)">${c.posReplies}</span></div>
         <div class="stat-row"><span class="label">Negative Replies</span><span class="value" style="color:var(--red)">${c.negReplies}</span></div>
         <div class="stat-row"><span class="label">Bounces</span><span class="value">${c.bounces}</span></div>
-        <div class="stat-row"><span class="label">Leads Generated</span><span class="value" style="color:var(--teal)">${c.leads}</span></div>
-        <div class="stat-row"><span class="label">Data Used</span><span class="value">${c.leadContacted.toLocaleString()} / ${c.leads.toLocaleString()} leads (${c.exhaustion > 0 ? Math.round(c.exhaustion*100)+'%' : '—'})</span></div>
+        <div class="stat-row"><span class="label">Actual Leads</span><span class="value" style="color:var(--teal)">${c.leads}</span></div>
+        <div class="stat-row"><span class="label">Data Size</span><span class="value">${(c.dataSize||0).toLocaleString()} contacts</span></div>
+        <div class="stat-row"><span class="label">Data Used</span><span class="value">${c.leadContacted.toLocaleString()} / ${(c.dataSize||0).toLocaleString()} (${c.exhaustion > 0 ? Math.round(c.exhaustion*100)+'%' : '—'})</span></div>
         ${c.lastReplied ? `<div class="stat-row"><span class="label">Last Reply</span><span class="value">${new Date(c.lastReplied).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'})}</span></div>` : ''}
       </div>
       ${(c.stepReplies||[]).filter(s=>s.sent>0).length > 1 ? `

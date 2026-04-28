@@ -635,9 +635,9 @@ function scoreCampaign(c, wsAvgReplyRate) {
   const replyRate    = sent > 0 ? (c.replied_count || 0) / sent : 0;
   const posReplyRate = (c.replied_count || 0) > 0 ? (c.positive_reply_count || 0) / c.replied_count : 0;
   const leadRate     = (c.replied_count || 0) > 0 ? (c.lead_count || 0) / c.replied_count : 0;
-  const contacted    = c.lead_contacted_count || 0;
-  const total        = c.lead_count || 0;
-  const exhaustion   = total > 0 ? contacted / total : 0;
+  const contacted  = c.lead_contacted_count || 0;
+  const total      = c.lead_count || 0; // data size (contacts in campaign list)
+  const exhaustion = total > 0 ? contacted / total : 0;
   const flags = [];
   if (replyRate < 0.005 && sent > 300)  flags.push({ type: 'critical', msg: 'Very low reply rate — copy likely needs refreshing' });
   else if (replyRate < 0.01 && sent > 200) flags.push({ type: 'warning', msg: 'Below average reply rate' });
@@ -764,6 +764,12 @@ async function refreshCampaignCache() {
         const wsAvgReplyRate = active.length
           ? active.reduce((s, c) => s + (c.replied_count || 0) / (c.sent_count || 1), 0) / active.length : 0;
 
+        // Build actual lead counts per campaign from revenue cache (workspace-leads API)
+        const revLeadsByCamp = {};
+        (revenueCache.leads || [])
+          .filter(l => l.workspace_id === ws.id && l.campaign)
+          .forEach(l => { revLeadsByCamp[l.campaign] = (revLeadsByCamp[l.campaign] || 0) + 1; });
+
         const scored = [];
         for (const c of campaigns) {
           const metrics = scoreCampaign(c, wsAvgReplyRate);
@@ -774,21 +780,28 @@ async function refreshCampaignCache() {
               if (Array.isArray(vstats)) { variationSteps = vstats; variantInsights = analyzeVariants(vstats); }
             } catch {}
           }
-          // Step drop-off: replies per step
           const stepReplies = (variationSteps || []).map(st => ({
             step: st.step,
             sent:    st.variations.reduce((s, v) => s + (v.sent || 0), 0),
             replies: st.variations.reduce((s, v) => s + (v.reply || 0), 0),
           }));
 
+          // actualLeads = contacts marked as LEAD from this campaign (from workspace-leads)
+          // dataSize    = total contacts in the campaign list (for exhaustion calc only)
+          const actualLeads = revLeadsByCamp[c.camp_name] || 0;
+          const dataSize    = c.lead_count || 0;
+          const sent        = c.sent_count || 0;
+          const leadConvRate = sent > 0 ? actualLeads / sent : 0;
+
           scored.push({
             id: c.id, name: c.camp_name || 'Unnamed', status: c.status,
-            sent: c.sent_count || 0, opens: c.unique_opened_count || c.opened_count || 0,
+            sent, opens: c.unique_opened_count || c.opened_count || 0,
             replies: c.replied_count || 0, posReplies: c.positive_reply_count || 0,
             negReplies: c.negative_reply_count || 0, bounces: c.bounced_count || 0,
-            leads: c.lead_count || 0, leadContacted: c.lead_contacted_count || 0,
+            leads: actualLeads, dataSize, leadContacted: c.lead_contacted_count || 0,
             openRate: c.open_rate || 0, replyRate: metrics.replyRate,
-            posReplyRate: metrics.posReplyRate, leadRate: metrics.leadRate,
+            posReplyRate: metrics.posReplyRate,
+            leadRate: leadConvRate,
             exhaustion: metrics.exhaustion, tier: metrics.tier, flags: metrics.flags,
             variantInsights, variationSteps, stepReplies,
             lastSent: c.last_lead_sent || null, lastReplied: c.last_lead_replied || null,
