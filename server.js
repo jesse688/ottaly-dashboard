@@ -494,7 +494,7 @@ app.post('/api/client-status/:id', requireAdmin, (req, res) => {
 
 // ── Workspace prices (public — used by Revenue page) ──────
 app.get('/api/workspace-prices', (req, res) => {
-  const rows = db.prepare(`SELECT workspace_id, workspace_name, price_per_lead, client_status FROM clients`).all();
+  const rows = db.prepare(`SELECT workspace_id, workspace_name, price_per_lead, client_status, contact_name FROM clients`).all();
   res.json(rows);
 });
 

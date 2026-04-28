@@ -1007,13 +1007,32 @@
         </div>
 
         <!-- Commission Tracker -->
-        <div class="section-title">Commission Tracker — This Month</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.75rem;margin-bottom:1rem">
+            <div class="section-title" style="margin-bottom:0">Commission Tracker</div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <select id="commPeriod" onchange="handleCommPeriodChange()" style="padding:6px 10px;border:1px solid #E5E7EB;border-radius:7px;font-size:13px;font-family:'Inter',sans-serif;outline:none">
+                    <option value="month" selected>This Month</option>
+                    <option value="lastMonth">Last Month</option>
+                    <option value="quarter">This Quarter</option>
+                    <option value="year">This Year</option>
+                    <option value="all">All Time</option>
+                    <option value="custom">Custom Range</option>
+                </select>
+                <div id="commCustomGroup" style="display:none;gap:6px;align-items:center">
+                    <input type="date" id="commStart" style="padding:6px 8px;border:1px solid #E5E7EB;border-radius:7px;font-size:12px;outline:none">
+                    <span style="font-size:12px;color:#6B7280">to</span>
+                    <input type="date" id="commEnd" style="padding:6px 8px;border:1px solid #E5E7EB;border-radius:7px;font-size:12px;outline:none">
+                    <button onclick="updateCommissionTracker()" style="padding:6px 10px;background:var(--navy);color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer">Apply</button>
+                </div>
+                <span id="commPeriodLabel" style="font-size:12px;color:#6B7280"></span>
+            </div>
+        </div>
         <div class="commission-layout">
             <div class="agency-total-card">
                 <div class="agency-eye">👁</div>
                 <div class="agency-total-label">Agency Commission</div>
                 <div class="agency-total-value" id="agencyTotal">£0</div>
-                <div class="agency-total-sub">total earned this month</div>
+                <div class="agency-total-sub" id="agencyTotalSub">total earned this month</div>
             </div>
             <div class="commission-panel">
                 <div class="earner-tabs" id="earnerTabs"></div>
@@ -1205,7 +1224,15 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
         async function fetchData() {
             try {
                 document.getElementById('loadingStatus').textContent = 'Loading…';
-                const cache = await fetch('/api/revenue/leads').then(r => r.json());
+                const [cache, prices] = await Promise.all([
+                    fetch('/api/revenue/leads').then(r => r.json()),
+                    fetch('/api/workspace-prices').then(r => r.json()).catch(() => [])
+                ]);
+                // Build clientName → commission earner from workspace prices
+                clientEarners = {};
+                (prices || []).forEach(p => {
+                    if (p.contact_name) clientEarners[p.workspace_name] = p.contact_name;
+                });
                 allLeads = (cache.leads || []).map(l => {
                     const dateObj = parseDate(l.date);
                     return {
@@ -1704,14 +1731,52 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
             chart.update();
         }
 
-        function updateCommissionTracker() {
+        function handleCommPeriodChange() {
+            const p = document.getElementById('commPeriod').value;
+            const cg = document.getElementById('commCustomGroup');
+            if (p === 'custom') {
+                cg.style.display = 'flex';
+                const now = new Date();
+                document.getElementById('commStart').value = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+                document.getElementById('commEnd').value   = now.toISOString().split('T')[0];
+            } else {
+                cg.style.display = 'none';
+                updateCommissionTracker();
+            }
+        }
+
+        function getCommRange() {
+            const p   = document.getElementById('commPeriod').value;
             const now = new Date();
-            const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-            const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+            const y   = now.getFullYear();
+            const m   = now.getMonth();
+            let start, end, label;
+            if (p === 'month')     { start = new Date(y, m, 1);   end = new Date(y, m+1, 1);   label = now.toLocaleDateString('en-GB', {month:'long', year:'numeric'}); }
+            else if (p === 'lastMonth') { start = new Date(y, m-1, 1); end = new Date(y, m, 1); label = new Date(y, m-1, 1).toLocaleDateString('en-GB', {month:'long', year:'numeric'}); }
+            else if (p === 'quarter') {
+                const q = Math.floor(m / 3);
+                start = new Date(y, q*3, 1); end = new Date(y, q*3+3, 1);
+                label = `Q${q+1} ${y}`;
+            }
+            else if (p === 'year')  { start = new Date(y, 0, 1);  end = new Date(y+1, 0, 1);  label = `${y}`; }
+            else if (p === 'all')   { start = new Date(2020, 0, 1); end = new Date(y+1, 0, 1); label = 'All Time'; }
+            else {
+                const s = document.getElementById('commStart').value;
+                const e = document.getElementById('commEnd').value;
+                start = new Date(s + 'T00:00:00'); end = new Date(e + 'T23:59:59');
+                label = `${s} – ${e}`;
+            }
+            document.getElementById('commPeriodLabel').textContent = label;
+            document.getElementById('agencyTotalSub').textContent  = label;
+            return { start, end };
+        }
+
+        function updateCommissionTracker() {
+            const { start, end } = getCommRange();
 
             const monthLeads = allLeads.filter(l =>
                 !l.is_nonlead && l.date &&
-                l.date >= monthStart && l.date < monthEnd
+                l.date >= start && l.date < end
             );
 
             // Build: { earnerName: { clientName: { leads, revenue } } }
