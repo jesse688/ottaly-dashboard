@@ -432,7 +432,9 @@ function renderWorkspace() {
 
   const rows = [];
   for (const c of filtered) {
-    const rr   = (c.replyRate * 100).toFixed(2);
+    const rr     = (c.replyRate * 100).toFixed(2);
+    const rrEx   = c.sent > 0 ? (((c.posReplies + c.negReplies + (c.neutralReplies||0)) / c.sent) * 100).toFixed(2) : null;
+    const showEx = rrEx !== null && Math.abs(parseFloat(rr) - parseFloat(rrEx)) > 0.05;
     const prr  = c.replies > 0 ? ((c.posReplies / c.replies) * 100).toFixed(0) : '—';
     const lr   = c.sent > 0 && c.leads > 0 ? ((c.leads / c.sent) * 100).toFixed(2) + '%' : '—';
     const expanded = expandedIds.has(c.id);
@@ -460,6 +462,7 @@ function renderWorkspace() {
           <span class="tier-dot ${c.tier}"></span>
           <span class="rate-val ${c.tier}">${c.sent < 50 ? '—' : rr + '%'}</span>
         </div>
+        ${showEx ? `<div style="font-size:11px;color:var(--purple);margin-top:1px">${rrEx}% excl. OOO</div>` : ''}
       </td>
       <td>${c.sent >= 50 && c.replies > 0 ? prr + '%' : '—'}</td>
       <td style="font-weight:600">${c.leads}</td>
@@ -537,8 +540,9 @@ function renderDetailPanel(c, wsAvg) {
         <div class="detail-section-title">Campaign Stats</div>
         <div class="stat-row"><span class="label">Total Sends</span><span class="value">${c.sent.toLocaleString()}</span></div>
         <div class="stat-row"><span class="label">Total Replies</span><span class="value">${c.replies.toLocaleString()}</span></div>
-        <div class="stat-row"><span class="label">Reply Rate</span><span class="value ${c.tier}">${(c.replyRate*100).toFixed(2)}%</span></div>
-        <div class="stat-row"><span class="label">Workspace Avg</span><span class="value">${(wsAvg*100).toFixed(2)}%</span></div>
+        <div class="stat-row"><span class="label">Reply Rate (incl. OOO)</span><span class="value ${c.tier}">${(c.replyRate*100).toFixed(2)}%</span></div>
+        ${c.sent > 0 ? `<div class="stat-row"><span class="label">Reply Rate (excl. OOO)</span><span class="value" style="color:var(--purple)">${(((c.posReplies+c.negReplies+(c.neutralReplies||0))/c.sent)*100).toFixed(2)}%</span></div>` : ''}
+        <div class="stat-row"><span class="label">Workspace Avg (incl. OOO)</span><span class="value">${(wsAvg*100).toFixed(2)}%</span></div>
         <div class="stat-row"><span class="label">Positive Replies</span><span class="value" style="color:var(--green)">${c.posReplies}</span></div>
         <div class="stat-row"><span class="label">Negative Replies</span><span class="value" style="color:var(--red)">${c.negReplies}</span></div>
         <div class="stat-row"><span class="label">Bounces</span><span class="value">${c.bounces}</span></div>

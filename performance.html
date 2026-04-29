@@ -872,11 +872,16 @@ fetch('/api/session').then(r=>r.json()).then(s=>{
     // ── Helpers ───────────────────────────────────────────────
     function agg(campaigns) {
         return (campaigns || []).reduce((a, c) => ({
-            sent:    a.sent    + (c.sent_count    || 0),
-            replies: a.replies + (c.replied_count || 0),
-            bounces: a.bounces + (c.bounced_count || 0),
-        }), { sent: 0, replies: 0, bounces: 0 });
+            sent:       a.sent       + (c.sent_count           || 0),
+            replies:    a.replies    + (c.replied_count        || 0),
+            posReplies: a.posReplies + (c.positive_reply_count || 0),
+            bounces:    a.bounces    + (c.bounced_count        || 0),
+        }), { sent: 0, replies: 0, posReplies: 0, bounces: 0 });
     }
+
+    // OOO-excluded reply rate: positive replies only (human, intentional)
+    // Total reply rate includes OOO + auto-replies
+    function replyExOOO(a) { return pct(a.posReplies, a.sent); }
 
     function pct(num, denom) { return denom > 0 ? (num / denom) * 100 : 0; }
     function fmtPct(n, d = 1) { return n.toFixed(d) + '%'; }
@@ -949,10 +954,12 @@ fetch('/api/session').then(r=>r.json()).then(s=>{
         document.getElementById('mSent').textContent    = fmtN(todayAgg.sent);
         document.getElementById('mSentSub').textContent = `${capPct}% of ${fmtN(totalCap)} capacity`;
 
+        const exRate  = replyExOOO(todayAgg);
         const replyEl = document.getElementById('mReply');
         replyEl.textContent  = todayAgg.sent > 0 ? fmtPct(replyRate) : '—';
         replyEl.className    = 'metric-value' + (replyRate < 1 && todayAgg.sent > 50 ? ' red' : '');
-        document.getElementById('mReplySub').textContent = `${fmtN(todayAgg.replies)} replies today`;
+        const exStr = todayAgg.sent > 0 && Math.abs(replyRate - exRate) > 0.05 ? ` · ${fmtPct(exRate)} excl. OOO` : '';
+        document.getElementById('mReplySub').textContent = `${fmtN(todayAgg.replies)} replies today${exStr}`;
 
         const bounceEl = document.getElementById('mBounce');
         bounceEl.textContent = todayAgg.sent > 0 ? fmtPct(bounceRate) : '—';
@@ -1347,9 +1354,11 @@ fetch('/api/session').then(r=>r.json()).then(s=>{
         const totalCap  = activeAcc.reduce((s, a) => s + (a.payload?.daily_limit || 0), 0);
         const capPct    = totalCap > 0 ? (todayAgg.sent / totalCap) * 100 : null;
 
-        const replyToday  = pct(todayAgg.replies, todayAgg.sent);
-        const reply3d     = pct(agg3d.replies,    agg3d.sent);
-        const bounceToday = pct(todayAgg.bounces,  todayAgg.sent);
+        const replyToday     = pct(todayAgg.replies,    todayAgg.sent);
+        const replyTodayEx   = replyExOOO(todayAgg);   // excl. OOO
+        const reply3d        = pct(agg3d.replies,      agg3d.sent);
+        const reply3dEx      = replyExOOO(agg3d);      // excl. OOO
+        const bounceToday    = pct(todayAgg.bounces,   todayAgg.sent);
 
         const lastLeadDays = lastLeadDate
             ? Math.floor((Date.now() - lastLeadDate.getTime()) / 86400000)
@@ -1375,8 +1384,8 @@ fetch('/api/session').then(r=>r.json()).then(s=>{
                           + (lastLeadDays ?? 999) * 3
                           + flags.length * 50;
 
-        return { ws, todayAgg, agg3d, capPct, totalCap, replyToday, reply3d,
-                 bounceToday, lastLeadDate, lastLeadDays, flags, color, sortKey };
+        return { ws, todayAgg, agg3d, capPct, totalCap, replyToday, replyTodayEx,
+                 reply3d, reply3dEx, bounceToday, lastLeadDate, lastLeadDays, flags, color, sortKey };
     }
 
     async function runHealthScan() {
@@ -1454,14 +1463,17 @@ fetch('/api/session').then(r=>r.json()).then(s=>{
                     <div class="ch-sub">${fmtN(sent)} sent</div>`;
         }
 
-        function replyHtml(replyToday, reply3d, sent) {
+        function replyHtml(replyToday, reply3d, sent, replyTodayEx, reply3dEx) {
             if (sent < 5) return `<div class="ch-metric-value muted">—</div><div class="ch-sub">No sends</div>`;
             const cls     = replyToday >= 3 ? 'green' : replyToday >= 1 ? 'amber' : 'red';
             const dropped = reply3d > 0.5 && replyToday < reply3d * (1 - THR.replyDropPct / 100);
             const up      = reply3d > 0 && replyToday > reply3d * 1.1;
             const arr     = dropped ? `<span class="ch-arrow red">↓</span>` : up ? `<span class="ch-arrow green">↑</span>` : '';
-            const sub     = reply3d > 0 ? `${fmtPct(reply3d)} 3d avg` : '';
-            return `<div class="ch-metric-value ${cls}">${fmtPct(replyToday)}${arr}</div>${sub ? `<div class="ch-sub">${sub}</div>` : ''}`;
+            const avg     = reply3d > 0 ? `${fmtPct(reply3d)} 3d avg` : '';
+            // OOO-excluded line (only show if different from total)
+            const exLine  = replyTodayEx !== undefined && Math.abs(replyToday - replyTodayEx) > 0.05
+                ? `<div class="ch-sub" style="color:#7C89CD" title="Excluding OOO & auto-replies">${fmtPct(replyTodayEx)} excl. OOO</div>` : '';
+            return `<div class="ch-metric-value ${cls}">${fmtPct(replyToday)}${arr}</div>${avg ? `<div class="ch-sub">${avg}</div>` : ''}${exLine}`;
         }
 
         function bounceHtml(rate, sent) {
@@ -1500,7 +1512,7 @@ fetch('/api/session').then(r=>r.json()).then(s=>{
                             <div class="ch-dot"></div>
                             <div class="ch-name" title="${r.ws.name}">${r.ws.name}</div>
                             <div class="ch-metric">${sendVolHtml(r.capPct, r.todayAgg.sent)}</div>
-                            <div class="ch-metric">${replyHtml(r.replyToday, r.reply3d, r.todayAgg.sent)}</div>
+                            <div class="ch-metric">${replyHtml(r.replyToday, r.reply3d, r.todayAgg.sent, r.replyTodayEx, r.reply3dEx)}</div>
                             <div class="ch-metric">${bounceHtml(r.bounceToday, r.todayAgg.sent)}</div>
                             <div class="ch-metric">${lastLeadHtml(r.lastLeadDays, r.lastLeadDate)}</div>
                             <div class="ch-flags">${flagsHtml(r.flags)}</div>
