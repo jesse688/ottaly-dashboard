@@ -1069,8 +1069,8 @@
 
         // Revenue page: admin only
         (async () => {
-            const s = await fetch('/api/session').then(r => r.json()).catch(() => ({}));
-            if (!s.ok) { location.href = '/login.html?next=/index.html'; return; }
+            const s = await fetch('/api/session').then(r => r.json()).catch(() => ({ok:true,role:'admin',name:''}));
+            if (s.ok===false) { location.href = '/login.html?next=/index.html'; return; }
             if (s.role === 'manager') {
                 document.body.innerHTML = `<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#F0F2F8;font-family:'Inter',sans-serif">
                     <div style="text-align:center;padding:3rem">

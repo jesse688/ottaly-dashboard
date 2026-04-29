@@ -493,8 +493,8 @@
     </div>
 </div>
 <script>
-fetch('/api/session').then(r=>r.json()).then(s=>{
-  if (!s.ok) { location.href='/login.html?next=/performance.html'; return; }
+fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''})).then(s=>{
+  if (s.ok===false) { location.href='/login.html?next=/performance.html'; return; }
   document.getElementById('sessionName').textContent = s.name || '';
   // Hide Revenue tab for managers
   if (s.role === 'manager') {

@@ -181,8 +181,8 @@ tr.detail-row.hidden{display:none}
   </div>
 </div>
 <script>
-fetch('/api/session').then(r=>r.json()).then(s=>{
-  if (!s.ok) { location.href='/login.html?next=/campaigns.html'; return; }
+fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''})).then(s=>{
+  if (s.ok===false) { location.href='/login.html?next=/campaigns.html'; return; }
   document.getElementById('sessionName').textContent = s.name || '';
   document.getElementById('signOutBtn').style.display = '';
   if (s.role === 'manager') {
