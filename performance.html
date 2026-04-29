@@ -578,8 +578,13 @@ fetch('/api/session').then(r=>r.json()).then(s=>{
       </div>
       <div class="ag-stat teal">
         <div class="ag-stat-val" id="agStatReply">—</div>
-        <div class="ag-stat-label">Avg Reply Rate</div>
+        <div class="ag-stat-label">Reply Rate (incl. OOO)</div>
         <div class="ag-stat-sub" id="agStatReplySub"></div>
+      </div>
+      <div class="ag-stat" style="border-top-color:#7C89CD;">
+        <div class="ag-stat-val" id="agStatReplyEx">—</div>
+        <div class="ag-stat-label">Human Reply Rate</div>
+        <div class="ag-stat-sub" id="agStatReplyExSub">excl. OOO</div>
       </div>
       <div class="ag-stat red">
         <div class="ag-stat-val" id="agStatBounce">—</div>
@@ -615,8 +620,12 @@ fetch('/api/session').then(r=>r.json()).then(s=>{
         <div class="ag-chart-wrap" id="agWrapSent"><canvas id="agChartSent"></canvas></div>
       </div>
       <div class="card ag-chart-card">
-        <div class="ag-chart-title">Reply Rate %</div>
+        <div class="ag-chart-title">Reply Rate % (incl. OOO)</div>
         <div class="ag-chart-wrap" id="agWrapReply"><canvas id="agChartReply"></canvas></div>
+      </div>
+      <div class="card ag-chart-card">
+        <div class="ag-chart-title">Human Reply Rate % (excl. OOO)</div>
+        <div class="ag-chart-wrap" id="agWrapReplyEx"><canvas id="agChartReplyEx"></canvas></div>
       </div>
       <div class="card ag-chart-card">
         <div class="ag-chart-title">Bounce Rate %</div>
@@ -1736,7 +1745,7 @@ fetch('/api/session').then(r=>r.json()).then(s=>{
                 const wsData = await Promise.all(wslist.map(ws =>
                     get(`/analytics/campaign/stats?workspace_id=${ws.id}&start_date=${b.start}&end_date=${b.end}`)
                         .then(data => agg(data))
-                        .catch(() => ({ sent: 0, replies: 0, bounces: 0 }))
+                        .catch(() => ({ sent: 0, replies: 0, posReplies: 0, bounces: 0 }))
                         .then(pvData => ({
                             ...pvData,
                             leads: countPvLeads(wsLabeledLeads[ws.id] || [], b.start, b.end)
@@ -1745,11 +1754,12 @@ fetch('/api/session').then(r=>r.json()).then(s=>{
                 bucketResults.push({
                     bucket: b,
                     totals: wsData.reduce((acc, d) => ({
-                        sent:    acc.sent    + d.sent,
-                        replies: acc.replies + d.replies,
-                        bounces: acc.bounces + d.bounces,
-                        leads:   acc.leads   + d.leads,
-                    }), { sent: 0, replies: 0, bounces: 0, leads: 0 })
+                        sent:       acc.sent       + d.sent,
+                        replies:    acc.replies    + d.replies,
+                        posReplies: acc.posReplies + (d.posReplies || 0),
+                        bounces:    acc.bounces    + d.bounces,
+                        leads:      acc.leads      + d.leads,
+                    }), { sent: 0, replies: 0, posReplies: 0, bounces: 0, leads: 0 })
                 });
                 const p = Math.round(((i + 1) / buckets.length) * 100);
                 progFill.style.width = p + '%';
@@ -1770,7 +1780,8 @@ fetch('/api/session').then(r=>r.json()).then(s=>{
         const sentArr    = bucketResults.map(r => r.totals.sent);
         const repliesArr = bucketResults.map(r => r.totals.replies);
         const leadsArr   = bucketResults.map(r => r.totals.leads);
-        const replyRArr  = bucketResults.map(r => r.totals.sent > 0 ? pct(r.totals.replies, r.totals.sent) : 0);
+        const replyRArr  = bucketResults.map(r => r.totals.sent > 0 ? pct(r.totals.replies,    r.totals.sent) : 0);
+        const replyExArr = bucketResults.map(r => r.totals.sent > 0 ? pct(r.totals.posReplies, r.totals.sent) : 0);
         const bounceRArr = bucketResults.map(r => r.totals.sent > 0 ? pct(r.totals.bounces, r.totals.sent) : 0);
         const rtlArr     = bucketResults.map(r => r.totals.leads > 0 ? r.totals.replies / r.totals.leads : 0);
 
@@ -1785,8 +1796,13 @@ fetch('/api/session').then(r=>r.json()).then(s=>{
         // Stat cards
         document.getElementById('agStatSent').textContent      = fmtN(totalSent);
         document.getElementById('agStatSentSub').textContent   = `${fmtN(totalBounces)} bounces`;
+        const totalPosReplies = bucketResults.reduce((a, r) => a + r.totals.posReplies, 0);
+        const avgReplyEx      = totalSent > 0 ? pct(totalPosReplies, totalSent) : 0;
+
         document.getElementById('agStatReply').textContent     = fmtPct(avgReply);
         document.getElementById('agStatReplySub').textContent  = `${fmtN(totalReplies)} total`;
+        document.getElementById('agStatReplyEx').textContent   = fmtPct(avgReplyEx);
+        document.getElementById('agStatReplyExSub').textContent= `${fmtN(totalPosReplies)} genuine replies`;
         document.getElementById('agStatBounce').textContent    = fmtPct(avgBounce);
         document.getElementById('agStatBounceSub').textContent = totalSent > 0 ? (avgBounce > 5 ? '⚠ Above threshold' : '✓ Within range') : '';
         document.getElementById('agStatReplies').textContent   = fmtN(totalReplies);
@@ -1801,7 +1817,8 @@ fetch('/api/session').then(r=>r.json()).then(s=>{
         // Charts
         const pt = labels.length <= 7 ? 4 : labels.length <= 14 ? 3 : 2;
         buildChart('agChartSent',    labels, sentArr,    'bar',  '#224388', 'Sent',              false, pt);
-        buildChart('agChartReply',   labels, replyRArr,  'line', '#1F6F78', 'Reply Rate %',      true,  pt);
+        buildChart('agChartReply',   labels, replyRArr,  'line', '#1F6F78', 'Reply Rate %',       true,  pt);
+        buildChart('agChartReplyEx', labels, replyExArr, 'line', '#7C89CD', 'Human Reply Rate %', true,  pt);
         buildChart('agChartBounce',  labels, bounceRArr, 'line', '#DC2626', 'Bounce Rate %',     true,  pt);
         buildChart('agChartReplies', labels, repliesArr, 'bar',  '#7C89CD', 'Replies',           false, pt);
         buildChart('agChartLeads',   labels, leadsArr,   'bar',  '#16A34A', 'Marked as Lead',    false, pt);
