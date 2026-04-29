@@ -462,7 +462,7 @@ function renderWorkspace() {
           <span class="tier-dot ${c.tier}"></span>
           <span class="rate-val ${c.tier}">${c.sent < 50 ? '—' : rr + '%'}</span>
         </div>
-        ${showEx ? `<div style="font-size:11px;color:var(--purple);margin-top:1px">${rrEx}% excl. OOO</div>` : ''}
+        ${rrEx !== null ? `<div style="font-size:11px;color:var(--purple);margin-top:1px">${rrEx}% excl. OOO</div>` : ''}
       </td>
       <td>${c.sent >= 50 && c.replies > 0 ? prr + '%' : '—'}</td>
       <td style="font-weight:600">${c.leads}</td>

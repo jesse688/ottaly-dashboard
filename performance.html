@@ -958,7 +958,7 @@ fetch('/api/session').then(r=>r.json()).then(s=>{
         const replyEl = document.getElementById('mReply');
         replyEl.textContent  = todayAgg.sent > 0 ? fmtPct(replyRate) : '—';
         replyEl.className    = 'metric-value' + (replyRate < 1 && todayAgg.sent > 50 ? ' red' : '');
-        const exStr = todayAgg.sent > 0 && Math.abs(replyRate - exRate) > 0.05 ? ` · ${fmtPct(exRate)} excl. OOO` : '';
+        const exStr = todayAgg.sent > 0 ? ` · ${fmtPct(exRate)} excl. OOO` : '';
         document.getElementById('mReplySub').textContent = `${fmtN(todayAgg.replies)} replies today${exStr}`;
 
         const bounceEl = document.getElementById('mBounce');
@@ -1470,9 +1470,8 @@ fetch('/api/session').then(r=>r.json()).then(s=>{
             const up      = reply3d > 0 && replyToday > reply3d * 1.1;
             const arr     = dropped ? `<span class="ch-arrow red">↓</span>` : up ? `<span class="ch-arrow green">↑</span>` : '';
             const avg     = reply3d > 0 ? `${fmtPct(reply3d)} 3d avg` : '';
-            // OOO-excluded line (only show if different from total)
-            const exLine  = replyTodayEx !== undefined && Math.abs(replyToday - replyTodayEx) > 0.05
-                ? `<div class="ch-sub" style="color:#7C89CD" title="Excluding OOO & auto-replies">${fmtPct(replyTodayEx)} excl. OOO</div>` : '';
+            const exLine  = replyTodayEx !== undefined
+                ? `<div class="ch-sub" style="color:#7C89CD" title="Excl. OOO &amp; auto-replies">${fmtPct(replyTodayEx)} excl. OOO</div>` : '';
             return `<div class="ch-metric-value ${cls}">${fmtPct(replyToday)}${arr}</div>${avg ? `<div class="ch-sub">${avg}</div>` : ''}${exLine}`;
         }
 
