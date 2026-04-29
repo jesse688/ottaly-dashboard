@@ -655,9 +655,15 @@ fetch('/api/session').then(r=>r.json()).then(s=>{
         </div>
         <div class="metric navy">
             <div class="metric-icon navy">↩️</div>
-            <div class="metric-label">Reply Rate</div>
+            <div class="metric-label">Reply Rate (incl. OOO)</div>
             <div class="metric-value" id="mReply">—</div>
             <div class="metric-sub" id="mReplySub">loading…</div>
+        </div>
+        <div class="metric" style="border-top-color:#7C89CD;">
+            <div class="metric-icon" style="background:rgba(124,137,205,0.12);">✉️</div>
+            <div class="metric-label">Human Reply Rate</div>
+            <div class="metric-value" id="mReplyEx">—</div>
+            <div class="metric-sub" id="mReplyExSub">excl. OOO &amp; auto-replies</div>
         </div>
         <div class="metric yellow">
             <div class="metric-icon yellow">⚠️</div>
@@ -958,8 +964,15 @@ fetch('/api/session').then(r=>r.json()).then(s=>{
         const replyEl = document.getElementById('mReply');
         replyEl.textContent  = todayAgg.sent > 0 ? fmtPct(replyRate) : '—';
         replyEl.className    = 'metric-value' + (replyRate < 1 && todayAgg.sent > 50 ? ' red' : '');
-        const exStr = todayAgg.sent > 0 ? ` · ${fmtPct(exRate)} excl. OOO` : '';
-        document.getElementById('mReplySub').textContent = `${fmtN(todayAgg.replies)} replies today${exStr}`;
+        document.getElementById('mReplySub').textContent = `${fmtN(todayAgg.replies)} total replies today`;
+
+        const replyExEl = document.getElementById('mReplyEx');
+        replyExEl.textContent = todayAgg.sent > 0 ? fmtPct(exRate) : '—';
+        replyExEl.className   = 'metric-value' + (exRate < 0.5 && todayAgg.sent > 50 ? ' red' : '');
+        document.getElementById('mReplyExSub').textContent =
+            todayAgg.sent > 0
+                ? `${fmtN(todayAgg.posReplies)} genuine replies · excl. OOO`
+                : 'excl. OOO & auto-replies';
 
         const bounceEl = document.getElementById('mBounce');
         bounceEl.textContent = todayAgg.sent > 0 ? fmtPct(bounceRate) : '—';
