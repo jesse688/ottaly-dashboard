@@ -873,15 +873,15 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
         const month_start = ds(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
         const ws = activeWS.id;
 
-        const [todayCampaigns, monthCampaigns, accounts, warmup, leads] = await Promise.all([
-            get(`/analytics/campaign/stats?workspace_id=${ws}&start_date=${today}&end_date=${today}`),
+        const [todayStats, monthCampaigns, accounts, warmup, leads] = await Promise.all([
+            get(`/account/email-stats?workspace_id=${ws}&start_date=${today}&end_date=${today}`),
             get(`/analytics/campaign/stats?workspace_id=${ws}&start_date=${month_start}&end_date=${today}`),
             get(`/account/list?workspace_id=${ws}&skip=0&limit=500`),
             get(`/account/warmup-stats?workspace_id=${ws}&start_date=${today}&end_date=${today}`),
             get(`/lead/count/lead-status?workspace_id=${ws}`)
         ]);
 
-        return { todayCampaigns, monthCampaigns, accounts, warmup, leads };
+        return { todayStats, monthCampaigns, accounts, warmup, leads };
     }
 
     // ── Helpers ───────────────────────────────────────────────
@@ -889,14 +889,28 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
         return (campaigns || []).reduce((a, c) => ({
             sent:       a.sent       + (c.sent_count           || 0),
             replies:    a.replies    + (c.replied_count        || 0),
+            oooReplies: a.oooReplies + (c.ooo_reply_count      || 0),
             posReplies: a.posReplies + (c.positive_reply_count || 0),
             bounces:    a.bounces    + (c.bounced_count        || 0),
-        }), { sent: 0, replies: 0, posReplies: 0, bounces: 0 });
+            contacted:  a.contacted  + (c.lead_contacted_count || c.sent_count || 0),
+        }), { sent: 0, replies: 0, oooReplies: 0, posReplies: 0, bounces: 0, contacted: 0 });
     }
 
-    // OOO-excluded reply rate: positive replies only (human, intentional)
-    // Total reply rate includes OOO + auto-replies
-    function replyExOOO(a) { return pct(a.posReplies, a.sent); }
+    function aggEmailStats(stats) {
+        const rows = stats?.header ? [stats.header] : (Array.isArray(stats) ? stats : (stats?.chart || []));
+        return rows.reduce((a, r) => ({
+            sent:       a.sent       + (r.total_sent_count               || 0),
+            replies:    a.replies    + (r.total_reply_count              || 0),
+            oooReplies: a.oooReplies + (r.total_ooo_reply_count          || 0),
+            posReplies: a.posReplies + (r.total_pos_reply_count          || 0),
+            bounces:    a.bounces    + (r.total_bounce_count             || 0),
+            contacted:  a.contacted  + (r.total_contacted_count || r.total_sent_count || 0),
+        }), { sent: 0, replies: 0, oooReplies: 0, posReplies: 0, bounces: 0, contacted: 0 });
+    }
+
+    function replyWithOOO(a) { return pct((a.replies || 0) + (a.oooReplies || 0), a.contacted || a.sent); }
+    function humanReplyRate(a) { return pct(a.replies, a.contacted || a.sent); }
+    function totalRepliesWithOOO(a) { return (a.replies || 0) + (a.oooReplies || 0); }
 
     function pct(num, denom) { return denom > 0 ? (num / denom) * 100 : 0; }
     function fmtPct(n, d = 1) { return n.toFixed(d) + '%'; }
@@ -936,7 +950,7 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
     // ── Render alerts ─────────────────────────────────────────
     function renderAlerts(todayAgg, history) {
         const bounceRate = pct(todayAgg.bounces, todayAgg.sent);
-        const replyRate  = pct(todayAgg.replies, todayAgg.sent);
+        const replyRate  = humanReplyRate(todayAgg);
         const avg7Reply  = avgField(history, 'replyRate', 7);
         const alerts = [];
 
@@ -958,7 +972,8 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
 
     // ── Render summary metrics ────────────────────────────────
     function renderSummary(todayAgg, accounts, warmup) {
-        const replyRate  = pct(todayAgg.replies, todayAgg.sent);
+        const replyRate  = replyWithOOO(todayAgg);
+        const humanRate  = humanReplyRate(todayAgg);
         const bounceRate = pct(todayAgg.bounces, todayAgg.sent);
 
         const accs        = Array.isArray(accounts) ? accounts : (accounts?.accounts || accounts?.data || []);
@@ -969,18 +984,17 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
         document.getElementById('mSent').textContent    = fmtN(todayAgg.sent);
         document.getElementById('mSentSub').textContent = `${capPct}% of ${fmtN(totalCap)} capacity`;
 
-        const exRate  = replyExOOO(todayAgg);
         const replyEl = document.getElementById('mReply');
         replyEl.textContent  = todayAgg.sent > 0 ? fmtPct(replyRate) : '—';
         replyEl.className    = 'metric-value' + (replyRate < 1 && todayAgg.sent > 50 ? ' red' : '');
-        document.getElementById('mReplySub').textContent = `${fmtN(todayAgg.replies)} total replies today`;
+        document.getElementById('mReplySub').textContent = `${fmtN(totalRepliesWithOOO(todayAgg))} total replies today`;
 
         const replyExEl = document.getElementById('mReplyEx');
-        replyExEl.textContent = todayAgg.sent > 0 ? fmtPct(exRate) : '—';
-        replyExEl.className   = 'metric-value' + (exRate < 0.5 && todayAgg.sent > 50 ? ' red' : '');
+        replyExEl.textContent = todayAgg.sent > 0 ? fmtPct(humanRate) : '—';
+        replyExEl.className   = 'metric-value' + (humanRate < 0.5 && todayAgg.sent > 50 ? ' red' : '');
         document.getElementById('mReplyExSub').textContent =
             todayAgg.sent > 0
-                ? `${fmtN(todayAgg.posReplies)} genuine replies · excl. OOO`
+                ? `${fmtN(todayAgg.replies)} human replies · excl. OOO`
                 : 'excl. OOO & auto-replies';
 
         const bounceEl = document.getElementById('mBounce');
@@ -998,7 +1012,7 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
 
     // ── Render trend cards ────────────────────────────────────
     function renderTrends(todayAgg, history) {
-        const replyRate  = pct(todayAgg.replies, todayAgg.sent);
+        const replyRate  = humanReplyRate(todayAgg);
         const bounceRate = pct(todayAgg.bounces, todayAgg.sent);
 
         const r3  = avgField(history, 'replyRate',  3);
@@ -1196,15 +1210,15 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
     async function refresh() {
         secsLeft = CFG.REFRESH_MS / 1000;
         try {
-            const { todayCampaigns, monthCampaigns, accounts, warmup, leads } = await fetchAll();
+            const { todayStats, monthCampaigns, accounts, warmup, leads } = await fetchAll();
 
-            const todayAgg = agg(todayCampaigns);
+            const todayAgg = aggEmailStats(todayStats);
             const history  = loadHistory();
 
             if (todayAgg.sent > 0) {
                 saveSnapshot({
                     ts:         Date.now(),
-                    replyRate:  pct(todayAgg.replies, todayAgg.sent),
+                    replyRate:  humanReplyRate(todayAgg),
                     bounceRate: pct(todayAgg.bounces, todayAgg.sent),
                     sent:       todayAgg.sent
                 });
@@ -1359,27 +1373,27 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
     async function fetchWorkspaceHealth(ws) {
         const today = ds(new Date());
         const ago3  = ds(workdaysAgo(3)); // 3 working days, skipping weekends
-        const [todayCamps, camps3d, accounts] = await Promise.all([
-            get(`/analytics/campaign/stats?workspace_id=${ws.id}&start_date=${today}&end_date=${today}`),
-            get(`/analytics/campaign/stats?workspace_id=${ws.id}&start_date=${ago3}&end_date=${today}`),
+        const [todayStats, stats3d, accounts] = await Promise.all([
+            get(`/account/email-stats?workspace_id=${ws.id}&start_date=${today}&end_date=${today}`),
+            get(`/account/email-stats?workspace_id=${ws.id}&start_date=${ago3}&end_date=${today}`),
             get(`/account/list?workspace_id=${ws.id}&skip=0&limit=500`)
         ]);
-        return { ws, todayCamps, camps3d, accounts };
+        return { ws, todayStats, stats3d, accounts };
     }
 
-    function buildClientHealth({ ws, todayCamps, camps3d, accounts }, lastLeadDate) {
-        const todayAgg = agg(todayCamps);
-        const agg3d    = agg(camps3d);
+    function buildClientHealth({ ws, todayStats, stats3d, accounts }, lastLeadDate) {
+        const todayAgg = aggEmailStats(todayStats);
+        const agg3d    = aggEmailStats(stats3d);
 
         const accs      = Array.isArray(accounts) ? accounts : (accounts?.accounts || accounts?.data || []);
         const activeAcc = accs.filter(a => a.status === 'ACTIVE');
         const totalCap  = activeAcc.reduce((s, a) => s + (a.payload?.daily_limit || 0), 0);
         const capPct    = totalCap > 0 ? (todayAgg.sent / totalCap) * 100 : null;
 
-        const replyToday     = pct(todayAgg.replies,    todayAgg.sent);
-        const replyTodayEx   = replyExOOO(todayAgg);   // excl. OOO
-        const reply3d        = pct(agg3d.replies,      agg3d.sent);
-        const reply3dEx      = replyExOOO(agg3d);      // excl. OOO
+        const replyToday     = replyWithOOO(todayAgg);
+        const replyTodayEx   = humanReplyRate(todayAgg);   // excl. OOO
+        const reply3d        = replyWithOOO(agg3d);
+        const reply3dEx      = humanReplyRate(agg3d);      // excl. OOO
         const bounceToday    = pct(todayAgg.bounces,   todayAgg.sent);
 
         const lastLeadDays = lastLeadDate
@@ -1395,7 +1409,7 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
             flags.push({ type: 'bounce',   label: 'High bounce',   color: 'red'   });
         if (reply3d > 0.5 && todayAgg.sent > 20 && replyToday < reply3d * (1 - THR.replyDropPct / 100))
             flags.push({ type: 'reply',    label: 'Reply dropping', color: 'amber' });
-        const hasActive = (todayCamps || []).some(c => (c.status || '').toUpperCase() === 'ACTIVE');
+        const hasActive = todayAgg.sent > 0;
         if (hasActive && agg3d.sent > 0 && agg3d.replies === 0)
             flags.push({ type: 'silent',   label: 'Silent 3d',     color: 'red'   });
 
@@ -1743,9 +1757,9 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
             for (let i = 0; i < buckets.length; i++) {
                 const b = buckets[i];
                 const wsData = await Promise.all(wslist.map(ws =>
-                    get(`/analytics/campaign/stats?workspace_id=${ws.id}&start_date=${b.start}&end_date=${b.end}`)
-                        .then(data => agg(data))
-                        .catch(() => ({ sent: 0, replies: 0, posReplies: 0, bounces: 0 }))
+                    get(`/account/email-stats?workspace_id=${ws.id}&start_date=${b.start}&end_date=${b.end}`)
+                        .then(data => aggEmailStats(data))
+                        .catch(() => ({ sent: 0, replies: 0, oooReplies: 0, posReplies: 0, bounces: 0, contacted: 0 }))
                         .then(pvData => ({
                             ...pvData,
                             leads: countPvLeads(wsLabeledLeads[ws.id] || [], b.start, b.end)
@@ -1756,10 +1770,12 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
                     totals: wsData.reduce((acc, d) => ({
                         sent:       acc.sent       + d.sent,
                         replies:    acc.replies    + d.replies,
+                        oooReplies: acc.oooReplies + (d.oooReplies || 0),
                         posReplies: acc.posReplies + (d.posReplies || 0),
                         bounces:    acc.bounces    + d.bounces,
+                        contacted:  acc.contacted  + (d.contacted || d.sent || 0),
                         leads:      acc.leads      + d.leads,
-                    }), { sent: 0, replies: 0, posReplies: 0, bounces: 0, leads: 0 })
+                    }), { sent: 0, replies: 0, oooReplies: 0, posReplies: 0, bounces: 0, contacted: 0, leads: 0 })
                 });
                 const p = Math.round(((i + 1) / buckets.length) * 100);
                 progFill.style.width = p + '%';
@@ -1778,31 +1794,33 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
     function renderAgencyResults(bucketResults, clientCount) {
         const labels     = bucketResults.map(r => r.bucket.label);
         const sentArr    = bucketResults.map(r => r.totals.sent);
-        const repliesArr = bucketResults.map(r => r.totals.replies);
+        const repliesArr = bucketResults.map(r => totalRepliesWithOOO(r.totals));
+        const humanRepliesArr = bucketResults.map(r => r.totals.replies);
         const leadsArr   = bucketResults.map(r => r.totals.leads);
-        const replyRArr  = bucketResults.map(r => r.totals.sent > 0 ? pct(r.totals.replies,    r.totals.sent) : 0);
-        const replyExArr = bucketResults.map(r => r.totals.sent > 0 ? pct(r.totals.posReplies, r.totals.sent) : 0);
+        const replyRArr  = bucketResults.map(r => replyWithOOO(r.totals));
+        const replyExArr = bucketResults.map(r => humanReplyRate(r.totals));
         const bounceRArr = bucketResults.map(r => r.totals.sent > 0 ? pct(r.totals.bounces, r.totals.sent) : 0);
         const rtlArr     = bucketResults.map(r => r.totals.leads > 0 ? r.totals.replies / r.totals.leads : 0);
 
         const totalSent    = sentArr.reduce((a, b) => a + b, 0);
         const totalReplies = repliesArr.reduce((a, b) => a + b, 0);
+        const totalHumanReplies = humanRepliesArr.reduce((a, b) => a + b, 0);
         const totalLeads   = leadsArr.reduce((a, b) => a + b, 0);
         const totalBounces = bucketResults.reduce((a, r) => a + r.totals.bounces, 0);
-        const avgReply     = totalSent > 0 ? pct(totalReplies, totalSent) : 0;
+        const totalContacted = bucketResults.reduce((a, r) => a + (r.totals.contacted || r.totals.sent || 0), 0);
+        const avgReply     = totalContacted > 0 ? pct(totalReplies, totalContacted) : 0;
         const avgBounce    = totalSent > 0 ? pct(totalBounces, totalSent) : 0;
-        const overallRTL   = totalLeads > 0 ? totalReplies / totalLeads : null;
+        const overallRTL   = totalLeads > 0 ? totalHumanReplies / totalLeads : null;
 
         // Stat cards
         document.getElementById('agStatSent').textContent      = fmtN(totalSent);
         document.getElementById('agStatSentSub').textContent   = `${fmtN(totalBounces)} bounces`;
-        const totalPosReplies = bucketResults.reduce((a, r) => a + r.totals.posReplies, 0);
-        const avgReplyEx      = totalSent > 0 ? pct(totalPosReplies, totalSent) : 0;
+        const avgReplyEx      = totalContacted > 0 ? pct(totalHumanReplies, totalContacted) : 0;
 
         document.getElementById('agStatReply').textContent     = fmtPct(avgReply);
         document.getElementById('agStatReplySub').textContent  = `${fmtN(totalReplies)} total`;
         document.getElementById('agStatReplyEx').textContent   = fmtPct(avgReplyEx);
-        document.getElementById('agStatReplyExSub').textContent= `${fmtN(totalPosReplies)} genuine replies`;
+        document.getElementById('agStatReplyExSub').textContent= `${fmtN(totalHumanReplies)} human replies`;
         document.getElementById('agStatBounce').textContent    = fmtPct(avgBounce);
         document.getElementById('agStatBounceSub').textContent = totalSent > 0 ? (avgBounce > 5 ? '⚠ Above threshold' : '✓ Within range') : '';
         document.getElementById('agStatReplies').textContent   = fmtN(totalReplies);
