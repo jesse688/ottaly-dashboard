@@ -204,6 +204,16 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
 app.use(express.json({ limit: '4mb' }));
 app.use(express.static(path.join(__dirname)));
 
+app.get(['/healthz', '/api/health'], (req, res) => {
+  res.json({
+    ok: true,
+    service: 'ottaly-dashboard',
+    uptime: Math.round(process.uptime()),
+    node: process.version,
+    port: PORT,
+  });
+});
+
 function requireAuth(req, res, next) {
   const token = (req.headers.authorization || '').replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'Unauthorized' });
@@ -1121,4 +1131,6 @@ app.post('/api/admin/nonlead-requests/:id/reject', requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
-app.listen(PORT, () => console.log(`Ottaly running on http://localhost:${PORT}`));
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Ottaly running on http://0.0.0.0:${PORT}`);
+});
