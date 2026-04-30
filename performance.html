@@ -1592,6 +1592,8 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
     let agCustomStart  = null;
     let agCustomEnd    = null;
     let agRunning      = false;
+    let agQueued       = false;
+    let agScanSeq      = 0;
     let agSelectedWS   = null;  // null = all clients
 
     function toggleAgencyView() {
@@ -1718,8 +1720,12 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
     }
 
     async function runAgencyScan() {
-        if (agRunning) return;
+        if (agRunning) { agQueued = true; return; }
         agRunning = true;
+        const scanSeq = ++agScanSeq;
+        const periodAtStart = agPeriod;
+        const granAtStart = agGran;
+        const selectedAtStart = agSelectedWS;
         // Clear lead cache so each scan gets fresh data
         Object.keys(_pvLeadsCache).forEach(k => delete _pvLeadsCache[k]);
 
@@ -1738,6 +1744,7 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
 
         // Clear charts — use wrap IDs (canvas is replaced, so can't use canvas.parentElement)
         [['agChartSent','agWrapSent'],['agChartReply','agWrapReply'],
+         ['agChartReplyEx','agWrapReplyEx'],
          ['agChartBounce','agWrapBounce'],['agChartReplies','agWrapReplies'],
          ['agChartLeads','agWrapLeads'],['agChartRTL','agWrapRTL']].forEach(([cid, wid]) => {
             if (agencyCharts[cid]) { agencyCharts[cid].destroy(); delete agencyCharts[cid]; }
@@ -1782,12 +1789,17 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
                 progText.textContent = `Loading ${i + 1} / ${buckets.length} buckets…`;
             }
             prog.style.display = 'none';
+            if (scanSeq !== agScanSeq || periodAtStart !== agPeriod || granAtStart !== agGran || selectedAtStart !== agSelectedWS) return;
             renderAgencyResults(bucketResults, wslist.length);
         } catch (err) {
             prog.style.display = 'none';
             console.error('Agency scan error:', err);
         } finally {
             agRunning = false;
+            if (agQueued) {
+                agQueued = false;
+                setTimeout(runAgencyScan, 0);
+            }
         }
     }
 
