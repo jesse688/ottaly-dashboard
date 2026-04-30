@@ -3,6 +3,7 @@ const Database  = require('better-sqlite3');
 const bcrypt    = require('bcryptjs');
 const jwt       = require('jsonwebtoken');
 const path      = require('path');
+const fs        = require('fs');
 const Stripe    = require('stripe');
 
 const app  = express();
@@ -20,7 +21,10 @@ const NONLEAD_WEBHOOK_URL    = 'https://n8n1-n8n.xuobbb.easypanel.host/webhook/o
 const stripe = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY) : null;
 
 // ── Database ──────────────────────────────────────────────
-const db = new Database(process.env.DB_PATH || 'ottaly.db');
+const DB_PATH = process.env.DB_PATH || 'ottaly.db';
+const DB_DIR  = path.dirname(DB_PATH);
+if (DB_DIR !== '.') { try { fs.mkdirSync(DB_DIR, { recursive: true }); } catch {} }
+const db = new Database(DB_PATH);
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS clients (
