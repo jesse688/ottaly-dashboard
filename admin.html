@@ -127,6 +127,28 @@ tbody tr:hover { background:#FAFBFC; }
 .status-pill.unpaid { background:#FEF3C7; color:#92400E; }
 .payslip-link { font-size:12px; font-weight:700; color:var(--teal); text-decoration:none; }
 .payslip-link:hover { text-decoration:underline; }
+.adjustment-form { display:grid; grid-template-columns:1fr 1.4fr 140px auto; gap:8px; margin:0.5rem 0 1rem; }
+.adjustment-form input, .adjustment-form select {
+  padding:8px 10px; border:1.5px solid #E5E7EB; border-radius:7px;
+  font-size:13px; font-family:'Inter',sans-serif; outline:none; background:white;
+}
+.adjustment-list { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:1rem; }
+.adjustment-chip {
+  display:flex; align-items:center; gap:8px; background:#F9FAFB; border:1px solid #E5E7EB;
+  border-radius:999px; padding:6px 10px; font-size:12px; color:#374151;
+}
+.detail-btn { background:#EEF2FF; color:var(--navy); border:1px solid #C7D2FE; }
+.manager-detail-row td { background:#FBFCFE; padding:0 14px 14px; }
+.detail-grid { display:grid; grid-template-columns:1fr 1.4fr; gap:12px; padding-top:12px; }
+.detail-panel { border:1px solid #E5E7EB; border-radius:9px; background:white; overflow:hidden; }
+.detail-panel h4 { padding:10px 12px; font-size:12px; text-transform:uppercase; letter-spacing:0.8px; color:#6B7280; background:#FAFBFC; border-bottom:1px solid #E5E7EB; }
+.detail-row { display:grid; grid-template-columns:1.2fr 70px 90px 90px; gap:8px; padding:9px 12px; border-bottom:1px solid #F3F4F6; font-size:12px; align-items:center; }
+.detail-row:last-child { border-bottom:none; }
+.lead-mini-row { display:grid; grid-template-columns:92px 1fr 1fr 90px; gap:8px; padding:8px 12px; border-bottom:1px solid #F3F4F6; font-size:12px; align-items:center; }
+.lead-mini-row:last-child { border-bottom:none; }
+@media(max-width:800px) {
+  .adjustment-form, .detail-grid, .detail-row, .lead-mini-row { grid-template-columns:1fr; }
+}
 </style>
 </head>
 <body>
@@ -205,7 +227,7 @@ tbody tr:hover { background:#FAFBFC; }
       </div>
       <div class="summary-grid">
         <div class="summary-card green">
-          <div class="summary-label">Total Commission</div>
+          <div class="summary-label">Total Due</div>
           <div class="summary-val" id="commTotal">£0.00</div>
         </div>
         <div class="summary-card amber">
@@ -221,6 +243,18 @@ tbody tr:hover { background:#FAFBFC; }
           <div class="summary-val" id="commManagers">0</div>
         </div>
       </div>
+      <div style="border:1px solid #E5E7EB;border-radius:10px;padding:1rem;margin-bottom:1rem;background:#FCFCFD;">
+        <div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:0.8px;color:#6B7280;margin-bottom:0.5rem;">Fixed Manager Payments</div>
+        <div class="adjustment-form">
+          <select id="adjustmentManager"></select>
+          <input type="text" id="adjustmentLabel" placeholder="Label, e.g. Automation">
+          <input type="number" id="adjustmentAmount" placeholder="Amount" step="0.01">
+          <button class="btn btn-primary" onclick="createCommissionAdjustment()">Add</button>
+        </div>
+        <div class="adjustment-list" id="commissionAdjustmentList">
+          <span style="font-size:12px;color:#9CA3AF">Loading fixed payments...</span>
+        </div>
+      </div>
       <table>
         <thead>
           <tr>
@@ -229,13 +263,16 @@ tbody tr:hover { background:#FAFBFC; }
             <th style="text-align:right">Leads</th>
             <th style="text-align:right">Revenue</th>
             <th style="text-align:right">Commission</th>
+            <th style="text-align:right">Fixed</th>
+            <th style="text-align:right">Total Due</th>
             <th>Status</th>
             <th>Payslip</th>
+            <th>Details</th>
             <th></th>
           </tr>
         </thead>
         <tbody id="managerCommissionTable">
-          <tr><td colspan="8" style="color:#9CA3AF;padding:1rem;">Loading…</td></tr>
+          <tr><td colspan="11" style="color:#9CA3AF;padding:1rem;">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -373,7 +410,10 @@ function adminHeaders() {
 let commissionClients = [];
 let commissionLeads = [];
 let commissionPayments = {};
+let commissionAdjustments = [];
 let commissionRows = [];
+let expandedCommissionManagers = new Set();
+let managerAccounts = [];
 
 function isoDate(d) { return d.toISOString().split('T')[0]; }
 
@@ -426,19 +466,23 @@ function paymentKey(manager, startKey, endKey) {
 }
 
 async function fetchManagerCommissions() {
-  const [clients, revenue, payments] = await Promise.all([
+  const [clients, revenue, payments, adjustments] = await Promise.all([
     fetch('/api/admin/clients', { headers: adminHeaders() }).then(r => r.ok ? r.json() : []),
     fetch('/api/revenue/leads').then(r => r.json()).catch(() => ({ leads: [] })),
-    fetch('/api/admin/commission-payments', { headers: adminHeaders() }).then(r => r.ok ? r.json() : [])
+    fetch('/api/admin/commission-payments', { headers: adminHeaders() }).then(r => r.ok ? r.json() : []),
+    fetch('/api/admin/commission-adjustments', { headers: adminHeaders() }).then(r => r.ok ? r.json() : [])
   ]);
   commissionClients = Array.isArray(clients) ? clients : [];
   commissionLeads = (revenue.leads || [])
     .filter(l => !l.is_nonlead)
     .map(l => ({ ...l, dateObj: l.date ? new Date(l.date) : null }));
+  commissionAdjustments = Array.isArray(adjustments) ? adjustments : [];
   commissionPayments = {};
   (payments || []).forEach(p => {
     commissionPayments[paymentKey(p.manager_name, p.period_start, p.period_end)] = p;
   });
+  renderAdjustmentManagerOptions();
+  renderCommissionAdjustments();
   renderManagerCommissions();
 }
 
@@ -450,8 +494,13 @@ function renderManagerCommissions() {
   const byManager = {};
   assigned.forEach(c => {
     const manager = c.campaign_manager.trim();
-    if (!byManager[manager]) byManager[manager] = { manager, clients: [], leads: 0, revenue: 0, commission: 0 };
+    if (!byManager[manager]) byManager[manager] = { manager, clients: [], clientDetails: [], leadDetails: [], leads: 0, revenue: 0, commission: 0, fixed: 0, totalDue: 0 };
     byManager[manager].clients.push(c);
+  });
+  commissionAdjustments.filter(a => a.active).forEach(a => {
+    const manager = (a.manager_name || '').trim();
+    if (!manager) return;
+    if (!byManager[manager]) byManager[manager] = { manager, clients: [], clientDetails: [], leadDetails: [], leads: 0, revenue: 0, commission: 0, fixed: 0, totalDue: 0 };
   });
 
   Object.values(byManager).forEach(row => {
@@ -464,21 +513,43 @@ function renderManagerCommissions() {
       );
       const revenue = clientLeads.reduce((s, l) => s + (l.lead_price || 0), 0);
       const rate = (c.commission_rate ?? 15) / 100;
+      const commission = revenue * rate;
       row.leads += clientLeads.length;
       row.revenue += revenue;
-      row.commission += revenue * rate;
+      row.commission += commission;
+      row.clientDetails.push({
+        name: c.workspace_name,
+        rate: c.commission_rate ?? 15,
+        price: c.price_per_lead || 0,
+        start: c.manager_start_date || '',
+        leads: clientLeads.length,
+        revenue,
+        commission
+      });
+      row.leadDetails.push(...clientLeads.map(l => ({
+        date: l.date || '',
+        client: c.workspace_name,
+        name: l.lead_name || [l.first_name, l.last_name].filter(Boolean).join(' ') || l.company_name || 'Lead',
+        email: l.lead_email || l.email || '',
+        price: l.lead_price || 0
+      })));
     });
+    row.adjustments = commissionAdjustments.filter(a => a.active && (a.manager_name || '').toLowerCase() === row.manager.toLowerCase());
+    row.fixed = row.adjustments.reduce((s, a) => s + (parseFloat(a.amount) || 0), 0);
+    row.totalDue = row.commission + row.fixed;
+    row.clientDetails.sort((a, b) => b.commission - a.commission);
+    row.leadDetails.sort((a, b) => String(b.date).localeCompare(String(a.date)));
     row.payment = commissionPayments[paymentKey(row.manager, startKey, endKey)] || { status: 'unpaid' };
     row.startKey = startKey;
     row.endKey = endKey;
   });
 
   commissionRows = Object.values(byManager)
-    .filter(r => r.clients.length || r.commission > 0)
-    .sort((a, b) => b.commission - a.commission);
+    .filter(r => r.clients.length || r.totalDue > 0)
+    .sort((a, b) => b.totalDue - a.totalDue);
 
-  const total = commissionRows.reduce((s, r) => s + r.commission, 0);
-  const paid = commissionRows.filter(r => r.payment.status === 'paid').reduce((s, r) => s + r.commission, 0);
+  const total = commissionRows.reduce((s, r) => s + r.totalDue, 0);
+  const paid = commissionRows.filter(r => r.payment.status === 'paid').reduce((s, r) => s + r.totalDue, 0);
   document.getElementById('commTotal').textContent = '£' + total.toFixed(2);
   document.getElementById('commPaid').textContent = '£' + paid.toFixed(2);
   document.getElementById('commUnpaid').textContent = '£' + (total - paid).toFixed(2);
@@ -486,6 +557,7 @@ function renderManagerCommissions() {
 
   document.getElementById('managerCommissionTable').innerHTML = commissionRows.length ? commissionRows.map((r, i) => {
     const paidStatus = r.payment.status === 'paid';
+    const expanded = expandedCommissionManagers.has(r.manager.toLowerCase());
     const payslip = r.payment.payslip_data
       ? `<a class="payslip-link" href="${r.payment.payslip_data}" download="${escAttr(r.payment.payslip_name || r.manager + '-payslip')}" target="_blank">${escHtml(r.payment.payslip_name || 'View payslip')}</a>`
       : '<span style="font-size:12px;color:#9CA3AF">No payslip</span>';
@@ -496,8 +568,11 @@ function renderManagerCommissions() {
         <td style="text-align:right;font-weight:600">${r.leads}</td>
         <td style="text-align:right">£${Math.round(r.revenue).toLocaleString('en-GB')}</td>
         <td style="text-align:right;font-weight:800;color:#059669">£${r.commission.toFixed(2)}</td>
+        <td style="text-align:right;font-weight:700">£${r.fixed.toFixed(2)}</td>
+        <td style="text-align:right;font-weight:800;color:#050C29">£${r.totalDue.toFixed(2)}</td>
         <td><span class="status-pill ${paidStatus ? 'paid' : 'unpaid'}">${paidStatus ? 'Paid' : 'Unpaid'}</span></td>
         <td>${payslip}</td>
+        <td><button class="btn btn-sm detail-btn" onclick="toggleManagerDetails(${i})">${expanded ? 'Hide' : 'Details'}</button></td>
         <td>
           <div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap">
             <input type="file" id="payslip_${i}" accept=".pdf,image/*" style="display:none" onchange="uploadPayslip(${i})">
@@ -505,8 +580,114 @@ function renderManagerCommissions() {
             ${paidStatus ? `<button class="btn btn-sm btn-danger" onclick="markCommissionUnpaid(${i})">Mark Unpaid</button>` : ''}
           </div>
         </td>
-      </tr>`;
-  }).join('') : '<tr><td colspan="8" style="color:#9CA3AF;padding:1rem;">No manager commissions for this period.</td></tr>';
+      </tr>
+      ${expanded ? renderManagerDetailRow(r) : ''}`;
+  }).join('') : '<tr><td colspan="11" style="color:#9CA3AF;padding:1rem;">No manager commissions for this period.</td></tr>';
+}
+
+function renderAdjustmentManagerOptions() {
+  const managers = [...new Set([
+    ...managerAccounts.map(m => (m.name || '').trim()).filter(Boolean),
+    ...commissionClients.map(c => (c.campaign_manager || '').trim()).filter(Boolean),
+    ...commissionAdjustments.map(a => (a.manager_name || '').trim()).filter(Boolean)
+  ])].sort((a, b) => a.localeCompare(b));
+  const select = document.getElementById('adjustmentManager');
+  select.innerHTML = managers.length
+    ? managers.map(m => `<option value="${escAttr(m)}">${escHtml(m)}</option>`).join('')
+    : '<option value="">No managers yet</option>';
+}
+
+function renderCommissionAdjustments() {
+  const list = document.getElementById('commissionAdjustmentList');
+  const active = commissionAdjustments.filter(a => a.active);
+  list.innerHTML = active.length ? active.map(a => `
+    <span class="adjustment-chip">
+      <strong>${escHtml(a.manager_name)}</strong>
+      <span>${escHtml(a.label)}</span>
+      <strong>£${(parseFloat(a.amount) || 0).toFixed(2)}</strong>
+      <button class="btn btn-sm btn-danger" onclick="deleteCommissionAdjustment(${a.id})" style="padding:2px 7px">Remove</button>
+    </span>
+  `).join('') : '<span style="font-size:12px;color:#9CA3AF">No fixed manager payments yet.</span>';
+}
+
+async function createCommissionAdjustment() {
+  const manager = document.getElementById('adjustmentManager').value.trim();
+  const label = document.getElementById('adjustmentLabel').value.trim();
+  const amount = parseFloat(document.getElementById('adjustmentAmount').value);
+  if (!manager || !label || !Number.isFinite(amount)) return alert('Add manager, label and amount');
+  const r = await fetch('/api/admin/commission-adjustments', {
+    method: 'POST',
+    headers: adminHeaders(),
+    body: JSON.stringify({ manager_name: manager, label, amount })
+  });
+  if (!r.ok) {
+    const j = await r.json().catch(() => ({}));
+    return alert(j.error || 'Could not add fixed payment');
+  }
+  document.getElementById('adjustmentLabel').value = '';
+  document.getElementById('adjustmentAmount').value = '';
+  showToast('Fixed payment added');
+  await fetchManagerCommissions();
+}
+
+async function deleteCommissionAdjustment(id) {
+  if (!confirm('Remove this fixed manager payment?')) return;
+  const r = await fetch(`/api/admin/commission-adjustments/${id}`, { method: 'DELETE', headers: adminHeaders() });
+  if (r.ok) {
+    showToast('Fixed payment removed');
+    await fetchManagerCommissions();
+  }
+}
+
+function toggleManagerDetails(index) {
+  const row = commissionRows[index];
+  const key = row.manager.toLowerCase();
+  if (expandedCommissionManagers.has(key)) expandedCommissionManagers.delete(key);
+  else expandedCommissionManagers.add(key);
+  renderManagerCommissions();
+}
+
+function renderManagerDetailRow(r) {
+  const clientRows = r.clientDetails.length ? r.clientDetails.map(c => `
+    <div class="detail-row">
+      <strong>${escHtml(c.name)}</strong>
+      <span>${c.leads} leads</span>
+      <span>£${Math.round(c.revenue).toLocaleString('en-GB')}</span>
+      <span>${c.rate}% = £${c.commission.toFixed(2)}</span>
+    </div>
+  `).join('') : '<div style="padding:10px 12px;font-size:12px;color:#9CA3AF">No client leads in this period.</div>';
+  const fixedRows = r.adjustments.length ? r.adjustments.map(a => `
+    <div class="detail-row" style="grid-template-columns:1.4fr 1fr 1fr auto">
+      <strong>${escHtml(a.label)}</strong>
+      <span>Fixed</span>
+      <span>£${(parseFloat(a.amount) || 0).toFixed(2)}</span>
+      <span></span>
+    </div>
+  `).join('') : '<div style="padding:10px 12px;font-size:12px;color:#9CA3AF">No fixed payments for this manager.</div>';
+  const leadRows = r.leadDetails.slice(0, 25).map(l => `
+    <div class="lead-mini-row">
+      <span style="color:#6B7280">${escHtml(String(l.date).slice(0, 10) || '-')}</span>
+      <strong>${escHtml(l.name)}</strong>
+      <span title="${escAttr(l.email)}">${escHtml(l.client)}</span>
+      <span style="text-align:right">£${(l.price || 0).toFixed(2)}</span>
+    </div>
+  `).join('') || '<div style="padding:10px 12px;font-size:12px;color:#9CA3AF">No leads to show.</div>';
+  return `
+    <tr class="manager-detail-row">
+      <td colspan="11">
+        <div class="detail-grid">
+          <div class="detail-panel">
+            <h4>Client Breakdown</h4>
+            ${clientRows}
+            ${fixedRows}
+          </div>
+          <div class="detail-panel">
+            <h4>Recent Leads (${r.leadDetails.length})</h4>
+            ${leadRows}
+          </div>
+        </div>
+      </td>
+    </tr>`;
 }
 
 async function saveCommissionPayment(row, status, file) {
@@ -745,7 +926,14 @@ async function rejectNLR(id) {
 // ── Helpers ────────────────────────────────────────────────
 function showMsg(el, msg) { el.textContent = msg; el.style.display = 'block'; }
 function escHtml(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-function escAttr(s) { return (s||'').replace(/'/g,"\\'"); }
+function escAttr(s) {
+  return (s||'')
+    .replace(/&/g,'&amp;')
+    .replace(/"/g,'&quot;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/'/g,"\\'");
+}
 
 let toastTimer;
 function showToast(msg) {
@@ -773,6 +961,8 @@ async function fetchManagers() {
   const r = await fetch('/api/admin/managers', { headers: adminHeaders() });
   if (!r.ok) return;
   const managers = await r.json();
+  managerAccounts = Array.isArray(managers) ? managers : [];
+  renderAdjustmentManagerOptions();
   document.getElementById('managersTable').innerHTML = managers.length ? managers.map(m => `
     <tr>
       <td style="font-weight:600">${escHtml(m.name)}</td>

@@ -96,6 +96,15 @@ db.exec(`CREATE TABLE IF NOT EXISTS manager_commission_payments (
   UNIQUE(manager_name, period_start, period_end)
 )`);
 
+db.exec(`CREATE TABLE IF NOT EXISTS manager_commission_adjustments (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  manager_name  TEXT NOT NULL,
+  label         TEXT NOT NULL,
+  amount        REAL DEFAULT 0,
+  active        INTEGER DEFAULT 1,
+  created_at    TEXT DEFAULT (datetime('now'))
+)`);
+
 // Migrations for existing deployments
 for (const sql of [
   `ALTER TABLE clients ADD COLUMN plan_leads INTEGER DEFAULT 0`,
@@ -387,6 +396,48 @@ app.put('/api/admin/commission-payments', requireAdmin, (req, res) => {
     manager_name.trim(), period_start, period_end, cleanStatus,
     payslip_name || '', payslip_type || '', payslip_data || '', cleanStatus
   );
+  res.json({ ok: true });
+});
+
+app.get('/api/admin/commission-adjustments', requireAdmin, (req, res) => {
+  res.json(db.prepare(`
+    SELECT id, manager_name, label, amount, active, created_at
+    FROM manager_commission_adjustments
+    ORDER BY active DESC, manager_name, label
+  `).all());
+});
+
+app.post('/api/admin/commission-adjustments', requireAdmin, (req, res) => {
+  const { manager_name, label, amount } = req.body || {};
+  const cleanManager = (manager_name || '').trim();
+  const cleanLabel = (label || '').trim();
+  const cleanAmount = parseFloat(amount);
+  if (!cleanManager || !cleanLabel || !Number.isFinite(cleanAmount)) {
+    return res.status(400).json({ error: 'Manager, label and amount are required' });
+  }
+  db.prepare(`
+    INSERT INTO manager_commission_adjustments (manager_name, label, amount, active)
+    VALUES (?, ?, ?, 1)
+  `).run(cleanManager, cleanLabel, cleanAmount);
+  res.json({ ok: true });
+});
+
+app.put('/api/admin/commission-adjustments/:id', requireAdmin, (req, res) => {
+  const { manager_name, label, amount, active } = req.body || {};
+  const updates = [];
+  const vals = [];
+  if (manager_name !== undefined) { updates.push('manager_name = ?'); vals.push((manager_name || '').trim()); }
+  if (label !== undefined) { updates.push('label = ?'); vals.push((label || '').trim()); }
+  if (amount !== undefined) { updates.push('amount = ?'); vals.push(parseFloat(amount) || 0); }
+  if (active !== undefined) { updates.push('active = ?'); vals.push(active ? 1 : 0); }
+  if (updates.length) {
+    db.prepare(`UPDATE manager_commission_adjustments SET ${updates.join(', ')} WHERE id = ?`).run(...vals, req.params.id);
+  }
+  res.json({ ok: true });
+});
+
+app.delete('/api/admin/commission-adjustments/:id', requireAdmin, (req, res) => {
+  db.prepare('DELETE FROM manager_commission_adjustments WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
 });
 
