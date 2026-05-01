@@ -110,6 +110,23 @@ tbody tr:hover { background:#FAFBFC; }
   font-size:12px; color:#6B7280; background:#F9FAFB; border-radius:5px;
   padding:5px 9px; max-width:320px; line-height:1.45;
 }
+
+.summary-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:0.75rem; margin-bottom:1rem; }
+.summary-card { background:#F9FAFB; border:1px solid #E5E7EB; border-radius:9px; padding:0.9rem 1rem; border-top:3px solid var(--navy); }
+.summary-card.green { border-top-color:#059669; }
+.summary-card.amber { border-top-color:#D97706; }
+.summary-label { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.6px; color:#6B7280; }
+.summary-val { font-family:'Genos',sans-serif; font-size:1.7rem; font-weight:800; margin-top:3px; }
+.period-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:1rem; }
+.period-row select, .period-row input {
+  padding:8px 10px; border:1.5px solid #E5E7EB; border-radius:7px;
+  font-size:13px; font-family:'Inter',sans-serif; outline:none; background:white;
+}
+.status-pill { display:inline-block; padding:3px 9px; border-radius:999px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.4px; }
+.status-pill.paid { background:#D1FAE5; color:#065F46; }
+.status-pill.unpaid { background:#FEF3C7; color:#92400E; }
+.payslip-link { font-size:12px; font-weight:700; color:var(--teal); text-decoration:none; }
+.payslip-link:hover { text-decoration:underline; }
 </style>
 </head>
 <body>
@@ -163,6 +180,63 @@ tbody tr:hover { background:#FAFBFC; }
       <table>
         <thead><tr><th>Name</th><th>Created</th><th>New Password</th><th></th></tr></thead>
         <tbody id="managersTable"><tr><td colspan="4" style="text-align:center;padding:1.5rem;color:#9CA3AF">Loading…</td></tr></tbody>
+      </table>
+    </div>
+
+    <!-- Manager commissions -->
+    <div class="section-title">Manager Commissions</div>
+    <div class="card" style="overflow-x:auto;">
+      <div class="period-row">
+        <select id="commissionPeriod" onchange="handleCommissionPeriod()">
+          <option value="lastMonth" selected>Last Month</option>
+          <option value="month">This Month</option>
+          <option value="quarter">This Quarter</option>
+          <option value="year">This Year</option>
+          <option value="all">All Time</option>
+          <option value="custom">Custom Range</option>
+        </select>
+        <div id="commissionCustomRange" style="display:none;gap:6px;align-items:center;flex-wrap:wrap">
+          <input type="date" id="commissionStart">
+          <span style="font-size:12px;color:#6B7280">to</span>
+          <input type="date" id="commissionEnd">
+          <button class="btn btn-sm btn-primary" onclick="renderManagerCommissions()">Apply</button>
+        </div>
+        <span id="commissionPeriodLabel" style="font-size:12px;color:#6B7280;font-weight:600"></span>
+      </div>
+      <div class="summary-grid">
+        <div class="summary-card green">
+          <div class="summary-label">Total Commission</div>
+          <div class="summary-val" id="commTotal">£0.00</div>
+        </div>
+        <div class="summary-card amber">
+          <div class="summary-label">Unpaid</div>
+          <div class="summary-val" id="commUnpaid">£0.00</div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-label">Paid</div>
+          <div class="summary-val" id="commPaid">£0.00</div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-label">Managers</div>
+          <div class="summary-val" id="commManagers">0</div>
+        </div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Manager</th>
+            <th>Clients</th>
+            <th style="text-align:right">Leads</th>
+            <th style="text-align:right">Revenue</th>
+            <th style="text-align:right">Commission</th>
+            <th>Status</th>
+            <th>Payslip</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="managerCommissionTable">
+          <tr><td colspan="8" style="color:#9CA3AF;padding:1rem;">Loading…</td></tr>
+        </tbody>
       </table>
     </div>
 
@@ -273,7 +347,7 @@ tbody tr:hover { background:#FAFBFC; }
 
 async function tryLoad() {
   try {
-    await Promise.all([fetchClients(), fetchWorkspaces(), fetchNonleadRequests()]);
+    await Promise.all([fetchClients(), fetchWorkspaces(), fetchNonleadRequests(), fetchManagerCommissions()]);
     return true;
   } catch { return false; }
 }
@@ -286,6 +360,7 @@ async function saveKey() {
   if (r.ok) {
     document.getElementById('keyOverlay').style.display = 'none';
     await tryLoad();
+    fetchManagers();
   } else {
     document.getElementById('authError').style.display = 'block';
   }
@@ -293,6 +368,198 @@ async function saveKey() {
 
 function adminHeaders() {
   return { 'Content-Type': 'application/json' };
+}
+
+let commissionClients = [];
+let commissionLeads = [];
+let commissionPayments = {};
+let commissionRows = [];
+
+function isoDate(d) { return d.toISOString().split('T')[0]; }
+
+function getCommissionRange() {
+  const p = document.getElementById('commissionPeriod').value;
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  let start, end, label;
+  if (p === 'lastMonth') {
+    start = new Date(y, m - 1, 1); end = new Date(y, m, 1);
+    label = start.toLocaleDateString('en-GB', { month:'long', year:'numeric' });
+  } else if (p === 'month') {
+    start = new Date(y, m, 1); end = new Date(y, m + 1, 1);
+    label = now.toLocaleDateString('en-GB', { month:'long', year:'numeric' });
+  } else if (p === 'quarter') {
+    const q = Math.floor(m / 3);
+    start = new Date(y, q * 3, 1); end = new Date(y, q * 3 + 3, 1);
+    label = `Q${q + 1} ${y}`;
+  } else if (p === 'year') {
+    start = new Date(y, 0, 1); end = new Date(y + 1, 0, 1);
+    label = `${y}`;
+  } else if (p === 'all') {
+    start = new Date(2020, 0, 1); end = new Date(y + 1, 0, 1);
+    label = 'All Time';
+  } else {
+    const s = document.getElementById('commissionStart').value;
+    const e = document.getElementById('commissionEnd').value;
+    start = new Date(s + 'T00:00:00'); end = new Date(e + 'T23:59:59');
+    label = s && e ? `${s} to ${e}` : 'Custom Range';
+  }
+  return { start, end, label, startKey: isoDate(start), endKey: isoDate(new Date(end.getTime() - 1)) };
+}
+
+function handleCommissionPeriod() {
+  const p = document.getElementById('commissionPeriod').value;
+  const custom = document.getElementById('commissionCustomRange');
+  custom.style.display = p === 'custom' ? 'flex' : 'none';
+  if (p === 'custom') {
+    const now = new Date();
+    document.getElementById('commissionStart').value = isoDate(new Date(now.getFullYear(), now.getMonth(), 1));
+    document.getElementById('commissionEnd').value = isoDate(now);
+    return;
+  }
+  renderManagerCommissions();
+}
+
+function paymentKey(manager, startKey, endKey) {
+  return `${manager.toLowerCase()}|${startKey}|${endKey}`;
+}
+
+async function fetchManagerCommissions() {
+  const [clients, revenue, payments] = await Promise.all([
+    fetch('/api/admin/clients', { headers: adminHeaders() }).then(r => r.ok ? r.json() : []),
+    fetch('/api/revenue/leads').then(r => r.json()).catch(() => ({ leads: [] })),
+    fetch('/api/admin/commission-payments', { headers: adminHeaders() }).then(r => r.ok ? r.json() : [])
+  ]);
+  commissionClients = Array.isArray(clients) ? clients : [];
+  commissionLeads = (revenue.leads || [])
+    .filter(l => !l.is_nonlead)
+    .map(l => ({ ...l, dateObj: l.date ? new Date(l.date) : null }));
+  commissionPayments = {};
+  (payments || []).forEach(p => {
+    commissionPayments[paymentKey(p.manager_name, p.period_start, p.period_end)] = p;
+  });
+  renderManagerCommissions();
+}
+
+function renderManagerCommissions() {
+  const { start, end, label, startKey, endKey } = getCommissionRange();
+  document.getElementById('commissionPeriodLabel').textContent = label;
+
+  const assigned = commissionClients.filter(c => (c.campaign_manager || '').trim());
+  const byManager = {};
+  assigned.forEach(c => {
+    const manager = c.campaign_manager.trim();
+    if (!byManager[manager]) byManager[manager] = { manager, clients: [], leads: 0, revenue: 0, commission: 0 };
+    byManager[manager].clients.push(c);
+  });
+
+  Object.values(byManager).forEach(row => {
+    row.clients.forEach(c => {
+      const managerStart = c.manager_start_date ? new Date(c.manager_start_date + 'T00:00:00') : null;
+      const clientLeads = commissionLeads.filter(l =>
+        l.client_name === c.workspace_name &&
+        l.dateObj && l.dateObj >= start && l.dateObj < end &&
+        (!managerStart || l.dateObj >= managerStart)
+      );
+      const revenue = clientLeads.reduce((s, l) => s + (l.lead_price || 0), 0);
+      const rate = (c.commission_rate ?? 15) / 100;
+      row.leads += clientLeads.length;
+      row.revenue += revenue;
+      row.commission += revenue * rate;
+    });
+    row.payment = commissionPayments[paymentKey(row.manager, startKey, endKey)] || { status: 'unpaid' };
+    row.startKey = startKey;
+    row.endKey = endKey;
+  });
+
+  commissionRows = Object.values(byManager)
+    .filter(r => r.clients.length || r.commission > 0)
+    .sort((a, b) => b.commission - a.commission);
+
+  const total = commissionRows.reduce((s, r) => s + r.commission, 0);
+  const paid = commissionRows.filter(r => r.payment.status === 'paid').reduce((s, r) => s + r.commission, 0);
+  document.getElementById('commTotal').textContent = '£' + total.toFixed(2);
+  document.getElementById('commPaid').textContent = '£' + paid.toFixed(2);
+  document.getElementById('commUnpaid').textContent = '£' + (total - paid).toFixed(2);
+  document.getElementById('commManagers').textContent = commissionRows.length;
+
+  document.getElementById('managerCommissionTable').innerHTML = commissionRows.length ? commissionRows.map((r, i) => {
+    const paidStatus = r.payment.status === 'paid';
+    const payslip = r.payment.payslip_data
+      ? `<a class="payslip-link" href="${r.payment.payslip_data}" download="${escAttr(r.payment.payslip_name || r.manager + '-payslip')}" target="_blank">${escHtml(r.payment.payslip_name || 'View payslip')}</a>`
+      : '<span style="font-size:12px;color:#9CA3AF">No payslip</span>';
+    return `
+      <tr>
+        <td style="font-weight:700">${escHtml(r.manager)}</td>
+        <td style="color:#6B7280;font-size:12px">${r.clients.map(c => escHtml(c.workspace_name)).join(', ')}</td>
+        <td style="text-align:right;font-weight:600">${r.leads}</td>
+        <td style="text-align:right">£${Math.round(r.revenue).toLocaleString('en-GB')}</td>
+        <td style="text-align:right;font-weight:800;color:#059669">£${r.commission.toFixed(2)}</td>
+        <td><span class="status-pill ${paidStatus ? 'paid' : 'unpaid'}">${paidStatus ? 'Paid' : 'Unpaid'}</span></td>
+        <td>${payslip}</td>
+        <td>
+          <div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap">
+            <input type="file" id="payslip_${i}" accept=".pdf,image/*" style="display:none" onchange="uploadPayslip(${i})">
+            <button class="btn btn-sm btn-primary" onclick="document.getElementById('payslip_${i}').click()">${paidStatus ? 'Replace Payslip' : 'Upload & Pay'}</button>
+            ${paidStatus ? `<button class="btn btn-sm btn-danger" onclick="markCommissionUnpaid(${i})">Mark Unpaid</button>` : ''}
+          </div>
+        </td>
+      </tr>`;
+  }).join('') : '<tr><td colspan="8" style="color:#9CA3AF;padding:1rem;">No manager commissions for this period.</td></tr>';
+}
+
+async function saveCommissionPayment(row, status, file) {
+  const payload = {
+    manager_name: row.manager,
+    period_start: row.startKey,
+    period_end: row.endKey,
+    status,
+    payslip_name: file ? file.name : (row.payment.payslip_name || ''),
+    payslip_type: file ? file.type : (row.payment.payslip_type || ''),
+    payslip_data: file ? file.data : (row.payment.payslip_data || '')
+  };
+  const r = await fetch('/api/admin/commission-payments', {
+    method: 'PUT',
+    headers: adminHeaders(),
+    body: JSON.stringify(payload)
+  });
+  if (!r.ok) {
+    const j = await r.json().catch(() => ({}));
+    throw new Error(j.error || 'Failed to save payment');
+  }
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function uploadPayslip(index) {
+  const row = commissionRows[index];
+  const input = document.getElementById(`payslip_${index}`);
+  const file = input.files?.[0];
+  if (!file) return;
+  if (file.size > 8 * 1024 * 1024) return alert('Payslip must be under 8MB');
+  try {
+    await saveCommissionPayment(row, 'paid', { name: file.name, type: file.type, data: await readFileAsDataUrl(file) });
+    showToast(`${row.manager} marked paid`);
+    await fetchManagerCommissions();
+  } catch (e) { alert(e.message); }
+}
+
+async function markCommissionUnpaid(index) {
+  const row = commissionRows[index];
+  if (!confirm(`Mark ${row.manager} as unpaid for this period?`)) return;
+  try {
+    await saveCommissionPayment(row, 'unpaid', { name: '', type: '', data: '' });
+    showToast(`${row.manager} marked unpaid`);
+    await fetchManagerCommissions();
+  } catch (e) { alert(e.message); }
 }
 
 // ── Workspaces ─────────────────────────────────────────────

@@ -82,6 +82,20 @@ db.exec(`CREATE TABLE IF NOT EXISTS nonlead_overrides (
   active     INTEGER DEFAULT 1
 )`);
 
+db.exec(`CREATE TABLE IF NOT EXISTS manager_commission_payments (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  manager_name  TEXT NOT NULL,
+  period_start  TEXT NOT NULL,
+  period_end    TEXT NOT NULL,
+  status        TEXT DEFAULT 'unpaid',
+  payslip_name  TEXT DEFAULT '',
+  payslip_type  TEXT DEFAULT '',
+  payslip_data  TEXT DEFAULT '',
+  paid_at       TEXT DEFAULT NULL,
+  updated_at    TEXT DEFAULT (datetime('now')),
+  UNIQUE(manager_name, period_start, period_end)
+)`);
+
 // Migrations for existing deployments
 for (const sql of [
   `ALTER TABLE clients ADD COLUMN plan_leads INTEGER DEFAULT 0`,
@@ -201,7 +215,7 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
 });
 
 // ── Middleware ─────────────────────────────────────────────
-app.use(express.json({ limit: '4mb' }));
+app.use(express.json({ limit: '12mb' }));
 app.use(express.static(path.join(__dirname), {
   setHeaders(res, filePath) {
     if (filePath.endsWith('.html')) {
@@ -341,6 +355,38 @@ app.put('/api/admin/managers/:id/password', requireAdmin, (req, res) => {
 
 app.delete('/api/admin/managers/:id', requireAdmin, (req, res) => {
   db.prepare('DELETE FROM managers WHERE id=?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+// ── Manager commission payments ───────────────────────────
+app.get('/api/admin/commission-payments', requireAdmin, (req, res) => {
+  res.json(db.prepare(`
+    SELECT manager_name, period_start, period_end, status, payslip_name, payslip_type,
+           payslip_data, paid_at, updated_at
+    FROM manager_commission_payments
+    ORDER BY period_start DESC, manager_name
+  `).all());
+});
+
+app.put('/api/admin/commission-payments', requireAdmin, (req, res) => {
+  const { manager_name, period_start, period_end, status, payslip_name, payslip_type, payslip_data } = req.body || {};
+  if (!manager_name || !period_start || !period_end) return res.status(400).json({ error: 'Missing payment key' });
+  const cleanStatus = status === 'paid' ? 'paid' : 'unpaid';
+  db.prepare(`
+    INSERT INTO manager_commission_payments
+      (manager_name, period_start, period_end, status, payslip_name, payslip_type, payslip_data, paid_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, CASE WHEN ?='paid' THEN datetime('now') ELSE NULL END, datetime('now'))
+    ON CONFLICT(manager_name, period_start, period_end) DO UPDATE SET
+      status=excluded.status,
+      payslip_name=excluded.payslip_name,
+      payslip_type=excluded.payslip_type,
+      payslip_data=excluded.payslip_data,
+      paid_at=CASE WHEN excluded.status='paid' THEN COALESCE(manager_commission_payments.paid_at, datetime('now')) ELSE NULL END,
+      updated_at=datetime('now')
+  `).run(
+    manager_name.trim(), period_start, period_end, cleanStatus,
+    payslip_name || '', payslip_type || '', payslip_data || '', cleanStatus
+  );
   res.json({ ok: true });
 });
 
