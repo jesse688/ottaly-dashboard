@@ -832,6 +832,15 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
     // label=LEAD = marked as lead in PlusVibe UI
     // Additional labels for leads that progressed after being marked
     const LEAD_LABELS = ['LEAD', 'MEETING_BOOKED', 'MEETING_COMPLETED', 'CLOSED', 'ADDED_TO_ZOHO', 'AWAITING_REPLY', 'NON_LEAD', 'WEAK_LEAD'];
+    const NON_LEAD_LABEL_RE = /(^|[_\-\s])non([_\-\s]?lead)?([_\-\s]|$)/i;
+
+    function isNonLeadLabel(label) {
+        return NON_LEAD_LABEL_RE.test(String(label || ''));
+    }
+
+    function leadOriginalDate(lead) {
+        return lead.created_at || lead.createdAt || lead.lead_created_at || lead.added_at || lead.date || lead.modified_at;
+    }
 
     async function fetchLabeledLeads(wsId) {
         if (_pvLeadsCache[wsId] !== undefined) return _pvLeadsCache[wsId];
@@ -844,7 +853,14 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
                 const batch = Array.isArray(raw) ? raw : (raw?.leads || raw?.data || []);
                 if (!batch.length) break;
                 batch.forEach(l => {
-                    if (!seenIds.has(l._id)) { seenIds.add(l._id); leads.push(l); }
+                    const id = l._id || l.id || l.email;
+                    if (seenIds.has(id)) {
+                        const existing = leads.find(x => (x._id || x.id || x.email) === id);
+                        if (existing && (isNonLeadLabel(label) || isNonLeadLabel(l.label))) existing._pv_nonlead = true;
+                        return;
+                    }
+                    seenIds.add(id);
+                    leads.push({ ...l, _pv_nonlead: isNonLeadLabel(label) || isNonLeadLabel(l.label) });
                 });
                 if (batch.length < 100) break;
             }
@@ -857,7 +873,8 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
         const start = new Date(startStr + 'T00:00:00');
         const end   = new Date(endStr   + 'T23:59:59');
         return labeledLeads.filter(l => {
-            const d = new Date(l.modified_at || l.created_at);
+            if (l._pv_nonlead || isNonLeadLabel(l.label)) return false;
+            const d = new Date(leadOriginalDate(l));
             return !isNaN(d) && d >= start && d <= end;
         }).length;
     }

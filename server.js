@@ -105,6 +105,14 @@ db.exec(`CREATE TABLE IF NOT EXISTS manager_commission_adjustments (
   created_at    TEXT DEFAULT (datetime('now'))
 )`);
 
+db.exec(`CREATE TABLE IF NOT EXISTS revenue_lead_first_seen (
+  lead_key      TEXT PRIMARY KEY,
+  workspace_id  TEXT NOT NULL,
+  email         TEXT DEFAULT '',
+  first_seen    TEXT NOT NULL,
+  created_at    TEXT DEFAULT (datetime('now'))
+)`);
+
 // Migrations for existing deployments
 for (const sql of [
   `ALTER TABLE clients ADD COLUMN plan_leads INTEGER DEFAULT 0`,
@@ -711,6 +719,7 @@ app.get('/api/workspace-prices', (req, res) => {
 
 // ── Revenue leads cache (refreshed every 3 min server-side) ──
 const LEAD_LABELS = ['LEAD', 'MEETING_BOOKED', 'MEETING_COMPLETED', 'CLOSED', 'ADDED_TO_ZOHO', 'AWAITING_REPLY', 'NON_LEAD', 'WEAK_LEAD'];
+const NON_LEAD_LABEL_RE = /(^|[_\-\s])non([_\-\s]?lead)?([_\-\s]|$)/i;
 let revenueCache = { leads: [], updatedAt: null };
 
 async function pvFetch(path) {
@@ -719,6 +728,33 @@ async function pvFetch(path) {
   });
   if (!r.ok) throw new Error(`PlusVibe ${r.status}: ${path}`);
   return r.json();
+}
+
+function normalizePvLabel(label) {
+  return String(label || '').trim().replace(/\s+/g, '_').toUpperCase();
+}
+
+function isPvNonLeadLabel(label) {
+  return NON_LEAD_LABEL_RE.test(String(label || ''));
+}
+
+function stableLeadKey(workspaceId, lead) {
+  return String(lead?._id || lead?.id || lead?.lead_id || `${workspaceId}:${(lead?.email || '').toLowerCase()}`);
+}
+
+function sourceLeadDate(lead) {
+  return lead?.created_at || lead?.createdAt || lead?.lead_created_at || lead?.added_at || lead?.date || lead?.modified_at || null;
+}
+
+function getStableRevenueLeadDate(workspaceId, leadKey, email, sourceDate) {
+  const fallback = sourceDate || new Date().toISOString();
+  const existing = db.prepare('SELECT first_seen FROM revenue_lead_first_seen WHERE lead_key = ?').get(leadKey);
+  if (existing?.first_seen) return existing.first_seen;
+  db.prepare(`
+    INSERT OR IGNORE INTO revenue_lead_first_seen (lead_key, workspace_id, email, first_seen)
+    VALUES (?, ?, ?, ?)
+  `).run(leadKey, workspaceId, email || '', fallback);
+  return db.prepare('SELECT first_seen FROM revenue_lead_first_seen WHERE lead_key = ?').get(leadKey)?.first_seen || fallback;
 }
 
 async function refreshRevenueCache() {
@@ -739,7 +775,7 @@ async function refreshRevenueCache() {
     for (const ws of workspaces) {
       const wsPrice    = priceMap[ws.id]  || 0;
       const wsInactive = statusMap[ws.id] === 'inactive';
-      const seenIds = new Set();
+      const byLeadKey = new Map();
       for (const label of LEAD_LABELS) {
         for (let page = 1; page <= 20; page++) {
           let batch;
@@ -749,24 +785,32 @@ async function refreshRevenueCache() {
           } catch(e) { break; }
           if (!batch.length) break;
           batch.forEach(l => {
-            if (seenIds.has(l._id)) return;
-            seenIds.add(l._id);
-            leads.push({
+            const leadKey = stableLeadKey(ws.id, l);
+            const scanLabel = normalizePvLabel(label);
+            const leadLabel = normalizePvLabel(l.label || label);
+            const existing = byLeadKey.get(leadKey);
+            const email = l.email || existing?.lead_email || '';
+            const stableDate = existing?.date || getStableRevenueLeadDate(ws.id, leadKey, email, sourceLeadDate(l));
+            const merged = {
+              ...(existing || {}),
               client_name:    ws.name || ws.workspace_name || 'Unknown',
               workspace_id:   ws.id,
-              campaign:       l.camp_name || '',
-              first_name:     l.first_name  || l.firstName  || '',
-              last_name:      l.last_name   || l.lastName   || '',
-              lead_email:     l.email || '',
+              campaign:       existing?.campaign || l.camp_name || '',
+              first_name:     existing?.first_name || l.first_name  || l.firstName  || '',
+              last_name:      existing?.last_name  || l.last_name   || l.lastName   || '',
+              lead_email:     email,
               lead_price:     wsPrice,
-              label:          l.label || '',
-              date:           l.modified_at || l.created_at || null,
+              label:          isPvNonLeadLabel(scanLabel) || isPvNonLeadLabel(leadLabel) ? 'NON_LEAD' : (existing?.label || leadLabel || scanLabel),
+              date:           stableDate,
               client_inactive: wsInactive,
-            });
+              pv_nonlead:     Boolean(existing?.pv_nonlead || isPvNonLeadLabel(scanLabel) || isPvNonLeadLabel(leadLabel)),
+            };
+            byLeadKey.set(leadKey, merged);
           });
           if (batch.length < 100) break;
         }
       }
+      leads.push(...byLeadKey.values());
     }
     revenueCache = { leads, updatedAt: new Date().toISOString() };
     console.log(`[revenue cache] refreshed — ${leads.length} total leads`);
@@ -793,12 +837,13 @@ app.get('/api/revenue/leads', (req, res) => {
   const leads = (revenueCache.leads || []).map(l => {
     const o        = nonleadMap[(l.lead_email || '').toLowerCase()];
     const livePrice = livePriceMap[l.workspace_id] ?? l.lead_price ?? 0;
+    const pvNonlead = Boolean(l.pv_nonlead || isPvNonLeadLabel(l.label));
     return {
       ...l,
       lead_price:     livePrice,
-      is_nonlead:     o?.active ? true  : false,
-      nonlead_reason: o?.active ? o.reason   : '',
-      nonlead_date:   o?.active ? o.marked_at: '',
+      is_nonlead:     o?.active || pvNonlead ? true : false,
+      nonlead_reason: o?.active ? o.reason : (pvNonlead ? 'PlusVibe label: Non Lead' : ''),
+      nonlead_date:   o?.active ? o.marked_at : (pvNonlead ? l.date : ''),
     };
   });
   res.json({ ...revenueCache, leads });
@@ -827,9 +872,15 @@ app.get('/api/revenue/stats-by-workspace', (req, res) => {
   const currentPrices = db.prepare('SELECT workspace_id, price_per_lead FROM clients').all();
   const livePriceMap  = {};
   currentPrices.forEach(p => { livePriceMap[p.workspace_id] = p.price_per_lead || 0; });
+  const manualNonleads = new Set(
+    db.prepare(`SELECT email FROM nonlead_overrides WHERE active = 1`).all()
+      .map(r => String(r.email || '').toLowerCase())
+  );
 
   const counts = {};
   (revenueCache.leads || []).forEach(l => {
+    if (manualNonleads.has(String(l.lead_email || '').toLowerCase())) return;
+    if (l.pv_nonlead || isPvNonLeadLabel(l.label)) return;
     if (!counts[l.workspace_id]) counts[l.workspace_id] = { delivered: 0, revenue: 0 };
     counts[l.workspace_id].delivered++;
     counts[l.workspace_id].revenue += livePriceMap[l.workspace_id] ?? l.lead_price ?? 0;
