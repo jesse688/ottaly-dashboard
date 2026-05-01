@@ -113,6 +113,17 @@ db.exec(`CREATE TABLE IF NOT EXISTS revenue_lead_first_seen (
   created_at    TEXT DEFAULT (datetime('now'))
 )`);
 
+db.exec(`CREATE TABLE IF NOT EXISTS app_meta (
+  key    TEXT PRIMARY KEY,
+  value  TEXT NOT NULL
+)`);
+
+const revenueDateMigration = db.prepare('SELECT value FROM app_meta WHERE key = ?').get('revenue_first_seen_uses_modified_at');
+if (!revenueDateMigration) {
+  db.prepare('DELETE FROM revenue_lead_first_seen').run();
+  db.prepare('INSERT INTO app_meta (key, value) VALUES (?, ?)').run('revenue_first_seen_uses_modified_at', '1');
+}
+
 // Migrations for existing deployments
 for (const sql of [
   `ALTER TABLE clients ADD COLUMN plan_leads INTEGER DEFAULT 0`,
@@ -743,7 +754,7 @@ function stableLeadKey(workspaceId, lead) {
 }
 
 function sourceLeadDate(lead) {
-  return lead?.created_at || lead?.createdAt || lead?.lead_created_at || lead?.added_at || lead?.date || lead?.modified_at || null;
+  return lead?.modified_at || lead?.created_at || lead?.createdAt || lead?.lead_created_at || lead?.added_at || lead?.date || null;
 }
 
 function getStableRevenueLeadDate(workspaceId, leadKey, email, sourceDate) {
