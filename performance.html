@@ -474,6 +474,7 @@
                 <a href="performance.html" class="nav-tab active">Performance</a>
                 <a href="campaigns.html"   class="nav-tab">Campaigns</a>
                 <a href="clients.html"     class="nav-tab">Clients</a>
+                <a href="automation.html"  class="nav-tab">Automation</a>
                 <a href="admin.html"       class="nav-tab">Admin</a>
             </nav>
         </div>
@@ -501,6 +502,7 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
     document.querySelectorAll('a[href="index.html"]').forEach(a => a.style.display='none');
     document.querySelectorAll('a[href="admin.html"]').forEach(a => a.style.display='none');
     document.querySelectorAll('a[href="clients.html"]').forEach(a => a.style.display='none');
+    document.querySelectorAll('a[href="automation.html"]').forEach(a => a.style.display='none');
     // Add commission link
     document.getElementById('sessionBadge').insertAdjacentHTML('beforebegin',
       '<a href="commission.html" style="padding:6px 14px;border-radius:7px;background:#1F6F78;color:#fff;text-decoration:none;font-size:12px;font-weight:600;margin-right:8px">My Commission</a>');
