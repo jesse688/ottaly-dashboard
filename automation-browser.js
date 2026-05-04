@@ -13,6 +13,7 @@ const WIDTH = process.env.AUTOMATION_BROWSER_WIDTH || '1440';
 const HEIGHT = process.env.AUTOMATION_BROWSER_HEIGHT || '900';
 const VNC_PORT = process.env.AUTOMATION_VNC_PORT || '5900';
 const NOVNC_PORT = process.env.AUTOMATION_NOVNC_PORT || '6080';
+const START_URL = process.env.AUTOMATION_BROWSER_START_URL || 'https://app.apollo.io/#/login';
 process.env.DISPLAY = DISPLAY;
 
 function log(message, data) {
@@ -38,7 +39,6 @@ function browserLaunchOptions() {
     args: [
       '--no-sandbox',
       '--disable-dev-shm-usage',
-      '--start-maximized',
       '--window-position=0,0',
       `--window-size=${WIDTH},${HEIGHT}`,
     ],
@@ -71,8 +71,10 @@ async function main() {
     children.push(startProcess('xvfb', 'Xvfb', [DISPLAY, '-screen', '0', `${WIDTH}x${HEIGHT}x24`, '-ac']));
     await new Promise(resolve => setTimeout(resolve, 1000));
     children.push(startProcess('fluxbox', 'fluxbox', [], { DISPLAY }));
+    await new Promise(resolve => setTimeout(resolve, 1000));
     children.push(startProcess('x11vnc', 'x11vnc', ['-display', DISPLAY, '-forever', '-shared', '-nopw', '-listen', '0.0.0.0', '-rfbport', VNC_PORT], { DISPLAY }));
     children.push(startProcess('novnc', 'websockify', ['--web=/usr/share/novnc', `0.0.0.0:${NOVNC_PORT}`, `localhost:${VNC_PORT}`]));
+    await new Promise(resolve => setTimeout(resolve, 1000));
 
     context = await chromium.launchPersistentContext(SESSION_DIR, {
       ...browserLaunchOptions(),
@@ -85,11 +87,8 @@ async function main() {
   }
 
   let page = context.pages()[0] || await context.newPage();
-  await page.setViewportSize({ width: Number(WIDTH), height: Number(HEIGHT) }).catch(() => {});
   await page.bringToFront().catch(() => {});
-  if (page.url() === 'about:blank') {
-    await page.goto('https://app.apollo.io/#/login', { waitUntil: 'domcontentloaded' }).catch(() => {});
-  }
+  await page.goto(START_URL, { waitUntil: 'domcontentloaded' }).catch(err => log('Initial page load failed', { error: err.message }));
 
   log('Automation browser ready', { url: page.url(), noVncPath: '/vnc.html?autoconnect=true&resize=scale' });
 

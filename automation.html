@@ -17,6 +17,7 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text)}
 .btn{padding:10px 16px;border:0;border-radius:8px;font-size:13px;font-weight:800;cursor:pointer}.btn-primary{background:var(--navy);color:white}.btn-primary:hover{background:var(--teal)}.btn-ghost{background:#F8F9FC;color:var(--text);border:1px solid var(--border)}
 .hint{font-size:12px;color:var(--muted);line-height:1.55}.status{display:inline-flex;align-items:center;padding:4px 9px;border-radius:999px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.4px}.status.running{background:#DBEAFE;color:#1E40AF}.status.completed{background:#D1FAE5;color:#065F46}.status.failed{background:#FEE2E2;color:#991B1B}.status.queued{background:#FEF3C7;color:#92400E}
 .runs{display:flex;flex-direction:column;gap:.75rem}.run{border:1px solid var(--border);border-radius:10px;padding:.9rem;background:#FBFCFE}.run-head{display:flex;justify-content:space-between;gap:.75rem;align-items:flex-start}.run-title{font-weight:800;font-size:13px}.run-meta{font-size:11px;color:var(--muted);margin-top:3px}.log{margin-top:.75rem;background:#050C29;color:#DDE7FF;border-radius:8px;padding:.8rem;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.5;white-space:pre-wrap;max-height:300px;overflow:auto}.empty{text-align:center;color:var(--muted);padding:2rem;border:1px dashed var(--border);border-radius:10px;background:#FBFCFE}.toast{position:fixed;right:1.5rem;bottom:1.5rem;background:var(--navy-dark);color:white;border-radius:8px;padding:10px 16px;font-size:13px;font-weight:700;opacity:0;transform:translateY(10px);transition:.2s}.toast.show{opacity:1;transform:translateY(0)}
+.browser-log{display:none;margin:.75rem 0 1rem;background:#050C29;color:#DDE7FF;border-radius:8px;padding:.75rem;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;line-height:1.45;white-space:pre-wrap;max-height:160px;overflow:auto}
 @media(max-width:880px){.layout{grid-template-columns:1fr}.header{padding:1rem}.nav{overflow:auto}.nav a{white-space:nowrap;padding:8px 12px}.page{padding:1rem}}
 </style>
 </head>
@@ -51,6 +52,7 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text)}
         <button class="btn btn-ghost" onclick="stopBrowser()">Stop</button>
       </div>
       <p class="hint" id="browserStatus" style="margin-bottom:1rem">Browser status loading...</p>
+      <pre class="browser-log" id="browserLog"></pre>
       <div class="section-label">New Run</div>
       <div class="field">
         <label for="apolloUrl">Apollo URL</label>
@@ -102,6 +104,9 @@ async function loadBrowserStatus(){
   document.getElementById('browserStatus').textContent=data.running
     ? `Running on ${data.url}. Use this to log into Apollo/Drive/PlusVibe once.`
     : `Stopped. Start it, then open the browser.`;
+  const log=document.getElementById('browserLog');
+  log.textContent=data.log_tail||'';
+  log.style.display=data.log_tail?'block':'none';
 }
 async function startBrowser(){
   const r=await fetch('/api/admin/automation/browser/start',{method:'POST'});
