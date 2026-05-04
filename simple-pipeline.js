@@ -134,16 +134,31 @@ async function saveDebugSnapshot(page, runDownloadDir, name, log) {
   }
 }
 
-async function loginApollo(page, log) {
+async function loginApollo(page, runDownloadDir, log) {
   if (!process.env.APOLLO_EMAIL || !process.env.APOLLO_PASSWORD) {
     throw new Error('APOLLO_EMAIL and APOLLO_PASSWORD are required');
   }
   log('Logging into Apollo');
   await page.goto(`${APOLLO_BASE}/#/login`, { waitUntil: 'domcontentloaded' });
-  await fillFirst(page, ['Email', 'email'], process.env.APOLLO_EMAIL);
-  await fillFirst(page, ['Password', 'password'], process.env.APOLLO_PASSWORD);
-  await clickFirst(page, [/log in/i, /sign in/i, 'Log In', 'Sign In']);
+  await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+  const filledEmail = await fillFirst(page, ['Email', 'email'], process.env.APOLLO_EMAIL, 12000);
+  const filledPassword = await fillFirst(page, ['Password', 'password'], process.env.APOLLO_PASSWORD, 12000);
+  if (!filledEmail || !filledPassword) {
+    await saveDebugSnapshot(page, runDownloadDir, 'apollo-login-fields-missing', log);
+    throw new Error('Apollo login fields were not found. Check the saved screenshot for the login page state.');
+  }
+  const clickedLogin = await clickFirst(page, [/log in/i, /sign in/i, 'Log In', 'Sign In'], 8000);
+  if (!clickedLogin) {
+    await saveDebugSnapshot(page, runDownloadDir, 'apollo-login-button-missing', log);
+    throw new Error('Apollo login button was not found. Check the saved screenshot for the login page state.');
+  }
+  await page.waitForURL(url => !String(url).includes('/login'), { timeout: 45000 }).catch(() => {});
   await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+  if (page.url().includes('/login')) {
+    await saveDebugSnapshot(page, runDownloadDir, 'apollo-login-not-complete', log);
+    throw new Error('Apollo login did not complete. Apollo may require verification, the password may be wrong, or the account may need a manual login check.');
+  }
+  log('Apollo login completed', { url: page.url() });
 }
 
 async function sortApolloSearch(page, log) {
@@ -165,13 +180,13 @@ async function scrapeApollo(page, apolloUrl, pages, runDownloadDir, log) {
   await sortApolloSearch(page, log);
 
   log('Starting Apollo scrape', { pages });
-  const downloadPromise = page.waitForEvent('download', { timeout: 10 * 60 * 1000 });
   const opened = await clickFirst(page, ['Attention', 'Scrape', 'Export', 'Download'], 5000);
   if (!opened) {
     await saveDebugSnapshot(page, runDownloadDir, 'apollo-scrape-control-missing', log);
     throw new Error('Could not find Apollo scrape/export control. Open the saved screenshot and tell me the exact button text for the scrape menu.');
   }
   await fillFirst(page, ['Pages', 'Number of pages', 'page'], String(pages), 4000).catch(() => {});
+  const downloadPromise = page.waitForEvent('download', { timeout: 10 * 60 * 1000 });
   const started = await clickFirst(page, ['Scrape', 'Start scrape', 'Start', 'Download CSV', 'Export'], 5000);
   if (!started) {
     await saveDebugSnapshot(page, runDownloadDir, 'apollo-start-scrape-missing', log);
@@ -360,7 +375,7 @@ async function run() {
   const page = await context.newPage();
 
   try {
-    await loginApollo(page, log);
+    await loginApollo(page, runDownloadDir, log);
     const scrapedCsv = await scrapeApollo(page, apolloUrl, pages, runDownloadDir, log);
     const exportedCsv = await uploadAndExportApollo(page, scrapedCsv, campaignName, runDownloadDir, log);
     const verifiedCsv = await verifyViaDrive(exportedCsv, runDownloadDir, log);
