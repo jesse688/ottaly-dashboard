@@ -3,7 +3,7 @@ require('dotenv').config({ quiet: true });
 
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const { chromium } = require('playwright');
 
 const ROOT = __dirname;
@@ -31,6 +31,15 @@ function startProcess(name, command, args, env = {}) {
   return child;
 }
 
+function cleanupStaleBrowserProfile() {
+  // A previous crashed browser can leave Chromium's profile lock behind.
+  // The profile is only used by this automation service, so clear stale owners before launch.
+  spawnSync('pkill', ['-f', SESSION_DIR], { stdio: 'ignore' });
+  for (const file of ['SingletonLock', 'SingletonSocket', 'SingletonCookie', 'lockfile']) {
+    try { fs.rmSync(path.join(SESSION_DIR, file), { force: true, recursive: true }); } catch {}
+  }
+}
+
 function browserLaunchOptions() {
   const options = {
     headless: false,
@@ -55,6 +64,7 @@ function browserLaunchOptions() {
 
 async function main() {
   fs.mkdirSync(SESSION_DIR, { recursive: true });
+  cleanupStaleBrowserProfile();
   log('Starting automation browser', { sessionDir: SESSION_DIR, novncPort: NOVNC_PORT });
 
   const children = [];

@@ -1324,6 +1324,7 @@ app.post('/api/admin/automation/browser/start', requireAdmin, (req, res) => {
   const child = spawn(process.execPath, [path.join(__dirname, 'automation-browser.js')], {
     cwd: __dirname,
     env: process.env,
+    detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   automationBrowserProcess = child;
@@ -1342,7 +1343,10 @@ app.post('/api/admin/automation/browser/start', requireAdmin, (req, res) => {
 });
 
 app.post('/api/admin/automation/browser/stop', requireAdmin, (req, res) => {
-  if (automationBrowserProcess) automationBrowserProcess.kill('SIGTERM');
+  if (automationBrowserProcess) {
+    try { process.kill(-automationBrowserProcess.pid, 'SIGTERM'); }
+    catch { automationBrowserProcess.kill('SIGTERM'); }
+  }
   res.json({ ok: true });
 });
 
