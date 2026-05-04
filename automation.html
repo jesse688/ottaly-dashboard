@@ -44,6 +44,13 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text)}
 
   <div class="layout">
     <section class="panel">
+      <div class="section-label">Automation Browser</div>
+      <div style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin-bottom:.75rem">
+        <button class="btn btn-primary" onclick="startBrowser()">Start Browser</button>
+        <button class="btn btn-ghost" onclick="openBrowser()">Open Browser</button>
+        <button class="btn btn-ghost" onclick="stopBrowser()">Stop</button>
+      </div>
+      <p class="hint" id="browserStatus" style="margin-bottom:1rem">Browser status loading...</p>
       <div class="section-label">New Run</div>
       <div class="field">
         <label for="apolloUrl">Apollo URL</label>
@@ -73,6 +80,7 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text)}
 
 <script>
 let pollTimer=null;
+let automationBrowserUrl='';
 function toast(msg){const el=document.getElementById('toast');el.textContent=msg;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),2600)}
 async function ensureAdmin(){
   const r=await fetch('/api/session');
@@ -86,6 +94,30 @@ async function loadClients(){
   const r=await fetch('/api/admin/clients');
   const clients=await r.json();
   select.innerHTML='<option value="">Choose a client…</option>'+clients.map(c=>`<option value="${c.id}">${escapeHtml(c.workspace_name)} — ${escapeHtml(c.workspace_id)}</option>`).join('');
+}
+async function loadBrowserStatus(){
+  const r=await fetch('/api/admin/automation/browser/status');
+  const data=await r.json();
+  automationBrowserUrl=data.url||'';
+  document.getElementById('browserStatus').textContent=data.running
+    ? `Running on ${data.url}. Use this to log into Apollo/Drive/PlusVibe once.`
+    : `Stopped. Start it, then open the browser.`;
+}
+async function startBrowser(){
+  const r=await fetch('/api/admin/automation/browser/start',{method:'POST'});
+  const data=await r.json();
+  automationBrowserUrl=data.url||automationBrowserUrl;
+  await loadBrowserStatus();
+  toast('Automation browser starting');
+}
+function openBrowser(){
+  if(!automationBrowserUrl){toast('Start the browser first');return}
+  window.open(automationBrowserUrl,'_blank');
+}
+async function stopBrowser(){
+  await fetch('/api/admin/automation/browser/stop',{method:'POST'});
+  await loadBrowserStatus();
+  toast('Automation browser stopping');
 }
 async function startRun(){
   const apollo_url=document.getElementById('apolloUrl').value.trim();
@@ -123,7 +155,7 @@ async function loadRuns(){
 }
 function escapeHtml(v){return String(v||'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))}
 function formatDate(v){try{return new Date(v).toLocaleString()}catch{return v||''}}
-ensureAdmin().then(ok=>{if(ok){loadClients();loadRuns();}});
+ensureAdmin().then(ok=>{if(ok){loadClients();loadRuns();loadBrowserStatus();setInterval(loadBrowserStatus,10000);}});
 </script>
 </body>
 </html>

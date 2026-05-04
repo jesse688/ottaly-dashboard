@@ -12,6 +12,7 @@ const { google } = require('googleapis');
 const ROOT = __dirname;
 const DOWNLOAD_DIR = path.resolve(ROOT, process.env.AUTOMATION_DOWNLOAD_DIR || 'downloads');
 const RUN_DIR = path.resolve(ROOT, process.env.AUTOMATION_RUN_DIR || 'automation-runs');
+const APOLLO_SESSION_DIR = path.resolve(process.env.APOLLO_SESSION_DIR || path.join(ROOT, 'apollo-session'));
 const APOLLO_BASE = 'https://app.apollo.io';
 const PV_BASE = process.env.PLUSVIBE_API_BASE || 'https://api.plusvibe.ai/api/v1';
 
@@ -191,6 +192,15 @@ async function loginApollo(page, runDownloadDir, log) {
   if (!process.env.APOLLO_EMAIL || !process.env.APOLLO_PASSWORD) {
     throw new Error('APOLLO_EMAIL and APOLLO_PASSWORD are required');
   }
+
+  log('Checking Apollo browser session');
+  await page.goto(`${APOLLO_BASE}/#/people`, { waitUntil: 'domcontentloaded' });
+  await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+  if (page.url().startsWith(APOLLO_BASE) && !page.url().includes('/login')) {
+    log('Apollo existing session is active', { url: page.url() });
+    return;
+  }
+
   log('Logging into Apollo');
   await page.goto(`${APOLLO_BASE}/#/login`, { waitUntil: 'domcontentloaded' });
   await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
@@ -428,10 +438,17 @@ async function run() {
   }
 
   const launchOptions = browserLaunchOptions();
-  log('Launching browser', { headless: launchOptions.headless, proxy: launchOptions.proxy ? launchOptions.proxy.server : 'none' });
-  const browser = await chromium.launch(launchOptions);
-  const context = await browser.newContext({ acceptDownloads: true });
-  const page = await context.newPage();
+  ensureDir(APOLLO_SESSION_DIR);
+  log('Launching browser', {
+    headless: launchOptions.headless,
+    proxy: launchOptions.proxy ? launchOptions.proxy.server : 'none',
+    sessionDir: APOLLO_SESSION_DIR,
+  });
+  const context = await chromium.launchPersistentContext(APOLLO_SESSION_DIR, {
+    ...launchOptions,
+    acceptDownloads: true,
+  });
+  const page = context.pages()[0] || await context.newPage();
 
   try {
     await loginApollo(page, runDownloadDir, log);
@@ -447,7 +464,7 @@ async function run() {
     log('Automation run failed', { error: err.message });
     throw err;
   } finally {
-    await browser.close().catch(() => {});
+    await context.close().catch(() => {});
   }
 }
 

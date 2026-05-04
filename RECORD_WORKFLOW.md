@@ -52,3 +52,22 @@ After recording, the automation should be cleaned up to:
 Do not commit lead CSVs, downloaded verifier files, screenshots with private data, or secrets.
 
 The browser session file can contain login cookies, so it is ignored by git.
+
+## Dashboard Automation Browser
+
+The deployed dashboard can also start a persistent browser session from the Automation page.
+
+Required deployment settings:
+
+```bash
+APOLLO_SESSION_DIR=/data/apollo-session
+AUTOMATION_NOVNC_PORT=6080
+```
+
+EasyPanel must expose port `6080` for the Ottaly app. Then use:
+
+1. Automation page
+2. Start Browser
+3. Open Browser
+4. Log into Apollo, Google Drive, and PlusVibe once
+5. Leave the session saved for future automation runs

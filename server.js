@@ -19,6 +19,7 @@ const STRIPE_WEBHOOK_SECRET  = process.env.STRIPE_WEBHOOK_SECRET  || '';
 const APP_URL                = process.env.APP_URL                || 'http://localhost:3000';
 const NONLEAD_WEBHOOK_URL    = 'https://n8n1-n8n.xuobbb.easypanel.host/webhook/ottaly-nonlead';
 const AUTOMATION_RUN_DIR     = path.resolve(process.env.AUTOMATION_RUN_DIR || 'automation-runs');
+const AUTOMATION_NOVNC_PORT  = process.env.AUTOMATION_NOVNC_PORT || '6080';
 
 const stripe = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY) : null;
 
@@ -1234,6 +1235,8 @@ app.delete('/api/admin/clients/:id', requireAdmin, (req, res) => {
 
 // ── Admin — Apollo → Verify → PlusVibe automation ─────────
 const automationRuns = new Map();
+let automationBrowserProcess = null;
+let automationBrowserLog = '';
 try { fs.mkdirSync(AUTOMATION_RUN_DIR, { recursive: true }); } catch {}
 
 function automationPublicRun(run) {
@@ -1266,6 +1269,58 @@ app.get('/api/admin/automation/runs/:id', requireAdmin, (req, res) => {
   const run = automationRuns.get(req.params.id);
   if (!run) return res.status(404).json({ error: 'Run not found' });
   res.json(automationPublicRun(run));
+});
+
+function automationBrowserUrl(req) {
+  const host = req.headers.host || '';
+  const hostname = host.split(':')[0];
+  const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+  return `${protocol}://${hostname}:${AUTOMATION_NOVNC_PORT}/vnc.html?autoconnect=true&resize=scale`;
+}
+
+function automationBrowserStatus(req) {
+  return {
+    running: !!automationBrowserProcess,
+    pid: automationBrowserProcess?.pid || null,
+    url: automationBrowserUrl(req),
+    log_tail: automationBrowserLog.split('\n').slice(-60).join('\n'),
+  };
+}
+
+function appendAutomationBrowserLog(chunk) {
+  automationBrowserLog = `${automationBrowserLog}${String(chunk || '')}`.split('\n').slice(-120).join('\n');
+}
+
+app.get('/api/admin/automation/browser/status', requireAdmin, (req, res) => {
+  res.json(automationBrowserStatus(req));
+});
+
+app.post('/api/admin/automation/browser/start', requireAdmin, (req, res) => {
+  if (automationBrowserProcess) return res.json(automationBrowserStatus(req));
+  automationBrowserLog = '';
+  const child = spawn(process.execPath, [path.join(__dirname, 'automation-browser.js')], {
+    cwd: __dirname,
+    env: process.env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  automationBrowserProcess = child;
+  appendAutomationBrowserLog(`[server] Started automation browser ${child.pid}\n`);
+  child.stdout.on('data', appendAutomationBrowserLog);
+  child.stderr.on('data', appendAutomationBrowserLog);
+  child.on('close', code => {
+    appendAutomationBrowserLog(`[server] Automation browser exited with code ${code}\n`);
+    if (automationBrowserProcess === child) automationBrowserProcess = null;
+  });
+  child.on('error', err => {
+    appendAutomationBrowserLog(`[server] Automation browser error: ${err.message}\n`);
+    if (automationBrowserProcess === child) automationBrowserProcess = null;
+  });
+  res.json(automationBrowserStatus(req));
+});
+
+app.post('/api/admin/automation/browser/stop', requireAdmin, (req, res) => {
+  if (automationBrowserProcess) automationBrowserProcess.kill('SIGTERM');
+  res.json({ ok: true });
 });
 
 app.post('/api/admin/automation/run', requireAdmin, (req, res) => {
