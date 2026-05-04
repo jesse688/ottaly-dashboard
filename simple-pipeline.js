@@ -43,6 +43,18 @@ function plusVibeKeyFor(workspaceId) {
   return process.env[keyName] || process.env.PLUSVIBE_KEY || '';
 }
 
+function browserLaunchOptions() {
+  const options = { headless: boolEnv('HEADLESS', true) };
+  if (process.env.PROXY_SERVER) {
+    options.proxy = {
+      server: process.env.PROXY_SERVER,
+      username: process.env.PROXY_USERNAME || undefined,
+      password: process.env.PROXY_PASSWORD || undefined,
+    };
+  }
+  return options;
+}
+
 function campaignNameFromUrl(rawUrl, fallbackWorkspace = 'Campaign') {
   try {
     const u = new URL(rawUrl);
@@ -317,7 +329,9 @@ async function run() {
     return;
   }
 
-  const browser = await chromium.launch({ headless: boolEnv('HEADLESS', true) });
+  const launchOptions = browserLaunchOptions();
+  log('Launching browser', { headless: launchOptions.headless, proxy: launchOptions.proxy ? launchOptions.proxy.server : 'none' });
+  const browser = await chromium.launch(launchOptions);
   const context = await browser.newContext({ acceptDownloads: true });
   const page = await context.newPage();
 

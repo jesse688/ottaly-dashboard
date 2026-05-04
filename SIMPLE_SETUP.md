@@ -22,6 +22,16 @@ HEADLESS=true
 APOLLO_SCRAPE_PAGES=100
 ```
 
+Optional browser-only proxy/VPN endpoint:
+
+```bash
+PROXY_SERVER=
+PROXY_USERNAME=
+PROXY_PASSWORD=
+```
+
+Use this only for the automation browser. Do not route the whole dashboard container through a VPN unless you also configure inbound routing carefully.
+
 For per-client PlusVibe keys, add an optional variable using the workspace id:
 
 ```bash
