@@ -4,7 +4,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "record:apollo": "playwright codegen --target javascript --output recordings/apollo-workflow.recording.js --save-storage recordings/apollo-storage.json https://app.apollo.io/#/login"
   },
   "type": "commonjs",
   "dependencies": {
