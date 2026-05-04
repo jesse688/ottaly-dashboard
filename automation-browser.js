@@ -13,6 +13,7 @@ const WIDTH = process.env.AUTOMATION_BROWSER_WIDTH || '1440';
 const HEIGHT = process.env.AUTOMATION_BROWSER_HEIGHT || '900';
 const VNC_PORT = process.env.AUTOMATION_VNC_PORT || '5900';
 const NOVNC_PORT = process.env.AUTOMATION_NOVNC_PORT || '6080';
+process.env.DISPLAY = DISPLAY;
 
 function log(message, data) {
   console.log(`[${new Date().toISOString()}] ${message}${data ? ` ${JSON.stringify(data)}` : ''}`);
@@ -37,6 +38,8 @@ function browserLaunchOptions() {
     args: [
       '--no-sandbox',
       '--disable-dev-shm-usage',
+      '--start-maximized',
+      '--window-position=0,0',
       `--window-size=${WIDTH},${HEIGHT}`,
     ],
   };
@@ -55,33 +58,43 @@ async function main() {
   log('Starting automation browser', { sessionDir: SESSION_DIR, novncPort: NOVNC_PORT });
 
   const children = [];
-  children.push(startProcess('xvfb', 'Xvfb', [DISPLAY, '-screen', '0', `${WIDTH}x${HEIGHT}x24`, '-ac']));
-  await new Promise(resolve => setTimeout(resolve, 1000));
-  children.push(startProcess('fluxbox', 'fluxbox', [], { DISPLAY }));
-  children.push(startProcess('x11vnc', 'x11vnc', ['-display', DISPLAY, '-forever', '-shared', '-nopw', '-listen', '0.0.0.0', '-rfbport', VNC_PORT], { DISPLAY }));
-  children.push(startProcess('novnc', 'websockify', ['--web=/usr/share/novnc', `0.0.0.0:${NOVNC_PORT}`, `localhost:${VNC_PORT}`]));
+  let context;
 
-  const context = await chromium.launchPersistentContext(SESSION_DIR, {
-    ...browserLaunchOptions(),
-    env: { ...process.env, DISPLAY },
-  });
+  async function shutdown(exitCode = 0) {
+    log('Stopping automation browser');
+    if (context) await context.close().catch(() => {});
+    for (const child of children.reverse()) child.kill('SIGTERM');
+    setTimeout(() => process.exit(exitCode), 500);
+  }
+
+  try {
+    children.push(startProcess('xvfb', 'Xvfb', [DISPLAY, '-screen', '0', `${WIDTH}x${HEIGHT}x24`, '-ac']));
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    children.push(startProcess('fluxbox', 'fluxbox', [], { DISPLAY }));
+    children.push(startProcess('x11vnc', 'x11vnc', ['-display', DISPLAY, '-forever', '-shared', '-nopw', '-listen', '0.0.0.0', '-rfbport', VNC_PORT], { DISPLAY }));
+    children.push(startProcess('novnc', 'websockify', ['--web=/usr/share/novnc', `0.0.0.0:${NOVNC_PORT}`, `localhost:${VNC_PORT}`]));
+
+    context = await chromium.launchPersistentContext(SESSION_DIR, {
+      ...browserLaunchOptions(),
+      env: { ...process.env, DISPLAY },
+    });
+  } catch (err) {
+    console.error(err.stack || err.message);
+    await shutdown(1);
+    return;
+  }
 
   let page = context.pages()[0] || await context.newPage();
+  await page.setViewportSize({ width: Number(WIDTH), height: Number(HEIGHT) }).catch(() => {});
+  await page.bringToFront().catch(() => {});
   if (page.url() === 'about:blank') {
     await page.goto('https://app.apollo.io/#/login', { waitUntil: 'domcontentloaded' }).catch(() => {});
   }
 
   log('Automation browser ready', { url: page.url(), noVncPath: '/vnc.html?autoconnect=true&resize=scale' });
 
-  async function shutdown() {
-    log('Stopping automation browser');
-    await context.close().catch(() => {});
-    for (const child of children.reverse()) child.kill('SIGTERM');
-    setTimeout(() => process.exit(0), 500);
-  }
-
-  process.on('SIGTERM', shutdown);
-  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', () => shutdown(0));
+  process.on('SIGINT', () => shutdown(0));
   await new Promise(() => {});
 }
 
