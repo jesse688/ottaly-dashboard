@@ -123,6 +123,17 @@ async function fillFirst(page, labels, value, timeout = 6000) {
   return false;
 }
 
+async function saveDebugSnapshot(page, runDownloadDir, name, log) {
+  const safeName = sanitizeName(name || 'snapshot');
+  const screenshotPath = path.join(runDownloadDir, `${safeName}-${stamp()}.png`);
+  try {
+    await page.screenshot({ path: screenshotPath, fullPage: true, timeout: 10000 });
+    log('Saved browser snapshot', { screenshotPath, url: page.url() });
+  } catch (err) {
+    log('Could not save browser snapshot', { error: err.message, url: page.url() });
+  }
+}
+
 async function loginApollo(page, log) {
   if (!process.env.APOLLO_EMAIL || !process.env.APOLLO_PASSWORD) {
     throw new Error('APOLLO_EMAIL and APOLLO_PASSWORD are required');
@@ -136,23 +147,36 @@ async function loginApollo(page, log) {
 }
 
 async function sortApolloSearch(page, log) {
+  if (!boolEnv('APOLLO_ENABLE_SORT', false)) {
+    log('Skipping Apollo sort during calibration', { enableWith: 'APOLLO_ENABLE_SORT=true' });
+    return;
+  }
   log('Applying Apollo sort order');
-  await clickFirst(page, ['Name', 'Sort by Name', 'Person Name'], 4000).catch(() => {});
-  await clickFirst(page, ['Job Title', 'Title'], 4000).catch(() => {});
+  const sortedName = await clickFirst(page, ['Sort by Name', 'Person Name'], 2500).catch(() => false);
+  const sortedTitle = await clickFirst(page, ['Sort by Job Title', 'Job Title'], 2500).catch(() => false);
+  log('Apollo sort attempt finished', { sortedName, sortedTitle });
 }
 
 async function scrapeApollo(page, apolloUrl, pages, runDownloadDir, log) {
   log('Opening Apollo search', { apolloUrl });
   await page.goto(apolloUrl, { waitUntil: 'domcontentloaded' });
   await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+  await saveDebugSnapshot(page, runDownloadDir, 'apollo-search-loaded', log);
   await sortApolloSearch(page, log);
 
   log('Starting Apollo scrape', { pages });
   const downloadPromise = page.waitForEvent('download', { timeout: 10 * 60 * 1000 });
-  const opened = await clickFirst(page, ['Attention', 'Scrape', 'Export', 'Download'], 12000);
-  if (!opened) throw new Error('Could not find Apollo scrape/export control. Update selectors in simple-pipeline.js for this Apollo screen.');
+  const opened = await clickFirst(page, ['Attention', 'Scrape', 'Export', 'Download'], 5000);
+  if (!opened) {
+    await saveDebugSnapshot(page, runDownloadDir, 'apollo-scrape-control-missing', log);
+    throw new Error('Could not find Apollo scrape/export control. Open the saved screenshot and tell me the exact button text for the scrape menu.');
+  }
   await fillFirst(page, ['Pages', 'Number of pages', 'page'], String(pages), 4000).catch(() => {});
-  await clickFirst(page, ['Scrape', 'Start scrape', 'Start', 'Download CSV', 'Export'], 8000);
+  const started = await clickFirst(page, ['Scrape', 'Start scrape', 'Start', 'Download CSV', 'Export'], 5000);
+  if (!started) {
+    await saveDebugSnapshot(page, runDownloadDir, 'apollo-start-scrape-missing', log);
+    throw new Error('Opened scrape/export menu but could not find the final scrape/start/download button.');
+  }
   const download = await downloadPromise;
   const filePath = path.join(runDownloadDir, `contacts-${stamp()}.csv`);
   await download.saveAs(filePath);
