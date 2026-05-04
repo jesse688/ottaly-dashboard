@@ -4,6 +4,8 @@ const bcrypt    = require('bcryptjs');
 const jwt       = require('jsonwebtoken');
 const path      = require('path');
 const fs        = require('fs');
+const http      = require('http');
+const net       = require('net');
 const Stripe    = require('stripe');
 const { spawn } = require('child_process');
 
@@ -1272,10 +1274,29 @@ app.get('/api/admin/automation/runs/:id', requireAdmin, (req, res) => {
 });
 
 function automationBrowserUrl(req) {
-  const host = req.headers.host || '';
-  const hostname = host.split(':')[0];
-  const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
-  return `${protocol}://${hostname}:${AUTOMATION_NOVNC_PORT}/vnc.html?autoconnect=true&resize=scale`;
+  return '/automation-browser/vnc.html?autoconnect=true&resize=scale&path=automation-browser/websockify';
+}
+
+function stripAutomationBrowserPrefix(url = '/') {
+  return url.replace(/^\/automation-browser(?=\/|$)/, '') || '/';
+}
+
+function proxyAutomationBrowser(req, res) {
+  const targetPath = stripAutomationBrowserPrefix(req.originalUrl || req.url);
+  const proxyReq = http.request({
+    hostname: '127.0.0.1',
+    port: Number(AUTOMATION_NOVNC_PORT),
+    method: req.method,
+    path: targetPath,
+    headers: { ...req.headers, host: `127.0.0.1:${AUTOMATION_NOVNC_PORT}` },
+  }, proxyRes => {
+    res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
+    proxyRes.pipe(res);
+  });
+  proxyReq.on('error', () => {
+    res.status(502).send('Automation browser is not ready yet. Click Start Browser, wait 10 seconds, then open it again.');
+  });
+  req.pipe(proxyReq);
 }
 
 function automationBrowserStatus(req) {
@@ -1294,6 +1315,8 @@ function appendAutomationBrowserLog(chunk) {
 app.get('/api/admin/automation/browser/status', requireAdmin, (req, res) => {
   res.json(automationBrowserStatus(req));
 });
+
+app.use('/automation-browser', requireAdmin, proxyAutomationBrowser);
 
 app.post('/api/admin/automation/browser/start', requireAdmin, (req, res) => {
   if (automationBrowserProcess) return res.json(automationBrowserStatus(req));
@@ -1448,4 +1471,21 @@ app.post('/api/admin/nonlead-requests/:id/reject', requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
-app.listen(PORT, () => console.log(`Ottaly running on http://localhost:${PORT}`));
+const server = app.listen(PORT, () => console.log(`Ottaly running on http://localhost:${PORT}`));
+
+server.on('upgrade', (req, socket, head) => {
+  if (!req.url || !req.url.startsWith('/automation-browser')) {
+    socket.destroy();
+    return;
+  }
+  const targetPath = stripAutomationBrowserPrefix(req.url);
+  const proxySocket = net.connect(Number(AUTOMATION_NOVNC_PORT), '127.0.0.1', () => {
+    const headers = Object.entries(req.headers)
+      .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : value}`)
+      .join('\r\n');
+    proxySocket.write(`${req.method} ${targetPath} HTTP/${req.httpVersion}\r\n${headers}\r\n\r\n`);
+    if (head && head.length) proxySocket.write(head);
+    socket.pipe(proxySocket).pipe(socket);
+  });
+  proxySocket.on('error', () => socket.destroy());
+});
