@@ -9,9 +9,15 @@
   "type": "commonjs",
   "dependencies": {
     "bcryptjs": "^2.4.3",
+    "axios": "^1.13.2",
     "better-sqlite3": "^9.6.0",
+    "csv-parse": "^6.1.0",
+    "csv-stringify": "^6.6.0",
+    "dotenv": "^17.2.3",
     "express": "^4.18.2",
+    "googleapis": "^166.0.0",
     "jsonwebtoken": "^9.0.2",
+    "playwright": "^1.57.0",
     "stripe": "^14.0.0"
   },
   "repository": {

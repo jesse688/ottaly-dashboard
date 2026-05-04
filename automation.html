@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ottaly — Automation</title>
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--purple:#7C89CD;--bg:#F0F2F8;--card:#fff;--border:#E2E6F0;--text:#050C29;--muted:#6B7280;--green:#059669;--red:#DC2626;--amber:#D97706}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text)}
+.header{background:var(--navy-dark);padding:1rem 2rem;border-bottom:3px solid var(--teal);display:flex;align-items:center;justify-content:space-between}
+.nav{display:flex;gap:.25rem;align-items:center}.nav a{padding:8px 18px;border-radius:8px;font-size:13px;font-weight:600;color:rgba(255,255,255,.55);text-decoration:none}.nav a:hover,.nav a.active{background:var(--teal);color:#fff}
+.page{max-width:1180px;margin:0 auto;padding:2rem}.page-title{font-size:1.45rem;font-weight:800}.page-sub{font-size:13px;color:var(--muted);margin-top:4px}
+.layout{display:grid;grid-template-columns:minmax(320px,420px) 1fr;gap:1rem;margin-top:1.5rem}.panel{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:1.25rem;box-shadow:0 1px 3px rgba(5,12,41,.05)}
+.section-label{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:.75rem}.field{display:flex;flex-direction:column;gap:6px;margin-bottom:1rem}.field label{font-size:12px;font-weight:700}.field input,.field select,.field textarea{width:100%;padding:10px 11px;border:1.5px solid var(--border);border-radius:8px;background:#fff;font:inherit;font-size:13px;outline:none}.field textarea{min-height:116px;resize:vertical}.field input:focus,.field select:focus,.field textarea:focus{border-color:var(--teal)}
+.btn{padding:10px 16px;border:0;border-radius:8px;font-size:13px;font-weight:800;cursor:pointer}.btn-primary{background:var(--navy);color:white}.btn-primary:hover{background:var(--teal)}.btn-ghost{background:#F8F9FC;color:var(--text);border:1px solid var(--border)}
+.hint{font-size:12px;color:var(--muted);line-height:1.55}.status{display:inline-flex;align-items:center;padding:4px 9px;border-radius:999px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.4px}.status.running{background:#DBEAFE;color:#1E40AF}.status.completed{background:#D1FAE5;color:#065F46}.status.failed{background:#FEE2E2;color:#991B1B}.status.queued{background:#FEF3C7;color:#92400E}
+.runs{display:flex;flex-direction:column;gap:.75rem}.run{border:1px solid var(--border);border-radius:10px;padding:.9rem;background:#FBFCFE}.run-head{display:flex;justify-content:space-between;gap:.75rem;align-items:flex-start}.run-title{font-weight:800;font-size:13px}.run-meta{font-size:11px;color:var(--muted);margin-top:3px}.log{margin-top:.75rem;background:#050C29;color:#DDE7FF;border-radius:8px;padding:.8rem;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.5;white-space:pre-wrap;max-height:300px;overflow:auto}.empty{text-align:center;color:var(--muted);padding:2rem;border:1px dashed var(--border);border-radius:10px;background:#FBFCFE}.toast{position:fixed;right:1.5rem;bottom:1.5rem;background:var(--navy-dark);color:white;border-radius:8px;padding:10px 16px;font-size:13px;font-weight:700;opacity:0;transform:translateY(10px);transition:.2s}.toast.show{opacity:1;transform:translateY(0)}
+@media(max-width:880px){.layout{grid-template-columns:1fr}.header{padding:1rem}.nav{overflow:auto}.nav a{white-space:nowrap;padding:8px 12px}.page{padding:1rem}}
+</style>
+</head>
+<body>
+<div class="header">
+  <div style="display:flex;align-items:center;gap:1rem">
+    <img src="https://framerusercontent.com/images/nDSHQKnOUtpvlbArTv7AiTwZpcE.svg" alt="Ottaly" style="height:36px">
+    <nav class="nav">
+      <a href="index.html">Revenue</a>
+      <a href="performance.html">Performance</a>
+      <a href="campaigns.html">Campaigns</a>
+      <a href="clients.html">Clients</a>
+      <a href="automation.html" class="active">Automation</a>
+      <a href="admin.html">Admin</a>
+    </nav>
+  </div>
+  <a href="/login.html" onclick="fetch('/api/logout',{method:'POST'});return true" style="font-size:12px;color:rgba(255,255,255,.55);text-decoration:none">Sign out</a>
+</div>
+
+<main class="page">
+  <div>
+    <div class="page-title">Apollo Automation</div>
+    <div class="page-sub">Paste an Apollo people search, pick a workspace, and launch the pipeline.</div>
+  </div>
+
+  <div class="layout">
+    <section class="panel">
+      <div class="section-label">New Run</div>
+      <div class="field">
+        <label for="apolloUrl">Apollo URL</label>
+        <textarea id="apolloUrl" placeholder="https://app.apollo.io/people?..."></textarea>
+      </div>
+      <div class="field">
+        <label for="clientSelect">Client workspace</label>
+        <select id="clientSelect"><option value="">Loading clients…</option></select>
+      </div>
+      <label style="display:flex;gap:8px;align-items:center;font-size:12px;font-weight:700;margin-bottom:1rem">
+        <input type="checkbox" id="dryRun"> Dry run
+      </label>
+      <div style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap">
+        <button class="btn btn-primary" onclick="startRun()">Run Pipeline</button>
+        <button class="btn btn-ghost" onclick="loadRuns()">Refresh</button>
+      </div>
+      <p class="hint" style="margin-top:1rem">Dry run checks server wiring without logging into Apollo. Live runs need Apollo credentials, a PlusVibe key, and optional Google Drive verifier settings in EasyPanel environment variables.</p>
+    </section>
+
+    <section class="panel">
+      <div class="section-label">Recent Runs</div>
+      <div id="runs" class="runs"><div class="empty">No automation runs loaded yet.</div></div>
+    </section>
+  </div>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+let pollTimer=null;
+function toast(msg){const el=document.getElementById('toast');el.textContent=msg;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),2600)}
+async function ensureAdmin(){
+  const r=await fetch('/api/session');
+  if(!r.ok){location.href='/login.html';return false}
+  const s=await r.json();
+  if(s.role!=='admin'){location.href='/performance.html';return false}
+  return true;
+}
+async function loadClients(){
+  const select=document.getElementById('clientSelect');
+  const r=await fetch('/api/admin/clients');
+  const clients=await r.json();
+  select.innerHTML='<option value="">Choose a client…</option>'+clients.map(c=>`<option value="${c.id}">${escapeHtml(c.workspace_name)} — ${escapeHtml(c.workspace_id)}</option>`).join('');
+}
+async function startRun(){
+  const apollo_url=document.getElementById('apolloUrl').value.trim();
+  const client_id=document.getElementById('clientSelect').value;
+  if(!apollo_url||!client_id){toast('Apollo URL and client are required');return}
+  const r=await fetch('/api/admin/automation/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({apollo_url,client_id,dry_run:document.getElementById('dryRun').checked})});
+  const data=await r.json();
+  if(!r.ok){toast(data.error||'Could not start run');return}
+  toast('Automation started');
+  await loadRuns();
+}
+async function loadRuns(){
+  const r=await fetch('/api/admin/automation/runs');
+  const runs=await r.json();
+  const box=document.getElementById('runs');
+  if(!runs.length){box.innerHTML='<div class="empty">No automation runs yet.</div>';return}
+  box.innerHTML=runs.map(run=>`
+    <article class="run">
+      <div class="run-head">
+        <div>
+          <div class="run-title">${escapeHtml(run.workspace_name||run.workspace_id)}</div>
+          <div class="run-meta">${formatDate(run.created_at)} · ${escapeHtml(run.id)}</div>
+        </div>
+        <span class="status ${run.status}">${run.status}</span>
+      </div>
+      ${run.error?`<div style="margin-top:.6rem;color:#991B1B;font-size:12px;font-weight:700">${escapeHtml(run.error)}</div>`:''}
+      <pre class="log">${escapeHtml(run.log_tail||'Waiting for log output…')}</pre>
+    </article>
+  `).join('');
+  if(runs.some(r=>r.status==='running'||r.status==='queued')){
+    if(!pollTimer) pollTimer=setInterval(loadRuns,5000);
+  } else if(pollTimer) {
+    clearInterval(pollTimer);pollTimer=null;
+  }
+}
+function escapeHtml(v){return String(v||'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))}
+function formatDate(v){try{return new Date(v).toLocaleString()}catch{return v||''}}
+ensureAdmin().then(ok=>{if(ok){loadClients();loadRuns();}});
+</script>
+</body>
+</html>

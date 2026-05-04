@@ -1,1 +1,9 @@
 node_modules/
+.DS_Store
+.env
+.env.*
+!.env.example
+downloads/
+automation-runs/
+*.log
+ottaly.db

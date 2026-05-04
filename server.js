@@ -5,6 +5,7 @@ const jwt       = require('jsonwebtoken');
 const path      = require('path');
 const fs        = require('fs');
 const Stripe    = require('stripe');
+const { spawn } = require('child_process');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -17,6 +18,7 @@ const STRIPE_PUBLISHABLE_KEY = process.env.STRIPE_PUBLISHABLE_KEY || '';
 const STRIPE_WEBHOOK_SECRET  = process.env.STRIPE_WEBHOOK_SECRET  || '';
 const APP_URL                = process.env.APP_URL                || 'http://localhost:3000';
 const NONLEAD_WEBHOOK_URL    = 'https://n8n1-n8n.xuobbb.easypanel.host/webhook/ottaly-nonlead';
+const AUTOMATION_RUN_DIR     = path.resolve(process.env.AUTOMATION_RUN_DIR || 'automation-runs');
 
 const stripe = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY) : null;
 
@@ -1228,6 +1230,109 @@ app.put('/api/admin/clients/:id/password', requireAdmin, (req, res) => {
 app.delete('/api/admin/clients/:id', requireAdmin, (req, res) => {
   db.prepare('DELETE FROM clients WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
+});
+
+// ── Admin — Apollo → Verify → PlusVibe automation ─────────
+const automationRuns = new Map();
+try { fs.mkdirSync(AUTOMATION_RUN_DIR, { recursive: true }); } catch {}
+
+function automationPublicRun(run) {
+  return {
+    id: run.id,
+    status: run.status,
+    apollo_url: run.apollo_url,
+    workspace_id: run.workspace_id,
+    workspace_name: run.workspace_name,
+    created_at: run.created_at,
+    started_at: run.started_at,
+    finished_at: run.finished_at,
+    exit_code: run.exit_code,
+    error: run.error,
+    log_tail: run.log_tail,
+  };
+}
+
+function appendRunLog(run, chunk) {
+  const text = String(chunk || '');
+  run.log_tail = `${run.log_tail || ''}${text}`.split('\n').slice(-80).join('\n');
+  try { fs.appendFileSync(run.server_log_path, text); } catch {}
+}
+
+app.get('/api/admin/automation/runs', requireAdmin, (req, res) => {
+  res.json(Array.from(automationRuns.values()).sort((a, b) => b.created_at.localeCompare(a.created_at)).map(automationPublicRun));
+});
+
+app.get('/api/admin/automation/runs/:id', requireAdmin, (req, res) => {
+  const run = automationRuns.get(req.params.id);
+  if (!run) return res.status(404).json({ error: 'Run not found' });
+  res.json(automationPublicRun(run));
+});
+
+app.post('/api/admin/automation/run', requireAdmin, (req, res) => {
+  const { apollo_url, client_id, workspace_id, workspace_name, dry_run } = req.body || {};
+  if (!apollo_url || !/^https:\/\/app\.apollo\.io\//.test(apollo_url)) {
+    return res.status(400).json({ error: 'A valid Apollo URL is required' });
+  }
+
+  let client = null;
+  if (client_id) client = db.prepare('SELECT id, workspace_id, workspace_name FROM clients WHERE id = ?').get(client_id);
+  if (!client && workspace_id) client = db.prepare('SELECT id, workspace_id, workspace_name FROM clients WHERE workspace_id = ?').get(workspace_id);
+  const wsId = client?.workspace_id || workspace_id;
+  const wsName = client?.workspace_name || workspace_name || wsId;
+  if (!wsId) return res.status(400).json({ error: 'Choose a client or provide a workspace id' });
+
+  const id = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+  const run = {
+    id,
+    status: 'queued',
+    apollo_url,
+    workspace_id: wsId,
+    workspace_name: wsName,
+    created_at: new Date().toISOString(),
+    started_at: null,
+    finished_at: null,
+    exit_code: null,
+    error: '',
+    log_tail: '',
+    server_log_path: path.join(AUTOMATION_RUN_DIR, `${id}.server.log`),
+  };
+  automationRuns.set(id, run);
+
+  const args = [
+    path.join(__dirname, 'simple-pipeline.js'),
+    '--url', apollo_url,
+    '--workspace-id', wsId,
+    '--workspace-name', wsName,
+  ];
+  if (dry_run) args.push('--dry-run');
+
+  run.status = 'running';
+  run.started_at = new Date().toISOString();
+  const child = spawn(process.execPath, args, {
+    cwd: __dirname,
+    env: process.env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  run.pid = child.pid;
+  appendRunLog(run, `[server] Started automation process ${child.pid}\n`);
+
+  child.stdout.on('data', chunk => appendRunLog(run, chunk));
+  child.stderr.on('data', chunk => appendRunLog(run, chunk));
+  child.on('error', err => {
+    run.status = 'failed';
+    run.error = err.message;
+    run.finished_at = new Date().toISOString();
+    appendRunLog(run, `[server] Failed to start: ${err.message}\n`);
+  });
+  child.on('close', code => {
+    run.exit_code = code;
+    run.status = code === 0 ? 'completed' : 'failed';
+    run.finished_at = new Date().toISOString();
+    if (code !== 0 && !run.error) run.error = `Automation exited with code ${code}`;
+    appendRunLog(run, `[server] Automation ${run.status} with exit code ${code}\n`);
+  });
+
+  res.json(automationPublicRun(run));
 });
 
 // ── Admin — non-lead requests ──────────────────────────────
