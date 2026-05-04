@@ -23,6 +23,7 @@ async function main() {
   console.log(`Saving Apollo browser session to: ${SESSION_DIR}`);
 
   const context = await chromium.launchPersistentContext(SESSION_DIR, {
+    channel: 'chrome',
     headless: false,
     viewport: null,
     acceptDownloads: true,
