@@ -5,7 +5,8 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "record:apollo": "playwright codegen --target javascript --output recordings/apollo-workflow.recording.js --save-storage recordings/apollo-storage.json https://app.apollo.io/#/login"
+    "record:workflow": "playwright codegen --target javascript --output recordings/full-workflow.recording.js --save-storage recordings/browser-session.json https://app.apollo.io/#/login",
+    "record:apollo": "npm run record:workflow"
   },
   "type": "commonjs",
   "dependencies": {
