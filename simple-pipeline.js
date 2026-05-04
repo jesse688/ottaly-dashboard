@@ -147,18 +147,23 @@ async function loginApollo(page, runDownloadDir, log) {
     await saveDebugSnapshot(page, runDownloadDir, 'apollo-login-fields-missing', log);
     throw new Error('Apollo login fields were not found. Check the saved screenshot for the login page state.');
   }
-  const clickedLogin = await clickFirst(page, [/log in/i, /sign in/i, 'Log In', 'Sign In'], 8000);
-  if (!clickedLogin) {
-    await saveDebugSnapshot(page, runDownloadDir, 'apollo-login-button-missing', log);
-    throw new Error('Apollo login button was not found. Check the saved screenshot for the login page state.');
+  await page.keyboard.press('Enter').catch(() => {});
+  await page.waitForURL(url => !String(url).includes('/login'), { timeout: 12000 }).catch(() => {});
+  if (page.url().includes('/login')) {
+    const clickedLogin = await clickFirst(page, ['Log In', 'Log in', 'Login'], 8000);
+    if (!clickedLogin) {
+      await saveDebugSnapshot(page, runDownloadDir, 'apollo-login-button-missing', log);
+      throw new Error('Apollo login button was not found. Check the saved screenshot for the login page state.');
+    }
   }
   await page.waitForURL(url => !String(url).includes('/login'), { timeout: 45000 }).catch(() => {});
   await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
-  if (page.url().includes('/login')) {
+  const currentUrl = page.url();
+  if (!currentUrl.startsWith(APOLLO_BASE) || currentUrl.includes('/login')) {
     await saveDebugSnapshot(page, runDownloadDir, 'apollo-login-not-complete', log);
-    throw new Error('Apollo login did not complete. Apollo may require verification, the password may be wrong, or the account may need a manual login check.');
+    throw new Error(`Apollo login did not complete. Current URL is ${currentUrl}. Apollo may require Google OAuth, verification, or a manual account check.`);
   }
-  log('Apollo login completed', { url: page.url() });
+  log('Apollo login completed', { url: currentUrl });
 }
 
 async function sortApolloSearch(page, log) {
