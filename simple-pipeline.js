@@ -123,6 +123,59 @@ async function fillFirst(page, labels, value, timeout = 6000) {
   return false;
 }
 
+async function visibleButtonLabels(page) {
+  try {
+    return await page.locator('button, [role="button"], input[type="submit"]').evaluateAll(nodes =>
+      nodes
+        .filter(node => {
+          const style = window.getComputedStyle(node);
+          const box = node.getBoundingClientRect();
+          return style.visibility !== 'hidden' && style.display !== 'none' && box.width > 0 && box.height > 0;
+        })
+        .map(node => (node.innerText || node.value || node.getAttribute('aria-label') || '').trim())
+        .filter(Boolean)
+        .slice(0, 20)
+    );
+  } catch {
+    return [];
+  }
+}
+
+async function submitApolloLoginForm(page) {
+  const password = page.locator('input[type="password"]').first();
+  try {
+    await password.press('Enter', { timeout: 3000 });
+    await page.waitForTimeout(1500);
+    if (!page.url().includes('/login')) return true;
+  } catch {}
+
+  try {
+    const submitted = await password.evaluate(input => {
+      const form = input.closest('form');
+      if (!form) return false;
+      const buttons = Array.from(form.querySelectorAll('button, input[type="submit"]'));
+      const visibleButton = buttons.find(button => {
+        const style = window.getComputedStyle(button);
+        const box = button.getBoundingClientRect();
+        return !button.disabled && style.visibility !== 'hidden' && style.display !== 'none' && box.width > 0 && box.height > 0;
+      });
+      if (visibleButton) {
+        visibleButton.click();
+        return true;
+      }
+      if (typeof form.requestSubmit === 'function') form.requestSubmit();
+      else form.submit();
+      return true;
+    }, { timeout: 5000 });
+    if (submitted) {
+      await page.waitForTimeout(1500);
+      return true;
+    }
+  } catch {}
+
+  return false;
+}
+
 async function saveDebugSnapshot(page, runDownloadDir, name, log) {
   const safeName = sanitizeName(name || 'snapshot');
   const screenshotPath = path.join(runDownloadDir, `${safeName}-${stamp()}.png`);
@@ -147,11 +200,12 @@ async function loginApollo(page, runDownloadDir, log) {
     await saveDebugSnapshot(page, runDownloadDir, 'apollo-login-fields-missing', log);
     throw new Error('Apollo login fields were not found. Check the saved screenshot for the login page state.');
   }
-  await page.keyboard.press('Enter').catch(() => {});
+  await submitApolloLoginForm(page);
   await page.waitForURL(url => !String(url).includes('/login'), { timeout: 12000 }).catch(() => {});
   if (page.url().includes('/login')) {
-    const clickedLogin = await clickFirst(page, ['Log In', 'Log in', 'Login'], 8000);
+    const clickedLogin = await clickFirst(page, ['Log In', 'Log in', 'Login', 'Sign In', 'Sign in', 'Continue'], 8000);
     if (!clickedLogin) {
+      log('Apollo login visible buttons', { buttons: await visibleButtonLabels(page) });
       await saveDebugSnapshot(page, runDownloadDir, 'apollo-login-button-missing', log);
       throw new Error('Apollo login button was not found. Check the saved screenshot for the login page state.');
     }
