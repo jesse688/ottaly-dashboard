@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   { href: '/health',    label: 'Health' },
   { href: '/finance',   label: 'Finance' },
   { href: '/stats',     label: 'Stats' },
+  { href: '/leads',     label: 'Leads' },
 ]
 
 export function Nav() {
