@@ -1,12 +1,19 @@
-import { type NextRequest, NextResponse } from 'next/server'
-import { legacyFetch } from '@/lib/api'
+import { NextResponse } from 'next/server'
+import pool from '@/lib/db'
 
-export async function GET(req: NextRequest) {
-  const params = req.nextUrl.searchParams.toString()
+export async function GET() {
   try {
-    const data = await legacyFetch(`/api/admin/clients${params ? `?${params}` : ''}`)
-    return NextResponse.json(data)
-  } catch {
-    return NextResponse.json({ error: 'Failed to fetch clients' }, { status: 502 })
+    const res = await pool.query(
+      `SELECT
+         c.id, c.name, c.workspace_id, c.status,
+         c.vertical, c.monthly_value, c.start_date,
+         c.contact_email, c.notes
+       FROM clients c
+       ORDER BY c.status, c.name`
+    )
+    return NextResponse.json(res.rows)
+  } catch (err) {
+    console.error('[clients]', err)
+    return NextResponse.json({ error: 'Database error' }, { status: 500 })
   }
 }
