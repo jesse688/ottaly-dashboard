@@ -1,61 +1,36 @@
-import { type NextRequest, NextResponse } from 'next/server'
+import { NextResponse } from 'next/server'
 import pool from '@/lib/db'
 
-export async function GET(req: NextRequest) {
-  const p = req.nextUrl.searchParams
-  const start = p.get('start') ?? new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0]
-  const end = p.get('end') ?? new Date().toISOString().split('T')[0]
-
+export async function GET() {
   try {
-    const [totalsRes, rowsRes] = await Promise.all([
-      pool.query(
-        `SELECT
-           COUNT(*) FILTER (WHERE event_type = 'sent') AS sent,
-           COUNT(*) FILTER (WHERE event_type = 'open') AS opens,
-           COUNT(*) FILTER (WHERE event_type = 'reply') AS replies,
-           COUNT(*) FILTER (WHERE event_type = 'bounce') AS bounces
-         FROM email_events
-         WHERE created_at >= $1 AND created_at < $2::date + 1`,
-        [start, end]
-      ),
-      pool.query(
-        `SELECT
-           w.id AS workspace_id, w.name AS workspace_name,
-           COUNT(*) FILTER (WHERE e.event_type = 'sent') AS sent,
-           COUNT(*) FILTER (WHERE e.event_type = 'open') AS opens,
-           COUNT(*) FILTER (WHERE e.event_type = 'reply') AS replies,
-           COUNT(*) FILTER (WHERE e.event_type = 'bounce') AS bounces
-         FROM email_events e
-         JOIN workspaces w ON w.id = e.workspace_id
-         WHERE e.created_at >= $1 AND e.created_at < $2::date + 1
-         GROUP BY w.id, w.name
-         ORDER BY sent DESC`,
-        [start, end]
-      ),
-    ])
+    const res = await pool.query(
+      `SELECT
+         workspace_id,
+         workspace_name,
+         (stats->>'sent_30d')::int AS sent_30d,
+         (stats->>'sent_90d')::int AS sent_90d,
+         (stats->>'replied_30d')::int AS replied_30d,
+         (stats->>'replied_90d')::int AS replied_90d,
+         (stats->>'leads_30d')::int AS leads_30d,
+         (stats->>'leads_90d')::int AS leads_90d,
+         (stats->>'reply_rate_30d')::numeric AS reply_rate_30d,
+         (stats->>'reply_rate_90d')::numeric AS reply_rate_90d,
+         (stats->>'mailbox_count')::int AS mailbox_count,
+         (stats->>'contacts_total')::int AS contacts_total,
+         stats->>'client_status' AS client_status,
+         computed_at
+       FROM workspace_stats
+       ORDER BY (stats->>'sent_30d')::int DESC NULLS LAST`
+    )
 
-    const t = totalsRes.rows[0]
-    const rows = rowsRes.rows.map(r => ({
-      ...r,
-      sent: parseInt(r.sent),
-      opens: parseInt(r.opens),
-      replies: parseInt(r.replies),
-      bounces: parseInt(r.bounces),
-      open_rate: r.sent > 0 ? r.opens / r.sent : 0,
-      reply_rate: r.sent > 0 ? r.replies / r.sent : 0,
-      bounce_rate: r.sent > 0 ? r.bounces / r.sent : 0,
-    }))
+    const rows = res.rows
+    const totals = rows.reduce((acc, r) => ({
+      sent: acc.sent + (r.sent_30d ?? 0),
+      replies: acc.replies + (r.replied_30d ?? 0),
+      leads: acc.leads + (r.leads_30d ?? 0),
+    }), { sent: 0, replies: 0, leads: 0 })
 
-    return NextResponse.json({
-      totals: {
-        sent: parseInt(t.sent),
-        opens: parseInt(t.opens),
-        replies: parseInt(t.replies),
-        bounces: parseInt(t.bounces),
-      },
-      rows,
-      period: `${start} to ${end}`,
-    })
+    return NextResponse.json({ rows, totals, period: '30d' })
   } catch (err) {
     console.error('[stats]', err)
     return NextResponse.json({ error: 'Database error' }, { status: 500 })

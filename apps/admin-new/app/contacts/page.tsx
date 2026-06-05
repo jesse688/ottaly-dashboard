@@ -35,7 +35,7 @@ export default function ContactsPage() {
   const [contacts, setContacts] = useState<Contact[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
-  const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [selected, setSelected] = useState<Set<string>>(new Set())
   const [filters, setFilters] = useState<ContactFilters>({
     page: 1,
     pageSize: PAGE_SIZE,
@@ -64,7 +64,7 @@ export default function ContactsPage() {
 
   useEffect(() => { fetchContacts() }, [fetchContacts])
 
-  function toggleSelect(id: number) {
+  function toggleSelect(id: string) {
     setSelected(prev => {
       const next = new Set(prev)
       next.has(id) ? next.delete(id) : next.add(id)

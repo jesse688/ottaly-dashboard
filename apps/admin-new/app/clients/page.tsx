@@ -17,11 +17,24 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import type { Client } from '@/types/client'
+interface Client {
+  workspace_id: string
+  workspace_name: string
+  status: string | null
+  mailbox_count: number | null
+  contacts_total: number | null
+  sent_30d: number | null
+  replied_30d: number | null
+  reply_rate_30d: number | null
+  leads_30d: number | null
+  leads_90d: number | null
+  last_sent_at: string | null
+  last_lead_at: string | null
+}
 
 const STATUS_COLORS: Record<string, string> = {
   active: 'bg-green-100 text-green-800',
-  paused: 'bg-yellow-100 text-yellow-800',
+  inactive: 'bg-yellow-100 text-yellow-800',
   churned: 'bg-red-100 text-red-800',
   trial: 'bg-purple-100 text-purple-800',
 }
@@ -36,7 +49,7 @@ export default function ClientsPage() {
   useEffect(() => {
     fetch('/api/clients')
       .then(r => r.json())
-      .then(d => setClients(Array.isArray(d) ? d : d.clients ?? []))
+      .then(d => setClients(Array.isArray(d) ? d : []))
       .catch(() => setClients([]))
       .finally(() => setLoading(false))
   }, [])
@@ -45,18 +58,13 @@ export default function ClientsPage() {
     let result = [...clients]
     if (search) {
       const q = search.toLowerCase()
-      result = result.filter(c =>
-        c.name.toLowerCase().includes(q) ||
-        (c.vertical ?? '').toLowerCase().includes(q)
-      )
+      result = result.filter(c => c.workspace_name.toLowerCase().includes(q))
     }
     if (status !== 'all') result = result.filter(c => c.status === status)
     setFiltered(result)
   }, [clients, search, status])
 
-  const mrr = filtered
-    .filter(c => c.status === 'active')
-    .reduce((sum, c) => sum + (c.monthly_value ?? 0), 0)
+  const totalLeads = filtered.reduce((sum, c) => sum + (c.leads_30d ?? 0), 0)
 
   return (
     <div className="flex flex-col h-screen bg-gray-50">
@@ -64,8 +72,7 @@ export default function ClientsPage() {
         <div>
           <h1 className="text-xl font-semibold text-gray-900">Clients</h1>
           <p className="text-sm text-gray-500">
-            {filtered.length} clients
-            {mrr > 0 && <span className="ml-2 text-green-700 font-medium">· £{mrr.toLocaleString()} MRR</span>}
+            {filtered.length} workspaces · {totalLeads} leads in 30d
           </p>
         </div>
       </div>
@@ -84,8 +91,7 @@ export default function ClientsPage() {
           <SelectContent>
             <SelectItem value="all">All statuses</SelectItem>
             <SelectItem value="active">Active</SelectItem>
-            <SelectItem value="trial">Trial</SelectItem>
-            <SelectItem value="paused">Paused</SelectItem>
+            <SelectItem value="inactive">Inactive</SelectItem>
             <SelectItem value="churned">Churned</SelectItem>
           </SelectContent>
         </Select>
@@ -96,44 +102,46 @@ export default function ClientsPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Client</TableHead>
+                <TableHead>Workspace</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead>Vertical</TableHead>
-                <TableHead>Monthly Value</TableHead>
-                <TableHead>Start Date</TableHead>
-                <TableHead>Contact</TableHead>
+                <TableHead>Mailboxes</TableHead>
+                <TableHead>Sent 30d</TableHead>
+                <TableHead>Reply % 30d</TableHead>
+                <TableHead>Leads 30d</TableHead>
+                <TableHead>Last Sent</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
                 Array.from({ length: 8 }).map((_, i) => (
                   <TableRow key={i}>
-                    {Array.from({ length: 6 }).map((_, j) => (
+                    {Array.from({ length: 7 }).map((_, j) => (
                       <TableCell key={j}><div className="h-4 bg-gray-100 rounded animate-pulse" /></TableCell>
                     ))}
                   </TableRow>
                 ))
               ) : filtered.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center py-12 text-gray-500">No clients found</TableCell>
+                  <TableCell colSpan={7} className="text-center py-12 text-gray-500">No clients found</TableCell>
                 </TableRow>
               ) : (
                 filtered.map(c => (
-                  <TableRow key={c.id} className="hover:bg-gray-50">
-                    <TableCell className="font-medium">{c.name}</TableCell>
+                  <TableRow key={c.workspace_id} className="hover:bg-gray-50">
+                    <TableCell className="font-medium">{c.workspace_name}</TableCell>
                     <TableCell>
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${STATUS_COLORS[c.status] ?? 'bg-gray-100 text-gray-600'}`}>
-                        {c.status}
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${STATUS_COLORS[c.status ?? ''] ?? 'bg-gray-100 text-gray-600'}`}>
+                        {c.status ?? '—'}
                       </span>
                     </TableCell>
-                    <TableCell className="text-sm text-gray-600">{c.vertical ?? '—'}</TableCell>
+                    <TableCell className="text-sm">{c.mailbox_count ?? '—'}</TableCell>
+                    <TableCell className="text-sm">{c.sent_30d?.toLocaleString() ?? '—'}</TableCell>
                     <TableCell className="text-sm">
-                      {c.monthly_value != null ? `£${c.monthly_value.toLocaleString()}` : '—'}
+                      {c.reply_rate_30d != null ? `${c.reply_rate_30d.toFixed(1)}%` : '—'}
                     </TableCell>
-                    <TableCell className="text-sm text-gray-600">
-                      {c.start_date ? new Date(c.start_date).toLocaleDateString('en-GB') : '—'}
+                    <TableCell className="text-sm font-medium text-blue-700">{c.leads_30d ?? '—'}</TableCell>
+                    <TableCell className="text-sm text-gray-500">
+                      {c.last_sent_at ? new Date(c.last_sent_at).toLocaleDateString('en-GB') : '—'}
                     </TableCell>
-                    <TableCell className="text-sm text-gray-600">{c.contact_email ?? '—'}</TableCell>
                   </TableRow>
                 ))
               )}
