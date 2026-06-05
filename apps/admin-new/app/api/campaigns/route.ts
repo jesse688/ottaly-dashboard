@@ -5,16 +5,21 @@ export async function GET() {
   try {
     const res = await pool.query(
       `SELECT
-         c.id, c.name, c.workspace_id, c.status,
-         ws.workspace_name,
-         COALESCE((ws.stats->>'sent_30d')::int, 0) AS sent,
-         COALESCE((ws.stats->>'replied_30d')::int, 0) AS replies,
-         COALESCE((ws.stats->>'bounces_30d')::int, 0) AS bounces,
-         COALESCE((ws.stats->>'reply_rate_30d')::numeric, 0) AS reply_rate,
-         c.created_at, c.updated_at
-       FROM campaigns c
-       LEFT JOIN workspace_stats ws ON ws.workspace_id = c.workspace_id
-       ORDER BY c.created_at DESC`
+         c.id, c.workspace_id, c.name, c.status, c.campaign_type,
+         c.lead_count, c.sent_count, c.replied_count, c.bounced_count,
+         c.positive_reply_count, c.reply_rate, c.daily_limit,
+         c.last_lead_sent, c.last_lead_replied, c.created_at, c.updated_at,
+         w.name AS workspace_name,
+         CASE WHEN c.sent_count > 0
+              THEN ROUND(c.replied_count::numeric / c.sent_count, 4)
+              ELSE 0 END AS reply_rate_calc,
+         CASE WHEN c.sent_count > 0
+              THEN ROUND(c.bounced_count::numeric / c.sent_count, 4)
+              ELSE 0 END AS bounce_rate
+       FROM esp_campaigns c
+       LEFT JOIN esp_workspaces w ON w.id = c.workspace_id AND w.source = c.source
+       WHERE c.source = 'plusvibe'
+       ORDER BY c.last_lead_sent DESC NULLS LAST, c.created_at DESC`
     )
     return NextResponse.json(res.rows)
   } catch (err) {

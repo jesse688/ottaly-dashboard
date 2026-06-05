@@ -3,14 +3,18 @@ export interface Campaign {
   name: string
   workspace_id: string
   workspace_name?: string
-  status: 'active' | 'paused' | 'draft' | 'completed'
-  sent: number
-  opens: number
-  replies: number
-  bounces: number
-  open_rate: number
+  status: string
+  campaign_type: string
+  sent_count: number
+  replied_count: number
+  bounced_count: number
+  positive_reply_count: number
   reply_rate: number
+  reply_rate_calc: number
   bounce_rate: number
+  daily_limit: number | null
+  last_lead_sent: string | null
+  last_lead_replied: string | null
   created_at: string
   updated_at: string
 }

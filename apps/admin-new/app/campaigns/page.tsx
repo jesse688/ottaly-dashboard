@@ -22,9 +22,13 @@ import type { Campaign } from '@/types/campaign'
 
 const STATUS_COLORS: Record<string, string> = {
   active: 'bg-green-100 text-green-800',
+  ACTIVE: 'bg-green-100 text-green-800',
   paused: 'bg-yellow-100 text-yellow-800',
+  PAUSED: 'bg-yellow-100 text-yellow-800',
   draft: 'bg-gray-100 text-gray-600',
+  DRAFT: 'bg-gray-100 text-gray-600',
   completed: 'bg-blue-100 text-blue-800',
+  COMPLETED: 'bg-blue-100 text-blue-800',
 }
 
 function Pct({ value }: { value: number }) {
@@ -81,7 +85,7 @@ export default function CampaignsPage() {
   }
 
   const totals = filtered.reduce(
-    (acc, c) => ({ sent: acc.sent + c.sent, replies: acc.replies + c.replies }),
+    (acc, c) => ({ sent: acc.sent + (c.sent_count ?? 0), replies: acc.replies + (c.replied_count ?? 0) }),
     { sent: 0, replies: 0 }
   )
 
@@ -123,9 +127,9 @@ export default function CampaignsPage() {
                 <SortHead col="name" label="Campaign" />
                 <TableHead>Workspace</TableHead>
                 <TableHead>Status</TableHead>
-                <SortHead col="sent" label="Sent" />
-                <SortHead col="open_rate" label="Open %" />
-                <SortHead col="reply_rate" label="Reply %" />
+                <SortHead col="sent_count" label="Sent" />
+                <SortHead col="replied_count" label="Replies" />
+                <SortHead col="reply_rate_calc" label="Reply %" />
                 <SortHead col="bounce_rate" label="Bounce %" />
               </TableRow>
             </TableHeader>
@@ -154,11 +158,11 @@ export default function CampaignsPage() {
                         {c.status}
                       </span>
                     </TableCell>
-                    <TableCell>{c.sent.toLocaleString()}</TableCell>
-                    <TableCell><Pct value={c.open_rate} /></TableCell>
+                    <TableCell>{c.sent_count.toLocaleString()}</TableCell>
+                    <TableCell>{c.replied_count.toLocaleString()}</TableCell>
                     <TableCell>
-                      <span className={c.reply_rate >= 0.05 ? 'text-green-700 font-medium' : ''}>
-                        <Pct value={c.reply_rate} />
+                      <span className={c.reply_rate_calc >= 0.05 ? 'text-green-700 font-medium' : ''}>
+                        <Pct value={c.reply_rate_calc} />
                       </span>
                     </TableCell>
                     <TableCell>
