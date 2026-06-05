@@ -13867,6 +13867,25 @@ function scheduleDiagnosticsDaily(pgdb, diagnostics) {
   });
 }
 
+// ── Slack Bot — starts if env vars are present ───────────────────────────────
+function startSlackBot() {
+  if (!process.env.SLACK_BOT_TOKEN || !process.env.SLACK_APP_TOKEN || !process.env.SLACK_CHANNEL_ID) {
+    console.log('[slack-bot] Skipping — SLACK_BOT_TOKEN/SLACK_APP_TOKEN/SLACK_CHANNEL_ID not set');
+    return;
+  }
+  const { spawn } = require('child_process');
+  const bot = spawn('node', ['slack-bot/bot.js'], {
+    cwd: __dirname,
+    stdio: 'inherit',
+    env: process.env,
+  });
+  bot.on('error', err => console.warn('[slack-bot] spawn error:', err.message));
+  bot.on('close', code => {
+    console.warn(`[slack-bot] exited ${code} — restarting in 10s`);
+    setTimeout(startSlackBot, 10000);
+  });
+}
+
 // ── ESP Sync — runs on startup then every hour ────────────────────────────────
 function scheduleEspSync() {
   const { spawn } = require('child_process');
@@ -14048,6 +14067,7 @@ function scheduleAudienceScoring(pgdb) {
     }, 20000);
   }
   scheduleEspSync();
+  startSlackBot();
   const server = app.listen(PORT, () => console.log(`Ottaly running on http://localhost:${PORT}`));
 
   server.on('upgrade', (req, socket, head) => {
