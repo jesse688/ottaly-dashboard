@@ -13867,6 +13867,26 @@ function scheduleDiagnosticsDaily(pgdb, diagnostics) {
   });
 }
 
+// ── ESP Sync — runs on startup then every hour ────────────────────────────────
+function scheduleEspSync() {
+  const { spawn } = require('child_process');
+  function runSync() {
+    const proc = spawn('node', ['esp-sync/sync.js'], {
+      cwd: __dirname,
+      stdio: 'inherit',
+      env: process.env,
+    });
+    proc.on('error', err => console.warn('[esp-sync] spawn error:', err.message));
+    proc.on('close', code => {
+      if (code !== 0) console.warn(`[esp-sync] exited with code ${code}`);
+    });
+  }
+  // Run immediately on startup
+  runSync();
+  // Then every hour
+  setInterval(runSync, 60 * 60 * 1000);
+}
+
 // Daily 6am scheduler for audience scoring
 function scheduleAudienceScoring(pgdb) {
   const now = new Date();
@@ -14027,6 +14047,7 @@ function scheduleAudienceScoring(pgdb) {
       await backfillIntelligenceLogs(pgdb);
     }, 20000);
   }
+  scheduleEspSync();
   const server = app.listen(PORT, () => console.log(`Ottaly running on http://localhost:${PORT}`));
 
   server.on('upgrade', (req, socket, head) => {
