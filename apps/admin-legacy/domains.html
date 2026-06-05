@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/favicon.svg">
+<meta name="theme-color" content="#050C29">
+<meta name="description" content="Ottaly Domain Health — DNS, blacklist, and authentication status">
+<title>Ottaly — Domain Health</title>
+<script>document.write('<script src="/splash.js?v=' + Date.now() + '"><\/script>');</script>
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--purple:#7C89CD;
+  --yellow:#FFB700;--white:#fff;--bg:#F0F2F8;--card:#fff;
+  --border:#E2E6F0;--text:#050C29;--muted:#6B7280;
+  --green:#16A34A;--red:#DC2626;--amber:#D97706;
+}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text)}
+.header{background:var(--navy-dark);padding:1rem 2rem;border-bottom:3px solid var(--teal);display:flex;align-items:center;justify-content:space-between}
+.page{max-width:1500px;margin:0 auto;padding:2rem}
+.page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem;flex-wrap:wrap;gap:0.75rem}
+.page-title{font-size:1.4rem;font-weight:700}
+.page-sub{font-size:13px;color:var(--muted);margin-top:2px}
+
+.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1rem;margin-bottom:1.5rem}
+.sum-card{background:var(--card);border-radius:10px;padding:1rem 1.25rem;border:1px solid var(--border);border-top:3px solid var(--navy)}
+.sum-card.green{border-top-color:var(--green)}
+.sum-card.amber{border-top-color:var(--amber)}
+.sum-card.red{border-top-color:var(--red)}
+.sum-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+.sum-val{font-size:1.5rem;font-weight:700;margin-top:4px}
+
+.toolbar{display:flex;gap:0.75rem;margin-bottom:1.25rem;flex-wrap:wrap;align-items:center}
+.search-wrap{position:relative;flex:1;min-width:220px}
+.search-wrap input{width:100%;padding:8px 12px 8px 36px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:#fff;outline:none}
+.search-wrap input:focus{border-color:var(--purple)}
+.search-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:15px}
+.btn{padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;border:none;transition:all 0.15s}
+.btn:disabled{opacity:0.6;cursor:not-allowed}
+.btn-primary{background:var(--navy);color:#fff}
+.btn-primary:hover:not(:disabled){background:#1a3370}
+.btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--border)}
+.btn-ghost:hover:not(:disabled){background:var(--bg);color:var(--text)}
+.filter-pills{display:flex;gap:6px}
+.filter-pill{padding:6px 12px;border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--border);background:#fff;color:var(--muted)}
+.filter-pill.active{background:var(--navy);color:#fff;border-color:var(--navy)}
+
+.table-wrap{background:var(--card);border-radius:12px;border:1px solid var(--border);overflow:hidden}
+table{width:100%;border-collapse:collapse}
+thead{background:#F8F9FC;position:sticky;top:0;z-index:1}
+th{padding:10px 14px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);border-bottom:1px solid var(--border)}
+td{padding:12px 14px;font-size:13px;border-bottom:1px solid var(--border);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#FAFBFF;cursor:pointer}
+.domain-name{font-weight:600}
+.ws-name{font-size:11px;color:var(--muted);margin-top:1px}
+.chk{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;font-size:12px;font-weight:700}
+.chk-ok{background:#D1FAE5;color:#065F46}
+.chk-warn{background:#FEF3C7;color:#92400E}
+.chk-bad{background:#FEE2E2;color:#991B1B}
+.score-cell{font-weight:700;font-size:14px}
+.status-pill{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.3px}
+.status-good{background:#D1FAE5;color:#065F46}
+.status-warning{background:#FEF3C7;color:#92400E}
+.status-critical{background:#FEE2E2;color:#991B1B}
+.status-unknown{background:#F3F4F6;color:#6B7280}
+.bl-cell{font-size:12px;color:var(--text)}
+.bl-hits{color:var(--red);font-weight:600}
+.bl-clean{color:var(--green);font-weight:600}
+.empty{text-align:center;padding:3rem;color:var(--muted)}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--navy);border-radius:50%;animation:spin 0.8s linear infinite;vertical-align:-2px;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(5,12,41,0.5);display:flex;align-items:center;justify-content:center;z-index:1000;opacity:0;pointer-events:none;transition:opacity 0.2s}
+.modal-overlay.active{opacity:1;pointer-events:all}
+.modal{background:#fff;border-radius:16px;width:720px;max-width:95vw;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.15)}
+.modal-header{padding:1.25rem 1.5rem;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.modal-title{font-size:1rem;font-weight:700}
+.modal-close{background:none;border:none;font-size:20px;cursor:pointer;color:var(--muted);line-height:1;padding:2px}
+.modal-close:hover{color:var(--text)}
+.modal-body{padding:1.5rem}
+.detail-grid{display:grid;grid-template-columns:120px 1fr;gap:0.6rem 1rem;font-size:13px}
+.detail-grid > label{color:var(--muted);font-size:12px;font-weight:600;padding-top:2px}
+.detail-grid > div{word-break:break-all}
+.raw{font-family:'SF Mono',ui-monospace,Menlo,monospace;font-size:11px;background:#F8F9FC;border:1px solid var(--border);padding:6px 8px;border-radius:6px}
+.section-h{font-size:12px;font-weight:700;text-transform:uppercase;color:var(--muted);letter-spacing:.5px;margin:1rem 0 0.5rem}
+.section-h:first-child{margin-top:0}
+
+.toast{position:fixed;bottom:1.5rem;right:1.5rem;background:var(--navy-dark);color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;font-weight:500;opacity:0;transform:translateY(10px);transition:all 0.3s;z-index:9999}
+.toast.show{opacity:1;transform:translateY(0)}
+
+@media(max-width:1024px){
+  .summary{grid-template-columns:repeat(3,1fr)}
+}
+@media(max-width:768px){
+  .header{padding:.75rem 1rem}
+  .page{padding:1rem}
+  .page-header{flex-direction:column;align-items:flex-start}
+  .summary{grid-template-columns:1fr 1fr}
+  .toolbar{flex-wrap:wrap}
+  .search-wrap{width:100%;min-width:0}
+  .filter-pills{flex-wrap:wrap}
+  .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  table{min-width:700px}
+}
+@media(max-width:480px){
+  .summary{grid-template-columns:1fr 1fr}
+}
+</style>
+    <script src="/nav.js" defer></script>
+</head>
+<body>
+
+
+<div class="page">
+
+  <div class="page-header">
+    <div>
+      <div class="page-title">Domain Health</div>
+      <div class="page-sub">SPF · DKIM · DMARC · MX · domain blacklists (Spamhaus DBL, SURBL, URIBL) — across all sending domains. Auto-refreshed every 6 hours.</div>
+    </div>
+    <div style="display:flex;gap:0.5rem;align-items:center">
+      <span id="lastRun" style="font-size:12px;color:var(--muted)"></span>
+      <button class="btn btn-ghost" onclick="openCheckModal()">+ Check domain</button>
+      <button class="btn btn-primary" id="refreshBtn" onclick="refreshAll()">↻ Refresh all</button>
+    </div>
+  </div>
+
+  <div class="summary" id="summary"></div>
+
+  <div class="toolbar">
+    <div class="search-wrap">
+      <div class="search-icon">&#9906;</div>
+      <input type="text" id="search" placeholder="Search domain or client (e.g. &quot;FAIT&quot;, &quot;ottaly.co.uk&quot;)…" oninput="render()">
+    </div>
+    <select id="wsFilter" onchange="render()" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:#fff;outline:none;min-width:160px">
+      <option value="">All clients</option>
+    </select>
+    <div class="filter-pills">
+      <div class="filter-pill active" data-status="" onclick="setFilter(this,'')">All</div>
+      <div class="filter-pill" data-status="critical" onclick="setFilter(this,'critical')">Critical</div>
+      <div class="filter-pill" data-status="warning" onclick="setFilter(this,'warning')">Warning</div>
+      <div class="filter-pill" data-status="good" onclick="setFilter(this,'good')">Good</div>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Domain</th>
+          <th style="text-align:center">SPF</th>
+          <th style="text-align:center">DKIM</th>
+          <th style="text-align:center">DMARC</th>
+          <th style="text-align:center">MX</th>
+          <th>Blacklists</th>
+          <th style="text-align:right">Score</th>
+          <th>Status</th>
+          <th>Last checked</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div id="empty" class="empty" style="display:none">
+      No domains yet. Either click "Refresh all" to scan now, or add one via "Check domain".
+    </div>
+  </div>
+</div>
+
+<!-- Detail modal -->
+<div class="modal-overlay" id="detailModal" onclick="if(event.target===this)closeDetail()">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title" id="detailDomain">—</div>
+        <div style="font-size:12px;color:var(--muted)" id="detailWs">&nbsp;</div>
+      </div>
+      <button class="modal-close" onclick="closeDetail()">×</button>
+    </div>
+    <div class="modal-body" id="detailBody"></div>
+  </div>
+</div>
+
+<!-- Single-domain check modal -->
+<div class="modal-overlay" id="checkModal" onclick="if(event.target===this)closeCheckModal()">
+  <div class="modal" style="width:480px">
+    <div class="modal-header">
+      <div class="modal-title">Check a domain now</div>
+      <button class="modal-close" onclick="closeCheckModal()">×</button>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:13px;color:var(--muted);margin-bottom:0.75rem">
+        Runs SPF, DKIM, DMARC, MX and DNS-blacklist checks. Saved to the table.
+      </div>
+      <input type="text" id="checkInput" placeholder="example.com" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;outline:none">
+      <div id="checkResult" style="margin-top:1rem"></div>
+    </div>
+    <div style="padding:1rem 1.5rem;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:0.5rem">
+      <button class="btn btn-ghost" onclick="closeCheckModal()">Close</button>
+      <button class="btn btn-primary" id="checkRunBtn" onclick="runSingleCheck()">Run check</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let data = [];
+let activeStatus = '';
+
+fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true})).then(s=>{
+  if (s.ok === false) { location.href = '/login.html'; return; }
+  const _sn = document.getElementById('sessionName'); if (_sn) _sn.textContent = s.name || '';
+  const _so = document.getElementById('signOutBtn'); if (_so) _so.style.display = '';
+  load();
+});
+
+function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2400);}
+
+async function load() {
+  try {
+    const r = await fetch('/api/domains/health');
+    const j = await r.json();
+    data = j.rows || [];
+    if (j.lastRun) {
+      const d = new Date(j.lastRun);
+      document.getElementById('lastRun').textContent = `Last refresh: ${d.toLocaleString()}`;
+    }
+    if (j.running) document.getElementById('refreshBtn').innerHTML = '<span class="spin"></span>Refreshing…';
+    renderSummary();
+    populateWsFilter();
+    render();
+  } catch (err) {
+    toast('Failed to load: ' + err.message);
+  }
+}
+
+function renderSummary() {
+  const total = data.length;
+  const good  = data.filter(d => d.status === 'good').length;
+  const warn  = data.filter(d => d.status === 'warning').length;
+  const crit  = data.filter(d => d.status === 'critical').length;
+  const bl    = data.filter(d => (d.blacklists || []).length > 0).length;
+  document.getElementById('summary').innerHTML = `
+    <div class="sum-card"><div class="sum-label">Total domains</div><div class="sum-val">${total}</div></div>
+    <div class="sum-card green"><div class="sum-label">Good</div><div class="sum-val">${good}</div></div>
+    <div class="sum-card amber"><div class="sum-label">Warning</div><div class="sum-val">${warn}</div></div>
+    <div class="sum-card red"><div class="sum-label">Critical</div><div class="sum-val">${crit}</div></div>
+    <div class="sum-card red"><div class="sum-label">Blacklisted</div><div class="sum-val">${bl}</div></div>
+  `;
+}
+
+function setFilter(el, status) {
+  document.querySelectorAll('.filter-pill').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  activeStatus = status;
+  render();
+}
+
+function chk(ok, label) {
+  const cls = ok === true ? 'chk-ok' : ok === 'warn' ? 'chk-warn' : 'chk-bad';
+  const glyph = ok === true ? '✓' : ok === 'warn' ? '!' : '×';
+  return `<span class="chk ${cls}" title="${label || ''}">${glyph}</span>`;
+}
+
+function fmtAgo(ts) {
+  if (!ts) return '—';
+  const ms = Date.now() - new Date(ts).getTime();
+  const h = Math.floor(ms / 3600000);
+  if (h < 1) return 'just now';
+  if (h < 24) return h + 'h ago';
+  const d = Math.floor(h / 24);
+  return d + 'd ago';
+}
+
+function spfState(spf) {
+  if (!spf || !spf.present) return false;
+  if (spf.valid && spf.strict) return true;
+  if (spf.valid) return 'warn';
+  return false;
+}
+function dmarcState(d) {
+  if (!d || !d.present) return false;
+  if (d.policy === 'reject' || d.policy === 'quarantine') return true;
+  return 'warn';
+}
+
+function populateWsFilter() {
+  const sel = document.getElementById('wsFilter');
+  if (!sel) return;
+  const current = sel.value;
+  const names = Array.from(new Set(data.map(r => r.workspace_name).filter(Boolean))).sort();
+  sel.innerHTML = '<option value="">All clients</option>' +
+    names.map(n => `<option value="${n}">${n}</option>`).join('');
+  if (names.includes(current)) sel.value = current;
+}
+
+function render() {
+  const q = document.getElementById('search').value.trim().toLowerCase();
+  const ws = document.getElementById('wsFilter')?.value || '';
+  let filtered = data.filter(r =>
+    (!activeStatus || r.status === activeStatus) &&
+    (!ws || r.workspace_name === ws) &&
+    (!q || (r.domain || '').includes(q) || (r.workspace_name || '').toLowerCase().includes(q))
+  );
+
+  const rows = document.getElementById('rows');
+  const empty = document.getElementById('empty');
+  if (!filtered.length) {
+    rows.innerHTML = '';
+    empty.style.display = '';
+    return;
+  }
+  empty.style.display = 'none';
+
+  rows.innerHTML = filtered.map(r => {
+    const bl = r.blacklists || [];
+    const spf = typeof r.spf === 'string' ? JSON.parse(r.spf || '{}') : r.spf || {};
+    const dkim = typeof r.dkim === 'string' ? JSON.parse(r.dkim || '{}') : r.dkim || {};
+    const dmarc = typeof r.dmarc === 'string' ? JSON.parse(r.dmarc || '{}') : r.dmarc || {};
+    const mx = typeof r.mx === 'string' ? JSON.parse(r.mx || '{}') : r.mx || {};
+    const safeDom = (r.domain || '').replace(/'/g, "\\'");
+    return `
+      <tr onclick="openDetail('${safeDom}')">
+        <td>
+          <div class="domain-name">${r.domain}</div>
+          <div class="ws-name">${r.workspace_name || '—'}</div>
+        </td>
+        <td style="text-align:center">${chk(spfState(spf),     spf.raw || 'Missing')}</td>
+        <td style="text-align:center">${chk(dkim.present === true, dkim.selector ? `selector: ${dkim.selector}` : 'No DKIM record found')}</td>
+        <td style="text-align:center">${chk(dmarcState(dmarc), dmarc.policy ? `p=${dmarc.policy}` : 'Missing')}</td>
+        <td style="text-align:center">${chk(mx.present === true, (mx.hosts || []).join(', '))}</td>
+        <td class="bl-cell">${bl.length
+          ? `<span class="bl-hits">${bl.length} listing${bl.length > 1 ? 's' : ''}</span> <span style="color:var(--muted);font-size:11px">${bl.map(b=>b.list).slice(0,2).join(', ')}${bl.length > 2 ? '…' : ''}</span>`
+          : `<span class="bl-clean">Clean</span>`}</td>
+        <td style="text-align:right" class="score-cell">${r.score}</td>
+        <td><span class="status-pill status-${r.status}">${r.status}</span></td>
+        <td style="font-size:12px;color:var(--muted)">${fmtAgo(r.last_checked)}</td>
+        <td style="text-align:right" onclick="event.stopPropagation()">
+          <button title="Remove (won't be re-added on auto-refresh)" onclick="removeDomain('${safeDom}')"
+            style="background:transparent;border:none;cursor:pointer;color:var(--muted);font-size:16px;padding:4px 8px;border-radius:6px"
+            onmouseover="this.style.background='#FEE2E2';this.style.color='var(--red)'"
+            onmouseout="this.style.background='transparent';this.style.color='var(--muted)'">&#x2715;</button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+async function removeDomain(domain) {
+  if (!confirm(`Remove ${domain} from the dashboard?\n\nThe domain stays in PlusVibe, but it won't show up here and won't be re-added on the next auto-refresh.`)) return;
+  try {
+    const r = await fetch('/api/domains/' + encodeURIComponent(domain), { method: 'DELETE' });
+    if (!r.ok) { toast('Remove failed'); return; }
+    data = data.filter(x => x.domain !== domain);
+    renderSummary(); populateWsFilter(); render();
+    toast(domain + ' removed');
+  } catch (err) {
+    toast('Remove error: ' + err.message);
+  }
+}
+
+function openDetail(domain) {
+  const r = data.find(x => x.domain === domain);
+  if (!r) return;
+  const spf = typeof r.spf === 'string' ? JSON.parse(r.spf || '{}') : r.spf || {};
+  const dkim = typeof r.dkim === 'string' ? JSON.parse(r.dkim || '{}') : r.dkim || {};
+  const dmarc = typeof r.dmarc === 'string' ? JSON.parse(r.dmarc || '{}') : r.dmarc || {};
+  const mx = typeof r.mx === 'string' ? JSON.parse(r.mx || '{}') : r.mx || {};
+  const bl = r.blacklists || [];
+
+  document.getElementById('detailDomain').textContent = r.domain;
+  document.getElementById('detailWs').textContent = (r.workspace_name || 'Unassigned workspace') + ' · score ' + r.score;
+
+  document.getElementById('detailBody').innerHTML = `
+    <div class="section-h">SPF</div>
+    <div class="detail-grid">
+      <label>Present</label><div>${spf.present ? 'Yes' : 'No'}</div>
+      <label>Strict (-all)</label><div>${spf.strict ? 'Yes' : 'No'}</div>
+      ${spf.raw ? `<label>Record</label><div class="raw">${spf.raw}</div>` : ''}
+    </div>
+
+    <div class="section-h">DKIM</div>
+    <div class="detail-grid">
+      <label>Present</label><div>${dkim.present ? 'Yes (selector: ' + dkim.selector + ')' : 'No DKIM record found on common selectors'}</div>
+      ${dkim.raw ? `<label>Record</label><div class="raw">${dkim.raw}</div>` : ''}
+    </div>
+
+    <div class="section-h">DMARC</div>
+    <div class="detail-grid">
+      <label>Present</label><div>${dmarc.present ? 'Yes' : 'No'}</div>
+      <label>Policy</label><div>${dmarc.policy || '—'}</div>
+      ${dmarc.raw ? `<label>Record</label><div class="raw">${dmarc.raw}</div>` : ''}
+    </div>
+
+    <div class="section-h">MX</div>
+    <div class="detail-grid">
+      <label>Present</label><div>${mx.present ? 'Yes' : 'No'}</div>
+      ${mx.top ? `<label>Top MX</label><div>${mx.top}</div>` : ''}
+      ${(mx.hosts||[]).length ? `<label>All</label><div class="raw">${(mx.hosts||[]).join('<br>')}</div>` : ''}
+      ${(mx.ips||[]).length  ? `<label>IPs</label><div class="raw">${(mx.ips||[]).join(', ')}</div>` : ''}
+    </div>
+
+    <div class="section-h">Domain blacklists</div>
+    <div>${bl.length
+      ? bl.map(b => `<div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:13px"><span class="bl-hits">${b.list}</span> <span style="color:var(--muted)">— ${b.target || b.ip || ''} (code ${b.response || '?'})</span></div>`).join('')
+      : `<div class="bl-clean">Clean on all domain blacklists.</div>`}</div>
+
+    ${r.notes ? `<div class="section-h">Notes</div><div style="font-size:13px;color:var(--text)">${r.notes}</div>` : ''}
+  `;
+
+  document.getElementById('detailModal').classList.add('active');
+}
+function closeDetail() { document.getElementById('detailModal').classList.remove('active'); }
+
+function openCheckModal() {
+  document.getElementById('checkInput').value = '';
+  document.getElementById('checkResult').innerHTML = '';
+  document.getElementById('checkModal').classList.add('active');
+  setTimeout(() => document.getElementById('checkInput').focus(), 80);
+}
+function closeCheckModal() { document.getElementById('checkModal').classList.remove('active'); }
+
+async function runSingleCheck() {
+  const btn = document.getElementById('checkRunBtn');
+  const input = document.getElementById('checkInput');
+  const out = document.getElementById('checkResult');
+  const domain = (input.value || '').trim().toLowerCase();
+  if (!domain) { out.innerHTML = '<div style="color:var(--red);font-size:13px">Enter a domain.</div>'; return; }
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Checking…';
+  out.innerHTML = '';
+  try {
+    const r = await fetch('/api/domains/check', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain })
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      out.innerHTML = `<div style="color:var(--red);font-size:13px">${d.error || 'Failed'}</div>`;
+    } else {
+      out.innerHTML = `
+        <div style="font-size:13px">Score: <b>${d.score}</b> — <span class="status-pill status-${d.status}">${d.status}</span></div>
+        <div style="font-size:12px;color:var(--muted);margin-top:6px">${d.notes || 'All checks passed.'}</div>
+      `;
+      await load();
+    }
+  } catch (err) {
+    out.innerHTML = `<div style="color:var(--red);font-size:13px">${err.message}</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Run check';
+  }
+}
+
+async function refreshAll() {
+  const btn = document.getElementById('refreshBtn');
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Refreshing…';
+  try {
+    const r = await fetch('/api/domains/refresh', { method: 'POST' });
+    const d = await r.json();
+    toast(d.message || 'Refresh started');
+    // Poll for updates every 8s while the refresh runs
+    const poll = setInterval(async () => {
+      const rr = await fetch('/api/domains/health'); const jj = await rr.json();
+      data = jj.rows || [];
+      renderSummary(); populateWsFilter(); render();
+      if (jj.lastRun) document.getElementById('lastRun').textContent = `Last refresh: ${new Date(jj.lastRun).toLocaleString()}`;
+      if (!jj.running) {
+        clearInterval(poll);
+        btn.disabled = false; btn.textContent = '↻ Refresh all';
+      }
+    }, 8000);
+  } catch (err) {
+    toast('Refresh failed: ' + err.message);
+    btn.disabled = false; btn.textContent = '↻ Refresh all';
+  }
+}
+</script>
+</body>
+</html>

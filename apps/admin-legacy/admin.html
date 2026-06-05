@@ -1,0 +1,1066 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/favicon.svg">
+<meta name="theme-color" content="#050C29">
+<meta name="description" content="Ottaly Admin — managers, commissions, and workspace settings">
+<title>Ottaly Admin</title>
+<script>document.write('<script src="/splash.js?v=' + Date.now() + '"><\/script>');</script>
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@400;500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+:root { --navy:#224388; --navy-dark:#050C29; --teal:#1F6F78; }
+body { font-family:'Inter',sans-serif; background:#F8F9FC; color:var(--navy-dark); }
+
+.header { background:var(--navy-dark); padding:1.25rem 2rem; border-bottom:3px solid var(--teal); }
+.header-inner { max-width:1200px; margin:0 auto; display:flex; align-items:center; justify-content:space-between; }
+.header-logo  { height:36px; }
+.header-title { font-family:'Genos',sans-serif; font-size:16px; font-weight:600; color:rgba(255,255,255,0.6); letter-spacing:1px; }
+.nav-tabs { display:flex; gap:0.25rem; margin-left:1rem; }
+.nav-tab {
+  padding:8px 18px; border-radius:8px; font-family:'Inter',sans-serif;
+  font-size:13px; font-weight:600; color:rgba(255,255,255,0.55);
+  text-decoration:none; transition:all 0.15s;
+}
+.nav-tab:hover { background:rgba(255,255,255,0.1); color:white; }
+.nav-tab.active { background:var(--teal); color:white; }
+
+/* Key prompt overlay (first-time only) */
+.key-overlay {
+  position:fixed; inset:0; background:rgba(5,12,41,0.7);
+  display:flex; align-items:center; justify-content:center; z-index:200;
+}
+.key-card {
+  background:white; border-radius:14px; padding:2rem 2rem 1.75rem;
+  width:380px; box-shadow:0 20px 50px rgba(0,0,0,0.35);
+}
+.key-card h2 { font-family:'Genos',sans-serif; font-size:22px; font-weight:700; margin-bottom:0.5rem; }
+.key-card p  { font-size:13px; color:#9CA3AF; margin-bottom:1.25rem; }
+.field { margin-bottom:1rem; }
+.field label { display:block; font-size:12px; font-weight:600; color:#6B7280; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px; }
+.field input, .field select {
+  width:100%; padding:9px 12px; border:1.5px solid #E5E7EB; border-radius:7px;
+  font-size:13px; font-family:'Inter',sans-serif; outline:none;
+}
+.field input:focus, .field select:focus { border-color:var(--teal); }
+.btn { padding:9px 18px; border:none; border-radius:7px; font-size:13px; font-weight:600; cursor:pointer; transition:all 0.15s; }
+.btn-primary { background:var(--navy); color:white; }
+.btn-primary:hover { background:var(--teal); }
+.btn-success  { background:#D1FAE5; color:#065F46; border:1px solid #6EE7B7; }
+.btn-success:hover { background:#059669; color:white; }
+.btn-danger   { background:#FEF2F2; color:#DC2626; border:1px solid #FCA5A5; }
+.btn-danger:hover { background:#DC2626; color:white; }
+.btn-sm { padding:5px 12px; font-size:12px; }
+.error-msg   { color:#DC2626; font-size:12px; margin-top:0.5rem; display:none; }
+.success-msg { color:#059669; font-size:12px; margin-top:0.5rem; display:none; }
+
+.container { max-width:1200px; margin:0 auto; padding:2rem; }
+
+.section-title {
+  font-family:'Genos',sans-serif; font-size:15px; font-weight:700;
+  color:var(--navy-dark); text-transform:uppercase; letter-spacing:2px;
+  margin-bottom:1rem; display:flex; align-items:center; gap:1rem;
+}
+.section-title::after { content:''; flex:1; height:2px; background:#E5E7EB; }
+
+.badge {
+  background:#DC2626; color:white; font-size:11px; font-weight:700;
+  padding:1px 7px; border-radius:8px; margin-left:6px;
+}
+
+.card { background:white; border-radius:12px; padding:1.5rem; box-shadow:0 1px 3px rgba(5,12,41,0.08); margin-bottom:2rem; }
+
+.page-toggle-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:.75rem; }
+.page-toggle { display:flex; align-items:center; justify-content:space-between; padding:.6rem .85rem; border-radius:8px; border:1px solid #E5E7EB; background:#fafafa; }
+.page-toggle-label { font-size:13px; font-weight:500; color:#374151; }
+.toggle-switch { position:relative; display:inline-block; width:38px; height:22px; flex-shrink:0; }
+.toggle-switch input { opacity:0; width:0; height:0; }
+.toggle-slider { position:absolute; cursor:pointer; inset:0; background:#D1D5DB; border-radius:22px; transition:.2s; }
+.toggle-slider:before { position:absolute; content:''; height:16px; width:16px; left:3px; bottom:3px; background:white; border-radius:50%; transition:.2s; }
+.toggle-switch input:checked + .toggle-slider { background:#1F6F78; }
+.toggle-switch input:checked + .toggle-slider:before { transform:translateX(16px); }
+
+/* Create client form */
+.create-grid { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
+.create-grid-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:1rem; margin-top:1rem; }
+@media(max-width:700px) { .create-grid, .create-grid-3 { grid-template-columns:1fr; } }
+
+/* Workspaces */
+.ws-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:0.75rem; }
+.ws-card {
+  background:#F9FAFB; border:1.5px solid #E5E7EB; border-radius:8px;
+  padding:0.875rem 1rem; cursor:pointer; transition:all 0.15s;
+}
+.ws-card:hover { border-color:var(--teal); background:rgba(31,111,120,0.04); }
+.ws-name { font-weight:600; font-size:13px; color:var(--navy-dark); margin-bottom:4px; }
+.ws-id   { font-family:monospace; font-size:11px; color:#9CA3AF; }
+.ws-copy { font-size:11px; color:var(--teal); font-weight:600; display:none; }
+.ws-card:hover .ws-copy { display:block; }
+
+/* Clients table */
+table { width:100%; border-collapse:collapse; }
+thead th { padding:10px 14px; text-align:left; font-size:11px; font-weight:700; color:#6B7280; text-transform:uppercase; letter-spacing:1px; border-bottom:2px solid #F3F4F6; background:#FAFBFC; }
+tbody td { padding:10px 14px; border-bottom:1px solid #F3F4F6; font-size:13px; vertical-align:middle; }
+tbody tr:last-child td { border-bottom:none; }
+tbody tr:hover { background:#FAFBFC; }
+.mono { font-family:monospace; font-size:12px; color:#6B7280; }
+
+/* Inline edit fields */
+.inline-field {
+  display:flex; gap:5px; align-items:center;
+}
+.inline-input {
+  padding:4px 8px; border:1.5px solid #E5E7EB; border-radius:6px;
+  font-size:12px; font-family:'Inter',sans-serif; outline:none; width:72px;
+}
+.inline-input:focus { border-color:var(--teal); }
+
+/* Non-lead request rows */
+.nlr-lead   { font-weight:600; font-size:13px; color:var(--navy-dark); }
+.nlr-client { font-size:12px; color:#6B7280; margin-top:2px; }
+.nlr-reason {
+  font-size:12px; color:#6B7280; background:#F9FAFB; border-radius:5px;
+  padding:5px 9px; max-width:320px; line-height:1.45;
+}
+
+.summary-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:0.75rem; margin-bottom:1rem; }
+.summary-card { background:#F9FAFB; border:1px solid #E5E7EB; border-radius:9px; padding:0.9rem 1rem; border-top:3px solid var(--navy); }
+.summary-card.green { border-top-color:#059669; }
+.summary-card.amber { border-top-color:#D97706; }
+.summary-label { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.6px; color:#6B7280; }
+.summary-val { font-family:'Genos',sans-serif; font-size:1.7rem; font-weight:800; margin-top:3px; }
+.period-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:1rem; }
+.period-row select, .period-row input {
+  padding:8px 10px; border:1.5px solid #E5E7EB; border-radius:7px;
+  font-size:13px; font-family:'Inter',sans-serif; outline:none; background:white;
+}
+.status-pill { display:inline-block; padding:3px 9px; border-radius:999px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.4px; }
+.status-pill.paid { background:#D1FAE5; color:#065F46; }
+.status-pill.unpaid { background:#FEF3C7; color:#92400E; }
+.payslip-link { font-size:12px; font-weight:700; color:var(--teal); text-decoration:none; }
+.payslip-link:hover { text-decoration:underline; }
+
+/* sticky header + mobile */
+.header,.nav{position:sticky;top:0;z-index:200}
+.header>div:first-child,.header-inner,.nav>div:first-child{flex:1;min-width:0;overflow:hidden}
+@media(max-width:768px){.header,.nav{padding:.75rem 1rem}.page,.container{padding:1rem}.page-header,.ph{flex-direction:column;align-items:flex-start}.toolbar,.ph-right{flex-wrap:wrap}.table-wrap,.table-container{overflow-x:auto;-webkit-overflow-scrolling:touch}table{min-width:600px}}
+</style>
+    <script src="/nav.js" defer></script>
+</head>
+<body>
+
+
+<!-- First-time key prompt -->
+<div class="key-overlay" id="keyOverlay" style="display:none;">
+  <div class="key-card">
+    <h2>Admin Key</h2>
+    <p>Enter once — it'll be saved for this browser.</p>
+    <div class="field">
+      <input type="password" id="adminKeyInput" placeholder="Enter admin key" onkeydown="if(event.key==='Enter')saveKey()">
+    </div>
+    <button class="btn btn-primary" style="width:100%;" onclick="saveKey()">Save &amp; Continue</button>
+    <div class="error-msg" id="authError" style="margin-top:0.75rem;">Incorrect key — try again</div>
+  </div>
+</div>
+
+<!-- Admin panel -->
+<div id="adminPanel">
+  <div class="container">
+
+    <!-- Default commission rate -->
+    <div class="section-title">Campaign Managers</div>
+    <div class="card" style="margin-bottom:1rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
+      <div style="font-size:13px;font-weight:600">CM Bonus Rate</div>
+      <div style="display:flex;align-items:center;gap:.5rem">
+        <input type="number" id="defaultCommRate" min="0" max="100" step="0.5"
+          style="width:80px;padding:6px 10px;border:1px solid #E5E7EB;border-radius:7px;font-size:13px;outline:none"
+          placeholder="5">
+        <span style="font-size:13px;color:#6B7280">%</span>
+        <button onclick="saveDefaultComm()" style="padding:6px 14px;background:#1F6F78;color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer">Save</button>
+      </div>
+      <span style="font-size:12px;color:#6B7280">Per-lead bonus = all-time avg lead price × this % × live ZAR rate. E.g. if avg lead = £98 and rate = 5%: £98 × 5% × R23.5 = R115/lead</span>
+      <span id="defaultCommSaved" style="font-size:12px;color:#16A34A;display:none">✓ Saved</span>
+    </div>
+    <div class="card" style="margin-bottom:1.5rem">
+      <div style="display:flex;gap:10px;margin-bottom:1rem;flex-wrap:wrap">
+        <input type="text" id="mgrNameInput" placeholder="Manager name (e.g. Joey)"
+          style="flex:1;min-width:140px;padding:8px 10px;border:1px solid #E5E7EB;border-radius:7px;font-size:13px;outline:none">
+        <input type="password" id="mgrPassInput" placeholder="Password"
+          style="flex:1;min-width:140px;padding:8px 10px;border:1px solid #E5E7EB;border-radius:7px;font-size:13px;outline:none">
+        <button onclick="createManager()"
+          style="padding:8px 16px;background:#050C29;color:#fff;border:none;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer">
+          Add Manager
+        </button>
+      </div>
+      <table>
+        <thead><tr><th>Name</th><th>Base Salary (R/mo)</th><th>New Password</th><th></th></tr></thead>
+        <tbody id="managersTable"><tr><td colspan="5" style="text-align:center;padding:1.5rem;color:#9CA3AF">Loading…</td></tr></tbody>
+      </table>
+    </div>
+
+    <!-- Manager commissions -->
+    <div class="section-title">Manager Commissions</div>
+    <div class="card" style="overflow-x:auto;">
+      <div class="period-row">
+        <select id="commissionPeriod" onchange="handleCommissionPeriod()">
+          <option value="lastMonth" selected>Last Month</option>
+          <option value="month">This Month</option>
+          <option value="quarter">This Quarter</option>
+          <option value="year">This Year</option>
+          <option value="all">All Time</option>
+          <option value="custom">Custom Range</option>
+        </select>
+        <div id="commissionCustomRange" style="display:none;gap:6px;align-items:center;flex-wrap:wrap">
+          <input type="date" id="commissionStart">
+          <span style="font-size:12px;color:#6B7280">to</span>
+          <input type="date" id="commissionEnd">
+          <button class="btn btn-sm btn-primary" onclick="renderManagerCommissions()">Apply</button>
+        </div>
+        <span id="commissionPeriodLabel" style="font-size:12px;color:#6B7280;font-weight:600"></span>
+      </div>
+      <div class="summary-grid">
+        <div class="summary-card green">
+          <div class="summary-label">Total Commission</div>
+          <div class="summary-val" id="commTotal">£0.00</div>
+        </div>
+        <div class="summary-card amber">
+          <div class="summary-label">Unpaid</div>
+          <div class="summary-val" id="commUnpaid">£0.00</div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-label">Paid</div>
+          <div class="summary-val" id="commPaid">£0.00</div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-label">Managers</div>
+          <div class="summary-val" id="commManagers">0</div>
+        </div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Manager</th>
+            <th>Clients</th>
+            <th style="text-align:right">Leads</th>
+            <th style="text-align:right">Revenue</th>
+            <th style="text-align:right">Rate</th>
+            <th style="text-align:right">Commission</th>
+            <th>Status</th>
+            <th>Payslip</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="managerCommissionTable">
+          <tr><td colspan="8" style="color:#9CA3AF;padding:1rem;">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Non-lead requests -->
+    <div class="section-title">
+      Non-Lead Requests
+      <span class="badge" id="nlrBadge" style="display:none;">0</span>
+    </div>
+    <div class="card" style="overflow-x:auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>Lead</th>
+            <th>Client</th>
+            <th>Reason</th>
+            <th>Submitted</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="nlrTable">
+          <tr><td colspan="5" style="color:#9CA3AF;padding:1rem;">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Create client -->
+    <div class="section-title">Create Client Account</div>
+    <div class="card">
+      <div class="create-grid">
+        <div class="field">
+          <label>Username</label>
+          <input type="text" id="newUsername" placeholder="e.g. pestcontrol_uk">
+        </div>
+        <div class="field">
+          <label>Password</label>
+          <input type="password" id="newPassword" placeholder="Strong password">
+        </div>
+        <div class="field">
+          <label>Workspace ID</label>
+          <input type="text" id="newWorkspaceId" placeholder="Click workspace below to fill">
+        </div>
+        <div class="field">
+          <label>Workspace Name (display)</label>
+          <input type="text" id="newWorkspaceName" placeholder="e.g. PestControl UK">
+        </div>
+      </div>
+      <div class="create-grid-3">
+        <div class="field" style="margin-bottom:0;">
+          <label>Plan Leads</label>
+          <input type="number" id="newPlanLeads" placeholder="0" min="0">
+        </div>
+        <div class="field" style="margin-bottom:0;">
+          <label>Price Per Lead (£)</label>
+          <input type="number" id="newPricePerLead" placeholder="0.00" min="0" step="0.01">
+        </div>
+      </div>
+      <button class="btn btn-primary" style="margin-top:1.25rem;" onclick="createClient()">Create Client</button>
+      <div class="error-msg"   id="createError"></div>
+      <div class="success-msg" id="createSuccess"></div>
+    </div>
+
+    <!-- Payslips -->
+    <div class="section-title">Manager Payslips</div>
+    <div class="card">
+      <p style="font-size:13px;color:#6B7280;margin-bottom:1.25rem;">Upload a payslip for a manager. The manager will see a download button on their commission page for that month.</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr auto auto;gap:.75rem;align-items:end;margin-bottom:1.25rem;flex-wrap:wrap">
+        <div>
+          <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#6B7280;display:block;margin-bottom:4px">Manager</label>
+          <select id="payslipManager" class="period-sel" style="width:100%">
+            <option value="">— Select manager —</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#6B7280;display:block;margin-bottom:4px">Month</label>
+          <input type="month" id="payslipMonth" class="custom-range" style="display:flex;padding:7px 8px;border:1px solid var(--border);border-radius:7px;font-size:13px;font-family:inherit;outline:none;width:100%">
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#6B7280;display:block;margin-bottom:4px">File (PDF/image)</label>
+          <input type="file" id="payslipFile" accept=".pdf,.png,.jpg,.jpeg" style="font-size:13px">
+        </div>
+        <button class="btn" onclick="uploadPayslip()">Upload</button>
+      </div>
+      <span id="payslipUploadMsg" style="font-size:12px;color:#059669;display:none">Uploaded</span>
+      <div id="payslipList" style="margin-top:1rem"></div>
+    </div>
+
+    <!-- PlusVibe workspaces -->
+    <div class="section-title">PlusVibe Workspaces</div>
+    <div class="card">
+      <p style="font-size:13px;color:#9CA3AF;margin-bottom:1rem;">Click a workspace to fill the Workspace ID field above.</p>
+      <div class="ws-grid" id="wsGrid"><p style="color:#9CA3AF;font-size:13px;">Loading…</p></div>
+    </div>
+
+    <!-- Manager page visibility -->
+    <div class="section-title">Manager Page Access</div>
+    <div class="card">
+      <p style="font-size:13px;color:#6B7280;margin-bottom:1.25rem;">Control which pages managers can see in the navigation. Admin-only pages are unaffected.</p>
+      <div class="page-toggle-grid" id="pageToggleGrid">
+        <p style="color:#9CA3AF;font-size:13px;">Loading…</p>
+      </div>
+      <div style="margin-top:1.25rem;display:flex;align-items:center;gap:1rem;">
+        <button class="btn" onclick="savePageVisibility()">Save</button>
+        <span id="pageVisibilityMsg" style="font-size:12px;color:#059669;display:none;">Saved</span>
+      </div>
+    </div>
+
+    <!-- Client accounts -->
+    <div class="section-title">Client Accounts</div>
+    <div class="card" style="overflow-x:auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>Username</th>
+            <th>Workspace</th>
+            <th>Workspace ID</th>
+            <th>Plan Leads</th>
+            <th>Price/Lead</th>
+            <th>Created</th>
+            <th>New Password</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="clientsTable">
+          <tr><td colspan="8" style="color:#9CA3AF;padding:1rem;">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ── Boot — check session cookie, show login if not authenticated ──
+(async function boot() {
+  const s = await fetch('/api/session').then(r=>r.json()).catch(()=>({ok:false}));
+  if (s.ok && s.role === 'admin') {
+    await tryLoad();
+    fetchManagers();
+  } else if (s.ok && s.role === 'manager') {
+    // Managers shouldn't be on admin page
+    location.href = '/performance.html';
+  } else {
+    document.getElementById('keyOverlay').style.display = 'flex';
+  }
+})();
+
+async function tryLoad() {
+  try {
+    await Promise.all([fetchClients(), fetchWorkspaces(), fetchNonleadRequests(), fetchManagerCommissions(), fetchPageVisibility(), fetchPayslips()]);
+    return true;
+  } catch { return false; }
+}
+
+// ── Manager page visibility ──────────────────────────────────
+// Derived from nav.js's window.OTTALY_PAGES so any page added to the nav
+// auto-appears here. Filters out admin-only pages (managers never see them).
+function getManagerPages() {
+  const all = window.OTTALY_PAGES || [];
+  return all.filter(p => !p.admin);
+}
+
+let _pageVisibility = {};
+
+async function fetchPageVisibility() {
+  try {
+    const r = await fetch('/api/admin/page-visibility', { headers: adminHeaders() });
+    _pageVisibility = r.ok ? await r.json() : {};
+  } catch { _pageVisibility = {}; }
+  renderPageToggles();
+}
+
+function renderPageToggles() {
+  const grid = document.getElementById('pageToggleGrid');
+  if (!grid) return;
+  grid.innerHTML = getManagerPages().map(p => {
+    const on = _pageVisibility[p.href] !== false; // default on
+    return `<div class="page-toggle">
+      <span class="page-toggle-label">${p.label}</span>
+      <label class="toggle-switch">
+        <input type="checkbox" ${on ? 'checked' : ''} data-href="${p.href}" onchange="onToggleChange()">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>`;
+  }).join('');
+}
+
+function onToggleChange() {
+  const msg = document.getElementById('pageVisibilityMsg');
+  if (msg) msg.style.display = 'none';
+}
+
+async function savePageVisibility() {
+  const checkboxes = document.querySelectorAll('#pageToggleGrid input[type=checkbox]');
+  const visibility = {};
+  checkboxes.forEach(cb => { visibility[cb.dataset.href] = cb.checked; });
+  try {
+    const r = await fetch('/api/admin/page-visibility', {
+      method: 'POST',
+      headers: { ...adminHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(visibility),
+    });
+    if (r.ok) {
+      _pageVisibility = visibility;
+      const msg = document.getElementById('pageVisibilityMsg');
+      if (msg) { msg.style.display = 'inline'; setTimeout(() => msg.style.display = 'none', 2000); }
+    }
+  } catch (e) { alert('Save failed: ' + e.message); }
+}
+
+// ── Payslips ─────────────────────────────────────────────────────────
+async function fetchPayslips() {
+  try {
+    const rows = await fetch('/api/admin/payslips', { headers: adminHeaders() }).then(r => r.json());
+    renderPayslipList(rows || []);
+  } catch { renderPayslipList([]); }
+}
+
+function renderPayslipList(rows) {
+  const el = document.getElementById('payslipList');
+  if (!el) return;
+  if (!rows.length) { el.innerHTML = '<p style="font-size:13px;color:#9CA3AF">No payslips uploaded yet.</p>'; return; }
+  el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead><tr>
+      <th style="text-align:left;padding:6px 8px;color:#6B7280;font-size:11px;text-transform:uppercase;border-bottom:1px solid #E5E7EB">Manager</th>
+      <th style="text-align:left;padding:6px 8px;color:#6B7280;font-size:11px;text-transform:uppercase;border-bottom:1px solid #E5E7EB">Month</th>
+      <th style="text-align:left;padding:6px 8px;color:#6B7280;font-size:11px;text-transform:uppercase;border-bottom:1px solid #E5E7EB">File</th>
+      <th style="padding:6px 8px;border-bottom:1px solid #E5E7EB"></th>
+    </tr></thead>
+    <tbody>${rows.map(r => `<tr>
+      <td style="padding:7px 8px;border-bottom:1px solid #F3F4F6">${esc(r.manager_name)}</td>
+      <td style="padding:7px 8px;border-bottom:1px solid #F3F4F6">${r.month}</td>
+      <td style="padding:7px 8px;border-bottom:1px solid #F3F4F6;color:#6B7280">${esc(r.filename)}</td>
+      <td style="padding:7px 8px;border-bottom:1px solid #F3F4F6;text-align:right">
+        <button class="btn btn-danger btn-sm" onclick="deletePayslip(${r.id})">Delete</button>
+      </td>
+    </tr>`).join('')}</tbody>
+  </table>`;
+}
+
+async function uploadPayslip() {
+  const manager = document.getElementById('payslipManager').value.trim();
+  const month   = document.getElementById('payslipMonth').value;
+  const fileEl  = document.getElementById('payslipFile');
+  const file    = fileEl?.files?.[0];
+  if (!manager) { alert('Select a manager'); return; }
+  if (!month)   { alert('Select a month'); return; }
+  if (!file)    { alert('Choose a file'); return; }
+  const reader  = new FileReader();
+  reader.onload = async function(e) {
+    const base64 = e.target.result.split(',')[1];
+    const r = await fetch('/api/admin/payslips', {
+      method: 'POST',
+      headers: { ...adminHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ manager_name: manager, month, filename: file.name, mimetype: file.type || 'application/pdf', data: base64 }),
+    });
+    if (r.ok) {
+      const msg = document.getElementById('payslipUploadMsg');
+      if (msg) { msg.style.display = 'inline'; setTimeout(() => msg.style.display = 'none', 2000); }
+      fileEl.value = '';
+      fetchPayslips();
+    } else {
+      const err = await r.json().catch(() => ({}));
+      alert('Upload failed: ' + (err.error || 'unknown error'));
+    }
+  };
+  reader.readAsDataURL(file);
+}
+
+async function deletePayslip(id) {
+  if (!confirm('Delete this payslip?')) return;
+  await fetch(`/api/admin/payslips/${id}`, { method: 'DELETE', headers: adminHeaders() });
+  fetchPayslips();
+}
+
+async function saveKey() {
+  const key = document.getElementById('adminKeyInput').value.trim();
+  if (!key) return;
+  document.getElementById('authError').style.display = 'none';
+  const r = await fetch('/api/admin/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }) });
+  if (r.ok) {
+    document.getElementById('keyOverlay').style.display = 'none';
+    await tryLoad();
+    fetchManagers();
+  } else {
+    document.getElementById('authError').style.display = 'block';
+  }
+}
+
+function adminHeaders() {
+  return { 'Content-Type': 'application/json' };
+}
+
+let commissionClients = [];
+let commissionLeads = [];
+let commissionPayments = {};
+let commissionRows = [];
+
+function isoDate(d) { return d.toISOString().split('T')[0]; }
+
+function getCommissionRange() {
+  const p = document.getElementById('commissionPeriod').value;
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  let start, end, label;
+  if (p === 'lastMonth') {
+    start = new Date(y, m - 1, 1); end = new Date(y, m, 1);
+    label = start.toLocaleDateString('en-GB', { month:'long', year:'numeric' });
+  } else if (p === 'month') {
+    start = new Date(y, m, 1); end = new Date(y, m + 1, 1);
+    label = now.toLocaleDateString('en-GB', { month:'long', year:'numeric' });
+  } else if (p === 'quarter') {
+    const q = Math.floor(m / 3);
+    start = new Date(y, q * 3, 1); end = new Date(y, q * 3 + 3, 1);
+    label = `Q${q + 1} ${y}`;
+  } else if (p === 'year') {
+    start = new Date(y, 0, 1); end = new Date(y + 1, 0, 1);
+    label = `${y}`;
+  } else if (p === 'all') {
+    start = new Date(2020, 0, 1); end = new Date(y + 1, 0, 1);
+    label = 'All Time';
+  } else {
+    const s = document.getElementById('commissionStart').value;
+    const e = document.getElementById('commissionEnd').value;
+    start = new Date(s + 'T00:00:00'); end = new Date(e + 'T23:59:59');
+    label = s && e ? `${s} to ${e}` : 'Custom Range';
+  }
+  return { start, end, label, startKey: isoDate(start), endKey: isoDate(new Date(end.getTime() - 1)) };
+}
+
+function handleCommissionPeriod() {
+  const p = document.getElementById('commissionPeriod').value;
+  const custom = document.getElementById('commissionCustomRange');
+  custom.style.display = p === 'custom' ? 'flex' : 'none';
+  if (p === 'custom') {
+    const now = new Date();
+    document.getElementById('commissionStart').value = isoDate(new Date(now.getFullYear(), now.getMonth(), 1));
+    document.getElementById('commissionEnd').value = isoDate(now);
+    return;
+  }
+  renderManagerCommissions();
+}
+
+function paymentKey(manager, startKey, endKey) {
+  return `${manager.toLowerCase()}|${startKey}|${endKey}`;
+}
+
+async function saveDefaultComm() {
+  const rate = parseFloat(document.getElementById('defaultCommRate').value) || 5;
+  await fetch('/api/admin/default-commission', { method: 'POST', headers: { ...adminHeaders(), 'Content-Type': 'application/json' }, body: JSON.stringify({ rate }) });
+  const el = document.getElementById('defaultCommSaved');
+  el.style.display = ''; setTimeout(() => { el.style.display = 'none'; }, 2000);
+}
+
+async function fetchManagerCommissions() {
+  const [clients, revenue, payments, managers, workload, defaultComm, avgData] = await Promise.all([
+    fetch('/api/admin/clients', { headers: adminHeaders() }).then(r => r.ok ? r.json() : []),
+    fetch('/api/revenue/leads').then(r => r.json()).catch(() => ({ leads: [] })),
+    fetch('/api/admin/commission-payments', { headers: adminHeaders() }).then(r => r.ok ? r.json() : []),
+    fetch('/api/admin/managers', { headers: adminHeaders() }).then(r => r.ok ? r.json() : []),
+    fetch('/api/admin/workload', { headers: adminHeaders() }).then(r => r.ok ? r.json() : { assignments: [], defaultRate: 5 }),
+    fetch('/api/admin/default-commission', { headers: adminHeaders() }).then(r => r.ok ? r.json() : { rate: 5 }),
+    fetch('/api/avg-lead-price').then(r => r.json()).catch(() => ({ avg_lead_price_gbp: 0 })),
+  ]);
+  const avgLeadPrice = avgData.avg_lead_price_gbp || 0;
+
+  // Set default commission rate input
+  document.getElementById('defaultCommRate').value = defaultComm.rate ?? 5;
+
+  // Build per-client per-manager rate lookup from client_managers (auto-split rates)
+  window._clientManagerRates = {};
+  (workload.assignments || []).forEach(a => {
+    if (!window._clientManagerRates[a.client_workspace_id]) window._clientManagerRates[a.client_workspace_id] = {};
+    window._clientManagerRates[a.client_workspace_id][a.manager_name] = a.commission_rate;
+  });
+  window._defaultCommRate = defaultComm.rate ?? 5;
+  commissionClients = Array.isArray(clients) ? clients : [];
+  commissionLeads = (revenue.leads || [])
+    .filter(l => !l.is_nonlead)
+    .map(l => ({ ...l, dateObj: l.date ? new Date(l.date) : null }));
+  commissionPayments = {};
+  (payments || []).forEach(p => {
+    commissionPayments[paymentKey(p.manager_name, p.period_start, p.period_end)] = p;
+  });
+  renderManagerCommissions();
+}
+
+function renderManagerCommissions() {
+  const { start, end, label, startKey, endKey } = getCommissionRange();
+  document.getElementById('commissionPeriodLabel').textContent = label;
+
+  // Build from client_managers — each manager gets their auto-split rate per client
+  const byManager = {};
+  const clientRates = window._clientManagerRates || {};
+  const defaultRate = window._defaultCommRate ?? 5;
+
+  commissionClients.forEach(c => {
+    const wsId = c.workspace_id;
+    const ratesForClient = clientRates[wsId] || {};
+    const managerNames = Object.keys(ratesForClient);
+
+    // Fall back to old campaign_manager if not in new system
+    const legacyManagers = [];
+    if (!managerNames.length) {
+      if ((c.campaign_manager || '').trim()) legacyManagers.push(c.campaign_manager.trim());
+      if ((c.campaign_manager_2 || '').trim()) legacyManagers.push(c.campaign_manager_2.trim());
+    }
+
+    const allManagers = managerNames.length ? managerNames : legacyManagers;
+    allManagers.forEach(manager => {
+      if (!byManager[manager]) byManager[manager] = { manager, clients: [], leads: 0, revenue: 0, commission: 0, rate: 0 };
+      byManager[manager].clients.push({ ...c, _cmRate: ratesForClient[manager] ?? (defaultRate / (allManagers.length || 1)) });
+    });
+  });
+
+  Object.values(byManager).forEach(row => {
+    row.clients.forEach(c => {
+      const managerStart = c.manager_start_date ? new Date(c.manager_start_date + 'T00:00:00') : null;
+      const clientLeads = commissionLeads.filter(l =>
+        l.client_name === c.workspace_name &&
+        l.dateObj && l.dateObj >= start && l.dateObj < end &&
+        (!managerStart || l.dateObj >= managerStart)
+      );
+      const revenue = clientLeads.reduce((s, l) => s + (l.lead_price || 0), 0);
+      const ratePct = c._cmRate ?? defaultRate;
+      row.rate = ratePct;
+      row.leads += clientLeads.length;
+      row.revenue += revenue;
+      row.commission += clientLeads.length * avgLeadPrice * (ratePct / 100);
+    });
+    row.payment = commissionPayments[paymentKey(row.manager, startKey, endKey)] || { status: 'unpaid' };
+    row.startKey = startKey;
+    row.endKey = endKey;
+  });
+
+  commissionRows = Object.values(byManager)
+    .filter(r => r.clients.length || r.commission > 0)
+    .sort((a, b) => b.commission - a.commission);
+
+  const total = commissionRows.reduce((s, r) => s + r.commission, 0);
+  const paid = commissionRows.filter(r => r.payment.status === 'paid').reduce((s, r) => s + r.commission, 0);
+  document.getElementById('commTotal').textContent = '£' + total.toFixed(2);
+  document.getElementById('commPaid').textContent = '£' + paid.toFixed(2);
+  document.getElementById('commUnpaid').textContent = '£' + (total - paid).toFixed(2);
+  document.getElementById('commManagers').textContent = commissionRows.length;
+
+  document.getElementById('managerCommissionTable').innerHTML = commissionRows.length ? commissionRows.map((r, i) => {
+    const paidStatus = r.payment.status === 'paid';
+    const payslip = r.payment.payslip_data
+      ? `<a class="payslip-link" href="${r.payment.payslip_data}" download="${escAttr(r.payment.payslip_name || r.manager + '-payslip')}" target="_blank">${escHtml(r.payment.payslip_name || 'View payslip')}</a>`
+      : '<span style="font-size:12px;color:#9CA3AF">No payslip</span>';
+    return `
+      <tr>
+        <td style="font-weight:700">${escHtml(r.manager)}</td>
+        <td style="color:#6B7280;font-size:12px">${r.clients.map(c => escHtml(c.workspace_name)).join(', ')}</td>
+        <td style="text-align:right;font-weight:600">${r.leads}</td>
+        <td style="text-align:right">£${Math.round(r.revenue).toLocaleString('en-GB')}</td>
+        <td style="text-align:right"><span style="background:#EDE9FE;color:#5B21B6;font-weight:700;font-size:12px;padding:2px 7px;border-radius:5px">${r.rate ?? 5}%</span></td>
+        <td style="text-align:right;font-weight:800;color:#059669">£${r.commission.toFixed(2)}</td>
+        <td><span class="status-pill ${paidStatus ? 'paid' : 'unpaid'}">${paidStatus ? 'Paid' : 'Unpaid'}</span></td>
+        <td>${payslip}</td>
+        <td>
+          <div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap">
+            <input type="file" id="payslip_${i}" accept=".pdf,image/*" style="display:none" onchange="uploadPayslip(${i})">
+            <button class="btn btn-sm btn-primary" onclick="document.getElementById('payslip_${i}').click()">${paidStatus ? 'Replace Payslip' : 'Upload & Pay'}</button>
+            ${paidStatus ? `<button class="btn btn-sm btn-danger" onclick="markCommissionUnpaid(${i})">Mark Unpaid</button>` : ''}
+          </div>
+        </td>
+      </tr>`;
+  }).join('') : '<tr><td colspan="8" style="color:#9CA3AF;padding:1rem;">No manager commissions for this period.</td></tr>';
+}
+
+async function saveCommissionPayment(row, status, file) {
+  const payload = {
+    manager_name: row.manager,
+    period_start: row.startKey,
+    period_end: row.endKey,
+    status,
+    payslip_name: file ? file.name : (row.payment.payslip_name || ''),
+    payslip_type: file ? file.type : (row.payment.payslip_type || ''),
+    payslip_data: file ? file.data : (row.payment.payslip_data || '')
+  };
+  const r = await fetch('/api/admin/commission-payments', {
+    method: 'PUT',
+    headers: adminHeaders(),
+    body: JSON.stringify(payload)
+  });
+  if (!r.ok) {
+    const j = await r.json().catch(() => ({}));
+    throw new Error(j.error || 'Failed to save payment');
+  }
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function uploadPayslip(index) {
+  const row = commissionRows[index];
+  const input = document.getElementById(`payslip_${index}`);
+  const file = input.files?.[0];
+  if (!file) return;
+  if (file.size > 8 * 1024 * 1024) return alert('Payslip must be under 8MB');
+  try {
+    await saveCommissionPayment(row, 'paid', { name: file.name, type: file.type, data: await readFileAsDataUrl(file) });
+    showToast(`${row.manager} marked paid`);
+    await fetchManagerCommissions();
+  } catch (e) { alert(e.message); }
+}
+
+async function markCommissionUnpaid(index) {
+  const row = commissionRows[index];
+  if (!confirm(`Mark ${row.manager} as unpaid for this period?`)) return;
+  try {
+    await saveCommissionPayment(row, 'unpaid', { name: '', type: '', data: '' });
+    showToast(`${row.manager} marked unpaid`);
+    await fetchManagerCommissions();
+  } catch (e) { alert(e.message); }
+}
+
+// ── Workspaces ─────────────────────────────────────────────
+async function fetchWorkspaces() {
+  const r = await fetch('/api/admin/workspaces', { headers: adminHeaders() });
+  if (!r.ok) throw new Error('Bad key');
+  const ws = await r.json();
+  document.getElementById('wsGrid').innerHTML = (Array.isArray(ws) ? ws : []).map(w => `
+    <div class="ws-card" onclick="fillWorkspace('${w.id}','${escAttr(w.name)}')">
+      <div class="ws-name">${escHtml(w.name)}</div>
+      <div class="ws-id">${w.id}</div>
+      <div class="ws-copy">↑ Click to use</div>
+    </div>`).join('') || '<p style="color:#9CA3AF;font-size:13px;">No workspaces found.</p>';
+}
+
+function fillWorkspace(id, name) {
+  document.getElementById('newWorkspaceId').value   = id;
+  document.getElementById('newWorkspaceName').value = name;
+}
+
+// ── Clients ────────────────────────────────────────────────
+async function fetchClients() {
+  const r = await fetch('/api/admin/clients', { headers: adminHeaders() });
+  if (!r.ok) throw new Error('Bad key');
+  const clients = await r.json();
+  renderClients(clients);
+  return clients;
+}
+
+function renderClients(clients) {
+  if (!clients.length) {
+    document.getElementById('clientsTable').innerHTML =
+      '<tr><td colspan="8" style="color:#9CA3AF;padding:1rem;">No client accounts yet.</td></tr>';
+    return;
+  }
+  document.getElementById('clientsTable').innerHTML = clients.map(c => `
+    <tr>
+      <td><strong>${escHtml(c.username)}</strong></td>
+      <td>${escHtml(c.workspace_name)}</td>
+      <td class="mono">${escHtml(c.workspace_id)}</td>
+      <td>
+        <div class="inline-field">
+          <input type="number" class="inline-input" id="pl_${c.id}" value="${c.plan_leads || 0}" min="0" placeholder="0">
+          <button class="btn btn-sm btn-primary" onclick="saveClientFields(${c.id})">Save</button>
+        </div>
+      </td>
+      <td>
+        <div class="inline-field">
+          <span style="font-size:12px;color:#6B7280;">£</span>
+          <input type="number" class="inline-input" id="ppl_${c.id}" value="${c.price_per_lead || 0}" min="0" step="0.01" placeholder="0.00">
+        </div>
+      </td>
+      <td style="color:#9CA3AF;">${c.created_at?.split('T')[0] || '—'}</td>
+      <td>
+        <div style="display:flex;gap:6px;">
+          <input type="password" id="pw_${c.id}" placeholder="New password"
+                 style="padding:5px 9px;border:1.5px solid #E5E7EB;border-radius:6px;font-size:12px;width:130px;outline:none;">
+          <button class="btn btn-sm btn-primary" onclick="resetPassword(${c.id})">Reset</button>
+        </div>
+      </td>
+      <td>
+        <button class="btn btn-sm btn-danger" onclick="deleteClient(${c.id}, '${escAttr(c.username)}')">Delete</button>
+      </td>
+    </tr>`).join('');
+}
+
+async function createClient() {
+  const username       = document.getElementById('newUsername').value.trim();
+  const password       = document.getElementById('newPassword').value;
+  const workspace_id   = document.getElementById('newWorkspaceId').value.trim();
+  const workspace_name = document.getElementById('newWorkspaceName').value.trim();
+  const plan_leads     = document.getElementById('newPlanLeads').value;
+  const price_per_lead = document.getElementById('newPricePerLead').value;
+  const errEl = document.getElementById('createError');
+  const okEl  = document.getElementById('createSuccess');
+  errEl.style.display = 'none'; okEl.style.display = 'none';
+
+  if (!username || !password || !workspace_id || !workspace_name)
+    return showMsg(errEl, 'Username, password, workspace ID and name are required');
+  if (password.length < 6)
+    return showMsg(errEl, 'Password must be at least 6 characters');
+
+  const r = await fetch('/api/admin/clients', {
+    method: 'POST', headers: adminHeaders(),
+    body: JSON.stringify({ username, password, workspace_id, workspace_name, plan_leads, price_per_lead })
+  });
+  const data = await r.json();
+  if (!r.ok) return showMsg(errEl, data.error);
+
+  showMsg(okEl, `Client "${username}" created`);
+  document.getElementById('newUsername').value = '';
+  document.getElementById('newPassword').value = '';
+  document.getElementById('newPlanLeads').value = '';
+  document.getElementById('newPricePerLead').value = '';
+  fetchClients();
+}
+
+async function saveClientFields(id) {
+  const plan_leads     = document.getElementById(`pl_${id}`)?.value;
+  const price_per_lead = document.getElementById(`ppl_${id}`)?.value;
+  const r = await fetch(`/api/admin/clients/${id}`, {
+    method: 'PUT', headers: adminHeaders(),
+    body: JSON.stringify({ plan_leads, price_per_lead })
+  });
+  if (r.ok) showToast('Saved');
+}
+
+async function resetPassword(id) {
+  const pw = document.getElementById(`pw_${id}`)?.value;
+  if (!pw || pw.length < 6) return alert('Password must be at least 6 characters');
+  const r = await fetch(`/api/admin/clients/${id}/password`, {
+    method: 'PUT', headers: adminHeaders(), body: JSON.stringify({ password: pw })
+  });
+  if (r.ok) { showToast('Password updated'); document.getElementById(`pw_${id}`).value = ''; }
+}
+
+async function deleteClient(id, username) {
+  if (!confirm(`Delete client "${username}"? This cannot be undone.`)) return;
+  await fetch(`/api/admin/clients/${id}`, { method: 'DELETE', headers: adminHeaders() });
+  fetchClients();
+}
+
+// ── Non-lead requests ──────────────────────────────────────
+async function fetchNonleadRequests() {
+  const r = await fetch('/api/admin/nonlead-requests', { headers: adminHeaders() });
+  if (!r.ok) return;
+  const requests = await r.json();
+  renderNonleadRequests(requests);
+}
+
+function renderNonleadRequests(requests) {
+  const badge = document.getElementById('nlrBadge');
+  if (requests.length) {
+    badge.textContent = requests.length;
+    badge.style.display = 'inline';
+  } else {
+    badge.style.display = 'none';
+  }
+
+  if (!requests.length) {
+    document.getElementById('nlrTable').innerHTML =
+      '<tr><td colspan="5" style="color:#9CA3AF;padding:1rem;">No pending requests.</td></tr>';
+    return;
+  }
+
+  document.getElementById('nlrTable').innerHTML = requests.map(req => `
+    <tr>
+      <td>
+        <div class="nlr-lead">${escHtml(req.lead_name) || '(unnamed)'}</div>
+        <div class="nlr-client" style="font-size:11px;font-family:monospace;">${escHtml(req.lead_email)}</div>
+      </td>
+      <td>
+        <div style="font-weight:600;font-size:13px;">${escHtml(req.username)}</div>
+        <div style="font-size:11px;color:#9CA3AF;">${escHtml(req.workspace_name)}</div>
+      </td>
+      <td><div class="nlr-reason">${escHtml(req.reason)}</div></td>
+      <td style="color:#9CA3AF;font-size:12px;white-space:nowrap;">${req.created_at?.split('T')[0] || '—'}</td>
+      <td>
+        <div style="display:flex;gap:6px;">
+          <button class="btn btn-sm btn-success" onclick="approveNLR(${req.id})">Approve</button>
+          <button class="btn btn-sm btn-danger"  onclick="rejectNLR(${req.id})">Reject</button>
+        </div>
+      </td>
+    </tr>`).join('');
+}
+
+async function approveNLR(id) {
+  const r = await fetch(`/api/admin/nonlead-requests/${id}/approve`, {
+    method: 'POST', headers: adminHeaders()
+  });
+  if (r.ok) { showToast('Approved — N8n webhook fired'); fetchNonleadRequests(); fetchClients(); }
+  else { const d = await r.json(); alert(d.error); }
+}
+
+async function rejectNLR(id) {
+  if (!confirm('Reject this non-lead request? The lead will stay in the client\'s inbox.')) return;
+  const r = await fetch(`/api/admin/nonlead-requests/${id}/reject`, {
+    method: 'POST', headers: adminHeaders()
+  });
+  if (r.ok) { showToast('Rejected — lead restored'); fetchNonleadRequests(); }
+}
+
+// ── Helpers ────────────────────────────────────────────────
+function showMsg(el, msg) { el.textContent = msg; el.style.display = 'block'; }
+function escHtml(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function escAttr(s) { return (s||'').replace(/'/g,"\\'"); }
+
+let toastTimer;
+function showToast(msg) {
+  clearTimeout(toastTimer);
+  const t = document.getElementById('toast');
+  if (!t) {
+    // Create toast if not in DOM
+    const el = document.createElement('div');
+    el.id = 'toast';
+    el.style.cssText = 'position:fixed;bottom:1.5rem;right:1.5rem;background:#065F46;color:white;font-size:13px;font-weight:600;padding:10px 18px;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.2);z-index:999;';
+    el.textContent = msg;
+    document.body.appendChild(el);
+    toastTimer = setTimeout(() => el.remove(), 3000);
+    return;
+  }
+  t.textContent = msg; t.style.display = 'block';
+  toastTimer = setTimeout(() => { t.style.display = 'none'; }, 3000);
+}
+
+// Auto-refresh non-lead requests every 30 seconds
+setInterval(() => fetchNonleadRequests(), 30000);
+
+// ── Manager management ────────────────────────────────────
+async function fetchManagers() {
+  const r = await fetch('/api/admin/managers', { headers: adminHeaders() });
+  if (!r.ok) return;
+  const managers = await r.json();
+  // Populate payslip manager dropdown
+  const sel = document.getElementById('payslipManager');
+  if (sel) {
+    sel.innerHTML = '<option value="">— Select manager —</option>' +
+      managers.map(m => `<option value="${escHtml(m.name)}">${escHtml(m.name)}</option>`).join('');
+  }
+  document.getElementById('managersTable').innerHTML = managers.length ? managers.map(m => `
+    <tr>
+      <td style="font-weight:600">${escHtml(m.name)}</td>
+      <td>
+        <div style="display:flex;gap:4px;align-items:center">
+          <span style="color:#6b7280;font-size:12px">R</span>
+          <input type="number" id="mgrSalary_${m.id}" value="${m.base_salary || 0}" min="0" step="100"
+            style="width:90px;padding:5px 8px;border:1px solid #E5E7EB;border-radius:6px;font-size:12px;outline:none">
+          <button onclick="updateMgrPay(${m.id})"
+            style="padding:5px 10px;background:#1F6F78;color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer">Save</button>
+        </div>
+      </td>
+      <td><input type="hidden" id="mgrComm_${m.id}" value="${m.commission_rate ?? 5}"></td>
+      <td>
+        <div style="display:flex;gap:6px">
+          <input type="password" id="mgrPw_${m.id}" placeholder="New password"
+            style="padding:5px 8px;border:1px solid #E5E7EB;border-radius:6px;font-size:12px;outline:none;width:130px">
+          <button onclick="updateMgrPassword(${m.id})"
+            style="padding:5px 10px;background:#1F6F78;color:#fff;border:none;border-radius:6px;font-size:12px;cursor:pointer">Update</button>
+        </div>
+      </td>
+      <td>
+        <button onclick="deleteManager(${m.id},'${escAttr(m.name)}')"
+          style="padding:5px 10px;background:#FEE2E2;color:#DC2626;border:none;border-radius:6px;font-size:12px;cursor:pointer">Remove</button>
+      </td>
+    </tr>`).join('') : '<tr><td colspan="5" style="text-align:center;padding:1.5rem;color:#9CA3AF">No managers yet</td></tr>';
+}
+
+async function updateMgrPay(id) {
+  const salary = parseFloat(document.getElementById('mgrSalary_' + id).value) || 0;
+  const commission_rate = parseFloat(document.getElementById('mgrComm_' + id).value) ?? 15;
+  const r = await fetch(`/api/admin/managers/${id}`, {
+    method: 'PUT', headers: adminHeaders(),
+    body: JSON.stringify({ base_salary: salary, commission_rate })
+  });
+  if (r.ok) { showToast('Saved'); } else { alert('Save failed'); }
+}
+
+async function createManager() {
+  const name = document.getElementById('mgrNameInput').value.trim();
+  const pass = document.getElementById('mgrPassInput').value;
+  if (!name || !pass) return alert('Enter name and password');
+  const r = await fetch('/api/admin/managers', { method:'POST', headers: adminHeaders(), body: JSON.stringify({ name, password: pass }) });
+  const j = await r.json();
+  if (!r.ok) return alert(j.error || 'Error');
+  document.getElementById('mgrNameInput').value = '';
+  document.getElementById('mgrPassInput').value = '';
+  fetchManagers();
+}
+
+async function updateMgrPassword(id) {
+  const pass = document.getElementById('mgrPw_' + id).value;
+  if (!pass) return;
+  const r = await fetch(`/api/admin/managers/${id}/password`, { method:'PUT', headers: adminHeaders(), body: JSON.stringify({ password: pass }) });
+  if (r.ok) { document.getElementById('mgrPw_' + id).value = ''; alert('Password updated'); }
+}
+
+async function deleteManager(id, name) {
+  if (!confirm(`Remove ${name}?`)) return;
+  await fetch(`/api/admin/managers/${id}`, { method:'DELETE', headers: adminHeaders() });
+  fetchManagers();
+}
+</script>
+</body>
+</html>

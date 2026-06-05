@@ -1,0 +1,950 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/favicon.svg">
+<meta name="theme-color" content="#050C29">
+<meta name="description" content="Ottaly Finance — revenue, costs, gross and net margins">
+<title>Ottaly — Finance</title>
+<script>document.write('<script src="/splash.js?v=' + Date.now() + '"><\/script>');</script>
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--purple:#7C89CD;
+  --yellow:#FFB700;--white:#fff;--bg:#F0F2F8;--card:#fff;
+  --border:#E2E6F0;--text:#050C29;--muted:#6B7280;
+  --green:#16A34A;--red:#DC2626;--amber:#D97706;
+}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text)}
+.header{background:var(--navy-dark);padding:1rem 2rem;border-bottom:3px solid var(--teal);display:flex;align-items:center;justify-content:space-between}
+.page{max-width:1500px;margin:0 auto;padding:2rem}
+.page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem;flex-wrap:wrap;gap:.75rem}
+.page-title{font-size:1.4rem;font-weight:700}
+.page-sub{font-size:13px;color:var(--muted);margin-top:2px}
+
+/* KPI cards */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1rem;margin-bottom:1.5rem}
+.kpi{background:var(--card);border-radius:12px;padding:1.1rem 1.25rem;border:1px solid var(--border);border-top:3px solid var(--navy);position:relative}
+.kpi.revenue  {border-top-color:var(--teal)}
+.kpi.cost     {border-top-color:var(--amber)}
+.kpi.gross    {border-top-color:var(--navy)}
+.kpi.opex     {border-top-color:#7C3AED}
+.kpi.net      {border-top-color:var(--green)}
+.kpi.margin   {border-top-color:var(--purple)}
+.kpi .label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+.kpi .val{font-size:1.5rem;font-weight:700;margin-top:4px}
+.kpi .sub{font-size:11px;color:var(--muted);margin-top:5px;line-height:1.4}
+.kpi .badge{position:absolute;top:.75rem;right:.75rem;font-size:11px;font-weight:700;padding:2px 7px;border-radius:20px}
+.badge-green{background:#D1FAE5;color:#065F46}
+.badge-red{background:#FEE2E2;color:#991B1B}
+.badge-gray{background:#F3F4F6;color:#6B7280}
+
+/* Section header */
+.sec-h{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin:1.25rem 0 .6rem}
+.sec-h:first-of-type{margin-top:0}
+
+/* Tables */
+.tbl-wrap{background:var(--card);border-radius:12px;border:1px solid var(--border);overflow:hidden;margin-bottom:1.25rem}
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead{background:#F8F9FC}
+th{padding:10px 14px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);border-bottom:1px solid var(--border);white-space:nowrap}
+td{padding:11px 14px;border-bottom:1px solid var(--border);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr.total-row td{font-weight:700;background:#F8F9FC;border-top:2px solid var(--border)}
+tr:hover:not(.total-row) td{background:#FAFBFF}
+
+/* Two-column layout for bottom section */
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:1rem;align-items:start}
+
+/* Inline form */
+.add-form{display:flex;gap:.5rem;flex-wrap:wrap;padding:.75rem 1rem;background:#F8F9FC;border-top:1px solid var(--border)}
+.add-form input,.add-form select{padding:7px 9px;border:1px solid var(--border);border-radius:7px;font-size:13px;font-family:inherit;outline:none;background:#fff}
+.add-form input:focus,.add-form select:focus{border-color:var(--purple)}
+.add-form input[type=number]{width:90px}
+.add-form input[type=month]{width:130px}
+/* Expense type toggle */
+.exp-type-toggle{display:flex;border:1px solid var(--border);border-radius:7px;overflow:hidden;flex-shrink:0}
+.exp-type-btn{padding:6px 11px;font-size:12px;font-weight:600;cursor:pointer;border:none;background:#fff;color:var(--muted);font-family:inherit;transition:all .12s;white-space:nowrap}
+.exp-type-btn.active.recurring{background:#DBEAFE;color:#1D4ED8}
+.exp-type-btn.active.oneoff{background:#FEF3C7;color:#B45309}
+/* Expense filter tabs */
+.exp-filter{display:flex;gap:4px;padding:.5rem 1rem;border-bottom:1px solid var(--border)}
+.exp-filter-btn{padding:4px 10px;font-size:11.5px;font-weight:600;border-radius:5px;border:none;background:transparent;color:var(--muted);cursor:pointer;font-family:inherit}
+.exp-filter-btn.active{background:var(--navy);color:#fff}
+/* Badges in table */
+.exp-badge{font-size:10.5px;font-weight:700;padding:2px 6px;border-radius:4px;text-transform:uppercase;letter-spacing:.3px}
+.exp-badge.recurring{background:#DBEAFE;color:#1D4ED8}
+.exp-badge.oneoff{background:#FEF3C7;color:#B45309}
+
+/* Buttons */
+.btn{padding:7px 14px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;border:none;transition:all .15s}
+.btn:disabled{opacity:.6;cursor:not-allowed}
+.btn-primary{background:var(--navy);color:#fff}
+.btn-primary:hover:not(:disabled){background:#1a3370}
+.btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--border)}
+.btn-ghost:hover:not(:disabled){background:var(--bg);color:var(--text)}
+.btn-sm{padding:4px 9px;font-size:12px}
+.btn-danger{background:#FEE2E2;color:var(--red);border:1px solid #FECACA}
+.btn-danger:hover{background:#FECACA}
+
+/* Pill */
+.pill{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600}
+.pill-green{background:#D1FAE5;color:#065F46}
+.pill-red{background:#FEE2E2;color:#991B1B}
+.pill-gray{background:#F3F4F6;color:#4B5563}
+
+/* Month picker */
+.month-bar{display:flex;gap:.5rem;align-items:center;margin-bottom:1rem}
+.month-bar input[type=month]{padding:7px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;font-family:inherit;outline:none;background:#fff}
+.month-bar input[type=month]:focus{border-color:var(--purple)}
+
+.empty{text-align:center;padding:2rem;color:var(--muted);font-size:13px}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--navy);border-radius:50%;animation:spin .8s linear infinite;vertical-align:-2px;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.toast{position:fixed;bottom:1.5rem;right:1.5rem;background:var(--navy-dark);color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;font-weight:500;opacity:0;transform:translateY(10px);transition:all .3s;z-index:9999}
+.toast.show{opacity:1;transform:translateY(0)}
+.editable{background:transparent;border:1px solid transparent;border-radius:5px;padding:3px 5px;font-size:13px;font-family:inherit;width:80px;text-align:right}
+.editable:hover{border-color:var(--border)}
+.editable:focus{outline:none;border-color:var(--purple);background:#fff}
+
+/* sticky header */
+.header{position:sticky;top:0;z-index:200}
+.header>div:first-child{flex:1;min-width:0;overflow:hidden;display:flex;align-items:center;gap:.5rem}
+
+@media(max-width:1024px){
+  .two-col{grid-template-columns:1fr}
+}
+@media(max-width:768px){
+  .header{padding:.75rem 1rem}
+  .page{padding:1rem}
+  .page-header{flex-direction:column;align-items:flex-start;gap:.75rem}
+  .page-header .month-bar{width:100%;flex-wrap:wrap}
+  /* Charts stack */
+  .charts-grid{grid-template-columns:1fr !important}
+  /* KPIs: 2 per row on mobile */
+  .kpis{grid-template-columns:1fr 1fr;gap:.75rem}
+  .kpi .val{font-size:1.25rem}
+  /* Tables scroll */
+  .tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .tbl-wrap table{min-width:520px}
+  /* Two-col stacks */
+  .two-col{grid-template-columns:1fr}
+  /* Add form wraps */
+  .add-form{flex-wrap:wrap}
+  .add-form input[type=number]{width:80px}
+}
+@media(max-width:480px){
+  .kpis{grid-template-columns:1fr 1fr}
+  .kpi .val{font-size:1.15rem}
+}
+</style>
+    <script src="/nav.js" defer></script>
+</head>
+<body>
+
+
+<div class="page">
+
+  <div class="page-header">
+    <div>
+      <div class="page-title">Finance</div>
+      <div class="page-sub">Monthly P&L per client · agency gross & net · infra cost breakdown · recurring expenses</div>
+    </div>
+    <div class="month-bar" style="gap:.75rem">
+      <label style="font-size:13px;color:var(--muted)">Month</label>
+      <input type="month" id="monthPicker" onchange="loadSnapshot()">
+      <span id="fxBadge" style="font-size:12px;color:var(--muted);margin-left:.5rem;padding:5px 10px;border:1px solid var(--border);border-radius:8px;background:var(--card)"
+        title="Historical ECB rates for the selected month, auto-fetched from frankfurter.app">FX: loading…</span>
+    </div>
+  </div>
+
+  <!-- Monthly trend charts -->
+  <div class="charts-grid" style="display:grid;grid-template-columns:2fr 1fr;gap:1rem;margin-bottom:1.5rem">
+    <div style="background:var(--card);border-radius:12px;border:1px solid var(--border);padding:1.25rem">
+      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:1rem">Revenue vs Gross Profit — last 12 months</div>
+      <canvas id="trendChart" height="90"></canvas>
+    </div>
+    <div style="background:var(--card);border-radius:12px;border:1px solid var(--border);padding:1.25rem">
+      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:1rem">Net margin %</div>
+      <canvas id="marginChart" height="90"></canvas>
+    </div>
+  </div>
+
+  <!-- KPIs -->
+  <div class="kpis" id="kpis">
+    <div class="kpi revenue"><div class="label">Revenue</div><div class="val" id="k_rev">—</div><div class="sub" id="k_rev_sub"></div></div>
+    <div class="kpi cost"><div class="label">Mailbox infra</div><div class="val" id="k_cost">—</div><div class="sub" id="k_cost_sub"></div></div>
+    <div class="kpi gross"><div class="label">Gross profit</div><div class="val" id="k_gross">—</div><div class="sub" id="k_gross_sub"></div></div>
+    <div class="kpi opex"><div class="label">Other expenses</div><div class="val" id="k_opex">—</div><div class="sub" id="k_opex_sub"></div></div>
+    <div class="kpi" style="border-left:3px solid #8b5cf6"><div class="label">Staff costs</div><div class="val" id="k_staff">—</div><div class="sub" id="k_staff_sub"></div></div>
+    <div class="kpi net"><div class="label">Net profit</div><div class="val" id="k_net">—</div><div class="sub" id="k_net_sub"></div></div>
+    <div class="kpi margin"><div class="label">Net margin</div><div class="val" id="k_margin">—</div></div>
+  </div>
+
+  <!-- Per-client P&L -->
+  <div class="sec-h">Per-client breakdown</div>
+  <div class="tbl-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Client</th>
+          <th style="text-align:right">Leads delivered</th>
+          <th style="text-align:right">Revenue</th>
+          <th style="text-align:right">Mailboxes</th>
+          <th style="text-align:right">Infra cost</th>
+          <th style="text-align:right">Gross profit</th>
+          <th style="text-align:right">Gross margin</th>
+          <th style="text-align:right" title="Return on Investment: Revenue ÷ Mailbox cost">ROI</th>
+        </tr>
+      </thead>
+      <tbody id="clientRows"></tbody>
+    </table>
+  </div>
+
+  <!-- Manual revenue entries -->
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-top:1.5rem">
+    <div class="sec-h" style="margin:0">Manual revenue entries</div>
+    <button class="btn btn-sm btn-ghost" onclick="toggleManualSection()">+ Add entry</button>
+  </div>
+  <div id="manualSection" style="display:none;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1rem;margin-top:.5rem">
+    <form id="manualEntryForm" onsubmit="addManualEntry(event)" style="display:flex;gap:.75rem;flex-wrap:wrap;align-items:flex-end;margin-bottom:1rem">
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <label style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">Client</label>
+        <select id="me_workspace" required style="padding:6px 10px;border:1px solid var(--border);border-radius:7px;font-size:13px;background:var(--bg);color:var(--text);font-family:inherit;min-width:180px">
+          <option value="">Select client…</option>
+        </select>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <label style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">Month</label>
+        <input type="month" id="me_month" required style="padding:6px 10px;border:1px solid var(--border);border-radius:7px;font-size:13px;background:var(--bg);color:var(--text);font-family:inherit">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <label style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">Leads</label>
+        <input type="number" id="me_count" min="1" step="1" required placeholder="e.g. 5" style="width:90px;padding:6px 10px;border:1px solid var(--border);border-radius:7px;font-size:13px;background:var(--bg);color:var(--text);font-family:inherit">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <label style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">£ / lead</label>
+        <input type="number" id="me_price" min="0" step="0.01" required placeholder="e.g. 75.00" style="width:110px;padding:6px 10px;border:1px solid var(--border);border-radius:7px;font-size:13px;background:var(--bg);color:var(--text);font-family:inherit">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <label style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">Note</label>
+        <input type="text" id="me_note" placeholder="e.g. Pre-system leads" style="width:200px;padding:6px 10px;border:1px solid var(--border);border-radius:7px;font-size:13px;background:var(--bg);color:var(--text);font-family:inherit">
+      </div>
+      <button type="submit" class="btn btn-primary btn-sm">Add</button>
+    </form>
+    <div id="manualEntriesTable"></div>
+  </div>
+
+  <!-- Infra spend by supplier + bottom editing -->
+  <div class="two-col">
+
+    <!-- Infra by supplier -->
+    <div>
+      <div class="sec-h">Infra cost by supplier</div>
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Supplier</th>
+              <th style="text-align:right">Mailboxes</th>
+              <th style="text-align:right">$/month</th>
+            </tr>
+          </thead>
+          <tbody id="supplierRows"></tbody>
+        </table>
+      </div>
+
+      <!-- Mailbox pricing editor -->
+      <div class="sec-h">Mailbox pricing</div>
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Supplier</th>
+              <th>Type</th>
+              <th style="text-align:right">$/mo each</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody id="pricingRows"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Operating expenses editor -->
+    <div>
+      <div class="sec-h" style="display:flex;align-items:center;justify-content:space-between">
+        Expenses
+        <div class="exp-filter">
+          <button class="exp-filter-btn active" id="expFilter-all"      onclick="setExpFilter('all')">All</button>
+          <button class="exp-filter-btn"         id="expFilter-recurring" onclick="setExpFilter('recurring')">Recurring</button>
+          <button class="exp-filter-btn"         id="expFilter-oneoff"    onclick="setExpFilter('oneoff')">One-off</button>
+        </div>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Expense</th>
+              <th>Category</th>
+              <th>Type</th>
+              <th style="text-align:right">Amount</th>
+              <th>From</th>
+              <th>Until</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="expenseRows"></tbody>
+        </table>
+        <form class="add-form" onsubmit="addExpense(event)">
+          <div class="exp-type-toggle">
+            <button type="button" class="exp-type-btn active recurring" id="exTypeRecurring" onclick="setExpType('recurring')">↻ Recurring</button>
+            <button type="button" class="exp-type-btn oneoff"           id="exTypeOneoff"    onclick="setExpType('oneoff')">✦ One-off</button>
+          </div>
+          <input type="text" id="ex_label" placeholder="Label (e.g. Reacher)" required style="flex:1;min-width:120px">
+          <input type="text" id="ex_cat" placeholder="Category" style="width:100px">
+          <input type="number" id="ex_amount" placeholder="Amount" min="0" step="0.01" required style="width:90px">
+          <select id="ex_currency" style="padding:7px 8px;border:1px solid var(--border);border-radius:7px;font-size:13px;font-family:inherit;outline:none">
+            <option value="GBP">£ GBP</option>
+            <option value="USD">$ USD</option>
+            <option value="EUR">€ EUR</option>
+            <option value="ZAR">R ZAR</option>
+          </select>
+          <input type="month" id="ex_start" required>
+          <input type="month" id="ex_end" placeholder="Until (blank = ongoing)" style="width:130px" title="Leave blank for ongoing">
+          <button type="submit" class="btn btn-primary btn-sm">+ Add</button>
+        </form>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Billing Reconciliation -->
+  <div class="sec-h" style="display:flex;align-items:center;justify-content:space-between;margin-top:1.5rem">
+    Mithun billing reconciliation
+    <span style="font-size:11px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">Set $/box rate and statement amount per row to reconcile</span>
+  </div>
+  <div class="tbl-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Client</th>
+          <th style="text-align:center">Renewal day</th>
+          <th style="text-align:center" title="Next billing date">Next renewal</th>
+          <th style="text-align:right">Google</th>
+          <th style="text-align:right">Microsoft</th>
+          <th style="text-align:right">SMTP</th>
+          <th style="text-align:right">Total boxes</th>
+          <th style="text-align:right" title="Cost per mailbox per month — edit to override">$/box</th>
+          <th style="text-align:right">Expected $</th>
+          <th style="text-align:right" title="Amount from your bank statement / supplier invoice">Statement $</th>
+          <th style="text-align:right">Diff</th>
+        </tr>
+      </thead>
+      <tbody id="billingCycleRows"></tbody>
+    </table>
+  </div>
+  <div id="billingCycleTotals" style="display:none;background:#F8F9FC;border:1px solid var(--border);border-radius:10px;padding:.75rem 1rem;font-size:13px;margin-top:-.75rem;margin-bottom:1rem"></div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let snapshot = null;
+let allExpenses = [];
+let manualEntries = [];
+let expenseFilter = 'all'; // 'all' | 'recurring' | 'oneoff'
+let expenseType   = 'recurring'; // current add-form type
+
+function isOneOff(e) { return e.end_month && e.end_month === e.start_month; }
+
+function setExpType(type) {
+  expenseType = type;
+  document.getElementById('exTypeRecurring').classList.toggle('active', type === 'recurring');
+  document.getElementById('exTypeOneoff').classList.toggle('active', type === 'oneoff');
+  const endEl = document.getElementById('ex_end');
+  if (type === 'oneoff') {
+    endEl.style.display = 'none';
+    endEl.value = '';
+  } else {
+    endEl.style.display = '';
+  }
+}
+
+function setExpFilter(f) {
+  expenseFilter = f;
+  ['all','recurring','oneoff'].forEach(v => {
+    document.getElementById('expFilter-' + v).classList.toggle('active', v === f);
+  });
+  renderExpenses();
+}
+let allPricing  = [];
+let trendChartInst = null;
+let marginChartInst = null;
+
+// Exchange rates → GBP. Mailbox costs are in USD; expenses may be
+// entered in GBP, USD, or ZAR. Everything is displayed in £.
+// FX rates auto-fetched from /api/finance/fx-rates for the selected month.
+// Multiplier interpretation: rate of 0.79 for USD means £0.79 per $1.
+// Hardcoded fallback used only if the API call fails on first load.
+let FX = { GBP: 1, USD: 0.79, EUR: 0.85, ZAR: 0.042 };
+
+// Back-compat helpers for any callers still reading the old globals.
+function _usd() { return FX.USD || 0.79; }
+function _zar() { return FX.ZAR || 0.042; }
+
+fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true})).then(s=>{
+  if (s.ok === false) { location.href = '/login.html'; return; }
+  const nameEl = document.getElementById('sessionName');
+  const signEl = document.getElementById('signOutBtn');
+  if (nameEl) nameEl.textContent = s.name || '';
+  if (signEl) signEl.style.display = '';
+  const now = new Date();
+  document.getElementById('monthPicker').value =
+    now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0');
+  populateClientDropdown();
+  loadSnapshot();
+});
+
+async function loadFxRates(month) {
+  try {
+    const r = await fetch(`/api/finance/fx-rates?month=${month}`);
+    if (!r.ok) throw new Error(r.status);
+    const data = await r.json();
+    FX = { GBP: 1, ...Object.fromEntries(Object.entries(data.rates || {}).filter(([,v]) => v)) };
+    const badge = document.getElementById('fxBadge');
+    if (badge) {
+      const parts = [
+        `$1 = £${(FX.USD||0).toFixed(3)}`,
+        `€1 = £${(FX.EUR||0).toFixed(3)}`,
+        `R1 = £${(FX.ZAR||0).toFixed(4)}`,
+      ];
+      badge.textContent = `FX ${month}: ${parts.join(' · ')}${data.fallback ? ' (fallback)' : ''}`;
+      badge.title = data.fallback
+        ? `FX API unavailable — using fallback rates. ${data.error || ''}`
+        : `ECB rates from frankfurter.app for ${month}-01 (or nearest trading day).`;
+    }
+  } catch (err) {
+    console.warn('[finance] FX load failed:', err.message);
+  }
+}
+
+function toast(msg, err){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.background = err ? '#DC2626' : '#050C29';
+  t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'), 3000);
+}
+
+// fmt() outputs in GBP. Currency param picks the FX rate for the
+// currently-selected month (FX map populated by loadFxRates()).
+function toGBP(v, currency){
+  const c = (currency || 'GBP').toUpperCase();
+  const rate = FX[c];
+  if (rate == null) return v || 0; // unknown currency → leave as-is
+  return (v || 0) * rate;
+}
+function fmt(v, currency){
+  return '£' + toGBP(v, currency).toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+function fmtUSD(v){ return '$' + (v||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function pct(v){ return v == null ? '—' : (v*100).toFixed(1)+'%'; }
+function marginBadge(m){
+  if (m == null) return '';
+  if (m >= 0.4) return `<span class="badge badge-green">${pct(m)}</span>`;
+  if (m >= 0.1) return `<span class="badge badge-gray">${pct(m)}</span>`;
+  return `<span class="badge badge-red">${pct(m)}</span>`;
+}
+
+async function loadSnapshot() {
+  const month = document.getElementById('monthPicker').value;
+  if (!month) return;
+  // Load FX rates for this month first — every conversion below depends on them.
+  await loadFxRates(month);
+  try {
+    const [snapRes, expRes, priceRes, manualRes] = await Promise.all([
+      fetch(`/api/finance/snapshot?month=${month}`),
+      fetch('/api/finance/expenses'),
+      fetch('/api/finance/pricing'),
+      fetch(`/api/revenue/manual-entries?month=${month}`),
+    ]);
+    // Surface auth / server errors explicitly rather than swallowing them.
+    if (!snapRes.ok) {
+      const txt = await snapRes.text().catch(() => '');
+      document.getElementById('fxBadge').textContent = `Error ${snapRes.status}: ${txt.slice(0,120)}`;
+      document.getElementById('fxBadge').style.color = '#DC2626';
+      return;
+    }
+    if (!expRes.ok)   { toast(`Expenses: ${expRes.status}`, true); return; }
+    if (!priceRes.ok) { toast(`Pricing: ${priceRes.status}`, true); return; }
+
+    snapshot    = await snapRes.json();
+    allExpenses = (await expRes.json()).rows  || [];
+    allPricing  = (await priceRes.json()).rows || [];
+    manualEntries = manualRes.ok ? (await manualRes.json()) : [];
+
+    // Staff costs are computed server-side in buildFinanceSnapshot and returned
+    // in snapshot.staff / snapshot.totals.staff_cost — no client-side recalc needed.
+    try { renderKpis();          } catch(e) { console.error('renderKpis failed:', e); }
+    try { renderClients();       } catch(e) { console.error('renderClients failed:', e); }
+    try { renderManualEntries(); } catch(e) { console.error('renderManualEntries failed:', e); }
+    try { renderSuppliers();     } catch(e) { console.error('renderSuppliers failed:', e); }
+    try { renderExpenses();      } catch(e) { console.error('renderExpenses failed:', e); }
+    try { renderPricing();       } catch(e) { console.error('renderPricing failed:', e); }
+    populateClientDropdown();
+    loadTrend();
+    loadBillingCycles();
+  } catch (err) {
+    toast('Load failed: ' + err.message, true);
+  }
+}
+
+function renderKpis() {
+  const t = snapshot.totals || {};
+  // Mailbox costs are stored in USD in the DB; everything else is GBP.
+  // Convert using the live exchange rate before display.
+  const mailboxCostGBP = toGBP(t.mailbox_cost, 'USD');
+  const opexGBP   = t.opex || 0;
+  const staffCost = t.staff_cost || 0;
+  const grossGBP  = (t.revenue || 0) - mailboxCostGBP;
+  const netGBP    = grossGBP - opexGBP - staffCost;
+  const netMargin = t.revenue > 0 ? netGBP / t.revenue : null;
+  document.getElementById('k_rev').textContent   = fmt(t.revenue);
+  document.getElementById('k_rev_sub').textContent = (snapshot.clients||[]).length + ' clients · ' + (snapshot.clients||[]).reduce((s,c)=>s+c.delivered,0) + ' leads';
+  document.getElementById('k_cost').textContent  = fmt(mailboxCostGBP);
+  document.getElementById('k_cost_sub').textContent = (t.mailbox_total||0) + ' mailboxes · $1 = £' + (FX.USD || 0).toFixed(3);
+  document.getElementById('k_gross').textContent = fmt(grossGBP);
+  document.getElementById('k_gross_sub').textContent = t.revenue > 0 ? 'Margin: ' + pct(grossGBP / t.revenue) : '';
+  document.getElementById('k_opex').textContent  = fmt(opexGBP);
+  document.getElementById('k_opex_sub').textContent = (snapshot.expenses||[]).length + ' active expense(s)';
+  const staffRows = snapshot.staff || [];
+  document.getElementById('k_staff').textContent = fmt(staffCost);
+  document.getElementById('k_staff_sub').textContent = staffRows.length
+    ? staffRows.map(m => `${m.name}: R${(m.base_salary_zar||0).toLocaleString()} (£${m.base_salary.toFixed(0)}) + £${m.commission.toFixed(0)}`).join(' · ')
+    : 'No staff costs set';
+  document.getElementById('k_net').textContent   = fmt(netGBP);
+  document.getElementById('k_net_sub').innerHTML = marginBadge(netMargin);
+  document.getElementById('k_margin').textContent = netMargin != null ? pct(netMargin) : '—';
+  document.querySelector('.kpi.net .val').style.color = netGBP >= 0 ? 'var(--green)' : 'var(--red)';
+}
+
+function renderClients() {
+  const clients = (snapshot.clients || []);
+  const totals  = snapshot.totals   || {};
+  const tbody   = document.getElementById('clientRows');
+  if (!clients.length) {
+    tbody.innerHTML = `<tr><td colspan="7" class="empty">No client revenue data for this month.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = clients.map(c => {
+    const costGBP  = toGBP(c.mailbox_cost, 'USD');
+    const grossGBP = c.revenue - costGBP;
+    const margin   = c.revenue > 0 ? grossGBP / c.revenue : null;
+    const neg = grossGBP < 0;
+    const manualBadge = c.manual_leads > 0
+      ? ` <span title="${c.manual_leads} manual lead(s) · ${fmt(c.manual_revenue)}" style="font-size:10px;background:#EDE9FE;color:#6D28D9;padding:1px 6px;border-radius:3px;cursor:help">manual</span>`
+      : '';
+    return `
+      <tr>
+        <td>
+          <div style="font-weight:600">${c.workspace_name}${c.client_status==='inactive'?' <span style="font-size:10px;background:#F3F4F6;color:#6B7280;padding:1px 5px;border-radius:3px">Inactive</span>':''}${manualBadge}</div>
+          <div style="font-size:11px;color:var(--muted)">${c.workspace_id}</div>
+        </td>
+        <td style="text-align:right">${c.delivered}</td>
+        <td style="text-align:right;font-weight:600">${fmt(c.revenue)}</td>
+        <td style="text-align:right;color:var(--muted)">${c.mailbox_count}</td>
+        <td style="text-align:right;color:var(--amber)">${fmt(costGBP)}</td>
+        <td style="text-align:right;font-weight:700;color:${neg?'var(--red)':'var(--green)'}">${fmt(grossGBP)}</td>
+        <td style="text-align:right">${margin != null ? `<span class="pill ${margin>=0.3?'pill-green':margin<0?'pill-red':'pill-gray'}">${pct(margin)}</span>` : '—'}</td>
+        <td style="text-align:right;font-weight:600;color:${costGBP > 0 ? (c.revenue/costGBP >= 3 ? 'var(--green)' : 'var(--amber)') : 'var(--muted)'}">
+          ${costGBP > 0 ? (c.revenue / costGBP).toFixed(1) + 'x' : '—'}
+        </td>
+      </tr>
+    `;
+  }).join('') + `
+    <tr class="total-row">
+      <td>Total</td>
+      <td style="text-align:right">${clients.reduce((s,c)=>s+c.delivered,0)}</td>
+      <td style="text-align:right">${fmt(totals.revenue)}</td>
+      <td style="text-align:right">${clients.reduce((s,c)=>s+c.mailbox_count,0)}</td>
+      <td style="text-align:right">${fmt(toGBP(totals.mailbox_cost,'USD'))}</td>
+      <td style="text-align:right;color:${(totals.revenue-toGBP(totals.mailbox_cost,'USD'))>=0?'var(--green)':'var(--red)'}">${fmt(totals.revenue-toGBP(totals.mailbox_cost,'USD'))}</td>
+      <td style="text-align:right">${totals.revenue>0?pct((totals.revenue-toGBP(totals.mailbox_cost,'USD'))/totals.revenue):'—'}</td>
+    </tr>
+  `;
+}
+
+function renderSuppliers() {
+  const rows  = (snapshot.bySupplier || []);
+  const tbody = document.getElementById('supplierRows');
+  if (!rows.length) { tbody.innerHTML = `<tr><td colspan="3" class="empty">No mailboxes tagged yet.</td></tr>`; return; }
+  tbody.innerHTML = rows.map(r => `
+    <tr>
+      <td><b>${r.supplier}</b></td>
+      <td style="text-align:right">${r.mailbox_count}</td>
+      <td style="text-align:right;font-weight:600">${fmt(toGBP(r.monthly_cost,'USD'))} <span style="font-size:10px;color:var(--muted)">(${fmtUSD(r.monthly_cost)})</span></td>
+    </tr>
+  `).join('') + `
+    <tr class="total-row">
+      <td>Total</td>
+      <td style="text-align:right">${rows.reduce((s,r)=>s+r.mailbox_count,0)}</td>
+      <td style="text-align:right">${fmt(toGBP(rows.reduce((s,r)=>s+r.monthly_cost,0),'USD'))}</td>
+    </tr>
+  `;
+}
+
+function renderPricing() {
+  const tbody = document.getElementById('pricingRows');
+  if (!allPricing.length) { tbody.innerHTML = `<tr><td colspan="4" class="empty">No pricing rows.</td></tr>`; return; }
+  tbody.innerHTML = allPricing.map(p => `
+    <tr>
+      <td>${p.supplier}</td>
+      <td>${p.mailbox_type}</td>
+      <td style="text-align:right">
+        <input class="editable" type="number" step="0.01" min="0" value="${parseFloat(p.unit_cost).toFixed(2)}"
+          onblur="savePricing('${p.supplier}','${p.mailbox_type}',this.value)"
+          onkeydown="if(event.key==='Enter')this.blur()">
+      </td>
+      <td style="font-size:12px;color:var(--muted)">${p.notes||''}</td>
+    </tr>
+  `).join('');
+}
+
+async function savePricing(supplier, mailbox_type, value) {
+  const unit_cost = parseFloat(value);
+  if (isNaN(unit_cost) || unit_cost < 0) return;
+  try {
+    const r = await fetch('/api/finance/pricing', {
+      method: 'PUT', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ supplier, mailbox_type, unit_cost }),
+    });
+    if (!r.ok) { toast('Save failed', true); return; }
+    toast('Pricing updated');
+    loadSnapshot();
+  } catch (err) { toast(err.message, true); }
+}
+
+function renderExpenses() {
+  const month = document.getElementById('monthPicker').value;
+  const tbody = document.getElementById('expenseRows');
+  const filtered = allExpenses.filter(e => {
+    if (expenseFilter === 'recurring') return !isOneOff(e);
+    if (expenseFilter === 'oneoff')    return isOneOff(e);
+    return true;
+  });
+  if (!filtered.length) {
+    tbody.innerHTML = `<tr><td colspan="7" class="empty">${allExpenses.length ? 'No ' + expenseFilter + ' expenses.' : 'No expenses yet. Add one below.'}</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = filtered.map(e => {
+    const active  = (e.start_month <= month) && (!e.end_month || e.end_month >= month);
+    const oneOff  = isOneOff(e);
+    const typeLabel = oneOff
+      ? '<span class="exp-badge oneoff">One-off</span>'
+      : '<span class="exp-badge recurring">Recurring</span>';
+    const untilText = oneOff ? '<span style="color:var(--muted);font-size:11px">—</span>'
+                    : (e.end_month || '<span style="color:var(--green);font-size:11px">ongoing</span>');
+    return `
+      <tr${active ? '' : ' style="opacity:.5"'}>
+        <td style="font-weight:600">${e.label}${active ? '' : ' <span style="color:var(--muted);font-size:11px">(inactive)</span>'}</td>
+        <td style="font-size:12px;color:var(--muted)">${e.category||''}</td>
+        <td>${typeLabel}</td>
+        <td style="text-align:right;font-weight:600">${fmt(parseFloat(e.amount), e.currency||'GBP')}</td>
+        <td style="font-size:12px">${e.start_month}</td>
+        <td style="font-size:12px">${untilText}</td>
+        <td style="text-align:right">
+          <button class="btn btn-sm btn-danger" onclick="deleteExpense(${e.id})">✕</button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+async function addExpense(ev) {
+  ev.preventDefault();
+  const label      = document.getElementById('ex_label').value.trim();
+  const category   = document.getElementById('ex_cat').value.trim() || null;
+  const amount     = parseFloat(document.getElementById('ex_amount').value);
+  const currency   = document.getElementById('ex_currency').value || 'GBP';
+  const start_month= document.getElementById('ex_start').value;
+  const end_month  = expenseType === 'oneoff' ? start_month : (document.getElementById('ex_end').value || null);
+  if (!label || !amount || !start_month) return;
+  try {
+    const r = await fetch('/api/finance/expenses', {
+      method: 'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ label, category, amount, currency, start_month, end_month }),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Failed', true); return; }
+    document.getElementById('ex_label').value = '';
+    document.getElementById('ex_cat').value   = '';
+    document.getElementById('ex_amount').value= '';
+    document.getElementById('ex_start').value = '';
+    document.getElementById('ex_end').value   = '';
+    toast('Expense added');
+    allExpenses = [...allExpenses, d.row];
+    renderExpenses();
+    loadSnapshot();
+  } catch (err) { toast(err.message, true); }
+}
+
+async function deleteExpense(id) {
+  if (!confirm('Remove this expense?')) return;
+  try {
+    await fetch(`/api/finance/expenses/${id}`, { method: 'DELETE' });
+    allExpenses = allExpenses.filter(e => e.id !== id);
+    renderExpenses();
+    loadSnapshot();
+    toast('Expense removed');
+  } catch (err) { toast(err.message, true); }
+}
+
+async function loadTrend() {
+  try {
+    const r = await fetch('/api/finance/trend');
+    if (!r.ok) return;
+    const { months } = await r.json();
+    if (!months || !months.length) return;
+
+    const labels  = months.map(m => m.month);
+    const revenue = months.map(m => m.revenue);
+    const gross   = months.map(m => m.revenue - toGBP(m.mailbox_cost, 'USD') - m.opex);
+    const margins = months.map(m => m.revenue > 0 ? ((m.revenue - toGBP(m.mailbox_cost,'USD') - m.opex) / m.revenue * 100) : 0);
+
+    const defaults = {
+      responsive: true,
+      plugins: { legend: { position: 'top', labels: { boxWidth: 10, font: { size: 11 } } } },
+      scales: { y: { ticks: { font: { size: 11 } }, grid: { color: '#F0F2F8' } }, x: { ticks: { font: { size: 11 } } } }
+    };
+
+    if (trendChartInst) trendChartInst.destroy();
+    trendChartInst = new Chart(document.getElementById('trendChart'), {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [
+          { label: 'Revenue', data: revenue, backgroundColor: 'rgba(31,111,120,0.7)', borderRadius: 4 },
+          { label: 'Net Profit', data: gross, backgroundColor: 'rgba(34,67,136,0.7)', borderRadius: 4 },
+        ]
+      },
+      options: { ...defaults, interaction: { mode: 'index' } }
+    });
+
+    if (marginChartInst) marginChartInst.destroy();
+    marginChartInst = new Chart(document.getElementById('marginChart'), {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Net margin %',
+          data: margins.map(v => +v.toFixed(1)),
+          borderColor: '#7C89CD',
+          backgroundColor: 'rgba(124,137,205,0.1)',
+          fill: true,
+          tension: 0.3,
+          pointRadius: 3,
+        }]
+      },
+      options: {
+        ...defaults,
+        scales: {
+          y: { ticks: { callback: v => v + '%', font: { size: 11 } }, grid: { color: '#F0F2F8' } },
+          x: { ticks: { font: { size: 11 } } }
+        }
+      }
+    });
+  } catch(e) { console.warn('trend chart failed:', e); }
+}
+
+// ── Billing Reconciliation ──────────────────────────────────────
+let _billingCycles = [];
+const _stmtAmounts = {}; // key → user-entered statement $
+const _rateOverrides = {}; // key → user-entered $/box rate
+
+// ── Manual revenue entries ───────────────────────────────────────
+let _manualSectionOpen = false;
+
+function toggleManualSection() {
+  _manualSectionOpen = !_manualSectionOpen;
+  document.getElementById('manualSection').style.display = _manualSectionOpen ? '' : 'none';
+  if (_manualSectionOpen) {
+    const month = document.getElementById('monthPicker').value;
+    if (month) document.getElementById('me_month').value = month;
+  }
+}
+
+async function populateClientDropdown() {
+  const sel = document.getElementById('me_workspace');
+  const current = sel.value;
+  try {
+    const r = await fetch('/api/admin/clients');
+    const all = r.ok ? await r.json() : [];
+    const sorted = all.slice().sort((a,b) => (a.workspace_name||'').localeCompare(b.workspace_name||''));
+    sel.innerHTML = '<option value="">Select client…</option>' +
+      sorted.map(c => `<option value="${c.workspace_id}"${c.workspace_id===current?' selected':''}>${c.workspace_name}${c.client_status==='inactive'?' (inactive)':''}</option>`).join('');
+  } catch {}
+}
+
+function renderManualEntries() {
+  const el = document.getElementById('manualEntriesTable');
+  if (!manualEntries.length) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--muted);padding:4px 0">No manual entries for this month.</div>';
+    return;
+  }
+  const clientMap = {};
+  (snapshot?.clients || []).forEach(c => { clientMap[c.workspace_id] = c.workspace_name; });
+  el.innerHTML = `<table style="width:100%;font-size:12px">
+    <thead><tr>
+      <th style="text-align:left;padding:4px 8px;color:var(--muted)">Client</th>
+      <th style="text-align:right;padding:4px 8px;color:var(--muted)">Leads</th>
+      <th style="text-align:right;padding:4px 8px;color:var(--muted)">£/lead</th>
+      <th style="text-align:right;padding:4px 8px;color:var(--muted)">Revenue</th>
+      <th style="text-align:left;padding:4px 8px;color:var(--muted)">Note</th>
+      <th></th>
+    </tr></thead>
+    <tbody>
+    ${manualEntries.map(e => {
+      const name = clientMap[e.workspace_id] || e.workspace_id;
+      const rev  = e.lead_count * Number(e.price_per_lead);
+      return `<tr style="border-top:1px solid var(--border)">
+        <td style="padding:5px 8px;font-weight:600">${name}</td>
+        <td style="text-align:right;padding:5px 8px">${e.lead_count}</td>
+        <td style="text-align:right;padding:5px 8px">${fmt(Number(e.price_per_lead))}</td>
+        <td style="text-align:right;padding:5px 8px;font-weight:700">${fmt(rev)}</td>
+        <td style="padding:5px 8px;color:var(--muted)">${e.note || '—'}</td>
+        <td style="padding:5px 8px"><button class="btn btn-sm btn-danger" onclick="deleteManualEntry(${e.id})">✕</button></td>
+      </tr>`;
+    }).join('')}
+    </tbody>
+  </table>`;
+}
+
+async function addManualEntry(ev) {
+  ev.preventDefault();
+  const workspace_id   = document.getElementById('me_workspace').value;
+  const month          = document.getElementById('me_month').value;
+  const lead_count     = document.getElementById('me_count').value;
+  const price_per_lead = document.getElementById('me_price').value;
+  const note           = document.getElementById('me_note').value;
+  if (!workspace_id || !month || !lead_count || !price_per_lead) return toast('All fields required', true);
+  try {
+    const r = await fetch('/api/revenue/manual-entries', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspace_id, month, lead_count: parseInt(lead_count), price_per_lead: parseFloat(price_per_lead), note }),
+    });
+    const d = await r.json();
+    if (!r.ok) return toast(d.error || 'Failed', true);
+    toast('Entry added');
+    document.getElementById('manualEntryForm').reset();
+    await loadSnapshot();
+  } catch (err) { toast(err.message, true); }
+}
+
+async function deleteManualEntry(id) {
+  if (!confirm('Remove this manual revenue entry?')) return;
+  try {
+    const r = await fetch(`/api/revenue/manual-entries/${id}`, { method: 'DELETE' });
+    if (!r.ok) { const d = await r.json(); return toast(d.error || 'Failed', true); }
+    toast('Entry removed');
+    await loadSnapshot();
+  } catch (err) { toast(err.message, true); }
+}
+
+async function loadBillingCycles() {
+  try {
+    const r = await fetch('/api/finance/billing-cycles');
+    if (!r.ok) return;
+    const { rows } = await r.json();
+    _billingCycles = (rows || []).filter(r => r.supplier === 'Mithun');
+    renderBillingCycles();
+  } catch(e) { console.warn('billing cycles load failed:', e); }
+}
+
+function renderBillingCycles() {
+  const rows = _billingCycles;
+  const tbody = document.getElementById('billingCycleRows');
+
+  let totalExpected = 0, totalStatement = 0, overchargeCount = 0;
+
+  tbody.innerHTML = rows.map(r => {
+    const key = `${r.supplier}||${r.client}`;
+
+    // $/box: user override → pricing from server → 0
+    const rateOverride = _rateOverrides[key];
+    const serverRate   = r.total_count > 0 ? r.total_cost / r.total_count : 0;
+    const rate         = rateOverride !== undefined && rateOverride !== '' ? parseFloat(rateOverride) : (serverRate || null);
+    const expected     = rate !== null ? rate * r.total_count : 0;
+
+    const stmtVal  = _stmtAmounts[key];
+    const stmtNum  = stmtVal !== undefined && stmtVal !== '' ? parseFloat(stmtVal) : null;
+    const diff     = stmtNum !== null ? stmtNum - expected : null;
+    const diffCls  = diff === null ? '' : diff > 0.01 ? 'color:var(--red);font-weight:700' : diff < -0.01 ? 'color:var(--amber);font-weight:700' : 'color:var(--green)';
+    const diffTxt  = diff === null ? '—' : (diff > 0 ? '+' : '') + '$' + diff.toFixed(2);
+
+    let renewStr = '—', renewCls = '';
+    if (r.next_renewal) {
+      const renewDate = new Date(r.next_renewal + 'T12:00:00');
+      const daysLeft  = Math.ceil((renewDate - new Date()) / 86400000);
+      renewStr = renewDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) + `<br><span style="font-size:10px;color:var(--muted)">${daysLeft}d</span>`;
+      renewCls = daysLeft <= 5 ? 'color:var(--amber);font-weight:600' : '';
+    }
+
+    if (stmtNum !== null) { totalExpected += expected; totalStatement += stmtNum; }
+    if (diff !== null && diff > 0.01) overchargeCount++;
+
+    const rateDisplay = rateOverride !== undefined && rateOverride !== '' ? rateOverride : (serverRate > 0 ? serverRate.toFixed(2) : '');
+
+    return `<tr>
+      <td style="font-weight:500">${r.client}</td>
+      <td style="text-align:center;font-size:12px;color:var(--muted)">${r.renewal_day || '—'}</td>
+      <td style="text-align:center;font-size:12px;${renewCls}">${renewStr}</td>
+      <td style="text-align:right;color:var(--muted)">${r.google || '—'}</td>
+      <td style="text-align:right;color:var(--muted)">${r.microsoft || '—'}</td>
+      <td style="text-align:right;color:var(--muted)">${r.smtp || '—'}</td>
+      <td style="text-align:right;font-weight:600">${r.total_count}</td>
+      <td style="text-align:right">
+        <input type="number" step="0.01" min="0" placeholder="e.g. 2.50"
+          value="${rateDisplay}"
+          style="width:70px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:12px;text-align:right;outline:none;${rateDisplay ? '' : 'border-color:#FCD34D'}"
+          oninput="_rateOverrides['${key}']=this.value; renderBillingCycles()">
+      </td>
+      <td style="text-align:right;font-weight:600;color:${expected > 0 ? 'var(--text)' : 'var(--muted)'}">$${expected.toFixed(2)}</td>
+      <td style="text-align:right">
+        <input type="number" step="0.01" min="0" placeholder="—"
+          value="${stmtVal !== undefined ? stmtVal : ''}"
+          style="width:80px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:12px;text-align:right;outline:none"
+          oninput="_stmtAmounts['${key}']=this.value; renderBillingCycles()">
+      </td>
+      <td style="text-align:right;${diffCls}">${diffTxt}</td>
+    </tr>`;
+  }).join('');
+
+  // Summary totals row
+  const totalsEl = document.getElementById('billingCycleTotals');
+  if (totalStatement > 0) {
+    const totalDiff = totalStatement - totalExpected;
+    const diffCls = totalDiff > 0.01 ? 'color:var(--red);font-weight:700' : totalDiff < -0.01 ? 'color:var(--amber);font-weight:700' : 'color:var(--green);font-weight:700';
+    totalsEl.style.display = '';
+    totalsEl.innerHTML = `
+      <span style="color:var(--muted)">Totals (reconciled rows):</span>
+      &nbsp;&nbsp;Expected: <strong>$${totalExpected.toFixed(2)}</strong>
+      &nbsp;&nbsp;Statement: <strong>$${totalStatement.toFixed(2)}</strong>
+      &nbsp;&nbsp;<span style="${diffCls}">Diff: ${totalDiff > 0 ? '+' : ''}$${totalDiff.toFixed(2)}</span>
+      ${overchargeCount ? `&nbsp;&nbsp;<span style="color:var(--red)">⚠️ ${overchargeCount} overcharge${overchargeCount>1?'s':''} detected</span>` : '<span style="color:var(--green)">✓ No overcharges</span>'}
+    `;
+  } else {
+    totalsEl.style.display = 'none';
+  }
+}
+
+</script>
+</body>
+</html>

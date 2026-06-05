@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="theme-color" content="#050C29">
+<title>Ottaly — Combo Analysis</title>
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@400;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<script src="/splash.js?v=ca1"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--purple:#7C89CD;
+  --bg:#F0F2F8;--card:#fff;--border:#E2E6F0;--text:#050C29;--muted:#6B7280;
+  --green:#059669;--amber:#D97706;--red:#DC2626;
+}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+.header{background:var(--navy-dark);padding:.75rem 2rem;border-bottom:3px solid var(--teal);display:flex;align-items:center;justify-content:space-between}
+.page{max-width:1400px;margin:0 auto;padding:1.5rem 2rem}
+.page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem;flex-wrap:wrap;gap:.75rem}
+.page-title{font-family:'Genos',sans-serif;font-size:1.4rem;font-weight:700;letter-spacing:.5px}
+.page-sub{font-size:12px;color:var(--muted);margin-top:3px}
+.period-bar{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap}
+.period-bar button{padding:5px 12px;border:1px solid var(--border);background:#fff;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;color:var(--muted);transition:all .15s}
+.period-bar button.active{background:var(--navy-dark);color:#fff;border-color:var(--navy-dark)}
+.period-bar input[type=date]{padding:5px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;font-family:inherit;outline:none}
+.period-bar label{font-size:12px;color:var(--muted)}
+
+/* Matrix */
+.matrix-wrap{background:var(--card);border-radius:12px;border:1px solid var(--border);overflow:hidden;margin-bottom:1.25rem}
+.matrix-title{padding:.9rem 1.25rem;font-size:13px;font-weight:700;border-bottom:1px solid var(--border);background:#fafbfd;display:flex;align-items:center;justify-content:space-between}
+.matrix-sub{font-size:11px;color:var(--muted);font-weight:400}
+.matrix-table{width:100%;border-collapse:collapse}
+.matrix-table th{padding:.7rem 1rem;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);border-bottom:1px solid var(--border);background:#fafbfd;text-align:left}
+.matrix-table th.to-header{text-align:center;border-left:1px solid var(--border)}
+.matrix-table td{padding:.75rem 1rem;border-bottom:1px solid var(--border);vertical-align:top}
+.matrix-table tr:last-child td{border-bottom:none}
+.from-label{font-size:13px;font-weight:700;white-space:nowrap}
+.from-sub{font-size:11px;color:var(--muted);margin-top:2px}
+.combo-cell{border-left:1px solid var(--border);text-align:center;min-width:140px}
+.combo-cell.best{background:#F0FDF4}
+.combo-cell.worst{background:#FFF1F2}
+.combo-sent{font-size:18px;font-weight:700;line-height:1}
+.combo-metrics{display:flex;gap:.35rem;justify-content:center;flex-wrap:wrap;margin-top:.4rem}
+.metric-pill{padding:2px 7px;border-radius:10px;font-size:10px;font-weight:700;white-space:nowrap}
+.rr-good{background:#D1FAE5;color:#065F46}
+.rr-warn{background:#FEF3C7;color:#92400E}
+.rr-bad {background:#FEE2E2;color:#991B1B}
+.rr-null{background:#F3F4F6;color:#6B7280}
+.br-good{background:#F0FDF4;color:#166534}
+.br-warn{background:#FFF7ED;color:#9A3412}
+.br-bad {background:#FEE2E2;color:#991B1B}
+.no-data{color:var(--muted);font-size:12px;text-align:center;padding:.5rem}
+
+/* Best combos */
+.best-section{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1.25rem}
+@media(max-width:700px){.best-section{grid-template-columns:1fr}}
+.combo-card{background:var(--card);border-radius:12px;border:1px solid var(--border);padding:1rem 1.25rem}
+.combo-card.winner{border-color:var(--teal);border-width:2px}
+.combo-card.loser{border-color:var(--red);border-width:2px}
+.combo-card-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:.5rem}
+.combo-name{font-size:1.1rem;font-weight:700;margin-bottom:.5rem}
+.combo-stats{display:flex;gap:.75rem;flex-wrap:wrap}
+.combo-stat{font-size:12px;color:var(--muted)}
+.combo-stat strong{color:var(--text)}
+
+/* Table breakdown */
+.breakdown{background:var(--card);border-radius:12px;border:1px solid var(--border);overflow:hidden}
+.breakdown-title{padding:.9rem 1.25rem;font-size:13px;font-weight:700;border-bottom:1px solid var(--border);background:#fafbfd}
+table{width:100%;border-collapse:collapse}
+th{padding:.6rem 1rem;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);border-bottom:1px solid var(--border);text-align:right;white-space:nowrap}
+th:first-child{text-align:left}
+td{padding:.75rem 1rem;font-size:13px;border-bottom:1px solid var(--border);text-align:right}
+td:first-child{text-align:left;font-weight:600}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#f7f8fb}
+.tag{display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700}
+.tag-google{background:#e0f2fe;color:#0369a1}
+.tag-microsoft{background:#ede9fe;color:#5b21b6}
+.tag-smtp{background:#f3f4f6;color:#374151}
+.tag-unknown{background:#f3f4f6;color:#6B7280}
+.tag-email_google{background:#dcfce7;color:#166534}
+.tag-email_outlook{background:#ede9fe;color:#5b21b6}
+.tag-email_other{background:#f3f4f6;color:#374151}
+.rate-good{color:var(--green);font-weight:700}
+.rate-warn{color:var(--amber);font-weight:700}
+.rate-bad{color:var(--red);font-weight:700}
+.rate-null{color:var(--muted)}
+.coverage-bar{font-size:11px;color:var(--muted);margin-bottom:.75rem}
+.coverage-bar span{font-weight:600;color:var(--text)}
+.spinner{text-align:center;padding:3rem;color:var(--muted);font-size:13px}
+.btn{padding:6px 14px;background:var(--navy-dark);color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer}
+.btn-sm{padding:4px 10px;font-size:11px}
+
+/* sticky header */
+.header{position:sticky;top:0;z-index:200}
+.header>div:first-child,.header-inner>div:first-child{flex:1;min-width:0;overflow:hidden}
+@media(max-width:768px){.header{padding:.75rem 1rem}.page,.page-md{padding:1rem}.page-header{flex-direction:column;align-items:flex-start}.toolbar{flex-wrap:wrap}.table-wrap,.table-container{overflow-x:auto;-webkit-overflow-scrolling:touch}table{min-width:600px}.grid3,.grid-3{grid-template-columns:1fr 1fr}}
+@media(max-width:480px){.metrics,.o-metrics{grid-template-columns:1fr 1fr}}
+
+.header>div:first-child{flex:1;min-width:0;overflow:hidden}
+</style>
+    <script src="/nav.js" defer></script>
+</head>
+<body>
+
+<div class="page">
+  <div class="page-header">
+    <div>
+      <div class="page-title">Combo Analysis</div>
+      <div class="page-sub">Sender provider × recipient provider — reply rate, bounce rate, leads</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
+      <!-- Historical Backfill removed 2026-05-28 — approx data was inaccurate,
+           combo analysis is now exact-webhook-only from 2026-05-28 onwards. -->
+      <button class="btn btn-sm" onclick="runBackfill()" title="Backfill recent sender data from webhook logs">Webhook Backfill</button>
+      <button class="btn btn-sm" id="enrichBtn" onclick="runMxEnrich()" style="background:#7C89CD" title="Look up MX records for all business-domain recipients to classify Google WS vs Microsoft 365">Enrich Recipient MX</button>
+      <div class="period-bar">
+        <button onclick="setPeriod('today')" id="btn-today" class="active">Today</button>
+        <button onclick="setPeriod('7d')"   id="btn-7d">7 Days</button>
+        <button onclick="setPeriod('14d')"  id="btn-14d">14 Days</button>
+        <button onclick="setPeriod('30d')"  id="btn-30d">30 Days</button>
+        <button onclick="setPeriod('this_month')" id="btn-this_month">This Month</button>
+        <label>From</label>
+        <input type="date" id="dateFrom" onchange="setCustom()">
+        <label>To</label>
+        <input type="date" id="dateTo" onchange="setCustom()">
+      </div>
+    </div>
+  </div>
+
+  <div id="coverageBar" class="coverage-bar" style="display:none"></div>
+  <div id="approxBanner" style="display:none;background:#FFF7ED;border:1px solid #FED7AA;border-radius:8px;padding:.6rem 1rem;margin-bottom:.75rem;font-size:12px;color:#92400E">
+    ⚠️ <strong>Some data is estimated</strong> — built from workspace-level PlusVibe stats + mailbox type distribution. Exact per-send data accumulates automatically going forward.
+  </div>
+
+  <!-- Best / Worst -->
+  <div class="best-section" id="bestSection" style="display:none">
+    <div class="combo-card winner" id="bestCard"></div>
+    <div class="combo-card loser"  id="worstCard"></div>
+  </div>
+
+  <!-- Matrix -->
+  <div class="matrix-wrap" id="matrixWrap">
+    <div class="spinner">Loading…</div>
+  </div>
+
+  <!-- Full breakdown table -->
+  <div class="breakdown" id="breakdownWrap" style="display:none">
+    <div class="breakdown-title">Full Breakdown</div>
+    <div id="breakdownTable"></div>
+  </div>
+</div>
+
+<script>
+let _data = null;
+
+/* ─── Date helpers ─── */
+function today() { return new Date().toISOString().slice(0,10); }
+function daysAgo(n) { const d = new Date(); d.setDate(d.getDate()-n); return d.toISOString().slice(0,10); }
+function firstOfMonth() { const d = new Date(); d.setDate(1); return d.toISOString().slice(0,10); }
+
+function periodDates(k) {
+  if (k === 'today')      return { start: today(),          end: today() };
+  if (k === '7d')         return { start: daysAgo(6),       end: today() };
+  if (k === '14d')        return { start: daysAgo(13),      end: today() };
+  if (k === '30d')        return { start: daysAgo(29),      end: today() };
+  if (k === 'this_month') return { start: firstOfMonth(),   end: today() };
+  return { start: today(), end: today() };
+}
+
+function setPeriod(k) {
+  document.querySelectorAll('.period-bar button').forEach(b => b.classList.remove('active'));
+  const btn = document.getElementById('btn-'+k);
+  if (btn) btn.classList.add('active');
+  const { start, end } = periodDates(k);
+  document.getElementById('dateFrom').value = start;
+  document.getElementById('dateTo').value   = end;
+  loadData(start, end);
+}
+function setCustom() {
+  const s = document.getElementById('dateFrom').value;
+  const e = document.getElementById('dateTo').value;
+  if (s && e) { document.querySelectorAll('.period-bar button').forEach(b => b.classList.remove('active')); loadData(s, e); }
+}
+
+/* ─── Labels ─── */
+function fromLabel(t) {
+  return { google: 'Google', microsoft: 'Microsoft', smtp: 'Other SMTP' }[t] || t || 'Unknown';
+}
+function toLabel(t) {
+  return { email_google: 'Google WS', email_outlook: 'Microsoft 365', email_other: 'Other', unknown: 'Unknown' }[t] || t || 'Unknown';
+}
+function fromTag(t)  { return `<span class="tag tag-${t}">${fromLabel(t)}</span>`; }
+function toTag(t)    { return `<span class="tag tag-${t}">${toLabel(t)}</span>`; }
+
+function pctStr(n, d) { return d ? (100*n/d).toFixed(1)+'%' : '—'; }
+function pctNum(n, d) { return d ? 100*n/d : 0; }
+
+function rrClass(p) { return p >= 3 ? 'rate-good' : p >= 1 ? 'rate-warn' : p > 0 ? 'rate-bad' : 'rate-null'; }
+function brClass(p) { return p < 0.5 ? 'rate-good' : p < 2 ? 'rate-warn' : 'rate-bad'; }
+function rrPill(p)  { return p >= 3 ? 'rr-good' : p >= 1 ? 'rr-warn' : p > 0 ? 'rr-bad' : 'rr-null'; }
+function brPill(p)  { return p < 0.5 ? 'br-good' : p < 2 ? 'br-warn' : 'br-bad'; }
+
+/* ─── Load ─── */
+async function loadData(start, end) {
+  document.getElementById('matrixWrap').innerHTML = '<div class="spinner">Loading…</div>';
+  document.getElementById('bestSection').style.display = 'none';
+  document.getElementById('breakdownWrap').style.display = 'none';
+  document.getElementById('coverageBar').style.display = 'none';
+  try {
+    _data = await fetch(`/api/combo-analysis?start=${start}&end=${end}`).then(r => r.json());
+    render();
+  } catch (err) {
+    document.getElementById('matrixWrap').innerHTML = `<div class="spinner" style="color:var(--red)">Error: ${err.message}</div>`;
+  }
+}
+
+/* ─── Render ─── */
+function render() {
+  if (!_data) return;
+  const rows = _data.rows || [];
+
+  // Coverage
+  const cov = _data.coverage;
+  if (cov && +cov.total > 0) {
+    const pct = Math.round(100 * +cov.with_sender / +cov.total);
+    const bar = document.getElementById('coverageBar');
+    bar.style.display = 'block';
+    bar.innerHTML = `Sender data coverage: <span>${cov.with_sender.toLocaleString()} / ${cov.total.toLocaleString()} events (${pct}%)</span>${pct < 50 ? ' — click <b>Backfill History</b> to improve coverage' : ''}`;
+  }
+
+  document.getElementById('approxBanner').style.display = _data.hasApprox ? 'block' : 'none';
+
+  if (!rows.length) {
+    document.getElementById('matrixWrap').innerHTML = '<div class="spinner">No data — click <b>Historical Backfill</b> to load from PlusVibe, or wait for webhook events to accumulate</div>';
+    return;
+  }
+
+  // Derive unique from/to types
+  const fromTypes = [...new Set(rows.map(r => r.from_type))].sort();
+  const toTypes   = [...new Set(rows.map(r => r.to_type))].sort();
+
+  // Index for quick lookup
+  const idx = {};
+  rows.forEach(r => { idx[`${r.from_type}|${r.to_type}`] = r; });
+
+  // Find best/worst by reply rate (min 50 sends)
+  const qualified = rows.filter(r => +r.sent >= 50);
+  let best = null, worst = null;
+  if (qualified.length) {
+    best  = qualified.reduce((a, b) => pctNum(+b.replies,+b.sent) > pctNum(+a.replies,+a.sent) ? b : a);
+    worst = qualified.reduce((a, b) => pctNum(+b.replies,+b.sent) < pctNum(+a.replies,+a.sent) ? b : a);
+  }
+
+  renderBestWorst(best, worst);
+  renderMatrix(fromTypes, toTypes, idx, best, worst);
+  renderTable(rows);
+}
+
+function renderBestWorst(best, worst) {
+  const section = document.getElementById('bestSection');
+  if (!best) { section.style.display = 'none'; return; }
+  section.style.display = 'grid';
+
+  function cardHtml(r, label, cls) {
+    const rr = pctNum(+r.replies, +r.sent);
+    const br = pctNum(+r.bounces, +r.sent);
+    return `<div class="combo-card-title">${label}</div>
+    <div class="combo-name">${fromLabel(r.from_type)} → ${toLabel(r.to_type)}</div>
+    <div class="combo-stats">
+      <div class="combo-stat"><strong>${(+r.sent).toLocaleString()}</strong> sent</div>
+      <div class="combo-stat"><strong class="${rrClass(rr)}">${rr.toFixed(1)}%</strong> reply rate</div>
+      <div class="combo-stat"><strong class="${brClass(br)}">${br.toFixed(2)}%</strong> bounce</div>
+      <div class="combo-stat"><strong>${+r.leads}</strong> leads</div>
+    </div>`;
+  }
+
+  document.getElementById('bestCard').innerHTML  = cardHtml(best,  '🏆 Best Combo',  'winner');
+  document.getElementById('worstCard').innerHTML = cardHtml(worst, '⚠️ Worst Combo', 'loser');
+}
+
+function renderMatrix(fromTypes, toTypes, idx, best, worst) {
+  const headers = toTypes.map(t => `<th class="to-header">${toLabel(t)}</th>`).join('');
+
+  const bodyRows = fromTypes.map(from => {
+    const totalSent = toTypes.reduce((s, to) => s + +(idx[`${from}|${to}`]?.sent || 0), 0);
+    const cells = toTypes.map(to => {
+      const r = idx[`${from}|${to}`];
+      if (!r || +r.sent === 0) return `<td class="combo-cell"><span class="no-data">—</span></td>`;
+      const rr = pctNum(+r.replies, +r.sent);
+      const br = pctNum(+r.bounces, +r.sent);
+      const isBest  = best  && r.from_type === best.from_type  && r.to_type === best.to_type;
+      const isWorst = worst && r.from_type === worst.from_type && r.to_type === worst.to_type;
+      const cls = isBest ? 'best' : isWorst ? 'worst' : '';
+      return `<td class="combo-cell ${cls}">
+        <div class="combo-sent">${(+r.sent).toLocaleString()}</div>
+        <div class="combo-metrics">
+          <span class="metric-pill ${rrPill(rr)}" title="Reply rate">${rr.toFixed(1)}% RR</span>
+          <span class="metric-pill ${brPill(br)}" title="Bounce rate">${br.toFixed(2)}% BR</span>
+          ${+r.leads ? `<span class="metric-pill rr-good" title="Leads">${+r.leads} leads</span>` : ''}
+        </div>
+      </td>`;
+    }).join('');
+
+    return `<tr>
+      <td>
+        <div class="from-label">${fromLabel(from)}</div>
+        <div class="from-sub">${totalSent.toLocaleString()} total sent</div>
+      </td>
+      ${cells}
+    </tr>`;
+  }).join('');
+
+  document.getElementById('matrixWrap').innerHTML = `
+    <div class="matrix-title">
+      Provider Matrix
+      <span class="matrix-sub">Rows = sending provider · Columns = recipient provider · Green = best · Red = worst</span>
+    </div>
+    <table class="matrix-table">
+      <thead><tr><th>Sending From</th>${headers}</tr></thead>
+      <tbody>${bodyRows}</tbody>
+    </table>`;
+}
+
+function renderTable(rows) {
+  const wrap = document.getElementById('breakdownWrap');
+  const tbody = rows.map(r => {
+    const rr = pctNum(+r.replies, +r.sent);
+    const br = pctNum(+r.bounces, +r.sent);
+    const pr = +r.replies > 0 ? pctNum(+r.pos_replies, +r.replies) : 0;
+    const lpt = +r.sent > 0 ? (+r.leads * 1000 / +r.sent) : 0;
+    return `<tr>
+      <td>${fromTag(r.from_type)}</td>
+      <td>${toTag(r.to_type)}</td>
+      <td>${(+r.sent).toLocaleString()}</td>
+      <td>${(+r.unique_contacts).toLocaleString()}</td>
+      <td>${(+r.replies).toLocaleString()}</td>
+      <td class="${rrClass(rr)}">${+r.sent ? rr.toFixed(2)+'%' : '—'}</td>
+      <td class="${rrClass(pr)}">${+r.replies ? pr.toFixed(1)+'%' : '—'}</td>
+      <td>${(+r.bounces).toLocaleString()}</td>
+      <td class="${brClass(br)}">${+r.sent ? br.toFixed(2)+'%' : '—'}</td>
+      <td>${+r.leads}</td>
+      <td title="Leads Per Thousand sent">${+r.sent ? lpt.toFixed(2) : '—'}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('breakdownTable').innerHTML = `
+    <table>
+      <thead><tr>
+        <th style="text-align:left">From</th>
+        <th style="text-align:left">To</th>
+        <th>Sent</th>
+        <th>Contacts</th>
+        <th>Replies</th>
+        <th>Reply %</th>
+        <th>Pos Reply %</th>
+        <th>Bounces</th>
+        <th>Bounce %</th>
+        <th>Leads</th>
+        <th title="Leads Per Thousand sent">LPT</th>
+      </tr></thead>
+      <tbody>${tbody}</tbody>
+    </table>`;
+  wrap.style.display = 'block';
+}
+
+/* ─── Historical backfill ─── */
+async function runHistoricalBackfill() {
+  if (!confirm('Build historical combo data from PlusVibe API?\n\nThis fetches up to 90 days of workspace stats and distributes them proportionally by mailbox type and contact provider. Takes ~30 seconds.\n\nData is approximate but accurate enough for directional analysis.')) return;
+  const btn = document.querySelector('button[onclick="runHistoricalBackfill()"]');
+  btn.disabled = true; btn.textContent = 'Running…';
+  try {
+    const r = await fetch('/api/combo-analysis/historical-backfill', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ days: 90 }),
+    }).then(r => r.json());
+    if (r.ok) {
+      const ws = (r.workspaces || []).map(w => `${w.workspace}: ${w.error || w.days + ' days'}`).join('\n');
+      alert(`Historical backfill complete!\n${r.total_rows} rows written\n\n${ws}`);
+      const s = document.getElementById('dateFrom').value;
+      const e = document.getElementById('dateTo').value;
+      if (s && e) loadData(s, e);
+    } else { alert('Error: ' + (r.error || 'unknown')); }
+  } catch (err) { alert('Failed: ' + err.message); }
+  btn.disabled = false; btn.textContent = 'Historical Backfill';
+}
+
+/* ─── Backfill ─── */
+async function runBackfill() {
+  if (!confirm('Run backfill? This will extract sender emails from historical webhook logs. May take a moment.')) return;
+  try {
+    const r = await fetch('/api/combo-analysis/backfill', { method: 'POST' }).then(r => r.json());
+    if (r.ok) {
+      alert(`Backfill complete — ${r.updated} rows updated. Reload the page.`);
+      const { start, end } = { start: document.getElementById('dateFrom').value, end: document.getElementById('dateTo').value };
+      if (start && end) loadData(start, end);
+    } else { alert('Backfill error: ' + (r.error || 'unknown')); }
+  } catch (e) { alert('Backfill failed: ' + e.message); }
+}
+
+/* ─── MX enrichment ─── */
+async function runMxEnrich() {
+  const btn = document.getElementById('enrichBtn');
+  btn.disabled = true;
+  btn.textContent = 'Running…';
+  try {
+    await fetch('/api/combo-analysis/enrich-buckets', { method: 'POST' });
+    btn.textContent = 'Running in background — reload in ~2 min';
+    setTimeout(() => { btn.disabled = false; btn.textContent = 'Enrich Recipient MX'; }, 120_000);
+  } catch (e) {
+    btn.textContent = 'Error — try again';
+    btn.disabled = false;
+  }
+}
+
+/* ─── Init ─── */
+const { start, end } = periodDates('today');
+document.getElementById('dateFrom').value = start;
+document.getElementById('dateTo').value   = end;
+loadData(start, end);
+</script>
+</body>
+</html>

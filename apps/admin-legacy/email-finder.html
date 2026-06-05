@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/favicon.svg">
+<meta name="theme-color" content="#050C29">
+<meta name="description" content="Ottaly Email Finder — verify and enrich email lists">
+<title>Ottaly — Email Finder</title>
+<script>document.write('<script src="/splash.js?v=' + Date.now() + '"><\/script>');</script>
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--bg:#F0F2F8;--card:#fff;--border:#E2E6F0;--text:#050C29;--muted:#6B7280;--red:#DC2626}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+.header{background:var(--navy-dark);padding:1rem 2rem;border-bottom:3px solid var(--teal);display:flex;align-items:center;justify-content:space-between}
+.nav{display:flex;gap:.25rem;align-items:center}.nav a{padding:8px 18px;border-radius:8px;font-size:13px;font-weight:600;color:rgba(255,255,255,.55);text-decoration:none}.nav a:hover,.nav a.active{background:var(--teal);color:#fff}
+.page{max-width:1600px;margin:0 auto;padding:1.5rem 2rem}.page-title{font-size:1.45rem;font-weight:800}.page-sub{font-size:13px;color:var(--muted);margin-top:4px}
+.toolbar{margin-top:1rem;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1rem;display:flex;gap:.75rem;align-items:center;flex-wrap:wrap}
+.toolbar input{flex:1;min-width:280px;padding:10px 11px;border:1.5px solid var(--border);border-radius:8px;font:inherit;font-size:13px;outline:none}.toolbar input:focus{border-color:var(--teal)}
+.btn{padding:10px 16px;border:0;border-radius:8px;font-size:13px;font-weight:800;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center}.btn-primary{background:var(--navy);color:white}.btn-primary:hover{background:var(--teal)}.btn-ghost{background:#F8F9FC;color:var(--text);border:1px solid var(--border)}
+.frame-wrap{margin-top:1rem;background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;min-height:720px}.frame-wrap iframe{width:100%;height:calc(100vh - 210px);min-height:720px;border:0;background:white}
+.notice{display:none;margin-top:1rem;background:#FEF2F2;border:1px solid #FECACA;color:#991B1B;border-radius:8px;padding:.9rem 1rem;font-size:13px;line-height:1.5}
+@media(max-width:880px){.header{padding:1rem}.nav{overflow:auto}.nav a{white-space:nowrap;padding:8px 12px}.page{padding:1rem}.frame-wrap iframe{height:720px}}
+
+/* sticky header */
+.header{position:sticky;top:0;z-index:200}
+.header>div:first-child,.header-inner>div:first-child{flex:1;min-width:0;overflow:hidden}
+@media(max-width:768px){.header{padding:.75rem 1rem}.page,.page-md{padding:1rem}.page-header{flex-direction:column;align-items:flex-start}.toolbar{flex-wrap:wrap}.table-wrap,.table-container{overflow-x:auto;-webkit-overflow-scrolling:touch}table{min-width:600px}.grid3,.grid-3{grid-template-columns:1fr 1fr}}
+@media(max-width:480px){.metrics,.o-metrics{grid-template-columns:1fr 1fr}}
+
+.header>div:first-child{flex:1;min-width:0;overflow:hidden}
+</style>
+    <script src="/nav.js" defer></script>
+</head>
+<body>
+<div class="header">
+  <a href="/login.html" onclick="fetch('/api/logout',{method:'POST'});return true" style="font-size:12px;color:rgba(255,255,255,.55);text-decoration:none">Sign out</a>
+</div>
+
+<main class="page">
+  <div>
+    <div class="page-title">Email Finder</div>
+    <div class="page-sub">Drop CSV files, run verification, and download enriched output from the standalone verifier app.</div>
+  </div>
+
+  <div class="toolbar">
+    <a class="btn btn-primary" href="/email-finder-tool/" target="_blank" rel="noopener">Open New Tab</a>
+    <button class="btn btn-ghost" onclick="reloadFinder()">Refresh Tool</button>
+  </div>
+  <div class="frame-wrap">
+    <iframe id="finderFrame" title="Email Finder" src="/email-finder-tool/"></iframe>
+  </div>
+</main>
+
+<script>
+function reloadFinder(){document.getElementById('finderFrame').src='/email-finder-tool/?t='+Date.now()}
+async function boot(){
+  try {
+    const session=await fetch('/api/session');
+    if(!session.ok){ location.href='/login.html'; return; }
+  } catch {}
+}
+boot();
+</script>
+</body>
+</html>

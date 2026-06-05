@@ -1,0 +1,137 @@
+═══════════════════════════════════════════════════════════════════════════════
+DIAGNOSTIC SYSTEM — COMPLETE 100% PLAN (Ready to build)
+═══════════════════════════════════════════════════════════════════════════════
+
+WHAT WE'RE BUILDING
+───────────────────────────────────────────────────────────────────────────────
+A root cause analyzer for performance dips.
+
+Input:  Select a date where stats dropped
+Output: Ranked list of hypotheses (campaign issue? delivery? external factor?)
+        with confidence scores, in < 1 second
+
+Example:
+  📉 Stats dropped 35% on 2026-06-03
+
+  Hypotheses:
+  1. UK Royal Mail strike (95% confidence — logged by operator)
+  2. PlusVibe API latency spike (85% — API logs confirm 2x slower)
+  3. Campaign quality decline (40% — unlikely, reply rates normal)
+
+WHY THIS MATTERS
+───────────────────────────────────────────────────────────────────────────────
+Right now when stats drop, you check:
+  ❌ Is it a client issue? (might be)
+  ❌ Is it copy decay? (might be)
+  ❌ Is it email account reputation? (might be)
+  ❌ Is it infrastructure? (might be)
+  ❌ Is it external (strike, ISP outage)? (might be)
+
+You never know for sure. This system tells you.
+
+SOLUTION APPROACH
+───────────────────────────────────────────────────────────────────────────────
+Collect 6 independent signal categories:
+  1. Email account health (warmup %, bounce rate per account)
+  2. Infrastructure health (memory, CPU, queue depth, event loop lag)
+  3. API health (PlusVibe latency, error rates)
+  4. Campaign metrics (sends, replies per client/workspace)
+  5. Bounce analysis (hard/soft, per account, trends)
+  6. External factors (operator-logged: strikes, ISP outages, policy changes)
+
+Decision tree with 7+ rules that isolates the root cause:
+  IF all metrics normal, reply rate down → campaign quality issue
+  IF sends down, replies normal → delivery/email account issue
+  IF everything down globally → external factor or infrastructure
+  ... etc (see DIAGNOSTIC_PLAN.md section 3)
+
+THREE-COLUMN DASHBOARD
+───────────────────────────────────────────────────────────────────────────────
+Left panel:   30-day timeline with 6 sparklines (color-coded by severity)
+Center panel: Metrics snapshot for selected date (reply rate, bounce %, warmup, etc.)
+Right panel:  Root cause tree — top 3 hypotheses ranked by confidence
+
+IMPLEMENTATION PHASES
+───────────────────────────────────────────────────────────────────────────────
+
+Phase 1: Signal Collection (2–3 days)
+  ✓ Create diagnostic_signals table + indexes
+  ✓ Instrument PlusVibe API calls (latency, errors)
+  ✓ Collect warmup metrics daily from PlusVibe
+  ✓ Aggregate bounce rates from email_events
+  ✓ Add infrastructure health endpoint (memory, CPU, queue)
+  ✓ Create campaign metric snapshots
+
+  Output: Raw signal data flowing into database
+
+Phase 2: Dashboard (1–2 days)
+  ✓ Create diagnostics.html page
+  ✓ Build timeline chart (6 signals over 30 days)
+  ✓ Build metrics snapshot panel
+  ✓ Build root cause tree (interactive display of hypotheses)
+
+  Output: Operator can manually drill down to find root cause
+
+Phase 3: Automation (2–3 days) [HIGH RISK — logic heavy]
+  ✓ Implement 7+ diagnostic rules (decision tree logic)
+  ✓ Test each rule on 5+ synthetic scenarios
+  ✓ Daily correlation job (runs at 11:30pm)
+  ✓ External factors form (operator logs strikes, etc.)
+  ✓ Anomaly alerts (if confidence > 85%)
+
+  Output: Automated hypotheses + confidence scores
+
+Phase 4: Integration (1–2 days) [OPTIONAL for MVP]
+  ✓ Wire to Client Health page
+  ✓ Daily email digest to account managers
+
+  Output: Health insights propagate to stakeholders
+
+MVP = Phase 1 + 2 + 3 = ~1 week
+
+RISK MITIGATION
+───────────────────────────────────────────────────────────────────────────────
+HIGH RISK:  Decision tree logic (can produce false diagnoses)
+            → Mitigate: Test on 10+ synthetic scenarios before shipping
+            → Start with high confidence thresholds (>85%)
+            → Operator can manually override
+
+MEDIUM RISK: API instrumentation overhead (logging every call = perf regression)
+            → Mitigate: Batch logs asynchronously, measure latency impact
+            → Sample (1 in 10 calls) if overhead detected
+
+MEDIUM RISK: Query performance on 30 days of signals
+            → Mitigate: Add indexes, test EXPLAIN ANALYZE before building
+
+VALIDATION GATES (DO THIS FIRST!)
+───────────────────────────────────────────────────────────────────────────────
+Run DIAGNOSTIC_VALIDATION.md Section 5 queries against production Postgres.
+We must pass all 7 gates before building:
+
+Gate 1: email_events has >100k events + 30+ days of history
+Gate 2: Bounce events include hard/soft type classification
+Gate 3: Query performance on 30-day aggregate < 500ms
+Gate 4: Health tables (domain_health, mailbox_meta, snapshots) have data
+Gate 5: Stats cache (workspace_stats or perf_cache) is up-to-date
+Gate 6: PlusVibe API accessible and responding <500ms
+Gate 7: Existing stats endpoints match email_events counts (±5%)
+
+If ANY gate fails → stop, debug, don't proceed until fixed.
+
+DOCUMENTATION
+───────────────────────────────────────────────────────────────────────────────
+DIAGNOSTIC_SYSTEM.md        — High-level architecture, signal types, tables
+DIAGNOSTIC_PLAN.md          — 100% detailed implementation plan per phase
+DIAGNOSTIC_VALIDATION.md    — Data validation approach + red flags
+PRE_IMPLEMENTATION_CHECKLIST.md — Gates to pass before building + recovery steps
+PLAN_SUMMARY.txt            — This file
+
+NEXT STEP
+───────────────────────────────────────────────────────────────────────────────
+1. Run the 7 validation gates (Section 5 of DIAGNOSTIC_VALIDATION.md)
+2. Copy results and paste them here
+3. I'll review for show-stoppers
+4. If all gates pass: start Phase 1 implementation
+5. If gate fails: diagnose root cause, fix, re-validate
+
+═══════════════════════════════════════════════════════════════════════════════

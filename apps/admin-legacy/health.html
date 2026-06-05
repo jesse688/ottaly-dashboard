@@ -1,0 +1,804 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/favicon.svg">
+<meta name="theme-color" content="#050C29">
+<meta name="description" content="Ottaly Client Health — daily AI-powered briefings per client">
+<title>Ottaly — Client Health</title>
+<script>document.write('<script src="/splash.js?v=' + Date.now() + '"><\/script>');</script>
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--purple:#7C89CD;
+  --yellow:#FFB700;--white:#fff;--bg:#F0F2F8;--card:#fff;
+  --border:#E2E6F0;--text:#050C29;--muted:#6B7280;
+  --red:#DC2626;--red-bg:#FEE2E2;--red-border:#FECACA;
+  --amber:#D97706;--amber-bg:#FEF3C7;--amber-border:#FDE68A;
+  --green:#059669;--green-bg:#D1FAE5;--green-border:#A7F3D0;
+}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);line-height:1.5}
+
+.header{background:var(--navy-dark);padding:1rem 2rem;border-bottom:3px solid var(--teal);display:flex;align-items:center;justify-content:space-between}
+.page{max-width:1280px;margin:0 auto;padding:1.75rem}
+
+.greeting{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:1.5rem;flex-wrap:wrap;gap:1rem}
+.greeting h1{font-size:1.5rem;font-weight:700;letter-spacing:-0.01em}
+.greeting .sub{font-size:13px;color:var(--muted);margin-top:4px}
+.greeting .meta{display:flex;gap:.5rem;align-items:center}
+.btn{padding:8px 14px;border-radius:8px;font-size:12.5px;font-weight:600;cursor:pointer;border:none;transition:all .15s;font-family:inherit}
+.btn-primary{background:var(--navy);color:#fff}
+.btn-primary:hover{background:#1a3370}
+.btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--border)}
+.btn-ghost:hover{background:#fff;color:var(--text)}
+.btn-sm{padding:5px 10px;font-size:11.5px}
+
+/* Summary strip */
+.stripe{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.85rem;margin-bottom:1.5rem}
+.tile{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.85rem 1rem;border-top:3px solid var(--navy)}
+.tile.red{border-top-color:var(--red)}
+.tile.amber{border-top-color:var(--amber)}
+.tile.green{border-top-color:var(--green)}
+.tile-label{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+.tile-val{font-size:1.35rem;font-weight:700;margin-top:2px}
+.tile-sub{font-size:11px;color:var(--muted);margin-top:1px}
+
+/* Section heading */
+.section-h{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:1.5rem 0 .65rem;display:flex;align-items:center;gap:.5rem}
+.section-h .count{background:#fff;color:var(--text);border:1px solid var(--border);font-weight:700;font-size:11px;padding:1px 7px;border-radius:20px}
+
+/* Copy alerts panel */
+.alerts-panel{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:1.25rem}
+.alert-row{display:grid;grid-template-columns:auto 1fr auto;gap:1rem;padding:.85rem 1rem;border-bottom:1px solid var(--border);align-items:center}
+.alert-row:last-child{border-bottom:none}
+.alert-pill{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;padding:3px 8px;border-radius:6px;white-space:nowrap}
+.alert-pill.critical{background:var(--red-bg);color:var(--red);border:1px solid var(--red-border)}
+.alert-pill.warning{background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber-border)}
+.alert-body{min-width:0}
+.alert-subject{font-weight:600;font-size:13px;color:var(--text)}
+.alert-meta{font-size:11.5px;color:var(--muted);margin-top:2px}
+.alert-meta .ws{color:var(--navy);font-weight:600}
+.alert-actions{display:flex;gap:.4rem;flex-shrink:0}
+
+/* Client cards */
+.cards{display:flex;flex-direction:column;gap:1rem}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden;transition:box-shadow .15s}
+.card:hover{box-shadow:0 4px 14px rgba(5,12,41,.05)}
+.card.band-red{border-left:4px solid var(--red)}
+.card.band-amber{border-left:4px solid var(--amber)}
+.card.band-green{border-left:4px solid var(--green)}
+.card.band-na{border-left:4px solid var(--border)}
+
+.card-head{padding:1rem 1.25rem;display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}
+.card-head .left{display:flex;align-items:center;gap:.75rem}
+.card-name{font-size:1.1rem;font-weight:700}
+.card-mgr{font-size:11.5px;color:var(--muted);margin-top:1px}
+.score{display:flex;align-items:baseline;gap:.5rem}
+.score-num{font-size:1.75rem;font-weight:800;font-variant-numeric:tabular-nums}
+.score-num.red{color:var(--red)}
+.score-num.amber{color:var(--amber)}
+.score-num.green{color:var(--green)}
+.score-num.na{color:var(--muted)}
+.score-band{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;padding:3px 8px;border-radius:6px}
+.score-band.red{background:var(--red-bg);color:var(--red)}
+.score-band.amber{background:var(--amber-bg);color:var(--amber)}
+.score-band.green{background:var(--green-bg);color:var(--green)}
+.score-band.na{background:var(--bg);color:var(--muted)}
+
+.card-body{padding:0 1.25rem 1.25rem}
+.briefing{font-size:13.5px;line-height:1.6;color:var(--text);padding:1rem 1.15rem;background:#FAFBFF;border:1px solid var(--border);border-radius:10px;margin-bottom:.85rem}
+.briefing.empty{color:var(--muted);font-style:italic}
+.briefing .source{display:block;margin-top:.5rem;font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);font-weight:600}
+
+.signals{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.65rem;margin-bottom:.85rem}
+.signal{background:#fff;border:1px solid var(--border);border-radius:8px;padding:.65rem .75rem}
+.signal-label{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)}
+.signal-val{font-size:14px;font-weight:700;margin-top:1px;font-variant-numeric:tabular-nums}
+.signal-trend{font-size:11px;font-weight:600;margin-left:.35rem}
+.signal-trend.down{color:var(--red)}
+.signal-trend.up{color:var(--green)}
+.signal-trend.flat{color:var(--muted)}
+
+/* Checkable actions panel — one row per action, checkbox to mark done */
+.actions-panel{background:#FAFBFF;border:1px solid var(--border);border-radius:10px;padding:.5rem .25rem;margin-top:.5rem}
+.actions-h{display:flex;align-items:center;justify-content:space-between;padding:.25rem .85rem .5rem;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+.actions-h .left{display:flex;align-items:center;gap:.5rem}
+.actions-h .progress{color:var(--text);font-weight:700}
+.action-row{display:grid;grid-template-columns:auto 1fr auto;gap:.65rem;padding:.65rem .85rem;align-items:flex-start;border-radius:7px;transition:background .12s}
+.action-row:hover{background:#fff}
+.action-row.done{opacity:.55}
+.action-row.done .action-label{text-decoration:line-through;color:var(--muted)}
+.action-check{margin-top:1px;width:18px;height:18px;border:2px solid var(--border);border-radius:5px;background:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .12s;padding:0}
+.action-check:hover{border-color:var(--navy)}
+.action-check.checked{background:var(--green);border-color:var(--green);color:#fff;font-size:12px;font-weight:700}
+.action-check.busy{opacity:.5;cursor:wait}
+.action-body{min-width:0}
+.action-label{font-size:13px;font-weight:600;color:var(--text);line-height:1.35}
+.action-rationale{font-size:11.5px;color:var(--muted);margin-top:2px;line-height:1.4}
+.action-meta{font-size:11px;color:var(--muted);margin-top:3px;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}
+.action-meta .pill{padding:1px 6px;border-radius:4px;background:#F3F4F6;color:var(--text);font-weight:600;font-size:10.5px}
+.action-meta .who{font-style:italic}
+.action-outcome{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;padding:2px 7px;border-radius:5px;display:inline-flex;align-items:center;gap:.3rem;white-space:nowrap}
+.action-outcome.helped{background:var(--green-bg);color:var(--green);border:1px solid var(--green-border)}
+.action-outcome.no_change{background:#F3F4F6;color:var(--muted);border:1px solid var(--border)}
+.action-outcome.worse{background:var(--red-bg);color:var(--red);border:1px solid var(--red-border)}
+.action-outcome.inconclusive{background:#F3F4F6;color:var(--muted);border:1px solid var(--border);opacity:.7}
+.action-outcome.pending{background:#FEF3C7;color:#A16207;border:1px solid #FDE68A;font-weight:600}
+.action-outcome-notes{font-size:11px;color:var(--muted);margin-top:4px;font-style:italic}
+.action-side{display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex-shrink:0}
+.action-pri{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;padding:2px 6px;border-radius:4px}
+.action-pri.p1{background:var(--red-bg);color:var(--red);border:1px solid var(--red-border)}
+.action-pri.p2{background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber-border)}
+.action-pri.p3{background:#EDE9FE;color:#5B21B6;border:1px solid #DDD6FE}
+.action-outcome{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;padding:2px 6px;border-radius:4px;white-space:nowrap}
+.action-outcome.helped{background:var(--green-bg);color:var(--green);border:1px solid var(--green-border)}
+.action-outcome.worse{background:var(--red-bg);color:var(--red);border:1px solid var(--red-border)}
+.action-outcome.no_change{background:#F3F4F6;color:#6B7280;border:1px solid #E5E7EB}
+.action-outcome.inconclusive{background:#FEF3C7;color:#92400E;border:1px solid #FDE68A}
+.action-outcome-notes{font-size:11px;color:var(--muted);margin-top:2px;font-style:italic}
+.action-dismiss{background:none;border:none;color:var(--muted);font-size:11px;cursor:pointer;padding:1px 4px;border-radius:3px;font-family:inherit}
+.action-dismiss:hover{color:var(--red);text-decoration:underline}
+.actions-empty{padding:.65rem .85rem;font-size:12px;color:var(--muted);font-style:italic}
+
+.empty{background:#fff;border:1px dashed var(--border);border-radius:12px;padding:2rem;text-align:center;color:var(--muted);font-size:13px}
+.empty strong{display:block;font-size:14px;color:var(--text);margin-bottom:.25rem}
+
+.healthy-toggle{margin:1.25rem 0 .5rem;text-align:center}
+.healthy-toggle button{background:transparent;border:1px dashed var(--border);color:var(--muted);font-size:12px;padding:6px 14px;border-radius:7px;cursor:pointer;font-family:inherit}
+.healthy-toggle button:hover{background:#fff;color:var(--text)}
+
+.loading{padding:3rem;text-align:center;color:var(--muted);font-size:13px}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--navy);border-radius:50%;animation:spin .8s linear infinite;vertical-align:middle;margin-right:.5rem}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Modal */
+.modal-bg{position:fixed;inset:0;background:rgba(5,12,41,.55);display:none;align-items:center;justify-content:center;z-index:1000;padding:1rem}
+.modal-bg.show{display:flex}
+.modal{background:#fff;border-radius:14px;width:640px;max-width:100%;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.2)}
+.modal-h{padding:1.1rem 1.4rem;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
+.modal-h-title{font-weight:700;font-size:14px}
+.modal-x{background:none;border:none;font-size:20px;cursor:pointer;color:var(--muted);line-height:1}
+.modal-x:hover{color:var(--text)}
+.modal-b{padding:1.4rem}
+.modal-f{padding:.9rem 1.4rem;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:.5rem}
+
+.variant-list{display:flex;flex-direction:column;gap:.5rem;margin-top:.75rem}
+.variant{background:#FAFBFF;border:1px solid var(--border);border-radius:8px;padding:.65rem .85rem;display:flex;align-items:center;justify-content:space-between;gap:1rem}
+.variant-text{font-size:13px;font-weight:500}
+.copy-btn{background:transparent;border:1px solid var(--border);color:var(--muted);font-size:11px;padding:3px 8px;border-radius:5px;cursor:pointer;font-family:inherit}
+.copy-btn:hover{background:var(--navy);color:#fff;border-color:var(--navy)}
+.copy-btn.copied{background:var(--green);color:#fff;border-color:var(--green)}
+
+.muted{color:var(--muted)}
+.kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,monospace;font-size:12px;background:#F3F4F6;padding:1px 5px;border-radius:4px;border:1px solid var(--border)}
+.toast{position:fixed;bottom:1.5rem;right:1.5rem;background:var(--navy-dark);color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;font-weight:500;opacity:0;transform:translateY(10px);transition:all .3s;z-index:9999}
+.toast.show{opacity:1;transform:translateY(0)}
+
+/* ── View toggle ─────────────────────────────────────────────────────── */
+.view-toggle{display:flex;background:#fff;border:1px solid var(--border);border-radius:10px;padding:3px;gap:2px;margin-bottom:1.25rem}
+.vt-btn{flex:1;text-align:center;padding:6px 0;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;border:none;background:transparent;color:var(--muted);transition:all .12s;font-family:inherit}
+.vt-btn.active{background:var(--navy);color:#fff}
+.vt-btn:hover:not(.active){background:var(--bg);color:var(--text)}
+
+/* Hide admin signals/actions when in CM view, and vice versa */
+body.view-admin [data-view="cm"]      { display:none !important }
+body.view-cm    [data-view="admin"]   { display:none !important }
+/* data-view="neutral" always visible; no class = view-all → show everything */
+
+/* ── Inline copy alerts per card ─────────────────────────────────────── */
+.card-copy-alerts{margin-bottom:.85rem}
+.card-copy-alerts-h{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--amber);margin-bottom:.5rem;display:flex;align-items:center;gap:.4rem}
+.card-copy-alert{background:#FFFBEB;border:1px solid var(--amber-border);border-radius:8px;padding:.6rem .85rem;margin-bottom:.4rem;display:flex;align-items:flex-start;justify-content:space-between;gap:.75rem}
+.card-copy-alert:last-child{margin-bottom:0}
+.cca-body{flex:1;min-width:0}
+.cca-name{font-size:12.5px;font-weight:600;color:var(--text)}
+.cca-meta{font-size:11px;color:var(--muted);margin-top:2px}
+.cca-actions{display:flex;gap:.35rem;flex-shrink:0;align-items:flex-start;flex-wrap:wrap;justify-content:flex-end}
+.cca-pill{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;padding:2px 6px;border-radius:4px}
+.cca-pill.critical{background:var(--red-bg);color:var(--red);border:1px solid var(--red-border)}
+.cca-pill.warning{background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber-border)}
+
+@media(max-width:1024px){
+  .signals{grid-template-columns:repeat(3,1fr)}
+  .stripe{grid-template-columns:repeat(3,1fr)}
+}
+@media(max-width:768px){
+  .header{padding:.75rem 1rem}
+  .page{padding:1rem}
+  .greeting{flex-direction:column;align-items:flex-start;gap:.5rem}
+  .greeting .meta{width:100%;justify-content:flex-start}
+  .stripe{grid-template-columns:1fr 1fr}
+  .signals{grid-template-columns:1fr 1fr}
+  .alert-row{grid-template-columns:auto 1fr;gap:.6rem}
+  .alert-actions{grid-column:1/-1;justify-content:flex-start}
+  .card-head{flex-direction:column;align-items:flex-start}
+}
+@media(max-width:480px){
+  .stripe{grid-template-columns:1fr 1fr}
+  .signals{grid-template-columns:1fr 1fr}
+}
+</style>
+    <script src="/nav.js" defer></script>
+</head>
+<body>
+
+
+<div class="page">
+  <div class="greeting">
+    <div>
+      <h1 id="greetingText">Loading…</h1>
+      <div class="sub" id="greetingSub">&nbsp;</div>
+    </div>
+    <div class="meta">
+      <span class="muted" id="snapDate" style="font-size:11.5px"></span>
+      <button class="btn btn-ghost btn-sm" id="refreshBtn">Refresh</button>
+    </div>
+  </div>
+
+  <div class="stripe" id="stripe"></div>
+
+  <!-- View toggle — Admin sees infrastructure, CM sees content/copy/campaigns, All sees everything -->
+  <div class="view-toggle" id="viewToggle">
+    <button class="vt-btn" id="vt-all"   onclick="setView('all')">All</button>
+    <button class="vt-btn" id="vt-cm"    onclick="setView('cm')">Campaign Manager</button>
+    <button class="vt-btn" id="vt-admin" onclick="setView('admin')">Infrastructure</button>
+  </div>
+
+  <!-- Kept for dismissAlert backward-compat; copy alerts now live per-card -->
+  <div id="alertsSection" style="display:none"></div>
+
+  <div class="section-h">
+    Clients
+    <span class="count" id="clientCount">0</span>
+  </div>
+  <div id="cards" class="cards"></div>
+</div>
+
+<!-- Variant generator modal -->
+<div class="modal-bg" id="modal">
+  <div class="modal">
+    <div class="modal-h">
+      <div class="modal-h-title" id="modalTitle">Generate variant subjects</div>
+      <button class="modal-x" onclick="closeModal()">×</button>
+    </div>
+    <div class="modal-b" id="modalBody"></div>
+    <div class="modal-f">
+      <button class="btn btn-ghost btn-sm" onclick="closeModal()">Close</button>
+      <button class="btn btn-primary btn-sm" id="regenBtn" onclick="generateVariants()">Generate 5 more</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────
+let DATA = null;
+let ALERTS = [];
+let SHOW_HEALTHY = false;
+let CURRENT_ALERT = null;
+let SESSION = { role: 'admin', name: '' };
+let CURRENT_VIEW = 'all';
+
+// Admin kinds: infrastructure — mailboxes, domains, DNS, send volume
+const ADMIN_KINDS = new Set(['pause_mailbox','add_mailboxes','add_warmup','lower_send_volume','check_dns','review_bounces']);
+// CM kinds: content, copy, campaigns, lead gen
+const CM_KINDS    = new Set(['refresh_copy','split_test_subject','add_followup_step','segment_rotation','swap_offer','narrow_audience','pause_campaign']);
+
+function kindView(kind) {
+  if (ADMIN_KINDS.has(kind)) return 'admin';
+  if (CM_KINDS.has(kind))   return 'cm';
+  return 'neutral';
+}
+
+function setView(v) {
+  CURRENT_VIEW = v;
+  document.body.className = document.body.className.replace(/\bview-\w+/g, '').trim();
+  if (v !== 'all') document.body.classList.add('view-' + v);
+  ['all','cm','admin'].forEach(name => {
+    const btn = $('vt-' + name);
+    if (btn) btn.classList.toggle('active', name === v);
+  });
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────
+const $ = (id) => document.getElementById(id);
+const escapeHTML = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pct = (n, digits = 1) => n == null ? '—' : (n * 100).toFixed(digits) + '%';
+const num = (n) => n == null ? '—' : Number(n).toLocaleString();
+const initials = (s) => String(s || '?').split(/\s+/).slice(0,2).map(w => w[0]).join('').toUpperCase();
+
+function toast(msg) {
+  const t = $('toast'); t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+function greetingForHour(h) {
+  if (h < 12) return 'Good morning';
+  if (h < 18) return 'Good afternoon';
+  return 'Good evening';
+}
+
+function trendArrow(current, baseline) {
+  if (current == null || baseline == null || baseline === 0) return '';
+  const ratio = current / baseline;
+  const delta = Math.round((ratio - 1) * 100);
+  if (Math.abs(delta) < 5) return '<span class="signal-trend flat">flat</span>';
+  if (delta < 0) return `<span class="signal-trend down">↓${Math.abs(delta)}%</span>`;
+  return `<span class="signal-trend up">↑${delta}%</span>`;
+}
+
+// ── Boot ─────────────────────────────────────────────────────────────
+fetch('/api/session').then(r => r.json()).catch(() => ({ ok: true, role: 'admin', name: '' })).then(s => {
+  if (s.ok === false) { location.href = '/login.html'; return; }
+  SESSION = { role: s.role || 'admin', name: s.name || '' };
+  const _sn = $('sessionName'); if (_sn) _sn.textContent = SESSION.name;
+  const _so = $('signOutBtn'); if (_so) _so.style.display = '';
+
+  const hour = new Date().getHours();
+  const name = SESSION.name ? `, ${SESSION.name.split(' ')[0]}` : '';
+  $('greetingText').textContent = `${greetingForHour(hour)}${name}`;
+
+  if (SESSION.role !== 'admin') $('refreshBtn').style.display = 'none';
+
+  // Default view: managers land on CM (what they control); admins on All
+  setView(SESSION.role === 'manager' ? 'cm' : 'all');
+  // Hide the infra toggle for managers — they can still switch to All
+  if (SESSION.role === 'manager') $('vt-admin').style.display = 'none';
+
+  load();
+});
+
+$('refreshBtn').addEventListener('click', async () => {
+  if (SESSION.role !== 'admin') return;
+  $('refreshBtn').textContent = 'Refreshing…';
+  $('refreshBtn').disabled = true;
+  try {
+    await fetch('/api/health/refresh', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}' });
+    toast('Rebuild started — takes ~30s. Reloading in 5s.');
+    setTimeout(() => load(true), 5000);
+  } catch (err) {
+    toast('Refresh failed: ' + err.message);
+  } finally {
+    $('refreshBtn').textContent = 'Refresh';
+    $('refreshBtn').disabled = false;
+  }
+});
+
+async function load(force = false) {
+  $('cards').innerHTML = '<div class="loading"><span class="spin"></span>Loading client health…</div>';
+  try {
+    const [clientsR, alertsR] = await Promise.all([
+      fetch('/api/health/clients').then(r => r.json()),
+      fetch('/api/health/copy-alerts').then(r => r.json()),
+    ]);
+    DATA = clientsR;
+    ALERTS = alertsR.alerts || [];
+    render();
+  } catch (err) {
+    $('cards').innerHTML = `<div class="empty"><strong>Couldn't load.</strong>${escapeHTML(err.message)}</div>`;
+  }
+}
+
+// ── Rendering ────────────────────────────────────────────────────────
+function render() {
+  const clients = DATA?.clients || [];
+  const needAttention = clients.filter(c => c.snapshot && (c.snapshot.health_band === 'red' || c.snapshot.health_band === 'yellow'));
+  const noData = clients.filter(c => !c.has_data);
+  const healthy = clients.filter(c => c.snapshot && c.snapshot.health_band === 'green');
+
+  $('greetingSub').innerHTML = clients.length === 0
+    ? 'No clients assigned to you yet.'
+    : needAttention.length === 0
+      ? `All ${clients.length} of your clients look healthy today.`
+      : `<strong>${needAttention.length}</strong> of your ${clients.length} clients need attention today.`;
+
+  $('snapDate').textContent = DATA?.generated_at
+    ? `Snapshot: ${new Date(DATA.generated_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
+    : 'No snapshot yet — first rebuild runs ~2min after server start.';
+
+  // Stripe
+  $('stripe').innerHTML = [
+    tile('Need attention', needAttention.length, '', needAttention.length > 0 ? 'red' : 'green'),
+    tile('Healthy', healthy.length, '', 'green'),
+    tile('No data yet', noData.length, 'Awaiting first snapshot', noData.length > 0 ? 'amber' : ''),
+    tile('Open copy alerts', ALERTS.length, ALERTS.length === 1 ? 'template flagged' : 'templates flagged', ALERTS.length > 0 ? 'amber' : 'green'),
+  ].join('');
+
+  // Cards (copy alerts now render per-card inline)
+  $('clientCount').textContent = clients.length;
+  renderCards(needAttention, noData, healthy);
+}
+
+function tile(label, val, sub, kind) {
+  const cls = kind ? ` ${kind}` : '';
+  const subHtml = sub ? `<div class="tile-sub">${escapeHTML(sub)}</div>` : '';
+  return `<div class="tile${cls}">
+    <div class="tile-label">${escapeHTML(label)}</div>
+    <div class="tile-val">${num(val)}</div>
+    ${subHtml}
+  </div>`;
+}
+
+function renderAlerts() {
+  if (!ALERTS.length) { $('alertsSection').style.display = 'none'; return; }
+  $('alertsSection').style.display = '';
+  $('alertCount').textContent = ALERTS.length;
+
+  const aiEnabled = DATA?.ai_enabled;
+  $('alertsPanel').innerHTML = ALERTS.map(a => {
+    const sub = a.template_subject || '(subject unknown — captured by body decay)';
+    const wsName = a.workspace_name || a.workspace_id;
+    const summary = alertSummary(a);
+    return `<div class="alert-row">
+      <span class="alert-pill ${a.severity || 'warning'}">${escapeHTML(a.alert_type.replace('_', ' '))}</span>
+      <div class="alert-body">
+        <div class="alert-subject">${escapeHTML(sub.slice(0, 110))}${sub.length > 110 ? '…' : ''}</div>
+        <div class="alert-meta">
+          <span class="ws">${escapeHTML(wsName)}</span>
+          · ${escapeHTML(a.campaign_name || 'Unknown campaign')}
+          · Step ${a.step ?? '?'}/${escapeHTML(a.variant || 'A')}
+          · ${summary}
+        </div>
+      </div>
+      <div class="alert-actions">
+        ${aiEnabled ? `<button class="act-btn primary" onclick="openVariantModal(${a.id})">Suggest fresh subjects</button>` : ''}
+        <button class="act-btn" onclick="dismissAlert(${a.id})">Dismiss</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function alertSummary(a) {
+  if (a.alert_type === 'decay') {
+    const dropPct = a.reply_rate_baseline > 0
+      ? Math.round((1 - (a.reply_rate_current / a.reply_rate_baseline)) * 100)
+      : null;
+    return dropPct != null
+      ? `Reply rate ${(a.reply_rate_baseline*100).toFixed(2)}% → ${(a.reply_rate_current*100).toFixed(2)}% (↓${dropPct}%) on ${num(a.lifetime_sends)} lifetime sends`
+      : `${num(a.lifetime_sends)} lifetime sends`;
+  }
+  if (a.alert_type === 'over_used') {
+    return `${num(a.lifetime_sends)} lifetime sends — providers have fingerprinted this content`;
+  }
+  if (a.alert_type === 'provider_split') {
+    const d = a.details || {};
+    return `Gmail ${(d.gmail_rate*100).toFixed(2)}% vs Outlook ${(d.outlook_rate*100).toFixed(2)}% — Gmail-specific filtering`;
+  }
+  return '';
+}
+
+// Inline copy alerts per card (replaces the global top-level panel)
+function inlineCopyAlerts(c) {
+  const alerts = ALERTS.filter(a => a.workspace_id === c.workspace_id);
+  if (!alerts.length) return '';
+  return `<div class="card-copy-alerts" data-view="cm">
+    <div class="card-copy-alerts-h">⚠ Needs fresh copy <span style="opacity:.6;font-weight:400;text-transform:none">${alerts.length} flagged</span></div>
+    ${alerts.map(a => {
+      const name = a.campaign_name || 'Unknown campaign';
+      const sub  = a.template_subject ? `"${a.template_subject.slice(0, 70)}${a.template_subject.length > 70 ? '…' : ''}"` : '';
+      const summary = a.alert_type === 'copy_stale'
+        ? `${(+(a.reply_rate_current||0)*100).toFixed(2)}% reply vs ${(+(a.reply_rate_baseline||0)*100).toFixed(2)}% workspace avg · ${(a.lifetime_sends||0).toLocaleString()} sends`
+        : alertSummary(a);
+      return `<div class="card-copy-alert">
+        <div class="cca-body">
+          <div class="cca-name">${escapeHTML(name)}${a.step != null ? ` · Step ${a.step}` : ''}</div>
+          ${sub ? `<div class="cca-meta" style="color:var(--text);font-weight:500">${escapeHTML(sub)}</div>` : ''}
+          <div class="cca-meta">${escapeHTML(summary)}</div>
+        </div>
+        <div class="cca-actions">
+          <span class="cca-pill ${a.severity || 'warning'}">${escapeHTML((a.alert_type||'').replace(/_/g,' '))}</span>
+          ${DATA?.ai_enabled ? `<button class="act-btn btn-sm primary" onclick="openVariantModal(${a.id})">Fresh subjects</button>` : ''}
+          <button class="act-btn btn-sm" onclick="dismissAlert(${a.id})">Dismiss</button>
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+async function dismissAlert(id) {
+  try {
+    await fetch(`/api/health/copy-alerts/${id}/dismiss`, { method: 'POST' });
+    ALERTS = ALERTS.filter(a => a.id !== id);
+    render(); // re-render cards so per-card panels update
+    toast('Alert dismissed');
+  } catch (err) { toast('Dismiss failed'); }
+}
+
+function renderCards(needAttention, noData, healthy) {
+  const cards = $('cards');
+  const top = [...needAttention, ...noData];
+  if (top.length === 0 && healthy.length === 0) {
+    cards.innerHTML = '<div class="empty"><strong>No clients to show.</strong>You aren\'t assigned any active clients yet. Ask an admin to assign you on the Clients page.</div>';
+    return;
+  }
+
+  let html = top.map(renderCard).join('');
+  if (healthy.length > 0) {
+    html += `<div class="healthy-toggle">
+      <button onclick="toggleHealthy()">${SHOW_HEALTHY ? 'Hide' : 'Show'} ${healthy.length} healthy ${healthy.length === 1 ? 'client' : 'clients'}</button>
+    </div>`;
+    if (SHOW_HEALTHY) html += healthy.map(renderCard).join('');
+  }
+  cards.innerHTML = html || '<div class="empty"><strong>All clients are healthy today.</strong>Nothing needs your attention right now.</div>';
+}
+
+function toggleHealthy() { SHOW_HEALTHY = !SHOW_HEALTHY; render(); }
+
+function renderCard(c) {
+  const snap = c.snapshot;
+  const band = snap?.health_band || 'na';
+  const bandKey = band === 'yellow' ? 'amber' : band;
+  const score = snap?.health_score;
+
+  if (!snap) {
+    return `<div class="card band-na">
+      <div class="card-head">
+        <div class="left">
+          <div>
+            <div class="card-name">${escapeHTML(c.workspace_name)}</div>
+            ${c.campaign_manager ? `<div class="card-mgr">Manager: ${escapeHTML(c.campaign_manager)}</div>` : ''}
+          </div>
+        </div>
+        <div class="score">
+          <div class="score-num na">—</div>
+          <span class="score-band na">No data</span>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="briefing empty">No snapshot yet. The first daily build runs ~2 minutes after the server starts and then every morning at 7am. Admin can force a rebuild with the Refresh button.</div>
+      </div>
+    </div>`;
+  }
+
+  // Actions now come from c.actions (the health_actions table), not from
+  // the embedded snap.ai_actions JSON — so the checkable state survives
+  // across snapshot rebuilds.
+  // Per-snapshot source — tells the truth even if the global key flipped
+  // between rebuilds, or if Claude returned an error this time.
+  const src = snap.ai_briefing_source;
+  const briefingSource = src === 'ai'                 ? 'AI briefing (Claude)'
+                       : src === 'fallback_api_failed' ? 'Fallback — Claude API call failed (check /api/health/ai-test)'
+                       : src === 'fallback_no_key'     ? 'Fallback — ANTHROPIC_API_KEY not set on server'
+                       : DATA?.ai_enabled              ? 'AI briefing'
+                       :                                 'Auto-generated (set ANTHROPIC_API_KEY for AI briefings)';
+
+  return `<div class="card band-${bandKey}">
+    <div class="card-head">
+      <div class="left">
+        <div>
+          <div class="card-name">${escapeHTML(c.workspace_name)}</div>
+          ${c.campaign_manager ? `<div class="card-mgr">Manager: ${escapeHTML(c.campaign_manager)}</div>` : ''}
+        </div>
+      </div>
+      <div class="score">
+        <div class="score-num ${bandKey}">${score ?? '—'}</div>
+        <span class="score-band ${bandKey}">${labelFor(band)}</span>
+      </div>
+    </div>
+    <div class="card-body">
+      <div class="briefing">
+        ${escapeHTML(snap.ai_briefing || 'No briefing.')}
+        <span class="source">${escapeHTML(briefingSource)}</span>
+      </div>
+      ${inlineCopyAlerts(c)}
+      <div class="signals">
+        ${snap.lead_target_monthly > 0 ? paceCard(snap) : ''}
+        ${signalCard('Sent 7d',       num(snap.sent_7d),   '', 'neutral')}
+        ${signalCard('Replies 7d',    `${num(snap.replies_7d)}${trendArrow(snap.reply_rate_7d, snap.reply_rate_baseline)}`, '', 'cm')}
+        ${signalCard('Reply rate 7d', pct(snap.reply_rate_7d, 2), pct(snap.reply_rate_baseline, 2) === '—' ? '' : `vs ${pct(snap.reply_rate_baseline, 2)} baseline`, 'cm')}
+        ${signalCard('Bounce rate 7d', pct(snap.bounce_rate_7d, 1), snap.bounce_rate_7d > 0.03 ? '<span style="color:var(--red);font-weight:700">elevated</span>' : '', 'admin')}
+        ${signalCard('Leads 7d',      num(snap.leads_7d),  '', 'cm')}
+        ${signalCard('Mailboxes',     snap.mailbox_total ? `${snap.mailbox_unhealthy}/${snap.mailbox_total}` : '—', snap.mailbox_unhealthy > 0 ? '<span style="color:var(--amber);font-weight:600">unhealthy</span>' : '', 'admin')}
+        ${snap.reply_rate_gmail_7d   != null ? signalCard('Gmail reply',   pct(snap.reply_rate_gmail_7d, 2),   '', 'admin') : ''}
+        ${snap.reply_rate_outlook_7d != null ? signalCard('Outlook reply', pct(snap.reply_rate_outlook_7d, 2), '', 'admin') : ''}
+      </div>
+      ${actionsPanel(c.actions || [])}
+    </div>
+  </div>`;
+}
+
+function signalCard(label, val, sub = '', view = 'neutral') {
+  const dv = view !== 'neutral' ? ` data-view="${view}"` : '';
+  return `<div class="signal"${dv}>
+    <div class="signal-label">${label}</div>
+    <div class="signal-val">${val}</div>
+    ${sub ? `<div class="signal-label" style="text-transform:none;font-weight:400">${sub}</div>` : ''}
+  </div>`;
+}
+
+function paceCard(snap) {
+  const pace = snap.pace_pct;
+  const target = snap.lead_target_monthly;
+  const mtd = snap.leads_mtd ?? 0;
+  const expected = snap.leads_expected_mtd != null ? Number(snap.leads_expected_mtd).toFixed(1) : '—';
+  let color = 'var(--text)', badge = '';
+  if (pace != null) {
+    if (pace < 0.65)      { color = 'var(--red)';   badge = `<span style="color:var(--red);font-weight:700">↓${Math.round((1-pace)*100)}% behind</span>`; }
+    else if (pace < 0.85) { color = 'var(--amber)'; badge = `<span style="color:var(--amber);font-weight:600">behind pace</span>`; }
+    else if (pace > 1.1)  { color = 'var(--green)'; badge = `<span style="color:var(--green);font-weight:600">ahead</span>`; }
+    else                  { badge = `<span class="muted">on pace</span>`; }
+  }
+  return `<div class="signal" data-view="cm" style="background:${color === 'var(--text)' ? '#fff' : 'rgba(255,255,255,1)'};border-color:${color === 'var(--text)' ? 'var(--border)' : color}">
+    <div class="signal-label">Lead pace MTD</div>
+    <div class="signal-val" style="color:${color}">${mtd}<span style="color:var(--muted);font-weight:500">/${target}</span></div>
+    <div class="signal-label" style="text-transform:none;font-weight:400">${expected} expected by day ${snap.signals?.day_of_month ?? new Date().getDate()} · ${badge}</div>
+  </div>`;
+}
+
+// Renders the actions panel for one client card. Each action is a
+// checkable row — clicking the checkbox POSTs to /complete and re-fetches.
+function actionsPanel(actions) {
+  if (!actions.length) {
+    return `<div class="actions-panel"><div class="actions-empty">No open actions — Claude couldn't propose anything actionable. Hit Refresh.</div></div>`;
+  }
+  const done = actions.filter(a => a.completed_at).length;
+  return `<div class="actions-panel">
+    <div class="actions-h">
+      <div class="left">Next actions</div>
+      <div class="progress">${done}/${actions.length} done</div>
+    </div>
+    ${actions.map(actionRow).join('')}
+  </div>`;
+}
+
+function actionRow(a) {
+  const done = !!a.completed_at;
+  const pri = Math.max(1, Math.min(3, a.priority || 2));
+  const kindLabel = String(a.kind || '').replace(/_/g, ' ');
+  const targetLabel = a.target_metric
+    ? `${a.target_metric}${a.target_direction === 'up' ? ' ↑' : a.target_direction === 'down' ? ' ↓' : ''}`
+    : '';
+  const completedAt = done ? new Date(a.completed_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+  const outcome = a.outcome || null;
+  // 'pending' = completed but evaluator hasn't run yet (within first ~24h)
+  const pendingEval = done && !outcome;
+  const outcomeLabel = outcome === 'helped' ? '✓ Helped'
+                    : outcome === 'worse' ? '✗ Worse'
+                    : outcome === 'no_change' ? '— No change'
+                    : outcome === 'inconclusive' ? '? Inconclusive'
+                    : pendingEval ? '… Evaluating'
+                    : '';
+  const rowView = kindView(a.kind);
+  const dvRow = rowView !== 'neutral' ? ` data-view="${rowView}"` : '';
+  return `<div class="action-row${done ? ' done' : ''}"${dvRow} data-action-id="${a.id}">
+    <button class="action-check${done ? ' checked' : ''}" onclick="toggleAction(${a.id}, ${done})" title="${done ? 'Mark not done' : 'Mark done'}">${done ? '✓' : ''}</button>
+    <div class="action-body">
+      <div class="action-label">${escapeHTML(a.label)}</div>
+      ${a.rationale ? `<div class="action-rationale">${escapeHTML(a.rationale)}</div>` : ''}
+      <div class="action-meta">
+        ${kindLabel ? `<span class="pill">${escapeHTML(kindLabel)}</span>` : ''}
+        ${targetLabel ? `<span>target: ${escapeHTML(targetLabel)}</span>` : ''}
+        ${done ? `<span class="who">done by ${escapeHTML(a.completed_by || 'someone')} · ${completedAt}</span>` : ''}
+      </div>
+      ${outcome && a.outcome_notes ? `<div class="action-outcome-notes">${escapeHTML(a.outcome_notes)}</div>` : ''}
+    </div>
+    <div class="action-side">
+      ${outcome ? `<span class="action-outcome ${outcome}">${outcomeLabel}</span>`
+        : pendingEval ? `<span class="action-outcome pending">${outcomeLabel}</span>`
+        : `<span class="action-pri p${pri}">P${pri}</span>`}
+      ${done ? '' : `<button class="action-dismiss" onclick="dismissAction(${a.id})">skip</button>`}
+    </div>
+  </div>`;
+}
+
+async function toggleAction(id, currentlyDone) {
+  const row = document.querySelector(`[data-action-id="${id}"]`);
+  const btn = row?.querySelector('.action-check');
+  if (btn) btn.classList.add('busy');
+  try {
+    const endpoint = currentlyDone ? 'uncomplete' : 'complete';
+    const r = await fetch(`/api/health/actions/${id}/${endpoint}`, { method: 'POST' });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.error || `HTTP ${r.status}`);
+    }
+    // Optimistic UI: re-fetch the clients list so all counts/state are consistent
+    await load();
+    toast(currentlyDone ? 'Action reopened' : 'Action marked done');
+  } catch (err) {
+    if (btn) btn.classList.remove('busy');
+    toast('Failed: ' + err.message);
+  }
+}
+
+async function dismissAction(id) {
+  const reason = prompt('Why skip this action? (optional)') || '';
+  // User cancelled — prompt returns null; skip request
+  if (reason === null) return;
+  try {
+    const r = await fetch(`/api/health/actions/${id}/dismiss`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.error || `HTTP ${r.status}`);
+    }
+    await load();
+    toast('Action skipped');
+  } catch (err) {
+    toast('Failed: ' + err.message);
+  }
+}
+
+function labelFor(band) {
+  return { red: 'Critical', yellow: 'Watch', amber: 'Watch', green: 'Healthy', na: 'No data' }[band] || band;
+}
+
+function safeJson(s, fallback) { try { return JSON.parse(s); } catch { return fallback; } }
+
+// ── Variant modal ────────────────────────────────────────────────────
+function openVariantModal(alertId) {
+  CURRENT_ALERT = ALERTS.find(a => a.id === alertId);
+  if (!CURRENT_ALERT) return;
+  $('modalTitle').textContent = `Fresh subjects for "${(CURRENT_ALERT.template_subject || '').slice(0, 70)}${(CURRENT_ALERT.template_subject || '').length > 70 ? '…' : ''}"`;
+  $('modalBody').innerHTML = `<div class="loading"><span class="spin"></span>Asking Claude for variants…</div>`;
+  $('modal').classList.add('show');
+  generateVariants();
+}
+
+function closeModal() {
+  $('modal').classList.remove('show');
+  CURRENT_ALERT = null;
+}
+
+async function generateVariants() {
+  if (!CURRENT_ALERT) return;
+  $('regenBtn').disabled = true;
+  $('regenBtn').textContent = 'Generating…';
+  try {
+    const r = await fetch('/api/health/generate-variants', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ alert_id: CURRENT_ALERT.id, count: 5 }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Failed');
+    renderVariants(j.variants || []);
+  } catch (err) {
+    $('modalBody').innerHTML = `<div class="empty"><strong>Couldn't generate.</strong>${escapeHTML(err.message)}</div>`;
+  } finally {
+    $('regenBtn').disabled = false;
+    $('regenBtn').textContent = 'Generate 5 more';
+  }
+}
+
+function renderVariants(variants) {
+  if (!variants.length) {
+    $('modalBody').innerHTML = `<div class="empty">No variants returned.</div>`;
+    return;
+  }
+  $('modalBody').innerHTML = `
+    <div style="font-size:12px;color:var(--muted);margin-bottom:.25rem">
+      Replace the decayed subject in <strong>${escapeHTML(CURRENT_ALERT.campaign_name || 'campaign')}</strong>, step ${CURRENT_ALERT.step ?? '?'}, variant ${escapeHTML(CURRENT_ALERT.variant || 'A')}. Edit in PlusVibe to apply.
+    </div>
+    <div class="variant-list">
+      ${variants.map((v, i) => `
+        <div class="variant">
+          <span class="variant-text">${escapeHTML(v)}</span>
+          <button class="copy-btn" data-text="${escapeHTML(v)}" onclick="copyVariant(this)">Copy</button>
+        </div>
+      `).join('')}
+    </div>`;
+}
+
+function copyVariant(btn) {
+  navigator.clipboard.writeText(btn.dataset.text).then(() => {
+    btn.textContent = 'Copied';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1500);
+  });
+}
+
+// Click outside modal to close
+$('modal').addEventListener('click', (e) => { if (e.target === $('modal')) closeModal(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+</script>
+</body>
+</html>

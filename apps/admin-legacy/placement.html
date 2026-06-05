@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/favicon.svg">
+<meta name="theme-color" content="#050C29">
+<title>Placement Tests — Ottaly</title>
+<script>document.write('<script src="/splash.js?v='+Date.now()+'"><\/script>');</script>
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',sans-serif;background:#f0f2f5;color:#111827;font-size:13px}
+.nav{background:#050C29;padding:.6rem 1.5rem;border-bottom:3px solid #1F6F78;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:200}
+.page{max-width:1500px;margin:0 auto;padding:1.5rem}
+.ph{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:1.25rem;flex-wrap:wrap;gap:.75rem}
+.ph-left h1{font-size:1.3rem;font-weight:700}
+.ph-left p{font-size:12px;color:#6b7280;margin-top:2px}
+.ph-right{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+
+/* Summary cards */
+.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1rem;margin-bottom:1.25rem}
+.sum-card{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:1rem 1.25rem;border-top:3px solid #224388}
+.sum-card.green{border-top-color:#059669}
+.sum-card.red{border-top-color:#dc2626}
+.sum-card.amber{border-top-color:#d97706}
+.sum-card .lbl{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#6b7280}
+.sum-card .val{font-size:1.6rem;font-weight:700;margin-top:4px}
+.sum-card .sub{font-size:11px;color:#9ca3af;margin-top:2px}
+
+/* Toolbar */
+.toolbar{display:flex;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap;align-items:center}
+.search-wrap{position:relative;flex:1;min-width:200px}
+.search-wrap input{width:100%;padding:7px 10px 7px 32px;border:1px solid #e5e7eb;border-radius:8px;font-size:13px;background:#fff;outline:none}
+.search-wrap input:focus{border-color:#7C89CD}
+.search-icon{position:absolute;left:9px;top:50%;transform:translateY(-50%);color:#9ca3af;font-size:14px}
+.pills{display:flex;gap:5px}
+.pill{padding:5px 12px;border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid #e5e7eb;background:#fff;color:#6b7280;transition:all .15s}
+.pill.active{background:#050C29;color:#fff;border-color:#050C29}
+.btn{padding:7px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;border:none;transition:all .15s;white-space:nowrap}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn-primary{background:#050C29;color:#fff}
+.btn-primary:hover:not(:disabled){background:#1a3370}
+.btn-sm{padding:4px 10px;font-size:11px;font-weight:600;border-radius:6px;cursor:pointer;border:none;background:#f3f4f6;color:#374151;transition:all .15s}
+.btn-sm:hover{background:#e5e7eb}
+.btn-sm.run{background:#EFF6FF;color:#1d4ed8}
+.btn-sm.run:hover{background:#DBEAFE}
+.btn-ghost{background:transparent;color:#6b7280;border:1px solid #e5e7eb}
+.btn-ghost:hover:not(:disabled){background:#f9fafb;color:#111827}
+
+/* Tab bar */
+.tabs{display:flex;gap:0;border-bottom:2px solid #e5e7eb;margin-bottom:1.25rem}
+.tab{padding:8px 18px;font-size:13px;font-weight:600;color:#6b7280;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;transition:all .15s}
+.tab.active{color:#050C29;border-bottom-color:#050C29}
+.tab-panel{display:none}
+.tab-panel.active{display:block}
+
+/* Table */
+.table-wrap{background:#fff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden}
+table{width:100%;border-collapse:collapse;font-size:12px}
+thead{background:#f9fafb;position:sticky;top:56px;z-index:10}
+th{padding:9px 12px;text-align:left;font-weight:600;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.3px;border-bottom:1px solid #e5e7eb}
+td{padding:10px 12px;border-bottom:1px solid #f3f4f6;color:#374151;vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#fafbff;cursor:pointer}
+.domain-name{font-weight:600;color:#111827;font-size:13px}
+.ws-name{font-size:11px;color:#9ca3af;margin-top:1px}
+
+/* Result badges */
+.badge{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.3px}
+.badge-inbox{background:#d1fae5;color:#065f46}
+.badge-spam{background:#fee2e2;color:#991b1b}
+.badge-other{background:#fef3c7;color:#92400e}
+.badge-inconclusive{background:#f3f4f6;color:#6b7280}
+.badge-untested{background:#eff6ff;color:#1d4ed8}
+.dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.dot-inbox{background:#059669}
+.dot-spam{background:#dc2626}
+.dot-other{background:#d97706}
+.dot-inconclusive{background:#9ca3af}
+.dot-untested{background:#3b82f6}
+
+/* DNS check cells */
+.chk{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;font-size:11px;font-weight:700}
+.chk-ok{background:#d1fae5;color:#065f46}
+.chk-warn{background:#fef3c7;color:#92400e}
+.chk-bad{background:#fee2e2;color:#991b1b}
+.chk-grey{background:#f3f4f6;color:#9ca3af}
+
+/* Job status bar */
+.job-bar{background:#EFF6FF;border:1px solid #BFDBFE;border-radius:8px;padding:8px 14px;display:flex;align-items:center;gap:10px;font-size:12px;color:#1e40af;margin-bottom:1rem}
+.job-bar.done{background:#f0fdf4;border-color:#bbf7d0;color:#14532d}
+.job-bar.failed{background:#fef2f2;border-color:#fecaca;color:#991b1b}
+.job-bar.hidden{display:none}
+.spin{display:inline-block;width:13px;height:13px;border:2px solid #BFDBFE;border-top-color:#1d4ed8;border-radius:50%;animation:spin .8s linear infinite;flex-shrink:0}
+@keyframes spin{to{transform:rotate(360deg)}}
+.progress-bar{flex:1;height:4px;background:#BFDBFE;border-radius:4px;overflow:hidden}
+.progress-fill{height:100%;background:#1d4ed8;transition:width .3s}
+
+/* Seeds & SMTP settings tables */
+.settings-section{margin-bottom:2rem}
+.settings-h{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#6b7280;margin-bottom:.75rem}
+.form-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.5rem;margin-bottom:.5rem}
+.form-row input{padding:7px 10px;border:1px solid #e5e7eb;border-radius:8px;font-size:13px;background:#fff;outline:none;width:100%}
+.form-row input:focus{border-color:#7C89CD}
+.form-add{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:1rem;margin-bottom:1rem}
+.form-add h3{font-size:12px;font-weight:700;color:#374151;margin-bottom:.75rem}
+
+/* History modal */
+.overlay{position:fixed;inset:0;background:rgba(5,12,41,.55);z-index:1000;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .2s}
+.overlay.active{opacity:1;pointer-events:all}
+.modal{background:#fff;border-radius:14px;width:820px;max-width:95vw;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.18);padding:1.5rem}
+.modal-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem}
+.modal-title{font-size:1rem;font-weight:700}
+.close-btn{background:none;border:none;font-size:1.3rem;cursor:pointer;color:#6b7280;padding:4px}
+.close-btn:hover{color:#111827}
+
+.empty{text-align:center;padding:3rem;color:#9ca3af;font-size:13px}
+
+/* Postmaster inlined */
+.inline-postmaster{display:flex;gap:.5rem;flex-wrap:wrap;font-size:11px}
+.pm-chip{padding:2px 8px;border-radius:20px;background:#f3f4f6;color:#374151;font-weight:600}
+.pm-chip.good{background:#d1fae5;color:#065f46}
+.pm-chip.bad{background:#fee2e2;color:#991b1b}
+
+/* sticky header + mobile */
+.header,.nav{position:sticky;top:0;z-index:200}
+.header>div:first-child,.header-inner,.nav>div:first-child{flex:1;min-width:0;overflow:hidden}
+@media(max-width:768px){.header,.nav{padding:.75rem 1rem}.page,.container{padding:1rem}.page-header,.ph{flex-direction:column;align-items:flex-start}.toolbar,.ph-right{flex-wrap:wrap}.table-wrap,.table-container{overflow-x:auto;-webkit-overflow-scrolling:touch}table{min-width:600px}}
+</style>
+    <script src="/nav.js" defer></script>
+</head>
+<body>
+<nav class="nav">
+  <a href="/login.html" onclick="fetch('/api/logout',{method:'POST'});return true;" id="signOutBtn" style="display:none;font-size:11px;color:rgba(255,255,255,.35);text-decoration:none">Sign out</a>
+</nav>
+
+<div class="page">
+  <div class="ph">
+    <div class="ph-left">
+      <h1>Placement Tests</h1>
+      <p>Send to seed accounts and check inbox vs spam — per sending domain, once per week</p>
+    </div>
+    <div class="ph-right" id="pageActions">
+      <button class="btn btn-ghost" id="refreshBtn" onclick="load()">Refresh</button>
+      <button class="btn btn-primary" id="runAllBtn" onclick="runAll()">Run All Domains</button>
+    </div>
+  </div>
+
+  <!-- Job status bar -->
+  <div class="job-bar hidden" id="jobBar">
+    <div class="spin" id="jobSpin"></div>
+    <div style="flex:1">
+      <span id="jobText">Running…</span>
+      <div class="progress-bar" style="margin-top:4px"><div class="progress-fill" id="jobProgress" style="width:0%"></div></div>
+    </div>
+    <span id="jobStats" style="white-space:nowrap;font-size:11px"></span>
+  </div>
+
+  <!-- Summary cards -->
+  <div class="summary" id="summary">
+    <div class="sum-card"><div class="lbl">Domains Tracked</div><div class="val" id="sDomains">—</div><div class="sub">with DNS records</div></div>
+    <div class="sum-card green"><div class="lbl">Inbox Rate</div><div class="val" id="sInbox">—</div><div class="sub">last test per domain</div></div>
+    <div class="sum-card red"><div class="lbl">Spam Rate</div><div class="val" id="sSpam">—</div><div class="sub">last test per domain</div></div>
+    <div class="sum-card amber"><div class="lbl">Untested</div><div class="val" id="sUntested">—</div><div class="sub">no SMTP configured</div></div>
+    <div class="sum-card amber"><div class="lbl">No SMTP</div><div class="val" id="sNoSmtp">—</div><div class="sub">can't run test</div></div>
+  </div>
+
+  <!-- Tab bar -->
+  <div class="tabs">
+    <div class="tab active" onclick="switchTab('domains')">Domains</div>
+    <div class="tab" onclick="switchTab('settings')">Settings</div>
+  </div>
+
+  <!-- Domains panel -->
+  <div class="tab-panel active" id="tab-domains">
+    <div class="toolbar">
+      <div class="search-wrap">
+        <span class="search-icon">⌕</span>
+        <input type="text" id="searchInput" placeholder="Search domain or client…" oninput="renderTable()">
+      </div>
+      <div class="pills">
+        <div class="pill active" data-filter="all" onclick="setFilter('all')">All</div>
+        <div class="pill" data-filter="inbox" onclick="setFilter('inbox')">Inbox</div>
+        <div class="pill" data-filter="spam" onclick="setFilter('spam')">Spam</div>
+        <div class="pill" data-filter="untested" onclick="setFilter('untested')">Untested</div>
+        <div class="pill" data-filter="no-smtp" onclick="setFilter('no-smtp')">No SMTP</div>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Domain</th>
+          <th>Last Result</th>
+          <th>Seeds</th>
+          <th>Tested</th>
+          <th>SPF</th>
+          <th>DKIM</th>
+          <th>DMARC</th>
+          <th>Health</th>
+          <th></th>
+        </tr></thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Settings panel -->
+  <div class="tab-panel" id="tab-settings">
+    <div class="settings-section">
+      <div class="settings-h">Seed Accounts (IMAP)</div>
+      <p style="font-size:12px;color:#6b7280;margin-bottom:.75rem">3 Google Workspace accounts on a test domain you own. Emails sent to these and checked via IMAP.</p>
+      <div class="form-add" id="seedForm">
+        <h3>Add / Update Seed Account</h3>
+        <div class="form-row">
+          <input id="sEmail" placeholder="email@testdomain.com" type="email">
+          <input id="sLabel" placeholder="Label (optional)">
+          <input id="sImapHost" placeholder="IMAP host (imap.gmail.com)">
+          <input id="sImapPort" placeholder="IMAP port (993)" type="number" value="993">
+          <input id="sImapUser" placeholder="IMAP username (= email)">
+          <input id="sImapPass" placeholder="App password" type="password">
+        </div>
+        <button class="btn btn-primary" onclick="saveSeed()">Save Seed Account</button>
+        <span id="seedMsg" style="margin-left:.5rem;font-size:12px;color:#059669"></span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Email</th><th>Label</th><th>IMAP Host</th><th>Port</th><th>Active</th><th></th></tr></thead>
+          <tbody id="seedsTable"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-h">Sending SMTP (one per domain)</div>
+      <p style="font-size:12px;color:#6b7280;margin-bottom:.75rem">One test mailbox per sending domain. Placement test is sent from this SMTP account.</p>
+      <div class="form-add" id="smtpForm">
+        <h3>Add / Update SMTP Account</h3>
+        <div class="form-row">
+          <input id="mDomain" placeholder="sending-domain.com">
+          <input id="mHost" placeholder="SMTP host">
+          <input id="mPort" placeholder="Port (587)" type="number" value="587">
+          <input id="mUser" placeholder="SMTP username">
+          <input id="mPass" placeholder="SMTP password" type="password">
+          <input id="mFrom" placeholder="From email (= username if blank)">
+        </div>
+        <button class="btn btn-primary" onclick="saveSmtp()">Save SMTP</button>
+        <span id="smtpMsg" style="margin-left:.5rem;font-size:12px;color:#059669"></span>
+      </div>
+      <div style="display:flex;gap:.5rem;margin-bottom:.75rem">
+        <div class="search-wrap" style="max-width:300px">
+          <span class="search-icon">⌕</span>
+          <input type="text" id="smtpSearch" placeholder="Filter SMTP accounts…" oninput="renderSmtpTable()">
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Domain</th><th>SMTP Host</th><th>Port</th><th>From</th><th>Active</th><th></th></tr></thead>
+          <tbody id="smtpTable"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- History modal -->
+<div class="overlay" id="historyOverlay" onclick="if(event.target===this)closeHistory()">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="historyTitle">Domain History</div>
+      <button class="close-btn" onclick="closeHistory()">✕</button>
+    </div>
+    <div id="historyBody"></div>
+  </div>
+</div>
+
+<script>
+const h = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+let DATA     = [];
+let SEEDS    = [];
+let SMTP     = [];
+let FILTER   = 'all';
+let jobTimer = null;
+
+// ── Auth ──────────────────────────────────────────────────────────
+fetch('/api/session').then(r=>r.json()).catch(()=>({ok:false})).then(s=>{
+  if (!s.ok) { location.href='/login.html?next=/placement'; return; }
+  document.getElementById('signOutBtn').style.display='';
+  load();
+  loadSettings();
+});
+
+// ── Data ──────────────────────────────────────────────────────────
+async function load() {
+  try {
+    const r = await fetch('/api/placement/domains').then(r=>r.json());
+    DATA = Array.isArray(r) ? r : [];
+    renderSummary();
+    renderTable();
+  } catch (e) { console.error('load failed', e); }
+}
+
+async function loadSettings() {
+  try {
+    const [s, m] = await Promise.all([
+      fetch('/api/placement/seeds').then(r=>r.json()),
+      fetch('/api/placement/smtp').then(r=>r.json()),
+    ]);
+    SEEDS = Array.isArray(s) ? s : [];
+    SMTP  = Array.isArray(m) ? m : [];
+    renderSeedsTable();
+    renderSmtpTable();
+  } catch (e) {}
+}
+
+// ── Summary ───────────────────────────────────────────────────────
+function renderSummary() {
+  const tested  = DATA.filter(d => d.last_result);
+  const inbox   = tested.filter(d => d.last_result === 'inbox').length;
+  const spam    = tested.filter(d => d.last_result === 'spam').length;
+  const noSmtp  = DATA.filter(d => !d.has_smtp).length;
+  const untested= DATA.filter(d => d.has_smtp && !d.last_result).length;
+  const pct = (n,t) => t > 0 ? Math.round(n/t*100)+'%' : '—';
+
+  document.getElementById('sDomains').textContent  = DATA.length;
+  document.getElementById('sInbox').textContent    = pct(inbox, tested.length);
+  document.getElementById('sSpam').textContent     = pct(spam, tested.length);
+  document.getElementById('sUntested').textContent = untested;
+  document.getElementById('sNoSmtp').textContent   = noSmtp;
+}
+
+// ── Table ─────────────────────────────────────────────────────────
+function setFilter(f) {
+  FILTER = f;
+  document.querySelectorAll('.pill').forEach(p => p.classList.toggle('active', p.dataset.filter === f));
+  renderTable();
+}
+
+function resultBadge(result) {
+  if (!result) return '<span class="badge badge-untested"><span class="dot dot-untested"></span>Untested</span>';
+  const cls = {'inbox':'badge-inbox','spam':'badge-spam','other':'badge-other','inconclusive':'badge-inconclusive'}[result] || 'badge-inconclusive';
+  const dot = {'inbox':'dot-inbox','spam':'dot-spam','other':'dot-other','inconclusive':'dot-inconclusive'}[result] || 'dot-inconclusive';
+  return `<span class="badge ${cls}"><span class="dot ${dot}"></span>${h(result)}</span>`;
+}
+
+function dnsChk(obj, key) {
+  if (!obj) return '<span class="chk chk-grey">?</span>';
+  const v = typeof obj === 'object' ? obj[key] ?? obj.valid ?? obj.pass : null;
+  if (v === true  || v === 'pass') return '<span class="chk chk-ok">✓</span>';
+  if (v === false || v === 'fail') return '<span class="chk chk-bad">✗</span>';
+  return '<span class="chk chk-grey">?</span>';
+}
+
+function healthPill(status) {
+  const m = {good:'badge-inbox',warning:'badge-other',critical:'badge-spam',unknown:'badge-inconclusive'};
+  return `<span class="badge ${m[status]||'badge-inconclusive'}">${h(status||'?')}</span>`;
+}
+
+function relTime(iso) {
+  if (!iso) return '—';
+  const s = Math.round((Date.now()-new Date(iso))/1000);
+  if (s < 60)   return 'just now';
+  if (s < 3600) return Math.round(s/60)+'m ago';
+  if (s < 86400)return Math.round(s/3600)+'h ago';
+  return Math.round(s/86400)+'d ago';
+}
+
+function renderTable() {
+  const q = (document.getElementById('searchInput').value||'').toLowerCase();
+  let rows = DATA.filter(d => {
+    if (q && !d.domain.toLowerCase().includes(q) && !(d.workspace_name||'').toLowerCase().includes(q)) return false;
+    if (FILTER === 'inbox')   return d.last_result === 'inbox';
+    if (FILTER === 'spam')    return d.last_result === 'spam';
+    if (FILTER === 'untested')return d.has_smtp && !d.last_result;
+    if (FILTER === 'no-smtp') return !d.has_smtp;
+    return true;
+  });
+
+  const tb = document.getElementById('tableBody');
+  if (!rows.length) {
+    tb.innerHTML = `<tr><td colspan="9" class="empty">No domains match this filter</td></tr>`;
+    return;
+  }
+  tb.innerHTML = rows.map(d => {
+    const spfObj  = typeof d.spf  === 'string' ? JSON.parse(d.spf||'{}')  : (d.spf||{});
+    const dkimObj = typeof d.dkim === 'string' ? JSON.parse(d.dkim||'{}') : (d.dkim||{});
+    const dmarcObj= typeof d.dmarc=== 'string' ? JSON.parse(d.dmarc||'{}'): (d.dmarc||{});
+
+    const seedPips = d.seed_count > 0
+      ? (() => {
+          const i = d.inbox_count || 0;
+          const s = d.spam_count  || 0;
+          const o = d.seed_count  - i - s;
+          let pip = '';
+          for (let x=0;x<i;x++) pip+='<span class="dot dot-inbox" style="display:inline-block;width:8px;height:8px;border-radius:50%;margin:1px"></span>';
+          for (let x=0;x<s;x++) pip+='<span class="dot dot-spam"  style="display:inline-block;width:8px;height:8px;border-radius:50%;margin:1px"></span>';
+          for (let x=0;x<o;x++) pip+='<span class="dot dot-inconclusive" style="display:inline-block;width:8px;height:8px;border-radius:50%;margin:1px"></span>';
+          return pip;
+        })()
+      : '<span style="color:#9ca3af">—</span>';
+
+    return `<tr onclick="openHistory('${h(d.domain)}')">
+      <td>
+        <div class="domain-name">${h(d.domain)}</div>
+        ${d.workspace_name ? `<div class="ws-name">${h(d.workspace_name)}</div>` : ''}
+      </td>
+      <td>${resultBadge(d.last_result)}</td>
+      <td style="white-space:nowrap">${seedPips}</td>
+      <td style="color:#6b7280">${relTime(d.last_tested)}</td>
+      <td>${dnsChk(spfObj,'valid')}</td>
+      <td>${dnsChk(dkimObj,'valid')}</td>
+      <td>${dnsChk(dmarcObj,'valid')}</td>
+      <td>${healthPill(d.health_status)}</td>
+      <td onclick="event.stopPropagation()">
+        ${d.has_smtp
+          ? `<button class="btn-sm run" onclick="runDomain('${h(d.domain)}')">Run test</button>`
+          : `<span style="font-size:11px;color:#9ca3af">No SMTP</span>`
+        }
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Run ───────────────────────────────────────────────────────────
+async function runAll() {
+  if (!confirm('Run placement tests for all domains with SMTP configured? This takes ~15-20 minutes.')) return;
+  await startRun(null);
+}
+
+async function runDomain(domain) {
+  await startRun(domain);
+}
+
+async function startRun(domain) {
+  document.getElementById('runAllBtn').disabled = true;
+  const r = await fetch('/api/placement/run', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(domain ? { domain } : {}),
+  }).then(r=>r.json());
+  if (r.already_running) { alert('A run is already in progress.'); return; }
+  pollJobStatus();
+}
+
+function pollJobStatus() {
+  if (jobTimer) clearInterval(jobTimer);
+  const bar  = document.getElementById('jobBar');
+  const spin = document.getElementById('jobSpin');
+  const txt  = document.getElementById('jobText');
+  const prg  = document.getElementById('jobProgress');
+  const stats= document.getElementById('jobStats');
+
+  jobTimer = setInterval(async () => {
+    try {
+      const { job } = await fetch('/api/placement/run/status').then(r=>r.json());
+      if (!job) { clearInterval(jobTimer); return; }
+
+      bar.classList.remove('hidden','done','failed');
+      spin.style.display = job.status === 'running' ? '' : 'none';
+
+      if (job.status === 'running') {
+        const pct = job.total > 0 ? Math.round(job.done/job.total*100) : 0;
+        txt.textContent  = job.current || 'Starting…';
+        prg.style.width  = pct+'%';
+        stats.textContent= `${job.done}/${job.total} domains`;
+      } else if (job.status === 'done') {
+        bar.classList.add('done');
+        txt.textContent  = `Done — ${job.done} domains tested, ${job.errors} errors`;
+        prg.style.width  = '100%';
+        stats.textContent= '';
+        clearInterval(jobTimer);
+        document.getElementById('runAllBtn').disabled = false;
+        load();
+      } else if (job.status === 'failed') {
+        bar.classList.add('failed');
+        txt.textContent = 'Run failed: '+(job.error||'unknown error');
+        clearInterval(jobTimer);
+        document.getElementById('runAllBtn').disabled = false;
+      }
+    } catch {}
+  }, 3000);
+}
+
+// ── History modal ─────────────────────────────────────────────────
+async function openHistory(domain) {
+  document.getElementById('historyTitle').textContent = domain+' — Test History';
+  document.getElementById('historyBody').innerHTML = '<div class="empty">Loading…</div>';
+  document.getElementById('historyOverlay').classList.add('active');
+
+  try {
+    const rows = await fetch(`/api/placement/domains/${encodeURIComponent(domain)}/history`).then(r=>r.json());
+    if (!rows.length) {
+      document.getElementById('historyBody').innerHTML = '<div class="empty">No tests recorded yet</div>';
+      return;
+    }
+
+    // Group by batch (sent within same minute)
+    const grouped = [];
+    let batch = null;
+    for (const r of rows) {
+      const min = r.sent_at ? r.sent_at.slice(0,16) : 'null';
+      if (!batch || batch.min !== min) { batch = { min, rows: [] }; grouped.push(batch); }
+      batch.rows.push(r);
+    }
+
+    let html = `<table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr style="background:#f9fafb">
+        <th style="padding:8px 12px;text-align:left;font-size:11px;font-weight:600;color:#6b7280;border-bottom:1px solid #e5e7eb">Sent</th>
+        <th style="padding:8px 12px;text-align:left;font-size:11px;font-weight:600;color:#6b7280;border-bottom:1px solid #e5e7eb">Seed</th>
+        <th style="padding:8px 12px;text-align:left;font-size:11px;font-weight:600;color:#6b7280;border-bottom:1px solid #e5e7eb">Result</th>
+        <th style="padding:8px 12px;text-align:left;font-size:11px;font-weight:600;color:#6b7280;border-bottom:1px solid #e5e7eb">Folder</th>
+        <th style="padding:8px 12px;text-align:left;font-size:11px;font-weight:600;color:#6b7280;border-bottom:1px solid #e5e7eb">Trigger</th>
+        <th style="padding:8px 12px;text-align:left;font-size:11px;font-weight:600;color:#6b7280;border-bottom:1px solid #e5e7eb">Checked</th>
+      </tr></thead><tbody>`;
+
+    for (const g of grouped) {
+      html += `<tr><td colspan="6" style="padding:6px 12px 2px;font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.3px;background:#fafafa;border-top:1px solid #f3f4f6">${h(new Date(g.min||'').toLocaleString())}</td></tr>`;
+      for (const r of g.rows) {
+        html += `<tr>
+          <td style="padding:7px 12px;border-bottom:1px solid #f3f4f6;color:#6b7280">${r.sent_at ? new Date(r.sent_at).toLocaleTimeString() : '—'}</td>
+          <td style="padding:7px 12px;border-bottom:1px solid #f3f4f6">${h(r.seed_email)}</td>
+          <td style="padding:7px 12px;border-bottom:1px solid #f3f4f6">${resultBadge(r.result)}</td>
+          <td style="padding:7px 12px;border-bottom:1px solid #f3f4f6;color:#6b7280;font-size:11px">${h(r.raw_folder||'—')}</td>
+          <td style="padding:7px 12px;border-bottom:1px solid #f3f4f6;color:#6b7280">${h(r.triggered_by||'—')}</td>
+          <td style="padding:7px 12px;border-bottom:1px solid #f3f4f6;color:#6b7280">${r.checked_at ? relTime(r.checked_at) : '—'}</td>
+        </tr>`;
+      }
+    }
+    html += '</tbody></table>';
+    document.getElementById('historyBody').innerHTML = html;
+  } catch (e) {
+    document.getElementById('historyBody').innerHTML = '<div class="empty">Failed to load history</div>';
+  }
+}
+
+function closeHistory() {
+  document.getElementById('historyOverlay').classList.remove('active');
+}
+
+// ── Settings ──────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach((t,i) => t.classList.toggle('active', ['domains','settings'][i]===name));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id==='tab-'+name));
+  if (name==='settings') loadSettings();
+}
+
+async function saveSeed() {
+  const body = {
+    email:      document.getElementById('sEmail').value.trim(),
+    label:      document.getElementById('sLabel').value.trim(),
+    imap_host:  document.getElementById('sImapHost').value.trim(),
+    imap_port:  parseInt(document.getElementById('sImapPort').value)||993,
+    imap_user:  document.getElementById('sImapUser').value.trim(),
+    imap_password: document.getElementById('sImapPass').value,
+  };
+  if (!body.email||!body.imap_host||!body.imap_user||!body.imap_password) {
+    alert('Email, IMAP host, user, and password are required'); return;
+  }
+  try {
+    await fetch('/api/placement/seeds',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
+    document.getElementById('seedMsg').textContent='Saved ✓';
+    setTimeout(()=>document.getElementById('seedMsg').textContent='',3000);
+    ['sEmail','sLabel','sImapHost','sImapUser','sImapPass'].forEach(id=>document.getElementById(id).value='');
+    loadSettings();
+  } catch(e){ alert('Failed: '+e.message); }
+}
+
+async function deleteSeed(id) {
+  if (!confirm('Delete this seed account?')) return;
+  await fetch(`/api/placement/seeds/${id}`,{method:'DELETE'});
+  loadSettings();
+}
+
+function renderSeedsTable() {
+  const tb = document.getElementById('seedsTable');
+  if (!SEEDS.length) { tb.innerHTML=`<tr><td colspan="6" class="empty">No seed accounts yet</td></tr>`; return; }
+  tb.innerHTML = SEEDS.map(s=>`<tr>
+    <td>${h(s.email)}</td>
+    <td style="color:#6b7280">${h(s.label||'')}</td>
+    <td style="color:#6b7280">${h(s.imap_host)}</td>
+    <td style="color:#6b7280">${s.imap_port}</td>
+    <td>${s.active?'<span style="color:#059669;font-weight:600">Active</span>':'<span style="color:#9ca3af">Inactive</span>'}</td>
+    <td><button class="btn-sm" onclick="deleteSeed(${s.id})">Delete</button></td>
+  </tr>`).join('');
+}
+
+async function saveSmtp() {
+  const body = {
+    domain:        document.getElementById('mDomain').value.trim(),
+    smtp_host:     document.getElementById('mHost').value.trim(),
+    smtp_port:     parseInt(document.getElementById('mPort').value)||587,
+    smtp_user:     document.getElementById('mUser').value.trim(),
+    smtp_password: document.getElementById('mPass').value,
+    from_email:    document.getElementById('mFrom').value.trim(),
+  };
+  if (!body.domain||!body.smtp_host||!body.smtp_user||!body.smtp_password) {
+    alert('Domain, SMTP host, user, and password are required'); return;
+  }
+  try {
+    await fetch('/api/placement/smtp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
+    document.getElementById('smtpMsg').textContent='Saved ✓';
+    setTimeout(()=>document.getElementById('smtpMsg').textContent='',3000);
+    ['mDomain','mHost','mUser','mPass','mFrom'].forEach(id=>document.getElementById(id).value='');
+    loadSettings();
+  } catch(e){ alert('Failed: '+e.message); }
+}
+
+async function deleteSmtp(id) {
+  if (!confirm('Delete this SMTP account?')) return;
+  await fetch(`/api/placement/smtp/${id}`,{method:'DELETE'});
+  loadSettings();
+}
+
+function renderSmtpTable() {
+  const q  = (document.getElementById('smtpSearch').value||'').toLowerCase();
+  const tb = document.getElementById('smtpTable');
+  const rows = SMTP.filter(s => !q || s.domain.includes(q) || s.smtp_user.includes(q));
+  if (!rows.length) { tb.innerHTML=`<tr><td colspan="6" class="empty">No SMTP accounts yet</td></tr>`; return; }
+  tb.innerHTML = rows.map(s=>`<tr>
+    <td class="domain-name">${h(s.domain)}</td>
+    <td style="color:#6b7280">${h(s.smtp_host)}</td>
+    <td style="color:#6b7280">${s.smtp_port}</td>
+    <td style="color:#6b7280">${h(s.from_email||s.smtp_user)}</td>
+    <td>${s.active?'<span style="color:#059669;font-weight:600">Active</span>':'<span style="color:#9ca3af">Inactive</span>'}</td>
+    <td><button class="btn-sm" onclick="deleteSmtp(${s.id})">Delete</button></td>
+  </tr>`).join('');
+}
+
+// Check if a run is in progress on page load
+(async () => {
+  try {
+    const { job } = await fetch('/api/placement/run/status').then(r=>r.json());
+    if (job && job.status === 'running') pollJobStatus();
+  } catch {}
+})();
+</script>
+</body>
+</html>

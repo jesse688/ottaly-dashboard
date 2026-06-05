@@ -1,0 +1,1323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/favicon.svg">
+<meta name="theme-color" content="#050C29">
+<meta name="description" content="Ottaly Revenue — leads, pricing, and commission tracking">
+<title>Ottaly Admin</title>
+    <meta property="og:title" content="Ottaly Admin">
+    <meta property="og:site_name" content="Ottaly">
+    <meta name="twitter:title" content="Ottaly Admin">
+    <script>document.write('<script src="/splash.js?v=' + Date.now() + '"><\/script>');</script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Genos:wght@400;500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/ottaly.css">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            /* Exact brand colors from your palette */
+            --navy:       #224388;
+            --navy-text:  #050C29;
+            --teal:       #1F6F78;
+            --purple:     #7C89CD;
+            --blue-light: #D2E4F8;
+            --yellow:     #FFB700;
+            --white:      #FFFFFF;
+            --gray-text:  #E5E5E5;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: #F8F9FC;
+            color: var(--navy-text);
+            margin: 0;
+            padding: 0;
+        }
+
+        /* Header with logo */
+        .header {
+            background: var(--navy-text);
+            padding: 1.25rem 2rem;
+            border-bottom: 3px solid var(--teal);
+        }
+
+        .header-content {
+            max-width: 1600px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .logo-container {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .logo {
+            height: 45px;
+            width: auto;
+        }
+
+        .logo-text {
+            border-left: 2px solid rgba(255,255,255,0.2);
+            padding-left: 1rem;
+        }
+
+        .logo-title {
+            font-family: 'Genos', sans-serif;
+            font-size: 28px;
+            font-weight: 700;
+            color: white;
+            letter-spacing: 2px;
+            line-height: 1;
+        }
+
+        .logo-subtitle {
+            font-family: 'Genos', sans-serif;
+            font-size: 11px;
+            color: rgba(255,255,255,0.6);
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            margin-top: 2px;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+        }
+
+        .live-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 14px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 20px;
+        }
+
+        .live-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #22c55e;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(34,197,94,0.4); }
+            50% { opacity: 0.7; box-shadow: 0 0 0 5px rgba(34,197,94,0); }
+        }
+
+        .live-text {
+            color: white;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .last-update {
+            color: rgba(255,255,255,0.5);
+            font-size: 12px;
+        }
+
+        /* Main content */
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        /* Filters */
+        .filters {
+            background: white;
+            border-radius: 12px;
+            padding: 1.25rem 1.75rem;
+            margin-bottom: 1.75rem;
+            display: flex;
+            align-items: center;
+            gap: 2rem;
+            box-shadow: 0 1px 3px rgba(5,12,41,0.08);
+        }
+
+        .filter-group {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .filter-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--navy-text);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        select {
+            border: 2px solid #E5E7EB;
+            border-radius: 8px;
+            padding: 8px 14px;
+            font-family: 'Inter', sans-serif;
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--navy-text);
+            background: white;
+            cursor: pointer;
+            outline: none;
+            transition: all 0.2s;
+        }
+
+        select:hover {
+            border-color: var(--teal);
+        }
+
+        select:focus {
+            border-color: var(--teal);
+            box-shadow: 0 0 0 3px rgba(31,111,120,0.1);
+        }
+
+        input[type="date"] {
+            border: 2px solid #E5E7EB;
+            border-radius: 8px;
+            padding: 8px 14px;
+            font-family: 'Inter', sans-serif;
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--navy-text);
+            background: white;
+            cursor: pointer;
+            outline: none;
+            transition: all 0.2s;
+        }
+
+        input[type="date"]:hover,
+        input[type="date"]:focus {
+            border-color: var(--teal);
+            box-shadow: 0 0 0 3px rgba(31,111,120,0.1);
+        }
+
+        /* Metrics grid */
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1.25rem;
+            margin-bottom: 1.75rem;
+        }
+
+        @media (max-width: 1200px) { .metrics { grid-template-columns: repeat(2, 1fr); } }
+        @media (max-width: 600px) { .metrics { grid-template-columns: 1fr; } }
+
+        .metric {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 1px 3px rgba(5,12,41,0.08);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .metric:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(5,12,41,0.15);
+        }
+
+        .metric::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+        }
+
+        .metric.teal::before   { background: var(--teal); }
+        .metric.navy::before   { background: var(--navy); }
+        .metric.yellow::before { background: var(--yellow); }
+        .metric.purple::before { background: var(--purple); }
+
+        .metric-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            margin-bottom: 1rem;
+        }
+
+        .metric-icon.teal   { background: rgba(31,111,120,0.12); }
+        .metric-icon.navy   { background: rgba(34,67,136,0.12); }
+        .metric-icon.yellow { background: rgba(255,183,0,0.15); }
+        .metric-icon.purple { background: rgba(124,137,205,0.12); }
+
+        .metric-label {
+            font-size: 11px;
+            font-weight: 600;
+            color: #6B7280;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 6px;
+        }
+
+        .metric-value {
+            font-family: 'Genos', sans-serif;
+            font-size: 42px;
+            font-weight: 700;
+            color: var(--navy-text);
+            line-height: 1;
+            margin-bottom: 6px;
+            letter-spacing: -1px;
+        }
+
+        .metric-sub {
+            font-size: 13px;
+            color: #9CA3AF;
+            font-weight: 500;
+        }
+
+        /* Time-series bucket buttons */
+        .ts-btn {
+            padding: 5px 14px; border-radius: 20px; font-size: 12px; font-weight: 600;
+            cursor: pointer; border: 1.5px solid #E5E7EB; background: #fff;
+            color: #6B7280; transition: all 0.15s; font-family: 'Inter', sans-serif;
+        }
+        .ts-btn:hover { border-color: var(--teal); color: var(--teal); }
+        .ts-btn.active { background: var(--teal); border-color: var(--teal); color: #fff; }
+
+        /* Charts */
+        .charts {
+            display: grid;
+            grid-template-columns: 1.6fr 1fr;
+            gap: 1.25rem;
+            margin-bottom: 1.75rem;
+        }
+
+        @media (max-width: 1024px) { .charts { grid-template-columns: 1fr; } }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 1.75rem;
+            box-shadow: 0 1px 3px rgba(5,12,41,0.08);
+        }
+
+        .card-title {
+            font-family: 'Genos', sans-serif;
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--navy-text);
+            margin-bottom: 1.5rem;
+            letter-spacing: 0.5px;
+        }
+
+        .chart-wrapper {
+            position: relative;
+            height: 320px;
+        }
+
+        /* Tables */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        thead th {
+            padding: 12px 16px;
+            text-align: left;
+            font-size: 11px;
+            font-weight: 700;
+            color: #6B7280;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            border-bottom: 2px solid #F3F4F6;
+            background: #FAFBFC;
+        }
+
+        thead th:first-child { border-radius: 8px 0 0 0; }
+        thead th:last-child { border-radius: 0 8px 0 0; }
+
+        tbody td {
+            padding: 14px 16px;
+            border-bottom: 1px solid #F3F4F6;
+            font-size: 14px;
+            color: var(--navy-text);
+        }
+
+        tbody tr:last-child td { border-bottom: none; }
+        tbody tr:hover { background: #FAFBFC; }
+
+        .num {
+            font-family: 'Genos', sans-serif;
+            font-size: 17px;
+            font-weight: 700;
+            color: var(--navy-text);
+        }
+
+        .client-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 5px 12px 5px 5px;
+            background: var(--blue-light);
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--navy);
+        }
+
+        .client-initial {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 700;
+            color: white;
+        }
+
+        .revenue-pill {
+            display: inline-block;
+            padding: 4px 12px;
+            background: rgba(31,111,120,0.12);
+            color: var(--teal);
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 700;
+            font-family: 'Genos', sans-serif;
+        }
+
+        .error {
+            background: #FEF2F2;
+            border: 2px solid #FCA5A5;
+            border-radius: 12px;
+            padding: 1rem 1.25rem;
+            color: #DC2626;
+            margin-bottom: 1.5rem;
+            font-size: 14px;
+        }
+
+        .section-title {
+            font-family: 'Genos', sans-serif;
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--navy-text);
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .section-title::after {
+            content: '';
+            flex: 1;
+            height: 2px;
+            background: #E5E7EB;
+        }
+
+        /* Non-lead modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal {
+            background: white;
+            border-radius: 16px;
+            padding: 2rem;
+            max-width: 500px;
+            width: 90%;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        .modal-title {
+            font-family: 'Genos', sans-serif;
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--navy-text);
+            margin-bottom: 0.5rem;
+        }
+
+        .modal-subtitle {
+            color: #6B7280;
+            font-size: 14px;
+            margin-bottom: 1.5rem;
+        }
+
+        .form-group {
+            margin-bottom: 1.25rem;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--navy-text);
+            margin-bottom: 0.5rem;
+        }
+
+        .form-input,
+        .form-textarea {
+            width: 100%;
+            border: 2px solid #E5E7EB;
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-family: 'Inter', sans-serif;
+            font-size: 14px;
+            color: var(--navy-text);
+            outline: none;
+            transition: all 0.2s;
+        }
+
+        .form-textarea {
+            min-height: 100px;
+            resize: vertical;
+        }
+
+        .form-input:focus,
+        .form-textarea:focus {
+            border-color: var(--teal);
+            box-shadow: 0 0 0 3px rgba(31,111,120,0.1);
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 0.75rem;
+            margin-top: 1.5rem;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-family: 'Inter', sans-serif;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            border: none;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: var(--navy);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--teal);
+        }
+
+        .btn-secondary {
+            background: #F3F4F6;
+            color: var(--navy-text);
+        }
+
+        .btn-secondary:hover {
+            background: #E5E7EB;
+        }
+
+        .action-btn {
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            border: none;
+            transition: all 0.2s;
+        }
+
+        .action-btn.nonlead {
+            background: #FEF2F2;
+            color: #DC2626;
+        }
+
+        .action-btn.nonlead:hover {
+            background: #FEE2E2;
+        }
+
+        .action-btn.restore {
+            background: #ECFDF5;
+            color: #059669;
+        }
+
+        .action-btn.restore:hover {
+            background: #D1FAE5;
+        }
+
+        .nonlead-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            background: #FEF2F2;
+            color: #DC2626;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+
+        .nonlead-reason {
+            font-size: 12px;
+            color: #6B7280;
+            font-style: italic;
+            margin-top: 4px;
+        }
+
+
+        /* ── Sticky header ── */
+        .header { position: sticky; top: 0; z-index: 200; }
+        .logo-container { flex: 1; min-width: 0; overflow: hidden; }
+
+        /* ── Mobile overrides ── */
+        @media (max-width: 1024px) {
+            .header-content { flex-wrap: wrap; gap: .5rem; }
+            .charts { grid-template-columns: 1fr; }
+        }
+        @media (max-width: 768px) {
+            .header { padding: .75rem 1rem; }
+            .container { padding: 1rem; }
+            .filters { flex-wrap: wrap; gap: .75rem; padding: 1rem; }
+            .filter-group { flex-wrap: wrap; gap: .4rem; }
+            .metrics { grid-template-columns: 1fr 1fr; gap: .75rem; }
+            .metric { padding: 1.1rem; }
+            .metric-value { font-size: 32px; }
+.header-right { gap: .5rem; }
+        }
+        @media (max-width: 480px) {
+            .metrics { grid-template-columns: 1fr; }
+            .metric-value { font-size: 36px; }
+        }
+    </style>
+    <script src="/nav.js" defer></script>
+</head>
+<body>
+    <!-- Header -->
+
+    <!-- Main Container -->
+    <div class="container">
+        <!-- Filters -->
+        <div class="filters">
+            <div class="filter-group">
+                <span class="filter-label">Client</span>
+                <select id="clientFilter" onchange="updateDisplay()">
+                    <option value="all">All Clients</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <span class="filter-label">Period</span>
+                <select id="timeFilter" onchange="handlePeriodChange()">
+                    <option value="today">Today</option>
+                    <option value="yesterday">Yesterday</option>
+                    <option value="week">This Week</option>
+                    <option value="lastWeek">Last Week</option>
+                    <option value="month">This Month</option>
+                    <option value="lastMonth">Last Month</option>
+                    <option value="all" selected>All Time</option>
+                    <option value="custom">Custom Range...</option>
+                </select>
+            </div>
+            <div class="filter-group" id="customDateGroup" style="display: none;">
+                <input type="date" id="startDate" onchange="updateDisplay()">
+                <span style="color: #9CA3AF;">to</span>
+                <input type="date" id="endDate" onchange="updateDisplay()">
+            </div>
+            <div class="filter-group">
+                <span class="filter-label">Status</span>
+                <select id="statusFilter" onchange="updateDisplay()">
+                    <option value="active">Active Leads</option>
+                    <option value="nonlead">Non-Leads</option>
+                    <option value="all">All Leads</option>
+                </select>
+            </div>
+        </div>
+
+        <div id="errorContainer"></div>
+        <div id="lastUpdateWrap" style="display:none;font-size:11px;color:#9CA3AF;margin-bottom:0.5rem">
+            Last updated: <span id="lastUpdate"></span>
+            <span id="loadingStatus" style="margin-left:8px;color:#6B7280"></span>
+        </div>
+
+        <!-- Metrics -->
+        <div class="metrics">
+            <div class="metric teal">
+                <div class="metric-icon teal">💷</div>
+                <div class="metric-label">Total Revenue</div>
+                <div class="metric-value" id="metricRevenue">£0</div>
+                <div class="metric-sub" id="metricLeads">0 leads delivered</div>
+            </div>
+            <div class="metric navy">
+                <div class="metric-icon navy">📊</div>
+                <div class="metric-label">Avg Lead Value</div>
+                <div class="metric-value" id="metricAvg">£0</div>
+                <div class="metric-sub">per lead</div>
+            </div>
+            <div class="metric yellow">
+                <div class="metric-icon yellow">🏢</div>
+                <div class="metric-label">Active Clients</div>
+                <div class="metric-value" id="metricClients">0</div>
+                <div class="metric-sub">with leads</div>
+            </div>
+            <div class="metric purple">
+                <div class="metric-icon purple">🏆</div>
+                <div class="metric-label">Top Client</div>
+                <div class="metric-value" id="metricTopClient" style="font-size: 24px;">—</div>
+                <div class="metric-sub" id="metricTopRevenue">£0 revenue</div>
+            </div>
+        </div>
+
+        <!-- Time Series Charts -->
+        <div class="section-title">Revenue Over Time</div>
+        <div class="card" style="margin-bottom:1.25rem;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem;flex-wrap:wrap;gap:0.75rem;">
+                <div style="display:flex;gap:6px;flex-wrap:wrap;" id="tsBucketBtns">
+                    <button class="ts-btn active" data-bucket="day">Daily</button>
+                    <button class="ts-btn" data-bucket="week">Weekly</button>
+                    <button class="ts-btn" data-bucket="month">Monthly</button>
+                </div>
+                <div style="display:flex;gap:1.5rem;flex-wrap:wrap;">
+                    <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#6B7280;">
+                        <span style="width:10px;height:10px;border-radius:2px;background:var(--teal);display:inline-block"></span>Revenue
+                    </div>
+                    <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#6B7280;">
+                        <span style="width:10px;height:10px;border-radius:50%;background:var(--purple);display:inline-block"></span>Leads
+                    </div>
+                </div>
+            </div>
+            <div class="chart-wrapper" style="height:280px;">
+                <canvas id="tsChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Charts -->
+        <div class="section-title">Performance Overview</div>
+        <div class="charts">
+            <div class="card">
+                <div class="card-title">Revenue by Client</div>
+                <div class="chart-wrapper">
+                    <canvas id="revenueChart"></canvas>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-title">Lead Distribution</div>
+                <div class="chart-wrapper">
+                    <canvas id="leadsChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Client Performance Table -->
+        <div class="section-title">Client Performance</div>
+        <div class="card" style="margin-bottom: 1.5rem;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Client</th>
+                        <th>Leads</th>
+                        <th>Revenue</th>
+                        <th>Avg per Lead</th>
+                    </tr>
+                </thead>
+                <tbody id="clientsTable">
+                    <tr><td colspan="4" style="text-align: center; padding: 2rem; color: #9CA3AF;">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Recent Leads Table -->
+        <div class="section-title">Recent Leads</div>
+        <div class="card">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Client</th>
+                        <th>Name</th>
+                        <th>Email</th>
+                        <th>Date</th>
+                        <th>Value</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody id="leadsTable">
+                    <tr><td colspan="5" style="text-align: center; padding: 2rem; color: #9CA3AF;">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+    </div>
+
+    <!-- Non-Lead Modal -->
+    <div class="modal-overlay" id="nonleadModal">
+        <div class="modal">
+            <div class="modal-title">Mark as Non-Lead</div>
+            <div class="modal-subtitle" id="modalSubtitle">Are you sure you want to mark this lead as non-qualified?</div>
+            
+            <div class="form-group">
+                <label class="form-label">Lead Email</label>
+                <input type="text" class="form-input" id="nonleadEmail" readonly>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Reason *</label>
+                <textarea class="form-textarea" id="nonleadReason" placeholder="e.g., Not qualified, Wrong industry, Already customer, etc."></textarea>
+            </div>
+
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeNonleadModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="confirmNonlead()">Mark as Non-Lead</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const WEBHOOK_URL = 'https://n8n1-n8n.xuobbb.easypanel.host/webhook/ottaly-nonlead';
+
+        // Revenue page: admin only
+        (async () => {
+            const s = await fetch('/api/session').then(r => r.json()).catch(() => ({ok:true,role:'admin',name:''}));
+            if (s.ok===false) { location.href = '/login.html?next=/index.html'; return; }
+            if (s.role === 'manager') {
+                document.body.innerHTML = `<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#F0F2F8;font-family:'Inter',sans-serif">
+                    <div style="text-align:center;padding:3rem">
+                        <div style="font-size:3rem;margin-bottom:1rem">🔒</div>
+                        <div style="font-size:1.2rem;font-weight:700;color:#050C29;margin-bottom:0.5rem">Access Restricted</div>
+                        <div style="color:#6B7280;margin-bottom:1.5rem">Revenue data is only visible to admins.</div>
+                        <a href="/performance.html" style="padding:10px 24px;background:#1F6F78;color:#fff;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px">Go to Performance →</a>
+                        <div style="margin-top:1rem"><a href="/login.html" style="color:#6B7280;font-size:12px">Sign in as Admin</a></div>
+                    </div>
+                </div>`;
+                return;
+            }
+        })();
+
+// Detect if running locally
+const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+        
+        let allLeads = [];
+        let revenueChart = null;
+        let leadsChart = null;
+        let tsChart = null;
+        let tsBucket = 'day';
+        let currentNonleadEmail = null;
+
+        const CLIENT_COLORS = ['#1F6F78','#224388','#FFB700','#7C89CD','#D2E4F8'];
+
+        // Modal functions
+        function openNonleadModal(email, name) {
+            currentNonleadEmail = email;
+            document.getElementById('nonleadEmail').value = email;
+            document.getElementById('modalSubtitle').textContent = `Mark "${name}" as non-qualified?`;
+            document.getElementById('nonleadReason').value = '';
+            document.getElementById('nonleadModal').classList.add('active');
+        }
+
+        function closeNonleadModal() {
+            document.getElementById('nonleadModal').classList.remove('active');
+            currentNonleadEmail = null;
+        }
+
+        async function confirmNonlead() {
+            const reason = document.getElementById('nonleadReason').value.trim();
+            if (!reason) { alert('Please enter a reason'); return; }
+            try {
+                const r = await fetch('/api/nonlead/mark', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email: currentNonleadEmail, reason })
+                });
+                if (!r.ok) throw new Error('Server error');
+                closeNonleadModal();
+                // Also fire n8n webhook in background (don't block on it)
+                fetch(WEBHOOK_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ lead_email: currentNonleadEmail, non_lead_status: 'TRUE', non_lead_reason: reason, non_lead_date: new Date().toISOString() })
+                }).catch(() => {});
+                await fetchData();
+            } catch (e) { alert('Failed: ' + e.message); }
+        }
+
+        async function handleRestore(email) {
+            if (!confirm('Restore this lead to active status?')) return;
+            try {
+                const r = await fetch('/api/nonlead/restore', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email })
+                });
+                if (!r.ok) throw new Error('Server error');
+                fetch(WEBHOOK_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ lead_email: email, non_lead_status: 'FALSE', non_lead_reason: '', non_lead_date: '' })
+                }).catch(() => {});
+                await fetchData();
+            } catch (e) { alert('Failed: ' + e.message); }
+        }
+
+        // Date utility functions
+        function parseDate(dateStr) {
+            if (!dateStr) return null;
+            const d = new Date(dateStr);
+            return isNaN(d.getTime()) ? null : d;
+        }
+
+        function getDateRange(period) {
+            const now = new Date();
+            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            
+            switch(period) {
+                case 'today':
+                    return { start: today, end: new Date(today.getTime() + 86400000) };
+                
+                case 'yesterday':
+                    const yesterday = new Date(today.getTime() - 86400000);
+                    return { start: yesterday, end: today };
+                
+                case 'week':
+                    const weekStart = new Date(today);
+                    weekStart.setDate(today.getDate() - today.getDay());
+                    return { start: weekStart, end: new Date(now.getTime() + 86400000) };
+                
+                case 'lastWeek':
+                    const lastWeekEnd = new Date(today);
+                    lastWeekEnd.setDate(today.getDate() - today.getDay());
+                    const lastWeekStart = new Date(lastWeekEnd.getTime() - 7 * 86400000);
+                    return { start: lastWeekStart, end: lastWeekEnd };
+                
+                case 'month':
+                    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+                    return { start: monthStart, end: new Date(now.getTime() + 86400000) };
+                
+                case 'lastMonth':
+                    const lastMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+                    const lastMonthEnd = new Date(today.getFullYear(), today.getMonth(), 1);
+                    return { start: lastMonthStart, end: lastMonthEnd };
+                
+                case 'custom':
+                    const startInput = document.getElementById('startDate').value;
+                    const endInput = document.getElementById('endDate').value;
+                    if (startInput && endInput) {
+                        return {
+                            start: new Date(startInput),
+                            end: new Date(new Date(endInput).getTime() + 86400000)
+                        };
+                    }
+                    return null;
+                
+                default:
+                    return null;
+            }
+        }
+
+        function handlePeriodChange() {
+            const period = document.getElementById('timeFilter').value;
+            const customGroup = document.getElementById('customDateGroup');
+            
+            if (period === 'custom') {
+                customGroup.style.display = 'flex';
+                const today = new Date().toISOString().split('T')[0];
+                const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+                document.getElementById('startDate').value = weekAgo;
+                document.getElementById('endDate').value = today;
+            } else {
+                customGroup.style.display = 'none';
+            }
+            
+            updateDisplay();
+        }
+
+        function getClientColors(count) {
+            return Array(count).fill(0).map((_, i) => CLIENT_COLORS[i % CLIENT_COLORS.length]);
+        }
+
+        function clientInitial(name) { return name.charAt(0).toUpperCase(); }
+
+        async function fetchData() {
+            try {
+                document.getElementById('loadingStatus').textContent = 'Loading…';
+                const cache = await fetch('/api/revenue/leads').then(r => r.json());
+                allLeads = (cache.leads || []).map(l => {
+                    const dateObj = parseDate(l.date);
+                    return {
+                        ...l,
+                        date:    dateObj,
+                        dateStr: dateObj ? dateObj.toLocaleDateString('en-GB', {
+                            day: '2-digit', month: 'short', year: 'numeric',
+                            hour: '2-digit', minute: '2-digit'
+                        }) : 'N/A',
+                        is_nonlead:     l.is_nonlead     || false,
+                        nonlead_reason: l.nonlead_reason || '',
+                        nonlead_date:   l.nonlead_date   || ''
+                    };
+                });
+                populateClientFilter();
+                updateDisplay();
+                document.getElementById('loadingStatus').style.display = 'none';
+                document.getElementById('lastUpdateWrap').style.display = '';
+                document.getElementById('lastUpdate').textContent =
+                    cache.updatedAt
+                        ? new Date(cache.updatedAt).toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'})
+                        : new Date().toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'});
+            } catch (error) {
+                document.getElementById('loadingStatus').textContent = '';
+                document.getElementById('errorContainer').innerHTML = `<div class="error">⚠️ ${error.message}</div>`;
+            }
+        }
+
+        function populateClientFilter() {
+            const clients = [...new Set(allLeads.map(l => l.client_name))].sort();
+            const select = document.getElementById('clientFilter');
+            const current = select.value;
+            select.innerHTML = '<option value="all">All Clients</option>';
+            clients.forEach(client => {
+                const opt = document.createElement('option');
+                opt.value = client;
+                opt.textContent = client;
+                if (client === current) opt.selected = true;
+                select.appendChild(opt);
+            });
+        }
+
+        function getFilteredLeads() {
+            const clientFilter = document.getElementById('clientFilter').value;
+            const timeFilter = document.getElementById('timeFilter').value;
+            const statusFilter = document.getElementById('statusFilter').value;
+            
+            let filtered = allLeads;
+            
+            // Client filter
+            if (clientFilter !== 'all') {
+                filtered = filtered.filter(l => l.client_name === clientFilter);
+            }
+            
+            // Date filter
+            if (timeFilter !== 'all') {
+                const range = getDateRange(timeFilter);
+                if (range) {
+                    filtered = filtered.filter(l => {
+                        if (!l.date) return false;
+                        return l.date >= range.start && l.date < range.end;
+                    });
+                }
+            }
+            
+            // Status filter
+            if (statusFilter === 'active') {
+                filtered = filtered.filter(l => !l.is_nonlead);
+            } else if (statusFilter === 'nonlead') {
+                filtered = filtered.filter(l => l.is_nonlead);
+            }
+            
+            return filtered;
+        }
+
+        function updateDisplay() {
+            const leads = getFilteredLeads();
+            const activeLeads = leads.filter(l => !l.is_nonlead);
+            const statusFilter = document.getElementById('statusFilter').value;
+            
+            // Use active leads for revenue calculations unless viewing non-leads
+            const calcLeads = statusFilter === 'nonlead' ? leads : activeLeads;
+            
+            const totalRevenue = calcLeads.reduce((sum, l) => sum + l.lead_price, 0);
+            const avgValue = calcLeads.length > 0 ? totalRevenue / calcLeads.length : 0;
+
+            document.getElementById('metricRevenue').textContent = '£' + Math.round(totalRevenue).toLocaleString('en-GB');
+            document.getElementById('metricLeads').textContent = calcLeads.length + ' leads delivered';
+            document.getElementById('metricAvg').textContent = '£' + Math.round(avgValue).toLocaleString('en-GB');
+
+            const byClient = {};
+            calcLeads.forEach(lead => {
+                if (!byClient[lead.client_name]) byClient[lead.client_name] = { leads: 0, revenue: 0 };
+                byClient[lead.client_name].leads += 1;
+                byClient[lead.client_name].revenue += lead.lead_price;
+            });
+
+            document.getElementById('metricClients').textContent = Object.keys(byClient).length;
+
+            const sorted = Object.entries(byClient).sort((a, b) => b[1].revenue - a[1].revenue);
+            if (sorted.length > 0) {
+                document.getElementById('metricTopClient').textContent = sorted[0][0];
+                document.getElementById('metricTopRevenue').textContent = '£' + Math.round(sorted[0][1].revenue).toLocaleString('en-GB') + ' revenue';
+            } else {
+                document.getElementById('metricTopClient').textContent = '—';
+                document.getElementById('metricTopRevenue').textContent = '£0 revenue';
+            }
+
+            updateClientTable(sorted);
+            updateLeadsTable(leads);
+            updateCharts(sorted);
+            updateTsChart(calcLeads);
+        }
+
+        function updateClientTable(sortedClients) {
+            const colors = getClientColors(sortedClients.length);
+            document.getElementById('clientsTable').innerHTML = sortedClients.map(([client, stats], i) => `
+                <tr>
+                    <td>
+                        <div class="client-badge">
+                            <div class="client-initial" style="background:${colors[i]}">${clientInitial(client)}</div>
+                            ${client}
+                        </div>
+                    </td>
+                    <td><span class="num">${stats.leads}</span></td>
+                    <td><span class="revenue-pill">£${Math.round(stats.revenue).toLocaleString('en-GB')}</span></td>
+                    <td class="num">£${Math.round(stats.revenue / stats.leads)}</td>
+                </tr>
+            `).join('') || '<tr><td colspan="4" style="text-align:center;padding:2rem;color:#9CA3AF;">No data</td></tr>';
+        }
+
+        function updateLeadsTable(leads) {
+            const recent = leads.slice(-50).reverse();
+            const colors = {};
+            [...new Set(leads.map(l => l.client_name))].forEach((c, i) => colors[c] = CLIENT_COLORS[i % CLIENT_COLORS.length]);
+
+            document.getElementById('leadsTable').innerHTML = recent.map(lead => {
+                const fullName = `${lead.first_name} ${lead.last_name}`;
+                const inactive = lead.client_inactive;
+                return `
+                <tr style="${inactive ? 'opacity:0.45' : ''}">
+                    <td>
+                        <div class="client-badge">
+                            <div class="client-initial" style="background:${inactive ? '#9CA3AF' : colors[lead.client_name]}">${clientInitial(lead.client_name)}</div>
+                            ${lead.client_name}${inactive ? ' <span style="font-size:10px;background:#F3F4F6;color:#6B7280;padding:1px 5px;border-radius:3px">Inactive</span>' : ''}
+                        </div>
+                    </td>
+                    <td>
+                        <div style="font-weight:500;">${fullName}</div>
+                        ${lead.is_nonlead ? `<div class="nonlead-reason">Reason: ${lead.nonlead_reason}</div>` : ''}
+                    </td>
+                    <td style="font-size:13px;color:#6B7280;">${lead.lead_email}</td>
+                    <td style="font-size:13px;color:#6B7280;">${lead.dateStr}</td>
+                    <td><span class="revenue-pill">£${lead.lead_price}</span></td>
+                    <td>
+                        ${lead.is_nonlead
+                            ? `<button class="action-btn restore" onclick="handleRestore('${lead.lead_email}')">Restore</button>`
+                            : `<button class="action-btn nonlead" onclick="openNonleadModal('${lead.lead_email}', '${fullName}')">Non-Lead</button>`
+                        }
+                    </td>
+                </tr>
+                `;
+            }).join('') || '<tr><td colspan="6" style="text-align:center;padding:2rem;color:#9CA3AF;">No leads</td></tr>';
+        }
+
+        function updateCharts(sortedClients) {
+            const labels = sortedClients.map(([c]) => c);
+            const revenues = sortedClients.map(([, s]) => s.revenue);
+            const leadCounts = sortedClients.map(([, s]) => s.leads);
+            const colors = getClientColors(labels.length);
+
+            const ctx1 = document.getElementById('revenueChart').getContext('2d');
+            if (revenueChart) revenueChart.destroy();
+            revenueChart = new Chart(ctx1, {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [{
+                        data: revenues,
+                        backgroundColor: colors,
+                        borderRadius: 8,
+                        borderSkipped: false,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    indexAxis: 'y',
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: { label: ctx => ' £' + Math.round(ctx.raw).toLocaleString('en-GB') }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            ticks: { color: '#6B7280', font: { family: 'Inter', size: 11 }, callback: v => '£' + v },
+                            grid: { color: '#F3F4F6' }
+                        },
+                        y: {
+                            ticks: { color: '#374151', font: { family: 'Inter', size: 12, weight: '600' } },
+                            grid: { display: false }
+                        }
+                    }
+                }
+            });
+
+            const ctx2 = document.getElementById('leadsChart').getContext('2d');
+            if (leadsChart) leadsChart.destroy();
+            leadsChart = new Chart(ctx2, {
+                type: 'doughnut',
+                data: {
+                    labels,
+                    datasets: [{
+                        data: leadCounts,
+                        backgroundColor: colors,
+                        borderColor: '#FFFFFF',
+                        borderWidth: 4,
+                        hoverOffset: 8
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '65%',
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: {
+                                color: '#374151',
+                                font: { family: 'Inter', size: 12, weight: '600' },
+                                padding: 16,
+                                usePointStyle: true,
+                                pointStyleWidth: 12
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        function bucketKey(date, bucket) {
+            const y = date.getFullYear(), m = date.getMonth(), d = date.getDate();
+            if (bucket === 'day')   return `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+            if (bucket === 'week')  {
+                const day = new Date(y, m, d);
+                const mon = new Date(day); mon.setDate(d - ((day.getDay()+6)%7));
+                return `${mon.getFullYear()}-${String(mon.getMonth()+1).padStart(2,'0')}-${String(mon.getDate()).padStart(2,'0')}`;
+            }
+            return `${y}-${String(m+1).padStart(2,'0')}`;
+        }
+
+        function bucketLabel(key, bucket) {
+            const [y, m, d] = key.split('-').map(Number);
+            if (bucket === 'day')   return new Date(y, m-1, d).toLocaleDateString('en-GB', {day:'numeric', month:'short'});
+            if (bucket === 'week')  return 'w/c ' + new Date(y, m-1, d).toLocaleDateString('en-GB', {day:'numeric', month:'short'});
+            return new Date(y, m-1, 1).toLocaleDateString('en-GB', {month:'short', year:'numeric'});
+        }
+
+        function updateTsChart(leads) {
+            const buckets = {};
+            leads.forEach(l => {
+                if (!l.date) return;
+                const k = bucketKey(l.date, tsBucket);
+                if (!buckets[k]) buckets[k] = { revenue: 0, count: 0 };
+                buckets[k].revenue += l.lead_price;
+                buckets[k].count++;
+            });
+
+            const keys = Object.keys(buckets).sort();
+            const labels   = keys.map(k => bucketLabel(k, tsBucket));
+            const revenues = keys.map(k => buckets[k].revenue);
+            const counts   = keys.map(k => buckets[k].count);
+
+            const ctx = document.getElementById('tsChart').getContext('2d');
+            if (tsChart) tsChart.destroy();
+            tsChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [
+                        {
+                            label: 'Revenue',
+                            data: revenues,
+                            backgroundColor: 'rgba(31,111,120,0.85)',
+                            borderRadius: 6,
+                            borderSkipped: false,
+                            yAxisID: 'yRev',
+                            order: 2
+                        },
+                        {
+                            label: 'Leads',
+                            data: counts,
+                            type: 'line',
+                            borderColor: '#7C89CD',
+                            backgroundColor: 'rgba(124,137,205,0.12)',
+                            borderWidth: 2.5,
+                            pointRadius: counts.length > 60 ? 0 : 4,
+                            pointHoverRadius: 6,
+                            fill: true,
+                            tension: 0.35,
+                            yAxisID: 'yLeads',
+                            order: 1
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: ctx => {
+                                    if (ctx.raw === null) return null;
+                                    if (ctx.datasetIndex === 0)
+                                        return ` £${Math.round(ctx.raw).toLocaleString('en-GB')} revenue`;
+                                    return ` ${ctx.raw} leads`;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        yRev: {
+                            position: 'left',
+                            ticks: { color: '#6B7280', font: { family: 'Inter', size: 11 }, callback: v => '£' + v.toLocaleString('en-GB') },
+                            grid: { color: 'rgba(0,0,0,0.05)' }
+                        },
+                        yLeads: {
+                            position: 'right',
+                            grid: { display: false },
+                            ticks: { color: '#7C89CD', font: { family: 'Inter', size: 11 } }
+                        },
+                        x: {
+                            ticks: { color: '#6B7280', font: { family: 'Inter', size: 11 }, maxRotation: 45 },
+                            grid: { display: false }
+                        }
+                    }
+                }
+            });
+
+        }
+
+        // Bucket toggle buttons
+        document.getElementById('tsBucketBtns').addEventListener('click', e => {
+            const btn = e.target.closest('.ts-btn');
+            if (!btn) return;
+            tsBucket = btn.dataset.bucket;
+            document.querySelectorAll('.ts-btn').forEach(b => b.classList.toggle('active', b === btn));
+            updateTsChart(getFilteredLeads().filter(l => !l.is_nonlead));
+        });
+
+        // Close modal when clicking outside
+        document.getElementById('nonleadModal').addEventListener('click', function(e) {
+            if (e.target === this) closeNonleadModal();
+        });
+
+        fetchData();
+        setInterval(fetchData, 30000);
+    </script>
+</body>
+</html>

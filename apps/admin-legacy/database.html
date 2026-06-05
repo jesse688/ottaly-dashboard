@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="theme-color" content="#050C29">
+<title>Database — Ottaly</title>
+<script>document.write('<script src="/splash.js?v=' + Date.now() + '"><\/script>');</script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<script src="/nav.js" defer></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--bg:#F0F2F8;--card:#fff;--border:#E2E6F0;--text:#050C29;--muted:#6B7280;--green:#16A34A;--red:#DC2626;--amber:#D97706}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+.page{max-width:1400px;margin:0 auto;padding:1.5rem}
+.card{background:var(--card);border-radius:12px;border:1px solid var(--border);padding:1.25rem;margin-bottom:1rem}
+.btn{padding:7px 16px;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;border:none;transition:all .15s}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn-primary{background:var(--navy);color:#fff}
+.btn-primary:hover:not(:disabled){background:#1a3370}
+.btn-teal{background:var(--teal);color:#fff}
+.btn-teal:hover:not(:disabled){background:#185f67}
+.btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--border)}
+.btn-ghost:hover:not(:disabled){background:var(--bg)}
+.btn-red{background:#fee2e2;color:var(--red);border:1px solid #fecaca}
+.btn-red:hover:not(:disabled){background:#fecaca}
+.toolbar{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin-bottom:1rem}
+.chip{padding:5px 12px;border-radius:20px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid var(--border);background:var(--card);color:var(--muted);transition:all .15s;white-space:nowrap}
+.chip.active{background:var(--navy);color:#fff;border-color:var(--navy)}
+.chip:hover:not(.active){background:var(--bg)}
+.table-wrap{overflow-x:auto;border-radius:8px;border:1px solid var(--border)}
+table{width:100%;border-collapse:collapse;font-size:12px}
+thead tr{background:#F8F9FC;border-bottom:2px solid var(--border)}
+th{padding:9px 10px;text-align:left;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);white-space:nowrap;cursor:pointer;user-select:none}
+th:hover{color:var(--navy)}
+th.sorted{color:var(--navy)}
+th .sort-icon{margin-left:4px;opacity:.5}
+th.sorted .sort-icon{opacity:1}
+tbody tr{border-bottom:1px solid var(--border);transition:background .1s}
+tbody tr:hover{background:#F8F9FC}
+tbody tr.selected{background:#EFF6FF}
+td{padding:7px 10px;vertical-align:middle;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+td.missing{color:#d1d5db;font-style:italic}
+.cb-cell{width:32px;text-align:center}
+.badge{display:inline-block;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:600}
+.badge-safe{background:#dcfce7;color:#16a34a}
+.badge-unsafe{background:#fee2e2;color:#dc2626}
+.badge-unknown{background:#f3f4f6;color:#6b7280}
+.badge-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px}
+.missing-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:#fbbf24;margin-right:3px;flex-shrink:0}
+.pagination{display:flex;align-items:center;gap:.5rem;margin-top:1rem;font-size:12px;color:var(--muted)}
+.page-btn{padding:5px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card);cursor:pointer;font-size:12px}
+.page-btn:disabled{opacity:.4;cursor:not-allowed}
+.page-btn.current{background:var(--navy);color:#fff;border-color:var(--navy)}
+.stat-bar{display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:.6rem}
+.stat-bar:last-of-type{margin-bottom:1rem}
+.stat{background:var(--card);border-radius:8px;border:1px solid var(--border);border-top:3px solid var(--navy);padding:.7rem 1rem;min-width:110px}
+.stat.teal{border-top-color:var(--teal)}
+.stat.teal{border-top-color:var(--teal)}
+.stat.amber{border-top-color:var(--amber)}
+.stat.red{border-top-color:var(--red)}
+.stat .lbl{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+.stat .val{font-size:1.3rem;font-weight:700;margin-top:2px}
+.search-input{padding:7px 12px;border-radius:7px;border:1px solid var(--border);font-size:13px;outline:none;min-width:220px}
+.search-input:focus{border-color:var(--teal)}
+select.filter-select{padding:7px 10px;border-radius:7px;border:1px solid var(--border);font-size:12px;outline:none;background:var(--card)}
+</style>
+</head>
+<body>
+
+<div class="page">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+    <div>
+      <h1 style="font-size:1.3rem;font-weight:700">Database</h1>
+      <div style="font-size:12px;color:var(--muted);margin-top:2px">Full contacts table — sort, filter, export, delete</div>
+    </div>
+    <div style="display:flex;gap:.5rem">
+      <button class="btn btn-ghost" onclick="exportCsv()" id="exportBtn">Export CSV</button>
+      <button class="btn btn-red" onclick="deleteSelected()" id="deleteBtn" style="display:none">Delete selected (<span id="selCount">0</span>)</button>
+    </div>
+  </div>
+
+  <!-- Stats -->
+  <div class="stat-bar" id="statBar">
+    <div class="stat"><div class="lbl">Unique Emails</div><div class="val" id="statTotal">—</div></div>
+    <div class="stat amber"><div class="lbl">Missing Keywords</div><div class="val" id="statKw">—</div></div>
+    <div class="stat amber"><div class="lbl">Missing Industry</div><div class="val" id="statInd">—</div></div>
+    <div class="stat amber"><div class="lbl">Missing Co. Size</div><div class="val" id="statEmp">—</div></div>
+    <div class="stat amber"><div class="lbl">Missing City</div><div class="val" id="statCity">—</div></div>
+  </div>
+  <div class="stat-bar">
+    <div class="stat teal"><div class="lbl">Unique Domains</div><div class="val" id="statDomains">—</div></div>
+    <div class="stat teal"><div class="lbl">w/ Keywords</div><div class="val" id="statDomKw">—</div></div>
+    <div class="stat teal"><div class="lbl">w/ Industry</div><div class="val" id="statDomInd">—</div></div>
+    <div class="stat teal"><div class="lbl">w/ Co. Size</div><div class="val" id="statDomEmp">—</div></div>
+    <div class="stat teal"><div class="lbl">w/ City</div><div class="val" id="statDomCity">—</div></div>
+  </div>
+
+  <!-- Toolbar -->
+  <div class="card" style="padding:.9rem">
+    <div class="toolbar">
+      <input type="text" class="search-input" id="searchInput" placeholder="Search email, name, company…" oninput="debounceSearch()">
+      <select class="filter-select" id="wsFilter" onchange="loadData()">
+        <option value="">All workspaces</option>
+      </select>
+      <select class="filter-select" id="sourceFilter" onchange="loadData()">
+        <option value="">All sources</option>
+        <option value="apollo_csv">Apollo CSV</option>
+        <option value="plusvibe">PlusVibe</option>
+      </select>
+    </div>
+    <div class="toolbar" style="margin-bottom:6px">
+      <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)">Missing:</span>
+      <span class="chip" data-missing="keywords" onclick="toggleMissing(this)">Keywords</span>
+      <span class="chip" data-missing="industry" onclick="toggleMissing(this)">Industry</span>
+      <span class="chip" data-missing="num_employees" onclick="toggleMissing(this)">Company Size</span>
+      <span class="chip" data-missing="city" onclick="toggleMissing(this)">City</span>
+      <span class="chip" data-missing="technologies" onclick="toggleMissing(this)">Technologies</span>
+      <span class="chip" data-missing="linkedin_url" onclick="toggleMissing(this)">LinkedIn</span>
+    </div>
+    <div class="toolbar" style="margin-bottom:0">
+      <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)">Companies House:</span>
+      <span class="chip" data-missing="company_status" onclick="toggleMissing(this)">Status</span>
+      <span class="chip" data-missing="ch_company_number" onclick="toggleMissing(this)">Not on CH</span>
+      <span class="chip" data-missing="ch_founded_year" onclick="toggleMissing(this)">Founded Year</span>
+      <span class="chip" data-missing="ch_postcode" onclick="toggleMissing(this)">Postcode</span>
+      <span class="chip" data-ch-active="not active" onclick="toggleChStatus(this)">Not Active</span>
+      <span class="chip" data-ch-insolvency onclick="toggleChInsolvency(this)">Has Insolvency</span>
+      <span class="chip" data-ch-overdue onclick="toggleChOverdue(this)">Accounts Overdue</span>
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div class="card" style="padding:0;overflow:hidden">
+    <div class="table-wrap">
+      <table id="dbTable">
+        <thead>
+          <tr>
+            <th class="cb-cell"><input type="checkbox" id="selectAll" onchange="toggleSelectAll(this)"></th>
+            <th onclick="sortBy('email')">Email <span class="sort-icon" id="sort-email"></span></th>
+            <th onclick="sortBy('first_name')">First <span class="sort-icon" id="sort-first_name"></span></th>
+            <th onclick="sortBy('last_name')">Last <span class="sort-icon" id="sort-last_name"></span></th>
+            <th onclick="sortBy('company_name')">Company <span class="sort-icon" id="sort-company_name"></span></th>
+            <th onclick="sortBy('company_domain')">Domain <span class="sort-icon" id="sort-company_domain"></span></th>
+            <th onclick="sortBy('job_title')">Job Title <span class="sort-icon" id="sort-job_title"></span></th>
+            <th onclick="sortBy('industry')">Industry <span class="sort-icon" id="sort-industry"></span></th>
+            <th onclick="sortBy('num_employees')">Employees <span class="sort-icon" id="sort-num_employees"></span></th>
+            <th onclick="sortBy('keywords')">Keywords <span class="sort-icon" id="sort-keywords"></span></th>
+            <th onclick="sortBy('city')">City <span class="sort-icon" id="sort-city"></span></th>
+            <th onclick="sortBy('country')">Country <span class="sort-icon" id="sort-country"></span></th>
+            <th onclick="sortBy('email_status')">Email Status <span class="sort-icon" id="sort-email_status"></span></th>
+            <th onclick="sortBy('source')">Source <span class="sort-icon" id="sort-source"></span></th>
+            <th onclick="sortBy('imported_at')">Imported <span class="sort-icon" id="sort-imported_at"></span></th>
+            <th>CH Status</th>
+            <th>CH Type</th>
+            <th>CH Founded</th>
+            <th>CH Postcode</th>
+            <th>CH SIC Codes</th>
+            <th>CH Officers</th>
+            <th>CH Insolvency</th>
+            <th>CH Charges</th>
+            <th>CH Overdue</th>
+            <th>CH Address</th>
+            <th>CH Cessation</th>
+            <th>CH Last Accounts</th>
+            <th onclick="sortBy('enriched_at')">Enriched <span class="sort-icon" id="sort-enriched_at"></span></th>
+          </tr>
+        </thead>
+        <tbody id="dbBody"><tr><td colspan="30" style="text-align:center;padding:2rem;color:var(--muted)">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Pagination -->
+  <div class="pagination" id="pagination"></div>
+</div>
+
+<script>
+const PAGE_SIZE = 200;
+let currentPage = 0;
+let totalRows = 0;
+let sortField = 'imported_at';
+let sortDir = 'desc';
+let missingFilters = new Set();
+let selectedIds = new Set();
+let searchTimer = null;
+
+function debounceSearch() {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => { currentPage = 0; loadData(); }, 350);
+}
+
+function toggleMissing(el) {
+  const key = el.dataset.missing;
+  if (missingFilters.has(key)) { missingFilters.delete(key); el.classList.remove('active'); }
+  else { missingFilters.add(key); el.classList.add('active'); }
+  currentPage = 0;
+  loadData();
+}
+function toggleChStatus(el) {
+  if (missingFilters.has('not_active')) { missingFilters.delete('not_active'); el.classList.remove('active'); }
+  else { missingFilters.add('not_active'); el.classList.add('active'); }
+  currentPage = 0; loadData();
+}
+function toggleChInsolvency(el) {
+  if (missingFilters.has('ch_insolvency')) { missingFilters.delete('ch_insolvency'); el.classList.remove('active'); }
+  else { missingFilters.add('ch_insolvency'); el.classList.add('active'); }
+  currentPage = 0; loadData();
+}
+function toggleChOverdue(el) {
+  if (missingFilters.has('ch_overdue')) { missingFilters.delete('ch_overdue'); el.classList.remove('active'); }
+  else { missingFilters.add('ch_overdue'); el.classList.add('active'); }
+  currentPage = 0; loadData();
+}
+
+function sortBy(field) {
+  if (sortField === field) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+  else { sortField = field; sortDir = 'asc'; }
+  currentPage = 0;
+  loadData();
+}
+
+function updateSortIcons() {
+  document.querySelectorAll('th').forEach(th => th.classList.remove('sorted'));
+  const icon = document.getElementById('sort-' + sortField);
+  if (icon) {
+    icon.closest('th').classList.add('sorted');
+    icon.textContent = sortDir === 'asc' ? '↑' : '↓';
+  }
+  document.querySelectorAll('.sort-icon').forEach(el => { if (el.id !== 'sort-' + sortField) el.textContent = ''; });
+}
+
+async function loadStats() {
+  try {
+    const r = await fetch('/api/admin/database/stats');
+    const d = await r.json();
+    document.getElementById('statTotal').textContent   = (d.total||0).toLocaleString();
+    document.getElementById('statKw').textContent      = (d.missing_keywords||0).toLocaleString();
+    document.getElementById('statInd').textContent     = (d.missing_industry||0).toLocaleString();
+    document.getElementById('statEmp').textContent     = (d.missing_num_employees||0).toLocaleString();
+    document.getElementById('statCity').textContent    = (d.missing_city||0).toLocaleString();
+    document.getElementById('statDomains').textContent = (d.total_domains||0).toLocaleString();
+    document.getElementById('statDomKw').textContent   = (d.domains_with_keywords||0).toLocaleString();
+    document.getElementById('statDomInd').textContent  = (d.domains_with_industry||0).toLocaleString();
+    document.getElementById('statDomEmp').textContent  = (d.domains_with_employees||0).toLocaleString();
+    document.getElementById('statDomCity').textContent = (d.domains_with_city||0).toLocaleString();
+  } catch {}
+}
+
+async function loadWorkspaces() {
+  try {
+    const r = await fetch('/api/admin/database/workspaces');
+    const d = await r.json();
+    const sel = document.getElementById('wsFilter');
+    (d.workspaces || []).forEach(w => {
+      const o = document.createElement('option');
+      o.value = w.id; o.textContent = w.name || w.id;
+      sel.appendChild(o);
+    });
+  } catch {}
+}
+
+async function loadData() {
+  updateSortIcons();
+  const params = new URLSearchParams({
+    page: currentPage,
+    limit: PAGE_SIZE,
+    sortBy: sortField,
+    sortDir,
+    q: document.getElementById('searchInput').value.trim(),
+    workspace: document.getElementById('wsFilter').value,
+    source: document.getElementById('sourceFilter').value,
+    missing: [...missingFilters].join(','),
+  });
+
+  try {
+    const r = await fetch('/api/admin/database/contacts?' + params);
+    const d = await r.json();
+    totalRows = d.total || 0;
+    renderTable(d.contacts || []);
+    renderPagination();
+    document.getElementById('statTotal').textContent = totalRows.toLocaleString();
+  } catch (err) {
+    document.getElementById('dbBody').innerHTML = `<tr><td colspan="15" style="text-align:center;padding:2rem;color:var(--red)">Error: ${err.message}</td></tr>`;
+  }
+}
+
+function cell(val, cls) {
+  if (val == null || val === '') return `<td class="missing">${cls || '—'}</td>`;
+  return `<td title="${String(val).replace(/"/g,'&quot;')}">${String(val).replace(/</g,'&lt;').slice(0,60)}</td>`;
+}
+
+function statusBadge(s) {
+  if (!s) return `<td><span class="badge badge-unknown">—</span></td>`;
+  const cls = (s==='safe'||s==='safe_catchall') ? 'badge-safe' : s==='invalid'||s==='risky' ? 'badge-unsafe' : 'badge-unknown';
+  return `<td><span class="badge ${cls}">${s}</span></td>`;
+}
+
+function renderTable(rows) {
+  selectedIds = new Set();
+  updateDeleteBtn();
+  document.getElementById('selectAll').checked = false;
+
+  if (!rows.length) {
+    document.getElementById('dbBody').innerHTML = '<tr><td colspan="15" style="text-align:center;padding:2rem;color:var(--muted)">No contacts found</td></tr>';
+    return;
+  }
+
+  document.getElementById('dbBody').innerHTML = rows.map(c => {
+    const kw = c.keywords ? c.keywords.split(',').slice(0,3).join(', ') + (c.keywords.split(',').length>3?'…':'') : null;
+    const imp = c.imported_at ? new Date(c.imported_at).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'2-digit'}) : null;
+    return `<tr data-id="${c.id}">
+      <td class="cb-cell"><input type="checkbox" class="row-cb" onchange="toggleRow(this,'${c.id}')"></td>
+      ${cell(c.email)}
+      ${cell(c.first_name)}
+      ${cell(c.last_name)}
+      ${cell(c.company_name)}
+      ${cell(c.company_domain)}
+      ${cell(c.job_title)}
+      ${cell(c.industry)}
+      ${c.num_employees!=null?`<td>${Number(c.num_employees).toLocaleString()}</td>`:cell(null)}
+      ${cell(kw)}
+      ${cell(c.city)}
+      ${cell(c.country)}
+      ${statusBadge(c.email_status)}
+      ${cell(c.source)}
+      ${cell(imp)}
+      ${cell(c.company_status)}
+      ${cell(c.ch_company_type)}
+      ${cell(c.ch_founded_year)}
+      ${cell(c.ch_postcode)}
+      ${cell(c.ch_sic_codes)}
+      ${cell(c.ch_active_officers)}
+      ${c.ch_has_insolvency != null ? `<td>${c.ch_has_insolvency ? 'Yes' : 'No'}</td>` : cell(null)}
+      ${c.ch_has_charges != null ? `<td>${c.ch_has_charges ? 'Yes' : 'No'}</td>` : cell(null)}
+      ${c.ch_accounts_overdue != null ? `<td>${c.ch_accounts_overdue ? 'Yes' : 'No'}</td>` : cell(null)}
+      ${cell(c.ch_address)}
+      ${cell(c.ch_date_of_cessation)}
+      ${cell(c.ch_last_accounts_date)}
+      ${cell(c.enriched_at ? new Date(c.enriched_at).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'2-digit'}) : null)}
+    </tr>`;
+  }).join('');
+}
+
+function renderPagination() {
+  const pages = Math.ceil(totalRows / PAGE_SIZE);
+  if (pages <= 1) { document.getElementById('pagination').innerHTML = `<span>${totalRows.toLocaleString()} rows</span>`; return; }
+
+  let html = `<span>${totalRows.toLocaleString()} rows &nbsp;·&nbsp;</span>`;
+  html += `<button class="page-btn" onclick="goPage(${currentPage-1})" ${currentPage===0?'disabled':''}>‹ Prev</button>`;
+
+  const start = Math.max(0, currentPage - 2);
+  const end   = Math.min(pages - 1, currentPage + 2);
+  if (start > 0) html += `<button class="page-btn" onclick="goPage(0)">1</button><span>…</span>`;
+  for (let i = start; i <= end; i++)
+    html += `<button class="page-btn ${i===currentPage?'current':''}" onclick="goPage(${i})">${i+1}</button>`;
+  if (end < pages-1) html += `<span>…</span><button class="page-btn" onclick="goPage(${pages-1})">${pages}</button>`;
+  html += `<button class="page-btn" onclick="goPage(${currentPage+1})" ${currentPage>=pages-1?'disabled':''}>Next ›</button>`;
+  document.getElementById('pagination').innerHTML = html;
+}
+
+function goPage(p) { currentPage = p; loadData(); window.scrollTo(0,0); }
+
+function toggleRow(cb, id) {
+  if (cb.checked) selectedIds.add(id); else selectedIds.delete(id);
+  updateDeleteBtn();
+}
+
+function toggleSelectAll(cb) {
+  document.querySelectorAll('.row-cb').forEach(el => {
+    el.checked = cb.checked;
+    const id = el.closest('tr').dataset.id;
+    if (cb.checked) selectedIds.add(id); else selectedIds.delete(id);
+  });
+  updateDeleteBtn();
+}
+
+function updateDeleteBtn() {
+  const btn = document.getElementById('deleteBtn');
+  document.getElementById('selCount').textContent = selectedIds.size;
+  btn.style.display = selectedIds.size ? '' : 'none';
+}
+
+async function deleteSelected() {
+  if (!selectedIds.size) return;
+  if (!confirm(`Delete ${selectedIds.size} contact(s)? This cannot be undone.`)) return;
+  try {
+    const r = await fetch('/api/admin/database/contacts', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [...selectedIds] }),
+    });
+    const d = await r.json();
+    if (!r.ok) { alert(d.error || 'Delete failed'); return; }
+    selectedIds.clear();
+    updateDeleteBtn();
+    loadData();
+    loadStats();
+  } catch (err) { alert('Error: ' + err.message); }
+}
+
+async function exportCsv() {
+  const params = new URLSearchParams({
+    sortBy: sortField, sortDir,
+    q: document.getElementById('searchInput').value.trim(),
+    workspace: document.getElementById('wsFilter').value,
+    source: document.getElementById('sourceFilter').value,
+    missing: [...missingFilters].join(','),
+    export: '1',
+  });
+  window.location = '/api/admin/database/contacts?' + params;
+}
+
+// Init
+loadStats();
+loadWorkspaces();
+loadData();
+</script>
+</body>
+</html>

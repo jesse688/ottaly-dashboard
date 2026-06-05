@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/favicon.svg">
+<meta name="theme-color" content="#050C29">
+<meta name="description" content="Ottaly DMARC — compare performance across DMARC policy groups">
+<title>DMARC Analysis — Ottaly</title>
+<script>document.write('<script src="/splash.js?v=' + Date.now() + '"><\/script>');</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Inter',sans-serif;background:#f0f2f5;color:#111827;font-size:13px}
+  .nav{background:#050C29;padding:.6rem 1.5rem;border-bottom:3px solid #1F6F78;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:200}
+  .nav a{padding:6px 14px;border-radius:8px;font-size:12px;font-weight:600;color:rgba(255,255,255,0.55);text-decoration:none}
+  .nav a.active{background:#1F6F78;color:#fff}
+  .page{max-width:1200px;margin:0 auto;padding:1.5rem}
+  .page-title{font-size:1.25rem;font-weight:700;color:#111827}
+  .page-sub{font-size:12px;color:#6b7280;margin-top:2px}
+  .section-h{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#6b7280;margin:1.5rem 0 .75rem}
+  .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;margin-bottom:1.5rem}
+  .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:1.25rem}
+  .card-title{font-size:13px;font-weight:700;color:#111827;margin-bottom:.25rem}
+  .card-sub{font-size:11px;color:#6b7280;margin-bottom:1rem}
+  .stat-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #f3f4f6}
+  .stat-row:last-child{border-bottom:none}
+  .stat-label{color:#6b7280;font-size:12px}
+  .stat-val{font-weight:600;font-size:13px}
+  .good{color:#059669} .med{color:#d97706} .bad{color:#dc2626} .muted{color:#9ca3af}
+  .chart-wrap{position:relative;height:200px;margin-top:1rem}
+  .table-wrap{background:#fff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;margin-bottom:1rem}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{padding:8px 12px;text-align:left;background:#f9fafb;font-weight:600;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.3px;border-bottom:1px solid #e5e7eb}
+  td{padding:8px 12px;border-bottom:1px solid #f3f4f6;color:#374151}
+  tr:last-child td{border-bottom:none}
+  .badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600}
+  .badge-green{background:#d1fae5;color:#065f46}
+  .badge-amber{background:#fef3c7;color:#92400e}
+  .badge-red{background:#fee2e2;color:#991b1b}
+  .badge-gray{background:#f3f4f6;color:#6b7280}
+  #loading{text-align:center;padding:3rem;color:#9ca3af;font-size:13px}
+
+/* sticky header + mobile */
+.header,.nav{position:sticky;top:0;z-index:200}
+.header>div:first-child,.header-inner,.nav>div:first-child{flex:1;min-width:0;overflow:hidden}
+@media(max-width:768px){.header,.nav{padding:.75rem 1rem}.page,.container{padding:1rem}.page-header,.ph{flex-direction:column;align-items:flex-start}.toolbar,.ph-right{flex-wrap:wrap}.table-wrap,.table-container{overflow-x:auto;-webkit-overflow-scrolling:touch}table{min-width:600px}}
+</style>
+    <script src="/nav.js" defer></script>
+</head>
+<body>
+<nav class="nav">
+  <a href="/login.html" onclick="fetch('/api/logout',{method:'POST'});return true;" id="signOutBtn" style="display:none;font-size:11px;color:rgba(255,255,255,0.35);text-decoration:none">Sign out</a>
+</nav>
+
+<div class="page">
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:1.25rem">
+    <div>
+      <div class="page-title">DMARC Analysis</div>
+      <div class="page-sub">Compare reply rate, leads and bounce rate across DMARC policy groups</div>
+    </div>
+  </div>
+
+  <div id="loading">Loading mailbox data…</div>
+  <div id="content" style="display:none">
+    <div class="cards" id="policyCards"></div>
+
+    <div class="section-h">Performance comparison by DMARC policy</div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;margin-bottom:1.5rem">
+      <div class="card">
+        <div class="card-title">Reply Rate %</div>
+        <div class="card-sub">Average across mailboxes in each group</div>
+        <div class="chart-wrap"><canvas id="chartRR"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Bounce Rate %</div>
+        <div class="card-sub">Average across mailboxes in each group</div>
+        <div class="chart-wrap"><canvas id="chartBR"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Total Sent</div>
+        <div class="card-sub">Total emails sent across each group</div>
+        <div class="chart-wrap"><canvas id="chartSent"></canvas></div>
+      </div>
+    </div>
+
+    <div class="section-h">Mailboxes not on p=none</div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Domain</th>
+          <th>Email</th>
+          <th>DMARC Policy</th>
+          <th>Supplier</th>
+          <th style="text-align:right">Reply Rate</th>
+          <th style="text-align:right">Bounce Rate</th>
+          <th style="text-align:right">Total Sent</th>
+        </tr></thead>
+        <tbody id="nonNoneTable"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+fetch('/api/session').then(r=>r.json()).catch(()=>({ok:false})).then(s=>{
+  if (s.ok === false) { location.href = '/login.html?next=/dmarc.html'; return; }
+  document.getElementById('signOutBtn').style.display = '';
+  // Role-based nav visibility is handled by nav.js.
+  loadData();
+});
+
+const POLICIES = ['none','quarantine','reject','missing'];
+const POLICY_LABEL = { none:'p=none', quarantine:'p=quarantine', reject:'p=reject', missing:'Missing' };
+const POLICY_COLOR = { none:'#059669', quarantine:'#d97706', reject:'#dc2626', missing:'#9ca3af' };
+const POLICY_BG    = { none:'#d1fae5', quarantine:'#fef3c7', reject:'#fee2e2', missing:'#f3f4f6' };
+
+function pct(n) { return n == null || isNaN(n) ? '—' : (n*100).toFixed(2)+'%'; }
+function fmtNum(n) { return (n||0).toLocaleString(); }
+
+async function loadData() {
+  const r = await fetch('/api/mailboxes').catch(()=>null);
+  if (!r?.ok) { document.getElementById('loading').textContent = 'Failed to load mailbox data.'; return; }
+  const d = await r.json();
+  const mailboxes = d.mailboxes || [];
+
+  // Group by DMARC policy
+  const groups = { none:[], quarantine:[], reject:[], missing:[] };
+  for (const m of mailboxes) {
+    const policy = m.auth?.dmarc_present ? (m.auth.dmarc_policy || 'none') : 'missing';
+    const key = ['none','quarantine','reject'].includes(policy) ? policy : 'missing';
+    groups[key].push(m);
+  }
+
+  // Compute stats per group
+  const stats = {};
+  for (const [key, mbs] of Object.entries(groups)) {
+    const withSent = mbs.filter(m => (m.attributed_sent || 0) > 0);
+    const avgRR    = withSent.length ? withSent.reduce((a,m)=>a+(m.reply_rate||0),0)/withSent.length : 0;
+    const avgBR    = withSent.length ? withSent.reduce((a,m)=>a+(m.bounce_rate||0),0)/withSent.length : 0;
+    const totalSent= mbs.reduce((a,m)=>a+(m.attributed_sent||0),0);
+    stats[key] = { count: mbs.length, avgRR, avgBR, totalSent };
+  }
+
+  // Summary cards
+  const cards = document.getElementById('policyCards');
+  cards.innerHTML = POLICIES.map(p => `
+    <div class="card" style="border-top:3px solid ${POLICY_COLOR[p]}">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem">
+        <span class="badge" style="background:${POLICY_BG[p]};color:${POLICY_COLOR[p]}">${POLICY_LABEL[p]}</span>
+        <span style="font-size:1.5rem;font-weight:700;color:#111827">${stats[p].count}</span>
+      </div>
+      <div class="stat-row"><span class="stat-label">Reply Rate</span><span class="stat-val ${stats[p].avgRR>=0.02?'good':stats[p].avgRR>=0.01?'med':'bad'}">${pct(stats[p].avgRR)}</span></div>
+      <div class="stat-row"><span class="stat-label">Bounce Rate</span><span class="stat-val ${stats[p].avgBR<0.02?'good':stats[p].avgBR<0.05?'med':'bad'}">${pct(stats[p].avgBR)}</span></div>
+      <div class="stat-row"><span class="stat-label">Total Sent</span><span class="stat-val">${fmtNum(stats[p].totalSent)}</span></div>
+    </div>
+  `).join('');
+
+  // Bar charts
+  const labels = POLICIES.map(p => POLICY_LABEL[p]);
+  const colors = POLICIES.map(p => POLICY_COLOR[p]);
+
+  function barChart(id, values, fmt) {
+    new Chart(document.getElementById(id), {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{ data: values, backgroundColor: colors, borderRadius: 6, borderSkipped: false }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: item => fmt(item.parsed.y) } } },
+        scales: {
+          x: { grid: { display: false }, ticks: { font: { size: 11 } } },
+          y: { beginAtZero: true, ticks: { font: { size: 11 }, callback: fmt } },
+        },
+      },
+    });
+  }
+
+  barChart('chartRR',   POLICIES.map(p => +(stats[p].avgRR*100).toFixed(2)),   v => v.toFixed(2)+'%');
+  barChart('chartBR',   POLICIES.map(p => +(stats[p].avgBR*100).toFixed(2)),   v => v.toFixed(2)+'%');
+  barChart('chartSent', POLICIES.map(p => stats[p].totalSent), v => v.toLocaleString());
+
+  // Non-none table
+  const nonNone = mailboxes
+    .filter(m => {
+      const policy = m.auth?.dmarc_present ? (m.auth.dmarc_policy || 'none') : 'missing';
+      return policy !== 'none';
+    })
+    .sort((a,b) => (b.total_sent||0) - (a.total_sent||0));
+
+  const tbody = document.getElementById('nonNoneTable');
+  if (!nonNone.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="padding:16px;text-align:center;color:#9ca3af">All mailboxes are on p=none ✅</td></tr>';
+  } else {
+    tbody.innerHTML = nonNone.map(m => {
+      const p = m.auth?.dmarc_present ? (m.auth.dmarc_policy || 'none') : 'missing';
+      const badgeClass = p === 'missing' ? 'badge-gray' : p === 'quarantine' ? 'badge-amber' : 'badge-red';
+      return `<tr>
+        <td>${m.domain || '—'}</td>
+        <td style="color:#6b7280">${m.email}</td>
+        <td><span class="badge ${badgeClass}">${POLICY_LABEL[p] || p}</span></td>
+        <td>${m.supplier || '—'}</td>
+        <td style="text-align:right">${pct(m.reply_rate)}</td>
+        <td style="text-align:right">${pct(m.bounce_rate)}</td>
+        <td style="text-align:right">${fmtNum(m.attributed_sent)}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('content').style.display = '';
+}
+</script>
+</body>
+</html>

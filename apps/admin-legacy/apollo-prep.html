@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/favicon.svg">
+<meta name="theme-color" content="#050C29">
+<meta name="description" content="Ottaly Apollo Prep — split CSVs into Apollo-ready chunks">
+<title>Apollo Upload Prep — Ottaly</title>
+<script>document.write('<script src="/splash.js?v=' + Date.now() + '"><\/script>');</script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;
+  --bg:#F0F2F8;--card:#fff;--border:#E2E6F0;--text:#050C29;--muted:#6B7280;
+  --green:#16A34A;--red:#DC2626;--amber:#D97706;
+}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+.header{background:var(--navy-dark);padding:1rem 2rem;border-bottom:3px solid var(--teal);display:flex;align-items:center;justify-content:space-between}
+.nav a{padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;color:rgba(255,255,255,0.55);text-decoration:none;display:inline-block}
+.nav a.active{background:var(--teal);color:#fff}
+.page{max-width:960px;margin:2rem auto;padding:0 1.5rem}
+.card{background:var(--card);border-radius:14px;border:1px solid var(--border);padding:1.75rem;margin-bottom:1.25rem}
+h1{font-size:1.4rem;font-weight:700;margin-bottom:4px}
+.sub{font-size:13px;color:var(--muted);margin-bottom:1.5rem}
+
+/* Drop zone */
+.drop{border:2px dashed var(--border);border-radius:12px;padding:3rem 2rem;text-align:center;cursor:pointer;transition:all .2s;background:#FAFBFF}
+.drop:hover,.drop.over{border-color:var(--teal);background:#EEF9FA}
+.drop .icon{font-size:2.5rem;margin-bottom:.75rem}
+.drop .label{font-size:15px;font-weight:600;color:var(--text)}
+.drop .hint{font-size:12px;color:var(--muted);margin-top:.4rem}
+#fileInput{display:none}
+
+/* File list */
+.file-list{margin-top:1rem;display:flex;flex-direction:column;gap:.5rem}
+.file-row{display:flex;align-items:center;gap:.75rem;padding:.6rem .9rem;background:#F8F9FC;border-radius:8px;border:1px solid var(--border)}
+.file-row .fname{flex:1;font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.file-row .fmeta{font-size:11px;color:var(--muted)}
+.file-row .rm{background:none;border:none;cursor:pointer;color:var(--muted);font-size:16px;padding:2px 6px;border-radius:4px}
+.file-row .rm:hover{background:#FEE2E2;color:var(--red)}
+
+/* Stats */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.75rem;margin-bottom:1.5rem}
+.stat{background:var(--card);border-radius:10px;border:1px solid var(--border);border-top:3px solid var(--navy);padding:.9rem 1rem}
+.stat.green{border-top-color:var(--green)}
+.stat.amber{border-top-color:var(--amber)}
+.stat.teal{border-top-color:var(--teal)}
+.stat .label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+.stat .val{font-size:1.4rem;font-weight:700;margin-top:3px}
+
+/* Chunk list */
+.chunks{display:flex;flex-direction:column;gap:.6rem}
+.chunk{display:flex;align-items:center;gap:1rem;padding:.75rem 1rem;background:#F8F9FC;border-radius:10px;border:1px solid var(--border)}
+.chunk .cname{font-weight:600;font-size:13px;flex:1}
+.chunk .cmeta{font-size:12px;color:var(--muted)}
+
+/* Progress */
+.prog-wrap{height:6px;background:#E5E7EB;border-radius:3px;overflow:hidden;margin:.75rem 0}
+.prog{height:100%;background:var(--teal);border-radius:3px;transition:width .3s}
+
+/* Buttons */
+.btn{padding:9px 20px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;border:none;transition:all .15s}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn-primary{background:var(--navy);color:#fff}
+.btn-primary:hover:not(:disabled){background:#1a3370}
+.btn-teal{background:var(--teal);color:#fff}
+.btn-teal:hover:not(:disabled){background:#185f67}
+.btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--border)}
+.btn-ghost:hover:not(:disabled){background:var(--bg)}
+.btn-sm{padding:5px 12px;font-size:12px}
+
+.actions{display:flex;gap:.75rem;flex-wrap:wrap;align-items:center;margin-top:1rem}
+
+/* Log */
+.log{font-family:'SF Mono',ui-monospace,monospace;font-size:11px;color:var(--muted);background:#F8F9FC;border:1px solid var(--border);border-radius:8px;padding:.75rem 1rem;max-height:140px;overflow-y:auto;margin-top:1rem;line-height:1.6}
+.log .ok{color:var(--green)}
+.log .warn{color:var(--amber)}
+.log .err{color:var(--red)}
+
+.empty{text-align:center;padding:2rem;color:var(--muted);font-size:13px}
+
+/* sticky header */
+.header{position:sticky;top:0;z-index:200}
+.header>div:first-child,.header-inner>div:first-child{flex:1;min-width:0;overflow:hidden}
+@media(max-width:768px){.header{padding:.75rem 1rem}.page,.page-md{padding:1rem}.page-header{flex-direction:column;align-items:flex-start}.toolbar{flex-wrap:wrap}.table-wrap,.table-container{overflow-x:auto;-webkit-overflow-scrolling:touch}table{min-width:600px}.grid3,.grid-3{grid-template-columns:1fr 1fr}}
+@media(max-width:480px){.metrics,.o-metrics{grid-template-columns:1fr 1fr}}
+
+.header>div:first-child{flex:1;min-width:0;overflow:hidden}
+</style>
+    <script src="/nav.js" defer></script>
+</head>
+<body>
+
+<div class="header">
+  <a href="/login.html" onclick="fetch('/api/logout',{method:'POST'});return true;" style="font-size:12px;color:rgba(255,255,255,0.35);text-decoration:none">Sign out</a>
+</div>
+
+<div class="page">
+
+  <!-- Apollo account split — export buttons + net-new searches -->
+  <div class="card">
+    <h1>Apollo Account Split — UK</h1>
+    <div class="sub">Export your existing database contacts split by account, or find net-new contacts in Apollo. Account 1 = London + South East; Account 2 = rest of the UK. No duplicates between accounts.</div>
+
+    <div style="margin-bottom:1.5rem">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:.6rem">Export from your database</div>
+      <div style="display:flex;gap:.75rem;flex-wrap:wrap;align-items:center">
+        <button class="btn btn-primary" onclick="exportSplit(1)" id="exportBtn1">↓ Export Account 1 — London + South East</button>
+        <button class="btn btn-teal" onclick="exportSplit(2)" id="exportBtn2">↓ Export Account 2 — Rest of UK</button>
+      </div>
+      <div id="splitExportStatus" style="font-size:12px;color:var(--muted);margin-top:.5rem"></div>
+    </div>
+
+    <div>
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:.6rem">Find net-new contacts in Apollo</div>
+      <div style="display:flex;gap:.75rem;flex-wrap:wrap">
+        <a class="btn btn-primary" href="https://app.apollo.io/#/people?page=1&contactEmailStatusV2[]=verified&contactEmailStatusV2[]=user_managed&organizationLocations[]=London%2C%20United%20Kingdom&organizationLocations[]=Reading%2C%20United%20Kingdom&organizationLocations[]=Guildford%2C%20United%20Kingdom&organizationLocations[]=Oxford%2C%20United%20Kingdom&organizationLocations[]=Brighton%2C%20United%20Kingdom&organizationLocations[]=Milton%20Keynes%2C%20United%20Kingdom&organizationLocations[]=Southampton%2C%20United%20Kingdom&organizationLocations[]=Kingston%20upon%20Thames%2C%20United%20Kingdom&organizationLocations[]=Redhill%2C%20United%20Kingdom&organizationLocations[]=Slough%2C%20United%20Kingdom&organizationLocations[]=Portsmouth%2C%20United%20Kingdom&organizationLocations[]=Tonbridge%2C%20United%20Kingdom&organizationLocations[]=Medway%2C%20United%20Kingdom&organizationLocations[]=Twickenham%2C%20United%20Kingdom&organizationLocations[]=Canterbury%2C%20United%20Kingdom&organizationLocations[]=Enfield%2C%20United%20Kingdom&organizationLocations[]=Harrow%2C%20United%20Kingdom&organizationLocations[]=Dartford%2C%20United%20Kingdom&organizationLocations[]=Croydon%2C%20United%20Kingdom&organizationLocations[]=Southall%2C%20United%20Kingdom&organizationLocations[]=Romford%2C%20United%20Kingdom&organizationLocations[]=Bromley%2C%20United%20Kingdom&organizationLocations[]=Ilford%2C%20United%20Kingdom&organizationLocations[]=Sutton%2C%20United%20Kingdom&organizationLocations[]=Bracknell%2C%20United%20Kingdom&organizationLocations[]=Maidstone%2C%20United%20Kingdom&organizationLocations[]=Basingstoke%2C%20United%20Kingdom&organizationLocations[]=Woking%2C%20United%20Kingdom&organizationLocations[]=Winchester%2C%20United%20Kingdom&organizationLocations[]=Hove%2C%20United%20Kingdom&organizationLocations[]=Farnborough%2C%20United%20Kingdom&organizationLocations[]=Maidenhead%2C%20United%20Kingdom&organizationLocations[]=Chichester%2C%20United%20Kingdom&organizationLocations[]=Ashford%2C%20United%20Kingdom&organizationLocations[]=Horsham%2C%20United%20Kingdom&organizationLocations[]=High%20Wycombe%2C%20United%20Kingdom&organizationLocations[]=Crawley%2C%20United%20Kingdom&organizationLocations[]=Hastings%2C%20United%20Kingdom&organizationLocations[]=Worthing%2C%20United%20Kingdom&organizationLocations[]=Aylesbury%2C%20United%20Kingdom&organizationLocations[]=Reigate%2C%20United%20Kingdom&organizationLocations[]=Eastbourne%2C%20United%20Kingdom&organizationLocations[]=Windsor%2C%20United%20Kingdom&organizationLocations[]=Westminster%2C%20United%20Kingdom&organizationLocations[]=Wembley%2C%20United%20Kingdom&organizationLocations[]=Camden%2C%20United%20Kingdom&recommendationConfigId=score&currentlyNotUsingAnyOfTechnologyUids[]=outlook&prospectedByCurrentTeam[]=no&sortByField=person_name.raw&sortAscending=false" target="_blank" rel="noopener" style="text-decoration:none">↗ Account 1 — London + South East</a>
+        <a class="btn btn-teal" href="https://app.apollo.io/#/people?page=1&contactEmailStatusV2[]=verified&contactEmailStatusV2[]=user_managed&organizationLocations[]=United%20Kingdom&organizationNotLocations[]=London%2C%20United%20Kingdom&organizationNotLocations[]=Reading%2C%20United%20Kingdom&organizationNotLocations[]=Guildford%2C%20United%20Kingdom&organizationNotLocations[]=Oxford%2C%20United%20Kingdom&organizationNotLocations[]=Brighton%2C%20United%20Kingdom&organizationNotLocations[]=Milton%20Keynes%2C%20United%20Kingdom&organizationNotLocations[]=Southampton%2C%20United%20Kingdom&organizationNotLocations[]=Kingston%20upon%20Thames%2C%20United%20Kingdom&organizationNotLocations[]=Redhill%2C%20United%20Kingdom&organizationNotLocations[]=Slough%2C%20United%20Kingdom&organizationNotLocations[]=Portsmouth%2C%20United%20Kingdom&organizationNotLocations[]=Tonbridge%2C%20United%20Kingdom&organizationNotLocations[]=Medway%2C%20United%20Kingdom&organizationNotLocations[]=Twickenham%2C%20United%20Kingdom&organizationNotLocations[]=Canterbury%2C%20United%20Kingdom&organizationNotLocations[]=Enfield%2C%20United%20Kingdom&organizationNotLocations[]=Harrow%2C%20United%20Kingdom&organizationNotLocations[]=Dartford%2C%20United%20Kingdom&organizationNotLocations[]=Croydon%2C%20United%20Kingdom&organizationNotLocations[]=Southall%2C%20United%20Kingdom&organizationNotLocations[]=Romford%2C%20United%20Kingdom&organizationNotLocations[]=Bromley%2C%20United%20Kingdom&organizationNotLocations[]=Ilford%2C%20United%20Kingdom&organizationNotLocations[]=Sutton%2C%20United%20Kingdom&organizationNotLocations[]=Bracknell%2C%20United%20Kingdom&organizationNotLocations[]=Maidstone%2C%20United%20Kingdom&organizationNotLocations[]=Basingstoke%2C%20United%20Kingdom&organizationNotLocations[]=Woking%2C%20United%20Kingdom&organizationNotLocations[]=Winchester%2C%20United%20Kingdom&organizationNotLocations[]=Hove%2C%20United%20Kingdom&organizationNotLocations[]=Farnborough%2C%20United%20Kingdom&organizationNotLocations[]=Maidenhead%2C%20United%20Kingdom&organizationNotLocations[]=Chichester%2C%20United%20Kingdom&organizationNotLocations[]=Ashford%2C%20United%20Kingdom&organizationNotLocations[]=Horsham%2C%20United%20Kingdom&organizationNotLocations[]=High%20Wycombe%2C%20United%20Kingdom&organizationNotLocations[]=Crawley%2C%20United%20Kingdom&organizationNotLocations[]=Hastings%2C%20United%20Kingdom&organizationNotLocations[]=Worthing%2C%20United%20Kingdom&organizationNotLocations[]=Aylesbury%2C%20United%20Kingdom&organizationNotLocations[]=Reigate%2C%20United%20Kingdom&organizationNotLocations[]=Eastbourne%2C%20United%20Kingdom&organizationNotLocations[]=Windsor%2C%20United%20Kingdom&organizationNotLocations[]=Westminster%2C%20United%20Kingdom&organizationNotLocations[]=Wembley%2C%20United%20Kingdom&organizationNotLocations[]=Camden%2C%20United%20Kingdom&recommendationConfigId=score&currentlyNotUsingAnyOfTechnologyUids[]=outlook&prospectedByCurrentTeam[]=no&sortByField=person_name.raw&sortAscending=false" target="_blank" rel="noopener" style="text-decoration:none">↗ Account 2 — Rest of UK</a>
+      </div>
+    </div>
+  </div>
+
+
+  <div class="card">
+    <h1>Apollo Upload Prep</h1>
+    <div class="sub">Drop any number of CSVs. Emails are extracted, deduplicated, stripped of all other columns, and split into chunks ≤ 45 MB / 100,000 rows — ready to import straight into Apollo.</div>
+
+    <!-- Drop zone -->
+    <div class="drop" id="drop" onclick="document.getElementById('fileInput').click()" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
+      <div class="icon">📂</div>
+      <div class="label">Drop CSV files here, or click to browse</div>
+      <div class="hint">Any column named Email / email / Email Address / email_address / E-mail will be detected automatically</div>
+    </div>
+    <input type="file" id="fileInput" accept=".csv" multiple onchange="addFiles(this.files)">
+
+    <div id="fileList" class="file-list"></div>
+
+    <div class="actions" id="actions" style="display:none">
+      <button class="btn btn-primary" onclick="process()">⚡ Process files</button>
+      <button class="btn btn-ghost" onclick="clearAll()">✕ Clear all</button>
+      <span id="statusMsg" style="font-size:12px;color:var(--muted)"></span>
+    </div>
+  </div>
+
+  <!-- Results -->
+  <div class="card" id="results" style="display:none">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+      <div>
+        <div style="font-size:1rem;font-weight:700">Results</div>
+        <div id="resultSub" style="font-size:12px;color:var(--muted);margin-top:2px"></div>
+      </div>
+      <button class="btn btn-teal btn-sm" onclick="downloadAll()">⬇ Download all</button>
+      <span style="font-size:11px;color:var(--muted);margin-left:.25rem">If Chrome asks "allow multiple downloads" — click Allow</span>
+    </div>
+
+    <div class="stats" id="statsRow"></div>
+
+    <div class="prog-wrap" id="progWrap" style="display:none">
+      <div class="prog" id="prog" style="width:0%"></div>
+    </div>
+
+    <div class="chunks" id="chunkList"></div>
+
+    <div class="log" id="log"></div>
+  </div>
+
+  <!-- AI Enrichment -->
+  <div class="card" style="margin-top:1.5rem">
+    <h1 style="margin-bottom:4px">AI Enrichment</h1>
+    <div class="sub">Scans the database for contacts missing data, searches the web using AI, and fills in the gaps. Groups by company domain — one search enriches all contacts from the same company.</div>
+
+    <!-- Field selection -->
+    <div style="margin-bottom:1.25rem">
+      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:.6rem">Claude fields (fills blanks only)</div>
+      <div style="display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:.75rem">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500;cursor:pointer">
+          <input type="checkbox" id="enrichKeywords" checked style="accent-color:var(--teal);width:15px;height:15px"> Keywords
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500;cursor:pointer">
+          <input type="checkbox" id="enrichIndustry" checked style="accent-color:var(--teal);width:15px;height:15px"> Industry
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500;cursor:pointer">
+          <input type="checkbox" id="enrichEmployees" checked style="accent-color:var(--teal);width:15px;height:15px"> Company Size
+        </label>
+      </div>
+      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:.4rem">Companies House (always updated — live gov data)</div>
+      <div style="font-size:12px;color:var(--muted);line-height:1.6">
+        Company status · Company type · Founded year · Postcode · Full address · SIC codes · Jurisdiction · Active &amp; resigned officers · Last accounts date · Insolvency history · Charges · Accounts overdue · Cessation date
+      </div>
+    </div>
+
+    <!-- Batch size + concurrency -->
+    <div style="margin-bottom:1.25rem;display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:.75rem">
+        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)">Batch size</div>
+        <select id="enrichLimit" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border);font-size:13px;font-weight:500">
+          <option value="100">100 domains (test)</option>
+          <option value="500">500 domains</option>
+          <option value="1000">1,000 domains</option>
+          <option value="5000">5,000 domains</option>
+          <option value="0">Full database</option>
+        </select>
+      </div>
+      <div style="display:flex;align-items:center;gap:.75rem">
+        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)">Speed</div>
+        <select id="enrichConcurrency" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border);font-size:13px;font-weight:500">
+          <option value="1">1 — safe</option>
+          <option value="3">3 — normal</option>
+          <option value="5" selected>5 — fast (recommended)</option>
+          <option value="10">10 — max</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Controls -->
+    <div style="display:flex;gap:.75rem;flex-wrap:wrap;align-items:center;margin-bottom:1rem" id="enrichControls">
+      <button class="btn btn-teal" id="enrichScanBtn" onclick="scanEnrichment()">Scan Database</button>
+      <button class="btn btn-teal" id="enrichConfirmBtn" onclick="startEnrichment()" style="display:none;background:#16A34A;border-color:#16A34A">Confirm &amp; Start</button>
+      <button class="btn btn-ghost" id="enrichCancelBtn" onclick="cancelScan()" style="display:none">Cancel</button>
+      <button class="btn btn-ghost" id="enrichPauseBtn" onclick="pauseEnrichment()" style="display:none">⏸ Pause</button>
+      <button class="btn btn-ghost" id="enrichResumeBtn" onclick="resumeEnrichment()" style="display:none">▶ Resume</button>
+      <button class="btn btn-ghost" id="enrichStopBtn" onclick="stopEnrichment()" style="display:none">■ Stop</button>
+      <span id="enrichStatus" style="font-size:12px;color:var(--muted)"></span>
+    </div>
+
+    <!-- Scan result confirmation box -->
+    <div id="enrichScanResult" style="display:none;background:#F0FDF4;border:1px solid #86EFAC;border-radius:10px;padding:1rem 1.25rem;margin-bottom:1rem">
+      <div style="font-size:14px;font-weight:600;color:#15803D;margin-bottom:.4rem">Ready to enrich</div>
+      <div style="font-size:13px;color:#166534" id="enrichScanSummary"></div>
+    </div>
+
+    <!-- Progress -->
+    <div id="enrichProgressWrap" style="display:none">
+      <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:4px">
+        <span id="enrichProgressLabel">0 / 0 domains</span>
+        <span id="enrichCurrentDomain" style="font-style:italic"></span>
+      </div>
+      <div class="prog-wrap"><div class="prog" id="enrichProg" style="width:0%"></div></div>
+
+      <div class="stats" style="margin-top:1rem">
+        <div class="stat teal"><div class="label">Updated</div><div class="val" id="enrichUpdated">0</div></div>
+        <div class="stat"><div class="label">Skipped</div><div class="val" id="enrichSkipped">0</div></div>
+        <div class="stat amber"><div class="label">Failed</div><div class="val" id="enrichFailed">0</div></div>
+        <div class="stat green"><div class="label">Domains</div><div class="val" id="enrichTotal">0</div></div>
+        <div class="stat" style="border-top-color:#8b5cf6"><div class="label">Cost (USD)</div><div class="val" id="enrichCost">$0.0000</div></div>
+        <div class="stat" style="border-top-color:#ec4899"><div class="label">Est. Time Left</div><div class="val" id="enrichEta">—</div></div>
+      </div>
+
+      <div class="log" id="enrichLog" style="margin-top:.75rem;max-height:150px"></div>
+
+      <!-- Sample CSV export -->
+      <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border)">
+        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:.6rem">Sample Export</div>
+        <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
+          <button class="btn btn-ghost" id="sampleCsvBtn" onclick="downloadSampleCsv()">Download 100 contact sample (original + enriched)</button>
+          <span id="sampleCsvStatus" style="font-size:12px;color:var(--muted)"></span>
+        </div>
+      </div>
+
+      <!-- Results table -->
+      <div style="margin-top:1.25rem;display:none" id="enrichResultsWrap">
+        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:.6rem">Results</div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead>
+              <tr style="background:#F8F9FC;border-bottom:2px solid var(--border)">
+                <th style="text-align:left;padding:8px 10px;font-weight:600;color:var(--muted)">Domain</th>
+                <th style="text-align:left;padding:8px 10px;font-weight:600;color:var(--muted)">Industry</th>
+                <th style="text-align:left;padding:8px 10px;font-weight:600;color:var(--muted)">Keywords</th>
+                <th style="text-align:left;padding:8px 10px;font-weight:600;color:var(--muted)">Employees</th>
+                <th style="text-align:left;padding:8px 10px;font-weight:600;color:var(--muted)">Contacts</th>
+                <th style="text-align:left;padding:8px 10px;font-weight:600;color:var(--muted)">Status</th>
+              </tr>
+            </thead>
+            <tbody id="enrichResultsBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const MAX_BYTES  = 45 * 1024 * 1024;  // 45 MB
+const MAX_ROWS   = 99999; // Apollo counts the header row, so 99999 data rows = 100000 total
+const EMAIL_COLS = ['email','e-mail','email address','email_address','emailaddress','e-mail address','mail'];
+
+let pendingFiles = []; // { name, file }
+let chunks       = []; // [{ name, csv, rows }]
+
+// ── Drag & drop ──────────────────────────────────────────────────────────
+function onDragOver(e) { e.preventDefault(); document.getElementById('drop').classList.add('over'); }
+function onDragLeave()  { document.getElementById('drop').classList.remove('over'); }
+function onDrop(e)      { e.preventDefault(); onDragLeave(); addFiles(e.dataTransfer.files); }
+
+function addFiles(fileList) {
+  for (const f of fileList) {
+    if (!f.name.toLowerCase().endsWith('.csv')) continue;
+    if (pendingFiles.some(p => p.name === f.name && p.file.size === f.size)) continue; // already added
+    pendingFiles.push({ name: f.name, file: f });
+  }
+  renderFileList();
+}
+
+function removeFile(idx) {
+  pendingFiles.splice(idx, 1);
+  renderFileList();
+}
+
+function clearAll() {
+  pendingFiles = [];
+  chunks = [];
+  renderFileList();
+  document.getElementById('results').style.display = 'none';
+}
+
+function renderFileList() {
+  const el = document.getElementById('fileList');
+  const act = document.getElementById('actions');
+  if (!pendingFiles.length) { el.innerHTML = ''; act.style.display = 'none'; return; }
+  act.style.display = 'flex';
+  el.innerHTML = pendingFiles.map((p, i) => `
+    <div class="file-row">
+      <span style="font-size:16px">📄</span>
+      <span class="fname">${p.name}</span>
+      <span class="fmeta">${(p.file.size / 1024).toFixed(0)} KB</span>
+      <button class="rm" onclick="removeFile(${i})" title="Remove">×</button>
+    </div>
+  `).join('');
+}
+
+// ── Core processing ──────────────────────────────────────────────────────
+function parseCSV(text) {
+  const lines = text.split(/\r?\n/);
+  if (!lines.length) return [];
+  // Detect delimiter: comma, semicolon, or tab
+  const firstLine = lines[0];
+  const delim = firstLine.includes('\t') ? '\t' : firstLine.includes(';') ? ';' : ',';
+
+  // Parse a single CSV line, handling quoted fields
+  function parseLine(line) {
+    const fields = [];
+    let cur = '';
+    let inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQ && line[i+1] === '"') { cur += '"'; i++; }
+        else inQ = !inQ;
+      } else if (ch === delim && !inQ) { fields.push(cur); cur = ''; }
+      else cur += ch;
+    }
+    fields.push(cur);
+    return fields;
+  }
+
+  const headers = parseLine(lines[0]).map(h => h.trim().toLowerCase().replace(/^"|"$/g,''));
+  const emailIdx = headers.findIndex(h => EMAIL_COLS.includes(h));
+  if (emailIdx === -1) return null; // no email column found
+
+  const emails = [];
+  for (let i = 1; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    const row = parseLine(lines[i]);
+    const raw = (row[emailIdx] || '').trim().toLowerCase().replace(/^"|"$/g,'');
+    if (raw && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) emails.push(raw);
+  }
+  return { emails, headerFound: headers[emailIdx] };
+}
+
+function setProgress(pct) {
+  document.getElementById('prog').style.width = pct + '%';
+}
+
+function log(msg, type='') {
+  const el = document.getElementById('log');
+  el.innerHTML += `<div class="${type}">${msg}</div>`;
+  el.scrollTop = el.scrollHeight;
+}
+
+async function process() {
+  if (!pendingFiles.length) return;
+  const btn = document.querySelector('button[onclick="process()"]');
+  btn.disabled = true;
+  btn.textContent = '⏳ Processing…';
+  document.getElementById('results').style.display = 'block';
+  document.getElementById('log').innerHTML = '';
+  document.getElementById('progWrap').style.display = 'block';
+  chunks = [];
+
+  const allEmails = new Set();
+  let skippedNoCol = 0, skippedInvalid = 0, dupes = 0;
+
+  for (let fi = 0; fi < pendingFiles.length; fi++) {
+    const { name, file } = pendingFiles[fi];
+    setProgress(Math.round((fi / pendingFiles.length) * 60));
+    const text = await file.text();
+    const result = parseCSV(text);
+    if (!result) {
+      log(`⚠ ${name} — no email column found (looked for: ${EMAIL_COLS.slice(0,4).join(', ')}…)`, 'warn');
+      skippedNoCol++;
+      continue;
+    }
+    const before = allEmails.size;
+    for (const e of result.emails) {
+      if (allEmails.has(e)) dupes++;
+      else allEmails.add(e);
+    }
+    const added = allEmails.size - before;
+    log(`✓ ${name} — col "${result.headerFound}", ${result.emails.length} valid, ${added} new`, 'ok');
+  }
+
+  setProgress(70);
+  const total = allEmails.size;
+
+  if (!total) {
+    log('No valid emails found across all files.', 'err');
+    btn.disabled = false; btn.textContent = '⚡ Process files';
+    return;
+  }
+
+  // Split into chunks — use simple byte estimate (emails are ASCII so
+  // length ≈ bytes; multiply by 1.05 for safety margin).
+  const emailArr = [...allEmails];
+  const header   = 'Email';
+  let chunkIdx   = 0;
+  let i          = 0;
+
+  while (i < emailArr.length) {
+    chunkIdx++;
+    let rows = 0;
+    let sizeBytes = header.length + 1;
+    const lines = [header];
+
+    while (i < emailArr.length && rows < MAX_ROWS) {
+      const line = emailArr[i];
+      const lineBytes = line.length + 1; // +1 for newline
+      if (sizeBytes + lineBytes > MAX_BYTES && rows > 0) break;
+      lines.push(line);
+      sizeBytes += lineBytes;
+      rows++;
+      i++;
+    }
+
+    const csv    = lines.join('\n');
+    const sizeMB = (sizeBytes / 1024 / 1024).toFixed(1);
+    chunks.push({ name: `apollo-chunk-${String(chunkIdx).padStart(2,'0')}.csv`, csv, rows, sizeMB });
+    log(`Chunk ${chunkIdx}: ${rows.toLocaleString()} emails, ~${sizeMB} MB`);
+  }
+
+  setProgress(100);
+  renderResults(total, dupes, skippedNoCol);
+  btn.disabled = false; btn.textContent = '⚡ Process files';
+}
+
+function renderResults(total, dupes, skippedNoCol) {
+  document.getElementById('resultSub').textContent =
+    `${chunks.length} chunk${chunks.length!==1?'s':''} ready to download`;
+
+  document.getElementById('statsRow').innerHTML = `
+    <div class="stat teal"><div class="label">Unique emails</div><div class="val">${total.toLocaleString()}</div></div>
+    <div class="stat green"><div class="label">Output chunks</div><div class="val">${chunks.length}</div></div>
+    <div class="stat amber"><div class="label">Duplicates removed</div><div class="val">${dupes.toLocaleString()}</div></div>
+    <div class="stat"><div class="label">Files skipped</div><div class="val">${skippedNoCol}</div></div>
+  `;
+
+  document.getElementById('chunkList').innerHTML = chunks.map((c, i) => `
+    <div class="chunk">
+      <span style="font-size:18px">📦</span>
+      <span class="cname">${c.name}</span>
+      <span class="cmeta">${c.rows.toLocaleString()} rows · ${c.sizeMB} MB</span>
+      <button class="btn btn-teal btn-sm" onclick="downloadChunk(${i})">⬇ Download</button>
+    </div>
+  `).join('');
+}
+
+function downloadChunk(idx) {
+  const c = chunks[idx];
+  const blob = new Blob([c.csv], { type: 'text/csv;charset=utf-8' });
+  const url  = URL.createObjectURL(blob);
+  const a    = Object.assign(document.createElement('a'), { href: url, download: c.name });
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function downloadAll() {
+  if (!chunks.length) return;
+  // Chrome blocks programmatic multi-downloads after the first async gap.
+  // Solution: create ALL anchor elements synchronously in one user-gesture
+  // call, then click them. Works for ≤ ~5 files without a permission prompt.
+  chunks.forEach((c, i) => {
+    const blob = new Blob([c.csv], { type: 'text/csv;charset=utf-8' });
+    const url  = URL.createObjectURL(blob);
+    const a    = Object.assign(document.createElement('a'), { href: url, download: c.name });
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    // Don't revoke immediately — let the browser complete the download
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  });
+}
+
+// ── Auto-restore running job on page load ─────────────────────
+async function initEnrichment() {
+  try {
+    const r = await fetch('/api/admin/enrich/status');
+    const d = await r.json();
+    if (!d || d.status === 'idle') return;
+    // Restore UI
+    document.getElementById('enrichProgressWrap').style.display = '';
+    document.getElementById('enrichScanBtn').style.display = 'none';
+    document.getElementById('enrichTotal').textContent = (d.total || 0).toLocaleString();
+    document.getElementById('enrichProgressLabel').textContent = `${(d.processed||0).toLocaleString()} / ${(d.total||0).toLocaleString()} domains`;
+    if (d.status === 'running') {
+      document.getElementById('enrichPauseBtn').style.display = '';
+      document.getElementById('enrichStopBtn').style.display = '';
+      document.getElementById('enrichStatus').textContent = `Enriching ${(d.total||0).toLocaleString()} domains…`;
+      startEnrichPoll();
+    } else if (d.status === 'paused') {
+      document.getElementById('enrichResumeBtn').style.display = '';
+      document.getElementById('enrichStopBtn').style.display = '';
+      document.getElementById('enrichStatus').textContent = 'Paused';
+    } else if (d.status === 'completed' || d.status === 'stopped') {
+      document.getElementById('enrichProgressWrap').style.display = 'none';
+      document.getElementById('enrichScanBtn').style.display = '';
+      document.getElementById('enrichStatus').textContent = d.status === 'completed'
+        ? `Done — ${(d.updated||0).toLocaleString()} contacts enriched`
+        : 'Stopped';
+    }
+    // Restore stats
+    document.getElementById('enrichUpdated').textContent = (d.updated||0).toLocaleString();
+    document.getElementById('enrichSkipped').textContent = (d.skipped||0).toLocaleString();
+    document.getElementById('enrichFailed').textContent  = (d.failed||0).toLocaleString();
+    document.getElementById('enrichCost').textContent = '$' + (d.total_cost||0).toFixed(4);
+    const pct = d.total ? Math.round((d.processed/d.total)*100) : 0;
+    document.getElementById('enrichProg').style.width = pct + '%';
+  } catch {}
+}
+window.addEventListener('DOMContentLoaded', initEnrichment);
+
+// ── Sample CSV ────────────────────────────────────────────────
+async function downloadSampleCsv() {
+  const btn = document.getElementById('sampleCsvBtn');
+  const status = document.getElementById('sampleCsvStatus');
+  btn.disabled = true;
+  status.textContent = 'Enriching 100 contacts… (~60 seconds)';
+  try {
+    const r = await fetch('/api/admin/enrich/sample-csv');
+    const d = await r.json();
+    if (!r.ok) { status.textContent = d.error || 'Failed'; btn.disabled = false; return; }
+
+    // Trigger two downloads
+    const dl = (b64, filename) => {
+      const a = document.createElement('a');
+      a.href = 'data:text/csv;base64,' + b64;
+      a.download = filename;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    };
+    dl(d.original.data, d.original.filename);
+    setTimeout(() => dl(d.enriched.data, d.enriched.filename), 500);
+
+    const s = d.summary;
+    status.textContent = `Done — ${s.contacts} contacts, ${s.tokens.toLocaleString()} tokens, $${s.cost_usd.toFixed(5)} cost (est. full DB: $${s.est_full_db_usd})`;
+  } catch (err) {
+    status.textContent = 'Error: ' + err.message;
+  }
+  btn.disabled = false;
+}
+
+// ── AI Enrichment ─────────────────────────────────────────────
+let enrichPollTimer = null;
+let _enrichFields = [];
+let _enrichLimit = 0;
+let _enrichConcurrency = 5;
+
+function cancelScan() {
+  document.getElementById('enrichScanResult').style.display = 'none';
+  document.getElementById('enrichConfirmBtn').style.display = 'none';
+  document.getElementById('enrichCancelBtn').style.display = 'none';
+  document.getElementById('enrichScanBtn').style.display = '';
+  document.getElementById('enrichStatus').textContent = '';
+}
+
+async function scanEnrichment() {
+  const fields = [];
+  if (document.getElementById('enrichKeywords').checked)  fields.push('keywords');
+  if (document.getElementById('enrichIndustry').checked)  fields.push('industry');
+  if (document.getElementById('enrichEmployees').checked) fields.push('num_employees');
+  if (!fields.length) { alert('Select at least one field to enrich.'); return; }
+
+  _enrichFields      = fields;
+  _enrichLimit       = parseInt(document.getElementById('enrichLimit').value, 10);
+  _enrichConcurrency = parseInt(document.getElementById('enrichConcurrency').value, 10);
+
+  document.getElementById('enrichScanBtn').disabled = true;
+  document.getElementById('enrichStatus').textContent = 'Scanning database…';
+
+  try {
+    const r = await fetch(`/api/admin/enrich/scan?fields=${fields.join(',')}`);
+    const d = await r.json();
+    if (!r.ok) { alert(d.error || 'Scan failed'); document.getElementById('enrichScanBtn').disabled = false; return; }
+
+    document.getElementById('enrichScanSummary').innerHTML =
+      `<strong>${d.domains.toLocaleString()} domains</strong> need enrichment &nbsp;·&nbsp; ` +
+      `${d.contacts.toLocaleString()} contacts affected &nbsp;·&nbsp; ` +
+      `Est. cost: <strong>$${d.cost_usd.toFixed(4)}</strong>`;
+    document.getElementById('enrichScanResult').style.display = '';
+    document.getElementById('enrichScanBtn').style.display = 'none';
+    document.getElementById('enrichConfirmBtn').style.display = '';
+    document.getElementById('enrichCancelBtn').style.display = '';
+    document.getElementById('enrichStatus').textContent = '';
+  } catch (err) {
+    alert('Error: ' + err.message);
+  } finally {
+    document.getElementById('enrichScanBtn').disabled = false;
+  }
+}
+
+async function startEnrichment() {
+  document.getElementById('enrichConfirmBtn').disabled = true;
+  document.getElementById('enrichCancelBtn').style.display = 'none';
+  document.getElementById('enrichScanResult').style.display = 'none';
+  document.getElementById('enrichStatus').textContent = 'Starting…';
+
+  try {
+    const r = await fetch('/api/admin/enrich/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fields: _enrichFields, limit: _enrichLimit, concurrency: _enrichConcurrency }),
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      if (r.status === 409) {
+        await initEnrichment();
+        document.getElementById('enrichConfirmBtn').disabled = false;
+        return;
+      }
+      alert(d.error || 'Failed to start');
+      document.getElementById('enrichConfirmBtn').disabled = false;
+      document.getElementById('enrichScanBtn').style.display = '';
+      document.getElementById('enrichConfirmBtn').style.display = 'none';
+      return;
+    }
+
+    document.getElementById('enrichProgressWrap').style.display = '';
+    document.getElementById('enrichConfirmBtn').style.display = 'none';
+    document.getElementById('enrichPauseBtn').style.display = '';
+    document.getElementById('enrichStopBtn').style.display = '';
+    document.getElementById('enrichTotal').textContent = d.total.toLocaleString();
+    document.getElementById('enrichProgressLabel').textContent = `0 / ${d.total.toLocaleString()} domains`;
+    document.getElementById('enrichStatus').textContent = `Enriching ${d.total.toLocaleString()} domains…`;
+
+    startEnrichPoll();
+  } catch (err) {
+    alert('Error: ' + err.message);
+    document.getElementById('enrichConfirmBtn').disabled = false;
+  }
+}
+
+async function pauseEnrichment() {
+  await fetch('/api/admin/enrich/pause', { method: 'POST' });
+  document.getElementById('enrichPauseBtn').style.display = 'none';
+  document.getElementById('enrichResumeBtn').style.display = '';
+  document.getElementById('enrichStatus').textContent = 'Paused';
+}
+
+async function resumeEnrichment() {
+  await fetch('/api/admin/enrich/resume', { method: 'POST' });
+  document.getElementById('enrichResumeBtn').style.display = 'none';
+  document.getElementById('enrichPauseBtn').style.display = '';
+  document.getElementById('enrichStatus').textContent = 'Running…';
+  startEnrichPoll();
+}
+
+async function stopEnrichment() {
+  await fetch('/api/admin/enrich/stop', { method: 'POST' });
+  clearInterval(enrichPollTimer);
+  document.getElementById('enrichPauseBtn').style.display = 'none';
+  document.getElementById('enrichResumeBtn').style.display = 'none';
+  document.getElementById('enrichStopBtn').style.display = 'none';
+  document.getElementById('enrichProgressWrap').style.display = 'none';
+  document.getElementById('enrichScanBtn').style.display = '';
+  document.getElementById('enrichScanBtn').disabled = false;
+  document.getElementById('enrichStatus').textContent = 'Stopped';
+}
+
+function startEnrichPoll() {
+  clearInterval(enrichPollTimer);
+  enrichPollTimer = setInterval(pollEnrichStatus, 2000);
+  pollEnrichStatus();
+}
+
+async function pollEnrichStatus() {
+  try {
+    const r = await fetch('/api/admin/enrich/status');
+    const d = await r.json();
+    if (d.status === 'idle') return;
+
+    const total     = d.total     || 0;
+    const processed = d.processed || 0;
+    const pct = total ? Math.round((processed / total) * 100) : 0;
+    document.getElementById('enrichProg').style.width = pct + '%';
+    document.getElementById('enrichProgressLabel').textContent = `${processed.toLocaleString()} / ${total.toLocaleString()} domains`;
+    document.getElementById('enrichCurrentDomain').textContent = d.current_domain ? `Processing: ${d.current_domain}` : '';
+    document.getElementById('enrichUpdated').textContent = (d.updated || 0).toLocaleString();
+    document.getElementById('enrichSkipped').textContent = (d.skipped || 0).toLocaleString();
+    document.getElementById('enrichFailed').textContent  = (d.failed  || 0).toLocaleString();
+    document.getElementById('enrichCost').textContent = '$' + ((d.total_cost || 0).toFixed(4));
+
+    // Estimate time remaining from average ms per domain
+    const avgMs = d.domain_ms?.length ? d.domain_ms.reduce((a,b)=>a+b,0)/d.domain_ms.length : 0;
+    const remaining = (total - processed);
+    if (avgMs && remaining > 0) {
+      const secs = Math.round((avgMs * remaining) / 1000);
+      const etaStr = secs < 60 ? `${secs}s` : secs < 3600 ? `${Math.round(secs/60)}m` : `${(secs/3600).toFixed(1)}h`;
+      document.getElementById('enrichEta').textContent = etaStr;
+    } else {
+      document.getElementById('enrichEta').textContent = processed >= total ? 'Done' : '—';
+    }
+
+    const logEl = document.getElementById('enrichLog');
+    if (d.log && d.log.length) {
+      logEl.innerHTML = d.log.map(l => {
+        const cls = l.startsWith('✓') ? 'ok' : l.startsWith('✗') ? 'err' : 'warn';
+        return `<div class="${cls}">${l}</div>`;
+      }).join('');
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    if (d.results && d.results.length) {
+      document.getElementById('enrichResultsWrap').style.display = '';
+      const tbody = document.getElementById('enrichResultsBody');
+      tbody.innerHTML = d.results.map(r => {
+        const statusColor = r.status === 'updated' ? 'var(--green)' : r.status === 'failed' ? 'var(--red)' : 'var(--muted)';
+        const kw = r.keywords ? r.keywords.split(',').slice(0,4).join(', ') + (r.keywords.split(',').length > 4 ? '…' : '') : '—';
+        return `<tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:7px 10px;font-weight:500">${r.domain}</td>
+          <td style="padding:7px 10px;color:var(--text)">${r.industry || '—'}</td>
+          <td style="padding:7px 10px;color:var(--muted);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.keywords||''}">${kw}</td>
+          <td style="padding:7px 10px">${r.num_employees ? r.num_employees.toLocaleString() : '—'}</td>
+          <td style="padding:7px 10px">${r.contacts}</td>
+          <td style="padding:7px 10px;font-weight:600;color:${statusColor}">${r.status}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    if (d.status === 'completed' || d.status === 'stopped') {
+      clearInterval(enrichPollTimer);
+      document.getElementById('enrichPauseBtn').style.display = 'none';
+      document.getElementById('enrichResumeBtn').style.display = 'none';
+      document.getElementById('enrichStopBtn').style.display = 'none';
+      document.getElementById('enrichStartBtn').style.display = '';
+      document.getElementById('enrichStartBtn').disabled = false;
+      document.getElementById('enrichCurrentDomain').textContent = '';
+      document.getElementById('enrichStatus').textContent = d.status === 'completed'
+        ? `Done — ${d.updated.toLocaleString()} contacts enriched`
+        : 'Stopped';
+    }
+  } catch (err) {
+    console.warn('[enrich poll]', err.message);
+  }
+}
+
+// Export contacts for a specific Apollo account split.
+// Account 1 = London + South East (company_region filter).
+// Account 2 = everything else (all other UK regions).
+async function exportSplit(account) {
+  const ACCT1_REGIONS = ['London', 'South East'];
+  const ALL_REGIONS   = ['London','South East','North West','East of England','West Midlands',
+                         'South West','Yorkshire and the Humber','East Midlands','Scotland',
+                         'North East','Northern Ireland','Wales'];
+  const ACCT2_REGIONS = ALL_REGIONS.filter(r => !ACCT1_REGIONS.includes(r));
+
+  const btn    = document.getElementById(`exportBtn${account}`);
+  const status = document.getElementById('splitExportStatus');
+  const regions = account === 1 ? ACCT1_REGIONS : ACCT2_REGIONS;
+
+  btn.disabled = true;
+  document.getElementById(`exportBtn${account === 1 ? 2 : 1}`).disabled = true;
+
+  let offset = 0, fileNum = 1, totalExported = 0;
+  try {
+    while (true) {
+      btn.textContent = `↓ Exporting file ${fileNum}...`;
+      status.textContent = `Exporting Account ${account} — file ${fileNum}${totalExported ? `, ${totalExported.toLocaleString()} rows so far` : ''}...`;
+
+      const params = new URLSearchParams({ offset, companyRegion: regions.join(',') });
+      const r = await fetch(`/api/contacts/export?${params}`);
+      if (!r.ok) { status.textContent = `Export failed (${r.status})`; break; }
+
+      const hasMore    = r.headers.get('X-Has-More') === 'true';
+      const nextOffset = parseInt(r.headers.get('X-Next-Offset') || '0');
+      const rowsInFile = parseInt(r.headers.get('X-Rows-In-File') || '0');
+
+      const blob = await r.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href = url;
+      a.download = `apollo-account${account}-export-${fileNum}.csv`;
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      totalExported += rowsInFile;
+      fileNum++;
+      offset = nextOffset;
+      if (!hasMore) break;
+    }
+    status.textContent = `Done — Account ${account} export complete: ${totalExported.toLocaleString()} rows in ${fileNum - 1} file${fileNum > 2 ? 's' : ''}.`;
+  } catch (err) {
+    status.textContent = `Error: ${err.message}`;
+  } finally {
+    btn.textContent    = account === 1 ? '↓ Export Account 1 — London + South East' : '↓ Export Account 2 — Rest of UK';
+    btn.disabled = false;
+    document.getElementById(`exportBtn${account === 1 ? 2 : 1}`).disabled = false;
+  }
+}
+</script>
+</body>
+</html>

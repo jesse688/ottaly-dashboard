@@ -1,0 +1,16 @@
+{
+  "name": "ottaly-dashboard-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm --workspace=apps/admin-new run dev",
+    "build": "npm --workspace=apps/admin-new run build",
+    "start": "npm --workspace=apps/admin-new run start"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3"
+  }
+}

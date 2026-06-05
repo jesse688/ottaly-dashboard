@@ -1,0 +1,3239 @@
+const { Pool } = require('pg');
+const path = require('path');
+const fs = require('fs');
+
+class PostgresDatabase {
+  constructor() {
+    this.pool = null;
+    this.initialized = false;
+  }
+
+  async init() {
+    if (this.initialized) return;
+
+    // Support any PostgreSQL connection string via DATABASE_URL
+    const dbUrl = process.env.DATABASE_URL || '';
+    const sslDisabled = dbUrl.includes('sslmode=disable') || dbUrl.includes('localhost') || dbUrl.includes('127.0.0.1');
+    // Pool sized for high concurrency — parallel index builds, webhook
+    // bursts, dashboard fan-out (search + count + employee buckets +
+    // email-provider counts), and CSV imports all share the pool.
+    // Requires Postgres max_connections >= 200 (2 app instances × 60 pool).
+    const config = dbUrl ? {
+      connectionString: dbUrl,
+      ssl: sslDisabled ? false : { rejectUnauthorized: false },
+      max: 60,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 10000,
+      // Kill runaway queries fast. 120s was pegging CPU because expensive
+      // ILIKE-OR searches that previously timed out at 30s now ran to
+      // completion. 45s catches genuinely-stuck queries while keeping the
+      // CPU ceiling sane. Bump only after query plans are confirmed cheap.
+      statement_timeout: 45000,
+    } : {
+      user: process.env.DB_USER || 'ottaly',
+      password: process.env.DB_PASSWORD || 'ottaly_dev',
+      host: process.env.DB_HOST || 'localhost',
+      port: parseInt(process.env.DB_PORT || '5432', 10),
+      database: process.env.DB_NAME || 'ottaly_contacts',
+      max: 60,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 5000,
+      statement_timeout: 45000,
+    };
+
+    this.pool = new Pool(config);
+
+    this.pool.on('error', (err) => {
+      console.error('[PostgreSQL Pool Error]', err);
+    });
+
+    try {
+      const client = await this.pool.connect();
+      console.log('[PostgreSQL] Connected to database');
+      client.release();
+      this.initialized = true;
+
+      // Schema setup runs in BACKGROUND — previous instances may still be
+      // holding locks on contacts during a rolling deploy, and ALTER TABLE
+      // statements would block waiting for them. Letting init() return
+      // immediately means app.listen() fires within ~1s of DB connect.
+      // The schema migrations are idempotent (IF NOT EXISTS everywhere)
+      // so any in-flight queries against missing columns are impossible
+      // — those columns exist from a prior deploy. The only thing we'd
+      // be racing against is adding a brand-new column, which won't be
+      // referenced until this deploy's code runs queries that need it.
+      this.setupSchema().catch(err => {
+        console.error('[PostgreSQL] Background schema setup failed:', err.message);
+      });
+    } catch (err) {
+      console.error('[PostgreSQL] Connection failed:', err.message);
+      throw err;
+    }
+  }
+
+  async setupSchema() {
+    const schemaPath = path.resolve(__dirname, 'db-schema-postgres.sql');
+    if (!fs.existsSync(schemaPath)) {
+      console.warn('[PostgreSQL] Schema file not found, skipping setup');
+      return;
+    }
+
+    // Use a dedicated client with a 5s lock_timeout so migrations don't
+    // hang waiting on the previous deploy's still-running queries. If a
+    // lock is contested, we skip that statement and retry later — better
+    // than blocking the entire startup.
+    const client = await this.pool.connect();
+    try {
+      await client.query(`SET lock_timeout = '5s'`);
+      await client.query(`SET statement_timeout = '60s'`);
+
+      const schema = fs.readFileSync(schemaPath, 'utf8');
+      const statements = schema
+        .split(/;\s*$/m)
+        .map(s => s.trim())
+        .filter(s => s.length > 0 && !s.startsWith('--'));
+      let schemaErrors = 0;
+      for (const stmt of statements) {
+        try { await client.query(stmt); }
+        catch (err) {
+          if (!/already exists|lock timeout/i.test(err.message)) {
+            console.error('[PostgreSQL] Schema error:', err.message.slice(0, 120));
+            schemaErrors++;
+          }
+        }
+      }
+      if (schemaErrors === 0) console.log('[PostgreSQL] Schema ready');
+      client.release();
+    } catch (err) {
+      client.release();
+      throw err;
+    }
+
+    // Add missing columns to existing tables (safe migrations)
+    const migrations = [
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS city TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS state TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS country TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS company_address TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS company_city TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS company_state TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS company_country TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS linkedin_url TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS company_linkedin_url TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS industry TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS num_employees INT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS keywords TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS technologies TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS corporate_phone TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS company_phone TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS sub_departments TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMP`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS email_status TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS mx_provider TEXT`,
+      // Intelligence columns from reply parsing
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS works_remote BOOLEAN`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS owns_building TEXT DEFAULT 'unknown'`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS do_not_contact BOOLEAN DEFAULT false`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS snoozed_verticals JSONB DEFAULT '[]'`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS reply_notes TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS last_reply_at TIMESTAMP`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS marked_as_lead_at TIMESTAMP`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS bounced_at TIMESTAMP`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS bounce_type TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS soft_bounce_count INT DEFAULT 0`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS last_emailed_at TIMESTAMP`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS email_count INT DEFAULT 0`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS emailed_workspaces JSONB DEFAULT '{}'`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS last_campaign_name TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS exported_to_apollo_at TIMESTAMP`,
+      // Per-campaign push history. Each entry: {workspace_id, campaign_id,
+      // campaign_name, pushed_at}. Used by verify-and-push to skip contacts
+      // already pushed to this exact campaign — last_campaign_name alone
+      // only remembers the most-recent push so it leaked when campaigns
+      // interleaved.
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS pushed_campaigns JSONB DEFAULT '[]'`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS company_status TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ch_company_number TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ch_company_type TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ch_founded_year INT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ch_postcode TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ch_sic_codes TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ch_jurisdiction TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ch_has_insolvency BOOLEAN`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ch_has_charges BOOLEAN`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ch_accounts_overdue BOOLEAN`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ch_active_officers INT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ch_resigned_officers INT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ch_address TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ch_date_of_cessation TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ch_last_accounts_date TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ch_year_end_month INT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ch_data JSONB`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS enriched_at TIMESTAMPTZ`,
+      // ── Normalised location hierarchy ────────────────────────────
+      // Clean Country > Region > County > City > Town, derived by the
+      // location-normalizer (postcode-area primary, place-name fallback).
+      // Company is the default target; person_* mirror it for the person.
+      // location_source ∈ postcode|place|county|country|website|manual.
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS company_region TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS company_county TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS company_town TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS person_region TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS person_county TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS person_town TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS location_source TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS location_needs_review BOOLEAN DEFAULT false`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS location_review_reason TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS location_normalized_at TIMESTAMPTZ`,
+      // template_alerts columns added after initial table creation
+      `ALTER TABLE template_alerts ADD COLUMN IF NOT EXISTS dismissed_by TEXT`,
+      `ALTER TABLE template_alerts ADD COLUMN IF NOT EXISTS dismissed_reason TEXT`,
+      `ALTER TABLE template_alerts ADD COLUMN IF NOT EXISTS target_metric TEXT`,
+      `ALTER TABLE template_alerts ADD COLUMN IF NOT EXISTS target_direction TEXT`,
+      `ALTER TABLE template_alerts ADD COLUMN IF NOT EXISTS baseline_value NUMERIC`,
+      `ALTER TABLE template_alerts ADD COLUMN IF NOT EXISTS followup_value NUMERIC`,
+      `ALTER TABLE template_alerts ADD COLUMN IF NOT EXISTS outcome TEXT`,
+      `ALTER TABLE template_alerts ADD COLUMN IF NOT EXISTS outcome_at TIMESTAMP`,
+      `ALTER TABLE template_alerts ADD COLUMN IF NOT EXISTS outcome_notes TEXT`,
+      // ── Domain health table ──────────────────────────────────────
+      // Free per-domain reputation snapshot built from DNS + blacklist
+      // checks (no Google Postmaster account needed). Refreshed nightly
+      // by refreshDomainHealth() in server.js.
+      `CREATE TABLE IF NOT EXISTS domain_health (
+        domain         TEXT PRIMARY KEY,
+        workspace_id   TEXT,
+        workspace_name TEXT,
+        spf            JSONB DEFAULT '{}',
+        dkim           JSONB DEFAULT '{}',
+        dmarc          JSONB DEFAULT '{}',
+        mx             JSONB DEFAULT '{}',
+        blacklists     JSONB DEFAULT '[]',
+        score          INT DEFAULT 0,
+        status         TEXT DEFAULT 'unknown',
+        last_checked   TIMESTAMP,
+        notes          TEXT,
+        created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_domain_health_workspace ON domain_health (workspace_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_domain_health_status    ON domain_health (status)`,
+      // Tombstone flag — when set, the auto-refresh skips re-adding this
+      // domain even though PlusVibe still lists it. Used for inactive
+      // clients or sunset domains. ignored_at is a soft-delete: the row
+      // stays so a user can un-ignore later without losing history.
+      `ALTER TABLE domain_health ADD COLUMN IF NOT EXISTS ignored_at TIMESTAMP`,
+      // Postmaster Tools registration tracking (Google Site Verification flow).
+      `ALTER TABLE domain_health ADD COLUMN IF NOT EXISTS pm_txt_token    TEXT`,
+      `ALTER TABLE domain_health ADD COLUMN IF NOT EXISTS pm_txt_added_at TIMESTAMP`,
+      `ALTER TABLE domain_health ADD COLUMN IF NOT EXISTS pm_verified_at  TIMESTAMP`,
+      // ── Combo analysis historical cache ──────────────────────────
+      // Approximate FROM×TO provider stats built from PlusVibe workspace
+      // totals + mailbox_meta type distribution + contacts mx_provider.
+      `CREATE TABLE IF NOT EXISTS combo_history (
+        workspace_id  TEXT    NOT NULL,
+        date          TEXT    NOT NULL,
+        from_type     TEXT    NOT NULL,
+        to_type       TEXT    NOT NULL,
+        sent          INT     NOT NULL DEFAULT 0,
+        replies       INT     NOT NULL DEFAULT 0,
+        pos_replies   INT     NOT NULL DEFAULT 0,
+        bounces       INT     NOT NULL DEFAULT 0,
+        leads         INT     NOT NULL DEFAULT 0,
+        PRIMARY KEY (workspace_id, date, from_type, to_type)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_combo_history_date ON combo_history (date)`,
+      // ── Manager payslips ─────────────────────────────────────────
+      `CREATE TABLE IF NOT EXISTS payslips (
+        id           BIGSERIAL PRIMARY KEY,
+        manager_name TEXT NOT NULL,
+        month        TEXT NOT NULL,
+        filename     TEXT NOT NULL,
+        mimetype     TEXT NOT NULL DEFAULT 'application/pdf',
+        data         TEXT NOT NULL,
+        uploaded_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (manager_name, month)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_payslips_manager ON payslips (manager_name)`,
+      // ── App-wide settings (key/value store) ──────────────────────
+      `CREATE TABLE IF NOT EXISTS app_settings (
+        key        TEXT PRIMARY KEY,
+        value      JSONB NOT NULL DEFAULT '{}',
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )`,
+      // ── Central per-workspace stats cache ────────────────────────
+      // Single source of truth for aggregate metrics (lead counts, send
+      // counts, reply rates, mailbox counts, capacity gaps, etc.) so every
+      // page reads from the same numbers. Refreshed periodically by
+      // refreshAllWorkspaceStats() in server.js.
+      `CREATE TABLE IF NOT EXISTS workspace_stats (
+        workspace_id   TEXT PRIMARY KEY,
+        workspace_name TEXT,
+        stats          JSONB NOT NULL DEFAULT '{}',
+        computed_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )`,
+      // ── Google Postmaster Tools daily snapshots ──────────────────
+      // One row per (domain, date). The API only returns data for
+      // domains registered in Postmaster Tools. ip_reputation is the
+      // worst bucket seen (BAD > LOW > MEDIUM > HIGH) for that day.
+      `CREATE TABLE IF NOT EXISTS postmaster_data (
+        domain            TEXT NOT NULL,
+        date              TEXT NOT NULL,
+        domain_reputation TEXT,
+        ip_reputation     TEXT,
+        spam_rate         NUMERIC,
+        spf_pass_rate     NUMERIC,
+        dkim_pass_rate    NUMERIC,
+        dmarc_pass_rate   NUMERIC,
+        ip_reputations    JSONB DEFAULT '[]',
+        raw_data          JSONB,
+        fetched_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (domain, date)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_postmaster_domain ON postmaster_data (domain)`,
+      `CREATE INDEX IF NOT EXISTS idx_postmaster_date   ON postmaster_data (date DESC)`,
+      // ── Mailbox metadata ─────────────────────────────────────────
+      // User-assigned tagging on top of PlusVibe data. PlusVibe knows
+      // the technical provider (GOOGLE / MICROSOFT365 / SMTP) but not
+      // *who supplied the mailbox* (Maildoso, Mithun, Winnr, …). We
+      // store that here so the Mailboxes dashboard can group + compare
+      // performance per supplier and per type.
+      `CREATE TABLE IF NOT EXISTS mailbox_meta (
+        email             TEXT PRIMARY KEY,
+        supplier          TEXT,
+        mailbox_type      TEXT,
+        notes             TEXT,
+        ignored_at        TIMESTAMP,
+        created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_mailbox_meta_supplier ON mailbox_meta (supplier)`,
+      `CREATE INDEX IF NOT EXISTS idx_mailbox_meta_type     ON mailbox_meta (mailbox_type)`,
+      // Billing tracking — when the mailbox was purchased and which day of
+      // the month it renews. billing_start_date is YYYY-MM-DD; billing_day
+      // is 1-31 (the day of month the supplier invoices). Lets us show
+      // "next renewal: 18 Jun" and flag mailboxes with upcoming renewals.
+      `ALTER TABLE mailbox_meta ADD COLUMN IF NOT EXISTS billing_start_date DATE`,
+      `ALTER TABLE mailbox_meta ADD COLUMN IF NOT EXISTS billing_day INT`,
+      // ── Mailbox pricing (supplier × type → unit cost / month) ─────
+      `CREATE TABLE IF NOT EXISTS mailbox_pricing (
+        supplier      TEXT NOT NULL,
+        mailbox_type  TEXT NOT NULL,
+        unit_cost     NUMERIC(10,2) NOT NULL DEFAULT 0,
+        currency      TEXT NOT NULL DEFAULT 'USD',
+        notes         TEXT,
+        updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (supplier, mailbox_type)
+      )`,
+      // ── Monthly operating expenses (recurring or one-off) ──────────
+      // start_month and end_month are inclusive YYYY-MM strings; end_month
+      // NULL means "ongoing". Lets us turn an expense off without deleting
+      // history so prior-month P&Ls stay consistent.
+      `CREATE TABLE IF NOT EXISTS perf_cache_daily (
+        ws_id      TEXT NOT NULL,
+        date       TEXT NOT NULL,
+        data       JSONB NOT NULL,
+        saved_at   BIGINT NOT NULL,
+        PRIMARY KEY (ws_id, date)
+      )`,
+      `CREATE TABLE IF NOT EXISTS perf_cache_leads (
+        ws_id      TEXT PRIMARY KEY,
+        data       JSONB NOT NULL,
+        saved_at   BIGINT NOT NULL
+      )`,
+      `CREATE TABLE IF NOT EXISTS monthly_expenses (
+        id            SERIAL PRIMARY KEY,
+        label         TEXT NOT NULL,
+        category      TEXT,
+        amount        NUMERIC(10,2) NOT NULL,
+        currency      TEXT NOT NULL DEFAULT 'USD',
+        start_month   TEXT NOT NULL,
+        end_month     TEXT,
+        notes         TEXT,
+        created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_monthly_expenses_start ON monthly_expenses (start_month)`,
+      // Per-campaign filter snapshots — when a user pushes to a campaign,
+      // they can opt to save the current DataBase 1.0 filter set against
+      // that campaign. Next time they search for more leads, they can
+      // recall the saved filter from a Client→Campaign cascading dropdown.
+      `CREATE TABLE IF NOT EXISTS campaign_filters (
+        workspace_id    TEXT NOT NULL,
+        workspace_name  TEXT,
+        campaign_id     TEXT NOT NULL,
+        campaign_name   TEXT,
+        filters         JSONB NOT NULL,
+        saved_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (workspace_id, campaign_id)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_campaign_filters_workspace ON campaign_filters (workspace_id)`,
+      // Cooldown check filters on (workspace_id, last_emailed_at); partial
+      // index keeps it small and only useful rows (NULL means 'never sent
+      // by us', which the filter lets through anyway).
+      `CREATE INDEX IF NOT EXISTS idx_contacts_last_emailed_at ON contacts (workspace_id, last_emailed_at) WHERE last_emailed_at IS NOT NULL`,
+
+      // ── Client Health analytics ────────────────────────────────────
+      // Denormalized event log written from the PlusVibe webhook so we can
+      // slice reply/bounce/lead activity by template, campaign-step, and
+      // recipient provider — none of which the per-workspace daily stats
+      // expose.
+      `CREATE TABLE IF NOT EXISTS email_events (
+        id              BIGSERIAL PRIMARY KEY,
+        workspace_id    TEXT,
+        campaign_id     TEXT,
+        campaign_name   TEXT,
+        step            INT,
+        variant         TEXT,
+        lead_email      TEXT,
+        recipient_domain TEXT,
+        provider_bucket TEXT,
+        event_type      TEXT,
+        event_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        content_hash    TEXT,
+        raw             JSONB
+      )`,
+      `ALTER TABLE email_events ADD COLUMN IF NOT EXISTS sender_email TEXT`,
+      `CREATE INDEX IF NOT EXISTS idx_ee_sender       ON email_events (sender_email) WHERE sender_email IS NOT NULL`,
+      `CREATE INDEX IF NOT EXISTS idx_ee_ws_event_at  ON email_events (workspace_id, event_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_ee_campaign     ON email_events (workspace_id, campaign_id, event_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_ee_template     ON email_events (content_hash, event_at DESC) WHERE content_hash IS NOT NULL`,
+      `CREATE INDEX IF NOT EXISTS idx_ee_event_type   ON email_events (event_type, event_at DESC)`,
+      // Combo analysis send-anchored attribution looks up follow-up events by
+      // (workspace_id, lower(lead_email)) — without this index every recipient
+      // EXISTS would scan the workspace, blowing the 45s statement timeout.
+      `CREATE INDEX IF NOT EXISTS idx_ee_ws_lead      ON email_events (workspace_id, lower(lead_email), event_type)`,
+
+      // Templates — content-hashed subject+body, deduped across campaigns
+      // and clients. Lets us see "this exact subject has shipped N times
+      // across X clients" — the only honest signal of provider profiling.
+      `CREATE TABLE IF NOT EXISTS templates (
+        content_hash  TEXT PRIMARY KEY,
+        subject_hash  TEXT,
+        subject       TEXT,
+        body          TEXT,
+        body_excerpt  TEXT,
+        first_seen    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_seen     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_templates_subject_hash ON templates (subject_hash)`,
+
+      // Maps each (workspace, campaign, step, variant) to its current
+      // template content. Populated by the daily campaign-content sync.
+      `CREATE TABLE IF NOT EXISTS campaign_templates (
+        workspace_id    TEXT NOT NULL,
+        campaign_id     TEXT NOT NULL,
+        campaign_name   TEXT,
+        step            INT  NOT NULL,
+        variant         TEXT NOT NULL DEFAULT 'A',
+        content_hash    TEXT,
+        active          BOOLEAN DEFAULT TRUE,
+        campaign_status TEXT,
+        captured_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (workspace_id, campaign_id, step, variant)
+      )`,
+      `ALTER TABLE campaign_templates ADD COLUMN IF NOT EXISTS campaign_status TEXT`,
+      // captured_at = FIRST time we saw this row (drives "Running since"); the
+      // upsert keeps it insert-only so it's never reset on re-sync. We do NOT
+      // add a last_captured_at column: ADD COLUMN needs an AccessExclusive lock
+      // that times out (lock_timeout 5s) against the constant writes to this
+      // table, so it silently never applies and breaks every query/upsert that
+      // references it. Recency ordering uses MAX(captured_at) instead.
+      `CREATE INDEX IF NOT EXISTS idx_ct_workspace ON campaign_templates (workspace_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_ct_content   ON campaign_templates (content_hash)`,
+
+      // Per-variant stats from PlusVibe's /campaign/get/variation-stats. The
+      // sent/reply webhook payloads don't include step, so step-level
+      // attribution is impossible from webhook data alone. This table holds
+      // PlusVibe's own per-step counts as the source of truth.
+      `CREATE TABLE IF NOT EXISTS campaign_variant_stats (
+        workspace_id  TEXT NOT NULL,
+        campaign_id   TEXT NOT NULL,
+        step          INT  NOT NULL,
+        variant       TEXT NOT NULL DEFAULT 'A',
+        sent          INT  DEFAULT 0,
+        reply         INT  DEFAULT 0,
+        bounce        INT  DEFAULT 0,
+        opened        INT  DEFAULT 0,
+        updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (workspace_id, campaign_id, step, variant)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_cvs_workspace ON campaign_variant_stats (workspace_id)`,
+
+      // Daily snapshots of campaign_variant_stats. Lets us compute true
+      // last-7-day deltas (current - 7-day-old snapshot) so the UI can
+      // surface decay vs lifetime — the strongest signal for ESP profiling.
+      // One row per (workspace, campaign, step, variant, day).
+      `CREATE TABLE IF NOT EXISTS campaign_variant_stats_snapshots (
+        workspace_id  TEXT NOT NULL,
+        campaign_id   TEXT NOT NULL,
+        step          INT  NOT NULL,
+        variant       TEXT NOT NULL DEFAULT 'A',
+        snapshot_date DATE NOT NULL DEFAULT CURRENT_DATE,
+        sent          INT  DEFAULT 0,
+        reply         INT  DEFAULT 0,
+        bounce        INT  DEFAULT 0,
+        opened        INT  DEFAULT 0,
+        snapshot_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (workspace_id, campaign_id, step, variant, snapshot_date)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_cvss_ws_date ON campaign_variant_stats_snapshots (workspace_id, snapshot_date DESC)`,
+
+      // Per-template decay / over-use / provider-split alerts. The Client
+      // Health page surfaces open rows (dismissed_at IS NULL).
+      `CREATE TABLE IF NOT EXISTS template_alerts (
+        id                   BIGSERIAL PRIMARY KEY,
+        workspace_id         TEXT,
+        campaign_id          TEXT,
+        campaign_name        TEXT,
+        step                 INT,
+        variant              TEXT,
+        content_hash         TEXT,
+        alert_type           TEXT,
+        severity             TEXT,
+        reply_rate_baseline  NUMERIC,
+        reply_rate_current   NUMERIC,
+        lifetime_sends       INT,
+        details              JSONB,
+        created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        dismissed_at         TIMESTAMP,
+        resolved_at          TIMESTAMP
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_ta_open ON template_alerts (workspace_id, created_at DESC) WHERE dismissed_at IS NULL AND resolved_at IS NULL`,
+
+      // Daily per-client health snapshot — written by the nightly cron.
+      // Score is mechanical (built from the numeric signals here); the AI
+      // briefing interprets *why* the score moved.
+      `CREATE TABLE IF NOT EXISTS client_health_snapshots (
+        workspace_id            TEXT NOT NULL,
+        snapshot_date           DATE NOT NULL,
+        health_score            INT,
+        health_band             TEXT,
+        sent_7d                 INT,
+        sent_30d                INT,
+        replies_7d              INT,
+        replies_30d             INT,
+        bounces_7d              INT,
+        bounces_30d             INT,
+        leads_7d                INT,
+        leads_30d               INT,
+        reply_rate_7d           NUMERIC,
+        reply_rate_30d          NUMERIC,
+        reply_rate_baseline     NUMERIC,
+        bounce_rate_7d          NUMERIC,
+        reply_rate_gmail_7d     NUMERIC,
+        reply_rate_outlook_7d   NUMERIC,
+        mailbox_total           INT,
+        mailbox_unhealthy       INT,
+        domain_unhealthy        INT,
+        copy_alerts_open        INT,
+        ai_briefing             TEXT,
+        ai_actions              JSONB,
+        signals                 JSONB,
+        PRIMARY KEY (workspace_id, snapshot_date)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_chs_date ON client_health_snapshots (snapshot_date DESC, workspace_id)`,
+
+      // Lead-target tracking on the health snapshot. Added after initial
+      // ship so this runs as an ALTER on existing rows (NULLs are fine —
+      // means "no target was set when this snapshot was built").
+      `ALTER TABLE client_health_snapshots ADD COLUMN IF NOT EXISTS lead_target_monthly INT`,
+      `ALTER TABLE client_health_snapshots ADD COLUMN IF NOT EXISTS leads_mtd           INT`,
+      `ALTER TABLE client_health_snapshots ADD COLUMN IF NOT EXISTS leads_expected_mtd  NUMERIC`,
+      `ALTER TABLE client_health_snapshots ADD COLUMN IF NOT EXISTS pace_pct            NUMERIC`,
+      // Tracks whether the briefing came from Claude or the deterministic
+      // fallback — so the UI can show the truth instead of inferring from
+      // a runtime "is key set" check (which lies after a key is added but
+      // before snapshots are rebuilt, or when Claude returns a 401/error).
+      `ALTER TABLE client_health_snapshots ADD COLUMN IF NOT EXISTS ai_briefing_source TEXT`,
+
+      // ── Actionable briefings — every AI action becomes a tracked row ──
+      // The AI is forced (via prompt) to return concrete, checkable actions
+      // instead of "monitor this client". Each action gets a row here so
+      // the campaign manager can tick it off, and so the outcome evaluator
+      // (next phase) can check 24h later whether the target metric moved.
+      `CREATE TABLE IF NOT EXISTS health_actions (
+        id                BIGSERIAL PRIMARY KEY,
+        workspace_id      TEXT NOT NULL,
+        snapshot_date     DATE NOT NULL,
+        -- The action itself
+        label             TEXT NOT NULL,
+        kind              TEXT NOT NULL,
+        payload           JSONB DEFAULT '{}'::jsonb,
+        rationale         TEXT,
+        priority          INT DEFAULT 2,
+        -- Lifecycle
+        proposed_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        completed_at      TIMESTAMP,
+        completed_by      TEXT,
+        dismissed_at      TIMESTAMP,
+        dismissed_by      TEXT,
+        dismissed_reason  TEXT,
+        -- Outcome tracking (filled by the daily evaluator cron — phase 2)
+        target_metric     TEXT,
+        target_direction  TEXT,
+        baseline_value    NUMERIC,
+        followup_value    NUMERIC,
+        outcome           TEXT,
+        outcome_at        TIMESTAMP,
+        outcome_notes     TEXT
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_ha_open
+         ON health_actions (workspace_id, snapshot_date DESC, priority)
+         WHERE completed_at IS NULL AND dismissed_at IS NULL`,
+      `CREATE INDEX IF NOT EXISTS idx_ha_completed_pending_outcome
+         ON health_actions (completed_at)
+         WHERE completed_at IS NOT NULL AND outcome IS NULL`,
+      `CREATE INDEX IF NOT EXISTS idx_ha_history
+         ON health_actions (workspace_id, kind, outcome)
+         WHERE outcome IS NOT NULL`,
+
+      // ── Audience scoring — lookalike TAM scoring per client ───────────
+      // Responder profile: top attribute values (seniority, industry, etc.)
+      // computed from who replied/became a lead for each workspace.
+      `CREATE TABLE IF NOT EXISTS client_audience_profiles (
+        workspace_id   TEXT PRIMARY KEY,
+        responder_count INT DEFAULT 0,
+        sent_count      INT DEFAULT 0,
+        profile         JSONB DEFAULT '{}'::jsonb,
+        computed_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )`,
+
+      // Per-contact score for each workspace: 0-100, breakdown of which
+      // features matched the responder profile, recomputed on demand / nightly.
+      `CREATE TABLE IF NOT EXISTS audience_scores (
+        workspace_id  TEXT NOT NULL,
+        contact_id    UUID NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+        score         INT  NOT NULL DEFAULT 0,
+        breakdown     JSONB DEFAULT '{}'::jsonb,
+        computed_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (workspace_id, contact_id)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_as_workspace_score
+         ON audience_scores (workspace_id, score DESC)`,
+
+      // ── Revenue leads — persistent store so leads survive PlusVibe workspace deletion ──
+      `CREATE TABLE IF NOT EXISTS revenue_leads (
+        lead_key        TEXT PRIMARY KEY,
+        workspace_id    TEXT NOT NULL,
+        workspace_name  TEXT NOT NULL DEFAULT '',
+        client_name     TEXT NOT NULL DEFAULT '',
+        lead_email      TEXT DEFAULT '',
+        first_name      TEXT DEFAULT '',
+        last_name       TEXT DEFAULT '',
+        campaign        TEXT DEFAULT '',
+        lead_price      NUMERIC(10,4) DEFAULT 0,
+        date            TEXT DEFAULT '',
+        label           TEXT DEFAULT '',
+        pv_nonlead      BOOLEAN DEFAULT false,
+        updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_revenue_leads_workspace ON revenue_leads (workspace_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_revenue_leads_date      ON revenue_leads (date)`,
+
+      // ── Manual revenue entries — admin-entered revenue for deleted/historical clients ──
+      `CREATE TABLE IF NOT EXISTS revenue_manual_entries (
+        id             SERIAL PRIMARY KEY,
+        workspace_id   TEXT NOT NULL,
+        month          TEXT NOT NULL,
+        lead_count     INT NOT NULL DEFAULT 1,
+        price_per_lead NUMERIC(10,4) NOT NULL DEFAULT 0,
+        note           TEXT,
+        created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_rme_workspace ON revenue_manual_entries (workspace_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_rme_month     ON revenue_manual_entries (month)`,
+
+      // ── Diagnostic Intelligence System (Phase 1+) ──
+      `CREATE TABLE IF NOT EXISTS diagnostic_signals (
+        id BIGSERIAL PRIMARY KEY,
+        timestamp TIMESTAMP DEFAULT NOW(),
+        signal_type TEXT NOT NULL,
+        workspace_id TEXT,
+        metric_key TEXT NOT NULL,
+        metric_value FLOAT NOT NULL,
+        unit TEXT,
+        status TEXT,
+        notes TEXT
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_ds_type_ts ON diagnostic_signals (signal_type, timestamp DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_ds_ws_ts  ON diagnostic_signals (workspace_id, timestamp DESC)`,
+
+      `CREATE TABLE IF NOT EXISTS diagnostic_correlation (
+        id BIGSERIAL PRIMARY KEY,
+        date DATE NOT NULL,
+        workspace_id TEXT,
+        signal_category TEXT NOT NULL,
+        correlated_metrics JSONB,
+        severity TEXT,
+        root_cause_hypothesis TEXT,
+        confidence FLOAT,
+        manual_notes TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_dc_date_ws ON diagnostic_correlation (date DESC, workspace_id)`,
+
+      `CREATE TABLE IF NOT EXISTS diagnostic_external_factors (
+        id BIGSERIAL PRIMARY KEY,
+        date DATE NOT NULL,
+        workspace_id TEXT,
+        factor_type TEXT NOT NULL,
+        description TEXT,
+        regions_affected TEXT[],
+        severity TEXT,
+        expected_impact TEXT,
+        created_by TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_def_date ON diagnostic_external_factors (date DESC)`,
+
+      `CREATE TABLE IF NOT EXISTS daily_intelligence_logs (
+        id BIGSERIAL PRIMARY KEY,
+        date DATE NOT NULL,
+        workspace_id TEXT,
+        performance_tier TEXT,
+        reply_rate FLOAT,
+        bounce_rate FLOAT,
+        warmup_pct FLOAT,
+        api_health FLOAT,
+        key_signals JSONB,
+        correlated_patterns TEXT[],
+        intelligence_notes TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_dil_date_ws ON daily_intelligence_logs (date DESC, workspace_id)`,
+
+      `CREATE TABLE IF NOT EXISTS performance_patterns (
+        id BIGSERIAL PRIMARY KEY,
+        pattern_type TEXT NOT NULL,
+        pattern_value TEXT NOT NULL,
+        workspace_id TEXT,
+        avg_reply_rate FLOAT,
+        avg_bounce_rate FLOAT,
+        sample_size INT,
+        correlation_strength FLOAT,
+        last_updated TIMESTAMP DEFAULT NOW()
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_pp_type ON performance_patterns (pattern_type)`,
+      `CREATE INDEX IF NOT EXISTS idx_pp_value ON performance_patterns (pattern_value)`,
+
+      `CREATE TABLE IF NOT EXISTS diagnostic_checks (
+        id SERIAL PRIMARY KEY,
+        check_name TEXT NOT NULL UNIQUE,
+        metric_key TEXT NOT NULL,
+        normal_min FLOAT,
+        normal_max FLOAT,
+        warning_min FLOAT,
+        warning_max FLOAT,
+        critical_min FLOAT,
+        critical_max FLOAT,
+        unit TEXT,
+        description TEXT
+      )`,
+
+      `CREATE TABLE IF NOT EXISTS suppressed_templates (
+        workspace_id  TEXT NOT NULL,
+        content_hash  TEXT NOT NULL,
+        suppressed_at TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (workspace_id, content_hash)
+      )`,
+
+      // ── Client notes — persistent copy of the notes field so it
+      // survives SQLite resets or migrations. Keyed by workspace_id.
+      `CREATE TABLE IF NOT EXISTS client_notes (
+        workspace_id TEXT PRIMARY KEY,
+        notes        TEXT NOT NULL DEFAULT '',
+        updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )`,
+    ];
+
+    // Migrations run with lock_timeout so a stuck previous-deploy query
+    // can't block startup. ALTER TABLE needs an AccessExclusive lock.
+    const mClient = await this.pool.connect();
+    try {
+      await mClient.query(`SET lock_timeout = '5s'`);
+      for (const sql of migrations) {
+        try { await mClient.query(sql); }
+        catch (err) {
+          if (!/already exists|lock timeout/i.test(err.message)) {
+            console.warn('[PostgreSQL] Migration warning:', err.message.slice(0, 120));
+          }
+        }
+      }
+    } finally {
+      mClient.release();
+    }
+
+    // Trigram indexes for fast substring ILIKE on the filter columns.
+    // Each GIN build can scan the full contacts table — on a 25k+ row table
+    // the six of these together can take minutes and block `app.listen()`.
+    // Enable the extension synchronously (cheap), then fire-and-forget the
+    // index builds so the dashboard starts serving immediately. Searches
+    // remain correct meanwhile; they're just slower until the builds finish.
+    try {
+      await this.pool.query(`CREATE EXTENSION IF NOT EXISTS pg_trgm`);
+      const trgmIndexes = [
+        ['job_title',         `CREATE INDEX IF NOT EXISTS idx_contacts_job_title_trgm         ON contacts USING GIN (job_title gin_trgm_ops)`],
+        ['job_title_cleaned', `CREATE INDEX IF NOT EXISTS idx_contacts_job_title_cleaned_trgm ON contacts USING GIN (job_title_cleaned gin_trgm_ops)`],
+        ['industry',          `CREATE INDEX IF NOT EXISTS idx_contacts_industry_trgm          ON contacts USING GIN (industry gin_trgm_ops)`],
+        ['keywords',          `CREATE INDEX IF NOT EXISTS idx_contacts_keywords_trgm          ON contacts USING GIN (keywords gin_trgm_ops)`],
+        ['technologies',      `CREATE INDEX IF NOT EXISTS idx_contacts_technologies_trgm      ON contacts USING GIN (technologies gin_trgm_ops)`],
+        ['company_name',      `CREATE INDEX IF NOT EXISTS idx_contacts_company_name_trgm     ON contacts USING GIN (company_name gin_trgm_ops)`],
+        // B-tree on lowered email domain — catch-all propagation matches
+        // by domain on every verify batch. Without this it was a full
+        // 230k-row seq scan and held a pool connection for seconds.
+        ['email_domain',      `CREATE INDEX IF NOT EXISTS idx_contacts_email_domain ON contacts (LOWER(SPLIT_PART(email, '@', 2)))`],
+        // B-tree indexes for equality/range filters used on every saved view
+        ['do_not_contact',   `CREATE INDEX IF NOT EXISTS idx_contacts_dnc ON contacts (do_not_contact) WHERE do_not_contact = false OR do_not_contact IS NULL`],
+        ['email_status',     `CREATE INDEX IF NOT EXISTS idx_contacts_email_status ON contacts (workspace_id, email_status)`],
+        ['num_employees',    `CREATE INDEX IF NOT EXISTS idx_contacts_num_employees ON contacts (num_employees)`],
+        ['country',          `CREATE INDEX IF NOT EXISTS idx_contacts_country ON contacts (LOWER(country))`],
+        ['company_country',  `CREATE INDEX IF NOT EXISTS idx_contacts_company_country ON contacts (LOWER(company_country))`],
+        ['city',             `CREATE INDEX IF NOT EXISTS idx_contacts_city ON contacts (LOWER(city))`],
+        ['department',       `CREATE INDEX IF NOT EXISTS idx_contacts_department ON contacts (LOWER(department))`],
+        // Additional missing indexes found in perf audit
+        ['state',            `CREATE INDEX IF NOT EXISTS idx_contacts_state ON contacts (LOWER(state))`],
+        ['company_city',     `CREATE INDEX IF NOT EXISTS idx_contacts_company_city ON contacts (LOWER(company_city))`],
+        ['company_state',    `CREATE INDEX IF NOT EXISTS idx_contacts_company_state ON contacts (LOWER(company_state))`],
+        // Normalised location hierarchy — these are the filter/split columns.
+        ['company_region',   `CREATE INDEX IF NOT EXISTS idx_contacts_company_region ON contacts (LOWER(company_region))`],
+        ['company_county',   `CREATE INDEX IF NOT EXISTS idx_contacts_company_county ON contacts (LOWER(company_county))`],
+        ['company_town',     `CREATE INDEX IF NOT EXISTS idx_contacts_company_town ON contacts (LOWER(company_town))`],
+        ['location_review',  `CREATE INDEX IF NOT EXISTS idx_contacts_location_review ON contacts (location_needs_review) WHERE location_needs_review = true`],
+        ['works_remote',     `CREATE INDEX IF NOT EXISTS idx_contacts_works_remote ON contacts (works_remote)`],
+        ['owns_building',    `CREATE INDEX IF NOT EXISTS idx_contacts_owns_building ON contacts (owns_building)`],
+        ['exported_apollo',  `CREATE INDEX IF NOT EXISTS idx_contacts_exported_apollo ON contacts (exported_to_apollo_at)`],
+        ['first_name',       `CREATE INDEX IF NOT EXISTS idx_contacts_first_name_trgm ON contacts USING GIN (first_name gin_trgm_ops)`],
+        ['last_name',        `CREATE INDEX IF NOT EXISTS idx_contacts_last_name_trgm ON contacts USING GIN (last_name gin_trgm_ops)`],
+        ['tags_gin',         `CREATE INDEX IF NOT EXISTS idx_contacts_tags_gin ON contacts USING GIN (tags)`],
+        // Per-client 60-day cooldown filter does `emailed_workspaces ? $ws`
+        // on every search/count when a client is selected — jsonb_path_ops
+        // makes that key-existence lookup index-backed.
+        ['emailed_ws_gin',   `CREATE INDEX IF NOT EXISTS idx_contacts_emailed_workspaces_gin ON contacts USING GIN (emailed_workspaces jsonb_path_ops)`],
+      ];
+      // Build indexes in parallel batches of 3 — sequential builds took
+      // 10+ minutes on 230K rows; parallel cuts that to ~3-4 min.
+      // Pool can absorb 3 long-running builds while still serving traffic.
+      (async () => {
+        console.log('[PostgreSQL] Building indexes in background (3 in parallel)…');
+        const t0 = Date.now();
+        const BATCH = 3;
+        for (let i = 0; i < trgmIndexes.length; i += BATCH) {
+          const slice = trgmIndexes.slice(i, i + BATCH);
+          await Promise.all(slice.map(async ([col, sql]) => {
+            const s = Date.now();
+            try {
+              await this.pool.query(sql);
+              console.log(`[PostgreSQL]   idx(${col}) ready in ${Date.now() - s}ms`);
+            } catch (e) {
+              console.warn(`[PostgreSQL]   idx(${col}) failed:`, e.message);
+            }
+          }));
+        }
+        console.log(`[PostgreSQL] All indexes done in ${Date.now() - t0}ms`);
+      })();
+    } catch (err) {
+      console.warn('[PostgreSQL] pg_trgm unavailable, ILIKE filters will be slower:', err.message);
+    }
+
+    // Seed default mailbox pricing (only inserts rows that don't already
+    // exist — so edits made in the UI aren't overwritten on restart).
+    try {
+      const defaults = [
+        ['Winnr',    'smtp',      1.00, 'Winnr SMTP'],
+        ['Maildoso', 'google',    2.50, 'Maildoso Google Admin'],
+        ['Maildoso', 'microsoft', 2.50, 'Maildoso MS'],
+        ['Mithun',   'microsoft', 1.00, 'Mithun MS Non-Admin'],
+        ['Mithun',   'google',    2.50, 'Mithun Google Admin'],
+        // Inboxing is billed as $30/month per domain (flat, up to 49
+        // mailboxes under that domain). Unit cost is $0 here because the
+        // $30/domain charge should be entered as a recurring expense on
+        // the Finance page — that way it shows correctly regardless of
+        // how many of the 49 slots are filled.
+        ['Inboxing', 'microsoft', 0.00, 'Flat $30/domain/month — add as expense, not per-mailbox'],
+      ];
+      for (const [supplier, type, cost, notes] of defaults) {
+        await this.pool.query(
+          `INSERT INTO mailbox_pricing (supplier, mailbox_type, unit_cost, notes)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (supplier, mailbox_type) DO UPDATE SET
+             unit_cost = EXCLUDED.unit_cost,
+             notes     = EXCLUDED.notes`,
+          [supplier, type, cost, notes]
+        );
+      }
+    } catch (err) {
+      console.warn('[PostgreSQL] mailbox pricing seed skipped:', err.message);
+    }
+
+    // updated_at trigger — sent as a single intact statement so the
+    // dollar-quoted PL/pgSQL body isn't shredded by the schema splitter.
+    try {
+      await this.pool.query(`
+        CREATE OR REPLACE FUNCTION update_contacts_updated_at()
+        RETURNS TRIGGER AS $$
+        BEGIN
+          NEW.updated_at = CURRENT_TIMESTAMP;
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+      `);
+      await this.pool.query(`DROP TRIGGER IF EXISTS contacts_update_timestamp ON contacts`);
+      await this.pool.query(`
+        CREATE TRIGGER contacts_update_timestamp
+        BEFORE UPDATE ON contacts
+        FOR EACH ROW
+        EXECUTE FUNCTION update_contacts_updated_at()
+      `);
+    } catch (err) {
+      console.error('[PostgreSQL] trigger setup error:', err.message);
+    }
+
+    // Named saved views — store the filter-hash string verbatim so the
+    // frontend's existing serializer is the single source of truth on shape.
+    try {
+      await this.pool.query(`
+        CREATE TABLE IF NOT EXISTS saved_views (
+          id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+          workspace_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          filters TEXT NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE (workspace_id, name)
+        );
+      `);
+    } catch (err) {
+      console.error('[PostgreSQL] saved_views create error:', err.message);
+    }
+
+    // ── Placement Tests ───────────────────────────────────────────────
+    for (const sql of [
+      `CREATE TABLE IF NOT EXISTS placement_seed_accounts (
+        id           SERIAL PRIMARY KEY,
+        label        TEXT NOT NULL,
+        email        TEXT NOT NULL UNIQUE,
+        imap_host    TEXT NOT NULL,
+        imap_port    INT  NOT NULL DEFAULT 993,
+        imap_user    TEXT NOT NULL,
+        imap_password TEXT NOT NULL,
+        active       BOOLEAN NOT NULL DEFAULT true,
+        created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )`,
+      `CREATE TABLE IF NOT EXISTS placement_smtp_accounts (
+        id            SERIAL PRIMARY KEY,
+        domain        TEXT NOT NULL UNIQUE,
+        smtp_host     TEXT NOT NULL,
+        smtp_port     INT  NOT NULL DEFAULT 587,
+        smtp_user     TEXT NOT NULL,
+        smtp_password TEXT NOT NULL,
+        from_email    TEXT NOT NULL,
+        active        BOOLEAN NOT NULL DEFAULT true,
+        created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )`,
+      `CREATE TABLE IF NOT EXISTS placement_tests (
+        id           SERIAL PRIMARY KEY,
+        domain       TEXT NOT NULL,
+        seed_email   TEXT NOT NULL,
+        subject      TEXT NOT NULL,
+        sent_at      TIMESTAMP,
+        result       TEXT,
+        raw_folder   TEXT,
+        checked_at   TIMESTAMP,
+        triggered_by TEXT NOT NULL DEFAULT 'scheduled',
+        created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_placement_tests_domain  ON placement_tests (domain)`,
+      `CREATE INDEX IF NOT EXISTS idx_placement_tests_sent_at ON placement_tests (sent_at)`,
+    ]) {
+      try { await this.pool.query(sql); }
+      catch (err) { console.error('[PostgreSQL] placement table error:', err.message); }
+    }
+
+    // One-shot data migrations tracked in _migrations so they never
+    // re-run after completing. Previously these ran on every restart,
+    // scanning the entire 230k-row contacts table each time (92+ seconds
+    // for the location backfill alone), even when nothing had changed.
+    // The whole IIFE is wrapped in a top-level catch so any unhandled
+    // error here doesn't escape as an unhandled rejection and crash Node.
+    (async () => {
+      try {
+        await this.pool.query(`
+          CREATE TABLE IF NOT EXISTS _migrations (
+            name TEXT PRIMARY KEY,
+            ran_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          )
+        `);
+      } catch { /* ignore — table may already exist */ }
+
+      const ran = async (name) => {
+        try {
+          const r = await this.pool.query(`SELECT 1 FROM _migrations WHERE name=$1`, [name]);
+          return r.rows.length > 0;
+        } catch { return false; } // if _migrations doesn't exist yet, treat as not-run
+      };
+      const mark = (name) => this.pool.query(`INSERT INTO _migrations (name) VALUES ($1) ON CONFLICT DO NOTHING`, [name]).catch(() => {});
+
+      // 1. Location / field backfill from Apollo raw_data
+      if (!await ran('location-field-backfill-v1')) {
+        try {
+          const t0 = Date.now();
+          await this.pool.query(`
+            UPDATE contacts SET
+              city            = NULLIF(TRIM(raw_data->>'City'), ''),
+              state           = NULLIF(TRIM(raw_data->>'State'), ''),
+              country         = NULLIF(TRIM(raw_data->>'Country'), ''),
+              company_city    = NULLIF(TRIM(COALESCE(NULLIF(raw_data->>'Company City', ''), SPLIT_PART(raw_data->>'Company Address', ',', 2))), ''),
+              company_state   = NULLIF(TRIM(COALESCE(NULLIF(raw_data->>'Company State', ''), SPLIT_PART(raw_data->>'Company Address', ',', 3))), ''),
+              company_country = NULLIF(TRIM(COALESCE(NULLIF(raw_data->>'Company Country', ''), SPLIT_PART(raw_data->>'Company Address', ',', 4))), ''),
+              linkedin_url    = NULLIF(TRIM(raw_data->>'Person Linkedin Url'), ''),
+              industry        = NULLIF(TRIM(raw_data->>'Industry'), ''),
+              technologies    = NULLIF(TRIM(raw_data->>'Technologies'), ''),
+              keywords        = NULLIF(TRIM(raw_data->>'Keywords'), '')
+            WHERE raw_data IS NOT NULL
+              AND (city IS NULL OR company_city IS NULL OR linkedin_url IS NULL
+                   OR (keywords IS NULL AND raw_data->>'Keywords' IS NOT NULL AND raw_data->>'Keywords' != ''))
+          `);
+          await mark('location-field-backfill-v1');
+          console.log(`[PostgreSQL] Location/field backfill complete (${Date.now() - t0}ms)`);
+        } catch (err) { console.error('[PostgreSQL] Backfill error:', err.message); }
+      }
+
+      // 1b. Backfill keywords + technologies columns for contacts that missed
+      //     the first pass (they had city/linkedin already so the v1 WHERE
+      //     clause skipped them even though keywords was still NULL).
+      if (!await ran('keywords-backfill-v1')) {
+        try {
+          const t0 = Date.now();
+          const r = await this.pool.query(`
+            UPDATE contacts
+            SET keywords     = NULLIF(TRIM(raw_data->>'Keywords'), ''),
+                technologies = NULLIF(TRIM(raw_data->>'Technologies'), '')
+            WHERE raw_data IS NOT NULL
+              AND (
+                (keywords IS NULL AND raw_data->>'Keywords' IS NOT NULL AND raw_data->>'Keywords' != '')
+                OR
+                (technologies IS NULL AND raw_data->>'Technologies' IS NOT NULL AND raw_data->>'Technologies' != '')
+              )
+          `);
+          await mark('keywords-backfill-v1');
+          console.log(`[PostgreSQL] Keywords/technologies backfill: ${r.rowCount} rows updated (${Date.now() - t0}ms)`);
+        } catch (err) { console.error('[PostgreSQL] Keywords backfill error:', err.message); }
+      }
+
+      // 1c. Department / sub_departments backfill — the importer previously read
+      //     "Department" (singular) but Apollo exports "Departments" (plural),
+      //     so these columns were blank for all Apollo imports.
+      if (!await ran('department-backfill-v2')) {
+        try {
+          const t0 = Date.now();
+          let total = 0;
+          // Run in batches of 10k to stay under the 120s statement timeout
+          while (true) {
+            const r = await this.pool.query(`
+              UPDATE contacts SET
+                department      = NULLIF(TRIM(COALESCE(NULLIF(raw_data->>'Departments',''),NULLIF(raw_data->>'Department',''),NULLIF(raw_data->>'department',''))),  ''),
+                sub_departments = NULLIF(TRIM(COALESCE(NULLIF(raw_data->>'Sub Departments',''),NULLIF(raw_data->>'sub_departments',''))), '')
+              WHERE id IN (
+                SELECT id FROM contacts
+                WHERE raw_data IS NOT NULL
+                  AND ((department IS NULL AND (raw_data->>'Departments' != '' OR raw_data->>'Department' != '' OR raw_data->>'department' != ''))
+                    OR (sub_departments IS NULL AND (raw_data->>'Sub Departments' != '' OR raw_data->>'sub_departments' != '')))
+                LIMIT 10000
+              )
+            `);
+            total += r.rowCount || 0;
+            if ((r.rowCount || 0) < 10000) break;
+          }
+          await mark('department-backfill-v2');
+          console.log(`[PostgreSQL] Department backfill: ${total} rows (${Date.now() - t0}ms)`);
+        } catch (err) { console.error('[PostgreSQL] Department backfill error:', err.message); }
+      }
+
+      // 2. num_employees from Apollo "# Employees" raw_data cell
+      if (!await ran('num-employees-backfill-v1')) {
+        try {
+          const t0 = Date.now();
+          const r = await this.pool.query(`
+            UPDATE contacts
+            SET num_employees = CASE
+              WHEN COALESCE(raw_data->>'# Employees', raw_data->>'Employees') ~ '^\\s*\\d+\\s*$'
+                THEN regexp_replace(COALESCE(raw_data->>'# Employees', raw_data->>'Employees'), '\\D', '', 'g')::int
+              WHEN COALESCE(raw_data->>'# Employees', raw_data->>'Employees') ~ '^\\s*\\d+\\s*-\\s*\\d+\\s*$'
+                THEN split_part(regexp_replace(COALESCE(raw_data->>'# Employees', raw_data->>'Employees'), '\\s', '', 'g'), '-', 1)::int
+              WHEN COALESCE(raw_data->>'# Employees', raw_data->>'Employees') ~ '^\\s*\\d+\\s*\\+\\s*$'
+                THEN regexp_replace(COALESCE(raw_data->>'# Employees', raw_data->>'Employees'), '\\D', '', 'g')::int
+              ELSE NULL
+            END
+            WHERE num_employees IS NULL
+              AND (raw_data->>'# Employees' IS NOT NULL OR raw_data->>'Employees' IS NOT NULL)
+          `);
+          await mark('num-employees-backfill-v1');
+          console.log(`[PostgreSQL] num_employees backfilled for ${r.rowCount} rows (${Date.now() - t0}ms)`);
+        } catch (err) { console.error('[PostgreSQL] num_employees backfill error:', err.message); }
+      }
+
+      // 3. Company-name + job-title cleanup regex passes
+      if (!await ran('company-name-job-title-clean-v1')) {
+        try {
+          const t0 = Date.now();
+          await this.pool.query(`UPDATE contacts SET company_name = TRIM(REGEXP_REPLACE(company_name, '\\s+[-–—]\\s+.+$', '', 'g')) WHERE company_name LIKE '%-%' OR company_name LIKE '%–%'`);
+          await this.pool.query(`UPDATE contacts SET company_name = TRIM(REGEXP_REPLACE(company_name, '\\s*\\([^)]*\\)', '', 'g')) WHERE company_name LIKE '%(%)%'`);
+          await this.pool.query(`UPDATE contacts SET company_name = TRIM(REGEXP_REPLACE(company_name, '\\s+(Ltd\\.?|Inc\\.?|LLC\\.?|PLC|plc|Limited|Group|Holdings?|International|Solutions?|Services?|Consulting|Technologies?)\\s*$', '', 'gi')) WHERE company_name IS NOT NULL`);
+          await this.pool.query(`UPDATE contacts SET job_title_cleaned = INITCAP(TRIM(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(job_title, '\\s*\\([^)]*\\)', '', 'g'), '\\s*,\\s*.+$', '', 'g'), '\\s+[-–—]\\s+.+$', '', 'g'))) WHERE job_title IS NOT NULL`);
+          await mark('company-name-job-title-clean-v1');
+          console.log(`[PostgreSQL] Job titles and company names re-cleaned (${Date.now() - t0}ms)`);
+        } catch (err) { console.error('[PostgreSQL] Cleaning error:', err.message); }
+      }
+
+      // 4. Title-case ALL-CAPS company names left over from raw imports.
+      //    Only touches MULTI-WORD all-caps strings ("DESIGNER CONTRACTS"
+      //    → "Designer Contracts", "THE DOUBLE A" → "The Double A"). Single
+      //    ALL-CAPS words like SIG / GSK / CITB are acronyms — left alone.
+      //    Bumps statement_timeout to 10 min since this touches all 230k rows.
+      // 4b. Strip ALL-CAPS leading "THE " — earlier v2 used '[Tt]he' which
+      //     missed the uppercase form. Run BEFORE titlecase so "THE DOUBLE A"
+      //     → "DOUBLE A" → (titlecase) → "Double A".
+      if (!await ran('company-name-strip-the-allcaps-v1')) {
+        try {
+          const t0 = Date.now();
+          const r = await this.pool.query(`
+            UPDATE contacts
+            SET company_name = TRIM(REGEXP_REPLACE(company_name, '^(THE|the|The)\\s+', '', ''))
+            WHERE company_name ~ '^(THE|the|The)\\s'
+          `);
+          await mark('company-name-strip-the-allcaps-v1');
+          console.log(`[PostgreSQL] Stripped leading "THE " from ${r.rowCount} company names (${Date.now() - t0}ms)`);
+        } catch (err) { console.error('[PostgreSQL] strip-the-allcaps error:', err.message); }
+      }
+
+      if (!await ran('company-name-titlecase-v2')) {
+        try {
+          const t0 = Date.now();
+          await this.pool.query(`SET LOCAL statement_timeout = '600000'`).catch(() => {});
+          const r = await this.pool.query(`
+            UPDATE contacts
+            SET company_name = INITCAP(company_name)
+            WHERE company_name IS NOT NULL
+              AND company_name !~ '[a-z]'      -- no lowercase anywhere
+              AND company_name ~ '[A-Z]'       -- has at least one uppercase
+              AND company_name ~ '\\s'         -- has whitespace → multi-word
+          `);
+          await mark('company-name-titlecase-v2');
+          console.log(`[PostgreSQL] Title-cased ${r.rowCount} multi-word ALL-CAPS company names (${Date.now() - t0}ms)`);
+        } catch (err) { console.error('[PostgreSQL] Company titlecase v2 error:', err.message); }
+      }
+
+      // 5. Strip leading "The " + extended trailing suffixes (Trading,
+      //    Enterprises, Industries, etc.). Runs as a separate migration so
+      //    it applies to data already cleaned by v1.
+      if (!await ran('company-name-clean-v2')) {
+        try {
+          const t0 = Date.now();
+          // Strip leading "The "
+          const r1 = await this.pool.query(`
+            UPDATE contacts
+            SET company_name = TRIM(REGEXP_REPLACE(company_name, '^[Tt]he\\s+', '', ''))
+            WHERE company_name ~* '^the\\s+'
+          `);
+          // Strip extended trailing suffixes (case-insensitive, may be
+          // followed by punctuation or end of string)
+          const r2 = await this.pool.query(`
+            UPDATE contacts
+            SET company_name = TRIM(REGEXP_REPLACE(
+              company_name,
+              '[\\s,]+(Trading|Enterprises?|Industries|Manufacturing|Distribution|Logistics|Brands?|Worldwide|Global|Consultancy|Associates?|Partners?|Ventures?|Systems?)\\.?\\s*$',
+              '',
+              'gi'
+            ))
+            WHERE company_name ~* '\\s+(Trading|Enterprises?|Industries|Manufacturing|Distribution|Logistics|Brands?|Worldwide|Global|Consultancy|Associates?|Partners?|Ventures?|Systems?)\\.?\\s*$'
+          `);
+          await mark('company-name-clean-v2');
+          console.log(`[PostgreSQL] company-name-clean-v2: stripped "The" on ${r1.rowCount}, suffixes on ${r2.rowCount} (${Date.now() - t0}ms)`);
+        } catch (err) { console.error('[PostgreSQL] company-name-clean-v2 error:', err.message); }
+      }
+
+      // 9. Repair campaign_templates.captured_at corrupted by the old upsert
+      //    (which reset captured_at = now on every sync). Reset it to the
+      //    earliest REAL send event for that template — the genuine "first ran"
+      //    date that drives Copy's "Running since". Only moves dates BACKWARD
+      //    to the truth (WHERE earliest_send < captured_at); never forward, so
+      //    a template legitimately seen before its first recorded send keeps
+      //    its real first-seen.
+      if (!await ran('captured-at-from-first-send-v1')) {
+        try {
+          const t0 = Date.now();
+          const r = await this.pool.query(`
+            UPDATE campaign_templates ct
+            SET captured_at = e.first_send
+            FROM (
+              SELECT workspace_id, content_hash, MIN(event_at) AS first_send
+              FROM email_events
+              WHERE content_hash IS NOT NULL AND event_type = 'sent'
+              GROUP BY workspace_id, content_hash
+            ) e
+            WHERE ct.workspace_id = e.workspace_id
+              AND ct.content_hash = e.content_hash
+              AND e.first_send < ct.captured_at
+          `);
+          await mark('captured-at-from-first-send-v1');
+          console.log(`[PostgreSQL] captured-at-from-first-send-v1: repaired ${r.rowCount} template rows (${Date.now() - t0}ms)`);
+        } catch (err) { console.error('[PostgreSQL] captured-at-from-first-send-v1 error:', err.message); }
+      }
+    })().catch(err => console.error('[PostgreSQL] Migration IIFE error:', err.message));
+  }
+
+  async query(sql, params) {
+    const client = await this.pool.connect();
+    try {
+      return await client.query(sql, params);
+    } finally {
+      client.release();
+    }
+  }
+
+  async close() {
+    if (this.pool) {
+      await this.pool.end();
+      this.initialized = false;
+    }
+  }
+
+  // ── Contact Operations ──────────────────────────────────────
+
+  async createContact(workspaceId, contactData) {
+    const {
+      email, firstName, lastName, phone, companyName, companyDomain,
+      jobTitle, jobTitleCleaned, seniority, department, subDepartments,
+      apolloId, apolloPersonId, linkedinUrl, industry, numEmployees,
+      keywords, technologies, companyLinkedinUrl,
+      city, state, country, companyAddress, companyCity, companyState, companyCountry,
+      corporatePhone, companyPhone, emailVerifiedAt,
+      source, rawData, tags
+    } = contactData;
+
+    const sql = `
+      INSERT INTO contacts (
+        workspace_id, email, first_name, last_name, phone,
+        company_name, company_domain, job_title, job_title_cleaned,
+        seniority, department, sub_departments, apollo_id, apollo_person_id,
+        linkedin_url, industry, num_employees, keywords, technologies,
+        company_linkedin_url, city, state, country,
+        company_address, company_city, company_state, company_country,
+        corporate_phone, company_phone, email_verified_at,
+        source, raw_data, tags, imported_at
+      ) VALUES (
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,
+        $15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
+        $31,$32,$33,CURRENT_TIMESTAMP
+      )
+      ON CONFLICT (workspace_id, email)
+      DO UPDATE SET
+        first_name = EXCLUDED.first_name,
+        last_name = EXCLUDED.last_name,
+        phone = EXCLUDED.phone,
+        company_name = EXCLUDED.company_name,
+        company_domain = EXCLUDED.company_domain,
+        job_title = EXCLUDED.job_title,
+        job_title_cleaned = EXCLUDED.job_title_cleaned,
+        seniority = EXCLUDED.seniority,
+        department = EXCLUDED.department,
+        sub_departments = EXCLUDED.sub_departments,
+        apollo_id = EXCLUDED.apollo_id,
+        linkedin_url = EXCLUDED.linkedin_url,
+        industry = EXCLUDED.industry,
+        num_employees = EXCLUDED.num_employees,
+        keywords = EXCLUDED.keywords,
+        technologies = EXCLUDED.technologies,
+        company_linkedin_url = EXCLUDED.company_linkedin_url,
+        city = EXCLUDED.city,
+        state = EXCLUDED.state,
+        country = EXCLUDED.country,
+        company_address = EXCLUDED.company_address,
+        company_city = EXCLUDED.company_city,
+        company_state = EXCLUDED.company_state,
+        company_country = EXCLUDED.company_country,
+        corporate_phone = EXCLUDED.corporate_phone,
+        company_phone = EXCLUDED.company_phone,
+        email_verified_at = EXCLUDED.email_verified_at,
+        raw_data = EXCLUDED.raw_data,
+        updated_at = CURRENT_TIMESTAMP
+      RETURNING *;
+    `;
+
+    const result = await this.query(sql, [
+      workspaceId, email, firstName, lastName, phone,
+      companyName, companyDomain, jobTitle, jobTitleCleaned,
+      seniority, department || null, subDepartments || null, apolloId, apolloPersonId,
+      linkedinUrl || null, industry || null, numEmployees || null,
+      keywords || null, technologies || null, companyLinkedinUrl || null,
+      city || null, state || null, country || null,
+      companyAddress || null, companyCity || null, companyState || null, companyCountry || null,
+      corporatePhone || null, companyPhone || null, emailVerifiedAt || null,
+      source, rawData ? JSON.stringify(rawData) : null, tags || []
+    ]);
+
+    return result.rows[0];
+  }
+
+  async getContact(workspaceId, email) {
+    const sql = `
+      SELECT * FROM contacts
+      WHERE workspace_id = $1 AND email = $2
+      LIMIT 1;
+    `;
+    const result = await this.query(sql, [workspaceId, email]);
+    return result.rows[0];
+  }
+
+  async getContactById(id) {
+    const sql = `
+      SELECT email, first_name, last_name, phone, company_name, company_domain, job_title
+      FROM contacts WHERE id = $1 LIMIT 1;
+    `;
+    const result = await this.query(sql, [id]);
+    return result.rows[0];
+  }
+
+  async getContactsById(ids) {
+    if (ids.length === 0) return [];
+    const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
+    const sql = `SELECT * FROM contacts WHERE id IN (${placeholders})`;
+    const result = await this.query(sql, ids);
+    return result.rows;
+  }
+
+  _buildFilterClauses(filters) {
+    const params = [];
+    let p = 2;
+    const clauses = [];
+
+    const like = (col, val) => { clauses.push(`${col} ILIKE $${p++}`); params.push(`%${val}%`); };
+    const eq   = (col, val) => { clauses.push(`${col} = $${p++}`); params.push(val); };
+    // Comma-separated → IN (...). Single value falls through to eq for an index-friendly plan.
+    const eqMulti = (col, val) => {
+      const values = val.split(',').map(v => v.trim()).filter(Boolean);
+      if (values.length === 0) return;
+      if (values.length === 1) { eq(col, values[0]); return; }
+      const placeholders = values.map(() => `$${p++}`).join(',');
+      clauses.push(`${col} IN (${placeholders})`);
+      params.push(...values);
+    };
+    const jsonbMulti = (field, val) => {
+      const values = val.split(',').map(v => v.trim()).filter(Boolean);
+      if (values.length === 0) return;
+      const patterns = values.map(v => `%${v}%`);
+      clauses.push(`(raw_data->>'${field}' ILIKE ANY($${p}))`);
+      params.push(patterns);
+      p++;
+    };
+    const jsonbExclude = (field, val) => {
+      const values = val.split(',').map(v => v.trim()).filter(Boolean);
+      if (values.length === 0) return;
+      const patterns = values.map(v => `%${v}%`);
+      clauses.push(`(raw_data->>'${field}' IS NULL OR raw_data->>'${field}' NOT ILIKE ALL($${p}))`);
+      params.push(patterns);
+      p++;
+    };
+    // Match a comma-separated value list against one or more real columns
+    // (faster than the JSONB equivalents, and works for both Apollo and
+    // PlusVibe rows because both importers populate these columns).
+    // Collapses N values into a single `col ILIKE ANY(ARRAY[...])` expression
+    // — one parameter, one per-row eval, planner-friendly. Was previously N
+    // chained OR clauses which timed out on big Apollo URLs (60+ keywords).
+    const colMulti = (cols, val) => {
+      const values = val.split(',').map(v => v.trim()).filter(Boolean);
+      if (values.length === 0) return;
+      const colsArr = Array.isArray(cols) ? cols : [cols];
+      const patterns = values.map(v => `%${v}%`);
+      const orClauses = colsArr.map(c => `${c} ILIKE ANY($${p})`);
+      clauses.push(`(${orClauses.join(' OR ')})`);
+      params.push(patterns);
+      p++;
+    };
+    // Exact-match variant for normalised fields (region/county/town).
+    // Uses LOWER() = ANY() so the LOWER() btree index is hit — no wildcard
+    // scan needed since these are clean normalised values.
+    const colExact = (col, val) => {
+      const values = val.split(',').map(v => v.trim().toLowerCase()).filter(Boolean);
+      if (!values.length) return;
+      clauses.push(`LOWER(${col}) = ANY($${p})`);
+      params.push(values);
+      p++;
+    };
+    const colExclude = (cols, val) => {
+      const values = val.split(',').map(v => v.trim()).filter(Boolean);
+      if (values.length === 0) return;
+      const colsArr = Array.isArray(cols) ? cols : [cols];
+      const patterns = values.map(v => `%${v}%`);
+      // Single `NOT ILIKE ALL` per column instead of N chained AND clauses.
+      // NULLs treated as "no match" (i.e. row passes the exclusion).
+      const perCol = colsArr.map(c => `(${c} IS NULL OR ${c} NOT ILIKE ALL($${p}))`);
+      clauses.push(`(${perCol.join(' AND ')})`);
+      params.push(patterns);
+      p++;
+    };
+
+    // Apply each filter inside a `safe()` wrapper so one bad value (malformed
+    // range, weird unicode, etc.) doesn't abort the whole search. Failed
+    // filters are logged and skipped; the rest still apply.
+    const safe = (name, fn) => {
+      try { fn(); }
+      catch (e) { console.warn(`[search] filter "${name}" skipped:`, e.message); }
+    };
+
+    safe('status',     () => { if (filters.status)     eq('status', filters.status); });
+    safe('seniority',  () => { if (filters.seniority)  eqMulti('seniority', filters.seniority); });
+    safe('firstName',  () => { if (filters.firstName)  like('first_name', filters.firstName); });
+    safe('lastName',   () => { if (filters.lastName)   like('last_name', filters.lastName); });
+    // Use the denormalised columns (populated by the CSV importer for both
+    // Apollo and PlusVibe rows) instead of raw_data->>'…' JSONB scans. This
+    // is 10–100× faster on big batches of ORs and avoids Apollo-only
+    // column-name assumptions.
+    safe('jobTitle',            () => { if (filters.jobTitle)            colMulti(['job_title','job_title_cleaned'], filters.jobTitle); });
+    safe('jobTitleExclude',     () => { if (filters.jobTitleExclude)     colExclude(['job_title','job_title_cleaned'], filters.jobTitleExclude); });
+    safe('department',          () => { if (filters.department)          colMulti('department', filters.department); });
+    safe('subDepartments',      () => { if (filters.subDepartments)      colMulti('sub_departments', filters.subDepartments); });
+    safe('linkedinUrl',         () => { if (filters.linkedinUrl)         like('linkedin_url', filters.linkedinUrl); });
+    safe('industry',            () => { if (filters.industry)            colMulti('industry', filters.industry); });
+    safe('industryExclude',     () => { if (filters.industryExclude)     colExclude('industry', filters.industryExclude); });
+    // keywords/technologies: search the dedicated column first, fall back to
+    // raw_data JSONB for contacts imported before the column was backfilled.
+    safe('keywords', () => {
+      if (!filters.keywords) return;
+      const values = filters.keywords.split(',').map(v => v.trim()).filter(Boolean);
+      if (!values.length) return;
+      const patterns = values.map(v => `%${v}%`);
+      clauses.push(`COALESCE(NULLIF(keywords,''), raw_data->>'Keywords') ILIKE ANY($${p})`);
+      params.push(patterns); p++;
+    });
+    safe('keywordsExclude', () => {
+      if (!filters.keywordsExclude) return;
+      const values = filters.keywordsExclude.split(',').map(v => v.trim()).filter(Boolean);
+      if (!values.length) return;
+      const patterns = values.map(v => `%${v}%`);
+      clauses.push(`(COALESCE(NULLIF(keywords,''), raw_data->>'Keywords') IS NULL OR COALESCE(NULLIF(keywords,''), raw_data->>'Keywords') NOT ILIKE ALL($${p}))`);
+      params.push(patterns); p++;
+    });
+    safe('technologies', () => {
+      if (!filters.technologies) return;
+      const values = filters.technologies.split(',').map(v => v.trim()).filter(Boolean);
+      if (!values.length) return;
+      const patterns = values.map(v => `%${v}%`);
+      clauses.push(`COALESCE(NULLIF(technologies,''), raw_data->>'Technologies') ILIKE ANY($${p})`);
+      params.push(patterns); p++;
+    });
+    safe('technologiesExclude', () => {
+      if (!filters.technologiesExclude) return;
+      const values = filters.technologiesExclude.split(',').map(v => v.trim()).filter(Boolean);
+      if (!values.length) return;
+      const patterns = values.map(v => `%${v}%`);
+      clauses.push(`(COALESCE(NULLIF(technologies,''), raw_data->>'Technologies') IS NULL OR COALESCE(NULLIF(technologies,''), raw_data->>'Technologies') NOT ILIKE ALL($${p}))`);
+      params.push(patterns); p++;
+    });
+    safe('website',             () => { if (filters.website)             like('company_domain', filters.website); });
+    safe('companyLinkedin',     () => { if (filters.companyLinkedin)     like('company_linkedin_url', filters.companyLinkedin); });
+    // Location filters are multi-select — comma-separated values must OR
+    // against the column, not be glued together as a single substring.
+    safe('city',          () => { if (filters.city)          colMulti('city',            filters.city); });
+    safe('state',         () => { if (filters.state)         colMulti('state',           filters.state); });
+    safe('country',       () => { if (filters.country)       colMulti('country',         filters.country); });
+    safe('companyCity',   () => { if (filters.companyCity)   colMulti('company_city',    filters.companyCity); });
+    safe('companyState',  () => { if (filters.companyState)  colMulti('company_state',   filters.companyState); });
+    safe('companyCountry',() => { if (filters.companyCountry)colMulti('company_country', filters.companyCountry); });
+    // Normalised location hierarchy filters — the clean split/filter columns.
+    safe('companyRegion', () => { if (filters.companyRegion) colExact('company_region',  filters.companyRegion); });
+    safe('companyCounty', () => { if (filters.companyCounty) colExact('company_county',  filters.companyCounty); });
+    safe('companyTown',   () => { if (filters.companyTown)   colExact('company_town',    filters.companyTown); });
+    safe('personRegion',  () => { if (filters.personRegion)  colExact('person_region',   filters.personRegion); });
+    safe('personCounty',  () => { if (filters.personCounty)  colExact('person_county',   filters.personCounty); });
+    safe('personTown',    () => { if (filters.personTown)    colExact('person_town',     filters.personTown); });
+    safe('locationNeedsReview', () => { if (filters.locationNeedsReview === 'true') clauses.push('location_needs_review = true'); });
+    // Per-client master exclusions — also match the company-side columns so
+    // "London" hides both person-in-London and company-in-London rows.
+    safe('cityExclude',   () => { if (filters.cityExclude)   colExclude(['city','company_city'],          filters.cityExclude); });
+    safe('stateExclude',  () => { if (filters.stateExclude)  colExclude(['state','company_state'],        filters.stateExclude); });
+    safe('countryExclude',() => { if (filters.countryExclude)colExclude(['country','company_country'],    filters.countryExclude); });
+    safe('email',         () => { if (filters.email)         like('email', filters.email); });
+    safe('phone',         () => { if (filters.phone)         { clauses.push(`(corporate_phone ILIKE $${p} OR company_phone ILIKE $${p})`); params.push(`%${filters.phone}%`); p++; } });
+    safe('company',       () => { if (filters.company)       { clauses.push(`(company_name ILIKE $${p} OR company_domain ILIKE $${p})`); params.push(`%${filters.company}%`); p++; } });
+    safe('search',        () => { if (filters.search)        { clauses.push(`(email ILIKE $${p} OR first_name ILIKE $${p} OR last_name ILIKE $${p} OR company_name ILIKE $${p})`); params.push(`%${filters.search}%`); p++; } });
+
+    // Verification status filter — multi-select values from email_status column.
+    // 'not_verified' is a synthetic value mapped to IS NULL.
+    safe('emailStatus', () => {
+      if (!filters.emailStatus) return;
+      const statuses = filters.emailStatus.split(',').map(s => s.trim()).filter(Boolean);
+      if (!statuses.length) return;
+      const ors = [];
+      const realStatuses = statuses.filter(s => s !== 'not_verified');
+      if (realStatuses.length) {
+        const ph = realStatuses.map(() => `$${p++}`).join(',');
+        ors.push(`email_status IN (${ph})`);
+        params.push(...realStatuses);
+      }
+      if (statuses.includes('not_verified')) ors.push(`email_status IS NULL`);
+      if (ors.length) clauses.push(`(${ors.join(' OR ')})`);
+    });
+
+    safe('emailProviders', () => {
+      if (!filters.emailProviders) return;
+      const providers = filters.emailProviders.split(',').map(prov => prov.trim()).filter(Boolean);
+      if (!providers.length) return;
+      const orClauses = [];
+      for (const prov of providers) {
+        if (prov === 'email_outlook') {
+          orClauses.push(`($${p} = ANY(tags) OR technologies ILIKE $${p+1} OR technologies ILIKE $${p+2} OR technologies ILIKE $${p+3})`);
+          params.push('email_outlook', '%outlook%', '%microsoft 365%', '%exchange%');
+          p += 4;
+        } else if (prov === 'email_google') {
+          orClauses.push(`($${p} = ANY(tags) OR technologies ILIKE $${p+1} OR technologies ILIKE $${p+2})`);
+          params.push('email_google', '%google workspace%', '%g suite%');
+          p += 3;
+        } else {
+          orClauses.push(`$${p} = ANY(tags)`);
+          params.push(prov);
+          p += 1;
+        }
+      }
+      clauses.push(`(${orClauses.join(' OR ')})`);
+    });
+
+    safe('numEmployeesRanges', () => {
+      if (!filters.numEmployeesRanges) return;
+      const buckets = filters.numEmployeesRanges.split(',').map(s => s.trim()).filter(Boolean);
+      const ors = [];
+      for (const b of buckets) {
+        if (b === 'unknown') {
+          ors.push(`num_employees IS NULL`);
+        } else {
+          const m = b.match(/^(\d+)\s*-\s*(\d+)?$/) || b.match(/^(\d+)\+$/);
+          if (!m) continue;
+          const lo = parseInt(m[1], 10);
+          const hi = m[2] ? parseInt(m[2], 10) : null;
+          if (hi == null) {
+            ors.push(`num_employees >= $${p}`); params.push(lo); p++;
+          } else {
+            ors.push(`num_employees BETWEEN $${p} AND $${p+1}`); params.push(lo, hi); p += 2;
+          }
+        }
+      }
+      if (ors.length) clauses.push(`(${ors.join(' OR ')})`);
+    });
+
+    // Per-client master exclusion — hide rows whose num_employees falls
+    // into any of the listed buckets. Same bucket grammar as the include
+    // filter ("1-10", "11-50", "1000+"). NULL employees are kept unless
+    // 'unknown' is listed (consistency with the include side).
+    safe('numEmployeesExcludeRanges', () => {
+      if (!filters.numEmployeesExcludeRanges) return;
+      const buckets = filters.numEmployeesExcludeRanges.split(',').map(s => s.trim()).filter(Boolean);
+      const ors = [];
+      for (const b of buckets) {
+        if (b === 'unknown') {
+          ors.push(`num_employees IS NULL`);
+        } else {
+          const m = b.match(/^(\d+)\s*-\s*(\d+)?$/) || b.match(/^(\d+)\+$/);
+          if (!m) continue;
+          const lo = parseInt(m[1], 10);
+          const hi = m[2] ? parseInt(m[2], 10) : null;
+          if (hi == null) {
+            ors.push(`num_employees >= $${p}`); params.push(lo); p++;
+          } else {
+            ors.push(`num_employees BETWEEN $${p} AND $${p+1}`); params.push(lo, hi); p += 2;
+          }
+        }
+      }
+      if (ors.length) clauses.push(`NOT (${ors.join(' OR ')})`);
+    });
+
+    // Intelligence filters
+    safe('ownsBuilding',   () => { if (filters.ownsBuilding) { clauses.push(`owns_building = $${p++}`); params.push(filters.ownsBuilding); } });
+    safe('worksRemote',    () => { if (filters.worksRemote === 'true')   clauses.push(`works_remote = true`); });
+    safe('excludeRemote',  () => { if (filters.excludeRemote === 'true') clauses.push(`(works_remote IS NULL OR works_remote = false)`); });
+    safe('excludeDNC',     () => { if (filters.excludeDNC === 'true')    clauses.push(`(do_not_contact IS NULL OR do_not_contact = false)`); });
+
+    // Apollo export filter
+    safe('notExportedToApollo', () => { if (filters.notExportedToApollo === 'true') clauses.push(`exported_to_apollo_at IS NULL`); });
+    safe('exportedToApollo',    () => { if (filters.exportedToApollo === 'true')    clauses.push(`exported_to_apollo_at IS NOT NULL`); });
+
+    // PlusVibe push filter — emailed_workspaces JSONB gets a key per workspace
+    // when the contact has been pushed to a campaign there. Empty {} = never sent.
+    safe('sentToPV',    () => { if (filters.sentToPV === 'true')    clauses.push(`COALESCE(emailed_workspaces, '{}'::jsonb) != '{}'::jsonb`); });
+    safe('notSentToPV', () => { if (filters.notSentToPV === 'true') clauses.push(`COALESCE(emailed_workspaces, '{}'::jsonb) = '{}'::jsonb`); });
+
+    // Companies House filters
+    safe('chStatus',      () => { if (filters.chStatus) { clauses.push(`company_status = $${p++}`); params.push(filters.chStatus); } });
+    safe('chInsolvency',  () => { if (filters.chInsolvency === 'true')  clauses.push(`ch_has_insolvency = true`); });
+    safe('chCharges',     () => { if (filters.chCharges === 'true')     clauses.push(`ch_has_charges = true`); });
+    safe('chOverdue',     () => { if (filters.chOverdue === 'true')     clauses.push(`ch_accounts_overdue = true`); });
+    safe('chOnlyEnriched',() => { if (filters.chOnlyEnriched === 'true') clauses.push(`ch_company_number IS NOT NULL`); });
+
+    safe('vertical', () => {
+      if (!filters.vertical) return;
+      const v = filters.vertical;
+      const today = new Date().toISOString().slice(0, 10);
+      clauses.push(`NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements(COALESCE(snoozed_verticals, '[]'::jsonb)) AS sv
+        WHERE sv->>'vertical' = $${p} AND sv->>'until' >= $${p+1}
+      )`);
+      params.push(v, today); p += 2;
+      if (v === 'solar') { clauses.push(`owns_building = $${p++}`); params.push('yes'); }
+      if (v === 'office_furniture') { clauses.push(`(works_remote IS NULL OR works_remote = false)`); }
+    });
+
+    // Per-client 60-day cooldown — hide contacts already pushed/emailed to this
+    // workspace in the last 60 days. Mirrors the push-time filter in
+    // /api/pv/push-contacts so users don't see rows that would just be
+    // silently skipped on push. last_sent is stored as YYYY-MM-DD string
+    // (stamped at push time + updated by webhook), so lexicographic comparison works.
+    safe('cooldownWorkspace', () => {
+      if (!filters.cooldownWorkspace) return;
+      const cooloffDate = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      clauses.push(`NOT (
+        emailed_workspaces ? $${p}
+        AND COALESCE(emailed_workspaces->$${p}->>'last_sent', '') >= $${p+1}
+      )`);
+      params.push(filters.cooldownWorkspace, cooloffDate);
+      p += 2;
+    });
+
+    return { clauses, params };
+  }
+
+  async searchContacts(workspaceId, filters, limit = 100, offset = 0) {
+    const { clauses, params } = this._buildFilterClauses(filters);
+    const where = clauses.length ? ' AND ' + clauses.join(' AND ') : '';
+
+    const allowedSort = ['created_at','email','first_name','last_name','company_name','seniority','status','exported_to_apollo_at'];
+    const sortField = allowedSort.includes(filters.sortBy) ? filters.sortBy : 'created_at';
+    const sortDir = filters.sortDir === 'asc' ? 'ASC' : 'DESC';
+
+    const p = params.length + 2;
+    let sql;
+    if (filters.maxPerCompany && filters.maxPerCompany > 0) {
+      // Window-function cap: take at most N rows per company_name (NULL
+      // company_name treated as its own bucket via COALESCE).
+      sql = `
+        WITH ranked AS (
+          SELECT id, workspace_id, email, first_name, last_name, phone, company_name, company_domain,
+            job_title, job_title_cleaned, seniority, department, sub_departments, apollo_id, apollo_person_id,
+            linkedin_url, company_linkedin_url, industry, num_employees, keywords, technologies,
+            city, state, country, company_address, company_city, company_state, company_country,
+            company_region, company_county, company_town,
+            person_region, person_county, person_town,
+            location_source, location_needs_review, location_review_reason,
+            corporate_phone, company_phone, email_status, email_verified_at,
+            status, tags, source, do_not_contact, works_remote, owns_building,
+            snoozed_verticals, reply_notes, last_reply_at, marked_as_lead_at,
+            bounced_at, bounce_type, soft_bounce_count, last_emailed_at, email_count,
+            emailed_workspaces, last_campaign_name, pushed_campaigns,
+            exported_to_apollo_at, imported_at, created_at, updated_at,
+            ROW_NUMBER() OVER (
+              PARTITION BY LOWER(COALESCE(company_name, email))
+              ORDER BY ${sortField} ${sortDir}
+            ) AS _rn
+          FROM contacts
+          WHERE workspace_id = $1${where}
+        )
+        SELECT * FROM ranked
+        WHERE _rn <= $${p}
+        ORDER BY ${sortField} ${sortDir}
+        LIMIT $${p + 1} OFFSET $${p + 2}
+      `;
+      const result = await this.query(sql, [workspaceId, ...params, filters.maxPerCompany, limit, offset]);
+      return result.rows;
+    }
+    sql = `SELECT id, workspace_id, email, first_name, last_name, phone, company_name, company_domain,
+      job_title, job_title_cleaned, seniority, department, sub_departments, apollo_id, apollo_person_id,
+      linkedin_url, company_linkedin_url, industry, num_employees, keywords, technologies,
+      city, state, country, company_address, company_city, company_state, company_country,
+      corporate_phone, company_phone, email_status, email_verified_at,
+      status, tags, source, do_not_contact, works_remote, owns_building,
+      snoozed_verticals, reply_notes, last_reply_at, marked_as_lead_at,
+      bounced_at, bounce_type, soft_bounce_count, last_emailed_at, email_count,
+      emailed_workspaces, last_campaign_name, pushed_campaigns,
+      exported_to_apollo_at, imported_at, created_at, updated_at
+      FROM contacts WHERE workspace_id = $1${where} ORDER BY ${sortField} ${sortDir} LIMIT $${p} OFFSET $${p + 1}`;
+    const result = await this.query(sql, [workspaceId, ...params, limit, offset]);
+    return result.rows;
+  }
+
+  // Lightweight export query — only the 6 columns Apollo needs.
+  // Bypasses searchContacts to avoid ORDER BY + raw_data overhead on large
+  // filtered sets (company_region filter on 267k rows was timing out).
+  async exportContacts(workspaceId, filters = {}, limit = 1000, offset = 0) {
+    const { clauses, params } = this._buildFilterClauses(filters);
+    const where = clauses.length ? ' AND ' + clauses.join(' AND ') : '';
+    const p = params.length + 2;
+    const sql = `
+      SELECT id, first_name, last_name, email, company_name, company_domain, apollo_id, raw_data
+      FROM contacts
+      WHERE workspace_id = $1${where}
+      ORDER BY id
+      LIMIT $${p} OFFSET $${p + 1}`;
+    const result = await this.query(sql, [workspaceId, ...params, limit, offset]);
+    return result.rows;
+  }
+
+  async getContactsCount(workspaceId, filters = {}) {
+    const { clauses, params } = this._buildFilterClauses(filters);
+    const where = clauses.length ? ' AND ' + clauses.join(' AND ') : '';
+
+    // 30s cache. COUNT(*) across 230k+ rows with filters is the single
+    // most expensive part of a search request (full-table scan + filter
+    // eval), and it runs in parallel with the actual page fetch on every
+    // filter tweak / pagination click. Total count rarely changes
+    // second-to-second, so this is safe and cuts search CPU roughly in half.
+    const cacheKey = 'cnt|' + workspaceId + '|' + where + '|' + params.join('|');
+    if (!this._filterCountCache) this._filterCountCache = new Map();
+    const now = Date.now();
+    const cached = this._filterCountCache.get(cacheKey);
+    if (cached && now - cached.ts < 30000) return cached.value;
+
+    const sql = `SELECT COUNT(*) as count FROM contacts WHERE workspace_id = $1${where}`;
+    const result = await this.query(sql, [workspaceId, ...params]);
+    const count = parseInt(result.rows[0].count, 10);
+    this._filterCountCache.set(cacheKey, { value: count, ts: now });
+    return count;
+  }
+
+  async bulkCreateContacts(workspaceId, contacts) {
+    // Postgres rejects ON CONFLICT DO UPDATE if the same target row is hit
+    // twice in one statement, so we must dedupe by email before batching.
+    // PlusVibe exports routinely contain repeats (one row per campaign send).
+    // Last occurrence wins, matching upsert semantics.
+    const seen = new Map();
+    let withinBatchDupes = 0;
+    for (const c of contacts) {
+      const key = (c.email || '').toLowerCase();
+      if (!key) continue;
+      if (seen.has(key)) withinBatchDupes++;
+      seen.set(key, c);
+    }
+    const unique = Array.from(seen.values());
+
+    // Insert in batches of 1000 for efficiency
+    const batchSize = 1000;
+    let inserted = 0;   // genuinely new rows
+    let updated = 0;    // existing rows refreshed
+
+    for (let i = 0; i < unique.length; i += batchSize) {
+      const batch = unique.slice(i, i + batchSize);
+      const values = [];
+      const placeholders = [];
+
+      const COLS = 40;
+      batch.forEach((contact, idx) => {
+        const offset = idx * COLS;
+        const ph = Array.from({ length: COLS }, (_, k) => `$${offset + k + 1}`).join(',');
+        // Two trailing literals: imported_at, location_normalized_at.
+        placeholders.push(`(${ph}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`);
+
+        const {
+          email, firstName, lastName, phone, companyName, companyDomain,
+          jobTitle, jobTitleCleaned, seniority, apolloId,
+          city, state, country, companyCity, companyState, companyCountry,
+          source, rawData, tags,
+          linkedinUrl, companyLinkedinUrl, industry, department, subDepartments, companyAddress,
+          lastEmailedAt, lastCampaignName, numEmployees,
+          keywords, technologies,
+          // Normalised location hierarchy (from location-normalizer)
+          companyCityNorm, companyRegion, companyCounty, companyTown,
+          personRegion, personCounty, personTown,
+          locationSource, locationNeedsReview, locationReviewReason
+        } = contact;
+
+        values.push(
+          workspaceId, email, firstName || null, lastName || null, phone || null,
+          companyName || null, companyDomain || null, jobTitle || null,
+          jobTitleCleaned || null, seniority || null,
+          apolloId || null,
+          city || null, state || null, country || null,
+          // company_city uses the cleaned post town when available
+          (companyCityNorm || companyCity) || null, companyState || null, companyCountry || null,
+          source || 'api', rawData ? JSON.stringify(rawData) : null, tags || [],
+          linkedinUrl || null, companyLinkedinUrl || null, industry || null,
+          department || null, subDepartments || null, companyAddress || null,
+          lastEmailedAt || null, lastCampaignName || null,
+          Number.isFinite(numEmployees) ? numEmployees : null,
+          keywords || null, technologies || null,
+          companyRegion || null, companyCounty || null, companyTown || null,
+          personRegion || null, personCounty || null, personTown || null,
+          locationSource || null, !!locationNeedsReview, locationReviewReason || null
+        );
+      });
+
+      const sql = `
+        INSERT INTO contacts (
+          workspace_id, email, first_name, last_name, phone,
+          company_name, company_domain, job_title, job_title_cleaned,
+          seniority, apollo_id,
+          city, state, country,
+          company_city, company_state, company_country,
+          source, raw_data, tags,
+          linkedin_url, company_linkedin_url, industry, department, sub_departments, company_address,
+          last_emailed_at, last_campaign_name, num_employees,
+          keywords, technologies,
+          company_region, company_county, company_town,
+          person_region, person_county, person_town,
+          location_source, location_needs_review, location_review_reason,
+          imported_at, location_normalized_at
+        ) VALUES ${placeholders.join(', ')}
+        ON CONFLICT (workspace_id, email) DO UPDATE SET
+          first_name          = COALESCE(NULLIF(EXCLUDED.first_name, ''), contacts.first_name),
+          last_name           = COALESCE(NULLIF(EXCLUDED.last_name, ''), contacts.last_name),
+          phone               = COALESCE(NULLIF(EXCLUDED.phone, ''), contacts.phone),
+          company_name        = COALESCE(NULLIF(EXCLUDED.company_name, ''), contacts.company_name),
+          company_domain      = COALESCE(NULLIF(EXCLUDED.company_domain, ''), contacts.company_domain),
+          job_title           = COALESCE(NULLIF(EXCLUDED.job_title, ''), contacts.job_title),
+          job_title_cleaned   = COALESCE(NULLIF(EXCLUDED.job_title_cleaned, ''), contacts.job_title_cleaned),
+          seniority           = COALESCE(NULLIF(EXCLUDED.seniority, ''), contacts.seniority),
+          apollo_id           = COALESCE(NULLIF(EXCLUDED.apollo_id, ''), contacts.apollo_id),
+          city                = COALESCE(NULLIF(EXCLUDED.city, ''), contacts.city),
+          state               = COALESCE(NULLIF(EXCLUDED.state, ''), contacts.state),
+          country             = COALESCE(NULLIF(EXCLUDED.country, ''), contacts.country),
+          company_city        = COALESCE(NULLIF(EXCLUDED.company_city, ''), contacts.company_city),
+          company_state       = COALESCE(NULLIF(EXCLUDED.company_state, ''), contacts.company_state),
+          company_country     = COALESCE(NULLIF(EXCLUDED.company_country, ''), contacts.company_country),
+          -- Normalised location: a fresh import re-derives the hierarchy, so
+          -- prefer the incoming values whenever the new import produced one.
+          company_region      = COALESCE(NULLIF(EXCLUDED.company_region, ''), contacts.company_region),
+          company_county      = COALESCE(NULLIF(EXCLUDED.company_county, ''), contacts.company_county),
+          company_town        = COALESCE(NULLIF(EXCLUDED.company_town, ''), contacts.company_town),
+          person_region       = COALESCE(NULLIF(EXCLUDED.person_region, ''), contacts.person_region),
+          person_county       = COALESCE(NULLIF(EXCLUDED.person_county, ''), contacts.person_county),
+          person_town         = COALESCE(NULLIF(EXCLUDED.person_town, ''), contacts.person_town),
+          location_source     = COALESCE(NULLIF(EXCLUDED.location_source, ''), contacts.location_source),
+          location_needs_review = EXCLUDED.location_needs_review,
+          location_review_reason = EXCLUDED.location_review_reason,
+          location_normalized_at = CURRENT_TIMESTAMP,
+          linkedin_url        = COALESCE(NULLIF(EXCLUDED.linkedin_url, ''), contacts.linkedin_url),
+          company_linkedin_url= COALESCE(NULLIF(EXCLUDED.company_linkedin_url, ''), contacts.company_linkedin_url),
+          industry            = COALESCE(NULLIF(EXCLUDED.industry, ''), contacts.industry),
+          department          = COALESCE(NULLIF(EXCLUDED.department, ''), contacts.department),
+          sub_departments     = COALESCE(NULLIF(EXCLUDED.sub_departments, ''), contacts.sub_departments),
+          company_address     = COALESCE(NULLIF(EXCLUDED.company_address, ''), contacts.company_address),
+          keywords            = COALESCE(NULLIF(EXCLUDED.keywords, ''), contacts.keywords),
+          technologies        = COALESCE(NULLIF(EXCLUDED.technologies, ''), contacts.technologies),
+          -- Only advance last_emailed_at; never blank it out. Take the max
+          -- of incoming and existing so a stale CSV row can't hide a more
+          -- recent send recorded later.
+          last_emailed_at     = GREATEST(EXCLUDED.last_emailed_at, contacts.last_emailed_at),
+          last_campaign_name  = COALESCE(NULLIF(EXCLUDED.last_campaign_name, ''), contacts.last_campaign_name),
+          num_employees       = COALESCE(EXCLUDED.num_employees, contacts.num_employees),
+          raw_data            = EXCLUDED.raw_data,
+          tags                = EXCLUDED.tags,
+          updated_at          = CURRENT_TIMESTAMP
+        RETURNING (xmax = 0) AS inserted;
+      `;
+
+      try {
+        const result = await this.query(sql, values);
+        for (const r of result.rows) {
+          if (r.inserted) inserted++; else updated++;
+        }
+      } catch (err) {
+        console.error('[PostgreSQL] Batch insert error:', err.message);
+      }
+    }
+
+    // `created` kept for backward-compat with the import endpoint, which adds
+    // it to job.imported. We want it to mean "newly inserted" only now.
+    return { created: inserted, inserted, updated, withinBatchDupes };
+  }
+
+  // ── Saved views ─────────────────────────────────────────────
+  async listSavedViews(workspaceId) {
+    const r = await this.query(
+      `SELECT id, name, filters, updated_at FROM saved_views
+        WHERE workspace_id = $1 ORDER BY LOWER(name)`,
+      [workspaceId]
+    );
+    return r.rows;
+  }
+
+  // Upsert by (workspace_id, name) so saving with an existing name overwrites
+  // — matches how users mentally model "save view".
+  async saveView(workspaceId, name, filters) {
+    const r = await this.query(
+      `INSERT INTO saved_views (workspace_id, name, filters)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (workspace_id, name) DO UPDATE SET
+         filters = EXCLUDED.filters,
+         updated_at = CURRENT_TIMESTAMP
+       RETURNING id, name, filters, updated_at`,
+      [workspaceId, name, filters]
+    );
+    return r.rows[0];
+  }
+
+  async deleteSavedView(workspaceId, id) {
+    const r = await this.query(
+      `DELETE FROM saved_views WHERE workspace_id = $1 AND id = $2`,
+      [workspaceId, id]
+    );
+    return r.rowCount || 0;
+  }
+
+  // Bulk update email verification results
+  async updateContactIntelligence(contactId, fields) {
+    const allowed = ['works_remote','owns_building','do_not_contact','snoozed_verticals','reply_notes','last_reply_at','marked_as_lead_at','bounced_at'];
+    const sets = Object.keys(fields).filter(k => allowed.includes(k)).map((k, i) => `${k} = $${i + 2}`);
+    if (!sets.length) return 0;
+    const vals = Object.keys(fields).filter(k => allowed.includes(k)).map(k =>
+      typeof fields[k] === 'object' ? JSON.stringify(fields[k]) : fields[k]
+    );
+    const result = await this.query(
+      `UPDATE contacts SET ${sets.join(', ')}, updated_at=CURRENT_TIMESTAMP WHERE id = $1`,
+      [contactId, ...vals]
+    );
+    return result.rowCount || 0;
+  }
+
+  async bulkUpdateVerification(updates, opts = {}) {
+    // updates = [{ id, email_status, email_verified_at, email? }]
+    // opts.skipCatchAllPropagation — write verdicts, defer domain propagation
+    // opts.propagateOnly             — skip the verdict UPDATE, only propagate
+    if (!updates.length) return 0;
+
+    if (!opts.propagateOnly) {
+      // Sort by id so concurrent batches acquire row locks in the same
+      // order, preventing the cross-deadlocks we hit when two verify-and-push
+      // jobs touched overlapping rows.
+      const sorted = [...updates].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+
+      // Chunk so any single UPDATE holds locks for a bounded time — webhooks
+      // and exports running in parallel were waiting >30s and timing out.
+      const BATCH = 1000;
+      const now = new Date().toISOString();
+      for (let i = 0; i < sorted.length; i += BATCH) {
+        const slice = sorted.slice(i, i + BATCH);
+        const vals = [];
+        const placeholders = slice.map((u, j) => {
+          const base = j * 4;
+          vals.push(u.id, u.email_status, u.email_verified_at || now, u.mx_provider || null);
+          return `($${base + 1}::uuid, $${base + 2}, $${base + 3}, $${base + 4})`;
+        });
+        await this.query(`
+          UPDATE contacts SET
+            email_status      = v.status,
+            email_verified_at = v.verified_at::timestamp,
+            tags = CASE
+              WHEN v.mx_provider IS NOT NULL THEN
+                array_append(
+                  array_remove(array_remove(array_remove(
+                    COALESCE(tags, ARRAY[]::text[]),
+                    'email_google'), 'email_outlook'), 'email_other'),
+                  v.mx_provider)
+              ELSE tags
+            END,
+            updated_at        = CURRENT_TIMESTAMP
+          FROM (VALUES ${placeholders.join(',')}) AS v(id, status, verified_at, mx_provider)
+          WHERE contacts.id = v.id::uuid
+        `, vals);
+      }
+    }
+
+    if (opts.skipCatchAllPropagation) return updates.length;
+
+    // Domain-level catch-all propagation: if any mailbox on a domain is
+    // risky (catch-all), every other contact at that domain is also risky
+    // by definition — the domain accepts all addresses.
+    //
+    // Build the risky-domain list from THIS batch's risky updates only, so
+    // we don't re-scan the entire contacts table on every verification job.
+    // Then propagate in id-ordered chunks with SKIP LOCKED so we never
+    // deadlock with another writer holding a row we want.
+    const riskyEmails = updates
+      .filter(u => u.email_status === 'risky' && u.email)
+      .map(u => u.email);
+    if (riskyEmails.length) {
+      const domains = [...new Set(
+        riskyEmails.map(e => (e.split('@')[1] || '').toLowerCase()).filter(Boolean)
+      )];
+      if (domains.length) {
+        let propagatedTotal = 0;
+        while (true) {
+          const r = await this.query(`
+            UPDATE contacts
+            SET email_status = 'risky', updated_at = CURRENT_TIMESTAMP
+            WHERE id IN (
+              SELECT id FROM contacts
+              WHERE email_status IS NULL
+                AND LOWER(SPLIT_PART(email, '@', 2)) = ANY($1::text[])
+              ORDER BY id
+              LIMIT 2000
+              FOR UPDATE SKIP LOCKED
+            )
+          `, [domains]);
+          const n = r.rowCount || 0;
+          propagatedTotal += n;
+          if (n < 2000) break;
+        }
+        if (propagatedTotal > 0) {
+          console.log(`[Verification] Catch-all propagated to ${propagatedTotal} additional contact(s)`);
+        }
+      }
+    }
+
+    return updates.length;
+  }
+
+  async backfillLocations(workspaceId) {
+    // Chunked so a 200k-row workspace doesn't hit the 45s statement_timeout.
+    // The WHERE clause only matches rows where a destination column is NULL
+    // AND raw_data has a non-empty value for it — guarantees termination
+    // because each touched row stops matching after the update. COALESCE in
+    // the SET preserves any already-populated columns instead of overwriting
+    // them with NULL when raw_data is missing that key.
+    const BATCH = 1000;
+    let total = 0;
+    while (true) {
+      const result = await this.query(`
+        UPDATE contacts SET
+          city            = COALESCE(city,            NULLIF(TRIM(raw_data->>'City'), '')),
+          state           = COALESCE(state,           NULLIF(TRIM(raw_data->>'State'), '')),
+          country         = COALESCE(country,         NULLIF(TRIM(raw_data->>'Country'), '')),
+          company_city    = COALESCE(company_city,    NULLIF(TRIM(COALESCE(
+                              NULLIF(raw_data->>'Company City', ''),
+                              SPLIT_PART(raw_data->>'Company Address', ',', 2)
+                            )), '')),
+          company_state   = COALESCE(company_state,   NULLIF(TRIM(COALESCE(
+                              NULLIF(raw_data->>'Company State', ''),
+                              SPLIT_PART(raw_data->>'Company Address', ',', 3)
+                            )), '')),
+          company_country = COALESCE(company_country, NULLIF(TRIM(COALESCE(
+                              NULLIF(raw_data->>'Company Country', ''),
+                              SPLIT_PART(raw_data->>'Company Address', ',', 4)
+                            )), '')),
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id IN (
+          SELECT id FROM contacts
+          WHERE workspace_id = $1 AND raw_data IS NOT NULL
+            AND (
+              (city            IS NULL AND TRIM(COALESCE(raw_data->>'City', '')) != '') OR
+              (state           IS NULL AND TRIM(COALESCE(raw_data->>'State', '')) != '') OR
+              (country         IS NULL AND TRIM(COALESCE(raw_data->>'Country', '')) != '') OR
+              (company_city    IS NULL AND (TRIM(COALESCE(raw_data->>'Company City', '')) != ''
+                                            OR TRIM(COALESCE(SPLIT_PART(raw_data->>'Company Address', ',', 2), '')) != '')) OR
+              (company_state   IS NULL AND (TRIM(COALESCE(raw_data->>'Company State', '')) != ''
+                                            OR TRIM(COALESCE(SPLIT_PART(raw_data->>'Company Address', ',', 3), '')) != '')) OR
+              (company_country IS NULL AND (TRIM(COALESCE(raw_data->>'Company Country', '')) != ''
+                                            OR TRIM(COALESCE(SPLIT_PART(raw_data->>'Company Address', ',', 4), '')) != ''))
+            )
+          LIMIT $2
+          FOR UPDATE SKIP LOCKED
+        )
+      `, [workspaceId, BATCH]);
+      const n = result.rowCount || 0;
+      total += n;
+      if (n === 0) break;
+    }
+    return total;
+  }
+
+  async deleteNoNameContacts(workspaceId) {
+    const result = await this.query(
+      `DELETE FROM contacts WHERE workspace_id = $1
+       AND (first_name IS NULL OR first_name = '')
+       AND (last_name IS NULL OR last_name = '')`,
+      [workspaceId]
+    );
+    return result.rowCount || 0;
+  }
+
+  async updateContactStatus(workspaceId, email, status) {
+    const sql = `
+      UPDATE contacts
+      SET status = $3, updated_at = CURRENT_TIMESTAMP
+      WHERE workspace_id = $1 AND email = $2
+      RETURNING *;
+    `;
+    const result = await this.query(sql, [workspaceId, email, status]);
+    return result.rows[0];
+  }
+
+  // ── Campaign Operations ──────────────────────────────────────
+
+  async createCampaign(workspaceId, name, description) {
+    const sql = `
+      INSERT INTO campaigns (workspace_id, name, description)
+      VALUES ($1, $2, $3)
+      RETURNING *;
+    `;
+    const result = await this.query(sql, [workspaceId, name, description]);
+    return result.rows[0];
+  }
+
+  async addContactsToCampaign(campaignId, contactIds) {
+    if (!contactIds.length) return 0;
+
+    const values = [];
+    const placeholders = [];
+
+    contactIds.forEach((id, idx) => {
+      placeholders.push(`($1, $${idx + 2})`);
+      values.push(campaignId, id);
+    });
+
+    const sql = `
+      INSERT INTO campaign_contacts (campaign_id, contact_id)
+      VALUES ${placeholders.join(', ')}
+      ON CONFLICT DO NOTHING;
+    `;
+
+    const result = await this.query(sql, [campaignId, ...contactIds]);
+    return result.rowCount || 0;
+  }
+
+  // ── Analytics ──────────────────────────────────────────────────────────
+
+  async getWorkspaceSummary(workspaceId) {
+    const sql = `
+      SELECT
+        COUNT(*) as total_contacts,
+        COUNT(CASE WHEN status = 'new' THEN 1 END) as new_contacts,
+        COUNT(CASE WHEN status = 'interested' THEN 1 END) as interested,
+        COUNT(CASE WHEN status = 'replied' THEN 1 END) as replied,
+        COUNT(CASE WHEN status = 'bounced' THEN 1 END) as bounced,
+        COUNT(DISTINCT company_domain) as unique_companies
+      FROM contacts
+      WHERE workspace_id = $1;
+    `;
+    const result = await this.query(sql, [workspaceId]);
+    return result.rows[0];
+  }
+
+  async getDistinctValues(workspaceId, field, limit = 100) {
+    // Map of table columns (fast query)
+    const tableColumns = {
+      'job_title':      'job_title',
+      'jobTitle':       'job_title_cleaned',
+      'seniority':      'seniority',
+      'status':         'status',
+      'company_name':   'company_name',
+      'company_domain': 'company_domain',
+      'industry':       'industry',
+      // Person location
+      'city': 'city', 'state': 'state', 'country': 'country',
+      // Company location
+      'company_city': 'company_city', 'company_state': 'company_state', 'company_country': 'company_country',
+      // Normalised location hierarchy (Country>Region>County>City>Town)
+      'company_region': 'company_region', 'company_county': 'company_county', 'company_town': 'company_town',
+      'person_region':  'person_region',  'person_county':  'person_county',  'person_town':  'person_town',
+      'department': 'department',
+    };
+
+    const tableColumn = tableColumns[field];
+    if (tableColumn) {
+      const sql = `
+        SELECT ${tableColumn} as value, COUNT(*) as count
+        FROM contacts
+        WHERE workspace_id = $2
+          AND ${tableColumn} IS NOT NULL AND ${tableColumn} != ''
+        GROUP BY ${tableColumn}
+        ORDER BY count DESC, ${tableColumn}
+        LIMIT $1;
+      `;
+      const result = await this.query(sql, [limit, workspaceId]);
+      return result.rows.filter(r => r.value).map(r => ({
+        value: r.value,
+        count: parseInt(r.count, 10)
+      }));
+    }
+
+    // Comma-separated fields: split into individual values.
+    // Read from the dedicated column (keywords / technologies) AND the raw_data
+    // JSONB fallback — some contacts were imported before the column was backfilled.
+    const commaSeparatedFields = {
+      'Keywords':     { col: 'keywords',     raw: 'Keywords' },
+      'Technologies': { col: 'technologies', raw: 'Technologies' },
+    };
+    if (commaSeparatedFields[field]) {
+      const { col, raw } = commaSeparatedFields[field];
+      const sql = `
+        SELECT trim(val) AS value, COUNT(*) AS count
+        FROM contacts,
+          unnest(string_to_array(
+            COALESCE(NULLIF(${col}, ''), raw_data->>'${raw}'),
+            ','
+          )) AS val
+        WHERE workspace_id = $2
+          AND COALESCE(NULLIF(${col}, ''), raw_data->>'${raw}') IS NOT NULL
+          AND trim(val) != ''
+        GROUP BY trim(val)
+        ORDER BY count DESC
+        LIMIT $1;
+      `;
+      const client = await this.pool.connect();
+      try {
+        await client.query(`SET statement_timeout = '120s'`);
+        const result = await client.query(sql, [limit, workspaceId]);
+        return result.rows.filter(r => r.value).map(r => ({
+          value: r.value.trim(),
+          count: parseInt(r.count, 10)
+        }));
+      } catch (err) {
+        console.error(`Error extracting ${field}:`, err);
+        return [];
+      } finally {
+        client.release();
+      }
+    }
+
+    // Extract from JSONB raw_data for any CSV column
+    const jsonField = field.replace('_', ' ').split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    const sql = `
+      SELECT raw_data->>'${jsonField}' as value, COUNT(*) as count
+      FROM contacts
+      WHERE workspace_id = $2
+        AND raw_data->>'${jsonField}' IS NOT NULL AND raw_data->>'${jsonField}' != ''
+      GROUP BY raw_data->>'${jsonField}'
+      ORDER BY count DESC, value
+      LIMIT $1;
+    `;
+
+    try {
+      const result = await this.query(sql, [limit, workspaceId]);
+      return result.rows.filter(r => r.value).map(r => ({
+        value: r.value,
+        count: parseInt(r.count, 10)
+      }));
+    } catch (err) {
+      console.error(`Error extracting ${field} from raw_data:`, err);
+      return [];
+    }
+  }
+
+  // Bucket counts for the # Employees sidebar. Honours every other filter
+  // in `filters`, but deliberately drops `numEmployeesRanges` so each
+  // bucket shows how many contacts it *would* add if ticked.
+  async getEmployeeBucketCounts(workspaceId, filters = {}) {
+    const { numEmployeesRanges, ...rest } = filters;
+    const { clauses, params } = this._buildFilterClauses(rest);
+    const where = clauses.length ? ' AND ' + clauses.join(' AND ') : '';
+
+    // 60s cache — bucket counts don't change second-to-second and re-aggregating
+    // 230K rows on every filter change is the dominant cost of filter refreshes.
+    const cacheKey = 'emp|' + workspaceId + '|' + where + '|' + params.join('|');
+    if (!this._filterCountCache) this._filterCountCache = new Map();
+    const now = Date.now();
+    const cached = this._filterCountCache.get(cacheKey);
+    if (cached && now - cached.ts < 60000) return cached.value;
+
+    const sql = `
+      SELECT
+        SUM(CASE WHEN num_employees BETWEEN 1     AND 10    THEN 1 ELSE 0 END) AS "1-10",
+        SUM(CASE WHEN num_employees BETWEEN 11    AND 20    THEN 1 ELSE 0 END) AS "11-20",
+        SUM(CASE WHEN num_employees BETWEEN 21    AND 50    THEN 1 ELSE 0 END) AS "21-50",
+        SUM(CASE WHEN num_employees BETWEEN 51    AND 100   THEN 1 ELSE 0 END) AS "51-100",
+        SUM(CASE WHEN num_employees BETWEEN 101   AND 200   THEN 1 ELSE 0 END) AS "101-200",
+        SUM(CASE WHEN num_employees BETWEEN 201   AND 500   THEN 1 ELSE 0 END) AS "201-500",
+        SUM(CASE WHEN num_employees BETWEEN 501   AND 1000  THEN 1 ELSE 0 END) AS "501-1000",
+        SUM(CASE WHEN num_employees BETWEEN 1001  AND 2000  THEN 1 ELSE 0 END) AS "1001-2000",
+        SUM(CASE WHEN num_employees BETWEEN 2001  AND 5000  THEN 1 ELSE 0 END) AS "2001-5000",
+        SUM(CASE WHEN num_employees BETWEEN 5001  AND 10000 THEN 1 ELSE 0 END) AS "5001-10000",
+        SUM(CASE WHEN num_employees >= 10001                THEN 1 ELSE 0 END) AS "10001+",
+        SUM(CASE WHEN num_employees IS NULL                 THEN 1 ELSE 0 END) AS "unknown"
+      FROM contacts WHERE workspace_id = $1${where}
+    `;
+    const r = await this.query(sql, [workspaceId, ...params]);
+    const row = r.rows[0] || {};
+    const out = {};
+    for (const k of Object.keys(row)) out[k] = parseInt(row[k], 10) || 0;
+    this._filterCountCache.set(cacheKey, { value: out, ts: now });
+    // Keep cache small — drop expired entries; if still bloated, drop oldest.
+    if (this._filterCountCache.size > 500) {
+      const cutoff = now - 90000;
+      for (const [k, v] of this._filterCountCache) {
+        if (v.ts < cutoff) this._filterCountCache.delete(k);
+      }
+      if (this._filterCountCache.size > 500) {
+        const sorted = [...this._filterCountCache].sort((a, b) => a[1].ts - b[1].ts);
+        for (let i = 0; i < sorted.length - 400; i++) {
+          this._filterCountCache.delete(sorted[i][0]);
+        }
+      }
+    }
+    return out;
+  }
+
+  // Re-parse `# Employees` out of raw_data into num_employees. Exposed as
+  // a one-click button so the user can rerun it after a deploy that lost
+  // the startup run (e.g. due to pool exhaustion).
+  async backfillNumEmployees() {
+    const r = await this.query(`
+      UPDATE contacts
+      SET num_employees = CASE
+        WHEN COALESCE(raw_data->>'# Employees', raw_data->>'Employees') ~ '^\\s*\\d+\\s*$'
+          THEN regexp_replace(COALESCE(raw_data->>'# Employees', raw_data->>'Employees'), '\\D', '', 'g')::int
+        WHEN COALESCE(raw_data->>'# Employees', raw_data->>'Employees') ~ '^\\s*\\d+\\s*-\\s*\\d+\\s*$'
+          THEN split_part(regexp_replace(COALESCE(raw_data->>'# Employees', raw_data->>'Employees'), '\\s', '', 'g'), '-', 1)::int
+        WHEN COALESCE(raw_data->>'# Employees', raw_data->>'Employees') ~ '^\\s*\\d+\\s*\\+\\s*$'
+          THEN regexp_replace(COALESCE(raw_data->>'# Employees', raw_data->>'Employees'), '\\D', '', 'g')::int
+        ELSE NULL
+      END
+      WHERE num_employees IS NULL
+        AND (raw_data->>'# Employees' IS NOT NULL OR raw_data->>'Employees' IS NOT NULL)
+    `);
+    return { updated: r.rowCount || 0 };
+  }
+
+  // Filter-aware email-provider counts. Same rule as the employee buckets:
+  // honour every other filter, but drop `emailProviders` from the input so
+  // each row's count reflects "what you'd add by ticking it".
+  async getEmailProviderStats(workspaceId, filters = {}) {
+    if (!workspaceId) {
+      // Backwards-compat: original signature was zero-arg, workspace-wide.
+      const r = await this.query(`
+        SELECT
+          COUNT(CASE WHEN 'email_google'  = ANY(tags) THEN 1 END) as google,
+          COUNT(CASE WHEN 'email_outlook' = ANY(tags) THEN 1 END) as outlook,
+          COUNT(CASE WHEN 'email_other'   = ANY(tags) THEN 1 END) as other
+        FROM contacts
+      `);
+      const row = r.rows[0] || {};
+      return { google: parseInt(row.google) || 0, outlook: parseInt(row.outlook) || 0, other: parseInt(row.other) || 0 };
+    }
+    const { emailProviders, ...rest } = filters;
+    const { clauses, params } = this._buildFilterClauses(rest);
+    const where = clauses.length ? ' AND ' + clauses.join(' AND ') : '';
+
+    // 60s cache shared with employee bucket cache structure
+    const cacheKey = 'ep|' + workspaceId + '|' + where + '|' + params.join('|');
+    if (!this._filterCountCache) this._filterCountCache = new Map();
+    const now = Date.now();
+    const cached = this._filterCountCache.get(cacheKey);
+    if (cached && now - cached.ts < 60000) return cached.value;
+
+    const sql = `
+      SELECT
+        COUNT(CASE WHEN 'email_google'  = ANY(tags)
+                     OR technologies ILIKE '%google workspace%'
+                     OR technologies ILIKE '%g suite%'
+                     OR technologies ILIKE '%gmail%'
+                   THEN 1 END) as google,
+        COUNT(CASE WHEN 'email_outlook' = ANY(tags)
+                     OR technologies ILIKE '%outlook%'
+                     OR technologies ILIKE '%microsoft 365%'
+                     OR technologies ILIKE '%exchange%'
+                   THEN 1 END) as outlook,
+        COUNT(CASE WHEN 'email_other'   = ANY(tags) THEN 1 END) as other
+      FROM contacts WHERE workspace_id = $1${where}
+    `;
+    const r = await this.query(sql, [workspaceId, ...params]);
+    const row = r.rows[0] || {};
+    const value = { google: parseInt(row.google) || 0, outlook: parseInt(row.outlook) || 0, other: parseInt(row.other) || 0 };
+    this._filterCountCache.set(cacheKey, { value, ts: now });
+    return value;
+  }
+
+  detectEmailProvider(technologiesStr) {
+    if (!technologiesStr) return null;
+    const tech = technologiesStr.toLowerCase();
+
+    if (tech.includes('google') || tech.includes('gmail') || tech.includes('workspace') || tech.includes('g suite')) {
+      return 'email_google';
+    }
+    if (tech.includes('outlook') || tech.includes('microsoft 365') || tech.includes('exchange') || tech.includes('office 365')) {
+      return 'email_outlook';
+    }
+    if (tech.includes('mail') || tech.includes('email') || tech.includes('smtp')) {
+      return 'email_other';
+    }
+    return null;
+  }
+
+  async backfillEmailProviders() {
+    // Keyset-paginated maintenance pass. The old single full-table UPDATE
+    // scanned all ~469k rows with ILIKE every boot and blew the 45s pool
+    // statement_timeout, so it never completed. We now batch by id over only
+    // the rows that still need a tag (technologies present, a recognisable
+    // provider keyword, and no email_* tag yet). After the first pass this
+    // finds almost nothing, so repeat boots are cheap, and it still tags
+    // newly-imported contacts going forward. Each query is bounded — no
+    // long-running statement, no long lock window.
+    const CHUNK = 10000;
+    const needsTag = `
+      technologies IS NOT NULL AND technologies <> ''
+      AND NOT (COALESCE(tags, ARRAY[]::text[]) && ARRAY['email_google','email_outlook','email_other'])
+      AND (
+        technologies ILIKE '%google workspace%' OR technologies ILIKE '%g suite%' OR technologies ILIKE '%gmail%'
+        OR technologies ILIKE '%outlook%' OR technologies ILIKE '%microsoft 365%' OR technologies ILIKE '%exchange%'
+        OR LOWER(technologies) LIKE '%smtp%'
+      )`;
+    const updateSql = `
+      UPDATE contacts SET tags = CASE
+        WHEN technologies ILIKE '%google workspace%' OR technologies ILIKE '%g suite%' OR technologies ILIKE '%gmail%'
+          THEN array_append(array_remove(array_remove(array_remove(COALESCE(tags, ARRAY[]::text[]),'email_google'),'email_outlook'),'email_other'),'email_google')
+        WHEN technologies ILIKE '%outlook%' OR technologies ILIKE '%microsoft 365%' OR technologies ILIKE '%exchange%'
+          THEN array_append(array_remove(array_remove(array_remove(COALESCE(tags, ARRAY[]::text[]),'email_google'),'email_outlook'),'email_other'),'email_outlook')
+        ELSE array_append(array_remove(array_remove(array_remove(COALESCE(tags, ARRAY[]::text[]),'email_google'),'email_outlook'),'email_other'),'email_other')
+      END
+      WHERE id = ANY($1::uuid[])`;
+    let updated = 0;
+    let lastId = '00000000-0000-0000-0000-000000000000';
+    // Guard against runaway loops: 300 * 10k = 3M-row ceiling.
+    for (let i = 0; i < 300; i++) {
+      const { rows } = await this.query(
+        `SELECT id FROM contacts WHERE id > $1 AND ${needsTag} ORDER BY id LIMIT $2`,
+        [lastId, CHUNK]
+      );
+      if (!rows.length) break;
+      const ids = rows.map(r => r.id);
+      lastId = ids[ids.length - 1];
+      const res = await this.query(updateSql, [ids]);
+      updated += res.rowCount || 0;
+    }
+    return { processed: updated, updated };
+  }
+
+  async deleteAllContacts() {
+    const sql = 'DELETE FROM contacts;';
+    const result = await this.query(sql, []);
+    return { deleted: result.rowCount || 0 };
+  }
+
+  // Delete contacts whose email or apollo_id matches any in the given lists.
+  // dryRun=true returns the would-delete count without modifying anything.
+  // Used by the "delete-from-csv" flow when re-scraping stale Apollo data.
+  async deleteByCsvKeys({ emails = [], apolloIds = [], dryRun = false }) {
+    const cleanEmails = [...new Set(emails.map(e => (e || '').toString().trim().toLowerCase()).filter(Boolean))];
+    const cleanApolloIds = [...new Set(apolloIds.map(a => (a || '').toString().trim()).filter(Boolean))];
+    if (!cleanEmails.length && !cleanApolloIds.length) return { deleted: 0, matched: 0 };
+
+    const countSql = `
+      SELECT COUNT(*)::int AS n FROM contacts
+      WHERE ($1::text[] IS NOT NULL AND LOWER(email) = ANY($1::text[]))
+         OR ($2::text[] IS NOT NULL AND apollo_id = ANY($2::text[]))
+    `;
+    const { rows } = await this.query(countSql, [cleanEmails, cleanApolloIds]);
+    const matched = rows[0]?.n || 0;
+    if (dryRun || matched === 0) return { deleted: 0, matched };
+
+    const delSql = `
+      DELETE FROM contacts
+      WHERE ($1::text[] IS NOT NULL AND LOWER(email) = ANY($1::text[]))
+         OR ($2::text[] IS NOT NULL AND apollo_id = ANY($2::text[]))
+    `;
+    const result = await this.query(delSql, [cleanEmails, cleanApolloIds]);
+    return { deleted: result.rowCount || 0, matched };
+  }
+
+  // Append a {workspace_id, campaign_id, campaign_name, pushed_at} entry
+  // to each contact's pushed_campaigns JSONB array. Used after a successful
+  // PlusVibe push so future verify-and-push runs against the same campaign
+  // can skip them. JSONB || jsonb_build_object is a single statement so
+  // we batch via UNNEST + a join to keep the lock window tiny.
+  // Heal company_name + job_title_cleaned for the rows that produced a
+  // different value when re-cleaned at push time. Idempotent — no-op if the
+  // stored value already matches.
+  async bulkUpdateCleanedNames(updates) {
+    if (!Array.isArray(updates) || !updates.length) return { updated: 0 };
+    // Batch into a single UPDATE per row via UNNEST so we don't issue 100 round-trips.
+    const ids = updates.map(u => u.id);
+    const companies = updates.map(u => u.company_name);
+    const titles = updates.map(u => u.job_title_cleaned);
+    const sql = `
+      UPDATE contacts AS c
+      SET company_name      = COALESCE(NULLIF(u.company_name, ''), c.company_name),
+          job_title_cleaned = COALESCE(NULLIF(u.job_title_cleaned, ''), c.job_title_cleaned),
+          updated_at        = CURRENT_TIMESTAMP
+      FROM (
+        SELECT UNNEST($1::uuid[]) AS id,
+               UNNEST($2::text[]) AS company_name,
+               UNNEST($3::text[]) AS job_title_cleaned
+      ) AS u
+      WHERE c.id = u.id
+        AND (c.company_name IS DISTINCT FROM COALESCE(NULLIF(u.company_name, ''), c.company_name)
+          OR c.job_title_cleaned IS DISTINCT FROM COALESCE(NULLIF(u.job_title_cleaned, ''), c.job_title_cleaned))
+    `;
+    const r = await this.query(sql, [ids, companies, titles]);
+    if (r.rowCount > 0) console.log(`[clean-on-push] healed ${r.rowCount} company/title rows`);
+    return { updated: r.rowCount || 0 };
+  }
+
+  // ── Audience Scoring ──────────────────────────────────────────────────────
+  // Builds a responder profile for a workspace (who replied / became a lead)
+  // then scores every unsent contact against it. Scores 0-100 based on how
+  // many of 5 dimensions (seniority, department, industry, country, company
+  // size) match the top values seen among actual responders.
+  //
+  // Two data sources for responders, merged with UNION DISTINCT:
+  //   1. email_events (recent webhook data — most accurate, has workspace_id)
+  //   2. pushed_campaigns + positive status (older data — workspace known from push stamp)
+  async computeAudienceScores(workspaceId) {
+    const sql = `
+      WITH
+
+      -- ── Responders: contacts with a positive outcome for this workspace ──
+      ws_responders AS (
+        -- Path 1: webhook events (accurate workspace attribution)
+        SELECT DISTINCT LOWER(ee.lead_email) AS email_lc
+        FROM email_events ee
+        WHERE ee.workspace_id = $1
+          AND ee.event_type IN ('reply', 'lead')
+
+        UNION
+
+        -- Path 2: pushed to this workspace AND had a positive status outcome
+        -- (covers pre-webhook history; imprecise only if a contact had
+        --  multiple workspaces — acceptable for profiling)
+        SELECT DISTINCT LOWER(c.email) AS email_lc
+        FROM contacts c
+        WHERE (c.status = 'interested' OR c.marked_as_lead_at IS NOT NULL)
+          AND EXISTS (
+            SELECT 1 FROM jsonb_array_elements(COALESCE(c.pushed_campaigns,'[]'::jsonb)) pc
+            WHERE pc->>'workspace_id' = $1
+          )
+      ),
+
+      responder_contacts AS (
+        SELECT
+          c.seniority,
+          c.department,
+          c.industry,
+          COALESCE(NULLIF(LOWER(c.company_country),''), NULLIF(LOWER(c.country),'')) AS country,
+          CASE
+            WHEN c.num_employees IS NULL     THEN NULL
+            WHEN c.num_employees <= 10       THEN '1-10'
+            WHEN c.num_employees <= 50       THEN '11-50'
+            WHEN c.num_employees <= 200      THEN '51-200'
+            WHEN c.num_employees <= 500      THEN '201-500'
+            WHEN c.num_employees <= 1000     THEN '501-1000'
+            ELSE '1000+'
+          END AS emp_bucket
+        FROM contacts c
+        WHERE LOWER(c.email) IN (SELECT email_lc FROM ws_responders)
+      ),
+
+      responder_count AS (SELECT COUNT(*) AS n FROM responder_contacts),
+
+      -- Top values per dimension (use top 3-5 so the model isn't too narrow)
+      top_seniority AS (
+        SELECT LOWER(seniority) AS val FROM responder_contacts
+        WHERE seniority IS NOT NULL AND seniority <> ''
+        GROUP BY LOWER(seniority) ORDER BY COUNT(*) DESC LIMIT 3
+      ),
+      top_department AS (
+        SELECT LOWER(department) AS val FROM responder_contacts
+        WHERE department IS NOT NULL AND department <> ''
+        GROUP BY LOWER(department) ORDER BY COUNT(*) DESC LIMIT 3
+      ),
+      top_industry AS (
+        SELECT LOWER(industry) AS val FROM responder_contacts
+        WHERE industry IS NOT NULL AND industry <> ''
+        GROUP BY LOWER(industry) ORDER BY COUNT(*) DESC LIMIT 5
+      ),
+      top_country AS (
+        SELECT country AS val FROM responder_contacts
+        WHERE country IS NOT NULL AND country <> ''
+        GROUP BY country ORDER BY COUNT(*) DESC LIMIT 5
+      ),
+      top_emp AS (
+        SELECT emp_bucket AS val FROM responder_contacts
+        WHERE emp_bucket IS NOT NULL
+        GROUP BY emp_bucket ORDER BY COUNT(*) DESC LIMIT 2
+      ),
+
+      -- ── Unsent contacts: never pushed to this workspace ───────────────
+      unsent AS (
+        SELECT
+          c.id,
+          c.seniority,
+          c.department,
+          c.industry,
+          COALESCE(NULLIF(LOWER(c.company_country),''), NULLIF(LOWER(c.country),'')) AS country,
+          CASE
+            WHEN c.num_employees IS NULL     THEN NULL
+            WHEN c.num_employees <= 10       THEN '1-10'
+            WHEN c.num_employees <= 50       THEN '11-50'
+            WHEN c.num_employees <= 200      THEN '51-200'
+            WHEN c.num_employees <= 500      THEN '201-500'
+            WHEN c.num_employees <= 1000     THEN '501-1000'
+            ELSE '1000+'
+          END AS emp_bucket
+        FROM contacts c
+        WHERE c.do_not_contact IS NOT TRUE
+          AND c.email_status IN ('safe', 'safe_catchall')
+          AND NOT EXISTS (
+            SELECT 1 FROM jsonb_array_elements(COALESCE(c.pushed_campaigns,'[]'::jsonb)) pc
+            WHERE pc->>'workspace_id' = $1
+          )
+      ),
+
+      -- ── Score each unsent contact ─────────────────────────────────────
+      -- 5 dimensions, 20 points each = 100 max.
+      -- A dimension scores 0 if the contact has no value for it (NULL/empty).
+      scored AS (
+        SELECT
+          u.id AS contact_id,
+          (
+            CASE WHEN LOWER(COALESCE(u.seniority,''))  IN (SELECT val FROM top_seniority)  THEN 20 ELSE 0 END +
+            CASE WHEN LOWER(COALESCE(u.department,'')) IN (SELECT val FROM top_department) THEN 20 ELSE 0 END +
+            CASE WHEN LOWER(COALESCE(u.industry,''))   IN (SELECT val FROM top_industry)   THEN 20 ELSE 0 END +
+            CASE WHEN u.country                        IN (SELECT val FROM top_country)    THEN 20 ELSE 0 END +
+            CASE WHEN u.emp_bucket                     IN (SELECT val FROM top_emp)        THEN 20 ELSE 0 END
+          ) AS score,
+          jsonb_build_object(
+            'seniority_match',  LOWER(COALESCE(u.seniority,''))  IN (SELECT val FROM top_seniority),
+            'department_match', LOWER(COALESCE(u.department,'')) IN (SELECT val FROM top_department),
+            'industry_match',   LOWER(COALESCE(u.industry,''))   IN (SELECT val FROM top_industry),
+            'country_match',    u.country                        IN (SELECT val FROM top_country),
+            'emp_match',        u.emp_bucket                     IN (SELECT val FROM top_emp)
+          ) AS breakdown
+        FROM unsent u
+      )
+
+      -- ── Upsert scores ─────────────────────────────────────────────────
+      INSERT INTO audience_scores (workspace_id, contact_id, score, breakdown, computed_at)
+      SELECT $1, contact_id, score, breakdown, CURRENT_TIMESTAMP
+      FROM scored
+      ON CONFLICT (workspace_id, contact_id) DO UPDATE SET
+        score       = EXCLUDED.score,
+        breakdown   = EXCLUDED.breakdown,
+        computed_at = CURRENT_TIMESTAMP
+
+      RETURNING (SELECT n FROM responder_count) AS responder_count
+    `;
+
+    const r = await this.query(sql, [workspaceId]);
+    const responderCount = r.rows[0]?.responder_count ?? 0;
+
+    // Persist the profile summary (top values) for display in the UI
+    const profileSql = `
+      WITH ws_responders AS (
+        SELECT DISTINCT LOWER(ee.lead_email) AS email_lc
+        FROM email_events ee
+        WHERE ee.workspace_id = $1 AND ee.event_type IN ('reply', 'lead')
+        UNION
+        SELECT DISTINCT LOWER(c.email) AS email_lc
+        FROM contacts c
+        WHERE (c.status = 'interested' OR c.marked_as_lead_at IS NOT NULL)
+          AND EXISTS (
+            SELECT 1 FROM jsonb_array_elements(COALESCE(c.pushed_campaigns,'[]'::jsonb)) pc
+            WHERE pc->>'workspace_id' = $1
+          )
+      ),
+      rc AS (
+        SELECT c.seniority, c.department, c.industry,
+          COALESCE(NULLIF(LOWER(c.company_country),''), NULLIF(LOWER(c.country),'')) AS country,
+          CASE
+            WHEN c.num_employees IS NULL THEN NULL
+            WHEN c.num_employees <= 10   THEN '1-10'
+            WHEN c.num_employees <= 50   THEN '11-50'
+            WHEN c.num_employees <= 200  THEN '51-200'
+            WHEN c.num_employees <= 500  THEN '201-500'
+            WHEN c.num_employees <= 1000 THEN '501-1000'
+            ELSE '1000+'
+          END AS emp_bucket
+        FROM contacts c
+        WHERE LOWER(c.email) IN (SELECT email_lc FROM ws_responders)
+      ),
+      sent_count AS (
+        SELECT COUNT(*) AS n FROM contacts c
+        WHERE EXISTS (
+          SELECT 1 FROM jsonb_array_elements(COALESCE(c.pushed_campaigns,'[]'::jsonb)) pc
+          WHERE pc->>'workspace_id' = $1
+        )
+      )
+      SELECT jsonb_build_object(
+        'top_seniorities',  (SELECT jsonb_agg(val ORDER BY cnt DESC) FROM (SELECT LOWER(seniority) AS val, COUNT(*) AS cnt FROM rc WHERE seniority IS NOT NULL AND seniority <> '' GROUP BY LOWER(seniority) ORDER BY cnt DESC LIMIT 5) s),
+        'top_departments',  (SELECT jsonb_agg(val ORDER BY cnt DESC) FROM (SELECT LOWER(department) AS val, COUNT(*) AS cnt FROM rc WHERE department IS NOT NULL AND department <> '' GROUP BY LOWER(department) ORDER BY cnt DESC LIMIT 5) s),
+        'top_industries',   (SELECT jsonb_agg(val ORDER BY cnt DESC) FROM (SELECT LOWER(industry) AS val, COUNT(*) AS cnt FROM rc WHERE industry IS NOT NULL AND industry <> '' GROUP BY LOWER(industry) ORDER BY cnt DESC LIMIT 8) s),
+        'top_countries',    (SELECT jsonb_agg(val ORDER BY cnt DESC) FROM (SELECT country AS val, COUNT(*) AS cnt FROM rc WHERE country IS NOT NULL AND country <> '' GROUP BY country ORDER BY cnt DESC LIMIT 8) s),
+        'top_emp_buckets',  (SELECT jsonb_agg(val ORDER BY cnt DESC) FROM (SELECT emp_bucket AS val, COUNT(*) AS cnt FROM rc WHERE emp_bucket IS NOT NULL GROUP BY emp_bucket ORDER BY cnt DESC LIMIT 5) s)
+      ) AS profile,
+      (SELECT COUNT(*) FROM rc) AS responder_count,
+      (SELECT n FROM sent_count) AS sent_count
+    `;
+
+    const pr = await this.query(profileSql, [workspaceId]);
+    const { profile, responder_count: rc, sent_count: sc } = pr.rows[0] || {};
+
+    await this.query(`
+      INSERT INTO client_audience_profiles (workspace_id, responder_count, sent_count, profile, computed_at)
+      VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+      ON CONFLICT (workspace_id) DO UPDATE SET
+        responder_count = EXCLUDED.responder_count,
+        sent_count      = EXCLUDED.sent_count,
+        profile         = EXCLUDED.profile,
+        computed_at     = CURRENT_TIMESTAMP
+    `, [workspaceId, rc || 0, sc || 0, JSON.stringify(profile || {})]);
+
+    return { scored: r.rowCount || 0, responders: Number(rc || 0), sent: Number(sc || 0) };
+  }
+
+  // Fetch top-N recommended contacts for a workspace (pre-scored, unsent)
+  async getRecommendedBatch(workspaceId, limit = 500, minScore = 0) {
+    const sql = `
+      SELECT
+        c.id, c.email, c.first_name, c.last_name,
+        c.job_title, c.company_name, c.industry,
+        c.seniority, c.department, c.country, c.company_country,
+        c.num_employees, c.email_status,
+        s.score, s.breakdown, s.computed_at AS scored_at
+      FROM audience_scores s
+      JOIN contacts c ON c.id = s.contact_id
+      WHERE s.workspace_id = $1
+        AND s.score >= $2
+        AND c.do_not_contact IS NOT TRUE
+        AND c.email_status IN ('safe', 'safe_catchall')
+        AND NOT EXISTS (
+          SELECT 1 FROM jsonb_array_elements(COALESCE(c.pushed_campaigns,'[]'::jsonb)) pc
+          WHERE pc->>'workspace_id' = $1
+        )
+      ORDER BY s.score DESC, c.id
+      LIMIT $3
+    `;
+    const r = await this.query(sql, [workspaceId, minScore, limit]);
+    return r.rows;
+  }
+
+  async stampPushedCampaign(contactIds, workspaceId, campaignId, campaignName) {
+    if (!contactIds || !contactIds.length) return { stamped: 0 };
+    const entry = JSON.stringify({
+      workspace_id: workspaceId,
+      campaign_id:  campaignId,
+      campaign_name: campaignName || '',
+      pushed_at: new Date().toISOString().slice(0, 10),
+    });
+    const today = new Date().toISOString().slice(0, 10);
+    const sql = `
+      UPDATE contacts
+      SET pushed_campaigns = COALESCE(pushed_campaigns, '[]'::jsonb) || $1::jsonb,
+          emailed_workspaces = jsonb_set(
+            COALESCE(emailed_workspaces, '{}'::jsonb),
+            ARRAY[$2],
+            COALESCE(emailed_workspaces->$2, '{}'::jsonb) || jsonb_build_object('last_sent', $3::text),
+            true
+          ),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ANY($4::uuid[])
+    `;
+    const result = await this.query(sql, [`[${entry}]`, workspaceId, today, contactIds]);
+    return { stamped: result.rowCount || 0 };
+  }
+
+  async upsertDomainHealth(row) {
+    const sql = `
+      INSERT INTO domain_health
+        (domain, workspace_id, workspace_name, spf, dkim, dmarc, mx, blacklists, score, status, last_checked, notes, updated_at)
+      VALUES
+        ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, NOW(), $11, NOW())
+      ON CONFLICT (domain) DO UPDATE SET
+        workspace_id   = COALESCE(EXCLUDED.workspace_id, domain_health.workspace_id),
+        workspace_name = COALESCE(EXCLUDED.workspace_name, domain_health.workspace_name),
+        spf            = EXCLUDED.spf,
+        dkim           = EXCLUDED.dkim,
+        dmarc          = EXCLUDED.dmarc,
+        mx             = EXCLUDED.mx,
+        blacklists     = EXCLUDED.blacklists,
+        score          = EXCLUDED.score,
+        status         = EXCLUDED.status,
+        last_checked   = NOW(),
+        notes          = EXCLUDED.notes,
+        updated_at     = NOW()
+    `;
+    await this.query(sql, [
+      row.domain,
+      row.workspace_id || null,
+      row.workspace_name || null,
+      JSON.stringify(row.spf || {}),
+      JSON.stringify(row.dkim || {}),
+      JSON.stringify(row.dmarc || {}),
+      JSON.stringify(row.mx || {}),
+      JSON.stringify(row.blacklists || []),
+      row.score || 0,
+      row.status || 'unknown',
+      row.notes || null,
+    ]);
+  }
+
+  async listDomainHealth(opts = {}) {
+    // By default hide ignored rows so the dashboard reflects active
+    // sending infrastructure only. Pass { includeIgnored: true } to
+    // show the full set (e.g. for a future "Show archived" toggle).
+    const where = opts.includeIgnored ? '' : 'WHERE ignored_at IS NULL';
+    const r = await this.query(
+      `SELECT * FROM domain_health ${where} ORDER BY status DESC, score ASC, domain ASC`
+    );
+    return r.rows;
+  }
+
+  async setDomainIgnored(domain, ignored) {
+    const sql = `UPDATE domain_health SET ignored_at = ${ignored ? 'NOW()' : 'NULL'}, updated_at = NOW() WHERE domain = $1`;
+    const r = await this.query(sql, [domain]);
+    return { changed: r.rowCount || 0 };
+  }
+
+  async isDomainIgnored(domain) {
+    const r = await this.query(`SELECT ignored_at FROM domain_health WHERE domain = $1`, [domain]);
+    return !!(r.rows[0] && r.rows[0].ignored_at);
+  }
+
+  async listIgnoredDomains() {
+    const r = await this.query(`SELECT domain FROM domain_health WHERE ignored_at IS NOT NULL`);
+    return r.rows.map(x => x.domain);
+  }
+
+  // ── Google Postmaster Tools data ────────────────────────────────────
+
+  async upsertPostmasterData(domain, date, fields) {
+    const sql = `
+      INSERT INTO postmaster_data
+        (domain, date, domain_reputation, ip_reputation, spam_rate,
+         spf_pass_rate, dkim_pass_rate, dmarc_pass_rate, ip_reputations, raw_data, fetched_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, NOW())
+      ON CONFLICT (domain, date) DO UPDATE SET
+        domain_reputation = EXCLUDED.domain_reputation,
+        ip_reputation     = EXCLUDED.ip_reputation,
+        spam_rate         = EXCLUDED.spam_rate,
+        spf_pass_rate     = EXCLUDED.spf_pass_rate,
+        dkim_pass_rate    = EXCLUDED.dkim_pass_rate,
+        dmarc_pass_rate   = EXCLUDED.dmarc_pass_rate,
+        ip_reputations    = EXCLUDED.ip_reputations,
+        raw_data          = EXCLUDED.raw_data,
+        fetched_at        = NOW()
+    `;
+    await this.query(sql, [
+      domain,
+      date,
+      fields.domain_reputation || null,
+      fields.ip_reputation || null,
+      fields.spam_rate ?? null,
+      fields.spf_pass_rate ?? null,
+      fields.dkim_pass_rate ?? null,
+      fields.dmarc_pass_rate ?? null,
+      JSON.stringify(fields.ip_reputations || []),
+      JSON.stringify(fields.raw_data || {}),
+    ]);
+  }
+
+  async listPostmasterLatest() {
+    // Latest row per domain, joined with domain_health for workspace info.
+    const r = await this.query(`
+      SELECT DISTINCT ON (p.domain)
+        p.domain, p.date, p.domain_reputation, p.ip_reputation,
+        p.spam_rate, p.spf_pass_rate, p.dkim_pass_rate, p.dmarc_pass_rate,
+        p.ip_reputations, p.fetched_at,
+        dh.workspace_id, dh.workspace_name
+      FROM postmaster_data p
+      LEFT JOIN domain_health dh ON p.domain = dh.domain AND dh.ignored_at IS NULL
+      ORDER BY p.domain, p.date DESC
+    `);
+    return r.rows;
+  }
+
+  async listPostmasterHistory(domain, days = 30) {
+    const r = await this.query(
+      `SELECT * FROM postmaster_data WHERE domain = $1 ORDER BY date DESC LIMIT $2`,
+      [domain, days]
+    );
+    return r.rows;
+  }
+
+  // Upsert pm_* tracking fields on a domain_health row (creates row if missing).
+  async setDomainPostmasterTracking(domain, fields) {
+    const sql = `
+      INSERT INTO domain_health (domain, pm_txt_token, pm_txt_added_at, pm_verified_at, updated_at)
+      VALUES ($1, $2, $3, $4, NOW())
+      ON CONFLICT (domain) DO UPDATE SET
+        pm_txt_token    = CASE WHEN $2 IS NOT NULL THEN $2 ELSE domain_health.pm_txt_token END,
+        pm_txt_added_at = CASE WHEN $3 IS NOT NULL THEN $3 ELSE domain_health.pm_txt_added_at END,
+        pm_verified_at  = CASE WHEN $4 IS NOT NULL THEN $4 ELSE domain_health.pm_verified_at END,
+        updated_at      = NOW()
+    `;
+    await this.query(sql, [
+      domain,
+      fields.pm_txt_token ?? null,
+      fields.pm_txt_added_at ?? null,
+      fields.pm_verified_at ?? null,
+    ]);
+  }
+
+  async listDomainPostmasterTracking() {
+    const r = await this.query(`
+      SELECT domain, pm_txt_token, pm_txt_added_at, pm_verified_at
+      FROM domain_health
+      WHERE pm_txt_token IS NOT NULL OR pm_verified_at IS NOT NULL
+    `);
+    return r.rows;
+  }
+
+  // ── Payslips ────────────────────────────────────────────────────────
+  async upsertPayslip(managerName, month, filename, mimetype, dataBase64) {
+    await this.query(`
+      INSERT INTO payslips (manager_name, month, filename, mimetype, data)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (manager_name, month) DO UPDATE SET
+        filename = EXCLUDED.filename, mimetype = EXCLUDED.mimetype,
+        data = EXCLUDED.data, uploaded_at = NOW()
+    `, [managerName, month, filename, mimetype, dataBase64]);
+  }
+  async getPayslip(managerName, month) {
+    const r = await this.query(
+      `SELECT id, manager_name, month, filename, mimetype, data, uploaded_at FROM payslips WHERE manager_name=$1 AND month=$2`,
+      [managerName, month]
+    );
+    return r.rows[0] || null;
+  }
+  async listPayslips(managerName) {
+    const r = await this.query(
+      `SELECT id, manager_name, month, filename, mimetype, uploaded_at FROM payslips WHERE manager_name=$1 ORDER BY month DESC`,
+      [managerName]
+    );
+    return r.rows;
+  }
+  async listAllPayslips() {
+    const r = await this.query(`SELECT id, manager_name, month, filename, mimetype, uploaded_at FROM payslips ORDER BY month DESC, manager_name`);
+    return r.rows;
+  }
+  async deletePayslip(id) {
+    await this.query(`DELETE FROM payslips WHERE id=$1`, [id]);
+  }
+
+  // ── App settings ────────────────────────────────────────────────────
+  async getSetting(key, defaultValue = {}) {
+    const r = await this.query(`SELECT value FROM app_settings WHERE key = $1`, [key]);
+    return r.rows.length ? r.rows[0].value : defaultValue;
+  }
+
+  async setSetting(key, value) {
+    await this.query(`
+      INSERT INTO app_settings (key, value, updated_at)
+      VALUES ($1, $2::jsonb, NOW())
+      ON CONFLICT (key) DO UPDATE SET value = $2::jsonb, updated_at = NOW()
+    `, [key, JSON.stringify(value)]);
+  }
+
+  // ── Mailbox metadata (supplier + type tagging) ─────────────────────
+  async listMailboxMeta() {
+    const r = await this.query(`SELECT * FROM mailbox_meta`);
+    return r.rows;
+  }
+
+  async upsertMailboxMeta(email, fields) {
+    const e = (email || '').toLowerCase();
+    const supplier     = fields.supplier ?? null;
+    const mailbox_type = fields.mailbox_type ?? null;
+    const notes        = fields.notes ?? null;
+    const sql = `
+      INSERT INTO mailbox_meta (email, supplier, mailbox_type, notes, updated_at)
+      VALUES ($1, $2, $3, $4, NOW())
+      ON CONFLICT (email) DO UPDATE SET
+        supplier     = COALESCE(EXCLUDED.supplier,     mailbox_meta.supplier),
+        mailbox_type = COALESCE(EXCLUDED.mailbox_type, mailbox_meta.mailbox_type),
+        notes        = COALESCE(EXCLUDED.notes,        mailbox_meta.notes),
+        updated_at   = NOW()
+      RETURNING *;
+    `;
+    const r = await this.query(sql, [e, supplier, mailbox_type, notes]);
+    return r.rows[0];
+  }
+
+  // Bulk-fill auto-detected provider type for mailboxes that have no type yet.
+  // Only writes where mailbox_type IS NULL so manual overrides set on the
+  // Mailboxes page are never clobbered. rows: [{ email, mailbox_type }].
+  // Used by the mailbox cache refresh so SQL consumers (combo analysis) can
+  // classify senders without depending on someone manually tagging each box.
+  async backfillMailboxTypes(rows) {
+    const clean = (rows || [])
+      .map(r => ({ email: (r.email || '').toLowerCase(), mailbox_type: r.mailbox_type }))
+      .filter(r => r.email.includes('@') && r.mailbox_type);
+    if (!clean.length) return 0;
+    const values = [];
+    const params = [];
+    clean.forEach((r, i) => {
+      values.push(`($${i * 2 + 1}, $${i * 2 + 2})`);
+      params.push(r.email, r.mailbox_type);
+    });
+    const sql = `
+      INSERT INTO mailbox_meta (email, mailbox_type)
+      VALUES ${values.join(',')}
+      ON CONFLICT (email) DO UPDATE SET
+        mailbox_type = EXCLUDED.mailbox_type,
+        updated_at   = NOW()
+      WHERE mailbox_meta.mailbox_type IS NULL
+    `;
+    const r = await this.query(sql, params);
+    return r.rowCount || 0;
+  }
+
+  // ── Mailbox pricing ────────────────────────────────────────────────
+  async listMailboxPricing() {
+    const r = await this.query(`SELECT * FROM mailbox_pricing ORDER BY supplier, mailbox_type`);
+    return r.rows;
+  }
+
+  async upsertMailboxPricing(supplier, mailbox_type, unit_cost, notes) {
+    const sql = `
+      INSERT INTO mailbox_pricing (supplier, mailbox_type, unit_cost, notes, updated_at)
+      VALUES ($1, $2, $3, $4, NOW())
+      ON CONFLICT (supplier, mailbox_type) DO UPDATE SET
+        unit_cost  = EXCLUDED.unit_cost,
+        notes      = COALESCE(EXCLUDED.notes, mailbox_pricing.notes),
+        updated_at = NOW()
+      RETURNING *;
+    `;
+    const r = await this.query(sql, [supplier, mailbox_type, unit_cost, notes || null]);
+    return r.rows[0];
+  }
+
+  // ── Monthly operating expenses ─────────────────────────────────────
+  async listMonthlyExpenses() {
+    const r = await this.query(`SELECT * FROM monthly_expenses ORDER BY start_month DESC, label`);
+    return r.rows;
+  }
+
+  async createMonthlyExpense({ label, category, amount, currency, start_month, end_month, notes }) {
+    const sql = `
+      INSERT INTO monthly_expenses (label, category, amount, currency, start_month, end_month, notes)
+      VALUES ($1, $2, $3, COALESCE($4, 'USD'), $5, $6, $7)
+      RETURNING *;
+    `;
+    const r = await this.query(sql, [label, category || null, amount, currency || null, start_month, end_month || null, notes || null]);
+    return r.rows[0];
+  }
+
+  async updateMonthlyExpense(id, fields) {
+    const r = await this.query(
+      `UPDATE monthly_expenses SET
+         label       = COALESCE($2, label),
+         category    = COALESCE($3, category),
+         amount      = COALESCE($4, amount),
+         currency    = COALESCE($5, currency),
+         start_month = COALESCE($6, start_month),
+         end_month   = $7,
+         notes       = COALESCE($8, notes),
+         updated_at  = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [id, fields.label || null, fields.category || null, fields.amount || null,
+       fields.currency || null, fields.start_month || null, fields.end_month || null, fields.notes || null]
+    );
+    return r.rows[0];
+  }
+
+  async deleteMonthlyExpense(id) {
+    await this.query(`DELETE FROM monthly_expenses WHERE id = $1`, [id]);
+    return { ok: true };
+  }
+
+  // ── Campaign filter snapshots ─────────────────────────────────
+  async saveCampaignFilter({ workspace_id, workspace_name, campaign_id, campaign_name, filters }) {
+    if (!workspace_id || !campaign_id) throw new Error('workspace_id and campaign_id required');
+    await this.query(`
+      INSERT INTO campaign_filters (workspace_id, workspace_name, campaign_id, campaign_name, filters, saved_at)
+      VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+      ON CONFLICT (workspace_id, campaign_id) DO UPDATE SET
+        workspace_name = EXCLUDED.workspace_name,
+        campaign_name  = EXCLUDED.campaign_name,
+        filters        = EXCLUDED.filters,
+        saved_at       = CURRENT_TIMESTAMP
+    `, [workspace_id, workspace_name || null, campaign_id, campaign_name || null, JSON.stringify(filters || {})]);
+    return { ok: true };
+  }
+
+  async listCampaignFilters() {
+    const r = await this.query(`
+      SELECT workspace_id, workspace_name, campaign_id, campaign_name, filters, saved_at
+      FROM campaign_filters
+      ORDER BY workspace_name NULLS LAST, campaign_name NULLS LAST
+    `);
+    return r.rows;
+  }
+
+  async deleteCampaignFilter(workspace_id, campaign_id) {
+    await this.query(
+      `DELETE FROM campaign_filters WHERE workspace_id = $1 AND campaign_id = $2`,
+      [workspace_id, campaign_id]
+    );
+    return { ok: true };
+  }
+
+  // Bulk supplier/type assignment — used by the "select 50 → tag all as Maildoso" flow.
+  async bulkSetMailboxField(emails, field, value) {
+    if (!Array.isArray(emails) || !emails.length) return { changed: 0 };
+    const allowed = ['supplier', 'mailbox_type', 'billing_start_date', 'billing_day'];
+    if (!allowed.includes(field)) throw new Error('Invalid field');
+    const sql = `
+      INSERT INTO mailbox_meta (email, ${field}, updated_at)
+      SELECT LOWER(e), $1, NOW() FROM UNNEST($2::text[]) AS e
+      ON CONFLICT (email) DO UPDATE SET
+        ${field}   = EXCLUDED.${field},
+        updated_at = NOW()
+    `;
+    const r = await this.query(sql, [value, emails]);
+    return { changed: r.rowCount || 0 };
+  }
+
+  // Bulk set billing date + day for a group of mailboxes (e.g. all Winnr mailboxes
+  // purchased on the same date). Used by the bulk billing form in mailboxes.html.
+  async bulkSetBilling(emails, billing_start_date, billing_day) {
+    if (!Array.isArray(emails) || !emails.length) return { changed: 0 };
+    const sql = `
+      INSERT INTO mailbox_meta (email, billing_start_date, billing_day, updated_at)
+      SELECT LOWER(e), $1::date, $2::int, NOW() FROM UNNEST($3::text[]) AS e
+      ON CONFLICT (email) DO UPDATE SET
+        billing_start_date = EXCLUDED.billing_start_date,
+        billing_day        = EXCLUDED.billing_day,
+        updated_at         = NOW()
+    `;
+    const r = await this.query(sql, [billing_start_date, billing_day, emails]);
+    return { changed: r.rowCount || 0 };
+  }
+
+  // Per-row billing import: rows = [{email, billing_start_date}]
+  async bulkSetBillingRows(rows) {
+    if (!Array.isArray(rows) || !rows.length) return { changed: 0 };
+    const emails = rows.map(r => r.email.toLowerCase().trim());
+    const dates  = rows.map(r => r.billing_start_date);
+    const days   = rows.map(r => new Date(r.billing_start_date).getUTCDate());
+    const sql = `
+      INSERT INTO mailbox_meta (email, billing_start_date, billing_day, updated_at)
+      SELECT LOWER(e), d::date, dy::int, NOW()
+      FROM UNNEST($1::text[], $2::text[], $3::int[]) AS t(e, d, dy)
+      ON CONFLICT (email) DO UPDATE SET
+        billing_start_date = EXCLUDED.billing_start_date,
+        billing_day        = EXCLUDED.billing_day,
+        updated_at         = NOW()
+    `;
+    const r = await this.query(sql, [emails, dates, days]);
+    return { changed: r.rowCount || 0 };
+  }
+
+  async stampExportedToApollo(workspaceId, ids) {
+    if (!ids || ids.length === 0) return { stamped: 0 };
+    // Use ANY($2::int[]) to avoid hitting PostgreSQL's parameter limit
+    // (~65k positional params per statement; we may have tens of thousands of ids).
+    const sql = `
+      UPDATE contacts
+      SET exported_to_apollo_at = NOW()
+      WHERE workspace_id = $1
+        AND id = ANY($2::uuid[])
+        AND exported_to_apollo_at IS NULL
+    `;
+    const result = await this.query(sql, [workspaceId, ids]);
+    return { stamped: result.rowCount || 0 };
+  }
+
+  // Performance cache persistence — survive restarts without re-fetching PlusVibe
+  async loadPerfCacheDaily() {
+    const r = await this.query(`SELECT ws_id, date, data, saved_at FROM perf_cache_daily`);
+    return r.rows; // [{ ws_id, date, data, saved_at }]
+  }
+
+  async savePerfCacheDaily(entries) {
+    // entries: [{ wsId, date, data, savedAt }]
+    if (!entries.length) return;
+    const vals = entries.map((e, i) => `($${i*4+1},$${i*4+2},$${i*4+3},$${i*4+4})`).join(',');
+    const params = entries.flatMap(e => [e.wsId, e.date, JSON.stringify(e.data), e.savedAt]);
+    await this.query(`
+      INSERT INTO perf_cache_daily (ws_id, date, data, saved_at)
+      VALUES ${vals}
+      ON CONFLICT (ws_id, date) DO UPDATE SET data=EXCLUDED.data, saved_at=EXCLUDED.saved_at
+    `, params);
+  }
+
+  async loadPerfCacheLeads() {
+    const r = await this.query(`SELECT ws_id, data, saved_at FROM perf_cache_leads`);
+    return r.rows;
+  }
+
+  async savePerfCacheLeads(entries) {
+    if (!entries.length) return;
+    const vals = entries.map((e, i) => `($${i*3+1},$${i*3+2},$${i*3+3})`).join(',');
+    const params = entries.flatMap(e => [e.wsId, JSON.stringify(e.data), e.savedAt]);
+    await this.query(`
+      INSERT INTO perf_cache_leads (ws_id, data, saved_at)
+      VALUES ${vals}
+      ON CONFLICT (ws_id) DO UPDATE SET data=EXCLUDED.data, saved_at=EXCLUDED.saved_at
+    `, params);
+  }
+
+  async clearPerfCache() {
+    await this.query(`TRUNCATE perf_cache_daily, perf_cache_leads`);
+  }
+
+  // ── Revenue leads ──────────────────────────────────────────────────
+  // Bulk upsert all leads from the current PlusVibe sync so they survive
+  // workspace deletion.
+  async upsertRevenueLeads(leads) {
+    const valid = (leads || []).filter(l => l.lead_key);
+    if (!valid.length) return 0;
+    const sql = `
+      INSERT INTO revenue_leads
+        (lead_key, workspace_id, workspace_name, client_name, lead_email,
+         first_name, last_name, campaign, lead_price, date, label, pv_nonlead, updated_at)
+      SELECT
+        unnest($1::text[]),  unnest($2::text[]),    unnest($3::text[]),    unnest($4::text[]),
+        unnest($5::text[]),  unnest($6::text[]),    unnest($7::text[]),    unnest($8::text[]),
+        unnest($9::numeric[]), unnest($10::text[]), unnest($11::text[]),
+        unnest($12::boolean[]), NOW()
+      ON CONFLICT (lead_key) DO UPDATE SET
+        workspace_name = EXCLUDED.workspace_name,
+        client_name    = EXCLUDED.client_name,
+        lead_email     = EXCLUDED.lead_email,
+        first_name     = EXCLUDED.first_name,
+        last_name      = EXCLUDED.last_name,
+        campaign       = EXCLUDED.campaign,
+        lead_price     = EXCLUDED.lead_price,
+        date           = EXCLUDED.date,
+        label          = EXCLUDED.label,
+        pv_nonlead     = EXCLUDED.pv_nonlead,
+        updated_at     = NOW()
+    `;
+    const r = await this.query(sql, [
+      valid.map(l => l.lead_key),
+      valid.map(l => l.workspace_id    || ''),
+      valid.map(l => l.workspace_name  || l.client_name || ''),
+      valid.map(l => l.client_name     || ''),
+      valid.map(l => l.lead_email      || ''),
+      valid.map(l => l.first_name      || ''),
+      valid.map(l => l.last_name       || ''),
+      valid.map(l => l.campaign        || ''),
+      valid.map(l => l.lead_price      || 0),
+      valid.map(l => l.date            || ''),
+      valid.map(l => l.label           || ''),
+      valid.map(l => Boolean(l.pv_nonlead)),
+    ]);
+    return r.rowCount || 0;
+  }
+
+  // Return persisted leads whose workspace_id is not in the current live set.
+  async getDeletedWorkspaceLeads(liveWsIds) {
+    const live = [...(liveWsIds || [])].filter(Boolean);
+    const r = live.length
+      ? await this.query(`SELECT * FROM revenue_leads WHERE workspace_id != ALL($1::text[])`, [live])
+      : await this.query(`SELECT * FROM revenue_leads`);
+    return r.rows;
+  }
+
+  // ── Manual revenue entries ─────────────────────────────────────────
+  async listManualRevenueEntries(month) {
+    const r = month
+      ? await this.query(`SELECT * FROM revenue_manual_entries WHERE month = $1 ORDER BY created_at`, [month])
+      : await this.query(`SELECT * FROM revenue_manual_entries ORDER BY month DESC, created_at`);
+    return r.rows;
+  }
+
+  async createManualRevenueEntry({ workspace_id, month, lead_count, price_per_lead, note }) {
+    const r = await this.query(
+      `INSERT INTO revenue_manual_entries (workspace_id, month, lead_count, price_per_lead, note)
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [workspace_id, month, lead_count, price_per_lead, note || null]
+    );
+    return r.rows[0];
+  }
+
+  async deleteManualRevenueEntry(id) {
+    const r = await this.query(
+      `DELETE FROM revenue_manual_entries WHERE id = $1 RETURNING id`,
+      [id]
+    );
+    return r.rowCount > 0;
+  }
+}
+
+module.exports = PostgresDatabase;

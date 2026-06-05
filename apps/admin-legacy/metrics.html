@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Metrics — Ottaly</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<style>
+  :root{--navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--green:#16a34a;--red:#dc2626;--amber:#d97706;--border:#E5E7EB;--card:#fff;--bg:#F8F9FC;--muted:#6B7280}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--navy-dark);min-height:100vh}
+  header{background:var(--navy-dark);padding:.75rem 2rem;border-bottom:3px solid var(--teal);display:flex;align-items:center;gap:2rem;position:sticky;top:0;z-index:200}
+  header nav{flex:1;min-width:0;overflow:hidden}
+  .page{max-width:1900px;margin:0 auto;padding:1.25rem 1rem}
+
+  .top-bar{display:flex;align-items:center;gap:1rem;margin-bottom:.75rem;flex-wrap:wrap}
+  .page-title{font-family:'Genos',sans-serif;font-size:1.4rem;font-weight:800;color:var(--navy-dark)}
+  .sub{font-size:11.5px;color:var(--muted)}
+  .btn{padding:7px 14px;border:1.5px solid var(--navy);background:var(--navy);color:#fff;border-radius:8px;font:600 12.5px Inter,sans-serif;cursor:pointer}
+  .btn:disabled{opacity:.6;cursor:not-allowed}
+
+  .section{background:var(--card);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:1rem}
+  .section-head{padding:.5rem .85rem;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap}
+  .section-title{font-family:'Genos',sans-serif;font-size:1rem;font-weight:800;color:var(--navy-dark)}
+  .section-sub{font-size:10.5px;color:var(--muted)}
+
+  /* Source-of-truth legend at top */
+  .legend{background:#FFF;border:1px solid var(--border);border-left:3px solid var(--teal);border-radius:8px;padding:.7rem .9rem;margin-bottom:.85rem;font-size:12px;line-height:1.5;color:var(--navy-dark)}
+  .legend b{color:var(--teal)}
+  .legend code{background:#F3F4F6;padding:1px 5px;border-radius:3px;font-size:11px;font-family:'SF Mono','Menlo',monospace}
+
+  table{width:100%;border-collapse:collapse;font-size:11.5px}
+  th{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.25px;color:var(--muted);padding:.3rem .4rem;text-align:right;background:#FAFAFA;border-bottom:1px solid var(--border);white-space:nowrap;cursor:pointer;user-select:none}
+  th:first-child{text-align:left}
+  th:hover{color:var(--navy-dark);background:#F3F4F6}
+  th.sorted{color:var(--navy-dark);background:#E5EFEF}
+  th .arrow{font-size:9px;color:var(--teal);margin-left:2px}
+  td{padding:.25rem .4rem;font-size:11.5px;border-bottom:1px solid #F3F4F6;vertical-align:middle;text-align:right;font-weight:600;white-space:nowrap}
+  td:first-child{text-align:left}
+  tr:last-child td{border-bottom:none}
+  tr:hover td{background:#F8F9FC}
+
+  .seg{font-weight:600;color:var(--navy-dark);font-size:11.5px;max-width:140px;overflow:hidden;text-overflow:ellipsis;display:inline-block;vertical-align:middle}
+  .muted{color:var(--muted);font-weight:500}
+  .empty{text-align:center;padding:3rem 1rem;color:var(--muted);font-size:14px}
+  .loading{text-align:center;padding:2rem;color:var(--muted);font-size:13px}
+
+  @media(max-width:768px){
+    header{padding:.75rem 1rem;flex-wrap:wrap;gap:.5rem}
+    .page{padding:1rem}
+    .table-wrap{overflow-x:auto}
+    table{min-width:1200px}
+  }
+</style>
+</head>
+<body>
+
+<script src="/nav.js" defer></script>
+
+<div class="page">
+  <div class="top-bar">
+    <div>
+      <div class="page-title">Central Metrics</div>
+      <div class="sub" id="generatedAt">—</div>
+    </div>
+    <button class="btn" id="refreshBtn" onclick="refreshStats()" style="margin-left:auto">↻ Refresh stats</button>
+    <span id="refreshStatus" style="font-size:12px;color:var(--muted)"></span>
+  </div>
+
+  <div class="legend">
+    Single source of truth. Every other page (Capacity, Audience, Health, Mailboxes) reads from here.
+    <b>Lead counts</b> come from <code>revenueCache</code> (Revenue page = original source; PlusVibe <code>/lead/workspace-leads?label=X</code> for LEAD/MEETING_BOOKED/MEETING_COMPLETED/CLOSED/ADDED_TO_ZOHO/AWAITING_REPLY/WEAK_LEAD, minus user-marked non-leads).
+    <b>Sends</b> from <code>email_events</code> + <code>campaignCache.totalSent</code>.
+    <b>Mailboxes</b> from <code>_mailboxCache</code> (PV <code>/account/email-accounts</code>).
+    <b>Avg/mo</b> = lifetime ÷ days_active × 30 (days_active = earliest of: client created_at, first lead date).
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <div>
+        <div class="section-title">Per-Workspace Metrics</div>
+        <div class="section-sub">Sorted by leads (lifetime) desc · click any header to re-sort</div>
+      </div>
+    </div>
+    <div class="table-wrap" id="tableWrap">
+      <div class="loading">Loading…</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const SORT = { col: 'leads_lifetime', dir: -1 };
+let DATA = null;
+
+async function init() {
+  try {
+    const r = await fetch('/api/metrics').then(r => r.json());
+    if (r.error) {
+      document.getElementById('tableWrap').innerHTML = `<div class="empty">${esc(r.error)}</div>`;
+      return;
+    }
+    DATA = r;
+    render();
+  } catch (e) {
+    document.getElementById('tableWrap').innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+  }
+}
+
+const COLS = [
+  ['workspace_name',         'Client'],
+  ['client_status',          'Status'],
+  ['days_since_start',       'Days'],
+  ['leads_lifetime',         'Leads (life)'],
+  ['leads_30d',              'Leads 30d'],
+  ['leads_90d',              'Leads 90d'],
+  ['leads_monthly_avg_3mo',  'Leads/mo'],
+  ['sent_lifetime',          'Sent (life)'],
+  ['sent_30d',               'Sent 30d'],
+  ['sent_90d',               'Sent 90d'],
+  ['sent_monthly_avg_3mo',   'Sent/mo'],
+  ['lpt_lifetime',           'LPT (life)'],
+  ['lpt_90d',                'LPT 90d'],
+  ['mailbox_count',          'MBs'],
+  ['domain_count',           'Domains'],
+  ['mailbox_monthly_capacity','Cap/mo'],
+  ['bounces_30d',            'Bounce 30d'],
+  ['bounce_rate_30d',        'Bounce %'],
+  ['lead_target_monthly',    'Target/mo'],
+  ['mailbox_gap',            'Gap'],
+];
+
+function render() {
+  const { workspaces } = DATA;
+  document.getElementById('generatedAt').textContent =
+    workspaces.length
+      ? `${workspaces.length} workspaces · oldest snapshot ${oldestSnap(workspaces)}`
+      : 'no data yet — click Refresh stats';
+
+  const sorted = workspaces.slice().sort((a, b) => {
+    let va = a[SORT.col], vb = b[SORT.col];
+    if (SORT.col === 'workspace_name' || SORT.col === 'client_status') {
+      return String(va || '').localeCompare(String(vb || '')) * SORT.dir;
+    }
+    if (va == null) va = -Infinity;
+    if (vb == null) vb = -Infinity;
+    return (va - vb) * SORT.dir;
+  });
+
+  const arrow = (col) => col === SORT.col ? ` <span class="arrow">${SORT.dir === 1 ? '▲' : '▼'}</span>` : '';
+  const sortedCls = (col) => col === SORT.col ? 'sorted' : '';
+
+  document.getElementById('tableWrap').innerHTML = `
+    <table>
+      <thead>
+        <tr>${COLS.map(([k, l]) =>
+          `<th class="${sortedCls(k)}" onclick="setSort('${k}')">${l}${arrow(k)}</th>`
+        ).join('')}</tr>
+      </thead>
+      <tbody>
+        ${sorted.map(w => `
+          <tr>
+            <td><span class="seg" title="${esc(w.workspace_name)}">${esc(w.workspace_name)}</span></td>
+            <td><span class="muted">${esc(w.client_status || '—')}</span></td>
+            <td>${w.days_since_start ?? '—'}</td>
+            <td>${fmt(w.leads_lifetime)}</td>
+            <td>${fmt(w.leads_30d)}</td>
+            <td>${fmt(w.leads_90d)}</td>
+            <td><b>${(w.leads_monthly_avg_3mo ?? 0).toFixed(1)}</b></td>
+            <td>${fmt(w.sent_lifetime)}</td>
+            <td>${fmt(w.sent_30d)}</td>
+            <td>${fmt(w.sent_90d)}</td>
+            <td><b>${fmt(w.sent_monthly_avg_3mo)}</b></td>
+            <td>${w.lpt_lifetime != null ? w.lpt_lifetime.toFixed(2) : '—'}</td>
+            <td>${w.lpt_90d != null ? w.lpt_90d.toFixed(2) : '—'}</td>
+            <td>${w.mailbox_count}</td>
+            <td>${w.domain_count}</td>
+            <td>${fmt(w.mailbox_monthly_capacity)}</td>
+            <td>${fmt(w.bounces_30d)}</td>
+            <td>${w.bounce_rate_30d != null ? w.bounce_rate_30d.toFixed(2) + '%' : '—'}</td>
+            <td>${w.lead_target_monthly || '—'}</td>
+            <td style="color:${w.mailbox_gap > 0 ? 'var(--red)' : w.mailbox_gap < 0 ? 'var(--amber)' : 'var(--green)'}">${w.mailbox_gap == null ? '—' : (w.mailbox_gap > 0 ? '+' + w.mailbox_gap : w.mailbox_gap)}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>`;
+}
+
+function setSort(col) {
+  if (SORT.col === col) SORT.dir = -SORT.dir;
+  else { SORT.col = col; SORT.dir = (col === 'workspace_name' || col === 'client_status') ? 1 : -1; }
+  render();
+}
+
+function oldestSnap(ws) {
+  const ts = ws.map(w => w.computed_at).filter(Boolean).map(s => new Date(s).getTime());
+  if (!ts.length) return 'never';
+  const oldest = new Date(Math.min(...ts));
+  return oldest.toLocaleTimeString();
+}
+
+async function refreshStats() {
+  const btn = document.getElementById('refreshBtn');
+  const status = document.getElementById('refreshStatus');
+  btn.disabled = true; btn.textContent = 'Refreshing…';
+  status.textContent = 'Recomputing for all clients (10–30 s)…';
+  try {
+    await fetch('/api/metrics/refresh', { method: 'POST' });
+    // Poll until any computed_at moves forward
+    let waited = 0;
+    const before = DATA?.workspaces?.[0]?.computed_at;
+    while (waited < 60000) {
+      await new Promise(r => setTimeout(r, 3000));
+      waited += 3000;
+      const r = await fetch('/api/metrics').then(r => r.json());
+      if (r.workspaces?.[0]?.computed_at !== before) {
+        DATA = r;
+        render();
+        status.textContent = `Done — refreshed at ${new Date().toLocaleTimeString()}.`;
+        break;
+      }
+    }
+  } catch (e) {
+    status.textContent = 'Failed: ' + e.message;
+  }
+  btn.disabled = false; btn.textContent = '↻ Refresh stats';
+}
+
+function fmt(n) { return (n || 0).toLocaleString(); }
+function esc(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+init();
+</script>
+</body>
+</html>

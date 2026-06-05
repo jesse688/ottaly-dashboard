@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git *)",
+      "Bash(node *)",
+      "Bash(curl *)",
+      "Bash(psql *)",
+      "Bash(lsof *)",
+      "WebFetch",
+      "Bash(sqlite3 *)",
+      "mcp__claude_ai_PlusVibe__get_emails",
+      "mcp__claude_ai_PlusVibe__list_all_leads",
+      "mcp__claude_ai_PlusVibe__get_workspaces",
+      "mcp__claude_ai_PlusVibe__get_analytics_stats",
+      "mcp__claude_ai_PlusVibe__get_campaign_stats",
+      "mcp__claude_ai_PlusVibe__find_lead_by_email"
+    ],
+    "defaultMode": "bypassPermissions"
+  }
+}

@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="theme-color" content="#050C29">
+<title>CM Workload — Ottaly</title>
+<script>document.write('<script src="/splash.js?v=' + Date.now() + '"><\/script>');</script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<script src="/nav.js" defer></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--bg:#F0F2F8;--card:#fff;--border:#E2E6F0;--text:#050C29;--muted:#6B7280;--green:#16A34A;--red:#DC2626;--amber:#D97706}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+.page{max-width:1300px;margin:0 auto;padding:1.5rem}
+.card{background:var(--card);border-radius:12px;border:1px solid var(--border);padding:1.25rem;margin-bottom:1rem}
+.btn{padding:7px 16px;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;border:none;transition:all .15s}
+.btn-primary{background:var(--navy);color:#fff}
+.btn-primary:hover{background:#1a3370}
+.btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--border)}
+.btn-ghost:hover{background:var(--bg)}
+
+/* Summary cards */
+.cm-cards{display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:1.25rem}
+.cm-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:1rem 1.25rem;min-width:180px;flex:1}
+.cm-card-name{font-size:14px;font-weight:700;margin-bottom:4px}
+.cm-card-stat{font-size:12px;color:var(--muted)}
+.cm-card-stat span{font-weight:600;color:var(--text)}
+
+/* Assignment grid */
+.grid-wrap{overflow-x:auto;border-radius:8px;border:1px solid var(--border)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead tr{background:#F8F9FC;border-bottom:2px solid var(--border)}
+th{padding:10px 14px;text-align:left;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);white-space:nowrap}
+th.cm-col{text-align:center;min-width:160px;color:var(--navy)}
+tbody tr{border-bottom:1px solid var(--border)}
+tbody tr:hover{background:#F8F9FC}
+td{padding:10px 14px;vertical-align:middle}
+td.cm-cell{text-align:center}
+
+/* Toggle */
+.toggle-wrap{display:flex;flex-direction:column;align-items:center;gap:4px}
+.toggle{position:relative;display:inline-block;width:40px;height:22px;cursor:pointer}
+.toggle input{opacity:0;width:0;height:0;position:absolute}
+.toggle-slider{position:absolute;inset:0;background:#ef4444;border-radius:11px;transition:background .2s}
+.toggle input:checked + .toggle-slider{background:#22c55e}
+.toggle-slider:before{content:'';position:absolute;width:16px;height:16px;background:#fff;border-radius:50%;top:3px;left:3px;transition:transform .2s;box-shadow:0 1px 3px rgba(0,0,0,.2)}
+.toggle input:checked + .toggle-slider:before{transform:translateX(18px)}
+.rate-input{width:58px;padding:3px 6px;border:1px solid var(--border);border-radius:5px;font-size:12px;font-weight:600;text-align:center;color:var(--teal);outline:none}
+.rate-input:focus{border-color:var(--teal)}
+.rate-input:disabled{opacity:.35;background:#f3f4f6}
+
+/* Status badge */
+.status-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px}
+.dot-active{background:var(--green)}
+.dot-inactive{background:#d1d5db}
+
+/* Unassigned column */
+.unassigned{font-size:11px;color:#d1d5db;font-style:italic}
+</style>
+</head>
+<body>
+<div class="page">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem">
+    <div>
+      <h1 style="font-size:1.3rem;font-weight:700">CM Workload</h1>
+      <div style="font-size:12px;color:var(--muted);margin-top:2px">Assign clients to campaign managers and set per-client commission rates</div>
+    </div>
+    <div id="saveStatus" style="font-size:12px;color:var(--green);display:none">✓ Saved</div>
+  </div>
+
+  <!-- View-only banner for managers -->
+  <div id="viewOnlyBanner" style="display:none;background:#fefce8;border:1px solid #fde047;border-radius:8px;padding:10px 14px;margin-bottom:1rem;font-size:12px;color:#854d0e;">
+    View only — only admins can assign clients and set commission rates.
+  </div>
+
+  <!-- CM Summary Cards -->
+  <div class="cm-cards" id="cmCards"></div>
+
+  <!-- CM Performance Stats -->
+  <div class="card" style="margin-bottom:1rem">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:.75rem">
+      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)">CM Performance</div>
+      <div style="display:flex;align-items:center;gap:.75rem">
+        <select id="statsPeriod" onchange="loadStats()" style="padding:5px 10px;border-radius:6px;border:1px solid var(--border);font-size:12px;font-weight:500">
+          <option value="this_month">This Month</option>
+          <option value="last_month">Last Month</option>
+          <option value="this_year">This Year</option>
+          <option value="all_time">All Time</option>
+        </select>
+        <span id="statsPeriodLabel" style="font-size:12px;color:var(--muted)"></span>
+      </div>
+    </div>
+    <div style="overflow-x:auto">
+      <table id="cmStatsTable" style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead>
+          <tr style="background:#F8F9FC;border-bottom:2px solid var(--border)">
+            <th style="padding:9px 12px;text-align:left;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)">CM</th>
+            <th style="padding:9px 12px;text-align:center;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)">Clients</th>
+            <th style="padding:9px 12px;text-align:center;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)">Sent</th>
+            <th style="padding:9px 12px;text-align:center;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)">Replies</th>
+            <th style="padding:9px 12px;text-align:center;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)">Reply Rate</th>
+            <th style="padding:9px 12px;text-align:center;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)">Leads</th>
+            <th style="padding:9px 12px;text-align:center;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)">LTL%</th>
+            <th style="padding:9px 12px;text-align:center;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)">Bounced</th>
+          </tr>
+        </thead>
+        <tbody id="cmStatsBody"><tr><td colspan="8" style="text-align:center;padding:1.5rem;color:var(--muted)">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Assignment Grid -->
+  <div class="card" style="padding:0;overflow:hidden">
+    <div class="grid-wrap">
+      <table id="workloadTable">
+        <thead id="tableHead"></thead>
+        <tbody id="tableBody"><tr><td colspan="10" style="text-align:center;padding:2rem;color:var(--muted)">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+let managers = [], clients = [], assignments = {}, isViewOnly = false, defaultRate = 5;
+
+async function load() {
+  // Resolve session and workload data in parallel — session must be known before rendering
+  const [sessionRes, workloadRes] = await Promise.all([
+    fetch('/api/session').then(r => r.json()).catch(() => ({})),
+    fetch('/api/admin/workload').then(r => r.json()),
+  ]);
+
+  isViewOnly = sessionRes?.role === 'manager';
+  if (isViewOnly) document.getElementById('viewOnlyBanner').style.display = '';
+
+  const d = workloadRes;
+  managers    = d.managers    || [];
+  clients     = d.clients     || [];
+  defaultRate = d.defaultRate ?? 5;
+  assignments = {};
+  (d.assignments || []).forEach(a => {
+    if (!assignments[a.client_workspace_id]) assignments[a.client_workspace_id] = {};
+    assignments[a.client_workspace_id][a.manager_name] = a.commission_rate;
+  });
+  render();
+}
+
+function render() {
+  renderCards();
+  renderTable();
+}
+
+function renderCards() {
+  const el = document.getElementById('cmCards');
+  if (!managers.length) { el.innerHTML = '<div style="color:var(--muted);font-size:13px">No managers yet — add them in Admin Settings</div>'; return; }
+  el.innerHTML = managers.map(m => {
+    const assigned       = clients.filter(c => assignments[c.workspace_id]?.[m.name] !== undefined);
+    const activeAssigned = assigned.filter(c => c.client_status !== 'inactive');
+    const inactive       = assigned.length - activeAssigned.length;
+    const rate           = m.commission_rate ?? defaultRate;
+    return `<div class="cm-card" style="border-top:3px solid var(--teal)">
+      <div class="cm-card-name">${m.name}</div>
+      <div class="cm-card-stat">Total clients: <span>${assigned.length}</span></div>
+      <div class="cm-card-stat">Active: <span>${activeAssigned.length}</span></div>
+      ${inactive ? `<div class="cm-card-stat" style="color:var(--muted)">Inactive: <span>${inactive}</span></div>` : ''}
+    </div>`;
+  }).join('');
+
+  // Unassigned count
+  const unassigned = clients.filter(c => !managers.some(m => assignments[c.workspace_id]?.[m.name] !== undefined));
+  if (unassigned.length) {
+    document.getElementById('cmCards').insertAdjacentHTML('beforeend',
+      `<div class="cm-card" style="border-top:3px solid #d1d5db">
+        <div class="cm-card-name" style="color:var(--muted)">Unassigned</div>
+        <div class="cm-card-stat">Clients: <span>${unassigned.length}</span></div>
+      </div>`);
+  }
+}
+
+function renderTable() {
+  const head = document.getElementById('tableHead');
+  const body = document.getElementById('tableBody');
+
+  head.innerHTML = `<tr>
+    <th>Client</th>
+    <th>Status</th>
+    <th>Live Date</th>
+    <th>£/Lead</th>
+    ${managers.map(m => `<th class="cm-col">${m.name}</th>`).join('')}
+  </tr>`;
+
+  if (!clients.length) { body.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:2rem;color:var(--muted)">No clients</td></tr>'; return; }
+
+  body.innerHTML = clients.map(c => {
+    const isActive = c.client_status !== 'inactive';
+    const cmCells = managers.map(m => {
+      const assigned = assignments[c.workspace_id]?.[m.name] !== undefined;
+      const rate = assigned ? (assignments[c.workspace_id][m.name] ?? 0) : '';
+      const readonly = isViewOnly ? 'disabled' : '';
+      return `<td class="cm-cell">
+        <label class="toggle" style="${isViewOnly ? 'opacity:.6;cursor:default;pointer-events:none' : ''}">
+          <input type="checkbox" ${assigned ? 'checked' : ''} ${readonly}
+            onchange="toggleAssign('${c.workspace_id}', '${m.name}', this)">
+          <span class="toggle-slider"></span>
+        </label>
+      </td>`;
+    }).join('');
+
+    const today = new Date().toISOString().slice(0,10);
+    const liveDate = c.manager_start_date || null;
+    const isLive = liveDate && liveDate <= today;
+    const liveDateStr = liveDate ? new Date(liveDate + 'T00:00:00').toLocaleDateString('en-GB', {day:'numeric',month:'short',year:'2-digit'}) : '—';
+    const liveColor = !liveDate ? 'var(--muted)' : isLive ? 'var(--green)' : 'var(--red)';
+    const liveDot = liveDate ? `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${liveColor};margin-right:5px;flex-shrink:0"></span>` : '';
+
+    return `<tr>
+      <td style="font-weight:600">${c.workspace_name}</td>
+      <td><span class="status-dot ${isActive ? 'dot-active' : 'dot-inactive'}"></span>${isActive ? 'Active' : 'Inactive'}</td>
+      <td style="color:${liveColor};white-space:nowrap">${liveDot}${liveDateStr}</td>
+      <td style="color:var(--muted)">£${c.price_per_lead || 0}</td>
+      ${cmCells}
+    </tr>`;
+  }).join('');
+}
+
+async function toggleAssign(workspaceId, managerName, checkbox) {
+  if (isViewOnly) { checkbox.checked = !checkbox.checked; return; } // block
+  if (checkbox.checked) {
+    const r = await fetch('/api/admin/workload/assign', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_workspace_id: workspaceId, manager_name: managerName }),
+    });
+    const d = await r.json();
+    if (!assignments[workspaceId]) assignments[workspaceId] = {};
+    assignments[workspaceId][managerName] = d.commission_rate ?? 0;
+  } else {
+    if (assignments[workspaceId]) delete assignments[workspaceId][managerName];
+    await fetch('/api/admin/workload/assign', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_workspace_id: workspaceId, manager_name: managerName }),
+    });
+  }
+  // Reload to get updated auto-split rates for all CMs on this client
+  await load();
+  flashSaved();
+}
+
+let rateTimer = null;
+function updateRate(workspaceId, managerName, value) {
+  if (isViewOnly) return; // block
+  if (!assignments[workspaceId]) assignments[workspaceId] = {};
+  assignments[workspaceId][managerName] = parseFloat(value) || 0;
+  clearTimeout(rateTimer);
+  rateTimer = setTimeout(async () => {
+    await fetch('/api/admin/workload/commission', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_workspace_id: workspaceId, manager_name: managerName, commission_rate: parseFloat(value) || 0 }),
+    });
+    renderCards();
+    flashSaved();
+  }, 600);
+}
+
+function flashSaved() {
+  const el = document.getElementById('saveStatus');
+  el.style.display = '';
+  clearTimeout(window._saveTimer);
+  window._saveTimer = setTimeout(() => { el.style.display = 'none'; }, 2000);
+}
+
+// Auto-recalculate split rates on load to keep workload grid in sync
+fetch('/api/admin/workload/recalc', { method: 'POST' }).then(() => load()).catch(() => load());
+loadStats();
+
+function getPeriodDates() {
+  const now = new Date();
+  const p = document.getElementById('statsPeriod')?.value || 'this_month';
+  const pad = n => String(n).padStart(2,'0');
+  const today = now.toISOString().slice(0,10);
+  if (p === 'this_month') {
+    const s = `${now.getFullYear()}-${pad(now.getMonth()+1)}-01`;
+    document.getElementById('statsPeriodLabel').textContent = now.toLocaleString('default',{month:'long',year:'numeric'});
+    return { start: s, end: today };
+  }
+  if (p === 'last_month') {
+    const d = new Date(now.getFullYear(), now.getMonth()-1, 1);
+    const last = new Date(now.getFullYear(), now.getMonth(), 0);
+    document.getElementById('statsPeriodLabel').textContent = d.toLocaleString('default',{month:'long',year:'numeric'});
+    return { start: d.toISOString().slice(0,10), end: last.toISOString().slice(0,10) };
+  }
+  if (p === 'this_year') {
+    document.getElementById('statsPeriodLabel').textContent = String(now.getFullYear());
+    return { start: `${now.getFullYear()}-01-01`, end: today };
+  }
+  document.getElementById('statsPeriodLabel').textContent = 'All time';
+  return { start: '2020-01-01', end: today };
+}
+
+async function loadStats() {
+  const { start, end } = getPeriodDates();
+  try {
+    const r = await fetch(`/api/admin/workload/cm-stats?start=${start}&end=${end}`);
+    const d = await r.json();
+    const tbody = document.getElementById('cmStatsBody');
+    const entries = Object.entries(d.stats || {});
+    if (!entries.length) { tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:1.5rem;color:var(--muted)">No managers yet</td></tr>'; return; }
+    tbody.innerHTML = entries.map(([name, s]) => {
+      const rr = parseFloat(s.reply_rate);
+      const rrColor = isNaN(rr) ? 'var(--muted)' : rr >= 4 ? 'var(--green)' : rr >= 2 ? 'var(--amber)' : 'var(--red)';
+      return `<tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:10px 12px;font-weight:600">${name}</td>
+        <td style="padding:10px 12px;text-align:center">${s.clients}</td>
+        <td style="padding:10px 12px;text-align:center;color:var(--muted)">${(s.sent||0).toLocaleString()}</td>
+        <td style="padding:10px 12px;text-align:center">${(s.replies||0).toLocaleString()}</td>
+        <td style="padding:10px 12px;text-align:center;font-weight:700;color:${rrColor}">${isNaN(rr) ? '—' : rr+'%'}</td>
+        <td style="padding:10px 12px;text-align:center;font-weight:600;color:var(--teal)">${(s.leads||0).toLocaleString()}</td>
+        <td style="padding:10px 12px;text-align:center;color:var(--muted)">${s.ltl || '—'}</td>
+        <td style="padding:10px 12px;text-align:center;color:${(s.bounced||0) > 0 ? 'var(--red)' : 'var(--muted)'}">${(s.bounced||0).toLocaleString()}</td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    document.getElementById('cmStatsBody').innerHTML = `<tr><td colspan="8" style="text-align:center;padding:1rem;color:var(--muted)">Stats unavailable</td></tr>`;
+  }
+}
+</script>
+</body>
+</html>

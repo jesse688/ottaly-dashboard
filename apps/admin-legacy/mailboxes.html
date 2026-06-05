@@ -1,0 +1,1679 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/favicon.svg">
+<meta name="theme-color" content="#050C29">
+<meta name="description" content="Ottaly Mailboxes — every sending mailbox with supplier and provider trends">
+<title>Ottaly — Mailboxes</title>
+<script>document.write('<script src="/splash.js?v=' + Date.now() + '"><\/script>');</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--purple:#7C89CD;
+  --yellow:#FFB700;--white:#fff;--bg:#F0F2F8;--card:#fff;
+  --border:#E2E6F0;--text:#050C29;--muted:#6B7280;
+  --green:#16A34A;--red:#DC2626;--amber:#D97706;
+}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text)}
+.header{background:var(--navy-dark);padding:1rem 2rem;border-bottom:3px solid var(--teal);display:flex;align-items:center;justify-content:space-between}
+.page{max-width:1900px;margin:0 auto;padding:1.25rem 1.5rem}
+.page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem;flex-wrap:wrap;gap:0.75rem}
+.page-title{font-size:1.4rem;font-weight:700}
+.page-sub{font-size:13px;color:var(--muted);margin-top:2px}
+
+.section-h{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin:1.25rem 0 0.5rem}
+.section-h:first-of-type{margin-top:0}
+
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem}
+.gridN{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1rem}
+.stat-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1rem 1.25rem;border-top:3px solid var(--navy)}
+.stat-card.maildoso{border-top-color:#10B981}
+.stat-card.mithun  {border-top-color:#F59E0B}
+.stat-card.winnr   {border-top-color:#6366F1}
+.stat-card.unassigned{border-top-color:#9CA3AF}
+.stat-card.google   {border-top-color:#EA4335}
+.stat-card.microsoft{border-top-color:#0078D4}
+.stat-card.smtp     {border-top-color:#475569}
+.stat-card .label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+.stat-card .val{font-size:1.5rem;font-weight:700;margin-top:4px}
+.stat-card .sub{font-size:11px;color:var(--muted);margin-top:6px;line-height:1.4}
+.stat-card .bar{display:flex;height:6px;border-radius:3px;background:#F3F4F6;overflow:hidden;margin-top:8px}
+.stat-card .bar > div{height:100%}
+
+.toolbar{display:flex;gap:0.6rem;margin:0.75rem 0 1rem;flex-wrap:wrap;align-items:center}
+.search-wrap{position:relative;flex:1;min-width:240px}
+.search-wrap input{width:100%;padding:8px 12px 8px 36px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:#fff;outline:none}
+.search-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:15px}
+.toolbar select{padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:#fff;outline:none;min-width:140px}
+.btn{padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;border:none;transition:all 0.15s}
+.btn:disabled{opacity:.6;cursor:not-allowed}
+.btn-primary{background:var(--navy);color:#fff}
+.btn-primary:hover:not(:disabled){background:#1a3370}
+.btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--border)}
+.btn-ghost:hover:not(:disabled){background:var(--bg);color:var(--text)}
+
+.bulk-bar{display:none;align-items:center;gap:.6rem;background:#EEF2FF;border:1px solid #C7D2FE;padding:.6rem .9rem;border-radius:10px;margin-bottom:.75rem;flex-wrap:wrap}
+.bulk-bar.show{display:flex}
+.bulk-bar .count{font-weight:700;color:var(--navy)}
+
+.table-wrap{background:var(--card);border-radius:12px;border:1px solid var(--border);overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:12px}
+thead{background:#F8F9FC;position:sticky;top:0;z-index:1}
+th{padding:8px 8px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);border-bottom:1px solid var(--border);white-space:nowrap}
+td{padding:7px 8px;border-bottom:1px solid var(--border);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#FAFBFF}
+.email-cell{font-weight:600}
+.sub-cell{font-size:11px;color:var(--muted);margin-top:2px}
+.pill{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;text-transform:capitalize}
+.pill-good{background:#D1FAE5;color:#065F46}
+.pill-warn{background:#FEF3C7;color:#92400E}
+.pill-bad {background:#FEE2E2;color:#991B1B}
+.pill-gray{background:#F3F4F6;color:#4B5563}
+.pill-google   {background:#FEE2E2;color:#991B1B}
+.pill-microsoft{background:#DBEAFE;color:#1E40AF}
+.pill-smtp     {background:#F1F5F9;color:#334155}
+.tag-input{padding:3px 4px;border:1px solid var(--border);border-radius:6px;font-size:11px;background:#fff;outline:none;min-width:90px;max-width:110px}
+.empty{text-align:center;padding:3rem;color:var(--muted)}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--navy);border-radius:50%;animation:spin .8s linear infinite;vertical-align:-2px;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.toast{position:fixed;bottom:1.5rem;right:1.5rem;background:var(--navy-dark);color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;font-weight:500;opacity:0;transform:translateY(10px);transition:all .3s;z-index:9999}
+.toast.show{opacity:1;transform:translateY(0)}
+
+@media(max-width:1024px){
+  .grid3{grid-template-columns:1fr 1fr}
+}
+@media(max-width:768px){
+  .header{padding:.75rem 1rem}
+  .page{padding:1rem}
+  .page-header{flex-direction:column;align-items:flex-start}
+  .page-header > div:last-child{width:100%;justify-content:flex-start;flex-wrap:wrap}
+  .grid3{grid-template-columns:1fr 1fr}
+  .gridN{grid-template-columns:1fr 1fr}
+  .toolbar{flex-wrap:wrap}
+  .search-wrap{min-width:0;width:100%}
+  .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .bulk-bar{flex-wrap:wrap}
+}
+@media(max-width:480px){
+  .grid3,.gridN{grid-template-columns:1fr}
+}
+</style>
+    <script src="/nav.js" defer></script>
+</head>
+<body>
+
+
+<div class="page">
+  <div class="page-header">
+    <div>
+      <div class="page-title">Mailboxes</div>
+      <div class="page-sub">Every sending mailbox across all clients. Assign each one a supplier (Maildoso / Mithun / Winnr) and compare performance by supplier and by type.</div>
+    </div>
+    <div style="display:flex;gap:.5rem;align-items:center">
+      <span id="lastRun" style="font-size:12px;color:var(--muted)"></span>
+      <button class="btn btn-ghost" onclick="openAssignModal()">⇪ Bulk assign</button>
+      <button class="btn btn-ghost" onclick="openBillingModal()">📅 Set billing</button>
+      <button class="btn btn-primary" id="refreshBtn" onclick="refreshAll()">↻ Refresh</button>
+    </div>
+  </div>
+
+  <!-- Top-line summary -->
+  <div class="grid3" id="summary"></div>
+
+  <!-- Not-on-warmup alert -->
+  <div id="noWarmupBanner" style="display:none;background:#FFFBEB;border:1px solid #FCD34D;border-left:4px solid #F59E0B;border-radius:10px;padding:1rem 1.25rem;margin-top:1rem">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem">
+      <div style="display:flex;align-items:center;gap:.6rem">
+        <span style="font-size:1.1rem">⚠️</span>
+        <span style="font-weight:700;color:#92400E" id="noWarmupHeading"></span>
+        <span style="font-size:12px;color:#78350F" id="noWarmupSub"></span>
+      </div>
+      <div style="display:flex;gap:.5rem;align-items:center">
+        <button class="btn" style="background:#F59E0B;color:#fff;padding:6px 14px;font-size:12px" id="enableAllWarmupBtn" onclick="enableAllWarmup()">Enable warmup for all</button>
+        <button onclick="document.getElementById('noWarmupList').style.display=document.getElementById('noWarmupList').style.display==='none'?'':'none'" style="background:none;border:1px solid #FCD34D;color:#92400E;border-radius:7px;padding:5px 10px;font-size:12px;cursor:pointer" id="noWarmupToggle">Show ▾</button>
+      </div>
+    </div>
+    <div id="noWarmupList" style="display:none;margin-top:.75rem;max-height:260px;overflow-y:auto;border:1px solid #FCD34D;border-radius:8px;background:#fff">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead style="background:#FEF3C7;position:sticky;top:0">
+          <tr>
+            <th style="padding:7px 12px;text-align:left;font-weight:600;color:#78350F">Mailbox</th>
+            <th style="padding:7px 12px;text-align:left;font-weight:600;color:#78350F">Client</th>
+            <th style="padding:7px 12px;text-align:left;font-weight:600;color:#78350F">Status</th>
+            <th style="padding:7px 12px;text-align:left;font-weight:600;color:#78350F">Warmup</th>
+            <th style="padding:7px 12px;text-align:right;font-weight:600;color:#78350F"></th>
+          </tr>
+        </thead>
+        <tbody id="noWarmupRows"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Stats: per supplier -->
+  <div class="section-h">By supplier — who performs best</div>
+  <div class="gridN" id="bySupplier"></div>
+
+  <!-- Supplier performance graphs -->
+  <div class="section-h" style="display:flex;align-items:center;justify-content:space-between;margin-top:1rem">
+    Supplier performance trends · 3-day rolling avg
+    <div style="display:flex;gap:.4rem">
+      <button id="mbPeriodToday" onclick="setMbPeriod('today')" style="padding:3px 10px;border:1px solid var(--border);background:#fff;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;color:var(--muted)">Today</button>
+      <button id="mbPeriod7d" onclick="setMbPeriod('7d')" style="padding:3px 10px;border:1px solid var(--navy-dark);background:var(--navy-dark);color:#fff;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer">7d</button>
+      <button id="mbPeriod14d" onclick="setMbPeriod('14d')" style="padding:3px 10px;border:1px solid var(--border);background:#fff;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;color:var(--muted)">14d</button>
+      <button id="mbPeriod30d" onclick="setMbPeriod('30d')" style="padding:3px 10px;border:1px solid var(--border);background:#fff;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;color:var(--muted)">30d</button>
+    </div>
+  </div>
+  <div id="supplierCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:1rem;margin-bottom:1rem"></div>
+
+  <!-- Provider type performance graphs -->
+  <div class="section-h" style="margin-top:1rem">Provider type performance trends · 3-day rolling avg</div>
+  <div id="providerCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:1rem;margin-bottom:1rem"></div>
+
+  <!-- Stats: per type -->
+  <div class="section-h">By type — Google vs Microsoft vs SMTP</div>
+  <div class="gridN" id="byType"></div>
+
+  <!-- Comparison: supplier × type -->
+  <div class="section-h" style="display:flex;align-items:center;justify-content:space-between">
+    Comparison · supplier × type
+    <span style="font-size:11px;font-weight:400;color:var(--muted)">Click column header to sort</span>
+  </div>
+  <div class="table-wrap" style="margin-bottom:1rem">
+    <table>
+      <thead>
+        <tr id="comparisonHead">
+          <th onclick="sortComparison('key')" style="cursor:pointer">Supplier · Type <span id="cSort_key"></span></th>
+          <th onclick="sortComparison('count')" style="text-align:right;cursor:pointer">Mailboxes <span id="cSort_count"></span></th>
+          <th onclick="sortComparison('active_pct')" style="text-align:right;cursor:pointer">Active <span id="cSort_active_pct"></span></th>
+          <th onclick="sortComparison('auth_clean_pct')" style="text-align:right;cursor:pointer">Auth clean <span id="cSort_auth_clean_pct"></span></th>
+          <th onclick="sortComparison('blacklist_listed_pct')" style="text-align:right;cursor:pointer">Blacklisted <span id="cSort_blacklist_listed_pct"></span></th>
+          <th onclick="sortComparison('total_sent')" style="text-align:right;cursor:pointer">Total sent <span id="cSort_total_sent"></span></th>
+          <th onclick="sortComparison('reply_rate')" style="text-align:right;cursor:pointer">Reply rate <span id="cSort_reply_rate"></span></th>
+          <th onclick="sortComparison('bounce_rate')" style="text-align:right;cursor:pointer">Bounce rate <span id="cSort_bounce_rate"></span></th>
+          <th onclick="sortComparison('avg_daily_limit')" style="text-align:right;cursor:pointer">Avg daily <span id="cSort_avg_daily_limit"></span></th>
+          <th onclick="sortComparison('total_monthly_cost')" style="text-align:right;cursor:pointer" title="Monthly cost">$/mo <span id="cSort_total_monthly_cost"></span></th>
+          <th onclick="sortComparison('attention_count')" style="text-align:right;cursor:pointer">Attention <span id="cSort_attention_count"></span></th>
+        </tr>
+      </thead>
+      <tbody id="comparisonRows"></tbody>
+    </table>
+  </div>
+
+  <!-- Pricing editor -->
+  <div class="section-h" style="display:flex;align-items:center;justify-content:space-between;margin-top:1.5rem">
+    Mailbox pricing
+    <button class="btn btn-ghost" style="font-size:12px;padding:4px 10px" onclick="addPricingRow()">+ Add row</button>
+  </div>
+  <div class="table-wrap" style="margin-bottom:1rem">
+    <table>
+      <thead><tr>
+        <th>Supplier</th><th>Type</th><th style="text-align:right">$/mailbox/mo</th><th>Notes</th><th></th>
+      </tr></thead>
+      <tbody id="pricingRows"></tbody>
+    </table>
+  </div>
+
+  <!-- Spreadsheet billing import -->
+  <div class="section-h" style="margin-top:1.5rem">Import billing dates from spreadsheet</div>
+  <div id="billingDropZone" style="border:2px dashed var(--border);border-radius:10px;padding:2rem;text-align:center;cursor:pointer;margin-bottom:.75rem;transition:border-color .15s,background .15s" onclick="document.getElementById('billingFileInput').click()" ondragover="billingDropOver(event)" ondragleave="billingDropLeave(event)" ondrop="billingDropFile(event)">
+    <div style="font-size:1.5rem;margin-bottom:.5rem">📂</div>
+    <div style="font-size:14px;font-weight:600;color:var(--text)">Drop spreadsheet here or click to browse</div>
+    <div style="font-size:12px;color:var(--muted);margin-top:4px">Accepts .xlsx, .xls, .csv — needs an Email column and a date column</div>
+    <input type="file" id="billingFileInput" accept=".xlsx,.xls,.csv" style="display:none" onchange="billingFileChosen(this.files[0])">
+  </div>
+
+  <!-- column mapper (hidden until file loaded) -->
+  <div id="billingMapRow" style="display:none;background:#f9fafb;border:1px solid var(--border);border-radius:10px;padding:1rem;margin-bottom:.75rem;display:none;gap:.75rem;align-items:end;flex-wrap:wrap">
+    <div>
+      <label style="font-size:12px;font-weight:600;color:var(--muted);display:block;margin-bottom:4px">Email column</label>
+      <select id="billingEmailCol" style="padding:7px 10px;border:1px solid var(--border);border-radius:7px;font-size:13px"></select>
+    </div>
+    <div>
+      <label style="font-size:12px;font-weight:600;color:var(--muted);display:block;margin-bottom:4px">Billing date column</label>
+      <select id="billingDateCol" style="padding:7px 10px;border:1px solid var(--border);border-radius:7px;font-size:13px"></select>
+    </div>
+    <button class="btn btn-ghost" style="font-size:12px" onclick="billingPreview()">Preview</button>
+    <button class="btn btn-primary" id="billingImportBtn" style="font-size:12px;display:none" onclick="billingImport()">Import billing dates</button>
+    <span id="billingMapStatus" style="font-size:12px;color:var(--muted)"></span>
+  </div>
+
+  <!-- preview table (hidden until preview clicked) -->
+  <div id="billingPreviewWrap" style="display:none;margin-bottom:1.5rem;max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:10px">
+    <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr style="background:#f9fafb;position:sticky;top:0">
+        <th style="padding:8px 12px;text-align:left;font-weight:600;color:var(--muted)">Email</th>
+        <th style="padding:8px 12px;text-align:left;font-weight:600;color:var(--muted)">Billing start date</th>
+        <th style="padding:8px 12px;text-align:left;font-weight:600;color:var(--muted)">Status</th>
+      </tr></thead>
+      <tbody id="billingPreviewBody"></tbody>
+    </table>
+  </div>
+
+  <!-- Bulk billing by pasting emails -->
+  <div class="section-h" style="margin-top:1.5rem">Bulk billing dates — paste emails</div>
+  <div style="background:#f9fafb;border:1px solid var(--border);border-radius:10px;padding:1rem;margin-bottom:1.5rem;display:grid;grid-template-columns:1fr 1fr auto;gap:.75rem;align-items:end">
+    <div>
+      <label style="font-size:12px;font-weight:600;color:var(--muted);display:block;margin-bottom:4px">Emails (one per line)</label>
+      <textarea id="bb_emails" rows="4" placeholder="james@example.co.uk&#10;sarah@example.co.uk" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:7px;font-size:12px;font-family:'SF Mono',monospace;outline:none;resize:vertical;box-sizing:border-box"></textarea>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:.5rem">
+      <div>
+        <label style="font-size:12px;font-weight:600;color:var(--muted);display:block;margin-bottom:4px">Purchase / start date</label>
+        <input type="date" id="bb_start" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:7px;font-size:13px;outline:none">
+      </div>
+      <div>
+        <label style="font-size:12px;font-weight:600;color:var(--muted);display:block;margin-bottom:4px">Billing day (leave blank = auto)</label>
+        <input type="number" id="bb_day" min="1" max="31" placeholder="auto" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:7px;font-size:13px;outline:none">
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="applyPasteBilling()" style="align-self:end">Set billing dates</button>
+  </div>
+
+  <!-- Toolbar -->
+  <div class="toolbar" style="margin-top:1.25rem">
+    <div class="search-wrap">
+      <div class="search-icon">&#9906;</div>
+      <input type="text" id="search" placeholder="Search email, domain, or client…" oninput="render()">
+    </div>
+    <select id="wsFilter" onchange="render()">
+      <option value="">All clients</option>
+    </select>
+    <select id="supplierFilter" onchange="render()">
+      <option value="">All suppliers</option>
+      <option value="Maildoso">Maildoso</option>
+      <option value="Mithun">Mithun</option>
+      <option value="Winnr">Winnr</option>
+      <option value="Inboxing">Inboxing</option>
+      <option value="__unassigned__">— Unassigned —</option>
+    </select>
+    <select id="typeFilter" onchange="render()">
+      <option value="">All types</option>
+      <option value="google">Google</option>
+      <option value="microsoft">Microsoft</option>
+      <option value="smtp">SMTP</option>
+    </select>
+    <select id="statusFilter" onchange="render()">
+      <option value="">All statuses</option>
+      <option value="ACTIVE">Active</option>
+      <option value="PAUSED">Paused</option>
+      <option value="__broken__">Disconnected</option>
+    </select>
+    <select id="dmarcFilter" onchange="render()">
+      <option value="">All DMARC</option>
+      <option value="none">p=none</option>
+      <option value="quarantine">p=quarantine</option>
+      <option value="reject">p=reject</option>
+      <option value="__missing__">Missing</option>
+    </select>
+    <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text);cursor:pointer">
+      <input type="checkbox" id="attentionOnly" onchange="render()"> Needs attention only
+    </label>
+    <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--red);cursor:pointer">
+      <input type="checkbox" id="brokenDnsOnly" onchange="render()"> Broken DNS only
+    </label>
+  </div>
+
+  <!-- Bulk action bar -->
+  <div class="bulk-bar" id="bulkBar">
+    <span class="count" id="bulkCount">0 selected</span>
+    <span style="color:var(--muted);font-size:12px">Tag as:</span>
+    <select id="bulkSupplier">
+      <option value="">Supplier…</option>
+      <option value="Maildoso">Maildoso</option>
+      <option value="Mithun">Mithun</option>
+      <option value="Winnr">Winnr</option>
+      <option value="Inboxing">Inboxing</option>
+    </select>
+    <button class="btn btn-primary" style="padding:6px 12px;font-size:12px" onclick="bulkApply('supplier')">Apply supplier</button>
+    <span style="width:1px;height:24px;background:var(--border)"></span>
+    <select id="bulkType">
+      <option value="">Type…</option>
+      <option value="google">Google</option>
+      <option value="microsoft">Microsoft</option>
+      <option value="smtp">SMTP</option>
+    </select>
+    <button class="btn btn-primary" style="padding:6px 12px;font-size:12px" onclick="bulkApply('mailbox_type')">Apply type</button>
+    <span style="flex:1"></span>
+    <button class="btn" style="padding:6px 12px;font-size:12px;background:#FEE2E2;color:#991B1B;border:1px solid #FECACA" onclick="bulkRemove()">Remove from dashboard</button>
+    <button class="btn btn-ghost" style="padding:6px 12px;font-size:12px" onclick="clearSelection()">Clear</button>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:34px"><input type="checkbox" id="selectAll" onclick="toggleAll(this)"></th>
+          <th>Mailbox</th>
+          <th>Client</th>
+          <th title="Next billing renewal date" style="cursor:pointer;white-space:nowrap" onclick="sortBy('renewal')">Renewal <span id="sortRenewalInd"></span></th>
+          <th>Supplier</th>
+          <th>Type</th>
+          <th>Status</th>
+          <th>Warmup</th>
+          <th style="text-align:center" title="SPF / DKIM / DMARC — click to expand DNS detail">Auth</th>
+          <th style="text-align:center" title="Domain blacklists">BL</th>
+          <th style="text-align:right" title="Domain health score 0-100">Score</th>
+          <th style="text-align:right">Sent</th>
+          <th style="text-align:right">Reply</th>
+          <th style="text-align:right">Bounce</th>
+          <th style="text-align:right" title="Daily sending limit">Daily</th>
+          <th style="text-align:right" title="Sending gap (seconds between emails)">Gap</th>
+          <th style="text-align:right" title="Warmup daily limit">W.Lim</th>
+          <th style="text-align:right" title="Monthly mailbox cost (set on the Finance page)">$/mo</th>
+          <th>Attention</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div id="empty" class="empty" style="display:none">No mailboxes match the current filters.</div>
+  </div>
+</div>
+
+<!-- Bulk assign modal — dynamic supplier blocks -->
+<div class="modal-overlay" id="assignModal" onclick="if(event.target===this)closeAssignModal()" style="position:fixed;inset:0;background:rgba(5,12,41,0.5);display:none;align-items:center;justify-content:center;z-index:1000">
+  <div style="background:#fff;border-radius:16px;width:820px;max-width:95vw;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.15)">
+    <div style="padding:1.25rem 1.5rem;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+      <div>
+        <div style="font-size:1rem;font-weight:700">Bulk assign suppliers</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px">Paste domains or full mailbox emails — mix freely in any section. Domains tag every mailbox at that domain; emails tag the specific mailbox.</div>
+      </div>
+      <button onclick="closeAssignModal()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--muted);line-height:1;padding:2px">×</button>
+    </div>
+    <div id="ba_supplierGrid" style="padding:1.25rem 1.5rem;display:grid;grid-template-columns:1fr 1fr;gap:1rem"></div>
+    <div style="padding:.75rem 1.5rem;display:flex;align-items:center;gap:.75rem;border-top:1px solid var(--border)">
+      <button class="btn btn-ghost" style="font-size:12px;padding:5px 12px" onclick="baAddSupplierBlock()">+ Add supplier</button>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;margin-left:auto">
+        <input type="checkbox" id="ba_default_mithun" checked>
+        Default <b>everything else</b> to Mithun
+      </label>
+    </div>
+    <div style="padding:1rem 1.5rem;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:.5rem">
+      <button class="btn btn-ghost" onclick="closeAssignModal()">Cancel</button>
+      <button class="btn btn-primary" id="ba_apply" onclick="applyBulkAssign()">Apply assignments</button>
+    </div>
+  </div>
+</div>
+
+<!-- Bulk billing modal -->
+<div id="billingModal" onclick="if(event.target===this)closeBillingModal()" style="position:fixed;inset:0;background:rgba(5,12,41,0.5);display:none;align-items:center;justify-content:center;z-index:1000">
+  <div style="background:#fff;border-radius:16px;width:520px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,0.15)">
+    <div style="padding:1.25rem 1.5rem;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+      <div>
+        <div style="font-size:1rem;font-weight:700">Set billing dates</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px">Apply to selected mailboxes, or filter by supplier/domain. The renewal day is auto-derived from the start date (you can override it).</div>
+      </div>
+      <button onclick="closeBillingModal()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--muted)">×</button>
+    </div>
+    <div style="padding:1.25rem 1.5rem;display:flex;flex-direction:column;gap:.75rem">
+      <div>
+        <label style="font-size:12px;font-weight:600;color:var(--muted);display:block;margin-bottom:4px">Apply to</label>
+        <select id="bl_target" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:7px;font-size:13px;font-family:inherit;outline:none">
+          <option value="selected">Selected mailboxes (${0} selected)</option>
+          <option value="supplier">All mailboxes for a supplier</option>
+          <option value="all">All mailboxes in cache</option>
+        </select>
+      </div>
+      <div id="bl_supplier_wrap" style="display:none">
+        <label style="font-size:12px;font-weight:600;color:var(--muted);display:block;margin-bottom:4px">Supplier</label>
+        <select id="bl_supplier" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:7px;font-size:13px;font-family:inherit;outline:none">
+          <option value="Winnr">Winnr</option>
+          <option value="Maildoso">Maildoso</option>
+          <option value="Mithun">Mithun</option>
+          <option value="Inboxing">Inboxing</option>
+        </select>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
+        <div>
+          <label style="font-size:12px;font-weight:600;color:var(--muted);display:block;margin-bottom:4px">Purchase / start date</label>
+          <input type="date" id="bl_start" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:7px;font-size:13px;font-family:inherit;outline:none">
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:600;color:var(--muted);display:block;margin-bottom:4px">Billing day (1-31)</label>
+          <input type="number" id="bl_day" min="1" max="31" placeholder="auto from start date" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:7px;font-size:13px;font-family:inherit;outline:none">
+        </div>
+      </div>
+    </div>
+    <div style="padding:1rem 1.5rem;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:.5rem">
+      <button class="btn btn-ghost" onclick="closeBillingModal()">Cancel</button>
+      <button class="btn btn-primary" id="bl_apply" onclick="applyBilling()">Set billing dates</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let data = { mailboxes: [], stats: { bySupplier: [], byType: [] }, suppliers: [], types: [] };
+let selected = new Set();
+
+fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true})).then(s=>{
+  if (s.ok === false) { location.href = '/login.html'; return; }
+  const _sn = document.getElementById('sessionName'); if (_sn) _sn.textContent = s.name || '';
+  const _so = document.getElementById('signOutBtn'); if (_so) _so.style.display = '';
+  load();
+});
+
+function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2400);}
+
+async function load() {
+  try {
+    const r = await fetch('/api/mailboxes');
+    data = await r.json();
+    if (data.lastRun) document.getElementById('lastRun').textContent = `Last refresh: ${new Date(data.lastRun).toLocaleString()}`;
+    if (data.running) document.getElementById('refreshBtn').innerHTML = '<span class="spin"></span>Refreshing…';
+    renderSummary();
+    renderNoWarmupBanner();
+    renderStats('bySupplier', data.stats.bySupplier, true);
+    renderStats('byType',     data.stats.byType,     false);
+    renderComparison();
+    populateClientFilter();
+    render();
+    loadPricing();
+    loadSupplierCharts(_mbPeriod);
+    loadProviderCharts(_mbPeriod);
+  } catch (err) {
+    toast('Load failed: ' + err.message);
+  }
+}
+
+function renderSummary() {
+  const s = data.summary || { total: 0, needs_attention: 0 };
+  document.getElementById('summary').innerHTML = `
+    <div class="stat-card"><div class="label">Total mailboxes</div><div class="val">${s.total}</div></div>
+    <div class="stat-card unassigned"><div class="label">Unassigned supplier</div><div class="val">${(data.mailboxes || []).filter(m => !m.supplier).length}</div></div>
+    <div class="stat-card mithun" style="border-top-color:#DC2626"><div class="label">Need attention</div><div class="val">${s.needs_attention}</div><div class="sub">click "Needs attention only" below</div></div>
+  `;
+}
+
+function pct(v) { return (v * 100).toFixed(2) + '%'; }
+function fmtNum(n) { return (n || 0).toLocaleString(); }
+
+function nextRenewal(startDate, billingDay) {
+  if (!startDate) return '—';
+  const day = billingDay || new Date(startDate).getDate();
+  const now = new Date();
+  let d = new Date(now.getFullYear(), now.getMonth(), day);
+  if (d <= now) d = new Date(now.getFullYear(), now.getMonth() + 1, day);
+  const diff = Math.ceil((d - now) / 86400000);
+  const label = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  const urgent = diff <= 5;
+  return `<span style="${urgent ? 'color:var(--amber);font-weight:600' : ''}">${label}</span><br><span style="font-size:10px;color:var(--muted)">${diff}d</span>`;
+}
+
+// ── Main table sort ───────────────────────────────────────────
+let _tableSort = { key: null, dir: 1 };
+
+function nextRenewalMs(m) {
+  if (!m.billing_start_date) return Infinity;
+  const day = m.billing_day || new Date(m.billing_start_date).getDate();
+  const now = new Date();
+  let d = new Date(now.getFullYear(), now.getMonth(), day);
+  if (d <= now) d = new Date(now.getFullYear(), now.getMonth() + 1, day);
+  return d.getTime();
+}
+
+function sortBy(key) {
+  if (_tableSort.key === key) _tableSort.dir *= -1;
+  else { _tableSort.key = key; _tableSort.dir = 1; }
+  const ind = document.getElementById('sortRenewalInd');
+  if (ind) ind.textContent = _tableSort.key === 'renewal' ? (_tableSort.dir === 1 ? '↑' : '↓') : '';
+  render();
+}
+
+let _cSortKey = null, _cSortDir = 1;
+function sortComparison(col) {
+  if (_cSortKey === col) _cSortDir *= -1;
+  else { _cSortKey = col; _cSortDir = col === 'key' ? 1 : -1; }
+  renderComparison();
+}
+
+function renderComparison() {
+  let rows = [...(data.stats?.bySupplierType || [])];
+  if (_cSortKey) {
+    rows.sort((a, b) => {
+      const av = a[_cSortKey] ?? 0, bv = b[_cSortKey] ?? 0;
+      return (av < bv ? -1 : av > bv ? 1 : 0) * _cSortDir;
+    });
+  }
+  // Update sort indicators
+  ['key','count','active_pct','auth_clean_pct','blacklist_listed_pct','total_sent','reply_rate','bounce_rate','avg_daily_limit','total_monthly_cost','attention_count'].forEach(k => {
+    const el = document.getElementById('cSort_' + k);
+    if (el) el.textContent = _cSortKey === k ? (_cSortDir === 1 ? ' ↑' : ' ↓') : '';
+  });
+  document.getElementById('comparisonRows').innerHTML = rows.length
+    ? rows.map(g => `
+      <tr>
+        <td><b>${g.key}</b></td>
+        <td style="text-align:right">${g.count}</td>
+        <td style="text-align:right">${g.active_pct}%</td>
+        <td style="text-align:right">${g.auth_clean_pct}%</td>
+        <td style="text-align:right">${g.blacklist_listed_pct ? `<span style="color:var(--red);font-weight:600">${g.blacklist_listed_pct}%</span>` : '0%'}</td>
+        <td style="text-align:right">${fmtNum(g.total_sent)}</td>
+        <td style="text-align:right">${g.total_sent ? `<b>${pct(g.reply_rate)}</b>` : '—'}</td>
+        <td style="text-align:right">${g.total_sent ? (g.bounce_rate > 0.05 ? `<span style="color:var(--red);font-weight:600">${pct(g.bounce_rate)}</span>` : pct(g.bounce_rate)) : '—'}</td>
+        <td style="text-align:right">${g.avg_daily_limit}</td>
+        <td style="text-align:right">${g.total_monthly_cost ? '$' + Number(g.total_monthly_cost).toFixed(2) : '—'}</td>
+        <td style="text-align:right">${g.attention_count ? `<span style="color:var(--red);font-weight:600">${g.attention_count}</span>` : '0'}</td>
+      </tr>
+    `).join('')
+    : '<tr><td colspan="11" style="text-align:center;padding:1.5rem;color:var(--muted)">No mailboxes tagged yet.</td></tr>';
+}
+
+function clsForKey(k) {
+  return (k || '').toLowerCase().replace(/[^a-z]/g, '').slice(0, 20) || 'gray';
+}
+
+function renderStats(elId, rows, isSupplier) {
+  const el = document.getElementById(elId);
+  if (!rows || !rows.length) { el.innerHTML = `<div style="color:var(--muted);font-size:13px">No data yet.</div>`; return; }
+  el.innerHTML = rows.map(g => {
+    const cls = clsForKey(g.key);
+    return `
+      <div class="stat-card ${cls}">
+        <div class="label">${g.key}</div>
+        <div class="val">${g.count}</div>
+        <div class="sub">
+          ${g.active} active · ${g.paused} paused${g.disconnected ? ` · <span style="color:var(--red)">${g.disconnected} broken</span>` : ''}<br>
+          ${g.total_sent ? `Reply <b>${pct(g.reply_rate)}</b> · Bounce ${g.bounce_rate > 0.05 ? `<span style="color:var(--red)">${pct(g.bounce_rate)}</span>` : pct(g.bounce_rate)} · ${fmtNum(g.total_sent)} sent<br>` : ''}
+          warmup ${g.warmup_pct}% · auth clean ${g.auth_clean_pct}%${g.blacklist_listed ? ` · <span style="color:var(--red)">${g.blacklist_listed} listed</span>` : ''}<br>
+          avg ${g.avg_daily_limit}/day · ${g.attention_count ? `<span style="color:var(--red)">${g.attention_count} need attention</span>` : 'all healthy'}<br>
+          ${g.total_monthly_cost ? `<b>$${Number(g.total_monthly_cost).toFixed(2)}/mo</b>` : ''}
+        </div>
+        <div class="bar">
+          <div style="background:#16A34A;width:${(g.active / Math.max(g.count,1)) * 100}%"></div>
+          <div style="background:#F59E0B;width:${(g.paused / Math.max(g.count,1)) * 100}%"></div>
+          <div style="background:#DC2626;width:${(g.disconnected / Math.max(g.count,1)) * 100}%"></div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function populateClientFilter() {
+  const sel = document.getElementById('wsFilter');
+  const cur = sel.value;
+  const names = Array.from(new Set((data.mailboxes || []).map(m => m.workspace_name).filter(Boolean))).sort();
+  sel.innerHTML = '<option value="">All clients</option>' + names.map(n => `<option value="${n}">${n}</option>`).join('');
+  if (names.includes(cur)) sel.value = cur;
+}
+
+function applyFilters(list) {
+  const q  = document.getElementById('search').value.trim().toLowerCase();
+  const ws = document.getElementById('wsFilter').value;
+  const sup= document.getElementById('supplierFilter').value;
+  const ty = document.getElementById('typeFilter').value;
+  const st = document.getElementById('statusFilter').value;
+  const attentionOnly = document.getElementById('attentionOnly')?.checked;
+  const brokenDnsOnly = document.getElementById('brokenDnsOnly')?.checked;
+  const dmarcF = document.getElementById('dmarcFilter')?.value || '';
+  return list.filter(m => {
+    if (q  && !(m.email.includes(q) || (m.domain||'').includes(q) || (m.workspace_name||'').toLowerCase().includes(q))) return false;
+    if (ws && m.workspace_name !== ws) return false;
+    if (sup === '__unassigned__' && m.supplier) return false;
+    if (sup && sup !== '__unassigned__' && m.supplier !== sup) return false;
+    if (ty && m.type !== ty) return false;
+    if (st === '__broken__' && ['ACTIVE','PAUSED'].includes((m.status||'').toUpperCase())) return false;
+    if (st && st !== '__broken__' && (m.status||'').toUpperCase() !== st) return false;
+    if (attentionOnly && !(m.attention && m.attention.length)) return false;
+    if (dmarcF === '__missing__' && (m.auth || {}).dmarc_present) return false;
+    if (dmarcF && dmarcF !== '__missing__' && (m.auth || {}).dmarc_policy !== dmarcF) return false;
+    if (brokenDnsOnly) {
+      const auth = m.auth || {};
+      const hasDnsProblem = !auth.spf_present || !auth.dkim_present || !auth.dmarc_present || (auth.dmarc_policy && auth.dmarc_policy !== 'none');
+      if (!hasDnsProblem) return false;
+    }
+    return true;
+  });
+}
+
+function setDmarcFilter(val) {
+  const el = document.getElementById('dmarcFilter');
+  if (!el) return;
+  el.value = el.value === val ? '' : val; // toggle off if already set
+  render();
+}
+
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function toggleDnsExpand(email, rowEl) {
+  const set = window._expandedMailboxes || (window._expandedMailboxes = new Set());
+  if (set.has(email)) { set.delete(email); } else { set.add(email); }
+  render();
+  // Scroll the row back into view after re-render
+  setTimeout(() => {
+    const rows = document.getElementById('rows');
+    const target = rows?.querySelector(`tr[data-email="${email.replace(/"/g,'&quot;')}"]`);
+    if (target) target.scrollIntoView({ block: 'nearest' });
+  }, 50);
+}
+
+function statusPill(s) {
+  const v = (s || '').toUpperCase();
+  if (v === 'ACTIVE') return `<span class="pill pill-good">active</span>`;
+  if (v === 'PAUSED') return `<span class="pill pill-warn">paused</span>`;
+  if (v) return `<span class="pill pill-bad">${v.toLowerCase()}</span>`;
+  return `<span class="pill pill-gray">—</span>`;
+}
+
+function warmupPill(s) {
+  const v = (s || '').toUpperCase();
+  if (v === 'ACTIVE') return `<span class="pill pill-good">on</span>`;
+  if (v === 'PAUSED') return `<span class="pill pill-warn">paused</span>`;
+  if (v) return `<span class="pill pill-gray">${v.toLowerCase()}</span>`;
+  return `<span class="pill pill-gray">off</span>`;
+}
+
+function typePill(t) {
+  if (!t) return `<span class="pill pill-gray">—</span>`;
+  return `<span class="pill pill-${t}">${t}</span>`;
+}
+
+function render() {
+  const filtered = applyFilters(data.mailboxes || []);
+  if (_tableSort.key === 'renewal') {
+    filtered.sort((a, b) => (nextRenewalMs(a) - nextRenewalMs(b)) * _tableSort.dir);
+  }
+  const rows = document.getElementById('rows');
+  const empty = document.getElementById('empty');
+  if (!filtered.length) {
+    rows.innerHTML = '';
+    empty.style.display = '';
+    updateBulkBar();
+    return;
+  }
+  empty.style.display = 'none';
+  const expandedSet = window._expandedMailboxes || (window._expandedMailboxes = new Set());
+  rows.innerHTML = filtered.map(m => {
+    const id = (m.email || '').replace(/'/g, "\\'");
+    const checked = selected.has(m.email) ? 'checked' : '';
+    const auth = m.auth || {};
+    const isExpanded = expandedSet.has(m.email);
+
+    // Auth badges — color + letter
+    const spfColor  = auth.spf_present  ? (auth.spf_strict  ? 'var(--green)' : 'var(--amber)') : 'var(--red)';
+    const dkimColor = auth.dkim_present ? 'var(--green)' : 'var(--red)';
+    const dmarcColor= auth.dmarc_present ? (auth.dmarc_policy === 'none' ? 'var(--green)' : 'var(--amber)') : 'var(--red)';
+    const dmarcLabel= auth.dmarc_present ? (auth.dmarc_policy || 'none') : '✕';
+    const authBadges = `
+      <span title="SPF${auth.spf_raw ? ': '+auth.spf_raw : ' — not found'}" style="color:${spfColor};font-weight:700;cursor:pointer">S</span>
+      <span title="DKIM${auth.dkim_selector ? ' ('+auth.dkim_selector+')' : ''}" style="color:${dkimColor};font-weight:700;cursor:pointer">K</span>
+      <span title="DMARC${auth.dmarc_policy ? ': p='+auth.dmarc_policy : ' — not found'} — click to filter" onclick="event.stopPropagation();setDmarcFilter('${auth.dmarc_present ? (auth.dmarc_policy||'none') : '__missing__'}')" style="display:inline-block;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:700;cursor:pointer;background:${dmarcColor === 'var(--green)' ? '#D1FAE5' : dmarcColor === 'var(--amber)' ? '#FEF3C7' : '#FEE2E2'};color:${dmarcColor}">p=${dmarcLabel}</span>
+    `;
+
+    // Domain score badge
+    const score = m.domain_score;
+    const scoreColor = score == null ? 'var(--muted)' : score >= 80 ? 'var(--green)' : score >= 50 ? 'var(--amber)' : 'var(--red)';
+    const scoreBadge = score != null ? `<span style="font-weight:600;color:${scoreColor}">${score}</span>` : '—';
+
+    const bl = m.blacklist_count || 0;
+    const sent = m.attributed_sent || 0;
+    const reply = m.reply_rate || 0;
+    const bounce = m.bounce_rate || 0;
+    const att = m.attention || [];
+    const attDot = att.length
+      ? `<span style="color:${att.some(a=>a.level==='critical')?'var(--red)':'var(--amber)'};font-weight:600" title="${att.map(a=>a.msg).join(' · ').replace(/"/g,'&quot;')}">●</span> <span style="font-size:11px;color:var(--muted)">${att.length}</span>`
+      : `<span style="color:var(--green)" title="All checks passing">✓</span>`;
+
+    // DNS expanded detail
+    const dnsDetail = isExpanded ? `
+      <tr class="dns-detail-row" style="background:#f8fafc">
+        <td colspan="16" style="padding:12px 16px 14px 48px;border-bottom:2px solid var(--border)">
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;max-width:900px">
+            <div style="background:#fff;border:1px solid ${auth.spf_present ? (auth.spf_strict ? '#d1fae5' : '#fef3c7') : '#fee2e2'};border-radius:8px;padding:10px 12px">
+              <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:${auth.spf_present ? (auth.spf_strict ? 'var(--green)' : 'var(--amber)') : 'var(--red)'};margin-bottom:6px">
+                SPF ${auth.spf_present ? (auth.spf_strict ? '✅ Strict' : '⚠️ Soft') : '❌ Missing'}
+              </div>
+              ${auth.spf_raw
+                ? `<code style="font-size:11px;word-break:break-all;color:#374151">${auth.spf_raw}</code>`
+                : `<div style="font-size:12px;color:var(--muted)">No SPF record found on <strong>${m.domain}</strong>.<br>Add a TXT record: <code style="background:#f3f4f6;padding:1px 4px;border-radius:3px">v=spf1 include:your-provider.com -all</code></div>`}
+            </div>
+            <div style="background:#fff;border:1px solid ${auth.dkim_present ? '#d1fae5' : '#fee2e2'};border-radius:8px;padding:10px 12px">
+              <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:${auth.dkim_present ? 'var(--green)' : 'var(--red)'};margin-bottom:6px">
+                DKIM ${auth.dkim_present ? `✅ Found (${auth.dkim_selector})` : '❌ Missing'}
+              </div>
+              ${auth.dkim_raw
+                ? `<code style="font-size:11px;word-break:break-all;color:#374151">${auth.dkim_raw.slice(0,200)}${auth.dkim_raw.length > 200 ? '…' : ''}</code>`
+                : `<div style="font-size:12px;color:var(--muted)">No DKIM found on common selectors.<br>Check your email provider for the DKIM TXT record to add to <strong>${m.domain}</strong>.</div>`}
+            </div>
+            <div style="background:#fff;border:1px solid ${auth.dmarc_present ? (auth.dmarc_policy === 'none' ? '#d1fae5' : '#fef3c7') : '#fee2e2'};border-radius:8px;padding:10px 12px">
+              <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:${auth.dmarc_present ? (auth.dmarc_policy === 'none' ? 'var(--green)' : 'var(--amber)') : 'var(--red)'};margin-bottom:6px">
+                DMARC ${auth.dmarc_present ? (auth.dmarc_policy === 'none' ? `✅ p=none` : `⚠️ p=${auth.dmarc_policy} (change to p=none)`) : '❌ Missing'}
+              </div>
+              ${auth.dmarc_raw
+                ? `<code style="font-size:11px;word-break:break-all;color:#374151">${auth.dmarc_raw}</code>`
+                : `<div style="font-size:12px;color:var(--muted)">No DMARC record found.<br>Add TXT record on <strong>_dmarc.${m.domain}</strong>:<br><code style="background:#f3f4f6;padding:1px 4px;border-radius:3px">v=DMARC1; p=none; rua=mailto:dmarc@${m.domain}</code></div>`}
+              ${auth.dmarc_present && auth.dmarc_policy !== 'none' ? `<div style="margin-top:6px;font-size:11px;color:var(--amber)">⚠️ p=${auth.dmarc_policy} may block forwarded emails. Change to p=none for cold outreach.</div>` : ''}
+            </div>
+          </div>
+          ${m.domain_notes ? `<div style="margin-top:8px;font-size:12px;color:var(--muted)">${esc(m.domain_notes)}</div>` : ''}
+        </td>
+      </tr>` : '';
+
+    return `
+      <tr style="cursor:pointer" data-email="${m.email.replace(/"/g,'&quot;')}" onclick="toggleDnsExpand('${id}', this)">
+        <td onclick="event.stopPropagation()"><input type="checkbox" ${checked} onclick="toggleOne('${id}', this.checked)"></td>
+        <td>
+          <div class="email-cell">${m.email}</div>
+          <div class="sub-cell">${m.name || ''} ${m.name ? '· ' : ''}${m.domain}</div>
+        </td>
+        <td>${m.workspace_name || '—'}</td>
+        <td style="font-size:12px;${m.billing_start_date ? '' : 'color:var(--muted)'}">
+          ${nextRenewal(m.billing_start_date, m.billing_day)}
+        </td>
+        <td onclick="event.stopPropagation()">
+          <select class="tag-input" onchange="setField('${id}','supplier',this.value)">
+            <option value="">—</option>
+            ${(data.suppliers || []).map(s => `<option value="${s}" ${m.supplier===s?'selected':''}>${s}</option>`).join('')}
+          </select>
+        </td>
+        <td onclick="event.stopPropagation()">
+          <select class="tag-input" onchange="setField('${id}','mailbox_type',this.value)">
+            ${(data.types || []).map(t => `<option value="${t}" ${m.type===t?'selected':''}>${t}</option>`).join('')}
+          </select>
+          ${m.type_auto && m.type_auto !== m.type ? `<div class="sub-cell">auto: ${m.type_auto}</div>` : ''}
+        </td>
+        <td>${statusPill(m.status)}</td>
+        <td>${warmupPill(m.warmup_status)}</td>
+        <td style="text-align:center;letter-spacing:2px">${authBadges}</td>
+        <td style="text-align:center">${bl ? `<span style="color:var(--red);font-weight:600">${bl}</span>` : `<span style="color:var(--green)">0</span>`}</td>
+        <td style="text-align:right">${scoreBadge}</td>
+        <td style="text-align:right">${sent ? fmtNum(sent) : '—'}</td>
+        <td style="text-align:right">${sent ? pct(reply) : '—'}</td>
+        <td style="text-align:right">${sent ? (bounce > 0.05 ? `<span style="color:var(--red);font-weight:600">${pct(bounce)}</span>` : pct(bounce)) : '—'}</td>
+        <td style="text-align:right">${m.daily_limit != null ? m.daily_limit : '—'}</td>
+        <td style="text-align:right;color:var(--muted)">${m.sending_gap != null ? m.sending_gap + 's' : '—'}</td>
+        <td style="text-align:right;color:var(--muted)">${m.warmup_limit != null ? m.warmup_limit : '—'}</td>
+        <td style="text-align:right;${m.unit_cost ? '' : 'color:var(--muted)'}">${m.unit_cost ? '$' + Number(m.unit_cost).toFixed(2) : '—'}</td>
+        <td>${attDot}</td>
+      </tr>
+      ${dnsDetail}
+    `;
+  }).join('');
+  document.getElementById('selectAll').checked = filtered.length > 0 && filtered.every(m => selected.has(m.email));
+  updateBulkBar();
+}
+
+function toggleOne(email, on) {
+  if (on) selected.add(email); else selected.delete(email);
+  updateBulkBar();
+}
+
+function toggleAll(el) {
+  const filtered = applyFilters(data.mailboxes || []);
+  if (el.checked) filtered.forEach(m => selected.add(m.email));
+  else            filtered.forEach(m => selected.delete(m.email));
+  render();
+}
+
+function clearSelection() { selected.clear(); render(); }
+
+function updateBulkBar() {
+  const bar = document.getElementById('bulkBar');
+  const c = selected.size;
+  document.getElementById('bulkCount').textContent = `${c} selected`;
+  bar.classList.toggle('show', c > 0);
+}
+
+async function setField(email, field, value) {
+  try {
+    const body = {};
+    body[field] = value || null;
+    const r = await fetch('/api/mailboxes/' + encodeURIComponent(email), {
+      method: 'PUT', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+    if (!r.ok) { toast('Save failed'); return; }
+    // Update local cache so the row reflects immediately
+    const m = data.mailboxes.find(x => x.email === email);
+    if (m) m[field] = value || null;
+    if (field === 'mailbox_type' && m) m.type = value || m.type_auto || 'smtp';
+    render();
+    toast('Saved');
+  } catch (err) { toast('Save error: ' + err.message); }
+}
+
+async function bulkApply(field) {
+  const value = document.getElementById(field === 'supplier' ? 'bulkSupplier' : 'bulkType').value;
+  if (!value) { toast('Pick a value first'); return; }
+  if (!selected.size) return;
+  try {
+    const r = await fetch('/api/mailboxes/bulk-tag', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ emails: Array.from(selected), field, value })
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Bulk failed'); return; }
+    toast(`Tagged ${d.changed} mailbox(es)`);
+    // Refresh from server so the stat cards and rows reflect the changes.
+    await load();
+  } catch (err) { toast('Bulk error: ' + err.message); }
+}
+
+async function bulkRemove() {
+  if (!selected.size) return;
+  const n = selected.size;
+  if (!confirm(`Remove ${n} mailbox${n === 1 ? '' : 'es'} from the dashboard?\n\nThey will be hidden here but remain in PlusVibe. You can restore them by contacting an admin.`)) return;
+  try {
+    const r = await fetch('/api/mailboxes/bulk-remove', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ emails: Array.from(selected) })
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Remove failed'); return; }
+    toast(`Removed ${d.removed} mailbox${d.removed === 1 ? '' : 'es'} from dashboard`);
+    selected.clear();
+    await load();
+  } catch (err) { toast('Remove error: ' + err.message); }
+}
+
+// Bulk assign modal — pre-filled with the latest known lists so a single
+// click applies all current supplier assignments. Edit the textareas to
+// adjust before applying.
+const WINNR_DOMAINS = [
+  'bruudoffice.co.uk','bruud-coffee.co.uk','bruudcoffeeco.co.uk','bruud-coffeeco.co.uk',
+  'butterflyecosolar.co.uk','bruud-workplace.co.uk','butterflyecopower.co.uk','butterflysolarinstall.co.uk',
+  'bruudgroup.co.uk','bruudco.co.uk','butterflyltd.co.uk','butterfly-ltd.co.uk',
+  'butterflyecobase.co.uk','bruud-limited.co.uk','butterflyecouk.co.uk','bruud-machines.co.uk',
+  'bruud-ltd.co.uk','gxifurniture.co.uk','gxiofficefurniture.co.uk','gxicommercialfurniture.co.uk',
+  'gxiofficedesks.co.uk','gxidesignandbuild.co.uk','gxifurnituregroup.co.uk','gxiworkspacefurniture.co.uk',
+  'ottalyenquiries.co.uk','ottaly-ltd.co.uk','gxiofficeworks.co.uk','gxifitouts.co.uk',
+  'gxiworkspace.co.uk','gxiprojects.co.uk','auraa-workspace.co.uk','auraa-office.co.uk',
+  'auraa-furniture.co.uk','auraafitout.co.uk','butterflyecosolutions.co.uk','butterflyecosystems.co.uk',
+  'butterflyecotech.co.uk','butterflyecohub.co.uk','butterflyecoltd.co.uk','butterfly-eco-uk.co.uk',
+  'butterflyeco-ltd.co.uk','butterflyeco-power.co.uk','aivi-solutions.co.uk','aivi-digital.co.uk',
+  'aivi-ai.co.uk','indigovalleyworkplacecoffee.co.uk','indigovalleycoffeeltd.co.uk',
+];
+const MAILDOSO_EMAILS = [
+  'james@ppc-dynamics.co.uk','james@ppcdynamicsmedia.co.uk','james@ppcdynamicsresults.co.uk','james@ppcdynamicsservices.co.uk',
+  'james.daniel@ppc-dynamics.co.uk','james.daniel@ppcdynamicsmedia.co.uk','james.daniel@ppcdynamicsresults.co.uk','james.daniel@ppcdynamicsservices.co.uk',
+  'james.d@ppc-dynamics.co.uk','james.d@ppcdynamicsmedia.co.uk','james.d@ppcdynamicsresults.co.uk','james.d@ppcdynamicsservices.co.uk',
+  'james_d@ppc-dynamics.co.uk','james_d@ppcdynamicsmedia.co.uk','james_d@ppcdynamicsresults.co.uk','james_d@ppcdynamicsservices.co.uk',
+  'scott@the-hydration-water.co.uk','scott@thehydrationworkplace.co.uk','scott@thehydrationdrinks.co.uk','scott@thehydrationstations.co.uk',
+  'scott@officehydrationco.co.uk','scott@workplacehydrationco.co.uk',
+  'scott_w@the-hydration-water.co.uk','scott_w@thehydrationworkplace.co.uk','scott_w@thehydrationdrinks.co.uk','scott_w@thehydrationstations.co.uk',
+  'scott_w@officehydrationco.co.uk','scott_w@workplacehydrationco.co.uk',
+  'scott-w@the-hydration-water.co.uk','scott-w@thehydrationworkplace.co.uk','scott-w@thehydrationdrinks.co.uk','scott-w@thehydrationstations.co.uk',
+  'scott-w@officehydrationco.co.uk','scott-w@workplacehydrationco.co.uk',
+  'scottwilson@the-hydration-water.co.uk','scottwilson@thehydrationworkplace.co.uk','scottwilson@thehydrationdrinks.co.uk','scottwilson@thehydrationstations.co.uk',
+  'scottwilson@officehydrationco.co.uk','scottwilson@workplacehydrationco.co.uk',
+];
+const INBOXING_DOMAINS = ['thehydrationoffice.co.uk','ottalyuk.co.uk'];
+
+// Dynamic supplier blocks — each entry is { name, entries[] }
+// Entries can be emails (contain @) or domains — detected automatically.
+let _baSuppliers = [
+  { name: 'Winnr',    entries: WINNR_DOMAINS },
+  { name: 'Maildoso', entries: MAILDOSO_EMAILS },
+  { name: 'Inboxing', entries: INBOXING_DOMAINS },
+  { name: 'Mithun',   entries: [] },
+];
+
+function baRenderGrid() {
+  const grid = document.getElementById('ba_supplierGrid');
+  grid.innerHTML = _baSuppliers.map((s, i) => `
+    <div style="position:relative">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+        <input value="${s.name}" onchange="_baSuppliers[${i}].name=this.value"
+          style="font-size:12px;font-weight:700;border:1px solid transparent;border-radius:5px;padding:2px 6px;outline:none;width:120px;background:transparent"
+          onfocus="this.style.borderColor='var(--border)'" onblur="this.style.borderColor='transparent'">
+        <span style="font-size:11px;color:var(--muted)">— domains or emails</span>
+        <button onclick="_baSuppliers.splice(${i},1);baRenderGrid()" style="margin-left:auto;background:none;border:none;cursor:pointer;color:#dc2626;font-size:14px;padding:0 2px" title="Remove">×</button>
+      </div>
+      <textarea onchange="_baSuppliers[${i}].entries=this.value.split(/\\n/).map(v=>v.trim()).filter(Boolean)"
+        style="width:100%;height:120px;border:1px solid var(--border);border-radius:8px;padding:8px;font-family:'SF Mono',monospace;font-size:12px;outline:none;resize:vertical;box-sizing:border-box"
+        placeholder="domains or mailbox emails, one per line"
+      >${s.entries.join('\n')}</textarea>
+    </div>
+  `).join('');
+}
+
+function baAddSupplierBlock() {
+  _baSuppliers.push({ name: 'New supplier', entries: [] });
+  baRenderGrid();
+  // Focus the new name input
+  const inputs = document.getElementById('ba_supplierGrid').querySelectorAll('input');
+  if (inputs.length) inputs[inputs.length - 1].select();
+}
+
+function openAssignModal() {
+  baRenderGrid();
+  document.getElementById('ba_default_mithun').checked = true;
+  document.getElementById('assignModal').style.display = 'flex';
+}
+function closeAssignModal() { document.getElementById('assignModal').style.display = 'none'; }
+
+function openBillingModal() {
+  const n = selected.size;
+  document.getElementById('bl_target').innerHTML = `
+    <option value="selected">Selected mailboxes (${n} selected)</option>
+    <option value="supplier">All mailboxes for a supplier</option>
+    <option value="all">All mailboxes in cache</option>
+  `;
+  document.getElementById('bl_target').value = n > 0 ? 'selected' : 'supplier';
+  document.getElementById('bl_supplier_wrap').style.display = n > 0 ? 'none' : '';
+  document.getElementById('bl_target').onchange = function() {
+    document.getElementById('bl_supplier_wrap').style.display = this.value === 'supplier' ? '' : 'none';
+  };
+  document.getElementById('billingModal').style.display = 'flex';
+}
+function closeBillingModal() { document.getElementById('billingModal').style.display = 'none'; }
+
+async function applyBilling() {
+  const btn = document.getElementById('bl_apply');
+  const startDate = document.getElementById('bl_start').value;
+  if (!startDate) { toast('Pick a start date first', true); return; }
+  const billingDay = parseInt(document.getElementById('bl_day').value) || null;
+  const target = document.getElementById('bl_target').value;
+
+  let body = { billing_start_date: startDate };
+  if (billingDay) body.billing_day = billingDay;
+  if (target === 'selected') body.emails = [...selected];
+  else if (target === 'supplier') body.supplier = document.getElementById('bl_supplier').value;
+  // target === 'all' → no filter → server applies to everything
+
+  btn.disabled = true; btn.textContent = 'Applying…';
+  try {
+    const r = await fetch('/api/mailboxes/bulk-billing', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Failed', true); return; }
+    toast(`Billing set for ${d.changed} mailbox(es) — renews day ${billingDay || new Date(startDate).getDate()} each month`);
+    closeBillingModal();
+    await load();
+  } catch(err) { toast(err.message, true); }
+  finally { btn.disabled = false; btn.textContent = 'Set billing dates'; }
+}
+
+function parseList(id) {
+  return (document.getElementById(id).value || '')
+    .split(/[\n,]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
+}
+
+async function applyBulkAssign() {
+  const btn = document.getElementById('ba_apply');
+  btn.disabled = true; btn.textContent = 'Applying…';
+  try {
+    // Read current textarea values into _baSuppliers (in case user typed without triggering onchange)
+    document.getElementById('ba_supplierGrid').querySelectorAll('textarea').forEach((ta, i) => {
+      if (_baSuppliers[i]) _baSuppliers[i].entries = ta.value.split(/\n/).map(v => v.trim()).filter(Boolean);
+    });
+    document.getElementById('ba_supplierGrid').querySelectorAll('input').forEach((inp, i) => {
+      if (_baSuppliers[i]) _baSuppliers[i].name = inp.value.trim();
+    });
+
+    // Split each supplier's entries into emails (contain @) vs domains automatically
+    const supplierDomains = {}, supplierEmails = {};
+    for (const s of _baSuppliers) {
+      if (!s.name) continue;
+      const emails  = s.entries.filter(e => e.includes('@'));
+      const domains = s.entries.filter(e => !e.includes('@'));
+      if (emails.length)  supplierEmails[s.name]  = emails;
+      if (domains.length) supplierDomains[s.name] = domains;
+    }
+    const payload = {
+      supplierDomains,
+      supplierEmails,
+      defaultSupplier: document.getElementById('ba_default_mithun').checked ? 'Mithun' : null,
+    };
+    const r = await fetch('/api/mailboxes/assign-suppliers', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Failed'); return; }
+    const breakdown = Object.entries(d.result || {})
+      .map(([s, info]) => `${s}: ${info.changed}`).join(' · ');
+    toast(`Assigned ${d.totalAssigned} mailboxes — ${breakdown}`);
+    closeAssignModal();
+    await load();
+  } catch (err) { toast('Error: ' + err.message); }
+  finally { btn.disabled = false; btn.textContent = 'Apply assignments'; }
+}
+
+async function refreshAll() {
+  const btn = document.getElementById('refreshBtn');
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Refreshing…';
+  try {
+    await fetch('/api/mailboxes/refresh', { method: 'POST' });
+    const poll = setInterval(async () => {
+      const r = await fetch('/api/mailboxes'); const d = await r.json();
+      data = d;
+      if (d.lastRun) document.getElementById('lastRun').textContent = `Last refresh: ${new Date(d.lastRun).toLocaleString()}`;
+      renderSummary();
+      renderNoWarmupBanner();
+      renderStats('bySupplier', d.stats.bySupplier, true);
+      renderStats('byType',     d.stats.byType,     false);
+      renderComparison();
+      populateClientFilter(); render();
+      if (!d.running) { clearInterval(poll); btn.disabled = false; btn.textContent = '↻ Refresh'; }
+    }, 6000);
+  } catch (err) {
+    toast('Refresh failed: ' + err.message);
+    btn.disabled = false; btn.textContent = '↻ Refresh';
+  }
+}
+
+// ── Pricing editor ───────────────────────────────────────────────────────────
+let _pricing = [];
+
+async function loadPricing() {
+  try {
+    const r = await fetch('/api/finance/pricing');
+    const d = await r.json();
+    _pricing = d.rows || [];
+    renderPricing();
+  } catch { /* silent — pricing section just stays empty */ }
+}
+
+function renderPricing() {
+  const tbody = document.getElementById('pricingRows');
+  if (!tbody) return;
+  if (!_pricing.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted);text-align:center;padding:1rem">No pricing rows yet. Click + Add row.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = _pricing.map((row, i) => `
+    <tr>
+      <td><input value="${row.supplier||''}" onchange="_pricing[${i}].supplier=this.value" style="width:100%;border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:13px;outline:none"></td>
+      <td><input value="${row.mailbox_type||''}" onchange="_pricing[${i}].mailbox_type=this.value" style="width:100%;border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:13px;outline:none"></td>
+      <td><input type="number" step="0.01" value="${row.unit_cost||''}" onchange="_pricing[${i}].unit_cost=parseFloat(this.value)||0" style="width:80px;border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:13px;outline:none;text-align:right"></td>
+      <td><input value="${row.notes||''}" onchange="_pricing[${i}].notes=this.value" placeholder="optional" style="width:100%;border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:13px;outline:none"></td>
+      <td style="display:flex;gap:4px">
+        <button onclick="savePricingRow(${i})" style="font-size:11px;padding:4px 8px;border:1px solid #d1d5db;border-radius:5px;background:#f0fdf4;color:#166534;cursor:pointer">Save</button>
+        <button onclick="deletePricingRow(${i})" style="font-size:11px;padding:4px 8px;border:1px solid #fca5a5;border-radius:5px;background:#fef2f2;color:#dc2626;cursor:pointer">Delete</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function addPricingRow() {
+  _pricing.push({ supplier: '', mailbox_type: '', unit_cost: 0, notes: '' });
+  renderPricing();
+}
+
+async function savePricingRow(i) {
+  const row = _pricing[i];
+  if (!row.supplier || !row.mailbox_type) { toast('Supplier and type required'); return; }
+  try {
+    const r = await fetch('/api/finance/pricing', {
+      method: 'PUT', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(row)
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Save failed'); return; }
+    _pricing[i] = d.row;
+    renderPricing();
+    toast('Saved');
+  } catch (err) { toast('Error: ' + err.message); }
+}
+
+async function deletePricingRow(i) {
+  const row = _pricing[i];
+  if (!confirm(`Delete pricing for ${row.supplier} · ${row.mailbox_type}?`)) return;
+  try {
+    const r = await fetch('/api/finance/pricing', {
+      method: 'DELETE', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ supplier: row.supplier, mailbox_type: row.mailbox_type })
+    });
+    if (!r.ok) { const d = await r.json(); toast(d.error || 'Delete failed'); return; }
+    _pricing.splice(i, 1);
+    renderPricing();
+    toast('Deleted');
+  } catch (err) { toast('Error: ' + err.message); }
+}
+
+// ── Paste-email bulk billing ─────────────────────────────────────────────────
+async function applyPasteBilling() {
+  const raw = (document.getElementById('bb_emails').value || '').trim();
+  const emails = raw.split(/[\n,;]+/).map(e => e.trim().toLowerCase()).filter(Boolean);
+  const billing_start_date = document.getElementById('bb_start').value;
+  const billing_day = parseInt(document.getElementById('bb_day').value) || null;
+  if (!emails.length) { toast('Paste at least one email'); return; }
+  if (!billing_start_date) { toast('Pick a start date'); return; }
+  try {
+    const r = await fetch('/api/mailboxes/bulk-billing', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ emails, billing_start_date, billing_day })
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Failed'); return; }
+    toast(`Billing set for ${d.updated || emails.length} mailboxes`);
+    document.getElementById('bb_emails').value = '';
+    await load();
+  } catch (err) { toast('Error: ' + err.message); }
+}
+
+// ── Spreadsheet billing import ───────────────────────────────
+let _billingSheetRows = [];
+
+function billingDropOver(e) {
+  e.preventDefault();
+  const z = document.getElementById('billingDropZone');
+  z.style.borderColor = 'var(--navy)';
+  z.style.background = 'rgba(34,67,136,0.04)';
+}
+function billingDropLeave(e) {
+  const z = document.getElementById('billingDropZone');
+  z.style.borderColor = 'var(--border)';
+  z.style.background = '';
+}
+function billingDropFile(e) {
+  e.preventDefault();
+  billingDropLeave(e);
+  const file = e.dataTransfer.files[0];
+  if (file) billingFileChosen(file);
+}
+
+function billingFileChosen(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(ev) {
+    try {
+      const wb = XLSX.read(ev.target.result, { type: 'array', cellDates: true });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+      if (!rows.length) { toast('Sheet appears empty'); return; }
+      _billingSheetRows = rows;
+      const headers = Object.keys(rows[0]);
+
+      const emailSel = document.getElementById('billingEmailCol');
+      const dateSel  = document.getElementById('billingDateCol');
+      emailSel.innerHTML = headers.map(h => `<option value="${h}">${h}</option>`).join('');
+      dateSel.innerHTML  = headers.map(h => `<option value="${h}">${h}</option>`).join('');
+
+      // Auto-select best columns
+      const emailGuess = headers.find(h => /email/i.test(h)) || headers[1] || headers[0];
+      const dateGuess  = headers.find(h => /billing.?date/i.test(h))
+                      || headers.find(h => /creation.?date/i.test(h))
+                      || headers.find(h => /date/i.test(h))
+                      || headers[4];
+      if (emailGuess) emailSel.value = emailGuess;
+      if (dateGuess)  dateSel.value  = dateGuess;
+
+      const mapRow = document.getElementById('billingMapRow');
+      mapRow.style.display = 'flex';
+      document.getElementById('billingMapStatus').textContent = `${rows.length} rows loaded from "${wb.SheetNames[0]}"`;
+      document.getElementById('billingPreviewWrap').style.display = 'none';
+      document.getElementById('billingImportBtn').style.display = 'none';
+    } catch (err) {
+      toast('Could not parse file: ' + err.message);
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function parseSheetDate(val) {
+  if (!val && val !== 0) return null;
+  // Already a JS Date (cellDates: true)
+  if (val instanceof Date) return val.toISOString().slice(0,10);
+  // Excel serial number
+  if (typeof val === 'number') {
+    const d = XLSX.SSF.parse_date_code(val);
+    if (d) return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`;
+  }
+  // String like "3 Feb 2026" or "26/03/2026" or "2026-03-26"
+  const s = String(val).trim();
+  const parsed = new Date(s);
+  if (!isNaN(parsed)) return parsed.toISOString().slice(0,10);
+  return null;
+}
+
+function billingPreview() {
+  const emailCol = document.getElementById('billingEmailCol').value;
+  const dateCol  = document.getElementById('billingDateCol').value;
+  const known = new Set((data.mailboxes || []).map(m => m.email.toLowerCase()));
+
+  const tbody = document.getElementById('billingPreviewBody');
+  const rows = [];
+  let badCount = 0;
+  for (const row of _billingSheetRows) {
+    const email = String(row[emailCol] || '').trim().toLowerCase();
+    const date  = parseSheetDate(row[dateCol]);
+    if (!email || !email.includes('@')) continue;
+    const found = known.has(email);
+    if (!date) { badCount++; continue; }
+    rows.push({ email, date, found });
+  }
+
+  tbody.innerHTML = rows.map(r => `
+    <tr style="border-top:1px solid var(--border)">
+      <td style="padding:6px 12px;font-family:'SF Mono',monospace">${r.email}</td>
+      <td style="padding:6px 12px">${r.date}</td>
+      <td style="padding:6px 12px;color:${r.found ? 'var(--green,#16a34a)' : 'var(--muted)'}">${r.found ? '✓ matched' : '— not in DB'}</td>
+    </tr>`).join('');
+
+  document.getElementById('billingPreviewWrap').style.display = 'block';
+  const matched = rows.filter(r => r.found).length;
+  document.getElementById('billingMapStatus').textContent =
+    `${rows.length} rows • ${matched} matched in DB${badCount ? ` • ${badCount} skipped (no date)` : ''}`;
+  document.getElementById('billingImportBtn').style.display = matched ? '' : 'none';
+  // Store parsed rows for import
+  window._billingImportRows = rows.filter(r => r.found).map(r => ({ email: r.email, billing_start_date: r.date }));
+}
+
+async function billingImport() {
+  const rows = window._billingImportRows || [];
+  if (!rows.length) { toast('Nothing to import'); return; }
+  const btn = document.getElementById('billingImportBtn');
+  btn.disabled = true; btn.textContent = 'Importing…';
+  try {
+    const r = await fetch('/api/mailboxes/bulk-billing-rows', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rows })
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Import failed'); return; }
+    toast(`Billing dates imported for ${d.changed} mailbox(es)`);
+    document.getElementById('billingPreviewWrap').style.display = 'none';
+    document.getElementById('billingMapRow').style.display = 'none';
+    document.getElementById('billingFileInput').value = '';
+    _billingSheetRows = [];
+    await load();
+  } catch (err) {
+    toast('Error: ' + err.message);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Import billing dates';
+  }
+}
+
+// ── Not-on-warmup banner ─────────────────────────────────────
+function renderNoWarmupBanner() {
+  const mailboxes = data.mailboxes || [];
+  const notOnWarmup = mailboxes.filter(m =>
+    (m.status || '').toUpperCase() === 'ACTIVE' &&
+    (m.warmup_status || '').toUpperCase() !== 'ACTIVE'
+  );
+  const banner = document.getElementById('noWarmupBanner');
+  if (!notOnWarmup.length) { banner.style.display = 'none'; return; }
+  banner.style.display = '';
+  document.getElementById('noWarmupHeading').textContent = `${notOnWarmup.length} active mailbox${notOnWarmup.length === 1 ? '' : 'es'} not on warmup`;
+  document.getElementById('noWarmupSub').textContent = '— warmup should run on all active sending accounts';
+
+  document.getElementById('noWarmupRows').innerHTML = notOnWarmup.map(m => `
+    <tr style="border-top:1px solid #FEF3C7">
+      <td style="padding:6px 12px;font-weight:600">${esc(m.email)}</td>
+      <td style="padding:6px 12px;color:var(--muted)">${esc(m.workspace_name || '—')}</td>
+      <td style="padding:6px 12px">${statusPill(m.status)}</td>
+      <td style="padding:6px 12px">${warmupPill(m.warmup_status)}</td>
+      <td style="padding:6px 12px;text-align:right">
+        <button onclick="enableWarmupFor([${JSON.stringify(m.email)}], this)" style="font-size:11px;padding:3px 9px;border:1px solid #F59E0B;border-radius:6px;background:#FFFBEB;color:#92400E;cursor:pointer">Enable</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+async function enableWarmupFor(emails, btn) {
+  const orig = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    const r = await fetch('/api/mailboxes/enable-warmup', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ emails })
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || 'Failed'); return; }
+    const skipped = d.missing?.length ? ` (${d.missing.length} need a page refresh first)` : '';
+    toast(`Warmup enabled for ${d.enabled} mailbox${d.enabled === 1 ? '' : 'es'}${skipped}`);
+    await load();
+  } catch (err) { toast('Error: ' + err.message); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = orig; } }
+}
+
+async function enableAllWarmup() {
+  const mailboxes = data.mailboxes || [];
+  const emails = mailboxes
+    .filter(m => (m.status || '').toUpperCase() === 'ACTIVE' && (m.warmup_status || '').toUpperCase() !== 'ACTIVE')
+    .map(m => m.email);
+  if (!emails.length) return;
+  const btn = document.getElementById('enableAllWarmupBtn');
+  await enableWarmupFor(emails, btn);
+}
+
+// ── Supplier performance charts ──────────────────────────────
+let _mbPeriod = '7d';
+const _mbCharts = {};
+
+function setMbPeriod(p) {
+  _mbPeriod = p;
+  ['Today','7d','14d','30d'].forEach(x => {
+    const btn = document.getElementById(`mbPeriod${x}`);
+    if (!btn) return;
+    const active = x.toLowerCase() === p || (x === 'Today' && p === 'today');
+    btn.style.background = active ? 'var(--navy-dark)' : '#fff';
+    btn.style.color = active ? '#fff' : 'var(--muted)';
+    btn.style.borderColor = active ? 'var(--navy-dark)' : 'var(--border)';
+  });
+  loadSupplierCharts(p);
+  loadProviderCharts(p);
+}
+
+function mbDateRange(p) {
+  const today = new Date().toISOString().slice(0,10);
+  const nAgo = n => { const d=new Date(); d.setDate(d.getDate()-n); return d.toISOString().slice(0,10); };
+  if (p === 'today') return { start: today, end: today };
+  if (p === '7d')  return { start: nAgo(6), end: today };
+  if (p === '14d') return { start: nAgo(13), end: today };
+  if (p === '30d') return { start: nAgo(29), end: today };
+  return { start: nAgo(6), end: today };
+}
+
+async function loadSupplierCharts(p) {
+  const wrap = document.getElementById('supplierCharts');
+  if (!wrap) return;
+  const suppliers = [...new Set((data.mailboxes || []).map(m => m.supplier).filter(Boolean))].sort();
+  if (!suppliers.length) { wrap.innerHTML = '<div style="color:var(--muted);font-size:12px">No supplier-tagged mailboxes yet.</div>'; return; }
+
+  const { start, end } = mbDateRange(p);
+  // Get all workspaces
+  wrap.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:.5rem 0">Loading performance data…</div>';
+  let wsData;
+  try {
+    const r = await fetch(`/api/stats/summary?start=${start}&end=${end}`);
+    if (!r.ok) throw new Error(r.status);
+    wsData = await r.json();
+    // If cache is warming and partial, retry once after 8s
+    if (wsData.partial || !wsData.workspaces?.length) {
+      wrap.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:.5rem 0">Cache warming… retrying in 8s</div>';
+      await new Promise(r => setTimeout(r, 8000));
+      const r2 = await fetch(`/api/stats/summary?start=${start}&end=${end}`);
+      wsData = await r2.json();
+    }
+  } catch (err) {
+    wrap.innerHTML = `<div style="color:var(--muted);font-size:12px">Stats unavailable: ${err.message}</div>`;
+    return;
+  }
+
+  // Build per-supplier aggregation by matching workspace names to mailbox suppliers
+  const dates = wsData.dates || [];
+  // Map supplier → set of workspace names that have at least one mailbox from that supplier
+  const supWsNames = {};
+  for (const sup of suppliers) {
+    supWsNames[sup] = new Set(
+      (data.mailboxes || []).filter(m => m.supplier === sup).map(m => m.workspace_name).filter(Boolean)
+    );
+  }
+  // Build per-supplier per-day aggregates from the workspace series data
+  const supByDate = {};
+  for (const sup of suppliers) {
+    supByDate[sup] = {};
+    for (const date of dates) supByDate[sup][date] = { sent:0, replies:0, bounces:0 };
+  }
+  for (const ws of (wsData.workspaces || [])) {
+    for (const sup of suppliers) {
+      if (!supWsNames[sup].has(ws.name)) continue;
+      for (const pt of (ws.series || [])) {
+        if (!supByDate[sup][pt.date]) continue;
+        supByDate[sup][pt.date].sent    += pt.sent || 0;
+        supByDate[sup][pt.date].replies += pt.replies || 0;
+        supByDate[sup][pt.date].bounces += pt.bounces || 0;
+      }
+    }
+  }
+
+  // Destroy old charts
+  Object.values(_mbCharts).forEach(c => { try { c.destroy(); } catch {} });
+  Object.keys(_mbCharts).forEach(k => delete _mbCharts[k]);
+
+  wrap.innerHTML = suppliers.map(sup =>
+    `<div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:1rem">
+       <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:.5rem">${sup}</div>
+       <div style="position:relative;height:160px"><canvas id="mbChart-${sup.replace(/\s+/g,'-')}"></canvas></div>
+     </div>`
+  ).join('');
+
+  for (const sup of suppliers) {
+    const labels = dates.map(d => d.slice(5));
+    const canvas = document.getElementById(`mbChart-${sup.replace(/\s+/g,'-')}`);
+    if (!canvas) continue;
+
+    const agg = supByDate[sup] || {};
+    const roll3 = arr => arr.map((_, i) => {
+      const sl = arr.slice(Math.max(0, i - 2), i + 1).filter(v => v != null);
+      return sl.length ? +(sl.reduce((a,b)=>a+b,0)/sl.length).toFixed(2) : null;
+    });
+    const sentCounts  = roll3(dates.map(d => agg[d]?.sent || 0));
+    const replyRates  = roll3(dates.map(d => {
+      const sent = agg[d]?.sent || 0;
+      return sent > 0 ? +((agg[d].replies / sent) * 100).toFixed(2) : null;
+    }));
+    const bounceRates = roll3(dates.map(d => {
+      const sent = agg[d]?.sent || 0;
+      return sent > 0 ? +((agg[d].bounces / sent) * 100).toFixed(2) : null;
+    }));
+    const ptR = dates.length <= 7 ? 3 : 1;
+
+    _mbCharts[sup] = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: 'Sent',
+            data: sentCounts,
+            borderColor: '#2563EB', backgroundColor: '#2563EB22',
+            borderWidth: 2, tension: .3, fill: false,
+            pointRadius: ptR, spanGaps: true,
+            yAxisID: 'ySent',
+          },
+          {
+            label: 'Reply Rate %',
+            data: replyRates,
+            borderColor: '#059669', backgroundColor: '#05966922',
+            borderWidth: 2, tension: .3, fill: false,
+            pointRadius: ptR, spanGaps: true,
+            yAxisID: 'yPct',
+          },
+          {
+            label: 'Bounce Rate %',
+            data: bounceRates,
+            borderColor: '#DC2626', backgroundColor: '#DC262622',
+            borderWidth: 2, tension: .3, fill: false,
+            pointRadius: ptR, spanGaps: true,
+            yAxisID: 'yPct',
+          },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { position: 'top', labels: { boxWidth: 10, font: { size: 10 } } },
+          tooltip: {
+            callbacks: {
+              title: items => `${sup} — ${items[0].label}`,
+              label: item => {
+                const v = item.parsed.y;
+                if (v == null) return `${item.dataset.label}: —`;
+                return item.dataset.label === 'Sent'
+                  ? `Sent: ${v.toLocaleString()}`
+                  : `${item.dataset.label}: ${v.toFixed(2)}%`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { font: { size: 10 } } },
+          ySent: {
+            position: 'right',
+            beginAtZero: true,
+            grid: { drawOnChartArea: false },
+            ticks: { font: { size: 10 } },
+          },
+          yPct: {
+            position: 'left',
+            beginAtZero: true,
+            ticks: { font: { size: 10 }, callback: v => v + '%' },
+          },
+        },
+      },
+    });
+  }
+}
+
+// ── Provider type performance charts (Google / Microsoft / SMTP) ─
+const _providerCharts = {};
+const PROVIDER_LABEL = { google: 'Google', microsoft: 'Microsoft', smtp: 'SMTP' };
+const PROVIDER_COLOR = { google: '#EA4335', microsoft: '#0078D4', smtp: '#475569' };
+
+async function loadProviderCharts(p) {
+  const wrap = document.getElementById('providerCharts');
+  if (!wrap) return;
+  const providers = [...new Set((data.mailboxes || []).map(m => (m.type || '').toLowerCase()).filter(Boolean))].sort();
+  if (!providers.length) { wrap.innerHTML = '<div style="color:var(--muted);font-size:12px">No provider-typed mailboxes yet.</div>'; return; }
+
+  const { start, end } = mbDateRange(p);
+  wrap.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:.5rem 0">Loading provider performance…</div>';
+  let wsData;
+  try {
+    const r = await fetch(`/api/stats/summary?start=${start}&end=${end}`);
+    if (!r.ok) throw new Error(r.status);
+    wsData = await r.json();
+    if (wsData.partial || !wsData.workspaces?.length) {
+      wrap.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:.5rem 0">Cache warming… retrying in 8s</div>';
+      await new Promise(r => setTimeout(r, 8000));
+      const r2 = await fetch(`/api/stats/summary?start=${start}&end=${end}`);
+      wsData = await r2.json();
+    }
+  } catch (err) {
+    wrap.innerHTML = `<div style="color:var(--muted);font-size:12px">Stats unavailable: ${err.message}</div>`;
+    return;
+  }
+
+  const dates = wsData.dates || [];
+  // Per provider → set of workspace names with at least one mailbox of that type
+  const provWsNames = {};
+  for (const prov of providers) {
+    provWsNames[prov] = new Set(
+      (data.mailboxes || []).filter(m => (m.type || '').toLowerCase() === prov).map(m => m.workspace_name).filter(Boolean)
+    );
+  }
+  const provByDate = {};
+  for (const prov of providers) {
+    provByDate[prov] = {};
+    for (const date of dates) provByDate[prov][date] = { sent:0, replies:0, bounces:0 };
+  }
+  for (const ws of (wsData.workspaces || [])) {
+    for (const prov of providers) {
+      if (!provWsNames[prov].has(ws.name)) continue;
+      for (const pt of (ws.series || [])) {
+        if (!provByDate[prov][pt.date]) continue;
+        provByDate[prov][pt.date].sent    += pt.sent || 0;
+        provByDate[prov][pt.date].replies += pt.replies || 0;
+        provByDate[prov][pt.date].bounces += pt.bounces || 0;
+      }
+    }
+  }
+
+  Object.values(_providerCharts).forEach(c => { try { c.destroy(); } catch {} });
+  Object.keys(_providerCharts).forEach(k => delete _providerCharts[k]);
+
+  wrap.innerHTML = providers.map(prov =>
+    `<div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:1rem;border-top:3px solid ${PROVIDER_COLOR[prov] || '#475569'}">
+       <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:.5rem">${PROVIDER_LABEL[prov] || prov}</div>
+       <div style="position:relative;height:160px"><canvas id="provChart-${prov}"></canvas></div>
+     </div>`
+  ).join('');
+
+  for (const prov of providers) {
+    const labels = dates.map(d => d.slice(5));
+    const canvas = document.getElementById(`provChart-${prov}`);
+    if (!canvas) continue;
+
+    const agg = provByDate[prov] || {};
+    // 3-day rolling average — matches supplier-trends behaviour
+    const roll3 = arr => arr.map((_, i) => {
+      const sl = arr.slice(Math.max(0, i - 2), i + 1).filter(v => v != null);
+      return sl.length ? +(sl.reduce((a,b)=>a+b,0)/sl.length).toFixed(2) : null;
+    });
+    const sentCounts  = roll3(dates.map(d => agg[d]?.sent || 0));
+    const replyRates  = roll3(dates.map(d => {
+      const sent = agg[d]?.sent || 0;
+      return sent > 0 ? +((agg[d].replies / sent) * 100).toFixed(2) : null;
+    }));
+    const bounceRates = roll3(dates.map(d => {
+      const sent = agg[d]?.sent || 0;
+      return sent > 0 ? +((agg[d].bounces / sent) * 100).toFixed(2) : null;
+    }));
+    const ptR = dates.length <= 7 ? 3 : 1;
+    const provLabel = PROVIDER_LABEL[prov] || prov;
+
+    _providerCharts[prov] = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: 'Sent',
+            data: sentCounts,
+            borderColor: '#2563EB', backgroundColor: '#2563EB22',
+            borderWidth: 2, tension: .3, fill: false,
+            pointRadius: ptR, spanGaps: true,
+            yAxisID: 'ySent',
+          },
+          {
+            label: 'Reply Rate %',
+            data: replyRates,
+            borderColor: '#059669', backgroundColor: '#05966922',
+            borderWidth: 2, tension: .3, fill: false,
+            pointRadius: ptR, spanGaps: true,
+            yAxisID: 'yPct',
+          },
+          {
+            label: 'Bounce Rate %',
+            data: bounceRates,
+            borderColor: '#DC2626', backgroundColor: '#DC262622',
+            borderWidth: 2, tension: .3, fill: false,
+            pointRadius: ptR, spanGaps: true,
+            yAxisID: 'yPct',
+          },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { position: 'top', labels: { boxWidth: 10, font: { size: 10 } } },
+          tooltip: {
+            callbacks: {
+              title: items => `${provLabel} — ${items[0].label} (3d avg)`,
+              label: item => {
+                const v = item.parsed.y;
+                if (v == null) return `${item.dataset.label}: —`;
+                return item.dataset.label === 'Sent'
+                  ? `Sent: ${v.toLocaleString()}`
+                  : `${item.dataset.label}: ${v.toFixed(2)}%`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { font: { size: 10 } } },
+          ySent: {
+            position: 'right',
+            beginAtZero: true,
+            grid: { drawOnChartArea: false },
+            ticks: { font: { size: 10 } },
+          },
+          yPct: {
+            position: 'left',
+            beginAtZero: true,
+            ticks: { font: { size: 10 }, callback: v => v + '%' },
+          },
+        },
+      },
+    });
+  }
+}
+</script>
+</body>
+</html>

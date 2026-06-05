@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/favicon.svg">
+<meta name="theme-color" content="#050C29">
+<meta name="description" content="Ottaly Commission">
+<title>Ottaly — Commission</title>
+<script>document.write('<script src="/splash.js?v=' + Date.now() + '"><\/script>');</script>
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--purple:#7C89CD;--yellow:#FFB700;--bg:#F0F2F8;--card:#fff;--border:#E2E6F0;--text:#050C29;--muted:#6B7280;--green:#059669;--amber:#D97706}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text)}
+.page{max-width:1100px;margin:0 auto;padding:2rem}
+.page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem;flex-wrap:wrap;gap:0.75rem}
+.page-title{font-size:1.4rem;font-weight:700}
+.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1rem;margin-bottom:1.5rem}
+.sum-card{background:var(--card);border-radius:10px;padding:1rem 1.1rem;border:1px solid var(--border);border-top:3px solid var(--teal)}
+.sum-card.green{border-top-color:var(--green)}.sum-card.amber{border-top-color:var(--amber)}
+.sum-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+.sum-val{font-size:1.5rem;font-weight:700;margin-top:4px}
+.card{background:var(--card);border-radius:12px;border:1px solid var(--border);overflow:hidden;margin-bottom:1.5rem}
+.card-header{padding:1rem 1.25rem;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem}
+.card-title{font-weight:700;font-size:14px}
+table{width:100%;border-collapse:collapse}
+thead{background:#F8F9FC}
+th{padding:9px 14px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);border-bottom:1px solid var(--border)}
+td{padding:12px 14px;font-size:13px;border-bottom:1px solid var(--border)}
+tr:last-child td{border-bottom:none}
+.pill{display:inline-block;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;background:#D1FAE5;color:#065F46}
+.period-sel{padding:7px 10px;border:1px solid var(--border);border-radius:7px;font-size:13px;font-family:'Inter',sans-serif;outline:none}
+.custom-range{display:none;gap:6px;align-items:center;flex-wrap:wrap}
+.custom-range input{padding:7px 8px;border:1px solid var(--border);border-radius:7px;font-size:12px;outline:none}
+.btn{padding:7px 14px;background:var(--navy-dark);color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer}
+.empty{text-align:center;padding:2.5rem;color:var(--muted)}
+.avatar{width:34px;height:34px;border-radius:8px;background:var(--teal);color:#fff;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+
+/* Admin commission tracker */
+.comm-layout{display:grid;grid-template-columns:220px 1fr;gap:1.25rem;margin-bottom:2rem;align-items:start}
+@media(max-width:800px){.comm-layout{grid-template-columns:1fr}}
+.agency-card{background:var(--navy-dark);border-radius:12px;padding:1.5rem;box-shadow:0 1px 3px rgba(5,12,41,.12)}
+.agency-card-icon{font-size:26px;margin-bottom:.75rem}
+.agency-card-label{font-size:11px;font-weight:600;color:rgba(255,255,255,.5);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
+.agency-card-value{font-family:'Genos',sans-serif;font-size:38px;font-weight:700;color:var(--yellow);line-height:1}
+.agency-card-sub{font-size:12px;color:rgba(255,255,255,.35);margin-top:6px}
+.earner-panel{background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(5,12,41,.08);overflow:hidden}
+.earner-tabs{display:flex;gap:.5rem;padding:1rem 1.25rem;border-bottom:2px solid #F3F4F6;flex-wrap:wrap}
+.earner-tab{padding:7px 20px;border-radius:8px;border:2px solid #E5E7EB;font-family:'Genos',sans-serif;font-size:18px;font-weight:700;cursor:pointer;background:transparent;color:#9CA3AF;transition:all .2s}
+.earner-tab:hover{background:#F9FAFB;color:var(--navy-dark)}
+.earner-tab.active{background:#EBF2FF;color:var(--navy);border-color:var(--navy)}
+.earner-hdr{display:flex;justify-content:space-between;align-items:center;padding:1.25rem 1.5rem;border-bottom:1px solid #F3F4F6}
+.earner-name{font-family:'Genos',sans-serif;font-size:26px;font-weight:700;color:var(--navy-dark)}
+.earner-meta{font-size:13px;color:#9CA3AF;margin-top:2px}
+.earner-due-label{font-size:11px;font-weight:600;color:#6B7280;text-transform:uppercase;letter-spacing:1px;text-align:right;margin-bottom:4px}
+.earner-due-value{font-family:'Genos',sans-serif;font-size:30px;font-weight:700;color:var(--teal);line-height:1}
+.earner-client-row{display:flex;justify-content:space-between;align-items:center;padding:1rem 1.5rem;border-bottom:1px solid #F9FAFB}
+.earner-client-row:last-child{border-bottom:none}
+.earner-client-stats{display:flex;align-items:center;gap:1.25rem}
+.stat-pill{font-size:12px;color:#9CA3AF;font-weight:500}
+.stat-val{font-family:'Genos',sans-serif;font-size:17px;font-weight:700;color:var(--navy-dark)}
+.rev-pill{display:inline-block;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;background:#D1FAE5;color:#065F46}
+.client-badge{display:flex;align-items:center;gap:10px;font-weight:600;font-size:13px}
+.client-initial{width:30px;height:30px;border-radius:7px;color:#fff;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+@media(max-width:768px){.earner-client-row{flex-wrap:wrap;gap:.5rem}.earner-client-stats{flex-wrap:wrap;gap:.5rem}}
+</style>
+    <script src="/nav.js" defer></script>
+</head>
+<body>
+
+<!-- Manager view -->
+<div class="page" id="managerView" style="display:none">
+  <div class="page-header">
+    <div>
+      <div class="page-title">My Commission</div>
+      <div style="font-size:13px;color:var(--muted)" id="pageSubtitle">Loading…</div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <select class="period-sel" id="period" onchange="handlePeriod()">
+        <option value="month" selected>This Month</option>
+        <option value="lastMonth">Last Month</option>
+        <option value="quarter">This Quarter</option>
+        <option value="year">This Year</option>
+        <option value="all">All Time</option>
+        <option value="custom">Custom Range</option>
+      </select>
+      <div class="custom-range" id="customRange">
+        <input type="date" id="startDate">
+        <span style="font-size:12px;color:var(--muted)">to</span>
+        <input type="date" id="endDate">
+        <button class="btn" onclick="renderManager()">Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="summary">
+    <div class="sum-card green">
+      <div class="sum-label">Commission Earned</div>
+      <div class="sum-val" id="sumComm">£0</div>
+    </div>
+    <div class="sum-card">
+      <div class="sum-label">Leads Delivered</div>
+      <div class="sum-val" id="sumLeads">0</div>
+    </div>
+    <div class="sum-card amber">
+      <div class="sum-label">Active Clients</div>
+      <div class="sum-val" id="sumClients">0</div>
+    </div>
+    <div class="sum-card">
+      <div class="sum-label">Rate per Lead</div>
+      <div class="sum-val" id="sumRate" style="font-size:1.1rem">—</div>
+    </div>
+    <div class="sum-card" id="salaryCard" style="display:none">
+      <div class="sum-label">Base Salary</div>
+      <div class="sum-val" id="sumSalary">£0</div>
+    </div>
+    <div class="sum-card green" id="totalCard" style="display:none">
+      <div class="sum-label">Total This Month</div>
+      <div class="sum-val" id="sumTotal">£0</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:4px">Salary + commission</div>
+    </div>
+    <div class="sum-card" id="payslipCard" style="display:none">
+      <div class="sum-label">Pay Slip</div>
+      <div style="margin-top:8px">
+        <a id="payslipLink" href="#" onclick="downloadPayslip(event)"
+           style="display:inline-flex;align-items:center;gap:6px;padding:7px 14px;background:var(--navy-dark);color:#fff;border-radius:7px;font-size:12px;font-weight:600;text-decoration:none">
+          ↓ Download
+        </a>
+      </div>
+      <div id="payslipFilename" style="font-size:11px;color:var(--muted);margin-top:6px"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">Client Breakdown</div>
+      <div style="font-size:12px;color:var(--muted)" id="periodLabel"></div>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Client</th>
+          <th>Managing Since</th>
+          <th style="text-align:center">Leads</th>
+          <th style="text-align:right">Leads</th>
+          <th style="text-align:right">Commission Earned</th>
+        </tr>
+      </thead>
+      <tbody id="clientsBody">
+        <tr><td colspan="5" class="empty">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Admin view -->
+<div class="page" id="adminView" style="display:none">
+  <div class="page-header">
+    <div>
+      <div class="page-title">Commission Tracker</div>
+      <div style="font-size:13px;color:var(--muted)" id="adminPeriodLabel"></div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <select class="period-sel" id="adminPeriod" onchange="handleAdminPeriod()">
+        <option value="month" selected>This Month</option>
+        <option value="lastMonth">Last Month</option>
+        <option value="quarter">This Quarter</option>
+        <option value="year">This Year</option>
+        <option value="all">All Time</option>
+        <option value="custom">Custom Range</option>
+      </select>
+      <div class="custom-range" id="adminCustomRange">
+        <input type="date" id="adminStart">
+        <span style="font-size:12px;color:var(--muted)">to</span>
+        <input type="date" id="adminEnd">
+        <button class="btn" onclick="renderAdmin()">Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="comm-layout">
+    <div class="agency-card">
+      <div class="agency-card-icon">👁</div>
+      <div class="agency-card-label">Agency Commission</div>
+      <div class="agency-card-value" id="agencyTotal">£0</div>
+      <div class="agency-card-sub" id="agencyTotalSub">total earned this month</div>
+    </div>
+    <div class="earner-panel">
+      <div class="earner-tabs" id="earnerTabs"></div>
+      <div id="earnerDetail"><p style="color:#9CA3AF;padding:1.5rem;">Loading…</p></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const CLIENT_COLORS = ['#1F6F78','#224388','#FFB700','#7C89CD','#D2E4F8'];
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// ── Shared data ──────────────────────────────────────────
+let allLeads = [];
+
+// ── Manager-specific ─────────────────────────────────────
+let myName = '', myRate = 15, mySalary = 0, myClients = [], _defaultRate = 5;
+let _zarRate = null;          // GBP → ZAR live rate
+let _avgLeadPriceGbp = null;  // Last month's avg lead price in GBP
+
+async function fetchZarRate() {
+  try {
+    const r = await fetch('/api/gbp-zar-rate'); // server-side cache — reliable
+    const d = await r.json();
+    _zarRate = d?.rate || null;
+  } catch { _zarRate = null; }
+}
+
+function fmtZar(gbpAmount) {
+  if (_zarRate && _zarRate > 0) {
+    return 'R' + (gbpAmount * _zarRate).toLocaleString('en-ZA', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  return '£' + gbpAmount.toFixed(2); // fallback to GBP if rate unavailable
+}
+
+function fmtZarSalary(zarAmount) {
+  // Salary is stored in ZAR directly — no conversion needed
+  return 'R' + zarAmount.toLocaleString('en-ZA', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function getRange() {
+  const p = document.getElementById('period').value;
+  return buildRange(p, 'startDate', 'endDate');
+}
+
+function handlePeriod() {
+  const p = document.getElementById('period').value;
+  document.getElementById('customRange').style.display = p === 'custom' ? 'flex' : 'none';
+  if (p !== 'custom') renderManager();
+}
+
+function renderManager() {
+  try {
+  const { start, end, label } = getRange();
+  document.getElementById('periodLabel').textContent = label;
+
+  // Per-lead bonus = last month avg lead price (GBP) × CM rate% × ZAR rate
+  const perLeadGbp = (_avgLeadPriceGbp || 0) * ((_defaultRate || 5) / 100);
+  const perLeadZar = _zarRate ? perLeadGbp * _zarRate : perLeadGbp;
+
+  const rows = [];
+  let totalLeads = 0;
+  for (const c of myClients) {
+    const mgrStart = c.manager_start_date ? new Date(c.manager_start_date + 'T00:00:00') : null;
+    const leads = allLeads.filter(l =>
+      l.client_name === c.workspace_name &&
+      l.date && l.date >= start && l.date < end &&
+      (!mgrStart || l.date >= mgrStart)
+    );
+    if (leads.length === 0) continue;
+    const earned = leads.length * perLeadZar;
+    totalLeads += leads.length;
+    rows.push({ name: c.workspace_name, since: c.manager_start_date, leads: leads.length, earned });
+  }
+  rows.sort((a, b) => b.leads - a.leads);
+
+  const totalCommZar = totalLeads * perLeadZar;
+
+  // Business day salary accrual — only for "This Month" view
+  const isThisMonth = document.getElementById('period').value === 'month';
+  let salaryEarned = mySalary; // default: full salary for other periods
+  let salaryLabel  = fmtZarSalary(mySalary);
+  if (isThisMonth) {
+    const now = new Date();
+    const y = now.getFullYear(), m = now.getMonth();
+    // Count all business days in month
+    let totalBizDays = 0, elapsedBizDays = 0;
+    const today = now.toISOString().slice(0,10);
+    for (let d = new Date(y, m, 1); d.getMonth() === m; d.setDate(d.getDate() + 1)) {
+      const dow = d.getDay();
+      if (dow !== 0 && dow !== 6) {
+        totalBizDays++;
+        if (d.toISOString().slice(0,10) <= today) elapsedBizDays++;
+      }
+    }
+    const dailyRate  = mySalary / (totalBizDays || 1);
+    salaryEarned     = dailyRate * elapsedBizDays;
+    salaryLabel      = `R${salaryEarned.toLocaleString('en-ZA',{minimumFractionDigits:2,maximumFractionDigits:2})} <span style="font-size:11px;color:var(--muted)">(${elapsedBizDays}/${totalBizDays} days · R${dailyRate.toLocaleString('en-ZA',{minimumFractionDigits:2,maximumFractionDigits:2})}/day)</span>`;
+  }
+
+  const totalZar = salaryEarned + totalCommZar;
+
+  document.getElementById('sumComm').textContent    = 'R' + totalCommZar.toLocaleString('en-ZA', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  document.getElementById('sumLeads').textContent   = totalLeads;
+  document.getElementById('sumClients').textContent = rows.length;
+  document.getElementById('sumRate').textContent    = 'R' + perLeadZar.toLocaleString('en-ZA', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '/lead';
+  document.getElementById('sumSalary').innerHTML    = salaryLabel;
+  document.getElementById('sumTotal').textContent   = 'R' + totalZar.toLocaleString('en-ZA', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  document.getElementById('salaryCard').style.display = 'block';
+  document.getElementById('totalCard').style.display  = isThisMonth ? 'block' : 'none';
+  checkPayslip();
+  document.getElementById('clientsBody').innerHTML = rows.length
+    ? rows.map(r => `<tr>
+        <td><div style="display:flex;align-items:center;gap:10px">
+          <div class="avatar">${r.name[0].toUpperCase()}</div>
+          <span style="font-weight:600">${esc(r.name)}</span>
+        </div></td>
+        <td style="color:var(--muted);font-size:12px">${r.since || '—'}</td>
+        <td style="text-align:center;font-weight:600">${r.leads}</td>
+        <td style="text-align:right;font-weight:700;color:var(--green)">R${r.earned.toLocaleString('en-ZA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+      </tr>`).join('')
+    : `<tr><td colspan="4" class="empty">No leads delivered in this period</td></tr>`;
+  } catch(e) {
+    console.error('[renderManager]', e);
+    document.getElementById('clientsBody').innerHTML = `<tr><td colspan="5" class="empty">Error loading commission data — ${e.message}</td></tr>`;
+  }
+}
+
+function currentMonth() {
+  const { start } = getRange();
+  return start.toISOString().slice(0, 7);
+}
+
+async function checkPayslip() {
+  const month = currentMonth();
+  const card  = document.getElementById('payslipCard');
+  try {
+    const meta = await fetch(`/api/payslips/${month}/meta`).then(r => r.json());
+    if (meta.exists) {
+      document.getElementById('payslipFilename').textContent = meta.filename || '';
+      card.style.display = 'block';
+    } else {
+      card.style.display = 'none';
+    }
+  } catch { card.style.display = 'none'; }
+}
+
+function downloadPayslip(e) {
+  e.preventDefault();
+  window.open(`/api/payslips/${currentMonth()}`, '_blank');
+}
+
+// ── Admin-specific ────────────────────────────────────────
+// clientMgrs: workspace_name → [{name, share}]
+// share = 0.5 when two managers split a client, 1.0 when sole manager
+let clientMgrs       = {};
+let commRateMap      = {};  // workspace_name → commission rate %
+let managerStartMap  = {};  // workspace_name → start date string
+let managerSalaryMap = {};  // manager name → base_salary
+let _earnerStats     = {};  // earnerName → { clientName: { leads, revenue, commRate, share, startDate } }
+
+function buildRange(p, startId, endId) {
+  const now = new Date();
+  const y = now.getFullYear(), m = now.getMonth();
+  let start, end, label;
+  if (p === 'month')      { start = new Date(y,m,1);   end = new Date(y,m+1,1);   label = now.toLocaleDateString('en-GB',{month:'long',year:'numeric'}); }
+  else if (p === 'lastMonth') { start = new Date(y,m-1,1); end = new Date(y,m,1); label = new Date(y,m-1,1).toLocaleDateString('en-GB',{month:'long',year:'numeric'}); }
+  else if (p === 'quarter')   { const q=Math.floor(m/3); start=new Date(y,q*3,1); end=new Date(y,q*3+3,1); label=`Q${q+1} ${y}`; }
+  else if (p === 'year')  { start = new Date(y,0,1);  end = new Date(y+1,0,1);  label = `${y}`; }
+  else if (p === 'all')   { start = new Date(2020,0,1); end = new Date(y+1,0,1); label = 'All Time'; }
+  else {
+    const s = document.getElementById(startId).value;
+    const e = document.getElementById(endId).value;
+    start = new Date(s+'T00:00:00'); end = new Date(e+'T23:59:59'); label = `${s} – ${e}`;
+  }
+  return { start, end, label };
+}
+
+function handleAdminPeriod() {
+  const p = document.getElementById('adminPeriod').value;
+  document.getElementById('adminCustomRange').style.display = p === 'custom' ? 'flex' : 'none';
+  if (p !== 'custom') renderAdmin();
+}
+
+function renderAdmin() {
+  const { start, end, label } = buildRange(
+    document.getElementById('adminPeriod').value, 'adminStart', 'adminEnd'
+  );
+  document.getElementById('adminPeriodLabel').textContent = label;
+
+  const periodLeads = allLeads.filter(l =>
+    l.date && l.date >= start && l.date < end
+  );
+
+  _earnerStats = {};
+  periodLeads.forEach(lead => {
+    const rates = (window._effectiveRates || {})[lead.client_name?.trim()] || {};
+    if (!Object.keys(rates).length) return;
+    const startDateStr = managerStartMap[lead.client_name?.trim()];
+    if (startDateStr && lead.date < new Date(startDateStr + 'T00:00:00')) return;
+    Object.entries(rates).forEach(([earner, ratePct]) => {
+      const effectiveRate = ratePct / 100;
+      if (!_earnerStats[earner]) _earnerStats[earner] = {};
+      if (!_earnerStats[earner]) _earnerStats[earner] = {};
+      if (!_earnerStats[earner][lead.client_name]) {
+        _earnerStats[earner][lead.client_name] = { leads: 0, revenue: 0, commission: 0, commRate: effectiveRate, share: 1, startDate: startDateStr };
+      }
+      _earnerStats[earner][lead.client_name].leads++;
+      _earnerStats[earner][lead.client_name].revenue   += lead.lead_price;
+      _earnerStats[earner][lead.client_name].commission += (_avgLeadPriceGbp || 0) * effectiveRate;
+    });
+  });
+
+  let agencyComm = 0;
+  Object.entries(_earnerStats).forEach(([earner, clients]) => {
+    Object.values(clients).forEach(s => agencyComm += s.commission);
+  });
+  // Salary is in ZAR — don't add to GBP total
+  document.getElementById('agencyTotal').textContent = '£' + agencyComm.toFixed(2);
+  document.getElementById('agencyTotalSub').textContent = `£${agencyComm.toFixed(0)} commission · ` + label;
+
+  const earners = Object.keys(_earnerStats).sort();
+  const tabsEl  = document.getElementById('earnerTabs');
+
+  if (earners.length === 0) {
+    tabsEl.innerHTML = '';
+    document.getElementById('earnerDetail').innerHTML = '<p style="color:#9CA3AF;padding:1.5rem;">No commission data for this period</p>';
+    return;
+  }
+
+  const currentActive = tabsEl.querySelector('.earner-tab.active')?.dataset.earner;
+  const activeEarner  = earners.includes(currentActive) ? currentActive : earners[0];
+
+  tabsEl.innerHTML = earners.map(e =>
+    `<button class="earner-tab ${e === activeEarner ? 'active' : ''}" data-earner="${esc(e)}" onclick="selectEarner('${esc(e)}')">${esc(e)}</button>`
+  ).join('');
+
+  renderEarnerDetail(activeEarner);
+}
+
+function selectEarner(earner) {
+  document.querySelectorAll('.earner-tab').forEach(btn =>
+    btn.classList.toggle('active', btn.dataset.earner === earner)
+  );
+  renderEarnerDetail(earner);
+}
+
+function renderEarnerDetail(earner) {
+  const clients = _earnerStats[earner] || {};
+  const entries = Object.entries(clients).sort((a, b) => b[1].revenue - a[1].revenue);
+  const totalLeads      = entries.reduce((s, [, c]) => s + c.leads, 0);
+  const totalCommission = entries.reduce((s, [, c]) => s + (c.commission ?? c.revenue * c.commRate), 0);
+  const salary          = managerSalaryMap[earner] || 0;
+  // Salary is in ZAR — don't mix with GBP commission for "Total Due"
+  const allClientKeys = Object.keys(window._effectiveRates || {});
+
+  document.getElementById('earnerDetail').innerHTML = `
+    <div class="earner-hdr">
+      <div>
+        <div class="earner-name">${esc(earner)}</div>
+        <div class="earner-meta">${entries.length} client${entries.length !== 1 ? 's' : ''} · ${totalLeads} lead${totalLeads !== 1 ? 's' : ''}</div>
+      </div>
+      <div style="display:flex;gap:1.5rem;align-items:flex-end;flex-wrap:wrap">
+        ${salary > 0 ? `<div style="text-align:right">
+          <div class="earner-due-label">Base Salary</div>
+          <div style="font-family:'Genos',sans-serif;font-size:22px;font-weight:700;color:#6B7280">R${salary.toLocaleString('en-ZA',{minimumFractionDigits:0,maximumFractionDigits:0})}<span style="font-size:13px">/mo</span></div>
+        </div>` : ''}
+        <div style="text-align:right">
+          <div class="earner-due-label">Commission</div>
+          <div class="earner-due-value">£${totalCommission.toFixed(2)}</div>
+        </div>
+        ${salary > 0 ? `<div style="text-align:right">
+          <div class="earner-due-label" style="font-size:10px">Note: salary paid in ZAR separately</div>
+        </div>` : ''}
+      </div>
+    </div>
+    ${entries.map(([client, stats]) => {
+      const commission = stats.commission ?? stats.revenue * stats.commRate;
+      const colorIdx   = allClientKeys.indexOf(client);
+      const color      = CLIENT_COLORS[colorIdx % CLIENT_COLORS.length];
+      return `<div class="earner-client-row">
+        <div class="client-badge">
+          <div class="client-initial" style="background:${color}">${esc(client.charAt(0).toUpperCase())}</div>
+          ${esc(client)}
+        </div>
+        <div class="earner-client-stats">
+          <span class="stat-pill">${stats.leads} lead${stats.leads !== 1 ? 's' : ''}</span>
+          <span class="rev-pill">£${commission.toFixed(2)}</span>
+          ${stats.startDate ? `<span style="font-size:11px;color:#9CA3AF">from ${stats.startDate}</span>` : ''}
+        </div>
+      </div>`;
+    }).join('')}
+  `;
+}
+
+// ── Init ─────────────────────────────────────────────────
+async function init() {
+  const sess = await fetch('/api/session').then(r => r.json()).catch(() => ({ ok: false }));
+  if (!sess.ok) { location.href = '/login.html?next=/commission.html'; return; }
+
+  const [prices, managers, cache, workload] = await Promise.all([
+    fetch('/api/workspace-prices').then(r => r.json()).catch(() => []),
+    fetch('/api/admin/managers').then(r => r.ok ? r.json() : []).catch(() => []),
+    fetch('/api/revenue/leads').then(r => r.json()).catch(() => ({ leads: [] })),
+    fetch('/api/admin/workload').then(r => r.json()).catch(() => ({ assignments: [], defaultRate: 5 })),
+  ]);
+
+  allLeads = (cache.leads || [])
+    .filter(l => !l.is_nonlead)
+    .map(l => ({ ...l, date: l.date ? new Date(l.date) : null }));
+
+  _defaultRate = workload.defaultRate ?? 5;
+
+  // Simple: build effectiveRates — each CM earns their own rate on their own clients only
+  const mgrRateLookup = {}; // manager name → commission %
+  (managers || []).forEach(m => {
+    mgrRateLookup[m.name.trim().toLowerCase()] = m.commission_rate ?? _defaultRate;
+    managerSalaryMap[m.name.trim()] = m.base_salary ?? 0;
+  });
+
+  // Build workspace → CM assignments from client_managers (new) with fallback to campaign_manager
+  const wsToMgrs = {}; // workspace_name → [{ name, rate }]
+  const myWsSet  = new Set();
+
+  (prices || []).forEach(p => {
+    managerStartMap[p.workspace_name] = p.manager_start_date || null;
+  });
+
+  // Use client_managers table assignments
+  const wsNameMap = {};
+  (prices || []).forEach(p => { wsNameMap[p.workspace_id] = p.workspace_name; });
+
+  (workload.assignments || []).forEach(a => {
+    const name = wsNameMap[a.client_workspace_id]; if (!name) return;
+    if (!wsToMgrs[name]) wsToMgrs[name] = [];
+    const rate = mgrRateLookup[a.manager_name.toLowerCase()] ?? _defaultRate;
+    wsToMgrs[name].push({ name: a.manager_name, rate });
+  });
+
+  // Fallback: clients with old campaign_manager fields not in client_managers
+  (prices || []).forEach(p => {
+    if (wsToMgrs[p.workspace_name]) return;
+    const m1 = (p.campaign_manager  || '').trim();
+    const m2 = (p.campaign_manager_2 || '').trim();
+    if (m1 || m2) {
+      wsToMgrs[p.workspace_name] = [];
+      if (m1) wsToMgrs[p.workspace_name].push({ name: m1, rate: mgrRateLookup[m1.toLowerCase()] ?? _defaultRate });
+      if (m2) wsToMgrs[p.workspace_name].push({ name: m2, rate: mgrRateLookup[m2.toLowerCase()] ?? _defaultRate });
+    }
+  });
+
+  // Build effectiveRates: { workspace_name: { manager_name: rate } }
+  // Simple: each CM earns their own rate on clients they manage — no cross-commission
+  const effectiveRates = {};
+  Object.entries(wsToMgrs).forEach(([wsName, mgrs]) => {
+    effectiveRates[wsName] = {};
+    mgrs.forEach(({ name, rate }) => { effectiveRates[wsName][name] = rate; });
+  });
+  window._effectiveRates = effectiveRates;
+  window._defaultCommRate = _defaultRate;
+
+  if (sess.role === 'admin') {
+    const avgData = await fetch('/api/avg-lead-price').then(r => r.json()).catch(() => ({ avg_lead_price_gbp: 0 }));
+    _avgLeadPriceGbp = avgData.avg_lead_price_gbp || 0;
+    document.getElementById('adminView').style.display = 'block';
+    renderAdmin();
+  } else {
+    const rateRes = await fetch('/api/manager/rate').then(r => r.json()).catch(() => ({}));
+    myName   = sess.name;
+    mySalary = rateRes.base_salary ?? 0;
+    _defaultRate = rateRes.commission_rate ?? _defaultRate;
+
+    // Fetch live GBP→ZAR rate and last month's avg lead price in parallel
+    const [, avgData] = await Promise.all([
+      fetchZarRate(),
+      fetch('/api/avg-lead-price').then(r => r.json()).catch(() => ({ avg_lead_price_gbp: 0 })),
+    ]);
+    _avgLeadPriceGbp = avgData.avg_lead_price_gbp || 0;
+    // Show per-lead rate explanation card
+    const perLeadGbp = _avgLeadPriceGbp * ((_defaultRate || 5) / 100);
+    const perLeadZar = _zarRate ? perLeadGbp * _zarRate : 0;
+    document.getElementById('sumRate').closest('.sum-card').insertAdjacentHTML('afterend',
+      `<div class="sum-card" style="border-top-color:#7C89CD">
+        <div class="sum-label">How your rate is calculated</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:6px;line-height:1.6">
+          All-time avg lead: <strong>£${_avgLeadPriceGbp.toFixed(2)}</strong><br>
+          × ${_defaultRate}% commission = £${(perLeadGbp).toFixed(2)}<br>
+          × R${_zarRate ? _zarRate.toFixed(2) : '23.50'}/GBP<br>
+          = <strong style="color:var(--green)">R${perLeadZar.toFixed(2)} per lead</strong>
+        </div>
+      </div>`
+    );
+
+    document.getElementById('pageSubtitle').textContent = `Commission for ${myName}`;
+    // Manager sees only their own assigned clients
+    const myAssigned = new Set((workload.assignments || []).filter(a => a.manager_name === myName).map(a => a.client_workspace_id));
+    myClients = (prices || []).filter(p =>
+      myAssigned.has(p.workspace_id) ||
+      (p.campaign_manager   && p.campaign_manager.toLowerCase()   === myName.toLowerCase()) ||
+      (p.campaign_manager_2 && p.campaign_manager_2.toLowerCase() === myName.toLowerCase())
+    );
+    document.getElementById('managerView').style.display = 'block';
+    renderManager();
+  }
+}
+
+init();
+</script>
+</body>
+</html>

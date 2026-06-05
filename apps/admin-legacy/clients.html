@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/favicon.svg">
+<meta name="theme-color" content="#050C29">
+<meta name="description" content="Ottaly Clients — manage client workspaces and pricing">
+<title>Ottaly — Client Management</title>
+<script>document.write('<script src="/splash.js?v=' + Date.now() + '"><\/script>');</script>
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--purple:#7C89CD;
+  --yellow:#FFB700;--white:#fff;--bg:#F0F2F8;--card:#fff;
+  --border:#E2E6F0;--text:#050C29;--muted:#6B7280;
+}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text)}
+
+/* Header */
+.header{background:var(--navy-dark);padding:1rem 2rem;border-bottom:3px solid var(--teal);display:flex;align-items:center;justify-content:space-between}
+.logo{font-family:'Genos',sans-serif;font-size:1.6rem;font-weight:800;color:var(--white);letter-spacing:1px}
+.logo span{color:var(--teal)}
+.nav{display:flex;gap:0.5rem}
+.nav a{color:rgba(255,255,255,0.6);text-decoration:none;font-size:13px;font-weight:500;padding:6px 14px;border-radius:6px;transition:all 0.15s}
+.nav a:hover,.nav a.active{background:rgba(255,255,255,0.1);color:#fff}
+
+/* Page */
+.page{max-width:1400px;margin:0 auto;padding:2rem}
+.page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem;flex-wrap:wrap;gap:0.75rem}
+.page-title{font-size:1.4rem;font-weight:700}
+.page-sub{font-size:13px;color:var(--muted);margin-top:2px}
+
+/* Summary bar */
+.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1rem;margin-bottom:1.5rem}
+.sum-card{background:var(--card);border-radius:10px;padding:1rem 1.25rem;border:1px solid var(--border);border-top:3px solid var(--navy)}
+.sum-card.teal{border-top-color:var(--teal)}
+.sum-card.yellow{border-top-color:var(--yellow)}
+.sum-card.purple{border-top-color:var(--purple)}
+.sum-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+.sum-val{font-size:1.5rem;font-weight:700;margin-top:4px}
+
+/* Toolbar */
+.toolbar{display:flex;gap:0.75rem;margin-bottom:1.25rem;flex-wrap:wrap;align-items:center}
+.search-wrap{position:relative;flex:1;min-width:200px}
+.search-wrap input{width:100%;padding:8px 12px 8px 36px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:#fff;outline:none}
+.search-wrap input:focus{border-color:var(--purple)}
+.search-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:15px}
+.btn{padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;border:none;transition:all 0.15s}
+.btn-primary{background:var(--navy);color:#fff}
+.btn-primary:hover{background:#1a3370}
+.btn-sm{padding:5px 10px;font-size:12px}
+.btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--border)}
+.btn-ghost:hover{background:var(--bg);color:var(--text)}
+.btn-danger{background:#FEE2E2;color:#DC2626;border:1px solid #FECACA}
+.btn-danger:hover{background:#FECACA}
+
+/* Table */
+.table-wrap{background:var(--card);border-radius:12px;border:1px solid var(--border);overflow:hidden}
+table{width:100%;border-collapse:collapse}
+thead{background:#F8F9FC}
+th{padding:10px 14px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);border-bottom:1px solid var(--border)}
+td{padding:12px 14px;font-size:13px;border-bottom:1px solid var(--border);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#FAFBFF}
+.avatar{width:34px;height:34px;border-radius:8px;background:var(--navy);color:#fff;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.client-name{font-weight:600;font-size:13px}
+.client-ws{font-size:11px;color:var(--muted);margin-top:1px}
+.pill{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600}
+.pill-green{background:#D1FAE5;color:#065F46}
+
+/* Status toggle */
+.toggle-wrap{position:relative;display:inline-block;width:36px;height:20px;cursor:pointer}
+.toggle-wrap input{opacity:0;width:0;height:0}
+.toggle-slider{position:absolute;inset:0;background:#D1D5DB;border-radius:20px;transition:.2s}
+.toggle-slider::before{content:'';position:absolute;width:14px;height:14px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s}
+.toggle-wrap input:checked + .toggle-slider{background:var(--green)}
+.toggle-wrap input:checked + .toggle-slider::before{transform:translateX(16px)}
+.pill-blue{background:#DBEAFE;color:#1E40AF}
+.pill-gray{background:#F3F4F6;color:#4B5563}
+.contact-cell{font-size:12px;line-height:1.6;color:var(--text)}
+.contact-cell a{color:var(--navy);text-decoration:none}
+.contact-cell a:hover{text-decoration:underline}
+.notes-cell{font-size:12px;color:var(--muted);max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stat-cell{text-align:right}
+.stat-main{font-weight:700;font-size:14px}
+.stat-sub{font-size:11px;color:var(--muted)}
+.actions{display:flex;gap:6px;justify-content:flex-end}
+.no-clients{text-align:center;padding:3rem;color:var(--muted)}
+/* Financial columns hidden by default — only shown for admins */
+.fin-hide{display:none}
+body.admin-view .fin-hide{display:revert}
+/* Elements hidden from managers */
+body.manager-view .admin-only{display:none !important}
+
+/* Modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(5,12,41,0.5);display:flex;align-items:center;justify-content:center;z-index:1000;opacity:0;pointer-events:none;transition:opacity 0.2s}
+.modal-overlay.active{opacity:1;pointer-events:all}
+.modal{background:#fff;border-radius:16px;width:600px;max-width:95vw;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.15)}
+.modal-header{padding:1.25rem 1.5rem;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.modal-title{font-size:1rem;font-weight:700}
+.modal-close{background:none;border:none;font-size:20px;cursor:pointer;color:var(--muted);line-height:1;padding:2px}
+.modal-close:hover{color:var(--text)}
+.modal-body{padding:1.5rem}
+.modal-footer{padding:1rem 1.5rem;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:0.75rem}
+.section-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin:1rem 0 0.5rem}
+.section-label:first-child{margin-top:0}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:0.75rem}
+.form-grid.one{grid-template-columns:1fr}
+.field{display:flex;flex-direction:column;gap:4px}
+.field label{font-size:12px;font-weight:600;color:var(--text)}
+.field input,.field textarea,.field select{padding:8px 10px;border:1px solid var(--border);border-radius:7px;font-size:13px;font-family:inherit;outline:none;transition:border 0.15s}
+.field input:focus,.field textarea:focus,.field select:focus{border-color:var(--purple)}
+.field textarea{resize:vertical;min-height:70px}
+
+/* Toast */
+.toast{position:fixed;bottom:1.5rem;right:1.5rem;background:var(--navy-dark);color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;font-weight:500;opacity:0;transform:translateY(10px);transition:all 0.3s;z-index:9999}
+.toast.show{opacity:1;transform:translateY(0)}
+
+/* Exclusion tag inputs */
+.exc-tag-wrap{display:flex;flex-wrap:wrap;gap:3px;padding:5px 7px;border:1px solid var(--border);border-radius:7px;background:#fff;min-height:34px;cursor:text;align-content:flex-start}
+.exc-tag-wrap:focus-within{border-color:var(--purple);box-shadow:0 0 0 2px rgba(124,137,205,.12)}
+.exc-tag{background:#fee2e2;color:#991b1b;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:600;display:inline-flex;align-items:center;gap:3px;white-space:nowrap}
+.exc-tag button{background:none;border:none;color:#991b1b;cursor:pointer;padding:0;font-size:12px;line-height:1;width:14px;height:14px;display:flex;align-items:center;justify-content:center;border-radius:2px}
+.exc-tag button:hover{background:#fca5a5}
+.exc-tag-input{border:none;outline:none;font-size:12px;font-family:inherit;flex:1;min-width:80px;padding:1px 0;color:var(--text);background:transparent}
+.exc-tag-input::placeholder{color:#9ca3af}
+.exc-size-btns{display:flex;flex-wrap:wrap;gap:5px;padding:4px 0}
+.exc-size-btn{padding:4px 10px;border:1.5px solid var(--border);border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:#fff;color:var(--muted);transition:all .15s;font-family:inherit}
+.exc-size-btn:hover{border-color:#f87171;color:#991b1b}
+.exc-size-btn.active{background:#fee2e2;border-color:#f87171;color:#991b1b}
+
+/* sticky header */
+.header{position:sticky;top:0;z-index:200}
+.header>div:first-child,.header-inner>div:first-child{flex:1;min-width:0;overflow:hidden}
+@media(max-width:768px){.header{padding:.75rem 1rem}.page,.page-md{padding:1rem}.page-header{flex-direction:column;align-items:flex-start}.toolbar{flex-wrap:wrap}.table-wrap,.table-container{overflow-x:auto;-webkit-overflow-scrolling:touch}table{min-width:600px}.grid3,.grid-3{grid-template-columns:1fr 1fr}}
+@media(max-width:480px){.metrics,.o-metrics{grid-template-columns:1fr 1fr}}
+
+.header>div:first-child{flex:1;min-width:0;overflow:hidden}
+</style>
+    <script src="/nav.js" defer></script>
+</head>
+<body>
+
+
+
+<div class="page">
+  <div class="page-header">
+    <div>
+      <div class="page-title">Client Management</div>
+      <div class="page-sub" id="pageSubtitle">Loading…</div>
+    </div>
+    <button class="btn btn-primary admin-only" onclick="openModal()">+ Add Client</button>
+  </div>
+
+  <div class="summary">
+    <div class="sum-card">
+      <div class="sum-label">Total Clients</div>
+      <div class="sum-val" id="sumClients">—</div>
+    </div>
+    <div class="sum-card teal fin-hide">
+      <div class="sum-label">Leads Delivered</div>
+      <div class="sum-val" id="sumDelivered">—</div>
+    </div>
+    <div class="sum-card yellow fin-hide">
+      <div class="sum-label">Total Revenue</div>
+      <div class="sum-val" id="sumRevenue">—</div>
+    </div>
+    <div class="sum-card purple fin-hide">
+      <div class="sum-label">Leads Bought</div>
+      <div class="sum-val" id="sumBought">—</div>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <div class="search-wrap">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="searchInput" placeholder="Search clients…" oninput="renderTable()">
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Client</th>
+          <th>Status</th>
+          <th>Contact</th>
+          <th>Website</th>
+          <th class="fin-hide">Lead Price</th>
+          <th class="fin-hide" style="text-align:right">Delivered</th>
+          <th class="fin-hide" style="text-align:right">Bought</th>
+          <th class="fin-hide" style="text-align:right">Revenue</th>
+          <th>Notes</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="clientsBody">
+        <tr><td colspan="9" class="no-clients">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Edit/Add Modal -->
+<div class="modal-overlay" id="modalOverlay" onclick="handleOverlayClick(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="modalTitle">Add Client</div>
+      <button class="modal-close" onclick="closeModal()">×</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="editId">
+
+      <div class="section-label admin-only">Account</div>
+      <div class="form-grid admin-only">
+        <div class="field">
+          <label>Client Name (workspace)</label>
+          <input type="text" id="fWorkspaceName" placeholder="e.g. Hydration Co">
+        </div>
+        <div class="field">
+          <label>PlusVibe Workspace ID</label>
+          <input type="text" id="fWorkspaceId" placeholder="e.g. 69525a0e…">
+        </div>
+        <div class="field">
+          <label>Login Username</label>
+          <input type="text" id="fUsername" placeholder="username">
+        </div>
+        <div class="field">
+          <label>Password <span id="pwHint" style="font-weight:400;color:var(--muted)">(leave blank to keep)</span></label>
+          <input type="password" id="fPassword" placeholder="••••••••">
+        </div>
+      </div>
+
+      <div class="section-label admin-only">Campaign Manager</div>
+      <div class="form-grid admin-only">
+        <div class="field">
+          <label>Primary Manager</label>
+          <input type="text" id="fCampaignManager" placeholder="e.g. Joey">
+        </div>
+        <div class="field">
+          <label>Managing Since <span style="font-weight:400;color:var(--muted)">(commission counts from this date)</span></label>
+          <input type="date" id="fManagerStartDate">
+        </div>
+      </div>
+      <div class="form-grid admin-only">
+        <div class="field">
+          <label>Second Manager <span style="font-weight:400;color:var(--muted)">(splits commission 50/50 with primary)</span></label>
+          <input type="text" id="fCampaignManager2" placeholder="e.g. Jordy">
+        </div>
+      </div>
+
+      <div class="section-label admin-only">Client Contact Details</div>
+      <div class="form-grid admin-only">
+        <div class="field">
+          <label>Contact Name</label>
+          <input type="text" id="fContactName" placeholder="John Smith">
+        </div>
+        <div class="field">
+          <label>Contact Email</label>
+          <input type="email" id="fContactEmail" placeholder="john@company.com">
+        </div>
+        <div class="field">
+          <label>Phone</label>
+          <input type="tel" id="fContactPhone" placeholder="+44 7700 000000">
+        </div>
+        <div class="field">
+          <label>Website</label>
+          <input type="text" id="fWebsite" placeholder="https://example.com">
+        </div>
+      </div>
+
+      <div class="section-label fin-hide admin-only">Pricing & Plan</div>
+      <div class="form-grid fin-hide admin-only">
+        <div class="field">
+          <label>Price Per Lead (£)</label>
+          <input type="number" id="fPricePerLead" placeholder="0.00" min="0" step="0.01">
+        </div>
+        <div class="field">
+          <label>Leads Bought</label>
+          <input type="number" id="fPlanLeads" placeholder="0" min="0">
+        </div>
+      </div>
+
+      <div class="section-label admin-only">Lead Target</div>
+      <div class="form-grid admin-only">
+        <div class="field">
+          <label>Monthly Target (leads/month)</label>
+          <input type="number" id="fLeadTargetMonthly" placeholder="0" min="0" step="1">
+          <small style="color:var(--muted);font-size:11px;margin-top:2px">Drives "behind pace" detection on the Client Health page. Leave 0 to skip.</small>
+        </div>
+      </div>
+
+      <div class="section-label admin-only">Status</div>
+      <div class="form-grid admin-only">
+        <div class="field">
+          <label>Client Status</label>
+          <select id="fStatus">
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Restart Date <span style="font-weight:400;color:var(--muted)">(if inactive — auto-activates on this date)</span></label>
+          <input type="date" id="fRestartDate">
+        </div>
+      </div>
+
+      <div class="section-label">Notes</div>
+      <div class="form-grid one">
+        <div class="field">
+          <textarea id="fNotes" placeholder="Internal notes about this client…"></textarea>
+        </div>
+      </div>
+
+      <div class="section-label admin-only" style="margin-top:1.5rem;color:#1F6F78;">DataBase Targeting Rules</div>
+      <p class="admin-only" style="font-size:12px;color:var(--muted);margin:-0.5rem 0 1rem">Controls which contacts are shown and pushed for this client.</p>
+      <div class="form-grid two admin-only">
+        <div class="field">
+          <label>Vertical / Industry</label>
+          <select id="fVertical">
+            <option value="">— Not set (auto-detect) —</option>
+            <option value="solar">Solar / Energy</option>
+            <option value="office_furniture">Office Furniture / Fitout</option>
+            <option value="accounting">Accounting / Tax</option>
+            <option value="recruitment">Recruitment / Staffing</option>
+            <option value="marketing">Marketing / Digital</option>
+            <option value="flooring">Flooring / Carpet</option>
+            <option value="cleaning">Cleaning / Janitorial</option>
+            <option value="insurance">Insurance</option>
+            <option value="software">Software / SaaS</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Snooze Duration (months)</label>
+          <select id="fSnoozeMonths">
+            <option value="3">3 months</option>
+            <option value="6" selected>6 months</option>
+            <option value="12">12 months</option>
+            <option value="24">24 months</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-grid two admin-only" style="margin-top:0.75rem;">
+        <div class="field">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="fExcludeRemote" style="accent-color:#1F6F78;width:16px;height:16px;">
+            <span>Exclude remote workers <span style="font-size:11px;color:var(--muted);display:block">Can't use office furniture, on-site services etc</span></span>
+          </label>
+        </div>
+        <div class="field">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="fRequireOwnsBuilding" style="accent-color:#1F6F78;width:16px;height:16px;">
+            <span>Requires building ownership <span style="font-size:11px;color:var(--muted);display:block">Solar, flooring, major fit-outs etc</span></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="section-label" style="margin-top:1.5rem;color:#B91C1C;">Master Exclusions</div>
+      <p style="font-size:12px;color:var(--muted);margin:-0.5rem 0 1rem">Always-on exclusions for this client. Applied automatically on the contacts page whenever this client is the selected filter target. Type and press <strong>Enter</strong> or <strong>,</strong> to add. Click a tag to remove.</p>
+      <div class="form-grid two">
+        <div class="field">
+          <label>Industries</label>
+          <div class="exc-tag-wrap" id="fExcIndustriesWrap" onclick="document.getElementById('fExcIndustriesInput').focus()">
+            <input class="exc-tag-input" id="fExcIndustriesInput" placeholder="e.g. Tobacco, Gambling…" onkeydown="excKeydown(event,'industries')" onblur="excBlurCommit(event,'industries')" onpaste="excPaste(event,'industries')">
+          </div>
+        </div>
+        <div class="field">
+          <label>Company Sizes</label>
+          <div class="exc-size-btns" id="fExcSizeBtns">
+            <button type="button" class="exc-size-btn" data-val="1-10" onclick="toggleExcSize('1-10')">1–10</button>
+            <button type="button" class="exc-size-btn" data-val="11-50" onclick="toggleExcSize('11-50')">11–50</button>
+            <button type="button" class="exc-size-btn" data-val="51-200" onclick="toggleExcSize('51-200')">51–200</button>
+            <button type="button" class="exc-size-btn" data-val="201-500" onclick="toggleExcSize('201-500')">201–500</button>
+            <button type="button" class="exc-size-btn" data-val="501-1000" onclick="toggleExcSize('501-1000')">501–1000</button>
+            <button type="button" class="exc-size-btn" data-val="1000+" onclick="toggleExcSize('1000+')">1000+</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>Keywords</label>
+          <div class="exc-tag-wrap" id="fExcKeywordsWrap" onclick="document.getElementById('fExcKeywordsInput').focus()">
+            <input class="exc-tag-input" id="fExcKeywordsInput" placeholder="e.g. crypto, NSFW, MLM…" onkeydown="excKeydown(event,'keywords')" onblur="excBlurCommit(event,'keywords')" onpaste="excPaste(event,'keywords')">
+          </div>
+        </div>
+        <div class="field">
+          <label>Counties / States</label>
+          <div class="exc-tag-wrap" id="fExcCountiesWrap" onclick="document.getElementById('fExcCountiesInput').focus()">
+            <input class="exc-tag-input" id="fExcCountiesInput" placeholder="e.g. Greater London, Manchester…" onkeydown="excKeydown(event,'counties')" onblur="excBlurCommit(event,'counties')" onpaste="excPaste(event,'counties')">
+          </div>
+        </div>
+        <div class="field">
+          <label>Cities</label>
+          <div class="exc-tag-wrap" id="fExcCitiesWrap" onclick="document.getElementById('fExcCitiesInput').focus()">
+            <input class="exc-tag-input" id="fExcCitiesInput" placeholder="e.g. London, Birmingham…" onkeydown="excKeydown(event,'cities')" onblur="excBlurCommit(event,'cities')" onpaste="excPaste(event,'cities')">
+          </div>
+        </div>
+        <div class="field">
+          <label>Job Titles</label>
+          <div class="exc-tag-wrap" id="fExcJobTitlesWrap" onclick="document.getElementById('fExcJobTitlesInput').focus()">
+            <input class="exc-tag-input" id="fExcJobTitlesInput" placeholder="e.g. Intern, Student, Trainee…" onkeydown="excKeydown(event,'jobTitles')" onblur="excBlurCommit(event,'jobTitles')" onpaste="excPaste(event,'jobTitles')">
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveClient()">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- Login overlay -->
+<div id="loginOverlay" style="display:none;position:fixed;inset:0;background:rgba(5,12,41,0.85);z-index:9999;align-items:center;justify-content:center">
+  <div style="background:#fff;border-radius:14px;padding:2rem;width:360px;max-width:90vw;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
+    <div style="font-family:'Genos',sans-serif;font-size:1.4rem;font-weight:800;color:var(--navy-dark);margin-bottom:0.25rem">Ottaly Admin</div>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:1.25rem">Enter your admin key to continue</div>
+    <input type="password" id="loginKey" placeholder="Admin key" autofocus
+      style="width:100%;padding:10px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;outline:none;margin-bottom:0.5rem;font-family:'Inter',sans-serif">
+    <div id="loginErr" style="color:#DC2626;font-size:12px;min-height:18px;margin-bottom:0.5rem"></div>
+    <button onclick="doLogin()"
+      style="width:100%;padding:10px;background:var(--navy-dark);color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif">
+      Sign In
+    </button>
+  </div>
+</div>
+
+<script>
+// All requests include cookies automatically (credentials: 'include' not needed for same-origin)
+const headers = { 'Content-Type': 'application/json' };
+
+let clients = [];
+let statsMap = {};
+let isManager = false;
+
+async function load() {
+  try {
+    const sess = await fetch('/api/session').then(r => r.json()).catch(() => ({}));
+    if (sess?.role === 'manager') {
+      isManager = true;
+      document.body.classList.add('manager-view');
+    } else if (sess?.role === 'admin') {
+      document.body.classList.add('admin-view');
+    }
+  } catch {}
+
+  loadVerticals();
+  try {
+    const [c, s] = await Promise.all([
+      fetch('/api/admin/clients', { headers }).then(r => { if (r.status === 401) throw new Error('auth'); return r.json(); }),
+      isManager ? Promise.resolve({}) : fetch('/api/revenue/stats-by-workspace').then(r => r.json()).catch(() => ({}))
+    ]);
+    clients = Array.isArray(c) ? c : [];
+    statsMap = s || {};
+    renderSummary();
+    renderTable();
+    document.getElementById('pageSubtitle').textContent = `${clients.length} clients`;
+  } catch(e) {
+    if (e.message === 'auth') { showLogin(); return; }
+    document.getElementById('clientsBody').innerHTML =
+      `<tr><td colspan="9" class="no-clients">⚠️ ${e.message}</td></tr>`;
+  }
+}
+
+function renderSummary() {
+  const totalDelivered = Object.values(statsMap).reduce((s, v) => s + v.delivered, 0);
+  const totalRevenue   = Object.values(statsMap).reduce((s, v) => s + v.revenue, 0);
+  const totalBought    = clients.reduce((s, c) => s + (c.plan_leads || 0), 0);
+  document.getElementById('sumClients').textContent   = clients.length;
+  document.getElementById('sumDelivered').textContent = totalDelivered.toLocaleString();
+  document.getElementById('sumRevenue').textContent   = '£' + Math.round(totalRevenue).toLocaleString('en-GB');
+  document.getElementById('sumBought').textContent    = totalBought.toLocaleString();
+}
+
+function renderTable() {
+  const q = document.getElementById('searchInput').value.toLowerCase();
+  const filtered = clients.filter(c =>
+    [c.workspace_name, c.contact_name, c.contact_email, c.website, c.notes, c.username]
+      .some(v => (v||'').toLowerCase().includes(q))
+  );
+
+  if (!filtered.length) {
+    document.getElementById('clientsBody').innerHTML =
+      `<tr><td colspan="9" class="no-clients">No clients found</td></tr>`;
+    return;
+  }
+
+  document.getElementById('clientsBody').innerHTML = filtered.map(c => {
+    const st       = statsMap[c.workspace_id] || { delivered: 0, revenue: 0 };
+    const initial  = (c.workspace_name || c.username || '?')[0].toUpperCase();
+    const websiteDisplay = (c.website || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const inactive = c.client_status === 'inactive';
+    const rowStyle = inactive ? 'opacity:0.45' : '';
+    return `<tr style="${rowStyle}">
+      <td>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div class="avatar" style="${inactive ? 'background:#9CA3AF' : ''}">${initial}</div>
+          <div>
+            <div class="client-name">${esc(c.workspace_name || c.username)}</div>
+            <div class="client-ws">${esc(c.username)}</div>
+          </div>
+        </div>
+      </td>
+      <td>
+        ${isManager
+          ? `<span style="font-size:11px;font-weight:600;color:${inactive ? 'var(--muted)' : 'var(--green)'}">${inactive ? 'Inactive' : 'Active'}</span>`
+          : `<div style="display:flex;align-items:center;gap:8px">
+          <label class="toggle-wrap" title="${inactive ? 'Click to activate' : 'Click to deactivate'}">
+            <input type="checkbox" ${inactive ? '' : 'checked'} onchange="toggleStatus(${c.id}, this.checked)">
+            <span class="toggle-slider"></span>
+          </label>
+          <span style="font-size:11px;font-weight:600;color:${inactive ? 'var(--muted)' : 'var(--green)'}">${inactive ? 'Inactive' : 'Active'}</span>
+          ${inactive && c.restart_date ? `<span style="font-size:11px;color:var(--muted)">resumes ${c.restart_date}</span>` : ''}
+        </div>`}
+      </td>
+      <td class="contact-cell">
+        ${c.contact_name ? `<div>${esc(c.contact_name)}</div>` : ''}
+        ${c.contact_email ? `<div><a href="mailto:${esc(c.contact_email)}">${esc(c.contact_email)}</a></div>` : ''}
+        ${c.contact_phone ? `<div><a href="tel:${esc(c.contact_phone)}">${esc(c.contact_phone)}</a></div>` : ''}
+        ${!c.contact_name && !c.contact_email && !c.contact_phone ? '<span style="color:var(--muted)">—</span>' : ''}
+      </td>
+      <td>
+        ${c.website ? `<a href="${esc(c.website)}" target="_blank" style="color:var(--navy);font-size:12px;text-decoration:none">${esc(websiteDisplay)}</a>` : '<span style="color:var(--muted)">—</span>'}
+      </td>
+      <td class="fin-hide"><span class="pill pill-green">£${(c.price_per_lead||0).toFixed(0)}</span></td>
+      <td class="stat-cell fin-hide"><div class="stat-main">${st.delivered}</div></td>
+      <td class="stat-cell fin-hide"><div class="stat-main">${c.plan_leads || 0}</div></td>
+      <td class="stat-cell fin-hide"><div class="stat-main">£${Math.round(st.revenue).toLocaleString('en-GB')}</div></td>
+      <td class="notes-cell" title="${esc(c.notes||'')}">${c.notes ? esc(c.notes) : '<span style="color:var(--muted)">—</span>'}</td>
+      <td>
+        <div class="actions">
+          <button class="btn btn-ghost btn-sm" onclick="openModal(${c.id})">${isManager ? 'Notes / Exclusions' : 'Edit'}</button>
+          ${isManager ? '' : `<button class="btn btn-danger btn-sm" onclick="deleteClient(${c.id},'${esc(c.workspace_name||c.username)}')">Delete</button>`}
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function openModal(id) {
+  const isNew = !id;
+  document.getElementById('modalTitle').textContent = isNew ? 'Add Client'
+    : isManager ? 'Notes & Exclusions'
+    : 'Edit Client';
+  document.getElementById('pwHint').style.display = isNew ? 'none' : '';
+  document.getElementById('editId').value = id || '';
+
+  if (isNew) {
+    ['fWorkspaceName','fWorkspaceId','fUsername','fPassword','fContactName',
+     'fContactEmail','fContactPhone','fWebsite','fNotes','fRestartDate','fCampaignManager','fCampaignManager2','fManagerStartDate'].forEach(f => document.getElementById(f).value = '');
+    document.getElementById('fPricePerLead').value    = '';
+    document.getElementById('fPlanLeads').value       = '';
+    document.getElementById('fLeadTargetMonthly').value = '';
+    document.getElementById('fStatus').value          = 'active';
+    setExcTags('industries', ''); setExcTags('keywords', ''); setExcTags('counties', '');
+    setExcTags('cities', ''); setExcTags('jobTitles', ''); setExcSizes('');
+  } else {
+    const c = clients.find(x => x.id === id);
+    if (!c) return;
+    document.getElementById('fWorkspaceName').value   = c.workspace_name    || '';
+    document.getElementById('fWorkspaceId').value     = c.workspace_id      || '';
+    document.getElementById('fUsername').value        = c.username          || '';
+    document.getElementById('fPassword').value        = '';
+    document.getElementById('fCampaignManager').value   = c.campaign_manager    || '';
+    document.getElementById('fCampaignManager2').value  = c.campaign_manager_2  || '';
+    document.getElementById('fManagerStartDate').value  = c.manager_start_date  || '';
+    document.getElementById('fContactName').value     = c.contact_name      || '';
+    document.getElementById('fContactEmail').value    = c.contact_email     || '';
+    document.getElementById('fContactPhone').value    = c.contact_phone     || '';
+    document.getElementById('fWebsite').value         = c.website           || '';
+    document.getElementById('fPricePerLead').value    = c.price_per_lead    || '';
+    document.getElementById('fPlanLeads').value       = c.plan_leads        || '';
+    document.getElementById('fLeadTargetMonthly').value = c.lead_target_monthly || '';
+    document.getElementById('fNotes').value           = c.notes             || '';
+    document.getElementById('fStatus').value          = c.client_status     || 'active';
+    document.getElementById('fRestartDate').value     = c.restart_date      || '';
+    // Load targeting rules
+    const vr = (window.clientVerticals || []).find(v => v.workspace_id === c.workspace_id) || {};
+    document.getElementById('fVertical').value                = vr.vertical          || '';
+    document.getElementById('fSnoozeMonths').value            = vr.snooze_months     || '6';
+    document.getElementById('fExcludeRemote').checked         = !!(vr.exclude_remote);
+    document.getElementById('fRequireOwnsBuilding').checked   = !!(vr.require_owns_building);
+    setExcTags('industries', vr.excluded_industries    || '');
+    setExcTags('keywords',   vr.excluded_keywords      || '');
+    setExcTags('counties',   vr.excluded_counties      || '');
+    setExcTags('cities',     vr.excluded_cities        || '');
+    setExcTags('jobTitles',  vr.excluded_job_titles    || '');
+    setExcSizes(             vr.excluded_company_sizes || '');
+  }
+  document.getElementById('modalOverlay').classList.add('active');
+}
+
+function closeModal() {
+  document.getElementById('modalOverlay').classList.remove('active');
+}
+
+function handleOverlayClick(e) {
+  if (e.target === document.getElementById('modalOverlay')) closeModal();
+}
+
+async function saveClient() {
+  const id    = document.getElementById('editId').value;
+  const isNew = !id;
+
+  if (isManager) {
+    if (!id) return toast('Cannot create clients', 'error');
+    const body = {
+      notes:                  document.getElementById('fNotes').value.trim(),
+      excluded_industries:    getExcValue('industries'),
+      excluded_company_sizes: getExcSizes(),
+      excluded_keywords:      getExcValue('keywords'),
+      excluded_counties:      getExcValue('counties'),
+      excluded_cities:        getExcValue('cities'),
+      excluded_job_titles:    getExcValue('jobTitles'),
+    };
+    const r = await fetch(`/api/clients/${id}/notes-exclusions`, { method: 'PUT', headers, body: JSON.stringify(body) });
+    const j = await r.json();
+    if (!r.ok) return toast(j.error || 'Error', 'error');
+    closeModal();
+    toast('Saved');
+    load();
+    return;
+  }
+
+  const password = document.getElementById('fPassword').value;
+  const body = {
+    workspace_name: document.getElementById('fWorkspaceName').value.trim(),
+    workspace_id:   document.getElementById('fWorkspaceId').value.trim(),
+    username:       document.getElementById('fUsername').value.trim(),
+    contact_name:   document.getElementById('fContactName').value.trim(),
+    contact_email:  document.getElementById('fContactEmail').value.trim(),
+    contact_phone:  document.getElementById('fContactPhone').value.trim(),
+    website:        document.getElementById('fWebsite').value.trim(),
+    price_per_lead:   document.getElementById('fPricePerLead').value,
+    plan_leads:       document.getElementById('fPlanLeads').value,
+    lead_target_monthly: document.getElementById('fLeadTargetMonthly').value,
+    notes:            document.getElementById('fNotes').value.trim(),
+    client_status:    document.getElementById('fStatus').value,
+    restart_date:     document.getElementById('fRestartDate').value || null,
+    campaign_manager:    document.getElementById('fCampaignManager').value.trim(),
+    campaign_manager_2:  document.getElementById('fCampaignManager2').value.trim(),
+    manager_start_date:  document.getElementById('fManagerStartDate').value || null,
+  };
+  if (isNew || password) body.password = password;
+
+  if (isNew && (!body.username || !body.password || !body.workspace_id || !body.workspace_name))
+    return toast('Fill in all required account fields', 'error');
+
+  const url    = isNew ? '/api/admin/clients' : `/api/admin/clients/${id}`;
+  const method = isNew ? 'POST' : 'PUT';
+  const r = await fetch(url, { method, headers, body: JSON.stringify(body) });
+  const j = await r.json();
+  if (!r.ok) return toast(j.error || 'Error', 'error');
+
+  if (!isNew && password) {
+    await fetch(`/api/admin/clients/${id}/password`, {
+      method: 'PUT', headers, body: JSON.stringify({ password })
+    });
+  }
+  // Save targeting rules
+  const wsId = body.workspace_id || (clients.find(x=>x.id===id)||{}).workspace_id;
+  if (wsId) {
+    await fetch('/api/admin/client-verticals', {
+      method: 'POST', headers,
+      body: JSON.stringify({
+        workspace_id: wsId,
+        workspace_name: body.workspace_name || '',
+        vertical: document.getElementById('fVertical').value,
+        exclude_remote: document.getElementById('fExcludeRemote').checked,
+        require_owns_building: document.getElementById('fRequireOwnsBuilding').checked,
+        snooze_months: parseInt(document.getElementById('fSnoozeMonths').value) || 6,
+        excluded_industries:    getExcValue('industries'),
+        excluded_company_sizes: getExcSizes(),
+        excluded_keywords:      getExcValue('keywords'),
+        excluded_counties:      getExcValue('counties'),
+        excluded_cities:        getExcValue('cities'),
+        excluded_job_titles:    getExcValue('jobTitles'),
+      })
+    });
+    // Refresh cached verticals
+    loadVerticals();
+  }
+
+  closeModal();
+  toast(isNew ? 'Client added' : 'Saved');
+  load();
+}
+
+async function loadVerticals() {
+  try {
+    const r = await fetch('/api/admin/client-verticals', { headers });
+    const d = await r.json();
+    window.clientVerticals = d.verticals || [];
+  } catch {}
+}
+
+async function toggleStatus(id, makeActive) {
+  const status = makeActive ? 'active' : 'inactive';
+  let restart_date = null;
+  if (!makeActive) {
+    restart_date = prompt('Set a restart date (YYYY-MM-DD) — leave blank if unsure:', '');
+    if (restart_date === null) return; // cancelled
+    restart_date = restart_date.trim() || null;
+  }
+  const r = await fetch(`/api/client-status/${id}`, {
+    method: 'POST', headers,
+    body: JSON.stringify({ client_status: status, restart_date })
+  });
+  if (!r.ok) { toast('Failed to update status', 'error'); return; }
+  toast(makeActive ? 'Client activated' : 'Client set to inactive');
+  load();
+}
+
+async function deleteClient(id, name) {
+  if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
+  await fetch(`/api/admin/clients/${id}`, { method: 'DELETE', headers });
+  toast('Client deleted');
+  load();
+}
+
+function toast(msg, type) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.background = type === 'error' ? '#DC2626' : 'var(--navy-dark)';
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+function showLogin() {
+  document.getElementById('loginOverlay').style.display = 'flex';
+}
+
+async function doLogin() {
+  const key = document.getElementById('loginKey').value.trim();
+  const err = document.getElementById('loginErr');
+  if (!key) return;
+  const r = await fetch('/api/admin/login', { method: 'POST', headers, body: JSON.stringify({ key }) });
+  if (r.ok) {
+    document.getElementById('loginOverlay').style.display = 'none';
+    load();
+  } else {
+    err.textContent = 'Incorrect key — try again';
+  }
+}
+
+document.getElementById('loginKey').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+
+// ── Exclusion tag-input engine ───────────────────────────────────────────────
+
+const EXC_META = {
+  industries: { wrapId: 'fExcIndustriesWrap', inputId: 'fExcIndustriesInput' },
+  keywords:   { wrapId: 'fExcKeywordsWrap',   inputId: 'fExcKeywordsInput' },
+  counties:   { wrapId: 'fExcCountiesWrap',   inputId: 'fExcCountiesInput' },
+  cities:     { wrapId: 'fExcCitiesWrap',     inputId: 'fExcCitiesInput' },
+  jobTitles:  { wrapId: 'fExcJobTitlesWrap',  inputId: 'fExcJobTitlesInput' },
+};
+const excState = { industries: [], keywords: [], counties: [], cities: [], jobTitles: [] };
+const excSizeState = new Set();
+
+function renderExcTags(field) {
+  const { wrapId, inputId } = EXC_META[field];
+  const wrap = document.getElementById(wrapId);
+  const inputEl = document.getElementById(inputId);
+  // Remove existing tags (everything except the input)
+  [...wrap.children].forEach(el => { if (el !== inputEl) el.remove(); });
+  // Insert tags before the input
+  excState[field].forEach((val, idx) => {
+    const tag = document.createElement('span');
+    tag.className = 'exc-tag';
+    tag.innerHTML = `${esc(val)} <button type="button" onclick="removeExcTag('${field}',${idx})">×</button>`;
+    wrap.insertBefore(tag, inputEl);
+  });
+}
+
+function addExcTag(field, raw) {
+  const vals = raw.split(',').map(s => s.trim()).filter(Boolean);
+  vals.forEach(v => {
+    if (!excState[field].includes(v)) excState[field].push(v);
+  });
+  renderExcTags(field);
+}
+
+function removeExcTag(field, idx) {
+  excState[field].splice(idx, 1);
+  renderExcTags(field);
+}
+
+function setExcTags(field, csv) {
+  excState[field] = csv ? csv.split(',').map(s => s.trim()).filter(Boolean) : [];
+  renderExcTags(field);
+}
+
+function getExcValue(field) {
+  return excState[field].join(',');
+}
+
+function excKeydown(e, field) {
+  if (e.key === 'Enter' || e.key === ',') {
+    e.preventDefault();
+    const v = e.target.value.trim().replace(/,$/, '');
+    if (v) { addExcTag(field, v); e.target.value = ''; }
+  } else if (e.key === 'Backspace' && !e.target.value && excState[field].length) {
+    excState[field].pop();
+    renderExcTags(field);
+  }
+}
+
+function excBlurCommit(e, field) {
+  const v = e.target.value.trim().replace(/,$/, '');
+  if (v) { addExcTag(field, v); e.target.value = ''; }
+}
+
+function excPaste(e, field) {
+  e.preventDefault();
+  const text = (e.clipboardData || window.clipboardData).getData('text');
+  addExcTag(field, text);
+  e.target.value = '';
+}
+
+// Company size toggles
+const SIZE_BUCKETS = ['1-10','11-50','51-200','201-500','501-1000','1000+'];
+
+function toggleExcSize(val) {
+  if (excSizeState.has(val)) excSizeState.delete(val);
+  else excSizeState.add(val);
+  renderExcSizes();
+}
+
+function renderExcSizes() {
+  document.querySelectorAll('#fExcSizeBtns .exc-size-btn').forEach(btn => {
+    btn.classList.toggle('active', excSizeState.has(btn.dataset.val));
+  });
+}
+
+function setExcSizes(csv) {
+  excSizeState.clear();
+  if (csv) csv.split(',').map(s => s.trim()).filter(Boolean).forEach(v => excSizeState.add(v));
+  renderExcSizes();
+}
+
+function getExcSizes() {
+  return SIZE_BUCKETS.filter(b => excSizeState.has(b)).join(',');
+}
+
+// Role-based class is set in load() via /api/session fetch.
+
+load();
+</script>
+</body>
+</html>

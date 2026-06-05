@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Audience Profiles — Ottaly</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<style>
+  :root{--navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--green:#16a34a;--red:#dc2626;--amber:#d97706;--border:#E5E7EB;--card:#fff;--bg:#F8F9FC;--muted:#6B7280}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--navy-dark);min-height:100vh}
+  header{background:var(--navy-dark);padding:.75rem 2rem;border-bottom:3px solid var(--teal);display:flex;align-items:center;gap:2rem}
+  nav{display:flex;gap:.25rem;flex-wrap:wrap;align-items:center}
+  .page{max-width:1400px;margin:0 auto;padding:2rem 1.5rem}
+
+  /* Top bar */
+  .top-bar{display:flex;align-items:center;gap:1rem;margin-bottom:2rem;flex-wrap:wrap}
+  .page-title{font-family:'Genos',sans-serif;font-size:1.75rem;font-weight:800;color:var(--navy-dark)}
+  .client-select{padding:8px 14px;border:1.5px solid var(--border);border-radius:8px;font:600 13px 'Inter',sans-serif;color:var(--navy-dark);background:#fff;cursor:pointer;min-width:220px}
+  .client-select:focus{outline:none;border-color:var(--teal)}
+
+  /* Summary strip */
+  .summary{display:flex;gap:1rem;margin-bottom:2rem;flex-wrap:wrap}
+  .sum-card{background:var(--card);border:1px solid var(--border);border-top:3px solid var(--navy);border-radius:10px;padding:1rem 1.5rem;flex:1;min-width:160px}
+  .sum-val{font-family:'Genos',sans-serif;font-size:2rem;font-weight:800;color:var(--navy-dark);line-height:1}
+  .sum-label{font-size:12px;font-weight:500;color:var(--muted);margin-top:4px}
+
+  /* Single-column grid so each table has room for all 9 metric columns */
+  .grid{display:grid;grid-template-columns:1fr;gap:1.5rem}
+
+  .section{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+  .section-head{padding:1rem 1.25rem .75rem;border-bottom:1px solid var(--border);display:flex;align-items:baseline;gap:.5rem}
+  .section-title{font-family:'Genos',sans-serif;font-size:1.1rem;font-weight:800;color:var(--navy-dark)}
+  .section-sub{font-size:12px;color:var(--muted)}
+
+  table{width:100%;border-collapse:collapse}
+  th{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);padding:.6rem .85rem;text-align:right;background:#FAFAFA;border-bottom:1px solid var(--border);cursor:pointer;user-select:none;white-space:nowrap}
+  th:first-child{text-align:left}
+  th:hover{color:var(--navy-dark);background:#F3F4F6}
+  th .arrow{display:inline-block;margin-left:4px;font-size:10px;color:var(--teal);opacity:0;transition:opacity .15s}
+  th.sorted{color:var(--navy-dark)}
+  th.sorted .arrow{opacity:1}
+  td{padding:.6rem .85rem;font-size:13px;border-bottom:1px solid #F3F4F6;vertical-align:middle;text-align:right;font-weight:600}
+  td:first-child{text-align:left}
+  tr:last-child td{border-bottom:none}
+  tr:hover td{background:#F8F9FC}
+
+  .seg{font-weight:600;color:var(--navy-dark);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block}
+
+  /* Rate pill */
+  .rate{display:inline-block;padding:2px 8px;border-radius:20px;font-size:12px;font-weight:700}
+  .rate-high{background:#DCFCE7;color:var(--green)}
+  .rate-mid {background:#FEF3C7;color:var(--amber)}
+  .rate-low {background:#FEE2E2;color:var(--red)}
+  .rate-zero{background:#F3F4F6;color:var(--muted)}
+
+  /* Bar inside cell */
+  .bar-wrap{display:flex;align-items:center;gap:8px}
+  .bar-bg{flex:1;height:6px;background:#F3F4F6;border-radius:3px;overflow:hidden;min-width:60px}
+  .bar-fill{height:100%;border-radius:3px;background:var(--teal);transition:width .3s}
+
+  /* Empty / loading states */
+  .empty{text-align:center;padding:3rem 1rem;color:var(--muted);font-size:14px}
+  .loading{text-align:center;padding:2rem;color:var(--muted);font-size:13px}
+
+  /* AI recommendation cards */
+  .rec-card{background:#fff;border:1px solid var(--border);border-left:3px solid var(--navy);border-radius:8px;padding:1rem 1.25rem;margin-bottom:.85rem}
+  .rec-title{font-family:'Genos',sans-serif;font-size:1.05rem;font-weight:800;color:var(--navy-dark);margin-bottom:.35rem}
+  .rec-target{font-size:13px;color:var(--teal);font-weight:600;margin-bottom:.75rem}
+  .rec-row{font-size:13px;line-height:1.5;margin-bottom:.6rem}
+  .rec-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:.25rem}
+  .rec-list{margin:0;padding-left:1.25rem;font-size:13px;line-height:1.6}
+  .rec-confidence{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.3px}
+  .rec-confidence.high{background:#DCFCE7;color:var(--green)}
+  .rec-confidence.medium{background:#FEF3C7;color:var(--amber)}
+  .rec-confidence.low{background:#FEE2E2;color:var(--red)}
+  .rec-summary{background:#F8F9FC;border-radius:8px;padding:.85rem 1.1rem;font-size:13px;color:var(--navy-dark);margin-bottom:1rem;border-left:3px solid var(--teal)}
+  .copy-btn{background:transparent;border:1px solid var(--border);color:var(--muted);padding:2px 8px;border-radius:6px;font-size:11px;cursor:pointer;margin-left:6px}
+  .copy-btn:hover{border-color:var(--teal);color:var(--teal)}
+
+  /* sticky header + mobile */
+  header{position:sticky;top:0;z-index:200}
+  header nav{flex:1;min-width:0;overflow:hidden}
+  @media(max-width:768px){
+    header{padding:.75rem 1rem;flex-wrap:wrap;gap:.5rem}
+    .page{padding:1rem}
+    .table-wrap{overflow-x:auto}
+    table{min-width:600px}
+  }
+</style>
+</head>
+<body>
+
+<script src="/nav.js" defer></script>
+
+<div class="page">
+  <div class="top-bar">
+    <div class="page-title">Audience Profiles</div>
+    <select class="client-select" id="clientSelect" onchange="onClientChange()">
+      <option value="">— Select client —</option>
+    </select>
+    <select class="client-select" id="campaignSelect" onchange="load()" style="display:none;min-width:260px">
+      <option value="">— All campaigns —</option>
+    </select>
+    <button class="client-select" id="refreshBtn" onclick="runRefresh()" style="min-width:auto;background:var(--navy);color:#fff;border-color:var(--navy);cursor:pointer">↻ Refresh All</button>
+    <button class="client-select" id="backfillBtn" onclick="runBackfill()" style="min-width:auto;background:#fff;color:var(--navy);border-color:var(--navy);cursor:pointer" title="Spread known industry/city/state across contacts at the same domain — fast, no PV walk">↺ Fill Unknowns</button>
+    <button class="client-select" id="empSizeBtn" onclick="runEmpSizeBackfill()" style="min-width:auto;background:#fff;color:var(--teal);border-color:var(--teal);cursor:pointer" title="Pull company size from PlusVibe enrichment data (all workspaces, ~1–2 min)">⬇ Sync Company Size</button>
+    <span id="refreshStatus" style="font-size:13px;color:var(--muted)"></span>
+  </div>
+
+  <div class="summary" id="summary" style="display:none">
+    <div class="sum-card">
+      <div class="sum-val" id="sumTotal">—</div>
+      <div class="sum-label">Contacts</div>
+    </div>
+    <div class="sum-card">
+      <div class="sum-val" id="sumSent">—</div>
+      <div class="sum-label">Total Sent</div>
+    </div>
+    <div class="sum-card">
+      <div class="sum-val" id="sumReplied">—</div>
+      <div class="sum-label">Replied</div>
+    </div>
+    <div class="sum-card">
+      <div class="sum-val" id="sumLeads">—</div>
+      <div class="sum-label">Leads (Interested)</div>
+    </div>
+    <div class="sum-card">
+      <div class="sum-val" id="sumNotInt">—</div>
+      <div class="sum-label">Not Interested</div>
+    </div>
+    <div class="sum-card">
+      <div class="sum-val" id="sumRate">—</div>
+      <div class="sum-label">Reply Rate</div>
+    </div>
+    <div class="sum-card">
+      <div class="sum-val" id="sumLpt">—</div>
+      <div class="sum-label">LPT (leads/1k sent)</div>
+    </div>
+    <div class="sum-card">
+      <div class="sum-val" id="sumRtl">—</div>
+      <div class="sum-label">RTL (responses/lead)</div>
+    </div>
+  </div>
+
+  <!-- AI Recommendations panel — opt-in via the button so we don't burn tokens on every load. -->
+  <div class="section" id="aiPanel" style="display:none;margin-bottom:1.5rem;border-left:3px solid var(--teal)">
+    <div class="section-head" style="padding:1rem 1.25rem;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.75rem">
+      <div>
+        <div class="section-title">AI Campaign Recommendations</div>
+        <div class="section-sub" id="aiSubtitle">Read-only intelligence based on this client's audience + past campaign data</div>
+      </div>
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+        <button id="aiCopyBtn" onclick="copyPromptForClaudeAi()" style="padding:8px 14px;border:1.5px solid var(--navy);background:#fff;color:var(--navy);border-radius:8px;font:600 13px Inter,sans-serif;cursor:pointer">
+          📋 Copy prompt
+        </button>
+        <button id="aiPasteBtn" onclick="pasteAndRender()" style="padding:8px 14px;border:1.5px solid var(--teal);background:var(--teal);color:#fff;border-radius:8px;font:600 13px Inter,sans-serif;cursor:pointer">
+          📥 Paste response
+        </button>
+        <button id="aiBtn" onclick="getRecommendations()" style="padding:8px 14px;border:1.5px solid var(--border);background:#fff;color:var(--muted);border-radius:8px;font:600 13px Inter,sans-serif;cursor:pointer" title="Direct API call — costs ~$0.01">
+          ⚡ Via API
+        </button>
+      </div>
+    </div>
+    <div id="aiContent" style="padding:1rem 1.25rem 1.25rem"></div>
+    <!-- Paste-back area: hidden until user copies the prompt. -->
+    <div id="aiPasteWrap" style="display:none;padding:0 1.25rem 1.25rem">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:.5rem">
+        Paste Claude.ai's JSON response here
+      </div>
+      <textarea id="aiPasteBox" placeholder='{ "summary": "...", "recommendations": [...] }' style="width:100%;min-height:120px;padding:.75rem 1rem;border:1.5px solid var(--border);border-radius:8px;font:13px/1.5 'SF Mono','Menlo',monospace;color:var(--navy-dark);background:#FAFAFA;resize:vertical"></textarea>
+      <div style="display:flex;gap:.5rem;margin-top:.5rem;align-items:center">
+        <button onclick="renderPastedResponse()" style="padding:7px 14px;border:1.5px solid var(--teal);background:var(--teal);color:#fff;border-radius:8px;font:600 13px Inter,sans-serif;cursor:pointer">
+          Render response
+        </button>
+        <button onclick="document.getElementById('aiPasteBox').value=''" style="padding:7px 14px;border:1.5px solid var(--border);background:#fff;color:var(--muted);border-radius:8px;font:600 13px Inter,sans-serif;cursor:pointer">
+          Clear
+        </button>
+        <span id="aiPasteStatus" style="font-size:12px;color:var(--muted)"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid" id="grid" style="display:none">
+    <div class="section" id="secIndustry">
+      <div class="section-head">
+        <div class="section-title">Industry</div>
+        <div class="section-sub">Top 25</div>
+      </div>
+      <div id="tblIndustry"><div class="loading">Loading…</div></div>
+    </div>
+
+    <div class="section" id="secCity">
+      <div class="section-head">
+        <div class="section-title">City</div>
+        <div class="section-sub">Top 25</div>
+      </div>
+      <div id="tblCity"><div class="loading">Loading…</div></div>
+    </div>
+
+    <div class="section" id="secCounty">
+      <div class="section-head">
+        <div class="section-title">County / State</div>
+        <div class="section-sub">Top 25</div>
+      </div>
+      <div id="tblCounty"><div class="loading">Loading…</div></div>
+    </div>
+
+    <div class="section" id="secSize">
+      <div class="section-head">
+        <div class="section-title">Company Size</div>
+        <div class="section-sub">Employees</div>
+      </div>
+      <div id="tblSize"><div class="loading">Loading…</div></div>
+    </div>
+
+    <div class="section" id="secSeniority">
+      <div class="section-head">
+        <div class="section-title">Seniority</div>
+      </div>
+      <div id="tblSeniority"><div class="loading">Loading…</div></div>
+    </div>
+  </div>
+
+  <div id="noClient" style="text-align:center;padding:4rem 1rem;color:var(--muted);font-size:14px">
+    Select a client above to view their audience breakdown.
+  </div>
+</div>
+
+<script>
+let clients = [];
+
+async function init() {
+  const r = await fetch('/api/admin/clients').then(r => r.json()).catch(() => []);
+  clients = Array.isArray(r) ? r.filter(c => c.workspace_id && c.client_status !== 'inactive') : [];
+  clients.sort((a, b) => (a.workspace_name || '').localeCompare(b.workspace_name || ''));
+  const sel = document.getElementById('clientSelect');
+  // "Show All Clients" option at the top
+  const allOpt = document.createElement('option');
+  allOpt.value = 'all';
+  allOpt.textContent = '— Show All Clients —';
+  sel.appendChild(allOpt);
+  clients.forEach(c => {
+    const o = document.createElement('option');
+    o.value = c.workspace_id;
+    o.textContent = c.workspace_name || c.username;
+    sel.appendChild(o);
+  });
+  // auto-select if URL has ?ws=
+  const ws = new URLSearchParams(location.search).get('ws');
+  if (ws) { sel.value = ws; await onClientChange(); }
+}
+
+async function onClientChange() {
+  const wsId = document.getElementById('clientSelect').value;
+  const campSel = document.getElementById('campaignSelect');
+
+  // Reset campaign dropdown
+  campSel.innerHTML = '<option value="">— All campaigns —</option>';
+  campSel.style.display = 'none';
+
+  if (wsId && wsId !== 'all') {
+    const campaigns = await fetch(`/api/audience/campaigns/${wsId}`).then(r => r.json()).catch(() => []);
+    if (Array.isArray(campaigns) && campaigns.length) {
+      campaigns.forEach(c => {
+        const o = document.createElement('option');
+        o.value = c.campaign_id;
+        o.textContent = c.campaign_name || c.campaign_id;
+        campSel.appendChild(o);
+      });
+      campSel.style.display = '';
+    }
+  }
+
+  load();
+}
+
+// Per-table sort state: { col, dir } where dir = 1 (asc) or -1 (desc)
+const sortState = {
+  tblIndustry:  { col: 'total', dir: -1 },
+  tblCity:      { col: 'total', dir: -1 },
+  tblCounty:    { col: 'total', dir: -1 },
+  tblSize:      { col: 'total', dir: -1 },
+  tblSeniority: { col: 'total', dir: -1 },
+};
+const rowsCache = {};
+const TABLES = ['tblIndustry','tblCity','tblCounty','tblSize','tblSeniority'];
+
+async function load() {
+  const wsId = document.getElementById('clientSelect').value;
+  if (!wsId) {
+    document.getElementById('summary').style.display = 'none';
+    document.getElementById('grid').style.display = 'none';
+    document.getElementById('aiPanel').style.display = 'none';
+    document.getElementById('noClient').style.display = '';
+    return;
+  }
+  const campaignId = document.getElementById('campaignSelect').value;
+  document.getElementById('noClient').style.display = 'none';
+  document.getElementById('summary').style.display = 'none';
+  document.getElementById('grid').style.display = 'grid';
+  document.getElementById('aiPanel').style.display = '';
+  // Reset AI panel state when switching clients
+  document.getElementById('aiContent').innerHTML = '';
+  const campName = campaignId
+    ? document.getElementById('campaignSelect').options[document.getElementById('campaignSelect').selectedIndex].text
+    : null;
+  document.getElementById('aiSubtitle').textContent = wsId === 'all'
+    ? "Aggregated audience data across all active clients"
+    : campName
+      ? `Filtered to campaign: ${campName}`
+      : "Read-only intelligence based on this client's audience + past campaign data";
+  TABLES.forEach(id => {
+    document.getElementById(id).innerHTML = '<div class="loading">Loading…</div>';
+  });
+
+  const url = campaignId
+    ? `/api/audience/icp/${wsId}?campaign_id=${encodeURIComponent(campaignId)}`
+    : `/api/audience/icp/${wsId}`;
+  const d = await fetch(url).then(r => r.json()).catch(() => null);
+  if (!d || d.error) {
+    TABLES.forEach(id => {
+      document.getElementById(id).innerHTML = '<div class="empty">Failed to load data.</div>';
+    });
+    return;
+  }
+
+  // Summary strip — overall numbers across the workspace
+  const t = d.totals || {};
+  const rate = t.total > 0 ? (t.replied / t.total) : 0;
+  const lpt  = t.sent  > 0 ? (t.leads * 1000 / t.sent) : null;
+  const rtl  = t.leads > 0 ? (t.replied / t.leads)     : null;
+  document.getElementById('sumTotal').textContent   = fmt(t.total);
+  document.getElementById('sumSent').textContent    = fmt(t.sent);
+  document.getElementById('sumReplied').textContent = fmt(t.replied);
+  document.getElementById('sumLeads').textContent   = fmt(t.leads);
+  document.getElementById('sumNotInt').textContent  = fmt(t.not_interested);
+  document.getElementById('sumRate').textContent    = pct(rate);
+  document.getElementById('sumLpt').textContent     = lpt != null ? lpt.toFixed(1) : '—';
+  document.getElementById('sumRtl').textContent     = rtl != null ? rtl.toFixed(1) : '—';
+  document.getElementById('summary').style.display  = 'flex';
+
+  rowsCache.tblIndustry  = d.industry  || [];
+  rowsCache.tblCity      = d.city      || [];
+  rowsCache.tblCounty    = d.county    || [];
+  rowsCache.tblSize      = d.size      || [];
+  rowsCache.tblSeniority = d.seniority || [];
+
+  TABLES.forEach(renderTable);
+}
+
+// Compute derived metrics on a raw row
+function withMetrics(r) {
+  return {
+    ...r,
+    lpt:  r.sent  > 0 ? (r.leads * 1000 / r.sent) : null,
+    rtl:  r.leads > 0 ? (r.replied / r.leads)      : null,
+    rate: r.total > 0 ? r.replied / r.total         : 0,
+  };
+}
+
+// Score each row 0–100 relative to all rows in the same table.
+// Weights: LPT 45% · RTL efficiency 30% · Reply rate 25%
+// Rows with no leads score only on reply rate (capped at 25).
+function scoreRows(rows) {
+  const lpts  = rows.map(r => r.lpt  ?? 0);
+  const rtls  = rows.map(r => r.rtl  ?? 0);
+  const rates = rows.map(r => r.rate ?? 0);
+
+  const maxLpt  = Math.max(...lpts,  0.001);
+  const maxRtl  = Math.max(...rtls,  0.001);
+  const maxRate = Math.max(...rates, 0.001);
+
+  return rows.map(r => {
+    const lptScore  = (r.lpt  ?? 0) / maxLpt  * 45;
+    // RTL: lower is better — invert so best RTL = full 30 pts
+    const rtlScore  = r.rtl != null ? (1 - Math.min(r.rtl, maxRtl) / maxRtl) * 30 : 0;
+    const rateScore = (r.rate ?? 0) / maxRate * 25;
+    const score = Math.round(lptScore + rtlScore + rateScore);
+    return { ...r, score };
+  });
+}
+
+function scoreColor(s) {
+  if (s >= 70) return '#22c55e';
+  if (s >= 40) return '#f59e0b';
+  return '#ef4444';
+}
+
+// Columns: key on the row, label shown, formatter for display
+const COLS = [
+  { key: 'score', label: 'Score', fmt: (r) => {
+    const c = scoreColor(r.score);
+    return `<span style="display:inline-block;min-width:42px;padding:2px 8px;border-radius:12px;font-size:12px;font-weight:700;background:${c}22;color:${c};text-align:center;">${r.score}</span>`;
+  }},
+  { key: 'segment',        label: 'Segment',  fmt: (r) => `<span class="seg" title="${esc(r.segment)}">${esc(r.segment)}</span>` },
+  { key: 'total',          label: 'Contacts', fmt: (r) => fmt(r.total) },
+  { key: 'sent',           label: 'Sent',     fmt: (r) => r.sent > 0 ? fmt(r.sent) : '—' },
+  { key: 'leads',          label: 'Leads',    fmt: (r) => r.leads > 0 ? `<b style="color:var(--green)">${r.leads}</b>` : '—' },
+  { key: 'replied',        label: 'Replied',  fmt: (r) => r.replied > 0 ? r.replied : '—' },
+  { key: 'not_interested', label: 'Not Int.', fmt: (r) => r.not_interested > 0 ? `<span style="color:var(--muted)">${r.not_interested}</span>` : '—' },
+  { key: 'lpt',            label: 'LPT',      fmt: (r) => r.lpt != null ? `<b>${r.lpt.toFixed(1)}</b>` : '—' },
+  { key: 'rtl',            label: 'RTL',      fmt: (r) => r.rtl != null ? r.rtl.toFixed(1) : '—' },
+  { key: 'rate',           label: 'Reply Rate', fmt: (r) => {
+    if (r.rate <= 0) return '—';
+    let cls = 'rate-zero';
+    if (r.rate >= 0.05)      cls = 'rate-high';
+    else if (r.rate >= 0.02) cls = 'rate-mid';
+    else                     cls = 'rate-low';
+    return `<span class="rate ${cls}">${pct(r.rate)}</span>`;
+  } },
+];
+
+function renderTable(id) {
+  const el = document.getElementById(id);
+  const raw = rowsCache[id] || [];
+  if (!raw.length) {
+    el.innerHTML = '<div class="empty">No contacts found for this client.</div>';
+    return;
+  }
+  const rows = scoreRows(raw.map(withMetrics));
+  const state = sortState[id];
+
+  // Sort
+  rows.sort((a, b) => {
+    let va = a[state.col], vb = b[state.col];
+    // Treat nulls as -Infinity so they sort to the bottom on desc
+    if (va == null) va = -Infinity;
+    if (vb == null) vb = -Infinity;
+    if (state.col === 'segment') {
+      return String(va).localeCompare(String(vb)) * state.dir;
+    }
+    return (va - vb) * state.dir;
+  });
+
+  const arrow = (col) => col === state.col ? (state.dir === 1 ? '▲' : '▼') : '';
+  const sortedClass = (col) => col === state.col ? 'sorted' : '';
+
+  el.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          ${COLS.map(c => `
+            <th class="${sortedClass(c.key)}" data-tbl="${id}" data-col="${c.key}" onclick="toggleSort('${id}','${c.key}')">
+              ${c.label}<span class="arrow">${arrow(c.key)}</span>
+            </th>
+          `).join('')}
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map(r => `
+          <tr>${COLS.map(c => `<td>${c.fmt(r)}</td>`).join('')}</tr>
+        `).join('')}
+      </tbody>
+    </table>`;
+}
+
+function toggleSort(id, col) {
+  const state = sortState[id];
+  if (state.col === col) {
+    state.dir = -state.dir;
+  } else {
+    state.col = col;
+    // Default direction: desc for numbers, asc for segment text
+    state.dir = (col === 'segment') ? 1 : -1;
+  }
+  renderTable(id);
+}
+
+function pct(v) { return (v * 100).toFixed(1) + '%'; }
+function fmt(n) { return (n || 0).toLocaleString(); }
+function esc(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Render a recommendation object (whether from API or pasted from Claude.ai)
+// as the card UI.
+function renderRecommendations(r, source) {
+  const content = document.getElementById('aiContent');
+  const subtitle = document.getElementById('aiSubtitle');
+  if (!r || !Array.isArray(r.recommendations)) {
+    content.innerHTML = '<div class="empty">Response is missing "recommendations" array.</div>';
+    return;
+  }
+  const when = r.generated_at ? `Generated ${new Date(r.generated_at).toLocaleString()}` : 'Pasted from Claude.ai';
+  subtitle.textContent = `${when} · ${r.recommendations.length} recommendations · ${source || ''}`;
+  let html = '';
+  if (r.summary) html += `<div class="rec-summary">${esc(r.summary)}</div>`;
+  html += r.recommendations.map(rec => `
+    <div class="rec-card">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;margin-bottom:.4rem">
+        <div class="rec-title">${esc(rec.title || 'Recommendation')}</div>
+        <span class="rec-confidence ${esc(rec.confidence || 'medium')}">${esc(rec.confidence || 'medium')}</span>
+      </div>
+      <div class="rec-target">🎯 ${esc(rec.target || '')}</div>
+      <div class="rec-row"><span class="rec-label">Why</span><br>${esc(rec.rationale || '')}</div>
+      ${rec.split_80_winner ? `
+        <div class="rec-row">
+          <span class="rec-label">Keep 80% → ${esc(rec.split_80_winner.campaign_name || '')}</span><br>
+          <span style="color:var(--muted)">${esc(rec.split_80_winner.reason || '')}</span>
+        </div>` : ''}
+      ${rec.split_20_test ? `
+        <div class="rec-row">
+          <span class="rec-label">Test 20% → ${esc(rec.split_20_test.angle || '')}</span>
+          ${rec.split_20_test.subject_lines?.length ? `
+            <div style="margin-top:.5rem">
+              <div class="rec-label">Subject lines</div>
+              <ul class="rec-list">
+                ${rec.split_20_test.subject_lines.map(s =>
+                  `<li>${esc(s)} <button class="copy-btn" onclick="copyText(${JSON.stringify(s).replace(/"/g,'&quot;')})">copy</button></li>`
+                ).join('')}
+              </ul>
+            </div>` : ''}
+          ${rec.split_20_test.opening_lines?.length ? `
+            <div style="margin-top:.5rem">
+              <div class="rec-label">Opening lines</div>
+              <ul class="rec-list">
+                ${rec.split_20_test.opening_lines.map(s =>
+                  `<li>${esc(s)} <button class="copy-btn" onclick="copyText(${JSON.stringify(s).replace(/"/g,'&quot;')})">copy</button></li>`
+                ).join('')}
+              </ul>
+            </div>` : ''}
+        </div>` : ''}
+      ${rec.data_gaps ? `<div class="rec-row" style="color:var(--muted);font-size:12px"><span class="rec-label">Data gaps</span><br>${esc(rec.data_gaps)}</div>` : ''}
+    </div>
+  `).join('');
+  content.innerHTML = html;
+}
+
+async function getRecommendations() {
+  const wsId = document.getElementById('clientSelect').value;
+  if (!wsId) return;
+  const btn = document.getElementById('aiBtn');
+  const content = document.getElementById('aiContent');
+  btn.disabled = true;
+  btn.textContent = 'Analyzing…';
+  content.innerHTML = '<div class="loading">Analyzing audience + past campaigns via API…</div>';
+
+  try {
+    const resp = await fetch(`/api/audience/recommendations/${wsId}`);
+    const text = await resp.text();
+    let r;
+    try { r = JSON.parse(text); }
+    catch { r = { error: `Non-JSON response (HTTP ${resp.status}): ${text.slice(0, 200)}` }; }
+    if (!resp.ok || r.error || !r.recommendations) {
+      content.innerHTML = `<div class="empty">${esc(r.error || `HTTP ${resp.status} — no recommendations returned`)}</div>`;
+      return;
+    }
+    renderRecommendations(r, 'via API');
+  } catch (e) {
+    content.innerHTML = `<div class="empty">Network error: ${esc(e.message || String(e))}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '⚡ Get via API';
+  }
+}
+
+// Copy-prompt flow: fetch the prompt, put on clipboard, clear the paste
+// box (ready for the response), open Claude.ai, show instructions.
+async function copyPromptForClaudeAi() {
+  const wsId = document.getElementById('clientSelect').value;
+  if (!wsId) return;
+  const btn = document.getElementById('aiCopyBtn');
+  const content = document.getElementById('aiContent');
+  btn.disabled = true;
+  btn.textContent = 'Building prompt…';
+
+  try {
+    const resp = await fetch(`/api/audience/recommendations/${wsId}/prompt`);
+    const r = await resp.json();
+    if (!resp.ok || !r.prompt) {
+      content.innerHTML = `<div class="empty">${esc(r.error || `HTTP ${resp.status}`)}</div>`;
+      return;
+    }
+    try { await navigator.clipboard.writeText(r.prompt); }
+    catch (e) {
+      // Fallback: dump into the paste box so user can copy manually
+      document.getElementById('aiPasteBox').value = r.prompt;
+      alert('Clipboard blocked — prompt loaded into the paste box below. Cut from there.');
+    }
+    // Clear the paste box so it's empty and ready for the response
+    document.getElementById('aiPasteBox').value = '';
+    document.getElementById('aiPasteStatus').textContent = '';
+    document.getElementById('aiPasteWrap').style.display = '';
+    content.innerHTML = `<div style="background:#F8F9FC;border-left:3px solid var(--teal);padding:.85rem 1.1rem;border-radius:8px;font-size:13px;line-height:1.6;color:var(--navy-dark)">
+      <b>✓ Prompt copied (${(r.char_count || 0).toLocaleString()} chars). Paste box cleared.</b><br>
+      1. Open <a href="https://claude.ai/new" target="_blank" style="color:var(--teal);font-weight:600">Claude.ai →</a> and paste<br>
+      2. Copy Claude's JSON response<br>
+      3. Click <b>📥 Paste response</b> above to render
+    </div>`;
+  } catch (e) {
+    content.innerHTML = `<div class="empty">Network error: ${esc(e.message || String(e))}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '📋 Copy prompt';
+  }
+}
+
+// Paste flow: read from clipboard, fill the paste box, render immediately.
+async function pasteAndRender() {
+  const btn = document.getElementById('aiPasteBtn');
+  const status = document.getElementById('aiPasteStatus');
+  btn.disabled = true;
+  btn.textContent = 'Reading…';
+  try {
+    let text;
+    try { text = await navigator.clipboard.readText(); }
+    catch (e) {
+      alert('Clipboard read blocked by the browser. Paste manually into the box below and click "Render response".');
+      document.getElementById('aiPasteWrap').style.display = '';
+      document.getElementById('aiPasteBox').focus();
+      return;
+    }
+    if (!text || !text.trim()) {
+      status.textContent = 'Clipboard is empty.';
+      status.style.color = 'var(--red)';
+      document.getElementById('aiPasteWrap').style.display = '';
+      return;
+    }
+    document.getElementById('aiPasteWrap').style.display = '';
+    document.getElementById('aiPasteBox').value = text;
+    renderPastedResponse();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '📥 Paste response';
+  }
+}
+
+// Render whatever the user pasted in. Tolerant: strips fences, extracts the
+// first {...} block if Claude added prose around it.
+function renderPastedResponse() {
+  const raw = document.getElementById('aiPasteBox').value.trim();
+  const status = document.getElementById('aiPasteStatus');
+  if (!raw) { status.textContent = 'Paste box is empty.'; status.style.color = 'var(--red)'; return; }
+  let text = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+  // If Claude wrapped JSON in explanation text, grab the first {...last}
+  if (text[0] !== '{') {
+    const start = text.indexOf('{');
+    const end   = text.lastIndexOf('}');
+    if (start >= 0 && end > start) text = text.slice(start, end + 1);
+  }
+  let parsed;
+  try { parsed = JSON.parse(text); }
+  catch (e) {
+    status.textContent = `JSON parse failed: ${e.message}`;
+    status.style.color = 'var(--red)';
+    return;
+  }
+  status.textContent = `✓ Rendered ${parsed.recommendations?.length || 0} recommendations.`;
+  status.style.color = 'var(--green)';
+  renderRecommendations(parsed, 'from Claude.ai');
+}
+
+function copyText(s) {
+  navigator.clipboard.writeText(s).catch(() => {});
+}
+
+async function runBackfill() {
+  const wsId = document.getElementById('clientSelect').value;
+  const btn = document.getElementById('backfillBtn');
+  const status = document.getElementById('refreshStatus');
+  btn.disabled = true;
+  btn.textContent = '↺ Filling…';
+  status.textContent = wsId
+    ? 'Spreading known industry/city/state across same-domain contacts…'
+    : 'Running domain backfill across all clients…';
+  try {
+    const body = wsId ? { workspace_id: wsId } : {};
+    const r = await fetch('/api/audience/backfill-domains', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(r => r.json());
+    if (r.error) {
+      status.textContent = 'Failed: ' + r.error;
+    } else if (wsId) {
+      const t = r.totals || {};
+      const total = Object.values(t).reduce((s, n) => s + n, 0);
+      status.textContent = `Done — updated ${total} contacts (industry:${t.industry||0} city:${t.city||0} state:${t.state||0} country:${t.country||0} employees:${t.num_employees||0}).`;
+      if (wsId) load();
+    } else {
+      const total = (r.results || []).reduce((s, c) => s + Object.values(c.totals || {}).reduce((a, n) => a + n, 0), 0);
+      status.textContent = `Done — ${r.clients} clients, ${total} contacts updated.`;
+    }
+  } catch (e) {
+    status.textContent = 'Failed: ' + e.message;
+  }
+  btn.disabled = false;
+  btn.textContent = '↺ Fill Unknowns';
+}
+
+async function runEmpSizeBackfill() {
+  const btn = document.getElementById('empSizeBtn');
+  const status = document.getElementById('refreshStatus');
+  btn.disabled = true;
+  btn.textContent = '⬇ Syncing…';
+  status.textContent = 'Fetching employee size from PlusVibe for all clients — may take 1–2 min…';
+  try {
+    const r = await fetch('/api/audience/backfill-employee-size', { method: 'POST' }).then(r => r.json());
+    if (r.error) {
+      status.textContent = 'Failed: ' + r.error;
+    } else {
+      status.textContent = `Done — ${r.totalUpdated} contacts updated with company size.`;
+      const wsId = document.getElementById('clientSelect').value;
+      if (wsId) load();
+    }
+  } catch (e) {
+    status.textContent = 'Failed: ' + e.message;
+  }
+  btn.disabled = false;
+  btn.textContent = '⬇ Sync Company Size';
+}
+
+async function runRefresh() {
+  const btn = document.getElementById('refreshBtn');
+  const status = document.getElementById('refreshStatus');
+  btn.disabled = true;
+  btn.textContent = '↻ Running…';
+  status.textContent = 'Pulling replies from PlusVibe for all clients…';
+  try {
+    const r = await fetch('/api/audience/refresh-all', { method: 'POST' }).then(r => r.json());
+    status.textContent = `Done — ${r.clients} clients refreshed.`;
+    const wsId = document.getElementById('clientSelect').value;
+    if (wsId) load();
+  } catch {
+    status.textContent = 'Failed — check console.';
+  }
+  btn.disabled = false;
+  btn.textContent = '↻ Refresh All';
+}
+
+init();
+</script>
+</body>
+</html>

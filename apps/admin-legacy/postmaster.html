@@ -1,0 +1,682 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/favicon.svg">
+<meta name="theme-color" content="#050C29">
+<meta name="description" content="Ottaly Postmaster — Google Postmaster Tools domain reputation, IP reputation, and spam rate">
+<title>Ottaly — Postmaster</title>
+<script>document.write('<script src="/splash.js?v=' + Date.now() + '"><\/script>');</script>
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--purple:#7C89CD;
+  --yellow:#FFB700;--white:#fff;--bg:#F0F2F8;--card:#fff;
+  --border:#E2E6F0;--text:#050C29;--muted:#6B7280;
+  --green:#16A34A;--red:#DC2626;--amber:#D97706;
+}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text)}
+.header{background:var(--navy-dark);padding:1rem 2rem;border-bottom:3px solid var(--teal);display:flex;align-items:center;justify-content:space-between}
+.page{max-width:1600px;margin:0 auto;padding:2rem}
+.page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem;flex-wrap:wrap;gap:0.75rem}
+.page-title{font-size:1.4rem;font-weight:700}
+.page-sub{font-size:13px;color:var(--muted);margin-top:2px}
+
+.setup-banner{background:#FEF3C7;border:1px solid #F59E0B;border-radius:10px;padding:1rem 1.25rem;margin-bottom:1.5rem;font-size:13px;line-height:1.6}
+.setup-banner strong{color:#92400E}
+.setup-banner code{background:#fff;border:1px solid #E5E7EB;border-radius:4px;padding:1px 5px;font-size:12px;font-family:'SF Mono',ui-monospace,Menlo,monospace}
+
+.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1rem;margin-bottom:1.5rem}
+.sum-card{background:var(--card);border-radius:10px;padding:1rem 1.25rem;border:1px solid var(--border);border-top:3px solid var(--navy)}
+.sum-card.green{border-top-color:var(--green)}
+.sum-card.amber{border-top-color:var(--amber)}
+.sum-card.red{border-top-color:var(--red)}
+.sum-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+.sum-val{font-size:1.5rem;font-weight:700;margin-top:4px}
+
+.toolbar{display:flex;gap:0.75rem;margin-bottom:1.25rem;flex-wrap:wrap;align-items:center}
+.search-wrap{position:relative;flex:1;min-width:220px}
+.search-wrap input{width:100%;padding:8px 12px 8px 36px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:#fff;outline:none}
+.search-wrap input:focus{border-color:var(--purple)}
+.search-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:15px}
+.btn{padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;border:none;transition:all 0.15s}
+.btn:disabled{opacity:0.6;cursor:not-allowed}
+.btn-primary{background:var(--navy);color:#fff}
+.btn-primary:hover:not(:disabled){background:#1a3370}
+.btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--border)}
+.btn-ghost:hover:not(:disabled){background:var(--bg);color:var(--text)}
+.filter-pills{display:flex;gap:6px}
+.filter-pill{padding:6px 12px;border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--border);background:#fff;color:var(--muted)}
+.filter-pill.active{background:var(--navy);color:#fff;border-color:var(--navy)}
+
+.table-wrap{background:var(--card);border-radius:12px;border:1px solid var(--border);overflow:hidden}
+table{width:100%;border-collapse:collapse}
+thead{background:#F8F9FC;position:sticky;top:0;z-index:1}
+th{padding:10px 14px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);border-bottom:1px solid var(--border);white-space:nowrap;user-select:none}
+th.sortable{cursor:pointer}
+th.sortable:hover{color:var(--navy)}
+th .sort-arrow{margin-left:4px;opacity:0.4}
+th.sorted .sort-arrow{opacity:1;color:var(--navy)}
+td{padding:11px 14px;font-size:13px;border-bottom:1px solid var(--border);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#FAFBFF;cursor:pointer}
+.domain-name{font-weight:600}
+.ws-name{font-size:11px;color:var(--muted);margin-top:1px}
+.rep-pill{display:inline-block;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.3px}
+.rep-high{background:#D1FAE5;color:#065F46}
+.rep-medium{background:#DBEAFE;color:#1E40AF}
+.rep-low{background:#FEF3C7;color:#92400E}
+.rep-bad{background:#FEE2E2;color:#991B1B}
+.rep-null{background:#F3F4F6;color:#6B7280}
+.alert-flag{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:#FEE2E2;color:#991B1B;font-size:11px;font-weight:700}
+.rate-good{color:var(--green);font-weight:600}
+.rate-warn{color:var(--amber);font-weight:600}
+.rate-bad{color:var(--red);font-weight:600}
+.rate-null{color:var(--muted)}
+.pct-cell{font-size:13px}
+.empty{text-align:center;padding:3rem;color:var(--muted)}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--navy);border-radius:50%;animation:spin 0.8s linear infinite;vertical-align:-2px;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(5,12,41,0.5);display:flex;align-items:center;justify-content:center;z-index:1000;opacity:0;pointer-events:none;transition:opacity 0.2s}
+.modal-overlay.active{opacity:1;pointer-events:all}
+.modal{background:#fff;border-radius:16px;width:760px;max-width:95vw;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.15)}
+.modal-header{padding:1.25rem 1.5rem;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.modal-title{font-size:1rem;font-weight:700}
+.modal-close{background:none;border:none;font-size:20px;cursor:pointer;color:var(--muted);line-height:1;padding:2px}
+.modal-close:hover{color:var(--text)}
+.modal-body{padding:1.5rem}
+.section-h{font-size:12px;font-weight:700;text-transform:uppercase;color:var(--muted);letter-spacing:.5px;margin:1.25rem 0 0.6rem}
+.section-h:first-child{margin-top:0}
+.detail-grid{display:grid;grid-template-columns:140px 1fr;gap:0.5rem 1rem;font-size:13px;align-items:start}
+.detail-grid > label{color:var(--muted);font-size:12px;font-weight:600;padding-top:2px}
+.history-table{width:100%;border-collapse:collapse;font-size:12px}
+.history-table th{padding:6px 10px;text-align:left;color:var(--muted);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border);background:#F8F9FC}
+.history-table td{padding:7px 10px;border-bottom:1px solid var(--border)}
+.history-table tr:last-child td{border-bottom:none}
+
+.toast{position:fixed;bottom:1.5rem;right:1.5rem;background:var(--navy-dark);color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;font-weight:500;opacity:0;transform:translateY(10px);transition:all 0.3s;z-index:9999}
+.toast.show{opacity:1;transform:translateY(0)}
+
+/* Winnr registration panel */
+.winnr-panel{background:var(--card);border:1px solid var(--border);border-left:4px solid var(--teal);border-radius:10px;margin-bottom:1.5rem}
+.winnr-panel-head{display:flex;align-items:center;justify-content:space-between;padding:.9rem 1.25rem;cursor:pointer;user-select:none}
+.winnr-panel-head:hover{background:#FAFBFF;border-radius:10px}
+.winnr-panel-title{font-size:13px;font-weight:700;display:flex;align-items:center;gap:8px}
+.winnr-panel-body{padding:0 1.25rem 1.25rem;display:none}
+.winnr-panel-body.open{display:block}
+.step-row{display:flex;align-items:flex-start;gap:1rem;padding:.75rem 0;border-bottom:1px solid var(--border)}
+.step-row:last-child{border-bottom:none}
+.step-num{width:24px;height:24px;border-radius:50%;background:var(--navy);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
+.step-num.done{background:var(--green)}
+.step-info{flex:1}
+.step-label{font-size:13px;font-weight:600}
+.step-sub{font-size:12px;color:var(--muted);margin-top:2px}
+.log-box{background:#F8F9FC;border:1px solid var(--border);border-radius:6px;padding:.6rem .8rem;font-size:11px;font-family:'SF Mono',ui-monospace,Menlo,monospace;max-height:220px;overflow-y:auto;margin-top:.75rem;white-space:pre-wrap;line-height:1.5}
+.log-ok{color:var(--green)}
+.log-err{color:var(--red)}
+.log-info{color:var(--muted)}
+
+/* sticky header */
+.header{position:sticky;top:0;z-index:200}
+.header>div:first-child,.header-inner>div:first-child{flex:1;min-width:0;overflow:hidden}
+@media(max-width:768px){.header{padding:.75rem 1rem}.page,.page-md{padding:1rem}.page-header{flex-direction:column;align-items:flex-start}.toolbar{flex-wrap:wrap}.table-wrap,.table-container{overflow-x:auto;-webkit-overflow-scrolling:touch}table{min-width:600px}.grid3,.grid-3{grid-template-columns:1fr 1fr}}
+@media(max-width:480px){.metrics,.o-metrics{grid-template-columns:1fr 1fr}}
+
+.header>div:first-child{flex:1;min-width:0;overflow:hidden}
+</style>
+    <script src="/nav.js" defer></script>
+</head>
+<body>
+
+
+<div class="page">
+
+  <div class="page-header">
+    <div>
+      <div class="page-title">Google Postmaster</div>
+      <div class="page-sub" id="pageSubtitle">Domain reputation · IP reputation · Spam rate · Authentication pass rates — pulled daily from Google Postmaster Tools.</div>
+    </div>
+    <div style="display:flex;gap:0.5rem;align-items:center">
+      <span id="lastRun" style="font-size:12px;color:var(--muted)"></span>
+      <button class="btn btn-primary" id="refreshBtn" onclick="triggerRefresh()">↻ Refresh</button>
+    </div>
+  </div>
+
+  <div id="setupBanner" style="display:none" class="setup-banner">
+    <strong>Setup required — Google Postmaster Tools credentials not configured.</strong><br>
+    To enable: create a Google Cloud service account, enable the <em>Gmail Postmaster Tools API</em> and <em>Google Site Verification API</em>,
+    download the JSON key, and set <code>GOOGLE_POSTMASTER_KEY_JSON</code> or <code>GOOGLE_POSTMASTER_KEY_FILE</code> in your <code>.env</code>.
+  </div>
+
+  <!-- Winnr domain registration panel -->
+  <div class="winnr-panel" id="winnrPanel" style="display:none">
+    <div class="winnr-panel-head" onclick="toggleWinnrPanel()">
+      <div class="winnr-panel-title">
+        <span style="background:var(--teal);color:#fff;padding:2px 8px;border-radius:4px;font-size:11px">WINNR</span>
+        Register domains in Postmaster Tools
+        <span id="winnrPanelCount" style="font-size:12px;color:var(--muted);font-weight:400"></span>
+      </div>
+      <span id="winnrPanelChevron" style="color:var(--muted);font-size:13px">▼</span>
+    </div>
+    <div class="winnr-panel-body" id="winnrPanelBody">
+
+      <div class="step-row">
+        <div class="step-num" id="step1Num">1</div>
+        <div class="step-info">
+          <div class="step-label">Add Google verification TXT records to Winnr DNS</div>
+          <div class="step-sub">Fetches a unique TXT token per domain from Google Site Verification API and writes it to DNS automatically. Takes ~30s for all domains.</div>
+          <div style="margin-top:.6rem;display:flex;gap:.5rem;align-items:center">
+            <button class="btn btn-primary" id="step1Btn" onclick="runStep1()">Run Step 1</button>
+            <span id="step1Status" style="font-size:12px;color:var(--muted)"></span>
+          </div>
+          <div id="step1Log" class="log-box" style="display:none"></div>
+        </div>
+      </div>
+
+      <div class="step-row">
+        <div class="step-num" id="step2Num">2</div>
+        <div class="step-info">
+          <div class="step-label">Verify domain ownership with Google</div>
+          <div class="step-sub">Tells Google to check the TXT records and confirm ownership. Run this ~5 minutes after Step 1 to allow DNS to propagate. Once verified, Postmaster data appears within 24h.</div>
+          <div style="margin-top:.6rem;display:flex;gap:.5rem;align-items:center">
+            <button class="btn btn-ghost" id="step2Btn" onclick="runStep2()">Run Step 2</button>
+            <span id="step2Status" style="font-size:12px;color:var(--muted)"></span>
+          </div>
+          <div id="step2Log" class="log-box" style="display:none"></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="summary" id="summary"></div>
+
+  <div class="toolbar">
+    <div class="search-wrap">
+      <div class="search-icon">&#9906;</div>
+      <input type="text" id="search" placeholder="Search domain or client…" oninput="render()">
+    </div>
+    <select id="wsFilter" onchange="render()" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:#fff;outline:none;min-width:160px">
+      <option value="">All clients</option>
+    </select>
+    <div class="filter-pills">
+      <div class="filter-pill active" data-filter="" onclick="setFilter(this,'')">All</div>
+      <div class="filter-pill" data-filter="alert" onclick="setFilter(this,'alert')">Alerts</div>
+      <div class="filter-pill" data-filter="ok" onclick="setFilter(this,'ok')">OK</div>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th class="sortable" onclick="sortBy('domain')">Domain<span class="sort-arrow">↕</span></th>
+          <th class="sortable" onclick="sortBy('domain_reputation')" style="text-align:center">Domain Rep<span class="sort-arrow">↕</span></th>
+          <th class="sortable" onclick="sortBy('ip_reputation')" style="text-align:center">IP Rep<span class="sort-arrow">↕</span></th>
+          <th class="sortable" onclick="sortBy('spam_rate')" style="text-align:right">Spam Rate<span class="sort-arrow">↕</span></th>
+          <th style="text-align:right">SPF Pass</th>
+          <th style="text-align:right">DKIM Pass</th>
+          <th style="text-align:right">DMARC Pass</th>
+          <th class="sortable" onclick="sortBy('date')">Data Date<span class="sort-arrow">↕</span></th>
+          <th style="text-align:center">Alert</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div id="empty" class="empty" style="display:none">
+      No data yet. Click ↻ Refresh to pull from Postmaster Tools.
+    </div>
+  </div>
+</div>
+
+<!-- Detail / history modal -->
+<div class="modal-overlay" id="detailModal" onclick="if(event.target===this)closeDetail()">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title" id="detailDomain">—</div>
+        <div style="font-size:12px;color:var(--muted)" id="detailWs">&nbsp;</div>
+      </div>
+      <button class="modal-close" onclick="closeDetail()">×</button>
+    </div>
+    <div class="modal-body" id="detailBody"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let data = [];
+let activeFilter = '';
+let sortCol = 'domain_reputation';
+let sortDir = 1; // 1 = asc, -1 = desc
+
+const REP_ORDER = { BAD: 0, LOW: 1, MEDIUM: 2, HIGH: 3 };
+
+fetch('/api/session').then(r => r.json()).catch(() => ({ ok: true })).then(s => {
+  if (s.ok === false) { location.href = '/login.html'; return; }
+  const _sn = document.getElementById('sessionName'); if (_sn) _sn.textContent = s.name || '';
+  const _so = document.getElementById('signOutBtn'); if (_so) _so.style.display = '';
+  load();
+});
+
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2600);
+}
+
+async function load() {
+  try {
+    const r = await fetch('/api/postmaster/status');
+    const j = await r.json();
+    data = j.rows || [];
+
+    if (!j.configured) {
+      document.getElementById('setupBanner').style.display = '';
+    }
+    if (j.winnr_configured) {
+      document.getElementById('winnrPanel').style.display = '';
+    }
+    if (j.lastRun) {
+      document.getElementById('lastRun').textContent = 'Last pull: ' + new Date(j.lastRun).toLocaleString();
+    }
+    if (j.running) {
+      document.getElementById('refreshBtn').innerHTML = '<span class="spin"></span>Pulling…';
+      document.getElementById('refreshBtn').disabled = true;
+    }
+    renderSummary();
+    populateWsFilter();
+    render();
+  } catch (err) {
+    toast('Failed to load: ' + err.message);
+  }
+}
+
+function isAlert(row) {
+  const dr = row.domain_reputation;
+  const ir = row.ip_reputation;
+  if (dr === 'BAD' || dr === 'LOW') return true;
+  if (ir === 'BAD' || ir === 'LOW') return true;
+  if (row.spam_rate != null && row.spam_rate > 0.001) return true;
+  return false;
+}
+
+function renderSummary() {
+  const total = data.length;
+  const alerts = data.filter(isAlert).length;
+  const good   = data.filter(r => !isAlert(r) && r.domain_reputation).length;
+  const spamIssues = data.filter(r => r.spam_rate != null && r.spam_rate > 0.001).length;
+  const repIssues  = data.filter(r => r.domain_reputation === 'BAD' || r.domain_reputation === 'LOW').length;
+  document.getElementById('summary').innerHTML = `
+    <div class="sum-card"><div class="sum-label">Total domains</div><div class="sum-val">${total}</div></div>
+    <div class="sum-card ${alerts ? 'red' : 'green'}"><div class="sum-label">Alerts</div><div class="sum-val">${alerts}</div></div>
+    <div class="sum-card green"><div class="sum-label">All clear</div><div class="sum-val">${good}</div></div>
+    <div class="sum-card ${spamIssues ? 'red' : 'green'}"><div class="sum-label">Spam &gt; 0.1%</div><div class="sum-val">${spamIssues}</div></div>
+    <div class="sum-card ${repIssues ? 'amber' : 'green'}"><div class="sum-label">Low/Bad rep</div><div class="sum-val">${repIssues}</div></div>
+  `;
+}
+
+function setFilter(el, f) {
+  document.querySelectorAll('.filter-pill').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  activeFilter = f;
+  render();
+}
+
+function populateWsFilter() {
+  const sel = document.getElementById('wsFilter');
+  const current = sel.value;
+  const names = Array.from(new Set(data.map(r => r.workspace_name).filter(Boolean))).sort();
+  sel.innerHTML = '<option value="">All clients</option>' +
+    names.map(n => `<option value="${n}"${n === current ? ' selected' : ''}>${n}</option>`).join('');
+}
+
+function repPill(rep) {
+  if (!rep) return '<span class="rep-pill rep-null">—</span>';
+  const cls = rep === 'HIGH' ? 'rep-high' : rep === 'MEDIUM' ? 'rep-medium' : rep === 'LOW' ? 'rep-low' : 'rep-bad';
+  return `<span class="rep-pill ${cls}">${rep}</span>`;
+}
+
+function fmtSpam(rate) {
+  if (rate == null) return '<span class="rate-null">—</span>';
+  const pct = (rate * 100).toFixed(3);
+  const cls = rate > 0.005 ? 'rate-bad' : rate > 0.001 ? 'rate-warn' : 'rate-good';
+  return `<span class="${cls}">${pct}%</span>`;
+}
+
+function fmtPct(v) {
+  if (v == null) return '<span class="rate-null">—</span>';
+  const pct = Math.round(v * 100);
+  const cls = pct >= 95 ? 'rate-good' : pct >= 85 ? 'rate-warn' : 'rate-bad';
+  return `<span class="${cls}">${pct}%</span>`;
+}
+
+function repScore(rep) {
+  return rep == null ? -1 : (REP_ORDER[rep] ?? -1);
+}
+
+function sortBy(col) {
+  const ths = document.querySelectorAll('th');
+  ths.forEach(th => th.classList.remove('sorted'));
+  if (sortCol === col) {
+    sortDir *= -1;
+  } else {
+    sortCol = col;
+    sortDir = col === 'domain' || col === 'date' ? 1 : 1;
+  }
+  // Mark active header
+  document.querySelectorAll('th.sortable').forEach(th => {
+    if (th.getAttribute('onclick') && th.getAttribute('onclick').includes(`'${col}'`)) {
+      th.classList.add('sorted');
+      th.querySelector('.sort-arrow').textContent = sortDir > 0 ? '↑' : '↓';
+    } else {
+      if (th.querySelector('.sort-arrow')) th.querySelector('.sort-arrow').textContent = '↕';
+    }
+  });
+  render();
+}
+
+function cmpRows(a, b) {
+  let av, bv;
+  if (sortCol === 'domain') { av = a.domain || ''; bv = b.domain || ''; return sortDir * av.localeCompare(bv); }
+  if (sortCol === 'domain_reputation') { av = repScore(a.domain_reputation); bv = repScore(b.domain_reputation); }
+  else if (sortCol === 'ip_reputation') { av = repScore(a.ip_reputation); bv = repScore(b.ip_reputation); }
+  else if (sortCol === 'spam_rate') { av = a.spam_rate ?? -1; bv = b.spam_rate ?? -1; }
+  else if (sortCol === 'date') { av = a.date || ''; bv = b.date || ''; return sortDir * av.localeCompare(bv); }
+  else { av = 0; bv = 0; }
+  return sortDir * (av - bv);
+}
+
+function render() {
+  const q = document.getElementById('search').value.trim().toLowerCase();
+  const ws = document.getElementById('wsFilter').value;
+
+  let filtered = data.filter(r => {
+    if (activeFilter === 'alert' && !isAlert(r)) return false;
+    if (activeFilter === 'ok' && isAlert(r)) return false;
+    if (ws && r.workspace_name !== ws) return false;
+    if (q && !(r.domain || '').includes(q) && !(r.workspace_name || '').toLowerCase().includes(q)) return false;
+    return true;
+  });
+
+  filtered = filtered.slice().sort(cmpRows);
+
+  const rows = document.getElementById('rows');
+  const empty = document.getElementById('empty');
+  if (!filtered.length) {
+    rows.innerHTML = '';
+    empty.style.display = '';
+    return;
+  }
+  empty.style.display = 'none';
+
+  rows.innerHTML = filtered.map(r => {
+    const alert = isAlert(r);
+    const safeDom = (r.domain || '').replace(/'/g, "\\'");
+    return `
+      <tr onclick="openDetail('${safeDom}')">
+        <td>
+          <div class="domain-name">${r.domain}</div>
+          <div class="ws-name">${r.workspace_name || '—'}</div>
+        </td>
+        <td style="text-align:center">${repPill(r.domain_reputation)}</td>
+        <td style="text-align:center">${repPill(r.ip_reputation)}</td>
+        <td style="text-align:right" class="pct-cell">${fmtSpam(r.spam_rate)}</td>
+        <td style="text-align:right" class="pct-cell">${fmtPct(r.spf_pass_rate)}</td>
+        <td style="text-align:right" class="pct-cell">${fmtPct(r.dkim_pass_rate)}</td>
+        <td style="text-align:right" class="pct-cell">${fmtPct(r.dmarc_pass_rate)}</td>
+        <td style="font-size:12px;color:var(--muted)">${r.date || '—'}</td>
+        <td style="text-align:center">${alert ? '<span class="alert-flag" title="Needs attention">!</span>' : '<span style="color:var(--green);font-size:14px" title="OK">✓</span>'}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+async function openDetail(domain) {
+  const r = data.find(x => x.domain === domain);
+  if (!r) return;
+
+  document.getElementById('detailDomain').textContent = domain;
+  document.getElementById('detailWs').textContent = r.workspace_name || 'Unassigned workspace';
+  document.getElementById('detailBody').innerHTML = '<div style="color:var(--muted);font-size:13px">Loading history…</div>';
+  document.getElementById('detailModal').classList.add('active');
+
+  // Latest snapshot
+  const spamPct = r.spam_rate != null ? (r.spam_rate * 100).toFixed(3) + '%' : '—';
+  const ipReps = (r.ip_reputations || []);
+
+  let latestHtml = `
+    <div class="section-h">Latest data — ${r.date || '—'}</div>
+    <div class="detail-grid">
+      <label>Domain reputation</label><div>${repPill(r.domain_reputation)}</div>
+      <label>IP reputation</label><div>${repPill(r.ip_reputation)}</div>
+      <label>Spam rate</label><div>${fmtSpam(r.spam_rate)}</div>
+      <label>SPF pass rate</label><div>${fmtPct(r.spf_pass_rate)}</div>
+      <label>DKIM pass rate</label><div>${fmtPct(r.dkim_pass_rate)}</div>
+      <label>DMARC pass rate</label><div>${fmtPct(r.dmarc_pass_rate)}</div>
+    </div>`;
+
+  if (ipReps.length) {
+    latestHtml += `
+      <div class="section-h">IP reputation breakdown</div>
+      <table class="history-table">
+        <thead><tr><th>Tier</th><th>IPs</th></tr></thead>
+        <tbody>${ipReps.map(ip =>
+          `<tr><td>${repPill(ip.reputation)}</td><td>${ip.numIps || '0'}</td></tr>`
+        ).join('')}</tbody>
+      </table>`;
+  }
+
+  document.getElementById('detailBody').innerHTML = latestHtml + '<div style="color:var(--muted);font-size:13px;margin-top:1rem">Loading 30-day history…</div>';
+
+  try {
+    const hr = await fetch('/api/postmaster/history/' + encodeURIComponent(domain));
+    const hj = await hr.json();
+    const hist = hj.rows || [];
+
+    let histHtml = `
+      <div class="section-h">30-day history</div>`;
+    if (!hist.length) {
+      histHtml += '<div style="font-size:13px;color:var(--muted)">No historical data.</div>';
+    } else {
+      histHtml += `
+        <table class="history-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Domain Rep</th>
+              <th>IP Rep</th>
+              <th style="text-align:right">Spam Rate</th>
+              <th style="text-align:right">SPF</th>
+              <th style="text-align:right">DKIM</th>
+              <th style="text-align:right">DMARC</th>
+              <th style="text-align:center">Alert</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${hist.map(h => {
+              const a = isAlert(h);
+              return `<tr>
+                <td>${h.date || '—'}</td>
+                <td>${repPill(h.domain_reputation)}</td>
+                <td>${repPill(h.ip_reputation)}</td>
+                <td style="text-align:right">${fmtSpam(h.spam_rate)}</td>
+                <td style="text-align:right">${fmtPct(h.spf_pass_rate)}</td>
+                <td style="text-align:right">${fmtPct(h.dkim_pass_rate)}</td>
+                <td style="text-align:right">${fmtPct(h.dmarc_pass_rate)}</td>
+                <td style="text-align:center">${a ? '<span class="alert-flag">!</span>' : '<span style="color:var(--green)">✓</span>'}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>`;
+    }
+    document.getElementById('detailBody').innerHTML = latestHtml + histHtml;
+  } catch (err) {
+    document.getElementById('detailBody').innerHTML = latestHtml + `<div style="color:var(--red);font-size:13px;margin-top:1rem">Could not load history: ${err.message}</div>`;
+  }
+}
+
+function closeDetail() { document.getElementById('detailModal').classList.remove('active'); }
+
+async function triggerRefresh() {
+  const btn = document.getElementById('refreshBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>Pulling…';
+  try {
+    const r = await fetch('/api/postmaster/refresh', { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok) {
+      toast(d.error || 'Refresh failed');
+      btn.disabled = false;
+      btn.textContent = '↻ Refresh';
+      return;
+    }
+    toast(d.message || 'Refresh started');
+    // Poll every 5s while running
+    const poll = setInterval(async () => {
+      try {
+        const rr = await fetch('/api/postmaster/status');
+        const jj = await rr.json();
+        data = jj.rows || [];
+        renderSummary(); populateWsFilter(); render();
+        if (jj.lastRun) document.getElementById('lastRun').textContent = 'Last pull: ' + new Date(jj.lastRun).toLocaleString();
+        if (!jj.running) {
+          clearInterval(poll);
+          btn.disabled = false;
+          btn.textContent = '↻ Refresh';
+        }
+      } catch (_) {}
+    }, 5000);
+  } catch (err) {
+    toast('Refresh error: ' + err.message);
+    btn.disabled = false;
+    btn.textContent = '↻ Refresh';
+  }
+}
+
+// ── Winnr registration panel ─────────────────────────────────────────
+
+let _winnrOpen = false;
+let _winnrLoaded = false;
+
+function toggleWinnrPanel() {
+  _winnrOpen = !_winnrOpen;
+  document.getElementById('winnrPanelBody').classList.toggle('open', _winnrOpen);
+  document.getElementById('winnrPanelChevron').textContent = _winnrOpen ? '▲' : '▼';
+  if (_winnrOpen && !_winnrLoaded) loadWinnrStatus();
+}
+
+async function loadWinnrStatus() {
+  _winnrLoaded = true;
+  try {
+    const r = await fetch('/api/postmaster/winnr-domains');
+    if (!r.ok) return;
+    const j = await r.json();
+    const total = j.total || 0;
+    const verified = (j.rows || []).filter(d => d.pm_verified_at).length;
+    const withTxt = (j.rows || []).filter(d => d.pm_txt_added_at).length;
+    document.getElementById('winnrPanelCount').textContent =
+      `— ${total} domains · ${withTxt} TXT added · ${verified} verified`;
+    if (verified === total && total > 0) {
+      document.getElementById('step1Num').classList.add('done');
+      document.getElementById('step2Num').classList.add('done');
+    } else if (withTxt > 0) {
+      document.getElementById('step1Num').classList.add('done');
+    }
+  } catch (_) {}
+}
+
+function _appendLog(logId, text, cls) {
+  const el = document.getElementById(logId);
+  el.style.display = '';
+  el.innerHTML += `<span class="${cls || ''}">${text}\n</span>`;
+  el.scrollTop = el.scrollHeight;
+}
+
+async function runStep1() {
+  const btn = document.getElementById('step1Btn');
+  const stat = document.getElementById('step1Status');
+  document.getElementById('step1Log').innerHTML = '';
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>Running…';
+  stat.textContent = '';
+  _appendLog('step1Log', 'Fetching Winnr domain list…', 'log-info');
+  try {
+    const r = await fetch('/api/postmaster/register-winnr', { method: 'POST' });
+    const j = await r.json();
+    if (!r.ok) { _appendLog('step1Log', 'Error: ' + (j.error || 'Unknown'), 'log-err'); }
+    else {
+      (j.results || []).forEach(d => {
+        if (d.ok) _appendLog('step1Log', `✓ ${d.domain}`, 'log-ok');
+        else _appendLog('step1Log', `✗ ${d.domain} — ${d.error}`, 'log-err');
+      });
+      _appendLog('step1Log', '\n' + j.message, 'log-info');
+      stat.textContent = j.message;
+      document.getElementById('step1Num').classList.add('done');
+    }
+  } catch (err) {
+    _appendLog('step1Log', 'Error: ' + err.message, 'log-err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Run Step 1';
+    _winnrLoaded = false;
+    loadWinnrStatus();
+  }
+}
+
+async function runStep2() {
+  const btn = document.getElementById('step2Btn');
+  const stat = document.getElementById('step2Status');
+  document.getElementById('step2Log').innerHTML = '';
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>Starting…';
+  stat.textContent = '';
+  try {
+    const r = await fetch('/api/postmaster/verify-winnr', { method: 'POST' });
+    const j = await r.json();
+    if (!r.ok) {
+      _appendLog('step2Log', 'Error: ' + (j.error || 'Unknown'), 'log-err');
+      btn.disabled = false; btn.textContent = 'Run Step 2'; return;
+    }
+    _appendLog('step2Log', j.message, 'log-info');
+    stat.textContent = j.message;
+    if (!j.started && !j.running) { btn.disabled = false; btn.textContent = 'Run Step 2'; return; }
+
+    // Poll progress every 8s while running
+    btn.innerHTML = '<span class="spin"></span>Running…';
+    const poll = setInterval(async () => {
+      try {
+        const pr = await fetch('/api/postmaster/verify-winnr/progress');
+        const pj = await pr.json();
+        const last = (pj.results || []).slice(-5);
+        last.forEach(d => {
+          if (d.ok) _appendLog('step2Log', `✓ ${d.domain}`, 'log-ok');
+          else _appendLog('step2Log', `✗ ${d.domain} — ${d.error}`, 'log-err');
+        });
+        stat.textContent = `${pj.done || 0}/${pj.total || 0} verified`;
+        if (!pj.running && pj.finished) {
+          clearInterval(poll);
+          _appendLog('step2Log', `\nDone — ${pj.ok}/${pj.total} verified. Postmaster data appears within 24h.`, 'log-info');
+          stat.textContent = `${pj.ok}/${pj.total} verified`;
+          if (pj.ok > 0) document.getElementById('step2Num').classList.add('done');
+          btn.disabled = false; btn.textContent = 'Run Step 2';
+          _winnrLoaded = false; loadWinnrStatus();
+        }
+      } catch (_) {}
+    }, 8000);
+  } catch (err) {
+    _appendLog('step2Log', 'Error: ' + err.message, 'log-err');
+    btn.disabled = false; btn.textContent = 'Run Step 2';
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,1071 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/favicon.svg">
+<meta name="theme-color" content="#050C29">
+<meta name="description" content="Ottaly Copy Analytics — what's working, what's stale">
+<title>Ottaly — Copy Analytics</title>
+<script>document.write('<script src="/splash.js?v=' + Date.now() + '"><\/script>');</script>
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--purple:#7C89CD;
+  --yellow:#FFB700;--bg:#F0F2F8;--card:#fff;--border:#E2E6F0;
+  --text:#050C29;--muted:#6B7280;
+  --green:#059669;--amber:#D97706;--red:#DC2626;--blue:#2563EB;
+}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+
+.header{background:var(--navy-dark);padding:1rem 2rem;border-bottom:3px solid var(--teal);display:flex;align-items:center;justify-content:space-between;gap:1rem}
+.logo{font-family:'Genos',sans-serif;font-size:1.6rem;font-weight:800;color:#fff;letter-spacing:1px}
+.logo span{color:var(--teal)}
+.header-right{display:flex;align-items:center;gap:1rem}
+
+.ws-select{background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:8px;color:#fff;font-size:13px;font-weight:500;padding:7px 12px;cursor:pointer;outline:none;min-width:200px}
+.ws-select option{background:#050C29;color:#fff}
+
+.container{max-width:1500px;margin:0 auto;padding:1.75rem 2rem}
+
+/* ── Section headers ── */
+.section-hd{display:flex;align-items:center;gap:1rem;margin-bottom:1.25rem}
+.section-hd h2{font-family:'Genos',sans-serif;font-size:1.2rem;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--navy-dark);white-space:nowrap}
+.section-hd::after{content:'';flex:1;height:2px;background:var(--border)}
+.section-hd .badge{font-size:11px;font-weight:700;background:var(--teal);color:#fff;border-radius:20px;padding:3px 9px;white-space:nowrap}
+.section-hd .badge.amber{background:var(--amber)}
+.section-hd .badge.red{background:var(--red)}
+
+/* ── Stat summary row ── */
+.stat-row{display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin-bottom:1.75rem}
+@media(max-width:900px){.stat-row{grid-template-columns:repeat(2,1fr)}}
+.stat-card{background:var(--card);border-radius:12px;padding:1.25rem 1.5rem;box-shadow:0 1px 4px rgba(5,12,41,.07);border-top:3px solid transparent}
+.stat-card.teal{border-top-color:var(--teal)}
+.stat-card.green{border-top-color:var(--green)}
+.stat-card.amber{border-top-color:var(--amber)}
+.stat-card.red{border-top-color:var(--red)}
+.stat-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:8px}
+.stat-val{font-family:'Genos',sans-serif;font-size:2.4rem;font-weight:700;line-height:1;color:var(--navy-dark)}
+.stat-sub{font-size:12px;color:var(--muted);margin-top:4px}
+
+/* ── Tabs ── */
+.tabs{display:flex;gap:4px;margin-bottom:1.5rem;background:var(--card);padding:5px;border-radius:10px;border:1px solid var(--border);width:fit-content}
+.tab{padding:8px 20px;border-radius:7px;font-size:13px;font-weight:600;color:var(--muted);cursor:pointer;transition:all .15s;border:none;background:none}
+.tab:hover{color:var(--navy-dark)}
+.tab.active{background:var(--navy-dark);color:#fff}
+
+/* ── Table ── */
+.tbl-wrap{background:var(--card);border-radius:12px;box-shadow:0 1px 4px rgba(5,12,41,.07);overflow:hidden;margin-bottom:1.75rem}
+table{width:100%;border-collapse:collapse}
+thead th{background:var(--navy-dark);color:rgba(255,255,255,.7);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;padding:10px 14px;text-align:left;white-space:nowrap}
+thead th.num{text-align:right}
+tbody tr{border-bottom:1px solid var(--border);transition:background .1s}
+tbody tr:last-child{border-bottom:none}
+tbody tr:hover{background:#F7F9FF}
+tbody td{padding:11px 14px;font-size:13px;vertical-align:top}
+tbody td.num{text-align:right;font-variant-numeric:tabular-nums}
+
+.subject-text{font-weight:600;color:var(--navy-dark);margin-bottom:3px;font-size:13px}
+.body-preview{font-size:11px;color:var(--muted);line-height:1.45;max-width:420px}
+.campaign-tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}
+.campaign-tag{font-size:10px;font-weight:600;background:#EEF2FF;color:#4338CA;padding:2px 7px;border-radius:4px;white-space:nowrap}
+
+/* ── Rate cells ── */
+.rate{font-family:'Genos',sans-serif;font-size:1.1rem;font-weight:700}
+.rate.good{color:var(--green)}
+.rate.ok{color:var(--teal)}
+.rate.warn{color:var(--amber)}
+.rate.low{color:var(--muted)}
+.rate.bad{color:var(--red)}
+.rate-sub{font-size:10px;color:var(--muted);font-weight:400;font-family:'Inter',sans-serif}
+
+.count{font-family:'Genos',sans-serif;font-size:1.1rem;font-weight:700;color:var(--navy-dark)}
+.count.zero{color:#D1D5DB}
+
+.step-badge{display:inline-block;font-size:10px;font-weight:700;background:#F3F4F6;color:var(--muted);padding:2px 8px;border-radius:4px}
+.active-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);margin-right:5px;vertical-align:middle}
+.inactive-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#D1D5DB;margin-right:5px;vertical-align:middle}
+
+/* ── Step bars ── */
+.step-section{background:var(--card);border-radius:12px;box-shadow:0 1px 4px rgba(5,12,41,.07);padding:1.5rem;margin-bottom:1.75rem}
+.step-grid{display:flex;flex-direction:column;gap:1rem}
+.step-row{display:grid;grid-template-columns:80px 1fr 90px;align-items:center;gap:1rem}
+.step-lbl{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px}
+.step-bars{display:flex;flex-direction:column;gap:4px}
+.bar-wrap{display:flex;align-items:center;gap:8px}
+.bar-track{flex:1;height:8px;background:#F3F4F6;border-radius:4px;overflow:hidden}
+.bar-fill{height:100%;border-radius:4px;transition:width .5s ease}
+.bar-fill.reply{background:var(--teal)}
+.bar-fill.lead{background:var(--green)}
+.bar-lbl{font-size:10px;color:var(--muted);width:55px;text-align:right;white-space:nowrap}
+.step-nums{text-align:right}
+.step-num{font-family:'Genos',sans-serif;font-size:1.1rem;font-weight:700;color:var(--navy-dark)}
+.step-num-lbl{font-size:10px;color:var(--muted)}
+
+/* ── Empty / loading ── */
+.empty{padding:3rem 2rem;text-align:center;color:var(--muted);font-size:14px}
+.empty h3{font-size:1rem;margin-bottom:0.5rem;color:var(--navy-dark)}
+.loading{padding:3rem;text-align:center;color:var(--muted);font-size:14px}
+
+/* ── Stale warning ── */
+.stale-badge{font-size:10px;font-weight:700;background:#FEF3C7;color:var(--amber);padding:2px 8px;border-radius:4px;white-space:nowrap}
+.btn-sm{font-size:11px;font-weight:600;padding:4px 10px;border-radius:5px;border:none;cursor:pointer;white-space:nowrap}
+.btn-sm.btn-danger{background:#FEE2E2;color:#B91C1C;border:1px solid #FCA5A5}
+.btn-sm.btn-danger:hover{background:#FECACA}
+.btn-sm:disabled{opacity:0.5;cursor:default}
+
+/* ── No-data note ── */
+.data-note{font-size:11px;color:var(--muted);padding:10px 14px;background:#F9FAFB;border-top:1px solid var(--border);border-radius:0 0 12px 12px}
+.data-note strong{color:var(--navy-dark)}
+
+/* ── Tab panels ── */
+.tab-panel{display:none}
+.tab-panel.active{display:block}
+
+/* ── Min-sends notice ── */
+.min-notice{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);background:#F3F4F6;padding:4px 10px;border-radius:6px;margin-bottom:1rem}
+.min-notice svg{flex-shrink:0}
+
+/* ── Sortable headers ── */
+th.sortable{cursor:pointer;user-select:none;position:relative}
+th.sortable:hover{background:rgba(255,255,255,0.05)}
+th.sortable::after{content:'';display:inline-block;width:0;height:0;margin-left:6px;border-left:4px solid transparent;border-right:4px solid transparent;opacity:0.3}
+th.sortable.asc::after{border-bottom:5px solid currentColor;opacity:1}
+th.sortable.desc::after{border-top:5px solid currentColor;opacity:1}
+
+/* ── Refresh button ── */
+.refresh-btn{display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid var(--border);color:var(--navy-dark);padding:6px 12px;border-radius:6px;font:600 12px Inter,sans-serif;cursor:pointer;transition:background .15s}
+.refresh-btn:hover{background:var(--soft)}
+.refresh-btn:disabled{opacity:0.5;cursor:not-allowed}
+.refresh-btn svg{flex-shrink:0}
+
+/* ── Score badge ── */
+.score-badge{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:50%;font:800 13px/1 Inter,sans-serif;color:#fff;letter-spacing:-0.5px}
+.score-badge.none{background:#E5E7EB;color:#9CA3AF;font-size:11px;font-weight:600}
+
+/* ── Email preview modal ── */
+#emailModal{display:none;position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:9999;align-items:center;justify-content:center;padding:2rem}
+#emailModal.open{display:flex}
+.email-modal-card{background:#fff;border-radius:12px;max-width:720px;width:100%;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 25px 50px -12px rgba(0,0,0,0.35)}
+.email-modal-hd{padding:1rem 1.5rem;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.email-modal-hd h3{margin:0;font:700 14px Inter,sans-serif;color:var(--navy-dark)}
+.email-modal-close{background:none;border:none;cursor:pointer;color:var(--muted);font-size:22px;line-height:1;padding:4px 8px;border-radius:6px}
+.email-modal-close:hover{background:var(--soft);color:var(--navy-dark)}
+.email-modal-body{padding:1.25rem 1.5rem;overflow-y:auto;flex:1}
+.email-modal-subject{font:700 15px Inter,sans-serif;color:var(--navy-dark);margin-bottom:8px}
+.email-modal-meta{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:1.25rem;font-size:11px;color:var(--muted)}
+.email-modal-meta strong{color:var(--navy-dark)}
+.email-modal-content{white-space:pre-wrap;font:400 13px/1.6 Inter,sans-serif;color:#1F2937;background:#F9FAFB;padding:1rem 1.25rem;border-radius:8px;border:1px solid var(--border)}
+.email-modal-content :where(p,div){margin:0 0 0.5em 0}
+.email-modal-campaigns{margin-top:1rem;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.email-modal-campaigns-hd{padding:8px 12px;background:#F3F4F6;font:700 10px Inter,sans-serif;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
+.email-modal-campaigns-list{max-height:180px;overflow-y:auto;background:#fff}
+.email-modal-campaigns-list .ec-row{padding:8px 12px;font:400 12px Inter,sans-serif;color:var(--navy-dark);border-bottom:1px solid #F3F4F6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.email-modal-campaigns-list .ec-row:last-child{border-bottom:none}
+.email-modal-campaigns-list .ec-row:hover{background:#F9FAFB}
+
+/* Row clickable hint */
+#tplTable tbody tr,#subTable tbody tr{cursor:pointer}
+#tplTable tbody tr:hover,#subTable tbody tr:hover{background:rgba(31,111,120,0.04)}
+
+/* ── Profile / status badges ── */
+.flag{display:inline-block;font:700 9px/1.4 Inter,sans-serif;padding:3px 7px;border-radius:4px;text-transform:uppercase;letter-spacing:0.3px;white-space:nowrap;margin-top:2px}
+.flag.profiled{background:#FEE2E2;color:#B91C1C;border:1px solid #FCA5A5}
+.flag.bounced{background:#FEF3C7;color:#92400E;border:1px solid #FDE68A}
+.flag.top{background:#D1FAE5;color:#065F46;border:1px solid #6EE7B7}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="logo">Ottaly<span>.</span> <span style="font-size:1rem;font-weight:500;letter-spacing:0;opacity:.6;margin-left:4px">Copy Analytics</span></div>
+  <div class="header-right">
+    <button class="refresh-btn" id="refreshBtn" title="Re-sync templates from PlusVibe">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+      <span>Refresh templates</span>
+    </button>
+    <select class="ws-select" id="wsSelect">
+      <option value="">Select workspace…</option>
+    </select>
+  </div>
+</div>
+
+<div class="container" id="mainContent">
+  <div class="loading" id="loadingState">
+    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#1F6F78" stroke-width="2" stroke-linecap="round" style="animation:spin 1s linear infinite;margin-bottom:12px"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4"/></svg>
+    <p>Select a workspace to load copy data</p>
+  </div>
+  <div id="dashboard" style="display:none">
+
+    <!-- Summary stats -->
+    <div class="stat-row" id="statsRow"></div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+      <button class="tab active" data-tab="templates">Templates</button>
+      <button class="tab" data-tab="subjects">Subject Lines</button>
+      <button class="tab" data-tab="steps">By Step</button>
+      <button class="tab" data-tab="stale">Decaying Copy</button>
+      <button class="tab" data-tab="diag">Diagnostic</button>
+    </div>
+
+    <!-- Templates tab -->
+    <div class="tab-panel active" id="tab-templates">
+      <div class="section-hd">
+        <h2>Template Performance</h2>
+        <span class="badge" id="tplBadge">–</span>
+      </div>
+      <div class="min-notice">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        Reply rate and lead rate shown only for templates with 20+ sends — below that the numbers aren't meaningful.
+      </div>
+      <div class="tbl-wrap">
+        <table id="tplTable">
+          <thead>
+            <tr>
+              <th class="sortable" data-sort="subject">Subject / Body preview</th>
+              <th class="num sortable desc" data-sort="score">Score</th>
+              <th class="num sortable" data-sort="sent">Sent</th>
+              <th class="num sortable" data-sort="replies">Replies</th>
+              <th class="num sortable" data-sort="reply_rate">Reply rate</th>
+              <th class="num sortable" data-sort="leads">Leads</th>
+              <th class="num sortable" data-sort="lead_rate">Lead rate</th>
+              <th class="num sortable" data-sort="bounce_rate">Bounce rate</th>
+              <th class="sortable" data-sort="step">Step</th>
+              <th class="sortable" data-sort="status">Status</th>
+            </tr>
+          </thead>
+          <tbody id="tplBody"></tbody>
+        </table>
+        <div class="data-note">Click any column to sort. <strong>All-time stats from PlusVibe</strong> — workspace totals above are all-time from PlusVibe. <strong>Score</strong> 0–100 weighs reply rate, lead rate, bounce rate and volume. <strong>Profiled</strong> = high-volume copy with collapsed responses — stop using it.</div>
+      </div>
+    </div>
+
+    <!-- Subjects tab -->
+    <div class="tab-panel" id="tab-subjects">
+      <div class="section-hd">
+        <h2>Subject Line Performance</h2>
+        <span class="badge" id="subBadge">–</span>
+      </div>
+      <div class="min-notice">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        Same subject used across different bodies or campaigns is pooled. Rates shown for 20+ sends only.
+      </div>
+      <div class="tbl-wrap">
+        <table id="subTable">
+          <thead>
+            <tr>
+              <th class="sortable" data-sort="subject">Subject line</th>
+              <th class="num sortable desc" data-sort="score">Score</th>
+              <th class="num sortable" data-sort="campaign_count">Campaigns</th>
+              <th class="num sortable" data-sort="sent">Sent</th>
+              <th class="num sortable" data-sort="replies">Replies</th>
+              <th class="num sortable" data-sort="reply_rate">Reply rate</th>
+              <th class="num sortable" data-sort="leads">Leads</th>
+              <th class="num sortable" data-sort="lead_rate">Lead rate</th>
+              <th class="sortable" data-sort="status">Status</th>
+            </tr>
+          </thead>
+          <tbody id="subBody"></tbody>
+        </table>
+        <div class="data-note">Click any column to sort. <strong>All-time stats from PlusVibe</strong> — workspace totals above are all-time from PlusVibe. <strong>Score</strong> 0–100. <strong>Profiled</strong> = burnt copy — stop using it.</div>
+      </div>
+    </div>
+
+    <!-- Steps tab -->
+    <div class="tab-panel" id="tab-steps">
+      <div class="section-hd">
+        <h2>Performance by Step</h2>
+      </div>
+      <div class="step-section" id="stepSection">
+        <div class="step-grid" id="stepGrid"></div>
+      </div>
+      <div class="data-note" style="border-radius:8px;margin-bottom:1.75rem"><strong>All-time stats from PlusVibe</strong> (sent, replies, bounces per step), plus lead counts from webhook events. Workspace totals above are last-N-days from webhooks. Bars are relative to the best-performing step.</div>
+    </div>
+
+    <!-- Diagnostic tab -->
+    <div class="tab-panel" id="tab-diag">
+      <div class="section-hd">
+        <h2>Data Diagnostic</h2>
+        <span class="badge" id="diagBadge">–</span>
+      </div>
+      <div class="min-notice">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        Raw event field population — shows what PlusVibe is sending us and which attribution strategy each event uses.
+      </div>
+      <div id="diagContent" style="display:flex;flex-direction:column;gap:1.5rem;padding:1rem 0;"></div>
+    </div>
+
+    <!-- Decay tab -->
+    <div class="tab-panel" id="tab-stale">
+      <div class="section-hd">
+        <h2>Decaying Copy</h2>
+        <span class="badge amber" id="staleBadge">–</span>
+      </div>
+      <div class="min-notice">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        Active templates flagged as <strong>profiled · avoid</strong>, high bounce, or gone quiet. Remove to hide from all copy views.
+      </div>
+      <div class="tbl-wrap">
+        <table id="staleTable">
+          <thead>
+            <tr>
+              <th>Subject / Body preview</th>
+              <th class="num">All-time signal</th>
+              <th class="num">Last 14d signal</th>
+              <th class="num">Last signal</th>
+              <th>Campaigns</th>
+              <th>Step</th>
+              <th>Running since</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="staleBody"></tbody>
+        </table>
+        <div class="data-note"><strong>Signal</strong> = replies + leads. <strong>Disable</strong> pauses the variant in PlusVibe and hides it from copy analytics.</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+
+<!-- Email preview modal -->
+<div id="emailModal" role="dialog" aria-modal="true">
+  <div class="email-modal-card" id="emailModalCard">
+    <div class="email-modal-hd">
+      <h3>Email preview</h3>
+      <button class="email-modal-close" id="emailModalClose" title="Close">×</button>
+    </div>
+    <div class="email-modal-body">
+      <div class="email-modal-subject" id="emailModalSubject"></div>
+      <div class="email-modal-meta"   id="emailModalMeta"></div>
+      <div class="email-modal-content" id="emailModalContent"></div>
+    </div>
+  </div>
+</div>
+
+<script src="/nav.js"></script>
+<script>
+(function(){
+  const wsSelect = document.getElementById('wsSelect');
+  const dashboard = document.getElementById('dashboard');
+  const loadingState = document.getElementById('loadingState');
+  let allData = null;
+
+  // ── Load workspaces ──
+  async function loadWorkspaces() {
+    try {
+      const r = await fetch('/api/pv/workspaces');
+      const d = await r.json();
+      const list = d.workspaces || d.list || d || [];
+      list.forEach(w => {
+        const o = document.createElement('option');
+        o.value = w._id || w.id || w.workspace_id;
+        o.textContent = w.name || w.workspace_name || o.value;
+        wsSelect.appendChild(o);
+      });
+      const saved = localStorage.getItem('copy_ws');
+      if (saved) { wsSelect.value = saved; if (wsSelect.value === saved) loadData(saved); }
+    } catch(e){ console.warn('workspaces:', e); }
+  }
+
+  wsSelect.addEventListener('change', () => {
+    const id = wsSelect.value;
+    if (!id) return;
+    localStorage.setItem('copy_ws', id);
+    loadData(id);
+  });
+
+  // ── Helpers ──
+  function pct(num, den){ if (!den || den < 20) return null; return (num / den * 100).toFixed(1); }
+  function rateClass(p) {
+    if (p === null) return 'low';
+    const v = parseFloat(p);
+    if (v >= 5) return 'good';
+    if (v >= 2) return 'ok';
+    if (v > 0)  return 'warn';
+    return 'bad';
+  }
+  function rateCell(num, den) {
+    const p = pct(num, den);
+    if (p === null) return `<span class="rate low" title="Fewer than 20 sends — rate not shown">–</span>`;
+    return `<span class="rate ${rateClass(p)}">${p}%</span><div class="rate-sub">${num}/${den}</div>`;
+  }
+  // Show lifetime rate + last 7d rate side by side with a trend arrow.
+  // Used for reply rate so decay is visible at a glance.
+  function rateCellTrend(num, den, num7, den7) {
+    const lifetime = pct(num, den);
+    const recent   = pct(num7, den7);
+    const lifeHtml = lifetime === null
+      ? `<span class="rate low" title="Fewer than 20 sends — rate not shown">–</span>`
+      : `<span class="rate ${rateClass(lifetime)}">${lifetime}%</span>`;
+    // Recent: only show when there's at least some 7d activity. Compare to
+    // lifetime to mark direction.
+    let trendHtml = '';
+    if (den7 && den7 >= 20) {
+      const lifeNum = lifetime === null ? null : parseFloat(lifetime);
+      const recNum  = parseFloat(recent);
+      let arrow = '→', col = 'var(--muted)';
+      if (lifeNum !== null) {
+        if (recNum < lifeNum * 0.5)        { arrow = '↓↓'; col = '#EF4444'; }
+        else if (recNum < lifeNum * 0.8)   { arrow = '↓';  col = '#F59E0B'; }
+        else if (recNum > lifeNum * 1.25)  { arrow = '↑';  col = '#10B981'; }
+      }
+      trendHtml = `<div class="rate-sub" style="color:${col};font-weight:600" title="Last 7 days: ${num7}/${den7}">${arrow} ${recent}% 7d</div>`;
+    } else if (den7 && den7 > 0) {
+      trendHtml = `<div class="rate-sub" title="Last 7 days: ${num7}/${den7} (low volume)">— 7d: ${num7}/${den7}</div>`;
+    } else {
+      trendHtml = `<div class="rate-sub" style="color:var(--muted)">— no 7d data</div>`;
+    }
+    const subHtml = lifetime === null ? '' : `<div class="rate-sub">${num}/${den} lifetime</div>`;
+    return lifeHtml + subHtml + trendHtml;
+  }
+  function esc(s){ const d=document.createElement('div'); d.textContent=s||''; return d.innerHTML; }
+  function fmt(n){ return n != null ? Number(n).toLocaleString() : '–'; }
+  // Decode HTML entities that get stored in body_excerpt (&#39; → ', &quot; → ", etc.)
+  function decodeHtml(s) {
+    if (!s) return '';
+    const d = document.createElement('textarea');
+    d.innerHTML = s;
+    return d.value;
+  }
+  function cleanCampName(s) {
+    if (!s) return '';
+    // Old naming convention embeds an Apollo URL in the campaign name. Strip
+    // the URL but keep any human-written prefix/suffix so the user sees the
+    // actual campaign name they recognise from PlusVibe.
+    let cleaned = String(s).replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim();
+    if (!cleaned) cleaned = 'Apollo filter';
+    return cleaned.length > 50 ? cleaned.slice(0, 48) + '…' : cleaned;
+  }
+  function age(iso){
+    if (!iso) return '–';
+    const d = Math.floor((Date.now() - new Date(iso)) / 86400000);
+    if (d === 0) return 'Today';
+    if (d === 1) return '1 day ago';
+    return `${d}d ago`;
+  }
+
+  // ── Load data ──
+  async function loadData(wsId) {
+    loadingState.innerHTML = `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#1F6F78" stroke-width="2" stroke-linecap="round" style="animation:spin 1s linear infinite;margin-bottom:12px"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4"/></svg><p>Loading copy data…</p>`;
+    loadingState.style.display = 'block';
+    dashboard.style.display = 'none';
+    try {
+      const r = await fetch(`/api/copy/analytics?workspace_id=${encodeURIComponent(wsId)}`);
+      if (!r.ok) throw new Error(await r.text());
+      allData = await r.json();
+      render(allData);
+    } catch(e) {
+      loadingState.innerHTML = `<p style="color:var(--red)">Error: ${esc(e.message)}</p>`;
+    }
+  }
+
+  // ── Score + profile detection ──
+  // Score 0–100 combines reply rate, lead rate, bounce rate and volume.
+  // Returns null when there isn't enough volume to score reliably.
+  function computeScore(r) {
+    const sent    = Number(r.sent || 0);
+    const replies = Number(r.replies || 0);
+    const leads   = Number(r.leads || 0);
+    const bounces = Number(r.bounces || 0);
+    if (sent < 20) return null;
+    const rr = replies / sent;
+    const lr = leads   / sent;
+    const br = bounces / sent;
+    let s = 0;
+    // Reply rate (max 40)
+    if      (rr >= 0.05)  s += 40;
+    else if (rr >= 0.03)  s += 30;
+    else if (rr >= 0.015) s += 20;
+    else if (rr >= 0.005) s += 10;
+    else if (rr > 0)      s += 5;
+    // Lead rate (max 40) — leads are the highest-quality signal
+    if      (lr >= 0.005) s += 40;
+    else if (lr >= 0.002) s += 30;
+    else if (lr >= 0.001) s += 20;
+    else if (lr > 0)      s += 10;
+    // Bounce penalty
+    if      (br >= 0.05)  s -= 30;
+    else if (br >= 0.03)  s -= 20;
+    else if (br >= 0.02)  s -= 10;
+    // Volume bonus (max 20) — proven at scale beats good-looking but small
+    if      (sent >= 1000) s += 20;
+    else if (sent >= 500)  s += 15;
+    else if (sent >= 100)  s += 10;
+    else                   s += 5;
+    return Math.max(0, Math.min(100, s));
+  }
+  function scoreColor(s) {
+    if (s === null || s === undefined) return '#9CA3AF';
+    if (s >= 70) return '#10B981';
+    if (s >= 50) return '#1F6F78';
+    if (s >= 30) return '#F59E0B';
+    return '#EF4444';
+  }
+  function scoreBadge(s) {
+    if (s === null || s === undefined) return '<span class="score-badge none">–</span>';
+    return `<span class="score-badge" style="background:${scoreColor(s)}">${s}</span>`;
+  }
+
+  // Profile detection — surface subject lines / templates that are likely
+  // burnt with mailbox providers and should be retired.
+  function profileFlags(r) {
+    const sent    = Number(r.sent || 0);
+    const replies = Number(r.replies || 0);
+    const bounces = Number(r.bounces || 0);
+    const leads   = Number(r.leads || 0);
+    const flags = [];
+    if (sent < 100) return flags;
+    const rr = replies / sent;
+    const br = bounces / sent;
+    if (sent >= 500 && rr < 0.005 && leads === 0) {
+      flags.push({ cls: 'profiled', label: 'Profiled · avoid' });
+    }
+    if (br >= 0.03) {
+      flags.push({ cls: 'bounced', label: `${(br*100).toFixed(1)}% bounce · avoid` });
+    }
+    if (rr >= 0.04 && leads > 0 && sent >= 200) {
+      flags.push({ cls: 'top', label: 'Top performer' });
+    }
+    return flags;
+  }
+  function flagsHtml(r) {
+    return profileFlags(r).map(f => `<span class="flag ${f.cls}">${f.label}</span>`).join(' ');
+  }
+
+  // ── Email preview modal ──
+  const emailModal        = document.getElementById('emailModal');
+  const emailModalCard    = document.getElementById('emailModalCard');
+  const emailModalClose   = document.getElementById('emailModalClose');
+  const emailModalSubject = document.getElementById('emailModalSubject');
+  const emailModalMeta    = document.getElementById('emailModalMeta');
+  const emailModalContent = document.getElementById('emailModalContent');
+
+  function openEmailModal({ subject, body, campaigns, statuses, sent, replies, leads, bounces, step }) {
+    // Clean up any previously-rendered campaign block from a prior open
+    const prevCamps = document.getElementById('emailModalCampaigns');
+    if (prevCamps) prevCamps.remove();
+    emailModalSubject.textContent = subject || '(no subject)';
+    // Meta line: counts + step
+    const metaBits = [];
+    if (sent != null)    metaBits.push(`<strong>${Number(sent).toLocaleString()}</strong> sent`);
+    if (replies != null) metaBits.push(`<strong>${Number(replies).toLocaleString()}</strong> replies`);
+    if (leads != null)   metaBits.push(`<strong>${Number(leads).toLocaleString()}</strong> leads`);
+    if (bounces != null) metaBits.push(`<strong>${Number(bounces).toLocaleString()}</strong> bounces`);
+    if (step)            metaBits.push(`Step <strong>${esc(step)}</strong>`);
+    emailModalMeta.innerHTML = metaBits.join(' &nbsp;·&nbsp; ');
+    // Body — decode HTML entities then preserve whitespace
+    const decoded = decodeHtml(body || '');
+    if (/<[a-z][\s\S]*>/i.test(decoded)) {
+      emailModalContent.innerHTML = decoded;
+    } else {
+      emailModalContent.textContent = decoded;
+    }
+    // Campaign list — single scrollable column, full names, newest first
+    // (server returns them ordered by most-recently-captured DESC).
+    const camps = Array.isArray(campaigns) ? campaigns : [];
+    if (camps.length) {
+      const rows = camps.map(c => {
+        const cleaned = String(c).replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim() || 'Apollo filter';
+        return `<div class="ec-row" title="${esc(c)}">${esc(cleaned)}</div>`;
+      }).join('');
+      emailModalContent.insertAdjacentHTML('afterend',
+        `<div class="email-modal-campaigns" id="emailModalCampaigns">
+           <div class="email-modal-campaigns-hd"><span>Campaigns using this template</span><span>${camps.length}</span></div>
+           <div class="email-modal-campaigns-list">${rows}</div>
+         </div>`);
+    }
+    emailModal.classList.add('open');
+  }
+  function closeEmailModal() { emailModal.classList.remove('open'); }
+  emailModalClose.addEventListener('click', closeEmailModal);
+  emailModal.addEventListener('click', (e) => { if (e.target === emailModal) closeEmailModal(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeEmailModal(); });
+
+  // Show the real PlusVibe campaign status (active / paused / draft / etc.)
+  // instead of always "Active". When a template is used in multiple campaigns
+  // with different statuses, summarise (e.g. "3 active · 1 paused").
+  function campaignStatusBadge(t) {
+    const statuses = Array.isArray(t.campaign_statuses) ? t.campaign_statuses : [];
+    const colours = {
+      active: '#10B981', running: '#10B981', started: '#10B981',
+      paused: '#F59E0B', draft: '#9CA3AF', completed: '#6B7280', archived: '#6B7280',
+    };
+    const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+    const dot = (c) => `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c};margin-right:6px;vertical-align:middle"></span>`;
+
+    // is_active is the authoritative per-template signal (campaign active AND
+    // this variant actually sent in the last 7d). It must win over the raw
+    // campaign status: a disabled A/B variant lives in an ACTIVE campaign, so
+    // campaign_statuses would say "active" even though the variant isn't
+    // sending. Only show "Active" when the variant itself is live.
+    if (t.is_active) return `${dot('#10B981')}Active`;
+
+    // Not live. If the campaign itself is in a clear non-active state
+    // (draft/paused/completed), surface that; otherwise it's an inactive
+    // variant of an active campaign → "Inactive".
+    const nonActive = statuses.filter(s => s !== 'active' && s !== 'running' && s !== 'started');
+    if (nonActive.length) {
+      const s = nonActive[0];
+      return `${dot(colours[s] || '#6B7280')}${cap(s)}`;
+    }
+    return `${dot('#9CA3AF')}Inactive`;
+  }
+
+  // ── Sort state ──
+  const sortState = {
+    templates: { key: 'score', dir: 'desc' },
+    subjects:  { key: 'score', dir: 'desc' }
+  };
+
+  function rate(num, den) { return Number(den) > 0 ? Number(num) / Number(den) : -1; }
+  function sortRows(rows, key, dir) {
+    const mul = dir === 'asc' ? 1 : -1;
+    const get = (r) => {
+      switch (key) {
+        case 'sent':           return Number(r.sent || 0);
+        case 'replies':        return Number(r.replies || 0);
+        case 'leads':          return Number(r.leads || 0);
+        case 'bounces':        return Number(r.bounces || 0);
+        case 'reply_rate':     return rate(r.replies, r.sent);
+        case 'lead_rate':      return rate(r.leads, r.sent);
+        case 'bounce_rate':    return rate(r.bounces, r.sent);
+        case 'campaign_count': return Number(r.campaign_count || 0);
+        case 'subject':        return String(r.subject || '').toLowerCase();
+        case 'score': {
+          const s = computeScore(r);
+          return s === null ? -1 : s;
+        }
+        case 'step':           return Number(r.min_step || r.step || 99);
+        case 'status': {
+          // Templates: rank by is_active + status string priority.
+          // Subjects: rank by profile flag priority (top > clean > profiled).
+          const flags = profileFlags(r).map(f => f.cls);
+          if (flags.includes('top'))      return 5;
+          if (flags.includes('profiled')) return 0;
+          if (flags.includes('bounced'))  return 1;
+          if (r.is_active === false)      return 2;
+          const statuses = Array.isArray(r.campaign_statuses) ? r.campaign_statuses : [];
+          if (statuses.includes('active') || statuses.includes('running')) return 4;
+          if (statuses.includes('paused')) return 3;
+          if (statuses.length) return 2;
+          return r.is_active ? 4 : 2;
+        }
+        default:               return 0;
+      }
+    };
+    return rows.slice().sort((a, b) => {
+      const va = get(a), vb = get(b);
+      if (typeof va === 'string') return va.localeCompare(vb) * mul;
+      return (va - vb) * mul;
+    });
+  }
+
+  function updateSortIndicators(tableId, activeKey, dir) {
+    document.querySelectorAll(`#${tableId} th.sortable`).forEach(th => {
+      th.classList.remove('asc', 'desc');
+      if (th.dataset.sort === activeKey) th.classList.add(dir);
+    });
+  }
+
+  // ── Render ──
+  function render(d) {
+    renderStats(d);
+    renderTemplates(d.templates || []);
+    renderSubjects(d.subjects || []);
+    renderSteps(d.by_step || []);
+    renderStale(d.stale || []);
+    loadingState.style.display = 'none';
+    dashboard.style.display = 'block';
+  }
+
+  function renderStats(d) {
+    const t = d.totals || {};
+    const tpls = d.templates || [];
+    // Workspace totals come from windowed webhook events — gives an honest
+    // "last N days" picture instead of PlusVibe's all-time variant-stats
+    // (which the per-template tables use because they need per-step truth).
+    const totalSent    = Number(t.total_sent    || 0);
+    const totalReplies = Number(t.total_replies || 0);
+    const totalLeads   = Number(t.total_leads   || 0);
+    const staleCount   = (d.stale||[]).length;
+    const proven = tpls.filter(r => Number(r.replies||0) > 0 || Number(r.leads||0) > 0).length;
+
+    const replyRate = totalSent ? (totalReplies/totalSent*100).toFixed(1)+'%' : '–';
+
+    document.getElementById('statsRow').innerHTML = `
+      <div class="stat-card teal">
+        <div class="stat-label">Total Sent</div>
+        <div class="stat-val">${totalSent.toLocaleString()}</div>
+        <div class="stat-sub">all-time from PlusVibe</div>
+      </div>
+      <div class="stat-card green">
+        <div class="stat-label">Total Replies</div>
+        <div class="stat-val">${totalReplies.toLocaleString()}</div>
+        <div class="stat-sub">${replyRate} reply rate · all-time</div>
+      </div>
+      <div class="stat-card teal">
+        <div class="stat-label">Leads Generated</div>
+        <div class="stat-val">${totalLeads.toLocaleString()}</div>
+        <div class="stat-sub">${proven} templates with positive signal</div>
+      </div>
+      <div class="stat-card ${staleCount > 0 ? 'amber' : 'green'}">
+        <div class="stat-label">Stale Templates</div>
+        <div class="stat-val" style="${staleCount > 0 ? 'color:var(--amber)' : ''}">${staleCount}</div>
+        <div class="stat-sub">active, 20+ sends, zero response</div>
+      </div>`;
+  }
+
+  let tplCache = [];
+  function renderTemplates(rows) {
+    if (rows) tplCache = rows;
+    const sorted = sortRows(tplCache, sortState.templates.key, sortState.templates.dir);
+    updateSortIndicators('tplTable', sortState.templates.key, sortState.templates.dir);
+    document.getElementById('tplBadge').textContent = tplCache.length + ' templates';
+    const tbody = document.getElementById('tplBody');
+    if (!sorted.length) { tbody.innerHTML = '<tr><td colspan="10" class="empty">No template data yet for this workspace.</td></tr>'; return; }
+
+    tbody.innerHTML = sorted.map(t => {
+      const sent    = Number(t.sent||0);
+      const replies = Number(t.replies||0);
+      const leads   = Number(t.leads||0);
+      const bounces = Number(t.bounces||0);
+      const stepRange = t.min_step === t.max_step ? `Step ${t.min_step||'?'}` : `Steps ${t.min_step}–${t.max_step}`;
+      const camps = (t.campaigns||[]).slice(0,3);
+      const campHtml = camps.map(c => { const n=cleanCampName(c); return n?`<span class="campaign-tag" title="${esc(c)}">${esc(n)}</span>`:''; }).join('') +
+        (t.campaigns&&t.campaigns.length>3 ? `<span class="campaign-tag">+${t.campaigns.length-3} more</span>` : '');
+      const score = computeScore(t);
+      const flags = flagsHtml(t);
+
+      return `<tr data-tpl-idx="${tplCache.indexOf(t)}">
+        <td>
+          <div class="subject-text">${esc(decodeHtml(t.subject)||'(no subject)')}</div>
+          <div class="body-preview">${esc(decodeHtml(t.body_excerpt||'').slice(0,160))}</div>
+          ${campHtml ? `<div class="campaign-tags">${campHtml}</div>` : ''}
+          ${flags ? `<div style="margin-top:6px">${flags}</div>` : ''}
+        </td>
+        <td class="num">${scoreBadge(score)}</td>
+        <td class="num"><span class="count ${sent===0?'zero':''}">${fmt(sent)}</span></td>
+        <td class="num"><span class="count ${replies===0?'zero':''}">${fmt(replies)}</span></td>
+        <td class="num">${rateCellTrend(replies, sent, Number(t.replies_7d||0), Number(t.sent_7d||0))}</td>
+        <td class="num"><span class="count ${leads===0?'zero':''}">${fmt(leads)}</span></td>
+        <td class="num">${rateCell(leads, sent)}</td>
+        <td class="num">${rateCell(bounces, sent)}</td>
+        <td><span class="step-badge">${esc(stepRange)}</span></td>
+        <td>${campaignStatusBadge(t)}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  let subCache = [];
+  function renderSubjects(rows) {
+    if (rows) subCache = rows;
+    const sorted = sortRows(subCache, sortState.subjects.key, sortState.subjects.dir);
+    updateSortIndicators('subTable', sortState.subjects.key, sortState.subjects.dir);
+    document.getElementById('subBadge').textContent = subCache.length + ' subjects';
+    const tbody = document.getElementById('subBody');
+    if (!sorted.length) { tbody.innerHTML = '<tr><td colspan="9" class="empty">No subject data yet.</td></tr>'; return; }
+
+    tbody.innerHTML = sorted.map(s => {
+      const sent    = Number(s.sent||0);
+      const replies = Number(s.replies||0);
+      const leads   = Number(s.leads||0);
+      const score   = computeScore(s);
+      const flags   = flagsHtml(s);
+      const statusHtml = flags || '<span style="color:var(--muted);font-size:11px">–</span>';
+      const campaignStatus = campaignStatusBadge(s);
+      const statusCombined = (flags ? flags + ' ' : '') + campaignStatus;
+      return `<tr data-sub-idx="${subCache.indexOf(s)}">
+        <td><div class="subject-text">${esc(s.subject||'(blank)')}</div>
+            <div class="body-preview">${s.template_count>1 ? `${s.template_count} body variants` : '1 body variant'}</div></td>
+        <td class="num">${scoreBadge(score)}</td>
+        <td class="num">${fmt(s.campaign_count)}</td>
+        <td class="num"><span class="count">${fmt(sent)}</span></td>
+        <td class="num"><span class="count ${replies===0?'zero':''}">${fmt(replies)}</span></td>
+        <td class="num">${rateCellTrend(replies, sent, Number(s.replies_7d||0), Number(s.sent_7d||0))}</td>
+        <td class="num"><span class="count ${leads===0?'zero':''}">${fmt(leads)}</span></td>
+        <td class="num">${rateCell(leads, sent)}</td>
+        <td>${statusCombined}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  function renderSteps(rows) {
+    const grid = document.getElementById('stepGrid');
+    if (!rows.length) { grid.innerHTML = '<div class="empty">No step data yet.</div>'; return; }
+    const maxReplies = Math.max(...rows.map(r => Number(r.replies||0)), 1);
+    const maxLeads   = Math.max(...rows.map(r => Number(r.leads||0)), 1);
+
+    grid.innerHTML = rows.map(r => {
+      const step    = r.step || '?';
+      const sent    = Number(r.sent||0);
+      const replies = Number(r.replies||0);
+      const leads   = Number(r.leads||0);
+      const bounces = Number(r.bounces||0);
+      const rBar = Math.round(replies / maxReplies * 100);
+      const lBar = Math.round(leads   / maxLeads   * 100);
+      const replyRate = sent >= 20 ? (replies/sent*100).toFixed(1)+'%' : '–';
+      const leadRate  = sent >= 20 ? (leads/sent*100).toFixed(1)+'%'   : '–';
+
+      return `<div class="step-row">
+        <div class="step-lbl">Step ${step}</div>
+        <div class="step-bars">
+          <div class="bar-wrap">
+            <div class="bar-track"><div class="bar-fill reply" style="width:${rBar}%"></div></div>
+            <div class="bar-lbl">${fmt(replies)} replies (${replyRate})</div>
+          </div>
+          <div class="bar-wrap">
+            <div class="bar-track"><div class="bar-fill lead" style="width:${lBar}%"></div></div>
+            <div class="bar-lbl">${fmt(leads)} leads (${leadRate})</div>
+          </div>
+        </div>
+        <div class="step-nums">
+          <div class="step-num">${fmt(sent)}</div>
+          <div class="step-num-lbl">sent</div>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  async function suppressTemplate(contentHash) {
+    const wsId = wsSelect.value;
+    if (!wsId || !contentHash) return;
+    const btn = document.querySelector(`[data-suppress="${CSS.escape(contentHash)}"]`);
+    if (btn) { btn.disabled = true; btn.textContent = 'Disabling…'; }
+    try {
+      const r = await fetch('/api/copy/suppress', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspace_id: wsId, content_hash: contentHash })
+      });
+      const d = await r.json();
+      if (d.errors && d.errors.length) console.warn('[suppress] PV errors:', d.errors);
+      await loadData(wsId);
+    } catch (e) {
+      if (btn) { btn.disabled = false; btn.textContent = 'Disable'; }
+    }
+  }
+
+  function renderStale(rows) {
+    document.getElementById('staleBadge').textContent = rows.length + ' flagged';
+    const tbody = document.getElementById('staleBody');
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="8" class="empty"><h3>No flagged templates</h3>No active templates match the profiled, high-bounce, or gone-quiet criteria.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.map(t => {
+      const camps = (t.campaigns||[]).slice(0,3);
+      const campHtml = camps.map(c => { const n=cleanCampName(c); return n?`<span class="campaign-tag" title="${esc(c)}">${esc(n)}</span>`:''; }).join('') +
+        (t.campaigns&&t.campaigns.length>3 ? `<span class="campaign-tag">+${t.campaigns.length-3}</span>` : '');
+      const totalSignal = Number(t.total_signal) || 0;
+      const signal14d = Number(t.signal_14d) || 0;
+      return `<tr>
+        <td>
+          <span class="stale-badge">Avoid</span>
+          <div class="subject-text" style="margin-top:5px">${esc(t.subject||'(no subject)')}</div>
+          <div class="body-preview">${decodeHtml(t.body_excerpt||'')}</div>
+        </td>
+        <td class="num"><span class="count">${fmt(totalSignal)}</span></td>
+        <td class="num"><span class="count ${signal14d === 0 ? 'zero' : ''}">${fmt(signal14d)}</span></td>
+        <td style="font-size:12px;color:var(--muted)">${age(t.last_signal_at)}</td>
+        <td>${campHtml || '–'}</td>
+        <td><span class="step-badge">Step ${t.step||'?'}</span></td>
+        <td style="font-size:12px;color:var(--muted)">${age(t.first_seen)}</td>
+        <td><button class="btn-sm btn-danger" data-suppress="${esc(t.content_hash||'')}" onclick="suppressTemplate('${esc(t.content_hash||'')}')">Disable</button></td>
+      </tr>`;
+    }).join('');
+  }
+
+  // ── Diagnostic tab ──
+  async function loadDiagnostic() {
+    const wsId = wsSelect.value;
+    if (!wsId) return;
+    const box = document.getElementById('diagContent');
+    box.innerHTML = '<div style="padding:1rem;color:var(--muted)">Loading…</div>';
+    try {
+      const r = await fetch(`/api/copy/diagnostic?workspace_id=${encodeURIComponent(wsId)}`);
+      if (!r.ok) throw new Error(await r.text());
+      const d = await r.json();
+      renderDiagnostic(d);
+    } catch(e) {
+      box.innerHTML = `<div style="padding:1rem;color:var(--red)">Error: ${esc(e.message)}</div>`;
+    }
+  }
+
+  function renderDiagnostic(d) {
+    document.getElementById('diagBadge').textContent = `${d.campaign_templates_total} templates · ${(d.events_by_type||[]).reduce((s,r)=>s+Number(r.total||0),0).toLocaleString()} events`;
+
+    const eventsHtml = (d.events_by_type||[]).map(r => {
+      const total = Number(r.total) || 1;
+      const ch = Number(r.with_content_hash || 0);
+      const ci = Number(r.with_campaign_id  || 0);
+      const st = Number(r.with_step         || 0);
+      const le = Number(r.with_lead_email   || 0);
+      function pctBar(n, color) {
+        const p = (n/total*100).toFixed(0);
+        return `<div style="display:flex;align-items:center;gap:8px;font-size:12px;margin-top:4px">
+          <span style="width:110px;color:var(--muted)">${n.toLocaleString()} (${p}%)</span>
+          <div style="flex:1;height:6px;background:#E5E7EB;border-radius:3px;overflow:hidden"><div style="width:${p}%;height:100%;background:${color}"></div></div>
+        </div>`;
+      }
+      return `<div style="background:#fff;padding:1rem;border-radius:8px;border:1px solid var(--border)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div style="font-weight:700;font-size:14px">${esc(r.event_type)}</div>
+          <div style="font-size:12px;color:var(--muted)">${Number(r.total).toLocaleString()} events</div>
+        </div>
+        <div><div style="font-size:11px;color:var(--muted);text-transform:uppercase;font-weight:700">content_hash populated</div>${pctBar(ch,'#10B981')}</div>
+        <div style="margin-top:6px"><div style="font-size:11px;color:var(--muted);text-transform:uppercase;font-weight:700">campaign_id populated</div>${pctBar(ci,'#3B82F6')}</div>
+        <div style="margin-top:6px"><div style="font-size:11px;color:var(--muted);text-transform:uppercase;font-weight:700">step populated</div>${pctBar(st,'#8B5CF6')}</div>
+        <div style="margin-top:6px"><div style="font-size:11px;color:var(--muted);text-transform:uppercase;font-weight:700">lead_email populated</div>${pctBar(le,'#F59E0B')}</div>
+        <div style="margin-top:10px;font-size:11px;color:var(--muted)">Range: ${r.earliest ? new Date(r.earliest).toLocaleString() : '?'} → ${r.latest ? new Date(r.latest).toLocaleString() : '?'}</div>
+      </div>`;
+    }).join('');
+
+    // Attribution breakdown grouped by event_type
+    const attrByType = {};
+    (d.attribution_breakdown||[]).forEach(r => {
+      if (!attrByType[r.event_type]) attrByType[r.event_type] = [];
+      attrByType[r.event_type].push(r);
+    });
+    const attrHtml = Object.keys(attrByType).map(et => {
+      const rows = attrByType[et];
+      const total = rows.reduce((s,r)=>s+Number(r.n||0),0) || 1;
+      const items = rows.map(r => {
+        const p = (Number(r.n)/total*100).toFixed(0);
+        const color = r.strategy === 'unmatched' ? '#EF4444' : r.strategy === 'direct_hash' ? '#10B981' : r.strategy === 'lead_email' ? '#F59E0B' : '#3B82F6';
+        return `<div style="display:flex;align-items:center;gap:8px;font-size:12px;margin-top:4px">
+          <span style="width:120px;font-weight:600">${esc(r.strategy)}</span>
+          <span style="width:90px;color:var(--muted)">${Number(r.n).toLocaleString()} (${p}%)</span>
+          <div style="flex:1;height:6px;background:#E5E7EB;border-radius:3px;overflow:hidden"><div style="width:${p}%;height:100%;background:${color}"></div></div>
+        </div>`;
+      }).join('');
+      return `<div style="background:#fff;padding:1rem;border-radius:8px;border:1px solid var(--border);margin-top:8px">
+        <div style="font-weight:700;font-size:14px;margin-bottom:8px">${esc(et)}</div>
+        ${items}
+      </div>`;
+    }).join('');
+
+    const sampleHtml = (d.recent_events_sample||[]).map(r => `
+      <div style="background:#fff;padding:0.75rem;border-radius:6px;border:1px solid var(--border);margin-top:6px;font-family:ui-monospace,monospace;font-size:11px;line-height:1.6">
+        <div><strong>${esc(r.event_type)}</strong> @ ${esc(r.event_at)}</div>
+        <div style="color:var(--muted)">content_hash: <span style="color:${r.content_hash?'#10B981':'#EF4444'}">${esc(r.content_hash||'NULL')}</span></div>
+        <div style="color:var(--muted)">campaign_id: <span style="color:${r.campaign_id?'#10B981':'#EF4444'}">${esc(r.campaign_id||'NULL')}</span></div>
+        <div style="color:var(--muted)">step: <span style="color:${r.step!=null?'#10B981':'#EF4444'}">${r.step!=null?r.step:'NULL'}</span></div>
+        <div style="color:var(--muted)">lead_email: <span style="color:${r.lead_email?'#10B981':'#EF4444'}">${esc(r.lead_email||'NULL')}</span></div>
+        <div style="color:var(--muted)">raw keys: ${esc((r.raw_keys||[]).join(', '))}</div>
+      </div>
+    `).join('');
+
+    document.getElementById('diagContent').innerHTML = `
+      <div>
+        <h3 style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:0.5rem">Workspace</h3>
+        <div style="background:#fff;padding:1rem;border-radius:8px;border:1px solid var(--border);font-size:13px">
+          <div><strong>Workspace ID:</strong> ${esc(d.workspace_id)}</div>
+          <div><strong>Campaign templates captured:</strong> ${d.campaign_templates_total} (${d.campaign_templates_active} active)</div>
+        </div>
+      </div>
+      <div>
+        <h3 style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:0.5rem">Field population by event type</h3>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem">${eventsHtml || '<div style="color:var(--muted)">No events</div>'}</div>
+      </div>
+      <div>
+        <h3 style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:0.5rem">Attribution strategy breakdown</h3>
+        <p style="font-size:12px;color:var(--muted);margin-bottom:8px">Each event is attributed to a template via the strongest available signal. Unmatched events have no template attribution.</p>
+        ${attrHtml || '<div style="color:var(--muted)">No data</div>'}
+      </div>
+      <div>
+        <h3 style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:0.5rem">Recent events sample</h3>
+        ${sampleHtml || '<div style="color:var(--muted)">No events</div>'}
+      </div>
+    `;
+  }
+
+  // ── Tab switching ──
+  document.querySelectorAll('.tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+      if (btn.dataset.tab === 'diag') loadDiagnostic();
+    });
+  });
+
+  // ── Sortable headers ──
+  function wireSort(tableId, stateKey, renderFn) {
+    document.querySelectorAll(`#${tableId} th.sortable`).forEach(th => {
+      th.addEventListener('click', () => {
+        const key = th.dataset.sort;
+        if (sortState[stateKey].key === key) {
+          sortState[stateKey].dir = sortState[stateKey].dir === 'asc' ? 'desc' : 'asc';
+        } else {
+          sortState[stateKey].key = key;
+          sortState[stateKey].dir = key === 'subject' ? 'asc' : 'desc';
+        }
+        renderFn();
+      });
+    });
+  }
+  wireSort('tplTable', 'templates', () => renderTemplates());
+  wireSort('subTable', 'subjects',  () => renderSubjects());
+
+  // Click row → email preview modal
+  document.getElementById('tplBody').addEventListener('click', (e) => {
+    const tr = e.target.closest('tr[data-tpl-idx]');
+    if (!tr) return;
+    const t = tplCache[Number(tr.dataset.tplIdx)];
+    if (!t) return;
+    const stepRange = t.min_step === t.max_step ? `${t.min_step||'?'}` : `${t.min_step}–${t.max_step}`;
+    openEmailModal({
+      subject: t.subject, body: t.body || t.body_excerpt,
+      campaigns: t.campaigns || [], statuses: t.campaign_statuses,
+      sent: t.sent, replies: t.replies, leads: t.leads, bounces: t.bounces,
+      step: stepRange,
+    });
+  });
+  document.getElementById('subBody').addEventListener('click', (e) => {
+    const tr = e.target.closest('tr[data-sub-idx]');
+    if (!tr) return;
+    const s = subCache[Number(tr.dataset.subIdx)];
+    if (!s) return;
+    // Subject row maps to one or more template bodies. Find the matching
+    // template in tplCache by subject_hash to surface a representative body.
+    const matchTpl = (allData?.templates || []).find(t => t.subject === s.subject) || {};
+    openEmailModal({
+      subject: s.subject, body: matchTpl.body || matchTpl.body_excerpt,
+      campaigns: matchTpl.campaigns || [], statuses: s.campaign_statuses,
+      sent: s.sent, replies: s.replies, leads: s.leads, bounces: s.bounces,
+    });
+  });
+
+  // ── Refresh templates ──
+  const refreshBtn = document.getElementById('refreshBtn');
+  refreshBtn.addEventListener('click', async () => {
+    const wsId = wsSelect.value;
+    if (!wsId) return;
+    refreshBtn.disabled = true;
+    const original = refreshBtn.querySelector('span').textContent;
+    refreshBtn.querySelector('span').textContent = 'Syncing…';
+    try {
+      const r = await fetch(`/api/copy/refresh-templates?workspace_id=${encodeURIComponent(wsId)}`, { method: 'POST' });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'refresh failed');
+      refreshBtn.querySelector('span').textContent = `Synced ${d.captured || 0} templates`;
+      loadData(wsId);
+    } catch (e) {
+      refreshBtn.querySelector('span').textContent = 'Error: ' + e.message;
+    } finally {
+      setTimeout(() => { refreshBtn.querySelector('span').textContent = original; refreshBtn.disabled = false; }, 3500);
+    }
+  });
+
+  loadWorkspaces();
+})();
+</script>
+</body>
+</html>

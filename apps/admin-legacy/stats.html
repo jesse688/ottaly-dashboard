@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/favicon.svg">
+<meta name="theme-color" content="#050C29">
+<meta name="description" content="Ottaly Stats — per-client email performance trends">
+<title>Ottaly — Stats</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@400;500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<script src="/splash.js?v=stats1"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--purple:#7C89CD;
+  --yellow:#FFB700;--bg:#F0F2F8;--card:#fff;--border:#E2E6F0;
+  --text:#050C29;--muted:#6B7280;
+  --green:#059669;--amber:#D97706;--red:#DC2626;--blue:#2563EB;
+}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+.header{background:var(--navy-dark);padding:.75rem 2rem;border-bottom:3px solid var(--teal);display:flex;align-items:center;justify-content:space-between}
+.logo{font-family:'Genos',sans-serif;font-size:1.5rem;font-weight:800;color:#fff;letter-spacing:1px}
+.logo span{color:var(--teal)}
+.nav{display:flex;gap:.25rem;flex-wrap:wrap}
+.nav a{color:rgba(255,255,255,0.6);text-decoration:none;font-size:12px;font-weight:500;padding:5px 11px;border-radius:6px;transition:all .15s}
+.nav a:hover,.nav a.active{background:rgba(255,255,255,.1);color:#fff}
+.nav a.active{background:var(--teal);color:#fff}
+.page{max-width:1600px;margin:0 auto;padding:1.25rem 2rem}
+.page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem;flex-wrap:wrap;gap:.75rem}
+.page-title{font-size:1.2rem;font-weight:700}
+.page-sub{font-size:12px;color:var(--muted);margin-top:2px}
+
+/* Period picker */
+.period-bar{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+.period-bar button{padding:5px 12px;border:1px solid var(--border);background:#fff;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;color:var(--muted);transition:all .15s}
+.period-bar button.active{background:var(--navy-dark);color:#fff;border-color:var(--navy-dark)}
+.period-bar input[type=date]{padding:5px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;font-family:inherit;outline:none}
+.period-bar label{font-size:12px;color:var(--muted)}
+#updatedAt{font-size:11px;color:var(--muted);margin-left:.5rem}
+
+/* Client list */
+.clients-grid{display:flex;flex-direction:column;gap:.75rem}
+.client-card{background:var(--card);border-radius:10px;border:1px solid var(--border);overflow:hidden;transition:box-shadow .15s}
+.client-card:hover{box-shadow:0 2px 12px rgba(0,0,0,.07)}
+.client-row{display:grid;grid-template-columns:220px repeat(6,1fr) 48px;align-items:center;gap:0;cursor:pointer;padding:.75rem 1rem}
+.client-name{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.client-sub{font-size:11px;color:var(--muted);margin-top:1px}
+.stat-cell{text-align:right;padding:0 .5rem}
+.stat-val{font-size:14px;font-weight:700}
+.stat-lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-top:1px}
+.stat-cell.good .stat-val{color:var(--green)}
+.stat-cell.bad  .stat-val{color:var(--red)}
+.stat-cell.med  .stat-val{color:var(--amber)}
+.chevron{font-size:11px;color:var(--muted);text-align:center;transition:transform .2s}
+.chevron.open{transform:rotate(90deg)}
+
+/* Expanded chart area */
+.client-detail{display:none;padding:1rem 1rem 1rem 1rem;border-top:1px solid var(--border);background:#fafbfd}
+.client-detail.visible{display:block}
+.chart-controls{display:flex;align-items:center;gap:.5rem;margin-bottom:.75rem;flex-wrap:wrap}
+.toggle-btn{padding:3px 10px;border:1px solid var(--border);background:#fff;border-radius:20px;font-size:11px;font-weight:500;cursor:pointer;color:var(--muted);transition:all .15s}
+.toggle-btn.on{background:var(--navy-dark);color:#fff;border-color:var(--navy-dark)}
+.chart-wrap{position:relative;height:220px}
+
+/* Header row labels */
+.stats-header{display:grid;grid-template-columns:220px repeat(6,1fr) 48px;align-items:center;gap:0;padding:.5rem 1rem;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)}
+.stats-header>div:not(:first-child){text-align:right;padding:0 .5rem}
+
+/* All Workspaces aggregate row — distinguished from individual clients */
+.all-card{border-color:var(--navy-dark);box-shadow:0 1px 8px rgba(5,12,41,.08)}
+.all-card .client-row{background:#f4f6fc}
+.all-card .client-name{color:var(--navy-dark);font-weight:700}
+.spinner{text-align:center;padding:3rem;color:var(--muted);font-size:13px}
+.empty{text-align:center;padding:2rem;color:var(--muted);font-size:13px}
+
+/* sticky header */
+.header{position:sticky;top:0;z-index:200}
+.header>div:first-child,.header-inner>div:first-child{flex:1;min-width:0;overflow:hidden}
+@media(max-width:768px){.header{padding:.75rem 1rem}.page,.page-md{padding:1rem}.page-header{flex-direction:column;align-items:flex-start}.toolbar{flex-wrap:wrap}.table-wrap,.table-container{overflow-x:auto;-webkit-overflow-scrolling:touch}table{min-width:600px}.grid3,.grid-3{grid-template-columns:1fr 1fr}}
+@media(max-width:480px){.metrics,.o-metrics{grid-template-columns:1fr 1fr}}
+
+.header>div:first-child{flex:1;min-width:0;overflow:hidden}
+</style>
+    <script src="/nav.js" defer></script>
+</head>
+<body>
+
+<div class="page">
+  <div class="page-header">
+    <div>
+      <div class="page-title">Stats</div>
+      <div class="page-sub">Per-client email performance · reply rate · bounce rate · RTL · daily activity</div>
+    </div>
+    <div class="period-bar">
+      <button onclick="setPeriod('today')">Today</button>
+      <button onclick="setPeriod('7d')" class="active">7 Days</button>
+      <button onclick="setPeriod('14d')">14 Days</button>
+      <button onclick="setPeriod('30d')">30 Days</button>
+      <button onclick="setPeriod('this_week')">This Week</button>
+      <button onclick="setPeriod('last_week')">Last Week</button>
+      <button onclick="setPeriod('this_month')">This Month</button>
+      <button onclick="setPeriod('last_month')">Last Month</button>
+      <button onclick="setPeriod('this_year')">This Year</button>
+      <span style="color:var(--muted);font-size:12px">Custom:</span>
+      <input type="date" id="customStart">
+      <input type="date" id="customEnd">
+      <button onclick="applyCustom()">Apply</button>
+      <span id="updatedAt"></span>
+      <button id="refreshCacheBtn" onclick="forceRefreshCache()" style="padding:3px 10px;border:1px solid var(--border);background:#fff;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;color:var(--muted)">↻ Refresh data</button>
+    </div>
+  </div>
+
+  <div id="loading" class="spinner">Loading stats…</div>
+  <div id="content" style="display:none">
+    <div class="stats-header">
+      <div>Client</div>
+      <div>Reply Rate</div>
+      <div>Bounce Rate</div>
+      <div>RTL</div>
+      <div>Leads</div>
+      <div>Sends / Day</div>
+      <div>Replies / Day</div>
+      <div></div>
+    </div>
+    <div class="clients-grid" id="clientsGrid"></div>
+  </div>
+  <div id="emptyMsg" class="empty" style="display:none">No data for this period.</div>
+</div>
+
+<script>
+let _data = null;
+let _start = '';
+let _end = '';
+let _rows = [];   // rendered rows incl. the synthetic "All Workspaces" aggregate
+const _expanded = new Set();
+const _chartInstances = {};
+
+// Which series are toggled on per client (defaults all on)
+const _toggles = {};
+const ALL_SERIES = ['humanRR','oooRR','bounceRate','rtl','sent','leads'];
+const SERIES_LABEL = {
+  humanRR:    'Human RR',
+  oooRR:      'OOO RR',
+  bounceRate: 'Bounce Rate',
+  rtl:        'RTL',
+  sent:       'Sent',
+  leads:      'Leads',
+};
+const SERIES_COLOR = {
+  humanRR:    '#059669',
+  oooRR:      '#f59e0b',
+  bounceRate: '#DC2626',
+  rtl:        '#7C89CD',
+  sent:       '#2563EB',
+  leads:      '#D97706',
+};
+// Derive the raw value for each series from a day's data point.
+// Convention (matches performance.html: replyWithOOO / humanReplyRate):
+//   d.replies     = human / non-OOO replies (PlusVibe total_reply_count)
+//   d.oooReplies  = OOO replies, separate bucket
+//   total replies = d.replies + d.oooReplies
+function seriesValue(s, d) {
+  const sent    = d.sent || 0;
+  const replies = d.replies || 0;
+  const ooo     = d.oooReplies || 0;
+  if (s === 'replyRate')  return sent > 0 ? +((replies + ooo) / sent * 100).toFixed(2) : null;
+  if (s === 'humanRR')    return sent > 0 ? +(replies / sent * 100).toFixed(2) : null;
+  if (s === 'oooRR')      return sent > 0 ? +(ooo / sent * 100).toFixed(2) : null;
+  if (s === 'bounceRate') return sent > 0 ? +((d.bounces || 0) / sent * 100).toFixed(2) : null;
+  if (s === 'rtl')        return replies > 0 ? +((d.leads || 0) / replies * 100).toFixed(2) : null;
+  if (s === 'sent')       return sent;
+  if (s === 'leads')      return d.leads || 0;
+  return null;
+}
+// Is this series a % axis?
+function isPercent(s) { return s === 'humanRR' || s === 'oooRR' || s === 'bounceRate' || s === 'rtl'; }
+// Apply 3-day rolling average to a value array (nulls skipped, result rounded to 2dp)
+function rolling3(arr) {
+  return arr.map((_, i) => {
+    const slice = arr.slice(Math.max(0, i - 2), i + 1).filter(v => v != null);
+    if (!slice.length) return null;
+    return +(slice.reduce((a, b) => a + b, 0) / slice.length).toFixed(2);
+  });
+}
+
+fetch('/api/session').then(r=>r.json()).catch(()=>({ok:false})).then(s=>{
+  if (s.ok === false) { location.href = '/login.html?next=/stats.html'; return; }
+  const _so = document.getElementById('signOutBtn'); if (_so) _so.style.display = '';
+  setPeriod('7d');
+  startAutoRefresh();
+});
+
+function fmt(n, dec=1) {
+  if (n == null || isNaN(n)) return '—';
+  return n.toFixed(dec);
+}
+function pct(n) { return n == null || isNaN(n) ? '—' : (n*100).toFixed(1) + '%'; }
+function fmtNum(n) { return (n||0).toLocaleString(); }
+
+function dateRange(start, end) {
+  const dates = [];
+  const d = new Date(start);
+  const e = new Date(end);
+  while (d <= e) {
+    dates.push(d.toISOString().slice(0,10));
+    d.setDate(d.getDate()+1);
+  }
+  return dates;
+}
+
+function todayStr()    { return new Date().toISOString().slice(0,10); }
+function nDaysAgo(n)   { const d=new Date(); d.setDate(d.getDate()-n); return d.toISOString().slice(0,10); }
+function startOfWeek()  { const d=new Date(); d.setDate(d.getDate()-d.getDay()+1); return d.toISOString().slice(0,10); }
+function startOfMonth() { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-01`; }
+function startOfYear()  { return `${new Date().getFullYear()}-01-01`; }
+function lastWeekStart(){ const d=new Date(); d.setDate(d.getDate()-d.getDay()-6); return d.toISOString().slice(0,10); }
+function lastWeekEnd()  { const d=new Date(); d.setDate(d.getDate()-d.getDay()); return d.toISOString().slice(0,10); }
+function lastMonthStart(){ const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()).padStart(2,'0') || '12'}-01`.replace('-00-','-12-'); }
+function lastMonthEnd() {
+  const d=new Date(); d.setDate(0); return d.toISOString().slice(0,10);
+}
+
+function setPeriod(p) {
+  document.querySelectorAll('.period-bar button').forEach(b=>b.classList.remove('active'));
+  event?.target?.classList?.add('active');
+
+  const today = todayStr();
+  let s, e;
+  if (p==='today')       { s=today;           e=today; }
+  else if (p==='7d')     { s=nDaysAgo(6);     e=today; }
+  else if (p==='14d')    { s=nDaysAgo(13);    e=today; }
+  else if (p==='30d')    { s=nDaysAgo(29);    e=today; }
+  else if (p==='this_week')  { s=startOfWeek();  e=today; }
+  else if (p==='last_week')  { s=lastWeekStart(); e=lastWeekEnd(); }
+  else if (p==='this_month') { s=startOfMonth(); e=today; }
+  else if (p==='last_month') { s=lastMonthStart(); e=lastMonthEnd(); }
+  else if (p==='this_year')  { s=startOfYear();  e=today; }
+  else return;
+
+  loadStats(s, e);
+}
+
+function applyCustom() {
+  const s = document.getElementById('customStart').value;
+  const e = document.getElementById('customEnd').value;
+  if (!s || !e) return;
+  document.querySelectorAll('.period-bar button').forEach(b=>b.classList.remove('active'));
+  loadStats(s, e);
+}
+
+let _refreshTimer = null;
+let _partialRetryTimer = null;
+let _partialTries = 0;
+const MAX_PARTIAL_TRIES = 3;  // after this, render whatever we have rather than spin forever
+
+async function loadStats(start, end, silent = false) {
+  _start = start; _end = end;
+  if (!silent) {
+    _partialTries = 0;  // fresh period selection resets the retry budget
+    document.getElementById('loading').style.display = '';
+    document.getElementById('loading').textContent = 'Loading stats…';
+    document.getElementById('content').style.display = 'none';
+    document.getElementById('emptyMsg').style.display = 'none';
+  }
+  // Cancel any pending partial-retry
+  if (_partialRetryTimer) { clearTimeout(_partialRetryTimer); _partialRetryTimer = null; }
+  try {
+    const cmFilter = window.getCMFilter ? window.getCMFilter() : null;
+    const wsParam = cmFilter?.enabled && cmFilter.workspaceIds?.length ? `&workspace_ids=${cmFilter.workspaceIds.join(',')}` : '';
+    const r = await fetch(`/api/stats/summary?start=${start}&end=${end}${wsParam}`);
+    if (!r.ok) throw new Error(`${r.status}`);
+    _data = await r.json();
+    if (_data.updatedAt) {
+      const ts = new Date(_data.updatedAt).toLocaleTimeString();
+      document.getElementById('updatedAt').textContent = _data.partial ? `⏳ Caching… ${ts}` : `Updated ${ts}`;
+    }
+    // Render if data is complete, OR we've waited long enough. The retry budget
+    // is unconditional — a partial response with ZERO rows (every workspace's
+    // PlusVibe fetch failed, so sent=0 & leads=0 and all rows get filtered out)
+    // must still stop the spinner, or the page hangs forever on "Caching…".
+    if (!_data.partial || _partialTries >= MAX_PARTIAL_TRIES) {
+      renderClients();
+      // Keep quietly refreshing in the background if still partial.
+      if (_data.partial) _partialRetryTimer = setTimeout(() => loadStats(start, end, true), 8000);
+    } else {
+      _partialTries++;
+      if (!silent) {
+        document.getElementById('loading').textContent = '⏳ Caching stats — just a moment…';
+      }
+      _partialRetryTimer = setTimeout(() => loadStats(start, end, true), 5000);
+    }
+  } catch(e) {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('emptyMsg').textContent = 'Error loading stats: ' + e.message;
+    document.getElementById('emptyMsg').style.display = '';
+  }
+}
+
+async function forceRefreshCache() {
+  const btn = document.getElementById('refreshCacheBtn');
+  btn.textContent = '⏳ Clearing…';
+  btn.disabled = true;
+  try {
+    await fetch('/api/stats/refresh', { method: 'POST' });
+    document.getElementById('updatedAt').textContent = '⏳ Caching…';
+    if (_start && _end) setTimeout(() => loadStats(_start, _end, true), 3000);
+  } catch {}
+  btn.textContent = '↻ Refresh data';
+  btn.disabled = false;
+}
+
+// Auto-refresh every 5 minutes
+function startAutoRefresh() {
+  if (_refreshTimer) clearInterval(_refreshTimer);
+  _refreshTimer = setInterval(() => {
+    if (_start && _end) loadStats(_start, _end, true);
+  }, 5 * 60 * 1000);
+}
+
+// Build a synthetic "All Workspaces" row that sums every workspace's totals
+// and per-day series, so it renders + charts exactly like a normal client.
+function buildAllWorkspaces(list) {
+  if (!list.length) return null;
+  const totals = { sent:0, replies:0, posReplies:0, oooReplies:0, bounces:0, leads:0 };
+  const byDate = {};
+  let nDays = 0;
+  list.forEach(w => {
+    totals.sent       += w.totals.sent       || 0;
+    totals.replies    += w.totals.replies    || 0;
+    totals.posReplies += w.totals.posReplies || 0;
+    totals.oooReplies += w.totals.oooReplies || 0;
+    totals.bounces    += w.totals.bounces    || 0;
+    totals.leads      += w.totals.leads      || 0;
+    nDays = Math.max(nDays, (w.series || []).length);
+    (w.series || []).forEach(d => {
+      const e = byDate[d.date] || (byDate[d.date] = { date: d.date, sent:0, replies:0, posReplies:0, oooReplies:0, bounces:0, leads:0 });
+      e.sent       += d.sent       || 0;
+      e.replies    += d.replies    || 0;
+      e.posReplies += d.posReplies || 0;
+      e.oooReplies += d.oooReplies || 0;
+      e.bounces    += d.bounces    || 0;
+      e.leads      += d.leads      || 0;
+    });
+  });
+  const series = Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date));
+  const days = series.length || nDays || 1;
+  return {
+    workspace_id: '__all__',
+    name: `All Workspaces (${list.length})`,
+    totals: {
+      ...totals,
+      replyRate:    totals.sent    > 0 ? totals.replies / totals.sent    : 0,
+      bounceRate:   totals.sent    > 0 ? totals.bounces / totals.sent    : 0,
+      rtl:          totals.replies > 0 ? totals.leads   / totals.replies : 0,
+      sendsPerDay:   totals.sent    / days,
+      repliesPerDay: totals.replies / days,
+    },
+    series,
+  };
+}
+
+function renderClients() {
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('content').style.display = '';
+  const wsRaw = _data?.workspaces || [];
+  if (!wsRaw.length) {
+    const em = document.getElementById('emptyMsg');
+    // Partial + no rows means the PlusVibe fetch hasn't landed yet (or is failing),
+    // not a genuinely empty period — say so, and the background retry will refill.
+    em.textContent = _data?.partial
+      ? 'Still caching stats from PlusVibe — this will refresh automatically.'
+      : 'No data for this period.';
+    em.style.display = '';
+    return;
+  }
+  document.getElementById('content').style.display = '';
+
+  // Prepend the "All Workspaces" aggregate row above the individual clients.
+  const allRow = buildAllWorkspaces(wsRaw);
+  const ws = allRow ? [allRow, ...wsRaw] : wsRaw;
+  _rows = ws;   // includes the synthetic row, so toggles can find it
+
+  const grid = document.getElementById('clientsGrid');
+  grid.innerHTML = ws.map(w => {
+    const t = w.totals;
+    const rrClass = t.replyRate >= 0.025 ? 'good' : t.replyRate >= 0.01 ? 'med' : t.replyRate > 0 ? 'bad' : '';
+    const brClass = t.bounceRate >= 0.05 ? 'bad' : t.bounceRate >= 0.02 ? 'med' : 'good';
+    const rtlClass = t.rtl >= 0.1 ? 'good' : t.rtl >= 0.05 ? 'med' : t.rtl > 0 ? '' : '';
+    const isOpen = _expanded.has(w.workspace_id);
+    const isAll = w.workspace_id === '__all__';
+    return `
+      <div class="client-card${isAll ? ' all-card' : ''}" id="card-${w.workspace_id}">
+        <div class="client-row" onclick="toggleClient('${w.workspace_id}')">
+          <div>
+            <div class="client-name">${w.name}</div>
+            <div class="client-sub">${fmtNum(t.sent)} sent · ${fmtNum(t.replies)} replies · ${fmtNum(t.leads)} leads</div>
+          </div>
+          <div class="stat-cell ${rrClass}">
+            <div class="stat-val">${pct(t.replyRate)}</div>
+            <div class="stat-lbl">Reply Rate</div>
+          </div>
+          <div class="stat-cell ${brClass}">
+            <div class="stat-val">${pct(t.bounceRate)}</div>
+            <div class="stat-lbl">Bounce Rate</div>
+          </div>
+          <div class="stat-cell ${rtlClass}">
+            <div class="stat-val">${pct(t.rtl)}</div>
+            <div class="stat-lbl">RTL</div>
+          </div>
+          <div class="stat-cell ${t.leads > 0 ? 'good' : ''}">
+            <div class="stat-val">${fmtNum(t.leads)}</div>
+            <div class="stat-lbl">Leads</div>
+          </div>
+          <div class="stat-cell">
+            <div class="stat-val">${fmt(t.sendsPerDay, 0)}</div>
+            <div class="stat-lbl">Sends/Day</div>
+          </div>
+          <div class="stat-cell">
+            <div class="stat-val">${fmt(t.repliesPerDay, 1)}</div>
+            <div class="stat-lbl">Replies/Day</div>
+          </div>
+          <div class="chevron ${isOpen ? 'open' : ''}">▶</div>
+        </div>
+        <div class="client-detail ${isOpen ? 'visible' : ''}" id="detail-${w.workspace_id}">
+          <div class="chart-controls" id="toggles-${w.workspace_id}">
+            ${ALL_SERIES.map(s => {
+              const on = (_toggles[w.workspace_id]?.[s] !== false);
+              return `<button class="toggle-btn ${on?'on':''}" onclick="toggleSeries('${w.workspace_id}','${s}')" style="border-color:${SERIES_COLOR[s]};${on?'background:'+SERIES_COLOR[s]+';border-color:'+SERIES_COLOR[s]:'color:'+SERIES_COLOR[s]}">${SERIES_LABEL[s]}</button>`;
+            }).join('')}
+            <span style="margin-left:auto;font-size:11px;color:var(--muted);font-weight:500" title="Each point is the average of that day and the previous two — totals in the header row are not smoothed.">3-day rolling avg</span>
+          </div>
+          <div class="chart-wrap"><canvas id="chart-${w.workspace_id}"></canvas></div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  // Render charts for already-expanded clients
+  ws.forEach(w => {
+    if (_expanded.has(w.workspace_id)) renderChart(w);
+  });
+}
+
+function toggleClient(wsId) {
+  if (_expanded.has(wsId)) {
+    _expanded.delete(wsId);
+  } else {
+    _expanded.add(wsId);
+    const w = _rows.find(x => x.workspace_id === wsId);
+    if (w) setTimeout(() => renderChart(w), 50);
+  }
+  const detail = document.getElementById(`detail-${wsId}`);
+  const chevron = document.querySelector(`#card-${wsId} .chevron`);
+  if (detail) detail.classList.toggle('visible', _expanded.has(wsId));
+  if (chevron) chevron.classList.toggle('open', _expanded.has(wsId));
+}
+
+function toggleSeries(wsId, series) {
+  if (!_toggles[wsId]) _toggles[wsId] = Object.fromEntries(ALL_SERIES.map(s => [s, true]));
+  _toggles[wsId][series] = !_toggles[wsId][series];
+  const btn = document.querySelector(`#toggles-${wsId} .toggle-btn[onclick*="'${series}'"]`);
+  if (btn) {
+    const on = _toggles[wsId][series];
+    btn.classList.toggle('on', on);
+    btn.style.background = on ? SERIES_COLOR[series] : '';
+    btn.style.borderColor = SERIES_COLOR[series];
+    btn.style.color = on ? '#fff' : SERIES_COLOR[series];
+  }
+  const w = _rows.find(x => x.workspace_id === wsId);
+  if (w) renderChart(w);
+}
+
+function renderChart(w) {
+  const canvas = document.getElementById(`chart-${w.workspace_id}`);
+  if (!canvas) return;
+  // Destroy existing chart
+  if (_chartInstances[w.workspace_id]) {
+    _chartInstances[w.workspace_id].destroy();
+    delete _chartInstances[w.workspace_id];
+  }
+  const toggles = _toggles[w.workspace_id] || Object.fromEntries(ALL_SERIES.map(s => [s, true]));
+  const labels = w.series.map(d => d.date.slice(5)); // MM-DD
+  const ptR = w.series.length <= 14 ? 3 : 1;
+  const datasets = ALL_SERIES.filter(s => toggles[s] !== false).map(s => ({
+    label: SERIES_LABEL[s],
+    data: rolling3(w.series.map(d => seriesValue(s, d))),
+    borderColor: SERIES_COLOR[s],
+    backgroundColor: SERIES_COLOR[s] + '22',
+    borderWidth: 2,
+    pointRadius: ptR,
+    tension: 0.3,
+    fill: false,
+    spanGaps: true,
+    yAxisID: isPercent(s) ? 'yPct' : 'ySent',
+  }));
+  const hasPct    = ALL_SERIES.filter(s => toggles[s] !== false).some(isPercent);
+  const hasCounts = ['sent','leads'].some(s => toggles[s] !== false);
+  _chartInstances[w.workspace_id] = new Chart(canvas, {
+    type: 'line',
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            title: items => `${w.name} — ${items[0].label} (3d avg)`,
+            label: item => {
+              const s = ALL_SERIES.find(k => SERIES_LABEL[k] === item.dataset.label);
+              const v = item.parsed.y;
+              if (v == null) return `${item.dataset.label}: —`;
+              return `${item.dataset.label}: ${isPercent(s) ? v.toFixed(2) + '%' : v.toLocaleString()}`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { font: { size: 11 } } },
+        yPct: {
+          display: hasPct,
+          position: 'left',
+          beginAtZero: true,
+          ticks: { font: { size: 11 }, callback: v => v + '%' },
+          title: { display: true, text: '%', font: { size: 10 }, color: '#6B7280' },
+        },
+        ySent: {
+          display: hasCounts,
+          position: 'right',
+          beginAtZero: true,
+          grid: { drawOnChartArea: false },
+          ticks: { font: { size: 11 } },
+          title: { display: true, text: 'Sent', font: { size: 10 }, color: '#6B7280' },
+        },
+      },
+    },
+  });
+}
+
+// Reload when CM filter is toggled
+window.addEventListener('ottaly:cm-filter-changed', function() {
+  if (_start && _end) loadStats(_start, _end);
+});
+</script>
+</body>
+</html>

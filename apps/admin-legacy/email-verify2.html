@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/favicon.svg">
+<meta name="theme-color" content="#050C29">
+<meta name="description" content="Ottaly Email Verify 2.0 — proxy-backed SMTP verifier">
+<title>Email Verify 2.0 — Ottaly</title>
+<script>document.write('<script src="/splash.js?v=' + Date.now() + '"><\/script>');</script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f3f6fb;color:#111827}
+.topbar{background:#111827;color:#fff;border-bottom:3px solid #16817a}
+.topbar-inner{max-width:1280px;margin:0 auto;padding:14px 24px;display:flex;justify-content:space-between;gap:18px;align-items:center}
+.brand{font-size:16px;font-weight:850}
+.nav{display:flex;gap:.2rem;align-items:center}
+.nav a{padding:7px 14px;border-radius:7px;font-size:12px;font-weight:600;color:rgba(255,255,255,.55);text-decoration:none}
+.nav a:hover,.nav a.active{background:#16817a;color:#fff}
+.ip{display:flex;gap:8px;align-items:center;font-size:12px;color:#cbd5e1}
+.ip-dot{width:9px;height:9px;border-radius:50%;background:#22c55e}
+.wrap{max-width:1280px;margin:0 auto;padding:24px}
+.layout{display:grid;grid-template-columns:400px 1fr;gap:18px}
+.panel{background:#fff;border:1px solid #dde3ef;border-radius:8px;box-shadow:0 1px 3px rgba(17,24,39,.06)}
+.panel-pad{padding:18px}
+.section-title{font-size:12px;font-weight:850;text-transform:uppercase;letter-spacing:.8px;color:#667085;margin-bottom:14px}
+.dropzone{border:2px dashed #b7c4d8;border-radius:8px;background:#fbfcff;padding:34px 18px;text-align:center;cursor:pointer;transition:.15s}
+.dropzone:hover,.dropzone.drag{border-color:#16817a;background:#f0fbf9}
+.drop-title{font-weight:850;font-size:16px}
+.drop-sub{margin-top:6px;font-size:12px;color:#667085;line-height:1.45}
+.file-pill{display:none;margin-top:14px;background:#eef2f7;border:1px solid #d7deea;border-radius:7px;padding:9px 10px;font-size:12px;font-weight:750;color:#344054;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.field label{display:block;font-size:12px;font-weight:850;color:#344054;margin-bottom:6px}
+.field input{width:100%;padding:10px 11px;border:1.5px solid #d7deea;border-radius:7px;font:inherit;font-size:14px;background:white}
+.field input:focus{outline:none;border-color:#16817a}
+.single-test{border-top:1px solid #edf1f7;border-bottom:1px solid #edf1f7;margin:16px 0;padding:14px 0}
+.single-row{display:grid;grid-template-columns:1fr auto;gap:8px}
+.btn{border:0;border-radius:7px;padding:10px 14px;font:inherit;font-size:13px;font-weight:850;cursor:pointer}
+.btn-primary{background:#1f3d7a;color:#fff}.btn-primary:hover{background:#16817a}
+.btn-secondary{background:#eef2f7;color:#1f2937;border:1px solid #d7deea}.btn-secondary:hover{background:#e4eaf3}
+.btn-danger{background:#fee2e2;color:#991b1b;border:1px solid #fecaca}.btn-danger:hover{background:#fecaca}
+.btn-sm{padding:6px 10px;font-size:12px}
+.btn:disabled{opacity:.55;cursor:not-allowed}
+.actions{display:flex;gap:8px;flex-wrap:wrap}
+.note{font-size:12px;line-height:1.5;color:#667085;margin-top:14px}
+.queue-head{padding:16px 18px;border-bottom:1px solid #dde3ef;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.queue-title{font-weight:850}
+.muted{font-size:12px;color:#667085}
+.jobs{display:flex;flex-direction:column}
+.empty{padding:54px 18px;text-align:center;color:#667085}
+.job{padding:16px 18px;border-bottom:1px solid #edf1f7}
+.job:last-child{border-bottom:0}
+.job-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.job-name{font-weight:850;font-size:14px}
+.job-meta{font-size:12px;color:#667085;margin-top:3px}
+.job-side{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.pill{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;padding:4px 9px;font-size:11px;font-weight:850;text-transform:uppercase;letter-spacing:.3px}
+.queued{background:#fef3c7;color:#92400e}.running{background:#dbeafe;color:#1d4ed8}.completed{background:#dcfce7;color:#166534}.failed{background:#fee2e2;color:#991b1b}.cancelled{background:#f3f4f6;color:#4b5563}
+.progress-line{display:flex;align-items:center;gap:10px;margin:12px 0 9px}
+.bar{height:10px;background:#edf2f7;border-radius:999px;overflow:hidden;flex:1}
+.bar-fill{height:100%;width:0;background:#16817a;transition:.2s}
+.pct{font-size:12px;font-weight:850;color:#344054;min-width:42px;text-align:right}
+.log{margin-top:10px;background:#111827;color:#dce7f7;border-radius:7px;padding:10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.55;max-height:170px;overflow:auto;white-space:pre-wrap}
+.preview.verify-preview{display:grid;grid-template-columns:1.8fr 1fr 90px}
+.preview div{padding:6px 0;border-bottom:1px solid #f0f3f8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.download{display:inline-block;margin-top:10px;text-decoration:none}
+.error{font-size:12px;color:#991b1b;margin-top:8px}
+.verify-summary{display:flex;gap:10px;margin:10px 0;flex-wrap:wrap}
+.vs-card{flex:1;min-width:80px;border-radius:7px;padding:10px 12px;text-align:center}
+.vs-card .vs-num{font-size:22px;font-weight:850;line-height:1}
+.vs-card .vs-label{font-size:11px;font-weight:700;margin-top:3px;text-transform:uppercase;letter-spacing:.5px}
+.vs-safe{background:#dcfce7;color:#166534}.vs-catchall{background:#fef9c3;color:#854d0e}.vs-invalid{background:#fee2e2;color:#991b1b}.vs-total{background:#f1f5f9;color:#475569}
+
+/* Proxies panel */
+.proxy-divider{border:none;border-top:1px solid #edf1f7;margin:18px 0}
+.proxy-section-head{display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none}
+.proxy-section-head:hover .section-title{color:#344054}
+.proxy-chevron{font-size:14px;color:#667085;transition:transform .2s}
+.proxy-chevron.open{transform:rotate(180deg)}
+.proxy-body{display:none}
+.proxy-body.open{display:block}
+.proxy-table{width:100%;border-collapse:collapse;font-size:12px;margin-top:10px}
+.proxy-table th{text-align:left;padding:6px 8px;font-size:10px;font-weight:700;text-transform:uppercase;color:#667085;background:#f9fafb;border-bottom:1px solid #edf1f7}
+.proxy-table td{padding:7px 8px;border-bottom:1px solid #f3f4f6;vertical-align:middle}
+.badge{display:inline-block;padding:2px 6px;border-radius:6px;font-size:10px;font-weight:700}
+.b-ok{background:#dcfce7;color:#166534}
+.b-error{background:#fee2e2;color:#991b1b}
+.b-untested{background:#f3f4f6;color:#667085}
+.b-testing{background:#fef3c7;color:#92400e}
+.proxy-count-badge{display:inline-flex;align-items:center;justify-content:center;background:#16817a;color:#fff;border-radius:999px;font-size:10px;font-weight:800;min-width:18px;height:18px;padding:0 5px;margin-left:6px}
+textarea.proxy-input{width:100%;padding:9px 10px;border:1.5px solid #d7deea;border-radius:7px;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;resize:vertical;line-height:1.55;background:#fcfcfe;outline:none}
+textarea.proxy-input:focus{border-color:#16817a}
+.verifStatsBar{margin-top:14px}
+
+/* sticky header + mobile */
+.topbar{position:sticky;top:0;z-index:200}
+.topbar-inner>div:first-child{flex:1;min-width:0;overflow:hidden}
+@media(max-width:900px){
+  .layout{grid-template-columns:1fr}
+}
+@media(max-width:768px){
+  .topbar-inner{padding:10px 16px;flex-wrap:wrap;gap:10px}
+  .wrap{padding:1rem}
+  .layout{grid-template-columns:1fr}
+  .preview.verify-preview{grid-template-columns:1fr 1fr;overflow-x:auto}
+  .single-row{grid-template-columns:1fr auto}
+  .ip{display:none}
+}
+</style>
+    <script src="/nav.js" defer></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="ip"><span class="ip-dot" id="ipDot"></span><span id="ipText">Checking IP...</span></div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="layout">
+    <!-- ── Left panel ── -->
+    <section class="panel panel-pad">
+
+      <!-- Upload -->
+      <div class="section-title">Upload Apollo CSV</div>
+      <div id="dropzoneV" class="dropzone" onclick="fileInputV.click()">
+        <div class="drop-title">Drop Apollo export CSV here</div>
+        <div class="drop-sub">Needs an <b>Email</b> column. Verifies every address via Reacher and splits results into Verified and Catch-all files.</div>
+        <div id="filePillV" class="file-pill"></div>
+      </div>
+      <input id="fileInputV" type="file" accept=".csv,text/csv" style="display:none">
+
+      <!-- Single test -->
+      <div class="single-test">
+        <div class="section-title">Single Email Test</div>
+        <div class="single-row">
+          <div class="field">
+            <label for="singleEmailV">Email</label>
+            <input id="singleEmailV" type="email" placeholder="contact@company.com">
+          </div>
+          <button id="singleVerifyBtnV" class="btn btn-primary" style="align-self:end" onclick="verifySingleEmailV()">Verify</button>
+        </div>
+        <pre id="singleResultBoxV" class="log" style="display:none"></pre>
+      </div>
+
+      <!-- Actions -->
+      <div class="actions">
+        <button id="queueBtnV" class="btn btn-primary" onclick="queueFileV()" disabled>Verify Emails</button>
+        <button class="btn btn-secondary" onclick="resetFileV()">Clear</button>
+        <button class="btn btn-secondary" onclick="runReacherDiagnostic()">Test Reacher</button>
+      </div>
+      <p class="note"><b>Verifier mode:</b> reads the <b>Email</b> column from your Apollo CSV and checks every address. Downloads: <b>Verified</b> (safe to send) and <b>Catch-all</b> (domain accepts all — risky but may be real).</p>
+
+      <!-- Usage stats -->
+      <div id="verifStatsBar" class="verifStatsBar" style="display:none">
+        <div class="section-title" style="margin-bottom:8px">Usage</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px">
+            <div style="font-size:11px;font-weight:750;color:#667085;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Today</div>
+            <div id="statsToday" style="font-size:22px;font-weight:850;color:#111827;line-height:1">—</div>
+            <div id="statsTodayBreak" style="font-size:11px;color:#667085;margin-top:4px">—</div>
+          </div>
+          <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px">
+            <div style="font-size:11px;font-weight:750;color:#667085;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">This Month</div>
+            <div id="statsMonth" style="font-size:22px;font-weight:850;color:#111827;line-height:1">—</div>
+            <div id="statsMonthBreak" style="font-size:11px;color:#667085;margin-top:4px">—</div>
+          </div>
+        </div>
+      </div>
+
+      <pre id="diagnosticBox" class="log" style="display:none"></pre>
+
+      <!-- ── Proxies Section ── -->
+      <hr class="proxy-divider">
+      <div class="proxy-section-head" onclick="toggleProxies()">
+        <div class="section-title" style="margin:0">
+          Proxies
+          <span class="proxy-count-badge" id="proxyCountBadge">0</span>
+        </div>
+        <span class="proxy-chevron" id="proxyChevron">▼</span>
+      </div>
+
+      <div class="proxy-body" id="proxyBody">
+        <div id="ev2StatusBar" style="display:none;margin-top:10px;padding:8px 10px;border-radius:6px;font-size:11px;font-weight:600"></div>
+        <div style="margin-top:12px">
+          <textarea class="proxy-input" id="proxyInput" rows="5" placeholder="Paste proxies — one per line:&#10;IP:PORT:USERNAME:PASSWORD&#10;&#10;Example:&#10;31.59.20.176:6754:zoujvyjg:6fla716a2vih"></textarea>
+          <div style="font-size:11px;color:#667085;margin-top:4px">Format: IP:PORT:USER:PASS · One per line</div>
+          <div style="display:flex;gap:8px;margin-top:10px">
+            <button class="btn btn-primary btn-sm" onclick="addProxies()">Add Proxies</button>
+            <button class="btn btn-secondary btn-sm" id="testAllBtn" onclick="testAllProxies()">Test All</button>
+            <button class="btn btn-danger btn-sm" onclick="clearAllProxies()">Clear All</button>
+          </div>
+        </div>
+
+        <div id="proxyTableWrap" style="margin-top:12px">
+          <div style="font-size:12px;color:#667085;text-align:center;padding:16px">No proxies added yet.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Right panel — Queue ── -->
+    <section class="panel">
+      <div class="queue-head">
+        <div>
+          <div class="queue-title">Queue</div>
+          <div id="queueSummary" class="muted">No jobs yet</div>
+        </div>
+        <button class="btn btn-secondary" onclick="refreshJobs()">Refresh</button>
+      </div>
+      <div id="jobs" class="jobs"><div class="empty">Drop a CSV to create the first job.</div></div>
+    </section>
+  </div>
+</main>
+
+<script>
+const apiBase = '/email-verify2-tool/api';
+let selectedFileV = null;
+const jobs = new Map();
+let pollTimer = null;
+let proxiesOpen = false;
+
+// ── Auth check ───────────────────────────────────────────────
+async function boot() {
+  try {
+    const s = await fetch('/api/session');
+    if (!s.ok) { location.href = '/login.html'; return; }
+  } catch {}
+  loadIp();
+  loadExistingJobs();
+  loadVerifStats();
+  loadProxies();
+}
+
+// ── IP ───────────────────────────────────────────────────────
+async function loadIp() {
+  try {
+    const r = await fetch(`${apiBase}/ip`);
+    const d = await r.json();
+    document.getElementById('ipText').textContent = `Current IP: ${d.ip}`;
+    document.getElementById('ipDot').style.background = '#22c55e';
+  } catch {
+    document.getElementById('ipText').textContent = 'IP unavailable';
+    document.getElementById('ipDot').style.background = '#f87171';
+  }
+}
+
+// ── File handling ────────────────────────────────────────────
+const dropzoneV = document.getElementById('dropzoneV');
+const fileInputV = document.getElementById('fileInputV');
+dropzoneV.addEventListener('dragover', e => { e.preventDefault(); dropzoneV.classList.add('drag'); });
+dropzoneV.addEventListener('dragleave', () => dropzoneV.classList.remove('drag'));
+dropzoneV.addEventListener('drop', e => { e.preventDefault(); dropzoneV.classList.remove('drag'); setFileV(e.dataTransfer.files[0]); });
+fileInputV.addEventListener('change', () => setFileV(fileInputV.files[0]));
+
+function setFileV(file) {
+  if (!file) return;
+  if (!file.name.toLowerCase().endsWith('.csv')) { alert('Please choose a CSV file.'); return; }
+  selectedFileV = file;
+  document.getElementById('filePillV').style.display = 'block';
+  document.getElementById('filePillV').textContent = `${file.name} (${Math.ceil(file.size / 1024)} KB)`;
+  document.getElementById('queueBtnV').disabled = false;
+}
+
+function resetFileV() {
+  selectedFileV = null;
+  fileInputV.value = '';
+  document.getElementById('filePillV').style.display = 'none';
+  document.getElementById('filePillV').textContent = '';
+  document.getElementById('queueBtnV').disabled = true;
+}
+
+function readFileAsText(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+    r.readAsText(file);
+  });
+}
+
+async function queueFileV() {
+  if (!selectedFileV) return;
+  document.getElementById('queueBtnV').disabled = true;
+  try {
+    const csvText = await readFileAsText(selectedFileV);
+    const response = await fetch(`${apiBase}/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fileName: selectedFileV.name, csvText, verifier: 'verify_emails' }),
+    });
+    const job = await response.json();
+    if (!response.ok) throw new Error(job.error || 'Could not queue file');
+    jobs.set(job.id, job);
+    resetFileV();
+    renderJobs();
+    startPolling();
+  } catch (err) {
+    alert(err.message);
+    document.getElementById('queueBtnV').disabled = false;
+  }
+}
+
+// ── Jobs ─────────────────────────────────────────────────────
+async function loadExistingJobs() {
+  try {
+    const r = await fetch(`${apiBase}/jobs`);
+    if (!r.ok) return;
+    const list = await r.json();
+    list.forEach(j => jobs.set(j.id, j));
+    renderJobs();
+    if (list.some(isActiveJob)) startPolling();
+  } catch {}
+}
+
+function startPolling() {
+  if (pollTimer) return;
+  pollTimer = setInterval(refreshJobs, 1200);
+}
+
+function stopPollingIfIdle() {
+  if (![...jobs.values()].some(isActiveJob) && pollTimer) {
+    clearInterval(pollTimer); pollTimer = null;
+  }
+}
+
+async function refreshJobs() {
+  const active = [...jobs.values()].filter(isActiveJob);
+  await Promise.all(active.map(async job => {
+    const r = await fetch(`${apiBase}/jobs/${job.id}`);
+    if (r.ok) jobs.set(job.id, await r.json());
+  }));
+  renderJobs();
+  stopPollingIfIdle();
+}
+
+function isActiveJob(j) { return j.status === 'queued' || j.status === 'running'; }
+
+function renderJobs() {
+  const root = document.getElementById('jobs');
+  const list = [...jobs.values()].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  document.getElementById('queueSummary').textContent = list.length ? `${list.length} job${list.length === 1 ? '' : 's'}` : 'No jobs yet';
+  if (!list.length) { root.innerHTML = '<div class="empty">Drop a CSV to create the first job.</div>'; return; }
+
+  root.innerHTML = list.map(job => {
+    const total = job.rowCount || 0;
+    const processed = job.processedRows || 0;
+    const pct = total ? Math.round(processed / total * 100) : (job.status === 'completed' ? 100 : 0);
+    const valid = job.foundCount || 0;
+    const catchAll = job.catchAllCount || 0;
+    const invalid = job.reviewCount || 0;
+    const summary = total > 0 ? `
+      <div class="verify-summary">
+        <div class="vs-card vs-total"><div class="vs-num">${total}</div><div class="vs-label">Total</div></div>
+        <div class="vs-card vs-safe"><div class="vs-num">${valid}</div><div class="vs-label">✓ Verified</div></div>
+        <div class="vs-card vs-catchall"><div class="vs-num">${catchAll}</div><div class="vs-label">≈ Catch-all</div></div>
+        <div class="vs-card vs-invalid"><div class="vs-num">${invalid}</div><div class="vs-label">✗ Invalid</div></div>
+      </div>` : '';
+    return `
+      <article class="job">
+        <div class="job-top">
+          <div>
+            <div class="job-name">${escapeHtml(job.fileName)}</div>
+            <div class="job-meta">${processed}/${total || '?'} emails checked</div>
+          </div>
+          <div class="job-side">
+            ${isActiveJob(job) ? `<button class="btn btn-danger btn-sm" onclick="cancelJob('${job.id}')">${job.cancelRequested ? 'Stopping...' : 'Stop'}</button>` : ''}
+            <span class="pill ${escapeHtml(job.status)}">${escapeHtml(job.status)}</span>
+          </div>
+        </div>
+        <div class="progress-line">
+          <div class="bar"><div class="bar-fill" style="width:${pct}%"></div></div>
+          <div class="pct">${pct}%</div>
+        </div>
+        ${summary}
+        ${job.error ? `<div class="error">${escapeHtml(job.error)}</div>` : ''}
+        ${renderLogs(job.logs || [])}
+        ${renderPreview(job.preview || [])}
+        ${job.safeDownloadUrl ? `<a class="btn btn-primary download" href="/email-verify2-tool${job.safeDownloadUrl}">⬇ Verified (${valid})</a>` : ''}
+        ${job.catchAllDownloadUrl ? `<a class="btn btn-secondary download" href="/email-verify2-tool${job.catchAllDownloadUrl}" style="margin-left:6px">⬇ Catch-all (${catchAll})</a>` : ''}
+      </article>`;
+  }).join('');
+}
+
+async function cancelJob(jobId) {
+  const job = jobs.get(jobId);
+  if (!job || !isActiveJob(job)) return;
+  job.cancelRequested = true;
+  renderJobs();
+  try {
+    const r = await fetch(`${apiBase}/jobs/${jobId}/cancel`, { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error);
+    jobs.set(jobId, d);
+    renderJobs();
+    startPolling();
+  } catch (err) { alert(err.message); }
+}
+
+function renderLogs(logs) {
+  if (!logs.length) return '<pre class="log">Waiting for worker...</pre>';
+  return `<pre class="log">${escapeHtml(logs.slice(-40).join('\n'))}</pre>`;
+}
+
+function renderPreview(preview) {
+  if (!preview.length) return '';
+  return `<div class="preview verify-preview">
+    <div><b>Email</b></div><div><b>Status</b></div><div><b>Sendability</b></div>
+    ${preview.map(r => `<div>${escapeHtml(r.email||'')}</div><div>${escapeHtml(r.status||'')}</div><div>${escapeHtml(r.sendability||r.status||'')}</div>`).join('')}
+  </div>`;
+}
+
+function escapeHtml(v) {
+  return String(v||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
+}
+
+// ── Single email test ─────────────────────────────────────────
+async function verifySingleEmailV() {
+  const input = document.getElementById('singleEmailV');
+  const btn = document.getElementById('singleVerifyBtnV');
+  const box = document.getElementById('singleResultBoxV');
+  const email = input.value.trim();
+  box.style.display = 'block';
+  if (!email) { box.textContent = 'Enter an email address first.'; return; }
+  btn.disabled = true;
+  box.textContent = `Verifying ${email}...`;
+  try {
+    const r = await fetch(`${apiBase}/verify-email`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, verifier: 'reacher' }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Verification failed');
+    const catchAll = d.result?.raw?.smtp?.is_catch_all === true;
+    const s = d.result?.status === 'valid' && !catchAll ? 'safe' : d.result?.status === 'valid' ? 'risky_catch_all' : d.result?.status || 'unknown';
+    box.textContent = [
+      `Email:       ${d.email}`,
+      `Status:      ${d.result?.status || 'unknown'}`,
+      `Sendability: ${s}`,
+      `Catch-all:   ${catchAll ? 'yes' : 'no'}`,
+      `Time:        ${d.ms}ms`,
+      `Reason:      ${d.result?.reason || ''}`,
+    ].join('\n');
+  } catch (err) {
+    box.textContent = `Error: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function runReacherDiagnostic() {
+  const box = document.getElementById('diagnosticBox');
+  box.style.display = 'block';
+  box.textContent = 'Testing Reacher connectivity...';
+  try {
+    const r = await fetch(`${apiBase}/diagnostics/reacher`);
+    const d = await r.json();
+    box.textContent = [
+      `Reacher: ${d.reacher_url}`,
+      `Reachable: ${d.ok ? 'yes' : 'no'} (${d.connectivity?.ms || 0}ms)`,
+      `Result: ${d.result?.status || 'unknown'}`,
+      `Reason: ${d.result?.reason || ''}`,
+    ].join('\n');
+  } catch (err) {
+    box.textContent = `Reacher test failed: ${err.message}`;
+  }
+}
+
+// ── Verify stats ─────────────────────────────────────────────
+async function loadVerifStats() {
+  try {
+    const r = await fetch(`${apiBase}/stats/verification`);
+    if (!r.ok) return;
+    const d = await r.json();
+    const fmt = n => n.toLocaleString();
+    const brk = b => `${fmt(b.safe)} safe · ${fmt(b.catchAll)} catch-all · ${fmt(b.invalid)} invalid`;
+    document.getElementById('statsToday').textContent = fmt(d.today.total);
+    document.getElementById('statsTodayBreak').textContent = d.today.total ? brk(d.today) : 'No verifications yet today';
+    document.getElementById('statsMonth').textContent = fmt(d.month.total);
+    document.getElementById('statsMonthBreak').textContent = d.month.total ? brk(d.month) : 'No verifications this month';
+    document.getElementById('verifStatsBar').style.display = '';
+  } catch {}
+}
+
+// ── Proxies ──────────────────────────────────────────────────
+function toggleProxies() {
+  proxiesOpen = !proxiesOpen;
+  document.getElementById('proxyBody').classList.toggle('open', proxiesOpen);
+  document.getElementById('proxyChevron').classList.toggle('open', proxiesOpen);
+}
+
+async function loadProxies() {
+  try {
+    const r = await fetch('/api/ev2/proxies');
+    const d = await r.json();
+    const proxies = d.proxies || [];
+    // Show proxy status banner
+    const statusBar = document.getElementById('ev2StatusBar');
+    const okCount = proxies.filter(p => p.status === 'ok').length;
+    const totalCount = proxies.length;
+    if (totalCount === 0) {
+      statusBar.style.display = '';
+      statusBar.style.background = '#fef3c7'; statusBar.style.color = '#92400e'; statusBar.style.border = '1px solid #fde68a';
+      statusBar.textContent = '⚠️ No proxies loaded — verifications will use Reacher\'s default proxy';
+    } else if (okCount === 0) {
+      statusBar.style.display = '';
+      statusBar.style.background = '#fee2e2'; statusBar.style.color = '#991b1b'; statusBar.style.border = '1px solid #fecaca';
+      statusBar.textContent = `❌ ${totalCount} proxies loaded but none tested OK — run Test All`;
+    } else {
+      statusBar.style.display = '';
+      statusBar.style.background = '#dcfce7'; statusBar.style.color = '#166534'; statusBar.style.border = '1px solid #bbf7d0';
+      statusBar.textContent = `✅ ${okCount}/${totalCount} Webshare proxies active — verifications rotate through these only`;
+    }
+    document.getElementById('proxyCountBadge').textContent = proxies.length;
+
+    const wrap = document.getElementById('proxyTableWrap');
+    if (!proxies.length) {
+      wrap.innerHTML = '<div style="font-size:12px;color:#667085;text-align:center;padding:16px">No proxies added yet.</div>';
+      return;
+    }
+    const totalUses = proxies.reduce((s, p) => s + (p.use_count || 0), 0);
+    wrap.innerHTML = `
+      <table class="proxy-table">
+        <thead><tr><th>Host</th><th>Port</th><th>Status</th><th title="Times used for verification">Uses</th><th>Last Used</th><th></th></tr></thead>
+        <tbody>
+          ${proxies.map(p => {
+            const usePct = totalUses > 0 ? Math.round((p.use_count || 0) / totalUses * 100) : 0;
+            const lastUsed = p.last_used ? p.last_used.slice(11, 16) + ' ' + p.last_used.slice(0, 10) : 'Never';
+            return `
+            <tr id="prow-${p.id}">
+              <td><code style="font-size:11px">${p.host}</code></td>
+              <td>${p.port}</td>
+              <td><span class="badge b-${p.status}" id="pstat-${p.id}">${p.status}</span></td>
+              <td>
+                <div style="display:flex;align-items:center;gap:6px">
+                  <span style="font-size:12px;font-weight:700;min-width:24px">${p.use_count || 0}</span>
+                  <div style="flex:1;background:#edf2f7;border-radius:4px;height:5px;min-width:40px">
+                    <div style="width:${usePct}%;height:5px;background:#16817a;border-radius:4px"></div>
+                  </div>
+                </div>
+              </td>
+              <td style="font-size:11px;color:#667085">${lastUsed}</td>
+              <td style="white-space:nowrap">
+                <button class="btn btn-secondary btn-sm" style="font-size:11px;padding:4px 8px" onclick="testProxy(${p.id})">Test</button>
+                <button class="btn btn-danger btn-sm" style="font-size:11px;padding:4px 8px;margin-left:4px" onclick="deleteProxy(${p.id})">✕</button>
+              </td>
+            </tr>`;}).join('')}
+        </tbody>
+      </table>
+      <div style="font-size:11px;color:#667085;margin-top:6px;text-align:right">Total uses: ${totalUses} · Round-robin rotation</div>`;
+  } catch {}
+}
+
+async function addProxies() {
+  const lines = document.getElementById('proxyInput').value.trim();
+  if (!lines) return;
+  const r = await fetch('/api/ev2/proxies', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ lines })
+  });
+  const d = await r.json();
+  document.getElementById('proxyInput').value = '';
+  // Auto-open the section
+  if (!proxiesOpen) toggleProxies();
+  loadProxies();
+  alert(`${d.added} proxies added`);
+}
+
+async function deleteProxy(id) {
+  await fetch(`/api/ev2/proxies/${id}`, { method: 'DELETE' });
+  loadProxies();
+}
+
+async function clearAllProxies() {
+  if (!confirm('Delete all proxies?')) return;
+  await fetch('/api/ev2/proxies', { method: 'DELETE' });
+  loadProxies();
+}
+
+async function testProxy(id) {
+  const el = document.getElementById('pstat-' + id);
+  if (el) { el.className = 'badge b-testing'; el.textContent = 'testing...'; }
+  const r = await fetch(`/api/ev2/proxies/${id}/test`, { method: 'POST' });
+  const d = await r.json();
+  if (el) { el.className = `badge b-${d.ok ? 'ok' : 'error'}`; el.textContent = d.ok ? 'ok' : 'error'; }
+  loadProxies();
+}
+
+async function testAllProxies() {
+  const r = await fetch('/api/ev2/proxies');
+  const d = await r.json();
+  const proxies = d.proxies || [];
+  if (!proxies.length) return;
+  const btn = document.getElementById('testAllBtn');
+  btn.disabled = true;
+  btn.textContent = `Testing 0/${proxies.length}...`;
+  proxies.forEach(p => {
+    const el = document.getElementById('pstat-' + p.id);
+    if (el) { el.className = 'badge b-testing'; el.textContent = 'testing...'; }
+  });
+  let done = 0;
+  const PARALLEL = 3;
+  async function testOne(p) {
+    const res = await fetch(`/api/ev2/proxies/${p.id}/test`, { method: 'POST' });
+    const data = await res.json();
+    done++;
+    btn.textContent = `Testing ${done}/${proxies.length}...`;
+    const el = document.getElementById('pstat-' + p.id);
+    if (el) { el.className = `badge b-${data.ok ? 'ok' : 'error'}`; el.textContent = data.ok ? 'ok' : 'error'; }
+  }
+  for (let i = 0; i < proxies.length; i += PARALLEL) {
+    await Promise.all(proxies.slice(i, i + PARALLEL).map(testOne));
+  }
+  btn.disabled = false;
+  btn.textContent = 'Test All';
+  loadProxies();
+}
+
+boot();
+</script>
+</body>
+</html>

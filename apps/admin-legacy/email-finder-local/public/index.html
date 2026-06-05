@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Email Finder Local</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f3f6fb;color:#111827}.topbar{background:#111827;color:#fff;border-bottom:3px solid #16817a}.topbar-inner{max-width:1120px;margin:0 auto;padding:18px 24px;display:flex;justify-content:space-between;gap:18px;align-items:center}.brand{font-size:20px;font-weight:850}.ip{display:flex;gap:8px;align-items:center;font-size:12px;color:#cbd5e1}.ip-dot{width:9px;height:9px;border-radius:50%;background:#22c55e}.wrap{max-width:1120px;margin:0 auto;padding:28px 24px}.layout{display:grid;grid-template-columns:380px 1fr;gap:18px}.panel{background:#fff;border:1px solid #dde3ef;border-radius:8px;box-shadow:0 1px 3px rgba(17,24,39,.06)}.panel-pad{padding:18px}.section-title{font-size:12px;font-weight:850;text-transform:uppercase;letter-spacing:.8px;color:#667085;margin-bottom:14px}.mode-tabs{display:flex;gap:0;margin-bottom:18px;border:1.5px solid #d7deea;border-radius:8px;overflow:hidden}.mode-tab{flex:1;padding:9px 0;font:inherit;font-size:13px;font-weight:750;cursor:pointer;border:0;background:#f8fafc;color:#667085;transition:.15s}.mode-tab.active{background:#1f3d7a;color:#fff}.mode-tab:not(.active):hover{background:#eef2f7;color:#344054}.dropzone{border:2px dashed #b7c4d8;border-radius:8px;background:#fbfcff;padding:34px 18px;text-align:center;cursor:pointer;transition:.15s}.dropzone:hover,.dropzone.drag{border-color:#16817a;background:#f0fbf9}.drop-title{font-weight:850;font-size:16px}.drop-sub{margin-top:6px;font-size:12px;color:#667085;line-height:1.45}.file-pill{display:none;margin-top:14px;background:#eef2f7;border:1px solid #d7deea;border-radius:7px;padding:9px 10px;font-size:12px;font-weight:750;color:#344054;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.toggle{display:flex;align-items:flex-start;gap:8px;font-size:13px;font-weight:750;color:#344054;margin:16px 0}.toggle input{width:17px;height:17px;margin-top:1px}.toggle span{display:block;font-size:12px;font-weight:500;color:#667085;margin-top:2px;line-height:1.4}.field label{display:block;font-size:12px;font-weight:850;color:#344054;margin-bottom:6px}.field input,.field select{width:100%;padding:10px 11px;border:1.5px solid #d7deea;border-radius:7px;font:inherit;font-size:14px;background:white}.single-test{border-top:1px solid #edf1f7;border-bottom:1px solid #edf1f7;margin:16px 0;padding:14px 0}.single-row{display:grid;grid-template-columns:1fr auto;gap:8px}.btn{border:0;border-radius:7px;padding:10px 14px;font:inherit;font-size:13px;font-weight:850;cursor:pointer}.btn-primary{background:#1f3d7a;color:#fff}.btn-primary:hover{background:#16817a}.btn-secondary{background:#eef2f7;color:#1f2937;border:1px solid #d7deea}.btn-secondary:hover{background:#e4eaf3}.btn-danger{background:#fee2e2;color:#991b1b;border:1px solid #fecaca}.btn-danger:hover{background:#fecaca}.btn:disabled{opacity:.55;cursor:not-allowed}.actions{display:flex;gap:8px;flex-wrap:wrap}.note{font-size:12px;line-height:1.5;color:#667085;margin-top:14px}.queue-head{padding:16px 18px;border-bottom:1px solid #dde3ef;display:flex;align-items:center;justify-content:space-between;gap:12px}.queue-title{font-weight:850}.muted{font-size:12px;color:#667085}.jobs{display:flex;flex-direction:column}.empty{padding:54px 18px;text-align:center;color:#667085}.job{padding:16px 18px;border-bottom:1px solid #edf1f7}.job:last-child{border-bottom:0}.job-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.job-name{font-weight:850;font-size:14px}.job-meta{font-size:12px;color:#667085;margin-top:3px}.job-side{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}.pill{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;padding:4px 9px;font-size:11px;font-weight:850;text-transform:uppercase;letter-spacing:.3px}.queued{background:#fef3c7;color:#92400e}.running{background:#dbeafe;color:#1d4ed8}.completed{background:#dcfce7;color:#166534}.failed{background:#fee2e2;color:#991b1b}.cancelled{background:#f3f4f6;color:#4b5563}.progress-line{display:flex;align-items:center;gap:10px;margin:12px 0 9px}.bar{height:10px;background:#edf2f7;border-radius:999px;overflow:hidden;flex:1}.bar-fill{height:100%;width:0;background:#16817a;transition:.2s}.pct{font-size:12px;font-weight:850;color:#344054;min-width:42px;text-align:right}.log{margin-top:10px;background:#111827;color:#dce7f7;border-radius:7px;padding:10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.55;max-height:170px;overflow:auto;white-space:pre-wrap}.preview{display:grid;grid-template-columns:1.1fr 1fr 1.2fr 90px;gap:10px;margin-top:10px;font-size:12px}.preview.verify-preview{grid-template-columns:1.8fr 1fr 90px}.preview div{padding:6px 0;border-bottom:1px solid #f0f3f8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.download{display:inline-block;margin-top:10px;text-decoration:none}.error{font-size:12px;color:#991b1b;margin-top:8px}.verifier-badge{display:inline-block;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:750;background:#f0f3ff;color:#3b4fd1;margin-left:6px}.verify-summary{display:flex;gap:10px;margin:10px 0;flex-wrap:wrap}.vs-card{flex:1;min-width:90px;border-radius:7px;padding:10px 12px;text-align:center}.vs-card .vs-num{font-size:22px;font-weight:850;line-height:1}.vs-card .vs-label{font-size:11px;font-weight:700;margin-top:3px;text-transform:uppercase;letter-spacing:.5px}.vs-safe{background:#dcfce7;color:#166534}.vs-catchall{background:#fef9c3;color:#854d0e}.vs-invalid{background:#fee2e2;color:#991b1b}.vs-total{background:#f1f5f9;color:#475569}@media(max-width:860px){.layout{grid-template-columns:1fr}.topbar-inner{align-items:flex-start;flex-direction:column}.preview{grid-template-columns:1fr}.preview div{white-space:normal}.single-row{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">Email Finder Local</div>
+    <div class="ip"><span class="ip-dot"></span><span id="ipText">Checking IP...</span></div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="layout">
+    <section class="panel panel-pad">
+      <div class="mode-tabs">
+        <button class="mode-tab active" id="tabFinder" onclick="setMode('finder')">Email Finder</button>
+        <button class="mode-tab" id="tabVerifier" onclick="setMode('verifier')">Email Verifier</button>
+      </div>
+
+      <!-- ── Email Finder ── -->
+      <div id="finderSection">
+        <div class="section-title">Upload Contacts CSV</div>
+        <div id="dropzone" class="dropzone" onclick="fileInput.click()">
+          <div class="drop-title">Drop contacts CSV here</div>
+          <div class="drop-sub">Needs FirstName, LastName, and OrganizationWebsiteUrl (or Website/Domain) columns. Finds and verifies email addresses.</div>
+          <div id="filePill" class="file-pill"></div>
+        </div>
+        <input id="fileInput" type="file" accept=".csv,text/csv" style="display:none">
+
+        <div class="field" style="margin-top:16px">
+          <label for="verifier">Verifier</label>
+          <select id="verifier">
+            <option value="reacher" selected>Reacher verifier</option>
+            <option value="smtp">Built-in SMTP</option>
+            <option value="permutation">Permutations only</option>
+          </select>
+        </div>
+
+        <div class="single-test">
+          <div class="section-title">Single Email Test</div>
+          <div class="single-row">
+            <div class="field">
+              <label for="singleEmail">Email</label>
+              <input id="singleEmail" type="email" placeholder="jesse@ottaly.co.uk">
+            </div>
+            <button id="singleVerifyBtn" class="btn btn-primary" style="align-self:end" onclick="verifySingleEmail()">Verify</button>
+          </div>
+          <pre id="singleResultBox" class="log" style="display:none"></pre>
+        </div>
+
+        <div class="actions">
+          <button id="queueBtn" class="btn btn-primary" onclick="queueFile()" disabled>Find Emails</button>
+          <button class="btn btn-secondary" onclick="resetFile()">Clear</button>
+          <button class="btn btn-secondary" onclick="runReacherDiagnostic()">Test Reacher</button>
+          <button class="btn btn-secondary" onclick="runSmtpDiagnostic()">Test SMTP</button>
+        </div>
+        <p class="note"><b>Finder mode:</b> generates email permutations from names + domain and verifies them. Output adds FoundEmail, status, and sendability columns.</p>
+      </div>
+
+      <!-- ── Email Verifier ── -->
+      <div id="verifierSection" style="display:none">
+        <div class="section-title">Upload Apollo CSV</div>
+        <div id="dropzoneV" class="dropzone" onclick="fileInputV.click()">
+          <div class="drop-title">Drop Apollo export CSV here</div>
+          <div class="drop-sub">Needs an <b>Email</b> column. Verifies every address via Reacher and splits results into Verified and Catch-all files.</div>
+          <div id="filePillV" class="file-pill"></div>
+        </div>
+        <input id="fileInputV" type="file" accept=".csv,text/csv" style="display:none">
+
+        <div class="single-test">
+          <div class="section-title">Single Email Test</div>
+          <div class="single-row">
+            <div class="field">
+              <label for="singleEmailV">Email</label>
+              <input id="singleEmailV" type="email" placeholder="contact@company.com">
+            </div>
+            <button id="singleVerifyBtnV" class="btn btn-primary" style="align-self:end" onclick="verifySingleEmailV()">Verify</button>
+          </div>
+          <pre id="singleResultBoxV" class="log" style="display:none"></pre>
+        </div>
+
+        <div class="actions">
+          <button id="queueBtnV" class="btn btn-primary" onclick="queueFileV()" disabled>Verify Emails</button>
+          <button class="btn btn-secondary" onclick="resetFileV()">Clear</button>
+          <button class="btn btn-secondary" onclick="runReacherDiagnostic()">Test Reacher</button>
+        </div>
+        <p class="note"><b>Verifier mode:</b> reads the <b>Email</b> column from your Apollo CSV and checks every address. Downloads: <b>Verified</b> (safe to send) and <b>Catch-all</b> (domain accepts all — risky but may be real).</p>
+
+        <div id="verifStatsBar" style="margin-top:14px;display:none">
+          <div class="section-title" style="margin-bottom:8px">Usage</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px">
+              <div style="font-size:11px;font-weight:750;color:#667085;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Today</div>
+              <div id="statsToday" style="font-size:22px;font-weight:850;color:#111827;line-height:1">—</div>
+              <div id="statsTodayBreak" style="font-size:11px;color:#667085;margin-top:4px">—</div>
+            </div>
+            <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px">
+              <div style="font-size:11px;font-weight:750;color:#667085;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">This Month</div>
+              <div id="statsMonth" style="font-size:22px;font-weight:850;color:#111827;line-height:1">—</div>
+              <div id="statsMonthBreak" style="font-size:11px;color:#667085;margin-top:4px">—</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <pre id="diagnosticBox" class="log" style="display:none"></pre>
+    </section>
+
+    <section class="panel">
+      <div class="queue-head">
+        <div>
+          <div class="queue-title">Queue</div>
+          <div id="queueSummary" class="muted">No jobs yet</div>
+        </div>
+        <button class="btn btn-secondary" onclick="refreshJobs()">Refresh</button>
+      </div>
+      <div id="jobs" class="jobs"><div class="empty">Drop a CSV to create the first job.</div></div>
+    </section>
+  </div>
+</main>
+
+<script>
+let selectedFile = null;
+let selectedFileV = null;
+let currentMode = 'finder';
+const jobs = new Map();
+const _lockedMode = new URLSearchParams(location.search).get('mode');
+let pollTimer = null;
+const embeddedPrefix = location.pathname.startsWith('/email-finder-tool') ? '/email-finder-tool' : '';
+const apiBase = `${embeddedPrefix}/api`;
+
+// ── Mode switching ──────────────────────────────────────────────────────────
+function setMode(mode) {
+  if (_lockedMode && mode !== _lockedMode) return; // locked by URL param
+  currentMode = mode;
+  document.getElementById('finderSection').style.display = mode === 'finder' ? '' : 'none';
+  document.getElementById('verifierSection').style.display = mode === 'verifier' ? '' : 'none';
+  document.getElementById('tabFinder').classList.toggle('active', mode === 'finder');
+  document.getElementById('tabVerifier').classList.toggle('active', mode === 'verifier');
+  if (_lockedMode) document.querySelector('.mode-tabs').style.display = 'none';
+}
+
+// ── Finder file handling ─────────────────────────────────────────────────────
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+
+dropzone.addEventListener('dragover', event => {
+  event.preventDefault();
+  dropzone.classList.add('drag');
+});
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag'));
+dropzone.addEventListener('drop', event => {
+  event.preventDefault();
+  dropzone.classList.remove('drag');
+  setFile(event.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => setFile(fileInput.files[0]));
+
+function setFile(file) {
+  if (!file) return;
+  if (!file.name.toLowerCase().endsWith('.csv')) { alert('Please choose a CSV file.'); return; }
+  selectedFile = file;
+  document.getElementById('filePill').style.display = 'block';
+  document.getElementById('filePill').textContent = `${file.name} (${Math.ceil(file.size / 1024)} KB)`;
+  document.getElementById('queueBtn').disabled = false;
+}
+
+function resetFile() {
+  selectedFile = null;
+  fileInput.value = '';
+  document.getElementById('filePill').style.display = 'none';
+  document.getElementById('filePill').textContent = '';
+  document.getElementById('queueBtn').disabled = true;
+}
+
+// ── Verifier file handling ───────────────────────────────────────────────────
+const dropzoneV = document.getElementById('dropzoneV');
+const fileInputV = document.getElementById('fileInputV');
+
+dropzoneV.addEventListener('dragover', event => {
+  event.preventDefault();
+  dropzoneV.classList.add('drag');
+});
+dropzoneV.addEventListener('dragleave', () => dropzoneV.classList.remove('drag'));
+dropzoneV.addEventListener('drop', event => {
+  event.preventDefault();
+  dropzoneV.classList.remove('drag');
+  setFileV(event.dataTransfer.files[0]);
+});
+fileInputV.addEventListener('change', () => setFileV(fileInputV.files[0]));
+
+function setFileV(file) {
+  if (!file) return;
+  if (!file.name.toLowerCase().endsWith('.csv')) { alert('Please choose a CSV file.'); return; }
+  selectedFileV = file;
+  document.getElementById('filePillV').style.display = 'block';
+  document.getElementById('filePillV').textContent = `${file.name} (${Math.ceil(file.size / 1024)} KB)`;
+  document.getElementById('queueBtnV').disabled = false;
+}
+
+function resetFileV() {
+  selectedFileV = null;
+  fileInputV.value = '';
+  document.getElementById('filePillV').style.display = 'none';
+  document.getElementById('filePillV').textContent = '';
+  document.getElementById('queueBtnV').disabled = true;
+}
+
+function readFileAsText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error || new Error('Could not read file'));
+    reader.readAsText(file);
+  });
+}
+
+async function queueFile() {
+  if (!selectedFile) return;
+  document.getElementById('queueBtn').disabled = true;
+  try {
+    const csvText = await readFileAsText(selectedFile);
+    const response = await fetch(`${apiBase}/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fileName: selectedFile.name, csvText, verifier: document.getElementById('verifier').value }),
+    });
+    const job = await response.json();
+    if (!response.ok) throw new Error(job.error || 'Could not queue file');
+    jobs.set(job.id, job);
+    resetFile();
+    renderJobs();
+    startPolling();
+  } catch (err) {
+    alert(err.message);
+    document.getElementById('queueBtn').disabled = false;
+  }
+}
+
+async function queueFileV() {
+  if (!selectedFileV) return;
+  document.getElementById('queueBtnV').disabled = true;
+  try {
+    const csvText = await readFileAsText(selectedFileV);
+    const response = await fetch(`${apiBase}/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fileName: selectedFileV.name, csvText, verifier: 'verify_emails' }),
+    });
+    const job = await response.json();
+    if (!response.ok) throw new Error(job.error || 'Could not queue file');
+    jobs.set(job.id, job);
+    resetFileV();
+    renderJobs();
+    startPolling();
+  } catch (err) {
+    alert(err.message);
+    document.getElementById('queueBtnV').disabled = false;
+  }
+}
+
+async function loadExistingJobs() {
+  try {
+    const response = await fetch(`${apiBase}/jobs`);
+    if (!response.ok) return;
+    const list = await response.json();
+    list.forEach(job => jobs.set(job.id, job));
+    renderJobs();
+    if (list.some(isActiveJob)) startPolling();
+  } catch {}
+}
+
+function startPolling() {
+  if (pollTimer) return;
+  pollTimer = setInterval(refreshJobs, 1200);
+}
+
+function stopPollingIfIdle() {
+  const active = [...jobs.values()].some(isActiveJob);
+  if (!active && pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+async function refreshJobs() {
+  const activeJobs = [...jobs.values()].filter(isActiveJob);
+  const hadVerifyActive = activeJobs.some(j => j.verifier === 'verify_emails');
+  await Promise.all(activeJobs.map(async job => {
+    const response = await fetch(`${apiBase}/jobs/${job.id}`);
+    if (response.ok) jobs.set(job.id, await response.json());
+  }));
+  renderJobs();
+  stopPollingIfIdle();
+  // Refresh stats when a verifier job just finished
+  const verifyJustDone = hadVerifyActive && [...jobs.values()].filter(j => j.verifier === 'verify_emails').every(j => !isActiveJob(j));
+  if (verifyJustDone) loadVerifStats();
+}
+
+function renderJobs() {
+  const root = document.getElementById('jobs');
+  const list = [...jobs.values()].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  document.getElementById('queueSummary').textContent = list.length ? `${list.length} job${list.length === 1 ? '' : 's'}` : 'No jobs yet';
+
+  if (!list.length) {
+    root.innerHTML = '<div class="empty">Drop a CSV to create the first job.</div>';
+    return;
+  }
+
+  root.innerHTML = list.map(job => {
+    const total = job.rowCount || 0;
+    const processed = job.processedRows || 0;
+    const pct = total ? Math.round(processed / total * 100) : (job.status === 'completed' ? 100 : 0);
+    const isVerify = job.verifier === 'verify_emails';
+    const badge = isVerify ? '<span class="verifier-badge">Verifier</span>' : '';
+    const meta = isVerify
+      ? `${processed}/${total || '?'} emails checked`
+      : `${processed}/${total || '?'} rows · ${escapeHtml(job.verifier || 'permutation')}`;
+    const summary = isVerify && total > 0 ? renderVerifySummary(job) : '';
+    return `
+      <article class="job">
+        <div class="job-top">
+          <div>
+            <div class="job-name">${escapeHtml(job.fileName)}${badge}</div>
+            <div class="job-meta">${meta}</div>
+          </div>
+          <div class="job-side">
+            ${isActiveJob(job) ? `<button class="btn btn-danger" onclick="cancelJob('${job.id}')">${job.cancelRequested ? 'Stopping...' : 'Stop'}</button>` : ''}
+            <span class="pill ${escapeHtml(job.status)}">${escapeHtml(job.status)}</span>
+          </div>
+        </div>
+        <div class="progress-line">
+          <div class="bar"><div class="bar-fill" style="width:${pct}%"></div></div>
+          <div class="pct">${pct}%</div>
+        </div>
+        ${summary}
+        ${job.error ? `<div class="error">${escapeHtml(job.error)}</div>` : ''}
+        ${renderLogs(job.logs || [])}
+        ${renderPreview(job.preview || [], isVerify)}
+        ${isVerify ? `
+          ${job.safeDownloadUrl ? `<a class="btn btn-primary download" href="${downloadHref(job.safeDownloadUrl)}">⬇ Verified (${job.foundCount || 0})</a>` : ''}
+          ${job.catchAllDownloadUrl ? `<a class="btn btn-secondary download" href="${downloadHref(job.catchAllDownloadUrl)}">⬇ Catch-all (${job.catchAllCount || 0})</a>` : ''}
+        ` : `
+          ${job.safeDownloadUrl ? `<a class="btn btn-primary download" href="${downloadHref(job.safeDownloadUrl)}">⬇ Valid</a>` : ''}
+          ${job.catchAllDownloadUrl ? `<a class="btn btn-secondary download" href="${downloadHref(job.catchAllDownloadUrl)}">⬇ Catch-all</a>` : ''}
+          ${job.reviewDownloadUrl ? `<a class="btn btn-secondary download" href="${downloadHref(job.reviewDownloadUrl)}">⬇ Needs Review</a>` : ''}
+        `}
+      </article>
+    `;
+  }).join('');
+}
+
+function isActiveJob(job) {
+  return job.status === 'queued' || job.status === 'running';
+}
+
+async function cancelJob(jobId) {
+  const job = jobs.get(jobId);
+  if (!job || !isActiveJob(job)) return;
+  job.cancelRequested = true;
+  renderJobs();
+  try {
+    const response = await fetch(`${apiBase}/jobs/${jobId}/cancel`, { method: 'POST' });
+    const updated = await response.json();
+    if (!response.ok) throw new Error(updated.error || 'Could not stop job');
+    jobs.set(jobId, updated);
+    renderJobs();
+    startPolling();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+function renderLogs(logs) {
+  if (!logs.length) return '<pre class="log">Waiting for worker...</pre>';
+  return `<pre class="log">${escapeHtml(logs.slice(-40).join('\n'))}</pre>`;
+}
+
+function downloadHref(url) {
+  if (!embeddedPrefix || !url.startsWith('/api/')) return url;
+  return `${embeddedPrefix}${url}`;
+}
+
+function renderVerifySummary(job) {
+  const total = job.rowCount || 0;
+  if (!total) return '';
+  const valid = job.foundCount || 0;
+  const catchAll = job.catchAllCount || 0;
+  const invalid = job.reviewCount || 0;
+  const validPct = total ? Math.round(valid / total * 100) : 0;
+  const catchAllPct = total ? Math.round(catchAll / total * 100) : 0;
+  const invalidPct = total ? Math.round(invalid / total * 100) : 0;
+  return `
+    <div class="verify-summary">
+      <div class="vs-card vs-total">
+        <div class="vs-num">${total}</div>
+        <div class="vs-label">Total checked</div>
+      </div>
+      <div class="vs-card vs-safe">
+        <div class="vs-num">${valid}</div>
+        <div class="vs-label">✓ Verified (${validPct}%)</div>
+      </div>
+      <div class="vs-card vs-catchall">
+        <div class="vs-num">${catchAll}</div>
+        <div class="vs-label">≈ Catch-all (${catchAllPct}%)</div>
+      </div>
+      <div class="vs-card vs-invalid">
+        <div class="vs-num">${invalid}</div>
+        <div class="vs-label">✗ Invalid (${invalidPct}%)</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderPreview(preview, isVerify) {
+  if (!preview.length) return '';
+  if (isVerify) {
+    return `
+      <div class="preview verify-preview">
+        <div><b>Email</b></div><div><b>Status</b></div><div><b>Sendability</b></div>
+        ${preview.map(row => `
+          <div>${escapeHtml(row.email || '')}</div>
+          <div>${escapeHtml(row.status || '')}</div>
+          <div>${escapeHtml(row.sendability || row.status || '')}</div>
+        `).join('')}
+      </div>
+    `;
+  }
+  return `
+    <div class="preview">
+      <div><b>Name</b></div><div><b>Domain</b></div><div><b>Email</b></div><div><b>Sendability</b></div>
+      ${preview.map(row => `
+        <div>${escapeHtml(row.name || '')}</div>
+        <div>${escapeHtml(row.domain || '')}</div>
+        <div>${escapeHtml(row.foundEmail || row.bestGuessEmail || row.email || '')}</div>
+        <div>${escapeHtml(row.sendability || row.status || '')}</div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function escapeHtml(value) {
+  return String(value || '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+}
+
+function singleSendability(result) {
+  const catchAll = result?.raw?.smtp?.is_catch_all === true || /\bcatch_all=yes\b/.test(String(result?.reason || ''));
+  if (result?.status === 'valid' && !catchAll) return 'safe';
+  if (result?.status === 'valid' && catchAll) return 'risky_catch_all';
+  if (result?.status === 'risky' || catchAll) return 'risky_catch_all';
+  if (result?.status === 'invalid') return 'do_not_send';
+  if (result?.status === 'unknown') return 'unknown';
+  return result?.status || 'unknown';
+}
+
+async function loadIp() {
+  try {
+    const response = await fetch(`${apiBase}/ip`);
+    const data = await response.json();
+    document.getElementById('ipText').textContent = `Current IP: ${data.ip}`;
+  } catch {
+    document.getElementById('ipText').textContent = 'Current IP unavailable';
+  }
+}
+
+async function runSmtpDiagnostic() {
+  const box = document.getElementById('diagnosticBox');
+  box.style.display = 'block';
+  box.textContent = 'Testing outbound SMTP connectivity...';
+  try {
+    const response = await fetch(`${apiBase}/diagnostics/smtp`);
+    const data = await response.json();
+    box.textContent = [
+      `IP: ${data.ip}`,
+      `SMTP reachable: ${data.smtpReachable ? 'yes' : 'no'}`,
+      data.message,
+      '',
+      ...data.checks.map(check => `${check.host}:${check.port} -> ${check.ok ? 'ok' : 'failed'} (${check.detail}, ${check.ms}ms)`)
+    ].join('\n');
+  } catch (err) {
+    box.textContent = `Diagnostic failed: ${err.message}`;
+  }
+}
+
+async function runReacherDiagnostic() {
+  const box = document.getElementById('diagnosticBox');
+  box.style.display = 'block';
+  box.textContent = 'Testing Reacher connectivity...';
+  try {
+    const response = await fetch(`${apiBase}/diagnostics/reacher`);
+    const data = await response.json();
+    box.textContent = [
+      `Reacher Base: ${data.reacher_base_url || ''}`,
+      `Reacher URL: ${data.reacher_url}`,
+      `Container reachable: ${data.connectivity?.ok ? 'yes' : 'no'} (${data.connectivity?.reason || 'unknown'}, ${data.connectivity?.ms || 0}ms)`,
+      `Reachable: ${data.ok ? 'yes' : 'no'}`,
+      `Test email: ${data.test_email}`,
+      `Time: ${data.ms}ms`,
+      `Result: ${data.result?.status || 'unknown'}`,
+      `Reason: ${data.result?.reason || ''}`,
+    ].join('\n');
+  } catch (err) {
+    box.textContent = `Reacher diagnostic failed: ${err.message}`;
+  }
+}
+
+async function verifySingleEmail() {
+  const input = document.getElementById('singleEmail');
+  const button = document.getElementById('singleVerifyBtn');
+  const box = document.getElementById('singleResultBox');
+  const email = input.value.trim();
+  const verifier = document.getElementById('verifier').value;
+  box.style.display = 'block';
+  if (!email) {
+    box.textContent = 'Enter an email address first.';
+    return;
+  }
+  if (verifier === 'permutation') {
+    box.textContent = 'Choose Reacher verifier or Built-in SMTP for a single-email test.';
+    return;
+  }
+  button.disabled = true;
+  box.textContent = `Verifying ${email} with ${verifier}...`;
+  try {
+    const response = await fetch(`${apiBase}/verify-email`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, verifier }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Single-email verification failed');
+    box.textContent = [
+      `Email: ${data.email}`,
+      `Verifier: ${data.verifier}`,
+      data.reacher_url ? `Reacher URL: ${data.reacher_url}` : '',
+      `Time: ${data.ms}ms`,
+      `Status: ${data.result?.status || 'unknown'}`,
+      `Confidence: ${data.result?.confidence || ''}`,
+      `Sendability: ${singleSendability(data.result)}`,
+      `Catch-all: ${singleSendability(data.result) === 'risky_catch_all' ? 'yes' : 'no'}`,
+      data.result?.mxHost ? `MX: ${data.result.mxHost}` : '',
+      `Reason: ${data.result?.reason || ''}`,
+      '',
+      JSON.stringify(data.result?.raw || data.result || {}, null, 2),
+    ].filter(Boolean).join('\n');
+  } catch (err) {
+    box.textContent = `Single-email test failed: ${err.message}`;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function verifySingleEmailV() {
+  const input = document.getElementById('singleEmailV');
+  const button = document.getElementById('singleVerifyBtnV');
+  const box = document.getElementById('singleResultBoxV');
+  const email = input.value.trim();
+  box.style.display = 'block';
+  if (!email) { box.textContent = 'Enter an email address first.'; return; }
+  button.disabled = true;
+  box.textContent = `Verifying ${email} with Reacher...`;
+  try {
+    const response = await fetch(`${apiBase}/verify-email`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, verifier: 'reacher' }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Verification failed');
+    const s = singleSendability(data.result);
+    box.textContent = [
+      `Email:       ${data.email}`,
+      `Status:      ${data.result?.status || 'unknown'}`,
+      `Sendability: ${s}`,
+      `Catch-all:   ${s === 'risky_catch_all' ? 'yes' : 'no'}`,
+      `Time:        ${data.ms}ms`,
+      `Reason:      ${data.result?.reason || ''}`,
+    ].join('\n');
+  } catch (err) {
+    box.textContent = `Error: ${err.message}`;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function loadVerifStats() {
+  try {
+    const r = await fetch(`${apiBase}/stats/verification`);
+    if (!r.ok) return;
+    const d = await r.json();
+    const fmt = n => n.toLocaleString();
+    const brk = b => `${fmt(b.safe)} safe · ${fmt(b.catchAll)} catch-all · ${fmt(b.invalid)} invalid`;
+    document.getElementById('statsToday').textContent = fmt(d.today.total);
+    document.getElementById('statsTodayBreak').textContent = d.today.total ? brk(d.today) : 'No verifications yet today';
+    document.getElementById('statsMonth').textContent = fmt(d.month.total);
+    document.getElementById('statsMonthBreak').textContent = d.month.total ? brk(d.month) : 'No verifications this month';
+    document.getElementById('verifStatsBar').style.display = '';
+  } catch {}
+}
+
+if (_lockedMode) setMode(_lockedMode);
+loadIp();
+loadExistingJobs();
+loadVerifStats();
+</script>
+</body>
+</html>

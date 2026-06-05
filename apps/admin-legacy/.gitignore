@@ -1,0 +1,14 @@
+node_modules/
+.DS_Store
+.env
+.env.*
+!.env.example
+downloads/
+automation-runs/
+recordings/
+*.log
+ottaly.db
+contacts.db
+CONTACTS_DB_SETUP.md
+POSTGRES_SETUP.md
+SERVER_INTEGRATION.md
