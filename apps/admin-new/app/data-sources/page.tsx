@@ -81,7 +81,8 @@ interface BusinessResult {
   place_id: string
   _firstName?: string | null
   _lastName?: string | null
-  _nameSource?: 'companies_house' | 'ai' | null
+  _nameSource?: 'serp' | 'companies_house' | 'ai' | null
+  _serpEmail?: string | null
   _email?: string
   _emailStatus?: string
 }
@@ -216,22 +217,27 @@ export default function DataSourcesPage() {
       })
       if (!enrichRes.ok) addLog('⚠ Enrich request failed (' + enrichRes.status + ') — continuing with empty names')
       const enrichData = enrichRes.ok ? await enrichRes.json() : { results: [] }
-      const nameMap = new Map<string, { firstName: string | null; lastName: string | null; source: string | null }>()
-      ;(enrichData.results ?? []).forEach((r: { place_id: string; firstName: string | null; lastName: string | null; source: string | null }) => {
-        nameMap.set(r.place_id, { firstName: r.firstName, lastName: r.lastName, source: r.source })
+      const nameMap = new Map<string, { firstName: string | null; lastName: string | null; email: string | null; source: string | null }>()
+      ;(enrichData.results ?? []).forEach((r: { place_id: string; firstName: string | null; lastName: string | null; email: string | null; source: string | null }) => {
+        nameMap.set(r.place_id, { firstName: r.firstName, lastName: r.lastName, email: r.email, source: r.source })
       })
       const named = [...nameMap.values()].filter(n => n.firstName || n.lastName).length
-      addLog('Names found: ' + named + '/' + targets.length + ' (via Gemini)')
+      const serpEmails = [...nameMap.values()].filter(n => n.email).length
+      addLog('Names found: ' + named + '/' + targets.length + (serpEmails ? ' · Emails direct from SERP: ' + serpEmails : '') + ' (source: SERP + Gemini)')
       setResults(prev => prev.map(row => {
         const n = nameMap.get(row.place_id)
-        return n ? { ...row, _firstName: n.firstName, _lastName: n.lastName, _nameSource: n.source as BusinessResult['_nameSource'] } : row
+        return n ? { ...row, _firstName: n.firstName, _lastName: n.lastName, _nameSource: n.source as BusinessResult['_nameSource'], _serpEmail: n.email } : row
       }))
 
-      // Step 2: Build CSV and create background job on email-finder-local
+      // Step 2: Build CSV — skip rows where SERP already found an email directly
       setPipelineStatus('Step 2/3 — Submitting to email finder…')
       const esc = (s: string) => '"' + String(s ?? '').replace(/"/g, '""') + '"'
+      const serpEmailMap = new Map<string, string>()
+      nameMap.forEach((n, pid) => { if (n.email) serpEmailMap.set(pid, n.email) })
+
       const csvLines = ['First Name,Last Name,Domain,place_id']
-      targets.forEach(t => {
+      const jobTargets = targets.filter(t => !serpEmailMap.has(t.place_id))
+      jobTargets.forEach(t => {
         const n = nameMap.get(t.place_id)
         // Fallback to info/contact so the finder generates generic patterns (info@, contact@, etc.)
         // when no director name was found. buildEmailCandidates returns [] if either name is empty.
@@ -239,6 +245,7 @@ export default function DataSourcesPage() {
         const lastName = n?.lastName || 'contact'
         csvLines.push([esc(firstName), esc(lastName), esc(t.domain ?? ''), esc(t.place_id)].join(','))
       })
+      if (serpEmailMap.size) addLog('Skipping ' + serpEmailMap.size + ' rows — emails already found via SERP')
 
       const jobRes = await fetch('/api/data-sources/email-job', {
         method: 'POST',
@@ -252,8 +259,8 @@ export default function DataSourcesPage() {
         return
       }
       const jobBody = await jobRes.json()
-      const { id: jobId, rowCount } = jobBody
-      addLog('Job created: ' + jobId + ' (' + (rowCount ?? targets.length) + ' rows)')
+      const { id: jobId } = jobBody
+      addLog('Job created: ' + jobId + ' (' + jobTargets.length + ' to verify)')
 
       // Step 3: Poll until done
       for (let attempt = 0; attempt < 300; attempt++) {
@@ -262,10 +269,10 @@ export default function DataSourcesPage() {
         if (!pollRes.ok) { setError('Failed to poll job'); return }
         const job = await pollRes.json()
         const processed = job.processedRows ?? 0
-        const total = job.rowCount > 0 ? job.rowCount : targets.length
+        const total = job.rowCount > 0 ? job.rowCount : jobTargets.length
         const lastLog = Array.isArray(job.logs) && job.logs.length > 0 ? job.logs[job.logs.length - 1] : ''
         setPipelineStatus(`Verifying… ${processed}/${total}` + (lastLog ? ` · ${lastLog.replace(/^\[\d+:\d+:\d+\] /, '')}` : ''))
-        if (job.status === 'completed') { addLog('✓ Job completed — ' + (job.foundCount ?? 0) + ' emails found'); break }
+        if (job.status === 'completed') { addLog('✓ Job completed — ' + (job.foundCount ?? 0) + ' emails verified'); break }
         if (job.status === 'failed' || job.status === 'cancelled') {
           addLog('✗ Job ' + job.status + (job.error ? ': ' + job.error : ''))
           setError('Email job ' + job.status + (job.error ? ': ' + job.error : ''))
@@ -300,6 +307,9 @@ export default function DataSourcesPage() {
       const statusIdx = col('EmailFinderSendability')
 
       const emailMap = new Map<string, { email: string; status: string }>()
+      // Inject SERP-found emails first (already verified, mark as safe)
+      serpEmailMap.forEach((email, pid) => emailMap.set(pid, { email, status: 'safe' }))
+      // Then add job results
       rows.slice(1).forEach(row => {
         const pid = pidIdx >= 0 ? row[pidIdx] : ''
         if (!pid) return
@@ -310,7 +320,7 @@ export default function DataSourcesPage() {
       })
 
       const found = [...emailMap.values()].filter(e => e.email).length
-      addLog('✓ Emails found: ' + found + '/' + targets.length)
+      addLog('✓ Emails found: ' + found + '/' + targets.length + (serpEmailMap.size ? ' (' + serpEmailMap.size + ' from SERP)' : ''))
       setResults(prev => prev.map(row => {
         const e = emailMap.get(row.place_id)
         return e ? { ...row, _email: e.email || undefined, _emailStatus: e.status || undefined } : row
@@ -596,7 +606,11 @@ export default function DataSourcesPage() {
                       <TableCell className="text-sm text-gray-600">{row.domain ?? '—'}</TableCell>
                       <TableCell className="text-sm">
                         {row._firstName || row._lastName ? (
-                          <span className={row._nameSource === 'companies_house' ? 'text-green-700' : 'text-blue-600'}>
+                          <span className={
+                            row._nameSource === 'companies_house' ? 'text-green-700' :
+                            row._nameSource === 'serp' ? 'text-purple-600' :
+                            'text-blue-600'
+                          }>
                             {[row._firstName, row._lastName].filter(Boolean).join(' ')}
                           </span>
                         ) : '—'}
