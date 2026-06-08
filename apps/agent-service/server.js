@@ -113,24 +113,60 @@ async function fetchOpsData() {
   return { metrics, health, summary, intelligence }
 }
 
+// ── Call Anthropic API directly ───────────────────────────
+function callClaude(systemPrompt, userMessage) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({
+      model: CLAUDE_MODEL,
+      max_tokens: 1024,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userMessage }],
+    })
+    const req = https.request({
+      hostname: 'api.anthropic.com',
+      path: '/v1/messages',
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${CLAUDE_AUTH_TOKEN}`,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+      },
+    }, res => {
+      let buf = ''
+      res.on('data', d => buf += d)
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(buf)
+          if (json.error) return reject(new Error(json.error.message || JSON.stringify(json.error)))
+          resolve(json.content?.[0]?.text || '')
+        } catch (e) {
+          reject(new Error('Bad response: ' + buf.slice(0, 200)))
+        }
+      })
+    })
+    req.on('error', reject)
+    req.write(body)
+    req.end()
+  })
+}
+
 // ── Agent runner with memory ──────────────────────────────
-async function runAgent(agentName, userMessage, timeoutMs = 120000) {
+async function runAgent(agentName, userMessage) {
   const agentDir = path.join(AGENTS_DIR, agentName)
   const sharedDir = path.join(AGENTS_DIR, 'shared')
 
-  // Read agent files from Mac via SSH (so memory persists across deploys)
-  const systemPrompt = sshMac(`cat ${agentDir}/system-prompt.md`)
+  // Read agent files from Mac via SSH (memory persists across deploys)
+  const systemPromptRaw = sshMac(`cat ${agentDir}/system-prompt.md`)
   const memory = sshMac(`cat ${agentDir}/memory.md`)
   const sharedContext = sshMac(`cat ${sharedDir}/ottaly-context.md`)
   const latestBrief = sshMac(`cat ${sharedDir}/brief-latest.md`)
 
-  // Fetch live data for ops agent — trim to key fields only to keep prompt size manageable
+  // Fetch live data for ops agent
   let liveData = ''
   if (agentName === 'ops') {
     try {
       const data = await fetchOpsData()
-
-      // Strip daily series from intelligence (too verbose), keep totals + campaigns
       const trimmedIntelligence = (data.intelligence?.workspaces || []).map(ws => ({
         id: ws.id, name: ws.name, avgReplyRate: ws.avgReplyRate,
         campaigns: (ws.campaigns || []).map(c => ({
@@ -138,62 +174,40 @@ async function runAgent(agentName, userMessage, timeoutMs = 120000) {
           leads: c.leads, replyRate: c.replyRate, tier: c.tier, flags: c.flags,
         }))
       }))
-
-      // Strip daily series from summary
       const trimmedSummary = (data.summary?.workspaces || []).map(ws => ({
         name: ws.name, workspace_id: ws.workspace_id, totals: ws.totals
       }))
-
-      liveData = `\n---\n## Live Dashboard Data (fetched right now)\n\n### Per-Workspace Metrics\n${JSON.stringify(data.metrics?.workspaces || data.metrics, null, 2)}\n\n### Client Health\n${JSON.stringify(data.health?.clients || data.health, null, 2)}\n\n### 30-Day Summary (totals only)\n${JSON.stringify(trimmedSummary, null, 2)}\n\n### Campaign Intelligence\n${JSON.stringify(trimmedIntelligence, null, 2)}\n`
+      liveData = `\n\n## Live Dashboard Data\n\n### Per-Workspace Metrics\n${JSON.stringify(data.metrics?.workspaces || data.metrics, null, 2)}\n\n### Client Health\n${JSON.stringify(data.health?.clients || data.health, null, 2)}\n\n### 30-Day Summary\n${JSON.stringify(trimmedSummary, null, 2)}\n\n### Campaign Intelligence\n${JSON.stringify(trimmedIntelligence, null, 2)}`
     } catch (e) {
-      liveData = `\n---\n## Live Data\nFailed to fetch: ${e.message}\n`
+      liveData = `\n\n## Live Data\nFailed to fetch: ${e.message}`
     }
   }
 
-  const fullPrompt = `${systemPrompt}
+  const systemPrompt = `${systemPromptRaw}
 
----
 ## Shared Business Context
 ${sharedContext}
 
----
-## Your Memory (what you've learned over time)
+## Your Memory
 ${memory}
 
----
-## Latest Brief (from other agents)
-${latestBrief}
-${liveData}
----
-## User message
-${userMessage}
+## Latest Brief
+${latestBrief}${liveData}
 
----
-IMPORTANT:
-1. Respond directly and helpfully using the live data above.
-2. At the very end of your response, if you learned something new or were corrected, append a MEMORY line like:
-   MEMORY: [what you learned]
-   This will be saved to your memory file automatically.`
+IMPORTANT: If you learned something new, end your reply with:
+MEMORY: [what you learned]`
 
-  // Write prompt to a temp file on the Mac to avoid shell arg size limits
-  const tmpPrompt = `/tmp/agent-prompt-${agentName}-${Date.now()}.txt`
-  sshMac(`cat > ${tmpPrompt} << 'PROMPT_EOF_MARKER'\n${fullPrompt.replace(/PROMPT_EOF_MARKER/g, 'PROMPT_EOF_MARKER_ESC')}\nPROMPT_EOF_MARKER`)
+  const output = await callClaude(systemPrompt, userMessage)
 
-  const output = sshMac(
-    `ANTHROPIC_AUTH_TOKEN=${CLAUDE_AUTH_TOKEN} ${CLAUDE_PATH} --print --dangerously-skip-permissions --model ${CLAUDE_MODEL} "$(cat ${tmpPrompt})" 2>&1; rm -f ${tmpPrompt}`,
-    timeoutMs
-  )
-
-  // Extract and save memory if agent learned something
+  // Save memory if agent learned something
   const memoryMatch = output.match(/MEMORY:\s*(.+)/i)
   if (memoryMatch) {
     const today = new Date().toISOString().slice(0, 10)
     const newMemory = `[${today}] — ${memoryMatch[1].trim()}`
     const memFile = path.join(agentDir, 'memory.md')
-    sshMac(`echo ${JSON.stringify(newMemory)} >> ${memFile} && sed -i '' 's/No memories yet.//' ${memFile} 2>/dev/null || true`)
+    sshMac(`grep -qF 'No memories yet.' ${memFile} && sed -i '' 's/No memories yet.//' ${memFile} 2>/dev/null; echo ${JSON.stringify(newMemory)} >> ${memFile}`)
   }
 
-  // Strip the MEMORY line from the response shown to user
   return output.replace(/\nMEMORY:.*$/im, '').trim()
 }
 
