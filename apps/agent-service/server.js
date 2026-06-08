@@ -17,6 +17,7 @@ const MAC_USER = process.env.MAC_USER || 'jesse'
 const MAC_HOST = process.env.MAC_HOST || '46.38.255.178'
 const MAC_REPO = process.env.MAC_REPO || '/Users/jesse/Desktop/ottaly-dashboard'
 const CLAUDE_PATH = process.env.CLAUDE_PATH || '/Users/jesse/.nvm/versions/node/v24.11.1/bin/claude'
+const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-4-6'
 const VERCEL_PROJECT = 'ottaly-dashboard-admin-new'
 
 // Page map: name → legacy file + new file
@@ -42,6 +43,9 @@ const PAGE_MAP = {
   metrics:        { legacy: 'metrics.html',        new: 'app/metrics/page.tsx' },
   health:         { legacy: 'health.html',         new: 'app/health/page.tsx' },
 }
+
+// Global build lock — only one build at a time
+let buildLock = false
 
 function sshMac(command, timeoutMs = 120000) {
   const scriptFile = `/tmp/ssh-cmd-${Date.now()}.sh`
@@ -70,7 +74,7 @@ async function buildPage(pageName, responseUrl, userId) {
     const instruction = `Read ${MAC_REPO}/apps/admin-legacy/${page.legacy} thoroughly to understand all features, data, filters, and interactions. Then rebuild ${MAC_REPO}/apps/admin-new/${page.new} to match the same functionality using Next.js, TypeScript, shadcn/ui and Tailwind. Work only in apps/admin-new. Summarise changes at the end.`
 
     const claudeOutput = sshMac(
-      `cd ${MAC_REPO} && ANTHROPIC_AUTH_TOKEN=${CLAUDE_AUTH_TOKEN} ${CLAUDE_PATH} --print --dangerously-skip-permissions ${JSON.stringify(instruction)} 2>&1`,
+      `cd ${MAC_REPO} && ANTHROPIC_AUTH_TOKEN=${CLAUDE_AUTH_TOKEN} ${CLAUDE_PATH} --print --dangerously-skip-permissions --model ${CLAUDE_MODEL} ${JSON.stringify(instruction)} 2>&1`,
       600000
     )
 
@@ -129,9 +133,11 @@ app.post('/slack/build',
     const { text, user_id, response_url } = params
 
     if (!text) return res.json({ response_type: 'ephemeral', text: 'Usage: /build <instruction>' })
+    if (buildLock) return res.json({ response_type: 'ephemeral', text: '⚠️ A build is already running. Wait for it to finish.' })
 
     res.json({ response_type: 'ephemeral', text: `⚙️ Working on: _${text}_` })
 
+    buildLock = true
     try {
       const branch = `agent/${Date.now()}`
       sshMac(`cd ${MAC_REPO} && git reset --hard HEAD && git clean -fd && git checkout main && git reset --hard origin/main && git checkout -b ${branch}`)
@@ -160,6 +166,8 @@ app.post('/slack/build',
     } catch (err) {
       console.error('[agent] Error:', err.message)
       postToSlack(response_url, `<@${user_id}> ❌ Error: ${err.message.slice(0, 300)}`)
+    } finally {
+      buildLock = false
     }
   }
 )
@@ -176,14 +184,22 @@ app.post('/slack/buildall',
 
     const pages = text ? text.split(',').map(p => p.trim().toLowerCase()) : Object.keys(PAGE_MAP)
 
+    if (buildLock) {
+      return res.json({ response_type: 'ephemeral', text: '⚠️ A build is already running. Wait for it to finish.' })
+    }
+
     res.json({ response_type: 'in_channel', text: `⚙️ <@${user_id}> Queuing *${pages.length} pages*: ${pages.join(', ')}\n\nI'll post each result as it completes.` })
 
-    // Run sequentially to avoid conflicts on Mac repo
+    buildLock = true
     let done = 0
     let failed = 0
-    for (const page of pages) {
-      const ok = await buildPage(page, response_url, user_id)
-      if (ok) done++; else failed++
+    try {
+      for (const page of pages) {
+        const ok = await buildPage(page, response_url, user_id)
+        if (ok) done++; else failed++
+      }
+    } finally {
+      buildLock = false
     }
 
     postToSlack(response_url, `<@${user_id}> 🏁 All done: *${done} built*, *${failed} failed*`)
