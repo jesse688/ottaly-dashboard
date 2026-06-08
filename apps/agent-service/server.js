@@ -91,7 +91,7 @@ function sshMac(command, timeoutMs = 120000) {
 
 // ── Fetch live data for ops agent ────────────────────────
 async function fetchOpsData() {
-  const [campaigns, recentLeads, analytics] = await Promise.all([
+  const [campaigns, recentLeads, recentActivity] = await Promise.all([
     dbQuery(`
       SELECT w.name as workspace, c.name as campaign, c.status,
         c.sent_count, c.replied_count, c.reply_rate, c.bounced_count, c.positive_reply_count
@@ -106,25 +106,28 @@ async function fetchOpsData() {
         w.name as workspace
       FROM esp_leads l
       JOIN esp_workspaces w ON w.raw->>'id' = l.workspace_id
-      WHERE l.first_replied_at > NOW() - INTERVAL '7 days'
-        AND l.label IN ('INTERESTED','MEETING_BOOKED')
+      WHERE l.label IN ('INTERESTED','MEETING_BOOKED')
       ORDER BY l.first_replied_at DESC
       LIMIT 20
     `),
     dbQuery(`
       SELECT w.name as workspace,
-        SUM(a.sent) as total_sent, SUM(a.replies) as total_replies, SUM(a.bounces) as total_bounces,
-        CASE WHEN SUM(a.sent) > 0 THEN ROUND((SUM(a.replies)::numeric/SUM(a.sent))*100,2) ELSE 0 END as reply_rate,
-        CASE WHEN SUM(a.sent) > 0 THEN ROUND((SUM(a.bounces)::numeric/SUM(a.sent))*100,2) ELSE 0 END as bounce_rate
-      FROM esp_analytics a
-      JOIN esp_workspaces w ON w.raw->>'id' = a.workspace_id
-      WHERE a.date > NOW() - INTERVAL '30 days'
+        COUNT(CASE WHEN e.event_type = 'sent' THEN 1 END) as sent_7d,
+        COUNT(CASE WHEN e.event_type = 'replied' THEN 1 END) as replies_7d,
+        COUNT(CASE WHEN e.event_type = 'bounced' THEN 1 END) as bounces_7d,
+        CASE WHEN COUNT(CASE WHEN e.event_type='sent' THEN 1 END) > 0
+          THEN ROUND(COUNT(CASE WHEN e.event_type='replied' THEN 1 END)::numeric /
+               COUNT(CASE WHEN e.event_type='sent' THEN 1 END) * 100, 2)
+          ELSE 0 END as reply_rate_7d
+      FROM email_events e
+      JOIN esp_workspaces w ON w.raw->>'id' = e.workspace_id
+      WHERE e.event_at > NOW() - INTERVAL '7 days'
       GROUP BY w.name
-      ORDER BY total_sent DESC
+      ORDER BY sent_7d DESC
       LIMIT 30
     `),
   ])
-  return { campaigns, recentLeads, analytics }
+  return { campaigns, recentLeads, recentActivity }
 }
 
 // ── Agent runner with memory ──────────────────────────────
