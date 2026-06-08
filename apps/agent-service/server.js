@@ -35,8 +35,9 @@ let buildLock = false
 // ── Repo setup ────────────────────────────────────────────
 function ensureRepo() {
   if (!fs.existsSync(path.join(REPO_DIR, '.git'))) {
+    if (!GITHUB_TOKEN) throw new Error('GITHUB_TOKEN not set — cannot clone repo. Add it in Easypanel env vars.')
     console.log('[repo] Cloning repo...')
-    execSync(`git clone ${REPO_URL} ${REPO_DIR}`, { stdio: 'pipe' })
+    execSync(`git clone ${REPO_URL} ${REPO_DIR}`, { stdio: 'pipe', timeout: 60000 })
     console.log('[repo] Cloned.')
   }
 }
@@ -225,7 +226,7 @@ async function executeTool(toolName, toolInput, agentName) {
 }
 
 // ── Agentic loop (Claude with tools) ─────────────────────
-async function runAgentLoop(systemPrompt, userMessage, agentName) {
+async function runAgentLoop(systemPrompt, userMessage, agentName, onToolCall) {
   const messages = [{ role: 'user', content: userMessage }]
   // Build agents may need more iterations (read → write → git); ops agents need fewer
   const maxIterations = agentName === 'build' ? 20 : 6
@@ -281,6 +282,7 @@ async function runAgentLoop(systemPrompt, userMessage, agentName) {
 
       const toolResults = await Promise.all(toolUses.map(async tu => {
         console.log(`[${agentName}] Tool: ${tu.name}`, JSON.stringify(tu.input).slice(0, 100))
+        if (onToolCall) onToolCall(tu.name, tu.input)
         const result = await executeTool(tu.name, tu.input, agentName)
         return { type: 'tool_result', tool_use_id: tu.id, content: result }
       }))
@@ -356,7 +358,7 @@ function saveMemory(agentDir, line) {
 // Chat agents: fast Gemini responses, no tool use
 const TOOL_AGENTS = new Set(['build', 'ops', 'research', 'strategy'])
 
-async function runAgent(agentName, userMessage) {
+async function runAgent(agentName, userMessage, onToolCall) {
   const agentDir = path.join(AGENTS_DIR, agentName)
   const sharedDir = path.join(AGENTS_DIR, 'shared')
 
@@ -383,7 +385,7 @@ ${latestBrief}
 
   let output
   if (TOOL_AGENTS.has(agentName)) {
-    output = await runAgentLoop(systemPrompt, userMessage, agentName)
+    output = await runAgentLoop(systemPrompt, userMessage, agentName, onToolCall)
   } else {
     // Marketing and copy use Gemini (fast, cheap, great for writing)
     const geminiPrompt = `${systemPrompt}\n\nUser: ${userMessage}`
@@ -478,7 +480,7 @@ async function runAgentWithProgress(agentName, text, botToken, replyChannel, thr
   const posted = await slackPost(botToken, 'chat.postMessage', {
     channel: replyChannel,
     ...(threadTs ? { thread_ts: threadTs } : {}),
-    text: isToolAgent ? '_Thinking... (may use tools to get data)_' : '_Thinking..._',
+    text: '_Thinking..._',
   })
   const msgTs = posted.ts
   const update = txt => slackPost(botToken, 'chat.update', { channel: replyChannel, ts: msgTs, text: txt })
@@ -487,12 +489,52 @@ async function runAgentWithProgress(agentName, text, botToken, replyChannel, thr
   const threadContext = threadTs ? await fetchThreadHistory(botToken, replyChannel, threadTs, botUserId) : ''
   const fullMessage = threadContext + text
 
+  // Progress ticker — updates message every 30s so Jesse knows it's alive
   const startedAt = Date.now()
-  try {
-    const reply = await runAgent(agentName, fullMessage)
+  const toolLog = []
+  let tickerActive = true
+  const ticker = setInterval(async () => {
+    if (!tickerActive) return
     const elapsed = Math.round((Date.now() - startedAt) / 1000)
-    await update(`${reply}\n\n_⏱ ${elapsed}s_`)
+    const toolSummary = toolLog.length ? `\n_Tools used: ${toolLog.slice(-3).join(' → ')}_` : ''
+    await update(`_Working... ${elapsed}s elapsed${toolSummary}_`)
+  }, 20000)
+
+  // Hard timeout — 4 minutes max
+  const TIMEOUT_MS = 4 * 60 * 1000
+  let timedOut = false
+  const timeoutId = setTimeout(() => {
+    timedOut = true
+    tickerActive = false
+    clearInterval(ticker)
+    update('⏱ Timed out after 4 minutes. Try a more specific request, or break it into smaller steps.')
+  }, TIMEOUT_MS)
+
+  // Inject tool progress logger into runAgent via a wrapper
+  const onToolCall = (toolName, input) => {
+    const label = toolName === 'get_dashboard_data' ? `get_dashboard_data(${input.type})` :
+                  toolName === 'read_file' ? `read_file(${input.file_path?.split('/').pop()})` :
+                  toolName === 'write_file' ? `write_file(${input.file_path?.split('/').pop()})` :
+                  toolName === 'run_git' ? `git ${input.command?.split(' ')[0]}` :
+                  toolName
+    toolLog.push(label)
+  }
+
+  try {
+    if (timedOut) return
+    const reply = await runAgent(agentName, fullMessage, onToolCall)
+    if (timedOut) return
+    tickerActive = false
+    clearInterval(ticker)
+    clearTimeout(timeoutId)
+    const elapsed = Math.round((Date.now() - startedAt) / 1000)
+    const toolSummary = toolLog.length ? `\n_Tools: ${toolLog.join(' → ')}_` : ''
+    await update(`${reply}\n\n_⏱ ${elapsed}s${toolSummary}_`)
   } catch (err) {
+    if (timedOut) return
+    tickerActive = false
+    clearInterval(ticker)
+    clearTimeout(timeoutId)
     await update(`❌ Error: ${err.message.slice(0, 300)}`)
   }
 }
