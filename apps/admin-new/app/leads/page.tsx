@@ -1,10 +1,11 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { ArrowUp } from 'lucide-react'
 
 interface Lead {
   id: string
@@ -41,6 +42,9 @@ export default function LeadsPage() {
   const [workspaceId, setWorkspaceId] = useState('all')
   const [label, setLabel] = useState('all')
   const [page, setPage] = useState(1)
+  const [showBackToTop, setShowBackToTop] = useState(false)
+
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
 
   const fetchLeads = useCallback(async () => {
     setLoading(true)
@@ -56,6 +60,21 @@ export default function LeadsPage() {
   }, [page, workspaceId, label])
 
   useEffect(() => { fetchLeads() }, [fetchLeads])
+
+  // Show button after scrolling down 300px inside the scroll container
+  useEffect(() => {
+    const el = scrollContainerRef.current
+    if (!el) return
+
+    const handleScroll = () => setShowBackToTop(el.scrollTop > 300)
+
+    el.addEventListener('scroll', handleScroll, { passive: true })
+    return () => el.removeEventListener('scroll', handleScroll)
+  }, [])
+
+  const scrollToTop = () => {
+    scrollContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+  }
 
   const leads = data?.leads ?? []
   const filtered = search
@@ -89,7 +108,8 @@ export default function LeadsPage() {
         </Select>
       </div>
 
-      <div className="flex-1 overflow-auto px-6 py-4">
+      {/* Scrollable content area */}
+      <div ref={scrollContainerRef} className="flex-1 overflow-auto px-6 py-4 relative">
         <div className="bg-white rounded-lg border">
           <Table>
             <TableHeader>
@@ -140,6 +160,24 @@ export default function LeadsPage() {
             </div>
           </div>
         )}
+
+        {/* Back to top button */}
+        <button
+          onClick={scrollToTop}
+          aria-label="Back to top"
+          className={`
+            fixed bottom-6 right-6 z-50
+            flex items-center gap-1.5 px-3 py-2
+            bg-white border border-gray-200 rounded-full shadow-md
+            text-sm font-medium text-gray-600
+            hover:bg-gray-50 hover:text-gray-900 hover:shadow-lg
+            transition-all duration-200
+            ${showBackToTop ? 'opacity-100 translate-y-0 pointer-events-auto' : 'opacity-0 translate-y-4 pointer-events-none'}
+          `}
+        >
+          <ArrowUp className="h-3.5 w-3.5" />
+          Back to top
+        </button>
       </div>
     </div>
   )
