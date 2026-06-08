@@ -12,13 +12,14 @@ const PORT = process.env.PORT || 3100
 
 const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET
 const MAC_USER = process.env.MAC_USER || 'jesse'
+const MAC_HOST = process.env.MAC_HOST || '46.38.255.178'
 const MAC_REPO = process.env.MAC_REPO || '/Users/jesse/Desktop/ottaly-dashboard'
 const CLAUDE_PATH = process.env.CLAUDE_PATH || '/Users/jesse/.nvm/versions/node/v24.11.1/bin/claude'
 const VERCEL_PROJECT = 'ottaly-dashboard-admin-new'
 
 // SSH command that goes through the reverse tunnel to the Mac
 function sshMac(command, timeoutMs = 120000) {
-  const ssh = `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p 2222 ${MAC_USER}@localhost`
+  const ssh = `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p 2222 ${MAC_USER}@${MAC_HOST}`
   return execSync(`${ssh} "${command.replace(/"/g, '\\"')}"`, {
     encoding: 'utf8',
     timeout: timeoutMs,
