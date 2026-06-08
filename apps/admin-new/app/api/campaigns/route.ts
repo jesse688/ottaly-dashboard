@@ -15,7 +15,13 @@ export async function GET() {
               ELSE 0 END AS reply_rate_calc,
          CASE WHEN c.sent_count > 0
               THEN ROUND(c.bounced_count::numeric / c.sent_count, 4)
-              ELSE 0 END AS bounce_rate
+              ELSE 0 END AS bounce_rate,
+         CASE WHEN c.replied_count > 0
+              THEN ROUND(c.positive_reply_count::numeric / c.replied_count, 4)
+              ELSE 0 END AS positive_rate,
+         CASE WHEN c.sent_count > 0
+              THEN ROUND(c.lead_count::numeric / c.sent_count, 4)
+              ELSE 0 END AS lead_rate
        FROM esp_campaigns c
        LEFT JOIN esp_workspaces w ON w.id = c.workspace_id AND w.source = c.source
        WHERE c.source = 'plusvibe'
