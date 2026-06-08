@@ -42,7 +42,6 @@ export async function POST(req: NextRequest) {
     categories: [category],
     location_coordinate: `${lat},${lng},${radius ?? 25}`,
     filters: buildFilters(filters ?? {}),
-    order_by: [['rating.votes_count', 'desc']],
     limit: Math.min(limit, 1000),
   }
   if (offset_token) taskPayload.offset_token = offset_token
