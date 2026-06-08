@@ -225,16 +225,17 @@ export default function DataSourcesPage() {
   function handleExportCsv() {
     const rows = selected.size > 0 ? results.filter(r => selected.has(r.place_id)) : results
     const header = 'business_name,domain,phone,city,region,address,rating,reviews,is_claimed,email,email_status'
+    const escape = (v: unknown) => v == null ? '' : '"' + String(v).replace(/"/g, '""') + '"'
     const lines = rows.map(r =>
       [r.title, r.domain, r.phone, r.city, r.region, r.address, r.rating, r.reviews, r.is_claimed, r._email, r._emailStatus]
-        .map(v => (v == null ? '' : `"${String(v).replace(/"/g, '""')}"'))
+        .map(escape)
         .join(',')
     )
     const blob = new Blob([[header, ...lines].join('\n')], { type: 'text/csv' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `data-sources-${activeCategory()}-${city}.csv`
+    a.download = 'data-sources-' + activeCategory() + '-' + city + '.csv'
     a.click()
     URL.revokeObjectURL(url)
   }
