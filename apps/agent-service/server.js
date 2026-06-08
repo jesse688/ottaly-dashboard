@@ -8,6 +8,7 @@ const { execSync } = require('child_process')
 const https = require('https')
 const fs = require('fs')
 const path = require('path')
+const { Pool } = require('pg')
 
 const app = express()
 const PORT = process.env.PORT || 3100
@@ -21,9 +22,23 @@ const CLAUDE_PATH = process.env.CLAUDE_PATH || '/Users/jesse/.nvm/versions/node/
 const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-4-6'
 const VERCEL_PROJECT = 'ottaly-dashboard-admin-new'
 const AGENTS_DIR = path.join(MAC_REPO, 'apps/agent-service/agents')
+const DATABASE_URL = process.env.DATABASE_URL || 'postgres://postgres:niwkebh37pbcr1prdz01@ottaly_ottaly-postgres:5432/ottaly'
+
+// Postgres pool for ops agent
+const db = new Pool({ connectionString: DATABASE_URL, max: 5 })
 
 // Global build lock
 let buildLock = false
+
+// ── DB query helper ───────────────────────────────────────
+async function dbQuery(sql, params = []) {
+  try {
+    const result = await db.query(sql, params)
+    return result.rows
+  } catch (err) {
+    return [{ error: err.message }]
+  }
+}
 
 // ── Agent channel config ──────────────────────────────────
 // Each agent has its own Slack bot token + app token + channel
@@ -74,8 +89,44 @@ function sshMac(command, timeoutMs = 120000) {
   }
 }
 
+// ── Fetch live data for ops agent ────────────────────────
+async function fetchOpsData() {
+  const [workspaces, recentLeads, recentStats] = await Promise.all([
+    dbQuery(`
+      SELECT w.name, w.workspace_id,
+        COUNT(DISTINCT c.id) as campaigns,
+        COUNT(DISTINCT l.id) as total_leads,
+        SUM(CASE WHEN l.label IN ('INTERESTED','MEETING_BOOKED') THEN 1 ELSE 0 END) as hot_leads,
+        SUM(CASE WHEN l.first_replied_at > NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as replies_7d
+      FROM esp_workspaces w
+      LEFT JOIN esp_campaigns c ON c.workspace_id = w.workspace_id
+      LEFT JOIN esp_leads l ON l.workspace_id = w.workspace_id
+      GROUP BY w.name, w.workspace_id
+      ORDER BY w.name
+    `),
+    dbQuery(`
+      SELECT l.email, l.first_name, l.last_name, l.company_name, l.label,
+        w.name as workspace
+      FROM esp_leads l
+      JOIN esp_workspaces w ON w.workspace_id = l.workspace_id
+      WHERE l.first_replied_at > NOW() - INTERVAL '7 days'
+        AND l.label IN ('INTERESTED','MEETING_BOOKED')
+      ORDER BY l.first_replied_at DESC
+      LIMIT 20
+    `),
+    dbQuery(`
+      SELECT workspace_id, date, sends, replies, bounces, leads
+      FROM esp_analytics
+      WHERE date > NOW() - INTERVAL '30 days'
+      ORDER BY date DESC
+      LIMIT 200
+    `),
+  ])
+  return { workspaces, recentLeads, recentStats }
+}
+
 // ── Agent runner with memory ──────────────────────────────
-function runAgent(agentName, userMessage, timeoutMs = 120000) {
+async function runAgent(agentName, userMessage, timeoutMs = 120000) {
   const agentDir = path.join(AGENTS_DIR, agentName)
   const sharedDir = path.join(AGENTS_DIR, 'shared')
 
@@ -84,6 +135,17 @@ function runAgent(agentName, userMessage, timeoutMs = 120000) {
   const memory = sshMac(`cat ${agentDir}/memory.md`)
   const sharedContext = sshMac(`cat ${sharedDir}/ottaly-context.md`)
   const latestBrief = sshMac(`cat ${sharedDir}/brief-latest.md`)
+
+  // Fetch live data for ops agent
+  let liveData = ''
+  if (agentName === 'ops') {
+    try {
+      const data = await fetchOpsData()
+      liveData = `\n---\n## Live Data (as of right now)\n\n### Workspaces & Campaign Summary\n${JSON.stringify(data.workspaces, null, 2)}\n\n### Hot Leads This Week (INTERESTED/MEETING_BOOKED)\n${JSON.stringify(data.recentLeads, null, 2)}\n\n### Analytics (last 30 days)\n${JSON.stringify(data.recentStats, null, 2)}\n`
+    } catch (e) {
+      liveData = `\n---\n## Live Data\nFailed to fetch: ${e.message}\n`
+    }
+  }
 
   const fullPrompt = `${systemPrompt}
 
@@ -98,14 +160,14 @@ ${memory}
 ---
 ## Latest Brief (from other agents)
 ${latestBrief}
-
+${liveData}
 ---
 ## User message
 ${userMessage}
 
 ---
 IMPORTANT:
-1. Respond directly and helpfully.
+1. Respond directly and helpfully using the live data above.
 2. At the very end of your response, if you learned something new or were corrected, append a MEMORY line like:
    MEMORY: [what you learned]
    This will be saved to your memory file automatically.`
@@ -231,7 +293,7 @@ function slackAgent(agentName, path_, saveBriefOnSuccess = false) {
       res.json({ response_type: 'ephemeral', text: `💬 ${agentName} is thinking...` })
 
       try {
-        const output = runAgent(agentName, text, 120000)
+        const output = await runAgent(agentName, text, 120000)
         if (saveBriefOnSuccess) saveBrief(agentName, output)
         postToSlack(response_url, `<@${user_id}> *${agentName}:*\n\n${output}`)
       } catch (err) {
@@ -458,7 +520,7 @@ function connectAgent(agentName, config) {
       })
 
       try {
-        const reply = runAgent(agentName, text, 120000)
+        const reply = await runAgent(agentName, text, 120000)
         await slackPost(config.botToken, 'chat.update', {
           channel: replyChannel,
           ts: thinkingRes.ts,
