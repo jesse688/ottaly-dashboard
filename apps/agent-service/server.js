@@ -91,21 +91,18 @@ function sshMac(command, timeoutMs = 120000) {
 
 // ── Fetch live data for ops agent ────────────────────────
 async function fetchOpsData() {
-  const [workspaces, recentLeads, recentStats] = await Promise.all([
+  const [campaigns, recentLeads, analytics] = await Promise.all([
     dbQuery(`
-      SELECT w.name,
-        COUNT(DISTINCT c.id) as campaigns,
-        COUNT(DISTINCT l.id) as total_leads,
-        SUM(CASE WHEN l.label IN ('INTERESTED','MEETING_BOOKED') THEN 1 ELSE 0 END) as hot_leads,
-        SUM(CASE WHEN l.first_replied_at > NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as replies_7d
-      FROM esp_workspaces w
-      LEFT JOIN esp_campaigns c ON c.workspace_id = (w.raw->>'id')
-      LEFT JOIN esp_leads l ON l.workspace_id = (w.raw->>'id')
-      GROUP BY w.name
-      ORDER BY w.name
+      SELECT w.name as workspace, c.name as campaign, c.status,
+        c.sent_count, c.replied_count, c.reply_rate, c.bounced_count, c.positive_reply_count
+      FROM esp_campaigns c
+      JOIN esp_workspaces w ON w.raw->>'id' = c.workspace_id
+      WHERE c.status IN ('ACTIVE','PAUSED')
+      ORDER BY w.name, c.replied_count DESC
+      LIMIT 100
     `),
     dbQuery(`
-      SELECT l.email, l.first_name, l.last_name, l.company_name, l.label,
+      SELECT l.first_name, l.last_name, l.company_name, l.label, l.first_replied_at,
         w.name as workspace
       FROM esp_leads l
       JOIN esp_workspaces w ON w.raw->>'id' = l.workspace_id
@@ -115,18 +112,19 @@ async function fetchOpsData() {
       LIMIT 20
     `),
     dbQuery(`
-      SELECT a.workspace_id, w.name as workspace_name, a.date,
-        a.sent, a.replies, a.bounces, a.new_leads,
-        CASE WHEN a.sent > 0 THEN ROUND((a.replies::numeric/a.sent)*100,2) ELSE 0 END as reply_rate,
-        CASE WHEN a.sent > 0 THEN ROUND((a.bounces::numeric/a.sent)*100,2) ELSE 0 END as bounce_rate
+      SELECT w.name as workspace,
+        SUM(a.sent) as total_sent, SUM(a.replies) as total_replies, SUM(a.bounces) as total_bounces,
+        CASE WHEN SUM(a.sent) > 0 THEN ROUND((SUM(a.replies)::numeric/SUM(a.sent))*100,2) ELSE 0 END as reply_rate,
+        CASE WHEN SUM(a.sent) > 0 THEN ROUND((SUM(a.bounces)::numeric/SUM(a.sent))*100,2) ELSE 0 END as bounce_rate
       FROM esp_analytics a
-      LEFT JOIN esp_workspaces w ON w.raw->>'id' = a.workspace_id
+      JOIN esp_workspaces w ON w.raw->>'id' = a.workspace_id
       WHERE a.date > NOW() - INTERVAL '30 days'
-      ORDER BY a.date DESC
-      LIMIT 300
+      GROUP BY w.name
+      ORDER BY total_sent DESC
+      LIMIT 30
     `),
   ])
-  return { workspaces, recentLeads, recentStats }
+  return { campaigns, recentLeads, analytics }
 }
 
 // ── Agent runner with memory ──────────────────────────────
