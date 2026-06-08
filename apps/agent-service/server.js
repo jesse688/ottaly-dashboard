@@ -129,7 +129,7 @@ async function runAgent(agentName, userMessage, timeoutMs = 120000) {
   if (agentName === 'ops') {
     try {
       const data = await fetchOpsData()
-      liveData = `\n---\n## Live Data (as of right now)\n\n### Workspaces & Campaign Summary\n${JSON.stringify(data.workspaces, null, 2)}\n\n### Hot Leads This Week (INTERESTED/MEETING_BOOKED)\n${JSON.stringify(data.recentLeads, null, 2)}\n\n### Analytics (last 30 days)\n${JSON.stringify(data.recentStats, null, 2)}\n`
+      liveData = `\n---\n## Live Dashboard Data (fetched right now from admin.ottaly.co.uk)\n\n### Per-Workspace Metrics (/api/metrics)\n${JSON.stringify(data.metrics, null, 2)}\n\n### Client Health (/api/health/clients)\n${JSON.stringify(data.health, null, 2)}\n\n### 30-Day Performance Summary (/api/stats/summary)\n${JSON.stringify(data.summary, null, 2)}\n\n### Campaign Intelligence (/api/campaigns/intelligence)\n${JSON.stringify(data.intelligence, null, 2)}\n`
     } catch (e) {
       liveData = `\n---\n## Live Data\nFailed to fetch: ${e.message}\n`
     }
