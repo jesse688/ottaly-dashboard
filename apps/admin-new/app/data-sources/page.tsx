@@ -194,15 +194,14 @@ export default function DataSourcesPage() {
   }
 
   async function handleFindEmails() {
-    // Operate on selected rows with a domain, or all rows with a domain if none selected
     const targets = results.filter(r => (selected.size === 0 || selected.has(r.place_id)) && r.domain)
     if (!targets.length) { setError('No rows with a domain to process'); return }
     setError(null)
     setPipelineRunning(true)
 
     try {
-      // Step 1: Enrich — Companies House + Gemini to find director names
-      setPipelineStatus('Step 1/2 — Finding director names…')
+      // Step 1: Enrich — Gemini extracts director name from business name
+      setPipelineStatus('Step 1/3 — Finding director names…')
       const enrichRes = await fetch('/api/data-sources/enrich', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -213,41 +212,79 @@ export default function DataSourcesPage() {
       ;(enrichData.results ?? []).forEach((r: { place_id: string; firstName: string | null; lastName: string | null; source: string | null }) => {
         nameMap.set(r.place_id, { firstName: r.firstName, lastName: r.lastName, source: r.source })
       })
-
-      // Apply names to results immediately so user sees them
       setResults(prev => prev.map(row => {
         const n = nameMap.get(row.place_id)
         return n ? { ...row, _firstName: n.firstName, _lastName: n.lastName, _nameSource: n.source as BusinessResult['_nameSource'] } : row
       }))
 
-      // Step 2: Find emails — pass name + domain to email-finder-local
-      setPipelineStatus('Step 2/2 — Verifying emails via Reacher…')
-      const contacts = targets.map(t => {
+      // Step 2: Build CSV and create background job on email-finder-local
+      setPipelineStatus('Step 2/3 — Submitting to email finder…')
+      const esc = (s: string) => '"' + String(s ?? '').replace(/"/g, '""') + '"'
+      const csvLines = ['First Name,Last Name,Domain,place_id']
+      targets.forEach(t => {
         const n = nameMap.get(t.place_id)
-        return { firstName: n?.firstName ?? '', lastName: n?.lastName ?? '', domain: t.domain }
+        csvLines.push([esc(n?.firstName ?? ''), esc(n?.lastName ?? ''), esc(t.domain ?? ''), esc(t.place_id)].join(','))
       })
 
-      const emailRes = await fetch('/api/data-sources/email-find', {
+      const jobRes = await fetch('/api/data-sources/email-job', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contacts }),
+        body: JSON.stringify({ csvText: csvLines.join('\n') }),
       })
-
-      if (!emailRes.ok) {
-        const err = await emailRes.json().catch(() => ({}))
-        setError('Email finder failed: ' + (err.error ?? emailRes.status))
+      if (!jobRes.ok) {
+        const err = await jobRes.json().catch(() => ({}))
+        setError('Job failed: ' + (err.error ?? jobRes.status))
         return
       }
+      const { id: jobId, rowCount } = await jobRes.json()
 
-      const emailData = await emailRes.json()
-      // Results are returned in the same order as contacts
-      const enriched = targets.map((t, i) => {
-        const r = emailData.results?.[i]
-        return { place_id: t.place_id, email: r?.email ?? '', status: r?.status ?? '' }
+      // Step 3: Poll until done
+      for (let attempt = 0; attempt < 300; attempt++) {
+        await new Promise(r => setTimeout(r, 3000))
+        const pollRes = await fetch(`/api/data-sources/email-job?id=${jobId}`)
+        if (!pollRes.ok) { setError('Failed to poll job'); return }
+        const job = await pollRes.json()
+        setPipelineStatus(`Step 3/3 — Verifying emails… ${job.processedRows ?? 0}/${job.rowCount ?? rowCount ?? targets.length}`)
+        if (job.status === 'completed') break
+        if (job.status === 'failed' || job.status === 'cancelled') {
+          setError('Email job ' + job.status + (job.error ? ': ' + job.error : ''))
+          return
+        }
+      }
+
+      // Download and parse results CSV
+      const dlRes = await fetch(`/api/data-sources/email-job/download?id=${jobId}`)
+      if (!dlRes.ok) { setError('Failed to download results'); return }
+      const csvText = await dlRes.text()
+
+      // Simple CSV parser
+      const rows = csvText.trim().split('\n').map(line => {
+        const cells: string[] = []
+        let cur = '', inQ = false
+        for (const ch of line) {
+          if (ch === '"') { inQ = !inQ }
+          else if (ch === ',' && !inQ) { cells.push(cur); cur = '' }
+          else cur += ch
+        }
+        cells.push(cur)
+        return cells
+      })
+
+      if (rows.length < 2) { setError('No results returned'); return }
+      const headers = rows[0]
+      const col = (name: string) => headers.indexOf(name)
+      const pidIdx = col('place_id')
+      const emailIdx = col('FoundEmail')
+      const statusIdx = col('EmailFinderSendability')
+
+      const emailMap = new Map<string, { email: string; status: string }>()
+      rows.slice(1).forEach(row => {
+        const pid = pidIdx >= 0 ? row[pidIdx] : ''
+        if (pid) emailMap.set(pid, { email: row[emailIdx] ?? '', status: row[statusIdx] ?? '' })
       })
 
       setResults(prev => prev.map(row => {
-        const found = enriched.find(e => e.place_id === row.place_id)
+        const found = emailMap.get(row.place_id)
         return found ? { ...row, _email: found.email || undefined, _emailStatus: found.status || undefined } : row
       }))
     } catch (err) {
@@ -458,7 +495,13 @@ export default function DataSourcesPage() {
 
         {/* Right: results */}
         <div className="flex-1 overflow-auto">
-          {results.length === 0 && !pulling && (
+          {error && (
+            <div className="m-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+              {error}
+            </div>
+          )}
+
+          {results.length === 0 && !pulling && !error && (
             <div className="flex items-center justify-center h-full text-gray-400 text-sm">
               Configure a search and pull results
             </div>
