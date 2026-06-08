@@ -48,6 +48,7 @@ const ADMIN_KEY              = process.env.ADMIN_KEY              || 'ottaly-adm
 const SESSION_SECRET         = JWT_SECRET + ':' + ADMIN_KEY;
 const PLUSVIBE_KEY           = process.env.PLUSVIBE_KEY           || '6425e882-f33fb46a-2837ff5a-eb535a60';
 const ANTHROPIC_API_KEY      = process.env.ANTHROPIC_API_KEY      || '';
+const SLACK_SIGNING_SECRET   = process.env.SLACK_SIGNING_SECRET   || '';
 const ANTHROPIC_MODEL        = process.env.ANTHROPIC_MODEL        || 'claude-haiku-4-5-20251001';
 const NO2BOUNCE_KEY          = process.env.NO2BOUNCE_KEY          || 'ab55c5f1325ad50bf92850e030c16caa';
 const STRIPE_SECRET_KEY      = process.env.STRIPE_SECRET_KEY      || '';
@@ -576,6 +577,39 @@ function requireSession(req, res, next) {
   if (req.headers['x-admin-key'] === ADMIN_KEY) return next();
   return res.status(401).json({ error: 'Unauthorized' });
 }
+
+// ── Slack slash commands ──────────────────────────────────
+const { verifySlackRequest, callClaude } = require('./slack-slash');
+
+app.post('/api/slack/slash', express.urlencoded({ extended: true }), async (req, res) => {
+  if (!verifySlackRequest(req)) {
+    console.error('[slack-slash] Invalid request signature')
+    return res.status(401).send('Unauthorized')
+  }
+
+  const { text, user_id, channel_id, response_url } = req.body
+  if (!text) return res.status(400).json({ text: 'Please provide a question' })
+
+  res.status(200).send() // Respond immediately (3 second timeout from Slack)
+
+  try {
+    const reply = await callClaude(text)
+    const payload = {
+      response_type: 'in_channel',
+      text: `<@${user_id}> asked: ${text}\n\n${reply}`,
+    }
+    // Post response back to Slack
+    const respBody = JSON.stringify(payload)
+    const respReq = require('https').request(new URL(response_url), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': respBody.length },
+    })
+    respReq.write(respBody)
+    respReq.end()
+  } catch (err) {
+    console.error('[slack-slash] Error:', err.message)
+  }
+})
 
 // ── Auth endpoints ────────────────────────────────────────
 app.get('/api/session', (req, res) => {
