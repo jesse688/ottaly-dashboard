@@ -8408,17 +8408,27 @@ app.get('/api/copy/analytics', requireSession, async (req, res) => {
       SELECT
         COALESCE(pv.content_hash, web.content_hash) AS content_hash,
         COALESCE(NULLIF(pv.sent, 0),    web.sent,    0) AS sent,
-        COALESCE(NULLIF(pv.replies, 0), web.replies, 0) AS replies,
+        -- Use pv replies/bounces only when pv.sent > 0. When pv.sent = 0 the
+        -- cvs rows had no sends (partial sync artefact) so their reply/bounce
+        -- counts can't be trusted — fall back to webhook attribution instead.
+        -- Cap replies/bounces at sent to prevent >100% rates from data anomalies.
+        CASE WHEN COALESCE(pv.sent, 0) > 0
+             THEN LEAST(COALESCE(pv.replies, 0), COALESCE(NULLIF(pv.sent, 0), web.sent, 0))
+             ELSE COALESCE(web.replies, 0)
+        END AS replies,
         -- Leads: real PlusVibe-label leads attributed to this template by
         -- email→send match (real_lead_hash), NOT the sparse 'lead' webhook
         -- count, so per-template leads sum close to the Leads Generated card.
         COALESCE(rlh.leads, 0)                          AS leads,
-        COALESCE(NULLIF(pv.bounces, 0), web.bounces, 0) AS bounces,
+        CASE WHEN COALESCE(pv.sent, 0) > 0
+             THEN LEAST(COALESCE(pv.bounces, 0), COALESCE(NULLIF(pv.sent, 0), web.sent, 0))
+             ELSE COALESCE(web.bounces, 0)
+        END AS bounces,
         web.last_positive_at,
-        COALESCE(pv_7d.sent_7d, 0)    AS sent_7d,
-        COALESCE(pv_7d.replies_7d, 0) AS replies_7d,
-        COALESCE(pv_7d.bounces_7d, 0) AS bounces_7d,
-        COALESCE(web_7d.leads_7d, 0)  AS leads_7d
+        COALESCE(pv_7d.sent_7d, 0)                                                        AS sent_7d,
+        LEAST(COALESCE(pv_7d.replies_7d, 0), COALESCE(pv_7d.sent_7d, 0))                 AS replies_7d,
+        LEAST(COALESCE(pv_7d.bounces_7d, 0), COALESCE(pv_7d.sent_7d, 0))                 AS bounces_7d,
+        COALESCE(web_7d.leads_7d, 0)                                                      AS leads_7d
       FROM pv FULL OUTER JOIN web ON pv.content_hash = web.content_hash
       LEFT JOIN pv_7d  ON pv_7d.content_hash  = COALESCE(pv.content_hash, web.content_hash)
       LEFT JOIN web_7d ON web_7d.content_hash = COALESCE(pv.content_hash, web.content_hash)
