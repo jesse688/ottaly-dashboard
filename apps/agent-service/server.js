@@ -180,7 +180,7 @@ RULES:
 6. Stop after the summary — do not make further edits`
 
   let iterations = 0
-  while (iterations < 25) {
+  while (iterations < 40) {
     iterations++
     const response = await anthropic.messages.create({
       model: 'claude-sonnet-4-6',

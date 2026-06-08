@@ -10,9 +10,9 @@ RUN apk add --no-cache \
     ca-certificates \
     ttf-freefont
 
-# Tell Playwright to use system Chromium
-ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser
+# Let Playwright download its own Chromium
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN npx playwright install chromium --with-deps 2>/dev/null || true
 
 WORKDIR /app
 
