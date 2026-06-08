@@ -73,13 +73,16 @@ app.post('/slack/build',
     res.json({ response_type: 'ephemeral', text: `⚙️ Working on: _${text}_` })
 
     try {
+      // 0. Get fresh auth token from Mac keychain
+      const authToken = sshMac(
+        `security find-generic-password -s "Claude Code-credentials" -w | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['claudeAiOauth']['accessToken'])"`
+      ).trim()
+
       // 1. Create branch on Mac
       const branch = `agent/${Date.now()}`
       sshMac(`cd ${MAC_REPO} && git checkout main && git pull origin main && git checkout -b ${branch}`)
 
-      // 2. Write task to file on Mac then run Claude Code reading from stdin
-      const taskId = Date.now()
-      const taskFile = `/tmp/ottaly-task-${taskId}.txt`
+      // 2. Run Claude Code with auth token and task as argument
       const fullInstruction = `${text}
 
 Important rules:
@@ -87,10 +90,8 @@ Important rules:
 - First read the equivalent legacy HTML file in ${MAC_REPO}/apps/admin-legacy to understand the feature
 - After all changes, summarise exactly what you changed and why`
 
-      sshMac(`printf '%s' ${JSON.stringify(fullInstruction)} > ${taskFile}`)
-
       const claudeOutput = sshMac(
-        `cd ${MAC_REPO} && cat ${taskFile} | ${CLAUDE_PATH} --print --dangerously-skip-permissions 2>&1 ; rm -f ${taskFile}`,
+        `cd ${MAC_REPO} && ANTHROPIC_AUTH_TOKEN=${authToken} ${CLAUDE_PATH} --print --dangerously-skip-permissions ${JSON.stringify(fullInstruction)} 2>&1`,
         300000
       )
 
