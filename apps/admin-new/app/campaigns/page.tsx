@@ -35,6 +35,13 @@ function Pct({ value }: { value: number }) {
   return <span>{(value * 100).toFixed(1)}%</span>
 }
 
+function getPerformanceTier(replyRate: number) {
+  if (replyRate >= 0.05) return { label: 'top', color: 'text-green-700' }
+  if (replyRate >= 0.03) return { label: 'good', color: 'text-green-600' }
+  if (replyRate >= 0.01) return { label: 'warning', color: 'text-amber-600' }
+  return { label: 'critical', color: 'text-red-600' }
+}
+
 export default function CampaignsPage() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
   const [filtered, setFiltered] = useState<Campaign[]>([])
@@ -77,9 +84,16 @@ export default function CampaignsPage() {
   }
 
   function SortHead({ col, label }: { col: keyof Campaign; label: string }) {
+    const isActive = sortBy === col
     return (
-      <TableHead className="cursor-pointer hover:bg-gray-50 select-none" onClick={() => setSort(col)}>
-        {label} {sortBy === col ? (sortDir === 'asc' ? '↑' : '↓') : ''}
+      <TableHead 
+        className="cursor-pointer hover:text-gray-900 select-none" 
+        onClick={() => setSort(col)}
+      >
+        <div className="flex items-center gap-1">
+          <span>{label}</span>
+          {isActive && <span className="text-xs">{sortDir === 'asc' ? '↑' : '↓'}</span>}
+        </div>
       </TableHead>
     )
   }
@@ -129,6 +143,7 @@ export default function CampaignsPage() {
                 <TableHead>Status</TableHead>
                 <SortHead col="sent_count" label="Sent" />
                 <SortHead col="replied_count" label="Replies" />
+                <SortHead col="positive_reply_count" label="Positive" />
                 <SortHead col="reply_rate_calc" label="Reply %" />
                 <SortHead col="bounce_rate" label="Bounce %" />
               </TableRow>
@@ -137,41 +152,45 @@ export default function CampaignsPage() {
               {loading ? (
                 Array.from({ length: 8 }).map((_, i) => (
                   <TableRow key={i}>
-                    {Array.from({ length: 7 }).map((_, j) => (
+                    {Array.from({ length: 8 }).map((_, j) => (
                       <TableCell key={j}><div className="h-4 bg-gray-100 rounded animate-pulse" /></TableCell>
                     ))}
                   </TableRow>
                 ))
               ) : filtered.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-12 text-gray-500">
+                  <TableCell colSpan={8} className="text-center py-12 text-gray-500">
                     No campaigns found
                   </TableCell>
                 </TableRow>
               ) : (
-                filtered.map(c => (
-                  <TableRow key={c.id} className="hover:bg-gray-50">
-                    <TableCell className="font-medium max-w-xs truncate">{c.name}</TableCell>
-                    <TableCell className="text-sm text-gray-600">{c.workspace_name ?? '—'}</TableCell>
-                    <TableCell>
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${STATUS_COLORS[c.status] ?? 'bg-gray-100 text-gray-600'}`}>
-                        {c.status}
-                      </span>
-                    </TableCell>
-                    <TableCell>{c.sent_count.toLocaleString()}</TableCell>
-                    <TableCell>{c.replied_count.toLocaleString()}</TableCell>
-                    <TableCell>
-                      <span className={c.reply_rate_calc >= 0.05 ? 'text-green-700 font-medium' : ''}>
-                        <Pct value={c.reply_rate_calc} />
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <span className={c.bounce_rate >= 0.03 ? 'text-red-600' : ''}>
-                        <Pct value={c.bounce_rate} />
-                      </span>
-                    </TableCell>
-                  </TableRow>
-                ))
+                filtered.map(c => {
+                  const tier = getPerformanceTier(c.reply_rate_calc)
+                  return (
+                    <TableRow key={c.id} className="hover:bg-gray-50">
+                      <TableCell className="font-medium max-w-xs truncate">{c.name}</TableCell>
+                      <TableCell className="text-sm text-gray-600">{c.workspace_name ?? '—'}</TableCell>
+                      <TableCell>
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${STATUS_COLORS[c.status] ?? 'bg-gray-100 text-gray-600'}`}>
+                          {c.status}
+                        </span>
+                      </TableCell>
+                      <TableCell>{c.sent_count.toLocaleString()}</TableCell>
+                      <TableCell>{c.replied_count.toLocaleString()}</TableCell>
+                      <TableCell>{c.positive_reply_count.toLocaleString()}</TableCell>
+                      <TableCell>
+                        <span className={`font-medium ${tier.color}`}>
+                          <Pct value={c.reply_rate_calc} />
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <span className={c.bounce_rate >= 0.03 ? 'text-red-600 font-medium' : ''}>
+                          <Pct value={c.bounce_rate} />
+                        </span>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })
               )}
             </TableBody>
           </Table>
