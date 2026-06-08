@@ -278,12 +278,16 @@ function slackAgent(agentName, path_, saveBriefOnSuccess = false) {
 
       if (!text) return res.json({ response_type: 'ephemeral', text: `Usage: /${agentName} <message>` })
 
-      res.json({ response_type: 'ephemeral', text: `💬 ${agentName} is thinking...` })
+      const startedAt = Date.now()
+      postToSlack(response_url, `<@${user_id}> _Step 1/3 — Reading memory..._`)
 
       try {
+        postToSlack(response_url, `<@${user_id}> _Step 2/3 — Fetching live data..._`)
+        postToSlack(response_url, `<@${user_id}> _Step 3/3 — Thinking... (~30–60s)_`)
         const output = await runAgent(agentName, text, 120000)
+        const elapsed = Math.round((Date.now() - startedAt) / 1000)
         if (saveBriefOnSuccess) saveBrief(agentName, output)
-        postToSlack(response_url, `<@${user_id}> *${agentName}:*\n\n${output}`)
+        postToSlack(response_url, `<@${user_id}> *${agentName}:*\n\n${output}\n\n_⏱ ${elapsed}s_`)
       } catch (err) {
         postToSlack(response_url, `<@${user_id}> ❌ ${agentName} error: ${err.message.slice(0, 300)}`)
       }
@@ -386,22 +390,63 @@ app.post('/slack/teach',
     if (!match) return res.json({ response_type: 'ephemeral', text: 'Usage: /teach <agent>: <what to remember>' })
 
     const [, agentName, lesson] = match
-    const agentDir = path.join(AGENTS_DIR, agentName)
-    if (!fs.existsSync(agentDir)) return res.json({ response_type: 'ephemeral', text: `Unknown agent: ${agentName}` })
+    const validAgents = Object.keys(AGENT_BOTS)
+    if (!validAgents.includes(agentName)) return res.json({ response_type: 'ephemeral', text: `Unknown agent: ${agentName}. Valid: ${validAgents.join(', ')}` })
 
     res.json({ response_type: 'ephemeral', text: `📝 Teaching ${agentName}...` })
 
     const today = new Date().toISOString().slice(0, 10)
-    const memFile = path.join(agentDir, 'memory.md')
-    const existing = fs.readFileSync(memFile, 'utf8')
-    const updated = existing.replace('No memories yet.\n', '') + `[${today}] — ${lesson.trim()}\n`
-    fs.writeFileSync(memFile, updated, 'utf8')
+    const memFile = path.join(AGENTS_DIR, agentName, 'memory.md')
+    const newLine = `[${today}] — ${lesson.trim()}`
+    sshMac(`grep -qF 'No memories yet.' ${memFile} && sed -i '' 's/No memories yet.//' ${memFile} 2>/dev/null; echo ${JSON.stringify(newLine)} >> ${memFile}`)
 
     postToSlack(response_url, `<@${user_id}> ✅ ${agentName} will remember: _${lesson}_`)
   }
 )
 
 app.get('/health', (_, res) => res.json({ ok: true }))
+
+// ── Progress updater ──────────────────────────────────────
+// Posts a message then updates it through steps so Jesse can see what's happening
+async function runAgentWithProgress(agentName, text, botToken, replyChannel, threadTs) {
+  const steps = [
+    { text: '_Step 1/3 — Reading memory & context..._', delay: 0 },
+    { text: '_Step 2/3 — Fetching live dashboard data..._', delay: 0 },
+    { text: `_Step 3/3 — Thinking... (usually 30–60s)_`, delay: 0 },
+  ]
+
+  // Post initial message
+  const posted = await slackPost(botToken, 'chat.postMessage', {
+    channel: replyChannel,
+    ...(threadTs ? { thread_ts: threadTs } : {}),
+    text: steps[0].text,
+  })
+  const msgTs = posted.ts
+
+  const update = (txt) => slackPost(botToken, 'chat.update', {
+    channel: replyChannel,
+    ts: msgTs,
+    text: txt,
+  })
+
+  // Step 1: reading files (happens inside runAgent, just show it)
+  const startedAt = Date.now()
+
+  // Step 2: fetching data — update before the await
+  await update(steps[1].text)
+  await new Promise(r => setTimeout(r, 300))
+
+  // Step 3: running claude
+  await update(steps[2].text)
+
+  try {
+    const reply = await runAgent(agentName, text, 120000)
+    const elapsed = Math.round((Date.now() - startedAt) / 1000)
+    await update(`${reply}\n\n_⏱ ${elapsed}s_`)
+  } catch (err) {
+    await update(`❌ Error: ${err.message.slice(0, 200)}`)
+  }
+}
 
 // ── Socket Mode bot per agent ─────────────────────────────
 const WebSocket = require('ws')
@@ -501,27 +546,7 @@ function connectAgent(agentName, config) {
       const replyChannel = event.channel
       const threadTs = isDM ? undefined : event.ts
 
-      const thinkingRes = await slackPost(config.botToken, 'chat.postMessage', {
-        channel: replyChannel,
-        ...(threadTs ? { thread_ts: threadTs } : {}),
-        text: '_Thinking..._',
-      })
-
-      try {
-        const reply = await runAgent(agentName, text, 120000)
-        await slackPost(config.botToken, 'chat.update', {
-          channel: replyChannel,
-          ts: thinkingRes.ts,
-          text: reply,
-        })
-      } catch (err) {
-        console.error(`[${agentName}] Error:`, err.message)
-        await slackPost(config.botToken, 'chat.update', {
-          channel: replyChannel,
-          ts: thinkingRes.ts,
-          text: `❌ Error: ${err.message.slice(0, 200)}`,
-        })
-      }
+      await runAgentWithProgress(agentName, text, config.botToken, replyChannel, threadTs)
     })
 
     ws.on('close', () => { cleanup(); setTimeout(connect, 3000) })
