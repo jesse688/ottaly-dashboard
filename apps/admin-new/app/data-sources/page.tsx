@@ -207,23 +207,32 @@ export default function DataSourcesPage() {
     setPipelineRunning(true)
 
     try {
-      // Step 1: Enrich — Gemini extracts director name from business name
+      // Step 1: Enrich — batches of 5 to stay within Vercel's 10s function limit
+      // SERP queries take ~5s per batch; Gemini extraction runs in parallel after
       setPipelineStatus('Step 1/3 — Finding director names…')
       addLog('Starting pipeline for ' + targets.length + ' businesses…')
-      const enrichRes = await fetch('/api/data-sources/enrich', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ businesses: targets.map(t => ({ place_id: t.place_id, title: t.title })) }),
-      })
-      if (!enrichRes.ok) addLog('⚠ Enrich request failed (' + enrichRes.status + ') — continuing with empty names')
-      const enrichData = enrichRes.ok ? await enrichRes.json() : { results: [] }
+      const ENRICH_BATCH = 5
       const nameMap = new Map<string, { firstName: string | null; lastName: string | null; email: string | null; source: string | null }>()
-      ;(enrichData.results ?? []).forEach((r: { place_id: string; firstName: string | null; lastName: string | null; email: string | null; source: string | null }) => {
-        nameMap.set(r.place_id, { firstName: r.firstName, lastName: r.lastName, email: r.email, source: r.source })
-      })
+      const enrichInputs = targets.map(t => ({ place_id: t.place_id, title: t.title }))
+      for (let i = 0; i < enrichInputs.length; i += ENRICH_BATCH) {
+        const batch = enrichInputs.slice(i, i + ENRICH_BATCH)
+        const enrichRes = await fetch('/api/data-sources/enrich', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ businesses: batch }),
+        })
+        if (!enrichRes.ok) { addLog('⚠ Enrich batch failed (' + enrichRes.status + ')'); continue }
+        const enrichData = await enrichRes.json()
+        ;(enrichData.results ?? []).forEach((r: { place_id: string; firstName: string | null; lastName: string | null; email: string | null; source: string | null }) => {
+          nameMap.set(r.place_id, { firstName: r.firstName, lastName: r.lastName, email: r.email, source: r.source })
+        })
+        const named = [...nameMap.values()].filter(n => n.firstName || n.lastName).length
+        setPipelineStatus('Finding director names… ' + Math.min(i + ENRICH_BATCH, enrichInputs.length) + '/' + enrichInputs.length)
+        addLog('Names so far: ' + named + '/' + Math.min(i + ENRICH_BATCH, enrichInputs.length) + ' processed')
+      }
       const named = [...nameMap.values()].filter(n => n.firstName || n.lastName).length
       const serpEmails = [...nameMap.values()].filter(n => n.email).length
-      addLog('Names found: ' + named + '/' + targets.length + (serpEmails ? ' · Emails direct from SERP: ' + serpEmails : '') + ' (source: SERP + Gemini)')
+      addLog('Names found: ' + named + '/' + targets.length + (serpEmails ? ' · ' + serpEmails + ' emails via SERP' : '') + ' (SERP + Gemini)')
       setResults(prev => prev.map(row => {
         const n = nameMap.get(row.place_id)
         return n ? { ...row, _firstName: n.firstName, _lastName: n.lastName, _nameSource: n.source as BusinessResult['_nameSource'], _serpEmail: n.email } : row
