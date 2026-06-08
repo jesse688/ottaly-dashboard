@@ -124,12 +124,27 @@ async function runAgent(agentName, userMessage, timeoutMs = 120000) {
   const sharedContext = sshMac(`cat ${sharedDir}/ottaly-context.md`)
   const latestBrief = sshMac(`cat ${sharedDir}/brief-latest.md`)
 
-  // Fetch live data for ops agent
+  // Fetch live data for ops agent — trim to key fields only to keep prompt size manageable
   let liveData = ''
   if (agentName === 'ops') {
     try {
       const data = await fetchOpsData()
-      liveData = `\n---\n## Live Dashboard Data (fetched right now from admin.ottaly.co.uk)\n\n### Per-Workspace Metrics (/api/metrics)\n${JSON.stringify(data.metrics, null, 2)}\n\n### Client Health (/api/health/clients)\n${JSON.stringify(data.health, null, 2)}\n\n### 30-Day Performance Summary (/api/stats/summary)\n${JSON.stringify(data.summary, null, 2)}\n\n### Campaign Intelligence (/api/campaigns/intelligence)\n${JSON.stringify(data.intelligence, null, 2)}\n`
+
+      // Strip daily series from intelligence (too verbose), keep totals + campaigns
+      const trimmedIntelligence = (data.intelligence?.workspaces || []).map(ws => ({
+        id: ws.id, name: ws.name, avgReplyRate: ws.avgReplyRate,
+        campaigns: (ws.campaigns || []).map(c => ({
+          name: c.name, status: c.status, sent: c.sent, replies: c.replies,
+          leads: c.leads, replyRate: c.replyRate, tier: c.tier, flags: c.flags,
+        }))
+      }))
+
+      // Strip daily series from summary
+      const trimmedSummary = (data.summary?.workspaces || []).map(ws => ({
+        name: ws.name, workspace_id: ws.workspace_id, totals: ws.totals
+      }))
+
+      liveData = `\n---\n## Live Dashboard Data (fetched right now)\n\n### Per-Workspace Metrics\n${JSON.stringify(data.metrics?.workspaces || data.metrics, null, 2)}\n\n### Client Health\n${JSON.stringify(data.health?.clients || data.health, null, 2)}\n\n### 30-Day Summary (totals only)\n${JSON.stringify(trimmedSummary, null, 2)}\n\n### Campaign Intelligence\n${JSON.stringify(trimmedIntelligence, null, 2)}\n`
     } catch (e) {
       liveData = `\n---\n## Live Data\nFailed to fetch: ${e.message}\n`
     }
@@ -160,8 +175,12 @@ IMPORTANT:
    MEMORY: [what you learned]
    This will be saved to your memory file automatically.`
 
+  // Write prompt to a temp file on the Mac to avoid shell arg size limits
+  const tmpPrompt = `/tmp/agent-prompt-${agentName}-${Date.now()}.txt`
+  sshMac(`cat > ${tmpPrompt} << 'PROMPT_EOF_MARKER'\n${fullPrompt.replace(/PROMPT_EOF_MARKER/g, 'PROMPT_EOF_MARKER_ESC')}\nPROMPT_EOF_MARKER`)
+
   const output = sshMac(
-    `ANTHROPIC_AUTH_TOKEN=${CLAUDE_AUTH_TOKEN} ${CLAUDE_PATH} --print --dangerously-skip-permissions --model ${CLAUDE_MODEL} ${JSON.stringify(fullPrompt)} 2>&1`,
+    `ANTHROPIC_AUTH_TOKEN=${CLAUDE_AUTH_TOKEN} timeout 90 ${CLAUDE_PATH} --print --dangerously-skip-permissions --model ${CLAUDE_MODEL} "$(cat ${tmpPrompt})" 2>&1; rm -f ${tmpPrompt}`,
     timeoutMs
   )
 
