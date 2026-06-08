@@ -13,12 +13,14 @@ const app = express()
 const PORT = process.env.PORT || 3100
 
 const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET
-const CLAUDE_AUTH_TOKEN = process.env.CLAUDE_AUTH_TOKEN || ''
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || ''
+const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6'
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || ''
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash'
 const MAC_USER = process.env.MAC_USER || 'jesse'
 const MAC_HOST = process.env.MAC_HOST || '46.38.255.178'
 const MAC_REPO = process.env.MAC_REPO || '/Users/jesse/Desktop/ottaly-dashboard'
 const CLAUDE_PATH = process.env.CLAUDE_PATH || '/Users/jesse/.nvm/versions/node/v24.11.1/bin/claude'
-const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-4-6'
 const VERCEL_PROJECT = 'ottaly-dashboard-admin-new'
 const AGENTS_DIR = path.join(MAC_REPO, 'apps/agent-service/agents')
 const DASHBOARD_URL = process.env.DASHBOARD_URL || 'https://admin.ottaly.co.uk'
@@ -113,12 +115,12 @@ async function fetchOpsData() {
   return { metrics, health, summary, intelligence }
 }
 
-// ── Call Anthropic API directly ───────────────────────────
+// ── Anthropic API (Claude Haiku — build agent) ────────────
 function callClaude(systemPrompt, userMessage) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
-      model: CLAUDE_MODEL,
-      max_tokens: 1024,
+      model: ANTHROPIC_MODEL,
+      max_tokens: 2048,
       system: systemPrompt,
       messages: [{ role: 'user', content: userMessage }],
     })
@@ -127,7 +129,7 @@ function callClaude(systemPrompt, userMessage) {
       path: '/v1/messages',
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${CLAUDE_AUTH_TOKEN}`,
+        'x-api-key': ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01',
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(body),
@@ -142,6 +144,41 @@ function callClaude(systemPrompt, userMessage) {
           resolve(json.content?.[0]?.text || '')
         } catch (e) {
           reject(new Error('Bad response: ' + buf.slice(0, 200)))
+        }
+      })
+    })
+    req.on('error', reject)
+    req.write(body)
+    req.end()
+  })
+}
+
+// ── Gemini API (ops/marketing/copy/research/strategy) ─────
+function callGemini(systemPrompt, userMessage) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({
+      systemInstruction: { parts: [{ text: systemPrompt }] },
+      contents: [{ role: 'user', parts: [{ text: userMessage }] }],
+      generationConfig: { maxOutputTokens: 2048 },
+    })
+    const req = https.request({
+      hostname: 'generativelanguage.googleapis.com',
+      path: `/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+      },
+    }, res => {
+      let buf = ''
+      res.on('data', d => buf += d)
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(buf)
+          if (json.error) return reject(new Error(json.error.message || JSON.stringify(json.error)))
+          resolve(json.candidates?.[0]?.content?.parts?.[0]?.text || '')
+        } catch (e) {
+          reject(new Error('Bad Gemini response: ' + buf.slice(0, 200)))
         }
       })
     })
@@ -197,7 +234,7 @@ ${latestBrief}${liveData}
 IMPORTANT: If you learned something new, end your reply with:
 MEMORY: [what you learned]`
 
-  const output = await callClaude(systemPrompt, userMessage)
+  const output = await (agentName === 'build' ? callClaude(systemPrompt, userMessage) : callGemini(systemPrompt, userMessage))
 
   // Save memory if agent learned something
   const memoryMatch = output.match(/MEMORY:\s*(.+)/i)
