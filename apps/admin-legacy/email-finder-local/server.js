@@ -132,7 +132,7 @@ const _reacherMember = (() => {
     label: 'primary',
     url: cleanUrl,
     key: REACHER_API_KEY || '',
-    version: versionMatch ? `v${versionMatch[1]}` : 'v1',
+    version: versionMatch ? `v${versionMatch[1]}` : 'v0',
     base: null,
     usageDate: saved.usageDate,
     usageCount: saved.usageCount,
@@ -811,7 +811,7 @@ async function resolveReacherBaseFor(member) {
     try {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 3000);
-      const resp = await fetch(`${base}/v1/check_email`, {
+      const resp = await fetch(`${base}/v0/check_email`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ to_email: 'probe@probe.invalid' }),
@@ -840,7 +840,7 @@ function reacherEndpoint() {
   // Sync helper used in diagnostics/logging — returns configured URL before first resolution.
   const base = _reacherBase || REACHER_URL.replace(/\/v[01]\/check_email$/, '').replace(/\/$/, '');
   if (/\/v[01]\/check_email$/.test(base)) return base;
-  return `${base}/v1/check_email`;
+  return `${base}/v0/check_email`;
 }
 
 function reacherBaseUrl() {
