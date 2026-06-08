@@ -203,10 +203,13 @@ async function executeTool(toolName, toolInput, agentName) {
 
       case 'run_git': {
         ensureRepo()
-        // Set git identity
         repoExec('git config user.email "agent@ottaly.co.uk"')
         repoExec('git config user.name "Ottaly Agent"')
         const result = repoExec(`git ${toolInput.command}`)
+        // Auto-push after every commit so changes are never lost if iterations run out
+        if (/^commit\b/.test(toolInput.command.trim())) {
+          try { repoExec('git push origin main') } catch (e) { console.warn('[git] auto-push failed:', e.message) }
+        }
         return result || '(no output)'
       }
 
