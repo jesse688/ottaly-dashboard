@@ -180,7 +180,7 @@ IMPORTANT:
   sshMac(`cat > ${tmpPrompt} << 'PROMPT_EOF_MARKER'\n${fullPrompt.replace(/PROMPT_EOF_MARKER/g, 'PROMPT_EOF_MARKER_ESC')}\nPROMPT_EOF_MARKER`)
 
   const output = sshMac(
-    `ANTHROPIC_AUTH_TOKEN=${CLAUDE_AUTH_TOKEN} timeout 90 ${CLAUDE_PATH} --print --dangerously-skip-permissions --model ${CLAUDE_MODEL} "$(cat ${tmpPrompt})" 2>&1; rm -f ${tmpPrompt}`,
+    `ANTHROPIC_AUTH_TOKEN=${CLAUDE_AUTH_TOKEN} ${CLAUDE_PATH} --print --dangerously-skip-permissions --model ${CLAUDE_MODEL} "$(cat ${tmpPrompt})" 2>&1; rm -f ${tmpPrompt}`,
     timeoutMs
   )
 
