@@ -1,4 +1,12 @@
 import { NextResponse } from 'next/server'
+import { legacyFetch } from '@/lib/api'
+
 export async function GET() {
-  return NextResponse.json({ error: 'Not implemented' }, { status: 501 })
+  try {
+    const data = await legacyFetch('/api/campaigns/intelligence')
+    return NextResponse.json(data)
+  } catch (err) {
+    console.error('[campaigns/intelligence]', err)
+    return NextResponse.json({ error: 'Failed to fetch campaign intelligence' }, { status: 502 })
+  }
 }
