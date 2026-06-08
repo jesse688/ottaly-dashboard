@@ -413,7 +413,7 @@ function startEmailFinderApp() {
       REACHER_URL_2: process.env.REACHER_URL_2 || '',
       REACHER_API_KEY_2: process.env.REACHER_API_KEY_2 || '',
       REACHER_URL_2_DAILY_LIMIT: process.env.REACHER_URL_2_DAILY_LIMIT || '10000',
-      PRIMARY_REACHER_CONCURRENCY: process.env.PRIMARY_REACHER_CONCURRENCY || '2',
+      PRIMARY_REACHER_CONCURRENCY: process.env.PRIMARY_REACHER_CONCURRENCY || '4',
       REACHER_RETRIES: process.env.REACHER_RETRIES || '1',
       MAX_CONTACTS: process.env.MAX_CONTACTS || '10000',
       // Email Verify 1.0 — proxy4smtp SOCKS5 (port 25 capable), NO Webshare
@@ -477,7 +477,8 @@ function startEv2FinderApp() {
   });
 }
 
-startEv2FinderApp();
+// EV2 disabled — only EV1 (proxy4smtp) is in use for push-verify
+// startEv2FinderApp();
 
 app.use('/email-verify2-tool', (req, res) => {
   const targetPath = req.originalUrl.replace(/^\/email-verify2-tool/, '') || '/';
