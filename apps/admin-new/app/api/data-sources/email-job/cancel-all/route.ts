@@ -8,7 +8,7 @@ export async function POST() {
     if (!listRes.ok) return NextResponse.json({ error: 'Failed to list jobs' }, { status: 500 })
 
     const jobs = await listRes.json() as { id: string; status: string }[]
-    const active = jobs.filter(j => j.status === 'queued' || j.status === 'running')
+    const active = jobs.filter(j => j.status === 'queued' || j.status === 'running' || j.status === 'waiting')
 
     await Promise.all(active.map(j => fetch(`${BASE}/api/jobs/${j.id}/cancel`, { method: 'POST' })))
 

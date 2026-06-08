@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -123,6 +123,7 @@ export default function DataSourcesPage() {
   const [pipelineRunning, setPipelineRunning] = useState(false)
   const [pipelineLogs, setPipelineLogs] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
+  const pipelineGuard = useRef(false)  // prevents double-invocation before React re-renders the disabled button
   const [pipelineProgress, setPipelineProgress] = useState<{
     step: 1 | 2 | 3
     step1Done: number; step1Total: number
@@ -135,6 +136,7 @@ export default function DataSourcesPage() {
   }
 
   async function handleCancelAll() {
+    pipelineGuard.current = false
     await fetch('/api/data-sources/email-job/cancel-all', { method: 'POST' })
     addLog('✗ All jobs cancelled')
     setPipelineRunning(false)
@@ -214,8 +216,10 @@ export default function DataSourcesPage() {
   }
 
   async function handleFindEmails() {
+    if (pipelineGuard.current) return  // block double-invocation before React re-renders
+    pipelineGuard.current = true
     const targets = results.filter(r => (selected.size === 0 || selected.has(r.place_id)) && r.domain)
-    if (!targets.length) { setError('No rows with a domain to process'); return }
+    if (!targets.length) { pipelineGuard.current = false; setError('No rows with a domain to process'); return }
     setError(null)
     setPipelineLogs([])
     setPipelineRunning(true)
@@ -383,6 +387,7 @@ export default function DataSourcesPage() {
       addLog('✗ Error: ' + msg)
       setError('Pipeline failed: ' + msg)
     } finally {
+      pipelineGuard.current = false
       setPipelineRunning(false)
       setPipelineStatus(null)
     }

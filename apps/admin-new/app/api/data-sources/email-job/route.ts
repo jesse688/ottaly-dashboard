@@ -13,7 +13,7 @@ export async function POST(req: NextRequest) {
       const jobs = await listRes.json() as { id: string; status: string }[]
       await Promise.all(
         jobs
-          .filter(j => j.status === 'queued')
+          .filter(j => j.status === 'queued' || j.status === 'running')
           .map(j => fetch(`${BASE}/api/jobs/${j.id}/cancel`, { method: 'POST' }))
       )
     }
