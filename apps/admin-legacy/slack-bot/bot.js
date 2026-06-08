@@ -4,34 +4,35 @@
  * Ottaly Slack Bot
  *
  * Listens for messages in a designated Slack channel, runs them through
- * Claude Code CLI non-interactively, and posts the result back.
+ * the Anthropic API (Claude), and posts the result back in-thread.
  *
- * Setup:
- * 1. Create a Slack app with Socket Mode enabled
- * 2. Add Bot Token Scopes: chat:write, channels:read, app_mentions:read
- * 3. Subscribe to events: app_mention, message.channels
- * 4. Set env vars: SLACK_BOT_TOKEN, SLACK_APP_TOKEN, SLACK_CHANNEL_ID
- *
- * Run: node slack-bot/bot.js
+ * Required env vars:
+ *   SLACK_BOT_TOKEN    xoxb-...
+ *   SLACK_APP_TOKEN    xapp-... (Socket Mode)
+ *   SLACK_CHANNEL_ID   C...
+ *   ANTHROPIC_API_KEY  sk-ant-...
  */
 
 require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') })
 
-const { execFile } = require('child_process')
 const https = require('https')
 
-const BOT_TOKEN    = process.env.SLACK_BOT_TOKEN
-const APP_TOKEN    = process.env.SLACK_APP_TOKEN   // xapp-... (Socket Mode)
-const CHANNEL_ID   = process.env.SLACK_CHANNEL_ID  // C... channel ID
-const PROJECT_DIR  = process.env.SLACK_PROJECT_DIR ?? '/app'
-const MAX_RESPONSE = 3000 // chars — Slack block limit
+const BOT_TOKEN   = process.env.SLACK_BOT_TOKEN
+const APP_TOKEN   = process.env.SLACK_APP_TOKEN
+const CHANNEL_ID  = process.env.SLACK_CHANNEL_ID
+const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY
 
 if (!BOT_TOKEN || !APP_TOKEN || !CHANNEL_ID) {
   console.error('[slack-bot] Missing SLACK_BOT_TOKEN, SLACK_APP_TOKEN, or SLACK_CHANNEL_ID')
   process.exit(1)
 }
 
-// ── Slack API helpers ─────────────────────────────────────────────────────────
+if (!ANTHROPIC_KEY) {
+  console.error('[slack-bot] Missing ANTHROPIC_API_KEY')
+  process.exit(1)
+}
+
+// ── Slack API ─────────────────────────────────────────────────────────────────
 
 function slackPost(method, body) {
   return new Promise((resolve, reject) => {
@@ -62,44 +63,61 @@ async function postMessage(text, threadTs = null) {
   return slackPost('chat.postMessage', payload)
 }
 
-async function postThinking(threadTs) {
-  return postMessage('_Working on it..._', threadTs)
-}
-
 async function updateMessage(ts, text) {
   return slackPost('chat.update', { channel: CHANNEL_ID, ts, text })
 }
 
-// ── Claude Code runner ────────────────────────────────────────────────────────
+// ── Anthropic API ─────────────────────────────────────────────────────────────
 
-function runClaude(prompt) {
+const DB_CONTEXT = `You are the Ottaly admin agent. Ottaly is a UK B2B lead generation agency.
+You have access to context about the business. When asked questions, answer concisely and helpfully.
+Key facts:
+- 30 client workspaces in PlusVibe
+- 977k+ contacts in PostgreSQL
+- Campaigns run via PlusVibe email sequencing
+- Database: postgres://postgres:***@46.38.255.178:5432/ottaly
+- New dashboard at dev.ottaly.co.uk (Next.js), old at admin.ottaly.co.uk (Express)
+Answer questions about the business, suggest actions, or explain data. Keep responses under 500 words.`
+
+function callClaude(userMessage) {
   return new Promise((resolve, reject) => {
-    const timeout = 5 * 60 * 1000 // 5 min max
-    const proc = execFile(
-      'claude',
-      ['--print', '--no-interactive', prompt],
-      {
-        cwd: PROJECT_DIR,
-        env: { ...process.env },
-        timeout,
-        maxBuffer: 1024 * 1024 * 10,
+    const body = JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1024,
+      system: DB_CONTEXT,
+      messages: [{ role: 'user', content: userMessage }],
+    })
+
+    const req = https.request({
+      hostname: 'api.anthropic.com',
+      path: '/v1/messages',
+      method: 'POST',
+      headers: {
+        'x-api-key': ANTHROPIC_KEY,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
       },
-      (err, stdout, stderr) => {
-        if (err && err.killed) return reject(new Error('Timed out after 5 minutes'))
-        // Claude CLI exits non-zero on tool errors but still produces output
-        resolve(stdout || stderr || 'No output')
-      }
-    )
-    proc.on('error', reject)
+    }, res => {
+      let data = ''
+      res.on('data', d => data += d)
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data)
+          if (parsed.error) return reject(new Error(parsed.error.message))
+          resolve(parsed.content?.[0]?.text ?? 'No response')
+        } catch (e) {
+          reject(e)
+        }
+      })
+    })
+    req.on('error', reject)
+    req.write(body)
+    req.end()
   })
 }
 
-function truncate(text, max) {
-  if (text.length <= max) return text
-  return text.slice(0, max - 100) + '\n\n_...truncated. Ask for more detail if needed._'
-}
-
-// ── Socket Mode WebSocket connection ──────────────────────────────────────────
+// ── Socket Mode ───────────────────────────────────────────────────────────────
 
 const WebSocket = (() => {
   try { return require('ws') } catch { return null }
@@ -110,12 +128,10 @@ if (!WebSocket) {
   process.exit(1)
 }
 
-let ws
-let pingInterval
+let ws, pingInterval
 const processedEvents = new Set()
 
 async function connect() {
-  // Get WebSocket URL via apps.connections.open
   const res = await new Promise((resolve, reject) => {
     const req = https.request({
       hostname: 'slack.com',
@@ -152,63 +168,43 @@ async function connect() {
     let msg
     try { msg = JSON.parse(raw) } catch { return }
 
-    // Acknowledge immediately
-    if (msg.envelope_id) {
-      ws.send(JSON.stringify({ envelope_id: msg.envelope_id }))
-    }
+    if (msg.envelope_id) ws.send(JSON.stringify({ envelope_id: msg.envelope_id }))
 
     if (msg.type === 'disconnect') {
-      console.log('[slack-bot] Disconnect received, reconnecting...')
-      cleanup()
-      setTimeout(connect, 1000)
-      return
+      cleanup(); setTimeout(connect, 1000); return
     }
 
     if (msg.type !== 'events_api') return
     const event = msg.payload?.event
     if (!event) return
-
-    // Only handle messages in our channel (not from bots)
     if (event.channel !== CHANNEL_ID) return
     if (event.bot_id || event.subtype) return
     if (!event.text) return
 
-    // Dedup
     const eventKey = event.client_msg_id ?? event.ts
     if (processedEvents.has(eventKey)) return
     processedEvents.add(eventKey)
-    if (processedEvents.size > 1000) {
-      const first = processedEvents.values().next().value
-      processedEvents.delete(first)
-    }
+    if (processedEvents.size > 1000) processedEvents.delete(processedEvents.values().next().value)
 
     const text = event.text.replace(/<@[A-Z0-9]+>/g, '').trim()
     if (!text) return
 
     console.log(`[slack-bot] Message: "${text.slice(0, 80)}"`)
 
-    // Post thinking indicator in thread
-    const thinkingRes = await postThinking(event.ts)
+    const thinkingRes = await postMessage('_Thinking..._', event.ts)
     const thinkingTs = thinkingRes.ts
 
     try {
-      const result = await runClaude(text)
-      const response = truncate(result, MAX_RESPONSE)
-      await updateMessage(thinkingTs, response)
+      const reply = await callClaude(text)
+      await updateMessage(thinkingTs, reply)
     } catch (err) {
+      console.error('[slack-bot] Error:', err.message)
       await updateMessage(thinkingTs, `❌ Error: ${err.message}`)
     }
   })
 
-  ws.on('close', () => {
-    console.log('[slack-bot] Connection closed, reconnecting...')
-    cleanup()
-    setTimeout(connect, 3000)
-  })
-
-  ws.on('error', err => {
-    console.error('[slack-bot] WebSocket error:', err.message)
-  })
+  ws.on('close', () => { cleanup(); setTimeout(connect, 3000) })
+  ws.on('error', err => console.error('[slack-bot] WebSocket error:', err.message))
 }
 
 function cleanup() {
@@ -216,9 +212,5 @@ function cleanup() {
   try { ws.terminate() } catch {}
 }
 
-connect().catch(err => {
-  console.error('[slack-bot] Fatal:', err)
-  process.exit(1)
-})
-
 console.log('[slack-bot] Starting Ottaly agent bot...')
+connect().catch(err => { console.error('[slack-bot] Fatal:', err); process.exit(1) })
