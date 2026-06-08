@@ -431,9 +431,12 @@ function connectAgent(agentName, config) {
 
       const event = msg.payload?.event
       if (!event || event.type !== 'message') return
-      if (event.channel !== config.channelId) return
       if (event.bot_id || event.subtype) return
       if (!event.text) return
+      // Accept messages from the configured channel OR any DM (channel_type = 'im')
+      const isDM = event.channel_type === 'im'
+      const isChannel = event.channel === config.channelId
+      if (!isDM && !isChannel) return
 
       const eventKey = event.client_msg_id ?? event.ts
       if (processedEvents.has(eventKey)) return
@@ -445,24 +448,27 @@ function connectAgent(agentName, config) {
 
       console.log(`[${agentName}] Message: "${text.slice(0, 80)}"`)
 
-      // Post thinking placeholder
+      // For DMs reply in same channel, for channels reply in thread
+      const replyChannel = event.channel
+      const threadTs = isDM ? undefined : event.ts
+
       const thinkingRes = await slackPost(config.botToken, 'chat.postMessage', {
-        channel: config.channelId,
-        thread_ts: event.ts,
+        channel: replyChannel,
+        ...(threadTs ? { thread_ts: threadTs } : {}),
         text: '_Thinking..._',
       })
 
       try {
         const reply = runAgent(agentName, text, 120000)
         await slackPost(config.botToken, 'chat.update', {
-          channel: config.channelId,
+          channel: replyChannel,
           ts: thinkingRes.ts,
           text: reply,
         })
       } catch (err) {
         console.error(`[${agentName}] Error:`, err.message)
         await slackPost(config.botToken, 'chat.update', {
-          channel: config.channelId,
+          channel: replyChannel,
           ts: thinkingRes.ts,
           text: `❌ Error: ${err.message.slice(0, 200)}`,
         })
