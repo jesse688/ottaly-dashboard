@@ -413,6 +413,8 @@ function startEmailFinderApp() {
       REACHER_URL_2: process.env.REACHER_URL_2 || '',
       REACHER_API_KEY_2: process.env.REACHER_API_KEY_2 || '',
       REACHER_URL_2_DAILY_LIMIT: process.env.REACHER_URL_2_DAILY_LIMIT || '10000',
+      PRIMARY_REACHER_CONCURRENCY: process.env.PRIMARY_REACHER_CONCURRENCY || '2',
+      REACHER_RETRIES: process.env.REACHER_RETRIES || '1',
       MAX_CONTACTS: process.env.MAX_CONTACTS || '10000',
       // Email Verify 1.0 — proxy4smtp SOCKS5 (port 25 capable), NO Webshare
       EV2_PROXY_URL: '',
@@ -455,6 +457,8 @@ function startEv2FinderApp() {
       REACHER_HELLO_NAME: process.env.REACHER_HELLO_NAME || '',
       REACHER_TIMEOUT_MS: process.env.REACHER_TIMEOUT_MS || '60000',
       MAX_CONTACTS: process.env.MAX_CONTACTS || '10000',
+      PRIMARY_REACHER_CONCURRENCY: process.env.PRIMARY_REACHER_CONCURRENCY || '2',
+      REACHER_RETRIES: process.env.REACHER_RETRIES || '1',
       // Use Webshare proxy pool — each Reacher call gets next proxy in rotation
       EV2_PROXY_URL: `http://127.0.0.1:${PORT}/api/ev2/active-proxy`,
       // Do NOT pass SOCKS5 vars — EV2 uses only Webshare proxies

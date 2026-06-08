@@ -908,6 +908,7 @@ function mapReacherResult(email, result) {
 }
 
 function shouldRetryReacherResult(result) {
+  if (/HTTP 429/.test(result?.reason || '')) return false; // quota/concurrency hit — don't burn more calls
   return ['unknown', 'error'].includes(String(result?.status || '').toLowerCase());
 }
 
