@@ -11,6 +11,7 @@ const app = express()
 const PORT = process.env.PORT || 3100
 
 const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET
+const CLAUDE_AUTH_TOKEN = process.env.CLAUDE_AUTH_TOKEN || ''
 const MAC_USER = process.env.MAC_USER || 'jesse'
 const MAC_HOST = process.env.MAC_HOST || '46.38.255.178'
 const MAC_REPO = process.env.MAC_REPO || '/Users/jesse/Desktop/ottaly-dashboard'
@@ -73,25 +74,15 @@ app.post('/slack/build',
     res.json({ response_type: 'ephemeral', text: `⚙️ Working on: _${text}_` })
 
     try {
-      // 0. Get fresh auth token from Mac keychain
-      const authToken = sshMac(
-        `security find-generic-password -s "Claude Code-credentials" -w | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['claudeAiOauth']['accessToken'])"`
-      ).trim()
-
       // 1. Create branch on Mac
       const branch = `agent/${Date.now()}`
       sshMac(`cd ${MAC_REPO} && git checkout main && git pull origin main && git checkout -b ${branch}`)
 
-      // 2. Run Claude Code with auth token and task as argument
-      const fullInstruction = `${text}
-
-Important rules:
-- Work only in ${MAC_REPO}/apps/admin-new
-- First read the equivalent legacy HTML file in ${MAC_REPO}/apps/admin-legacy to understand the feature
-- After all changes, summarise exactly what you changed and why`
+      // 2. Run Claude Code with auth token
+      const fullInstruction = `${text}. Work only in ${MAC_REPO}/apps/admin-new. Read the equivalent legacy HTML in ${MAC_REPO}/apps/admin-legacy first. Summarise changes at the end.`
 
       const claudeOutput = sshMac(
-        `cd ${MAC_REPO} && ANTHROPIC_AUTH_TOKEN=${authToken} ${CLAUDE_PATH} --print --dangerously-skip-permissions ${JSON.stringify(fullInstruction)} 2>&1`,
+        `cd ${MAC_REPO} && ANTHROPIC_AUTH_TOKEN=${CLAUDE_AUTH_TOKEN} ${CLAUDE_PATH} --print --dangerously-skip-permissions ${JSON.stringify(fullInstruction)} 2>&1`,
         300000
       )
 
