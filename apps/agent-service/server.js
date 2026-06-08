@@ -71,11 +71,21 @@ app.post('/slack/build',
       const branch = `agent/${Date.now()}`
       sshMac(`cd ${MAC_REPO} && git checkout main && git pull origin main && git checkout -b ${branch}`)
 
-      // 2. Run Claude Code on Mac with the instruction
-      const instruction = text.replace(/'/g, "'\\''")
+      // 2. Write task to file on Mac then run Claude Code reading from stdin
+      const taskId = Date.now()
+      const taskFile = `/tmp/ottaly-task-${taskId}.txt`
+      const fullInstruction = `${text}
+
+Important rules:
+- Work only in ${MAC_REPO}/apps/admin-new
+- First read the equivalent legacy HTML file in ${MAC_REPO}/apps/admin-legacy to understand the feature
+- After all changes, summarise exactly what you changed and why`
+
+      sshMac(`printf '%s' ${JSON.stringify(fullInstruction)} > ${taskFile}`)
+
       const claudeOutput = sshMac(
-        `cd ${MAC_REPO}/apps/admin-new && ${CLAUDE_PATH} --print --allowedTools "Read,Write,Edit,Bash" --permission-mode acceptEdits '${instruction}. Focus only on apps/admin-new. Read the legacy HTML in apps/admin-legacy first to understand the feature. After changes summarise what you did.'`,
-        300000 // 5 min timeout
+        `cd ${MAC_REPO} && ${CLAUDE_PATH} --print --dangerously-skip-permissions "$(cat ${taskFile})" ; rm -f ${taskFile}`,
+        300000
       )
 
       // 3. Check if anything changed
