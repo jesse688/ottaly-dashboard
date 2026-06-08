@@ -810,7 +810,7 @@ export default function ClientsPage() {
                   <SectionLabel>Status</SectionLabel>
                   <FormGrid>
                     <Field label="Client Status">
-                      <Select value={form.clientStatus} onValueChange={v => setField('clientStatus', v)}>
+                      <Select value={form.clientStatus} onValueChange={v => setField('clientStatus', v as string)}>
                         <SelectTrigger className="h-9 text-[13px]"><SelectValue /></SelectTrigger>
                         <SelectContent>
                           <SelectItem value="active">Active</SelectItem>
@@ -846,7 +846,7 @@ export default function ClientsPage() {
                     <p className="text-[12px] text-[#6B7280] -mt-2 mb-4">Controls which contacts are shown and pushed for this client.</p>
                     <FormGrid>
                       <Field label="Vertical / Industry">
-                        <Select value={form.vertical} onValueChange={v => setField('vertical', v)}>
+                        <Select value={form.vertical} onValueChange={v => setField('vertical', v as string)}>
                           <SelectTrigger className="h-9 text-[13px]"><SelectValue placeholder="— Not set (auto-detect) —" /></SelectTrigger>
                           <SelectContent>
                             <SelectItem value="">— Not set (auto-detect) —</SelectItem>
@@ -864,7 +864,7 @@ export default function ClientsPage() {
                         </Select>
                       </Field>
                       <Field label="Snooze Duration (months)">
-                        <Select value={form.snoozeMonths} onValueChange={v => setField('snoozeMonths', v)}>
+                        <Select value={form.snoozeMonths} onValueChange={v => setField('snoozeMonths', v as string)}>
                           <SelectTrigger className="h-9 text-[13px]"><SelectValue /></SelectTrigger>
                           <SelectContent>
                             <SelectItem value="3">3 months</SelectItem>
