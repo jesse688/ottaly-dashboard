@@ -281,7 +281,7 @@ export default function DataSourcesPage() {
             {/* Category */}
             <div>
               <label className="block text-xs font-medium text-gray-700 mb-1">Category</label>
-              <Select value={category} onValueChange={v => { setCategory(v); setCustomCategory('') }}>
+              <Select value={category} onValueChange={v => { setCategory(v ?? ''); setCustomCategory('') }}>
                 <SelectTrigger className="text-sm">
                   <SelectValue placeholder="Select category…" />
                 </SelectTrigger>
