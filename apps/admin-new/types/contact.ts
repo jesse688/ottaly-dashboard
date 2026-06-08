@@ -13,20 +13,34 @@ export interface Contact {
   company_state: string | null
   company_country: string | null
   company_region: string | null
+  company_county: string | null
+  company_town: string | null
+  person_region: string | null
+  person_county: string | null
+  person_town: string | null
   phone: string | null
   linkedin_url: string | null
   company_domain: string | null
   industry: string | null
-  num_employees: string | null
+  num_employees: number | null
   email_provider: string | null
   apollo_id: string | null
   status: string | null
   bounced_at: string | null
   marked_as_lead_at: string | null
   exported_to_apollo_at: string | null
-  owns_building: boolean | null
+  sent_to_pv_at: string | null
+  owns_building: string | null
   works_remote: boolean | null
-  snoozed: boolean | null
+  do_not_contact: boolean | null
+  email_status: string | null
+  email_verified_at: string | null
+  tags: string | null
+  raw_data: Record<string, any> | null
+  ch_status: string | null
+  ch_insolvency: boolean | null
+  ch_charges: boolean | null
+  ch_overdue: boolean | null
 }
 
 export interface ContactsResponse {
