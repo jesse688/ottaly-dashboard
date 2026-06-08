@@ -131,6 +131,69 @@ export default function DataSourcesPage() {
     queuePosition: number | null
   } | null>(null)
 
+  // Push to PlusVibe modal state
+  const [pvModal, setPvModal] = useState(false)
+  const [pvWorkspaces, setPvWorkspaces] = useState<{ id: string; name: string; campaigns: { id: string; name: string }[] }[]>([])
+  const [pvWorkspace, setPvWorkspace] = useState('')
+  const [pvCampaign, setPvCampaign] = useState('')
+  const [pvPushing, setPvPushing] = useState(false)
+  const [pvResult, setPvResult] = useState<{ pushed: number } | null>(null)
+  const [pvError, setPvError] = useState<string | null>(null)
+
+  async function openPvModal() {
+    setPvModal(true)
+    setPvResult(null)
+    setPvError(null)
+    if (pvWorkspaces.length) return  // already loaded
+    const res = await fetch('/api/data-sources/push-to-plusvibe')
+    if (res.ok) {
+      const data = await res.json()
+      setPvWorkspaces(data.workspaces ?? [])
+      if (data.workspaces?.[0]) {
+        setPvWorkspace(data.workspaces[0].id)
+        setPvCampaign(data.workspaces[0].campaigns?.[0]?.id ?? '')
+      }
+    }
+  }
+
+  async function handlePushToPv() {
+    const rows = selected.size > 0 ? results.filter(r => selected.has(r.place_id)) : results
+    const pushable = rows.filter(r => r._email)
+    if (!pushable.length) { setPvError('No rows with an email to push'); return }
+    setPvPushing(true)
+    setPvError(null)
+
+    const leads = pushable.map(r => {
+      const domain = r.domain ?? ''
+      return {
+        email: r._email!,
+        first_name: r._firstName ?? '',
+        last_name: r._lastName ?? '',
+        company_name: r.title,
+        company_website: domain.startsWith('http') ? domain : domain ? 'https://' + domain : '',
+        phone_number: r.phone ?? '',
+        city: r.city ?? '',
+        custom_variables: {
+          address: r.address ?? '',
+          rating: String(r.rating ?? ''),
+          reviews: String(r.reviews ?? ''),
+          category: activeCategory(),
+          email_status: r._emailStatus ?? '',
+        },
+      }
+    })
+
+    const res = await fetch('/api/data-sources/push-to-plusvibe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspace_id: pvWorkspace, campaign_id: pvCampaign, leads }),
+    })
+    const data = await res.json()
+    if (!res.ok) setPvError(data.error ?? 'Push failed')
+    else setPvResult({ pushed: data.pushed })
+    setPvPushing(false)
+  }
+
   function addLog(msg: string) {
     setPipelineLogs(prev => [...prev, msg])
   }
@@ -432,6 +495,11 @@ export default function DataSourcesPage() {
         </div>
         <div className="flex items-center gap-2">
           {pipelineStatus && <span className="text-xs text-gray-500">{pipelineStatus}</span>}
+          {results.some(r => r._email) && (
+            <Button variant="outline" size="sm" onClick={openPvModal}>
+              Push to PlusVibe {selected.size > 0 ? '(' + results.filter(r => selected.has(r.place_id) && r._email).length + ')' : '(' + results.filter(r => r._email).length + ')'}
+            </Button>
+          )}
           {results.length > 0 && (
             <Button variant="outline" size="sm" onClick={handleExportCsv}>
               Export CSV {selected.size > 0 ? '(' + selected.size + ')' : '(' + results.length + ')'}
@@ -764,5 +832,75 @@ export default function DataSourcesPage() {
         </div>
       </div>
     </div>
+
+    {/* Push to PlusVibe modal */}
+    {pvModal && (
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => !pvPushing && setPvModal(false)}>
+        <div className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 p-6" onClick={e => e.stopPropagation()}>
+          <h2 className="font-semibold text-lg mb-4">Push to PlusVibe</h2>
+
+          {pvResult ? (
+            <div className="text-center py-6">
+              <div className="text-4xl mb-3">✓</div>
+              <div className="font-medium text-green-700">{pvResult.pushed} leads pushed successfully</div>
+              <Button className="mt-4" onClick={() => setPvModal(false)}>Done</Button>
+            </div>
+          ) : (
+            <>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Workspace</label>
+                  <select
+                    className="w-full border rounded px-3 py-2 text-sm"
+                    value={pvWorkspace}
+                    onChange={e => {
+                      setPvWorkspace(e.target.value)
+                      const ws = pvWorkspaces.find(w => w.id === e.target.value)
+                      setPvCampaign(ws?.campaigns?.[0]?.id ?? '')
+                    }}
+                  >
+                    {pvWorkspaces.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Campaign</label>
+                  <select
+                    className="w-full border rounded px-3 py-2 text-sm"
+                    value={pvCampaign}
+                    onChange={e => setPvCampaign(e.target.value)}
+                  >
+                    {pvWorkspaces.find(w => w.id === pvWorkspace)?.campaigns.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="text-sm text-gray-500 bg-gray-50 rounded p-3">
+                  {(() => {
+                    const rows = selected.size > 0 ? results.filter(r => selected.has(r.place_id) && r._email) : results.filter(r => r._email)
+                    const verified = rows.filter(r => r._emailStatus === 'safe').length
+                    const catchAll = rows.filter(r => r._emailStatus?.includes('catch')).length
+                    const guess = rows.filter(r => r._emailStatus === 'unverified_candidate').length
+                    return <>{rows.length} leads with emails — <span className="text-green-700">{verified} verified</span>, <span className="text-amber-600">{catchAll} catch-all</span>, <span className="text-gray-500">{guess} best guess</ span></>
+                  })()}
+                </div>
+
+                {pvError && <div className="text-sm text-red-600 bg-red-50 rounded p-3">{pvError}</div>}
+              </div>
+
+              <div className="flex gap-3 mt-6">
+                <Button variant="outline" className="flex-1" onClick={() => setPvModal(false)} disabled={pvPushing}>
+                  Cancel
+                </Button>
+                <Button className="flex-1" onClick={handlePushToPv} disabled={pvPushing || !pvWorkspace || !pvCampaign}>
+                  {pvPushing ? 'Pushing…' : 'Push leads'}
+                </Button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    )}
   )
 }
