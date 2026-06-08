@@ -79,11 +79,11 @@ function runAgent(agentName, userMessage, timeoutMs = 120000) {
   const agentDir = path.join(AGENTS_DIR, agentName)
   const sharedDir = path.join(AGENTS_DIR, 'shared')
 
-  // Read system prompt, memory, shared context
-  const systemPrompt = fs.readFileSync(path.join(agentDir, 'system-prompt.md'), 'utf8')
-  const memory = fs.readFileSync(path.join(agentDir, 'memory.md'), 'utf8')
-  const sharedContext = fs.readFileSync(path.join(sharedDir, 'ottaly-context.md'), 'utf8')
-  const latestBrief = fs.readFileSync(path.join(sharedDir, 'brief-latest.md'), 'utf8')
+  // Read agent files from Mac via SSH (so memory persists across deploys)
+  const systemPrompt = sshMac(`cat ${agentDir}/system-prompt.md`)
+  const memory = sshMac(`cat ${agentDir}/memory.md`)
+  const sharedContext = sshMac(`cat ${sharedDir}/ottaly-context.md`)
+  const latestBrief = sshMac(`cat ${sharedDir}/brief-latest.md`)
 
   const fullPrompt = `${systemPrompt}
 
@@ -119,11 +119,9 @@ IMPORTANT:
   const memoryMatch = output.match(/MEMORY:\s*(.+)/i)
   if (memoryMatch) {
     const today = new Date().toISOString().slice(0, 10)
-    const newMemory = `[${today}] — ${memoryMatch[1].trim()}\n`
+    const newMemory = `[${today}] — ${memoryMatch[1].trim()}`
     const memFile = path.join(agentDir, 'memory.md')
-    const existing = fs.readFileSync(memFile, 'utf8')
-    const updated = existing.replace('No memories yet.\n', '') + newMemory
-    fs.writeFileSync(memFile, updated, 'utf8')
+    sshMac(`echo ${JSON.stringify(newMemory)} >> ${memFile} && sed -i '' 's/No memories yet.//' ${memFile} 2>/dev/null || true`)
   }
 
   // Strip the MEMORY line from the response shown to user
@@ -134,7 +132,8 @@ IMPORTANT:
 function saveBrief(agentName, content) {
   const briefFile = path.join(AGENTS_DIR, 'shared/brief-latest.md')
   const today = new Date().toISOString().slice(0, 10)
-  fs.writeFileSync(briefFile, `# Latest Brief\nFrom: ${agentName} agent\nDate: ${today}\n\n${content}`, 'utf8')
+  const briefContent = `# Latest Brief\nFrom: ${agentName} agent\nDate: ${today}\n\n${content}`
+  sshMac(`cat > ${briefFile} << 'BRIEF_EOF'\n${briefContent}\nBRIEF_EOF`)
 }
 
 // ── Page map for /build ───────────────────────────────────
