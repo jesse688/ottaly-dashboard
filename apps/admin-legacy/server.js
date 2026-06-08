@@ -582,8 +582,9 @@ function requireSession(req, res, next) {
 const { verifySlackRequest, callClaude } = require('./slack-slash');
 
 app.post('/api/slack/slash', express.urlencoded({ extended: true }), async (req, res) => {
+  console.log('[slack-slash] Received:', req.body.command, req.body.text)
   if (!verifySlackRequest(req)) {
-    console.error('[slack-slash] Invalid request signature')
+    console.error('[slack-slash] Invalid signature')
     return res.status(401).send('Unauthorized')
   }
 
