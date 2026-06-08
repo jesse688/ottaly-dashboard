@@ -84,7 +84,7 @@ Important rules:
       sshMac(`printf '%s' ${JSON.stringify(fullInstruction)} > ${taskFile}`)
 
       const claudeOutput = sshMac(
-        `cd ${MAC_REPO} && ${CLAUDE_PATH} --print --dangerously-skip-permissions "$(cat ${taskFile})" ; rm -f ${taskFile}`,
+        `cd ${MAC_REPO} && ${CLAUDE_PATH} --dangerously-skip-permissions --output-format text "$(cat ${taskFile})" 2>&1 ; rm -f ${taskFile}`,
         300000
       )
 
