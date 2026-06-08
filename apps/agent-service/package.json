@@ -1,7 +1,7 @@
 {
   "name": "ottaly-agent-service",
   "version": "1.0.0",
-  "description": "Slack agent service — receives slash commands, writes code, pushes branches",
+  "description": "Slack agent service — receives slash commands, writes code, tests, pushes branches",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -9,6 +9,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.24.0",
     "express": "^4.18.2",
-    "dotenv": "^16.0.0"
+    "dotenv": "^16.0.0",
+    "playwright": "^1.44.0"
   }
 }
