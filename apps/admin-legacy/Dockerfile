@@ -10,7 +10,7 @@ RUN cd email-finder-local && npm install --omit=dev
 
 # main server deps
 COPY apps/admin-legacy/package*.json ./
-RUN npm ci --omit=dev
+RUN npm install --omit=dev
 
 COPY apps/admin-legacy/ ./
 
