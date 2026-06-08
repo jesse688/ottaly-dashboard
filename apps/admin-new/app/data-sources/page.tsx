@@ -486,6 +486,7 @@ export default function DataSourcesPage() {
   const activeTargets = results.filter(r => (selected.size === 0 || selected.has(r.place_id)) && r.domain).length
 
   return (
+    <>
     <div className="flex flex-col h-screen bg-gray-50">
       {/* Header */}
       <div className="bg-white border-b px-6 py-4 flex items-center justify-between">
@@ -882,7 +883,7 @@ export default function DataSourcesPage() {
                     const verified = rows.filter(r => r._emailStatus === 'safe').length
                     const catchAll = rows.filter(r => r._emailStatus?.includes('catch')).length
                     const guess = rows.filter(r => r._emailStatus === 'unverified_candidate').length
-                    return <>{rows.length} leads with emails — <span className="text-green-700">{verified} verified</span>, <span className="text-amber-600">{catchAll} catch-all</span>, <span className="text-gray-500">{guess} best guess</ span></>
+                    return <>{rows.length} leads with emails — <span className="text-green-700">{verified} verified</span>, <span className="text-amber-600">{catchAll} catch-all</span>, <span className="text-gray-500">{guess} best guess</span></>
                   })()}
                 </div>
 
@@ -902,5 +903,6 @@ export default function DataSourcesPage() {
         </div>
       </div>
     )}
+    </>
   )
 }
