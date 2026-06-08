@@ -123,9 +123,23 @@ export default function DataSourcesPage() {
   const [pipelineRunning, setPipelineRunning] = useState(false)
   const [pipelineLogs, setPipelineLogs] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [pipelineProgress, setPipelineProgress] = useState<{
+    step: 1 | 2 | 3
+    step1Done: number; step1Total: number
+    verifyDone: number; verifyTotal: number
+    queuePosition: number | null
+  } | null>(null)
 
   function addLog(msg: string) {
     setPipelineLogs(prev => [...prev, msg])
+  }
+
+  async function handleCancelAll() {
+    await fetch('/api/data-sources/email-job/cancel-all', { method: 'POST' })
+    addLog('✗ All jobs cancelled')
+    setPipelineRunning(false)
+    setPipelineStatus(null)
+    setPipelineProgress(null)
   }
 
   function getCoords(): [number, number] | null {
@@ -205,15 +219,16 @@ export default function DataSourcesPage() {
     setError(null)
     setPipelineLogs([])
     setPipelineRunning(true)
+    setPipelineProgress(null)
 
     try {
       // Step 1: Enrich — batches of 5 to stay within Vercel's 10s function limit
       // SERP queries take ~5s per batch; Gemini extraction runs in parallel after
-      setPipelineStatus('Step 1/3 — Finding director names…')
       addLog('Starting pipeline for ' + targets.length + ' businesses…')
       const ENRICH_BATCH = 5
       const nameMap = new Map<string, { firstName: string | null; lastName: string | null; email: string | null; source: string | null }>()
       const enrichInputs = targets.map(t => ({ place_id: t.place_id, title: t.title }))
+      setPipelineProgress({ step: 1, step1Done: 0, step1Total: enrichInputs.length, verifyDone: 0, verifyTotal: 0, queuePosition: null })
       for (let i = 0; i < enrichInputs.length; i += ENRICH_BATCH) {
         const batch = enrichInputs.slice(i, i + ENRICH_BATCH)
         const enrichRes = await fetch('/api/data-sources/enrich', {
@@ -226,13 +241,12 @@ export default function DataSourcesPage() {
         ;(enrichData.results ?? []).forEach((r: { place_id: string; firstName: string | null; lastName: string | null; email: string | null; source: string | null }) => {
           nameMap.set(r.place_id, { firstName: r.firstName, lastName: r.lastName, email: r.email, source: r.source })
         })
-        const named = [...nameMap.values()].filter(n => n.firstName || n.lastName).length
-        setPipelineStatus('Finding director names… ' + Math.min(i + ENRICH_BATCH, enrichInputs.length) + '/' + enrichInputs.length)
-        addLog('Names so far: ' + named + '/' + Math.min(i + ENRICH_BATCH, enrichInputs.length) + ' processed')
+        const done = Math.min(i + ENRICH_BATCH, enrichInputs.length)
+        setPipelineProgress(prev => prev ? { ...prev, step1Done: done } : null)
       }
       const named = [...nameMap.values()].filter(n => n.firstName || n.lastName).length
       const serpEmails = [...nameMap.values()].filter(n => n.email).length
-      addLog('Names found: ' + named + '/' + targets.length + (serpEmails ? ' · ' + serpEmails + ' emails via SERP' : '') + ' (SERP + Gemini)')
+      addLog('Names found: ' + named + '/' + targets.length + (serpEmails ? ' · ' + serpEmails + ' emails direct from SERP' : ''))
       setResults(prev => prev.map(row => {
         const n = nameMap.get(row.place_id)
         return n ? { ...row, _firstName: n.firstName, _lastName: n.lastName, _nameSource: n.source as BusinessResult['_nameSource'], _serpEmail: n.email } : row
@@ -269,7 +283,8 @@ export default function DataSourcesPage() {
       }
       const jobBody = await jobRes.json()
       const { id: jobId } = jobBody
-      addLog('Job created: ' + jobId + ' (' + jobTargets.length + ' to verify)')
+      addLog('Job created — ' + jobTargets.length + ' to verify' + (serpEmailMap.size ? ', ' + serpEmailMap.size + ' already found via SERP' : ''))
+      setPipelineProgress(prev => prev ? { ...prev, step: 2, verifyDone: 0, verifyTotal: jobTargets.length, queuePosition: null } : null)
 
       // Step 3: Poll until done
       for (let attempt = 0; attempt < 300; attempt++) {
@@ -280,7 +295,11 @@ export default function DataSourcesPage() {
         const processed = job.processedRows ?? 0
         const total = job.rowCount > 0 ? job.rowCount : jobTargets.length
         const lastLog = Array.isArray(job.logs) && job.logs.length > 0 ? job.logs[job.logs.length - 1] : ''
-        setPipelineStatus(`Verifying… ${processed}/${total}` + (lastLog ? ` · ${lastLog.replace(/^\[\d+:\d+:\d+\] /, '')}` : ''))
+        const queuePos = typeof job.queuePosition === 'number' ? job.queuePosition : null
+        setPipelineProgress(prev => prev ? { ...prev, step: 2, verifyDone: processed, verifyTotal: total, queuePosition: job.status === 'queued' ? queuePos : null } : null)
+        if (job.status !== 'queued') {
+          setPipelineStatus(`Verifying… ${processed}/${total}` + (lastLog ? ` · ${lastLog.replace(/^\[\d+:\d+:\d+\] /, '')}` : ''))
+        }
         if (job.status === 'completed') { addLog('✓ Job completed — ' + (job.foundCount ?? 0) + ' emails verified'); break }
         if (job.status === 'failed' || job.status === 'cancelled') {
           addLog('✗ Job ' + job.status + (job.error ? ': ' + job.error : ''))
@@ -545,13 +564,79 @@ export default function DataSourcesPage() {
         {/* Right: results */}
         <div className="flex-1 overflow-auto">
           {(pipelineLogs.length > 0 || pipelineRunning) && (
-            <div className="m-4 p-3 bg-gray-900 rounded text-xs font-mono space-y-0.5">
-              {pipelineLogs.map((log, i) => (
-                <div key={i} className="text-green-400">{log}</div>
-              ))}
-              {pipelineRunning && pipelineStatus && (
-                <div className="text-yellow-300 animate-pulse">{pipelineStatus}</div>
+            <div className="m-4 rounded border border-gray-200 overflow-hidden">
+              {/* Header */}
+              <div className="flex items-center justify-between px-4 py-2 bg-gray-50 border-b">
+                <span className="font-medium text-sm">Email Finder Pipeline</span>
+                {pipelineRunning && (
+                  <button
+                    onClick={handleCancelAll}
+                    className="text-xs text-red-600 hover:text-red-700 font-medium"
+                  >
+                    Cancel all jobs ×
+                  </button>
+                )}
+              </div>
+
+              {/* Progress steps */}
+              {pipelineProgress && (
+                <div className="px-4 py-3 space-y-3 border-b">
+                  {/* Step 1: Name finding */}
+                  <div>
+                    <div className="flex justify-between text-xs text-gray-500 mb-1">
+                      <span>Step 1 — Finding director names via SERP + Gemini</span>
+                      <span>{pipelineProgress.step1Done}/{pipelineProgress.step1Total}</span>
+                    </div>
+                    <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                      <div
+                        className="h-2 bg-blue-500 rounded-full transition-all duration-500"
+                        style={{ width: pipelineProgress.step1Total ? (pipelineProgress.step1Done / pipelineProgress.step1Total * 100) + '%' : '0%' }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Step 2: Email verification */}
+                  {pipelineProgress.step >= 2 && (
+                    <div>
+                      <div className="flex justify-between text-xs text-gray-500 mb-1">
+                        <span>Step 2 — Verifying emails via Reacher</span>
+                        {pipelineProgress.queuePosition !== null ? (
+                          <span className="text-amber-600 font-medium">
+                            {pipelineProgress.queuePosition} job{pipelineProgress.queuePosition !== 1 ? 's' : ''} ahead in queue
+                          </span>
+                        ) : (
+                          <span>{pipelineProgress.verifyDone}/{pipelineProgress.verifyTotal}</span>
+                        )}
+                      </div>
+                      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                        {pipelineProgress.queuePosition !== null ? (
+                          <div className="h-2 bg-amber-400 rounded-full animate-pulse w-full" />
+                        ) : (
+                          <div
+                            className="h-2 bg-green-500 rounded-full transition-all duration-500"
+                            style={{ width: pipelineProgress.verifyTotal ? (pipelineProgress.verifyDone / pipelineProgress.verifyTotal * 100) + '%' : '0%' }}
+                          />
+                        )}
+                      </div>
+                      {pipelineStatus && pipelineProgress.queuePosition === null && (
+                        <div className="text-xs text-gray-400 mt-1 truncate">{pipelineStatus}</div>
+                      )}
+                    </div>
+                  )}
+                </div>
               )}
+
+              {/* Terminal log */}
+              <div className="p-3 bg-gray-900 text-xs font-mono space-y-0.5 max-h-36 overflow-y-auto">
+                {pipelineLogs.map((log, i) => (
+                  <div key={i} className="text-green-400">{log}</div>
+                ))}
+                {pipelineRunning && pipelineProgress?.queuePosition !== null && pipelineProgress?.step === 2 && (
+                  <div className="text-amber-400 animate-pulse">
+                    ⏳ Waiting — {pipelineProgress.queuePosition} job{pipelineProgress.queuePosition !== 1 ? 's' : ''} ahead in queue…
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
