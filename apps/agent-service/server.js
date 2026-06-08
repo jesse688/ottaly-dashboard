@@ -18,13 +18,19 @@ const CLAUDE_PATH = process.env.CLAUDE_PATH || '/Users/jesse/.nvm/versions/node/
 const VERCEL_PROJECT = 'ottaly-dashboard-admin-new'
 
 // SSH command that goes through the reverse tunnel to the Mac
+// Writes command to a temp script and executes it to avoid shell escaping issues
 function sshMac(command, timeoutMs = 120000) {
-  const ssh = `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p 2222 ${MAC_USER}@${MAC_HOST}`
-  return execSync(`${ssh} "${command.replace(/"/g, '\\"')}"`, {
-    encoding: 'utf8',
-    timeout: timeoutMs,
-    stdio: ['pipe', 'pipe', 'pipe']
-  })
+  const { writeFileSync, unlinkSync } = require('fs')
+  const scriptFile = `/tmp/ssh-cmd-${Date.now()}.sh`
+  writeFileSync(scriptFile, command, 'utf8')
+  try {
+    return execSync(
+      `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p 2222 ${MAC_USER}@${MAC_HOST} 'bash -s' < ${scriptFile}`,
+      { encoding: 'utf8', timeout: timeoutMs, stdio: ['pipe', 'pipe', 'pipe'] }
+    )
+  } finally {
+    try { unlinkSync(scriptFile) } catch {}
+  }
 }
 
 // ── Slack helpers ─────────────────────────────────────────
@@ -84,7 +90,7 @@ Important rules:
       sshMac(`printf '%s' ${JSON.stringify(fullInstruction)} > ${taskFile}`)
 
       const claudeOutput = sshMac(
-        `cd ${MAC_REPO} && ${CLAUDE_PATH} --dangerously-skip-permissions --output-format text "$(cat ${taskFile})" 2>&1 ; rm -f ${taskFile}`,
+        `cd ${MAC_REPO} && cat ${taskFile} | ${CLAUDE_PATH} --print --dangerously-skip-permissions 2>&1 ; rm -f ${taskFile}`,
         300000
       )
 
