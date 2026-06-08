@@ -492,11 +492,42 @@ async function fetchThreadHistory(botToken, channel, threadTs, botUserId) {
   } catch { return '' }
 }
 
+// ── DM session memory (keyed by agentName:userId) ────────
+// Keeps last 20 exchanges so agents remember context within a DM session.
+// Cleared after 2 hours of inactivity.
+const dmHistory = new Map()   // key → { messages: [{role,text}], lastAt: timestamp }
+const DM_MAX = 20
+const DM_TTL = 2 * 60 * 60 * 1000
+
+function getDmHistory(key) {
+  const entry = dmHistory.get(key)
+  if (!entry || Date.now() - entry.lastAt > DM_TTL) {
+    dmHistory.set(key, { messages: [], lastAt: Date.now() })
+    return []
+  }
+  entry.lastAt = Date.now()
+  return entry.messages
+}
+
+function appendDmHistory(key, role, text) {
+  const entry = dmHistory.get(key) || { messages: [], lastAt: Date.now() }
+  entry.messages.push({ role, text })
+  if (entry.messages.length > DM_MAX) entry.messages.splice(0, entry.messages.length - DM_MAX)
+  entry.lastAt = Date.now()
+  dmHistory.set(key, entry)
+}
+
+function buildDmContext(history, currentText) {
+  if (!history.length) return currentText
+  const lines = history.map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`).join('\n')
+  return `## Conversation so far\n${lines}\n\n## Latest message\n${currentText}`
+}
+
 // ── Socket Mode agent connection ──────────────────────────
 const WebSocket = require('ws')
 const processedEvents = new Set()
 
-async function runAgentWithProgress(agentName, text, botToken, replyChannel, threadTs, botUserId) {
+async function runAgentWithProgress(agentName, text, botToken, replyChannel, threadTs, botUserId, dmKey) {
   const isToolAgent = TOOL_AGENTS.has(agentName)
   const posted = await slackPost(botToken, 'chat.postMessage', {
     channel: replyChannel,
@@ -506,9 +537,16 @@ async function runAgentWithProgress(agentName, text, botToken, replyChannel, thr
   const msgTs = posted.ts
   const update = txt => slackPost(botToken, 'chat.update', { channel: replyChannel, ts: msgTs, text: txt })
 
-  // Get thread context so agent knows what was said before
-  const threadContext = threadTs ? await fetchThreadHistory(botToken, replyChannel, threadTs, botUserId) : ''
-  const fullMessage = threadContext + text
+  // Build message context: DM history (in-process) or Slack thread (channel)
+  let fullMessage
+  if (dmKey) {
+    const history = getDmHistory(dmKey)
+    appendDmHistory(dmKey, 'user', text)
+    fullMessage = buildDmContext(history, text)
+  } else {
+    const threadContext = threadTs ? await fetchThreadHistory(botToken, replyChannel, threadTs, botUserId) : ''
+    fullMessage = threadContext + text
+  }
 
   // Progress ticker — updates message every 30s so Jesse knows it's alive
   const startedAt = Date.now()
@@ -548,6 +586,7 @@ async function runAgentWithProgress(agentName, text, botToken, replyChannel, thr
     tickerActive = false
     clearInterval(ticker)
     clearTimeout(timeoutId)
+    if (dmKey) appendDmHistory(dmKey, 'assistant', reply)
     const elapsed = Math.round((Date.now() - startedAt) / 1000)
     const toolSummary = toolLog.length ? `\n_Tools: ${toolLog.join(' → ')}_` : ''
     await update(`${reply}\n\n_⏱ ${elapsed}s${toolSummary}_`)
@@ -609,11 +648,11 @@ function connectAgent(agentName, config) {
       const text = event.text.replace(/<@[A-Z0-9]+>/g, '').trim()
       if (!text) return
 
-      // thread_ts is the root message ts; if event.thread_ts exists it's a reply in a thread
       const replyThreadTs = event.thread_ts ?? (isDM ? undefined : event.ts)
+      const dmKey = isDM ? `${agentName}:${event.user}` : null
 
-      console.log(`[${agentName}] "${text.slice(0, 80)}"${event.thread_ts ? ' [thread]' : ''}`)
-      await runAgentWithProgress(agentName, text, config.botToken, event.channel, replyThreadTs, msg.payload?.authorizations?.[0]?.user_id)
+      console.log(`[${agentName}] "${text.slice(0, 80)}"${isDM ? ' [DM]' : event.thread_ts ? ' [thread]' : ''}`)
+      await runAgentWithProgress(agentName, text, config.botToken, event.channel, replyThreadTs, msg.payload?.authorizations?.[0]?.user_id, dmKey)
     })
 
     ws.on('close', () => { cleanup(); setTimeout(connect, 3000) })
