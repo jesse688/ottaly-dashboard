@@ -304,7 +304,7 @@ export default function DataSourcesPage() {
             {/* Location */}
             <div>
               <label className="block text-xs font-medium text-gray-700 mb-1">City</label>
-              <Select value={city} onValueChange={setCity}>
+              <Select value={city} onValueChange={v => { if (v) setCity(v) }}>
                 <SelectTrigger className="text-sm">
                   <SelectValue />
                 </SelectTrigger>
