@@ -1,4 +1,5 @@
 import { type NextRequest, NextResponse } from 'next/server'
+import { buildFilters } from '../filters'
 
 const DATAFORSEO_LOGIN = process.env.DATAFORSEO_LOGIN ?? ''
 const DATAFORSEO_PASSWORD = process.env.DATAFORSEO_PASSWORD ?? ''
@@ -37,19 +38,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'category, lat, and lng are required' }, { status: 400 })
   }
 
-  const builtFilters: [string, string, unknown][] = []
-  if (filters?.requireDomain)  builtFilters.push(['domain', '<>', null])
-  if (filters?.claimedOnly)    builtFilters.push(['is_claimed', '=', true])
-  if (filters?.requirePhone)   builtFilters.push(['phone', '<>', null])
-  if (typeof filters?.minRating === 'number' && filters.minRating > 0)
-    builtFilters.push(['rating.value', '>=', filters.minRating])
-  if (typeof filters?.minReviews === 'number' && filters.minReviews > 0)
-    builtFilters.push(['rating.votes_count', '>=', filters.minReviews])
-
   const taskPayload: Record<string, unknown> = {
     categories: [category],
     location_coordinate: `${lat},${lng},${radius ?? 25}`,
-    filters: builtFilters.length ? builtFilters : undefined,
+    filters: buildFilters(filters ?? {}),
     order_by: [['rating.votes_count', 'desc']],
     limit: Math.min(limit, 1000),
   }
