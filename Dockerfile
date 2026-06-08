@@ -5,9 +5,19 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY package*.json ./
-RUN npm ci
+
+# email-finder-local deps (socks package)
+COPY apps/admin-legacy/email-finder-local/package*.json ./email-finder-local/
+RUN cd email-finder-local && npm install --omit=dev
+
+# main server deps
+COPY apps/admin-legacy/package*.json ./
+RUN npm install --omit=dev
+
 RUN npx playwright install --with-deps chromium
-COPY . .
+
+# copy all admin-legacy files (server.js, email-finder-local/, public/, etc.)
+COPY apps/admin-legacy/ ./
+
 EXPOSE 3000 6080
 CMD ["node", "server.js"]
