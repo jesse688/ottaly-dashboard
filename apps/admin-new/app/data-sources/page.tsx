@@ -261,8 +261,11 @@ export default function DataSourcesPage() {
         const pollRes = await fetch(`/api/data-sources/email-job?id=${jobId}`)
         if (!pollRes.ok) { setError('Failed to poll job'); return }
         const job = await pollRes.json()
-        setPipelineStatus(`Step 3/3 — Verifying emails… ${job.processedRows ?? 0}/${job.rowCount ?? rowCount ?? targets.length}`)
-        if (job.status === 'completed') { addLog('✓ Job completed'); break }
+        const processed = job.processedRows ?? 0
+        const total = job.rowCount > 0 ? job.rowCount : targets.length
+        const lastLog = Array.isArray(job.logs) && job.logs.length > 0 ? job.logs[job.logs.length - 1] : ''
+        setPipelineStatus(`Verifying… ${processed}/${total}` + (lastLog ? ` · ${lastLog.replace(/^\[\d+:\d+:\d+\] /, '')}` : ''))
+        if (job.status === 'completed') { addLog('✓ Job completed — ' + (job.foundCount ?? 0) + ' emails found'); break }
         if (job.status === 'failed' || job.status === 'cancelled') {
           addLog('✗ Job ' + job.status + (job.error ? ': ' + job.error : ''))
           setError('Email job ' + job.status + (job.error ? ': ' + job.error : ''))
