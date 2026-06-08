@@ -25,6 +25,41 @@ const AGENTS_DIR = path.join(MAC_REPO, 'apps/agent-service/agents')
 // Global build lock
 let buildLock = false
 
+// ── Agent channel config ──────────────────────────────────
+// Each agent has its own Slack bot token + app token + channel
+const AGENT_BOTS = {
+  ops: {
+    botToken:  process.env.OPS_BOT_TOKEN,
+    appToken:  process.env.OPS_APP_TOKEN,
+    channelId: process.env.OPS_CHANNEL_ID,
+  },
+  build: {
+    botToken:  process.env.BUILD_BOT_TOKEN,
+    appToken:  process.env.BUILD_APP_TOKEN,
+    channelId: process.env.BUILD_CHANNEL_ID,
+  },
+  marketing: {
+    botToken:  process.env.MARKETING_BOT_TOKEN,
+    appToken:  process.env.MARKETING_APP_TOKEN,
+    channelId: process.env.MARKETING_CHANNEL_ID,
+  },
+  copy: {
+    botToken:  process.env.COPY_BOT_TOKEN,
+    appToken:  process.env.COPY_APP_TOKEN,
+    channelId: process.env.COPY_CHANNEL_ID,
+  },
+  research: {
+    botToken:  process.env.RESEARCH_BOT_TOKEN,
+    appToken:  process.env.RESEARCH_APP_TOKEN,
+    channelId: process.env.RESEARCH_CHANNEL_ID,
+  },
+  strategy: {
+    botToken:  process.env.STRATEGY_BOT_TOKEN,
+    appToken:  process.env.STRATEGY_APP_TOKEN,
+    channelId: process.env.STRATEGY_CHANNEL_ID,
+  },
+}
+
 // ── SSH helper ────────────────────────────────────────────
 function sshMac(command, timeoutMs = 120000) {
   const scriptFile = `/tmp/ssh-cmd-${Date.now()}.sh`
@@ -318,5 +353,135 @@ app.post('/slack/teach',
 )
 
 app.get('/health', (_, res) => res.json({ ok: true }))
+
+// ── Socket Mode bot per agent ─────────────────────────────
+const WebSocket = require('ws')
+const processedEvents = new Set()
+
+function slackPost(botToken, method, body) {
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify(body)
+    const req = https.request({
+      hostname: 'slack.com',
+      path: `/api/${method}`,
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${botToken}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(data),
+      },
+    }, res => {
+      let buf = ''
+      res.on('data', d => buf += d)
+      res.on('end', () => resolve(JSON.parse(buf)))
+    })
+    req.on('error', reject)
+    req.write(data)
+    req.end()
+  })
+}
+
+function connectAgent(agentName, config) {
+  if (!config.botToken || !config.appToken || !config.channelId) {
+    console.log(`[${agentName}] Missing tokens — skipping`)
+    return
+  }
+
+  let ws, pingInterval
+
+  async function connect() {
+    const res = await new Promise((resolve, reject) => {
+      const req = https.request({
+        hostname: 'slack.com',
+        path: '/api/apps.connections.open',
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${config.appToken}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+      }, res => {
+        let buf = ''
+        res.on('data', d => buf += d)
+        res.on('end', () => resolve(JSON.parse(buf)))
+      })
+      req.on('error', reject)
+      req.end()
+    })
+
+    if (!res.ok) {
+      console.error(`[${agentName}] Connection failed:`, res.error)
+      setTimeout(connect, 5000)
+      return
+    }
+
+    ws = new WebSocket(res.url)
+
+    ws.on('open', () => {
+      console.log(`[${agentName}] Connected ✓`)
+      pingInterval = setInterval(() => ws.ping(), 30000)
+    })
+
+    ws.on('message', async raw => {
+      let msg
+      try { msg = JSON.parse(raw) } catch { return }
+
+      if (msg.envelope_id) ws.send(JSON.stringify({ envelope_id: msg.envelope_id }))
+      if (msg.type === 'disconnect') { cleanup(); setTimeout(connect, 1000); return }
+      if (msg.type !== 'events_api') return
+
+      const event = msg.payload?.event
+      if (!event || event.type !== 'message') return
+      if (event.channel !== config.channelId) return
+      if (event.bot_id || event.subtype) return
+      if (!event.text) return
+
+      const eventKey = event.client_msg_id ?? event.ts
+      if (processedEvents.has(eventKey)) return
+      processedEvents.add(eventKey)
+      if (processedEvents.size > 500) processedEvents.delete(processedEvents.values().next().value)
+
+      const text = event.text.replace(/<@[A-Z0-9]+>/g, '').trim()
+      if (!text) return
+
+      console.log(`[${agentName}] Message: "${text.slice(0, 80)}"`)
+
+      // Post thinking placeholder
+      const thinkingRes = await slackPost(config.botToken, 'chat.postMessage', {
+        channel: config.channelId,
+        thread_ts: event.ts,
+        text: '_Thinking..._',
+      })
+
+      try {
+        const reply = runAgent(agentName, text, 120000)
+        await slackPost(config.botToken, 'chat.update', {
+          channel: config.channelId,
+          ts: thinkingRes.ts,
+          text: reply,
+        })
+      } catch (err) {
+        console.error(`[${agentName}] Error:`, err.message)
+        await slackPost(config.botToken, 'chat.update', {
+          channel: config.channelId,
+          ts: thinkingRes.ts,
+          text: `❌ Error: ${err.message.slice(0, 200)}`,
+        })
+      }
+    })
+
+    ws.on('close', () => { cleanup(); setTimeout(connect, 3000) })
+    ws.on('error', err => console.error(`[${agentName}] WS error:`, err.message))
+  }
+
+  function cleanup() {
+    clearInterval(pingInterval)
+    try { ws.terminate() } catch {}
+  }
+
+  connect().catch(err => console.error(`[${agentName}] Fatal:`, err.message))
+}
+
+// Start all configured agent bots
+Object.entries(AGENT_BOTS).forEach(([name, config]) => connectAgent(name, config))
 
 app.listen(PORT, () => console.log(`[agent] Running on port ${PORT}`))
