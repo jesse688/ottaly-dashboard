@@ -120,7 +120,12 @@ export default function DataSourcesPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [pipelineStatus, setPipelineStatus] = useState<string | null>(null)
   const [pipelineRunning, setPipelineRunning] = useState(false)
+  const [pipelineLogs, setPipelineLogs] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
+
+  function addLog(msg: string) {
+    setPipelineLogs(prev => [...prev, msg])
+  }
 
   function getCoords(): [number, number] | null {
     const coords = UK_CITIES[city]
@@ -197,21 +202,26 @@ export default function DataSourcesPage() {
     const targets = results.filter(r => (selected.size === 0 || selected.has(r.place_id)) && r.domain)
     if (!targets.length) { setError('No rows with a domain to process'); return }
     setError(null)
+    setPipelineLogs([])
     setPipelineRunning(true)
 
     try {
       // Step 1: Enrich — Gemini extracts director name from business name
       setPipelineStatus('Step 1/3 — Finding director names…')
+      addLog('Starting pipeline for ' + targets.length + ' businesses…')
       const enrichRes = await fetch('/api/data-sources/enrich', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ businesses: targets.map(t => ({ place_id: t.place_id, title: t.title })) }),
       })
+      if (!enrichRes.ok) addLog('⚠ Enrich request failed (' + enrichRes.status + ') — continuing with empty names')
       const enrichData = enrichRes.ok ? await enrichRes.json() : { results: [] }
       const nameMap = new Map<string, { firstName: string | null; lastName: string | null; source: string | null }>()
       ;(enrichData.results ?? []).forEach((r: { place_id: string; firstName: string | null; lastName: string | null; source: string | null }) => {
         nameMap.set(r.place_id, { firstName: r.firstName, lastName: r.lastName, source: r.source })
       })
+      const named = [...nameMap.values()].filter(n => n.firstName || n.lastName).length
+      addLog('Names found: ' + named + '/' + targets.length + ' (via Gemini)')
       setResults(prev => prev.map(row => {
         const n = nameMap.get(row.place_id)
         return n ? { ...row, _firstName: n.firstName, _lastName: n.lastName, _nameSource: n.source as BusinessResult['_nameSource'] } : row
@@ -233,10 +243,13 @@ export default function DataSourcesPage() {
       })
       if (!jobRes.ok) {
         const err = await jobRes.json().catch(() => ({}))
+        addLog('✗ Job creation failed: ' + (err.error ?? jobRes.status))
         setError('Job failed: ' + (err.error ?? jobRes.status))
         return
       }
-      const { id: jobId, rowCount } = await jobRes.json()
+      const jobBody = await jobRes.json()
+      const { id: jobId, rowCount } = jobBody
+      addLog('Job created: ' + jobId + ' (' + (rowCount ?? targets.length) + ' rows)')
 
       // Step 3: Poll until done
       for (let attempt = 0; attempt < 300; attempt++) {
@@ -245,8 +258,9 @@ export default function DataSourcesPage() {
         if (!pollRes.ok) { setError('Failed to poll job'); return }
         const job = await pollRes.json()
         setPipelineStatus(`Step 3/3 — Verifying emails… ${job.processedRows ?? 0}/${job.rowCount ?? rowCount ?? targets.length}`)
-        if (job.status === 'completed') break
+        if (job.status === 'completed') { addLog('✓ Job completed'); break }
         if (job.status === 'failed' || job.status === 'cancelled') {
+          addLog('✗ Job ' + job.status + (job.error ? ': ' + job.error : ''))
           setError('Email job ' + job.status + (job.error ? ': ' + job.error : ''))
           return
         }
@@ -283,12 +297,16 @@ export default function DataSourcesPage() {
         if (pid) emailMap.set(pid, { email: row[emailIdx] ?? '', status: row[statusIdx] ?? '' })
       })
 
+      const found = [...emailMap.values()].filter(e => e.email).length
+      addLog('✓ Emails found: ' + found + '/' + targets.length)
       setResults(prev => prev.map(row => {
-        const found = emailMap.get(row.place_id)
-        return found ? { ...row, _email: found.email || undefined, _emailStatus: found.status || undefined } : row
+        const e = emailMap.get(row.place_id)
+        return e ? { ...row, _email: e.email || undefined, _emailStatus: e.status || undefined } : row
       }))
     } catch (err) {
-      setError('Pipeline failed: ' + (err instanceof Error ? err.message : String(err)))
+      const msg = err instanceof Error ? err.message : String(err)
+      addLog('✗ Error: ' + msg)
+      setError('Pipeline failed: ' + msg)
     } finally {
       setPipelineRunning(false)
       setPipelineStatus(null)
@@ -495,6 +513,17 @@ export default function DataSourcesPage() {
 
         {/* Right: results */}
         <div className="flex-1 overflow-auto">
+          {(pipelineLogs.length > 0 || pipelineRunning) && (
+            <div className="m-4 p-3 bg-gray-900 rounded text-xs font-mono space-y-0.5">
+              {pipelineLogs.map((log, i) => (
+                <div key={i} className="text-green-400">{log}</div>
+              ))}
+              {pipelineRunning && pipelineStatus && (
+                <div className="text-yellow-300 animate-pulse">{pipelineStatus}</div>
+              )}
+            </div>
+          )}
+
           {error && (
             <div className="m-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
               {error}
