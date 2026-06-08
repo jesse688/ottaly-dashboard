@@ -1,6 +1,6 @@
 FROM node:20-alpine
 
-RUN apk add --no-cache openssh-client git
+RUN apk add --no-cache openssh-client git bash
 
 WORKDIR /app
 
@@ -8,8 +8,9 @@ COPY apps/agent-service/package.json .
 RUN npm install
 
 COPY apps/agent-service/server.js .
-
-# Write SSH key from env at startup
-CMD sh -c 'mkdir -p /root/.ssh && echo "$SSH_PRIVATE_KEY" > /root/.ssh/id_ed25519 && chmod 600 /root/.ssh/id_ed25519 && echo "StrictHostKeyChecking no" > /root/.ssh/config && node server.js'
+COPY apps/agent-service/start.sh .
+RUN chmod +x start.sh
 
 EXPOSE 3100
+
+CMD ["bash", "start.sh"]
