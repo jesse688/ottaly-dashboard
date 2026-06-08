@@ -26,8 +26,8 @@ function sshMac(command, timeoutMs = 120000) {
   writeFileSync(scriptFile, command, 'utf8')
   try {
     return execSync(
-      `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -p 2222 ${MAC_USER}@${MAC_HOST} 'bash -s' < ${scriptFile}`,
-      { encoding: 'utf8', timeout: timeoutMs, stdio: ['pipe', 'pipe', 'pipe'] }
+      `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=40 -p 2222 ${MAC_USER}@${MAC_HOST} 'bash -s' < ${scriptFile}`,
+      { encoding: 'utf8', timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'] }
     )
   } finally {
     try { unlinkSync(scriptFile) } catch {}
@@ -83,7 +83,7 @@ app.post('/slack/build',
 
       const claudeOutput = sshMac(
         `cd ${MAC_REPO} && ANTHROPIC_AUTH_TOKEN=${CLAUDE_AUTH_TOKEN} ${CLAUDE_PATH} --print --dangerously-skip-permissions ${JSON.stringify(fullInstruction)} 2>&1`,
-        300000
+        600000
       )
 
       // 3. Check if anything changed
