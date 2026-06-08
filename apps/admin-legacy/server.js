@@ -581,36 +581,37 @@ function requireSession(req, res, next) {
 // ── Slack slash commands ──────────────────────────────────
 const { verifySlackRequest, callClaude } = require('./slack-slash');
 
-app.post('/api/slack/slash', express.urlencoded({ extended: true }), async (req, res) => {
-  console.log('[slack-slash] Received:', req.body.command, req.body.text)
-  if (!verifySlackRequest(req)) {
-    console.error('[slack-slash] Invalid signature')
-    return res.status(401).send('Unauthorized')
-  }
+app.post('/api/slack/slash',
+  express.raw({ type: 'application/x-www-form-urlencoded' }),
+  async (req, res) => {
+    const rawBody = req.body.toString()
+    const params = new URLSearchParams(rawBody)
+    const body = Object.fromEntries(params)
 
-  const { text, user_id, channel_id, response_url } = req.body
-  if (!text) return res.status(400).json({ text: 'Please provide a question' })
+    console.log('[slack-slash] Received:', body.command, body.text)
 
-  res.status(200).send() // Respond immediately (3 second timeout from Slack)
-
-  try {
-    const reply = await callClaude(text)
-    const payload = {
-      response_type: 'in_channel',
-      text: `<@${user_id}> asked: ${text}\n\n${reply}`,
+    if (!verifySlackRequest(rawBody, req.headers)) {
+      console.error('[slack-slash] Invalid signature')
+      return res.status(401).send('Unauthorized')
     }
-    // Post response back to Slack
-    const respBody = JSON.stringify(payload)
-    const respReq = require('https').request(new URL(response_url), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': respBody.length },
-    })
-    respReq.write(respBody)
-    respReq.end()
-  } catch (err) {
-    console.error('[slack-slash] Error:', err.message)
+
+    const { text, user_id, response_url } = body
+    if (!text) return res.json({ response_type: 'ephemeral', text: 'Usage: /agent <your question>' })
+
+    res.json({ response_type: 'ephemeral', text: '_Thinking..._' })
+
+    try {
+      const reply = await callClaude(text)
+      const payload = JSON.stringify({ response_type: 'in_channel', text: `<@${user_id}>: ${text}\n\n${reply}` })
+      const url = new URL(response_url)
+      const respReq = require('https').request({ hostname: url.hostname, path: url.pathname + url.search, method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } })
+      respReq.write(payload)
+      respReq.end()
+    } catch (err) {
+      console.error('[slack-slash] Error:', err.message)
+    }
   }
-})
+)
 
 // ── Auth endpoints ────────────────────────────────────────
 app.get('/api/session', (req, res) => {
