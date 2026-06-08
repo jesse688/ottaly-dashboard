@@ -8,7 +8,6 @@ const { execSync } = require('child_process')
 const https = require('https')
 const fs = require('fs')
 const path = require('path')
-const { Pool } = require('pg')
 
 const app = express()
 const PORT = process.env.PORT || 3100
@@ -22,22 +21,24 @@ const CLAUDE_PATH = process.env.CLAUDE_PATH || '/Users/jesse/.nvm/versions/node/
 const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-4-6'
 const VERCEL_PROJECT = 'ottaly-dashboard-admin-new'
 const AGENTS_DIR = path.join(MAC_REPO, 'apps/agent-service/agents')
-const DATABASE_URL = process.env.DATABASE_URL || 'postgres://postgres:niwkebh37pbcr1prdz01@46.38.255.178:5432/ottaly'
-
-// Postgres pool for ops agent
-const db = new Pool({ connectionString: DATABASE_URL, max: 5 })
+const DASHBOARD_URL = process.env.DASHBOARD_URL || 'https://admin.ottaly.co.uk'
+const DASHBOARD_KEY = process.env.ADMIN_KEY || 'Ottaly2025$'
 
 // Global build lock
 let buildLock = false
 
-// ── DB query helper ───────────────────────────────────────
-async function dbQuery(sql, params = []) {
-  try {
-    const result = await db.query(sql, params)
-    return result.rows
-  } catch (err) {
-    return [{ error: err.message }]
-  }
+// ── Dashboard API helper ──────────────────────────────────
+function dashboardGet(path) {
+  return new Promise((resolve) => {
+    const url = new URL(DASHBOARD_URL + path)
+    https.get({ hostname: url.hostname, path: url.pathname + url.search, headers: { 'x-admin-key': DASHBOARD_KEY } }, res => {
+      let buf = ''
+      res.on('data', d => buf += d)
+      res.on('end', () => {
+        try { resolve(JSON.parse(buf)) } catch { resolve({ error: 'parse error' }) }
+      })
+    }).on('error', e => resolve({ error: e.message }))
+  })
 }
 
 // ── Agent channel config ──────────────────────────────────
@@ -91,43 +92,16 @@ function sshMac(command, timeoutMs = 120000) {
 
 // ── Fetch live data for ops agent ────────────────────────
 async function fetchOpsData() {
-  const [campaigns, recentLeads, recentActivity] = await Promise.all([
-    dbQuery(`
-      SELECT w.name as workspace, c.name as campaign, c.status,
-        c.sent_count, c.replied_count, c.reply_rate, c.bounced_count, c.positive_reply_count
-      FROM esp_campaigns c
-      JOIN esp_workspaces w ON w.raw->>'id' = c.workspace_id
-      WHERE c.status IN ('ACTIVE','PAUSED')
-      ORDER BY w.name, c.replied_count DESC
-      LIMIT 100
-    `),
-    dbQuery(`
-      SELECT l.first_name, l.last_name, l.company_name, l.label, l.first_replied_at,
-        w.name as workspace
-      FROM esp_leads l
-      JOIN esp_workspaces w ON w.raw->>'id' = l.workspace_id
-      WHERE l.label IN ('INTERESTED','MEETING_BOOKED')
-      ORDER BY l.first_replied_at DESC
-      LIMIT 20
-    `),
-    dbQuery(`
-      SELECT w.name as workspace,
-        COUNT(CASE WHEN e.event_type = 'sent' THEN 1 END) as sent_7d,
-        COUNT(CASE WHEN e.event_type = 'replied' THEN 1 END) as replies_7d,
-        COUNT(CASE WHEN e.event_type = 'bounced' THEN 1 END) as bounces_7d,
-        CASE WHEN COUNT(CASE WHEN e.event_type='sent' THEN 1 END) > 0
-          THEN ROUND(COUNT(CASE WHEN e.event_type='replied' THEN 1 END)::numeric /
-               COUNT(CASE WHEN e.event_type='sent' THEN 1 END) * 100, 2)
-          ELSE 0 END as reply_rate_7d
-      FROM email_events e
-      JOIN esp_workspaces w ON w.raw->>'id' = e.workspace_id
-      WHERE e.event_at > NOW() - INTERVAL '7 days'
-      GROUP BY w.name
-      ORDER BY sent_7d DESC
-      LIMIT 30
-    `),
+  const today = new Date().toISOString().slice(0, 10)
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
+
+  const [metrics, health, summary, intelligence] = await Promise.all([
+    dashboardGet('/api/metrics'),
+    dashboardGet('/api/health/clients'),
+    dashboardGet(`/api/stats/summary?start=${thirtyDaysAgo}&end=${today}`),
+    dashboardGet('/api/campaigns/intelligence'),
   ])
-  return { campaigns, recentLeads, recentActivity }
+  return { metrics, health, summary, intelligence }
 }
 
 // ── Agent runner with memory ──────────────────────────────
