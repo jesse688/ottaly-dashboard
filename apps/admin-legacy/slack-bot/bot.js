@@ -177,7 +177,12 @@ async function connect() {
     if (msg.type !== 'events_api') return
     const event = msg.payload?.event
     if (!event) return
-    if (event.channel !== CHANNEL_ID) return
+
+    if (event.type !== 'message') return
+    if (event.channel !== CHANNEL_ID) {
+      console.log(`[slack-bot] Ignoring message from channel ${event.channel} (expected ${CHANNEL_ID})`)
+      return
+    }
     if (event.bot_id || event.subtype) return
     if (!event.text) return
 
@@ -189,7 +194,7 @@ async function connect() {
     const text = event.text.replace(/<@[A-Z0-9]+>/g, '').trim()
     if (!text) return
 
-    console.log(`[slack-bot] Message: "${text.slice(0, 80)}"`)
+    console.log(`[slack-bot] Message in ${event.channel}: "${text.slice(0, 80)}"`)
 
     const thinkingRes = await postMessage('_Thinking..._', event.ts)
     const thinkingTs = thinkingRes.ts
