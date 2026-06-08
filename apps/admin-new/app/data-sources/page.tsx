@@ -233,7 +233,11 @@ export default function DataSourcesPage() {
       const csvLines = ['First Name,Last Name,Domain,place_id']
       targets.forEach(t => {
         const n = nameMap.get(t.place_id)
-        csvLines.push([esc(n?.firstName ?? ''), esc(n?.lastName ?? ''), esc(t.domain ?? ''), esc(t.place_id)].join(','))
+        // Fallback to info/contact so the finder generates generic patterns (info@, contact@, etc.)
+        // when no director name was found. buildEmailCandidates returns [] if either name is empty.
+        const firstName = n?.firstName || 'info'
+        const lastName = n?.lastName || 'contact'
+        csvLines.push([esc(firstName), esc(lastName), esc(t.domain ?? ''), esc(t.place_id)].join(','))
       })
 
       const jobRes = await fetch('/api/data-sources/email-job', {
