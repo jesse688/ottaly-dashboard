@@ -228,34 +228,50 @@ async function executeTool(toolName, toolInput, agentName) {
   }
 }
 
-// ── Agentic loop (Claude with tools) ─────────────────────
+// ── Convert tool schema to Gemini format ─────────────────
+function toGeminiSchema(s) {
+  if (!s) return {}
+  const out = { type: (s.type || 'string').toUpperCase() }
+  if (s.description) out.description = s.description
+  if (s.enum) out.enum = s.enum
+  if (s.properties) {
+    out.properties = {}
+    for (const [k, v] of Object.entries(s.properties)) out.properties[k] = toGeminiSchema(v)
+  }
+  if (s.required) out.required = s.required
+  if (s.items) out.items = toGeminiSchema(s.items)
+  return out
+}
+
+// ── Agentic loop (Gemini with tools) ─────────────────────
 async function runAgentLoop(systemPrompt, userMessage, agentName, onToolCall) {
-  const messages = [{ role: 'user', content: userMessage }]
-  // Build agents may need more iterations (read → write → git); ops agents need fewer
+  const agentTools = getToolsForAgent(agentName)
+  const geminiTools = [{
+    functionDeclarations: agentTools.map(t => ({
+      name: t.name,
+      description: t.description,
+      parameters: toGeminiSchema(t.input_schema),
+    }))
+  }]
+
+  const contents = [{ role: 'user', parts: [{ text: userMessage }] }]
   const maxIterations = agentName === 'build' ? 50 : 6
-  const tools = getToolsForAgent(agentName)
   let consecutiveErrors = 0
 
   for (let i = 0; i < maxIterations; i++) {
     const body = JSON.stringify({
-      model: ANTHROPIC_MODEL,
-      max_tokens: 4096,
-      system: systemPrompt,
-      tools,
-      messages,
+      systemInstruction: { parts: [{ text: systemPrompt }] },
+      contents,
+      tools: geminiTools,
+      generationConfig: { maxOutputTokens: 4096 },
     })
 
     const response = await new Promise((resolve, reject) => {
       const req = https.request({
-        hostname: 'api.anthropic.com',
-        path: '/v1/messages',
+        hostname: 'generativelanguage.googleapis.com',
+        path: `/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
         method: 'POST',
-        headers: {
-          'x-api-key': ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01',
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(body),
-        },
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
       }, res => {
         let buf = ''
         res.on('data', d => buf += d)
@@ -264,7 +280,7 @@ async function runAgentLoop(systemPrompt, userMessage, agentName, onToolCall) {
             const json = JSON.parse(buf)
             if (json.error) return reject(new Error(json.error.message))
             resolve(json)
-          } catch (e) { reject(new Error('Bad API response: ' + buf.slice(0, 200))) }
+          } catch (e) { reject(new Error('Bad Gemini response: ' + buf.slice(0, 200))) }
         })
       })
       req.on('error', reject)
@@ -272,42 +288,34 @@ async function runAgentLoop(systemPrompt, userMessage, agentName, onToolCall) {
       req.end()
     })
 
-    // If model is done, return the text
-    if (response.stop_reason === 'end_turn') {
-      const textBlock = response.content.find(b => b.type === 'text')
-      return textBlock?.text || ''
+    const parts = response.candidates?.[0]?.content?.parts || []
+    const functionCalls = parts.filter(p => p.functionCall)
+    const textPart = parts.find(p => p.text)
+
+    // No function calls — model is done
+    if (!functionCalls.length) return textPart?.text || ''
+
+    // Execute function calls
+    contents.push({ role: 'model', parts })
+
+    const functionResponses = await Promise.all(functionCalls.map(async p => {
+      const { name, args } = p.functionCall
+      console.log(`[${agentName}] Tool: ${name}`, JSON.stringify(args).slice(0, 100))
+      if (onToolCall) onToolCall(name, args)
+      const result = await executeTool(name, args, agentName)
+      return { functionResponse: { name, response: { content: result } } }
+    }))
+
+    // Bail if 2 consecutive rounds all errored
+    const allErrors = functionResponses.every(r => r.functionResponse.response.content.startsWith('Error:'))
+    if (allErrors) {
+      consecutiveErrors++
+      if (consecutiveErrors >= 2) return `Ran into errors: ${functionResponses.map(r => r.functionResponse.response.content).join('; ')}`
+    } else {
+      consecutiveErrors = 0
     }
 
-    // Model wants to use tools
-    if (response.stop_reason === 'tool_use') {
-      const toolUses = response.content.filter(b => b.type === 'tool_use')
-      messages.push({ role: 'assistant', content: response.content })
-
-      const toolResults = await Promise.all(toolUses.map(async tu => {
-        console.log(`[${agentName}] Tool: ${tu.name}`, JSON.stringify(tu.input).slice(0, 100))
-        if (onToolCall) onToolCall(tu.name, tu.input)
-        const result = await executeTool(tu.name, tu.input, agentName)
-        return { type: 'tool_result', tool_use_id: tu.id, content: result }
-      }))
-
-      // Bail if all tool results are errors (avoid pointless retry loops)
-      const allErrors = toolResults.every(r => r.content.startsWith('Error:'))
-      if (allErrors) {
-        consecutiveErrors++
-        if (consecutiveErrors >= 2) {
-          return `I ran into errors fetching data: ${toolResults.map(r => r.content).join('; ')}`
-        }
-      } else {
-        consecutiveErrors = 0
-      }
-
-      messages.push({ role: 'user', content: toolResults })
-      continue
-    }
-
-    // Unexpected stop reason
-    const textBlock = response.content?.find(b => b.type === 'text')
-    return textBlock?.text || ''
+    contents.push({ role: 'user', parts: functionResponses })
   }
 
   return 'Reached maximum tool iterations. Please try a more specific question.'
