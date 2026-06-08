@@ -66,10 +66,15 @@ async function pvGet(path) {
   });
 }
 
+const LEAD_LABELS    = new Set(['INTERESTED','MEETING_BOOKED','LEAD','ADDED_TO_ZOHO','INTERESTED_NONLEAD','FOLLOW_UP','CALL_BOOKED','POSITIVE_REPLY']);
+const NONLEAD_LABELS = new Set(['NOT_INTERESTED','WRONG_PERSON','NOT_GOOD_LEAD','NON_LEAD','UNSUBSCRIBE','UNSUBSCIBE']);
+const SKIP_LABELS    = new Set(['OUT_OF_OFFICE','AUTOMATIC_REPLY']);
+
 function labelToEventType(label) {
   const l = (label || '').toUpperCase();
-  if (l === 'INTERESTED' || l === 'MEETING_BOOKED') return 'lead';
-  if (l === 'NOT_INTERESTED') return 'not_interested';
+  if (SKIP_LABELS.has(l))    return null;           // exclude auto-replies entirely
+  if (LEAD_LABELS.has(l))    return 'lead';
+  if (NONLEAD_LABELS.has(l)) return 'not_interested';
   return 'reply';
 }
 
@@ -159,10 +164,13 @@ async function backfillWorkspace(workspaceId, client, cutoff) {
     const ts = email.source_modified_at || email.timestamp_created;
     if (!ts) continue;
 
+    const evType = labelToEventType(email.label);
+    if (!evType) continue; // skip OOO / auto-replies
+
     events.push({
       workspace_id: workspaceId,
       campaign_id:  email.campaign_id || null,
-      event_type:   labelToEventType(email.label),
+      event_type:   evType,
       event_at:     new Date(ts),
       lead_email:   leadEmail,
       raw: JSON.stringify({
