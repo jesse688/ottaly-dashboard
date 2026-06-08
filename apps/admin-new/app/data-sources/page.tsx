@@ -229,21 +229,25 @@ export default function DataSourcesPage() {
       const nameMap = new Map<string, { firstName: string | null; lastName: string | null; email: string | null; source: string | null }>()
       const enrichInputs = targets.map(t => ({ place_id: t.place_id, title: t.title }))
       setPipelineProgress({ step: 1, step1Done: 0, step1Total: enrichInputs.length, verifyDone: 0, verifyTotal: 0, queuePosition: null })
-      for (let i = 0; i < enrichInputs.length; i += ENRICH_BATCH) {
-        const batch = enrichInputs.slice(i, i + ENRICH_BATCH)
+
+      // Fire all SERP batches in parallel — each is an independent Vercel function call
+      const batches: Array<Array<{ place_id: string; title: string }>> = []
+      for (let i = 0; i < enrichInputs.length; i += ENRICH_BATCH) batches.push(enrichInputs.slice(i, i + ENRICH_BATCH))
+      let step1Done = 0
+      await Promise.all(batches.map(async batch => {
         const enrichRes = await fetch('/api/data-sources/enrich', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ businesses: batch }),
         })
-        if (!enrichRes.ok) { addLog('⚠ Enrich batch failed (' + enrichRes.status + ')'); continue }
+        if (!enrichRes.ok) { addLog('⚠ Enrich batch failed (' + enrichRes.status + ')'); return }
         const enrichData = await enrichRes.json()
         ;(enrichData.results ?? []).forEach((r: { place_id: string; firstName: string | null; lastName: string | null; email: string | null; source: string | null }) => {
           nameMap.set(r.place_id, { firstName: r.firstName, lastName: r.lastName, email: r.email, source: r.source })
         })
-        const done = Math.min(i + ENRICH_BATCH, enrichInputs.length)
-        setPipelineProgress(prev => prev ? { ...prev, step1Done: done } : null)
-      }
+        step1Done += batch.length
+        setPipelineProgress(prev => prev ? { ...prev, step1Done } : null)
+      }))
       const named = [...nameMap.values()].filter(n => n.firstName || n.lastName).length
       const serpEmails = [...nameMap.values()].filter(n => n.email).length
       addLog('Names found: ' + named + '/' + targets.length + (serpEmails ? ' · ' + serpEmails + ' emails direct from SERP' : ''))
@@ -255,20 +259,37 @@ export default function DataSourcesPage() {
       // Step 2: Build CSV — skip rows where SERP already found an email directly
       setPipelineStatus('Step 2/3 — Submitting to email finder…')
       const esc = (s: string) => '"' + String(s ?? '').replace(/"/g, '""') + '"'
+      // Emails already found directly in SERP snippets — skip verification
       const serpEmailMap = new Map<string, string>()
       nameMap.forEach((n, pid) => { if (n.email) serpEmailMap.set(pid, n.email) })
 
-      const csvLines = ['First Name,Last Name,Domain,place_id']
-      const jobTargets = targets.filter(t => !serpEmailMap.has(t.place_id))
-      jobTargets.forEach(t => {
+      // Split remaining targets: has a real name → Reacher verify; no name → info@ best guess only
+      // Avoids checking useless initials patterns (ic@, ci@, info.contact@, etc.) for generic fallbacks
+      const needsVerify = targets.filter(t => {
+        if (serpEmailMap.has(t.place_id)) return false  // already have email from SERP
         const n = nameMap.get(t.place_id)
-        // Fallback to info/contact so the finder generates generic patterns (info@, contact@, etc.)
-        // when no director name was found. buildEmailCandidates returns [] if either name is empty.
-        const firstName = n?.firstName || 'info'
-        const lastName = n?.lastName || 'contact'
-        csvLines.push([esc(firstName), esc(lastName), esc(t.domain ?? ''), esc(t.place_id)].join(','))
+        return !!(n?.firstName && n?.lastName)  // only verify rows with a real director name
       })
-      if (serpEmailMap.size) addLog('Skipping ' + serpEmailMap.size + ' rows — emails already found via SERP')
+      const bestGuessOnly = targets.filter(t => {
+        if (serpEmailMap.has(t.place_id)) return false
+        const n = nameMap.get(t.place_id)
+        return !(n?.firstName && n?.lastName)  // no real name → info@ best guess
+      })
+
+      if (serpEmailMap.size || bestGuessOnly.length) {
+        addLog(
+          [
+            serpEmailMap.size ? serpEmailMap.size + ' emails from SERP' : '',
+            bestGuessOnly.length ? bestGuessOnly.length + ' rows → info@ best guess (no director name found)' : '',
+          ].filter(Boolean).join(' · ')
+        )
+      }
+
+      const csvLines = ['First Name,Last Name,Domain,place_id']
+      needsVerify.forEach(t => {
+        const n = nameMap.get(t.place_id)!
+        csvLines.push([esc(n.firstName!), esc(n.lastName!), esc(t.domain ?? ''), esc(t.place_id)].join(','))
+      })
 
       const jobRes = await fetch('/api/data-sources/email-job', {
         method: 'POST',
@@ -283,8 +304,8 @@ export default function DataSourcesPage() {
       }
       const jobBody = await jobRes.json()
       const { id: jobId } = jobBody
-      addLog('Job created — ' + jobTargets.length + ' to verify' + (serpEmailMap.size ? ', ' + serpEmailMap.size + ' already found via SERP' : ''))
-      setPipelineProgress(prev => prev ? { ...prev, step: 2, verifyDone: 0, verifyTotal: jobTargets.length, queuePosition: null } : null)
+      addLog('Job created — ' + needsVerify.length + ' to verify via Reacher')
+      setPipelineProgress(prev => prev ? { ...prev, step: 2, verifyDone: 0, verifyTotal: needsVerify.length, queuePosition: null } : null)
 
       // Step 3: Poll until done
       for (let attempt = 0; attempt < 300; attempt++) {
@@ -293,7 +314,7 @@ export default function DataSourcesPage() {
         if (!pollRes.ok) { setError('Failed to poll job'); return }
         const job = await pollRes.json()
         const processed = job.processedRows ?? 0
-        const total = job.rowCount > 0 ? job.rowCount : jobTargets.length
+        const total = job.rowCount > 0 ? job.rowCount : needsVerify.length
         const lastLog = Array.isArray(job.logs) && job.logs.length > 0 ? job.logs[job.logs.length - 1] : ''
         const queuePos = typeof job.queuePosition === 'number' ? job.queuePosition : null
         setPipelineProgress(prev => prev ? { ...prev, step: 2, verifyDone: processed, verifyTotal: total, queuePosition: job.status === 'queued' ? queuePos : null } : null)
@@ -335,20 +356,24 @@ export default function DataSourcesPage() {
       const statusIdx = col('EmailFinderSendability')
 
       const emailMap = new Map<string, { email: string; status: string }>()
-      // Inject SERP-found emails first (already verified, mark as safe)
+      // SERP-found emails (verified by Google snippet)
       serpEmailMap.forEach((email, pid) => emailMap.set(pid, { email, status: 'safe' }))
-      // Then add job results
+      // info@ best guess for rows with no director name (not Reacher-verified)
+      bestGuessOnly.forEach(t => {
+        if (t.domain) emailMap.set(t.place_id, { email: 'info@' + t.domain, status: 'unverified_candidate' })
+      })
+      // Reacher job results
       rows.slice(1).forEach(row => {
         const pid = pidIdx >= 0 ? row[pidIdx] : ''
         if (!pid) return
-        // Use FoundEmail (safe/verified) first, fall back to BestGuessEmail (catch-all best guess)
         const email = (foundIdx >= 0 ? row[foundIdx] : '') || (guessIdx >= 0 ? row[guessIdx] : '') || ''
         const status = statusIdx >= 0 ? row[statusIdx] : ''
         emailMap.set(pid, { email, status })
       })
 
+      const verified = rows.slice(1).filter(r => { const e = r[foundIdx >= 0 ? foundIdx : -1]; return e && e.trim() }).length
       const found = [...emailMap.values()].filter(e => e.email).length
-      addLog('✓ Emails found: ' + found + '/' + targets.length + (serpEmailMap.size ? ' (' + serpEmailMap.size + ' from SERP)' : ''))
+      addLog('✓ Done — ' + found + '/' + targets.length + ' emails (' + verified + ' verified, ' + serpEmailMap.size + ' from SERP, ' + bestGuessOnly.filter(t => t.domain).length + ' best guess)')
       setResults(prev => prev.map(row => {
         const e = emailMap.get(row.place_id)
         return e ? { ...row, _email: e.email || undefined, _emailStatus: e.status || undefined } : row
