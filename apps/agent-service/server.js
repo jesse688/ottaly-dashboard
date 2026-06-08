@@ -22,7 +22,7 @@ const MAC_HOST = process.env.MAC_HOST || '46.38.255.178'
 const MAC_REPO = process.env.MAC_REPO || '/Users/jesse/Desktop/ottaly-dashboard'
 const CLAUDE_PATH = process.env.CLAUDE_PATH || '/Users/jesse/.nvm/versions/node/v24.11.1/bin/claude'
 const VERCEL_PROJECT = 'ottaly-dashboard-admin-new'
-const AGENTS_DIR = path.join(MAC_REPO, 'apps/agent-service/agents')
+const AGENTS_DIR = process.env.AGENTS_DIR || '/app/agents'
 const DASHBOARD_URL = process.env.DASHBOARD_URL || 'https://admin.ottaly.co.uk'
 const DASHBOARD_KEY = process.env.ADMIN_KEY || 'Ottaly2025$'
 
@@ -189,15 +189,19 @@ function callGemini(systemPrompt, userMessage) {
 }
 
 // ── Agent runner with memory ──────────────────────────────
+function readAgentFile(filePath, fallback = '') {
+  try { return fs.readFileSync(filePath, 'utf8') } catch { return fallback }
+}
+
 async function runAgent(agentName, userMessage) {
   const agentDir = path.join(AGENTS_DIR, agentName)
   const sharedDir = path.join(AGENTS_DIR, 'shared')
 
-  // Read agent files from Mac via SSH (memory persists across deploys)
-  const systemPromptRaw = sshMac(`cat ${agentDir}/system-prompt.md`)
-  const memory = sshMac(`cat ${agentDir}/memory.md`)
-  const sharedContext = sshMac(`cat ${sharedDir}/ottaly-context.md`)
-  const latestBrief = sshMac(`cat ${sharedDir}/brief-latest.md`)
+  // Read agent files from local volume (persists across redeploys via Docker volume)
+  const systemPromptRaw = readAgentFile(`${agentDir}/system-prompt.md`, `You are the Ottaly ${agentName} agent.`)
+  const memory = readAgentFile(`${agentDir}/memory.md`, 'No memories yet.')
+  const sharedContext = readAgentFile(`${sharedDir}/ottaly-context.md`, '')
+  const latestBrief = readAgentFile(`${sharedDir}/brief-latest.md`, 'No brief yet.')
 
   // Fetch live data for ops agent
   let liveData = ''
@@ -240,9 +244,11 @@ MEMORY: [what you learned]`
   const memoryMatch = output.match(/MEMORY:\s*(.+)/i)
   if (memoryMatch) {
     const today = new Date().toISOString().slice(0, 10)
-    const newMemory = `[${today}] — ${memoryMatch[1].trim()}`
+    const newMemory = `[${today}] — ${memoryMatch[1].trim()}\n`
     const memFile = path.join(agentDir, 'memory.md')
-    sshMac(`grep -qF 'No memories yet.' ${memFile} && sed -i '' 's/No memories yet.//' ${memFile} 2>/dev/null; echo ${JSON.stringify(newMemory)} >> ${memFile}`)
+    let existing = readAgentFile(memFile, '')
+    existing = existing.replace('No memories yet.\n', '').replace('No memories yet.', '')
+    fs.writeFileSync(memFile, existing + newMemory, 'utf8')
   }
 
   return output.replace(/\nMEMORY:.*$/im, '').trim()
@@ -252,8 +258,7 @@ MEMORY: [what you learned]`
 function saveBrief(agentName, content) {
   const briefFile = path.join(AGENTS_DIR, 'shared/brief-latest.md')
   const today = new Date().toISOString().slice(0, 10)
-  const briefContent = `# Latest Brief\nFrom: ${agentName} agent\nDate: ${today}\n\n${content}`
-  sshMac(`cat > ${briefFile} << 'BRIEF_EOF'\n${briefContent}\nBRIEF_EOF`)
+  fs.writeFileSync(briefFile, `# Latest Brief\nFrom: ${agentName} agent\nDate: ${today}\n\n${content}`, 'utf8')
 }
 
 // ── Page map for /build ───────────────────────────────────
@@ -467,8 +472,9 @@ app.post('/slack/teach',
 
     const today = new Date().toISOString().slice(0, 10)
     const memFile = path.join(AGENTS_DIR, agentName, 'memory.md')
-    const newLine = `[${today}] — ${lesson.trim()}`
-    sshMac(`grep -qF 'No memories yet.' ${memFile} && sed -i '' 's/No memories yet.//' ${memFile} 2>/dev/null; echo ${JSON.stringify(newLine)} >> ${memFile}`)
+    let existing = readAgentFile(memFile, '')
+    existing = existing.replace('No memories yet.\n', '').replace('No memories yet.', '')
+    fs.writeFileSync(memFile, existing + `[${today}] — ${lesson.trim()}\n`, 'utf8')
 
     postToSlack(response_url, `<@${user_id}> ✅ ${agentName} will remember: _${lesson}_`)
   }
