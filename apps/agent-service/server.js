@@ -22,7 +22,7 @@ const CLAUDE_PATH = process.env.CLAUDE_PATH || '/Users/jesse/.nvm/versions/node/
 const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-4-6'
 const VERCEL_PROJECT = 'ottaly-dashboard-admin-new'
 const AGENTS_DIR = path.join(MAC_REPO, 'apps/agent-service/agents')
-const DATABASE_URL = process.env.DATABASE_URL || 'postgres://postgres:niwkebh37pbcr1prdz01@ottaly_ottaly-postgres:5432/ottaly'
+const DATABASE_URL = process.env.DATABASE_URL || 'postgres://postgres:niwkebh37pbcr1prdz01@46.38.255.178:5432/ottaly'
 
 // Postgres pool for ops agent
 const db = new Pool({ connectionString: DATABASE_URL, max: 5 })
@@ -93,33 +93,37 @@ function sshMac(command, timeoutMs = 120000) {
 async function fetchOpsData() {
   const [workspaces, recentLeads, recentStats] = await Promise.all([
     dbQuery(`
-      SELECT w.name, w.workspace_id,
+      SELECT w.name,
         COUNT(DISTINCT c.id) as campaigns,
         COUNT(DISTINCT l.id) as total_leads,
         SUM(CASE WHEN l.label IN ('INTERESTED','MEETING_BOOKED') THEN 1 ELSE 0 END) as hot_leads,
         SUM(CASE WHEN l.first_replied_at > NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as replies_7d
       FROM esp_workspaces w
-      LEFT JOIN esp_campaigns c ON c.workspace_id = w.workspace_id
-      LEFT JOIN esp_leads l ON l.workspace_id = w.workspace_id
-      GROUP BY w.name, w.workspace_id
+      LEFT JOIN esp_campaigns c ON c.workspace_id = (w.raw->>'_id')
+      LEFT JOIN esp_leads l ON l.workspace_id = (w.raw->>'_id')
+      GROUP BY w.name
       ORDER BY w.name
     `),
     dbQuery(`
       SELECT l.email, l.first_name, l.last_name, l.company_name, l.label,
         w.name as workspace
       FROM esp_leads l
-      JOIN esp_workspaces w ON w.workspace_id = l.workspace_id
+      JOIN esp_workspaces w ON w.raw->>'_id' = l.workspace_id
       WHERE l.first_replied_at > NOW() - INTERVAL '7 days'
         AND l.label IN ('INTERESTED','MEETING_BOOKED')
       ORDER BY l.first_replied_at DESC
       LIMIT 20
     `),
     dbQuery(`
-      SELECT workspace_id, date, sends, replies, bounces, leads
-      FROM esp_analytics
-      WHERE date > NOW() - INTERVAL '30 days'
-      ORDER BY date DESC
-      LIMIT 200
+      SELECT a.workspace_id, w.name as workspace_name, a.date,
+        a.sent, a.replies, a.bounces, a.new_leads,
+        CASE WHEN a.sent > 0 THEN ROUND((a.replies::numeric/a.sent)*100,2) ELSE 0 END as reply_rate,
+        CASE WHEN a.sent > 0 THEN ROUND((a.bounces::numeric/a.sent)*100,2) ELSE 0 END as bounce_rate
+      FROM esp_analytics a
+      LEFT JOIN esp_workspaces w ON w.raw->>'_id' = a.workspace_id
+      WHERE a.date > NOW() - INTERVAL '30 days'
+      ORDER BY a.date DESC
+      LIMIT 300
     `),
   ])
   return { workspaces, recentLeads, recentStats }
