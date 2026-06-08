@@ -206,6 +206,86 @@ app.post('/slack/buildall',
   }
 )
 
+// ── Generic Claude agent (no file access, just thinking) ──
+function runClaudeTask(systemPrompt, userMessage, timeoutMs = 120000) {
+  const instruction = `[SYSTEM]\n${systemPrompt}\n\n[USER]\n${userMessage}\n\nRespond directly with your output only. No preamble.`
+  return sshMac(
+    `ANTHROPIC_AUTH_TOKEN=${CLAUDE_AUTH_TOKEN} ${CLAUDE_PATH} --print --dangerously-skip-permissions --model ${CLAUDE_MODEL} ${JSON.stringify(instruction)} 2>&1`,
+    timeoutMs
+  )
+}
+
+// /marketing — content drafts for Ottaly's own marketing
+app.post('/slack/marketing',
+  express.raw({ type: 'application/x-www-form-urlencoded' }),
+  async (req, res) => {
+    const rawBody = req.body.toString()
+    if (!verifySlack(rawBody, req.headers)) return res.status(401).send('Unauthorized')
+
+    const params = Object.fromEntries(new URLSearchParams(rawBody))
+    const { text, user_id, response_url } = params
+
+    if (!text) return res.json({ response_type: 'ephemeral', text: 'Usage: /marketing <brief>' })
+
+    res.json({ response_type: 'ephemeral', text: `✍️ Writing: _${text}_` })
+
+    try {
+      const system = `You are the marketing agent for Ottaly, a UK B2B cold email lead generation agency.
+Ottaly helps businesses book meetings with their ideal clients through personalised cold email campaigns.
+We run campaigns for 28+ clients across various industries.
+
+When writing content:
+- Tone: confident, direct, no fluff. We know what works.
+- LinkedIn posts: 150-300 words, hook in first line, no hashtag spam (max 3), end with a question or insight
+- Blogs: structured with clear headings, practical and data-driven
+- Always position Ottaly as experts who get results, not just a service provider
+- Never make up specific stats unless told to
+
+Output the draft only — no explanation, no "here's your post", just the content itself.`
+
+      const output = runClaudeTask(system, text, 120000)
+      postToSlack(response_url, `<@${user_id}> ✍️ *Draft for: ${text}*\n\n${output.trim()}`)
+    } catch (err) {
+      postToSlack(response_url, `<@${user_id}> ❌ Error: ${err.message.slice(0, 300)}`)
+    }
+  }
+)
+
+// /research — prospect research and industry insights
+app.post('/slack/research',
+  express.raw({ type: 'application/x-www-form-urlencoded' }),
+  async (req, res) => {
+    const rawBody = req.body.toString()
+    if (!verifySlack(rawBody, req.headers)) return res.status(401).send('Unauthorized')
+
+    const params = Object.fromEntries(new URLSearchParams(rawBody))
+    const { text, user_id, response_url } = params
+
+    if (!text) return res.json({ response_type: 'ephemeral', text: 'Usage: /research <topic or ICP>' })
+
+    res.json({ response_type: 'ephemeral', text: `🔍 Researching: _${text}_` })
+
+    try {
+      const system = `You are a B2B sales research agent for Ottaly, a UK cold email agency.
+Your job is to research industries, company types, and prospect profiles to help us run better campaigns.
+
+When given an ICP or research brief:
+- Identify the key decision makers (job titles) to target
+- Identify the best industries/verticals within scope
+- Suggest Apollo.io search filters (industry, employee count, keywords, location)
+- Note any timing signals or reasons why they'd need cold email outreach now
+- Flag any gotchas (e.g. regulated industries, GDPR sensitivities)
+
+Format output as a structured list in Slack markdown. Be specific and actionable.`
+
+      const output = runClaudeTask(system, text, 120000)
+      postToSlack(response_url, `<@${user_id}> 🔍 *Research: ${text}*\n\n${output.trim()}`)
+    } catch (err) {
+      postToSlack(response_url, `<@${user_id}> ❌ Error: ${err.message.slice(0, 300)}`)
+    }
+  }
+)
+
 app.get('/health', (_, res) => res.json({ ok: true }))
 
 app.listen(PORT, () => console.log(`[agent] Running on port ${PORT}`))
