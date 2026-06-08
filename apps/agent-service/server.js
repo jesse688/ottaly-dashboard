@@ -78,26 +78,26 @@ function dashboardGet(apiPath) {
 }
 
 // ── Tool definitions ──────────────────────────────────────
-const TOOLS = [
-  {
+const TOOL_DEFS = {
+  get_dashboard_data: {
     name: 'get_dashboard_data',
-    description: 'Fetch live data from the Ottaly dashboard API. Use type: metrics (per-workspace sends/replies/leads), health (client health scores and alerts), summary (30-day agency summary), intelligence (campaign-level data).',
+    description: 'Fetch live data from the Ottaly dashboard API. Call once with the type most relevant to the question, then answer. Types: metrics (per-workspace sends/replies/leads/bounces), health (client health scores and alerts), summary (30-day agency-wide totals), intelligence (campaign-level data).',
     input_schema: {
       type: 'object',
       properties: { type: { type: 'string', enum: ['metrics', 'health', 'summary', 'intelligence'] } },
       required: ['type']
     }
   },
-  {
+  read_file: {
     name: 'read_file',
-    description: 'Read a file from the Ottaly repo. Path is relative to repo root (e.g. apps/admin-legacy/contacts.html or apps/admin-new/app/contacts/page.tsx).',
+    description: 'Read a file from the Ottaly repo. Path is relative to repo root (e.g. apps/admin-new/app/contacts/page.tsx).',
     input_schema: {
       type: 'object',
       properties: { file_path: { type: 'string' } },
       required: ['file_path']
     }
   },
-  {
+  write_file: {
     name: 'write_file',
     description: 'Write or overwrite a file in the Ottaly repo. Path relative to repo root.',
     input_schema: {
@@ -106,7 +106,7 @@ const TOOLS = [
       required: ['file_path', 'content']
     }
   },
-  {
+  list_files: {
     name: 'list_files',
     description: 'List files in a directory of the repo. Path relative to repo root.',
     input_schema: {
@@ -115,7 +115,7 @@ const TOOLS = [
       required: ['dir_path']
     }
   },
-  {
+  run_git: {
     name: 'run_git',
     description: 'Run a git command in the repo. Use for: status, add, commit, push, checkout, branch.',
     input_schema: {
@@ -124,16 +124,29 @@ const TOOLS = [
       required: ['command']
     }
   },
-  {
+  save_brief: {
     name: 'save_brief',
-    description: 'Save a brief/summary for other agents to read. Use when you have completed research or analysis that other agents should know about.',
+    description: 'Save a brief/summary for other agents to read.',
     input_schema: {
       type: 'object',
       properties: { content: { type: 'string' } },
       required: ['content']
     }
   },
-]
+}
+
+// Tools available per agent — only show what each agent actually needs
+const AGENT_TOOLS = {
+  ops:      ['get_dashboard_data', 'save_brief'],
+  research: ['get_dashboard_data', 'read_file', 'list_files', 'save_brief'],
+  strategy: ['get_dashboard_data', 'save_brief'],
+  build:    ['read_file', 'write_file', 'list_files', 'run_git', 'get_dashboard_data', 'save_brief'],
+}
+
+function getToolsForAgent(agentName) {
+  const names = AGENT_TOOLS[agentName] || ['get_dashboard_data', 'save_brief']
+  return names.map(n => TOOL_DEFS[n]).filter(Boolean)
+}
 
 // ── Tool execution ────────────────────────────────────────
 async function executeTool(toolName, toolInput, agentName) {
@@ -214,14 +227,17 @@ async function executeTool(toolName, toolInput, agentName) {
 // ── Agentic loop (Claude with tools) ─────────────────────
 async function runAgentLoop(systemPrompt, userMessage, agentName) {
   const messages = [{ role: 'user', content: userMessage }]
-  const maxIterations = 10
+  // Build agents may need more iterations (read → write → git); ops agents need fewer
+  const maxIterations = agentName === 'build' ? 20 : 6
+  const tools = getToolsForAgent(agentName)
+  let consecutiveErrors = 0
 
   for (let i = 0; i < maxIterations; i++) {
     const body = JSON.stringify({
       model: ANTHROPIC_MODEL,
       max_tokens: 4096,
       system: systemPrompt,
-      tools: TOOLS,
+      tools,
       messages,
     })
 
@@ -268,6 +284,17 @@ async function runAgentLoop(systemPrompt, userMessage, agentName) {
         const result = await executeTool(tu.name, tu.input, agentName)
         return { type: 'tool_result', tool_use_id: tu.id, content: result }
       }))
+
+      // Bail if all tool results are errors (avoid pointless retry loops)
+      const allErrors = toolResults.every(r => r.content.startsWith('Error:'))
+      if (allErrors) {
+        consecutiveErrors++
+        if (consecutiveErrors >= 2) {
+          return `I ran into errors fetching data: ${toolResults.map(r => r.content).join('; ')}`
+        }
+      } else {
+        consecutiveErrors = 0
+      }
 
       messages.push({ role: 'user', content: toolResults })
       continue
@@ -318,6 +345,7 @@ function readAgentFile(filePath, fallback = '') {
 
 function saveMemory(agentDir, line) {
   const memFile = path.join(agentDir, 'memory.md')
+  fs.mkdirSync(agentDir, { recursive: true })
   let existing = readAgentFile(memFile, '')
   existing = existing.replace('No memories yet.\n', '').replace('No memories yet.', '')
   fs.writeFileSync(memFile, existing + line + '\n', 'utf8')
