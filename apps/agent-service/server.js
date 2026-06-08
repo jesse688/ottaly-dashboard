@@ -229,7 +229,7 @@ async function executeTool(toolName, toolInput, agentName) {
 async function runAgentLoop(systemPrompt, userMessage, agentName, onToolCall) {
   const messages = [{ role: 'user', content: userMessage }]
   // Build agents may need more iterations (read → write → git); ops agents need fewer
-  const maxIterations = agentName === 'build' ? 20 : 6
+  const maxIterations = agentName === 'build' ? 50 : 6
   const tools = getToolsForAgent(agentName)
   let consecutiveErrors = 0
 
@@ -361,6 +361,16 @@ const TOOL_AGENTS = new Set(['build', 'ops', 'research', 'strategy'])
 async function runAgent(agentName, userMessage, onToolCall) {
   const agentDir = path.join(AGENTS_DIR, agentName)
   const sharedDir = path.join(AGENTS_DIR, 'shared')
+
+  // Sync repo before build tasks so agent always works on latest code
+  if (agentName === 'build') {
+    try {
+      ensureRepo()
+      repoExec('git pull origin main --ff-only')
+    } catch (e) {
+      console.warn('[build] repo sync failed:', e.message)
+    }
+  }
 
   const systemPromptRaw = readAgentFile(`${agentDir}/system-prompt.md`, `You are the Ottaly ${agentName} agent.`)
   const memory = readAgentFile(`${agentDir}/memory.md`, 'No memories yet.')
@@ -500,8 +510,8 @@ async function runAgentWithProgress(agentName, text, botToken, replyChannel, thr
     await update(`_Working... ${elapsed}s elapsed${toolSummary}_`)
   }, 20000)
 
-  // Hard timeout — 4 minutes max
-  const TIMEOUT_MS = 4 * 60 * 1000
+  // Hard timeout — 8 min for build (needs time to read+write+push), 4 min for others
+  const TIMEOUT_MS = (agentName === 'build' ? 8 : 4) * 60 * 1000
   let timedOut = false
   const timeoutId = setTimeout(() => {
     timedOut = true
