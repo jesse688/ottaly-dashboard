@@ -79,6 +79,9 @@ interface BusinessResult {
   reviews: number | null
   is_claimed: boolean
   place_id: string
+  _firstName?: string | null
+  _lastName?: string | null
+  _nameSource?: 'companies_house' | 'ai' | null
   _email?: string
   _emailStatus?: string
 }
@@ -115,7 +118,8 @@ export default function DataSourcesPage() {
   const [pulling, setPulling] = useState(false)
 
   const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [findingEmails, setFindingEmails] = useState(false)
+  const [pipelineStatus, setPipelineStatus] = useState<string | null>(null)
+  const [pipelineRunning, setPipelineRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   function getCoords(): [number, number] | null {
@@ -190,35 +194,67 @@ export default function DataSourcesPage() {
   }
 
   async function handleFindEmails() {
-    const targets = results.filter(r => selected.has(r.place_id) && r.domain)
-    if (!targets.length) { setError('No selected rows with a domain'); return }
+    // Operate on selected rows with a domain, or all rows with a domain if none selected
+    const targets = results.filter(r => (selected.size === 0 || selected.has(r.place_id)) && r.domain)
+    if (!targets.length) { setError('No rows with a domain to process'); return }
     setError(null)
-    setFindingEmails(true)
+    setPipelineRunning(true)
+
     try {
-      const res = await fetch('/api/data-sources/email-find', {
+      // Step 1: Enrich — Companies House + Gemini to find director names
+      setPipelineStatus('Step 1/2 — Finding director names…')
+      const enrichRes = await fetch('/api/data-sources/enrich', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contacts: targets.map(t => ({ firstName: '', lastName: '', domain: t.domain })),
-        }),
+        body: JSON.stringify({ businesses: targets.map(t => ({ place_id: t.place_id, title: t.title })) }),
       })
-      const data = await res.json()
-      if (!res.ok) { setError(data.error ?? 'Email finder failed'); return }
+      const enrichData = enrichRes.ok ? await enrichRes.json() : { results: [] }
+      const nameMap = new Map<string, { firstName: string | null; lastName: string | null; source: string | null }>()
+      ;(enrichData.results ?? []).forEach((r: { place_id: string; firstName: string | null; lastName: string | null; source: string | null }) => {
+        nameMap.set(r.place_id, { firstName: r.firstName, lastName: r.lastName, source: r.source })
+      })
 
-      const emailMap = new Map<string, { email: string; status: string }>()
-      ;(data.results ?? []).forEach((r: { domain?: string; email?: string; status?: string }) => {
-        if (r.domain) emailMap.set(r.domain, { email: r.email ?? '', status: r.status ?? '' })
+      // Apply names to results immediately so user sees them
+      setResults(prev => prev.map(row => {
+        const n = nameMap.get(row.place_id)
+        return n ? { ...row, _firstName: n.firstName, _lastName: n.lastName, _nameSource: n.source as BusinessResult['_nameSource'] } : row
+      }))
+
+      // Step 2: Find emails — pass name + domain to email-finder-local
+      setPipelineStatus('Step 2/2 — Verifying emails via Reacher…')
+      const contacts = targets.map(t => {
+        const n = nameMap.get(t.place_id)
+        return { firstName: n?.firstName ?? '', lastName: n?.lastName ?? '', domain: t.domain }
+      })
+
+      const emailRes = await fetch('/api/data-sources/email-find', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contacts }),
+      })
+
+      if (!emailRes.ok) {
+        const err = await emailRes.json().catch(() => ({}))
+        setError('Email finder failed: ' + (err.error ?? emailRes.status))
+        return
+      }
+
+      const emailData = await emailRes.json()
+      // Results are returned in the same order as contacts
+      const enriched = targets.map((t, i) => {
+        const r = emailData.results?.[i]
+        return { place_id: t.place_id, email: r?.email ?? '', status: r?.status ?? '' }
       })
 
       setResults(prev => prev.map(row => {
-        if (!row.domain) return row
-        const found = emailMap.get(row.domain)
-        return found ? { ...row, _email: found.email, _emailStatus: found.status } : row
+        const found = enriched.find(e => e.place_id === row.place_id)
+        return found ? { ...row, _email: found.email || undefined, _emailStatus: found.status || undefined } : row
       }))
-    } catch {
-      setError('Email finder request failed')
+    } catch (err) {
+      setError('Pipeline failed: ' + (err instanceof Error ? err.message : String(err)))
     } finally {
-      setFindingEmails(false)
+      setPipelineRunning(false)
+      setPipelineStatus(null)
     }
   }
 
@@ -249,7 +285,7 @@ export default function DataSourcesPage() {
     else setSelected(new Set(results.map(r => r.place_id)))
   }
 
-  const selectedWithDomain = results.filter(r => selected.has(r.place_id) && r.domain).length
+  const activeTargets = results.filter(r => (selected.size === 0 || selected.has(r.place_id)) && r.domain).length
 
   return (
     <div className="flex flex-col h-screen bg-gray-50">
@@ -259,15 +295,16 @@ export default function DataSourcesPage() {
           <h1 className="text-xl font-semibold text-gray-900">Data Sources</h1>
           <p className="text-sm text-gray-500">Pull business listings from Google Maps via DataForSEO</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
+          {pipelineStatus && <span className="text-xs text-gray-500">{pipelineStatus}</span>}
           {results.length > 0 && (
             <Button variant="outline" size="sm" onClick={handleExportCsv}>
-              Export CSV {selected.size > 0 ? `(${selected.size})` : `(${results.length})`}
+              Export CSV {selected.size > 0 ? '(' + selected.size + ')' : '(' + results.length + ')'}
             </Button>
           )}
-          {selectedWithDomain > 0 && (
-            <Button size="sm" onClick={handleFindEmails} disabled={findingEmails}>
-              {findingEmails ? 'Finding emails…' : `Find Emails (${selectedWithDomain})`}
+          {results.length > 0 && (
+            <Button size="sm" onClick={handleFindEmails} disabled={pipelineRunning}>
+              {pipelineRunning ? 'Running…' : 'Find Emails' + (selected.size > 0 ? ' (' + activeTargets + ')' : ' (all)')}
             </Button>
           )}
         </div>
@@ -452,6 +489,7 @@ export default function DataSourcesPage() {
                     </TableHead>
                     <TableHead>Business</TableHead>
                     <TableHead>Domain</TableHead>
+                    <TableHead>Director</TableHead>
                     <TableHead>Phone</TableHead>
                     <TableHead>City</TableHead>
                     <TableHead>Rating</TableHead>
@@ -472,6 +510,13 @@ export default function DataSourcesPage() {
                         {row.is_claimed && <Badge variant="outline" className="text-xs mt-0.5">Claimed</Badge>}
                       </TableCell>
                       <TableCell className="text-sm text-gray-600">{row.domain ?? '—'}</TableCell>
+                      <TableCell className="text-sm">
+                        {row._firstName || row._lastName ? (
+                          <span className={row._nameSource === 'companies_house' ? 'text-green-700' : 'text-blue-600'}>
+                            {[row._firstName, row._lastName].filter(Boolean).join(' ')}
+                          </span>
+                        ) : '—'}
+                      </TableCell>
                       <TableCell className="text-sm text-gray-600">{row.phone ?? '—'}</TableCell>
                       <TableCell className="text-sm text-gray-600">{row.city ?? row.region ?? '—'}</TableCell>
                       <TableCell className="text-sm">
