@@ -99,8 +99,8 @@ async function fetchOpsData() {
         SUM(CASE WHEN l.label IN ('INTERESTED','MEETING_BOOKED') THEN 1 ELSE 0 END) as hot_leads,
         SUM(CASE WHEN l.first_replied_at > NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as replies_7d
       FROM esp_workspaces w
-      LEFT JOIN esp_campaigns c ON c.workspace_id = (w.raw->>'_id')
-      LEFT JOIN esp_leads l ON l.workspace_id = (w.raw->>'_id')
+      LEFT JOIN esp_campaigns c ON c.workspace_id = (w.raw->>'id')
+      LEFT JOIN esp_leads l ON l.workspace_id = (w.raw->>'id')
       GROUP BY w.name
       ORDER BY w.name
     `),
@@ -108,7 +108,7 @@ async function fetchOpsData() {
       SELECT l.email, l.first_name, l.last_name, l.company_name, l.label,
         w.name as workspace
       FROM esp_leads l
-      JOIN esp_workspaces w ON w.raw->>'_id' = l.workspace_id
+      JOIN esp_workspaces w ON w.raw->>'id' = l.workspace_id
       WHERE l.first_replied_at > NOW() - INTERVAL '7 days'
         AND l.label IN ('INTERESTED','MEETING_BOOKED')
       ORDER BY l.first_replied_at DESC
@@ -120,7 +120,7 @@ async function fetchOpsData() {
         CASE WHEN a.sent > 0 THEN ROUND((a.replies::numeric/a.sent)*100,2) ELSE 0 END as reply_rate,
         CASE WHEN a.sent > 0 THEN ROUND((a.bounces::numeric/a.sent)*100,2) ELSE 0 END as bounce_rate
       FROM esp_analytics a
-      LEFT JOIN esp_workspaces w ON w.raw->>'_id' = a.workspace_id
+      LEFT JOIN esp_workspaces w ON w.raw->>'id' = a.workspace_id
       WHERE a.date > NOW() - INTERVAL '30 days'
       ORDER BY a.date DESC
       LIMIT 300
