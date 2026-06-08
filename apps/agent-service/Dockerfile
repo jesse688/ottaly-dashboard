@@ -4,10 +4,10 @@ RUN apk add --no-cache git openssh
 
 WORKDIR /app
 
-COPY package.json .
+COPY apps/agent-service/package.json .
 RUN npm install
 
-COPY server.js .
+COPY apps/agent-service/server.js .
 
 # Git config for commits
 RUN git config --global user.email "agent@ottaly.co.uk" && \
