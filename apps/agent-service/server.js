@@ -74,9 +74,9 @@ app.post('/slack/build',
     res.json({ response_type: 'ephemeral', text: `⚙️ Working on: _${text}_` })
 
     try {
-      // 1. Create branch on Mac
+      // 1. Create branch on Mac — force clean state first
       const branch = `agent/${Date.now()}`
-      sshMac(`cd ${MAC_REPO} && git checkout main && git pull origin main && git checkout -b ${branch}`)
+      sshMac(`cd ${MAC_REPO} && git reset --hard HEAD && git clean -fd && git checkout main && git reset --hard origin/main && git checkout -b ${branch}`)
 
       // 2. Run Claude Code with auth token
       const fullInstruction = `${text}. Work only in ${MAC_REPO}/apps/admin-new. Read the equivalent legacy HTML in ${MAC_REPO}/apps/admin-legacy first. Summarise changes at the end.`
