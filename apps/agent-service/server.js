@@ -450,11 +450,30 @@ function slackPost(botToken, method, body) {
   })
 }
 
+// ── Thread history fetcher ────────────────────────────────
+async function fetchThreadHistory(botToken, channel, threadTs, botUserId) {
+  try {
+    const res = await slackPost(botToken, 'conversations.replies', { channel, ts: threadTs, limit: 20 })
+    if (!res.ok || !res.messages?.length) return ''
+    const lines = res.messages
+      .filter(m => m.ts !== threadTs || m.text)  // include root message
+      .slice(-10)  // last 10 messages for context
+      .map(m => {
+        const isBot = m.bot_id || m.user === botUserId
+        const role = isBot ? 'Assistant' : 'User'
+        const txt = (m.text || '').replace(/<@[A-Z0-9]+>/g, '').trim()
+        return txt ? `${role}: ${txt}` : null
+      })
+      .filter(Boolean)
+    return lines.length > 1 ? `## Conversation so far\n${lines.slice(0, -1).join('\n')}\n\n## Latest message\n` : ''
+  } catch { return '' }
+}
+
 // ── Socket Mode agent connection ──────────────────────────
 const WebSocket = require('ws')
 const processedEvents = new Set()
 
-async function runAgentWithProgress(agentName, text, botToken, replyChannel, threadTs) {
+async function runAgentWithProgress(agentName, text, botToken, replyChannel, threadTs, botUserId) {
   const isToolAgent = TOOL_AGENTS.has(agentName)
   const posted = await slackPost(botToken, 'chat.postMessage', {
     channel: replyChannel,
@@ -464,9 +483,13 @@ async function runAgentWithProgress(agentName, text, botToken, replyChannel, thr
   const msgTs = posted.ts
   const update = txt => slackPost(botToken, 'chat.update', { channel: replyChannel, ts: msgTs, text: txt })
 
+  // Get thread context so agent knows what was said before
+  const threadContext = threadTs ? await fetchThreadHistory(botToken, replyChannel, threadTs, botUserId) : ''
+  const fullMessage = threadContext + text
+
   const startedAt = Date.now()
   try {
-    const reply = await runAgent(agentName, text)
+    const reply = await runAgent(agentName, fullMessage)
     const elapsed = Math.round((Date.now() - startedAt) / 1000)
     await update(`${reply}\n\n_⏱ ${elapsed}s_`)
   } catch (err) {
@@ -523,8 +546,11 @@ function connectAgent(agentName, config) {
       const text = event.text.replace(/<@[A-Z0-9]+>/g, '').trim()
       if (!text) return
 
-      console.log(`[${agentName}] "${text.slice(0, 80)}"`)
-      await runAgentWithProgress(agentName, text, config.botToken, event.channel, isDM ? undefined : event.ts)
+      // thread_ts is the root message ts; if event.thread_ts exists it's a reply in a thread
+      const replyThreadTs = event.thread_ts ?? (isDM ? undefined : event.ts)
+
+      console.log(`[${agentName}] "${text.slice(0, 80)}"${event.thread_ts ? ' [thread]' : ''}`)
+      await runAgentWithProgress(agentName, text, config.botToken, event.channel, replyThreadTs, msg.payload?.authorizations?.[0]?.user_id)
     })
 
     ws.on('close', () => { cleanup(); setTimeout(connect, 3000) })
