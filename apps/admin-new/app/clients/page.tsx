@@ -270,7 +270,7 @@ export default function ClientsPage() {
     loadVerticals()
   }, [loadVerticals])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { void load() }, [load])
 
   // ── Toast ────────────────────────────────────────────────────────────────────
 
@@ -803,7 +803,7 @@ export default function ClientsPage() {
                   <FormGrid>
                     <Field label="Monthly Target (leads/month)">
                       <Input type="number" value={form.leadTargetMonthly} onChange={e => setField('leadTargetMonthly', e.target.value)} placeholder="0" min="0" className="h-9 text-[13px]" />
-                      <span className="text-[11px] text-[#6B7280] mt-0.5">Drives "behind pace" detection on the Client Health page. Leave 0 to skip.</span>
+                      <span className="text-[11px] text-[#6B7280] mt-0.5">Drives &quot;behind pace&quot; detection on the Client Health page. Leave 0 to skip.</span>
                     </Field>
                   </FormGrid>
 

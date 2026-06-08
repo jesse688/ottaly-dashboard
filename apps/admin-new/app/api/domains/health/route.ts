@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { legacyFetch } from '@/lib/api'
 
-export async function GET(req: NextRequest) {
+export async function GET(_req: NextRequest) {
   try {
     const data = await legacyFetch('/api/domains/health')
     return NextResponse.json(data)

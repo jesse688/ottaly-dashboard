@@ -738,7 +738,7 @@ export default function CampaignsPage() {
                 const rrEx = rrExNum !== null ? rrExNum.toFixed(2) : null
                 const showEx = rrEx !== null && Math.abs(parseFloat(rr) - parseFloat(rrEx)) > 0.05
                 const prr = c.replies > 0 ? ((c.posReplies / c.replies) * 100).toFixed(0) : '—'
-                const lr = c.sent > 0 && c.leads > 0 ? ((c.leads / c.sent) * 100).toFixed(2) + '%' : '—'
+                const _lr = c.sent > 0 && c.leads > 0 ? ((c.leads / c.sent) * 100).toFixed(2) + '%' : '—'
                 const expanded = expandedIds.has(c.id)
                 const exPct = c.exhaustion > 0 ? Math.round(c.exhaustion * 100) : 0
                 const exColor = c.exhaustion >= 0.9 ? '#DC2626' : c.exhaustion >= 0.75 ? '#D97706' : '#059669'

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
@@ -10,7 +10,6 @@ function pct(v: number) { return v != null ? `${(Number(v)*100).toFixed(1)}%` : 
 
 export default function ComboAnalysisPage() {
   const [rows, setRows] = useState<ComboRow[]>([])
-  const [filtered, setFiltered] = useState<ComboRow[]>([])
   const [loading, setLoading] = useState(true)
   const [workspace, setWorkspace] = useState('all')
 
@@ -20,9 +19,10 @@ export default function ComboAnalysisPage() {
 
   const workspaces = [...new Set(rows.map(r => r.workspace_id))].sort()
 
-  useEffect(() => {
-    setFiltered(workspace === 'all' ? rows : rows.filter(r => r.workspace_id === workspace))
-  }, [rows, workspace])
+  const filtered = useMemo(
+    () => workspace === 'all' ? rows : rows.filter(r => r.workspace_id === workspace),
+    [rows, workspace]
+  )
 
   // Aggregate by from_type × to_type
   const matrix: Record<string, ComboRow & { count: number }> = {}

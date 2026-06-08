@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { legacyFetch } from '@/lib/api'
 
-export async function POST(req: NextRequest) {
+export async function POST(_req: NextRequest) {
   try {
     const data = await legacyFetch('/api/domains/refresh', {
       method: 'POST',

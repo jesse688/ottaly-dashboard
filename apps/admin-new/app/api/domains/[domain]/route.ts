@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { legacyFetch } from '@/lib/api'
 
-export async function DELETE(req: NextRequest, { params }: { params: { domain: string } }) {
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ domain: string }> }) {
   try {
-    const domain = decodeURIComponent(params.domain)
+    const { domain: rawDomain } = await params
+    const domain = decodeURIComponent(rawDomain)
     const data = await legacyFetch(`/api/domains/${encodeURIComponent(domain)}`, {
       method: 'DELETE',
     })
