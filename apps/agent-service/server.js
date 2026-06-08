@@ -28,16 +28,25 @@ const DASHBOARD_KEY = process.env.ADMIN_KEY || 'Ottaly2025$'
 let buildLock = false
 
 // ── Dashboard API helper ──────────────────────────────────
-function dashboardGet(path) {
+function dashboardGet(apiPath) {
   return new Promise((resolve) => {
-    const url = new URL(DASHBOARD_URL + path)
-    https.get({ hostname: url.hostname, path: url.pathname + url.search, headers: { 'x-admin-key': DASHBOARD_KEY } }, res => {
+    const url = new URL(DASHBOARD_URL + apiPath)
+    const options = {
+      hostname: url.hostname,
+      port: 443,
+      path: url.pathname + url.search,
+      method: 'GET',
+      headers: { 'x-admin-key': DASHBOARD_KEY, 'Accept': 'application/json' }
+    }
+    const req = https.request(options, res => {
       let buf = ''
       res.on('data', d => buf += d)
       res.on('end', () => {
-        try { resolve(JSON.parse(buf)) } catch { resolve({ error: 'parse error' }) }
+        try { resolve(JSON.parse(buf)) } catch { resolve({ error: 'parse error', raw: buf.slice(0, 200) }) }
       })
-    }).on('error', e => resolve({ error: e.message }))
+    })
+    req.on('error', e => resolve({ error: e.message }))
+    req.end()
   })
 }
 
