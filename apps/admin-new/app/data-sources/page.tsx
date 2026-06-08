@@ -295,13 +295,18 @@ export default function DataSourcesPage() {
       const headers = rows[0]
       const col = (name: string) => headers.indexOf(name)
       const pidIdx = col('place_id')
-      const emailIdx = col('FoundEmail')
+      const foundIdx = col('FoundEmail')
+      const guessIdx = col('BestGuessEmail')
       const statusIdx = col('EmailFinderSendability')
 
       const emailMap = new Map<string, { email: string; status: string }>()
       rows.slice(1).forEach(row => {
         const pid = pidIdx >= 0 ? row[pidIdx] : ''
-        if (pid) emailMap.set(pid, { email: row[emailIdx] ?? '', status: row[statusIdx] ?? '' })
+        if (!pid) return
+        // Use FoundEmail (safe/verified) first, fall back to BestGuessEmail (catch-all best guess)
+        const email = (foundIdx >= 0 ? row[foundIdx] : '') || (guessIdx >= 0 ? row[guessIdx] : '') || ''
+        const status = statusIdx >= 0 ? row[statusIdx] : ''
+        emailMap.set(pid, { email, status })
       })
 
       const found = [...emailMap.values()].filter(e => e.email).length
