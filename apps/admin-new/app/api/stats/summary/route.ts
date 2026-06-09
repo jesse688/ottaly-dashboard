@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from 'next/server'
 
 const LEGACY = (process.env.LEGACY_API_URL ?? 'https://admin.ottaly.co.uk').replace(/\/$/, '')
+const ADMIN_KEY = process.env.ADMIN_KEY ?? ''
 
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl
@@ -17,15 +18,18 @@ export async function GET(req: NextRequest) {
 
   try {
     const upstream = await fetch(`${LEGACY}/api/stats/summary?${qs}`, {
-      credentials: 'include',
-      headers: {
-        Cookie: req.headers.get('cookie') || '',
-      },
+      headers: { 'x-admin-key': ADMIN_KEY },
       next: { revalidate: 0 },
     })
 
+    if (!upstream.ok) {
+      const err = await upstream.text()
+      console.error('[stats/summary]', upstream.status, err)
+      return NextResponse.json({ error: `Legacy API error: ${upstream.status}` }, { status: upstream.status })
+    }
+
     const data: unknown = await upstream.json()
-    return NextResponse.json(data, { status: upstream.status })
+    return NextResponse.json(data)
   } catch (err) {
     console.error('[stats/summary]', err)
     return NextResponse.json({ error: 'Failed to fetch stats' }, { status: 500 })
