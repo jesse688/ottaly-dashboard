@@ -169,6 +169,7 @@ tr:hover td{background:#FAFBFF}
       <button id="mbPeriod7d" onclick="setMbPeriod('7d')" style="padding:3px 10px;border:1px solid var(--navy-dark);background:var(--navy-dark);color:#fff;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer">7d</button>
       <button id="mbPeriod14d" onclick="setMbPeriod('14d')" style="padding:3px 10px;border:1px solid var(--border);background:#fff;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;color:var(--muted)">14d</button>
       <button id="mbPeriod30d" onclick="setMbPeriod('30d')" style="padding:3px 10px;border:1px solid var(--border);background:#fff;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;color:var(--muted)">30d</button>
+      <button id="mbPeriod60d" onclick="setMbPeriod('60d')" style="padding:3px 10px;border:1px solid var(--border);background:#fff;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;color:var(--muted)">60d</button>
     </div>
   </div>
   <div id="supplierCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:1rem;margin-bottom:1rem"></div>
@@ -1345,7 +1346,7 @@ const _mbCharts = {};
 
 function setMbPeriod(p) {
   _mbPeriod = p;
-  ['Today','7d','14d','30d'].forEach(x => {
+  ['Today','7d','14d','30d','60d'].forEach(x => {
     const btn = document.getElementById(`mbPeriod${x}`);
     if (!btn) return;
     const active = x.toLowerCase() === p || (x === 'Today' && p === 'today');
@@ -1364,6 +1365,7 @@ function mbDateRange(p) {
   if (p === '7d')  return { start: nAgo(6), end: today };
   if (p === '14d') return { start: nAgo(13), end: today };
   if (p === '30d') return { start: nAgo(29), end: today };
+  if (p === '60d') return { start: nAgo(59), end: today };
   return { start: nAgo(6), end: today };
 }
 
