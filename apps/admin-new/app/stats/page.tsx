@@ -111,7 +111,8 @@ export default function StatsPage() {
                   {rows.map(row => {
                     const sent = period === '30d' ? row.sent_30d : row.sent_90d
                     const replies = period === '30d' ? row.replied_30d : row.replied_90d
-                    const rr = period === '30d' ? row.reply_rate_30d : row.reply_rate_90d
+                    const rrRaw = period === '30d' ? row.reply_rate_30d : row.reply_rate_90d
+                    const rr = rrRaw != null ? Number(rrRaw) : null
                     const leads = period === '30d' ? row.leads_30d : row.leads_90d
                     return (
                       <tr key={row.workspace_id}>
