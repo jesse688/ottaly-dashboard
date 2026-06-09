@@ -353,76 +353,6 @@ export default function DataSourcesPage() {
         )
       }
 
-      const csvLines = ['First Name,Last Name,Domain,place_id']
-      needsVerify.forEach(t => {
-        const n = nameMap.get(t.place_id)!
-        csvLines.push([esc(n.firstName!), esc(n.lastName!), esc(t.domain ?? ''), esc(t.place_id)].join(','))
-      })
-
-      const jobRes = await fetch('/api/data-sources/email-job', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ csvText: csvLines.join('\n') }),
-      })
-      if (!jobRes.ok) {
-        const err = await jobRes.json().catch(() => ({}))
-        addLog('✗ Job creation failed: ' + (err.error ?? jobRes.status))
-        setError('Job failed: ' + (err.error ?? jobRes.status))
-        return
-      }
-      const jobBody = await jobRes.json()
-      const { id: jobId } = jobBody
-      addLog('Job created — ' + needsVerify.length + ' to verify via Reacher')
-      setPipelineProgress(prev => prev ? { ...prev, step: 2, verifyDone: 0, verifyTotal: needsVerify.length, queuePosition: null } : null)
-
-      // Step 3: Poll until done
-      for (let attempt = 0; attempt < 300; attempt++) {
-        await new Promise(r => setTimeout(r, 3000))
-        const pollRes = await fetch(`/api/data-sources/email-job?id=${jobId}`)
-        if (!pollRes.ok) { setError('Failed to poll job'); return }
-        const job = await pollRes.json()
-        const processed = job.processedRows ?? 0
-        const total = job.rowCount > 0 ? job.rowCount : needsVerify.length
-        const lastLog = Array.isArray(job.logs) && job.logs.length > 0 ? job.logs[job.logs.length - 1] : ''
-        const queuePos = typeof job.queuePosition === 'number' ? job.queuePosition : null
-        setPipelineProgress(prev => prev ? { ...prev, step: 2, verifyDone: processed, verifyTotal: total, queuePosition: job.status === 'queued' ? queuePos : null } : null)
-        if (job.status !== 'queued') {
-          setPipelineStatus(`Verifying… ${processed}/${total}` + (lastLog ? ` · ${lastLog.replace(/^\[\d+:\d+:\d+\] /, '')}` : ''))
-        }
-        if (job.status === 'completed') { addLog('✓ Job completed — ' + (job.foundCount ?? 0) + ' emails verified'); break }
-        if (job.status === 'failed' || job.status === 'cancelled') {
-          addLog('✗ Job ' + job.status + (job.error ? ': ' + job.error : ''))
-          setError('Email job ' + job.status + (job.error ? ': ' + job.error : ''))
-          return
-        }
-      }
-
-      // Download and parse results CSV
-      const dlRes = await fetch(`/api/data-sources/email-job/download?id=${jobId}`)
-      if (!dlRes.ok) { setError('Failed to download results'); return }
-      const csvText = await dlRes.text()
-
-      // Simple CSV parser
-      const rows = csvText.trim().split('\n').map(line => {
-        const cells: string[] = []
-        let cur = '', inQ = false
-        for (const ch of line) {
-          if (ch === '"') { inQ = !inQ }
-          else if (ch === ',' && !inQ) { cells.push(cur); cur = '' }
-          else cur += ch
-        }
-        cells.push(cur)
-        return cells
-      })
-
-      if (rows.length < 2) { setError('No results returned'); return }
-      const headers = rows[0]
-      const col = (name: string) => headers.indexOf(name)
-      const pidIdx = col('place_id')
-      const foundIdx = col('FoundEmail')
-      const guessIdx = col('BestGuessEmail')
-      const statusIdx = col('EmailFinderSendability')
-
       const emailMap = new Map<string, { email: string; status: string }>()
       // SERP-found emails (found in Google snippet)
       serpEmailMap.forEach((email, pid) => emailMap.set(pid, { email, status: 'safe' }))
@@ -432,18 +362,89 @@ export default function DataSourcesPage() {
       bestGuessOnly.forEach(t => {
         if (t.domain) emailMap.set(t.place_id, { email: 'info@' + t.domain, status: 'unverified_candidate' })
       })
-      // Reacher job results
-      rows.slice(1).forEach(row => {
-        const pid = pidIdx >= 0 ? row[pidIdx] : ''
-        if (!pid) return
-        const email = (foundIdx >= 0 ? row[foundIdx] : '') || (guessIdx >= 0 ? row[guessIdx] : '') || ''
-        const status = statusIdx >= 0 ? row[statusIdx] : ''
-        emailMap.set(pid, { email, status })
-      })
 
-      const verified = rows.slice(1).filter(r => { const e = r[foundIdx >= 0 ? foundIdx : -1]; return e && e.trim() }).length
-      const found = [...emailMap.values()].filter(e => e.email).length
-      addLog('✓ Done — ' + found + '/' + targets.length + ' emails (' + verified + ' verified via Reacher, ' + serpEmailMap.size + ' SERP, ' + websiteEmailMap.size + ' website, ' + bestGuessOnly.filter(t => t.domain).length + ' best guess)')
+      if (needsVerify.length > 0) {
+        // Step 2: Submit to Reacher for name-based email verification
+        setPipelineStatus('Step 2/3 — Submitting to email finder…')
+        const csvLines = ['First Name,Last Name,Domain,place_id']
+        needsVerify.forEach(t => {
+          const n = nameMap.get(t.place_id)!
+          csvLines.push([esc(n.firstName!), esc(n.lastName!), esc(t.domain ?? ''), esc(t.place_id)].join(','))
+        })
+
+        const jobRes = await fetch('/api/data-sources/email-job', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ csvText: csvLines.join('\n') }),
+        })
+        if (!jobRes.ok) {
+          const err = await jobRes.json().catch(() => ({}))
+          addLog('✗ Job creation failed: ' + (err.error ?? jobRes.status))
+          setError('Job failed: ' + (err.error ?? jobRes.status))
+          return
+        }
+        const { id: jobId } = await jobRes.json()
+        addLog('Job created — ' + needsVerify.length + ' to verify via Reacher')
+        setPipelineProgress(prev => prev ? { ...prev, step: 2, verifyDone: 0, verifyTotal: needsVerify.length, queuePosition: null } : null)
+
+        // Step 3: Poll until done
+        for (let attempt = 0; attempt < 300; attempt++) {
+          await new Promise(r => setTimeout(r, 3000))
+          const pollRes = await fetch(`/api/data-sources/email-job?id=${jobId}`)
+          if (!pollRes.ok) { setError('Failed to poll job'); return }
+          const job = await pollRes.json()
+          const processed = job.processedRows ?? 0
+          const total = job.rowCount > 0 ? job.rowCount : needsVerify.length
+          const lastLog = Array.isArray(job.logs) && job.logs.length > 0 ? job.logs[job.logs.length - 1] : ''
+          const queuePos = typeof job.queuePosition === 'number' ? job.queuePosition : null
+          setPipelineProgress(prev => prev ? { ...prev, step: 2, verifyDone: processed, verifyTotal: total, queuePosition: job.status === 'queued' ? queuePos : null } : null)
+          if (job.status !== 'queued') {
+            setPipelineStatus(`Verifying… ${processed}/${total}` + (lastLog ? ` · ${lastLog.replace(/^\[\d+:\d+:\d+\] /, '')}` : ''))
+          }
+          if (job.status === 'completed') { addLog('✓ Job completed — ' + (job.foundCount ?? 0) + ' emails verified'); break }
+          if (job.status === 'failed' || job.status === 'cancelled') {
+            addLog('✗ Job ' + job.status + (job.error ? ': ' + job.error : ''))
+            setError('Email job ' + job.status + (job.error ? ': ' + job.error : ''))
+            return
+          }
+        }
+
+        // Download and parse Reacher results
+        const dlRes = await fetch(`/api/data-sources/email-job/download?id=${jobId}`)
+        if (!dlRes.ok) { setError('Failed to download results'); return }
+        const csvText = await dlRes.text()
+        const rows = csvText.trim().split('\n').map(line => {
+          const cells: string[] = []
+          let cur = '', inQ = false
+          for (const ch of line) {
+            if (ch === '"') { inQ = !inQ }
+            else if (ch === ',' && !inQ) { cells.push(cur); cur = '' }
+            else cur += ch
+          }
+          cells.push(cur)
+          return cells
+        })
+        const headers = rows[0] ?? []
+        const col = (name: string) => headers.indexOf(name)
+        const pidIdx = col('place_id')
+        const foundIdx = col('FoundEmail')
+        const guessIdx = col('BestGuessEmail')
+        const statusIdx = col('EmailFinderSendability')
+          // Reacher job results
+          rows.slice(1).forEach(row => {
+            const pid = pidIdx >= 0 ? row[pidIdx] : ''
+            if (!pid) return
+            const email = (foundIdx >= 0 ? row[foundIdx] : '') || (guessIdx >= 0 ? row[guessIdx] : '') || ''
+            const status = statusIdx >= 0 ? row[statusIdx] : ''
+            emailMap.set(pid, { email, status })
+          })
+
+          const verified = rows.slice(1).filter(r => { const e = r[foundIdx >= 0 ? foundIdx : -1]; return e && e.trim() }).length
+          addLog('✓ Done — ' + [...emailMap.values()].filter(e => e.email).length + '/' + targets.length + ' emails (' + verified + ' verified, ' + serpEmailMap.size + ' SERP, ' + websiteEmailMap.size + ' website, ' + bestGuessOnly.filter(t => t.domain).length + ' best guess)')
+        } else {
+          addLog('✓ Done — ' + [...emailMap.values()].filter(e => e.email).length + '/' + targets.length + ' emails (' + serpEmailMap.size + ' SERP, ' + websiteEmailMap.size + ' website, ' + bestGuessOnly.filter(t => t.domain).length + ' best guess)')
+        }
+
       setResults(prev => prev.map(row => {
         const e = emailMap.get(row.place_id)
         return e ? { ...row, _email: e.email || undefined, _emailStatus: e.status || undefined } : row
