@@ -11418,6 +11418,45 @@ async function backfillEmailEventHashes() {
   }
 }
 
+// Sync webhook event to shared esp_leads table (for client portal)
+async function syncToEspLeads(body, eventType, email, dbPg) {
+  try {
+    const leadId = body?.lead?.id || body?.lead_id || '';
+    const workspaceId = body?.workspace?.id || body?.workspace_id || '';
+    const campaignId = body?.campaign?.id || body?.campaign_id || '';
+    if (!leadId || !workspaceId || !dbPg) return;
+
+    const now = new Date().toISOString();
+
+    // Determine what to update based on event type
+    if (/reply/i.test(eventType)) {
+      // Mark as replied — use COALESCE to never overwrite existing first_replied_at
+      await dbPg.query(`
+        UPDATE esp_leads
+        SET first_replied_at = COALESCE(first_replied_at, $1), updated_at = $2
+        WHERE id = $3 AND workspace_id = $4
+      `, [now, now, leadId, workspaceId]);
+    } else if (/lead/i.test(eventType)) {
+      // Mark lead status
+      await dbPg.query(`
+        UPDATE esp_leads
+        SET status = COALESCE(status, 'INTERESTED'), updated_at = $1
+        WHERE id = $2 AND workspace_id = $3
+      `, [now, leadId, workspaceId]);
+    } else if (/sent|email.sent/i.test(eventType) && !/reply|bounce|lead/i.test(eventType)) {
+      // Just mark updated_at to show we synced
+      await dbPg.query(`
+        UPDATE esp_leads SET updated_at = $1 WHERE id = $2 AND workspace_id = $3
+      `, [now, leadId, workspaceId]);
+    }
+
+    console.log(`[Webhook] Synced to esp_leads: ${eventType} for lead ${leadId}`);
+  } catch (err) {
+    // Non-fatal — log but don't throw, so webhook processing continues
+    console.warn(`[Webhook] esp_leads sync error: ${err.message}`);
+  }
+}
+
 // Process a single stored webhook event against the DB
 async function processWebhookEvent(event) {
   try {
@@ -11436,6 +11475,9 @@ async function processWebhookEvent(event) {
 
     const dbPg = app.locals.pgDb;
     if (!dbPg) return;
+
+    // Sync to esp_leads (for client portal) — non-fatal on failure
+    syncToEspLeads(body, eventType, email, dbPg).catch(() => {});
 
     const result = await dbPg.query(
       `SELECT id, snoozed_verticals, emailed_workspaces, company_domain FROM contacts WHERE LOWER(email) = LOWER($1) LIMIT 1`,
