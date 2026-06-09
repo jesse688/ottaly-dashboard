@@ -36,12 +36,32 @@ export default function Home() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    const end = new Date().toISOString().slice(0, 10)
+    const start = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
     Promise.all([
-      fetch('/api/stats').then(r => r.json()),
+      fetch(`/api/stats/summary?start=${start}&end=${end}`).then(r => r.json()).then(d => ({ rows: d.workspaces || [], totals: { sent: 0, replies: 0, leads: 0 } })),
       fetch('/api/health').then(r => r.json()),
     ])
       .then(([s, h]) => {
-        setStats(s)
+        // Calculate totals from workspaces
+        const totals = s.rows.reduce((acc: any, w: any) => ({
+          sent: acc.sent + (w.totals?.sent || 0),
+          replies: acc.replies + (w.totals?.replies || 0),
+          leads: acc.leads + (w.totals?.leads || 0),
+        }), { sent: 0, replies: 0, leads: 0 })
+
+        setStats({
+          rows: s.rows.map((w: any) => ({
+            workspace_id: w.workspace_id,
+            workspace_name: w.name,
+            client_status: 'active',
+            sent_30d: w.totals?.sent || 0,
+            replied_30d: w.totals?.replies || 0,
+            reply_rate_30d: w.totals?.sent > 0 ? w.totals.replies / w.totals.sent : 0,
+            leads_30d: w.totals?.leads || 0,
+          })),
+          totals,
+        })
         setHealth(Array.isArray(h) ? h : [])
       })
       .catch(() => {})
