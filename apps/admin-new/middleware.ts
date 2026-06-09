@@ -10,11 +10,6 @@ const PUBLIC_PATHS = ['/login', '/api/auth']
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl
-  const host = req.headers.get('host') ?? ''
-
-  // Skip auth on Vercel preview deployments
-  if (host.includes('vercel.app')) return NextResponse.next()
-
   // Allow public paths
   if (PUBLIC_PATHS.some(p => pathname.startsWith(p))) {
     return NextResponse.next()
