@@ -10,6 +10,7 @@
       pages: [
         { href: 'domains.html',   label: 'Domains' },
         { href: 'mailboxes.html', label: 'Mailboxes' },
+        { href: 'dmarc.html',     label: 'DMARC' },
         { href: 'capacity.html',  label: 'Capacity' },
       ]
     },
