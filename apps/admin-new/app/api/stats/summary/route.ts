@@ -1,5 +1,4 @@
 import { type NextRequest, NextResponse } from 'next/server'
-import { cookies } from 'next/headers'
 
 const LEGACY = (process.env.LEGACY_API_URL ?? 'https://admin.ottaly.co.uk').replace(/\/$/, '')
 
@@ -13,17 +12,22 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'start and end required' }, { status: 400 })
   }
 
-  const jar = await cookies()
-  const session = jar.get('ottaly_session')?.value
-
   const qs = new URLSearchParams({ start, end })
   if (workspaceIds) qs.set('workspace_ids', workspaceIds)
 
-  const upstream = await fetch(`${LEGACY}/api/stats/summary?${qs}`, {
-    headers: session ? { Cookie: `ottaly_session=${session}` } : {},
-    next: { revalidate: 0 },
-  })
+  try {
+    const upstream = await fetch(`${LEGACY}/api/stats/summary?${qs}`, {
+      credentials: 'include',
+      headers: {
+        Cookie: req.headers.get('cookie') || '',
+      },
+      next: { revalidate: 0 },
+    })
 
-  const data: unknown = await upstream.json()
-  return NextResponse.json(data, { status: upstream.status })
+    const data: unknown = await upstream.json()
+    return NextResponse.json(data, { status: upstream.status })
+  } catch (err) {
+    console.error('[stats/summary]', err)
+    return NextResponse.json({ error: 'Failed to fetch stats' }, { status: 500 })
+  }
 }
