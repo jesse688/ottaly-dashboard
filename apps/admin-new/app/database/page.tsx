@@ -95,54 +95,65 @@ function StatCard({
   value: string
   accent: 'navy' | 'teal' | 'amber' | 'red'
 }) {
-  const borderColor = {
+  const colorMap = {
     navy: '#224388',
     teal: '#1F6F78',
     amber: '#D97706',
     red: '#DC2626',
-  }[accent]
+  }
+  const borderColor = colorMap[accent]
+  const valColor = colorMap[accent]
   return (
-    <div
-      className="bg-white rounded-lg border border-[#E2E6F0] px-4 py-2.5 min-w-[110px]"
-      style={{ borderTop: `3px solid ${borderColor}` }}
-    >
-      <div className="text-[10px] font-bold uppercase tracking-[0.5px] text-[#6B7280]">{label}</div>
-      <div className="text-[1.3rem] font-bold mt-0.5 text-[#050C29]">{value}</div>
+    <div className="o-metric" style={{ borderTopColor: borderColor }}>
+      <div className="o-metric-label">{label}</div>
+      <div className="o-metric-val" style={{ color: valColor }}>{value}</div>
     </div>
   )
 }
 
 function EmailStatusBadge({ status }: { status: string | null }) {
   if (!status) {
-    return (
-      <span className="inline-block px-1.5 py-0.5 rounded-[10px] text-[10px] font-semibold bg-[#f3f4f6] text-[#6b7280]">
-        —
-      </span>
-    )
+    return <span className="o-status o-status-unknown">—</span>
   }
   const isSafe = status === 'safe' || status === 'safe_catchall'
   const isUnsafe = status === 'invalid' || status === 'risky'
-  const cls = isSafe
-    ? 'bg-[#dcfce7] text-[#16a34a]'
-    : isUnsafe
-    ? 'bg-[#fee2e2] text-[#dc2626]'
-    : 'bg-[#f3f4f6] text-[#6b7280]'
-  return (
-    <span className={`inline-block px-1.5 py-0.5 rounded-[10px] text-[10px] font-semibold ${cls}`}>
-      {status}
-    </span>
-  )
+  if (isSafe) return <span className="o-status o-status-good">{status}</span>
+  if (isUnsafe) return <span className="o-status o-status-critical">{status}</span>
+  return <span className="o-status o-status-unknown">{status}</span>
 }
 
 function Cell({ value }: { value: string | number | null | undefined }) {
   if (value == null || value === '') {
-    return <td className="px-2.5 py-[7px] text-[#d1d5db] italic text-[12px] max-w-[180px] overflow-hidden text-ellipsis whitespace-nowrap">—</td>
+    return (
+      <td
+        style={{
+          padding: '7px 10px',
+          color: '#d1d5db',
+          fontStyle: 'italic',
+          fontSize: 12,
+          maxWidth: 180,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        —
+      </td>
+    )
   }
   const str = String(value)
   return (
     <td
       title={str}
-      className="px-2.5 py-[7px] text-[12px] max-w-[180px] overflow-hidden text-ellipsis whitespace-nowrap text-[#050C29]"
+      style={{
+        padding: '7px 10px',
+        fontSize: 12,
+        maxWidth: 180,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+        color: '#050C29',
+      }}
     >
       {str.length > 60 ? str.slice(0, 60) : str}
     </td>
@@ -151,9 +162,13 @@ function Cell({ value }: { value: string | number | null | undefined }) {
 
 function BoolCell({ value }: { value: boolean | null }) {
   if (value == null) {
-    return <td className="px-2.5 py-[7px] text-[#d1d5db] italic text-[12px]">—</td>
+    return (
+      <td style={{ padding: '7px 10px', color: '#d1d5db', fontStyle: 'italic', fontSize: 12 }}>—</td>
+    )
   }
-  return <td className="px-2.5 py-[7px] text-[12px] text-[#050C29]">{value ? 'Yes' : 'No'}</td>
+  return (
+    <td style={{ padding: '7px 10px', fontSize: 12, color: '#050C29' }}>{value ? 'Yes' : 'No'}</td>
+  )
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
@@ -379,15 +394,27 @@ export default function DatabasePage() {
   // ── Sort icon ─────────────────────────────────────────────────────────────
 
   function SortIcon({ field }: { field: SortField }) {
-    if (sortField !== field) return <span className="ml-1 opacity-30">↕</span>
-    return <span className="ml-1">{sortDir === 'asc' ? '↑' : '↓'}</span>
+    if (sortField !== field) return <span style={{ marginLeft: 4, opacity: 0.3 }}>↕</span>
+    return <span style={{ marginLeft: 4 }}>{sortDir === 'asc' ? '↑' : '↓'}</span>
   }
 
   function SortTh({ field, label }: { field: SortField; label: string }) {
+    const isActive = sortField === field
     return (
       <th
         onClick={() => handleSort(field)}
-        className={`px-2.5 py-2 text-left text-[11px] font-bold uppercase tracking-[0.4px] cursor-pointer select-none whitespace-nowrap hover:text-[#224388] ${sortField === field ? 'text-[#224388]' : 'text-[#6B7280]'}`}
+        style={{
+          padding: '8px 10px',
+          textAlign: 'left',
+          fontSize: 11,
+          fontWeight: 700,
+          textTransform: 'uppercase',
+          letterSpacing: '0.4px',
+          cursor: 'pointer',
+          userSelect: 'none',
+          whiteSpace: 'nowrap',
+          color: isActive ? '#224388' : '#6B7280',
+        }}
       >
         {label}
         <SortIcon field={field} />
@@ -402,7 +429,7 @@ export default function DatabasePage() {
   function PaginationRow() {
     if (pages <= 1) {
       return (
-        <div className="flex items-center gap-2 mt-4 text-[12px] text-[#6B7280]">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, fontSize: 12, color: '#6B7280' }}>
           <span>{total.toLocaleString()} rows</span>
         </div>
       )
@@ -414,8 +441,8 @@ export default function DatabasePage() {
 
     if (start > 0) {
       btns.push(
-        <button key="first" onClick={() => goPage(0)} className="px-2.5 py-1 rounded-md border border-[#E2E6F0] bg-white text-[12px] cursor-pointer hover:bg-[#F0F2F8]">1</button>,
-        <span key="ellipsis1" className="text-[#6B7280]">…</span>
+        <button key="first" onClick={() => goPage(0)} className="o-btn o-btn-ghost o-btn-sm">1</button>,
+        <span key="ellipsis1" style={{ color: '#6B7280' }}>…</span>
       )
     }
     for (let i = start; i <= end; i++) {
@@ -423,7 +450,8 @@ export default function DatabasePage() {
         <button
           key={i}
           onClick={() => goPage(i)}
-          className={`px-2.5 py-1 rounded-md border text-[12px] cursor-pointer ${i === currentPage ? 'bg-[#224388] text-white border-[#224388]' : 'border-[#E2E6F0] bg-white hover:bg-[#F0F2F8]'}`}
+          className="o-btn o-btn-sm"
+          style={i === currentPage ? { background: '#224388', color: '#fff', borderColor: '#224388' } : {}}
         >
           {i + 1}
         </button>
@@ -431,18 +459,18 @@ export default function DatabasePage() {
     }
     if (end < pages - 1) {
       btns.push(
-        <span key="ellipsis2" className="text-[#6B7280]">…</span>,
-        <button key="last" onClick={() => goPage(pages - 1)} className="px-2.5 py-1 rounded-md border border-[#E2E6F0] bg-white text-[12px] cursor-pointer hover:bg-[#F0F2F8]">{pages}</button>
+        <span key="ellipsis2" style={{ color: '#6B7280' }}>…</span>,
+        <button key="last" onClick={() => goPage(pages - 1)} className="o-btn o-btn-ghost o-btn-sm">{pages}</button>
       )
     }
 
     return (
-      <div className="flex items-center gap-2 mt-4 text-[12px] text-[#6B7280] flex-wrap">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, fontSize: 12, color: '#6B7280', flexWrap: 'wrap' }}>
         <span>{total.toLocaleString()} rows &nbsp;·&nbsp;</span>
         <button
           onClick={() => goPage(currentPage - 1)}
           disabled={currentPage === 0}
-          className="px-2.5 py-1 rounded-md border border-[#E2E6F0] bg-white text-[12px] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[#F0F2F8]"
+          className="o-btn o-btn-ghost o-btn-sm"
         >
           ‹ Prev
         </button>
@@ -450,7 +478,7 @@ export default function DatabasePage() {
         <button
           onClick={() => goPage(currentPage + 1)}
           disabled={currentPage >= pages - 1}
-          className="px-2.5 py-1 rounded-md border border-[#E2E6F0] bg-white text-[12px] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[#F0F2F8]"
+          className="o-btn o-btn-ghost o-btn-sm"
         >
           Next ›
         </button>
@@ -465,11 +493,7 @@ export default function DatabasePage() {
     return (
       <button
         onClick={() => toggleMissing(missingKey)}
-        className={`px-3 py-1 rounded-[20px] text-[11px] font-semibold border cursor-pointer whitespace-nowrap transition-all ${
-          active
-            ? 'bg-[#224388] text-white border-[#224388]'
-            : 'bg-white text-[#6B7280] border-[#E2E6F0] hover:bg-[#F0F2F8]'
-        }`}
+        className={'o-pill' + (active ? ' o-pill-active' : '')}
       >
         {label}
       </button>
@@ -479,25 +503,19 @@ export default function DatabasePage() {
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="max-w-[1400px] mx-auto p-6 min-h-screen" style={{ background: '#F0F2F8' }}>
+    <div className="o-page">
       {/* Header */}
-      <div className="flex items-center justify-between mb-4">
+      <div className="o-page-header">
         <div>
-          <h1 className="text-[1.3rem] font-bold text-[#050C29]">Database</h1>
-          <div className="text-[12px] text-[#6B7280] mt-0.5">Full contacts table — sort, filter, export, delete</div>
+          <div className="o-page-title">Database</div>
+          <div className="o-page-sub">Full contacts table — sort, filter, export, delete</div>
         </div>
-        <div className="flex gap-2">
-          <button
-            onClick={exportCsv}
-            className="px-4 py-[7px] rounded-[7px] text-[12px] font-semibold border border-[#E2E6F0] bg-white text-[#6B7280] cursor-pointer hover:bg-[#F0F2F8] transition-all"
-          >
+        <div className="o-page-actions">
+          <button onClick={exportCsv} className="o-btn o-btn-ghost">
             Export CSV
           </button>
           {selectedIds.size > 0 && (
-            <button
-              onClick={deleteSelected}
-              className="px-4 py-[7px] rounded-[7px] text-[12px] font-semibold bg-[#fee2e2] text-[#DC2626] border border-[#fecaca] cursor-pointer hover:bg-[#fecaca] transition-all"
-            >
+            <button onClick={deleteSelected} className="o-btn o-btn-danger">
               Delete selected ({selectedIds.size})
             </button>
           )}
@@ -505,86 +523,95 @@ export default function DatabasePage() {
       </div>
 
       {/* Stats Row 1 */}
-      <div className="flex gap-4 flex-wrap mb-2">
-        <StatCard label="Unique Emails"    value={stats ? stats.total.toLocaleString() : '—'}                   accent="navy" />
-        <StatCard label="Missing Keywords" value={stats ? stats.missing_keywords.toLocaleString() : '—'}         accent="amber" />
-        <StatCard label="Missing Industry" value={stats ? stats.missing_industry.toLocaleString() : '—'}         accent="amber" />
-        <StatCard label="Missing Co. Size" value={stats ? stats.missing_num_employees.toLocaleString() : '—'}    accent="amber" />
-        <StatCard label="Missing City"     value={stats ? stats.missing_city.toLocaleString() : '—'}             accent="amber" />
+      <div className="o-metrics o-metrics-5" style={{ marginBottom: 8 }}>
+        <StatCard label="Unique Emails"    value={stats ? stats.total.toLocaleString() : '—'}                accent="navy" />
+        <StatCard label="Missing Keywords" value={stats ? stats.missing_keywords.toLocaleString() : '—'}    accent="amber" />
+        <StatCard label="Missing Industry" value={stats ? stats.missing_industry.toLocaleString() : '—'}    accent="amber" />
+        <StatCard label="Missing Co. Size" value={stats ? stats.missing_num_employees.toLocaleString() : '—'} accent="amber" />
+        <StatCard label="Missing City"     value={stats ? stats.missing_city.toLocaleString() : '—'}        accent="amber" />
       </div>
 
       {/* Stats Row 2 */}
-      <div className="flex gap-4 flex-wrap mb-4">
-        <StatCard label="Unique Domains"  value={stats ? stats.total_domains.toLocaleString() : '—'}            accent="teal" />
-        <StatCard label="w/ Keywords"     value={stats ? stats.domains_with_keywords.toLocaleString() : '—'}    accent="teal" />
-        <StatCard label="w/ Industry"     value={stats ? stats.domains_with_industry.toLocaleString() : '—'}    accent="teal" />
-        <StatCard label="w/ Co. Size"     value={stats ? stats.domains_with_employees.toLocaleString() : '—'}   accent="teal" />
-        <StatCard label="w/ City"         value={stats ? stats.domains_with_city.toLocaleString() : '—'}        accent="teal" />
+      <div className="o-metrics o-metrics-5">
+        <StatCard label="Unique Domains" value={stats ? stats.total_domains.toLocaleString() : '—'}           accent="teal" />
+        <StatCard label="w/ Keywords"    value={stats ? stats.domains_with_keywords.toLocaleString() : '—'}   accent="teal" />
+        <StatCard label="w/ Industry"    value={stats ? stats.domains_with_industry.toLocaleString() : '—'}   accent="teal" />
+        <StatCard label="w/ Co. Size"    value={stats ? stats.domains_with_employees.toLocaleString() : '—'}  accent="teal" />
+        <StatCard label="w/ City"        value={stats ? stats.domains_with_city.toLocaleString() : '—'}       accent="teal" />
       </div>
 
       {/* Toolbar */}
-      <div className="bg-white rounded-xl border border-[#E2E6F0] px-4 py-3 mb-4">
-        {/* Search + Filters */}
-        <div className="flex gap-2 flex-wrap items-center mb-3">
-          <input
-            type="text"
-            value={search}
-            onChange={e => handleSearch(e.target.value)}
-            placeholder="Search email, name, company…"
-            className="px-3 py-[7px] rounded-[7px] border border-[#E2E6F0] text-[13px] outline-none min-w-[220px] focus:border-[#1F6F78] text-[#050C29]"
-          />
-          <select
-            value={workspace}
-            onChange={e => handleWorkspace(e.target.value)}
-            className="px-2.5 py-[7px] rounded-[7px] border border-[#E2E6F0] text-[12px] outline-none bg-white text-[#050C29]"
-          >
-            <option value="">All workspaces</option>
-            {workspaces.map(w => (
-              <option key={w.id} value={w.id}>{w.name || w.id}</option>
-            ))}
-          </select>
-          <select
-            value={source}
-            onChange={e => handleSource(e.target.value)}
-            className="px-2.5 py-[7px] rounded-[7px] border border-[#E2E6F0] text-[12px] outline-none bg-white text-[#050C29]"
-          >
-            <option value="">All sources</option>
-            <option value="apollo_csv">Apollo CSV</option>
-            <option value="plusvibe">PlusVibe</option>
-          </select>
-        </div>
+      <div className="o-card" style={{ marginTop: 16 }}>
+        <div className="o-card-body">
+          {/* Search + Filters */}
+          <div className="o-toolbar" style={{ marginBottom: 12 }}>
+            <div className="o-search-wrap">
+              <span className="o-search-icon">
+                <svg width="14" height="14" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <circle cx="9" cy="9" r="6" stroke="#6B7280" strokeWidth="2" />
+                  <path d="M13.5 13.5L17 17" stroke="#6B7280" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+              </span>
+              <input
+                type="text"
+                value={search}
+                onChange={e => handleSearch(e.target.value)}
+                placeholder="Search email, name, company…"
+              />
+            </div>
+            <select
+              value={workspace}
+              onChange={e => handleWorkspace(e.target.value)}
+              className="o-select"
+            >
+              <option value="">All workspaces</option>
+              {workspaces.map(w => (
+                <option key={w.id} value={w.id}>{w.name || w.id}</option>
+              ))}
+            </select>
+            <select
+              value={source}
+              onChange={e => handleSource(e.target.value)}
+              className="o-select"
+            >
+              <option value="">All sources</option>
+              <option value="apollo_csv">Apollo CSV</option>
+              <option value="plusvibe">PlusVibe</option>
+            </select>
+          </div>
 
-        {/* Missing data chips */}
-        <div className="flex gap-2 flex-wrap items-center mb-2">
-          <span className="text-[11px] font-bold uppercase tracking-[0.5px] text-[#6B7280]">Missing:</span>
-          <Chip label="Keywords"     missingKey="keywords" />
-          <Chip label="Industry"     missingKey="industry" />
-          <Chip label="Company Size" missingKey="num_employees" />
-          <Chip label="City"         missingKey="city" />
-          <Chip label="Technologies" missingKey="technologies" />
-          <Chip label="LinkedIn"     missingKey="linkedin_url" />
-        </div>
+          {/* Missing data chips */}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: '#6B7280' }}>Missing:</span>
+            <Chip label="Keywords"     missingKey="keywords" />
+            <Chip label="Industry"     missingKey="industry" />
+            <Chip label="Company Size" missingKey="num_employees" />
+            <Chip label="City"         missingKey="city" />
+            <Chip label="Technologies" missingKey="technologies" />
+            <Chip label="LinkedIn"     missingKey="linkedin_url" />
+          </div>
 
-        {/* Companies House chips */}
-        <div className="flex gap-2 flex-wrap items-center">
-          <span className="text-[11px] font-bold uppercase tracking-[0.5px] text-[#6B7280]">Companies House:</span>
-          <Chip label="Status"       missingKey="company_status" />
-          <Chip label="Not on CH"    missingKey="ch_company_number" />
-          <Chip label="Founded Year" missingKey="ch_founded_year" />
-          <Chip label="Postcode"     missingKey="ch_postcode" />
-          <Chip label="Not Active"   missingKey="not_active" />
-          <Chip label="Has Insolvency"     missingKey="ch_insolvency" />
-          <Chip label="Accounts Overdue"   missingKey="ch_overdue" />
+          {/* Companies House chips */}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: '#6B7280' }}>Companies House:</span>
+            <Chip label="Status"             missingKey="company_status" />
+            <Chip label="Not on CH"          missingKey="ch_company_number" />
+            <Chip label="Founded Year"       missingKey="ch_founded_year" />
+            <Chip label="Postcode"           missingKey="ch_postcode" />
+            <Chip label="Not Active"         missingKey="not_active" />
+            <Chip label="Has Insolvency"     missingKey="ch_insolvency" />
+            <Chip label="Accounts Overdue"   missingKey="ch_overdue" />
+          </div>
         </div>
       </div>
 
       {/* Table */}
-      <div className="bg-white rounded-xl border border-[#E2E6F0] overflow-hidden mb-4">
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-[12px]">
+      <div className="o-card" style={{ marginTop: 16 }}>
+        <div className="o-table-wrap">
+          <table className="o-table">
             <thead>
-              <tr className="bg-[#F8F9FC] border-b-2 border-[#E2E6F0]">
-                <th className="px-2.5 py-2 w-8 text-center">
+              <tr>
+                <th style={{ padding: '8px 10px', width: 32, textAlign: 'center' }}>
                   <input
                     type="checkbox"
                     checked={selectAll}
@@ -605,41 +632,47 @@ export default function DatabasePage() {
                 <SortTh field="email_status"   label="Email Status" />
                 <SortTh field="source"         label="Source" />
                 <SortTh field="imported_at"    label="Imported" />
-                <th className="px-2.5 py-2 text-left text-[11px] font-bold uppercase tracking-[0.4px] text-[#6B7280] whitespace-nowrap">CH Status</th>
-                <th className="px-2.5 py-2 text-left text-[11px] font-bold uppercase tracking-[0.4px] text-[#6B7280] whitespace-nowrap">CH Type</th>
-                <th className="px-2.5 py-2 text-left text-[11px] font-bold uppercase tracking-[0.4px] text-[#6B7280] whitespace-nowrap">CH Founded</th>
-                <th className="px-2.5 py-2 text-left text-[11px] font-bold uppercase tracking-[0.4px] text-[#6B7280] whitespace-nowrap">CH Postcode</th>
-                <th className="px-2.5 py-2 text-left text-[11px] font-bold uppercase tracking-[0.4px] text-[#6B7280] whitespace-nowrap">CH SIC Codes</th>
-                <th className="px-2.5 py-2 text-left text-[11px] font-bold uppercase tracking-[0.4px] text-[#6B7280] whitespace-nowrap">CH Officers</th>
-                <th className="px-2.5 py-2 text-left text-[11px] font-bold uppercase tracking-[0.4px] text-[#6B7280] whitespace-nowrap">CH Insolvency</th>
-                <th className="px-2.5 py-2 text-left text-[11px] font-bold uppercase tracking-[0.4px] text-[#6B7280] whitespace-nowrap">CH Charges</th>
-                <th className="px-2.5 py-2 text-left text-[11px] font-bold uppercase tracking-[0.4px] text-[#6B7280] whitespace-nowrap">CH Overdue</th>
-                <th className="px-2.5 py-2 text-left text-[11px] font-bold uppercase tracking-[0.4px] text-[#6B7280] whitespace-nowrap">CH Address</th>
-                <th className="px-2.5 py-2 text-left text-[11px] font-bold uppercase tracking-[0.4px] text-[#6B7280] whitespace-nowrap">CH Cessation</th>
-                <th className="px-2.5 py-2 text-left text-[11px] font-bold uppercase tracking-[0.4px] text-[#6B7280] whitespace-nowrap">CH Last Accounts</th>
+                <th style={{ padding: '8px 10px', textAlign: 'left', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', color: '#6B7280', whiteSpace: 'nowrap' }}>CH Status</th>
+                <th style={{ padding: '8px 10px', textAlign: 'left', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', color: '#6B7280', whiteSpace: 'nowrap' }}>CH Type</th>
+                <th style={{ padding: '8px 10px', textAlign: 'left', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', color: '#6B7280', whiteSpace: 'nowrap' }}>CH Founded</th>
+                <th style={{ padding: '8px 10px', textAlign: 'left', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', color: '#6B7280', whiteSpace: 'nowrap' }}>CH Postcode</th>
+                <th style={{ padding: '8px 10px', textAlign: 'left', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', color: '#6B7280', whiteSpace: 'nowrap' }}>CH SIC Codes</th>
+                <th style={{ padding: '8px 10px', textAlign: 'left', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', color: '#6B7280', whiteSpace: 'nowrap' }}>CH Officers</th>
+                <th style={{ padding: '8px 10px', textAlign: 'left', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', color: '#6B7280', whiteSpace: 'nowrap' }}>CH Insolvency</th>
+                <th style={{ padding: '8px 10px', textAlign: 'left', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', color: '#6B7280', whiteSpace: 'nowrap' }}>CH Charges</th>
+                <th style={{ padding: '8px 10px', textAlign: 'left', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', color: '#6B7280', whiteSpace: 'nowrap' }}>CH Overdue</th>
+                <th style={{ padding: '8px 10px', textAlign: 'left', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', color: '#6B7280', whiteSpace: 'nowrap' }}>CH Address</th>
+                <th style={{ padding: '8px 10px', textAlign: 'left', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', color: '#6B7280', whiteSpace: 'nowrap' }}>CH Cessation</th>
+                <th style={{ padding: '8px 10px', textAlign: 'left', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', color: '#6B7280', whiteSpace: 'nowrap' }}>CH Last Accounts</th>
                 <SortTh field="enriched_at" label="Enriched" />
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={28} className="text-center py-8 text-[#6B7280]">Loading…</td>
+                  <td colSpan={28} style={{ textAlign: 'center', padding: '32px 0' }}>
+                    <span className="o-spin" />
+                  </td>
                 </tr>
               ) : error ? (
                 <tr>
-                  <td colSpan={28} className="text-center py-8 text-[#DC2626]">Error: {error}</td>
+                  <td colSpan={28} style={{ textAlign: 'center', padding: '32px 0', color: '#DC2626' }}>
+                    Error: {error}
+                  </td>
                 </tr>
               ) : contacts.length === 0 ? (
                 <tr>
-                  <td colSpan={28} className="text-center py-8 text-[#6B7280]">No contacts found</td>
+                  <td colSpan={28}>
+                    <div className="o-empty">No contacts found</div>
+                  </td>
                 </tr>
               ) : (
                 contacts.map(c => (
                   <tr
                     key={c.id}
-                    className={`border-b border-[#E2E6F0] transition-colors hover:bg-[#F8F9FC] ${selectedIds.has(c.id) ? 'bg-[#EFF6FF]' : ''}`}
+                    style={selectedIds.has(c.id) ? { background: '#EFF6FF' } : {}}
                   >
-                    <td className="px-2.5 py-[7px] w-8 text-center">
+                    <td style={{ padding: '7px 10px', width: 32, textAlign: 'center' }}>
                       <input
                         type="checkbox"
                         checked={selectedIds.has(c.id)}
@@ -654,13 +687,13 @@ export default function DatabasePage() {
                     <Cell value={c.job_title} />
                     <Cell value={c.industry} />
                     {c.num_employees != null
-                      ? <td className="px-2.5 py-[7px] text-[12px] text-[#050C29]">{Number(c.num_employees).toLocaleString()}</td>
+                      ? <td style={{ padding: '7px 10px', fontSize: 12, color: '#050C29' }}>{Number(c.num_employees).toLocaleString()}</td>
                       : <Cell value={null} />
                     }
                     <Cell value={fmtKeywords(c.keywords)} />
                     <Cell value={c.city} />
                     <Cell value={c.country} />
-                    <td className="px-2.5 py-[7px]">
+                    <td style={{ padding: '7px 10px' }}>
                       <EmailStatusBadge status={c.email_status} />
                     </td>
                     <Cell value={c.source} />

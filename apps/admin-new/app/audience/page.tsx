@@ -280,64 +280,24 @@ function AudienceTable({ title, subtitle, rows, loading, sortState, onSort }: Au
   }
 
   return (
-    <div
-      style={{
-        background: '#fff',
-        border: '1px solid #E2E6F0',
-        borderRadius: 12,
-        overflow: 'hidden',
-      }}
-    >
-      <div
-        style={{
-          padding: '1rem 1.25rem .75rem',
-          borderBottom: '1px solid #E2E6F0',
-          display: 'flex',
-          alignItems: 'baseline',
-          gap: '.5rem',
-        }}
-      >
-        <span
-          style={{
-            fontFamily: 'Genos, sans-serif',
-            fontSize: '1.1rem',
-            fontWeight: 800,
-            color: '#050C29',
-          }}
-        >
-          {title}
-        </span>
-        {subtitle && (
-          <span style={{ fontSize: 12, color: '#6B7280' }}>{subtitle}</span>
-        )}
+    <div className="o-card" style={{ overflow: 'hidden' }}>
+      <div className="o-card-header">
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: '.5rem' }}>
+          <div className="o-card-title">{title}</div>
+          {subtitle && (
+            <span style={{ fontSize: 12, color: '#6B7280' }}>{subtitle}</span>
+          )}
+        </div>
       </div>
-      <div style={{ overflowX: 'auto' }}>
+      <div className="o-card-body" style={{ padding: 0, overflowX: 'auto' }}>
         {loading ? (
-          <div
-            style={{
-              textAlign: 'center',
-              padding: '2rem',
-              color: '#6B7280',
-              fontSize: 13,
-            }}
-          >
-            Loading...
+          <div className="o-empty">
+            <span className="o-spin" />
           </div>
         ) : rows.length === 0 ? (
-          <div
-            style={{
-              textAlign: 'center',
-              padding: '3rem 1rem',
-              color: '#6B7280',
-              fontSize: 14,
-            }}
-          >
-            No contacts found for this client.
-          </div>
+          <div className="o-empty">No contacts found for this client.</div>
         ) : (
-          <table
-            style={{ width: '100%', borderCollapse: 'collapse', minWidth: 600 }}
-          >
+          <table className="o-table" style={{ minWidth: 600 }}>
             <thead>
               <tr>
                 {COLS.map((c) => (
@@ -345,15 +305,8 @@ function AudienceTable({ title, subtitle, rows, loading, sortState, onSort }: Au
                     key={c.key}
                     onClick={() => onSort(c.key)}
                     style={{
-                      fontSize: 11,
-                      fontWeight: 700,
-                      textTransform: 'uppercase',
-                      letterSpacing: '.4px',
                       color: c.key === sortState.col ? '#050C29' : '#6B7280',
-                      padding: '.6rem .85rem',
                       textAlign: c.key === 'segment' ? 'left' : 'right',
-                      background: '#FAFAFA',
-                      borderBottom: '1px solid #E2E6F0',
                       cursor: 'pointer',
                       userSelect: 'none',
                       whiteSpace: 'nowrap',
@@ -376,9 +329,6 @@ function AudienceTable({ title, subtitle, rows, loading, sortState, onSort }: Au
                     <td
                       key={c.key}
                       style={{
-                        padding: '.6rem .85rem',
-                        fontSize: 13,
-                        borderBottom: i === sorted.length - 1 ? 'none' : '1px solid #F3F4F6',
                         verticalAlign: 'middle',
                         textAlign: c.key === 'segment' ? 'left' : 'right',
                         fontWeight: 600,
@@ -414,12 +364,12 @@ function RecCard({ rec }: { rec: Recommendation }) {
   return (
     <div
       style={{
-        background: '#fff',
-        border: '1px solid #E5E7EB',
+        border: '1px solid #E2E6F0',
         borderLeft: '3px solid #224388',
         borderRadius: 8,
         padding: '1rem 1.25rem',
         marginBottom: '.85rem',
+        background: '#FFFFFF',
       }}
     >
       <div
@@ -538,16 +488,8 @@ function RecCard({ rec }: { rec: Recommendation }) {
                     {s}{' '}
                     <button
                       onClick={() => copyText(s)}
-                      style={{
-                        background: 'transparent',
-                        border: '1px solid #E5E7EB',
-                        color: '#6B7280',
-                        padding: '2px 8px',
-                        borderRadius: 6,
-                        fontSize: 11,
-                        cursor: 'pointer',
-                        marginLeft: 6,
-                      }}
+                      className="o-btn o-btn-ghost o-btn-sm"
+                      style={{ marginLeft: 6 }}
                     >
                       copy
                     </button>
@@ -577,16 +519,8 @@ function RecCard({ rec }: { rec: Recommendation }) {
                     {s}{' '}
                     <button
                       onClick={() => copyText(s)}
-                      style={{
-                        background: 'transparent',
-                        border: '1px solid #E5E7EB',
-                        color: '#6B7280',
-                        padding: '2px 8px',
-                        borderRadius: 6,
-                        fontSize: 11,
-                        cursor: 'pointer',
-                        marginLeft: 6,
-                      }}
+                      className="o-btn o-btn-ghost o-btn-sm"
+                      style={{ marginLeft: 6 }}
                     >
                       copy
                     </button>
@@ -973,60 +907,19 @@ export default function AudiencePage() {
     return "Read-only intelligence based on this client's audience + past campaign data"
   }
 
-  const btnBase: React.CSSProperties = {
-    padding: '8px 14px',
-    border: '1.5px solid #E5E7EB',
-    borderRadius: 8,
-    font: '600 13px Inter, sans-serif',
-    cursor: 'pointer',
-    whiteSpace: 'nowrap',
-  }
-
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        background: '#F0F2F8',
-        fontFamily: 'Inter, sans-serif',
-        color: '#050C29',
-      }}
-    >
-      <div style={{ maxWidth: 1400, margin: '0 auto', padding: '2rem 1.5rem' }}>
-        {/* Top bar */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '1rem',
-            marginBottom: '2rem',
-            flexWrap: 'wrap',
-          }}
-        >
-          <h1
-            style={{
-              fontFamily: 'Genos, sans-serif',
-              fontSize: '1.75rem',
-              fontWeight: 800,
-              color: '#050C29',
-              margin: 0,
-            }}
-          >
-            Audience Profiles
-          </h1>
-
+    <div className="o-page">
+      {/* Top bar */}
+      <div className="o-page-header">
+        <div>
+          <div className="o-page-title">Audience Profiles</div>
+        </div>
+        <div className="o-page-actions">
           <select
+            className="o-select"
             value={selectedWsId}
             onChange={(e) => setSelectedWsId(e.target.value)}
-            style={{
-              padding: '8px 14px',
-              border: '1.5px solid #E5E7EB',
-              borderRadius: 8,
-              font: '600 13px Inter, sans-serif',
-              color: '#050C29',
-              background: '#fff',
-              cursor: 'pointer',
-              minWidth: 220,
-            }}
+            style={{ minWidth: 220 }}
           >
             <option value="">— Select client —</option>
             <option value="all">— Show All Clients —</option>
@@ -1039,18 +932,10 @@ export default function AudiencePage() {
 
           {hasClient && selectedWsId !== 'all' && hasCampaigns && (
             <select
+              className="o-select"
               value={selectedCampaignId}
               onChange={(e) => setSelectedCampaignId(e.target.value)}
-              style={{
-                padding: '8px 14px',
-                border: '1.5px solid #E5E7EB',
-                borderRadius: 8,
-                font: '600 13px Inter, sans-serif',
-                color: '#050C29',
-                background: '#fff',
-                cursor: 'pointer',
-                minWidth: 260,
-              }}
+              style={{ minWidth: 260 }}
             >
               <option value="">— All campaigns —</option>
               {campaigns.map((c) => (
@@ -1062,414 +947,281 @@ export default function AudiencePage() {
           )}
 
           <button
+            className="o-btn o-btn-primary"
             onClick={runRefresh}
             disabled={refreshing}
-            style={{
-              ...btnBase,
-              background: '#224388',
-              color: '#fff',
-              borderColor: '#224388',
-              opacity: refreshing ? 0.6 : 1,
-            }}
           >
-            {refreshing ? '↻ Running...' : '↻ Refresh All'}
+            {refreshing ? <><span className="o-spin" /> Running...</> : '↻ Refresh All'}
           </button>
 
           <button
+            className="o-btn o-btn-ghost"
             onClick={runBackfill}
             disabled={backfilling}
             title="Spread known industry/city/state across contacts at the same domain — fast, no PV walk"
-            style={{
-              ...btnBase,
-              background: '#fff',
-              color: '#224388',
-              borderColor: '#224388',
-              opacity: backfilling ? 0.6 : 1,
-            }}
           >
-            {backfilling ? '↺ Filling...' : '↺ Fill Unknowns'}
+            {backfilling ? <><span className="o-spin" /> Filling...</> : '↺ Fill Unknowns'}
           </button>
 
           <button
+            className="o-btn o-btn-teal"
             onClick={runEmpSizeBackfill}
             disabled={empSizing}
             title="Pull company size from PlusVibe enrichment data (all workspaces, ~1–2 min)"
-            style={{
-              ...btnBase,
-              background: '#fff',
-              color: '#1F6F78',
-              borderColor: '#1F6F78',
-              opacity: empSizing ? 0.6 : 1,
-            }}
           >
-            {empSizing ? '⬇ Syncing...' : '⬇ Sync Company Size'}
+            {empSizing ? <><span className="o-spin" /> Syncing...</> : '⬇ Sync Company Size'}
           </button>
 
           {refreshStatus && (
             <span style={{ fontSize: 13, color: '#6B7280' }}>{refreshStatus}</span>
           )}
         </div>
+      </div>
 
-        {/* Summary strip */}
-        {hasClient && icpData && (
-          <div
-            style={{
-              display: 'flex',
-              gap: '1rem',
-              marginBottom: '2rem',
-              flexWrap: 'wrap',
-            }}
-          >
-            {(
-              [
-                { val: fmt(t.total), label: 'Contacts' },
-                { val: fmt(t.sent), label: 'Total Sent' },
-                { val: fmt(t.replied), label: 'Replied' },
-                { val: fmt(t.leads), label: 'Leads (Interested)' },
-                { val: fmt(t.not_interested), label: 'Not Interested' },
-                { val: pct(rate), label: 'Reply Rate' },
-                { val: lpt != null ? lpt.toFixed(1) : '—', label: 'LPT (leads/1k sent)' },
-                { val: rtl != null ? rtl.toFixed(1) : '—', label: 'RTL (responses/lead)' },
-              ] as const
-            ).map((card) => (
+      {/* Summary strip */}
+      {hasClient && icpData && (
+        <div className="o-metrics o-metrics-auto" style={{ marginBottom: '2rem' }}>
+          {(
+            [
+              { val: fmt(t.total), label: 'Contacts' },
+              { val: fmt(t.sent), label: 'Total Sent' },
+              { val: fmt(t.replied), label: 'Replied' },
+              { val: fmt(t.leads), label: 'Leads (Interested)' },
+              { val: fmt(t.not_interested), label: 'Not Interested' },
+              { val: pct(rate), label: 'Reply Rate' },
+              { val: lpt != null ? lpt.toFixed(1) : '—', label: 'LPT (leads/1k sent)' },
+              { val: rtl != null ? rtl.toFixed(1) : '—', label: 'RTL (responses/lead)' },
+            ] as const
+          ).map((card) => (
+            <div className="o-metric" key={card.label} style={{ borderTopColor: '#224388' }}>
+              <div className="o-metric-label">{card.label}</div>
+              <div className="o-metric-val" style={{ color: '#224388' }}>{card.val}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* AI Recommendations panel */}
+      {hasClient && (
+        <div
+          className="o-card"
+          style={{ borderLeft: '3px solid #1F6F78', marginBottom: '1.5rem' }}
+        >
+          <div className="o-card-header">
+            <div>
+              <div className="o-card-title">AI Campaign Recommendations</div>
+              <div style={{ fontSize: 12, color: '#6B7280' }}>{aiSubtitle()}</div>
+            </div>
+            <div style={{ display: 'flex', gap: '.5rem', flexWrap: 'wrap' }}>
+              <button
+                className="o-btn o-btn-ghost"
+                onClick={copyPromptForClaudeAi}
+                disabled={aiLoading}
+              >
+                📋 Copy prompt
+              </button>
+              <button
+                className="o-btn o-btn-teal"
+                onClick={pasteAndRender}
+              >
+                📥 Paste response
+              </button>
+              <button
+                className="o-btn o-btn-ghost"
+                onClick={getRecommendations}
+                disabled={aiLoading}
+                title="Direct API call — costs ~$0.01"
+              >
+                {aiLoading ? <><span className="o-spin" /> Analyzing...</> : '⚡ Via API'}
+              </button>
+            </div>
+          </div>
+
+          <div className="o-card-body">
+            {aiLoading && (
+              <div style={{ color: '#6B7280', fontSize: 13 }}>
+                Analyzing audience + past campaigns via API...
+              </div>
+            )}
+            {aiError && (
+              <div className="o-empty" style={{ color: '#6B7280' }}>
+                {aiError}
+              </div>
+            )}
+            {!aiLoading && !aiError && !aiRecs && aiSource && (
               <div
-                key={card.label}
                 style={{
-                  background: '#fff',
-                  border: '1px solid #E2E6F0',
-                  borderTop: '3px solid #224388',
-                  borderRadius: 10,
-                  padding: '1rem 1.5rem',
-                  flex: 1,
-                  minWidth: 160,
+                  background: '#F8F9FC',
+                  borderLeft: '3px solid #1F6F78',
+                  padding: '.85rem 1.1rem',
+                  borderRadius: 8,
+                  fontSize: 13,
+                  lineHeight: 1.6,
+                  color: '#050C29',
                 }}
               >
-                <div
-                  style={{
-                    fontFamily: 'Genos, sans-serif',
-                    fontSize: '2rem',
-                    fontWeight: 800,
-                    color: '#050C29',
-                    lineHeight: 1,
-                  }}
+                <b>Prompt copied. Paste box cleared.</b>
+                <br />
+                1. Open{' '}
+                <a
+                  href="https://claude.ai/new"
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ color: '#1F6F78', fontWeight: 600 }}
                 >
-                  {card.val}
-                </div>
-                <div
-                  style={{
-                    fontSize: 12,
-                    fontWeight: 500,
-                    color: '#6B7280',
-                    marginTop: 4,
-                  }}
-                >
-                  {card.label}
-                </div>
+                  Claude.ai →
+                </a>{' '}
+                and paste
+                <br />
+                2. Copy Claude&apos;s JSON response
+                <br />
+                3. Click <b>📥 Paste response</b> above to render
               </div>
-            ))}
-          </div>
-        )}
-
-        {/* AI Recommendations panel */}
-        {hasClient && (
-          <div
-            style={{
-              background: '#fff',
-              border: '1px solid #E2E6F0',
-              borderLeft: '3px solid #1F6F78',
-              borderRadius: 12,
-              overflow: 'hidden',
-              marginBottom: '1.5rem',
-            }}
-          >
-            <div
-              style={{
-                padding: '1rem 1.25rem',
-                borderBottom: '1px solid #E2E6F0',
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                flexWrap: 'wrap',
-                gap: '.75rem',
-              }}
-            >
+            )}
+            {aiRecs && (
               <div>
-                <div
-                  style={{
-                    fontFamily: 'Genos, sans-serif',
-                    fontSize: '1.1rem',
-                    fontWeight: 800,
-                    color: '#050C29',
-                  }}
-                >
-                  AI Campaign Recommendations
-                </div>
-                <div style={{ fontSize: 12, color: '#6B7280' }}>{aiSubtitle()}</div>
-              </div>
-              <div style={{ display: 'flex', gap: '.5rem', flexWrap: 'wrap' }}>
-                <button
-                  onClick={copyPromptForClaudeAi}
-                  disabled={aiLoading}
-                  style={{
-                    ...btnBase,
-                    background: '#fff',
-                    color: '#224388',
-                    borderColor: '#224388',
-                    opacity: aiLoading ? 0.6 : 1,
-                  }}
-                >
-                  📋 Copy prompt
-                </button>
-                <button
-                  onClick={pasteAndRender}
-                  style={{
-                    ...btnBase,
-                    background: '#1F6F78',
-                    color: '#fff',
-                    borderColor: '#1F6F78',
-                  }}
-                >
-                  📥 Paste response
-                </button>
-                <button
-                  onClick={getRecommendations}
-                  disabled={aiLoading}
-                  title="Direct API call — costs ~$0.01"
-                  style={{
-                    ...btnBase,
-                    background: '#fff',
-                    color: '#6B7280',
-                    borderColor: '#E5E7EB',
-                    opacity: aiLoading ? 0.6 : 1,
-                  }}
-                >
-                  {aiLoading ? 'Analyzing...' : '⚡ Via API'}
-                </button>
-              </div>
-            </div>
-
-            <div style={{ padding: '1rem 1.25rem 1.25rem' }}>
-              {aiLoading && (
-                <div style={{ color: '#6B7280', fontSize: 13 }}>
-                  Analyzing audience + past campaigns via API...
-                </div>
-              )}
-              {aiError && (
-                <div
-                  style={{
-                    textAlign: 'center',
-                    padding: '1rem',
-                    color: '#6B7280',
-                    fontSize: 14,
-                  }}
-                >
-                  {aiError}
-                </div>
-              )}
-              {!aiLoading && !aiError && !aiRecs && aiSource && (
-                <div
-                  style={{
-                    background: '#F8F9FC',
-                    borderLeft: '3px solid #1F6F78',
-                    padding: '.85rem 1.1rem',
-                    borderRadius: 8,
-                    fontSize: 13,
-                    lineHeight: 1.6,
-                    color: '#050C29',
-                  }}
-                >
-                  <b>Prompt copied. Paste box cleared.</b>
-                  <br />
-                  1. Open{' '}
-                  <a
-                    href="https://claude.ai/new"
-                    target="_blank"
-                    rel="noreferrer"
-                    style={{ color: '#1F6F78', fontWeight: 600 }}
-                  >
-                    Claude.ai →
-                  </a>{' '}
-                  and paste
-                  <br />
-                  2. Copy Claude&apos;s JSON response
-                  <br />
-                  3. Click <b>📥 Paste response</b> above to render
-                </div>
-              )}
-              {aiRecs && (
-                <div>
-                  {aiRecs.summary && (
-                    <div
-                      style={{
-                        background: '#F8F9FC',
-                        borderRadius: 8,
-                        padding: '.85rem 1.1rem',
-                        fontSize: 13,
-                        color: '#050C29',
-                        marginBottom: '1rem',
-                        borderLeft: '3px solid #1F6F78',
-                      }}
-                    >
-                      {aiRecs.summary}
-                    </div>
-                  )}
-                  {aiRecs.recommendations.map((rec, i) => (
-                    <RecCard key={i} rec={rec} />
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {showPasteArea && (
-              <div style={{ padding: '0 1.25rem 1.25rem' }}>
-                <div
-                  style={{
-                    fontSize: 11,
-                    fontWeight: 700,
-                    textTransform: 'uppercase',
-                    letterSpacing: '.5px',
-                    color: '#6B7280',
-                    marginBottom: '.5rem',
-                  }}
-                >
-                  Paste Claude.ai&apos;s JSON response here
-                </div>
-                <textarea
-                  value={pasteText}
-                  onChange={(e) => setPasteText(e.target.value)}
-                  placeholder='{ "summary": "...", "recommendations": [...] }'
-                  style={{
-                    width: '100%',
-                    minHeight: 120,
-                    padding: '.75rem 1rem',
-                    border: '1.5px solid #E5E7EB',
-                    borderRadius: 8,
-                    font: "13px/1.5 'SF Mono', 'Menlo', monospace",
-                    color: '#050C29',
-                    background: '#FAFAFA',
-                    resize: 'vertical',
-                  }}
-                />
-                <div
-                  style={{
-                    display: 'flex',
-                    gap: '.5rem',
-                    marginTop: '.5rem',
-                    alignItems: 'center',
-                  }}
-                >
-                  <button
-                    onClick={() => renderPasted()}
+                {aiRecs.summary && (
+                  <div
                     style={{
-                      ...btnBase,
-                      background: '#1F6F78',
-                      color: '#fff',
-                      borderColor: '#1F6F78',
+                      background: '#F8F9FC',
+                      borderRadius: 8,
+                      padding: '.85rem 1.1rem',
+                      fontSize: 13,
+                      color: '#050C29',
+                      marginBottom: '1rem',
+                      borderLeft: '3px solid #1F6F78',
                     }}
                   >
-                    Render response
-                  </button>
-                  <button
-                    onClick={() => {
-                      setPasteText('')
-                      setPasteStatus('')
-                    }}
-                    style={{
-                      ...btnBase,
-                      background: '#fff',
-                      color: '#6B7280',
-                      borderColor: '#E5E7EB',
-                    }}
-                  >
-                    Clear
-                  </button>
-                  {pasteStatus && (
-                    <span style={{ fontSize: 12, color: pasteStatusColor }}>
-                      {pasteStatus}
-                    </span>
-                  )}
-                </div>
+                    {aiRecs.summary}
+                  </div>
+                )}
+                {aiRecs.recommendations.map((rec, i) => (
+                  <RecCard key={i} rec={rec} />
+                ))}
               </div>
             )}
           </div>
-        )}
 
-        {/* No client selected */}
-        {!hasClient && (
-          <div
-            style={{
-              textAlign: 'center',
-              padding: '4rem 1rem',
-              color: '#6B7280',
-              fontSize: 14,
-            }}
-          >
-            Select a client above to view their audience breakdown.
-          </div>
-        )}
+          {showPasteArea && (
+            <div style={{ padding: '0 1.25rem 1.25rem' }}>
+              <div className="o-label" style={{ marginBottom: '.5rem' }}>
+                Paste Claude.ai&apos;s JSON response here
+              </div>
+              <textarea
+                className="o-input"
+                value={pasteText}
+                onChange={(e) => setPasteText(e.target.value)}
+                placeholder='{ "summary": "...", "recommendations": [...] }'
+                rows={5}
+                style={{
+                  width: '100%',
+                  minHeight: 120,
+                  font: "13px/1.5 'SF Mono', 'Menlo', monospace",
+                  resize: 'vertical',
+                }}
+              />
+              <div
+                style={{
+                  display: 'flex',
+                  gap: '.5rem',
+                  marginTop: '.5rem',
+                  alignItems: 'center',
+                }}
+              >
+                <button
+                  className="o-btn o-btn-teal"
+                  onClick={() => renderPasted()}
+                >
+                  Render response
+                </button>
+                <button
+                  className="o-btn o-btn-ghost"
+                  onClick={() => {
+                    setPasteText('')
+                    setPasteStatus('')
+                  }}
+                >
+                  Clear
+                </button>
+                {pasteStatus && (
+                  <span style={{ fontSize: 12, color: pasteStatusColor }}>
+                    {pasteStatus}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
-        {/* ICP error */}
-        {hasClient && icpError && (
-          <div
-            style={{
-              textAlign: 'center',
-              padding: '2rem',
-              color: '#dc2626',
-              fontSize: 14,
-              background: '#FEE2E2',
-              borderRadius: 12,
-              marginBottom: '1.5rem',
-            }}
-          >
-            Failed to load data: {icpError}
-          </div>
-        )}
+      {/* No client selected */}
+      {!hasClient && (
+        <div className="o-empty">
+          Select a client above to view their audience breakdown.
+        </div>
+      )}
 
-        {/* Tables grid */}
-        {hasClient && !icpError && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1.5rem' }}>
-            <AudienceTable
-              title="Industry"
-              subtitle="Top 25"
-              rows={icpData?.industry ?? []}
-              loading={loadingIcp}
-              sortState={sortIndustry}
-              onSort={makeToggleSort('tblIndustry')}
-            />
-            <AudienceTable
-              title="City"
-              subtitle="Top 25"
-              rows={icpData?.city ?? []}
-              loading={loadingIcp}
-              sortState={sortCity}
-              onSort={makeToggleSort('tblCity')}
-            />
-            <AudienceTable
-              title="County / State"
-              subtitle="Top 25"
-              rows={icpData?.county ?? []}
-              loading={loadingIcp}
-              sortState={sortCounty}
-              onSort={makeToggleSort('tblCounty')}
-            />
-            <AudienceTable
-              title="Company Size"
-              subtitle="Employees"
-              rows={icpData?.size ?? []}
-              loading={loadingIcp}
-              sortState={sortSize}
-              onSort={makeToggleSort('tblSize')}
-            />
-            <AudienceTable
-              title="Seniority"
-              rows={icpData?.seniority ?? []}
-              loading={loadingIcp}
-              sortState={sortSeniority}
-              onSort={makeToggleSort('tblSeniority')}
-            />
-          </div>
-        )}
-      </div>
+      {/* ICP error */}
+      {hasClient && icpError && (
+        <div
+          style={{
+            textAlign: 'center',
+            padding: '2rem',
+            color: '#DC2626',
+            fontSize: 14,
+            background: '#FEE2E2',
+            borderRadius: 12,
+            marginBottom: '1.5rem',
+          }}
+        >
+          Failed to load data: {icpError}
+        </div>
+      )}
+
+      {/* Tables grid */}
+      {hasClient && !icpError && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1.5rem' }}>
+          <AudienceTable
+            title="Industry"
+            subtitle="Top 25"
+            rows={icpData?.industry ?? []}
+            loading={loadingIcp}
+            sortState={sortIndustry}
+            onSort={makeToggleSort('tblIndustry')}
+          />
+          <AudienceTable
+            title="City"
+            subtitle="Top 25"
+            rows={icpData?.city ?? []}
+            loading={loadingIcp}
+            sortState={sortCity}
+            onSort={makeToggleSort('tblCity')}
+          />
+          <AudienceTable
+            title="County / State"
+            subtitle="Top 25"
+            rows={icpData?.county ?? []}
+            loading={loadingIcp}
+            sortState={sortCounty}
+            onSort={makeToggleSort('tblCounty')}
+          />
+          <AudienceTable
+            title="Company Size"
+            subtitle="Employees"
+            rows={icpData?.size ?? []}
+            loading={loadingIcp}
+            sortState={sortSize}
+            onSort={makeToggleSort('tblSize')}
+          />
+          <AudienceTable
+            title="Seniority"
+            rows={icpData?.seniority ?? []}
+            loading={loadingIcp}
+            sortState={sortSeniority}
+            onSort={makeToggleSort('tblSeniority')}
+          />
+        </div>
+      )}
     </div>
   )
 }
