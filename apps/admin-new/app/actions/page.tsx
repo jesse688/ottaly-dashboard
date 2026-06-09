@@ -993,144 +993,76 @@ export default function ActionsPage() {
 
             {/* Client rows */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-              {scanResults.map((r) => {
-                const borderColor = r.color === 'red' ? '#DC2626' : r.color === 'amber' ? '#D97706' : '#16A34A'
-                const dotBg = r.color === 'red' ? '#DC2626' : r.color === 'amber' ? '#D97706' : '#16A34A'
+              <div className="o-table-wrap">
+                <table className="o-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: 8 }}></th>
+                      <th>Client</th>
+                      <th style={{ textAlign: 'right' }}>Sent today</th>
+                      <th style={{ textAlign: 'right' }}>Capacity</th>
+                      <th style={{ textAlign: 'right' }}>Reply rate</th>
+                      <th style={{ textAlign: 'right' }}>3d avg</th>
+                      <th style={{ textAlign: 'right' }}>Bounce</th>
+                      <th style={{ textAlign: 'right' }}>Last lead</th>
+                      <th>Flags</th>
+                      <th style={{ width: 60 }}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {scanResults.map((r) => {
+                      const borderColor = r.color === 'red' ? '#DC2626' : r.color === 'amber' ? '#D97706' : '#16A34A'
+                      const capColor = r.capPct === null ? '#D1D5DB' : r.capPct < 50 ? '#DC2626' : r.capPct < 80 ? '#D97706' : '#16A34A'
+                      const rrColor = r.todayAgg.sent < 5 ? '#D1D5DB' : r.replyTodayEx >= 3 ? '#16A34A' : r.replyTodayEx >= 1 ? '#D97706' : '#DC2626'
+                      const avg3d = r.reply3dEx > 0 ? fmtPct(r.reply3dEx) : '—'
+                      const bounceColor = r.todayAgg.sent < 5 ? '#D1D5DB' : r.bounceToday > THR.bounceMax ? '#DC2626' : r.bounceToday > 3 ? '#D97706' : '#16A34A'
+                      const lastLeadText = r.lastLeadDays === null ? 'No data' : r.lastLeadDays === 0 ? 'Today' : r.lastLeadDays === 1 ? 'Yesterday' : `${r.lastLeadDays}d ago`
+                      const lastLeadColor = r.lastLeadDays === null ? '#D97706' : r.lastLeadDays > 14 ? '#DC2626' : r.lastLeadDays > 7 ? '#D97706' : '#16A34A'
+                      const dropped = r.reply3dEx > 0.5 && r.replyTodayEx < r.reply3dEx * (1 - THR.replyDropPct / 100)
+                      const up = r.reply3dEx > 0 && r.replyTodayEx > r.reply3dEx * 1.1
 
-                // Send vol cell
-                let sendVolCell: React.ReactNode
-                if (r.capPct === null) {
-                  sendVolCell = (
-                    <>
-                      <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: '#D1D5DB' }}>—</div>
-                      <div style={{ fontSize: 11, color: '#6B7280' }}>{fmtN(r.todayAgg.sent)} sent</div>
-                    </>
-                  )
-                } else {
-                  const cls = r.capPct < 50 ? '#DC2626' : r.capPct < 80 ? '#D97706' : '#16A34A'
-                  sendVolCell = (
-                    <>
-                      <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: cls }}>{r.capPct.toFixed(0)}%</div>
-                      <div style={{ height: 3, background: '#E2E6F0', borderRadius: 2, overflow: 'hidden', marginTop: 3 }}>
-                        <div style={{ height: '100%', borderRadius: 2, background: cls, width: `${Math.min(r.capPct, 100).toFixed(0)}%` }} />
-                      </div>
-                      <div style={{ fontSize: 11, color: '#6B7280' }}>{fmtN(r.todayAgg.sent)} sent</div>
-                    </>
-                  )
-                }
-
-                // Reply cell
-                let replyCell: React.ReactNode
-                if (r.todayAgg.sent < 5) {
-                  replyCell = (
-                    <>
-                      <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: '#D1D5DB' }}>—</div>
-                      <div style={{ fontSize: 11, color: '#6B7280' }}>No sends</div>
-                    </>
-                  )
-                } else {
-                  const main = r.replyTodayEx
-                  const base3d = r.reply3dEx
-                  const cls = main >= 3 ? '#16A34A' : main >= 1 ? '#D97706' : '#DC2626'
-                  const dropped = base3d > 0.5 && main < base3d * (1 - THR.replyDropPct / 100)
-                  const up = base3d > 0 && main > base3d * 1.1
-                  const avg = base3d > 0 ? `${fmtPct(base3d)} 3d avg` : ''
-                  replyCell = (
-                    <>
-                      <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: cls, display: 'flex', alignItems: 'center', gap: 3 }}>
-                        {fmtPct(main)}
-                        {dropped && <span style={{ fontSize: 13, color: '#DC2626' }}>↓</span>}
-                        {up && !dropped && <span style={{ fontSize: 13, color: '#16A34A' }}>↑</span>}
-                      </div>
-                      {avg && <div style={{ fontSize: 11, color: '#6B7280' }}>{avg}</div>}
-                      <div style={{ fontSize: 11, color: '#7C89CD' }} title="Incl. OOO & auto-replies">{fmtPct(r.replyToday)} incl. OOO</div>
-                    </>
-                  )
-                }
-
-                // Bounce cell
-                let bounceCell: React.ReactNode
-                if (r.todayAgg.sent < 5) {
-                  bounceCell = <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: '#D1D5DB' }}>—</div>
-                } else {
-                  const cls = r.bounceToday > THR.bounceMax ? '#DC2626' : r.bounceToday > 3 ? '#D97706' : '#16A34A'
-                  bounceCell = <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: cls }}>{fmtPct(r.bounceToday)}</div>
-                }
-
-                // Last lead cell
-                let lastLeadCell: React.ReactNode
-                if (r.lastLeadDays === null) {
-                  lastLeadCell = <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: '#D97706' }}>No data</div>
-                } else if (r.lastLeadDays === 0) {
-                  lastLeadCell = (
-                    <>
-                      <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: '#16A34A' }}>Today</div>
-                      {r.lastLeadDate && <div style={{ fontSize: 11, color: '#6B7280' }}>{r.lastLeadDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</div>}
-                    </>
-                  )
-                } else if (r.lastLeadDays === 1) {
-                  lastLeadCell = (
-                    <>
-                      <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: '#16A34A' }}>Yesterday</div>
-                      {r.lastLeadDate && <div style={{ fontSize: 11, color: '#6B7280' }}>{r.lastLeadDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</div>}
-                    </>
-                  )
-                } else {
-                  const cls = r.lastLeadDays > 14 ? '#DC2626' : r.lastLeadDays > 7 ? '#D97706' : '#16A34A'
-                  lastLeadCell = (
-                    <>
-                      <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: cls }}>{r.lastLeadDays}d ago</div>
-                      {r.lastLeadDate && <div style={{ fontSize: 11, color: '#6B7280' }}>{r.lastLeadDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</div>}
-                    </>
-                  )
-                }
-
-                return (
-                  <div
-                    key={r.ws.id}
-                    className="o-card"
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: '14px 180px 110px 120px 82px 120px 1fr 80px',
-                      gap: '1rem',
-                      alignItems: 'center',
-                      padding: '1.1rem 1.5rem',
-                      borderLeft: `4px solid ${borderColor}`,
-                      borderRadius: 10,
-                    }}
-                  >
-                    <div style={{ width: 10, height: 10, borderRadius: '50%', background: dotBg, flexShrink: 0 }} />
-                    <div style={{ fontSize: 13, fontWeight: 700, color: '#050C29', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.ws.name}>
-                      {r.ws.name}
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>{sendVolCell}</div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>{replyCell}</div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>{bounceCell}</div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>{lastLeadCell}</div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
-                      {r.flags.length === 0 ? (
-                        <span style={{ fontSize: 12, color: '#D1D5DB', fontWeight: 500 }}>✓ Healthy</span>
-                      ) : (
-                        r.flags.map((f) => (
-                          <span
-                            key={f.type}
-                            className={f.color === 'red' ? 'o-status o-status-critical' : 'o-status o-status-warning'}
-                          >
-                            {f.label}
-                          </span>
-                        ))
-                      )}
-                    </div>
-                    <button
-                      className="o-btn o-btn-ghost o-btn-sm"
-                      onClick={() => setActiveWS(r.ws)}
-                      style={{ justifySelf: 'end', whiteSpace: 'nowrap' }}
-                    >
-                      View →
-                    </button>
-                  </div>
-                )
-              })}
+                      return (
+                        <tr
+                          key={r.ws.id}
+                          style={{ borderLeft: `3px solid ${borderColor}`, cursor: 'pointer' }}
+                          onClick={() => setActiveWS(r.ws)}
+                        >
+                          <td><div style={{ width: 8, height: 8, borderRadius: '50%', background: borderColor }} /></td>
+                          <td style={{ fontWeight: 600 }}>{r.ws.name}</td>
+                          <td style={{ textAlign: 'right' }}>{fmtN(r.todayAgg.sent)}</td>
+                          <td style={{ textAlign: 'right', color: capColor, fontWeight: 500 }}>
+                            {r.capPct === null ? '—' : `${r.capPct.toFixed(0)}%`}
+                          </td>
+                          <td style={{ textAlign: 'right', color: rrColor, fontWeight: 500 }}>
+                            {r.todayAgg.sent < 5 ? '—' : (
+                              <span>{fmtPct(r.replyTodayEx)}{dropped ? ' ↓' : up ? ' ↑' : ''}</span>
+                            )}
+                          </td>
+                          <td style={{ textAlign: 'right', color: '#6B7280' }}>{avg3d}</td>
+                          <td style={{ textAlign: 'right', color: bounceColor, fontWeight: 500 }}>
+                            {r.todayAgg.sent < 5 ? '—' : fmtPct(r.bounceToday)}
+                          </td>
+                          <td style={{ textAlign: 'right', color: lastLeadColor, fontWeight: 500 }}>{lastLeadText}</td>
+                          <td>
+                            {r.flags.length === 0 ? (
+                              <span style={{ fontSize: 12, color: '#D1D5DB' }}>✓ OK</span>
+                            ) : r.flags.map((f) => (
+                              <span key={f.type} className={f.color === 'red' ? 'o-status o-status-critical' : 'o-status o-status-warning'} style={{ marginRight: 4 }}>
+                                {f.label}
+                              </span>
+                            ))}
+                          </td>
+                          <td>
+                            <button className="o-btn o-btn-ghost o-btn-sm" onClick={(e) => { e.stopPropagation(); setActiveWS(r.ws) }}>
+                              View →
+                            </button>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </>
         )}
