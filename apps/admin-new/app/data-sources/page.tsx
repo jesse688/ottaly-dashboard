@@ -360,7 +360,10 @@ export default function DataSourcesPage() {
       websiteEmailMap.forEach((email, pid) => emailMap.set(pid, { email, status: 'found_on_website' }))
       // info@ best guess for rows with no name and no scraped email
       bestGuessOnly.forEach(t => {
-        if (t.domain) emailMap.set(t.place_id, { email: 'info@' + t.domain, status: 'unverified_candidate' })
+        if (t.domain) {
+          const bare = t.domain.replace(/^www\./, '')
+          emailMap.set(t.place_id, { email: 'info@' + bare, status: 'unverified_candidate' })
+        }
       })
 
       if (needsVerify.length > 0) {
