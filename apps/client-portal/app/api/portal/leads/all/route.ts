@@ -23,15 +23,22 @@ export async function GET() {
               l.raw->>'country'             AS country,
               l.raw->>'linkedin_person_url' AS linkedin_url,
               l.raw->>'phone_number'        AS phone_number,
-              c.name AS campaign_name
+              c.name AS campaign_name,
+              ld.deal_value,
+              ld.notes AS deal_notes,
+              pd.status AS dispute_status,
+              pd.reason AS dispute_reason,
+              pd.admin_note AS dispute_admin_note
        FROM esp_leads l
        LEFT JOIN esp_campaigns c ON c.id = l.campaign_id AND c.source = 'plusvibe'
+       LEFT JOIN portal_lead_data ld ON ld.lead_id = l.id AND ld.client_id = $3
+       LEFT JOIN portal_lead_disputes pd ON pd.lead_id = l.id AND pd.client_id = $3
        WHERE l.workspace_id = $1
          AND l.source = 'plusvibe'
          AND l.label IS NOT NULL
          AND ($2::text[] = '{}' OR l.label != ALL($2::text[]))
        ORDER BY l.first_replied_at DESC NULLS LAST, l.created_at DESC`,
-      [session.workspaceId, hiddenLabels]
+      [session.workspaceId, hiddenLabels, session.clientId]
     )
     return NextResponse.json(res.rows)
   } catch (err) {
