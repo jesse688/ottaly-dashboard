@@ -3018,7 +3018,7 @@ function computeWorkspaceStatsForRange(wsIds, start, end) {
       totals.bounces    += d.bounces;
       return { date, sent: d.sent, replies: d.replies, posReplies: d.posReplies, oooReplies: d.oooReplies, bounces: d.bounces, leads: dayLeads };
     });
-    const replyRate  = totals.contacted > 0 ? totals.replies / totals.contacted : 0;
+    const replyRate  = totals.sent > 0 ? totals.posReplies / totals.sent : 0;
     const bounceRate = totals.sent    > 0 ? totals.bounces / totals.sent    : 0;
     const rtl        = totals.replies > 0 ? totals.leads   / totals.replies : 0;
     const sendsPerDay   = dates.length > 0 ? totals.sent    / dates.length : 0;
