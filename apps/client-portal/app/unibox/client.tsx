@@ -101,15 +101,6 @@ function cleanCampaign(n: string | null) {
 const AV = ['bg-indigo-100 text-indigo-700','bg-pink-100 text-pink-700','bg-amber-100 text-amber-700','bg-teal-100 text-teal-700','bg-purple-100 text-purple-700','bg-blue-100 text-blue-700','bg-green-100 text-green-700','bg-rose-100 text-rose-700']
 function av(id: string) { let h=0; for(let i=0;i<id.length;i++) h=(h+id.charCodeAt(i))%AV.length; return AV[h] }
 
-// ── Fake replies ──────────────────────────────────────────────────────────
-const REPLIES = [
-  (n:string) => `Hi,\n\nThanks for reaching out — this is actually great timing. We've been looking at options for this and your approach sounds interesting.\n\nHappy to jump on a call. What does your availability look like next week?\n\nCheers,\n${n}`,
-  (n:string) => `Hi there,\n\nAppreciate you getting in touch. Yes, I'd be open to learning more — can you send over some info first?\n\nThanks,\n${n}`,
-  (n:string) => `Hello,\n\nYes I'm interested. We've been struggling with lead generation and this could be a good fit.\n\nFeel free to book a slot or suggest a time.\n\nBest regards,\n${n}`,
-  (n:string) => `Thanks for the email.\n\nWe're actually in the middle of a growth push right now so the timing is good. Would love to hear more — let's get a call scheduled.\n\n${n}`,
-  (n:string) => `Hi,\n\nGood to hear from you. I'd definitely be interested in exploring this further — we're always open to solutions that can drive more qualified leads.\n\nWhen are you free for a quick chat?\n\nKind regards,\n${n}`,
-]
-function pickReply(id:string) { let h=0; for(let i=0;i<id.length;i++) h=(h*31+id.charCodeAt(i))>>>0; return REPLIES[h%REPLIES.length] }
 
 // ─────────────────────────────────────────────────────────────────────────
 export function UniboxClient({ companyName }: { companyName: string }) {
@@ -459,20 +450,21 @@ export function UniboxClient({ companyName }: { companyName: string }) {
                     </div>
                   </div>
                 </div>
-                {/* Reply */}
-                <div className="flex gap-3">
-                  <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 ${av(selected.id)}`}>{initials(selected)}</div>
-                  <div className="flex-1">
-                    <div className="flex items-baseline gap-2 mb-1">
-                      <span className="text-sm font-semibold text-gray-900">{fullName(selected)}</span>
-                      {selected.first_replied_at && <span className="text-xs text-gray-400">{fmtDateLong(selected.first_replied_at)}</span>}
-                    </div>
-                    <div className="text-xs text-gray-500 mb-2">to: outreach@ottaly.co.uk</div>
-                    <div className="rounded-xl border border-gray-200 px-4 py-3 text-sm text-gray-700 bg-white shadow-sm space-y-2">
-                      {pickReply(selected.id)(selected.first_name ?? fullName(selected).split(' ')[0]).split('\n').map((l,i) => l ? <p key={i}>{l}</p> : <br key={i} />)}
+                {/* Reply status */}
+                {selected.first_replied_at && (
+                  <div className="flex gap-3 px-5">
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 ${av(selected.id)}`}>{initials(selected)}</div>
+                    <div className="flex-1">
+                      <div className="flex items-baseline gap-2 mb-1">
+                        <span className="text-sm font-semibold text-gray-900">{fullName(selected)}</span>
+                        <span className="text-xs text-gray-400">{fmtDateLong(selected.first_replied_at)}</span>
+                      </div>
+                      <div className="text-xs text-gray-500 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg">
+                        Lead replied to your outreach
+                      </div>
                     </div>
                   </div>
-                </div>
+                )}
               </div>
 
               {/* Dispute banner */}
