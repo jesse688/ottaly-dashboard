@@ -36,76 +36,65 @@ export async function POST(req: NextRequest) {
 
     for (const ws of workspaces) {
       try {
-        // 2. Fetch campaigns for this workspace
-        console.log(`[backfill] workspace ${ws.name}: fetching campaigns...`)
-        const campRes = await fetch(`${PLUSVIBE_API_URL}/workspaces/${ws.id}/campaigns`, {
-          headers: { 'x-api-key': PLUSVIBE_API_KEY }
-        })
-        if (!campRes.ok) {
-          results.errors.push(`Workspace ${ws.name}: failed to fetch campaigns`)
-          continue
-        }
-        const campaigns = await campRes.json() as { id: string; name: string }[]
         results.workspaces++
 
-        for (const camp of campaigns) {
-          try {
-            // 3. Fetch leads for this campaign (paginated)
-            let skip = 0
-            let campaignLeadCount = 0
-            const limit = 100
+        // 2. Fetch all INTERESTED leads for this workspace (PlusVibe uses workspace-wide queries, not per-campaign)
+        console.log(`[backfill] workspace ${ws.name}: fetching leads...`)
+        let page = 1
+        let workspaceLeadCount = 0
+        const limit = 100
 
-            while (true) {
-              console.log(`[backfill] workspace ${ws.name}, campaign ${camp.name}: fetching leads (skip=${skip})...`)
-              const leadRes = await fetch(
-                `${PLUSVIBE_API_URL}/workspaces/${ws.id}/campaigns/${camp.id}/leads?skip=${skip}&limit=${limit}`,
-                { headers: { 'x-api-key': PLUSVIBE_API_KEY } }
-              )
-              if (!leadRes.ok) break
-              const leads = await leadRes.json() as PVLead[]
-              if (!leads || leads.length === 0) break
-
-              // 4. Upsert each lead into esp_leads
-              for (const lead of leads) {
-                await pool.query(`
-                  INSERT INTO esp_leads (
-                    id, workspace_id, campaign_id, source,
-                    email, first_name, last_name, company_name, status,
-                    label, raw, created_at, updated_at
-                  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-                  ON CONFLICT (id) DO UPDATE SET
-                    email = $5, first_name = $6, last_name = $7, company_name = $8,
-                    status = $9, raw = $11, updated_at = $13
-                  WHERE esp_leads.first_replied_at IS NULL OR $13 > esp_leads.updated_at
-                `, [
-                  lead.id,
-                  ws.id,
-                  camp.id,
-                  'plusvibe',
-                  lead.email,
-                  lead.first_name || null,
-                  lead.last_name || null,
-                  lead.company_name || null,
-                  lead.status || null,
-                  null, // label: no label from PlusVibe yet
-                  JSON.stringify(lead),
-                  lead.created_at || new Date().toISOString(),
-                  new Date().toISOString()
-                ])
-                campaignLeadCount++
-              }
-
-              skip += limit
-              if (leads.length < limit) break // Last page
-            }
-
-            results.leads += campaignLeadCount
-            results.campaigns++
-            console.log(`[backfill] campaign ${camp.name}: ${campaignLeadCount} leads`)
-          } catch (err) {
-            results.errors.push(`Campaign ${camp.name}: ${String(err)}`)
+        while (true) {
+          const leadRes = await fetch(
+            `${PLUSVIBE_API_URL}/lead/workspace-leads?workspace_id=${ws.id}&label=INTERESTED&page=${page}&limit=${limit}`,
+            { headers: { 'x-api-key': PLUSVIBE_API_KEY } }
+          )
+          if (!leadRes.ok) {
+            console.warn(`[backfill] workspace ${ws.name} page ${page}: ${leadRes.status}`)
+            break
           }
+          const response = await leadRes.json() as PVLead[] | { data?: PVLead[]; leads?: PVLead[] }
+          const leads = Array.isArray(response) ? response : (response.data ?? response.leads ?? [])
+          if (!leads || leads.length === 0) break
+
+          console.log(`[backfill] workspace ${ws.name}: page ${page} has ${leads.length} leads`)
+
+          // 3. Upsert each lead into esp_leads
+          for (const lead of leads) {
+            await pool.query(`
+              INSERT INTO esp_leads (
+                id, workspace_id, campaign_id, source,
+                email, first_name, last_name, company_name, status,
+                label, raw, created_at, updated_at
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+              ON CONFLICT (id) DO UPDATE SET
+                email = $5, first_name = $6, last_name = $7, company_name = $8,
+                status = $9, raw = $11, updated_at = $13
+              WHERE esp_leads.first_replied_at IS NULL OR $13 > esp_leads.updated_at
+            `, [
+              lead.id,
+              ws.id,
+              lead.campaign_id || null,
+              'plusvibe',
+              lead.email,
+              lead.first_name || null,
+              lead.last_name || null,
+              lead.company_name || null,
+              lead.status || null,
+              'INTERESTED', // label from the query
+              JSON.stringify(lead),
+              lead.created_at || new Date().toISOString(),
+              new Date().toISOString()
+            ])
+            workspaceLeadCount++
+          }
+
+          if (leads.length < limit) break
+          page++
         }
+
+        results.leads += workspaceLeadCount
+        console.log(`[backfill] workspace ${ws.name}: ${workspaceLeadCount} total leads`)
       } catch (err) {
         results.errors.push(`Workspace ${ws.name}: ${String(err)}`)
       }
