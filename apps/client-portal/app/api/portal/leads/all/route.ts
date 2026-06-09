@@ -17,6 +17,12 @@ export async function GET() {
     const res = await pool.query(
       `SELECT l.id, l.email, l.first_name, l.last_name, l.company_name,
               l.status, l.label, l.first_replied_at,
+              l.raw->>'job_title'           AS job_title,
+              l.raw->>'industry'            AS industry,
+              l.raw->>'city'                AS city,
+              l.raw->>'country'             AS country,
+              l.raw->>'linkedin_person_url' AS linkedin_url,
+              l.raw->>'phone_number'        AS phone_number,
               c.name AS campaign_name
        FROM esp_leads l
        LEFT JOIN esp_campaigns c ON c.id = l.campaign_id AND c.source = 'plusvibe'
