@@ -6510,6 +6510,106 @@ app.post('/api/domains/refresh', requireSession, async (req, res) => {
   res.json({ ok: true, message: 'Domain health refresh started' });
 });
 
+// Before/after impact analysis for a given change date.
+// Returns reply rate, bounce rate, sent count for each DMARC policy group
+// in the window [changeDate - 30d, changeDate) vs [changeDate, changeDate + 30d).
+app.get('/api/dmarc/impact', requireSession, async (req, res) => {
+  try {
+    const pgdb = app.locals.pgDb;
+    if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
+
+    const changeDate = req.query.date || '2026-05-20';
+    const before_start = new Date(changeDate); before_start.setDate(before_start.getDate() - 30);
+    const after_end   = new Date(changeDate); after_end.setDate(after_end.getDate() + 30);
+
+    // Per sender_email counts in both windows.
+    const evRows = await pgdb.query(`
+      SELECT
+        lower(sender_email) AS email,
+        COUNT(*) FILTER (WHERE event_type = 'sent'
+          AND event_at >= $2 AND event_at < $1)                                        AS sent_before,
+        COUNT(*) FILTER (WHERE event_type IN ('reply','positive_reply')
+          AND event_at >= $2 AND event_at < $1)                                        AS replies_before,
+        COUNT(*) FILTER (WHERE event_type = 'bounce'
+          AND event_at >= $2 AND event_at < $1)                                        AS bounces_before,
+        COUNT(*) FILTER (WHERE event_type = 'sent'
+          AND event_at >= $1 AND event_at < $3)                                        AS sent_after,
+        COUNT(*) FILTER (WHERE event_type IN ('reply','positive_reply')
+          AND event_at >= $1 AND event_at < $3)                                        AS replies_after,
+        COUNT(*) FILTER (WHERE event_type = 'bounce'
+          AND event_at >= $1 AND event_at < $3)                                        AS bounces_after
+      FROM email_events
+      WHERE sender_email IS NOT NULL
+        AND event_at >= $2 AND event_at < $3
+      GROUP BY lower(sender_email)
+    `, [changeDate, before_start.toISOString().slice(0,10), after_end.toISOString().slice(0,10)]);
+
+    // Current DMARC policy per domain from domain_health.
+    const dhRows = await pgdb.query(`SELECT domain, dmarc FROM domain_health`);
+    const dmarcByDomain = new Map();
+    for (const row of dhRows.rows) {
+      try {
+        const d = typeof row.dmarc === 'string' ? JSON.parse(row.dmarc) : row.dmarc;
+        const policy = d?.present ? (d.policy || 'none') : 'missing';
+        dmarcByDomain.set(row.domain, ['none','quarantine','reject'].includes(policy) ? policy : 'missing');
+      } catch { dmarcByDomain.set(row.domain, 'missing'); }
+    }
+
+    // Aggregate by DMARC policy group.
+    const groups = { none: { sent_before:0, replies_before:0, bounces_before:0, sent_after:0, replies_after:0, bounces_after:0, mailboxes:0 },
+                     quarantine: { sent_before:0, replies_before:0, bounces_before:0, sent_after:0, replies_after:0, bounces_after:0, mailboxes:0 },
+                     reject: { sent_before:0, replies_before:0, bounces_before:0, sent_after:0, replies_after:0, bounces_after:0, mailboxes:0 },
+                     missing: { sent_before:0, replies_before:0, bounces_before:0, sent_after:0, replies_after:0, bounces_after:0, mailboxes:0 } };
+
+    for (const r of evRows.rows) {
+      const domain = r.email.split('@')[1];
+      const policy = dmarcByDomain.get(domain) || 'missing';
+      const g = groups[policy] || groups.missing;
+      g.sent_before    += parseInt(r.sent_before,    10) || 0;
+      g.replies_before += parseInt(r.replies_before, 10) || 0;
+      g.bounces_before += parseInt(r.bounces_before, 10) || 0;
+      g.sent_after     += parseInt(r.sent_after,     10) || 0;
+      g.replies_after  += parseInt(r.replies_after,  10) || 0;
+      g.bounces_after  += parseInt(r.bounces_after,  10) || 0;
+      g.mailboxes++;
+    }
+
+    // Compute rates.
+    function rates(g) {
+      return {
+        ...g,
+        rr_before: g.sent_before > 0 ? g.replies_before / g.sent_before : null,
+        rr_after:  g.sent_after  > 0 ? g.replies_after  / g.sent_after  : null,
+        br_before: g.sent_before > 0 ? g.bounces_before / g.sent_before : null,
+        br_after:  g.sent_after  > 0 ? g.bounces_after  / g.sent_after  : null,
+      };
+    }
+
+    // Per-domain breakdown for the detail table (domains with activity in either window).
+    const domainRows = evRows.rows.map(r => {
+      const domain = r.email.split('@')[1];
+      const policy = dmarcByDomain.get(domain) || 'missing';
+      const sb = parseInt(r.sent_before,10)||0, rb = parseInt(r.replies_before,10)||0, bb = parseInt(r.bounces_before,10)||0;
+      const sa = parseInt(r.sent_after, 10)||0, ra = parseInt(r.replies_after, 10)||0, ba = parseInt(r.bounces_after, 10)||0;
+      return { email: r.email, domain, policy, sent_before:sb, replies_before:rb, bounces_before:bb, sent_after:sa, replies_after:ra, bounces_after:ba,
+               rr_before: sb>=20 ? rb/sb : null, rr_after: sa>=20 ? ra/sa : null,
+               br_before: sb>=20 ? bb/sb : null, br_after:  sa>=20 ? ba/sa : null };
+    }).filter(r => r.sent_before > 0 || r.sent_after > 0)
+      .sort((a,b) => (b.sent_before+b.sent_after) - (a.sent_before+a.sent_after));
+
+    res.json({
+      change_date:  changeDate,
+      before_start: before_start.toISOString().slice(0,10),
+      after_end:    after_end.toISOString().slice(0,10),
+      by_policy:    Object.fromEntries(Object.entries(groups).map(([k,g]) => [k, rates(g)])),
+      by_mailbox:   domainRows,
+    });
+  } catch (err) {
+    console.error('[dmarc/impact]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Single-domain on-demand check (useful when adding a new client)
 app.post('/api/domains/check', requireSession, async (req, res) => {
   try {
@@ -7085,20 +7185,18 @@ async function buildMailboxStatsFromEvents(pgdb) {
   try {
     const { rows } = await pgdb.query(`
       SELECT
-        sender_email,
+        lower(sender_email) AS sender_email,
         COUNT(*) FILTER (WHERE event_type = 'sent')                                    AS sent,
         COUNT(*) FILTER (WHERE event_type = 'bounce')                                  AS bounces,
-        COUNT(*) FILTER (WHERE event_type = 'sent'   AND event_at >= NOW() - INTERVAL '30 days') AS sent_30d,
-        COUNT(*) FILTER (WHERE event_type IN ('reply','positive_reply') AND event_at >= NOW() - INTERVAL '30 days') AS replies_30d
+        COUNT(*) FILTER (WHERE event_type = 'sent'   AND event_at >= NOW() - INTERVAL '30 days') AS sent_30d
       FROM email_events
       WHERE sender_email IS NOT NULL
-      GROUP BY sender_email
+      GROUP BY lower(sender_email)
     `);
     return new Map(rows.map(r => [r.sender_email, {
-      sent:       parseInt(r.sent,       10) || 0,
-      bounces:    parseInt(r.bounces,    10) || 0,
-      sent_30d:   parseInt(r.sent_30d,   10) || 0,
-      replies_30d:parseInt(r.replies_30d,10) || 0,
+      sent:     parseInt(r.sent,     10) || 0,
+      bounces:  parseInt(r.bounces,  10) || 0,
+      sent_30d: parseInt(r.sent_30d, 10) || 0,
     }]));
   } catch {
     return new Map();
@@ -7121,20 +7219,23 @@ function attachMailboxStats(mailboxes, { idx: campIndex, wsIdx }, eventsByMailbo
 
   // Second pass: direct webhook attribution or campaign even-split.
   for (const m of mailboxes) {
-    const ev = eventsByMailbox.get(m.email);
+    const ev = eventsByMailbox.get((m.email || '').toLowerCase());
+    let campSent = 0, campReplies = 0;
+    for (const cid of (m.campaign_ids || [])) {
+      const c = campIndex.get(cid);
+      if (!c) continue;
+      campSent    += c.sent;
+      campReplies += c.replies;
+    }
+    const campReplyRate = campSent > 0 ? campReplies / campSent : 0;
+
     if (ev && ev.sent > 0) {
       m.attributed_sent    = ev.sent;
       m.attributed_bounces = ev.bounces;
-      m.sent_30d           = ev.sent_30d    || 0;
-      m.replies_30d        = ev.replies_30d || 0;
-      let campSent = 0, campReplies = 0;
-      for (const cid of (m.campaign_ids || [])) {
-        const c = campIndex.get(cid);
-        if (!c) continue;
-        campSent    += c.sent;
-        campReplies += c.replies;
-      }
-      const campReplyRate = campSent > 0 ? campReplies / campSent : 0;
+      m.sent_30d           = ev.sent_30d || 0;
+      // Reply webhooks from PlusVibe don't include sender_email, so we estimate
+      // 30d replies by applying the campaign reply rate to actual 30d sends.
+      m.replies_30d        = Math.round(m.sent_30d * campReplyRate);
       m.attributed_replies = Math.round(ev.sent * campReplyRate);
     } else {
       // No webhook data — even-split across campaigns this mailbox belongs to.
@@ -7149,6 +7250,12 @@ function attachMailboxStats(mailboxes, { idx: campIndex, wsIdx }, eventsByMailbo
       m.attributed_sent    = Math.round(sent);
       m.attributed_replies = Math.round(replies);
       m.attributed_bounces = Math.round(bounces);
+      // Estimate 30d proportionally: assume recent period is ~30/365 of lifetime
+      if (m.attributed_sent > 0) {
+        const frac30 = Math.min(1, 30 / 180); // conservative 6-month lifetime assumption
+        m.sent_30d    = Math.round(m.attributed_sent    * frac30);
+        m.replies_30d = Math.round(m.attributed_replies * frac30);
+      }
     }
   }
 
@@ -7171,7 +7278,10 @@ function attachMailboxStats(mailboxes, { idx: campIndex, wsIdx }, eventsByMailbo
       m.attributed_sent    = Math.round(ws.sent    / count);
       m.attributed_replies = Math.round(ws.replies / count);
       m.attributed_bounces = Math.round(ws.bounces / count);
-      m._ws_split = true; // flag so callers can distinguish this estimate
+      m._ws_split = true;
+      const frac30 = Math.min(1, 30 / 180);
+      m.sent_30d    = Math.round(m.attributed_sent    * frac30);
+      m.replies_30d = Math.round(m.attributed_replies * frac30);
     }
   }
 
@@ -7179,11 +7289,12 @@ function attachMailboxStats(mailboxes, { idx: campIndex, wsIdx }, eventsByMailbo
     const s = m.attributed_sent    || 0;
     const r = m.attributed_replies || 0;
     const b = m.attributed_bounces || 0;
-    m.reply_rate    = s > 0 ? r / s : 0;
-    m.bounce_rate   = s > 0 ? b / s : 0;
+    m.reply_rate  = s > 0 ? r / s : 0;
+    m.bounce_rate = s > 0 ? b / s : 0;
     const s30 = m.sent_30d    || 0;
     const r30 = m.replies_30d || 0;
-    m.reply_rate_30d = s30 >= 20 ? r30 / s30 : null; // null = not enough volume
+    // Use 5-send minimum for 30d (lower threshold because 30d window is shorter)
+    m.reply_rate_30d = s30 >= 5 ? r30 / s30 : null;
   }
 }
 

@@ -43,6 +43,9 @@
   .badge-red{background:#fee2e2;color:#991b1b}
   .badge-gray{background:#f3f4f6;color:#6b7280}
   #loading{text-align:center;padding:3rem;color:#9ca3af;font-size:13px}
+  .progress-bar-wrap{width:260px;height:4px;background:#e5e7eb;border-radius:99px;margin:.75rem auto 0;overflow:hidden}
+  .progress-bar{height:100%;width:30%;background:#1F6F78;border-radius:99px;animation:pbar 1.4s ease-in-out infinite}
+  @keyframes pbar{0%{transform:translateX(-100%)}100%{transform:translateX(870%)}}
 
 /* sticky header + mobile */
 .header,.nav{position:sticky;top:0;z-index:200}
@@ -64,7 +67,7 @@
     </div>
   </div>
 
-  <div id="loading">Loading mailbox data…</div>
+  <div id="loading">Loading mailbox data…<div class="progress-bar-wrap"><div class="progress-bar"></div></div></div>
   <div id="content" style="display:none">
     <div class="cards" id="policyCards"></div>
 
@@ -103,6 +106,39 @@
         <tbody id="nonNoneTable"></tbody>
       </table>
     </div>
+
+    <!-- ── Before/After Impact Analysis ───────────────────────────────────── -->
+    <div class="section-h" style="margin-top:2rem">Before / After impact analysis</div>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:1rem;flex-wrap:wrap">
+      <label style="font-size:12px;font-weight:600;color:#374151">Change date:</label>
+      <input type="date" id="impactDate" value="2026-05-20" style="border:1px solid #e5e7eb;border-radius:8px;padding:5px 10px;font-size:13px;outline:none">
+      <button onclick="loadImpact()" style="background:#1F6F78;color:#fff;border:none;border-radius:8px;padding:6px 16px;font:600 13px Inter,sans-serif;cursor:pointer">Analyse</button>
+      <span id="impactMeta" style="font-size:12px;color:#9ca3af"></span>
+    </div>
+    <div id="impactLoading" style="display:none;color:#9ca3af;font-size:13px;padding:8px 0">Analysing…<div class="progress-bar-wrap"><div class="progress-bar"></div></div></div>
+    <div id="impactContent" style="display:none">
+      <!-- Summary cards: one per DMARC policy -->
+      <div id="impactCards" style="display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin-bottom:1.5rem"></div>
+      <p style="font-size:11px;color:#9ca3af;margin-bottom:1rem">⚠ Reply data uses PlusVibe webhooks — sender attribution is available for sent &amp; bounce events. Reply rate may show lower than actual where webhooks omit the sending mailbox.</p>
+      <!-- Per-mailbox detail table -->
+      <div class="section-h">Per-mailbox detail</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Email</th>
+            <th>DMARC</th>
+            <th style="text-align:right">Sent Before</th>
+            <th style="text-align:right">RR Before</th>
+            <th style="text-align:right">Sent After</th>
+            <th style="text-align:right">RR After</th>
+            <th style="text-align:right">RR Change</th>
+            <th style="text-align:right">BR Before</th>
+            <th style="text-align:right">BR After</th>
+          </tr></thead>
+          <tbody id="impactTable"></tbody>
+        </table>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -119,10 +155,9 @@ const POLICY_LABEL = { none:'p=none', quarantine:'p=quarantine', reject:'p=rejec
 const POLICY_COLOR = { none:'#059669', quarantine:'#d97706', reject:'#dc2626', missing:'#9ca3af' };
 const POLICY_BG    = { none:'#d1fae5', quarantine:'#fef3c7', reject:'#fee2e2', missing:'#f3f4f6' };
 
-// Show rate only for mailboxes with 20+ attributed sends — below that the number isn't meaningful.
 function pct(n, sent) {
   if (n == null || isNaN(n)) return '—';
-  if (sent != null && sent < 20) return '<span style="color:#9ca3af">—</span>';
+  if (sent != null && sent < 5) return '<span style="color:#9ca3af">—</span>';
   return (n*100).toFixed(2)+'%';
 }
 function fmtNum(n) { return (n||0).toLocaleString(); }
@@ -229,6 +264,113 @@ async function loadData() {
 
   document.getElementById('loading').style.display = 'none';
   document.getElementById('content').style.display = '';
+}
+
+async function loadImpact() {
+  const dateVal = document.getElementById('impactDate').value;
+  if (!dateVal) return;
+  document.getElementById('impactLoading').style.display = '';
+  document.getElementById('impactContent').style.display = 'none';
+  document.getElementById('impactMeta').textContent = '';
+
+  const res = await fetch(`/api/dmarc/impact?date=${dateVal}`).catch(() => null);
+  if (!res?.ok) {
+    document.getElementById('impactLoading').textContent = 'Failed to load impact data.';
+    return;
+  }
+  const data = await res.json();
+  document.getElementById('impactLoading').style.display = 'none';
+
+  const fmt = d => new Date(d).toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' });
+  document.getElementById('impactMeta').textContent =
+    `${fmt(data.before_start)} → ${fmt(data.change_date)} vs ${fmt(data.change_date)} → ${fmt(data.after_end)}`;
+
+  // Summary cards by policy
+  const cards = document.getElementById('impactCards');
+  const byPolicy = data.by_policy || {};
+  const PIMP_LABEL = { none:'p=none', quarantine:'p=quarantine', reject:'p=reject', missing:'No DMARC' };
+  const PIMP_BG    = { none:'#d1fae5', quarantine:'#fef3c7', reject:'#fee2e2', missing:'#f3f4f6' };
+  const PIMP_HDR   = { none:'#059669', quarantine:'#d97706', reject:'#dc2626', missing:'#6b7280' };
+
+  cards.innerHTML = POLICIES.map(p => {
+    const s = byPolicy[p] || { sent_before:0, replies_before:0, bounces_before:0, sent_after:0, replies_after:0, bounces_after:0, mailboxes:0 };
+    const rrBefore = s.sent_before > 0 ? (s.replies_before / s.sent_before * 100) : null;
+    const rrAfter  = s.sent_after  > 0 ? (s.replies_after  / s.sent_after  * 100) : null;
+    const rrDelta  = (rrBefore != null && rrAfter != null) ? (rrAfter - rrBefore) : null;
+    const brBefore = s.sent_before > 0 ? (s.bounces_before / s.sent_before * 100) : null;
+    const brAfter  = s.sent_after  > 0 ? (s.bounces_after  / s.sent_after  * 100) : null;
+    const fmtRate  = v => v != null ? v.toFixed(2)+'%' : '—';
+    const deltaColor = rrDelta == null ? '#9ca3af' : rrDelta >= 0 ? '#059669' : '#dc2626';
+    const deltaSign  = rrDelta == null ? '' : rrDelta >= 0 ? '+' : '';
+    return `<div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden">
+      <div style="background:${PIMP_BG[p]};padding:10px 14px;border-bottom:1px solid #e5e7eb">
+        <span style="font-weight:700;font-size:13px;color:${PIMP_HDR[p]}">${PIMP_LABEL[p]}</span>
+        <span style="float:right;font-size:11px;color:#9ca3af">${s.mailboxes} mailbox${s.mailboxes===1?'':'es'}</span>
+      </div>
+      <div style="padding:12px 14px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div>
+          <div style="font-size:10px;color:#9ca3af;margin-bottom:2px">Reply Rate Before</div>
+          <div style="font-size:18px;font-weight:700;color:#111">${fmtRate(rrBefore)}</div>
+          <div style="font-size:10px;color:#9ca3af">${(s.sent_before||0).toLocaleString()} sent</div>
+        </div>
+        <div>
+          <div style="font-size:10px;color:#9ca3af;margin-bottom:2px">Reply Rate After</div>
+          <div style="font-size:18px;font-weight:700;color:#111">${fmtRate(rrAfter)}</div>
+          <div style="font-size:10px;color:#9ca3af">${(s.sent_after||0).toLocaleString()} sent</div>
+        </div>
+        <div style="grid-column:1/-1;border-top:1px solid #f3f4f6;padding-top:8px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px">
+          <div>
+            <div style="font-size:10px;color:#9ca3af">RR Change</div>
+            <div style="font-size:14px;font-weight:700;color:${deltaColor}">${rrDelta!=null ? deltaSign+rrDelta.toFixed(2)+'pp' : '—'}</div>
+          </div>
+          <div>
+            <div style="font-size:10px;color:#9ca3af">BR Before</div>
+            <div style="font-size:14px;font-weight:600;color:#374151">${fmtRate(brBefore)}</div>
+          </div>
+          <div>
+            <div style="font-size:10px;color:#9ca3af">BR After</div>
+            <div style="font-size:14px;font-weight:600;color:#374151">${fmtRate(brAfter)}</div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Per-mailbox detail table
+  const rows = (data.by_mailbox || []).sort((a, b) => {
+    const da = (a.sent_before > 10 && a.sent_after > 10) ? ((a.replies_after/a.sent_after) - (a.replies_before/a.sent_before)) : 0;
+    const db = (b.sent_before > 10 && b.sent_after > 10) ? ((b.replies_after/b.sent_after) - (b.replies_before/b.sent_before)) : 0;
+    return da - db; // biggest drop first
+  });
+
+  const tbody = document.getElementById('impactTable');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:#9ca3af">No email_events data in this window.</td></tr>';
+  } else {
+    tbody.innerHTML = rows.map(m => {
+      const p = m.dmarc_policy || 'missing';
+      const badgeClass = p === 'missing' ? 'badge-gray' : p === 'quarantine' ? 'badge-amber' : p === 'reject' ? 'badge-red' : 'badge-green';
+      const rrB = m.sent_before > 0 ? m.replies_before / m.sent_before : null;
+      const rrA = m.sent_after  > 0 ? m.replies_after  / m.sent_after  : null;
+      const brB = m.sent_before > 0 ? m.bounces_before / m.sent_before : null;
+      const brA = m.sent_after  > 0 ? m.bounces_after  / m.sent_after  : null;
+      const delta = (rrB != null && rrA != null) ? ((rrA - rrB) * 100) : null;
+      const deltaColor = delta == null ? '#9ca3af' : delta >= 0 ? '#059669' : '#dc2626';
+      return `<tr>
+        <td style="font-size:11px">${m.email}</td>
+        <td><span class="badge ${badgeClass}">${POLICY_LABEL[p]||p}</span></td>
+        <td style="text-align:right">${(m.sent_before||0).toLocaleString()}</td>
+        <td style="text-align:right">${pct(rrB, m.sent_before)}</td>
+        <td style="text-align:right">${(m.sent_after||0).toLocaleString()}</td>
+        <td style="text-align:right">${pct(rrA, m.sent_after)}</td>
+        <td style="text-align:right;font-weight:600;color:${deltaColor}">${delta!=null ? (delta>=0?'+':'')+delta.toFixed(2)+'pp' : '—'}</td>
+        <td style="text-align:right">${pct(brB, m.sent_before)}</td>
+        <td style="text-align:right">${pct(brA, m.sent_after)}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  document.getElementById('impactContent').style.display = '';
 }
 </script>
 </body>
