@@ -24,7 +24,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const PLUSVIBE_API_URL = process.env.PLUSVIBE_API_URL || 'https://api.plusvibe.com/v1'
+  const PLUSVIBE_API_URL = process.env.PLUSVIBE_API_URL || 'https://api.plusvibe.ai/api/v1'
   const PLUSVIBE_API_KEY = process.env.PLUSVIBE_API_KEY
   if (!PLUSVIBE_API_KEY) return NextResponse.json({ error: 'PLUSVIBE_API_KEY not configured' }, { status: 500 })
 
