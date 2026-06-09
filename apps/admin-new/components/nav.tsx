@@ -41,8 +41,8 @@ const NAV_SECTIONS = [
     { href: '/apollo-prep',    label: 'Apollo Prep' },
     { href: '/audience',       label: 'Audience' },
     { href: '/commission',     label: 'Commission' },
-    { href: '/verify-split',   label: 'Verify Split' },
     { href: '/database',       label: 'Database' },
+    { href: '/verify-split',   label: 'Verify Split' },
     { href: '/admin-settings', label: 'Admin Settings' },
   ]},
 ]
