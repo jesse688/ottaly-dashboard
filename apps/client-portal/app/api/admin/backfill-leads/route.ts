@@ -100,11 +100,8 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Log completion
-    await pool.query(`
-      INSERT INTO esp_sync_log (source, status, leads_synced, error, finished_at)
-      VALUES ($1, $2, $3, $4, NOW())
-    `, ['plusvibe', results.errors.length === 0 ? 'success' : 'partial', results.leads, results.errors.length > 0 ? results.errors.join('; ') : null])
+    // Log completion (skip logging — esp_sync_log requires workspace_id which doesn't apply to global backfill)
+    // Results are visible in the response and Easypanel logs
 
     console.log('[backfill] complete:', results)
     return NextResponse.json(results)
