@@ -7,9 +7,17 @@ const CH_API_KEY = process.env.COMPANIES_HOUSE_API_KEY ?? ''
 const DATAFORSEO_LOGIN = process.env.DATAFORSEO_LOGIN ?? ''
 const DATAFORSEO_PASSWORD = process.env.DATAFORSEO_PASSWORD ?? ''
 
+// Reject placeholder strings Gemini sometimes returns instead of null
+const INVALID_NAMES = new Set(['unknown', 'n/a', 'na', 'null', 'none', 'not found', 'not available', 'unavailable', ''])
+function validName(name: unknown): string | null {
+  if (!name || typeof name !== 'string') return null
+  return INVALID_NAMES.has(name.trim().toLowerCase()) ? null : name.trim()
+}
+
 interface EnrichInput {
   place_id: string
   title: string
+  city?: string | null
 }
 
 export interface EnrichResult {
@@ -25,7 +33,7 @@ async function batchSerpLookup(businesses: EnrichInput[]): Promise<Map<string, s
   if (!DATAFORSEO_LOGIN || !DATAFORSEO_PASSWORD || !businesses.length) return new Map()
 
   const tasks = businesses.map(b => ({
-    keyword: `Who is the owner or director of "${b.title.replace(/"/g, "'")}"?`,
+    keyword: `"${b.title.replace(/"/g, "'")}" ${b.city ?? 'UK'} director OR founder OR owner`,
     location_code: 2826, // United Kingdom
     language_code: 'en',
     device: 'desktop',
@@ -98,7 +106,7 @@ async function extractFromContext(businessName: string, context: string): Promis
     const data = await res.json()
     const text = (data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '').replace(/```json|```/g, '').trim()
     const parsed = JSON.parse(text)
-    return { firstName: parsed.firstName || null, lastName: parsed.lastName || null, email }
+    return { firstName: validName(parsed.firstName), lastName: validName(parsed.lastName), email }
   } catch {
     return { firstName: null, lastName: null, email }
   }
@@ -124,7 +132,7 @@ async function extractNameFromTitle(businessName: string): Promise<{ firstName: 
     const data = await res.json()
     const text = (data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '').replace(/```json|```/g, '').trim()
     const parsed = JSON.parse(text)
-    return { firstName: parsed.firstName || null, lastName: parsed.lastName || null }
+    return { firstName: validName(parsed.firstName), lastName: validName(parsed.lastName) }
   } catch {
     return { firstName: null, lastName: null }
   }

@@ -260,7 +260,7 @@ export default function DataSourcesPage() {
       addLog('Starting pipeline for ' + targets.length + ' businesses…')
       const ENRICH_BATCH = 5
       const nameMap = new Map<string, { firstName: string | null; lastName: string | null; email: string | null; source: string | null }>()
-      const enrichInputs = targets.map(t => ({ place_id: t.place_id, title: t.title }))
+      const enrichInputs = targets.map(t => ({ place_id: t.place_id, title: t.title, city: t.city }))
       setPipelineProgress({ step: 1, step1Done: 0, step1Total: enrichInputs.length, verifyDone: 0, verifyTotal: 0, queuePosition: null })
 
       // Fire all SERP batches in parallel — each is an independent Vercel function call
@@ -289,31 +289,66 @@ export default function DataSourcesPage() {
         return n ? { ...row, _firstName: n.firstName, _lastName: n.lastName, _nameSource: n.source as BusinessResult['_nameSource'], _serpEmail: n.email } : row
       }))
 
-      // Step 2: Build CSV — skip rows where SERP already found an email directly
-      setPipelineStatus('Step 2/3 — Submitting to email finder…')
-      const esc = (s: string) => '"' + String(s ?? '').replace(/"/g, '""') + '"'
-      // Emails already found directly in SERP snippets — skip verification
+      // Step 1b: Scrape website contact pages for emails (for rows SERP didn't already email)
       const serpEmailMap = new Map<string, string>()
       nameMap.forEach((n, pid) => { if (n.email) serpEmailMap.set(pid, n.email) })
 
-      // Split remaining targets: has a real name → Reacher verify; no name → info@ best guess only
-      // Avoids checking useless initials patterns (ic@, ci@, info.contact@, etc.) for generic fallbacks
+      const needsScraping = targets.filter(t => !serpEmailMap.has(t.place_id) && t.domain)
+      const websiteEmailMap = new Map<string, string>()
+
+      if (needsScraping.length > 0) {
+        addLog('Scraping ' + needsScraping.length + ' websites for direct emails…')
+        setPipelineProgress(prev => prev ? { ...prev, step: 1, step1Done: 0, step1Total: needsScraping.length } : null)
+        const SCRAPE_BATCH = 8
+        const scrapeBatches: typeof needsScraping[] = []
+        for (let i = 0; i < needsScraping.length; i += SCRAPE_BATCH) scrapeBatches.push(needsScraping.slice(i, i + SCRAPE_BATCH))
+        let scrapeDone = 0
+        await Promise.all(scrapeBatches.map(async batch => {
+          const scrapeRes = await fetch('/api/data-sources/scrape', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ businesses: batch.map(t => ({ place_id: t.place_id, domain: t.domain })) }),
+          })
+          if (!scrapeRes.ok) { scrapeDone += batch.length; return }
+          const scrapeData = await scrapeRes.json()
+          ;(scrapeData.results ?? []).forEach((r: { place_id: string; email: string | null }) => {
+            if (r.email) websiteEmailMap.set(r.place_id, r.email)
+          })
+          scrapeDone += batch.length
+          setPipelineProgress(prev => prev ? { ...prev, step: 1, step1Done: scrapeDone } : null)
+        }))
+        if (websiteEmailMap.size) addLog('Found ' + websiteEmailMap.size + ' emails on company websites')
+      }
+
+      // Step 2: Build CSV — skip rows where SERP or website scraping already found an email
+      setPipelineStatus('Step 2/3 — Submitting to email finder…')
+      const esc = (s: string) => '"' + String(s ?? '').replace(/"/g, '""') + '"'
+      // serpEmailMap is already populated above from nameMap
+      nameMap.forEach((n, pid) => { if (n.email) serpEmailMap.set(pid, n.email) })
+
+      // Split remaining targets:
+      //   - has director name → Reacher verify (name-based patterns)
+      //   - has scraped website email → skip Reacher
+      //   - no name + no scraped email → info@ best guess
       const needsVerify = targets.filter(t => {
-        if (serpEmailMap.has(t.place_id)) return false  // already have email from SERP
+        if (serpEmailMap.has(t.place_id)) return false
+        if (websiteEmailMap.has(t.place_id)) return false
         const n = nameMap.get(t.place_id)
-        return !!(n?.firstName && n?.lastName)  // only verify rows with a real director name
+        return !!(n?.firstName && n?.lastName)
       })
       const bestGuessOnly = targets.filter(t => {
         if (serpEmailMap.has(t.place_id)) return false
+        if (websiteEmailMap.has(t.place_id)) return false
         const n = nameMap.get(t.place_id)
-        return !(n?.firstName && n?.lastName)  // no real name → info@ best guess
+        return !(n?.firstName && n?.lastName)
       })
 
-      if (serpEmailMap.size || bestGuessOnly.length) {
+      if (serpEmailMap.size || websiteEmailMap.size || bestGuessOnly.length) {
         addLog(
           [
-            serpEmailMap.size ? serpEmailMap.size + ' emails from SERP' : '',
-            bestGuessOnly.length ? bestGuessOnly.length + ' rows → info@ best guess (no director name found)' : '',
+            serpEmailMap.size ? serpEmailMap.size + ' from SERP' : '',
+            websiteEmailMap.size ? websiteEmailMap.size + ' scraped from websites' : '',
+            bestGuessOnly.length ? bestGuessOnly.length + ' → info@ best guess' : '',
           ].filter(Boolean).join(' · ')
         )
       }
@@ -389,9 +424,11 @@ export default function DataSourcesPage() {
       const statusIdx = col('EmailFinderSendability')
 
       const emailMap = new Map<string, { email: string; status: string }>()
-      // SERP-found emails (verified by Google snippet)
+      // SERP-found emails (found in Google snippet)
       serpEmailMap.forEach((email, pid) => emailMap.set(pid, { email, status: 'safe' }))
-      // info@ best guess for rows with no director name (not Reacher-verified)
+      // Scraped from company website contact pages
+      websiteEmailMap.forEach((email, pid) => emailMap.set(pid, { email, status: 'found_on_website' }))
+      // info@ best guess for rows with no name and no scraped email
       bestGuessOnly.forEach(t => {
         if (t.domain) emailMap.set(t.place_id, { email: 'info@' + t.domain, status: 'unverified_candidate' })
       })
@@ -406,7 +443,7 @@ export default function DataSourcesPage() {
 
       const verified = rows.slice(1).filter(r => { const e = r[foundIdx >= 0 ? foundIdx : -1]; return e && e.trim() }).length
       const found = [...emailMap.values()].filter(e => e.email).length
-      addLog('✓ Done — ' + found + '/' + targets.length + ' emails (' + verified + ' verified, ' + serpEmailMap.size + ' from SERP, ' + bestGuessOnly.filter(t => t.domain).length + ' best guess)')
+      addLog('✓ Done — ' + found + '/' + targets.length + ' emails (' + verified + ' verified via Reacher, ' + serpEmailMap.size + ' SERP, ' + websiteEmailMap.size + ' website, ' + bestGuessOnly.filter(t => t.domain).length + ' best guess)')
       setResults(prev => prev.map(row => {
         const e = emailMap.get(row.place_id)
         return e ? { ...row, _email: e.email || undefined, _emailStatus: e.status || undefined } : row
@@ -625,7 +662,7 @@ export default function DataSourcesPage() {
                   {/* Step 1: Name finding */}
                   <div>
                     <div className="flex justify-between text-xs text-gray-500 mb-1">
-                      <span>Step 1 — Finding director names via SERP + Gemini</span>
+                      <span>Step 1 — Director names (SERP + Gemini) · website emails</span>
                       <span>{pipelineProgress.step1Done}/{pipelineProgress.step1Total}</span>
                     </div>
                     <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
@@ -759,7 +796,11 @@ export default function DataSourcesPage() {
                       </TableCell>
                       <TableCell className="text-sm">
                         {row._email ? (
-                          <span className={row._emailStatus === 'safe' ? 'text-green-700' : 'text-amber-600'}>
+                          <span className={
+                            row._emailStatus === 'safe' ? 'text-green-700' :
+                            row._emailStatus === 'found_on_website' ? 'text-blue-600' :
+                            'text-amber-600'
+                          }>
                             {row._email}
                           </span>
                         ) : row._emailStatus === 'not_found' ? (
