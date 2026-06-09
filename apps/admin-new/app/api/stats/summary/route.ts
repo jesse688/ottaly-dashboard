@@ -92,12 +92,12 @@ export async function GET(req: NextRequest) {
         const dayData = perfByDateAndWs[ws.workspace_id]?.[date] || {}
         const day: DayData = {
           date,
-          sent: dayData.sent || 0,
-          replies: dayData.replies || 0,
-          posReplies: dayData.posReplies || 0,
-          oooReplies: dayData.oooReplies || 0,
-          bounces: dayData.bounces || 0,
-          leads: dayData.leads || 0,
+          sent: Number(dayData.sent) || 0,
+          replies: Number(dayData.replies) || 0,
+          posReplies: Number(dayData.posReplies) || 0,
+          oooReplies: Number(dayData.oooReplies) || 0,
+          bounces: Number(dayData.bounces) || 0,
+          leads: Number(dayData.leads) || 0,
         }
         series.push(day)
         totals.sent += day.sent
