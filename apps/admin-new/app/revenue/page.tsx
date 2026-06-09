@@ -1,8 +1,6 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Input } from '@/components/ui/input'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
 interface Lead { workspace_name: string; lead_email: string; first_name: string; last_name: string; campaign: string; lead_price: number; date: string; label: string }
 interface Summary { workspace_id: string; name: string; leads: number; revenue: number }
@@ -29,53 +27,114 @@ export default function RevenuePage() {
   const totalLeads = summary.reduce((s, r) => s + r.leads, 0)
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50">
-      <div className="bg-white border-b px-6 py-4">
-        <h1 className="text-xl font-semibold text-gray-900">Revenue</h1>
-        <p className="text-sm text-gray-500">{totalLeads} leads · £{totalRevenue.toLocaleString('en-GB', { maximumFractionDigits: 0 })} total</p>
+    <div className="o-page">
+      <div className="o-page-header">
+        <div>
+          <div className="o-page-title">Revenue</div>
+          <div className="o-page-sub">{totalLeads} leads · £{totalRevenue.toLocaleString('en-GB', { maximumFractionDigits: 0 })} total</div>
+        </div>
       </div>
-      <div className="bg-white border-b px-6 flex gap-4">
+
+      <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid #E2E6F0', marginBottom: '1.25rem' }}>
         {(['summary', 'leads'] as const).map(t => (
-          <button key={t} onClick={() => setTab(t)} className={`py-3 text-sm font-medium border-b-2 transition-colors capitalize ${tab === t ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>{t}</button>
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            style={{
+              padding: '0.625rem 1rem',
+              fontSize: '0.875rem',
+              fontWeight: 500,
+              border: 'none',
+              borderBottom: tab === t ? '2px solid #224388' : '2px solid transparent',
+              background: 'none',
+              color: tab === t ? '#224388' : '#6B7280',
+              cursor: 'pointer',
+              textTransform: 'capitalize',
+              marginBottom: '-1px',
+            }}
+          >{t}</button>
         ))}
       </div>
-      <div className="flex-1 overflow-auto px-6 py-4">
-        {tab === 'leads' && (
-          <div className="mb-4"><Input placeholder="Search email, workspace, campaign..." className="w-80" value={search} onChange={e => setSearch(e.target.value)} /></div>
-        )}
-        <div className="bg-white rounded-lg border">
+
+      {tab === 'leads' && (
+        <div className="o-toolbar" style={{ marginBottom: '1rem' }}>
+          <div className="o-search-wrap">
+            <span className="o-search-icon">
+              <svg width="15" height="15" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M10 6.5a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Zm-.747 3.56a4.5 4.5 0 1 1 .707-.707l2.844 2.843a.5.5 0 1 1-.708.708L9.253 10.06Z" fill="currentColor" fillRule="evenodd" clipRule="evenodd"/>
+              </svg>
+            </span>
+            <input type="text" placeholder="Search email, workspace, campaign..." value={search} onChange={e => setSearch(e.target.value)} />
+          </div>
+        </div>
+      )}
+
+      <div className="o-card">
+        <div className="o-table-wrap">
           {tab === 'summary' ? (
-            <Table>
-              <TableHeader><TableRow><TableHead>Workspace</TableHead><TableHead>Leads</TableHead><TableHead>Revenue</TableHead><TableHead>Avg / Lead</TableHead></TableRow></TableHeader>
-              <TableBody>
-                {loading ? Array.from({length: 5}).map((_,i) => <TableRow key={i}>{Array.from({length:4}).map((_,j) => <TableCell key={j}><div className="h-4 bg-gray-100 rounded animate-pulse"/></TableCell>)}</TableRow>)
-                : summary.sort((a,b) => b.revenue - a.revenue).map(s => (
-                  <TableRow key={s.workspace_id} className="hover:bg-gray-50">
-                    <TableCell className="font-medium">{s.name}</TableCell>
-                    <TableCell>{s.leads}</TableCell>
-                    <TableCell className="font-semibold text-green-700">£{s.revenue.toLocaleString('en-GB', {maximumFractionDigits: 0})}</TableCell>
-                    <TableCell className="text-gray-500">£{s.leads > 0 ? (s.revenue/s.leads).toFixed(0) : 0}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <table className="o-table">
+              <thead>
+                <tr>
+                  <th>Workspace</th>
+                  <th>Leads</th>
+                  <th>Revenue</th>
+                  <th>Avg / Lead</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading
+                  ? Array.from({ length: 5 }).map((_, i) => (
+                    <tr key={i}>
+                      {Array.from({ length: 4 }).map((_, j) => (
+                        <td key={j}><span className="o-spin" /></td>
+                      ))}
+                    </tr>
+                  ))
+                  : summary.sort((a, b) => b.revenue - a.revenue).map(s => (
+                    <tr key={s.workspace_id}>
+                      <td style={{ fontWeight: 500 }}>{s.name}</td>
+                      <td>{s.leads}</td>
+                      <td style={{ fontWeight: 600, color: '#16A34A' }}>£{s.revenue.toLocaleString('en-GB', { maximumFractionDigits: 0 })}</td>
+                      <td style={{ color: '#6B7280' }}>£{s.leads > 0 ? (s.revenue / s.leads).toFixed(0) : 0}</td>
+                    </tr>
+                  ))
+                }
+              </tbody>
+            </table>
           ) : (
-            <Table>
-              <TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Workspace</TableHead><TableHead>Email</TableHead><TableHead>Campaign</TableHead><TableHead>Label</TableHead><TableHead>Price</TableHead></TableRow></TableHeader>
-              <TableBody>
-                {loading ? Array.from({length: 8}).map((_,i) => <TableRow key={i}>{Array.from({length:6}).map((_,j) => <TableCell key={j}><div className="h-4 bg-gray-100 rounded animate-pulse"/></TableCell>)}</TableRow>)
-                : filtered.map((l, i) => (
-                  <TableRow key={i} className="hover:bg-gray-50">
-                    <TableCell className="text-sm text-gray-500">{new Date(l.date).toLocaleDateString('en-GB')}</TableCell>
-                    <TableCell className="text-sm">{l.workspace_name}</TableCell>
-                    <TableCell className="font-mono text-xs">{l.lead_email}</TableCell>
-                    <TableCell className="text-sm text-gray-600 max-w-xs truncate">{l.campaign}</TableCell>
-                    <TableCell><span className="text-xs px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">{l.label}</span></TableCell>
-                    <TableCell className="font-medium">£{parseFloat(String(l.lead_price)).toFixed(0)}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <table className="o-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Workspace</th>
+                  <th>Email</th>
+                  <th>Campaign</th>
+                  <th>Label</th>
+                  <th>Price</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading
+                  ? Array.from({ length: 8 }).map((_, i) => (
+                    <tr key={i}>
+                      {Array.from({ length: 6 }).map((_, j) => (
+                        <td key={j}><span className="o-spin" /></td>
+                      ))}
+                    </tr>
+                  ))
+                  : filtered.map((l, i) => (
+                    <tr key={i}>
+                      <td style={{ color: '#6B7280' }}>{new Date(l.date).toLocaleDateString('en-GB')}</td>
+                      <td>{l.workspace_name}</td>
+                      <td><code style={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>{l.lead_email}</code></td>
+                      <td style={{ color: '#374151', maxWidth: '16rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.campaign}</td>
+                      <td><span className="o-status o-status-active">{l.label}</span></td>
+                      <td style={{ fontWeight: 500 }}>£{parseFloat(String(l.lead_price)).toFixed(0)}</td>
+                    </tr>
+                  ))
+                }
+              </tbody>
+            </table>
           )}
         </div>
       </div>

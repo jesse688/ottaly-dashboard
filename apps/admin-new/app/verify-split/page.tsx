@@ -300,22 +300,20 @@ export default function VerifySplitPage() {
 
     if (!sent && !contacts) {
       return (
-        <div key={cls} style={{ background: '#fff', borderRadius: 12, border: `2px solid ${borderColor}`, overflow: 'hidden' }}>
+        <div key={cls} style={{ background: '#FFFFFF', borderRadius: 12, border: `2px solid ${borderColor}`, overflow: 'hidden' }}>
           <div style={{ ...headerStyle, padding: '0.9rem 1.25rem', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
             <div style={{ width: 36, height: 36, borderRadius: 8, background: 'rgba(255,255,255,.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, flexShrink: 0 }}>
               {icon}
             </div>
             <div style={{ color: '#fff', fontSize: 14, fontWeight: 700 }}>{title}</div>
           </div>
-          <div style={{ padding: '1rem 1.25rem', textAlign: 'center', color: '#6B7280', fontSize: 13, fontStyle: 'italic' }}>
-            No data in this period
-          </div>
+          <div className="o-empty">No data in this period</div>
         </div>
       )
     }
 
     return (
-      <div key={cls} style={{ background: '#fff', borderRadius: 12, border: `2px solid ${borderColor}`, overflow: 'hidden' }}>
+      <div key={cls} style={{ background: '#FFFFFF', borderRadius: 12, border: `2px solid ${borderColor}`, overflow: 'hidden' }}>
         <div style={{ ...headerStyle, padding: '0.9rem 1.25rem', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
           <div style={{ width: 36, height: 36, borderRadius: 8, background: 'rgba(255,255,255,.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, flexShrink: 0 }}>
             {icon}
@@ -356,39 +354,19 @@ export default function VerifySplitPage() {
   ]
 
   return (
-    <div style={{ background: '#F0F2F8', minHeight: '100vh', fontFamily: "'Inter', sans-serif", color: '#050C29' }}>
-      <div style={{ maxWidth: 1400, margin: '0 auto', padding: '1.5rem 2rem' }}>
-
-        {/* Page header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-          <div>
-            <div style={{ fontFamily: "'Inter', sans-serif", fontSize: '1.4rem', fontWeight: 700, letterSpacing: '0.5px' }}>
-              Verify Split
-            </div>
-            <div style={{ fontSize: 12, color: '#6B7280', marginTop: 3 }}>
-              SMTP Verified vs Catch-All (Safe) — replies, bounces, leads
-            </div>
-          </div>
-
-          {/* Period picker */}
+    <div className="o-page">
+      <div className="o-page-header">
+        <div>
+          <div className="o-page-title">Verify Split</div>
+          <div className="o-page-sub">SMTP Verified vs Catch-All (Safe) — replies, bounces, leads</div>
+        </div>
+        <div className="o-page-actions">
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
             {PERIODS.map(p => (
               <button
                 key={p.key}
                 onClick={() => setPeriod(p.key)}
-                style={{
-                  padding: '5px 12px',
-                  border: '1px solid #E2E6F0',
-                  borderRadius: 6,
-                  fontSize: 12,
-                  fontWeight: 500,
-                  cursor: 'pointer',
-                  fontFamily: 'inherit',
-                  background: activePeriod === p.key ? '#050C29' : '#fff',
-                  color:      activePeriod === p.key ? '#fff'    : '#6B7280',
-                  borderColor: activePeriod === p.key ? '#050C29' : '#E2E6F0',
-                  transition: 'all .15s',
-                }}
+                className={'o-pill' + (activePeriod === p.key ? ' o-pill-active' : '')}
               >
                 {p.label}
               </button>
@@ -398,104 +376,85 @@ export default function VerifySplitPage() {
               type="date"
               value={dateFrom}
               onChange={e => handleCustomFrom(e.target.value)}
-              style={{ padding: '5px 8px', border: '1px solid #E2E6F0', borderRadius: 6, fontSize: 12, fontFamily: 'inherit', outline: 'none' }}
+              className="o-input"
+              style={{ padding: '5px 8px', fontSize: 12, width: 'auto' }}
             />
             <label style={{ fontSize: 12, color: '#6B7280' }}>To</label>
             <input
               type="date"
               value={dateTo}
               onChange={e => handleCustomTo(e.target.value)}
-              style={{ padding: '5px 8px', border: '1px solid #E2E6F0', borderRadius: 6, fontSize: 12, fontFamily: 'inherit', outline: 'none' }}
+              className="o-input"
+              style={{ padding: '5px 8px', fontSize: 12, width: 'auto' }}
             />
           </div>
         </div>
+      </div>
 
-        {/* Comparison cards */}
-        {loading ? (
-          <LoadingGrid />
-        ) : error ? (
-          <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #E2E6F0', padding: '2rem', textAlign: 'center', color: '#DC2626', fontSize: 13, marginBottom: '1.25rem' }}>
+      {/* Comparison cards */}
+      {loading ? (
+        <LoadingGrid />
+      ) : error ? (
+        <div className="o-card" style={{ marginBottom: '1.25rem' }}>
+          <div className="o-card-body" style={{ textAlign: 'center', color: '#DC2626', fontSize: 13 }}>
             Error: {error}
           </div>
-        ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.25rem' }}>
-            {renderCompareCard(safeRow,    'safe',    '✓', 'SMTP Verified')}
-            {renderCompareCard(catchallRow,'catchall','~', 'Catch-All (Safe)')}
-          </div>
-        )}
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.25rem' }}>
+          {renderCompareCard(safeRow,    'safe',    '✓', 'SMTP Verified')}
+          {renderCompareCard(catchallRow,'catchall','~', 'Catch-All (Safe)')}
+        </div>
+      )}
 
-        {/* Daily trend chart */}
-        <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #E2E6F0', padding: '1.25rem', marginBottom: '1.25rem' }}>
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: '0.75rem', color: '#050C29' }}>
-            Daily Trend
-          </div>
-          <div style={{ display: 'flex', gap: '0.35rem', marginBottom: '0.75rem' }}>
+      {/* Daily trend chart */}
+      <div className="o-card" style={{ marginBottom: '1.25rem' }}>
+        <div className="o-card-header">
+          <div className="o-card-title">Daily Trend</div>
+          <div style={{ display: 'flex', gap: '0.35rem' }}>
             {CHART_METRICS.map(m => (
               <button
                 key={m.key}
                 onClick={() => setChartMetric(m.key)}
-                style={{
-                  padding: '4px 11px',
-                  border: '1px solid #E2E6F0',
-                  borderRadius: 20,
-                  fontSize: 11,
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  fontFamily: 'inherit',
-                  background: chartMetric === m.key ? '#050C29' : '#fff',
-                  color:      chartMetric === m.key ? '#fff'    : '#6B7280',
-                  borderColor: chartMetric === m.key ? '#050C29' : '#E2E6F0',
-                  transition: 'all .15s',
-                }}
+                className={'o-pill' + (chartMetric === m.key ? ' o-pill-active' : '')}
               >
                 {m.label}
               </button>
             ))}
           </div>
+        </div>
+        <div className="o-card-body">
           <div style={{ position: 'relative', height: 220 }}>
             {!loading && data && (data.daily?.length ?? 0) > 0 ? (
               <Line data={chartData()} options={chartOptions} />
             ) : loading ? (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#6B7280', fontSize: 13 }}>
-                Loading…
-              </div>
+              <div className="o-empty">Loading…</div>
             ) : (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#6B7280', fontSize: 13 }}>
-                No daily data in this period
-              </div>
+              <div className="o-empty">No daily data in this period</div>
             )}
           </div>
         </div>
+      </div>
 
-        {/* Full breakdown table */}
-        <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #E2E6F0', overflow: 'hidden' }}>
-          <div style={{ padding: '0.9rem 1.25rem', fontSize: 13, fontWeight: 700, borderBottom: '1px solid #E2E6F0', background: '#fafbfd' }}>
-            All Verification Statuses
-          </div>
+      {/* Full breakdown table */}
+      <div className="o-card">
+        <div className="o-card-header">
+          <div className="o-card-title">All Verification Statuses</div>
+        </div>
+        <div className="o-card-body" style={{ padding: 0 }}>
           {loading ? (
-            <div style={{ textAlign: 'center', padding: '3rem', color: '#6B7280', fontSize: 13 }}>Loading…</div>
+            <div className="o-empty">
+              <span className="o-spin" /> Loading…
+            </div>
           ) : !summary.length ? (
-            <div style={{ textAlign: 'center', padding: '2rem', color: '#6B7280', fontSize: 13 }}>No data in this period</div>
+            <div className="o-empty">No data in this period</div>
           ) : (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <div className="o-table-wrap">
+              <table className="o-table">
                 <thead>
                   <tr>
                     {['Status', 'Contacts', 'Sent', 'Replies', 'Reply %', 'Bounces', 'Bounce %', 'Leads', 'Lead %'].map((h, i) => (
-                      <th
-                        key={h}
-                        style={{
-                          padding: '0.6rem 1rem',
-                          textAlign: i === 0 ? 'left' : 'right',
-                          fontSize: 10,
-                          fontWeight: 700,
-                          textTransform: 'uppercase',
-                          letterSpacing: '0.4px',
-                          color: '#6B7280',
-                          whiteSpace: 'nowrap',
-                          borderBottom: '1px solid #E2E6F0',
-                        }}
-                      >
+                      <th key={h} style={{ textAlign: i === 0 ? 'left' : 'right' }}>
                         {h}
                       </th>
                     ))}
@@ -516,7 +475,6 @@ export default function VerifySplitPage() {
                     return (
                       <tr
                         key={`${row.email_status}-${idx}`}
-                        style={{ borderBottom: idx === summary.length - 1 ? 'none' : '1px solid #E2E6F0' }}
                         onMouseEnter={e => {
                           ;(e.currentTarget as HTMLTableRowElement).style.background = '#f7f8fb'
                         }}
@@ -524,21 +482,21 @@ export default function VerifySplitPage() {
                           ;(e.currentTarget as HTMLTableRowElement).style.background = ''
                         }}
                       >
-                        <td style={{ padding: '0.75rem 1rem', textAlign: 'left', fontWeight: 600, fontSize: 13 }}>
+                        <td style={{ textAlign: 'left', fontWeight: 600 }}>
                           <StatusTag status={row.email_status} label={meta.label} tagClass={meta.tagClass} />
                         </td>
-                        <td style={{ padding: '0.75rem 1rem', textAlign: 'right', fontSize: 13 }}>{contacts.toLocaleString()}</td>
-                        <td style={{ padding: '0.75rem 1rem', textAlign: 'right', fontSize: 13 }}>{sent.toLocaleString()}</td>
-                        <td style={{ padding: '0.75rem 1rem', textAlign: 'right', fontSize: 13 }}>{replies.toLocaleString()}</td>
-                        <td style={{ padding: '0.75rem 1rem', textAlign: 'right', fontSize: 13, fontWeight: 700, ...rateStyle(rateClass(rr, 'reply')) }}>
+                        <td style={{ textAlign: 'right' }}>{contacts.toLocaleString()}</td>
+                        <td style={{ textAlign: 'right' }}>{sent.toLocaleString()}</td>
+                        <td style={{ textAlign: 'right' }}>{replies.toLocaleString()}</td>
+                        <td style={{ textAlign: 'right', fontWeight: 700, ...rateStyle(rateClass(rr, 'reply')) }}>
                           {fmtPct(replies, sent)}
                         </td>
-                        <td style={{ padding: '0.75rem 1rem', textAlign: 'right', fontSize: 13 }}>{bounces.toLocaleString()}</td>
-                        <td style={{ padding: '0.75rem 1rem', textAlign: 'right', fontSize: 13, fontWeight: 700, ...rateStyle(rateClass(br, 'bounce')) }}>
+                        <td style={{ textAlign: 'right' }}>{bounces.toLocaleString()}</td>
+                        <td style={{ textAlign: 'right', fontWeight: 700, ...rateStyle(rateClass(br, 'bounce')) }}>
                           {fmtPct(bounces, sent)}
                         </td>
-                        <td style={{ padding: '0.75rem 1rem', textAlign: 'right', fontSize: 13 }}>{leads.toLocaleString()}</td>
-                        <td style={{ padding: '0.75rem 1rem', textAlign: 'right', fontSize: 13, fontWeight: 700, ...rateStyle(rateClass(lr, 'lead')) }}>
+                        <td style={{ textAlign: 'right' }}>{leads.toLocaleString()}</td>
+                        <td style={{ textAlign: 'right', fontWeight: 700, ...rateStyle(rateClass(lr, 'lead')) }}>
                           {fmtPct(leads, sent)}
                         </td>
                       </tr>
@@ -549,8 +507,8 @@ export default function VerifySplitPage() {
             </div>
           )}
         </div>
-
       </div>
+
     </div>
   )
 }
@@ -620,8 +578,10 @@ function LoadingGrid() {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.25rem' }}>
       {[0, 1].map(i => (
-        <div key={i} style={{ background: '#fff', borderRadius: 12, border: '1px solid #E2E6F0', padding: '3rem', textAlign: 'center', color: '#6B7280', fontSize: 13 }}>
-          Loading…
+        <div key={i} className="o-card">
+          <div className="o-card-body o-empty">
+            <span className="o-spin" /> Loading…
+          </div>
         </div>
       ))}
     </div>

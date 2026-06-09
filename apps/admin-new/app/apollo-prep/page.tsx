@@ -672,29 +672,31 @@ export default function ApolloPrep() {
   // ── Render ──────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen" style={{ background: '#F0F2F8', fontFamily: 'Inter, sans-serif', color: '#050C29' }}>
-      <div style={{ maxWidth: 960, margin: '2rem auto', padding: '0 1.5rem' }}>
+    <div className="o-page">
 
-        {/* Apollo Account Split */}
-        <div className="card" style={cardStyle}>
-          <h1 style={h1Style}>Apollo Account Split — UK</h1>
-          <p style={subStyle}>
+      {/* Apollo Account Split */}
+      <div className="o-card" style={{ marginBottom: '1.25rem' }}>
+        <div className="o-card-header">
+          <div className="o-card-title">Apollo Account Split — UK</div>
+        </div>
+        <div className="o-card-body">
+          <p style={{ fontSize: 13, color: '#6B7280', marginBottom: '1.5rem' }}>
             Export your existing database contacts split by account, or find net-new contacts in Apollo.
             Account 1 = London + South East; Account 2 = rest of the UK. No duplicates between accounts.
           </p>
 
           <div style={{ marginBottom: '1.5rem' }}>
-            <div style={sectionLabelStyle}>Export from your database</div>
+            <div className="o-section-h">Export from your database</div>
             <div style={{ display: 'flex', gap: '.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
               <button
-                style={{ ...btnStyle, ...btnPrimaryStyle }}
+                className="o-btn o-btn-primary"
                 disabled={exportingAccount !== null}
                 onClick={() => void exportSplit(1)}
               >
                 {exportingAccount === 1 ? 'Exporting…' : '↓ Export Account 1 — London + South East'}
               </button>
               <button
-                style={{ ...btnStyle, ...btnTealStyle }}
+                className="o-btn o-btn-teal"
                 disabled={exportingAccount !== null}
                 onClick={() => void exportSplit(2)}
               >
@@ -707,13 +709,14 @@ export default function ApolloPrep() {
           </div>
 
           <div>
-            <div style={sectionLabelStyle}>Find net-new contacts in Apollo</div>
+            <div className="o-section-h">Find net-new contacts in Apollo</div>
             <div style={{ display: 'flex', gap: '.75rem', flexWrap: 'wrap' }}>
               <a
                 href={APOLLO_URL_ACCOUNT1}
                 target="_blank"
                 rel="noopener noreferrer"
-                style={{ ...btnStyle, ...btnPrimaryStyle, textDecoration: 'none' }}
+                className="o-btn o-btn-primary"
+                style={{ textDecoration: 'none' }}
               >
                 &#x2197; Account 1 — London + South East
               </a>
@@ -721,18 +724,23 @@ export default function ApolloPrep() {
                 href={APOLLO_URL_ACCOUNT2}
                 target="_blank"
                 rel="noopener noreferrer"
-                style={{ ...btnStyle, ...btnTealStyle, textDecoration: 'none' }}
+                className="o-btn o-btn-teal"
+                style={{ textDecoration: 'none' }}
               >
                 &#x2197; Account 2 — Rest of UK
               </a>
             </div>
           </div>
         </div>
+      </div>
 
-        {/* Apollo Upload Prep */}
-        <div className="card" style={cardStyle}>
-          <h1 style={h1Style}>Apollo Upload Prep</h1>
-          <p style={subStyle}>
+      {/* Apollo Upload Prep */}
+      <div className="o-card" style={{ marginBottom: '1.25rem' }}>
+        <div className="o-card-header">
+          <div className="o-card-title">Apollo Upload Prep</div>
+        </div>
+        <div className="o-card-body">
+          <p style={{ fontSize: 13, color: '#6B7280', marginBottom: '1.5rem' }}>
             Drop any number of CSVs. Emails are extracted, deduplicated, stripped of all other columns,
             and split into chunks ≤ 45 MB / 100,000 rows — ready to import straight into Apollo.
           </p>
@@ -772,7 +780,7 @@ export default function ApolloPrep() {
           {pendingFiles.length > 0 && (
             <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '.5rem' }}>
               {pendingFiles.map((p, i) => (
-                <div key={i} style={fileRowStyle}>
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '.75rem', padding: '.6rem .9rem', background: '#F8F9FC', borderRadius: 8, border: '1px solid #E2E6F0' }}>
                   <span style={{ fontSize: 16 }}>📄</span>
                   <span style={{ flex: 1, fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {p.name}
@@ -795,14 +803,14 @@ export default function ApolloPrep() {
           {pendingFiles.length > 0 && (
             <div style={{ display: 'flex', gap: '.75rem', flexWrap: 'wrap', alignItems: 'center', marginTop: '1rem' }}>
               <button
-                style={{ ...btnStyle, ...btnPrimaryStyle, opacity: processing ? 0.5 : 1, cursor: processing ? 'not-allowed' : 'pointer' }}
+                className="o-btn o-btn-primary"
                 disabled={processing}
                 onClick={() => void processCsvFiles()}
               >
-                {processing ? '⏳ Processing…' : '⚡ Process files'}
+                {processing ? <><span className="o-spin" /> Processing…</> : '⚡ Process files'}
               </button>
               <button
-                style={{ ...btnStyle, ...btnGhostStyle }}
+                className="o-btn o-btn-ghost"
                 disabled={processing}
                 onClick={clearAll}
               >
@@ -811,39 +819,52 @@ export default function ApolloPrep() {
             </div>
           )}
         </div>
+      </div>
 
-        {/* Results */}
-        {showResults && (
-          <div style={cardStyle}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
-              <div>
-                <div style={{ fontSize: '1rem', fontWeight: 700 }}>Results</div>
-                {resultStats && (
-                  <div style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>
-                    {resultStats.chunkCount} chunk{resultStats.chunkCount !== 1 ? 's' : ''} ready to download
-                  </div>
-                )}
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
-                <button
-                  style={{ ...btnStyle, ...btnTealStyle, padding: '5px 12px', fontSize: 12 }}
-                  onClick={downloadAll}
-                  disabled={!chunks.length}
-                >
-                  ⬇ Download all
-                </button>
-                <span style={{ fontSize: 11, color: '#6B7280' }}>
-                  If Chrome asks &ldquo;allow multiple downloads&rdquo; — click Allow
-                </span>
-              </div>
+      {/* Results */}
+      {showResults && (
+        <div className="o-card" style={{ marginBottom: '1.25rem' }}>
+          <div className="o-card-header">
+            <div>
+              <div className="o-card-title">Results</div>
+              {resultStats && (
+                <div style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>
+                  {resultStats.chunkCount} chunk{resultStats.chunkCount !== 1 ? 's' : ''} ready to download
+                </div>
+              )}
             </div>
-
+            <div style={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
+              <button
+                className="o-btn o-btn-teal o-btn-sm"
+                onClick={downloadAll}
+                disabled={!chunks.length}
+              >
+                ⬇ Download all
+              </button>
+              <span style={{ fontSize: 11, color: '#6B7280' }}>
+                If Chrome asks &ldquo;allow multiple downloads&rdquo; — click Allow
+              </span>
+            </div>
+          </div>
+          <div className="o-card-body">
             {resultStats && (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '.75rem', marginBottom: '1.5rem' }}>
-                <StatCard label="Unique emails" value={resultStats.uniqueEmails.toLocaleString()} color="#1F6F78" />
-                <StatCard label="Output chunks" value={String(resultStats.chunkCount)} color="#16A34A" />
-                <StatCard label="Duplicates removed" value={resultStats.dupes.toLocaleString()} color="#D97706" />
-                <StatCard label="Files skipped" value={String(resultStats.skipped)} color="#224388" />
+              <div className="o-metrics o-metrics-4" style={{ marginBottom: '1.5rem' }}>
+                <div className="o-metric" style={{ borderTopColor: '#1F6F78' }}>
+                  <div className="o-metric-label">Unique emails</div>
+                  <div className="o-metric-val" style={{ color: '#1F6F78' }}>{resultStats.uniqueEmails.toLocaleString()}</div>
+                </div>
+                <div className="o-metric" style={{ borderTopColor: '#16A34A' }}>
+                  <div className="o-metric-label">Output chunks</div>
+                  <div className="o-metric-val" style={{ color: '#16A34A' }}>{String(resultStats.chunkCount)}</div>
+                </div>
+                <div className="o-metric" style={{ borderTopColor: '#D97706' }}>
+                  <div className="o-metric-label">Duplicates removed</div>
+                  <div className="o-metric-val" style={{ color: '#D97706' }}>{resultStats.dupes.toLocaleString()}</div>
+                </div>
+                <div className="o-metric" style={{ borderTopColor: '#224388' }}>
+                  <div className="o-metric-label">Files skipped</div>
+                  <div className="o-metric-val" style={{ color: '#224388' }}>{String(resultStats.skipped)}</div>
+                </div>
               </div>
             )}
 
@@ -860,7 +881,7 @@ export default function ApolloPrep() {
                   <span style={{ fontWeight: 600, fontSize: 13, flex: 1 }}>{c.name}</span>
                   <span style={{ fontSize: 12, color: '#6B7280' }}>{c.rows.toLocaleString()} rows · {c.sizeMB} MB</span>
                   <button
-                    style={{ ...btnStyle, ...btnTealStyle, padding: '5px 12px', fontSize: 12 }}
+                    className="o-btn o-btn-teal o-btn-sm"
                     onClick={() => downloadChunk(i)}
                   >
                     ⬇ Download
@@ -883,19 +904,23 @@ export default function ApolloPrep() {
               </div>
             )}
           </div>
-        )}
+        </div>
+      )}
 
-        {/* AI Enrichment */}
-        <div style={{ ...cardStyle, marginTop: '1.5rem' }}>
-          <h1 style={{ ...h1Style, marginBottom: 4 }}>AI Enrichment</h1>
-          <p style={subStyle}>
+      {/* AI Enrichment */}
+      <div className="o-card" style={{ marginBottom: '1.25rem' }}>
+        <div className="o-card-header">
+          <div className="o-card-title">AI Enrichment</div>
+        </div>
+        <div className="o-card-body">
+          <p style={{ fontSize: 13, color: '#6B7280', marginBottom: '1.5rem' }}>
             Scans the database for contacts missing data, searches the web using AI, and fills in the gaps.
             Groups by company domain — one search enriches all contacts from the same company.
           </p>
 
           {/* Field selection */}
           <div style={{ marginBottom: '1.25rem' }}>
-            <div style={sectionLabelStyle}>Claude fields (fills blanks only)</div>
+            <div className="o-section-h">Claude fields (fills blanks only)</div>
             <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '.75rem' }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>
                 <input type="checkbox" checked={enrichKeywords} onChange={e => setEnrichKeywords(e.target.checked)} style={{ accentColor: '#1F6F78', width: 15, height: 15 }} />
@@ -910,9 +935,7 @@ export default function ApolloPrep() {
                 Company Size
               </label>
             </div>
-            <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: '#6B7280', marginBottom: '.4rem' }}>
-              Companies House (always updated — live gov data)
-            </div>
+            <div className="o-section-h">Companies House (always updated — live gov data)</div>
             <div style={{ fontSize: 12, color: '#6B7280', lineHeight: 1.6 }}>
               Company status · Company type · Founded year · Postcode · Full address · SIC codes · Jurisdiction · Active &amp; resigned officers · Last accounts date · Insolvency history · Charges · Accounts overdue · Cessation date
             </div>
@@ -921,12 +944,12 @@ export default function ApolloPrep() {
           {/* Batch size + concurrency */}
           <div style={{ marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '1.5rem', flexWrap: 'wrap' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '.75rem' }}>
-              <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: '#6B7280' }}>Batch size</div>
+              <div className="o-section-h" style={{ marginBottom: 0 }}>Batch size</div>
               <select
+                className="o-select"
                 value={enrichLimit}
                 onChange={e => setEnrichLimit(e.target.value)}
                 disabled={isEnrichActive}
-                style={selectStyle}
               >
                 <option value="100">100 domains (test)</option>
                 <option value="500">500 domains</option>
@@ -936,12 +959,12 @@ export default function ApolloPrep() {
               </select>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '.75rem' }}>
-              <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: '#6B7280' }}>Speed</div>
+              <div className="o-section-h" style={{ marginBottom: 0 }}>Speed</div>
               <select
+                className="o-select"
                 value={enrichConcurrency}
                 onChange={e => setEnrichConcurrency(e.target.value)}
                 disabled={isEnrichActive}
-                style={selectStyle}
               >
                 <option value="1">1 — safe</option>
                 <option value="3">3 — normal</option>
@@ -955,7 +978,7 @@ export default function ApolloPrep() {
           <div style={{ display: 'flex', gap: '.75rem', flexWrap: 'wrap', alignItems: 'center', marginBottom: '1rem' }}>
             {(enrichPhase === 'idle' || enrichPhase === 'completed' || enrichPhase === 'stopped') && (
               <button
-                style={{ ...btnStyle, ...btnTealStyle }}
+                className="o-btn o-btn-teal"
                 onClick={() => void scanEnrichment()}
               >
                 Scan Database
@@ -963,21 +986,22 @@ export default function ApolloPrep() {
             )}
 
             {enrichPhase === 'scanning' && (
-              <button style={{ ...btnStyle, ...btnTealStyle, opacity: 0.5 }} disabled>
-                Scanning…
+              <button className="o-btn o-btn-teal" disabled style={{ opacity: 0.5 }}>
+                <span className="o-spin" /> Scanning…
               </button>
             )}
 
             {enrichPhase === 'scan-ready' && (
               <>
                 <button
-                  style={{ ...btnStyle, background: '#16A34A', color: '#fff' }}
+                  className="o-btn"
+                  style={{ background: '#16A34A', color: '#fff' }}
                   onClick={() => void startEnrichment()}
                 >
                   Confirm &amp; Start
                 </button>
                 <button
-                  style={{ ...btnStyle, ...btnGhostStyle }}
+                  className="o-btn o-btn-ghost"
                   onClick={cancelScan}
                 >
                   Cancel
@@ -987,15 +1011,15 @@ export default function ApolloPrep() {
 
             {isEnrichRunning && (
               <>
-                <button style={{ ...btnStyle, ...btnGhostStyle }} onClick={() => void pauseEnrichment()}>⏸ Pause</button>
-                <button style={{ ...btnStyle, ...btnGhostStyle }} onClick={() => void stopEnrichment()}>■ Stop</button>
+                <button className="o-btn o-btn-ghost" onClick={() => void pauseEnrichment()}>⏸ Pause</button>
+                <button className="o-btn o-btn-ghost" onClick={() => void stopEnrichment()}>■ Stop</button>
               </>
             )}
 
             {isEnrichPaused && (
               <>
-                <button style={{ ...btnStyle, ...btnGhostStyle }} onClick={() => void resumeEnrichment()}>▶ Resume</button>
-                <button style={{ ...btnStyle, ...btnGhostStyle }} onClick={() => void stopEnrichment()}>■ Stop</button>
+                <button className="o-btn o-btn-ghost" onClick={() => void resumeEnrichment()}>▶ Resume</button>
+                <button className="o-btn o-btn-ghost" onClick={() => void stopEnrichment()}>■ Stop</button>
               </>
             )}
 
@@ -1028,13 +1052,31 @@ export default function ApolloPrep() {
               </div>
 
               {/* Stats row */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '.75rem', marginTop: '1rem' }}>
-                <StatCard label="Updated" value={enrichStats.updated.toLocaleString()} color="#1F6F78" />
-                <StatCard label="Skipped" value={enrichStats.skipped.toLocaleString()} color="#224388" />
-                <StatCard label="Failed" value={enrichStats.failed.toLocaleString()} color="#D97706" />
-                <StatCard label="Domains" value={enrichStats.total.toLocaleString()} color="#16A34A" />
-                <StatCard label="Cost (USD)" value={`$${enrichStats.cost.toFixed(4)}`} color="#8b5cf6" />
-                <StatCard label="Est. Time Left" value={enrichEta} color="#ec4899" />
+              <div className="o-metrics o-metrics-auto" style={{ marginTop: '1rem' }}>
+                <div className="o-metric" style={{ borderTopColor: '#1F6F78' }}>
+                  <div className="o-metric-label">Updated</div>
+                  <div className="o-metric-val" style={{ color: '#1F6F78' }}>{enrichStats.updated.toLocaleString()}</div>
+                </div>
+                <div className="o-metric" style={{ borderTopColor: '#224388' }}>
+                  <div className="o-metric-label">Skipped</div>
+                  <div className="o-metric-val" style={{ color: '#224388' }}>{enrichStats.skipped.toLocaleString()}</div>
+                </div>
+                <div className="o-metric" style={{ borderTopColor: '#D97706' }}>
+                  <div className="o-metric-label">Failed</div>
+                  <div className="o-metric-val" style={{ color: '#D97706' }}>{enrichStats.failed.toLocaleString()}</div>
+                </div>
+                <div className="o-metric" style={{ borderTopColor: '#16A34A' }}>
+                  <div className="o-metric-label">Domains</div>
+                  <div className="o-metric-val" style={{ color: '#16A34A' }}>{enrichStats.total.toLocaleString()}</div>
+                </div>
+                <div className="o-metric" style={{ borderTopColor: '#7C89CD' }}>
+                  <div className="o-metric-label">Cost (USD)</div>
+                  <div className="o-metric-val" style={{ color: '#7C89CD' }}>{`$${enrichStats.cost.toFixed(4)}`}</div>
+                </div>
+                <div className="o-metric" style={{ borderTopColor: '#D97706' }}>
+                  <div className="o-metric-label">Est. Time Left</div>
+                  <div className="o-metric-val" style={{ color: '#D97706' }}>{enrichEta}</div>
+                </div>
               </div>
 
               {/* Enrich log */}
@@ -1053,14 +1095,14 @@ export default function ApolloPrep() {
 
               {/* Sample CSV export */}
               <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid #E2E6F0' }}>
-                <div style={sectionLabelStyle}>Sample Export</div>
+                <div className="o-section-h">Sample Export</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '.75rem', flexWrap: 'wrap' }}>
                   <button
-                    style={{ ...btnStyle, ...btnGhostStyle, opacity: sampleCsvLoading ? 0.5 : 1, cursor: sampleCsvLoading ? 'not-allowed' : 'pointer' }}
+                    className="o-btn o-btn-ghost"
                     disabled={sampleCsvLoading}
                     onClick={() => void downloadSampleCsv()}
                   >
-                    Download 100 contact sample (original + enriched)
+                    {sampleCsvLoading ? <><span className="o-spin" /> Working…</> : 'Download 100 contact sample (original + enriched)'}
                   </button>
                   {sampleCsvStatus && (
                     <span style={{ fontSize: 12, color: '#6B7280' }}>{sampleCsvStatus}</span>
@@ -1071,32 +1113,35 @@ export default function ApolloPrep() {
               {/* Results table */}
               {showEnrichResults && enrichResults.length > 0 && (
                 <div style={{ marginTop: '1.25rem' }}>
-                  <div style={sectionLabelStyle}>Results</div>
-                  <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <div className="o-section-h">Results</div>
+                  <div className="o-table-wrap">
+                    <table className="o-table">
                       <thead>
-                        <tr style={{ background: '#F8F9FC', borderBottom: '2px solid #E2E6F0' }}>
-                          <th style={thStyle}>Domain</th>
-                          <th style={thStyle}>Industry</th>
-                          <th style={thStyle}>Keywords</th>
-                          <th style={thStyle}>Employees</th>
-                          <th style={thStyle}>Contacts</th>
-                          <th style={thStyle}>Status</th>
+                        <tr>
+                          <th>Domain</th>
+                          <th>Industry</th>
+                          <th>Keywords</th>
+                          <th>Employees</th>
+                          <th>Contacts</th>
+                          <th>Status</th>
                         </tr>
                       </thead>
                       <tbody>
                         {enrichResults.map((r, i) => {
-                          const statusColor = r.status === 'updated' ? '#16A34A' : r.status === 'failed' ? '#DC2626' : '#6B7280'
                           const kwArr = r.keywords ? r.keywords.split(',') : []
                           const kw = kwArr.length ? kwArr.slice(0, 4).join(', ') + (kwArr.length > 4 ? '…' : '') : '—'
                           return (
-                            <tr key={i} style={{ borderBottom: '1px solid #E2E6F0' }}>
-                              <td style={tdStyle}><span style={{ fontWeight: 500 }}>{r.domain}</span></td>
-                              <td style={tdStyle}>{r.industry ?? '—'}</td>
-                              <td style={{ ...tdStyle, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#6B7280' }} title={r.keywords ?? ''}>{kw}</td>
-                              <td style={tdStyle}>{r.num_employees != null ? r.num_employees.toLocaleString() : '—'}</td>
-                              <td style={tdStyle}>{r.contacts}</td>
-                              <td style={{ ...tdStyle, fontWeight: 600, color: statusColor }}>{r.status}</td>
+                            <tr key={i}>
+                              <td><span style={{ fontWeight: 500 }}>{r.domain}</span></td>
+                              <td>{r.industry ?? '—'}</td>
+                              <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#6B7280' }} title={r.keywords ?? ''}>{kw}</td>
+                              <td>{r.num_employees != null ? r.num_employees.toLocaleString() : '—'}</td>
+                              <td>{r.contacts}</td>
+                              <td>
+                                {r.status === 'updated' && <span className="o-status o-status-good">{r.status}</span>}
+                                {r.status === 'failed' && <span className="o-status o-status-critical">{r.status}</span>}
+                                {r.status !== 'updated' && r.status !== 'failed' && <span className="o-status o-status-unknown">{r.status}</span>}
+                              </td>
                             </tr>
                           )
                         })}
@@ -1108,8 +1153,8 @@ export default function ApolloPrep() {
             </div>
           )}
         </div>
-
       </div>
+
     </div>
   )
 }
@@ -1118,104 +1163,9 @@ export default function ApolloPrep() {
 
 function StatCard({ label, value, color }: { label: string; value: string; color: string }) {
   return (
-    <div style={{
-      background: '#fff',
-      borderRadius: 10,
-      border: '1px solid #E2E6F0',
-      borderTop: `3px solid ${color}`,
-      padding: '.9rem 1rem',
-    }}>
-      <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: '#6B7280' }}>{label}</div>
-      <div style={{ fontSize: '1.4rem', fontWeight: 700, marginTop: 3 }}>{value}</div>
+    <div className="o-metric" style={{ borderTopColor: color }}>
+      <div className="o-metric-label">{label}</div>
+      <div className="o-metric-val" style={{ color }}>{value}</div>
     </div>
   )
-}
-
-// ── Style objects ─────────────────────────────────────────────────────────────
-
-const cardStyle: React.CSSProperties = {
-  background: '#fff',
-  borderRadius: 14,
-  border: '1px solid #E2E6F0',
-  padding: '1.75rem',
-  marginBottom: '1.25rem',
-}
-
-const h1Style: React.CSSProperties = {
-  fontSize: '1.4rem',
-  fontWeight: 700,
-  marginBottom: 4,
-}
-
-const subStyle: React.CSSProperties = {
-  fontSize: 13,
-  color: '#6B7280',
-  marginBottom: '1.5rem',
-}
-
-const sectionLabelStyle: React.CSSProperties = {
-  fontSize: 11,
-  fontWeight: 700,
-  textTransform: 'uppercase',
-  letterSpacing: '.5px',
-  color: '#6B7280',
-  marginBottom: '.6rem',
-}
-
-const btnStyle: React.CSSProperties = {
-  padding: '9px 20px',
-  borderRadius: 8,
-  fontSize: 13,
-  fontWeight: 600,
-  cursor: 'pointer',
-  border: 'none',
-  transition: 'all .15s',
-  display: 'inline-flex',
-  alignItems: 'center',
-}
-
-const btnPrimaryStyle: React.CSSProperties = {
-  background: '#224388',
-  color: '#fff',
-}
-
-const btnTealStyle: React.CSSProperties = {
-  background: '#1F6F78',
-  color: '#fff',
-}
-
-const btnGhostStyle: React.CSSProperties = {
-  background: 'transparent',
-  color: '#6B7280',
-  border: '1px solid #E2E6F0',
-}
-
-const fileRowStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: '.75rem',
-  padding: '.6rem .9rem',
-  background: '#F8F9FC',
-  borderRadius: 8,
-  border: '1px solid #E2E6F0',
-}
-
-const selectStyle: React.CSSProperties = {
-  padding: '6px 10px',
-  borderRadius: 6,
-  border: '1px solid #E2E6F0',
-  fontSize: 13,
-  fontWeight: 500,
-  background: '#fff',
-}
-
-const thStyle: React.CSSProperties = {
-  textAlign: 'left',
-  padding: '8px 10px',
-  fontWeight: 600,
-  color: '#6B7280',
-}
-
-const tdStyle: React.CSSProperties = {
-  padding: '7px 10px',
 }

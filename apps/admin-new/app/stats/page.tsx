@@ -26,10 +26,10 @@ interface StatsData {
 
 function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className="bg-white rounded-lg border p-5">
-      <p className="text-sm text-gray-500">{label}</p>
-      <p className="text-2xl font-semibold text-gray-900 mt-1">{value}</p>
-      {sub && <p className="text-sm text-gray-400 mt-0.5">{sub}</p>}
+    <div className="o-metric">
+      <div className="o-metric-label">{label}</div>
+      <div className="o-metric-val">{value}</div>
+      {sub && <div className="o-metric-sub">{sub}</div>}
     </div>
   )
 }
@@ -54,86 +54,90 @@ export default function StatsPage() {
   const replyRate = t && t.sent > 0 ? ((t.replies / t.sent) * 100).toFixed(1) + '%' : '—'
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50">
-      <div className="bg-white border-b px-6 py-4 flex items-center justify-between">
+    <div className="o-page">
+      <div className="o-page-header">
         <div>
-          <h1 className="text-xl font-semibold text-gray-900">Stats</h1>
-          <p className="text-sm text-gray-500">{rows.length} workspaces</p>
+          <div className="o-page-title">Stats</div>
+          <div className="o-page-sub">{rows.length} workspaces</div>
         </div>
-        <div className="flex gap-1">
-          {(['30d', '90d'] as const).map(p => (
-            <button
-              key={p}
-              onClick={() => setPeriod(p)}
-              className={`px-3 py-1.5 text-sm rounded border transition-colors ${period === p ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'}`}
-            >
-              {p}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="flex-1 overflow-auto px-6 py-6">
-        {loading ? (
-          <div className="grid grid-cols-3 gap-4 mb-6">
-            {Array.from({ length: 3 }).map((_, i) => (
-              <div key={i} className="bg-white rounded-lg border p-5">
-                <div className="h-4 bg-gray-100 rounded animate-pulse mb-2 w-16" />
-                <div className="h-8 bg-gray-100 rounded animate-pulse w-24" />
-              </div>
+        <div className="o-page-actions">
+          <div style={{ display: 'flex', gap: 6 }}>
+            {(['30d', '90d'] as const).map(p => (
+              <button
+                key={p}
+                onClick={() => setPeriod(p)}
+                className={'o-pill' + (period === p ? ' o-pill-active' : '')}
+              >
+                {p}
+              </button>
             ))}
           </div>
-        ) : t ? (
-          <div className="grid grid-cols-3 gap-4 mb-6">
-            <StatCard label="Sent (30d)" value={t.sent.toLocaleString()} />
-            <StatCard label="Replies (30d)" value={t.replies.toLocaleString()} sub={replyRate} />
-            <StatCard label="Leads (30d)" value={t.leads.toLocaleString()} />
-          </div>
-        ) : null}
-
-        {rows.length > 0 && (
-          <div className="bg-white rounded-lg border overflow-hidden">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b bg-gray-50">
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Workspace</th>
-                  <th className="text-right px-4 py-3 font-medium text-gray-600">Sent</th>
-                  <th className="text-right px-4 py-3 font-medium text-gray-600">Replies</th>
-                  <th className="text-right px-4 py-3 font-medium text-gray-600">Reply %</th>
-                  <th className="text-right px-4 py-3 font-medium text-gray-600">Leads</th>
-                  <th className="text-right px-4 py-3 font-medium text-gray-600">Mailboxes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map(row => {
-                  const sent = period === '30d' ? row.sent_30d : row.sent_90d
-                  const replies = period === '30d' ? row.replied_30d : row.replied_90d
-                  const rr = period === '30d' ? row.reply_rate_30d : row.reply_rate_90d
-                  const leads = period === '30d' ? row.leads_30d : row.leads_90d
-                  return (
-                    <tr key={row.workspace_id} className="border-b last:border-0 hover:bg-gray-50">
-                      <td className="px-4 py-3 font-medium">{row.workspace_name}</td>
-                      <td className="px-4 py-3 text-right text-gray-600">{sent?.toLocaleString() ?? '—'}</td>
-                      <td className="px-4 py-3 text-right text-gray-600">{replies?.toLocaleString() ?? '—'}</td>
-                      <td className="px-4 py-3 text-right">
-                        <span className={rr != null && rr >= 5 ? 'text-green-700 font-medium' : 'text-gray-600'}>
-                          {rr != null ? `${rr.toFixed(1)}%` : '—'}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-right text-blue-700 font-medium">{leads ?? '—'}</td>
-                      <td className="px-4 py-3 text-right text-gray-600">{row.mailbox_count ?? '—'}</td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {!loading && !data && (
-          <div className="text-center py-16 text-gray-500">Failed to load stats</div>
-        )}
+        </div>
       </div>
+
+      {loading ? (
+        <div className="o-metrics o-metrics-3" style={{ marginBottom: '1.5rem' }}>
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="o-metric">
+              <div className="o-metric-label"><span className="o-spin" /></div>
+              <div className="o-metric-val">—</div>
+            </div>
+          ))}
+        </div>
+      ) : t ? (
+        <div className="o-metrics o-metrics-3" style={{ marginBottom: '1.5rem' }}>
+          <StatCard label="Sent (30d)" value={t.sent.toLocaleString()} />
+          <StatCard label="Replies (30d)" value={t.replies.toLocaleString()} sub={replyRate} />
+          <StatCard label="Leads (30d)" value={t.leads.toLocaleString()} />
+        </div>
+      ) : null}
+
+      {rows.length > 0 && (
+        <div className="o-card">
+          <div className="o-card-body" style={{ padding: 0 }}>
+            <div className="o-table-wrap">
+              <table className="o-table">
+                <thead>
+                  <tr>
+                    <th>Workspace</th>
+                    <th style={{ textAlign: 'right' }}>Sent</th>
+                    <th style={{ textAlign: 'right' }}>Replies</th>
+                    <th style={{ textAlign: 'right' }}>Reply %</th>
+                    <th style={{ textAlign: 'right' }}>Leads</th>
+                    <th style={{ textAlign: 'right' }}>Mailboxes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map(row => {
+                    const sent = period === '30d' ? row.sent_30d : row.sent_90d
+                    const replies = period === '30d' ? row.replied_30d : row.replied_90d
+                    const rr = period === '30d' ? row.reply_rate_30d : row.reply_rate_90d
+                    const leads = period === '30d' ? row.leads_30d : row.leads_90d
+                    return (
+                      <tr key={row.workspace_id}>
+                        <td style={{ fontWeight: 500 }}>{row.workspace_name}</td>
+                        <td style={{ textAlign: 'right' }}>{sent?.toLocaleString() ?? '—'}</td>
+                        <td style={{ textAlign: 'right' }}>{replies?.toLocaleString() ?? '—'}</td>
+                        <td style={{ textAlign: 'right' }}>
+                          <span style={rr != null && rr >= 5 ? { color: '#16A34A', fontWeight: 500 } : { color: '#6B7280' }}>
+                            {rr != null ? `${rr.toFixed(1)}%` : '—'}
+                          </span>
+                        </td>
+                        <td style={{ textAlign: 'right', color: '#224388', fontWeight: 500 }}>{leads ?? '—'}</td>
+                        <td style={{ textAlign: 'right' }}>{row.mailbox_count ?? '—'}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!loading && !data && (
+        <div className="o-empty">Failed to load stats</div>
+      )}
     </div>
   )
 }

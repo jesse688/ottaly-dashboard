@@ -59,141 +59,157 @@ export default function Home() {
   const redCount = health.filter(h => h.health_band === 'red').length
 
   return (
-    <div
-      className="min-h-screen"
-      style={{ background: '#F0F2F8', color: '#050C29', fontFamily: 'Inter, sans-serif' }}
-    >
-      <div className="max-w-[1400px] mx-auto px-8 py-8">
+    <div className="o-page">
 
-        {/* Header */}
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold">Agency Dashboard</h1>
-          <p className="text-sm text-[#6B7280] mt-0.5">
+      {/* Header */}
+      <div className="o-page-header">
+        <div>
+          <div className="o-page-title">Agency Dashboard</div>
+          <div className="o-page-sub">
             Last 30 days · {loading ? '…' : `${health.length} workspaces`}
-          </p>
-        </div>
-
-        {/* Summary stat cards */}
-        <div className="grid gap-4 mb-6" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
-          {[
-            { label: 'Emails Sent', value: loading ? '—' : (totals?.sent ?? 0).toLocaleString(), accent: '#224388' },
-            { label: 'Reply Rate', value: loading ? '—' : replyRate, accent: '#1F6F78' },
-            { label: 'Leads Generated', value: loading ? '—' : (totals?.leads ?? 0).toLocaleString(), accent: '#059669' },
-            { label: 'Active Clients', value: loading ? '—' : String(activeClients), accent: '#7C89CD' },
-          ].map(card => (
-            <div
-              key={card.label}
-              className="bg-white rounded-xl border border-[#E2E6F0] px-5 py-4"
-              style={{ borderTop: `3px solid ${card.accent}` }}
-            >
-              <div className="text-xs font-bold uppercase tracking-wider text-[#6B7280]">{card.label}</div>
-              <div className="text-3xl font-bold mt-1">{card.value}</div>
-            </div>
-          ))}
-        </div>
-
-        <div className="grid gap-5" style={{ gridTemplateColumns: '1fr 280px' }}>
-
-          {/* Workspace table */}
-          <div className="bg-white rounded-xl border border-[#E2E6F0] overflow-hidden">
-            <div className="px-5 py-4 border-b border-[#E2E6F0] flex items-center justify-between">
-              <div>
-                <div className="font-bold text-[14px]">Workspaces</div>
-                <div className="text-xs text-[#6B7280] mt-0.5">Sorted by sends (30 days)</div>
-              </div>
-              <Link href="/stats" className="text-[12px] text-[#1F6F78] font-semibold">Full stats →</Link>
-            </div>
-            <table className="w-full border-collapse">
-              <thead style={{ background: '#F8F9FC' }}>
-                <tr>
-                  {['Workspace', 'Status', 'Sent', 'Reply Rate', 'Leads'].map(col => (
-                    <th
-                      key={col}
-                      className="py-2 px-4 text-left text-[11px] font-bold uppercase tracking-wider text-[#6B7280] border-b border-[#E2E6F0]"
-                    >
-                      {col}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {loading ? (
-                  <tr>
-                    <td colSpan={5} className="text-center py-10 text-[#6B7280] text-sm">Loading…</td>
-                  </tr>
-                ) : (
-                  (stats?.rows ?? []).map(ws => {
-                    const rr =
-                      ws.reply_rate_30d != null
-                        ? (Number(ws.reply_rate_30d) * 100).toFixed(2) + '%'
-                        : '—'
-                    const rrColor =
-                      ws.reply_rate_30d == null
-                        ? '#6B7280'
-                        : ws.reply_rate_30d >= 0.025
-                        ? '#059669'
-                        : ws.reply_rate_30d >= 0.01
-                        ? '#D97706'
-                        : '#DC2626'
-                    const statusCls =
-                      ws.client_status === 'active'
-                        ? 'bg-[#D1FAE5] text-[#065F46]'
-                        : ws.client_status === 'paused'
-                        ? 'bg-[#FEF3C7] text-[#92400E]'
-                        : 'bg-[#F3F4F6] text-[#4B5563]'
-                    return (
-                      <tr key={ws.workspace_id} className="border-b border-[#F3F4F6] last:border-0">
-                        <td className="py-2.5 px-4 text-[13px] font-medium">{ws.workspace_name}</td>
-                        <td className="py-2.5 px-4">
-                          <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${statusCls}`}>
-                            {ws.client_status ?? '—'}
-                          </span>
-                        </td>
-                        <td className="py-2.5 px-4 text-[13px]">{(ws.sent_30d ?? 0).toLocaleString()}</td>
-                        <td className="py-2.5 px-4 text-[13px] font-bold" style={{ color: rrColor }}>{rr}</td>
-                        <td className="py-2.5 px-4 text-[13px]">{ws.leads_30d ?? 0}</td>
-                      </tr>
-                    )
-                  })
-                )}
-              </tbody>
-            </table>
           </div>
+        </div>
+      </div>
 
-          {/* Right column */}
-          <div className="flex flex-col gap-4">
+      {/* Summary stat cards */}
+      <div className="o-metrics o-metrics-4" style={{ marginBottom: '1.5rem' }}>
+        <div className="o-metric" style={{ borderTopColor: '#224388' }}>
+          <div className="o-metric-label">Emails Sent</div>
+          <div className="o-metric-val" style={{ color: '#224388' }}>
+            {loading ? '—' : (totals?.sent ?? 0).toLocaleString()}
+          </div>
+        </div>
+        <div className="o-metric" style={{ borderTopColor: '#1F6F78' }}>
+          <div className="o-metric-label">Reply Rate</div>
+          <div className="o-metric-val" style={{ color: '#1F6F78' }}>
+            {loading ? '—' : replyRate}
+          </div>
+        </div>
+        <div className="o-metric" style={{ borderTopColor: '#16A34A' }}>
+          <div className="o-metric-label">Leads Generated</div>
+          <div className="o-metric-val" style={{ color: '#16A34A' }}>
+            {loading ? '—' : (totals?.leads ?? 0).toLocaleString()}
+          </div>
+        </div>
+        <div className="o-metric" style={{ borderTopColor: '#7C89CD' }}>
+          <div className="o-metric-label">Active Clients</div>
+          <div className="o-metric-val" style={{ color: '#7C89CD' }}>
+            {loading ? '—' : String(activeClients)}
+          </div>
+        </div>
+      </div>
 
-            {/* Health panel */}
-            <div className="bg-white rounded-xl border border-[#E2E6F0] p-5">
-              <div className="font-bold text-[14px] mb-4">Client Health</div>
-              <div className="grid grid-cols-3 gap-2 mb-4">
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 280px', gap: '1.25rem' }}>
+
+        {/* Workspace table */}
+        <div className="o-card">
+          <div className="o-card-header">
+            <div>
+              <div className="o-card-title">Workspaces</div>
+              <div style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>Sorted by sends (30 days)</div>
+            </div>
+            <Link href="/stats" style={{ fontSize: 12, color: '#1F6F78', fontWeight: 600, textDecoration: 'none' }}>Full stats →</Link>
+          </div>
+          <div className="o-card-body" style={{ padding: 0 }}>
+            <div className="o-table-wrap">
+              <table className="o-table">
+                <thead>
+                  <tr>
+                    <th>Workspace</th>
+                    <th>Status</th>
+                    <th>Sent</th>
+                    <th>Reply Rate</th>
+                    <th>Leads</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loading ? (
+                    <tr>
+                      <td colSpan={5} style={{ textAlign: 'center', padding: '2.5rem 1rem' }}>
+                        <span className="o-spin" />
+                      </td>
+                    </tr>
+                  ) : (
+                    (stats?.rows ?? []).map(ws => {
+                      const rr =
+                        ws.reply_rate_30d != null
+                          ? (Number(ws.reply_rate_30d) * 100).toFixed(2) + '%'
+                          : '—'
+                      const rrColor =
+                        ws.reply_rate_30d == null
+                          ? '#6B7280'
+                          : ws.reply_rate_30d >= 0.025
+                          ? '#16A34A'
+                          : ws.reply_rate_30d >= 0.01
+                          ? '#D97706'
+                          : '#DC2626'
+                      const statusCls =
+                        ws.client_status === 'active'
+                          ? 'o-status o-status-active'
+                          : ws.client_status === 'paused'
+                          ? 'o-status o-status-warning'
+                          : 'o-status o-status-unknown'
+                      return (
+                        <tr key={ws.workspace_id}>
+                          <td style={{ fontWeight: 500 }}>{ws.workspace_name}</td>
+                          <td>
+                            <span className={statusCls}>
+                              {ws.client_status ?? '—'}
+                            </span>
+                          </td>
+                          <td>{(ws.sent_30d ?? 0).toLocaleString()}</td>
+                          <td style={{ fontWeight: 700, color: rrColor }}>{rr}</td>
+                          <td>{ws.leads_30d ?? 0}</td>
+                        </tr>
+                      )
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        {/* Right column */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+
+          {/* Health panel */}
+          <div className="o-card">
+            <div className="o-card-header">
+              <div className="o-card-title">Client Health</div>
+            </div>
+            <div className="o-card-body">
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 16 }}>
                 {[
-                  { label: 'Healthy', count: greenCount, color: '#059669', bg: '#D1FAE5' },
+                  { label: 'Healthy', count: greenCount, color: '#16A34A', bg: '#D1FAE5' },
                   { label: 'Warning', count: yellowCount, color: '#D97706', bg: '#FEF3C7' },
                   { label: 'At Risk', count: redCount, color: '#DC2626', bg: '#FEE2E2' },
                 ].map(b => (
                   <div
                     key={b.label}
-                    className="rounded-lg text-center py-3"
-                    style={{ background: b.bg }}
+                    style={{ background: b.bg, borderRadius: 8, textAlign: 'center', padding: '12px 4px' }}
                   >
-                    <div className="text-2xl font-bold" style={{ color: b.color }}>
+                    <div style={{ fontSize: 24, fontWeight: 700, color: b.color }}>
                       {loading ? '—' : b.count}
                     </div>
-                    <div className="text-[10px] font-bold uppercase tracking-wide mt-0.5" style={{ color: b.color }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 2, color: b.color }}>
                       {b.label}
                     </div>
                   </div>
                 ))}
               </div>
-              <Link href="/health" className="text-[12px] text-[#1F6F78] font-semibold">
+              <Link href="/health" style={{ fontSize: 12, color: '#1F6F78', fontWeight: 600, textDecoration: 'none' }}>
                 View health report →
               </Link>
             </div>
+          </div>
 
-            {/* Quick links */}
-            <div className="bg-white rounded-xl border border-[#E2E6F0] p-5">
-              <div className="font-bold text-[14px] mb-3">Quick Links</div>
+          {/* Quick links */}
+          <div className="o-card">
+            <div className="o-card-header">
+              <div className="o-card-title">Quick Links</div>
+            </div>
+            <div className="o-card-body" style={{ padding: 0 }}>
               {[
                 { href: '/campaigns', label: 'Campaign Intelligence' },
                 { href: '/finance', label: 'Finance' },
@@ -201,14 +217,23 @@ export default function Home() {
                 { href: '/diagnostics', label: 'Diagnostics' },
                 { href: '/mailboxes', label: 'Mailboxes' },
                 { href: '/domains', label: 'Domains' },
-              ].map(link => (
+              ].map((link, i, arr) => (
                 <Link
                   key={link.href}
                   href={link.href}
-                  className="flex items-center justify-between py-2 border-b border-[#F3F4F6] last:border-0 text-[13px] text-[#050C29] hover:text-[#1F6F78] transition-colors"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '10px 20px',
+                    borderBottom: i < arr.length - 1 ? '1px solid #F3F4F6' : 'none',
+                    fontSize: 13,
+                    color: '#050C29',
+                    textDecoration: 'none',
+                  }}
                 >
                   {link.label}
-                  <span className="text-[#9CA3AF] text-[11px]">→</span>
+                  <span style={{ color: '#9CA3AF', fontSize: 11 }}>→</span>
                 </Link>
               ))}
             </div>

@@ -1,10 +1,6 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { Input } from '@/components/ui/input'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Button } from '@/components/ui/button'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
 interface Lead {
   id: string
@@ -27,11 +23,11 @@ interface LeadsResponse {
   pageSize: number
 }
 
-const LABEL_COLORS: Record<string, string> = {
-  INTERESTED: 'bg-green-100 text-green-800',
-  MEETING_BOOKED: 'bg-purple-100 text-purple-700',
-  NOT_INTERESTED: 'bg-gray-100 text-gray-600',
-  OUT_OF_OFFICE: 'bg-yellow-100 text-yellow-700',
+const LABEL_STYLES: Record<string, React.CSSProperties> = {
+  INTERESTED: { background: '#dcfce7', color: '#166534' },
+  MEETING_BOOKED: { background: '#ede9fe', color: '#6d28d9' },
+  NOT_INTERESTED: { background: '#f3f4f6', color: '#6B7280' },
+  OUT_OF_OFFICE: { background: '#fef9c3', color: '#92400e' },
 }
 
 export default function LeadsPage() {
@@ -69,78 +65,109 @@ export default function LeadsPage() {
   const totalPages = data ? Math.ceil(data.total / data.pageSize) : 1
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50">
-      <div className="bg-white border-b px-6 py-4">
-        <h1 className="text-xl font-semibold text-gray-900">Leads</h1>
-        <p className="text-sm text-gray-500">{data?.total.toLocaleString() ?? '—'} leads from PlusVibe</p>
+    <div className="o-page">
+      <div className="o-page-header">
+        <div>
+          <div className="o-page-title">Leads</div>
+          <div className="o-page-sub">{data?.total.toLocaleString() ?? '—'} leads from PlusVibe</div>
+        </div>
       </div>
 
-      <div className="bg-white border-b px-6 py-3 flex gap-3 flex-wrap">
-        <Input placeholder="Search email, name, company..." className="w-72" value={search} onChange={e => setSearch(e.target.value)} />
-        <Select value={label} onValueChange={v => { v && setLabel(v); setPage(1) }}>
-          <SelectTrigger className="w-44"><SelectValue placeholder="Label" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All labels</SelectItem>
-            <SelectItem value="INTERESTED">Interested</SelectItem>
-            <SelectItem value="MEETING_BOOKED">Meeting Booked</SelectItem>
-            <SelectItem value="NOT_INTERESTED">Not Interested</SelectItem>
-            <SelectItem value="OUT_OF_OFFICE">Out of Office</SelectItem>
-          </SelectContent>
-        </Select>
+      <div className="o-toolbar">
+        <div className="o-search-wrap">
+          <span className="o-search-icon">
+            <svg width="15" height="15" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M10.344 10.344a6 6 0 1 0-.707.707l3.656 3.656.707-.707-3.656-3.656zm-4.344 1.156a5 5 0 1 1 0-10 5 5 0 0 1 0 10z" fill="currentColor" />
+            </svg>
+          </span>
+          <input
+            type="text"
+            placeholder="Search email, name, company..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+        </div>
+        <select
+          className="o-select"
+          value={label}
+          onChange={e => { setLabel(e.target.value); setPage(1) }}
+        >
+          <option value="all">All labels</option>
+          <option value="INTERESTED">Interested</option>
+          <option value="MEETING_BOOKED">Meeting Booked</option>
+          <option value="NOT_INTERESTED">Not Interested</option>
+          <option value="OUT_OF_OFFICE">Out of Office</option>
+        </select>
       </div>
 
-      <div className="flex-1 overflow-auto px-6 py-4">
-        <div className="bg-white rounded-lg border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Email</TableHead>
-                <TableHead>Name</TableHead>
-                <TableHead>Company</TableHead>
-                <TableHead>Label</TableHead>
-                <TableHead>First Replied</TableHead>
-                <TableHead>Added</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
+      <div className="o-card">
+        <div className="o-table-wrap">
+          <table className="o-table">
+            <thead>
+              <tr>
+                <th>Email</th>
+                <th>Name</th>
+                <th>Company</th>
+                <th>Label</th>
+                <th>First Replied</th>
+                <th>Added</th>
+              </tr>
+            </thead>
+            <tbody>
               {loading ? (
                 Array.from({ length: 8 }).map((_, i) => (
-                  <TableRow key={i}>{Array.from({ length: 6 }).map((_, j) => <TableCell key={j}><div className="h-4 bg-gray-100 rounded animate-pulse" /></TableCell>)}</TableRow>
+                  <tr key={i}>
+                    {Array.from({ length: 6 }).map((_, j) => (
+                      <td key={j}><span className="o-spin" /></td>
+                    ))}
+                  </tr>
                 ))
               ) : filtered.length === 0 ? (
-                <TableRow><TableCell colSpan={6} className="text-center py-12 text-gray-500">No leads found</TableCell></TableRow>
+                <tr>
+                  <td colSpan={6}><div className="o-empty">No leads found</div></td>
+                </tr>
               ) : filtered.map(l => (
-                <TableRow key={l.id} className="hover:bg-gray-50">
-                  <TableCell className="font-mono text-xs">{l.email}</TableCell>
-                  <TableCell className="text-sm">{[l.first_name, l.last_name].filter(Boolean).join(' ') || '—'}</TableCell>
-                  <TableCell className="text-sm text-gray-600">{l.company_name ?? '—'}</TableCell>
-                  <TableCell>
+                <tr key={l.id}>
+                  <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{l.email}</td>
+                  <td>{[l.first_name, l.last_name].filter(Boolean).join(' ') || '—'}</td>
+                  <td style={{ color: '#6B7280' }}>{l.company_name ?? '—'}</td>
+                  <td>
                     {l.label ? (
-                      <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${LABEL_COLORS[l.label] ?? 'bg-gray-100 text-gray-600'}`}>{l.label}</span>
+                      <span
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 500,
+                          padding: '2px 6px',
+                          borderRadius: 4,
+                          ...(LABEL_STYLES[l.label] ?? { background: '#f3f4f6', color: '#6B7280' }),
+                        }}
+                      >
+                        {l.label}
+                      </span>
                     ) : '—'}
-                  </TableCell>
-                  <TableCell className="text-xs text-gray-500">
+                  </td>
+                  <td style={{ color: '#6B7280', fontSize: 12 }}>
                     {l.first_replied_at ? new Date(l.first_replied_at).toLocaleDateString('en-GB') : '—'}
-                  </TableCell>
-                  <TableCell className="text-xs text-gray-500">
+                  </td>
+                  <td style={{ color: '#6B7280', fontSize: 12 }}>
                     {l.created_at ? new Date(l.created_at).toLocaleDateString('en-GB') : '—'}
-                  </TableCell>
-                </TableRow>
+                  </td>
+                </tr>
               ))}
-            </TableBody>
-          </Table>
+            </tbody>
+          </table>
         </div>
-
-        {totalPages > 1 && (
-          <div className="flex items-center justify-between mt-4">
-            <p className="text-sm text-gray-600">Page {page} of {totalPages} · {data?.total.toLocaleString()} total</p>
-            <div className="flex gap-2">
-              <Button variant="outline" size="sm" disabled={page === 1} onClick={() => setPage(p => p - 1)}>Previous</Button>
-              <Button variant="outline" size="sm" disabled={page === totalPages} onClick={() => setPage(p => p + 1)}>Next</Button>
-            </div>
-          </div>
-        )}
       </div>
+
+      {totalPages > 1 && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 16 }}>
+          <span style={{ fontSize: 13, color: '#6B7280' }}>Page {page} of {totalPages} · {data?.total.toLocaleString()} total</span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="o-btn o-btn-ghost o-btn-sm" disabled={page === 1} onClick={() => setPage(p => p - 1)}>Previous</button>
+            <button className="o-btn o-btn-ghost o-btn-sm" disabled={page === totalPages} onClick={() => setPage(p => p + 1)}>Next</button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

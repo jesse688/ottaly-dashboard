@@ -289,7 +289,7 @@ function AudienceTable({ title, subtitle, rows, loading, sortState, onSort }: Au
           )}
         </div>
       </div>
-      <div className="o-card-body" style={{ padding: 0, overflowX: 'auto' }}>
+      <div className="o-card-body" style={{ padding: 0 }}>
         {loading ? (
           <div className="o-empty">
             <span className="o-spin" />
@@ -297,50 +297,52 @@ function AudienceTable({ title, subtitle, rows, loading, sortState, onSort }: Au
         ) : rows.length === 0 ? (
           <div className="o-empty">No contacts found for this client.</div>
         ) : (
-          <table className="o-table" style={{ minWidth: 600 }}>
-            <thead>
-              <tr>
-                {COLS.map((c) => (
-                  <th
-                    key={c.key}
-                    onClick={() => onSort(c.key)}
-                    style={{
-                      color: c.key === sortState.col ? '#050C29' : '#6B7280',
-                      textAlign: c.key === 'segment' ? 'left' : 'right',
-                      cursor: 'pointer',
-                      userSelect: 'none',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {c.label}
-                    {c.key === sortState.col && (
-                      <span style={{ marginLeft: 4, fontSize: 10, color: '#1F6F78' }}>
-                        {sortState.dir === 1 ? ' ▲' : ' ▼'}
-                      </span>
-                    )}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {sorted.map((r, i) => (
-                <tr key={i}>
+          <div className="o-table-wrap">
+            <table className="o-table" style={{ minWidth: 600 }}>
+              <thead>
+                <tr>
                   {COLS.map((c) => (
-                    <td
+                    <th
                       key={c.key}
+                      onClick={() => onSort(c.key)}
                       style={{
-                        verticalAlign: 'middle',
+                        color: c.key === sortState.col ? '#050C29' : '#6B7280',
                         textAlign: c.key === 'segment' ? 'left' : 'right',
-                        fontWeight: 600,
+                        cursor: 'pointer',
+                        userSelect: 'none',
+                        whiteSpace: 'nowrap',
                       }}
                     >
-                      {renderCell(r, c.key)}
-                    </td>
+                      {c.label}
+                      {c.key === sortState.col && (
+                        <span style={{ marginLeft: 4, fontSize: 10, color: '#1F6F78' }}>
+                          {sortState.dir === 1 ? ' ▲' : ' ▼'}
+                        </span>
+                      )}
+                    </th>
                   ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {sorted.map((r, i) => (
+                  <tr key={i}>
+                    {COLS.map((c) => (
+                      <td
+                        key={c.key}
+                        style={{
+                          verticalAlign: 'middle',
+                          textAlign: c.key === 'segment' ? 'left' : 'right',
+                          fontWeight: 600,
+                        }}
+                      >
+                        {renderCell(r, c.key)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </div>
@@ -1104,9 +1106,9 @@ export default function AudiencePage() {
 
           {showPasteArea && (
             <div style={{ padding: '0 1.25rem 1.25rem' }}>
-              <div className="o-label" style={{ marginBottom: '.5rem' }}>
+              <label className="o-label" style={{ display: 'block', marginBottom: '.5rem' }}>
                 Paste Claude.ai&apos;s JSON response here
-              </div>
+              </label>
               <textarea
                 className="o-input"
                 value={pasteText}

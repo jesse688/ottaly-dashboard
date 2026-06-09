@@ -524,26 +524,26 @@ export default function DatabasePage() {
 
       {/* Stats Row 1 */}
       <div className="o-metrics o-metrics-5" style={{ marginBottom: 8 }}>
-        <StatCard label="Unique Emails"    value={stats ? stats.total.toLocaleString() : '—'}                accent="navy" />
-        <StatCard label="Missing Keywords" value={stats ? stats.missing_keywords.toLocaleString() : '—'}    accent="amber" />
-        <StatCard label="Missing Industry" value={stats ? stats.missing_industry.toLocaleString() : '—'}    accent="amber" />
-        <StatCard label="Missing Co. Size" value={stats ? stats.missing_num_employees.toLocaleString() : '—'} accent="amber" />
-        <StatCard label="Missing City"     value={stats ? stats.missing_city.toLocaleString() : '—'}        accent="amber" />
+        <StatCard label="Unique Emails"    value={stats ? stats.total.toLocaleString() : '—'}                   accent="navy" />
+        <StatCard label="Missing Keywords" value={stats ? stats.missing_keywords.toLocaleString() : '—'}         accent="amber" />
+        <StatCard label="Missing Industry" value={stats ? stats.missing_industry.toLocaleString() : '—'}         accent="amber" />
+        <StatCard label="Missing Co. Size" value={stats ? stats.missing_num_employees.toLocaleString() : '—'}    accent="amber" />
+        <StatCard label="Missing City"     value={stats ? stats.missing_city.toLocaleString() : '—'}             accent="amber" />
       </div>
 
       {/* Stats Row 2 */}
       <div className="o-metrics o-metrics-5">
-        <StatCard label="Unique Domains" value={stats ? stats.total_domains.toLocaleString() : '—'}           accent="teal" />
-        <StatCard label="w/ Keywords"    value={stats ? stats.domains_with_keywords.toLocaleString() : '—'}   accent="teal" />
-        <StatCard label="w/ Industry"    value={stats ? stats.domains_with_industry.toLocaleString() : '—'}   accent="teal" />
-        <StatCard label="w/ Co. Size"    value={stats ? stats.domains_with_employees.toLocaleString() : '—'}  accent="teal" />
-        <StatCard label="w/ City"        value={stats ? stats.domains_with_city.toLocaleString() : '—'}       accent="teal" />
+        <StatCard label="Unique Domains" value={stats ? stats.total_domains.toLocaleString() : '—'}              accent="teal" />
+        <StatCard label="w/ Keywords"    value={stats ? stats.domains_with_keywords.toLocaleString() : '—'}      accent="teal" />
+        <StatCard label="w/ Industry"    value={stats ? stats.domains_with_industry.toLocaleString() : '—'}      accent="teal" />
+        <StatCard label="w/ Co. Size"    value={stats ? stats.domains_with_employees.toLocaleString() : '—'}     accent="teal" />
+        <StatCard label="w/ City"        value={stats ? stats.domains_with_city.toLocaleString() : '—'}          accent="teal" />
       </div>
 
-      {/* Toolbar */}
+      {/* Toolbar / Filters */}
       <div className="o-card" style={{ marginTop: 16 }}>
         <div className="o-card-body">
-          {/* Search + Filters */}
+          {/* Search + dropdowns */}
           <div className="o-toolbar" style={{ marginBottom: 12 }}>
             <div className="o-search-wrap">
               <span className="o-search-icon">
@@ -594,13 +594,13 @@ export default function DatabasePage() {
           {/* Companies House chips */}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: '#6B7280' }}>Companies House:</span>
-            <Chip label="Status"             missingKey="company_status" />
-            <Chip label="Not on CH"          missingKey="ch_company_number" />
-            <Chip label="Founded Year"       missingKey="ch_founded_year" />
-            <Chip label="Postcode"           missingKey="ch_postcode" />
-            <Chip label="Not Active"         missingKey="not_active" />
-            <Chip label="Has Insolvency"     missingKey="ch_insolvency" />
-            <Chip label="Accounts Overdue"   missingKey="ch_overdue" />
+            <Chip label="Status"           missingKey="company_status" />
+            <Chip label="Not on CH"        missingKey="ch_company_number" />
+            <Chip label="Founded Year"     missingKey="ch_founded_year" />
+            <Chip label="Postcode"         missingKey="ch_postcode" />
+            <Chip label="Not Active"       missingKey="not_active" />
+            <Chip label="Has Insolvency"   missingKey="ch_insolvency" />
+            <Chip label="Accounts Overdue" missingKey="ch_overdue" />
           </div>
         </div>
       </div>

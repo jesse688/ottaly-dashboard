@@ -756,29 +756,22 @@ export default function CommissionPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen" style={{ background: '#F0F2F8' }}>
-        <div style={{ color: '#6B7280', fontSize: '14px' }}>Loading commission data…</div>
+      <div className="o-page" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
+        <span className="o-spin" />
       </div>
     )
   }
 
   if (error) {
     return (
-      <div className="flex items-center justify-center min-h-screen" style={{ background: '#F0F2F8' }}>
-        <div
-          style={{
-            background: '#fff',
-            border: '1px solid #E2E6F0',
-            borderRadius: '12px',
-            padding: '2rem',
-            maxWidth: '400px',
-            textAlign: 'center',
-          }}
-        >
-          <div style={{ fontWeight: 700, marginBottom: '8px', color: '#050C29' }}>
-            Failed to load
+      <div className="o-page" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
+        <div className="o-card" style={{ maxWidth: '400px', textAlign: 'center' }}>
+          <div className="o-card-body">
+            <div style={{ fontWeight: 700, marginBottom: '8px', color: '#050C29' }}>
+              Failed to load
+            </div>
+            <div style={{ color: '#6B7280', fontSize: '13px' }}>{error}</div>
           </div>
-          <div style={{ color: '#6B7280', fontSize: '13px' }}>{error}</div>
         </div>
       </div>
     )
@@ -787,44 +780,22 @@ export default function CommissionPage() {
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div style={{ background: '#F0F2F8', minHeight: '100vh', fontFamily: "'Inter', sans-serif" }}>
+    <div className="o-page">
 
       {/* ── Manager View ────────────────────────────────────────────────── */}
       {session?.role !== 'admin' && (
-        <div style={{ maxWidth: '1100px', margin: '0 auto', padding: '2rem' }}>
+        <>
           {/* Header */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              marginBottom: '1.5rem',
-              flexWrap: 'wrap',
-              gap: '0.75rem',
-            }}
-          >
+          <div className="o-page-header">
             <div>
-              <div style={{ fontSize: '1.4rem', fontWeight: 700, color: '#050C29' }}>
-                My Commission
-              </div>
-              <div style={{ fontSize: '13px', color: '#6B7280', marginTop: '2px' }}>
-                Commission for {session?.name}
-              </div>
+              <div className="o-page-title">My Commission</div>
+              <div className="o-page-sub">Commission for {session?.name}</div>
             </div>
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <div className="o-page-actions">
               <select
+                className="o-select"
                 value={period}
                 onChange={(e) => handlePeriodChange(e.target.value as PeriodValue)}
-                style={{
-                  padding: '7px 10px',
-                  border: '1px solid #E2E6F0',
-                  borderRadius: '7px',
-                  fontSize: '13px',
-                  fontFamily: "'Inter', sans-serif",
-                  outline: 'none',
-                  background: '#fff',
-                  color: '#050C29',
-                }}
               >
                 <option value="month">This Month</option>
                 <option value="lastMonth">Last Month</option>
@@ -836,43 +807,21 @@ export default function CommissionPage() {
               {period === 'custom' && (
                 <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
                   <input
+                    className="o-input"
                     type="date"
                     value={customStart}
                     onChange={(e) => setCustomStart(e.target.value)}
-                    style={{
-                      padding: '7px 8px',
-                      border: '1px solid #E2E6F0',
-                      borderRadius: '7px',
-                      fontSize: '12px',
-                      outline: 'none',
-                    }}
+                    style={{ width: 'auto' }}
                   />
                   <span style={{ fontSize: '12px', color: '#6B7280' }}>to</span>
                   <input
+                    className="o-input"
                     type="date"
                     value={customEnd}
                     onChange={(e) => setCustomEnd(e.target.value)}
-                    style={{
-                      padding: '7px 8px',
-                      border: '1px solid #E2E6F0',
-                      borderRadius: '7px',
-                      fontSize: '12px',
-                      outline: 'none',
-                    }}
+                    style={{ width: 'auto' }}
                   />
-                  <button
-                    onClick={handleApplyCustom}
-                    style={{
-                      padding: '7px 14px',
-                      background: '#050C29',
-                      color: '#fff',
-                      border: 'none',
-                      borderRadius: '7px',
-                      fontSize: '12px',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                    }}
-                  >
+                  <button className="o-btn o-btn-primary o-btn-sm" onClick={handleApplyCustom}>
                     Apply
                   </button>
                 </div>
@@ -881,53 +830,33 @@ export default function CommissionPage() {
           </div>
 
           {/* Summary cards */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-              gap: '1rem',
-              marginBottom: '1.5rem',
-            }}
-          >
+          <div className="o-metrics o-metrics-auto" style={{ marginBottom: '1.5rem' }}>
             {/* Commission Earned */}
-            <SumCard color="green" label="Commission Earned" value={sumComm} />
+            <div className="o-metric" style={{ borderTopColor: '#16A34A' }}>
+              <div className="o-metric-label">Commission Earned</div>
+              <div className="o-metric-val" style={{ color: '#16A34A' }}>{sumComm}</div>
+            </div>
             {/* Leads Delivered */}
-            <SumCard label="Leads Delivered" value={String(sumLeads)} />
+            <div className="o-metric" style={{ borderTopColor: '#224388' }}>
+              <div className="o-metric-label">Leads Delivered</div>
+              <div className="o-metric-val">{String(sumLeads)}</div>
+            </div>
             {/* Active Clients */}
-            <SumCard color="amber" label="Active Clients" value={String(sumClients)} />
+            <div className="o-metric" style={{ borderTopColor: '#D97706' }}>
+              <div className="o-metric-label">Active Clients</div>
+              <div className="o-metric-val" style={{ color: '#D97706' }}>{String(sumClients)}</div>
+            </div>
             {/* Rate per Lead */}
-            <SumCard label="Rate per Lead" value={sumRate} smallValue />
+            <div className="o-metric" style={{ borderTopColor: '#1F6F78' }}>
+              <div className="o-metric-label">Rate per Lead</div>
+              <div className="o-metric-val" style={{ fontSize: '1.1rem' }}>{sumRate}</div>
+            </div>
 
             {/* Rate explanation card */}
             {rateExplanation && (
-              <div
-                style={{
-                  background: '#fff',
-                  borderRadius: '10px',
-                  padding: '1rem 1.1rem',
-                  border: '1px solid #E2E6F0',
-                  borderTop: '3px solid #7C89CD',
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: '11px',
-                    fontWeight: 700,
-                    textTransform: 'uppercase',
-                    letterSpacing: '.5px',
-                    color: '#6B7280',
-                  }}
-                >
-                  How your rate is calculated
-                </div>
-                <div
-                  style={{
-                    fontSize: '11px',
-                    color: '#6B7280',
-                    marginTop: '6px',
-                    lineHeight: 1.6,
-                  }}
-                >
+              <div className="o-metric" style={{ borderTopColor: '#7C89CD' }}>
+                <div className="o-metric-label">How your rate is calculated</div>
+                <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '6px', lineHeight: 1.6 }}>
                   All-time avg lead:{' '}
                   <strong>£{rateExplanation.avgLead.toFixed(2)}</strong>
                   <br />
@@ -937,7 +866,7 @@ export default function CommissionPage() {
                   × R{rateExplanation.zarRateDisplay}/GBP
                   <br />
                   ={' '}
-                  <strong style={{ color: '#059669' }}>
+                  <strong style={{ color: '#16A34A' }}>
                     R{rateExplanation.perLeadZar.toFixed(2)} per lead
                   </strong>
                 </div>
@@ -946,34 +875,9 @@ export default function CommissionPage() {
 
             {/* Base Salary */}
             {showSalaryCard && (
-              <div
-                style={{
-                  background: '#fff',
-                  borderRadius: '10px',
-                  padding: '1rem 1.1rem',
-                  border: '1px solid #E2E6F0',
-                  borderTop: '3px solid #1F6F78',
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: '11px',
-                    fontWeight: 700,
-                    textTransform: 'uppercase',
-                    letterSpacing: '.5px',
-                    color: '#6B7280',
-                  }}
-                >
-                  Base Salary
-                </div>
-                <div
-                  style={{
-                    fontSize: '13px',
-                    fontWeight: 600,
-                    marginTop: '4px',
-                    color: '#050C29',
-                  }}
-                >
+              <div className="o-metric" style={{ borderTopColor: '#1F6F78' }}>
+                <div className="o-metric-label">Base Salary</div>
+                <div style={{ fontSize: '13px', fontWeight: 600, marginTop: '4px', color: '#050C29' }}>
                   {salaryDisplay}
                 </div>
               </div>
@@ -981,86 +885,29 @@ export default function CommissionPage() {
 
             {/* Total This Month */}
             {showTotalCard && (
-              <div
-                style={{
-                  background: '#fff',
-                  borderRadius: '10px',
-                  padding: '1rem 1.1rem',
-                  border: '1px solid #E2E6F0',
-                  borderTop: '3px solid #059669',
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: '11px',
-                    fontWeight: 700,
-                    textTransform: 'uppercase',
-                    letterSpacing: '.5px',
-                    color: '#6B7280',
-                  }}
-                >
-                  Total This Month
-                </div>
-                <div
-                  style={{
-                    fontSize: '1.5rem',
-                    fontWeight: 700,
-                    marginTop: '4px',
-                    color: '#050C29',
-                  }}
-                >
-                  {sumTotal}
-                </div>
-                <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '4px' }}>
-                  Salary + commission
-                </div>
+              <div className="o-metric" style={{ borderTopColor: '#16A34A' }}>
+                <div className="o-metric-label">Total This Month</div>
+                <div className="o-metric-val">{sumTotal}</div>
+                <div className="o-metric-sub">Salary + commission</div>
               </div>
             )}
 
             {/* Pay Slip */}
             {payslipMeta?.exists && (
-              <div
-                style={{
-                  background: '#fff',
-                  borderRadius: '10px',
-                  padding: '1rem 1.1rem',
-                  border: '1px solid #E2E6F0',
-                  borderTop: '3px solid #1F6F78',
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: '11px',
-                    fontWeight: 700,
-                    textTransform: 'uppercase',
-                    letterSpacing: '.5px',
-                    color: '#6B7280',
-                  }}
-                >
-                  Pay Slip
-                </div>
+              <div className="o-metric" style={{ borderTopColor: '#1F6F78' }}>
+                <div className="o-metric-label">Pay Slip</div>
                 <div style={{ marginTop: '8px' }}>
                   <a
                     href="#"
                     onClick={handleDownloadPayslip}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      padding: '7px 14px',
-                      background: '#050C29',
-                      color: '#fff',
-                      borderRadius: '7px',
-                      fontSize: '12px',
-                      fontWeight: 600,
-                      textDecoration: 'none',
-                    }}
+                    className="o-btn o-btn-primary o-btn-sm"
+                    style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
                   >
                     ↓ Download
                   </a>
                 </div>
                 {payslipMeta.filename && (
-                  <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '6px' }}>
+                  <div className="o-metric-sub" style={{ marginTop: '6px' }}>
                     {payslipMeta.filename}
                   </div>
                 )}
@@ -1069,162 +916,90 @@ export default function CommissionPage() {
           </div>
 
           {/* Client Breakdown table */}
-          <div
-            style={{
-              background: '#fff',
-              borderRadius: '12px',
-              border: '1px solid #E2E6F0',
-              overflow: 'hidden',
-              marginBottom: '1.5rem',
-            }}
-          >
-            <div
-              style={{
-                padding: '1rem 1.25rem',
-                borderBottom: '1px solid #E2E6F0',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                flexWrap: 'wrap',
-                gap: '0.5rem',
-              }}
-            >
-              <div style={{ fontWeight: 700, fontSize: '14px', color: '#050C29' }}>
-                Client Breakdown
-              </div>
-              <div style={{ fontSize: '12px', color: '#6B7280' }}>{periodLabel}</div>
+          <div className="o-card" style={{ marginBottom: '1.5rem' }}>
+            <div className="o-card-header">
+              <div className="o-card-title">Client Breakdown</div>
+              <span style={{ fontSize: '12px', color: '#6B7280' }}>{periodLabel}</span>
             </div>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead style={{ background: '#F8F9FC' }}>
-                <tr>
-                  <Th>Client</Th>
-                  <Th>Managing Since</Th>
-                  <Th align="center">Leads</Th>
-                  <Th align="right">Commission Earned</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {clientRows.length === 0 ? (
+            <div className="o-table-wrap">
+              <table className="o-table">
+                <thead>
                   <tr>
-                    <td
-                      colSpan={4}
-                      style={{
-                        textAlign: 'center',
-                        padding: '2.5rem',
-                        color: '#6B7280',
-                        fontSize: '13px',
-                      }}
-                    >
-                      No leads delivered in this period
-                    </td>
+                    <th>Client</th>
+                    <th>Managing Since</th>
+                    <th style={{ textAlign: 'center' }}>Leads</th>
+                    <th style={{ textAlign: 'right' }}>Commission Earned</th>
                   </tr>
-                ) : (
-                  clientRows.map((row, i) => (
-                    <tr key={i}>
-                      <td style={{ padding: '12px 14px', fontSize: '13px', borderBottom: '1px solid #E2E6F0' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                          <div
-                            style={{
-                              width: '34px',
-                              height: '34px',
-                              borderRadius: '8px',
-                              background: '#1F6F78',
-                              color: '#fff',
-                              fontWeight: 700,
-                              fontSize: '14px',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              flexShrink: 0,
-                            }}
-                          >
-                            {avatarLetter(row.name)}
-                          </div>
-                          <span style={{ fontWeight: 600 }}>{row.name}</span>
-                        </div>
-                      </td>
-                      <td
-                        style={{
-                          padding: '12px 14px',
-                          fontSize: '12px',
-                          color: '#6B7280',
-                          borderBottom: '1px solid #E2E6F0',
-                        }}
-                      >
-                        {row.since ?? '—'}
-                      </td>
-                      <td
-                        style={{
-                          padding: '12px 14px',
-                          fontSize: '13px',
-                          textAlign: 'center',
-                          fontWeight: 600,
-                          borderBottom: '1px solid #E2E6F0',
-                        }}
-                      >
-                        {row.leads}
-                      </td>
-                      <td
-                        style={{
-                          padding: '12px 14px',
-                          fontSize: '13px',
-                          textAlign: 'right',
-                          fontWeight: 700,
-                          color: '#059669',
-                          borderBottom: '1px solid #E2E6F0',
-                        }}
-                      >
-                        R
-                        {row.earned.toLocaleString('en-ZA', {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        })}
+                </thead>
+                <tbody>
+                  {clientRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={4}>
+                        <div className="o-empty">No leads delivered in this period</div>
                       </td>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+                  ) : (
+                    clientRows.map((row, i) => (
+                      <tr key={i}>
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <div
+                              style={{
+                                width: '34px',
+                                height: '34px',
+                                borderRadius: '8px',
+                                background: '#1F6F78',
+                                color: '#fff',
+                                fontWeight: 700,
+                                fontSize: '14px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                flexShrink: 0,
+                              }}
+                            >
+                              {avatarLetter(row.name)}
+                            </div>
+                            <span style={{ fontWeight: 600 }}>{row.name}</span>
+                          </div>
+                        </td>
+                        <td style={{ color: '#6B7280', fontSize: '12px' }}>
+                          {row.since ?? '—'}
+                        </td>
+                        <td style={{ textAlign: 'center', fontWeight: 600 }}>
+                          {row.leads}
+                        </td>
+                        <td style={{ textAlign: 'right', fontWeight: 700, color: '#16A34A' }}>
+                          R
+                          {row.earned.toLocaleString('en-ZA', {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
+        </>
       )}
 
       {/* ── Admin View ──────────────────────────────────────────────────── */}
       {session?.role === 'admin' && (
-        <div style={{ maxWidth: '1100px', margin: '0 auto', padding: '2rem' }}>
+        <>
           {/* Header */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              marginBottom: '1.5rem',
-              flexWrap: 'wrap',
-              gap: '0.75rem',
-            }}
-          >
+          <div className="o-page-header">
             <div>
-              <div style={{ fontSize: '1.4rem', fontWeight: 700, color: '#050C29' }}>
-                Commission Tracker
-              </div>
-              <div style={{ fontSize: '13px', color: '#6B7280', marginTop: '2px' }}>
-                {adminPeriodLabel}
-              </div>
+              <div className="o-page-title">Commission Tracker</div>
+              <div className="o-page-sub">{adminPeriodLabel}</div>
             </div>
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <div className="o-page-actions">
               <select
+                className="o-select"
                 value={adminPeriod}
                 onChange={(e) => handleAdminPeriodChange(e.target.value as PeriodValue)}
-                style={{
-                  padding: '7px 10px',
-                  border: '1px solid #E2E6F0',
-                  borderRadius: '7px',
-                  fontSize: '13px',
-                  fontFamily: "'Inter', sans-serif",
-                  outline: 'none',
-                  background: '#fff',
-                  color: '#050C29',
-                }}
               >
                 <option value="month">This Month</option>
                 <option value="lastMonth">Last Month</option>
@@ -1236,43 +1011,21 @@ export default function CommissionPage() {
               {adminPeriod === 'custom' && (
                 <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
                   <input
+                    className="o-input"
                     type="date"
                     value={adminCustomStart}
                     onChange={(e) => setAdminCustomStart(e.target.value)}
-                    style={{
-                      padding: '7px 8px',
-                      border: '1px solid #E2E6F0',
-                      borderRadius: '7px',
-                      fontSize: '12px',
-                      outline: 'none',
-                    }}
+                    style={{ width: 'auto' }}
                   />
                   <span style={{ fontSize: '12px', color: '#6B7280' }}>to</span>
                   <input
+                    className="o-input"
                     type="date"
                     value={adminCustomEnd}
                     onChange={(e) => setAdminCustomEnd(e.target.value)}
-                    style={{
-                      padding: '7px 8px',
-                      border: '1px solid #E2E6F0',
-                      borderRadius: '7px',
-                      fontSize: '12px',
-                      outline: 'none',
-                    }}
+                    style={{ width: 'auto' }}
                   />
-                  <button
-                    onClick={handleApplyAdminCustom}
-                    style={{
-                      padding: '7px 14px',
-                      background: '#050C29',
-                      color: '#fff',
-                      border: 'none',
-                      borderRadius: '7px',
-                      fontSize: '12px',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                    }}
-                  >
+                  <button className="o-btn o-btn-primary o-btn-sm" onClick={handleApplyAdminCustom}>
                     Apply
                   </button>
                 </div>
@@ -1335,26 +1088,19 @@ export default function CommissionPage() {
             </div>
 
             {/* Earner panel */}
-            <div
-              style={{
-                background: '#fff',
-                borderRadius: '12px',
-                boxShadow: '0 1px 3px rgba(5,12,41,.08)',
-                overflow: 'hidden',
-              }}
-            >
+            <div className="o-card" style={{ overflow: 'hidden' }}>
               {/* Earner tabs */}
               <div
                 style={{
                   display: 'flex',
                   gap: '.5rem',
                   padding: '1rem 1.25rem',
-                  borderBottom: '2px solid #F3F4F6',
+                  borderBottom: '2px solid #E2E6F0',
                   flexWrap: 'wrap',
                 }}
               >
                 {earners.length === 0 ? (
-                  <span style={{ color: '#9CA3AF', fontSize: '13px' }}>
+                  <span style={{ color: '#6B7280', fontSize: '13px' }}>
                     No commission data for this period
                   </span>
                 ) : (
@@ -1362,17 +1108,11 @@ export default function CommissionPage() {
                     <button
                       key={earner}
                       onClick={() => setActiveEarner(earner)}
+                      className={'o-btn' + (activeEarner === earner ? ' o-btn-primary' : ' o-btn-ghost')}
                       style={{
-                        padding: '7px 20px',
-                        borderRadius: '8px',
-                        border: `2px solid ${activeEarner === earner ? '#224388' : '#E5E7EB'}`,
                         fontFamily: "'Genos', sans-serif",
                         fontSize: '18px',
                         fontWeight: 700,
-                        cursor: 'pointer',
-                        background: activeEarner === earner ? '#EBF2FF' : 'transparent',
-                        color: activeEarner === earner ? '#224388' : '#9CA3AF',
-                        transition: 'all .2s',
                       }}
                     >
                       {earner}
@@ -1390,7 +1130,7 @@ export default function CommissionPage() {
                   allClientKeys={allClientKeys}
                 />
               ) : (
-                <p style={{ color: '#9CA3AF', padding: '1.5rem', fontSize: '13px' }}>
+                <p style={{ color: '#6B7280', padding: '1.5rem', fontSize: '13px' }}>
                   {earners.length === 0
                     ? 'No commission data for this period'
                     : 'Select a manager above'}
@@ -1398,7 +1138,7 @@ export default function CommissionPage() {
               )}
             </div>
           </div>
-        </div>
+        </>
       )}
     </div>
   )
@@ -1419,71 +1159,35 @@ function SumCard({
 }) {
   const borderColor =
     color === 'green'
-      ? '#059669'
+      ? '#16A34A'
       : color === 'amber'
       ? '#D97706'
       : color === 'teal'
       ? '#1F6F78'
       : '#1F6F78'
 
+  const valueColor =
+    color === 'green'
+      ? '#16A34A'
+      : color === 'amber'
+      ? '#D97706'
+      : color === 'teal'
+      ? '#1F6F78'
+      : undefined
+
   return (
-    <div
-      style={{
-        background: '#fff',
-        borderRadius: '10px',
-        padding: '1rem 1.1rem',
-        border: '1px solid #E2E6F0',
-        borderTop: `3px solid ${borderColor}`,
-      }}
-    >
+    <div className="o-metric" style={{ borderTopColor: borderColor }}>
+      <div className="o-metric-label">{label}</div>
       <div
+        className="o-metric-val"
         style={{
-          fontSize: '11px',
-          fontWeight: 700,
-          textTransform: 'uppercase',
-          letterSpacing: '.5px',
-          color: '#6B7280',
-        }}
-      >
-        {label}
-      </div>
-      <div
-        style={{
-          fontSize: smallValue ? '1.1rem' : '1.5rem',
-          fontWeight: 700,
-          marginTop: '4px',
-          color: '#050C29',
+          fontSize: smallValue ? '1.1rem' : undefined,
+          color: valueColor,
         }}
       >
         {value}
       </div>
     </div>
-  )
-}
-
-function Th({
-  children,
-  align,
-}: {
-  children: React.ReactNode
-  align?: 'left' | 'center' | 'right'
-}) {
-  return (
-    <th
-      style={{
-        padding: '9px 14px',
-        textAlign: align ?? 'left',
-        fontSize: '11px',
-        fontWeight: 700,
-        textTransform: 'uppercase',
-        letterSpacing: '.5px',
-        color: '#6B7280',
-        borderBottom: '1px solid #E2E6F0',
-        background: '#F8F9FC',
-      }}
-    >
-      {children}
-    </th>
   )
 }
 
@@ -1525,7 +1229,7 @@ function EarnerDetail({
           justifyContent: 'space-between',
           alignItems: 'center',
           padding: '1.25rem 1.5rem',
-          borderBottom: '1px solid #F3F4F6',
+          borderBottom: '1px solid #E2E6F0',
           flexWrap: 'wrap',
           gap: '1rem',
         }}
@@ -1541,7 +1245,7 @@ function EarnerDetail({
           >
             {earner}
           </div>
-          <div style={{ fontSize: '13px', color: '#9CA3AF', marginTop: '2px' }}>
+          <div style={{ fontSize: '13px', color: '#6B7280', marginTop: '2px' }}>
             {entries.length} client{entries.length !== 1 ? 's' : ''} · {totalLeads}{' '}
             lead{totalLeads !== 1 ? 's' : ''}
           </div>
@@ -1641,7 +1345,7 @@ function EarnerDetail({
               justifyContent: 'space-between',
               alignItems: 'center',
               padding: '1rem 1.5rem',
-              borderBottom: i < entries.length - 1 ? '1px solid #F9FAFB' : 'none',
+              borderBottom: i < entries.length - 1 ? '1px solid #E2E6F0' : 'none',
               flexWrap: 'wrap',
               gap: '.5rem',
             }}
@@ -1683,24 +1387,14 @@ function EarnerDetail({
                 flexWrap: 'wrap',
               }}
             >
-              <span style={{ fontSize: '12px', color: '#9CA3AF', fontWeight: 500 }}>
+              <span style={{ fontSize: '12px', color: '#6B7280', fontWeight: 500 }}>
                 {stats.leads} lead{stats.leads !== 1 ? 's' : ''}
               </span>
-              <span
-                style={{
-                  display: 'inline-block',
-                  padding: '3px 9px',
-                  borderRadius: '20px',
-                  fontSize: '11px',
-                  fontWeight: 600,
-                  background: '#D1FAE5',
-                  color: '#065F46',
-                }}
-              >
+              <span className="o-status o-status-good">
                 £{commission.toFixed(2)}
               </span>
               {stats.startDate && (
-                <span style={{ fontSize: '11px', color: '#9CA3AF' }}>
+                <span style={{ fontSize: '11px', color: '#6B7280' }}>
                   from {stats.startDate}
                 </span>
               )}

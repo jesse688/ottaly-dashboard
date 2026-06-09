@@ -1,8 +1,6 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Input } from '@/components/ui/input'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
 interface HealthRow {
   workspace_id: string
@@ -57,89 +55,103 @@ export default function HealthPage() {
     : 0
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50">
-      <div className="bg-white border-b px-6 py-4 flex items-center justify-between">
+    <div className="o-page">
+      <div className="o-page-header">
         <div>
-          <h1 className="text-xl font-semibold text-gray-900">Health</h1>
-          <p className="text-sm text-gray-500">
+          <div className="o-page-title">Health</div>
+          <div className="o-page-sub">
             {filtered.length} workspaces · avg score {avgScore}
-            {redCount > 0 && <span className="ml-2 text-red-600 font-medium">· {redCount} critical</span>}
-          </p>
+            {redCount > 0 && <span style={{ marginLeft: 8, color: '#DC2626', fontWeight: 500 }}>· {redCount} critical</span>}
+          </div>
         </div>
       </div>
 
-      <div className="bg-white border-b px-6 py-3">
-        <Input
-          placeholder="Search workspace..."
-          className="w-72"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-        />
+      <div className="o-toolbar">
+        <div className="o-search-wrap">
+          <span className="o-search-icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+          </span>
+          <input
+            type="text"
+            placeholder="Search workspace..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+        </div>
       </div>
 
-      <div className="flex-1 overflow-auto px-6 py-4">
-        <div className="bg-white rounded-lg border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Workspace</TableHead>
-                <TableHead className="text-center">Score</TableHead>
-                <TableHead>Sent 30d</TableHead>
-                <TableHead>Replies 30d</TableHead>
-                <TableHead>Reply % 30d</TableHead>
-                <TableHead>Leads 30d</TableHead>
-                <TableHead>Bounce % 7d</TableHead>
-                <TableHead>Mailboxes</TableHead>
-                <TableHead>Unhealthy</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
-                Array.from({ length: 8 }).map((_, i) => (
-                  <TableRow key={i}>
-                    {Array.from({ length: 9 }).map((_, j) => (
-                      <TableCell key={j}><div className="h-4 bg-gray-100 rounded animate-pulse" /></TableCell>
-                    ))}
-                  </TableRow>
-                ))
-              ) : filtered.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={9} className="text-center py-12 text-gray-500">No data found</TableCell>
-                </TableRow>
-              ) : (
-                filtered.map(r => (
-                  <TableRow key={r.workspace_id} className={`hover:bg-gray-50 ${r.health_band === 'red' ? 'bg-red-50' : ''}`}>
-                    <TableCell className="font-medium">{r.workspace_name ?? r.workspace_id}</TableCell>
-                    <TableCell className="text-center">
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${BAND_COLORS[r.health_band] ?? 'bg-gray-100'}`}>
-                        {r.health_score}
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-sm">{r.sent_30d?.toLocaleString() ?? '—'}</TableCell>
-                    <TableCell className="text-sm">{r.replies_30d?.toLocaleString() ?? '—'}</TableCell>
-                    <TableCell className="text-sm">
-                      <span className={r.reply_rate_30d != null && Number(r.reply_rate_30d) >= 0.05 ? 'text-green-700 font-medium' : ''}>
-                        {pct(r.reply_rate_30d)}
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-sm text-blue-700 font-medium">{r.leads_30d ?? '—'}</TableCell>
-                    <TableCell className="text-sm">
-                      <span className={r.bounce_rate_7d != null && Number(r.bounce_rate_7d) >= 0.03 ? 'text-red-600' : ''}>
-                        {pct(r.bounce_rate_7d)}
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-sm">{r.mailbox_total ?? '—'}</TableCell>
-                    <TableCell className="text-sm">
-                      <span className={r.mailbox_unhealthy > 0 ? 'text-red-600 font-medium' : 'text-gray-400'}>
-                        {r.mailbox_unhealthy}
-                      </span>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </div>
+      <div className="o-table-wrap">
+        <table className="o-table">
+          <thead>
+            <tr>
+              <th>Workspace</th>
+              <th style={{ textAlign: 'center' }}>Score</th>
+              <th>Sent 30d</th>
+              <th>Replies 30d</th>
+              <th>Reply % 30d</th>
+              <th>Leads 30d</th>
+              <th>Bounce % 7d</th>
+              <th>Mailboxes</th>
+              <th>Unhealthy</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              Array.from({ length: 8 }).map((_, i) => (
+                <tr key={i}>
+                  {Array.from({ length: 9 }).map((_, j) => (
+                    <td key={j}><span className="o-spin" /></td>
+                  ))}
+                </tr>
+              ))
+            ) : filtered.length === 0 ? (
+              <tr>
+                <td colSpan={9}><div className="o-empty">No data found</div></td>
+              </tr>
+            ) : (
+              filtered.map(r => (
+                <tr key={r.workspace_id} style={r.health_band === 'red' ? { background: '#FEF2F2' } : undefined}>
+                  <td style={{ fontWeight: 500 }}>{r.workspace_name ?? r.workspace_id}</td>
+                  <td style={{ textAlign: 'center' }}>
+                    {r.health_band === 'green' && (
+                      <span className="o-status o-status-good">{r.health_score}</span>
+                    )}
+                    {r.health_band === 'yellow' && (
+                      <span className="o-status o-status-warning">{r.health_score}</span>
+                    )}
+                    {r.health_band === 'red' && (
+                      <span className="o-status o-status-critical">{r.health_score}</span>
+                    )}
+                    {r.health_band !== 'green' && r.health_band !== 'yellow' && r.health_band !== 'red' && (
+                      <span className="o-status o-status-unknown">{r.health_score}</span>
+                    )}
+                  </td>
+                  <td>{r.sent_30d?.toLocaleString() ?? '—'}</td>
+                  <td>{r.replies_30d?.toLocaleString() ?? '—'}</td>
+                  <td>
+                    <span style={r.reply_rate_30d != null && Number(r.reply_rate_30d) >= 0.05 ? { color: '#16A34A', fontWeight: 500 } : undefined}>
+                      {pct(r.reply_rate_30d)}
+                    </span>
+                  </td>
+                  <td style={{ color: '#224388', fontWeight: 500 }}>{r.leads_30d ?? '—'}</td>
+                  <td>
+                    <span style={r.bounce_rate_7d != null && Number(r.bounce_rate_7d) >= 0.03 ? { color: '#DC2626' } : undefined}>
+                      {pct(r.bounce_rate_7d)}
+                    </span>
+                  </td>
+                  <td>{r.mailbox_total ?? '—'}</td>
+                  <td>
+                    <span style={r.mailbox_unhealthy > 0 ? { color: '#DC2626', fontWeight: 500 } : { color: '#6B7280' }}>
+                      {r.mailbox_unhealthy}
+                    </span>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   )

@@ -157,15 +157,11 @@ function campaignSortValue(c: Campaign, key: SortKey): number {
 function StatusBadge({ status }: { status: string }) {
   const s = status.toLowerCase()
   const cls =
-    s === 'active'    ? 'bg-[#D1FAE5] text-[#065F46]' :
-    s === 'paused'    ? 'bg-[#FEF3C7] text-[#92400E]' :
-    s === 'completed' ? 'bg-[#DBEAFE] text-[#1E40AF]' :
-                        'bg-[#F3F4F6] text-[#4B5563]'
-  return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold ${cls}`}>
-      {status}
-    </span>
-  )
+    s === 'active'    ? 'o-status o-status-active' :
+    s === 'paused'    ? 'o-status o-status-warning' :
+    s === 'completed' ? 'o-status o-status-inactive' :
+                        'o-status o-status-unknown'
+  return <span className={cls}>{status}</span>
 }
 
 function TierDot({ tier }: { tier: Campaign['tier'] }) {
@@ -175,7 +171,7 @@ function TierDot({ tier }: { tier: Campaign['tier'] }) {
     tier === 'warning'  ? '#D97706' :
     tier === 'critical' ? '#DC2626' :
                           '#9CA3AF'
-  return <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: color }} />
+  return <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', flexShrink: 0, background: color }} />
 }
 
 function RateVal({ tier, children }: { tier: Campaign['tier']; children: React.ReactNode }) {
@@ -185,17 +181,17 @@ function RateVal({ tier, children }: { tier: Campaign['tier']; children: React.R
     tier === 'warning'  ? '#D97706' :
     tier === 'critical' ? '#DC2626' :
                           '#6B7280'
-  return <span className="font-bold text-[13px]" style={{ color }}>{children}</span>
+  return <span style={{ fontWeight: 700, fontSize: 13, color }}>{children}</span>
 }
 
 function FlagChip({ flag }: { flag: CampaignFlag }) {
   const cls =
-    flag.type === 'critical' ? 'bg-[#FEE2E2] text-[#DC2626]' :
-    flag.type === 'warning'  ? 'bg-[#FEF3C7] text-[#92400E]' :
-    flag.type === 'info'     ? 'bg-[#DBEAFE] text-[#1E40AF]' :
-                               'bg-[#D1FAE5] text-[#065F46]'
+    flag.type === 'critical' ? 'o-status o-status-critical' :
+    flag.type === 'warning'  ? 'o-status o-status-warning' :
+    flag.type === 'info'     ? 'o-status o-status-inactive' :
+                               'o-status o-status-good'
   return (
-    <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${cls}`}>
+    <span className={cls} style={{ fontSize: 10 }}>
       {flag.msg.split('—')[0].trim()}
     </span>
   )
@@ -203,22 +199,36 @@ function FlagChip({ flag }: { flag: CampaignFlag }) {
 
 function ExhaustBar({ pct, color }: { pct: number; color: string }) {
   return (
-    <div className="flex items-center gap-1.5">
-      <div className="w-[50px] h-[5px] rounded-full bg-[#E2E6F0] overflow-hidden">
-        <div className="h-full rounded-full" style={{ width: `${Math.min(pct, 100)}%`, background: color }} />
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div style={{ width: 50, height: 5, borderRadius: 9999, background: '#E2E6F0', overflow: 'hidden' }}>
+        <div style={{ width: `${Math.min(pct, 100)}%`, height: '100%', borderRadius: 9999, background: color }} />
       </div>
-      <span className="text-[11px] font-semibold" style={{ color }}>{pct}%</span>
+      <span style={{ fontSize: 11, fontWeight: 600, color }}>{pct}%</span>
     </div>
   )
 }
 
 function InsightCard({ cls, msg }: { cls: string; msg: string }) {
-  const style =
-    cls === 'critical' ? 'bg-[#FEF2F2] border-[#FECACA] text-[#DC2626]' :
-    cls === 'warning'  ? 'bg-[#FFFBEB] border-[#FDE68A] text-[#92400E]' :
-    cls === 'success'  ? 'bg-[#F0FDF4] border-[#BBF7D0] text-[#065F46]' :
-                         'bg-[#EFF6FF] border-[#BFDBFE] text-[#1E40AF]'
-  return <div className={`border rounded-[7px] px-3 py-2 mb-2 text-[12px] leading-relaxed ${style}`}>{msg}</div>
+  const bgColor =
+    cls === 'critical' ? '#FEF2F2' :
+    cls === 'warning'  ? '#FFFBEB' :
+    cls === 'success'  ? '#F0FDF4' :
+                         '#EFF6FF'
+  const borderColor =
+    cls === 'critical' ? '#FECACA' :
+    cls === 'warning'  ? '#FDE68A' :
+    cls === 'success'  ? '#BBF7D0' :
+                         '#BFDBFE'
+  const textColor =
+    cls === 'critical' ? '#DC2626' :
+    cls === 'warning'  ? '#92400E' :
+    cls === 'success'  ? '#065F46' :
+                         '#1E40AF'
+  return (
+    <div style={{ background: bgColor, border: `1px solid ${borderColor}`, color: textColor, borderRadius: 7, padding: '8px 12px', marginBottom: 8, fontSize: 12, lineHeight: 1.6 }}>
+      {msg}
+    </div>
+  )
 }
 
 function ApolloCard({ name }: { name: string }) {
@@ -226,27 +236,29 @@ function ApolloCard({ name }: { name: string }) {
   if (!a) return null
   const row = (label: string, val: string, color?: string) =>
     val ? (
-      <div key={label} className="flex justify-between items-center py-1 border-b border-[#F3F4F6] text-[13px] last:border-0">
-        <span className="text-[#6B7280]">{label}</span>
-        <span className="font-semibold text-right text-[12px] max-w-[300px]" style={color ? { color } : {}}>
+      <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: '1px solid #F3F4F6', fontSize: 13 }}>
+        <span style={{ color: '#6B7280' }}>{label}</span>
+        <span style={{ fontWeight: 600, textAlign: 'right', fontSize: 12, maxWidth: 300, ...(color ? { color } : {}) }}>
           {val}
         </span>
       </div>
     ) : null
   return (
-    <div className="bg-white rounded-lg border border-[#E2E6F0] p-4 mb-4">
-      <div className="flex justify-between items-center mb-3">
-        <span className="text-[11px] font-bold uppercase tracking-[.5px] text-[#6B7280]">Apollo Targeting</span>
+    <div className="o-card" style={{ marginBottom: 16 }}>
+      <div className="o-card-header">
+        <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: '#6B7280' }}>Apollo Targeting</span>
         <a href={a.rawUrl} target="_blank" rel="noreferrer"
-           className="text-[11px] text-[#7C89CD] no-underline font-normal">Open in Apollo ↗</a>
+           style={{ fontSize: 11, color: '#7C89CD', textDecoration: 'none', fontWeight: 400 }}>Open in Apollo ↗</a>
       </div>
-      {row('Job Titles', a.titles.join(', ') || a.seniority.join(', '))}
-      {a.titles.length && a.seniority.length ? row('Seniority', a.seniority.join(', ')) : null}
-      {row('Company Size', a.sizes.join(', '))}
-      {row('Locations', a.locations.join(', '))}
-      {row('Include Industries', a.inclKws.join(', '), '#059669')}
-      {row('Exclude Industries', a.exclKws.slice(0, 10).join(', ') + (a.exclKws.length > 10 ? ` +${a.exclKws.length - 10} more` : ''), '#DC2626')}
-      {row('Email Status', a.emailStatus.join(', '))}
+      <div className="o-card-body">
+        {row('Job Titles', a.titles.join(', ') || a.seniority.join(', '))}
+        {a.titles.length && a.seniority.length ? row('Seniority', a.seniority.join(', ')) : null}
+        {row('Company Size', a.sizes.join(', '))}
+        {row('Locations', a.locations.join(', '))}
+        {row('Include Industries', a.inclKws.join(', '), '#059669')}
+        {row('Exclude Industries', a.exclKws.slice(0, 10).join(', ') + (a.exclKws.length > 10 ? ` +${a.exclKws.length - 10} more` : ''), '#DC2626')}
+        {row('Email Status', a.emailStatus.join(', '))}
+      </div>
     </div>
   )
 }
@@ -269,127 +281,145 @@ function DetailPanel({ campaign, wsAvg }: { campaign: Campaign; wsAvg: number })
   )
 
   const statRow = (label: string, value: React.ReactNode) => (
-    <div className="flex justify-between items-center py-1.5 border-b border-[#F3F4F6] text-[13px] last:border-0">
-      <span className="text-[#6B7280]">{label}</span>
-      <span className="font-semibold">{value}</span>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #F3F4F6', fontSize: 13 }}>
+      <span style={{ color: '#6B7280' }}>{label}</span>
+      <span style={{ fontWeight: 600 }}>{value}</span>
     </div>
   )
 
   return (
-    <div className="p-5 grid gap-5" style={{ gridTemplateColumns: '1fr 1fr' }}>
+    <div style={{ padding: 20, display: 'grid', gap: 20, gridTemplateColumns: '1fr 1fr' }}>
       {/* Left column */}
       <div>
         <ApolloCard name={campaign.name} />
 
         {/* Campaign Stats */}
-        <div className="bg-white rounded-lg border border-[#E2E6F0] p-4 mb-4">
-          <div className="text-[11px] font-bold uppercase tracking-[.5px] text-[#6B7280] mb-3">Campaign Stats</div>
-          {statRow('Total Sends', campaign.sent.toLocaleString())}
-          {statRow('Total Replies', campaign.replies.toLocaleString())}
-          {statRow('Reply Rate (incl. OOO)',
-            <RateVal tier={campaign.tier}>{(campaign.replyRate * 100).toFixed(2)}%</RateVal>
-          )}
-          {exclOOO && statRow('Reply Rate (excl. OOO)',
-            <span style={{ color: '#7C89CD' }}>{exclOOO}%</span>
-          )}
-          {statRow('Workspace Avg (incl. OOO)', `${(wsAvg * 100).toFixed(2)}%`)}
-          {statRow('Positive Replies', <span style={{ color: '#059669' }}>{campaign.posReplies}</span>)}
-          {statRow('Negative Replies', <span style={{ color: '#DC2626' }}>{campaign.negReplies}</span>)}
-          {statRow('Bounces', campaign.bounces)}
-          {statRow('Actual Leads', <span style={{ color: '#1F6F78' }}>{campaign.leads}</span>)}
-          {statRow('Data Size', `${(campaign.dataSize || 0).toLocaleString()} contacts`)}
-          {statRow('Data Used',
-            `${campaign.leadContacted.toLocaleString()} / ${(campaign.dataSize || 0).toLocaleString()} (${campaign.exhaustion > 0 ? Math.round(campaign.exhaustion * 100) + '%' : '—'})`
-          )}
-          {campaign.lastReplied && statRow('Last Reply',
-            new Date(campaign.lastReplied).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
-          )}
+        <div className="o-card" style={{ marginBottom: 16 }}>
+          <div className="o-card-header">
+            <div className="o-card-title">Campaign Stats</div>
+          </div>
+          <div className="o-card-body">
+            {statRow('Total Sends', campaign.sent.toLocaleString())}
+            {statRow('Total Replies', campaign.replies.toLocaleString())}
+            {statRow('Reply Rate (incl. OOO)',
+              <RateVal tier={campaign.tier}>{(campaign.replyRate * 100).toFixed(2)}%</RateVal>
+            )}
+            {exclOOO && statRow('Reply Rate (excl. OOO)',
+              <span style={{ color: '#7C89CD' }}>{exclOOO}%</span>
+            )}
+            {statRow('Workspace Avg (incl. OOO)', `${(wsAvg * 100).toFixed(2)}%`)}
+            {statRow('Positive Replies', <span style={{ color: '#059669' }}>{campaign.posReplies}</span>)}
+            {statRow('Negative Replies', <span style={{ color: '#DC2626' }}>{campaign.negReplies}</span>)}
+            {statRow('Bounces', campaign.bounces)}
+            {statRow('Actual Leads', <span style={{ color: '#1F6F78' }}>{campaign.leads}</span>)}
+            {statRow('Data Size', `${(campaign.dataSize || 0).toLocaleString()} contacts`)}
+            {statRow('Data Used',
+              `${campaign.leadContacted.toLocaleString()} / ${(campaign.dataSize || 0).toLocaleString()} (${campaign.exhaustion > 0 ? Math.round(campaign.exhaustion * 100) + '%' : '—'})`
+            )}
+            {campaign.lastReplied && statRow('Last Reply',
+              new Date(campaign.lastReplied).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+            )}
+          </div>
         </div>
 
         {/* Step Drop-off */}
         {(campaign.stepReplies || []).filter(s => s.sent > 0).length > 1 && (
-          <div className="bg-white rounded-lg border border-[#E2E6F0] p-4 mb-4">
-            <div className="text-[11px] font-bold uppercase tracking-[.5px] text-[#6B7280] mb-3">Step Drop-off</div>
-            {(campaign.stepReplies || []).filter(s => s.sent > 0).map(s => {
-              const sr = s.sent > 0 ? s.replies / s.sent : 0
-              const barW = Math.min(Math.round(sr * 100 / 0.05), 80)
-              return (
-                <div key={s.step} className="flex justify-between items-center py-1.5 border-b border-[#F3F4F6] text-[13px] last:border-0">
-                  <span className="text-[#6B7280]">Step {s.step}</span>
-                  <span className="font-semibold flex items-center gap-1.5">
-                    <span className="inline-block h-[5px] rounded-sm" style={{ width: barW, background: '#1F6F78' }} />
-                    {(sr * 100).toFixed(2)}% ({s.replies}/{s.sent.toLocaleString()})
-                  </span>
-                </div>
-              )
-            })}
+          <div className="o-card" style={{ marginBottom: 16 }}>
+            <div className="o-card-header">
+              <div className="o-card-title">Step Drop-off</div>
+            </div>
+            <div className="o-card-body">
+              {(campaign.stepReplies || []).filter(s => s.sent > 0).map(s => {
+                const sr = s.sent > 0 ? s.replies / s.sent : 0
+                const barW = Math.min(Math.round(sr * 100 / 0.05), 80)
+                return (
+                  <div key={s.step} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #F3F4F6', fontSize: 13 }}>
+                    <span style={{ color: '#6B7280' }}>Step {s.step}</span>
+                    <span style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ display: 'inline-block', width: barW, height: 5, borderRadius: 2, background: '#1F6F78' }} />
+                      {(sr * 100).toFixed(2)}% ({s.replies}/{s.sent.toLocaleString()})
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
           </div>
         )}
 
         {/* Insights */}
-        <div className="bg-white rounded-lg border border-[#E2E6F0] p-4">
-          <div className="text-[11px] font-bold uppercase tracking-[.5px] text-[#6B7280] mb-3">Insights & Recommendations</div>
-          {insights.length
-            ? insights.map((ins, i) => <InsightCard key={i} cls={ins.cls} msg={ins.msg} />)
-            : <div className="border rounded-[7px] px-3 py-2 text-[12px] bg-[#EFF6FF] border-[#BFDBFE] text-[#1E40AF]">Not enough sends for analysis</div>
-          }
+        <div className="o-card">
+          <div className="o-card-header">
+            <div className="o-card-title">Insights & Recommendations</div>
+          </div>
+          <div className="o-card-body">
+            {insights.length
+              ? insights.map((ins, i) => <InsightCard key={i} cls={ins.cls} msg={ins.msg} />)
+              : <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', color: '#1E40AF', borderRadius: 7, padding: '8px 12px', fontSize: 12 }}>Not enough sends for analysis</div>
+            }
+          </div>
         </div>
       </div>
 
       {/* Right column — Variant Performance */}
-      <div className="bg-white rounded-lg border border-[#E2E6F0] p-4">
-        <div className="text-[11px] font-bold uppercase tracking-[.5px] text-[#6B7280] mb-3">
-          Variant Performance{' '}
-          {!campaign.variationSteps?.length && (
-            <span className="font-normal normal-case text-[#6B7280]">(needs 300+ sends)</span>
+      <div className="o-card">
+        <div className="o-card-header">
+          <div className="o-card-title">
+            Variant Performance{' '}
+            {!campaign.variationSteps?.length && (
+              <span style={{ fontWeight: 400, textTransform: 'none', color: '#6B7280', fontSize: 12 }}>(needs 300+ sends)</span>
+            )}
+          </div>
+        </div>
+        <div className="o-card-body">
+          {activeSteps.length ? activeSteps.map(step => {
+            const vars = step.variations.filter(v => v.sent > 0)
+            if (!vars.length) return null
+            const maxRate = Math.max(...vars.map(v => v.sent > 0 ? v.reply / v.sent : 0))
+            return (
+              <div key={step.step} style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7280', marginBottom: 6 }}>STEP {step.step}</div>
+                <div className="o-table-wrap">
+                  <table className="o-table">
+                    <thead>
+                      <tr>
+                        <th>Variant</th>
+                        <th>Name</th>
+                        <th>Sent</th>
+                        <th>Reply Rate</th>
+                        <th>Pos Replies</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {vars.map(v => {
+                        const rate = v.sent > 0 ? v.reply / v.sent : 0
+                        const isBest = rate === maxRate && maxRate > 0
+                        const barW = maxRate > 0 ? Math.round(rate / maxRate * 80) : 0
+                        return (
+                          <tr key={v.variation} style={isBest ? { background: '#F0FDF4' } : {}}>
+                            <td>
+                              <strong>{v.variation}</strong>{isBest ? ' 🏆' : ''}
+                            </td>
+                            <td style={{ color: '#6B7280' }}>
+                              {v.name === '-' ? '' : v.name}
+                            </td>
+                            <td>{v.sent.toLocaleString()}</td>
+                            <td>
+                              <span style={{ display: 'inline-block', width: barW, height: 6, borderRadius: 2, verticalAlign: 'middle', marginRight: 4, background: '#1F6F78' }} />
+                              <strong>{(rate * 100).toFixed(2)}%</strong>
+                            </td>
+                            <td>{v.pos_reply}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )
+          }) : (
+            <div className="o-empty">No variant data available for this campaign</div>
           )}
         </div>
-        {activeSteps.length ? activeSteps.map(step => {
-          const vars = step.variations.filter(v => v.sent > 0)
-          if (!vars.length) return null
-          const maxRate = Math.max(...vars.map(v => v.sent > 0 ? v.reply / v.sent : 0))
-          return (
-            <div key={step.step} className="mb-3">
-              <div className="text-[11px] font-bold text-[#6B7280] mb-1.5">STEP {step.step}</div>
-              <table className="w-full border-collapse text-[12px]">
-                <thead>
-                  <tr>
-                    <th className="text-left py-1 px-2 text-[#6B7280] font-semibold border-b border-[#E2E6F0]">Variant</th>
-                    <th className="text-left py-1 px-2 text-[#6B7280] font-semibold border-b border-[#E2E6F0]">Name</th>
-                    <th className="text-left py-1 px-2 text-[#6B7280] font-semibold border-b border-[#E2E6F0]">Sent</th>
-                    <th className="text-left py-1 px-2 text-[#6B7280] font-semibold border-b border-[#E2E6F0]">Reply Rate</th>
-                    <th className="text-left py-1 px-2 text-[#6B7280] font-semibold border-b border-[#E2E6F0]">Pos Replies</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {vars.map(v => {
-                    const rate = v.sent > 0 ? v.reply / v.sent : 0
-                    const isBest = rate === maxRate && maxRate > 0
-                    const barW = maxRate > 0 ? Math.round(rate / maxRate * 80) : 0
-                    return (
-                      <tr key={v.variation} className={isBest ? 'bg-[#F0FDF4]' : ''}>
-                        <td className="py-1 px-2 border-b border-[#F3F4F6]">
-                          <strong>{v.variation}</strong>{isBest ? ' 🏆' : ''}
-                        </td>
-                        <td className="py-1 px-2 border-b border-[#F3F4F6] text-[#6B7280]">
-                          {v.name === '-' ? '' : v.name}
-                        </td>
-                        <td className="py-1 px-2 border-b border-[#F3F4F6]">{v.sent.toLocaleString()}</td>
-                        <td className="py-1 px-2 border-b border-[#F3F4F6]">
-                          <span className="inline-block h-[6px] rounded-sm align-middle mr-1" style={{ width: barW, background: '#1F6F78' }} />
-                          <strong>{(rate * 100).toFixed(2)}%</strong>
-                        </td>
-                        <td className="py-1 px-2 border-b border-[#F3F4F6]">{v.pos_reply}</td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )
-        }) : (
-          <div className="text-[#6B7280] text-[13px] py-2">No variant data available for this campaign</div>
-        )}
       </div>
     </div>
   )
@@ -506,12 +536,11 @@ export default function CampaignsPage() {
     const active = sortKey === col
     return (
       <th
-        className="py-2 px-3 text-left text-[11px] font-bold uppercase tracking-[.5px] text-[#6B7280] border-b border-[#E2E6F0] cursor-pointer select-none whitespace-nowrap hover:text-[#050C29]"
-        style={active ? { color: '#224388' } : {}}
+        style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', color: active ? '#224388' : undefined }}
         onClick={() => handleSort(col)}
       >
         {label}{' '}
-        <span className="inline-block w-2.5 ml-1 text-[10px]" style={{ color: '#224388' }}>
+        <span style={{ display: 'inline-block', width: 10, marginLeft: 4, fontSize: 10, color: '#224388' }}>
           {active ? (sortDir === 'asc' ? '▲' : '▼') : ''}
         </span>
       </th>
@@ -521,215 +550,218 @@ export default function CampaignsPage() {
   // ── Render ───────────────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen" style={{ background: '#F0F2F8', color: '#050C29', fontFamily: 'Inter, sans-serif' }}>
+    <div className="o-page">
 
       {/* Alert banner */}
       {critAlerts.length > 0 && (
-        <div className="bg-[#FEF3C7] border-b-2 border-[#FCD34D] px-8 py-2.5 flex items-center gap-2.5 text-[13px] font-medium text-[#92400E]">
+        <div style={{ background: '#FEF3C7', borderBottom: '2px solid #FCD34D', padding: '10px 0', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, fontWeight: 500, color: '#92400E', marginBottom: 20 }}>
           ⚠️ <strong>{critAlerts.length} critical issue{critAlerts.length > 1 ? 's' : ''}:</strong>{' '}
           {critAlerts.slice(0, 3).join(' · ')}{critAlerts.length > 3 ? ` +${critAlerts.length - 3} more` : ''}
         </div>
       )}
 
-      <div className="max-w-[1600px] mx-auto px-8 py-6">
-
-        {/* Page header */}
-        <div className="flex items-center justify-between mb-5 flex-wrap gap-2">
-          <div>
-            <div className="text-[1.3rem] font-bold">Campaign Intelligence</div>
-            <div className="text-[12px] text-[#6B7280]">
-              {loading ? 'Loading…' : updatedAt || '—'}
-            </div>
+      {/* Page header */}
+      <div className="o-page-header">
+        <div>
+          <div className="o-page-title">Campaign Intelligence</div>
+          <div className="o-page-sub">
+            {loading ? 'Loading…' : updatedAt || '—'}
           </div>
-          <input
-            type="text"
-            placeholder="Search campaigns…"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="px-3 py-1.5 border border-[#E2E6F0] rounded-lg text-[13px] w-[220px] outline-none focus:border-[#1F6F78]"
-          />
         </div>
-
-        {/* Summary bar */}
-        <div className="grid gap-4 mb-6" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
-          {[
-            { label: 'Total Campaigns', value: allCampaigns.length, accent: '#224388' },
-            { label: 'Active',          value: allCampaigns.filter(c => c.status === 'ACTIVE').length, accent: '#1F6F78' },
-            { label: 'Top Performers',  value: allCampaigns.filter(c => c.tier === 'top').length,      accent: '#059669' },
-            { label: 'Need Attention',  value: allCampaigns.filter(c => c.tier === 'warning').length,  accent: '#D97706' },
-            { label: 'Critical',        value: allCampaigns.filter(c => c.tier === 'critical').length, accent: '#DC2626' },
-            { label: 'Avg Reply Rate',  value: `${(avgReply * 100).toFixed(2)}%`,                      accent: '#224388' },
-          ].map(card => (
-            <div key={card.label} className="bg-white rounded-[10px] border border-[#E2E6F0] px-4 py-3"
-                 style={{ borderTop: `3px solid ${card.accent}` }}>
-              <div className="text-[11px] font-bold uppercase tracking-[.5px] text-[#6B7280]">{card.label}</div>
-              <div className="text-[1.4rem] font-bold mt-0.5">{loading ? '—' : card.value}</div>
-            </div>
-          ))}
+        <div className="o-page-actions">
+          <div className="o-search-wrap">
+            <span className="o-search-icon">
+              <svg width="14" height="14" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="9" cy="9" r="6" stroke="#6B7280" strokeWidth="2" />
+                <path d="M13.5 13.5L17 17" stroke="#6B7280" strokeWidth="2" strokeLinecap="round" />
+              </svg>
+            </span>
+            <input
+              type="text"
+              placeholder="Search campaigns…"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+          </div>
         </div>
+      </div>
 
-        {/* Suggested Optimisations */}
-        {data && data.optimisations?.length > 0 && (
-          <div className="mb-5">
-            <div className="flex items-center justify-between mb-2">
-              <div className="font-bold text-[14px]">
-                🎯 Suggested Optimisations{' '}
-                <span className="bg-[#FEF3C7] text-[#92400E] px-2 py-0.5 rounded-full text-[12px] ml-1.5">
-                  {data.optimisations.length} found
-                </span>
-              </div>
-              <button
-                onClick={() => setOptsVisible(v => !v)}
-                className="text-[12px] text-[#6B7280] bg-transparent border-0 cursor-pointer"
-              >
-                {optsVisible ? 'Hide' : 'Show'}
-              </button>
+      {/* Summary metrics */}
+      <div className="o-metrics o-metrics-auto" style={{ marginBottom: 24 }}>
+        {[
+          { label: 'Total Campaigns', value: allCampaigns.length,                                    accent: '#224388' },
+          { label: 'Active',          value: allCampaigns.filter(c => c.status === 'ACTIVE').length, accent: '#1F6F78' },
+          { label: 'Top Performers',  value: allCampaigns.filter(c => c.tier === 'top').length,      accent: '#16A34A' },
+          { label: 'Need Attention',  value: allCampaigns.filter(c => c.tier === 'warning').length,  accent: '#D97706' },
+          { label: 'Critical',        value: allCampaigns.filter(c => c.tier === 'critical').length, accent: '#DC2626' },
+          { label: 'Avg Reply Rate',  value: `${(avgReply * 100).toFixed(2)}%`,                      accent: '#224388' },
+        ].map(card => (
+          <div key={card.label} className="o-metric" style={{ borderTopColor: card.accent }}>
+            <div className="o-metric-label">{card.label}</div>
+            <div className="o-metric-val" style={{ color: card.accent }}>{loading ? '—' : card.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Suggested Optimisations */}
+      {data && data.optimisations?.length > 0 && (
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>
+              Suggested Optimisations{' '}
+              <span style={{ background: '#FEF3C7', color: '#92400E', padding: '2px 8px', borderRadius: 9999, fontSize: 12, marginLeft: 6 }}>
+                {data.optimisations.length} found
+              </span>
             </div>
-            {optsVisible && data.optimisations.map((o, i) => {
-              const st = optStatuses[i]
-              return (
-                <div key={i} className="bg-white border border-[#E2E6F0] rounded-lg px-4 py-3 mb-2 flex items-center justify-between gap-4 flex-wrap"
-                     style={{ borderLeft: `4px solid ${o.confidence === 'high' ? '#059669' : '#D97706'}` }}>
-                  <div className="flex-1 min-w-[200px]">
-                    <div className="font-semibold text-[13px] mb-0.5">
+            <button className="o-btn o-btn-ghost o-btn-sm" onClick={() => setOptsVisible(v => !v)}>
+              {optsVisible ? 'Hide' : 'Show'}
+            </button>
+          </div>
+          {optsVisible && data.optimisations.map((o, i) => {
+            const st = optStatuses[i]
+            return (
+              <div key={i} className="o-card" style={{ borderLeft: `4px solid ${o.confidence === 'high' ? '#059669' : '#D97706'}`, marginBottom: 8 }}>
+                <div className="o-card-body" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+                  <div style={{ flex: 1, minWidth: 200 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 2 }}>
                       {o.wsName} — {o.campName}
-                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ml-1.5 ${o.confidence === 'high' ? 'bg-[#D1FAE5] text-[#065F46]' : 'bg-[#FEF3C7] text-[#92400E]'}`}>
+                      <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 9999, marginLeft: 6, background: o.confidence === 'high' ? '#D1FAE5' : '#FEF3C7', color: o.confidence === 'high' ? '#065F46' : '#92400E' }}>
                         {o.confidence === 'high' ? 'High confidence' : 'Medium confidence'}
                       </span>
                     </div>
-                    <div className="text-[12px] text-[#6B7280] leading-relaxed">
+                    <div style={{ fontSize: 12, color: '#6B7280', lineHeight: 1.6 }}>
                       Step {o.step} · Winner: <strong>Variant {o.winner.variation}</strong>{' '}
                       ({(o.winner.rate * 100).toFixed(2)}% reply rate, {o.winner.reply} replies from {o.winner.sent.toLocaleString()} sends) ·
                       Pause: {o.losers.map(l => `Variant ${l.variation} (${(l.rate * 100).toFixed(2)}%)`).join(', ')}
                     </div>
                   </div>
-                  <div className="flex gap-1.5 items-center flex-shrink-0">
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
                     {st && typeof st === 'string' && st !== 'applying' && st !== 'applied' && (
-                      <span className="text-[12px] text-[#DC2626]">{st}</span>
+                      <span style={{ fontSize: 12, color: '#DC2626' }}>{st}</span>
                     )}
                     {st === 'applied' ? (
-                      <span className="px-3 py-1.5 bg-[#D1FAE5] text-[#065F46] border-0 rounded-md text-[12px] font-semibold">✓ Applied</span>
+                      <span style={{ padding: '6px 12px', background: '#D1FAE5', color: '#065F46', borderRadius: 6, fontSize: 12, fontWeight: 600 }}>✓ Applied</span>
                     ) : (
                       <button
+                        className="o-btn o-btn-teal o-btn-sm"
                         disabled={st === 'applying'}
                         onClick={() => applyOpt(i)}
-                        className="px-3 py-1.5 border-0 rounded-md text-[12px] font-semibold cursor-pointer transition-colors"
-                        style={{ background: st === 'applying' ? '#9CA3AF' : '#1F6F78', color: '#fff', cursor: st === 'applying' ? 'not-allowed' : 'pointer' }}
+                        style={st === 'applying' ? { background: '#9CA3AF', cursor: 'not-allowed' } : {}}
                       >
-                        {st === 'applying' ? 'Applying…' : 'Apply in PlusVibe'}
+                        {st === 'applying' ? <><span className="o-spin" /> Applying…</> : 'Apply in PlusVibe'}
                       </button>
                     )}
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Targeting Intelligence */}
+      {data && data.targetingPatterns?.length > 0 && (
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>
+            Targeting Intelligence{' '}
+            <span style={{ fontSize: 12, fontWeight: 400, color: '#6B7280' }}>— which Apollo targeting combinations perform best across all clients</span>
+          </div>
+          <div style={{ display: 'grid', gap: 16, gridTemplateColumns: '1fr 1fr' }}>
+            {data.targetingPatterns.slice(0, 10).map((p, i) => {
+              const rr = (p.avgReplyRate * 100).toFixed(2)
+              const tier = p.avgReplyRate >= 0.025 ? 'top' : p.avgReplyRate >= 0.01 ? 'good' : p.avgReplyRate >= 0.005 ? 'warning' : 'critical'
+              const maxRate = data.targetingPatterns[0].avgReplyRate
+              const barW = maxRate > 0 ? Math.round(p.avgReplyRate / maxRate * 100) : 0
+              const rateColor = tier === 'top' ? '#059669' : tier === 'good' ? '#10B981' : tier === 'warning' ? '#D97706' : '#DC2626'
+              const parts = [p.titleKey, p.sizeKey, p.kwKey].filter(Boolean)
+              return (
+                <div key={i} className="o-card">
+                  <div className="o-card-body">
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                        {parts.map(s => (
+                          <span key={s} style={{ background: '#F3F4F6', padding: '2px 8px', borderRadius: 4, fontSize: 11 }}>{s}</span>
+                        ))}
+                      </div>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: rateColor }}>{rr}%</div>
+                    </div>
+                    <div style={{ height: 4, background: '#E2E6F0', borderRadius: 2, marginBottom: 6 }}>
+                      <div style={{ width: `${barW}%`, height: 4, borderRadius: 2, background: '#1F6F78' }} />
+                    </div>
+                    <div style={{ fontSize: 11, color: '#6B7280' }}>
+                      {p.count} campaigns · {p.totalSent.toLocaleString()} total sends
+                      · {p.campaigns.slice(0, 2).map(c => c.wsName).join(', ')}{p.count > 2 ? ` +${p.count - 2} more` : ''}
+                    </div>
                   </div>
                 </div>
               )
             })}
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Targeting Intelligence */}
-        {data && data.targetingPatterns?.length > 0 && (
-          <div className="mb-5">
-            <div className="font-bold text-[14px] mb-2">
-              📊 Targeting Intelligence{' '}
-              <span className="text-[12px] font-normal text-[#6B7280]">— which Apollo targeting combinations perform best across all clients</span>
-            </div>
-            <div className="grid gap-4" style={{ gridTemplateColumns: '1fr 1fr' }}>
-              {data.targetingPatterns.slice(0, 10).map((p, i) => {
-                const rr = (p.avgReplyRate * 100).toFixed(2)
-                const tier = p.avgReplyRate >= 0.025 ? 'top' : p.avgReplyRate >= 0.01 ? 'good' : p.avgReplyRate >= 0.005 ? 'warning' : 'critical'
-                const maxRate = data.targetingPatterns[0].avgReplyRate
-                const barW = maxRate > 0 ? Math.round(p.avgReplyRate / maxRate * 100) : 0
-                const rateColor = tier === 'top' ? '#059669' : tier === 'good' ? '#10B981' : tier === 'warning' ? '#D97706' : '#DC2626'
-                const parts = [p.titleKey, p.sizeKey, p.kwKey].filter(Boolean)
-                return (
-                  <div key={i} className="bg-white border border-[#E2E6F0] rounded-lg px-4 py-3">
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex flex-wrap gap-1">
-                        {parts.map(s => (
-                          <span key={s} className="bg-[#F3F4F6] px-2 py-0.5 rounded text-[11px]">{s}</span>
-                        ))}
-                      </div>
-                      <div className="text-[15px] font-bold" style={{ color: rateColor }}>{rr}%</div>
-                    </div>
-                    <div className="h-1 bg-[#E2E6F0] rounded mb-1.5">
-                      <div className="h-1 rounded" style={{ width: `${barW}%`, background: '#1F6F78' }} />
-                    </div>
-                    <div className="text-[11px] text-[#6B7280]">
-                      {p.count} campaigns · {p.totalSent.toLocaleString()} total sends
-                      · {p.campaigns.slice(0, 2).map(c => c.wsName).join(', ')}{p.count > 2 ? ` +${p.count - 2} more` : ''}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
+      {/* Workspace tabs */}
+      {data && (
+        <div style={{ overflowX: 'auto', marginBottom: 20 }}>
+          <div style={{ display: 'flex', gap: 6, minWidth: 'max-content', paddingBottom: 2 }}>
+            {data.workspaces.map((ws, i) => {
+              const critCount = ws.campaigns.filter(c => c.tier === 'critical').length
+              const dotColor = critCount > 0 ? '#DC2626' : ws.campaigns.some(c => c.tier === 'top') ? '#059669' : '#9CA3AF'
+              return (
+                <button
+                  key={ws.id}
+                  onClick={() => switchWs(i)}
+                  className={'o-pill' + (i === activeWsIdx ? ' o-pill-active' : '')}
+                >
+                  <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', marginRight: 6, verticalAlign: 'middle', background: dotColor }} />
+                  {ws.name}
+                  {critCount > 0 && (
+                    <span style={{ background: '#DC2626', color: '#fff', borderRadius: 9999, padding: '1px 6px', fontSize: 10, marginLeft: 4 }}>{critCount}</span>
+                  )}
+                </button>
+              )
+            })}
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Workspace tabs */}
-        {data && (
-          <div className="overflow-x-auto mb-5">
-            <div className="flex gap-1.5 min-w-max pb-0.5">
-              {data.workspaces.map((ws, i) => {
-                const critCount = ws.campaigns.filter(c => c.tier === 'critical').length
-                const dotColor = critCount > 0 ? '#DC2626' : ws.campaigns.some(c => c.tier === 'top') ? '#059669' : '#9CA3AF'
-                return (
-                  <button
-                    key={ws.id}
-                    onClick={() => switchWs(i)}
-                    className="px-3.5 py-1.5 rounded-full text-[12px] font-semibold cursor-pointer border transition-all whitespace-nowrap"
-                    style={i === activeWsIdx
-                      ? { background: '#050C29', borderColor: '#050C29', color: '#fff' }
-                      : { background: '#fff', borderColor: '#E2E6F0', color: '#6B7280' }
-                    }
-                  >
-                    <span className="inline-block w-[7px] h-[7px] rounded-full mr-1.5 align-middle" style={{ background: dotColor }} />
-                    {ws.name}
-                    {critCount > 0 && (
-                      <span className="bg-[#DC2626] text-white rounded-full px-1.5 py-px text-[10px] ml-1">{critCount}</span>
-                    )}
-                  </button>
-                )
-              })}
-            </div>
+      {/* Campaign table */}
+      <div className="o-card" style={{ marginBottom: 20 }}>
+        <div className="o-card-header">
+          <div>
+            <div className="o-card-title">{activeWs?.name ?? '—'}</div>
+            {activeWs && (
+              <div style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>
+                {activeWs.campaigns.length} campaigns · {activeWs.activeCampaigns} active · {activeWs.totalSent.toLocaleString()} total sends · avg reply rate {(activeWs.avgReplyRate * 100).toFixed(2)}%
+              </div>
+            )}
           </div>
-        )}
+          <div style={{ fontSize: 12, color: '#6B7280' }}>Click a campaign to expand</div>
+        </div>
 
-        {/* Campaign table */}
-        <div className="bg-white rounded-xl border border-[#E2E6F0] overflow-hidden mb-5">
-          <div className="px-5 py-4 border-b border-[#E2E6F0] flex items-center justify-between flex-wrap gap-2">
-            <div>
-              <span className="font-bold text-[14px]">{activeWs?.name ?? '—'}</span>
-              {activeWs && (
-                <div className="text-[12px] text-[#6B7280] mt-0.5">
-                  {activeWs.campaigns.length} campaigns · {activeWs.activeCampaigns} active · {activeWs.totalSent.toLocaleString()} total sends · avg reply rate {(activeWs.avgReplyRate * 100).toFixed(2)}%
-                </div>
-              )}
-            </div>
-            <div className="text-[12px] text-[#6B7280]">Click a campaign to expand</div>
-          </div>
-
-          <table className="w-full border-collapse">
-            <thead style={{ background: '#F8F9FC' }}>
+        <div className="o-table-wrap">
+          <table className="o-table">
+            <thead>
               <tr>
-                <th className="py-2 px-3 text-left text-[11px] font-bold uppercase tracking-[.5px] text-[#6B7280] border-b border-[#E2E6F0] w-6" />
-                <th className="py-2 px-3 text-left text-[11px] font-bold uppercase tracking-[.5px] text-[#6B7280] border-b border-[#E2E6F0]">Campaign</th>
-                <th className="py-2 px-3 text-left text-[11px] font-bold uppercase tracking-[.5px] text-[#6B7280] border-b border-[#E2E6F0]">Status</th>
+                <th style={{ width: 24 }} />
+                <th>Campaign</th>
+                <th>Status</th>
                 <SortTh col="sent"        label="Sent" />
                 <SortTh col="exhaustion"  label="Data Used" />
                 <SortTh col="replyRate"   label="Reply Rate" />
                 <SortTh col="bounceRate"  label="Bounce Rate" />
                 <SortTh col="positivePct" label="Positive %" />
                 <SortTh col="leads"       label="Leads" />
-                <th className="py-2 px-3 text-left text-[11px] font-bold uppercase tracking-[.5px] text-[#6B7280] border-b border-[#E2E6F0]">Flags</th>
+                <th>Flags</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={10} className="text-center py-12 text-[14px] text-[#6B7280]">Loading…</td></tr>
+                <tr><td colSpan={10}><div className="o-empty"><span className="o-spin" /> Loading…</div></td></tr>
               ) : error ? (
-                <tr><td colSpan={10} className="text-center py-12 text-[14px] text-[#6B7280]">{error}</td></tr>
+                <tr><td colSpan={10}><div className="o-empty">{error}</div></td></tr>
               ) : filteredCampaigns.length === 0 ? (
-                <tr><td colSpan={10} className="text-center py-12 text-[14px] text-[#6B7280]">No campaigns match</td></tr>
+                <tr><td colSpan={10}><div className="o-empty">No campaigns match</div></td></tr>
               ) : filteredCampaigns.map(c => {
                 const rr = (c.replyRate * 100).toFixed(2)
                 const rrExNum = c.sent > 0
@@ -752,52 +784,51 @@ export default function CampaignsPage() {
                 return [
                   <tr
                     key={`row-${c.id}`}
-                    className="cursor-pointer"
+                    style={{ cursor: 'pointer', borderBottom: '1px solid #E2E6F0' }}
                     onClick={() => toggleDetail(c.id)}
-                    style={{ borderBottom: '1px solid #E2E6F0' }}
                     onMouseEnter={e => (e.currentTarget as HTMLTableRowElement).querySelectorAll('td').forEach(td => (td.style.background = '#FAFBFF'))}
                     onMouseLeave={e => (e.currentTarget as HTMLTableRowElement).querySelectorAll('td').forEach(td => (td.style.background = ''))}
                   >
-                    <td className="py-2.5 px-3 text-[12px] text-[#6B7280]" style={{ transition: 'transform 0.2s' }}>
+                    <td style={{ color: '#6B7280' }}>
                       <span style={{ display: 'inline-block', transform: expanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.2s' }}>▶</span>
                     </td>
-                    <td className="py-2.5 px-3">
-                      <div className="font-semibold text-[13px] max-w-[300px] truncate" title={c.name}>
+                    <td>
+                      <div style={{ fontWeight: 600, fontSize: 13, maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.name}>
                         {shortName(c.name)}
                       </div>
                       {apolloSummary && (
-                        <div className="text-[11px] mt-0.5" style={{ color: '#7C89CD' }}>{apolloSummary}</div>
+                        <div style={{ fontSize: 11, marginTop: 2, color: '#7C89CD' }}>{apolloSummary}</div>
                       )}
                     </td>
-                    <td className="py-2.5 px-3"><StatusBadge status={c.status} /></td>
-                    <td className="py-2.5 px-3 font-semibold">{c.sent.toLocaleString()}</td>
-                    <td className="py-2.5 px-3">
+                    <td><StatusBadge status={c.status} /></td>
+                    <td style={{ fontWeight: 600 }}>{c.sent.toLocaleString()}</td>
+                    <td>
                       {c.leadContacted > 0
                         ? <ExhaustBar pct={exPct} color={exColor} />
-                        : <span className="text-[#6B7280] text-[11px]">—</span>
+                        : <span style={{ color: '#6B7280', fontSize: 11 }}>—</span>
                       }
                     </td>
-                    <td className="py-2.5 px-3">
-                      <div className="flex items-center gap-1.5">
+                    <td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <TierDot tier={c.tier} />
                         <RateVal tier={c.tier}>{c.sent < 50 ? '—' : rr + '%'}</RateVal>
                       </div>
                       {showEx && (
-                        <div className="text-[11px] mt-0.5" style={{ color: '#7C89CD' }}>{rrEx}% excl. OOO</div>
+                        <div style={{ fontSize: 11, marginTop: 2, color: '#7C89CD' }}>{rrEx}% excl. OOO</div>
                       )}
                     </td>
-                    <td className="py-2.5 px-3">
+                    <td>
                       {bounceRate === null
                         ? '—'
-                        : <span className="font-semibold" style={{ color: bounceColor }}>{bounceRate.toFixed(2)}%</span>
+                        : <span style={{ fontWeight: 600, color: bounceColor }}>{bounceRate.toFixed(2)}%</span>
                       }
                     </td>
-                    <td className="py-2.5 px-3">
+                    <td>
                       {c.sent >= 50 && c.replies > 0 ? prr + '%' : '—'}
                     </td>
-                    <td className="py-2.5 px-3 font-semibold">{c.leads}</td>
-                    <td className="py-2.5 px-3">
-                      <div className="flex flex-wrap gap-1">
+                    <td style={{ fontWeight: 600 }}>{c.leads}</td>
+                    <td>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                         {allFlags.slice(0, 2).map((f, fi) => (
                           <FlagChip key={fi} flag={f} />
                         ))}
@@ -806,7 +837,7 @@ export default function CampaignsPage() {
                   </tr>,
                   expanded && (
                     <tr key={`detail-${c.id}`} style={{ background: '#F8FAFF', borderBottom: '1px solid #E2E6F0' }}>
-                      <td colSpan={10} className="p-0">
+                      <td colSpan={10} style={{ padding: 0 }}>
                         <DetailPanel campaign={c} wsAvg={activeWs!.avgReplyRate} />
                       </td>
                     </tr>

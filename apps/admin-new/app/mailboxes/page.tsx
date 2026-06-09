@@ -1,31 +1,14 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Input } from '@/components/ui/input'
-import { Button } from '@/components/ui/button'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import type { Mailbox } from '@/types/mailbox'
 
-const STATUS_COLORS: Record<string, string> = {
-  active: 'bg-green-100 text-green-800',
-  disconnected: 'bg-red-100 text-red-800',
-  warming: 'bg-orange-100 text-orange-800',
-  paused: 'bg-yellow-100 text-yellow-800',
-  error: 'bg-red-100 text-red-800',
+const STATUS_MAP: Record<string, string> = {
+  active: 'o-status o-status-active',
+  disconnected: 'o-status o-status-critical',
+  warming: 'o-status o-status-warning',
+  paused: 'o-status o-status-inactive',
+  error: 'o-status o-status-critical',
 }
 
 export default function MailboxesPage() {
@@ -63,118 +46,110 @@ export default function MailboxesPage() {
   const needsAttention = filtered.filter(m => m.status === 'disconnected' || m.status === 'error').length
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50">
-      <div className="bg-white border-b px-6 py-4 flex items-center justify-between">
+    <div className="o-page">
+      <div className="o-page-header">
         <div>
-          <h1 className="text-xl font-semibold text-gray-900">Mailboxes</h1>
-          <p className="text-sm text-gray-500">
+          <div className="o-page-title">Mailboxes</div>
+          <div className="o-page-sub">
             {filtered.length} mailboxes
             {needsAttention > 0 && (
-              <span className="ml-2 text-red-600 font-medium">· {needsAttention} need attention</span>
+              <span style={{ marginLeft: 8, color: '#DC2626', fontWeight: 500 }}>· {needsAttention} need attention</span>
             )}
-          </p>
+          </div>
         </div>
       </div>
 
-      <div className="bg-white border-b px-6 py-3 flex items-center gap-3 flex-wrap">
-        <Input
-          placeholder="Search email, workspace..."
-          className="w-72"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-        />
-        <Select value={status} onValueChange={v => v && setStatus(v)}>
-          <SelectTrigger className="w-40">
-            <SelectValue placeholder="Status" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All statuses</SelectItem>
-            <SelectItem value="active">Active</SelectItem>
-            <SelectItem value="warming">Warming</SelectItem>
-            <SelectItem value="paused">Paused</SelectItem>
-            <SelectItem value="disconnected">Disconnected</SelectItem>
-            <SelectItem value="error">Error</SelectItem>
-          </SelectContent>
-        </Select>
+      <div className="o-toolbar">
+        <div className="o-search-wrap">
+          <span className="o-search-icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+          </span>
+          <input
+            type="text"
+            placeholder="Search email, workspace..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+        </div>
+        <select className="o-select" value={status} onChange={e => { if (e.target.value) setStatus(e.target.value) }}>
+          <option value="all">All statuses</option>
+          <option value="active">Active</option>
+          <option value="warming">Warming</option>
+          <option value="paused">Paused</option>
+          <option value="disconnected">Disconnected</option>
+          <option value="error">Error</option>
+        </select>
         {suppliers.length > 0 && (
-          <Select value={supplier} onValueChange={v => v && setSupplier(v)}>
-            <SelectTrigger className="w-40">
-              <SelectValue placeholder="Supplier" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All suppliers</SelectItem>
-              {suppliers.map(s => (
-                <SelectItem key={s} value={s}>{s}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <select className="o-select" value={supplier} onChange={e => { if (e.target.value) setSupplier(e.target.value) }}>
+            <option value="all">All suppliers</option>
+            {suppliers.map(s => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
         )}
         {needsAttention > 0 && (
-          <Button
-            variant="outline"
-            size="sm"
-            className="text-red-600 border-red-200"
-            onClick={() => setStatus('disconnected')}
-          >
+          <button className="o-btn o-btn-ghost o-btn-sm" style={{ color: '#DC2626', borderColor: '#FECACA' }} onClick={() => setStatus('disconnected')}>
             Show attention only
-          </Button>
+          </button>
         )}
       </div>
 
-      <div className="flex-1 overflow-auto px-6 py-4">
-        <div className="bg-white rounded-lg border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Email</TableHead>
-                <TableHead>Workspace</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Supplier</TableHead>
-                <TableHead>Warmup</TableHead>
-                <TableHead>Sent Today</TableHead>
-                <TableHead>Daily Limit</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
+      <div className="o-card">
+        <div className="o-table-wrap">
+          <table className="o-table">
+            <thead>
+              <tr>
+                <th>Email</th>
+                <th>Workspace</th>
+                <th>Status</th>
+                <th>Supplier</th>
+                <th>Warmup</th>
+                <th>Sent Today</th>
+                <th>Daily Limit</th>
+              </tr>
+            </thead>
+            <tbody>
               {loading ? (
                 Array.from({ length: 10 }).map((_, i) => (
-                  <TableRow key={i}>
+                  <tr key={i}>
                     {Array.from({ length: 7 }).map((_, j) => (
-                      <TableCell key={j}><div className="h-4 bg-gray-100 rounded animate-pulse" /></TableCell>
+                      <td key={j}><span className="o-spin" /></td>
                     ))}
-                  </TableRow>
+                  </tr>
                 ))
               ) : filtered.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={7} className="text-center py-12 text-gray-500">No mailboxes found</TableCell>
-                </TableRow>
+                <tr>
+                  <td colSpan={7}><div className="o-empty">No mailboxes found</div></td>
+                </tr>
               ) : (
                 filtered.map(m => (
-                  <TableRow key={m.id} className="hover:bg-gray-50">
-                    <TableCell className="font-mono text-sm">{m.email}</TableCell>
-                    <TableCell className="text-sm text-gray-600">{m.workspace_name ?? '—'}</TableCell>
-                    <TableCell>
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${STATUS_COLORS[m.status] ?? 'bg-gray-100 text-gray-600'}`}>
+                  <tr key={m.id}>
+                    <td style={{ fontFamily: 'monospace' }}>{m.email}</td>
+                    <td style={{ color: '#6B7280' }}>{m.workspace_name ?? '—'}</td>
+                    <td>
+                      <span className={STATUS_MAP[m.status] ?? 'o-status o-status-unknown'}>
                         {m.status}
                       </span>
-                    </TableCell>
-                    <TableCell className="text-sm">{m.supplier ?? '—'}</TableCell>
-                    <TableCell>
+                    </td>
+                    <td>{m.supplier ?? '—'}</td>
+                    <td>
                       {m.warmup_enabled ? (
-                        <span className="text-green-700 text-sm">
+                        <span style={{ color: '#16A34A' }}>
                           On {m.warmup_score != null ? `(${m.warmup_score})` : ''}
                         </span>
                       ) : (
-                        <span className="text-gray-400 text-sm">Off</span>
+                        <span style={{ color: '#9CA3AF' }}>Off</span>
                       )}
-                    </TableCell>
-                    <TableCell className="text-sm">{m.sent_today ?? '—'}</TableCell>
-                    <TableCell className="text-sm">{m.daily_limit ?? '—'}</TableCell>
-                  </TableRow>
+                    </td>
+                    <td>{m.sent_today ?? '—'}</td>
+                    <td>{m.daily_limit ?? '—'}</td>
+                  </tr>
                 ))
               )}
-            </TableBody>
-          </Table>
+            </tbody>
+          </table>
         </div>
       </div>
     </div>

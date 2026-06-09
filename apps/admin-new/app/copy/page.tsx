@@ -251,13 +251,25 @@ function rate(num: number, den: number): number {
 function ScoreBadge({ score }: { score: number | null }) {
   if (score === null || score === undefined) {
     return (
-      <span className="inline-flex items-center justify-center w-10 h-10 rounded-full text-[11px] font-semibold"
-        style={{ background: '#E5E7EB', color: '#9CA3AF' }}>–</span>
+      <span
+        style={{
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          width: 40, height: 40, borderRadius: '50%',
+          background: '#E5E7EB', color: '#9CA3AF',
+          fontSize: 11, fontWeight: 600,
+        }}
+      >–</span>
     )
   }
   return (
-    <span className="inline-flex items-center justify-center w-10 h-10 rounded-full text-white text-[13px] font-extrabold tracking-tight"
-      style={{ background: scoreColor(score) }}>{score}</span>
+    <span
+      style={{
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        width: 40, height: 40, borderRadius: '50%',
+        background: scoreColor(score), color: '#fff',
+        fontSize: 13, fontWeight: 800, letterSpacing: '-0.5px',
+      }}
+    >{score}</span>
   )
 }
 
@@ -265,7 +277,7 @@ function FlagBadges({ r }: { r: { sent: number; replies: number; leads: number; 
   const flags = profileFlags(r)
   if (!flags.length) return null
   return (
-    <div className="flex flex-wrap gap-1 mt-1.5">
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
       {flags.map(f => (
         <span key={f.cls} className={`flag flag-${f.cls}`}>{f.label}</span>
       ))}
@@ -304,7 +316,7 @@ function RateCellTrend({ num, den, num7, den7 }: { num: number; den: number; num
       else if (recNum < lifeNum * 0.8)  { arrow = '↓';  col = '#F59E0B' }
       else if (recNum > lifeNum * 1.25) { arrow = '↑';  col = '#10B981' }
     }
-    trendEl = <div className="rate-sub font-semibold" style={{ color: col }} title={`Last 7 days: ${num7}/${den7}`}>{arrow} {recent}% 7d</div>
+    trendEl = <div className="rate-sub" style={{ fontWeight: 600, color: col }} title={`Last 7 days: ${num7}/${den7}`}>{arrow} {recent}% 7d</div>
   } else if (den7 && den7 > 0) {
     trendEl = <div className="rate-sub" title={`Last 7 days: ${num7}/${den7} (low volume)`}>— 7d: {num7}/{den7}</div>
   } else {
@@ -328,7 +340,7 @@ function CampaignStatusBadge({ t }: { t: { is_active: boolean; campaign_statuses
   }
   const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
   const Dot = ({ color }: { color: string }) => (
-    <span className="inline-block w-2 h-2 rounded-full mr-1.5 align-middle" style={{ background: color }} />
+    <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', marginRight: 6, verticalAlign: 'middle', background: color }} />
   )
 
   if (t.is_active) return <><Dot color="#10B981" />Active</>
@@ -445,55 +457,49 @@ function EmailModal({ open, onClose, subject, body, campaigns, sent, replies, le
 
   return (
     <div
-      className="fixed inset-0 z-[9999] flex items-center justify-center p-8"
-      style={{ background: 'rgba(15,23,42,0.55)' }}
+      className="o-modal-overlay"
       onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
       role="dialog"
       aria-modal="true"
     >
       <div
-        className="bg-white rounded-xl max-w-[720px] w-full max-h-[85vh] flex flex-col"
-        style={{ boxShadow: '0 25px 50px -12px rgba(0,0,0,0.35)' }}
+        className="o-modal"
         onClick={e => e.stopPropagation()}
       >
-        <div className="px-6 py-4 border-b border-[#E2E6F0] flex items-center justify-between shrink-0">
-          <h3 className="font-bold text-sm text-[#050C29]">Email preview</h3>
-          <button
-            onClick={onClose}
-            className="text-[#6B7280] text-xl leading-none px-2 py-1 rounded hover:bg-gray-100 hover:text-[#050C29]"
-            aria-label="Close"
-          >×</button>
+        <div className="o-modal-header">
+          <div className="o-modal-title">Email preview</div>
+          <button className="o-modal-close" onClick={onClose} aria-label="Close">×</button>
         </div>
-        <div className="px-6 py-5 overflow-y-auto flex-1">
-          <div className="font-bold text-[15px] text-[#050C29] mb-2">{subject || '(no subject)'}</div>
-          <div className="flex flex-wrap gap-2 mb-5 text-[11px] text-[#6B7280]">
-            {sent    != null && <span><strong className="text-[#050C29]">{Number(sent).toLocaleString()}</strong> sent</span>}
-            {replies != null && <span><strong className="text-[#050C29]">{Number(replies).toLocaleString()}</strong> replies</span>}
-            {leads   != null && <span><strong className="text-[#050C29]">{Number(leads).toLocaleString()}</strong> leads</span>}
-            {bounces != null && <span><strong className="text-[#050C29]">{Number(bounces).toLocaleString()}</strong> bounces</span>}
-            {step    != null && <span>Step <strong className="text-[#050C29]">{step}</strong></span>}
+        <div className="o-modal-body" style={{ overflowY: 'auto' }}>
+          <div style={{ fontWeight: 700, fontSize: 15, color: '#050C29', marginBottom: 8 }}>{subject || '(no subject)'}</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 20, fontSize: 11, color: '#6B7280' }}>
+            {sent    != null && <span><strong style={{ color: '#050C29' }}>{Number(sent).toLocaleString()}</strong> sent</span>}
+            {replies != null && <span><strong style={{ color: '#050C29' }}>{Number(replies).toLocaleString()}</strong> replies</span>}
+            {leads   != null && <span><strong style={{ color: '#050C29' }}>{Number(leads).toLocaleString()}</strong> leads</span>}
+            {bounces != null && <span><strong style={{ color: '#050C29' }}>{Number(bounces).toLocaleString()}</strong> bounces</span>}
+            {step    != null && <span>Step <strong style={{ color: '#050C29' }}>{step}</strong></span>}
           </div>
           {isHtml ? (
             <div
-              className="text-[13px] leading-[1.6] text-[#1F2937] bg-[#F9FAFB] p-4 rounded-lg border border-[#E2E6F0]"
+              style={{ fontSize: 13, lineHeight: 1.6, color: '#1F2937', background: '#F9FAFB', padding: 16, borderRadius: 8, border: '1px solid #E2E6F0' }}
               dangerouslySetInnerHTML={{ __html: decoded }}
             />
           ) : (
-            <pre className="whitespace-pre-wrap text-[13px] leading-[1.6] font-[Inter,sans-serif] text-[#1F2937] bg-[#F9FAFB] p-4 rounded-lg border border-[#E2E6F0]">
+            <pre style={{ whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.6, fontFamily: 'Inter, sans-serif', color: '#1F2937', background: '#F9FAFB', padding: 16, borderRadius: 8, border: '1px solid #E2E6F0' }}>
               {decoded}
             </pre>
           )}
           {campaigns.length > 0 && (
-            <div className="mt-4 border border-[#E2E6F0] rounded-lg overflow-hidden">
-              <div className="px-3 py-2 bg-[#F3F4F6] text-[10px] font-bold text-[#6B7280] uppercase tracking-wider border-b border-[#E2E6F0] flex justify-between items-center">
+            <div style={{ marginTop: 16, border: '1px solid #E2E6F0', borderRadius: 8, overflow: 'hidden' }}>
+              <div style={{ padding: '8px 12px', background: '#F3F4F6', fontSize: 10, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: '1px solid #E2E6F0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span>Campaigns using this template</span>
                 <span>{campaigns.length}</span>
               </div>
-              <div className="max-h-[180px] overflow-y-auto bg-white">
+              <div style={{ maxHeight: 180, overflowY: 'auto', background: '#fff' }}>
                 {campaigns.map((c, i) => {
                   const cleaned = cleanCampName(c) || 'Apollo filter'
                   return (
-                    <div key={i} className="px-3 py-2 text-[12px] text-[#050C29] border-b border-[#F3F4F6] last:border-0 hover:bg-[#F9FAFB] truncate" title={c}>
+                    <div key={i} style={{ padding: '8px 12px', fontSize: 12, color: '#050C29', borderBottom: '1px solid #F3F4F6', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c}>
                       {cleaned}
                     </div>
                   )
@@ -687,8 +693,8 @@ export default function CopyPage() {
   function sortCaret(key: string, state: SortState) {
     if (state.key !== key) return null
     return state.dir === 'asc'
-      ? <span className="ml-1.5 inline-block border-l-4 border-r-4 border-b-[5px] border-l-transparent border-r-transparent border-b-current opacity-100" />
-      : <span className="ml-1.5 inline-block border-l-4 border-r-4 border-t-[5px] border-l-transparent border-r-transparent border-t-current opacity-100" />
+      ? <span style={{ marginLeft: 6, display: 'inline-block', width: 0, height: 0, borderLeft: '4px solid transparent', borderRight: '4px solid transparent', borderBottom: '5px solid currentColor' }} />
+      : <span style={{ marginLeft: 6, display: 'inline-block', width: 0, height: 0, borderLeft: '4px solid transparent', borderRight: '4px solid transparent', borderTop: '5px solid currentColor' }} />
   }
 
   // ── Template row click ──
@@ -741,56 +747,49 @@ export default function CopyPage() {
         .stale-badge { font-size: 10px; font-weight: 700; background: #FEF3C7; color: #D97706; padding: 2px 8px; border-radius: 4px; white-space: nowrap; }
       `}</style>
 
-      {/* Header */}
-      <div className="bg-[#050C29] px-8 py-4 border-b-[3px] border-[#1F6F78] flex items-center justify-between gap-4">
-        <div>
-          <span style={{ fontFamily: "'Genos', sans-serif", fontSize: '1.6rem', fontWeight: 800, color: '#fff', letterSpacing: '1px' }}>
-            Ottaly<span style={{ color: '#1F6F78' }}>.</span>
-          </span>
-          <span className="text-white/60 text-base font-medium ml-2">Copy Analytics</span>
+      <div className="o-page">
+        {/* Page header */}
+        <div className="o-page-header">
+          <div>
+            <div className="o-page-title">Copy Analytics</div>
+            <div className="o-page-sub">Template and subject line performance across workspaces</div>
+          </div>
+          <div className="o-page-actions">
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing || !wsId}
+              className="o-btn o-btn-ghost o-btn-sm"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+                <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+              </svg>
+              <span>{refreshLabel}</span>
+            </button>
+            <select
+              value={wsId}
+              onChange={e => handleWsChange(e.target.value)}
+              className="o-select"
+              style={{ minWidth: 200 }}
+            >
+              <option value="">Select workspace…</option>
+              {wsList.map(w => (
+                <option key={w.id} value={w.id}>{w.name || w.id}</option>
+              ))}
+            </select>
+          </div>
         </div>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={handleRefresh}
-            disabled={refreshing || !wsId}
-            className="inline-flex items-center gap-1.5 bg-white border border-[#E2E6F0] text-[#050C29] px-3 py-1.5 rounded text-[12px] font-semibold hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
-              <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
-              <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
-            </svg>
-            <span>{refreshLabel}</span>
-          </button>
-          <select
-            value={wsId}
-            onChange={e => handleWsChange(e.target.value)}
-            className="rounded-lg text-white text-[13px] font-medium px-3 py-1.5 cursor-pointer outline-none min-w-[200px]"
-            style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)' }}
-          >
-            <option value="" style={{ background: '#050C29' }}>Select workspace…</option>
-            {wsList.map(w => (
-              <option key={w.id} value={w.id} style={{ background: '#050C29' }}>{w.name || w.id}</option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      {/* Main content */}
-      <div className="max-w-[1500px] mx-auto px-8 py-7">
 
         {/* Loading / Error state */}
         {!data && (
-          <div className="py-12 text-center text-[#6B7280] text-sm">
+          <div className="o-empty" style={{ paddingTop: 48, paddingBottom: 48 }}>
             {error ? (
-              <p style={{ color: '#DC2626' }}>Error: {error}</p>
+              <span style={{ color: '#DC2626' }}>Error: {error}</span>
             ) : loading ? (
-              <>
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#1F6F78" strokeWidth="2" strokeLinecap="round"
-                  className="mx-auto mb-3 animate-spin"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4"/></svg>
-                <p>{loadMsg}</p>
-              </>
+              <><span className="o-spin" style={{ marginRight: 8 }} />{loadMsg}</>
             ) : (
-              <p>{loadMsg}</p>
+              <span>{loadMsg}</span>
             )}
           </div>
         )}
@@ -799,40 +798,46 @@ export default function CopyPage() {
         {data && (
           <>
             {/* Stats row */}
-            <div className="grid grid-cols-4 gap-4 mb-7 max-[900px]:grid-cols-2">
-              <div className="bg-white rounded-xl px-6 py-5 shadow-sm border-t-[3px] border-t-[#1F6F78]">
-                <div className="text-[10px] font-bold uppercase tracking-widest text-[#6B7280] mb-2">Total Sent</div>
-                <div style={{ fontFamily: "'Genos', sans-serif", fontSize: '2.4rem', fontWeight: 700, lineHeight: 1, color: '#050C29' }}>{totalSent.toLocaleString()}</div>
-                <div className="text-[12px] text-[#6B7280] mt-1">all-time from PlusVibe</div>
+            <div className="o-metrics o-metrics-4" style={{ marginBottom: 28 }}>
+              <div className="o-metric" style={{ borderTopColor: '#1F6F78' }}>
+                <div className="o-metric-label">Total Sent</div>
+                <div className="o-metric-val" style={{ color: '#224388' }}>{totalSent.toLocaleString()}</div>
+                <div className="o-metric-sub">all-time from PlusVibe</div>
               </div>
-              <div className="bg-white rounded-xl px-6 py-5 shadow-sm border-t-[3px] border-t-[#059669]">
-                <div className="text-[10px] font-bold uppercase tracking-widest text-[#6B7280] mb-2">Total Replies</div>
-                <div style={{ fontFamily: "'Genos', sans-serif", fontSize: '2.4rem', fontWeight: 700, lineHeight: 1, color: '#050C29' }}>{totalReplies.toLocaleString()}</div>
-                <div className="text-[12px] text-[#6B7280] mt-1">{replyRate} reply rate · all-time</div>
+              <div className="o-metric" style={{ borderTopColor: '#16A34A' }}>
+                <div className="o-metric-label">Total Replies</div>
+                <div className="o-metric-val" style={{ color: '#16A34A' }}>{totalReplies.toLocaleString()}</div>
+                <div className="o-metric-sub">{replyRate} reply rate · all-time</div>
               </div>
-              <div className="bg-white rounded-xl px-6 py-5 shadow-sm border-t-[3px] border-t-[#1F6F78]">
-                <div className="text-[10px] font-bold uppercase tracking-widest text-[#6B7280] mb-2">Leads Generated</div>
-                <div style={{ fontFamily: "'Genos', sans-serif", fontSize: '2.4rem', fontWeight: 700, lineHeight: 1, color: '#050C29' }}>{totalLeads.toLocaleString()}</div>
-                <div className="text-[12px] text-[#6B7280] mt-1">{proven} templates with positive signal</div>
+              <div className="o-metric" style={{ borderTopColor: '#1F6F78' }}>
+                <div className="o-metric-label">Leads Generated</div>
+                <div className="o-metric-val" style={{ color: '#224388' }}>{totalLeads.toLocaleString()}</div>
+                <div className="o-metric-sub">{proven} templates with positive signal</div>
               </div>
-              <div className={`bg-white rounded-xl px-6 py-5 shadow-sm border-t-[3px] ${staleCount > 0 ? 'border-t-[#D97706]' : 'border-t-[#059669]'}`}>
-                <div className="text-[10px] font-bold uppercase tracking-widest text-[#6B7280] mb-2">Stale Templates</div>
-                <div style={{ fontFamily: "'Genos', sans-serif", fontSize: '2.4rem', fontWeight: 700, lineHeight: 1, color: staleCount > 0 ? '#D97706' : '#050C29' }}>{staleCount}</div>
-                <div className="text-[12px] text-[#6B7280] mt-1">active, 20+ sends, zero response</div>
+              <div className="o-metric" style={{ borderTopColor: staleCount > 0 ? '#D97706' : '#16A34A' }}>
+                <div className="o-metric-label">Stale Templates</div>
+                <div className="o-metric-val" style={{ color: staleCount > 0 ? '#D97706' : '#224388' }}>{staleCount}</div>
+                <div className="o-metric-sub">active, 20+ sends, zero response</div>
               </div>
             </div>
 
             {/* Tabs */}
-            <div className="flex gap-1 mb-6 bg-white p-1 rounded-xl border border-[#E2E6F0] w-fit">
+            <div style={{ display: 'flex', gap: 4, marginBottom: 24, background: '#fff', padding: 4, borderRadius: 12, border: '1px solid #E2E6F0', width: 'fit-content' }}>
               {(['templates', 'subjects', 'steps', 'stale', 'diag'] as TabId[]).map(tab => (
                 <button
                   key={tab}
                   onClick={() => handleTabChange(tab)}
-                  className={`px-5 py-2 rounded-lg text-[13px] font-semibold transition-all ${
-                    activeTab === tab
-                      ? 'bg-[#050C29] text-white'
-                      : 'text-[#6B7280] hover:text-[#050C29]'
-                  }`}
+                  style={{
+                    padding: '8px 20px',
+                    borderRadius: 8,
+                    fontSize: 13,
+                    fontWeight: 600,
+                    border: 'none',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s',
+                    background: activeTab === tab ? '#050C29' : 'transparent',
+                    color: activeTab === tab ? '#fff' : '#6B7280',
+                  }}
                 >
                   {tab === 'templates' ? 'Templates' :
                    tab === 'subjects'  ? 'Subject Lines' :
@@ -846,112 +851,117 @@ export default function CopyPage() {
             {/* Templates tab */}
             {activeTab === 'templates' && (
               <div>
-                <div className="flex items-center gap-4 mb-5">
-                  <h2 style={{ fontFamily: "'Genos', sans-serif", fontSize: '1.2rem', fontWeight: 700, letterSpacing: '1.5px', textTransform: 'uppercase', color: '#050C29', whiteSpace: 'nowrap' }}>
-                    Template Performance
-                  </h2>
-                  <span className="text-[11px] font-bold bg-[#1F6F78] text-white rounded-full px-3 py-0.5 whitespace-nowrap">{(data.templates || []).length} templates</span>
-                  <div className="flex-1 h-px bg-[#E2E6F0]" />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20 }}>
+                  <div className="o-section-h" style={{ margin: 0 }}>Template Performance</div>
+                  <span style={{ fontSize: 11, fontWeight: 700, background: '#1F6F78', color: '#fff', borderRadius: 999, padding: '2px 12px', whiteSpace: 'nowrap' }}>{(data.templates || []).length} templates</span>
+                  <div style={{ flex: 1, height: 1, background: '#E2E6F0' }} />
                 </div>
-                <div className="inline-flex items-center gap-1.5 text-[11px] text-[#6B7280] bg-[#F3F4F6] px-3 py-1.5 rounded-lg mb-4">
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#6B7280', background: '#F3F4F6', padding: '6px 12px', borderRadius: 8, marginBottom: 16 }}>
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
                   Reply rate and lead rate shown only for templates with 20+ sends — below that the numbers aren't meaningful.
                 </div>
-                <div className="bg-white rounded-xl shadow-sm overflow-hidden mb-7">
-                  <table className="w-full border-collapse">
-                    <thead>
-                      <tr>
-                        {([
-                          { key: 'subject',      label: 'Subject / Body preview', num: false },
-                          { key: 'score',        label: 'Score',       num: true },
-                          { key: 'sent',         label: 'Sent',        num: true },
-                          { key: 'replies',      label: 'Replies',     num: true },
-                          { key: 'reply_rate',   label: 'Reply rate',  num: true },
-                          { key: 'leads',        label: 'Leads',       num: true },
-                          { key: 'lead_rate',    label: 'Lead rate',   num: true },
-                          { key: 'bounce_rate',  label: 'Bounce rate', num: true },
-                          { key: 'step',         label: 'Step',        num: false },
-                          { key: 'status',       label: 'Status',      num: false },
-                        ] as { key: string; label: string; num: boolean }[]).map(col => (
-                          <th
-                            key={col.key}
-                            onClick={() => handleTplSort(col.key)}
-                            className={`bg-[#050C29] text-white/70 text-[10px] font-bold uppercase tracking-widest px-3.5 py-2.5 cursor-pointer select-none hover:bg-white/5 whitespace-nowrap ${col.num ? 'text-right' : 'text-left'}`}
-                          >
-                            {col.label}{sortCaret(col.key, tplSort)}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {templates.length === 0 ? (
-                        <tr><td colSpan={10} className="py-12 text-center text-[#6B7280] text-sm">No template data yet for this workspace.</td></tr>
-                      ) : templates.map(t => {
-                        const stepRange = t.min_step === t.max_step
-                          ? `Step ${t.min_step ?? '?'}`
-                          : `Steps ${t.min_step}–${t.max_step}`
-                        const camps = (t.campaigns || []).slice(0, 3)
-                        const score = computeScore(t)
-                        return (
-                          <tr
-                            key={t.content_hash}
-                            onClick={() => handleTplRowClick(t)}
-                            className="border-b border-[#E2E6F0] last:border-0 hover:bg-[rgba(31,111,120,0.04)] cursor-pointer transition-colors"
-                          >
-                            <td className="px-3.5 py-3 text-[13px] align-top max-w-[380px]">
-                              <div className="font-semibold text-[#050C29] mb-0.5 text-[13px]">
-                                {decodeHtml(t.subject || '') || '(no subject)'}
-                              </div>
-                              <div className="text-[11px] text-[#6B7280] leading-[1.45]">
-                                {decodeHtml(t.body_excerpt || '').slice(0, 160)}
-                              </div>
-                              {camps.length > 0 && (
-                                <div className="flex flex-wrap gap-1 mt-1">
-                                  {camps.map((c, i) => {
-                                    const n = cleanCampName(c)
-                                    return n ? (
-                                      <span key={i} className="text-[10px] font-semibold bg-[#EEF2FF] text-[#4338CA] px-1.5 py-0.5 rounded whitespace-nowrap" title={c}>{n}</span>
-                                    ) : null
-                                  })}
-                                  {(t.campaigns?.length ?? 0) > 3 && (
-                                    <span className="text-[10px] font-semibold bg-[#EEF2FF] text-[#4338CA] px-1.5 py-0.5 rounded">+{(t.campaigns?.length ?? 0) - 3} more</span>
-                                  )}
+                <div className="o-card" style={{ marginBottom: 28, padding: 0, overflow: 'hidden' }}>
+                  <div className="o-table-wrap" style={{ margin: 0 }}>
+                    <table className="o-table">
+                      <thead>
+                        <tr>
+                          {([
+                            { key: 'subject',      label: 'Subject / Body preview', num: false },
+                            { key: 'score',        label: 'Score',       num: true },
+                            { key: 'sent',         label: 'Sent',        num: true },
+                            { key: 'replies',      label: 'Replies',     num: true },
+                            { key: 'reply_rate',   label: 'Reply rate',  num: true },
+                            { key: 'leads',        label: 'Leads',       num: true },
+                            { key: 'lead_rate',    label: 'Lead rate',   num: true },
+                            { key: 'bounce_rate',  label: 'Bounce rate', num: true },
+                            { key: 'step',         label: 'Step',        num: false },
+                            { key: 'status',       label: 'Status',      num: false },
+                          ] as { key: string; label: string; num: boolean }[]).map(col => (
+                            <th
+                              key={col.key}
+                              onClick={() => handleTplSort(col.key)}
+                              style={{
+                                background: '#050C29', color: 'rgba(255,255,255,0.7)',
+                                fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em',
+                                padding: '10px 14px', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap',
+                                textAlign: col.num ? 'right' : 'left',
+                              }}
+                            >
+                              {col.label}{sortCaret(col.key, tplSort)}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {templates.length === 0 ? (
+                          <tr><td colSpan={10}><div className="o-empty">No template data yet for this workspace.</div></td></tr>
+                        ) : templates.map(t => {
+                          const stepRange = t.min_step === t.max_step
+                            ? `Step ${t.min_step ?? '?'}`
+                            : `Steps ${t.min_step}–${t.max_step}`
+                          const camps = (t.campaigns || []).slice(0, 3)
+                          const score = computeScore(t)
+                          return (
+                            <tr
+                              key={t.content_hash}
+                              onClick={() => handleTplRowClick(t)}
+                              style={{ cursor: 'pointer' }}
+                            >
+                              <td style={{ padding: '12px 14px', fontSize: 13, verticalAlign: 'top', maxWidth: 380 }}>
+                                <div style={{ fontWeight: 600, color: '#050C29', marginBottom: 2, fontSize: 13 }}>
+                                  {decodeHtml(t.subject || '') || '(no subject)'}
                                 </div>
-                              )}
-                              <FlagBadges r={t} />
-                            </td>
-                            <td className="px-3.5 py-3 text-right align-top"><ScoreBadge score={score} /></td>
-                            <td className="px-3.5 py-3 text-right align-top font-[tabular-nums]">
-                              <span className={`count ${t.sent === 0 ? 'zero' : ''}`}>{fmt(t.sent)}</span>
-                            </td>
-                            <td className="px-3.5 py-3 text-right align-top font-[tabular-nums]">
-                              <span className={`count ${t.replies === 0 ? 'zero' : ''}`}>{fmt(t.replies)}</span>
-                            </td>
-                            <td className="px-3.5 py-3 text-right align-top font-[tabular-nums]">
-                              <RateCellTrend num={t.replies} den={t.sent} num7={t.replies_7d} den7={t.sent_7d} />
-                            </td>
-                            <td className="px-3.5 py-3 text-right align-top font-[tabular-nums]">
-                              <span className={`count ${t.leads === 0 ? 'zero' : ''}`}>{fmt(t.leads)}</span>
-                            </td>
-                            <td className="px-3.5 py-3 text-right align-top font-[tabular-nums]">
-                              <RateCell num={t.leads} den={t.sent} />
-                            </td>
-                            <td className="px-3.5 py-3 text-right align-top font-[tabular-nums]">
-                              <RateCell num={t.bounces} den={t.sent} />
-                            </td>
-                            <td className="px-3.5 py-3 align-top">
-                              <span className="step-badge">{stepRange}</span>
-                            </td>
-                            <td className="px-3.5 py-3 text-[13px] align-top whitespace-nowrap">
-                              <CampaignStatusBadge t={t} />
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                  <div className="text-[11px] text-[#6B7280] px-3.5 py-2.5 bg-[#F9FAFB] border-t border-[#E2E6F0] rounded-b-xl">
-                    Click any column to sort. <strong className="text-[#050C29]">All-time stats from PlusVibe</strong> — workspace totals above are all-time from PlusVibe. <strong className="text-[#050C29]">Score</strong> 0–100 weighs reply rate, lead rate, bounce rate and volume. <strong className="text-[#050C29]">Profiled</strong> = high-volume copy with collapsed responses — stop using it.
+                                <div style={{ fontSize: 11, color: '#6B7280', lineHeight: 1.45 }}>
+                                  {decodeHtml(t.body_excerpt || '').slice(0, 160)}
+                                </div>
+                                {camps.length > 0 && (
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+                                    {camps.map((c, i) => {
+                                      const n = cleanCampName(c)
+                                      return n ? (
+                                        <span key={i} style={{ fontSize: 10, fontWeight: 600, background: '#EEF2FF', color: '#4338CA', padding: '2px 6px', borderRadius: 4, whiteSpace: 'nowrap' }} title={c}>{n}</span>
+                                      ) : null
+                                    })}
+                                    {(t.campaigns?.length ?? 0) > 3 && (
+                                      <span style={{ fontSize: 10, fontWeight: 600, background: '#EEF2FF', color: '#4338CA', padding: '2px 6px', borderRadius: 4 }}>+{(t.campaigns?.length ?? 0) - 3} more</span>
+                                    )}
+                                  </div>
+                                )}
+                                <FlagBadges r={t} />
+                              </td>
+                              <td style={{ padding: '12px 14px', textAlign: 'right', verticalAlign: 'top' }}><ScoreBadge score={score} /></td>
+                              <td style={{ padding: '12px 14px', textAlign: 'right', verticalAlign: 'top', fontVariantNumeric: 'tabular-nums' }}>
+                                <span className={`count ${t.sent === 0 ? 'zero' : ''}`}>{fmt(t.sent)}</span>
+                              </td>
+                              <td style={{ padding: '12px 14px', textAlign: 'right', verticalAlign: 'top', fontVariantNumeric: 'tabular-nums' }}>
+                                <span className={`count ${t.replies === 0 ? 'zero' : ''}`}>{fmt(t.replies)}</span>
+                              </td>
+                              <td style={{ padding: '12px 14px', textAlign: 'right', verticalAlign: 'top', fontVariantNumeric: 'tabular-nums' }}>
+                                <RateCellTrend num={t.replies} den={t.sent} num7={t.replies_7d} den7={t.sent_7d} />
+                              </td>
+                              <td style={{ padding: '12px 14px', textAlign: 'right', verticalAlign: 'top', fontVariantNumeric: 'tabular-nums' }}>
+                                <span className={`count ${t.leads === 0 ? 'zero' : ''}`}>{fmt(t.leads)}</span>
+                              </td>
+                              <td style={{ padding: '12px 14px', textAlign: 'right', verticalAlign: 'top', fontVariantNumeric: 'tabular-nums' }}>
+                                <RateCell num={t.leads} den={t.sent} />
+                              </td>
+                              <td style={{ padding: '12px 14px', textAlign: 'right', verticalAlign: 'top', fontVariantNumeric: 'tabular-nums' }}>
+                                <RateCell num={t.bounces} den={t.sent} />
+                              </td>
+                              <td style={{ padding: '12px 14px', verticalAlign: 'top' }}>
+                                <span className="step-badge">{stepRange}</span>
+                              </td>
+                              <td style={{ padding: '12px 14px', fontSize: 13, verticalAlign: 'top', whiteSpace: 'nowrap' }}>
+                                <CampaignStatusBadge t={t} />
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{ fontSize: 11, color: '#6B7280', padding: '10px 14px', background: '#F9FAFB', borderTop: '1px solid #E2E6F0', borderRadius: '0 0 8px 8px' }}>
+                    Click any column to sort. <strong style={{ color: '#050C29' }}>All-time stats from PlusVibe</strong> — workspace totals above are all-time from PlusVibe. <strong style={{ color: '#050C29' }}>Score</strong> 0–100 weighs reply rate, lead rate, bounce rate and volume. <strong style={{ color: '#050C29' }}>Profiled</strong> = high-volume copy with collapsed responses — stop using it.
                   </div>
                 </div>
               </div>
@@ -960,93 +970,98 @@ export default function CopyPage() {
             {/* Subjects tab */}
             {activeTab === 'subjects' && (
               <div>
-                <div className="flex items-center gap-4 mb-5">
-                  <h2 style={{ fontFamily: "'Genos', sans-serif", fontSize: '1.2rem', fontWeight: 700, letterSpacing: '1.5px', textTransform: 'uppercase', color: '#050C29', whiteSpace: 'nowrap' }}>
-                    Subject Line Performance
-                  </h2>
-                  <span className="text-[11px] font-bold bg-[#1F6F78] text-white rounded-full px-3 py-0.5 whitespace-nowrap">{(data.subjects || []).length} subjects</span>
-                  <div className="flex-1 h-px bg-[#E2E6F0]" />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20 }}>
+                  <div className="o-section-h" style={{ margin: 0 }}>Subject Line Performance</div>
+                  <span style={{ fontSize: 11, fontWeight: 700, background: '#1F6F78', color: '#fff', borderRadius: 999, padding: '2px 12px', whiteSpace: 'nowrap' }}>{(data.subjects || []).length} subjects</span>
+                  <div style={{ flex: 1, height: 1, background: '#E2E6F0' }} />
                 </div>
-                <div className="inline-flex items-center gap-1.5 text-[11px] text-[#6B7280] bg-[#F3F4F6] px-3 py-1.5 rounded-lg mb-4">
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#6B7280', background: '#F3F4F6', padding: '6px 12px', borderRadius: 8, marginBottom: 16 }}>
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
                   Same subject used across different bodies or campaigns is pooled. Rates shown for 20+ sends only.
                 </div>
-                <div className="bg-white rounded-xl shadow-sm overflow-hidden mb-7">
-                  <table className="w-full border-collapse">
-                    <thead>
-                      <tr>
-                        {([
-                          { key: 'subject',        label: 'Subject line', num: false },
-                          { key: 'score',          label: 'Score',        num: true },
-                          { key: 'campaign_count', label: 'Campaigns',    num: true },
-                          { key: 'sent',           label: 'Sent',         num: true },
-                          { key: 'replies',        label: 'Replies',      num: true },
-                          { key: 'reply_rate',     label: 'Reply rate',   num: true },
-                          { key: 'leads',          label: 'Leads',        num: true },
-                          { key: 'lead_rate',      label: 'Lead rate',    num: true },
-                          { key: 'status',         label: 'Status',       num: false },
-                        ] as { key: string; label: string; num: boolean }[]).map(col => (
-                          <th
-                            key={col.key}
-                            onClick={() => handleSubSort(col.key)}
-                            className={`bg-[#050C29] text-white/70 text-[10px] font-bold uppercase tracking-widest px-3.5 py-2.5 cursor-pointer select-none hover:bg-white/5 whitespace-nowrap ${col.num ? 'text-right' : 'text-left'}`}
-                          >
-                            {col.label}{sortCaret(col.key, subSort)}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {subjects.length === 0 ? (
-                        <tr><td colSpan={9} className="py-12 text-center text-[#6B7280] text-sm">No subject data yet.</td></tr>
-                      ) : subjects.map(s => {
-                        const score = computeScore(s)
-                        const flags = profileFlags(s)
-                        const statusEl = flags.length
-                          ? <div className="flex flex-wrap gap-1">{flags.map(f => <span key={f.cls} className={`flag flag-${f.cls}`}>{f.label}</span>)}</div>
-                          : null
-                        return (
-                          <tr
-                            key={s.subject_hash}
-                            onClick={() => handleSubRowClick(s)}
-                            className="border-b border-[#E2E6F0] last:border-0 hover:bg-[rgba(31,111,120,0.04)] cursor-pointer transition-colors"
-                          >
-                            <td className="px-3.5 py-3 text-[13px] align-top">
-                              <div className="font-semibold text-[#050C29] mb-0.5">{s.subject || '(blank)'}</div>
-                              <div className="text-[11px] text-[#6B7280]">
-                                {s.template_count > 1 ? `${s.template_count} body variants` : '1 body variant'}
-                              </div>
-                            </td>
-                            <td className="px-3.5 py-3 text-right align-top"><ScoreBadge score={score} /></td>
-                            <td className="px-3.5 py-3 text-right align-top font-[tabular-nums]">
-                              <span className="count">{fmt(s.campaign_count)}</span>
-                            </td>
-                            <td className="px-3.5 py-3 text-right align-top font-[tabular-nums]">
-                              <span className="count">{fmt(s.sent)}</span>
-                            </td>
-                            <td className="px-3.5 py-3 text-right align-top font-[tabular-nums]">
-                              <span className={`count ${s.replies === 0 ? 'zero' : ''}`}>{fmt(s.replies)}</span>
-                            </td>
-                            <td className="px-3.5 py-3 text-right align-top font-[tabular-nums]">
-                              <RateCellTrend num={s.replies} den={s.sent} num7={s.replies_7d} den7={s.sent_7d} />
-                            </td>
-                            <td className="px-3.5 py-3 text-right align-top font-[tabular-nums]">
-                              <span className={`count ${s.leads === 0 ? 'zero' : ''}`}>{fmt(s.leads)}</span>
-                            </td>
-                            <td className="px-3.5 py-3 text-right align-top font-[tabular-nums]">
-                              <RateCell num={s.leads} den={s.sent} />
-                            </td>
-                            <td className="px-3.5 py-3 text-[13px] align-top">
-                              {statusEl}
-                              <span className="text-[11px]"><CampaignStatusBadge t={s} /></span>
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                  <div className="text-[11px] text-[#6B7280] px-3.5 py-2.5 bg-[#F9FAFB] border-t border-[#E2E6F0] rounded-b-xl">
-                    Click any column to sort. <strong className="text-[#050C29]">All-time stats from PlusVibe</strong> — workspace totals above are all-time from PlusVibe. <strong className="text-[#050C29]">Score</strong> 0–100. <strong className="text-[#050C29]">Profiled</strong> = burnt copy — stop using it.
+                <div className="o-card" style={{ marginBottom: 28, padding: 0, overflow: 'hidden' }}>
+                  <div className="o-table-wrap" style={{ margin: 0 }}>
+                    <table className="o-table">
+                      <thead>
+                        <tr>
+                          {([
+                            { key: 'subject',        label: 'Subject line', num: false },
+                            { key: 'score',          label: 'Score',        num: true },
+                            { key: 'campaign_count', label: 'Campaigns',    num: true },
+                            { key: 'sent',           label: 'Sent',         num: true },
+                            { key: 'replies',        label: 'Replies',      num: true },
+                            { key: 'reply_rate',     label: 'Reply rate',   num: true },
+                            { key: 'leads',          label: 'Leads',        num: true },
+                            { key: 'lead_rate',      label: 'Lead rate',    num: true },
+                            { key: 'status',         label: 'Status',       num: false },
+                          ] as { key: string; label: string; num: boolean }[]).map(col => (
+                            <th
+                              key={col.key}
+                              onClick={() => handleSubSort(col.key)}
+                              style={{
+                                background: '#050C29', color: 'rgba(255,255,255,0.7)',
+                                fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em',
+                                padding: '10px 14px', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap',
+                                textAlign: col.num ? 'right' : 'left',
+                              }}
+                            >
+                              {col.label}{sortCaret(col.key, subSort)}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {subjects.length === 0 ? (
+                          <tr><td colSpan={9}><div className="o-empty">No subject data yet.</div></td></tr>
+                        ) : subjects.map(s => {
+                          const score = computeScore(s)
+                          const flags = profileFlags(s)
+                          const statusEl = flags.length
+                            ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>{flags.map(f => <span key={f.cls} className={`flag flag-${f.cls}`}>{f.label}</span>)}</div>
+                            : null
+                          return (
+                            <tr
+                              key={s.subject_hash}
+                              onClick={() => handleSubRowClick(s)}
+                              style={{ cursor: 'pointer' }}
+                            >
+                              <td style={{ padding: '12px 14px', fontSize: 13, verticalAlign: 'top' }}>
+                                <div style={{ fontWeight: 600, color: '#050C29', marginBottom: 2 }}>{s.subject || '(blank)'}</div>
+                                <div style={{ fontSize: 11, color: '#6B7280' }}>
+                                  {s.template_count > 1 ? `${s.template_count} body variants` : '1 body variant'}
+                                </div>
+                              </td>
+                              <td style={{ padding: '12px 14px', textAlign: 'right', verticalAlign: 'top' }}><ScoreBadge score={score} /></td>
+                              <td style={{ padding: '12px 14px', textAlign: 'right', verticalAlign: 'top', fontVariantNumeric: 'tabular-nums' }}>
+                                <span className="count">{fmt(s.campaign_count)}</span>
+                              </td>
+                              <td style={{ padding: '12px 14px', textAlign: 'right', verticalAlign: 'top', fontVariantNumeric: 'tabular-nums' }}>
+                                <span className="count">{fmt(s.sent)}</span>
+                              </td>
+                              <td style={{ padding: '12px 14px', textAlign: 'right', verticalAlign: 'top', fontVariantNumeric: 'tabular-nums' }}>
+                                <span className={`count ${s.replies === 0 ? 'zero' : ''}`}>{fmt(s.replies)}</span>
+                              </td>
+                              <td style={{ padding: '12px 14px', textAlign: 'right', verticalAlign: 'top', fontVariantNumeric: 'tabular-nums' }}>
+                                <RateCellTrend num={s.replies} den={s.sent} num7={s.replies_7d} den7={s.sent_7d} />
+                              </td>
+                              <td style={{ padding: '12px 14px', textAlign: 'right', verticalAlign: 'top', fontVariantNumeric: 'tabular-nums' }}>
+                                <span className={`count ${s.leads === 0 ? 'zero' : ''}`}>{fmt(s.leads)}</span>
+                              </td>
+                              <td style={{ padding: '12px 14px', textAlign: 'right', verticalAlign: 'top', fontVariantNumeric: 'tabular-nums' }}>
+                                <RateCell num={s.leads} den={s.sent} />
+                              </td>
+                              <td style={{ padding: '12px 14px', fontSize: 13, verticalAlign: 'top' }}>
+                                {statusEl}
+                                <span style={{ fontSize: 11 }}><CampaignStatusBadge t={s} /></span>
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{ fontSize: 11, color: '#6B7280', padding: '10px 14px', background: '#F9FAFB', borderTop: '1px solid #E2E6F0', borderRadius: '0 0 8px 8px' }}>
+                    Click any column to sort. <strong style={{ color: '#050C29' }}>All-time stats from PlusVibe</strong> — workspace totals above are all-time from PlusVibe. <strong style={{ color: '#050C29' }}>Score</strong> 0–100. <strong style={{ color: '#050C29' }}>Profiled</strong> = burnt copy — stop using it.
                   </div>
                 </div>
               </div>
@@ -1055,55 +1070,55 @@ export default function CopyPage() {
             {/* Steps tab */}
             {activeTab === 'steps' && (
               <div>
-                <div className="flex items-center gap-4 mb-5">
-                  <h2 style={{ fontFamily: "'Genos', sans-serif", fontSize: '1.2rem', fontWeight: 700, letterSpacing: '1.5px', textTransform: 'uppercase', color: '#050C29', whiteSpace: 'nowrap' }}>
-                    Performance by Step
-                  </h2>
-                  <div className="flex-1 h-px bg-[#E2E6F0]" />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20 }}>
+                  <div className="o-section-h" style={{ margin: 0 }}>Performance by Step</div>
+                  <div style={{ flex: 1, height: 1, background: '#E2E6F0' }} />
                 </div>
-                <div className="bg-white rounded-xl shadow-sm p-6 mb-7">
-                  {steps.length === 0 ? (
-                    <div className="py-8 text-center text-[#6B7280] text-sm">No step data yet.</div>
-                  ) : (
-                    <div className="flex flex-col gap-4">
-                      {steps.map(r => {
-                        const step    = r.step ?? '?'
-                        const sent    = Number(r.sent    || 0)
-                        const replies = Number(r.replies || 0)
-                        const leads   = Number(r.leads   || 0)
-                        const rBar    = Math.round(replies / maxReplies * 100)
-                        const lBar    = Math.round(leads   / maxLeads   * 100)
-                        const replyRateTxt = sent >= 20 ? (replies / sent * 100).toFixed(1) + '%' : '–'
-                        const leadRateTxt  = sent >= 20 ? (leads   / sent * 100).toFixed(1) + '%' : '–'
-                        return (
-                          <div key={step} className="grid items-center gap-4" style={{ gridTemplateColumns: '80px 1fr 90px' }}>
-                            <div className="text-[12px] font-bold text-[#6B7280] uppercase tracking-[0.5px]">Step {step}</div>
-                            <div className="flex flex-col gap-1">
-                              <div className="flex items-center gap-2">
-                                <div className="flex-1 h-2 bg-[#F3F4F6] rounded-full overflow-hidden">
-                                  <div className="h-full rounded-full transition-all duration-500" style={{ width: `${rBar}%`, background: '#1F6F78' }} />
+                <div className="o-card" style={{ marginBottom: 28 }}>
+                  <div className="o-card-body">
+                    {steps.length === 0 ? (
+                      <div className="o-empty">No step data yet.</div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                        {steps.map(r => {
+                          const step    = r.step ?? '?'
+                          const sent    = Number(r.sent    || 0)
+                          const replies = Number(r.replies || 0)
+                          const leads   = Number(r.leads   || 0)
+                          const rBar    = Math.round(replies / maxReplies * 100)
+                          const lBar    = Math.round(leads   / maxLeads   * 100)
+                          const replyRateTxt = sent >= 20 ? (replies / sent * 100).toFixed(1) + '%' : '–'
+                          const leadRateTxt  = sent >= 20 ? (leads   / sent * 100).toFixed(1) + '%' : '–'
+                          return (
+                            <div key={step} style={{ display: 'grid', alignItems: 'center', gap: 16, gridTemplateColumns: '80px 1fr 90px' }}>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Step {step}</div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                  <div style={{ flex: 1, height: 8, background: '#F3F4F6', borderRadius: 99, overflow: 'hidden' }}>
+                                    <div style={{ width: `${rBar}%`, height: '100%', borderRadius: 99, background: '#1F6F78', transition: 'width 0.5s' }} />
+                                  </div>
+                                  <div style={{ fontSize: 10, color: '#6B7280', width: 140, textAlign: 'right', whiteSpace: 'nowrap' }}>{fmt(replies)} replies ({replyRateTxt})</div>
                                 </div>
-                                <div className="text-[10px] text-[#6B7280] w-[140px] text-right whitespace-nowrap">{fmt(replies)} replies ({replyRateTxt})</div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                  <div style={{ flex: 1, height: 8, background: '#F3F4F6', borderRadius: 99, overflow: 'hidden' }}>
+                                    <div style={{ width: `${lBar}%`, height: '100%', borderRadius: 99, background: '#059669', transition: 'width 0.5s' }} />
+                                  </div>
+                                  <div style={{ fontSize: 10, color: '#6B7280', width: 140, textAlign: 'right', whiteSpace: 'nowrap' }}>{fmt(leads)} leads ({leadRateTxt})</div>
+                                </div>
                               </div>
-                              <div className="flex items-center gap-2">
-                                <div className="flex-1 h-2 bg-[#F3F4F6] rounded-full overflow-hidden">
-                                  <div className="h-full rounded-full transition-all duration-500" style={{ width: `${lBar}%`, background: '#059669' }} />
-                                </div>
-                                <div className="text-[10px] text-[#6B7280] w-[140px] text-right whitespace-nowrap">{fmt(leads)} leads ({leadRateTxt})</div>
+                              <div style={{ textAlign: 'right' }}>
+                                <div style={{ fontFamily: "'Genos', sans-serif", fontSize: '1.1rem', fontWeight: 700, color: '#050C29' }}>{fmt(sent)}</div>
+                                <div style={{ fontSize: 10, color: '#6B7280' }}>sent</div>
                               </div>
                             </div>
-                            <div className="text-right">
-                              <div style={{ fontFamily: "'Genos', sans-serif", fontSize: '1.1rem', fontWeight: 700, color: '#050C29' }}>{fmt(sent)}</div>
-                              <div className="text-[10px] text-[#6B7280]">sent</div>
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )}
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <div className="text-[11px] text-[#6B7280] px-3.5 py-2.5 bg-white border border-[#E2E6F0] rounded-lg mb-7">
-                  <strong className="text-[#050C29]">All-time stats from PlusVibe</strong> (sent, replies, bounces per step), plus lead counts from webhook events. Workspace totals above are last-N-days from webhooks. Bars are relative to the best-performing step.
+                <div style={{ fontSize: 11, color: '#6B7280', padding: '10px 14px', background: '#fff', border: '1px solid #E2E6F0', borderRadius: 8, marginBottom: 28 }}>
+                  <strong style={{ color: '#050C29' }}>All-time stats from PlusVibe</strong> (sent, replies, bounces per step), plus lead counts from webhook events. Workspace totals above are last-N-days from webhooks. Bars are relative to the best-performing step.
                 </div>
               </div>
             )}
@@ -1111,91 +1126,93 @@ export default function CopyPage() {
             {/* Decaying Copy tab */}
             {activeTab === 'stale' && (
               <div>
-                <div className="flex items-center gap-4 mb-5">
-                  <h2 style={{ fontFamily: "'Genos', sans-serif", fontSize: '1.2rem', fontWeight: 700, letterSpacing: '1.5px', textTransform: 'uppercase', color: '#050C29', whiteSpace: 'nowrap' }}>
-                    Decaying Copy
-                  </h2>
-                  <span className="text-[11px] font-bold bg-[#D97706] text-white rounded-full px-3 py-0.5 whitespace-nowrap">{stale.length} flagged</span>
-                  <div className="flex-1 h-px bg-[#E2E6F0]" />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20 }}>
+                  <div className="o-section-h" style={{ margin: 0 }}>Decaying Copy</div>
+                  <span style={{ fontSize: 11, fontWeight: 700, background: '#D97706', color: '#fff', borderRadius: 999, padding: '2px 12px', whiteSpace: 'nowrap' }}>{stale.length} flagged</span>
+                  <div style={{ flex: 1, height: 1, background: '#E2E6F0' }} />
                 </div>
-                <div className="inline-flex items-center gap-1.5 text-[11px] text-[#6B7280] bg-[#F3F4F6] px-3 py-1.5 rounded-lg mb-4">
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#6B7280', background: '#F3F4F6', padding: '6px 12px', borderRadius: 8, marginBottom: 16 }}>
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                  Active templates flagged as <strong className="mx-0.5">profiled · avoid</strong>, high bounce, or gone quiet. Remove to hide from all copy views.
+                  Active templates flagged as <strong style={{ margin: '0 2px' }}>profiled · avoid</strong>, high bounce, or gone quiet. Remove to hide from all copy views.
                 </div>
-                <div className="bg-white rounded-xl shadow-sm overflow-hidden mb-7">
-                  <table className="w-full border-collapse">
-                    <thead>
-                      <tr>
-                        <th className="bg-[#050C29] text-white/70 text-[10px] font-bold uppercase tracking-widest px-3.5 py-2.5 text-left">Subject / Body preview</th>
-                        <th className="bg-[#050C29] text-white/70 text-[10px] font-bold uppercase tracking-widest px-3.5 py-2.5 text-right">All-time signal</th>
-                        <th className="bg-[#050C29] text-white/70 text-[10px] font-bold uppercase tracking-widest px-3.5 py-2.5 text-right">Last 14d signal</th>
-                        <th className="bg-[#050C29] text-white/70 text-[10px] font-bold uppercase tracking-widest px-3.5 py-2.5 text-right">Last signal</th>
-                        <th className="bg-[#050C29] text-white/70 text-[10px] font-bold uppercase tracking-widest px-3.5 py-2.5 text-left">Campaigns</th>
-                        <th className="bg-[#050C29] text-white/70 text-[10px] font-bold uppercase tracking-widest px-3.5 py-2.5 text-left">Step</th>
-                        <th className="bg-[#050C29] text-white/70 text-[10px] font-bold uppercase tracking-widest px-3.5 py-2.5 text-left">Running since</th>
-                        <th className="bg-[#050C29] text-white/70 text-[10px] font-bold uppercase tracking-widest px-3.5 py-2.5"></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {stale.length === 0 ? (
+                <div className="o-card" style={{ marginBottom: 28, padding: 0, overflow: 'hidden' }}>
+                  <div className="o-table-wrap" style={{ margin: 0 }}>
+                    <table className="o-table">
+                      <thead>
                         <tr>
-                          <td colSpan={8} className="py-12 text-center text-[#6B7280] text-sm">
-                            <div className="font-semibold text-[#050C29] mb-1">No flagged templates</div>
-                            No active templates match the profiled, high-bounce, or gone-quiet criteria.
-                          </td>
+                          <th style={{ background: '#050C29', color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', padding: '10px 14px', textAlign: 'left' }}>Subject / Body preview</th>
+                          <th style={{ background: '#050C29', color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', padding: '10px 14px', textAlign: 'right' }}>All-time signal</th>
+                          <th style={{ background: '#050C29', color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', padding: '10px 14px', textAlign: 'right' }}>Last 14d signal</th>
+                          <th style={{ background: '#050C29', color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', padding: '10px 14px', textAlign: 'right' }}>Last signal</th>
+                          <th style={{ background: '#050C29', color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', padding: '10px 14px', textAlign: 'left' }}>Campaigns</th>
+                          <th style={{ background: '#050C29', color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', padding: '10px 14px', textAlign: 'left' }}>Step</th>
+                          <th style={{ background: '#050C29', color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', padding: '10px 14px', textAlign: 'left' }}>Running since</th>
+                          <th style={{ background: '#050C29', color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', padding: '10px 14px' }}></th>
                         </tr>
-                      ) : stale.map(t => {
-                        const camps      = (t.campaigns || []).slice(0, 3)
-                        const totalSig   = Number(t.total_signal)  || 0
-                        const sig14d     = Number(t.signal_14d)    || 0
-                        const isSuppressing = !!suppressing[t.content_hash]
-                        return (
-                          <tr key={t.content_hash} className="border-b border-[#E2E6F0] last:border-0">
-                            <td className="px-3.5 py-3 align-top">
-                              <span className="stale-badge">Avoid</span>
-                              <div className="font-semibold text-[#050C29] text-[13px] mt-1">{t.subject || '(no subject)'}</div>
-                              <div className="text-[11px] text-[#6B7280]">{decodeHtml(t.body_excerpt || '')}</div>
-                            </td>
-                            <td className="px-3.5 py-3 text-right align-top font-[tabular-nums]">
-                              <span className="count">{fmt(totalSig)}</span>
-                            </td>
-                            <td className="px-3.5 py-3 text-right align-top font-[tabular-nums]">
-                              <span className={`count ${sig14d === 0 ? 'zero' : ''}`}>{fmt(sig14d)}</span>
-                            </td>
-                            <td className="px-3.5 py-3 text-[12px] text-[#6B7280] align-top">{age(t.last_signal_at)}</td>
-                            <td className="px-3.5 py-3 align-top">
-                              {camps.length > 0 ? (
-                                <div className="flex flex-wrap gap-1">
-                                  {camps.map((c, i) => {
-                                    const n = cleanCampName(c)
-                                    return n ? <span key={i} className="text-[10px] font-semibold bg-[#EEF2FF] text-[#4338CA] px-1.5 py-0.5 rounded whitespace-nowrap" title={c}>{n}</span> : null
-                                  })}
-                                  {(t.campaigns?.length ?? 0) > 3 && (
-                                    <span className="text-[10px] font-semibold bg-[#EEF2FF] text-[#4338CA] px-1.5 py-0.5 rounded">+{(t.campaigns?.length ?? 0) - 3}</span>
-                                  )}
-                                </div>
-                              ) : '–'}
-                            </td>
-                            <td className="px-3.5 py-3 align-top">
-                              <span className="step-badge">Step {t.step ?? '?'}</span>
-                            </td>
-                            <td className="px-3.5 py-3 text-[12px] text-[#6B7280] align-top">{age(t.first_seen)}</td>
-                            <td className="px-3.5 py-3 align-top">
-                              <button
-                                onClick={() => handleSuppress(t.content_hash)}
-                                disabled={isSuppressing}
-                                className="text-[11px] font-semibold px-2.5 py-1 rounded border border-[#FCA5A5] bg-[#FEE2E2] text-[#B91C1C] hover:bg-[#FECACA] disabled:opacity-50 disabled:cursor-default whitespace-nowrap"
-                              >
-                                {isSuppressing ? 'Disabling…' : 'Disable'}
-                              </button>
+                      </thead>
+                      <tbody>
+                        {stale.length === 0 ? (
+                          <tr>
+                            <td colSpan={8}>
+                              <div className="o-empty">
+                                <strong style={{ color: '#050C29', display: 'block', marginBottom: 4 }}>No flagged templates</strong>
+                                No active templates match the profiled, high-bounce, or gone-quiet criteria.
+                              </div>
                             </td>
                           </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                  <div className="text-[11px] text-[#6B7280] px-3.5 py-2.5 bg-[#F9FAFB] border-t border-[#E2E6F0] rounded-b-xl">
-                    <strong className="text-[#050C29]">Signal</strong> = replies + leads. <strong className="text-[#050C29]">Disable</strong> pauses the variant in PlusVibe and hides it from copy analytics.
+                        ) : stale.map(t => {
+                          const camps      = (t.campaigns || []).slice(0, 3)
+                          const totalSig   = Number(t.total_signal)  || 0
+                          const sig14d     = Number(t.signal_14d)    || 0
+                          const isSuppressing = !!suppressing[t.content_hash]
+                          return (
+                            <tr key={t.content_hash}>
+                              <td style={{ padding: '12px 14px', verticalAlign: 'top' }}>
+                                <span className="stale-badge">Avoid</span>
+                                <div style={{ fontWeight: 600, color: '#050C29', fontSize: 13, marginTop: 4 }}>{t.subject || '(no subject)'}</div>
+                                <div style={{ fontSize: 11, color: '#6B7280' }}>{decodeHtml(t.body_excerpt || '')}</div>
+                              </td>
+                              <td style={{ padding: '12px 14px', textAlign: 'right', verticalAlign: 'top', fontVariantNumeric: 'tabular-nums' }}>
+                                <span className="count">{fmt(totalSig)}</span>
+                              </td>
+                              <td style={{ padding: '12px 14px', textAlign: 'right', verticalAlign: 'top', fontVariantNumeric: 'tabular-nums' }}>
+                                <span className={`count ${sig14d === 0 ? 'zero' : ''}`}>{fmt(sig14d)}</span>
+                              </td>
+                              <td style={{ padding: '12px 14px', fontSize: 12, color: '#6B7280', verticalAlign: 'top' }}>{age(t.last_signal_at)}</td>
+                              <td style={{ padding: '12px 14px', verticalAlign: 'top' }}>
+                                {camps.length > 0 ? (
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                                    {camps.map((c, i) => {
+                                      const n = cleanCampName(c)
+                                      return n ? <span key={i} style={{ fontSize: 10, fontWeight: 600, background: '#EEF2FF', color: '#4338CA', padding: '2px 6px', borderRadius: 4, whiteSpace: 'nowrap' }} title={c}>{n}</span> : null
+                                    })}
+                                    {(t.campaigns?.length ?? 0) > 3 && (
+                                      <span style={{ fontSize: 10, fontWeight: 600, background: '#EEF2FF', color: '#4338CA', padding: '2px 6px', borderRadius: 4 }}>+{(t.campaigns?.length ?? 0) - 3}</span>
+                                    )}
+                                  </div>
+                                ) : '–'}
+                              </td>
+                              <td style={{ padding: '12px 14px', verticalAlign: 'top' }}>
+                                <span className="step-badge">Step {t.step ?? '?'}</span>
+                              </td>
+                              <td style={{ padding: '12px 14px', fontSize: 12, color: '#6B7280', verticalAlign: 'top' }}>{age(t.first_seen)}</td>
+                              <td style={{ padding: '12px 14px', verticalAlign: 'top' }}>
+                                <button
+                                  onClick={() => handleSuppress(t.content_hash)}
+                                  disabled={isSuppressing}
+                                  className="o-btn o-btn-danger o-btn-sm"
+                                >
+                                  {isSuppressing ? 'Disabling…' : 'Disable'}
+                                </button>
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{ fontSize: 11, color: '#6B7280', padding: '10px 14px', background: '#F9FAFB', borderTop: '1px solid #E2E6F0', borderRadius: '0 0 8px 8px' }}>
+                    <strong style={{ color: '#050C29' }}>Signal</strong> = replies + leads. <strong style={{ color: '#050C29' }}>Disable</strong> pauses the variant in PlusVibe and hides it from copy analytics.
                   </div>
                 </div>
               </div>
@@ -1204,48 +1221,46 @@ export default function CopyPage() {
             {/* Diagnostic tab */}
             {activeTab === 'diag' && (
               <div>
-                <div className="flex items-center gap-4 mb-5">
-                  <h2 style={{ fontFamily: "'Genos', sans-serif", fontSize: '1.2rem', fontWeight: 700, letterSpacing: '1.5px', textTransform: 'uppercase', color: '#050C29', whiteSpace: 'nowrap' }}>
-                    Data Diagnostic
-                  </h2>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20 }}>
+                  <div className="o-section-h" style={{ margin: 0 }}>Data Diagnostic</div>
                   {diagData && (
-                    <span className="text-[11px] font-bold bg-[#1F6F78] text-white rounded-full px-3 py-0.5 whitespace-nowrap">
+                    <span style={{ fontSize: 11, fontWeight: 700, background: '#1F6F78', color: '#fff', borderRadius: 999, padding: '2px 12px', whiteSpace: 'nowrap' }}>
                       {diagData.campaign_templates_total} templates · {(diagData.events_by_type || []).reduce((s, r) => s + Number(r.total || 0), 0).toLocaleString()} events
                     </span>
                   )}
-                  <div className="flex-1 h-px bg-[#E2E6F0]" />
+                  <div style={{ flex: 1, height: 1, background: '#E2E6F0' }} />
                 </div>
-                <div className="inline-flex items-center gap-1.5 text-[11px] text-[#6B7280] bg-[#F3F4F6] px-3 py-1.5 rounded-lg mb-4">
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#6B7280', background: '#F3F4F6', padding: '6px 12px', borderRadius: 8, marginBottom: 16 }}>
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
                   Raw event field population — shows what PlusVibe is sending us and which attribution strategy each event uses.
                 </div>
 
                 {diagLoading && (
-                  <div className="py-8 text-center text-[#6B7280] text-sm">
-                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#1F6F78" strokeWidth="2" strokeLinecap="round"
-                      className="mx-auto mb-3 animate-spin"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4"/></svg>
-                    Loading…
+                  <div className="o-empty" style={{ paddingTop: 32, paddingBottom: 32 }}>
+                    <span className="o-spin" style={{ marginRight: 8 }} />Loading…
                   </div>
                 )}
-                {diagError && <p className="py-4 text-sm" style={{ color: '#DC2626' }}>Error: {diagError}</p>}
+                {diagError && <p style={{ padding: '16px 0', fontSize: 14, color: '#DC2626' }}>Error: {diagError}</p>}
 
                 {diagData && (
-                  <div className="flex flex-col gap-6 py-2">
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 24, paddingTop: 8 }}>
                     {/* Workspace info */}
                     <div>
-                      <h3 className="text-[13px] font-extrabold uppercase tracking-[0.5px] text-[#6B7280] mb-2">Workspace</h3>
-                      <div className="bg-white p-4 rounded-lg border border-[#E2E6F0] text-[13px]">
-                        <div><strong>Workspace ID:</strong> {diagData.workspace_id}</div>
-                        <div><strong>Campaign templates captured:</strong> {diagData.campaign_templates_total} ({diagData.campaign_templates_active} active)</div>
+                      <div className="o-section-h">Workspace</div>
+                      <div className="o-card">
+                        <div className="o-card-body" style={{ fontSize: 13 }}>
+                          <div><strong>Workspace ID:</strong> {diagData.workspace_id}</div>
+                          <div><strong>Campaign templates captured:</strong> {diagData.campaign_templates_total} ({diagData.campaign_templates_active} active)</div>
+                        </div>
                       </div>
                     </div>
 
                     {/* Field population */}
                     <div>
-                      <h3 className="text-[13px] font-extrabold uppercase tracking-[0.5px] text-[#6B7280] mb-2">Field population by event type</h3>
-                      <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}>
+                      <div className="o-section-h">Field population by event type</div>
+                      <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}>
                         {diagData.events_by_type.length === 0 ? (
-                          <div className="text-[#6B7280] text-sm">No events</div>
+                          <div style={{ color: '#6B7280', fontSize: 14 }}>No events</div>
                         ) : diagData.events_by_type.map(r => {
                           const total = Number(r.total) || 1
                           const ch = Number(r.with_content_hash || 0)
@@ -1255,38 +1270,40 @@ export default function CopyPage() {
                           const PctBar = ({ n, color }: { n: number; color: string }) => {
                             const p = (n / total * 100).toFixed(0)
                             return (
-                              <div className="flex items-center gap-2 text-[12px] mt-1">
-                                <span className="w-[110px] text-[#6B7280]">{n.toLocaleString()} ({p}%)</span>
-                                <div className="flex-1 h-1.5 bg-[#E5E7EB] rounded-full overflow-hidden">
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, marginTop: 4 }}>
+                                <span style={{ width: 110, color: '#6B7280' }}>{n.toLocaleString()} ({p}%)</span>
+                                <div style={{ flex: 1, height: 6, background: '#E5E7EB', borderRadius: 99, overflow: 'hidden' }}>
                                   <div style={{ width: `${p}%`, height: '100%', background: color }} />
                                 </div>
                               </div>
                             )
                           }
                           return (
-                            <div key={r.event_type} className="bg-white p-4 rounded-lg border border-[#E2E6F0]">
-                              <div className="flex justify-between items-center mb-2.5">
-                                <div className="font-bold text-[14px] text-[#050C29]">{r.event_type}</div>
-                                <div className="text-[12px] text-[#6B7280]">{Number(r.total).toLocaleString()} events</div>
-                              </div>
-                              <div>
-                                <div className="text-[11px] text-[#6B7280] uppercase font-bold">content_hash populated</div>
-                                <PctBar n={ch} color="#10B981" />
-                              </div>
-                              <div className="mt-1.5">
-                                <div className="text-[11px] text-[#6B7280] uppercase font-bold">campaign_id populated</div>
-                                <PctBar n={ci} color="#3B82F6" />
-                              </div>
-                              <div className="mt-1.5">
-                                <div className="text-[11px] text-[#6B7280] uppercase font-bold">step populated</div>
-                                <PctBar n={st} color="#8B5CF6" />
-                              </div>
-                              <div className="mt-1.5">
-                                <div className="text-[11px] text-[#6B7280] uppercase font-bold">lead_email populated</div>
-                                <PctBar n={le} color="#F59E0B" />
-                              </div>
-                              <div className="mt-2.5 text-[11px] text-[#6B7280]">
-                                Range: {r.earliest ? new Date(r.earliest).toLocaleString() : '?'} → {r.latest ? new Date(r.latest).toLocaleString() : '?'}
+                            <div key={r.event_type} className="o-card">
+                              <div className="o-card-body">
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                                  <div style={{ fontWeight: 700, fontSize: 14, color: '#050C29' }}>{r.event_type}</div>
+                                  <div style={{ fontSize: 12, color: '#6B7280' }}>{Number(r.total).toLocaleString()} events</div>
+                                </div>
+                                <div>
+                                  <div style={{ fontSize: 11, color: '#6B7280', textTransform: 'uppercase', fontWeight: 700 }}>content_hash populated</div>
+                                  <PctBar n={ch} color="#10B981" />
+                                </div>
+                                <div style={{ marginTop: 6 }}>
+                                  <div style={{ fontSize: 11, color: '#6B7280', textTransform: 'uppercase', fontWeight: 700 }}>campaign_id populated</div>
+                                  <PctBar n={ci} color="#3B82F6" />
+                                </div>
+                                <div style={{ marginTop: 6 }}>
+                                  <div style={{ fontSize: 11, color: '#6B7280', textTransform: 'uppercase', fontWeight: 700 }}>step populated</div>
+                                  <PctBar n={st} color="#8B5CF6" />
+                                </div>
+                                <div style={{ marginTop: 6 }}>
+                                  <div style={{ fontSize: 11, color: '#6B7280', textTransform: 'uppercase', fontWeight: 700 }}>lead_email populated</div>
+                                  <PctBar n={le} color="#F59E0B" />
+                                </div>
+                                <div style={{ marginTop: 10, fontSize: 11, color: '#6B7280' }}>
+                                  Range: {r.earliest ? new Date(r.earliest).toLocaleString() : '?'} → {r.latest ? new Date(r.latest).toLocaleString() : '?'}
+                                </div>
                               </div>
                             </div>
                           )
@@ -1296,8 +1313,8 @@ export default function CopyPage() {
 
                     {/* Attribution breakdown */}
                     <div>
-                      <h3 className="text-[13px] font-extrabold uppercase tracking-[0.5px] text-[#6B7280] mb-1">Attribution strategy breakdown</h3>
-                      <p className="text-[12px] text-[#6B7280] mb-2">Each event is attributed to a template via the strongest available signal. Unmatched events have no template attribution.</p>
+                      <div className="o-section-h">Attribution strategy breakdown</div>
+                      <p style={{ fontSize: 12, color: '#6B7280', marginBottom: 8 }}>Each event is attributed to a template via the strongest available signal. Unmatched events have no template attribution.</p>
                       {(() => {
                         const attrByType: Record<string, DiagAttribution[]> = {}
                         diagData.attribution_breakdown.forEach(r => {
@@ -1305,28 +1322,30 @@ export default function CopyPage() {
                           attrByType[r.event_type].push(r)
                         })
                         return Object.keys(attrByType).length === 0
-                          ? <div className="text-[#6B7280] text-sm">No data</div>
+                          ? <div style={{ color: '#6B7280', fontSize: 14 }}>No data</div>
                           : Object.entries(attrByType).map(([et, rows]) => {
                             const totalN = rows.reduce((s, r) => s + Number(r.n || 0), 0) || 1
                             const stratColors: Record<string, string> = {
                               unmatched: '#EF4444', direct_hash: '#10B981', lead_email: '#F59E0B'
                             }
                             return (
-                              <div key={et} className="bg-white p-4 rounded-lg border border-[#E2E6F0] mt-2">
-                                <div className="font-bold text-[14px] text-[#050C29] mb-2">{et}</div>
-                                {rows.map(r => {
-                                  const p = (Number(r.n) / totalN * 100).toFixed(0)
-                                  const color = stratColors[r.strategy] || '#3B82F6'
-                                  return (
-                                    <div key={r.strategy} className="flex items-center gap-2 text-[12px] mt-1">
-                                      <span className="w-[120px] font-semibold text-[#050C29]">{r.strategy}</span>
-                                      <span className="w-[90px] text-[#6B7280]">{Number(r.n).toLocaleString()} ({p}%)</span>
-                                      <div className="flex-1 h-1.5 bg-[#E5E7EB] rounded-full overflow-hidden">
-                                        <div style={{ width: `${p}%`, height: '100%', background: color }} />
+                              <div key={et} className="o-card" style={{ marginTop: 8 }}>
+                                <div className="o-card-body">
+                                  <div style={{ fontWeight: 700, fontSize: 14, color: '#050C29', marginBottom: 8 }}>{et}</div>
+                                  {rows.map(r => {
+                                    const p = (Number(r.n) / totalN * 100).toFixed(0)
+                                    const color = stratColors[r.strategy] || '#3B82F6'
+                                    return (
+                                      <div key={r.strategy} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, marginTop: 4 }}>
+                                        <span style={{ width: 120, fontWeight: 600, color: '#050C29' }}>{r.strategy}</span>
+                                        <span style={{ width: 90, color: '#6B7280' }}>{Number(r.n).toLocaleString()} ({p}%)</span>
+                                        <div style={{ flex: 1, height: 6, background: '#E5E7EB', borderRadius: 99, overflow: 'hidden' }}>
+                                          <div style={{ width: `${p}%`, height: '100%', background: color }} />
+                                        </div>
                                       </div>
-                                    </div>
-                                  )
-                                })}
+                                    )
+                                  })}
+                                </div>
                               </div>
                             )
                           })
@@ -1335,17 +1354,17 @@ export default function CopyPage() {
 
                     {/* Recent events sample */}
                     <div>
-                      <h3 className="text-[13px] font-extrabold uppercase tracking-[0.5px] text-[#6B7280] mb-2">Recent events sample</h3>
+                      <div className="o-section-h">Recent events sample</div>
                       {diagData.recent_events_sample.length === 0 ? (
-                        <div className="text-[#6B7280] text-sm">No events</div>
+                        <div style={{ color: '#6B7280', fontSize: 14 }}>No events</div>
                       ) : diagData.recent_events_sample.map((r, i) => (
-                        <div key={i} className="bg-white p-3 rounded-lg border border-[#E2E6F0] mt-1.5 font-mono text-[11px] leading-[1.6]">
+                        <div key={i} style={{ background: '#fff', padding: 12, borderRadius: 8, border: '1px solid #E2E6F0', marginTop: 6, fontFamily: 'monospace', fontSize: 11, lineHeight: 1.6 }}>
                           <div><strong>{r.event_type}</strong> @ {r.event_at}</div>
-                          <div className="text-[#6B7280]">content_hash: <span style={{ color: r.content_hash ? '#10B981' : '#EF4444' }}>{r.content_hash || 'NULL'}</span></div>
-                          <div className="text-[#6B7280]">campaign_id: <span style={{ color: r.campaign_id ? '#10B981' : '#EF4444' }}>{r.campaign_id || 'NULL'}</span></div>
-                          <div className="text-[#6B7280]">step: <span style={{ color: r.step != null ? '#10B981' : '#EF4444' }}>{r.step != null ? r.step : 'NULL'}</span></div>
-                          <div className="text-[#6B7280]">lead_email: <span style={{ color: r.lead_email ? '#10B981' : '#EF4444' }}>{r.lead_email || 'NULL'}</span></div>
-                          <div className="text-[#6B7280]">raw keys: {(r.raw_keys || []).join(', ')}</div>
+                          <div style={{ color: '#6B7280' }}>content_hash: <span style={{ color: r.content_hash ? '#10B981' : '#EF4444' }}>{r.content_hash || 'NULL'}</span></div>
+                          <div style={{ color: '#6B7280' }}>campaign_id: <span style={{ color: r.campaign_id ? '#10B981' : '#EF4444' }}>{r.campaign_id || 'NULL'}</span></div>
+                          <div style={{ color: '#6B7280' }}>step: <span style={{ color: r.step != null ? '#10B981' : '#EF4444' }}>{r.step != null ? r.step : 'NULL'}</span></div>
+                          <div style={{ color: '#6B7280' }}>lead_email: <span style={{ color: r.lead_email ? '#10B981' : '#EF4444' }}>{r.lead_email || 'NULL'}</span></div>
+                          <div style={{ color: '#6B7280' }}>raw keys: {(r.raw_keys || []).join(', ')}</div>
                         </div>
                       ))}
                     </div>

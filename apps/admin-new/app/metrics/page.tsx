@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
 interface MetricRow { ws_id: string; date: string; data: Record<string, unknown> }
 
@@ -27,32 +26,42 @@ export default function MetricsPage() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50">
-      <div className="bg-white border-b px-6 py-4">
-        <h1 className="text-xl font-semibold text-gray-900">Metrics</h1>
-        <p className="text-sm text-gray-500">{dedupedRows.length} workspaces · latest snapshot</p>
+    <div className="o-page">
+      <div className="o-page-header">
+        <div>
+          <div className="o-page-title">Metrics</div>
+          <div className="o-page-sub">{dedupedRows.length} workspaces · latest snapshot</div>
+        </div>
       </div>
-      <div className="flex-1 overflow-auto px-6 py-4">
-        <div className="bg-white rounded-lg border overflow-x-auto">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Workspace</TableHead>
-                <TableHead>Date</TableHead>
-                {allKeys.map(k => <TableHead key={k} className="whitespace-nowrap text-xs">{k.replace(/_/g, ' ')}</TableHead>)}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? Array.from({length:8}).map((_,i) => <TableRow key={i}>{Array.from({length: 2 + allKeys.length}).map((_,j) => <TableCell key={j}><div className="h-4 bg-gray-100 rounded animate-pulse"/></TableCell>)}</TableRow>)
-              : dedupedRows.map(r => (
-                <TableRow key={r.ws_id} className="hover:bg-gray-50">
-                  <TableCell className="font-medium text-sm">{r.ws_id}</TableCell>
-                  <TableCell className="text-sm text-gray-500">{r.date}</TableCell>
-                  {allKeys.map(k => <TableCell key={k} className="text-sm">{fmt((r.data ?? {})[k])}</TableCell>)}
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+      <div className="o-card">
+        <div className="o-table-wrap">
+          <table className="o-table">
+            <thead>
+              <tr>
+                <th>Workspace</th>
+                <th>Date</th>
+                {allKeys.map(k => <th key={k} style={{ whiteSpace: 'nowrap', fontSize: '0.75rem' }}>{k.replace(/_/g, ' ')}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {loading
+                ? Array.from({ length: 8 }).map((_, i) => (
+                    <tr key={i}>
+                      {Array.from({ length: 2 + allKeys.length }).map((_, j) => (
+                        <td key={j}><span className="o-spin" /></td>
+                      ))}
+                    </tr>
+                  ))
+                : dedupedRows.map(r => (
+                    <tr key={r.ws_id}>
+                      <td>{r.ws_id}</td>
+                      <td style={{ color: '#6B7280' }}>{r.date}</td>
+                      {allKeys.map(k => <td key={k}>{fmt((r.data ?? {})[k])}</td>)}
+                    </tr>
+                  ))
+              }
+            </tbody>
+          </table>
         </div>
       </div>
     </div>

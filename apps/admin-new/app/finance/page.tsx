@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
 interface Expense {
   id: number
@@ -52,91 +51,115 @@ export default function FinancePage() {
     .reduce((s, e) => s + Number(e.amount), 0)
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50">
-      <div className="bg-white border-b px-6 py-4">
-        <h1 className="text-xl font-semibold text-gray-900">Finance</h1>
-        <div className="flex gap-6 mt-1">
-          <span className="text-sm text-gray-500">Revenue: <span className="text-green-700 font-semibold">£{totalRevenueGBP.toLocaleString()}</span></span>
-          <span className="text-sm text-gray-500">Expenses (GBP): <span className="text-red-600 font-semibold">£{totalExpenses.toLocaleString()}</span></span>
+    <div className="o-page">
+      <div className="o-page-header">
+        <div>
+          <div className="o-page-title">Finance</div>
+          <div className="o-page-sub">
+            Revenue: <span style={{ color: '#16A34A', fontWeight: 600 }}>£{totalRevenueGBP.toLocaleString()}</span>
+            <span style={{ marginLeft: 16 }}>Expenses (GBP): <span style={{ color: '#DC2626', fontWeight: 600 }}>£{totalExpenses.toLocaleString()}</span></span>
+          </div>
         </div>
       </div>
 
-      <div className="bg-white border-b px-6 flex gap-4">
-        {(['revenue', 'expenses'] as const).map(t => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`py-3 text-sm font-medium border-b-2 transition-colors capitalize ${tab === t ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-          >
-            {t}
-          </button>
-        ))}
+      <div className="o-toolbar" style={{ marginBottom: 0, borderBottom: '1px solid #E2E6F0', paddingBottom: 0, gap: 0 }}>
+        <div style={{ display: 'flex', gap: 0 }}>
+          {(['revenue', 'expenses'] as const).map(t => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className={'o-btn o-btn-ghost'}
+              style={{
+                borderRadius: 0,
+                borderBottom: tab === t ? '2px solid #224388' : '2px solid transparent',
+                color: tab === t ? '#050C29' : '#6B7280',
+                fontWeight: tab === t ? 600 : 400,
+                textTransform: 'capitalize',
+                paddingBottom: 10,
+              }}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
       </div>
 
-      <div className="flex-1 overflow-auto px-6 py-4">
-        <div className="bg-white rounded-lg border">
+      <div className="o-card" style={{ marginTop: 16 }}>
+        <div className="o-card-body" style={{ padding: 0 }}>
           {tab === 'revenue' ? (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Month</TableHead>
-                  <TableHead>Workspace</TableHead>
-                  <TableHead>Leads</TableHead>
-                  <TableHead>Price / Lead</TableHead>
-                  <TableHead>Total</TableHead>
-                  <TableHead>Note</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {loading ? (
-                  Array.from({ length: 5 }).map((_, i) => (
-                    <TableRow key={i}>{Array.from({ length: 6 }).map((_, j) => <TableCell key={j}><div className="h-4 bg-gray-100 rounded animate-pulse" /></TableCell>)}</TableRow>
-                  ))
-                ) : revenue.length === 0 ? (
-                  <TableRow><TableCell colSpan={6} className="text-center py-12 text-gray-400">No revenue entries</TableCell></TableRow>
-                ) : revenue.map(r => (
-                  <TableRow key={r.id} className="hover:bg-gray-50">
-                    <TableCell className="font-mono text-sm">{r.month}</TableCell>
-                    <TableCell className="font-medium">{r.workspace_name ?? r.workspace_id}</TableCell>
-                    <TableCell>{r.lead_count}</TableCell>
-                    <TableCell>{fmt(r.price_per_lead)}</TableCell>
-                    <TableCell className="font-semibold text-green-700">{fmt(r.lead_count * Number(r.price_per_lead))}</TableCell>
-                    <TableCell className="text-sm text-gray-500">{r.note ?? '—'}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <div className="o-table-wrap">
+              <table className="o-table">
+                <thead>
+                  <tr>
+                    <th>Month</th>
+                    <th>Workspace</th>
+                    <th>Leads</th>
+                    <th>Price / Lead</th>
+                    <th>Total</th>
+                    <th>Note</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loading ? (
+                    Array.from({ length: 5 }).map((_, i) => (
+                      <tr key={i}>
+                        {Array.from({ length: 6 }).map((_, j) => (
+                          <td key={j}><span className="o-spin" /></td>
+                        ))}
+                      </tr>
+                    ))
+                  ) : revenue.length === 0 ? (
+                    <tr><td colSpan={6}><div className="o-empty">No revenue entries</div></td></tr>
+                  ) : revenue.map(r => (
+                    <tr key={r.id}>
+                      <td style={{ fontFamily: 'monospace', fontSize: 13 }}>{r.month}</td>
+                      <td style={{ fontWeight: 500 }}>{r.workspace_name ?? r.workspace_id}</td>
+                      <td>{r.lead_count}</td>
+                      <td>{fmt(r.price_per_lead)}</td>
+                      <td style={{ fontWeight: 600, color: '#16A34A' }}>{fmt(r.lead_count * Number(r.price_per_lead))}</td>
+                      <td style={{ color: '#6B7280' }}>{r.note ?? '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Label</TableHead>
-                  <TableHead>Category</TableHead>
-                  <TableHead>Amount</TableHead>
-                  <TableHead>Period</TableHead>
-                  <TableHead>Notes</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {loading ? (
-                  Array.from({ length: 5 }).map((_, i) => (
-                    <TableRow key={i}>{Array.from({ length: 5 }).map((_, j) => <TableCell key={j}><div className="h-4 bg-gray-100 rounded animate-pulse" /></TableCell>)}</TableRow>
-                  ))
-                ) : expenses.length === 0 ? (
-                  <TableRow><TableCell colSpan={5} className="text-center py-12 text-gray-400">No expenses</TableCell></TableRow>
-                ) : expenses.map(e => (
-                  <TableRow key={e.id} className="hover:bg-gray-50">
-                    <TableCell className="font-medium">{e.label}</TableCell>
-                    <TableCell className="text-sm text-gray-600">{e.category ?? '—'}</TableCell>
-                    <TableCell className="font-semibold text-red-600">{fmt(e.amount, e.currency)}</TableCell>
-                    <TableCell className="text-sm text-gray-500">
-                      {e.start_month}{e.end_month && e.end_month !== e.start_month ? ` → ${e.end_month}` : ''}
-                    </TableCell>
-                    <TableCell className="text-sm text-gray-500">{e.notes ?? '—'}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <div className="o-table-wrap">
+              <table className="o-table">
+                <thead>
+                  <tr>
+                    <th>Label</th>
+                    <th>Category</th>
+                    <th>Amount</th>
+                    <th>Period</th>
+                    <th>Notes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loading ? (
+                    Array.from({ length: 5 }).map((_, i) => (
+                      <tr key={i}>
+                        {Array.from({ length: 5 }).map((_, j) => (
+                          <td key={j}><span className="o-spin" /></td>
+                        ))}
+                      </tr>
+                    ))
+                  ) : expenses.length === 0 ? (
+                    <tr><td colSpan={5}><div className="o-empty">No expenses</div></td></tr>
+                  ) : expenses.map(e => (
+                    <tr key={e.id}>
+                      <td style={{ fontWeight: 500 }}>{e.label}</td>
+                      <td style={{ color: '#6B7280' }}>{e.category ?? '—'}</td>
+                      <td style={{ fontWeight: 600, color: '#DC2626' }}>{fmt(e.amount, e.currency)}</td>
+                      <td style={{ color: '#6B7280' }}>
+                        {e.start_month}{e.end_month && e.end_month !== e.start_month ? ` → ${e.end_month}` : ''}
+                      </td>
+                      <td style={{ color: '#6B7280' }}>{e.notes ?? '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       </div>

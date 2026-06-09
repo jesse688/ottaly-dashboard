@@ -1,25 +1,6 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Checkbox } from '@/components/ui/checkbox'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -181,16 +162,16 @@ function TagInput({
 
   return (
     <div
-      className="flex flex-wrap gap-1 p-1.5 border border-[#E2E6F0] rounded-[7px] bg-white min-h-[34px] cursor-text focus-within:border-[#7C89CD] focus-within:ring-2 focus-within:ring-[#7C89CD]/12"
+      style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: '6px', border: '1px solid #E2E6F0', borderRadius: 7, background: '#fff', minHeight: 34, cursor: 'text' }}
       onClick={() => inputRef.current?.focus()}
     >
       {tags.map((tag, i) => (
-        <span key={i} className="inline-flex items-center gap-1 bg-red-100 text-red-800 px-1.5 py-0.5 rounded text-[11px] font-semibold whitespace-nowrap">
+        <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#FEE2E2', color: '#991B1B', padding: '2px 6px', borderRadius: 4, fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap' }}>
           {tag}
           <button
             type="button"
             onClick={e => { e.stopPropagation(); removeTag(i) }}
-            className="text-red-800 hover:bg-red-300 w-3.5 h-3.5 flex items-center justify-center rounded-sm leading-none"
+            style={{ color: '#991B1B', background: 'none', border: 'none', cursor: 'pointer', width: 14, height: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 3, padding: 0, lineHeight: 1 }}
           >
             ×
           </button>
@@ -204,7 +185,7 @@ function TagInput({
         onBlur={handleBlur}
         onPaste={handlePaste}
         placeholder={tags.length === 0 ? placeholder : ''}
-        className="border-none outline-none text-[12px] flex-1 min-w-[80px] py-0.5 bg-transparent text-[#050C29] placeholder:text-gray-400"
+        style={{ border: 'none', outline: 'none', fontSize: 12, flex: 1, minWidth: 80, paddingTop: 2, paddingBottom: 2, background: 'transparent', color: '#050C29' }}
       />
     </div>
   )
@@ -486,44 +467,59 @@ export default function ClientsPage() {
   // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
-    <div className="max-w-[1400px] mx-auto p-8">
+    <div className="o-page">
       {/* Page header */}
-      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+      <div className="o-page-header">
         <div>
-          <div className="text-[1.4rem] font-bold text-[#050C29]">Client Management</div>
-          <div className="text-[13px] text-[#6B7280] mt-0.5">
+          <div className="o-page-title">Client Management</div>
+          <div className="o-page-sub">
             {loading ? 'Loading…' : `${clients.length} clients`}
           </div>
         </div>
         {isAdmin && (
-          <Button
-            onClick={() => openModal()}
-            className="bg-[#224388] hover:bg-[#1a3370] text-white text-[13px] font-semibold px-4 py-2 h-auto"
-          >
-            + Add Client
-          </Button>
+          <div className="o-page-actions">
+            <button className="o-btn o-btn-primary" onClick={() => openModal()}>
+              + Add Client
+            </button>
+          </div>
         )}
       </div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-4 mb-6">
-        <SumCard label="Total Clients" value={loading ? '—' : String(clients.length)} accent="navy" />
+      <div className={isAdmin ? 'o-metrics o-metrics-4' : 'o-metrics o-metrics-auto'} style={{ marginBottom: '1.5rem' }}>
+        <div className="o-metric" style={{ borderTopColor: '#224388' }}>
+          <div className="o-metric-label">Total Clients</div>
+          <div className="o-metric-val" style={{ color: '#224388' }}>{loading ? '—' : String(clients.length)}</div>
+        </div>
         {isAdmin && (
           <>
-            <SumCard label="Leads Delivered" value={loading ? '—' : totalDelivered.toLocaleString()} accent="teal" />
-            <SumCard label="Total Revenue" value={loading ? '—' : '£' + Math.round(totalRevenue).toLocaleString('en-GB')} accent="yellow" />
-            <SumCard label="Leads Bought" value={loading ? '—' : totalBought.toLocaleString()} accent="purple" />
+            <div className="o-metric" style={{ borderTopColor: '#1F6F78' }}>
+              <div className="o-metric-label">Leads Delivered</div>
+              <div className="o-metric-val" style={{ color: '#1F6F78' }}>{loading ? '—' : totalDelivered.toLocaleString()}</div>
+            </div>
+            <div className="o-metric" style={{ borderTopColor: '#D97706' }}>
+              <div className="o-metric-label">Total Revenue</div>
+              <div className="o-metric-val" style={{ color: '#D97706' }}>{loading ? '—' : '£' + Math.round(totalRevenue).toLocaleString('en-GB')}</div>
+            </div>
+            <div className="o-metric" style={{ borderTopColor: '#7C89CD' }}>
+              <div className="o-metric-label">Leads Bought</div>
+              <div className="o-metric-val" style={{ color: '#7C89CD' }}>{loading ? '—' : totalBought.toLocaleString()}</div>
+            </div>
           </>
         )}
       </div>
 
       {/* Toolbar */}
-      <div className="flex gap-3 mb-5 flex-wrap items-center">
-        <div className="relative flex-1 min-w-[200px]">
-          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#6B7280] text-[15px] pointer-events-none">🔍</span>
-          <Input
+      <div className="o-toolbar">
+        <div className="o-search-wrap">
+          <span className="o-search-icon">
+            <svg width="15" height="15" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M10 6.5C10 8.433 8.433 10 6.5 10C4.567 10 3 8.433 3 6.5C3 4.567 4.567 3 6.5 3C8.433 3 10 4.567 10 6.5ZM9.34 10.4C8.523 11.01 7.554 11.375 6.5 11.375C3.808 11.375 1.625 9.192 1.625 6.5C1.625 3.808 3.808 1.625 6.5 1.625C9.192 1.625 11.375 3.808 11.375 6.5C11.375 7.554 11.01 8.523 10.4 9.34L13.28 12.22C13.548 12.488 13.548 12.922 13.28 13.19C13.012 13.458 12.578 13.458 12.31 13.19L9.34 10.4Z" fill="currentColor" fillRule="evenodd" clipRule="evenodd"/>
+            </svg>
+          </span>
+          <input
+            type="text"
             placeholder="Search clients…"
-            className="pl-8 text-[13px] border-[#E2E6F0] h-9"
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
@@ -531,39 +527,39 @@ export default function ClientsPage() {
       </div>
 
       {/* Table */}
-      <div className="bg-white rounded-xl border border-[#E2E6F0] overflow-hidden">
-        <Table>
-          <TableHeader className="bg-[#F8F9FC]">
-            <TableRow>
-              <TableHead className="text-[11px] font-bold uppercase tracking-[.5px] text-[#6B7280]">Client</TableHead>
-              <TableHead className="text-[11px] font-bold uppercase tracking-[.5px] text-[#6B7280]">Status</TableHead>
-              <TableHead className="text-[11px] font-bold uppercase tracking-[.5px] text-[#6B7280]">Contact</TableHead>
-              <TableHead className="text-[11px] font-bold uppercase tracking-[.5px] text-[#6B7280]">Website</TableHead>
+      <div className="o-table-wrap">
+        <table className="o-table">
+          <thead>
+            <tr>
+              <th>Client</th>
+              <th>Status</th>
+              <th>Contact</th>
+              <th>Website</th>
               {isAdmin && (
                 <>
-                  <TableHead className="text-[11px] font-bold uppercase tracking-[.5px] text-[#6B7280]">Lead Price</TableHead>
-                  <TableHead className="text-[11px] font-bold uppercase tracking-[.5px] text-[#6B7280] text-right">Delivered</TableHead>
-                  <TableHead className="text-[11px] font-bold uppercase tracking-[.5px] text-[#6B7280] text-right">Bought</TableHead>
-                  <TableHead className="text-[11px] font-bold uppercase tracking-[.5px] text-[#6B7280] text-right">Revenue</TableHead>
+                  <th>Lead Price</th>
+                  <th style={{ textAlign: 'right' }}>Delivered</th>
+                  <th style={{ textAlign: 'right' }}>Bought</th>
+                  <th style={{ textAlign: 'right' }}>Revenue</th>
                 </>
               )}
-              <TableHead className="text-[11px] font-bold uppercase tracking-[.5px] text-[#6B7280]">Notes</TableHead>
-              <TableHead />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
+              <th>Notes</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
             {loading ? (
-              <TableRow>
-                <TableCell colSpan={isAdmin ? 10 : 6} className="text-center py-12 text-[#6B7280] text-[13px]">
-                  Loading…
-                </TableCell>
-              </TableRow>
+              <tr>
+                <td colSpan={isAdmin ? 10 : 6} style={{ textAlign: 'center', padding: '3rem 0' }}>
+                  <span className="o-spin" />
+                </td>
+              </tr>
             ) : filtered.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={isAdmin ? 10 : 6} className="text-center py-12 text-[#6B7280] text-[13px]">
-                  No clients found
-                </TableCell>
-              </TableRow>
+              <tr>
+                <td colSpan={isAdmin ? 10 : 6}>
+                  <div className="o-empty">No clients found</div>
+                </td>
+              </tr>
             ) : (
               filtered.map(c => {
                 const st = statsMap[c.workspace_id] || { delivered: 0, revenue: 0 }
@@ -571,398 +567,391 @@ export default function ClientsPage() {
                 const websiteDisplay = (c.website || '').replace(/^https?:\/\//, '').replace(/\/$/, '')
                 const inactive = c.client_status === 'inactive'
                 return (
-                  <TableRow
-                    key={c.id}
-                    className="hover:bg-[#FAFBFF]"
-                    style={{ opacity: inactive ? 0.45 : 1 }}
-                  >
+                  <tr key={c.id} style={{ opacity: inactive ? 0.45 : 1 }}>
                     {/* Client */}
-                    <TableCell>
-                      <div className="flex items-center gap-2.5">
+                    <td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                         <div
-                          className="w-[34px] h-[34px] rounded-lg flex items-center justify-center text-white font-bold text-sm flex-shrink-0"
-                          style={{ background: inactive ? '#9CA3AF' : '#224388' }}
+                          style={{ width: 34, height: 34, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 14, flexShrink: 0, background: inactive ? '#9CA3AF' : '#224388' }}
                         >
                           {initial}
                         </div>
                         <div>
-                          <div className="font-semibold text-[13px] text-[#050C29]">{c.workspace_name || c.username}</div>
-                          <div className="text-[11px] text-[#6B7280] mt-px">{c.username}</div>
+                          <div style={{ fontWeight: 600, fontSize: 13, color: '#050C29' }}>{c.workspace_name || c.username}</div>
+                          <div style={{ fontSize: 11, color: '#6B7280', marginTop: 1 }}>{c.username}</div>
                         </div>
                       </div>
-                    </TableCell>
+                    </td>
 
                     {/* Status */}
-                    <TableCell>
+                    <td>
                       {isManager ? (
-                        <span className={`text-[11px] font-semibold ${inactive ? 'text-[#6B7280]' : 'text-green-600'}`}>
+                        <span className={inactive ? 'o-status o-status-inactive' : 'o-status o-status-active'}>
                           {inactive ? 'Inactive' : 'Active'}
                         </span>
                       ) : (
-                        <div className="flex items-center gap-2">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <ToggleSwitch
                             checked={!inactive}
                             title={inactive ? 'Click to activate' : 'Click to deactivate'}
                             onChange={checked => toggleStatus(c.id, checked)}
                           />
-                          <span className={`text-[11px] font-semibold ${inactive ? 'text-[#6B7280]' : 'text-green-600'}`}>
+                          <span className={inactive ? 'o-status o-status-inactive' : 'o-status o-status-active'}>
                             {inactive ? 'Inactive' : 'Active'}
                           </span>
                           {inactive && c.restart_date && (
-                            <span className="text-[11px] text-[#6B7280]">resumes {c.restart_date}</span>
+                            <span style={{ fontSize: 11, color: '#6B7280' }}>resumes {c.restart_date}</span>
                           )}
                         </div>
                       )}
-                    </TableCell>
+                    </td>
 
                     {/* Contact */}
-                    <TableCell>
-                      <div className="text-[12px] leading-relaxed text-[#050C29]">
+                    <td>
+                      <div style={{ fontSize: 12, lineHeight: 1.6, color: '#050C29' }}>
                         {c.contact_name && <div>{c.contact_name}</div>}
                         {c.contact_email && (
                           <div>
-                            <a href={`mailto:${c.contact_email}`} className="text-[#224388] hover:underline">
+                            <a href={`mailto:${c.contact_email}`} style={{ color: '#224388' }}>
                               {c.contact_email}
                             </a>
                           </div>
                         )}
                         {c.contact_phone && (
                           <div>
-                            <a href={`tel:${c.contact_phone}`} className="text-[#224388] hover:underline">
+                            <a href={`tel:${c.contact_phone}`} style={{ color: '#224388' }}>
                               {c.contact_phone}
                             </a>
                           </div>
                         )}
                         {!c.contact_name && !c.contact_email && !c.contact_phone && (
-                          <span className="text-[#6B7280]">—</span>
+                          <span style={{ color: '#6B7280' }}>—</span>
                         )}
                       </div>
-                    </TableCell>
+                    </td>
 
                     {/* Website */}
-                    <TableCell>
+                    <td>
                       {c.website ? (
                         <a
                           href={c.website}
                           target="_blank"
                           rel="noreferrer"
-                          className="text-[#224388] text-[12px] no-underline hover:underline"
+                          style={{ color: '#224388', fontSize: 12, textDecoration: 'none' }}
                         >
                           {websiteDisplay}
                         </a>
                       ) : (
-                        <span className="text-[#6B7280]">—</span>
+                        <span style={{ color: '#6B7280' }}>—</span>
                       )}
-                    </TableCell>
+                    </td>
 
                     {/* Financial columns (admin only) */}
                     {isAdmin && (
                       <>
-                        <TableCell>
-                          <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold bg-[#D1FAE5] text-[#065F46]">
+                        <td>
+                          <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: '#D1FAE5', color: '#065F46' }}>
                             £{(c.price_per_lead || 0).toFixed(0)}
                           </span>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <span className="font-bold text-[14px]">{st.delivered}</span>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <span className="font-bold text-[14px]">{c.plan_leads || 0}</span>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <span className="font-bold text-[14px]">£{Math.round(st.revenue).toLocaleString('en-GB')}</span>
-                        </TableCell>
+                        </td>
+                        <td style={{ textAlign: 'right' }}>
+                          <span style={{ fontWeight: 700, fontSize: 14 }}>{st.delivered}</span>
+                        </td>
+                        <td style={{ textAlign: 'right' }}>
+                          <span style={{ fontWeight: 700, fontSize: 14 }}>{c.plan_leads || 0}</span>
+                        </td>
+                        <td style={{ textAlign: 'right' }}>
+                          <span style={{ fontWeight: 700, fontSize: 14 }}>£{Math.round(st.revenue).toLocaleString('en-GB')}</span>
+                        </td>
                       </>
                     )}
 
                     {/* Notes */}
-                    <TableCell>
+                    <td>
                       <div
-                        className="text-[12px] text-[#6B7280] max-w-[180px] whitespace-nowrap overflow-hidden text-ellipsis"
+                        style={{ fontSize: 12, color: '#6B7280', maxWidth: 180, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
                         title={c.notes || ''}
                       >
-                        {c.notes || <span className="text-[#6B7280]">—</span>}
+                        {c.notes || <span style={{ color: '#6B7280' }}>—</span>}
                       </div>
-                    </TableCell>
+                    </td>
 
                     {/* Actions */}
-                    <TableCell>
-                      <div className="flex gap-1.5 justify-end">
-                        <Button
-                          variant="outline"
-                          size="sm"
+                    <td>
+                      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                        <button
+                          className="o-btn o-btn-ghost o-btn-sm"
                           onClick={() => openModal(c.id)}
-                          className="text-[12px] h-7 px-2.5 border-[#E2E6F0] text-[#6B7280] hover:bg-[#F0F2F8] hover:text-[#050C29]"
                         >
                           {isManager ? 'Notes / Exclusions' : 'Edit'}
-                        </Button>
+                        </button>
                         {!isManager && (
-                          <Button
-                            variant="outline"
-                            size="sm"
+                          <button
+                            className="o-btn o-btn-danger o-btn-sm"
                             onClick={() => deleteClient(c.id, c.workspace_name || c.username)}
-                            className="text-[12px] h-7 px-2.5 bg-[#FEE2E2] text-[#DC2626] border-[#FECACA] hover:bg-[#FECACA]"
                           >
                             Delete
-                          </Button>
+                          </button>
                         )}
                       </div>
-                    </TableCell>
-                  </TableRow>
+                    </td>
+                  </tr>
                 )
               })
             )}
-          </TableBody>
-        </Table>
+          </tbody>
+        </table>
       </div>
 
       {/* Modal */}
       {modalOpen && (
-        <div
-          className="fixed inset-0 bg-[rgba(5,12,41,0.5)] flex items-center justify-center z-[1000]"
-          onClick={e => { if (e.target === e.currentTarget) closeModal() }}
-        >
-          <div className="bg-white rounded-2xl w-[600px] max-w-[95vw] max-h-[90vh] overflow-y-auto shadow-[0_20px_60px_rgba(0,0,0,0.15)]">
+        <div className="o-modal-overlay" onClick={e => { if (e.target === e.currentTarget) closeModal() }}>
+          <div className="o-modal" onClick={e => e.stopPropagation()}>
             {/* Modal header */}
-            <div className="px-6 py-5 border-b border-[#E2E6F0] flex items-center justify-between">
-              <div className="text-base font-bold text-[#050C29]">
+            <div className="o-modal-header">
+              <div className="o-modal-title">
                 {!form.editId ? 'Add Client' : isManager ? 'Notes & Exclusions' : 'Edit Client'}
               </div>
-              <button
-                onClick={closeModal}
-                className="text-[#6B7280] text-xl leading-none hover:text-[#050C29] bg-none border-none cursor-pointer px-0.5"
-              >
-                ×
-              </button>
+              <button className="o-modal-close" onClick={closeModal}>×</button>
             </div>
 
             {/* Modal body */}
-            <div className="p-6 space-y-0">
+            <div className="o-modal-body">
 
               {/* Account — admin only */}
               {isAdmin && (
                 <>
                   <SectionLabel>Account</SectionLabel>
                   <FormGrid>
-                    <Field label="Client Name (workspace)">
-                      <Input value={form.workspaceName} onChange={e => setField('workspaceName', e.target.value)} placeholder="e.g. Hydration Co" className="h-9 text-[13px]" />
-                    </Field>
-                    <Field label="PlusVibe Workspace ID">
-                      <Input value={form.workspaceId} onChange={e => setField('workspaceId', e.target.value)} placeholder="e.g. 69525a0e…" className="h-9 text-[13px]" />
-                    </Field>
-                    <Field label="Login Username">
-                      <Input value={form.username} onChange={e => setField('username', e.target.value)} placeholder="username" className="h-9 text-[13px]" />
-                    </Field>
-                    <Field label={<>Password {form.editId && <span className="font-normal text-[#6B7280]">(leave blank to keep)</span>}</>}>
-                      <Input type="password" value={form.password} onChange={e => setField('password', e.target.value)} placeholder="••••••••" className="h-9 text-[13px]" />
-                    </Field>
+                    <div className="o-field">
+                      <label className="o-label">Client Name (workspace)</label>
+                      <input className="o-input" value={form.workspaceName} onChange={e => setField('workspaceName', e.target.value)} placeholder="e.g. Hydration Co" />
+                    </div>
+                    <div className="o-field">
+                      <label className="o-label">PlusVibe Workspace ID</label>
+                      <input className="o-input" value={form.workspaceId} onChange={e => setField('workspaceId', e.target.value)} placeholder="e.g. 69525a0e…" />
+                    </div>
+                    <div className="o-field">
+                      <label className="o-label">Login Username</label>
+                      <input className="o-input" value={form.username} onChange={e => setField('username', e.target.value)} placeholder="username" />
+                    </div>
+                    <div className="o-field">
+                      <label className="o-label">Password {form.editId && <span style={{ fontWeight: 400, color: '#6B7280' }}>(leave blank to keep)</span>}</label>
+                      <input className="o-input" type="password" value={form.password} onChange={e => setField('password', e.target.value)} placeholder="••••••••" />
+                    </div>
                   </FormGrid>
 
                   <SectionLabel>Campaign Manager</SectionLabel>
                   <FormGrid>
-                    <Field label="Primary Manager">
-                      <Input value={form.campaignManager} onChange={e => setField('campaignManager', e.target.value)} placeholder="e.g. Joey" className="h-9 text-[13px]" />
-                    </Field>
-                    <Field label={<>Managing Since <span className="font-normal text-[#6B7280]">(commission counts from this date)</span></>}>
-                      <Input type="date" value={form.managerStartDate} onChange={e => setField('managerStartDate', e.target.value)} className="h-9 text-[13px]" />
-                    </Field>
+                    <div className="o-field">
+                      <label className="o-label">Primary Manager</label>
+                      <input className="o-input" value={form.campaignManager} onChange={e => setField('campaignManager', e.target.value)} placeholder="e.g. Joey" />
+                    </div>
+                    <div className="o-field">
+                      <label className="o-label">Managing Since <span style={{ fontWeight: 400, color: '#6B7280' }}>(commission counts from this date)</span></label>
+                      <input className="o-input" type="date" value={form.managerStartDate} onChange={e => setField('managerStartDate', e.target.value)} />
+                    </div>
                   </FormGrid>
                   <FormGrid>
-                    <Field label={<>Second Manager <span className="font-normal text-[#6B7280]">(splits commission 50/50 with primary)</span></>}>
-                      <Input value={form.campaignManager2} onChange={e => setField('campaignManager2', e.target.value)} placeholder="e.g. Jordy" className="h-9 text-[13px]" />
-                    </Field>
+                    <div className="o-field">
+                      <label className="o-label">Second Manager <span style={{ fontWeight: 400, color: '#6B7280' }}>(splits commission 50/50 with primary)</span></label>
+                      <input className="o-input" value={form.campaignManager2} onChange={e => setField('campaignManager2', e.target.value)} placeholder="e.g. Jordy" />
+                    </div>
                   </FormGrid>
 
                   <SectionLabel>Client Contact Details</SectionLabel>
                   <FormGrid>
-                    <Field label="Contact Name">
-                      <Input value={form.contactName} onChange={e => setField('contactName', e.target.value)} placeholder="John Smith" className="h-9 text-[13px]" />
-                    </Field>
-                    <Field label="Contact Email">
-                      <Input type="email" value={form.contactEmail} onChange={e => setField('contactEmail', e.target.value)} placeholder="john@company.com" className="h-9 text-[13px]" />
-                    </Field>
-                    <Field label="Phone">
-                      <Input type="tel" value={form.contactPhone} onChange={e => setField('contactPhone', e.target.value)} placeholder="+44 7700 000000" className="h-9 text-[13px]" />
-                    </Field>
-                    <Field label="Website">
-                      <Input value={form.website} onChange={e => setField('website', e.target.value)} placeholder="https://example.com" className="h-9 text-[13px]" />
-                    </Field>
+                    <div className="o-field">
+                      <label className="o-label">Contact Name</label>
+                      <input className="o-input" value={form.contactName} onChange={e => setField('contactName', e.target.value)} placeholder="John Smith" />
+                    </div>
+                    <div className="o-field">
+                      <label className="o-label">Contact Email</label>
+                      <input className="o-input" type="email" value={form.contactEmail} onChange={e => setField('contactEmail', e.target.value)} placeholder="john@company.com" />
+                    </div>
+                    <div className="o-field">
+                      <label className="o-label">Phone</label>
+                      <input className="o-input" type="tel" value={form.contactPhone} onChange={e => setField('contactPhone', e.target.value)} placeholder="+44 7700 000000" />
+                    </div>
+                    <div className="o-field">
+                      <label className="o-label">Website</label>
+                      <input className="o-input" value={form.website} onChange={e => setField('website', e.target.value)} placeholder="https://example.com" />
+                    </div>
                   </FormGrid>
 
                   <SectionLabel>Pricing &amp; Plan</SectionLabel>
                   <FormGrid>
-                    <Field label="Price Per Lead (£)">
-                      <Input type="number" value={form.pricePerLead} onChange={e => setField('pricePerLead', e.target.value)} placeholder="0.00" min="0" step="0.01" className="h-9 text-[13px]" />
-                    </Field>
-                    <Field label="Leads Bought">
-                      <Input type="number" value={form.planLeads} onChange={e => setField('planLeads', e.target.value)} placeholder="0" min="0" className="h-9 text-[13px]" />
-                    </Field>
+                    <div className="o-field">
+                      <label className="o-label">Price Per Lead (£)</label>
+                      <input className="o-input" type="number" value={form.pricePerLead} onChange={e => setField('pricePerLead', e.target.value)} placeholder="0.00" min="0" step="0.01" />
+                    </div>
+                    <div className="o-field">
+                      <label className="o-label">Leads Bought</label>
+                      <input className="o-input" type="number" value={form.planLeads} onChange={e => setField('planLeads', e.target.value)} placeholder="0" min="0" />
+                    </div>
                   </FormGrid>
 
                   <SectionLabel>Lead Target</SectionLabel>
                   <FormGrid>
-                    <Field label="Monthly Target (leads/month)">
-                      <Input type="number" value={form.leadTargetMonthly} onChange={e => setField('leadTargetMonthly', e.target.value)} placeholder="0" min="0" className="h-9 text-[13px]" />
-                      <span className="text-[11px] text-[#6B7280] mt-0.5">Drives &quot;behind pace&quot; detection on the Client Health page. Leave 0 to skip.</span>
-                    </Field>
+                    <div className="o-field">
+                      <label className="o-label">Monthly Target (leads/month)</label>
+                      <input className="o-input" type="number" value={form.leadTargetMonthly} onChange={e => setField('leadTargetMonthly', e.target.value)} placeholder="0" min="0" />
+                      <span style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>Drives &quot;behind pace&quot; detection on the Client Health page. Leave 0 to skip.</span>
+                    </div>
                   </FormGrid>
 
                   <SectionLabel>Status</SectionLabel>
                   <FormGrid>
-                    <Field label="Client Status">
-                      <Select value={form.clientStatus} onValueChange={v => setField('clientStatus', v as string)}>
-                        <SelectTrigger className="h-9 text-[13px]"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="active">Active</SelectItem>
-                          <SelectItem value="inactive">Inactive</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </Field>
-                    <Field label={<>Restart Date <span className="font-normal text-[#6B7280]">(if inactive — auto-activates on this date)</span></>}>
-                      <Input type="date" value={form.restartDate} onChange={e => setField('restartDate', e.target.value)} className="h-9 text-[13px]" />
-                    </Field>
+                    <div className="o-field">
+                      <label className="o-label">Client Status</label>
+                      <select className="o-select" value={form.clientStatus} onChange={e => setField('clientStatus', e.target.value)}>
+                        <option value="active">Active</option>
+                        <option value="inactive">Inactive</option>
+                      </select>
+                    </div>
+                    <div className="o-field">
+                      <label className="o-label">Restart Date <span style={{ fontWeight: 400, color: '#6B7280' }}>(if inactive — auto-activates on this date)</span></label>
+                      <input className="o-input" type="date" value={form.restartDate} onChange={e => setField('restartDate', e.target.value)} />
+                    </div>
                   </FormGrid>
                 </>
               )}
 
               {/* Notes — everyone */}
               <SectionLabel>Notes</SectionLabel>
-              <div className="mb-3">
-                <Field label="">
-                  <textarea
-                    value={form.notes}
-                    onChange={e => setField('notes', e.target.value)}
-                    placeholder="Internal notes about this client…"
-                    className="w-full px-2.5 py-2 border border-[#E2E6F0] rounded-[7px] text-[13px] font-[inherit] outline-none resize-y min-h-[70px] focus:border-[#7C89CD]"
-                  />
-                </Field>
+              <div className="o-field" style={{ marginBottom: 12 }}>
+                <textarea
+                  className="o-input"
+                  rows={3}
+                  value={form.notes}
+                  onChange={e => setField('notes', e.target.value)}
+                  placeholder="Internal notes about this client…"
+                  style={{ resize: 'vertical', minHeight: 70 }}
+                />
               </div>
 
               {/* Database Targeting Rules — admin only */}
               {isAdmin && (
-                <>
-                  <div className="mt-6">
-                    <SectionLabel color="teal">DataBase Targeting Rules</SectionLabel>
-                    <p className="text-[12px] text-[#6B7280] -mt-2 mb-4">Controls which contacts are shown and pushed for this client.</p>
-                    <FormGrid>
-                      <Field label="Vertical / Industry">
-                        <Select value={form.vertical} onValueChange={v => setField('vertical', v as string)}>
-                          <SelectTrigger className="h-9 text-[13px]"><SelectValue placeholder="— Not set (auto-detect) —" /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="">— Not set (auto-detect) —</SelectItem>
-                            <SelectItem value="solar">Solar / Energy</SelectItem>
-                            <SelectItem value="office_furniture">Office Furniture / Fitout</SelectItem>
-                            <SelectItem value="accounting">Accounting / Tax</SelectItem>
-                            <SelectItem value="recruitment">Recruitment / Staffing</SelectItem>
-                            <SelectItem value="marketing">Marketing / Digital</SelectItem>
-                            <SelectItem value="flooring">Flooring / Carpet</SelectItem>
-                            <SelectItem value="cleaning">Cleaning / Janitorial</SelectItem>
-                            <SelectItem value="insurance">Insurance</SelectItem>
-                            <SelectItem value="software">Software / SaaS</SelectItem>
-                            <SelectItem value="other">Other</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </Field>
-                      <Field label="Snooze Duration (months)">
-                        <Select value={form.snoozeMonths} onValueChange={v => setField('snoozeMonths', v as string)}>
-                          <SelectTrigger className="h-9 text-[13px]"><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="3">3 months</SelectItem>
-                            <SelectItem value="6">6 months</SelectItem>
-                            <SelectItem value="12">12 months</SelectItem>
-                            <SelectItem value="24">24 months</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </Field>
-                    </FormGrid>
-                    <FormGrid cols={2} className="mt-3">
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <Checkbox
-                          checked={form.excludeRemote}
-                          onCheckedChange={v => setField('excludeRemote', !!v)}
-                          className="accent-[#1F6F78]"
-                        />
-                        <span className="text-[12px] font-semibold">
-                          Exclude remote workers
-                          <span className="block text-[11px] text-[#6B7280] font-normal">Can&apos;t use office furniture, on-site services etc</span>
-                        </span>
-                      </label>
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <Checkbox
-                          checked={form.requireOwnsBuilding}
-                          onCheckedChange={v => setField('requireOwnsBuilding', !!v)}
-                          className="accent-[#1F6F78]"
-                        />
-                        <span className="text-[12px] font-semibold">
-                          Requires building ownership
-                          <span className="block text-[11px] text-[#6B7280] font-normal">Solar, flooring, major fit-outs etc</span>
-                        </span>
-                      </label>
-                    </FormGrid>
-                  </div>
-                </>
+                <div style={{ marginTop: 24 }}>
+                  <SectionLabel color="teal">DataBase Targeting Rules</SectionLabel>
+                  <p style={{ fontSize: 12, color: '#6B7280', marginTop: -8, marginBottom: 16 }}>Controls which contacts are shown and pushed for this client.</p>
+                  <FormGrid>
+                    <div className="o-field">
+                      <label className="o-label">Vertical / Industry</label>
+                      <select className="o-select" value={form.vertical} onChange={e => setField('vertical', e.target.value)}>
+                        <option value="">— Not set (auto-detect) —</option>
+                        <option value="solar">Solar / Energy</option>
+                        <option value="office_furniture">Office Furniture / Fitout</option>
+                        <option value="accounting">Accounting / Tax</option>
+                        <option value="recruitment">Recruitment / Staffing</option>
+                        <option value="marketing">Marketing / Digital</option>
+                        <option value="flooring">Flooring / Carpet</option>
+                        <option value="cleaning">Cleaning / Janitorial</option>
+                        <option value="insurance">Insurance</option>
+                        <option value="software">Software / SaaS</option>
+                        <option value="other">Other</option>
+                      </select>
+                    </div>
+                    <div className="o-field">
+                      <label className="o-label">Snooze Duration (months)</label>
+                      <select className="o-select" value={form.snoozeMonths} onChange={e => setField('snoozeMonths', e.target.value)}>
+                        <option value="3">3 months</option>
+                        <option value="6">6 months</option>
+                        <option value="12">12 months</option>
+                        <option value="24">24 months</option>
+                      </select>
+                    </div>
+                  </FormGrid>
+                  <FormGrid cols={2} className="mt-3">
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={form.excludeRemote}
+                        onChange={e => setField('excludeRemote', e.target.checked)}
+                        style={{ accentColor: '#1F6F78', width: 15, height: 15, flexShrink: 0 }}
+                      />
+                      <span style={{ fontSize: 12, fontWeight: 600 }}>
+                        Exclude remote workers
+                        <span style={{ display: 'block', fontSize: 11, color: '#6B7280', fontWeight: 400 }}>Can&apos;t use office furniture, on-site services etc</span>
+                      </span>
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={form.requireOwnsBuilding}
+                        onChange={e => setField('requireOwnsBuilding', e.target.checked)}
+                        style={{ accentColor: '#1F6F78', width: 15, height: 15, flexShrink: 0 }}
+                      />
+                      <span style={{ fontSize: 12, fontWeight: 600 }}>
+                        Requires building ownership
+                        <span style={{ display: 'block', fontSize: 11, color: '#6B7280', fontWeight: 400 }}>Solar, flooring, major fit-outs etc</span>
+                      </span>
+                    </label>
+                  </FormGrid>
+                </div>
               )}
 
               {/* Master Exclusions — everyone */}
-              <div className="mt-6">
+              <div style={{ marginTop: 24 }}>
                 <SectionLabel color="red">Master Exclusions</SectionLabel>
-                <p className="text-[12px] text-[#6B7280] -mt-2 mb-4">
+                <p style={{ fontSize: 12, color: '#6B7280', marginTop: -8, marginBottom: 16 }}>
                   Always-on exclusions for this client. Applied automatically on the contacts page whenever this client is the selected filter target.
                   Type and press <strong>Enter</strong> or <strong>,</strong> to add. Click a tag to remove.
                 </p>
                 <FormGrid>
-                  <Field label="Industries">
+                  <div className="o-field">
+                    <label className="o-label">Industries</label>
                     <TagInput tags={form.excIndustries} placeholder="e.g. Tobacco, Gambling…" onChange={v => setField('excIndustries', v)} />
-                  </Field>
-                  <Field label="Company Sizes">
-                    <div className="flex flex-wrap gap-1.5 py-1">
+                  </div>
+                  <div className="o-field">
+                    <label className="o-label">Company Sizes</label>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingTop: 4 }}>
                       {SIZE_BUCKETS.map(val => (
                         <button
                           key={val}
                           type="button"
                           onClick={() => toggleExcSize(val)}
-                          className={`px-2.5 py-1 border-[1.5px] rounded-[6px] text-[12px] font-semibold cursor-pointer transition-all font-[inherit] ${
-                            form.excSizes.has(val)
-                              ? 'bg-red-100 border-[#f87171] text-red-800'
-                              : 'border-[#E2E6F0] bg-white text-[#6B7280] hover:border-[#f87171] hover:text-red-800'
-                          }`}
+                          style={{
+                            padding: '4px 10px',
+                            border: `1.5px solid ${form.excSizes.has(val) ? '#f87171' : '#E2E6F0'}`,
+                            borderRadius: 6,
+                            fontSize: 12,
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            background: form.excSizes.has(val) ? '#FEE2E2' : '#fff',
+                            color: form.excSizes.has(val) ? '#991B1B' : '#6B7280',
+                            fontFamily: 'inherit',
+                          }}
                         >
                           {val === '1-10' ? '1–10' : val === '11-50' ? '11–50' : val === '51-200' ? '51–200' : val === '201-500' ? '201–500' : val === '501-1000' ? '501–1000' : val}
                         </button>
                       ))}
                     </div>
-                  </Field>
-                  <Field label="Keywords">
+                  </div>
+                  <div className="o-field">
+                    <label className="o-label">Keywords</label>
                     <TagInput tags={form.excKeywords} placeholder="e.g. crypto, NSFW, MLM…" onChange={v => setField('excKeywords', v)} />
-                  </Field>
-                  <Field label="Counties / States">
+                  </div>
+                  <div className="o-field">
+                    <label className="o-label">Counties / States</label>
                     <TagInput tags={form.excCounties} placeholder="e.g. Greater London, Manchester…" onChange={v => setField('excCounties', v)} />
-                  </Field>
-                  <Field label="Cities">
+                  </div>
+                  <div className="o-field">
+                    <label className="o-label">Cities</label>
                     <TagInput tags={form.excCities} placeholder="e.g. London, Birmingham…" onChange={v => setField('excCities', v)} />
-                  </Field>
-                  <Field label="Job Titles">
+                  </div>
+                  <div className="o-field">
+                    <label className="o-label">Job Titles</label>
                     <TagInput tags={form.excJobTitles} placeholder="e.g. Intern, Student, Trainee…" onChange={v => setField('excJobTitles', v)} />
-                  </Field>
+                  </div>
                 </FormGrid>
               </div>
             </div>
 
             {/* Modal footer */}
-            <div className="px-6 py-4 border-t border-[#E2E6F0] flex justify-end gap-3">
-              <Button
-                variant="outline"
-                onClick={closeModal}
-                className="text-[13px] border-[#E2E6F0] text-[#6B7280] hover:bg-[#F0F2F8] hover:text-[#050C29]"
-              >
-                Cancel
-              </Button>
-              <Button
-                onClick={saveClient}
-                className="bg-[#224388] hover:bg-[#1a3370] text-white text-[13px]"
-              >
-                Save
-              </Button>
+            <div className="o-modal-footer">
+              <button className="o-btn o-btn-ghost" onClick={closeModal}>Cancel</button>
+              <button className="o-btn o-btn-primary" onClick={saveClient}>Save</button>
             </div>
           </div>
         </div>
@@ -970,10 +959,22 @@ export default function ClientsPage() {
 
       {/* Toast */}
       <div
-        className={`fixed bottom-6 right-6 px-[18px] py-2.5 rounded-lg text-[13px] font-medium text-white z-[9999] transition-all duration-300 ${
-          toastVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2.5 pointer-events-none'
-        }`}
-        style={{ background: toast?.type === 'error' ? '#DC2626' : '#050C29' }}
+        style={{
+          position: 'fixed',
+          bottom: 24,
+          right: 24,
+          padding: '10px 18px',
+          borderRadius: 8,
+          fontSize: 13,
+          fontWeight: 500,
+          color: '#fff',
+          zIndex: 9999,
+          transition: 'opacity 0.3s, transform 0.3s',
+          opacity: toastVisible ? 1 : 0,
+          transform: toastVisible ? 'translateY(0)' : 'translateY(10px)',
+          pointerEvents: toastVisible ? 'auto' : 'none',
+          background: toast?.type === 'error' ? '#DC2626' : '#050C29',
+        }}
       >
         {toast?.msg}
       </div>
@@ -986,12 +987,9 @@ export default function ClientsPage() {
 function SumCard({ label, value, accent }: { label: string; value: string; accent: 'navy' | 'teal' | 'yellow' | 'purple' }) {
   const colors = { navy: '#224388', teal: '#1F6F78', yellow: '#FFB700', purple: '#7C89CD' }
   return (
-    <div
-      className="bg-white rounded-[10px] px-5 py-4 border border-[#E2E6F0]"
-      style={{ borderTop: `3px solid ${colors[accent]}` }}
-    >
-      <div className="text-[11px] font-semibold uppercase tracking-[.5px] text-[#6B7280]">{label}</div>
-      <div className="text-[1.5rem] font-bold mt-1 text-[#050C29]">{value}</div>
+    <div className="o-metric" style={{ borderTopColor: colors[accent] }}>
+      <div className="o-metric-label">{label}</div>
+      <div className="o-metric-val" style={{ color: colors[accent] }}>{value}</div>
     </div>
   )
 }
@@ -1000,8 +998,7 @@ function SectionLabel({ children, color }: { children: React.ReactNode; color?: 
   const textColor = color === 'teal' ? '#1F6F78' : color === 'red' ? '#B91C1C' : '#6B7280'
   return (
     <div
-      className="text-[11px] font-bold uppercase tracking-[.5px] mt-4 mb-2 first:mt-0"
-      style={{ color: textColor }}
+      style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 16, marginBottom: 8, color: textColor }}
     >
       {children}
     </div>
@@ -1011,18 +1008,9 @@ function SectionLabel({ children, color }: { children: React.ReactNode; color?: 
 function FormGrid({ children, cols, className }: { children: React.ReactNode; cols?: number; className?: string }) {
   return (
     <div
-      className={`grid gap-3 mb-3 ${className || ''}`}
-      style={{ gridTemplateColumns: cols === 1 ? '1fr' : 'repeat(2, 1fr)' }}
+      className={className}
+      style={{ display: 'grid', gap: 12, marginBottom: 12, gridTemplateColumns: cols === 1 ? '1fr' : 'repeat(2, 1fr)' }}
     >
-      {children}
-    </div>
-  )
-}
-
-function Field({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
-  return (
-    <div className="flex flex-col gap-1">
-      {label && <Label className="text-[12px] font-semibold text-[#050C29]">{label}</Label>}
       {children}
     </div>
   )
@@ -1030,20 +1018,18 @@ function Field({ label, children }: { label: React.ReactNode; children: React.Re
 
 function ToggleSwitch({ checked, onChange, title }: { checked: boolean; onChange: (v: boolean) => void; title: string }) {
   return (
-    <label className="relative inline-block w-9 h-5 cursor-pointer flex-shrink-0" title={title}>
+    <label style={{ position: 'relative', display: 'inline-block', width: 36, height: 20, cursor: 'pointer', flexShrink: 0 }} title={title}>
       <input
         type="checkbox"
-        className="opacity-0 w-0 h-0 absolute"
+        style={{ opacity: 0, width: 0, height: 0, position: 'absolute' }}
         checked={checked}
         onChange={e => onChange(e.target.checked)}
       />
       <span
-        className="absolute inset-0 rounded-[20px] transition-all duration-200"
-        style={{ background: checked ? '#22c55e' : '#D1D5DB' }}
+        style={{ position: 'absolute', inset: 0, borderRadius: 20, transition: 'background 0.2s', background: checked ? '#22c55e' : '#D1D5DB' }}
       />
       <span
-        className="absolute w-3.5 h-3.5 bg-white rounded-full top-[3px] transition-all duration-200"
-        style={{ left: checked ? 'calc(100% - 17px)' : '3px' }}
+        style={{ position: 'absolute', width: 14, height: 14, background: '#fff', borderRadius: '50%', top: 3, transition: 'left 0.2s', left: checked ? 'calc(100% - 17px)' : 3 }}
       />
     </label>
   )

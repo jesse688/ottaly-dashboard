@@ -1,8 +1,6 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
 interface ComboRow { workspace_id: string; date: string; from_type: string; to_type: string; sent: number; replies: number; pos_replies: number; bounces: number; leads: number; reply_rate: number; bounce_rate: number }
 
@@ -40,36 +38,53 @@ export default function ComboAnalysisPage() {
   })).sort((a, b) => b.sent - a.sent)
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50">
-      <div className="bg-white border-b px-6 py-4">
-        <h1 className="text-xl font-semibold text-gray-900">Combo Analysis</h1>
-        <p className="text-sm text-gray-500">Sender × recipient provider performance</p>
-      </div>
-      <div className="bg-white border-b px-6 py-3">
-        <Select value={workspace} onValueChange={v => v && setWorkspace(v)}>
-          <SelectTrigger className="w-48"><SelectValue placeholder="Workspace" /></SelectTrigger>
-          <SelectContent><SelectItem value="all">All workspaces</SelectItem>{workspaces.map(w => <SelectItem key={w} value={w}>{w}</SelectItem>)}</SelectContent>
-        </Select>
-      </div>
-      <div className="flex-1 overflow-auto px-6 py-4">
-        <div className="bg-white rounded-lg border">
-          <Table>
-            <TableHeader><TableRow><TableHead>From → To</TableHead><TableHead>Sent</TableHead><TableHead>Replies</TableHead><TableHead>Reply %</TableHead><TableHead>Bounce %</TableHead><TableHead>Leads</TableHead></TableRow></TableHeader>
-            <TableBody>
-              {loading ? Array.from({length:6}).map((_,i) => <TableRow key={i}>{Array.from({length:6}).map((_,j) => <TableCell key={j}><div className="h-4 bg-gray-100 rounded animate-pulse"/></TableCell>)}</TableRow>)
-              : aggregated.map(r => (
-                <TableRow key={r.key} className="hover:bg-gray-50">
-                  <TableCell className="font-medium font-mono text-sm">{r.key}</TableCell>
-                  <TableCell>{r.sent.toLocaleString()}</TableCell>
-                  <TableCell>{r.replies.toLocaleString()}</TableCell>
-                  <TableCell><span className={r.reply_rate >= 0.05 ? 'text-green-700 font-medium' : ''}>{pct(r.reply_rate)}</span></TableCell>
-                  <TableCell><span className={r.bounce_rate >= 0.03 ? 'text-red-600' : ''}>{pct(r.bounce_rate)}</span></TableCell>
-                  <TableCell className="text-blue-700 font-medium">{r.leads}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+    <div className="o-page">
+      <div className="o-page-header">
+        <div>
+          <div className="o-page-title">Combo Analysis</div>
+          <div className="o-page-sub">Sender × recipient provider performance</div>
         </div>
+      </div>
+      <div className="o-toolbar">
+        <select className="o-select" value={workspace} onChange={e => setWorkspace(e.target.value)}>
+          <option value="all">All workspaces</option>
+          {workspaces.map(w => <option key={w} value={w}>{w}</option>)}
+        </select>
+      </div>
+      <div className="o-table-wrap">
+        <table className="o-table">
+          <thead>
+            <tr>
+              <th>From → To</th>
+              <th>Sent</th>
+              <th>Replies</th>
+              <th>Reply %</th>
+              <th>Bounce %</th>
+              <th>Leads</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading
+              ? Array.from({length: 6}).map((_, i) => (
+                  <tr key={i}>
+                    {Array.from({length: 6}).map((_, j) => (
+                      <td key={j}><span className="o-spin" /></td>
+                    ))}
+                  </tr>
+                ))
+              : aggregated.map(r => (
+                  <tr key={r.key}>
+                    <td><code className="o-raw">{r.key}</code></td>
+                    <td>{r.sent.toLocaleString()}</td>
+                    <td>{r.replies.toLocaleString()}</td>
+                    <td><span style={{ color: r.reply_rate >= 0.05 ? '#16A34A' : undefined, fontWeight: r.reply_rate >= 0.05 ? 600 : undefined }}>{pct(r.reply_rate)}</span></td>
+                    <td><span style={{ color: r.bounce_rate >= 0.03 ? '#DC2626' : undefined }}>{pct(r.bounce_rate)}</span></td>
+                    <td style={{ color: '#224388', fontWeight: 600 }}>{r.leads}</td>
+                  </tr>
+                ))
+            }
+          </tbody>
+        </table>
       </div>
     </div>
   )
