@@ -7057,19 +7057,21 @@ function mergeMailboxesWithMeta(mailboxes, metaByEmail) {
 // misclassifies OOO auto-replies as bounces.
 function buildCampaignIndex(dbBounceByCampaign) {
   const idx = new Map(); // campaign_id → { sent, replies, bounces, mailbox_count }
+  const wsIdx = new Map(); // workspace_id → { sent, replies, bounces }
   for (const ws of (campaignCache.workspaces || [])) {
+    let wsSent = 0, wsReplies = 0, wsBounces = 0;
     for (const c of (ws.campaigns || [])) {
       if (!c.id) continue;
       const dbBounces = dbBounceByCampaign?.get(c.id);
-      idx.set(c.id, {
-        sent: c.sent || 0,
-        replies: c.replies || 0,
-        bounces: dbBounces != null ? dbBounces : (c.bounces || 0),
-        mailbox_count: 0,
-      });
+      const bounces = dbBounces != null ? dbBounces : (c.bounces || 0);
+      idx.set(c.id, { sent: c.sent || 0, replies: c.replies || 0, bounces, mailbox_count: 0 });
+      wsSent    += c.sent    || 0;
+      wsReplies += c.replies || 0;
+      wsBounces += bounces;
     }
+    if (ws.id) wsIdx.set(ws.id, { sent: wsSent, replies: wsReplies, bounces: wsBounces });
   }
-  return idx;
+  return { idx, wsIdx };
 }
 
 // Query email_events for actual per-mailbox sent/reply/bounce counts.
@@ -7104,9 +7106,8 @@ async function buildMailboxStatsFromEvents(pgdb) {
 // Reply rate is computed as (campaign reply rate × mailbox sent count) because
 // PlusVibe reply webhooks don't include the sending mailbox.
 // Falls back to even-split for mailboxes with no webhook history.
-function attachMailboxStats(mailboxes, campIndex, eventsByMailbox = new Map()) {
-  // First pass: count mailboxes per campaign (for even-split fallback) and
-  // accumulate campaign-level totals needed for reply-rate scaling.
+function attachMailboxStats(mailboxes, { idx: campIndex, wsIdx }, eventsByMailbox = new Map()) {
+  // First pass: count mailboxes per campaign (for even-split fallback).
   for (const m of mailboxes) {
     for (const cid of (m.campaign_ids || [])) {
       const c = campIndex.get(cid);
@@ -7114,15 +7115,12 @@ function attachMailboxStats(mailboxes, campIndex, eventsByMailbox = new Map()) {
     }
   }
 
-  // Second pass: assign sent/bounce from email_events where available,
-  // then derive replies by applying the campaign reply rate to real sent count.
+  // Second pass: direct webhook attribution or campaign even-split.
   for (const m of mailboxes) {
     const ev = eventsByMailbox.get(m.email);
     if (ev && ev.sent > 0) {
-      // Real sent + bounce counts from webhooks.
       m.attributed_sent    = ev.sent;
       m.attributed_bounces = ev.bounces;
-      // Scale campaign reply rate to this mailbox's actual send volume.
       let campSent = 0, campReplies = 0;
       for (const cid of (m.campaign_ids || [])) {
         const c = campIndex.get(cid);
@@ -7133,7 +7131,7 @@ function attachMailboxStats(mailboxes, campIndex, eventsByMailbox = new Map()) {
       const campReplyRate = campSent > 0 ? campReplies / campSent : 0;
       m.attributed_replies = Math.round(ev.sent * campReplyRate);
     } else {
-      // No webhook data — fall back to even-split across campaign mailboxes.
+      // No webhook data — even-split across campaigns this mailbox belongs to.
       let sent = 0, replies = 0, bounces = 0;
       for (const cid of (m.campaign_ids || [])) {
         const c = campIndex.get(cid);
@@ -7146,9 +7144,35 @@ function attachMailboxStats(mailboxes, campIndex, eventsByMailbox = new Map()) {
       m.attributed_replies = Math.round(replies);
       m.attributed_bounces = Math.round(bounces);
     }
-    const s = m.attributed_sent;
-    const r = m.attributed_replies;
-    const b = m.attributed_bounces;
+  }
+
+  // Third pass: workspace-level even-split for mailboxes still at 0.
+  // Covers workspaces where sender_email isn't in email_events AND PlusVibe's
+  // account-list API doesn't return cmps (campaign associations), so both
+  // earlier strategies produce 0. Group the zero-sent mailboxes per workspace
+  // and distribute the workspace's campaign totals evenly across them.
+  const wsZeroCount = new Map(); // workspace_id → count of 0-sent mailboxes
+  for (const m of mailboxes) {
+    if (!m.attributed_sent && m.workspace_id) {
+      wsZeroCount.set(m.workspace_id, (wsZeroCount.get(m.workspace_id) || 0) + 1);
+    }
+  }
+  for (const m of mailboxes) {
+    if (m.attributed_sent || !m.workspace_id) continue;
+    const ws = wsIdx.get(m.workspace_id);
+    const count = wsZeroCount.get(m.workspace_id) || 1;
+    if (ws && ws.sent > 0) {
+      m.attributed_sent    = Math.round(ws.sent    / count);
+      m.attributed_replies = Math.round(ws.replies / count);
+      m.attributed_bounces = Math.round(ws.bounces / count);
+      m._ws_split = true; // flag so callers can distinguish this estimate
+    }
+  }
+
+  for (const m of mailboxes) {
+    const s = m.attributed_sent    || 0;
+    const r = m.attributed_replies || 0;
+    const b = m.attributed_bounces || 0;
     m.reply_rate  = s > 0 ? r / s : 0;
     m.bounce_rate = s > 0 ? b / s : 0;
   }

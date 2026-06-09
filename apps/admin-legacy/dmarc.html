@@ -213,7 +213,7 @@ async function loadData() {
         <td>${m.supplier || '—'}</td>
         <td style="text-align:right">${pct(m.reply_rate, m.attributed_sent)}</td>
         <td style="text-align:right">${pct(m.bounce_rate, m.attributed_sent)}</td>
-        <td style="text-align:right">${fmtNum(m.attributed_sent)}</td>
+        <td style="text-align:right">${m._ws_split ? `<span title="Estimated: workspace total ÷ mailbox count" style="color:#9ca3af">~</span>` : ''}${fmtNum(m.attributed_sent)}</td>
       </tr>`;
     }).join('');
   }
