@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from 'next/server'
 import pool from '@/lib/db'
+import '@/lib/cache-warming' // Initialize cache warming on first import
 
 interface DayData {
   date: string
