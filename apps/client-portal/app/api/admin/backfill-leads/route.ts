@@ -29,7 +29,7 @@ export async function POST(req: NextRequest) {
     // 1. Fetch all workspaces from PlusVibe
     console.log('[backfill] fetching workspaces from PlusVibe...')
     const wsRes = await fetch(`${PLUSVIBE_API_URL}/workspaces`, {
-      headers: { 'Authorization': `Bearer ${PLUSVIBE_API_KEY}` }
+      headers: { 'x-api-key': PLUSVIBE_API_KEY }
     })
     if (!wsRes.ok) throw new Error(`PlusVibe API error: ${wsRes.statusText}`)
     const workspaces = await wsRes.json() as { id: string; name: string }[]
@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
         // 2. Fetch campaigns for this workspace
         console.log(`[backfill] workspace ${ws.name}: fetching campaigns...`)
         const campRes = await fetch(`${PLUSVIBE_API_URL}/workspaces/${ws.id}/campaigns`, {
-          headers: { 'Authorization': `Bearer ${PLUSVIBE_API_KEY}` }
+          headers: { 'x-api-key': PLUSVIBE_API_KEY }
         })
         if (!campRes.ok) {
           results.errors.push(`Workspace ${ws.name}: failed to fetch campaigns`)
@@ -59,7 +59,7 @@ export async function POST(req: NextRequest) {
               console.log(`[backfill] workspace ${ws.name}, campaign ${camp.name}: fetching leads (skip=${skip})...`)
               const leadRes = await fetch(
                 `${PLUSVIBE_API_URL}/workspaces/${ws.id}/campaigns/${camp.id}/leads?skip=${skip}&limit=${limit}`,
-                { headers: { 'Authorization': `Bearer ${PLUSVIBE_API_KEY}` } }
+                { headers: { 'x-api-key': PLUSVIBE_API_KEY } }
               )
               if (!leadRes.ok) break
               const leads = await leadRes.json() as PVLead[]
