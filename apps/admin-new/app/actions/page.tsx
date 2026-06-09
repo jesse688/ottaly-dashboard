@@ -283,20 +283,14 @@ async function pvGet<T>(path: string): Promise<T> {
 
 function Badge({ status }: { status: string }) {
   const s = (status || '').toUpperCase()
-  const cls =
+  const statusClass =
     s === 'ACTIVE'
-      ? 'bg-emerald-50 text-emerald-700'
+      ? 'o-status o-status-active'
       : s === 'PAUSED'
-      ? 'bg-amber-50 text-amber-700'
-      : 'bg-gray-100 text-gray-500'
+      ? 'o-status o-status-warning'
+      : 'o-status o-status-inactive'
   return (
-    <span
-      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold uppercase tracking-wide ${cls}`}
-    >
-      <span
-        className="w-1.5 h-1.5 rounded-full"
-        style={{ background: 'currentColor' }}
-      />
+    <span className={statusClass}>
       {status || '—'}
     </span>
   )
@@ -305,7 +299,7 @@ function Badge({ status }: { status: string }) {
 function LoadingRow({ cols, msg = 'Loading…' }: { cols: number; msg?: string }) {
   return (
     <tr>
-      <td colSpan={cols} className="text-center text-gray-400 py-8 text-sm">
+      <td colSpan={cols} style={{ textAlign: 'center', color: '#9CA3AF', padding: '2rem', fontSize: 13 }}>
         {msg}
       </td>
     </tr>
@@ -727,20 +721,20 @@ export default function ActionsPage() {
   const b30 = avgField(history, 'bounceRate', 30)
 
   function arrowEl(current: number, prev: number | null, higherGood: boolean) {
-    if (prev == null || isNaN(prev)) return <span className="text-gray-300">➡</span>
+    if (prev == null || isNaN(prev)) return <span style={{ color: '#D1D5DB' }}>➡</span>
     const diff = current - prev
-    if (Math.abs(diff) < 0.3) return <span className="text-gray-300">➡</span>
+    if (Math.abs(diff) < 0.3) return <span style={{ color: '#D1D5DB' }}>➡</span>
     if (higherGood) {
       return diff > 0 ? (
-        <span className="text-emerald-600">↑</span>
+        <span style={{ color: '#16A34A' }}>↑</span>
       ) : (
-        <span className="text-red-500">↓</span>
+        <span style={{ color: '#DC2626' }}>↓</span>
       )
     }
     return diff < 0 ? (
-      <span className="text-emerald-600">↓</span>
+      <span style={{ color: '#16A34A' }}>↓</span>
     ) : (
-      <span className="text-red-500">↑</span>
+      <span style={{ color: '#DC2626' }}>↑</span>
     )
   }
 
@@ -783,65 +777,18 @@ export default function ActionsPage() {
   // ── JSX ──────────────────────────────────────────────────────────────────
 
   return (
-    <div style={{ fontFamily: "'Inter', -apple-system, sans-serif", background: '#F0F2F8', minHeight: '100vh', color: '#050C29' }}>
-
-      {/* ── Header ── */}
-      <div style={{ background: '#050C29', padding: '1.25rem 2rem', borderBottom: '3px solid #1F6F78' }}>
-        <div style={{ maxWidth: 1600, margin: '0 auto', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
-            <span style={{ fontFamily: 'Genos, sans-serif', fontWeight: 800, fontSize: 24, color: '#1F6F78', letterSpacing: 2 }}>OTTALY</span>
-            <nav style={{ display: 'flex', gap: 4 }}>
-              {[
-                ['/', 'Dashboard'],
-                ['/campaigns', 'Campaigns'],
-                ['/contacts', 'Contacts'],
-                ['/clients', 'Clients'],
-                ['/actions', 'Actions'],
-              ].map(([href, label]) => (
-                <a
-                  key={href}
-                  href={href}
-                  style={{
-                    padding: '8px 18px',
-                    borderRadius: 8,
-                    fontSize: 13,
-                    fontWeight: 600,
-                    textDecoration: 'none',
-                    background: href === '/actions' ? '#1F6F78' : 'transparent',
-                    color: href === '/actions' ? 'white' : 'rgba(255,255,255,0.55)',
-                    transition: 'all 0.2s',
-                  }}
-                >
-                  {label}
-                </a>
-              ))}
-            </nav>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', background: 'rgba(255,255,255,0.1)', borderRadius: 20 }}>
-              <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#22c55e' }} />
-              <span style={{ color: 'white', fontSize: 12, fontWeight: 500 }}>Live</span>
-              {lastUpdate && (
-                <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12 }}>{lastUpdate}</span>
-              )}
-            </div>
-            <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.35)' }}>
-              {m}:{s.toString().padStart(2, '0')}
-            </span>
-          </div>
-        </div>
-      </div>
+    <div className="o-page">
 
       {/* ── Client tab bar ── */}
-      <div style={{ background: 'white', borderBottom: '2px solid #E5E7EB', padding: '0 2rem', overflowX: 'auto', whiteSpace: 'nowrap' }}>
-        <div style={{ maxWidth: 1600, margin: '0 auto', display: 'flex', gap: 0 }}>
-          <div style={{ width: 1, background: '#E5E7EB', margin: '8px 4px', flexShrink: 0 }} />
+      <div style={{ background: '#ffffff', borderBottom: '2px solid #E2E6F0', margin: '-2rem -1.75rem 2rem', padding: '0 1.75rem', overflowX: 'auto', whiteSpace: 'nowrap' }}>
+        <div style={{ display: 'flex', gap: 0, alignItems: 'stretch' }}>
+          <div style={{ width: 1, background: '#E2E6F0', margin: '8px 4px', flexShrink: 0 }} />
           {initError ? (
             <span style={{ padding: '14px 20px', color: '#DC2626', fontSize: 13 }}>
               Failed to load clients: {initError}
             </span>
           ) : workspaces.length === 0 ? (
-            <span style={{ padding: '14px 20px', color: '#9CA3AF', fontSize: 13 }}>Loading clients…</span>
+            <span style={{ padding: '14px 20px', color: '#6B7280', fontSize: 13 }}>Loading clients…</span>
           ) : (
             activeWorkspaces.map((ws) => (
               <button
@@ -876,7 +823,7 @@ export default function ActionsPage() {
               fontFamily: 'Inter, sans-serif',
               fontSize: 13,
               fontWeight: 600,
-              color: '#9CA3AF',
+              color: '#6B7280',
               cursor: 'pointer',
               borderBottom: '3px solid transparent',
               marginBottom: -2,
@@ -885,29 +832,33 @@ export default function ActionsPage() {
           >
             ⚙ Manage
           </button>
+          {lastUpdate && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 16px', borderLeft: '1px solid #E2E6F0' }}>
+              <div style={{ width: 7, height: 7, borderRadius: '50%', background: '#16A34A' }} />
+              <span style={{ color: '#6B7280', fontSize: 12, fontWeight: 500 }}>{lastUpdate}</span>
+              <span style={{ fontSize: 12, color: '#9CA3AF' }}>
+                {m}:{s.toString().padStart(2, '0')}
+              </span>
+            </div>
+          )}
         </div>
       </div>
 
       {/* ── Manage Modal ── */}
       {manageOpen && (
         <div
-          style={{ position: 'fixed', inset: 0, background: 'rgba(5,12,41,0.45)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          className="o-modal-overlay"
           onClick={(e) => { if (e.target === e.currentTarget) setManageOpen(false) }}
         >
-          <div style={{ background: 'white', borderRadius: 14, width: 480, maxWidth: '95vw', maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(5,12,41,0.25)' }}>
-            <div style={{ padding: '1.5rem 1.75rem 1.25rem', borderBottom: '1px solid #F3F4F6', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div className="o-modal o-modal-sm">
+            <div className="o-modal-header">
               <div>
-                <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 22, fontWeight: 700, color: '#050C29' }}>Manage Clients</div>
-                <div style={{ fontSize: 12, color: '#9CA3AF', marginTop: 2 }}>Hidden clients are excluded from the dashboard and scans</div>
+                <div className="o-modal-title">Manage Clients</div>
+                <div style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>Hidden clients are excluded from the dashboard and scans</div>
               </div>
-              <button
-                onClick={() => setManageOpen(false)}
-                style={{ background: 'none', border: 'none', fontSize: 20, color: '#9CA3AF', cursor: 'pointer', padding: '4px 8px', borderRadius: 6, lineHeight: 1 }}
-              >
-                ✕
-              </button>
+              <button className="o-modal-close" onClick={() => setManageOpen(false)}>×</button>
             </div>
-            <div style={{ overflowY: 'auto', padding: '0.75rem 0', flex: 1 }}>
+            <div className="o-modal-body" style={{ padding: '0.75rem 0', maxHeight: '60vh', overflowY: 'auto' }}>
               {workspaces.map((ws) => {
                 const isInactive = inactiveIds.has(ws.id)
                 const isHidden = hiddenIds.has(ws.id) || isInactive
@@ -919,9 +870,9 @@ export default function ActionsPage() {
                     <div>
                       <div style={{ fontSize: 13, fontWeight: 600, color: '#050C29' }}>{ws.name}</div>
                       {isInactive ? (
-                        <div style={{ fontSize: 11, color: '#f87171' }}>Disabled in Clients page</div>
+                        <div style={{ fontSize: 11, color: '#DC2626' }}>Disabled in Clients page</div>
                       ) : isHidden ? (
-                        <div style={{ fontSize: 11, color: '#9CA3AF' }}>Hidden</div>
+                        <div style={{ fontSize: 11, color: '#6B7280' }}>Hidden</div>
                       ) : null}
                     </div>
                     <label style={{ position: 'relative', width: 40, height: 22, flexShrink: 0, pointerEvents: isInactive ? 'none' : 'auto' }}>
@@ -937,7 +888,7 @@ export default function ActionsPage() {
                           position: 'absolute',
                           inset: 0,
                           borderRadius: 11,
-                          background: !isHidden ? '#1F6F78' : '#E5E7EB',
+                          background: !isHidden ? '#1F6F78' : '#E2E6F0',
                           cursor: 'pointer',
                           transition: 'background 0.2s',
                         }}
@@ -965,377 +916,334 @@ export default function ActionsPage() {
         </div>
       )}
 
-      {/* ── Main content ── */}
-      <div style={{ maxWidth: 1600, margin: '0 auto', padding: '2rem' }}>
-
-        {/* ── Health Scan Section ── */}
-        <div style={{ marginBottom: '2rem' }}>
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '1.25rem', paddingBottom: '1.25rem', borderBottom: '2px solid #E2E6F0' }}>
-            <div>
-              <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 26, fontWeight: 700, color: '#050C29', lineHeight: 1, marginBottom: 4 }}>
-                Client Health Overview
-              </div>
-              <div style={{ fontSize: 12, color: '#9CA3AF' }}>
-                {scanResults
-                  ? `${scanResults.length} active workspaces · Scanned at ${new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`
-                  : scanRunning
-                  ? 'Scanning…'
-                  : 'Not yet scanned'}
-              </div>
+      {/* ── Health Scan Section ── */}
+      <div style={{ marginBottom: '2rem' }}>
+        <div className="o-page-header" style={{ marginBottom: '1.25rem', paddingBottom: '1.25rem', borderBottom: '2px solid #E2E6F0' }}>
+          <div>
+            <div className="o-page-title">Client Health Overview</div>
+            <div className="o-page-sub">
+              {scanResults
+                ? `${scanResults.length} active workspaces · Scanned at ${new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`
+                : scanRunning
+                ? 'Scanning…'
+                : 'Not yet scanned'}
             </div>
+          </div>
+          <div className="o-page-actions">
             <button
+              className="o-btn o-btn-primary"
               onClick={runHealthScan}
               disabled={scanRunning}
-              style={{
-                padding: '8px 18px',
-                background: scanRunning ? '#9CA3AF' : '#224388',
-                color: 'white',
-                border: 'none',
-                borderRadius: 8,
-                fontSize: 13,
-                fontWeight: 600,
-                cursor: scanRunning ? 'not-allowed' : 'pointer',
-                flexShrink: 0,
-                marginTop: 4,
-              }}
             >
-              {scanRunning ? '↻ Scanning…' : '↻ Re-scan'}
+              {scanRunning ? <><span className="o-spin" /> Scanning…</> : '↻ Re-scan'}
             </button>
           </div>
+        </div>
 
-          {/* Scan progress */}
-          {scanRunning && !scanResults && (
-            <div style={{ background: 'white', borderRadius: 12, padding: '2.5rem', boxShadow: '0 1px 3px rgba(5,12,41,0.08)', textAlign: 'center', maxWidth: 520, margin: '0 auto 2rem' }}>
+        {/* Scan progress */}
+        {scanRunning && !scanResults && (
+          <div className="o-card" style={{ maxWidth: 520, margin: '0 auto 2rem', textAlign: 'center' }}>
+            <div className="o-card-body">
               <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 22, fontWeight: 700, color: '#050C29', marginBottom: '1.5rem' }}>
                 Loading client data…
               </div>
-              <div style={{ background: '#F3F4F6', borderRadius: 8, height: 8, overflow: 'hidden', marginBottom: '1rem' }}>
+              <div style={{ background: '#E2E6F0', borderRadius: 8, height: 8, overflow: 'hidden', marginBottom: '1rem' }}>
                 <div style={{ height: '100%', background: '#1F6F78', borderRadius: 8, transition: 'width 0.3s ease', width: `${scanProgress}%` }} />
               </div>
-              <div style={{ fontSize: 13, color: '#9CA3AF' }}>{scanStatus}</div>
+              <div style={{ fontSize: 13, color: '#6B7280' }}>{scanStatus}</div>
             </div>
-          )}
+          </div>
+        )}
 
-          {/* Health pills */}
-          {scanResults && (
-            <>
-              <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
-                {redCount > 0 && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 18px', borderRadius: 10, background: '#FEF2F2', color: '#DC2626', fontSize: 13, fontWeight: 600 }}>
-                    <span style={{ fontFamily: 'Genos, sans-serif', fontSize: 24, fontWeight: 800, lineHeight: 1 }}>{redCount}</span>
-                    Need attention
-                  </div>
-                )}
-                {amberCount > 0 && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 18px', borderRadius: 10, background: '#FFFBEB', color: '#B45309', fontSize: 13, fontWeight: 600 }}>
-                    <span style={{ fontFamily: 'Genos, sans-serif', fontSize: 24, fontWeight: 800, lineHeight: 1 }}>{amberCount}</span>
-                    Monitor
-                  </div>
-                )}
-                {greenCount > 0 && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 18px', borderRadius: 10, background: '#ECFDF5', color: '#059669', fontSize: 13, fontWeight: 600 }}>
-                    <span style={{ fontFamily: 'Genos, sans-serif', fontSize: 24, fontWeight: 800, lineHeight: 1 }}>{greenCount}</span>
-                    Healthy
-                  </div>
-                )}
-              </div>
-
-              {/* Table header */}
-              <div style={{ display: 'grid', gridTemplateColumns: '14px 180px 110px 120px 82px 120px 1fr 80px', gap: '1rem', alignItems: 'center', padding: '0 1.5rem 0.5rem', fontSize: 10, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: 1 }}>
-                <div />
-                <div>Client</div>
-                <div>Send Vol</div>
-                <div>Reply Rate</div>
-                <div>Bounce</div>
-                <div>Last Lead</div>
-                <div>Status</div>
-                <div />
-              </div>
-
-              {/* Client rows */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                {scanResults.map((r) => {
-                  const borderColor = r.color === 'red' ? '#DC2626' : r.color === 'amber' ? '#D97706' : '#059669'
-                  const dotBg = r.color === 'red' ? '#DC2626' : r.color === 'amber' ? '#D97706' : '#059669'
-
-                  // Send vol cell
-                  let sendVolCell: React.ReactNode
-                  if (r.capPct === null) {
-                    sendVolCell = (
-                      <>
-                        <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: '#D1D5DB' }}>—</div>
-                        <div style={{ fontSize: 11, color: '#9CA3AF' }}>{fmtN(r.todayAgg.sent)} sent</div>
-                      </>
-                    )
-                  } else {
-                    const cls = r.capPct < 50 ? '#DC2626' : r.capPct < 80 ? '#D97706' : '#059669'
-                    sendVolCell = (
-                      <>
-                        <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: cls }}>{r.capPct.toFixed(0)}%</div>
-                        <div style={{ height: 3, background: '#F3F4F6', borderRadius: 2, overflow: 'hidden', marginTop: 3 }}>
-                          <div style={{ height: '100%', borderRadius: 2, background: cls, width: `${Math.min(r.capPct, 100).toFixed(0)}%` }} />
-                        </div>
-                        <div style={{ fontSize: 11, color: '#9CA3AF' }}>{fmtN(r.todayAgg.sent)} sent</div>
-                      </>
-                    )
-                  }
-
-                  // Reply cell
-                  let replyCell: React.ReactNode
-                  if (r.todayAgg.sent < 5) {
-                    replyCell = (
-                      <>
-                        <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: '#D1D5DB' }}>—</div>
-                        <div style={{ fontSize: 11, color: '#9CA3AF' }}>No sends</div>
-                      </>
-                    )
-                  } else {
-                    const main = r.replyTodayEx
-                    const base3d = r.reply3dEx
-                    const cls = main >= 3 ? '#059669' : main >= 1 ? '#D97706' : '#DC2626'
-                    const dropped = base3d > 0.5 && main < base3d * (1 - THR.replyDropPct / 100)
-                    const up = base3d > 0 && main > base3d * 1.1
-                    const avg = base3d > 0 ? `${fmtPct(base3d)} 3d avg` : ''
-                    replyCell = (
-                      <>
-                        <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: cls, display: 'flex', alignItems: 'center', gap: 3 }}>
-                          {fmtPct(main)}
-                          {dropped && <span style={{ fontSize: 13, color: '#DC2626' }}>↓</span>}
-                          {up && !dropped && <span style={{ fontSize: 13, color: '#059669' }}>↑</span>}
-                        </div>
-                        {avg && <div style={{ fontSize: 11, color: '#9CA3AF' }}>{avg}</div>}
-                        <div style={{ fontSize: 11, color: '#7C89CD' }} title="Incl. OOO & auto-replies">{fmtPct(r.replyToday)} incl. OOO</div>
-                      </>
-                    )
-                  }
-
-                  // Bounce cell
-                  let bounceCell: React.ReactNode
-                  if (r.todayAgg.sent < 5) {
-                    bounceCell = <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: '#D1D5DB' }}>—</div>
-                  } else {
-                    const cls = r.bounceToday > THR.bounceMax ? '#DC2626' : r.bounceToday > 3 ? '#D97706' : '#059669'
-                    bounceCell = <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: cls }}>{fmtPct(r.bounceToday)}</div>
-                  }
-
-                  // Last lead cell
-                  let lastLeadCell: React.ReactNode
-                  if (r.lastLeadDays === null) {
-                    lastLeadCell = <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: '#D97706' }}>No data</div>
-                  } else if (r.lastLeadDays === 0) {
-                    lastLeadCell = (
-                      <>
-                        <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: '#059669' }}>Today</div>
-                        {r.lastLeadDate && <div style={{ fontSize: 11, color: '#9CA3AF' }}>{r.lastLeadDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</div>}
-                      </>
-                    )
-                  } else if (r.lastLeadDays === 1) {
-                    lastLeadCell = (
-                      <>
-                        <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: '#059669' }}>Yesterday</div>
-                        {r.lastLeadDate && <div style={{ fontSize: 11, color: '#9CA3AF' }}>{r.lastLeadDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</div>}
-                      </>
-                    )
-                  } else {
-                    const cls = r.lastLeadDays > 14 ? '#DC2626' : r.lastLeadDays > 7 ? '#D97706' : '#059669'
-                    lastLeadCell = (
-                      <>
-                        <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: cls }}>{r.lastLeadDays}d ago</div>
-                        {r.lastLeadDate && <div style={{ fontSize: 11, color: '#9CA3AF' }}>{r.lastLeadDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</div>}
-                      </>
-                    )
-                  }
-
-                  return (
-                    <div
-                      key={r.ws.id}
-                      style={{
-                        background: 'white',
-                        borderRadius: 10,
-                        display: 'grid',
-                        gridTemplateColumns: '14px 180px 110px 120px 82px 120px 1fr 80px',
-                        gap: '1rem',
-                        alignItems: 'center',
-                        padding: '1.1rem 1.5rem',
-                        boxShadow: '0 1px 3px rgba(5,12,41,0.07)',
-                        borderLeft: `4px solid ${borderColor}`,
-                      }}
-                    >
-                      <div style={{ width: 10, height: 10, borderRadius: '50%', background: dotBg, flexShrink: 0 }} />
-                      <div style={{ fontSize: 13, fontWeight: 700, color: '#050C29', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.ws.name}>
-                        {r.ws.name}
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>{sendVolCell}</div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>{replyCell}</div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>{bounceCell}</div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>{lastLeadCell}</div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
-                        {r.flags.length === 0 ? (
-                          <span style={{ fontSize: 12, color: '#D1D5DB', fontWeight: 500 }}>✓ Healthy</span>
-                        ) : (
-                          r.flags.map((f) => (
-                            <span
-                              key={f.type}
-                              style={{
-                                padding: '2px 8px',
-                                borderRadius: 10,
-                                fontSize: 11,
-                                fontWeight: 700,
-                                background: f.color === 'red' ? '#FEF2F2' : '#FFFBEB',
-                                color: f.color === 'red' ? '#DC2626' : '#B45309',
-                              }}
-                            >
-                              {f.label}
-                            </span>
-                          ))
-                        )}
-                      </div>
-                      <button
-                        onClick={() => setActiveWS(r.ws)}
-                        style={{
-                          padding: '5px 12px',
-                          background: 'transparent',
-                          color: '#224388',
-                          border: '1.5px solid #D1D5DB',
-                          borderRadius: 7,
-                          fontSize: 12,
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                          whiteSpace: 'nowrap',
-                          justifySelf: 'end',
-                        }}
-                      >
-                        View →
-                      </button>
-                    </div>
-                  )
-                })}
-              </div>
-            </>
-          )}
-        </div>
-
-        {/* Divider */}
-        <div style={{ height: 2, background: '#E2E6F0', margin: '2rem 0' }} />
-
-        {/* ── Client Detail Section ── */}
-        {activeWS && (
+        {/* Health pills */}
+        {scanResults && (
           <>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
-              <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 22, fontWeight: 700, color: '#050C29' }}>
-                {activeWS.name} — Detail View
-              </div>
-              {loadingClient && (
-                <span style={{ fontSize: 12, color: '#9CA3AF' }}>Refreshing…</span>
+            <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
+              {redCount > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 18px', borderRadius: 10, background: '#FEF2F2', color: '#DC2626', fontSize: 13, fontWeight: 600 }}>
+                  <span style={{ fontFamily: 'Genos, sans-serif', fontSize: 24, fontWeight: 800, lineHeight: 1 }}>{redCount}</span>
+                  Need attention
+                </div>
+              )}
+              {amberCount > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 18px', borderRadius: 10, background: '#FFFBEB', color: '#D97706', fontSize: 13, fontWeight: 600 }}>
+                  <span style={{ fontFamily: 'Genos, sans-serif', fontSize: 24, fontWeight: 800, lineHeight: 1 }}>{amberCount}</span>
+                  Monitor
+                </div>
+              )}
+              {greenCount > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 18px', borderRadius: 10, background: '#DCFCE7', color: '#16A34A', fontSize: 13, fontWeight: 600 }}>
+                  <span style={{ fontFamily: 'Genos, sans-serif', fontSize: 24, fontWeight: 800, lineHeight: 1 }}>{greenCount}</span>
+                  Healthy
+                </div>
               )}
             </div>
 
-            {/* Alerts */}
-            {(clientError || alerts.length > 0) && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem' }}>
-                {clientError && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.875rem 1.25rem', borderRadius: 10, fontSize: 14, fontWeight: 600, background: '#FEF2F2', border: '2px solid #FCA5A5', color: '#DC2626' }}>
-                    Failed to load data: {clientError}
-                  </div>
-                )}
-                {alerts.map((a, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: '0.75rem',
-                      padding: '0.875rem 1.25rem', borderRadius: 10, fontSize: 14, fontWeight: 600,
-                      background: a.cls === 'red' ? '#FEF2F2' : '#FFFBEB',
-                      border: `2px solid ${a.cls === 'red' ? '#FCA5A5' : '#FCD34D'}`,
-                      color: a.cls === 'red' ? '#DC2626' : '#B45309',
-                    }}
-                  >
-                    {a.cls === 'red' ? '🔴' : '⚠️'} {a.msg}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Section: Today's Overview */}
-            <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 16, fontWeight: 700, color: '#050C29', textTransform: 'uppercase', letterSpacing: 2, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              Today&apos;s Overview
-              <div style={{ flex: 1, height: 2, background: '#E5E7EB' }} />
+            {/* Table header */}
+            <div style={{ display: 'grid', gridTemplateColumns: '14px 180px 110px 120px 82px 120px 1fr 80px', gap: '1rem', alignItems: 'center', padding: '0 1.5rem 0.5rem', fontSize: 10, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: 1 }}>
+              <div />
+              <div>Client</div>
+              <div>Send Vol</div>
+              <div>Reply Rate</div>
+              <div>Bounce</div>
+              <div>Last Lead</div>
+              <div>Status</div>
+              <div />
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '1.25rem', marginBottom: '1.75rem' }}>
-              {[
-                {
-                  label: 'Sent Today',
-                  icon: '📨',
-                  color: '#1F6F78',
-                  value: todayAgg ? fmtN(todayAgg.sent) : '—',
-                  sub: todayAgg ? `${capPct}% of ${fmtN(totalCap)} capacity` : 'loading…',
-                  isRed: false,
-                },
-                {
-                  label: 'Reply Rate (incl. OOO)',
-                  icon: '↩️',
-                  color: '#224388',
-                  value: todayAgg && todayAgg.sent > 0 ? fmtPct(replyRate) : '—',
-                  sub: todayAgg ? `${fmtN((todayAgg.replies || 0) + (todayAgg.oooReplies || 0))} total replies today` : 'loading…',
-                  isRed: replyRate < 1 && (todayAgg?.sent ?? 0) > 50,
-                },
-                {
-                  label: 'Human Reply Rate',
-                  icon: '✉️',
-                  color: '#7C89CD',
-                  value: todayAgg && todayAgg.sent > 0 ? fmtPct(humanRate) : '—',
-                  sub: todayAgg && todayAgg.sent > 0 ? `${fmtN(todayAgg.replies)} human replies · excl. OOO` : 'excl. OOO & auto-replies',
-                  isRed: humanRate < 0.5 && (todayAgg?.sent ?? 0) > 50,
-                },
-                {
-                  label: 'Bounce Rate',
-                  icon: '⚠️',
-                  color: '#FFB700',
-                  value: todayAgg && todayAgg.sent > 0 ? fmtPct(bounceRate) : '—',
-                  sub: todayAgg ? `${fmtN(todayAgg.bounces)} bounces today` : 'loading…',
-                  isRed: bounceRate > THR.bounceMax,
-                },
-                {
-                  label: 'Inbox Health',
-                  icon: '📬',
-                  color: '#7C89CD',
-                  value: warmupEa ? fmtPct(inboxPct) : '—',
-                  sub: warmupEa ? `${warmupEa.total_inboxes || 0} mailboxes warming` : 'loading…',
-                  isRed: inboxPct < 80 && !!warmupEa,
-                },
-              ].map((card, idx) => (
+            {/* Client rows */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              {scanResults.map((r) => {
+                const borderColor = r.color === 'red' ? '#DC2626' : r.color === 'amber' ? '#D97706' : '#16A34A'
+                const dotBg = r.color === 'red' ? '#DC2626' : r.color === 'amber' ? '#D97706' : '#16A34A'
+
+                // Send vol cell
+                let sendVolCell: React.ReactNode
+                if (r.capPct === null) {
+                  sendVolCell = (
+                    <>
+                      <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: '#D1D5DB' }}>—</div>
+                      <div style={{ fontSize: 11, color: '#6B7280' }}>{fmtN(r.todayAgg.sent)} sent</div>
+                    </>
+                  )
+                } else {
+                  const cls = r.capPct < 50 ? '#DC2626' : r.capPct < 80 ? '#D97706' : '#16A34A'
+                  sendVolCell = (
+                    <>
+                      <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: cls }}>{r.capPct.toFixed(0)}%</div>
+                      <div style={{ height: 3, background: '#E2E6F0', borderRadius: 2, overflow: 'hidden', marginTop: 3 }}>
+                        <div style={{ height: '100%', borderRadius: 2, background: cls, width: `${Math.min(r.capPct, 100).toFixed(0)}%` }} />
+                      </div>
+                      <div style={{ fontSize: 11, color: '#6B7280' }}>{fmtN(r.todayAgg.sent)} sent</div>
+                    </>
+                  )
+                }
+
+                // Reply cell
+                let replyCell: React.ReactNode
+                if (r.todayAgg.sent < 5) {
+                  replyCell = (
+                    <>
+                      <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: '#D1D5DB' }}>—</div>
+                      <div style={{ fontSize: 11, color: '#6B7280' }}>No sends</div>
+                    </>
+                  )
+                } else {
+                  const main = r.replyTodayEx
+                  const base3d = r.reply3dEx
+                  const cls = main >= 3 ? '#16A34A' : main >= 1 ? '#D97706' : '#DC2626'
+                  const dropped = base3d > 0.5 && main < base3d * (1 - THR.replyDropPct / 100)
+                  const up = base3d > 0 && main > base3d * 1.1
+                  const avg = base3d > 0 ? `${fmtPct(base3d)} 3d avg` : ''
+                  replyCell = (
+                    <>
+                      <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: cls, display: 'flex', alignItems: 'center', gap: 3 }}>
+                        {fmtPct(main)}
+                        {dropped && <span style={{ fontSize: 13, color: '#DC2626' }}>↓</span>}
+                        {up && !dropped && <span style={{ fontSize: 13, color: '#16A34A' }}>↑</span>}
+                      </div>
+                      {avg && <div style={{ fontSize: 11, color: '#6B7280' }}>{avg}</div>}
+                      <div style={{ fontSize: 11, color: '#7C89CD' }} title="Incl. OOO & auto-replies">{fmtPct(r.replyToday)} incl. OOO</div>
+                    </>
+                  )
+                }
+
+                // Bounce cell
+                let bounceCell: React.ReactNode
+                if (r.todayAgg.sent < 5) {
+                  bounceCell = <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: '#D1D5DB' }}>—</div>
+                } else {
+                  const cls = r.bounceToday > THR.bounceMax ? '#DC2626' : r.bounceToday > 3 ? '#D97706' : '#16A34A'
+                  bounceCell = <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: cls }}>{fmtPct(r.bounceToday)}</div>
+                }
+
+                // Last lead cell
+                let lastLeadCell: React.ReactNode
+                if (r.lastLeadDays === null) {
+                  lastLeadCell = <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: '#D97706' }}>No data</div>
+                } else if (r.lastLeadDays === 0) {
+                  lastLeadCell = (
+                    <>
+                      <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: '#16A34A' }}>Today</div>
+                      {r.lastLeadDate && <div style={{ fontSize: 11, color: '#6B7280' }}>{r.lastLeadDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</div>}
+                    </>
+                  )
+                } else if (r.lastLeadDays === 1) {
+                  lastLeadCell = (
+                    <>
+                      <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: '#16A34A' }}>Yesterday</div>
+                      {r.lastLeadDate && <div style={{ fontSize: 11, color: '#6B7280' }}>{r.lastLeadDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</div>}
+                    </>
+                  )
+                } else {
+                  const cls = r.lastLeadDays > 14 ? '#DC2626' : r.lastLeadDays > 7 ? '#D97706' : '#16A34A'
+                  lastLeadCell = (
+                    <>
+                      <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 18, fontWeight: 700, color: cls }}>{r.lastLeadDays}d ago</div>
+                      {r.lastLeadDate && <div style={{ fontSize: 11, color: '#6B7280' }}>{r.lastLeadDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</div>}
+                    </>
+                  )
+                }
+
+                return (
+                  <div
+                    key={r.ws.id}
+                    className="o-card"
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '14px 180px 110px 120px 82px 120px 1fr 80px',
+                      gap: '1rem',
+                      alignItems: 'center',
+                      padding: '1.1rem 1.5rem',
+                      borderLeft: `4px solid ${borderColor}`,
+                      borderRadius: 10,
+                    }}
+                  >
+                    <div style={{ width: 10, height: 10, borderRadius: '50%', background: dotBg, flexShrink: 0 }} />
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#050C29', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.ws.name}>
+                      {r.ws.name}
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>{sendVolCell}</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>{replyCell}</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>{bounceCell}</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>{lastLeadCell}</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+                      {r.flags.length === 0 ? (
+                        <span style={{ fontSize: 12, color: '#D1D5DB', fontWeight: 500 }}>✓ Healthy</span>
+                      ) : (
+                        r.flags.map((f) => (
+                          <span
+                            key={f.type}
+                            className={f.color === 'red' ? 'o-status o-status-critical' : 'o-status o-status-warning'}
+                          >
+                            {f.label}
+                          </span>
+                        ))
+                      )}
+                    </div>
+                    <button
+                      className="o-btn o-btn-ghost o-btn-sm"
+                      onClick={() => setActiveWS(r.ws)}
+                      style={{ justifySelf: 'end', whiteSpace: 'nowrap' }}
+                    >
+                      View →
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Divider */}
+      <div style={{ height: 2, background: '#E2E6F0', margin: '2rem 0' }} />
+
+      {/* ── Client Detail Section ── */}
+      {activeWS && (
+        <>
+          <div className="o-page-header" style={{ marginBottom: '1.5rem' }}>
+            <div>
+              <div className="o-page-title">{activeWS.name} — Detail View</div>
+            </div>
+            {loadingClient && (
+              <div className="o-page-actions">
+                <span className="o-spin" />
+                <span style={{ fontSize: 12, color: '#6B7280', marginLeft: 6 }}>Refreshing…</span>
+              </div>
+            )}
+          </div>
+
+          {/* Alerts */}
+          {(clientError || alerts.length > 0) && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem' }}>
+              {clientError && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.875rem 1.25rem', borderRadius: 10, fontSize: 14, fontWeight: 600, background: '#FEF2F2', border: '2px solid #FCA5A5', color: '#DC2626' }}>
+                  Failed to load data: {clientError}
+                </div>
+              )}
+              {alerts.map((a, i) => (
                 <div
-                  key={idx}
+                  key={i}
                   style={{
-                    background: 'white',
-                    borderRadius: 12,
-                    padding: '1.5rem',
-                    position: 'relative',
-                    overflow: 'hidden',
-                    boxShadow: '0 1px 3px rgba(5,12,41,0.08)',
-                    borderTop: `4px solid ${card.color}`,
+                    display: 'flex', alignItems: 'center', gap: '0.75rem',
+                    padding: '0.875rem 1.25rem', borderRadius: 10, fontSize: 14, fontWeight: 600,
+                    background: a.cls === 'red' ? '#FEF2F2' : '#FFFBEB',
+                    border: `2px solid ${a.cls === 'red' ? '#FCA5A5' : '#FCD34D'}`,
+                    color: a.cls === 'red' ? '#DC2626' : '#D97706',
                   }}
                 >
-                  <div style={{ width: 44, height: 44, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, marginBottom: '1rem', background: `${card.color}20` }}>
-                    {card.icon}
-                  </div>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 }}>{card.label}</div>
-                  <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 42, fontWeight: 700, color: card.isRed ? '#DC2626' : '#050C29', lineHeight: 1, marginBottom: 6, letterSpacing: -1 }}>{card.value}</div>
-                  <div style={{ fontSize: 13, color: '#9CA3AF', fontWeight: 500 }}>{card.sub}</div>
+                  {a.cls === 'red' ? '🔴' : '⚠️'} {a.msg}
                 </div>
               ))}
             </div>
+          )}
 
-            {/* Section: Rate Trends */}
-            <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 16, fontWeight: 700, color: '#050C29', textTransform: 'uppercase', letterSpacing: 2, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              Rate Trends
-              <div style={{ flex: 1, height: 2, background: '#E5E7EB' }} />
-            </div>
+          {/* Section: Today's Overview */}
+          <div className="o-section-h" style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            Today&apos;s Overview
+            <div style={{ flex: 1, height: 2, background: '#E2E6F0' }} />
+          </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', marginBottom: '1.75rem' }}>
-              {/* Reply Rate Trends */}
-              <div style={{ background: 'white', borderRadius: 12, padding: '1.75rem', boxShadow: '0 1px 3px rgba(5,12,41,0.08)' }}>
-                <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 20, fontWeight: 700, color: '#050C29', marginBottom: '1.5rem' }}>Reply Rate</div>
+          <div className="o-metrics o-metrics-5" style={{ marginBottom: '1.75rem' }}>
+            {[
+              {
+                label: 'Sent Today',
+                color: '#1F6F78',
+                value: todayAgg ? fmtN(todayAgg.sent) : '—',
+                sub: todayAgg ? `${capPct}% of ${fmtN(totalCap)} capacity` : 'loading…',
+                isRed: false,
+              },
+              {
+                label: 'Reply Rate (incl. OOO)',
+                color: '#224388',
+                value: todayAgg && todayAgg.sent > 0 ? fmtPct(replyRate) : '—',
+                sub: todayAgg ? `${fmtN((todayAgg.replies || 0) + (todayAgg.oooReplies || 0))} total replies today` : 'loading…',
+                isRed: replyRate < 1 && (todayAgg?.sent ?? 0) > 50,
+              },
+              {
+                label: 'Human Reply Rate',
+                color: '#7C89CD',
+                value: todayAgg && todayAgg.sent > 0 ? fmtPct(humanRate) : '—',
+                sub: todayAgg && todayAgg.sent > 0 ? `${fmtN(todayAgg.replies)} human replies · excl. OOO` : 'excl. OOO & auto-replies',
+                isRed: humanRate < 0.5 && (todayAgg?.sent ?? 0) > 50,
+              },
+              {
+                label: 'Bounce Rate',
+                color: '#D97706',
+                value: todayAgg && todayAgg.sent > 0 ? fmtPct(bounceRate) : '—',
+                sub: todayAgg ? `${fmtN(todayAgg.bounces)} bounces today` : 'loading…',
+                isRed: bounceRate > THR.bounceMax,
+              },
+              {
+                label: 'Inbox Health',
+                color: '#7C89CD',
+                value: warmupEa ? fmtPct(inboxPct) : '—',
+                sub: warmupEa ? `${warmupEa.total_inboxes || 0} mailboxes warming` : 'loading…',
+                isRed: inboxPct < 80 && !!warmupEa,
+              },
+            ].map((card, idx) => (
+              <div className="o-metric" key={idx} style={{ borderTopColor: card.color }}>
+                <div className="o-metric-label">{card.label}</div>
+                <div className="o-metric-val" style={{ color: card.isRed ? '#DC2626' : card.color }}>{card.value}</div>
+                <div className="o-metric-sub">{card.sub}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Section: Rate Trends */}
+          <div className="o-section-h" style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            Rate Trends
+            <div style={{ flex: 1, height: 2, background: '#E2E6F0' }} />
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', marginBottom: '1.75rem' }}>
+            {/* Reply Rate Trends */}
+            <div className="o-card">
+              <div className="o-card-header">
+                <div className="o-card-title">Reply Rate</div>
+              </div>
+              <div className="o-card-body">
                 {[
                   { label: 'Today', val: todayAgg && todayAgg.sent > 0 ? humanRate : null, isToday: true },
                   { label: '3-day avg', val: r3, isToday: false },
@@ -1344,14 +1252,14 @@ export default function ActionsPage() {
                 ].map((row) => {
                   const cls =
                     row.val == null
-                      ? '#9CA3AF'
+                      ? '#6B7280'
                       : row.val >= 3
                       ? '#1F6F78'
                       : row.val >= 1.5
                       ? '#D97706'
                       : '#DC2626'
                   return (
-                    <div key={row.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.8rem 0', borderBottom: '1px solid #F3F4F6' }}>
+                    <div key={row.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.8rem 0', borderBottom: '1px solid #E2E6F0' }}>
                       <span style={{ fontSize: 13, color: '#6B7280', fontWeight: 500 }}>{row.label}</span>
                       <span style={{ fontFamily: 'Genos, sans-serif', fontSize: 22, fontWeight: 700, color: cls, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                         {row.val != null ? fmtPct(row.val) : '—'}
@@ -1361,10 +1269,14 @@ export default function ActionsPage() {
                   )
                 })}
               </div>
+            </div>
 
-              {/* Bounce Rate Trends */}
-              <div style={{ background: 'white', borderRadius: 12, padding: '1.75rem', boxShadow: '0 1px 3px rgba(5,12,41,0.08)' }}>
-                <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 20, fontWeight: 700, color: '#050C29', marginBottom: '1.5rem' }}>Bounce Rate</div>
+            {/* Bounce Rate Trends */}
+            <div className="o-card">
+              <div className="o-card-header">
+                <div className="o-card-title">Bounce Rate</div>
+              </div>
+              <div className="o-card-body">
                 {[
                   { label: 'Today', val: todayAgg && todayAgg.sent > 0 ? bounceRate : null, isToday: true },
                   { label: '3-day avg', val: b3, isToday: false },
@@ -1373,14 +1285,14 @@ export default function ActionsPage() {
                 ].map((row) => {
                   const cls =
                     row.val == null
-                      ? '#9CA3AF'
+                      ? '#6B7280'
                       : row.val <= 2
                       ? '#1F6F78'
                       : row.val <= 5
                       ? '#D97706'
                       : '#DC2626'
                   return (
-                    <div key={row.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.8rem 0', borderBottom: '1px solid #F3F4F6' }}>
+                    <div key={row.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.8rem 0', borderBottom: '1px solid #E2E6F0' }}>
                       <span style={{ fontSize: 13, color: '#6B7280', fontWeight: 500 }}>{row.label}</span>
                       <span style={{ fontFamily: 'Genos, sans-serif', fontSize: 22, fontWeight: 700, color: cls, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                         {row.val != null ? fmtPct(row.val) : '—'}
@@ -1391,112 +1303,105 @@ export default function ActionsPage() {
                 })}
               </div>
             </div>
+          </div>
 
-            {/* Section: Lead Pipeline */}
-            <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 16, fontWeight: 700, color: '#050C29', textTransform: 'uppercase', letterSpacing: 2, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              Lead Pipeline
-              <div style={{ flex: 1, height: 2, background: '#E5E7EB' }} />
+          {/* Section: Lead Pipeline */}
+          <div className="o-section-h" style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            Lead Pipeline
+            <div style={{ flex: 1, height: 2, background: '#E2E6F0' }} />
+          </div>
+
+          <div className="o-metrics o-metrics-5" style={{ marginBottom: '1.75rem' }}>
+            {pipelineItems.map((item) => {
+              const count = leadMap[item.key] || 0
+              const p = totalLeads > 0 ? ((count / totalLeads) * 100).toFixed(1) : '0.0'
+              return (
+                <div className="o-metric" key={item.key} style={{ borderTopColor: item.color, textAlign: 'center' }}>
+                  <div className="o-metric-label">{item.label}</div>
+                  <div className="o-metric-val" style={{ color: item.color }}>{fmtN(count)}</div>
+                  <div className="o-metric-sub">{p}% of total</div>
+                </div>
+              )
+            })}
+          </div>
+
+          {/* Section: Campaign Breakdown */}
+          <div className="o-section-h" style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            Campaign Breakdown — This Month
+            <div style={{ flex: 1, height: 2, background: '#E2E6F0' }} />
+          </div>
+
+          <div className="o-card" style={{ marginBottom: '1.75rem' }}>
+            <div className="o-card-body" style={{ padding: 0 }}>
+              <div className="o-table-wrap">
+                <table className="o-table">
+                  <thead>
+                    <tr>
+                      {['Campaign', 'Status', 'Sent', 'Replies', 'Reply %', 'Bounces', 'Bounce %'].map((h) => (
+                        <th key={h}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sortedCampaigns.length === 0 ? (
+                      <LoadingRow cols={7} msg={loadingClient ? 'Loading…' : 'No campaign data for this month'} />
+                    ) : (
+                      sortedCampaigns.map((c) => {
+                        const sent = c.sent_count || 0
+                        const replies = c.replied_count || 0
+                        const bounces = c.bounced_count || 0
+                        const rr = pct(replies, sent)
+                        const br = pct(bounces, sent)
+                        const rrCls = rr >= 3 ? '#1F6F78' : rr >= 1.5 ? '#D97706' : '#DC2626'
+                        const brCls = br <= 2 ? '#1F6F78' : br <= 5 ? '#D97706' : '#DC2626'
+                        return (
+                          <tr key={c.camp_id}>
+                            <td style={{ maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.camp_name || ''}>
+                              {shortName(c.camp_name)}
+                            </td>
+                            <td><Badge status={c.status} /></td>
+                            <td>
+                              <span style={{ fontFamily: 'Genos, sans-serif', fontSize: 17, fontWeight: 700, color: '#050C29' }}>{fmtN(sent)}</span>
+                            </td>
+                            <td>
+                              <span style={{ fontFamily: 'Genos, sans-serif', fontSize: 17, fontWeight: 700, color: '#050C29' }}>{fmtN(replies)}</span>
+                            </td>
+                            <td>
+                              <span style={{ fontFamily: 'Genos, sans-serif', fontSize: 17, fontWeight: 700, color: rrCls }}>{sent > 0 ? fmtPct(rr) : '—'}</span>
+                            </td>
+                            <td>
+                              <span style={{ fontFamily: 'Genos, sans-serif', fontSize: 17, fontWeight: 700, color: '#050C29' }}>{fmtN(bounces)}</span>
+                            </td>
+                            <td>
+                              <span style={{ fontFamily: 'Genos, sans-serif', fontSize: 17, fontWeight: 700, color: brCls }}>{sent > 0 ? fmtPct(br) : '—'}</span>
+                            </td>
+                          </tr>
+                        )
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
+          </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '1.25rem', marginBottom: '1.75rem' }}>
-              {pipelineItems.map((item) => {
-                const count = leadMap[item.key] || 0
-                const p = totalLeads > 0 ? ((count / totalLeads) * 100).toFixed(1) : '0.0'
-                return (
-                  <div
-                    key={item.key}
-                    style={{
-                      background: 'white',
-                      borderRadius: 10,
-                      padding: '1.25rem',
-                      boxShadow: '0 1px 3px rgba(5,12,41,0.08)',
-                      textAlign: 'center',
-                      borderTop: `4px solid ${item.color}`,
-                    }}
-                  >
-                    <div style={{ fontSize: 11, fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>{item.label}</div>
-                    <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 36, fontWeight: 700, lineHeight: 1, color: item.color }}>{fmtN(count)}</div>
-                    <div style={{ fontSize: 12, color: '#9CA3AF', marginTop: 4 }}>{p}% of total</div>
-                  </div>
-                )
-              })}
-            </div>
+          {/* Section: Warmup & Inbox Health */}
+          <div className="o-section-h" style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            Warmup &amp; Inbox Health — Today
+            <div style={{ flex: 1, height: 2, background: '#E2E6F0' }} />
+          </div>
 
-            {/* Section: Campaign Breakdown */}
-            <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 16, fontWeight: 700, color: '#050C29', textTransform: 'uppercase', letterSpacing: 2, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              Campaign Breakdown — This Month
-              <div style={{ flex: 1, height: 2, background: '#E5E7EB' }} />
-            </div>
-
-            <div style={{ background: 'white', borderRadius: 12, padding: '1.75rem', boxShadow: '0 1px 3px rgba(5,12,41,0.08)', marginBottom: '1.75rem', overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr>
-                    {['Campaign', 'Status', 'Sent', 'Replies', 'Reply %', 'Bounces', 'Bounce %'].map((h) => (
-                      <th
-                        key={h}
-                        style={{ padding: '12px 16px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: 1, borderBottom: '2px solid #F3F4F6', background: '#FAFBFC' }}
-                      >
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedCampaigns.length === 0 ? (
-                    <LoadingRow cols={7} msg={loadingClient ? 'Loading…' : 'No campaign data for this month'} />
-                  ) : (
-                    sortedCampaigns.map((c) => {
-                      const sent = c.sent_count || 0
-                      const replies = c.replied_count || 0
-                      const bounces = c.bounced_count || 0
-                      const rr = pct(replies, sent)
-                      const br = pct(bounces, sent)
-                      const rrCls = rr >= 3 ? '#1F6F78' : rr >= 1.5 ? '#D97706' : '#DC2626'
-                      const brCls = br <= 2 ? '#1F6F78' : br <= 5 ? '#D97706' : '#DC2626'
-                      return (
-                        <tr key={c.camp_id} style={{ borderBottom: '1px solid #F3F4F6' }}>
-                          <td style={{ padding: '13px 16px', fontSize: 14, maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.camp_name || ''}>
-                            {shortName(c.camp_name)}
-                          </td>
-                          <td style={{ padding: '13px 16px' }}><Badge status={c.status} /></td>
-                          <td style={{ padding: '13px 16px' }}>
-                            <span style={{ fontFamily: 'Genos, sans-serif', fontSize: 17, fontWeight: 700, color: '#050C29' }}>{fmtN(sent)}</span>
-                          </td>
-                          <td style={{ padding: '13px 16px' }}>
-                            <span style={{ fontFamily: 'Genos, sans-serif', fontSize: 17, fontWeight: 700, color: '#050C29' }}>{fmtN(replies)}</span>
-                          </td>
-                          <td style={{ padding: '13px 16px' }}>
-                            <span style={{ fontFamily: 'Genos, sans-serif', fontSize: 17, fontWeight: 700, color: rrCls }}>{sent > 0 ? fmtPct(rr) : '—'}</span>
-                          </td>
-                          <td style={{ padding: '13px 16px' }}>
-                            <span style={{ fontFamily: 'Genos, sans-serif', fontSize: 17, fontWeight: 700, color: '#050C29' }}>{fmtN(bounces)}</span>
-                          </td>
-                          <td style={{ padding: '13px 16px' }}>
-                            <span style={{ fontFamily: 'Genos, sans-serif', fontSize: 17, fontWeight: 700, color: brCls }}>{sent > 0 ? fmtPct(br) : '—'}</span>
-                          </td>
-                        </tr>
-                      )
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Section: Warmup & Inbox Health */}
-            <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 16, fontWeight: 700, color: '#050C29', textTransform: 'uppercase', letterSpacing: 2, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              Warmup &amp; Inbox Health — Today
-              <div style={{ flex: 1, height: 2, background: '#E5E7EB' }} />
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', marginBottom: '1.75rem' }}>
-              {/* Agency Inbox Rates */}
-              <div style={{ background: 'white', borderRadius: 12, padding: '1.75rem', boxShadow: '0 1px 3px rgba(5,12,41,0.08)' }}>
-                <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 20, fontWeight: 700, color: '#050C29', marginBottom: '1.5rem' }}>Agency Inbox Rates</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', marginBottom: '1.75rem' }}>
+            {/* Agency Inbox Rates */}
+            <div className="o-card">
+              <div className="o-card-header">
+                <div className="o-card-title">Agency Inbox Rates</div>
+              </div>
+              <div className="o-card-body">
                 {!warmupEa ? (
-                  <p style={{ color: '#9CA3AF', textAlign: 'center', padding: '2rem', fontSize: 14 }}>
+                  <div className="o-empty">
                     {loadingClient ? 'Loading…' : 'No warmup data'}
-                  </p>
+                  </div>
                 ) : (
                   <>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem', marginBottom: '1.5rem', textAlign: 'center' }}>
@@ -1515,7 +1420,7 @@ export default function ActionsPage() {
                       { label: 'Google inbox rate', val: parseFloat(warmupEa.google_percent || '0'), higherGood: true },
                       { label: 'Microsoft inbox rate', val: parseFloat(warmupEa.microsoft_percent || '0'), higherGood: true },
                     ].map((row) => {
-                      const cls =
+                      const _cls =
                         row.val >= 3
                           ? pctCls(row.val, true) === 'pct-good'
                             ? '#1F6F78'
@@ -1523,13 +1428,13 @@ export default function ActionsPage() {
                           : '#DC2626'
                       const color = row.val >= 3 ? '#1F6F78' : row.val >= 1.5 ? '#D97706' : '#DC2626'
                       return (
-                        <div key={row.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.8rem 0', borderBottom: '1px solid #F3F4F6' }}>
+                        <div key={row.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.8rem 0', borderBottom: '1px solid #E2E6F0' }}>
                           <span style={{ fontSize: 13, color: '#6B7280', fontWeight: 500 }}>{row.label}</span>
                           <span style={{ fontFamily: 'Genos, sans-serif', fontSize: 17, fontWeight: 700, color }}>{row.val.toFixed(1)}%</span>
                         </div>
                       )
                     })}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.8rem 0', borderBottom: '1px solid #F3F4F6' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.8rem 0', borderBottom: '1px solid #E2E6F0' }}>
                       <span style={{ fontSize: 13, color: '#6B7280', fontWeight: 500 }}>Total warmup sent today</span>
                       <span style={{ fontFamily: 'Genos, sans-serif', fontSize: 17, fontWeight: 700, color: '#050C29' }}>{fmtN(warmupEa.total_warmup_sent || 0)}</span>
                     </div>
@@ -1542,17 +1447,21 @@ export default function ActionsPage() {
                   </>
                 )}
               </div>
+            </div>
 
-              {/* Mailboxes by Domain */}
-              <div style={{ background: 'white', borderRadius: 12, padding: '1.75rem', boxShadow: '0 1px 3px rgba(5,12,41,0.08)' }}>
-                <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 20, fontWeight: 700, color: '#050C29', marginBottom: '1.5rem' }}>Mailboxes by Domain</div>
+            {/* Mailboxes by Domain */}
+            <div className="o-card">
+              <div className="o-card-header">
+                <div className="o-card-title">Mailboxes by Domain</div>
+              </div>
+              <div className="o-card-body">
                 {domainEntries.length === 0 ? (
-                  <p style={{ color: '#9CA3AF', textAlign: 'center', padding: '2rem', fontSize: 14 }}>
+                  <div className="o-empty">
                     {loadingClient ? 'Loading…' : 'No domain data'}
-                  </p>
+                  </div>
                 ) : (
                   domainEntries.map(([domain, count]) => (
-                    <div key={domain} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.55rem 0', borderBottom: '1px solid #F9FAFB', fontSize: 13 }}>
+                    <div key={domain} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.55rem 0', borderBottom: '1px solid #E2E6F0', fontSize: 13 }}>
                       <span style={{ fontWeight: 600, color: '#050C29' }}>{domain}</span>
                       <span style={{ fontFamily: 'Genos, sans-serif', fontSize: 17, fontWeight: 700, color: '#224388' }}>{count}</span>
                     </div>
@@ -1560,51 +1469,50 @@ export default function ActionsPage() {
                 )}
               </div>
             </div>
+          </div>
 
-            {/* Section: Mailbox Status */}
-            <div style={{ fontFamily: 'Genos, sans-serif', fontSize: 16, fontWeight: 700, color: '#050C29', textTransform: 'uppercase', letterSpacing: 2, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              Mailbox Status
-              <div style={{ flex: 1, height: 2, background: '#E5E7EB' }} />
-            </div>
+          {/* Section: Mailbox Status */}
+          <div className="o-section-h" style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            Mailbox Status
+            <div style={{ flex: 1, height: 2, background: '#E2E6F0' }} />
+          </div>
 
-            <div style={{ background: 'white', borderRadius: 12, padding: '1.75rem', boxShadow: '0 1px 3px rgba(5,12,41,0.08)', overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr>
-                    {['Email', 'Provider', 'Status', 'Warmup', 'Daily Limit'].map((h) => (
-                      <th
-                        key={h}
-                        style={{ padding: '12px 16px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: 1, borderBottom: '2px solid #F3F4F6', background: '#FAFBFC' }}
-                      >
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedMailboxes.length === 0 ? (
-                    <LoadingRow cols={5} msg={loadingClient ? 'Loading…' : 'No mailboxes found'} />
-                  ) : (
-                    sortedMailboxes.map((a) => (
-                      <tr key={a._id || a.email} style={{ borderBottom: '1px solid #F3F4F6' }}>
-                        <td style={{ padding: '13px 16px', fontSize: 13, fontWeight: 500 }}>{a.email || '—'}</td>
-                        <td style={{ padding: '13px 16px', fontSize: 12, color: '#6B7280' }}>{(a.provider || '—').replace('365', '')}</td>
-                        <td style={{ padding: '13px 16px' }}><Badge status={a.status} /></td>
-                        <td style={{ padding: '13px 16px' }}><Badge status={a.warmup_status} /></td>
-                        <td style={{ padding: '13px 16px' }}>
-                          <span style={{ fontFamily: 'Genos, sans-serif', fontSize: 17, fontWeight: 700, color: '#050C29' }}>
-                            {a.payload?.daily_limit ?? '—'}
-                          </span>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+          <div className="o-card">
+            <div className="o-card-body" style={{ padding: 0 }}>
+              <div className="o-table-wrap">
+                <table className="o-table">
+                  <thead>
+                    <tr>
+                      {['Email', 'Provider', 'Status', 'Warmup', 'Daily Limit'].map((h) => (
+                        <th key={h}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sortedMailboxes.length === 0 ? (
+                      <LoadingRow cols={5} msg={loadingClient ? 'Loading…' : 'No mailboxes found'} />
+                    ) : (
+                      sortedMailboxes.map((a) => (
+                        <tr key={a._id || a.email}>
+                          <td style={{ fontSize: 13, fontWeight: 500 }}>{a.email || '—'}</td>
+                          <td style={{ fontSize: 12, color: '#6B7280' }}>{(a.provider || '—').replace('365', '')}</td>
+                          <td><Badge status={a.status} /></td>
+                          <td><Badge status={a.warmup_status} /></td>
+                          <td>
+                            <span style={{ fontFamily: 'Genos, sans-serif', fontSize: 17, fontWeight: 700, color: '#050C29' }}>
+                              {a.payload?.daily_limit ?? '—'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </>
-        )}
-      </div>
+          </div>
+        </>
+      )}
     </div>
   )
 }
