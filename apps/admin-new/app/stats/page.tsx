@@ -20,7 +20,7 @@ interface WorkspaceRow {
 
 interface StatsData {
   rows: WorkspaceRow[]
-  totals: { sent: number; replies: number; leads: number }
+  totals: { sent: number; replies: number; leads: number; replyRate: number }
   period: string
 }
 
@@ -51,7 +51,7 @@ export default function StatsPage() {
   const t = data?.totals
   const rows = data?.rows ?? []
 
-  const replyRate = t && t.sent > 0 ? ((t.replies / t.sent) * 100).toFixed(1) + '%' : '—'
+  const replyRate = t?.replyRate != null ? (t.replyRate * 100).toFixed(1) + '%' : '—'
 
   return (
     <div className="o-page">
