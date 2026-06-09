@@ -3006,18 +3006,19 @@ function computeWorkspaceStatsForRange(wsIds, start, end) {
       const d = (l.date || '').slice(0, 10);
       return d >= start && d <= end;
     });
-    const totals = { sent: 0, replies: 0, posReplies: 0, oooReplies: 0, bounces: 0, leads: wsLeads.length };
+    const totals = { sent: 0, contacted: 0, replies: 0, posReplies: 0, oooReplies: 0, bounces: 0, leads: wsLeads.length };
     const series = dates.map(date => {
       const d = performanceCache.dailyStats.get(`${wsId}|${date}`)?.data || { ...EMPTY_PERF_AGG };
       const dayLeads = wsLeads.filter(l => (l.date || '').slice(0,10) === date).length;
       totals.sent       += d.sent;
+      totals.contacted  += d.contacted;
       totals.replies    += d.replies;
       totals.posReplies += d.posReplies;
       totals.oooReplies += d.oooReplies;
       totals.bounces    += d.bounces;
       return { date, sent: d.sent, replies: d.replies, posReplies: d.posReplies, oooReplies: d.oooReplies, bounces: d.bounces, leads: dayLeads };
     });
-    const replyRate  = totals.sent    > 0 ? totals.replies / totals.sent    : 0;
+    const replyRate  = totals.contacted > 0 ? totals.replies / totals.contacted : 0;
     const bounceRate = totals.sent    > 0 ? totals.bounces / totals.sent    : 0;
     const rtl        = totals.replies > 0 ? totals.leads   / totals.replies : 0;
     const sendsPerDay   = dates.length > 0 ? totals.sent    / dates.length : 0;
