@@ -451,9 +451,15 @@ export default function StatsPage() {
   }
 
   function applyCustom() {
-    if (!customStart || !customEnd) return
+    if (!customStart || !customEnd) {
+      alert('Please select both start and end dates')
+      return
+    }
     setActivePeriod(null)
-    loadStats(customStart, customEnd)
+    // Ensure dates are in YYYY-MM-DD format
+    const start = customStart.includes('-') ? customStart : new Date(customStart).toISOString().slice(0, 10)
+    const end = customEnd.includes('-') ? customEnd : new Date(customEnd).toISOString().slice(0, 10)
+    loadStats(start, end)
   }
 
   async function forceRefresh() {
