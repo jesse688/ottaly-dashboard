@@ -7,3 +7,4 @@ dist/
 .env.production
 .DS_Store
 *.db
+.vercel

@@ -1,0 +1,222 @@
+'use client'
+
+import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
+
+interface Lead {
+  id: string
+  email: string
+  first_name: string | null
+  last_name: string | null
+  company_name: string | null
+  status: string
+  label: string | null
+  first_replied_at: string | null
+  campaign_name: string | null
+}
+
+const STATUS_COLOR: Record<string, string> = {
+  INTERESTED:     'bg-blue-100 text-blue-700',
+  MEETING_BOOKED: 'bg-green-100 text-green-700',
+}
+const STATUS_LABEL: Record<string, string> = {
+  INTERESTED:     'Lead',
+  MEETING_BOOKED: 'Meeting Booked',
+}
+
+function initials(lead: Lead) {
+  const f = lead.first_name?.charAt(0) ?? ''
+  const l = lead.last_name?.charAt(0) ?? ''
+  return (f + l).toUpperCase() || lead.email.charAt(0).toUpperCase()
+}
+
+function fullName(lead: Lead) {
+  return [lead.first_name, lead.last_name].filter(Boolean).join(' ') || lead.email
+}
+
+function fmtDate(d: string | null) {
+  if (!d) return ''
+  const date = new Date(d)
+  const now = new Date()
+  const diff = now.getTime() - date.getTime()
+  const days = Math.floor(diff / 86400000)
+  if (days === 0) return 'Today'
+  if (days === 1) return 'Yesterday'
+  if (days < 7) return `${days} days ago`
+  return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+}
+
+export function UniboxClient({ companyName }: { companyName: string }) {
+  const [leads, setLeads] = useState<Lead[] | null>(null)
+  const [selected, setSelected] = useState<Lead | null>(null)
+  const [filter, setFilter] = useState<'all' | 'INTERESTED' | 'MEETING_BOOKED'>('all')
+  const router = useRouter()
+
+  useEffect(() => {
+    fetch('/api/portal/leads/all')
+      .then(r => r.json())
+      .then((d: Lead[] | { error: string }) => {
+        if (Array.isArray(d)) {
+          setLeads(d)
+          if (d.length > 0) setSelected(d[0])
+        }
+      })
+  }, [])
+
+  const filtered = leads?.filter(l => filter === 'all' || l.status === filter) ?? []
+
+  async function handleLogout() {
+    await fetch('/api/logout', { method: 'POST' })
+    router.push('/login')
+  }
+
+  return (
+    <div className="h-screen flex flex-col bg-white">
+      {/* Top bar */}
+      <header className="h-12 bg-slate-900 flex items-center px-4 shrink-0 gap-3">
+        <span className="text-white font-bold text-sm tracking-wide">Ottaly</span>
+        <span className="text-slate-500 text-xs">|</span>
+        <span className="text-slate-300 text-sm">{companyName}</span>
+        <div className="ml-auto flex items-center gap-3">
+          <button onClick={handleLogout} className="text-slate-400 hover:text-white text-xs">
+            Sign out
+          </button>
+          <div className="w-7 h-7 rounded-full bg-indigo-600 flex items-center justify-center text-white text-xs font-semibold">
+            {companyName.charAt(0).toUpperCase()}
+          </div>
+        </div>
+      </header>
+
+      <div className="flex flex-1 overflow-hidden">
+        {/* Lead list panel */}
+        <div className="w-80 border-r border-gray-100 flex flex-col shrink-0">
+          {/* Filter tabs */}
+          <div className="px-3 py-2 border-b border-gray-100 flex gap-1">
+            {(['all', 'INTERESTED', 'MEETING_BOOKED'] as const).map(f => (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                  filter === f
+                    ? 'bg-indigo-600 text-white'
+                    : 'text-gray-500 hover:text-gray-800 hover:bg-gray-100'
+                }`}
+              >
+                {f === 'all' ? 'All' : STATUS_LABEL[f]}
+                {leads && (
+                  <span className="ml-1 opacity-75">
+                    ({f === 'all' ? leads.length : leads.filter(l => l.status === f).length})
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+
+          {/* List */}
+          <div className="flex-1 overflow-y-auto">
+            {leads === null ? (
+              Array.from({ length: 8 }).map((_, i) => (
+                <div key={i} className="flex gap-3 px-3 py-3 border-b border-gray-50">
+                  <div className="w-9 h-9 rounded-full bg-gray-100 animate-pulse shrink-0" />
+                  <div className="flex-1 space-y-1.5">
+                    <div className="h-3.5 bg-gray-100 rounded animate-pulse w-3/4" />
+                    <div className="h-3 bg-gray-100 rounded animate-pulse w-1/2" />
+                  </div>
+                </div>
+              ))
+            ) : filtered.length === 0 ? (
+              <div className="p-6 text-center text-sm text-gray-400">No leads</div>
+            ) : (
+              filtered.map(lead => (
+                <button
+                  key={lead.id}
+                  onClick={() => setSelected(lead)}
+                  className={`w-full text-left flex gap-3 px-3 py-3 border-b border-gray-50 hover:bg-gray-50 transition-colors ${
+                    selected?.id === lead.id ? 'bg-indigo-50 border-l-2 border-l-indigo-500' : ''
+                  }`}
+                >
+                  <div className="w-9 h-9 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 text-xs font-semibold shrink-0">
+                    {initials(lead)}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-medium text-gray-900 truncate">{fullName(lead)}</span>
+                      <span className="text-xs text-gray-400 shrink-0">{fmtDate(lead.first_replied_at)}</span>
+                    </div>
+                    <div className="text-xs text-gray-500 truncate mt-0.5">{lead.company_name || lead.email}</div>
+                    <div className="mt-1">
+                      <span className={`inline-flex px-1.5 py-0.5 rounded text-xs font-medium ${STATUS_COLOR[lead.status] ?? 'bg-gray-100 text-gray-600'}`}>
+                        {STATUS_LABEL[lead.status] ?? lead.status}
+                      </span>
+                    </div>
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* Detail panel */}
+        <div className="flex-1 overflow-auto bg-white">
+          {selected ? (
+            <div className="max-w-2xl p-6">
+              {/* Header */}
+              <div className="flex items-start justify-between mb-6">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 text-base font-semibold">
+                    {initials(selected)}
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-semibold text-gray-900">{fullName(selected)}</h2>
+                    <p className="text-sm text-gray-500">{selected.email}</p>
+                  </div>
+                </div>
+                <span className={`inline-flex px-2.5 py-1 rounded-full text-sm font-medium ${STATUS_COLOR[selected.status] ?? 'bg-gray-100 text-gray-600'}`}>
+                  {STATUS_LABEL[selected.status] ?? selected.status}
+                </span>
+              </div>
+
+              {/* Details grid */}
+              <div className="grid grid-cols-2 gap-4 mb-6">
+                {[
+                  { label: 'Company', value: selected.company_name },
+                  { label: 'Email', value: selected.email },
+                  { label: 'Campaign', value: selected.campaign_name },
+                  { label: 'Replied', value: selected.first_replied_at ? new Date(selected.first_replied_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }) : null },
+                ].map(({ label, value }) => (
+                  <div key={label} className="bg-gray-50 rounded-lg p-3">
+                    <p className="text-xs text-gray-500 mb-0.5">{label}</p>
+                    <p className="text-sm font-medium text-gray-900">{value || '—'}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Replied indicator */}
+              <div className="border border-gray-100 rounded-xl p-4 bg-white">
+                <div className="flex items-center gap-2 text-sm text-gray-600">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-green-500">
+                    <polyline points="9 11 12 14 22 4"/>
+                    <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+                  </svg>
+                  <span>This lead replied to your campaign</span>
+                  {selected.first_replied_at && (
+                    <span className="text-gray-400">· {fmtDate(selected.first_replied_at)}</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="h-full flex items-center justify-center">
+              <div className="text-center text-gray-400">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mx-auto mb-3 text-gray-200">
+                  <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.62 3.44 2 2 0 0 1 3.62 1.25h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.84a16 16 0 0 0 6 6l.95-.95a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7a2 2 0 0 1 1.72 2.02z"/>
+                </svg>
+                <p className="text-sm">Select a lead to view details</p>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
