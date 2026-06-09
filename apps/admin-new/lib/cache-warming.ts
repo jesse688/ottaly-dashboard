@@ -34,19 +34,30 @@ function lastNDates(n: number): string[] {
 }
 
 async function pvFetch(path: string): Promise<any> {
-  const res = await fetch(`${PV_BASE}${path}`, {
+  const url = `${PV_BASE}${path}`
+  console.log(`[cache-warming] fetching ${url}`)
+  const res = await fetch(url, {
     headers: { 'x-api-key': PV_KEY },
     signal: AbortSignal.timeout(15000),
   })
-  if (!res.ok) throw new Error(`PlusVibe ${res.status}`)
-  return res.json()
+  if (!res.ok) {
+    const err = `PlusVibe ${res.status}`
+    console.error(`[cache-warming] ${err}`)
+    throw new Error(err)
+  }
+  const data = await res.json()
+  console.log(`[cache-warming] got response:`, JSON.stringify(data).slice(0, 200))
+  return data
 }
 
 function aggregatePvEmailStats(raw: any): Record<string, number> {
   const header = raw?.header
-  if (!header) return { sent: 0, replies: 0, bounces: 0, posReplies: 0, oooReplies: 0, leads: 0 }
+  if (!header) {
+    console.warn('[cache-warming] no header in PV response:', JSON.stringify(raw).slice(0, 100))
+    return { sent: 0, replies: 0, bounces: 0, posReplies: 0, oooReplies: 0, leads: 0 }
+  }
 
-  return {
+  const agg = {
     sent: header.total_sent_count ?? 0,
     replies: header.total_reply_count ?? 0,
     bounces: header.total_bounce_count ?? 0,
@@ -54,6 +65,8 @@ function aggregatePvEmailStats(raw: any): Record<string, number> {
     oooReplies: header.total_ooo_reply_count ?? 0,
     leads: 0, // Not available from email-stats, loaded separately
   }
+  console.log(`[cache-warming] aggregated: sent=${agg.sent} replies=${agg.replies} ooo=${agg.oooReplies}`)
+  return agg
 }
 
 async function ensurePerfCacheDaily(wsIds: string[], dates: string[]): Promise<void> {
