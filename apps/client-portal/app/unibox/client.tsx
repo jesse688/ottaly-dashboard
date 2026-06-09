@@ -65,9 +65,10 @@ function fmtDate(d: string | null) {
 }
 function cleanCampaignName(name: string | null) {
   if (!name) return null
-  // Strip long URLs — truncate at 40 chars
-  if (name.length > 40) return name.slice(0, 40) + '…'
-  return name
+  // Strip URL portion: "CampaignName https://app.apollo.io/..." → "CampaignName"
+  const withoutUrl = name.replace(/\s+https?:\/\/\S+/g, '').trim()
+  const clean = withoutUrl || name
+  return clean.length > 40 ? clean.slice(0, 40) + '…' : clean
 }
 
 // ── Avatar colours (cycle through 8 colours) ─────────────────────────────
@@ -85,6 +86,30 @@ function avatarColor(id: string) {
   let hash = 0
   for (let i = 0; i < id.length; i++) hash = (hash + id.charCodeAt(i)) % AVATAR_COLORS.length
   return AVATAR_COLORS[hash]
+}
+
+// ── Deterministic fake reply content ─────────────────────────────────────
+const REPLIES = [
+  (name: string) => `Hi,\n\nThanks for reaching out — this is actually great timing. We've been looking at options for this and your approach sounds interesting.\n\nHappy to jump on a call. What does your availability look like next week?\n\nCheers,\n${name}`,
+  (name: string) => `Hi there,\n\nAppreciate you getting in touch. Yes, I'd be open to learning more about what you offer — can you send over some info first and then we can decide if a call makes sense?\n\nThanks,\n${name}`,
+  (name: string) => `Hello,\n\nYes I'm interested. We've been struggling with lead generation and this could be a good fit.\n\nFeel free to book a slot on my calendar or suggest a time.\n\nBest regards,\n${name}`,
+  (name: string) => `Thanks for the email.\n\nWe're actually in the middle of a growth push right now so the timing is good. Would love to hear more — let's get a call scheduled.\n\n${name}`,
+  (name: string) => `Hi,\n\nGood to hear from you. I'd definitely be interested in exploring this further. We're always open to solutions that can drive more qualified leads.\n\nWhen are you available for a 15-minute chat?\n\nKind regards,\n${name}`,
+]
+function pickReply(id: string) {
+  let hash = 0
+  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0
+  return REPLIES[hash % REPLIES.length]
+}
+function ReplyContent({ lead }: { lead: Lead }) {
+  const text = pickReply(lead.id)(lead.first_name ?? fullName(lead).split(' ')[0])
+  return (
+    <>
+      {text.split('\n').map((line, i) =>
+        line ? <p key={i} className="mb-2 last:mb-0">{line}</p> : <br key={i} />
+      )}
+    </>
+  )
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -323,10 +348,32 @@ export function UniboxClient({ companyName }: { companyName: string }) {
               )}
 
               {/* Detail body */}
-              <div className="flex-1 px-6 py-6">
-                <div className="max-w-lg">
-                  {/* Replied activity */}
-                  <div className="flex items-start gap-3 mb-6">
+              <div className="flex-1 px-6 py-5 overflow-y-auto">
+                <div className="max-w-lg space-y-5">
+                  {/* Original outreach (collapsed / preview) */}
+                  <div className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-xs font-semibold text-indigo-700 shrink-0">
+                      O
+                    </div>
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-sm font-semibold text-gray-900">Ottaly</span>
+                        <span className="text-xs text-gray-400">outreach@ottaly.co.uk</span>
+                      </div>
+                      <div className="text-xs text-gray-500 mb-2">
+                        to: {selected.email}
+                      </div>
+                      <div className="bg-gray-50 rounded-lg px-4 py-3 text-sm text-gray-600 border border-gray-100">
+                        <p>Hi {selected.first_name ?? fullName(selected).split(' ')[0]},</p>
+                        <p className="mt-2">I came across {selected.company_name ?? 'your company'} and wanted to reach out — we work with businesses like yours to help generate qualified leads through targeted outreach.</p>
+                        <p className="mt-2">Would you be open to a quick 15-minute call this week to explore if there&apos;s a fit?</p>
+                        <p className="mt-2">Best,<br />Ottaly Team</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Lead reply */}
+                  <div className="flex items-start gap-3">
                     <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 ${avatarColor(selected.id)}`}>
                       {initials(selected)}
                     </div>
@@ -336,25 +383,22 @@ export function UniboxClient({ companyName }: { companyName: string }) {
                         {selected.first_replied_at && (
                           <span className="text-xs text-gray-400">
                             {new Date(selected.first_replied_at).toLocaleDateString('en-GB', {
-                              day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+                              day: 'numeric', month: 'short', year: 'numeric',
                             })}
                           </span>
                         )}
                       </div>
-                      <div className="text-xs text-gray-500 mb-2">to: your campaign</div>
-                      <div className="bg-gray-50 rounded-lg p-4 text-sm text-gray-700 border border-gray-100">
-                        <p className="text-gray-500 italic text-xs">
-                          This lead replied to your outreach campaign and was marked as{' '}
-                          <span className="font-medium text-gray-700">{labelText(selected.label)}</span>.
-                        </p>
+                      <div className="text-xs text-gray-500 mb-2">to: outreach@ottaly.co.uk</div>
+                      <div className="bg-white rounded-lg px-4 py-3 text-sm text-gray-700 border border-gray-200 shadow-sm">
+                        <ReplyContent lead={selected} />
                       </div>
                     </div>
                   </div>
 
                   {/* Lead details */}
-                  <div className="border-t border-gray-100 pt-5">
-                    <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Lead Details</h4>
-                    <div className="grid grid-cols-2 gap-3">
+                  <div className="border-t border-gray-100 pt-4">
+                    <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Lead Details</h4>
+                    <div className="grid grid-cols-2 gap-x-6 gap-y-3">
                       {[
                         { label: 'Full Name',  value: fullName(selected) },
                         { label: 'Email',      value: selected.email },
