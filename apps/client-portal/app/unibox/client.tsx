@@ -436,20 +436,6 @@ export function UniboxClient({ companyName }: { companyName: string }) {
 
               {/* Thread body */}
               <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
-                {/* Outreach */}
-                <div className="flex gap-3">
-                  <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-xs font-semibold text-indigo-700 shrink-0">O</div>
-                  <div className="flex-1">
-                    <div className="flex items-baseline gap-2 mb-1"><span className="text-sm font-semibold text-gray-900">Ottaly</span><span className="text-xs text-gray-400">outreach@ottaly.co.uk</span></div>
-                    <div className="text-xs text-gray-500 mb-2">to: {selected.email}</div>
-                    <div className="rounded-xl border border-gray-200 px-4 py-3 text-sm text-gray-700 bg-gray-50 space-y-2">
-                      <p>Hi {selected.first_name ?? fullName(selected).split(' ')[0]},</p>
-                      <p>I came across {selected.company_name ?? 'your company'} and wanted to reach out — we work with businesses like yours to help generate qualified leads through targeted outreach.</p>
-                      <p>Would you be open to a quick 15-minute call this week to explore if there&apos;s a fit?</p>
-                      <p>Best,<br />Ottaly Team</p>
-                    </div>
-                  </div>
-                </div>
                 {/* Reply status */}
                 {selected.first_replied_at && (
                   <div className="flex gap-3 px-5">
