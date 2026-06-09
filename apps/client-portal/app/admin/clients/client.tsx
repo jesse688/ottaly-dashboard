@@ -25,6 +25,8 @@ export function AdminClientsClient() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [showForm, setShowForm] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
+  const [labelClientId, setLabelClientId] = useState<string | null>(null)
+  const [labelData, setLabelData] = useState<{ labels: { label: string; count: number }[]; hiddenLabels: string[] } | null>(null)
   const [form, setForm] = useState({ email: '', password: '', workspaceId: '', companyName: '' })
   const [resetPassword, setResetPassword] = useState('')
   const [saving, setSaving] = useState(false)
@@ -83,6 +85,27 @@ export function AdminClientsClient() {
     })
     setResetPassword('')
     setEditId(null)
+  }
+
+  async function openLabels(id: string) {
+    setLabelClientId(id)
+    setLabelData(null)
+    const res = await fetch(`/api/admin/clients/${id}/labels`)
+    const data = await res.json() as { labels: { label: string; count: number }[]; hiddenLabels: string[] }
+    setLabelData(data)
+  }
+
+  async function toggleLabel(label: string) {
+    if (!labelData || !labelClientId) return
+    const hidden = labelData.hiddenLabels.includes(label)
+      ? labelData.hiddenLabels.filter(l => l !== label)
+      : [...labelData.hiddenLabels, label]
+    setLabelData({ ...labelData, hiddenLabels: hidden })
+    await fetch(`/api/admin/clients/${labelClientId}/labels`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hiddenLabels: hidden }),
+    })
   }
 
   async function handleDelete(id: string) {
@@ -253,6 +276,13 @@ export function AdminClientsClient() {
                           </button>
                           <span className="text-gray-200">|</span>
                           <button
+                            onClick={() => openLabels(client.id)}
+                            className="text-xs text-indigo-600 hover:text-indigo-800"
+                          >
+                            Labels
+                          </button>
+                          <span className="text-gray-200">|</span>
+                          <button
                             onClick={() => toggleActive(client)}
                             className="text-xs text-gray-500 hover:text-gray-800"
                           >
@@ -304,6 +334,50 @@ export function AdminClientsClient() {
           </table>
         </div>
       </div>
+
+      {/* Label visibility panel */}
+      {labelClientId && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setLabelClientId(null)}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-5" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-semibold text-gray-900">Label Visibility</h2>
+              <button onClick={() => setLabelClientId(null)} className="text-gray-400 hover:text-gray-600 text-lg leading-none">×</button>
+            </div>
+            <p className="text-xs text-gray-500 mb-4">Toggle which labels this client can see in their portal. Hidden labels won&apos;t appear in their unibox.</p>
+            {labelData === null ? (
+              <div className="space-y-2">
+                {[1,2,3].map(i => <div key={i} className="h-8 bg-gray-100 rounded animate-pulse" />)}
+              </div>
+            ) : labelData.labels.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-4">No labels found for this workspace</p>
+            ) : (
+              <div className="space-y-2">
+                {labelData.labels.map(({ label, count }) => {
+                  const hidden = labelData.hiddenLabels.includes(label)
+                  return (
+                    <div key={label} className="flex items-center justify-between p-3 rounded-lg border border-gray-100 hover:bg-gray-50">
+                      <div>
+                        <span className="text-sm font-medium text-gray-900">{label}</span>
+                        <span className="text-xs text-gray-400 ml-2">{count} leads</span>
+                      </div>
+                      <button
+                        onClick={() => toggleLabel(label)}
+                        className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                          hidden
+                            ? 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                            : 'bg-green-100 text-green-700 hover:bg-green-200'
+                        }`}
+                      >
+                        {hidden ? 'Hidden' : 'Visible'}
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

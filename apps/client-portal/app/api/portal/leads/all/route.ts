@@ -7,6 +7,13 @@ export async function GET() {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   try {
+    // Fetch client's hidden_labels config
+    const configRes = await pool.query(
+      'SELECT hidden_labels FROM portal_clients WHERE id = $1',
+      [session.clientId]
+    )
+    const hiddenLabels: string[] = configRes.rows[0]?.hidden_labels ?? []
+
     const res = await pool.query(
       `SELECT l.id, l.email, l.first_name, l.last_name, l.company_name,
               l.status, l.label, l.first_replied_at,
@@ -15,9 +22,10 @@ export async function GET() {
        LEFT JOIN esp_campaigns c ON c.id = l.campaign_id AND c.source = 'plusvibe'
        WHERE l.workspace_id = $1
          AND l.source = 'plusvibe'
-         AND l.status IN ('INTERESTED', 'MEETING_BOOKED')
+         AND l.label IS NOT NULL
+         AND ($2::text[] = '{}' OR l.label != ALL($2::text[]))
        ORDER BY l.first_replied_at DESC NULLS LAST, l.created_at DESC`,
-      [session.workspaceId]
+      [session.workspaceId, hiddenLabels]
     )
     return NextResponse.json(res.rows)
   } catch (err) {
