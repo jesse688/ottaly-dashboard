@@ -57,6 +57,17 @@ export async function GET() {
     )
     results.portal_client = client.rows[0]
 
+    // All workspaces that have plusvibe leads with labels (to find the right workspace_id)
+    const allWs = await pool.query(
+      `SELECT workspace_id, COUNT(*) AS lead_count
+       FROM esp_leads
+       WHERE source = 'plusvibe' AND label IS NOT NULL
+       GROUP BY workspace_id
+       ORDER BY lead_count DESC
+       LIMIT 20`
+    )
+    results.workspaces_with_plusvibe_leads = allWs.rows
+
   } catch (err) {
     results.error = String(err)
   }
