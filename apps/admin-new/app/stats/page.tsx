@@ -287,6 +287,11 @@ function ClientCard({ workspace: w, isAll }: ClientCardProps) {
     setToggles(prev => ({ ...prev, [s]: !prev[s] }))
   }
 
+  // Get latest day's reply rate (not period aggregate)
+  const latestDay = w.series.length > 0 ? w.series[w.series.length - 1] : null
+  const latestRR = latestDay && latestDay.sent > 0 ? latestDay.replies / latestDay.sent : 0
+  const latestRRClass = latestRR >= 0.025 ? 'text-green-600' : latestRR >= 0.01 ? 'text-amber-600' : latestRR > 0 ? 'text-red-600' : 'text-gray-400'
+
   return (
     <div
       className="bg-white rounded-xl border overflow-hidden transition-shadow hover:shadow-md"
@@ -304,7 +309,7 @@ function ClientCard({ workspace: w, isAll }: ClientCardProps) {
             {fmtNum(t.sent)} sent · {fmtNum(t.replies)} replies · {fmtNum(t.leads)} leads
           </div>
         </div>
-        <StatCell val={pct(t.replyRate)} lbl="Reply Rate" cls={rrClass} />
+        <StatCell val={pct(latestRR)} lbl="Reply Rate" cls={latestRRClass} />
         <StatCell val={pct(t.bounceRate)} lbl="Bounce Rate" cls={brClass} />
         <StatCell val={pct(t.rtl)} lbl="RTL" cls={t.rtl >= 0.1 ? 'text-green-600' : t.rtl >= 0.05 ? 'text-amber-600' : ''} />
         <StatCell val={fmtNum(t.leads)} lbl="Leads" cls={t.leads > 0 ? 'text-green-600' : ''} />
@@ -542,13 +547,16 @@ export default function StatsPage() {
             style={{ gridTemplateColumns: '220px repeat(6, 1fr) 48px' }}
           >
             <div>Client</div>
-            <div className="text-right px-2">Reply Rate</div>
+            <div className="text-right px-2">Reply Rate*</div>
             <div className="text-right px-2">Bounce Rate</div>
             <div className="text-right px-2">RTL</div>
             <div className="text-right px-2">Leads</div>
             <div className="text-right px-2">Sends/Day</div>
             <div className="text-right px-2">Replies/Day</div>
             <div />
+          </div>
+          <div className="px-4 text-[10px] text-gray-400 mb-3">
+            * Latest day | Period aggregate for other columns
           </div>
 
           {/* Cards */}
