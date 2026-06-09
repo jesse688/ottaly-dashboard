@@ -21,32 +21,12 @@ import {
   TableRow,
 } from '@/components/ui/table'
 
-// Major UK cities with lat/lng
-const UK_CITIES: Record<string, [number, number]> = {
-  'London':       [51.5074, -0.1278],
-  'Manchester':   [53.4808, -2.2426],
-  'Birmingham':   [52.4862, -1.8904],
-  'Leeds':        [53.8008, -1.5491],
-  'Glasgow':      [55.8642, -4.2518],
-  'Sheffield':    [53.3811, -1.4701],
-  'Edinburgh':    [55.9533, -3.1883],
-  'Liverpool':    [53.4084, -2.9916],
-  'Bristol':      [51.4545, -2.5879],
-  'Cardiff':      [51.4816, -3.1791],
-  'Belfast':      [54.5973, -5.9301],
-  'Leicester':    [52.6369, -1.1398],
-  'Nottingham':   [52.9548, -1.1581],
-  'Newcastle':    [54.9783, -1.6178],
-  'Southampton':  [50.9097, -1.4044],
-  'Brighton':     [50.8225, -0.1372],
-  'Oxford':       [51.7520, -1.2577],
-  'Cambridge':    [52.2053,  0.1218],
-  'Reading':      [51.4543, -0.9781],
-  'York':         [53.9600, -1.0873],
-  'Exeter':       [50.7184, -3.5339],
-  'Norwich':      [52.6309,  1.2974],
-  'Plymouth':     [50.3755, -4.1427],
-}
+const UK_CITIES = [
+  'London', 'Manchester', 'Birmingham', 'Leeds', 'Glasgow', 'Sheffield',
+  'Edinburgh', 'Liverpool', 'Bristol', 'Cardiff', 'Belfast', 'Leicester',
+  'Nottingham', 'Newcastle', 'Southampton', 'Brighton', 'Oxford', 'Cambridge',
+  'Reading', 'York', 'Exeter', 'Norwich', 'Plymouth',
+]
 
 const COMMON_CATEGORIES = [
   { value: 'accounting_firm',                label: 'Accounting Firm' },
@@ -65,7 +45,6 @@ const COMMON_CATEGORIES = [
   { value: 'hotel',                          label: 'Hotel' },
 ]
 
-const RADII = [10, 25, 50, 100, 200]
 
 interface BusinessResult {
   title: string
@@ -107,10 +86,9 @@ export default function DataSourcesPage() {
   const [category, setCategory] = useState('')
   const [customCategory, setCustomCategory] = useState('')
   const [city, setCity] = useState('London')
-  const [radius, setRadius] = useState(25)
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS)
 
-  const [checkResult, setCheckResult] = useState<{ total_count: number; cost_estimate: number } | null>(null)
+  const [checkResult, setCheckResult] = useState<{ total_count: number } | null>(null)
   const [checking, setChecking] = useState(false)
 
   const [results, setResults] = useState<BusinessResult[]>([])
@@ -207,18 +185,11 @@ export default function DataSourcesPage() {
     setPipelineProgress(null)
   }
 
-  function getCoords(): [number, number] | null {
-    const coords = UK_CITIES[city]
-    return coords ?? null
-  }
-
   function activeCategory() {
     return customCategory.trim() || category
   }
 
   async function handleCheck() {
-    const coords = getCoords()
-    if (!coords) { setError('Select a city'); return }
     const cat = activeCategory()
     if (!cat) { setError('Enter a category'); return }
     setError(null)
@@ -228,7 +199,7 @@ export default function DataSourcesPage() {
       const res = await fetch('/api/data-sources/check', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ category: cat, lat: coords[0], lng: coords[1], radius, filters }),
+        body: JSON.stringify({ category: cat, city, filters }),
       })
       const data = await res.json()
       if (!res.ok) { setError(data.error ?? 'Check failed'); return }
@@ -241,8 +212,6 @@ export default function DataSourcesPage() {
   }
 
   async function handlePull(token?: string | null) {
-    const coords = getCoords()
-    if (!coords) { setError('Select a city'); return }
     const cat = activeCategory()
     if (!cat) { setError('Enter a category'); return }
     setError(null)
@@ -253,12 +222,9 @@ export default function DataSourcesPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           category: cat,
-          lat: coords[0],
-          lng: coords[1],
-          radius,
+          city,
           filters,
-          limit: 1000,
-          offset_token: token ?? undefined,
+          depth: 100,
         }),
       })
       const data = await res.json()
@@ -550,31 +516,11 @@ export default function DataSourcesPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {Object.keys(UK_CITIES).map(c => (
+                  {UK_CITIES.map(c => (
                     <SelectItem key={c} value={c}>{c}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-            </div>
-
-            {/* Radius */}
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">Radius</label>
-              <div className="flex gap-1 flex-wrap">
-                {RADII.map(r => (
-                  <button
-                    key={r}
-                    onClick={() => setRadius(r)}
-                    className={`px-2 py-1 text-xs rounded border transition-colors ${
-                      radius === r
-                        ? 'bg-gray-900 text-white border-gray-900'
-                        : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
-                    }`}
-                  >
-                    {r}km
-                  </button>
-                ))}
-              </div>
             </div>
 
             {/* Filters */}
@@ -629,14 +575,10 @@ export default function DataSourcesPage() {
             {error && <p className="text-xs text-red-600">{error}</p>}
 
             {checkResult && (
-              <div className="bg-gray-50 border rounded p-3 text-sm space-y-1">
+              <div className="bg-gray-50 border rounded p-3 text-sm">
                 <div className="flex justify-between">
-                  <span className="text-gray-500">Matches</span>
-                  <span className="font-semibold">{checkResult.total_count.toLocaleString()}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Est. cost</span>
-                  <span className="font-semibold">${checkResult.cost_estimate.toFixed(2)}</span>
+                  <span className="text-gray-500">Found (sample)</span>
+                  <span className="font-semibold">{checkResult.total_count.toLocaleString()} results</span>
                 </div>
               </div>
             )}
@@ -655,7 +597,7 @@ export default function DataSourcesPage() {
               onClick={() => handlePull(null)}
               disabled={pulling}
             >
-              {pulling ? 'Pulling…' : checkResult ? `Pull results (~$${checkResult.cost_estimate.toFixed(2)})` : 'Pull results'}
+              {pulling ? 'Pulling…' : 'Pull results'}
             </Button>
           </div>
         </div>

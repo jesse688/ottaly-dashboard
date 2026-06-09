@@ -1,9 +1,32 @@
 import { type NextRequest, NextResponse } from 'next/server'
-import { buildFilters } from '../filters'
 
 const DATAFORSEO_LOGIN = process.env.DATAFORSEO_LOGIN ?? ''
 const DATAFORSEO_PASSWORD = process.env.DATAFORSEO_PASSWORD ?? ''
-const COST_PER_RECORD = 0.00028
+
+const CATEGORY_KEYWORDS: Record<string, string> = {
+  financial_planner: 'financial planners',
+  accounting_firm: 'accounting firms',
+  legal_services: 'legal services',
+  real_estate_agency: 'estate agents',
+  insurance_agency: 'insurance agencies',
+  mortgage_broker: 'mortgage brokers',
+  marketing_consultant: 'marketing consultants',
+  it_company: 'IT companies',
+  construction_company: 'construction companies',
+  dentist: 'dentists',
+  physiotherapist: 'physiotherapists',
+  restaurant: 'restaurants',
+  hotel: 'hotels',
+  solar_energy_equipment_supplier: 'solar energy companies',
+}
+
+interface Filters {
+  requireDomain?: boolean
+  claimedOnly?: boolean
+  requirePhone?: boolean
+  minRating?: number
+  minReviews?: number
+}
 
 export async function POST(req: NextRequest) {
   if (!DATAFORSEO_LOGIN || !DATAFORSEO_PASSWORD) {
@@ -11,31 +34,31 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json()
-  const { category, lat, lng, radius, filters } = body as {
+  const { category, city, filters } = body as {
     category: string
-    lat: number
-    lng: number
-    radius: number
-    filters: Record<string, unknown>
+    city: string
+    filters: Filters
   }
 
-  if (!category || !lat || !lng) {
-    return NextResponse.json({ error: 'category, lat, and lng are required' }, { status: 400 })
+  if (!category || !city) {
+    return NextResponse.json({ error: 'category and city are required' }, { status: 400 })
   }
 
-  const payload = [{
-    categories: [category],
-    location_coordinate: `${lat},${lng},${radius ?? 25}`,
-    filters: buildFilters(filters ?? {}),
-    limit: 1,
-  }]
+  const searchTerm = CATEGORY_KEYWORDS[category] ?? category.replace(/_/g, ' ')
+  const keyword = `${searchTerm} in ${city}`
 
   try {
     const credentials = Buffer.from(`${DATAFORSEO_LOGIN}:${DATAFORSEO_PASSWORD}`).toString('base64')
-    const res = await fetch('https://api.dataforseo.com/v3/business_data/business_listings/search/live', {
+    const res = await fetch('https://api.dataforseo.com/v3/serp/google/maps/live/advanced', {
       method: 'POST',
       headers: { 'Authorization': `Basic ${credentials}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify([{
+        keyword,
+        location_code: 2826,
+        language_code: 'en',
+        device: 'desktop',
+        depth: 20,
+      }]),
     })
 
     if (!res.ok) {
@@ -50,10 +73,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: task?.status_message ?? 'DataForSEO task failed' }, { status: 400 })
     }
 
-    const total_count: number = task?.result?.[0]?.total_count ?? 0
-    const cost_estimate = +(total_count * COST_PER_RECORD).toFixed(2)
+    const rawItems: Record<string, unknown>[] = task?.result?.[0]?.items ?? []
+    const filtered = rawItems.filter(item => {
+      if (filters?.requireDomain && !item.domain) return false
+      if (filters?.claimedOnly && !item.is_claimed) return false
+      if (filters?.requirePhone && !item.phone) return false
+      if (filters?.minRating && ((item.rating as Record<string, number>)?.value ?? 0) < filters.minRating) return false
+      if (filters?.minReviews && ((item.rating as Record<string, number>)?.votes_count ?? 0) < filters.minReviews) return false
+      return true
+    })
 
-    return NextResponse.json({ total_count, cost_estimate })
+    return NextResponse.json({ total_count: filtered.length, cost_estimate: 0 })
   } catch (err) {
     console.error('[data-sources/check]', err)
     return NextResponse.json({ error: 'Failed to reach DataForSEO' }, { status: 500 })

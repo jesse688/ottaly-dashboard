@@ -1,8 +1,25 @@
 import { type NextRequest, NextResponse } from 'next/server'
-import { buildFilters } from '../filters'
 
 const DATAFORSEO_LOGIN = process.env.DATAFORSEO_LOGIN ?? ''
 const DATAFORSEO_PASSWORD = process.env.DATAFORSEO_PASSWORD ?? ''
+
+// Map DataForSEO category IDs to Google Maps search terms
+const CATEGORY_KEYWORDS: Record<string, string> = {
+  financial_planner: 'financial planners',
+  accounting_firm: 'accounting firms',
+  legal_services: 'legal services',
+  real_estate_agency: 'estate agents',
+  insurance_agency: 'insurance agencies',
+  mortgage_broker: 'mortgage brokers',
+  marketing_consultant: 'marketing consultants',
+  it_company: 'IT companies',
+  construction_company: 'construction companies',
+  dentist: 'dentists',
+  physiotherapist: 'physiotherapists',
+  restaurant: 'restaurants',
+  hotel: 'hotels',
+  solar_energy_equipment_supplier: 'solar energy companies',
+}
 
 export interface BusinessResult {
   title: string
@@ -18,40 +35,57 @@ export interface BusinessResult {
   place_id: string
 }
 
+interface Filters {
+  requireDomain?: boolean
+  claimedOnly?: boolean
+  requirePhone?: boolean
+  minRating?: number
+  minReviews?: number
+}
+
+function applyFilters(items: BusinessResult[], filters: Filters): BusinessResult[] {
+  return items.filter(item => {
+    if (filters.requireDomain && !item.domain) return false
+    if (filters.claimedOnly && !item.is_claimed) return false
+    if (filters.requirePhone && !item.phone) return false
+    if (filters.minRating && (item.rating ?? 0) < filters.minRating) return false
+    if (filters.minReviews && (item.reviews ?? 0) < filters.minReviews) return false
+    return true
+  })
+}
+
 export async function POST(req: NextRequest) {
   if (!DATAFORSEO_LOGIN || !DATAFORSEO_PASSWORD) {
     return NextResponse.json({ error: 'DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD are not set' }, { status: 503 })
   }
 
   const body = await req.json()
-  const { category, lat, lng, radius, filters, limit = 1000, offset_token } = body as {
+  const { category, city, filters, depth = 100 } = body as {
     category: string
-    lat: number
-    lng: number
-    radius: number
-    filters: Record<string, unknown>
-    limit?: number
-    offset_token?: string
+    city: string
+    filters: Filters
+    depth?: number
   }
 
-  if (!category || !lat || !lng) {
-    return NextResponse.json({ error: 'category, lat, and lng are required' }, { status: 400 })
+  if (!category || !city) {
+    return NextResponse.json({ error: 'category and city are required' }, { status: 400 })
   }
 
-  const taskPayload: Record<string, unknown> = {
-    categories: [category],
-    location_coordinate: `${lat},${lng},${radius ?? 25}`,
-    filters: buildFilters(filters ?? {}),
-    limit: Math.min(limit, 1000),
-  }
-  if (offset_token) taskPayload.offset_token = offset_token
+  const searchTerm = CATEGORY_KEYWORDS[category] ?? category.replace(/_/g, ' ')
+  const keyword = `${searchTerm} in ${city}`
 
   try {
     const credentials = Buffer.from(`${DATAFORSEO_LOGIN}:${DATAFORSEO_PASSWORD}`).toString('base64')
-    const res = await fetch('https://api.dataforseo.com/v3/business_data/business_listings/search/live', {
+    const res = await fetch('https://api.dataforseo.com/v3/serp/google/maps/live/advanced', {
       method: 'POST',
       headers: { 'Authorization': `Basic ${credentials}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify([taskPayload]),
+      body: JSON.stringify([{
+        keyword,
+        location_code: 2826,
+        language_code: 'en',
+        device: 'desktop',
+        depth: Math.min(depth, 200),
+      }]),
     })
 
     if (!res.ok) {
@@ -66,8 +100,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: task?.status_message ?? 'DataForSEO task failed' }, { status: 400 })
     }
 
-    const result = task?.result?.[0]
-    const items: BusinessResult[] = (result?.items ?? []).map((item: Record<string, unknown>) => {
+    const rawItems: Record<string, unknown>[] = task?.result?.[0]?.items ?? []
+    const mapped: BusinessResult[] = rawItems.map(item => {
       const addr = item.address_info as Record<string, string> | null
       const rating = item.rating as Record<string, number> | null
       return {
@@ -77,18 +111,20 @@ export async function POST(req: NextRequest) {
         category: (item.category as string) || null,
         city: addr?.city || null,
         region: addr?.region || null,
-        address: addr?.address || null,
+        address: (item.address as string) || addr?.address || null,
         rating: rating?.value ?? null,
         reviews: rating?.votes_count ?? null,
         is_claimed: Boolean(item.is_claimed),
-        place_id: String(item.place_id ?? ''),
+        place_id: String(item.place_id ?? item.feature_id ?? ''),
       }
     })
 
+    const items = applyFilters(mapped, filters ?? {})
+
     return NextResponse.json({
       items,
-      total_count: result?.total_count ?? 0,
-      next_offset_token: result?.offset_token ?? null,
+      total_count: items.length,
+      next_offset_token: null,
     })
   } catch (err) {
     console.error('[data-sources/search]', err)
