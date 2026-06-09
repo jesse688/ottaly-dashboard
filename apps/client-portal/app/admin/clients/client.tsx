@@ -62,6 +62,9 @@ export function AdminClientsClient() {
   const [labelData, setLabelData]             = useState<{ labels: { label: string; count: number }[]; hiddenLabels: string[] } | null>(null)
   const [fieldData, setFieldData]             = useState<{ hiddenFields: string[] } | null>(null)
 
+  // Sync status
+  const [syncStatus, setSyncStatus]           = useState<{ status: { webhook: string; polling: string; alert: string } } | null>(null)
+
   // Invoice form
   const [showInvForm, setShowInvForm]         = useState(false)
   const [invForm, setInvForm]                 = useState({ clientId: '', invoiceNumber: '', description: '', amount: '', dueDate: '', status: 'unpaid' })
@@ -72,6 +75,7 @@ export function AdminClientsClient() {
   useEffect(() => {
     fetch('/api/admin/clients').then(r => r.json()).then(setClients)
     fetch('/api/admin/workspaces').then(r => r.json()).then(setWorkspaces)
+    fetch('/api/admin/sync-status').then(r => r.json()).then(d => !d.error && setSyncStatus(d)).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -176,6 +180,15 @@ export function AdminClientsClient() {
         <span className="text-white font-bold text-sm">Ottaly</span>
         <span className="text-slate-500 text-xs">|</span>
         <span className="text-slate-300 text-sm">Portal Admin</span>
+        {syncStatus?.status && (
+          <div className="flex items-center gap-2 text-xs ml-4">
+            <span className={`w-2 h-2 rounded-full ${syncStatus.status.webhook === 'healthy' ? 'bg-green-400' : syncStatus.status.webhook === 'stale' ? 'bg-yellow-400' : 'bg-red-400'}`}></span>
+            <span className="text-slate-400">Webhook: {syncStatus.status.webhook}</span>
+            <span className="text-slate-500">·</span>
+            <span className={`w-2 h-2 rounded-full ${syncStatus.status.polling === 'healthy' ? 'bg-green-400' : syncStatus.status.polling === 'stale' ? 'bg-yellow-400' : 'bg-red-400'}`}></span>
+            <span className="text-slate-400">Polling: {syncStatus.status.polling}</span>
+          </div>
+        )}
         <div className="ml-auto flex items-center gap-4">
           <button onClick={async () => {
             if (!confirm('Run DB migration to create new tables?')) return
