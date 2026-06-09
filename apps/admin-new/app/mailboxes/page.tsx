@@ -11,20 +11,58 @@ const STATUS_MAP: Record<string, string> = {
   error: 'o-status o-status-critical',
 }
 
+interface MailboxStats {
+  sent: number
+  replies: number
+  bounces: number
+  contacted: number
+  replyRate: number
+  bounceRate: number
+}
+
+type MailboxWithStats = Mailbox & { stats?: MailboxStats }
+
 export default function MailboxesPage() {
-  const [mailboxes, setMailboxes] = useState<Mailbox[]>([])
-  const [filtered, setFiltered] = useState<Mailbox[]>([])
+  const [mailboxes, setMailboxes] = useState<MailboxWithStats[]>([])
+  const [filtered, setFiltered] = useState<MailboxWithStats[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('all')
   const [supplier, setSupplier] = useState('all')
 
   useEffect(() => {
-    fetch('/api/mailboxes')
-      .then(r => r.json())
-      .then(d => setMailboxes(Array.isArray(d) ? d : d.mailboxes ?? []))
-      .catch(() => setMailboxes([]))
-      .finally(() => setLoading(false))
+    ;(async () => {
+      try {
+        const r = await fetch('/api/mailboxes')
+        const d = await r.json()
+        const boxes = (Array.isArray(d) ? d : d.mailboxes ?? []) as MailboxWithStats[]
+
+        // Fetch stats for each mailbox in parallel
+        const today = new Date().toISOString().slice(0, 10)
+        const nDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+
+        const statsPromises = boxes.map(async m => {
+          if (!m.workspace_id) return m
+          try {
+            const res = await fetch(
+              `/api/mailboxes/pv-stats?workspace_id=${encodeURIComponent(m.workspace_id)}&email_acc_id=${encodeURIComponent(m.id)}&start_date=${nDaysAgo}&end_date=${today}`
+            )
+            if (res.ok) {
+              const stats = (await res.json()) as MailboxStats
+              return { ...m, stats }
+            }
+          } catch { /* ignore */ }
+          return m
+        })
+
+        const withStats = await Promise.all(statsPromises)
+        setMailboxes(withStats)
+      } catch {
+        setMailboxes([])
+      } finally {
+        setLoading(false)
+      }
+    })()
   }, [])
 
   const suppliers = [...new Set(mailboxes.map(m => m.supplier).filter(Boolean))] as string[]
@@ -106,47 +144,63 @@ export default function MailboxesPage() {
                 <th>Status</th>
                 <th>Supplier</th>
                 <th>Warmup</th>
-                <th>Sent Today</th>
-                <th>Daily Limit</th>
+                <th style={{ textAlign: 'right' }}>Reply Rate</th>
+                <th style={{ textAlign: 'right' }}>Bounce Rate</th>
+                <th style={{ textAlign: 'right' }}>Sent (30d)</th>
+                <th style={{ textAlign: 'right' }}>Daily Limit</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 Array.from({ length: 10 }).map((_, i) => (
                   <tr key={i}>
-                    {Array.from({ length: 7 }).map((_, j) => (
+                    {Array.from({ length: 9 }).map((_, j) => (
                       <td key={j}><span className="o-spin" /></td>
                     ))}
                   </tr>
                 ))
               ) : filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={7}><div className="o-empty">No mailboxes found</div></td>
+                  <td colSpan={9}><div className="o-empty">No mailboxes found</div></td>
                 </tr>
               ) : (
-                filtered.map(m => (
-                  <tr key={m.id}>
-                    <td style={{ fontFamily: 'monospace' }}>{m.email}</td>
-                    <td style={{ color: '#6B7280' }}>{m.workspace_name ?? '—'}</td>
-                    <td>
-                      <span className={STATUS_MAP[m.status] ?? 'o-status o-status-unknown'}>
-                        {m.status}
-                      </span>
-                    </td>
-                    <td>{m.supplier ?? '—'}</td>
-                    <td>
-                      {m.warmup_enabled ? (
-                        <span style={{ color: '#16A34A' }}>
-                          On {m.warmup_score != null ? `(${m.warmup_score})` : ''}
+                filtered.map(m => {
+                  const rr = m.stats?.replyRate ?? 0
+                  const br = m.stats?.bounceRate ?? 0
+                  const rrClass = rr >= 0.025 ? '#059669' : rr >= 0.01 ? '#D97706' : rr > 0 ? '#DC2626' : '#9CA3AF'
+                  const brClass = br >= 0.05 ? '#DC2626' : br >= 0.02 ? '#D97706' : '#059669'
+                  return (
+                    <tr key={m.id}>
+                      <td style={{ fontFamily: 'monospace' }}>{m.email}</td>
+                      <td style={{ color: '#6B7280' }}>{m.workspace_name ?? '—'}</td>
+                      <td>
+                        <span className={STATUS_MAP[m.status] ?? 'o-status o-status-unknown'}>
+                          {m.status}
                         </span>
-                      ) : (
-                        <span style={{ color: '#9CA3AF' }}>Off</span>
-                      )}
-                    </td>
-                    <td>{m.sent_today ?? '—'}</td>
-                    <td>{m.daily_limit ?? '—'}</td>
-                  </tr>
-                ))
+                      </td>
+                      <td>{m.supplier ?? '—'}</td>
+                      <td>
+                        {m.warmup_enabled ? (
+                          <span style={{ color: '#16A34A' }}>
+                            On {m.warmup_score != null ? `(${m.warmup_score})` : ''}
+                          </span>
+                        ) : (
+                          <span style={{ color: '#9CA3AF' }}>Off</span>
+                        )}
+                      </td>
+                      <td style={{ textAlign: 'right', color: rrClass, fontWeight: m.stats ? 600 : 400 }}>
+                        {m.stats ? (rr * 100).toFixed(1) + '%' : '—'}
+                      </td>
+                      <td style={{ textAlign: 'right', color: brClass, fontWeight: m.stats ? 600 : 400 }}>
+                        {m.stats ? (br * 100).toFixed(1) + '%' : '—'}
+                      </td>
+                      <td style={{ textAlign: 'right', color: '#6B7280' }}>
+                        {m.stats ? m.stats.sent.toLocaleString() : '—'}
+                      </td>
+                      <td style={{ textAlign: 'right', color: '#6B7280' }}>{m.daily_limit ?? '—'}</td>
+                    </tr>
+                  )
+                })
               )}
             </tbody>
           </table>
