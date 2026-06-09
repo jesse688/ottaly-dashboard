@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
 
 interface PortalClient {
@@ -88,7 +88,7 @@ export function AdminClientsClient() {
   }, [tab, disputes, invoices])
 
   // ── Clients ──
-  async function handleCreate(e: React.FormEvent) {
+  async function handleCreate(e: FormEvent) {
     e.preventDefault(); setSaving(true); setError('')
     try {
       const res = await fetch('/api/admin/clients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) })
@@ -144,7 +144,7 @@ export function AdminClientsClient() {
   }
 
   // ── Invoices ──
-  async function handleCreateInvoice(e: React.FormEvent) {
+  async function handleCreateInvoice(e: FormEvent) {
     e.preventDefault(); setInvSaving(true)
     await fetch('/api/admin/invoices', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },

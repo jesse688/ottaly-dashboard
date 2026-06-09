@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
 
 interface Invoice {
@@ -181,7 +181,7 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
 }
 
 function SummaryCard({ label, value, sub, color, icon }: {
-  label: string; value: string; sub: string; color: string; icon: React.ReactNode
+  label: string; value: string; sub: string; color: string; icon: ReactNode
 }) {
   return (
     <div className="bg-white rounded-xl border border-gray-100 p-4">
