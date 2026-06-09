@@ -180,10 +180,22 @@ export function AdminClientsClient() {
           <button onClick={async () => {
             if (!confirm('Run DB migration to create new tables?')) return
             const r = await fetch('/api/admin/migrate', { method: 'POST' })
-            const d = await r.json() as { ok?: boolean; error?: string }
+            const d = await r.json() as { ok?: boolean; error?: string; statements?: number }
             alert(d.ok ? 'Migration complete!' : `Error: ${d.error}`)
           }} className="text-slate-400 hover:text-white text-xs border border-slate-600 px-2 py-1 rounded">
             Run Migration
+          </button>
+          <button onClick={async () => {
+            if (!confirm('Backfill all PlusVibe leads from API? This may take several minutes.')) return
+            const r = await fetch('/api/admin/backfill-leads', { method: 'POST' })
+            const d = await r.json() as { leads?: number; error?: string; errors?: string[] }
+            if (d.error) {
+              alert(`Error: ${d.error}`)
+            } else {
+              alert(`Backfill complete: ${d.leads} leads imported`)
+            }
+          }} className="text-slate-400 hover:text-white text-xs border border-slate-600 px-2 py-1 rounded">
+            Backfill Leads
           </button>
           <button onClick={handleLogout} className="text-slate-400 hover:text-white text-xs">Sign out</button>
         </div>
