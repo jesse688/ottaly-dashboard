@@ -248,6 +248,10 @@ body.manager-view .admin-only{display:none !important}
       </div>
       <div class="form-grid admin-only">
         <div class="field">
+          <label>Managing Until <span style="font-weight:400;color:var(--muted)">(leave blank if still active)</span></label>
+          <input type="date" id="fManagerEndDate">
+        </div>
+        <div class="field">
           <label>Second Manager <span style="font-weight:400;color:var(--muted)">(splits commission 50/50 with primary)</span></label>
           <input type="text" id="fCampaignManager2" placeholder="e.g. Jordy">
         </div>
@@ -556,7 +560,7 @@ function openModal(id) {
 
   if (isNew) {
     ['fWorkspaceName','fWorkspaceId','fUsername','fPassword','fContactName',
-     'fContactEmail','fContactPhone','fWebsite','fNotes','fRestartDate','fCampaignManager','fCampaignManager2','fManagerStartDate'].forEach(f => document.getElementById(f).value = '');
+     'fContactEmail','fContactPhone','fWebsite','fNotes','fRestartDate','fCampaignManager','fCampaignManager2','fManagerStartDate','fManagerEndDate'].forEach(f => document.getElementById(f).value = '');
     document.getElementById('fPricePerLead').value    = '';
     document.getElementById('fPlanLeads').value       = '';
     document.getElementById('fLeadTargetMonthly').value = '';
@@ -573,6 +577,7 @@ function openModal(id) {
     document.getElementById('fCampaignManager').value   = c.campaign_manager    || '';
     document.getElementById('fCampaignManager2').value  = c.campaign_manager_2  || '';
     document.getElementById('fManagerStartDate').value  = c.manager_start_date  || '';
+    document.getElementById('fManagerEndDate').value    = c.manager_end_date    || '';
     document.getElementById('fContactName').value     = c.contact_name      || '';
     document.getElementById('fContactEmail').value    = c.contact_email     || '';
     document.getElementById('fContactPhone').value    = c.contact_phone     || '';
@@ -649,6 +654,7 @@ async function saveClient() {
     campaign_manager:    document.getElementById('fCampaignManager').value.trim(),
     campaign_manager_2:  document.getElementById('fCampaignManager2').value.trim(),
     manager_start_date:  document.getElementById('fManagerStartDate').value || null,
+    manager_end_date:    document.getElementById('fManagerEndDate').value   || null,
   };
   if (isNew || password) body.password = password;
 

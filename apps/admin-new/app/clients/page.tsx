@@ -41,6 +41,7 @@ interface Client {
   campaign_manager: string | null
   campaign_manager_2: string | null
   manager_start_date: string | null
+  manager_end_date: string | null
 }
 
 interface WorkspaceStats {
@@ -82,6 +83,7 @@ interface ModalForm {
   campaignManager: string
   campaignManager2: string
   managerStartDate: string
+  managerEndDate: string
   // targeting
   vertical: string
   snoozeMonths: string
@@ -116,6 +118,7 @@ const EMPTY_FORM: ModalForm = {
   campaignManager: '',
   campaignManager2: '',
   managerStartDate: '',
+  managerEndDate: '',
   vertical: '',
   snoozeMonths: '6',
   excludeRemote: false,
@@ -322,6 +325,7 @@ export default function ClientsPage() {
         campaignManager: c.campaign_manager || '',
         campaignManager2: c.campaign_manager_2 || '',
         managerStartDate: c.manager_start_date || '',
+        managerEndDate: c.manager_end_date || '',
         vertical: vr.vertical || '',
         snoozeMonths: vr.snooze_months ? String(vr.snooze_months) : '6',
         excludeRemote: !!vr.exclude_remote,
@@ -405,6 +409,7 @@ export default function ClientsPage() {
       campaign_manager: form.campaignManager.trim(),
       campaign_manager_2: form.campaignManager2.trim(),
       manager_start_date: form.managerStartDate || null,
+      manager_end_date: form.managerEndDate || null,
     }
     if (isNew || form.password) body.password = form.password
 
@@ -768,6 +773,9 @@ export default function ClientsPage() {
                     </Field>
                   </FormGrid>
                   <FormGrid>
+                    <Field label={<>Managing Until <span className="font-normal text-[#6B7280]">(leave blank if still active)</span></>}>
+                      <Input type="date" value={form.managerEndDate} onChange={e => setField('managerEndDate', e.target.value)} className="h-9 text-[13px]" />
+                    </Field>
                     <Field label={<>Second Manager <span className="font-normal text-[#6B7280]">(splits commission 50/50 with primary)</span></>}>
                       <Input value={form.campaignManager2} onChange={e => setField('campaignManager2', e.target.value)} placeholder="e.g. Jordy" className="h-9 text-[13px]" />
                     </Field>

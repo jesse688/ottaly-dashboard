@@ -197,6 +197,9 @@ for (const sql of [
   // Health view. 0 means "no target set" (skip pace scoring).
   `ALTER TABLE clients ADD COLUMN lead_target_monthly INTEGER DEFAULT 0`,
   `ALTER TABLE clients ADD COLUMN campaign_manager_2 TEXT DEFAULT ''`,
+  `ALTER TABLE clients ADD COLUMN manager_end_date TEXT DEFAULT NULL`,
+  `ALTER TABLE client_managers ADD COLUMN end_date TEXT DEFAULT NULL`,
+  `ALTER TABLE client_managers ADD COLUMN start_date TEXT DEFAULT NULL`,
   `ALTER TABLE managers ADD COLUMN commission_rate REAL DEFAULT 15`,
   `ALTER TABLE managers ADD COLUMN base_salary REAL DEFAULT 0`,
   `ALTER TABLE leads ADD COLUMN closed_value REAL`,
@@ -226,6 +229,16 @@ try {
   });
   backfill();
 } catch (e) { console.warn('[workload] backfill error:', e.message); }
+
+// Backfill client_managers.start_date from clients.manager_start_date for primary managers
+try {
+  db.prepare(`UPDATE client_managers SET start_date = (
+    SELECT c.manager_start_date FROM clients c
+    WHERE c.workspace_id = client_managers.client_workspace_id
+      AND LOWER(TRIM(c.campaign_manager)) = LOWER(TRIM(client_managers.manager_name))
+      AND c.manager_start_date IS NOT NULL
+  ) WHERE start_date IS NULL`).run();
+} catch (e) { console.warn('[workload] start_date backfill error:', e.message); }
 
 // Backfill any leads that arrived before received_at column existed
 db.exec(`UPDATE leads SET received_at = datetime('now') WHERE received_at IS NULL`);
@@ -7918,16 +7931,16 @@ async function buildFinanceSnapshot(month) {
   const managerMap  = new Map(allManagers.map(m => [m.name.toLowerCase(), m]));
 
   // Revenue per manager = sum of lead revenue from their clients this month,
-  // applying manager_start_date (same logic as the admin commission page).
-  const clientMetaMap = {};
-  // Track canonical name casing from campaign_manager / campaign_manager_2 fields.
+  // using client_managers history so past managers still earn for leads before their end_date.
   const mgrCanonicalName = {};  // lower → original case
+  const historyByWorkspace = {};  // workspace_id → [{manager_name, start_date, end_date}]
   try {
-    db.prepare('SELECT workspace_id, campaign_manager, campaign_manager_2, manager_start_date FROM clients').all()
-      .forEach(r => {
-        clientMetaMap[r.workspace_id] = r;
-        const n1 = (r.campaign_manager  || '').trim(); if (n1) mgrCanonicalName[n1.toLowerCase()] = n1;
-        const n2 = (r.campaign_manager_2 || '').trim(); if (n2) mgrCanonicalName[n2.toLowerCase()] = n2;
+    db.prepare('SELECT client_workspace_id, manager_name, start_date, end_date FROM client_managers').all()
+      .forEach(a => {
+        if (!historyByWorkspace[a.client_workspace_id]) historyByWorkspace[a.client_workspace_id] = [];
+        historyByWorkspace[a.client_workspace_id].push(a);
+        const n = (a.manager_name || '').trim();
+        if (n) mgrCanonicalName[n.toLowerCase()] = n;
       });
   } catch {}
   let manualNonleadsSet = new Set();
@@ -7948,17 +7961,20 @@ async function buildFinanceSnapshot(month) {
     if (l.pv_nonlead || isPvNonLeadLabel(l.label)) continue;
     if (manualNonleadsSet.has(String(l.lead_email || '').toLowerCase())) continue;
     if (!(l.date || '').startsWith(month)) continue;
-    const meta = clientMetaMap[l.workspace_id];
-    if (!meta) continue;
-    const mgr1 = (meta.campaign_manager   || '').toLowerCase().trim();
-    const mgr2 = (meta.campaign_manager_2 || '').toLowerCase().trim();
-    if (!mgr1 && !mgr2) continue;
-    if (meta.manager_start_date && l.date < meta.manager_start_date) continue;
-    const price    = livePriceMapMgr[l.workspace_id] ?? l.lead_price ?? 0;
-    const numMgrs  = (mgr1 ? 1 : 0) + (mgr2 ? 1 : 0);
-    const share    = price / numMgrs;
-    if (mgr1) revenueByManager[mgr1] = (revenueByManager[mgr1] || 0) + share;
-    if (mgr2) revenueByManager[mgr2] = (revenueByManager[mgr2] || 0) + share;
+    const history = historyByWorkspace[l.workspace_id];
+    if (!history || !history.length) continue;
+    const activeAtDate = history.filter(a => {
+      const afterStart = !a.start_date || l.date >= a.start_date;
+      const beforeEnd  = !a.end_date   || l.date <= a.end_date;
+      return afterStart && beforeEnd;
+    });
+    if (!activeAtDate.length) continue;
+    const price = livePriceMapMgr[l.workspace_id] ?? l.lead_price ?? 0;
+    const share = price / activeAtDate.length;
+    for (const a of activeAtDate) {
+      const key = (a.manager_name || '').toLowerCase().trim();
+      if (key) revenueByManager[key] = (revenueByManager[key] || 0) + share;
+    }
   }
 
   // Union of manager names: anyone in the managers table OR anyone with revenue
@@ -8038,17 +8054,20 @@ app.get('/api/finance/staff-debug', requireAdmin, (req, res) => {
   const month = (req.query.month || currentMonthStr()).slice(0, 7);
   let allManagers = [];
   try { allManagers = db.prepare('SELECT name, commission_rate, base_salary FROM managers').all(); } catch (e) { return res.json({ error: 'managers query failed: ' + e.message }); }
-  const clientMetaMap = {};
   const mgrCanonicalName = {};
+  const historyByWorkspace = {};
   let clientMetaError = null;
   try {
-    db.prepare('SELECT workspace_id, campaign_manager, manager_start_date FROM clients').all()
-      .forEach(r => {
-        clientMetaMap[r.workspace_id] = r;
-        const name = (r.campaign_manager || '').trim();
+    db.prepare('SELECT client_workspace_id, manager_name, start_date, end_date FROM client_managers').all()
+      .forEach(a => {
+        if (!historyByWorkspace[a.client_workspace_id]) historyByWorkspace[a.client_workspace_id] = [];
+        historyByWorkspace[a.client_workspace_id].push(a);
+        const name = (a.manager_name || '').trim();
         if (name) mgrCanonicalName[name.toLowerCase()] = name;
       });
   } catch (e) { clientMetaError = e.message; }
+  const allWorkspaceIds = new Set();
+  try { db.prepare('SELECT workspace_id FROM clients').all().forEach(r => allWorkspaceIds.add(r.workspace_id)); } catch {}
   const revenueByManager = {};
   const livePriceMapMgr = {};
   try { db.prepare('SELECT workspace_id, price_per_lead FROM clients').all().forEach(r => { livePriceMapMgr[r.workspace_id] = r.price_per_lead; }); } catch {}
@@ -8057,13 +8076,21 @@ app.get('/api/finance/staff-debug', requireAdmin, (req, res) => {
     if (!l || isRevenueExcludedWorkspace(l)) { skipped.excluded++; continue; }
     if (l.pv_nonlead || isPvNonLeadLabel(l.label)) { skipped.nonlead++; continue; }
     if (!(l.date || '').startsWith(month)) { skipped.date++; continue; }
-    const meta = clientMetaMap[l.workspace_id];
-    if (!meta) { skipped.noMeta++; continue; }
-    const mgr = (meta.campaign_manager || '').toLowerCase().trim();
-    if (!mgr) { skipped.noMgr++; continue; }
-    if (meta.manager_start_date && l.date < meta.manager_start_date) { skipped.startDate++; continue; }
+    if (!allWorkspaceIds.has(l.workspace_id)) { skipped.noMeta++; continue; }
+    const history = historyByWorkspace[l.workspace_id];
+    if (!history || !history.length) { skipped.noMgr++; continue; }
+    const activeAtDate = history.filter(a => {
+      const afterStart = !a.start_date || l.date >= a.start_date;
+      const beforeEnd  = !a.end_date   || l.date <= a.end_date;
+      return afterStart && beforeEnd;
+    });
+    if (!activeAtDate.length) { skipped.startDate++; continue; }
     const price = livePriceMapMgr[l.workspace_id] ?? l.lead_price ?? 0;
-    revenueByManager[mgr] = (revenueByManager[mgr] || 0) + price;
+    const share = price / activeAtDate.length;
+    for (const a of activeAtDate) {
+      const key = (a.manager_name || '').toLowerCase().trim();
+      if (key) revenueByManager[key] = (revenueByManager[key] || 0) + share;
+    }
     skipped.counted++;
   }
   res.json({ month, allManagers, mgrCanonicalName, revenueByManager, clientMetaError, skipped, revenueCacheLeads: revenueCache.leads?.length ?? 0 });
@@ -9943,7 +9970,7 @@ app.get('/api/my-clients', requireSession, (req, res) => {
 
 app.get('/api/admin/workload/cm-stats', requireSession, async (req, res) => {
   const managers = db.prepare('SELECT name FROM managers ORDER BY name').all().map(m => m.name);
-  const assignments = db.prepare('SELECT client_workspace_id, manager_name FROM client_managers').all();
+  const assignments = db.prepare('SELECT client_workspace_id, manager_name FROM client_managers WHERE end_date IS NULL').all();
 
   // Period: default to current month
   const now = new Date();
@@ -9995,7 +10022,7 @@ app.get('/api/admin/workload', requireSession, (req, res) => {
   const s = decodeSession(req);
   const managers = db.prepare('SELECT id, name, commission_rate FROM managers ORDER BY name').all();
   const clients  = db.prepare('SELECT workspace_id, workspace_name, price_per_lead, client_status, manager_start_date FROM clients ORDER BY workspace_name').all();
-  const assignments = db.prepare('SELECT client_workspace_id, manager_name, commission_rate FROM client_managers').all();
+  const assignments = db.prepare('SELECT client_workspace_id, manager_name, commission_rate FROM client_managers WHERE end_date IS NULL').all();
   const defaultRateRow = db.prepare("SELECT value FROM app_meta WHERE key = 'default_commission_rate'").get();
   const defaultRate = defaultRateRow ? parseFloat(defaultRateRow.value) : 5;
 
@@ -10014,7 +10041,7 @@ app.get('/api/admin/workload', requireSession, (req, res) => {
 function recalcSplitRates(client_workspace_id) {
   const defaultRateRow = db.prepare("SELECT value FROM app_meta WHERE key = 'default_commission_rate'").get();
   const defaultRate = defaultRateRow ? parseFloat(defaultRateRow.value) : 5;
-  const cms = db.prepare('SELECT manager_name FROM client_managers WHERE client_workspace_id = ?').all(client_workspace_id);
+  const cms = db.prepare('SELECT manager_name FROM client_managers WHERE client_workspace_id = ? AND end_date IS NULL').all(client_workspace_id);
   const splitRate = cms.length ? defaultRate / cms.length : defaultRate;
   db.prepare('UPDATE client_managers SET commission_rate = ? WHERE client_workspace_id = ?').run(splitRate, client_workspace_id);
 }
@@ -10022,7 +10049,8 @@ function recalcSplitRates(client_workspace_id) {
 app.post('/api/admin/workload/assign', requireAdmin, (req, res) => {
   const { client_workspace_id, manager_name } = req.body || {};
   if (!client_workspace_id || !manager_name) return res.status(400).json({ error: 'client_workspace_id and manager_name required' });
-  db.prepare(`INSERT OR IGNORE INTO client_managers (client_workspace_id, manager_name, commission_rate) VALUES (?, ?, 0)`)
+  db.prepare(`INSERT INTO client_managers (client_workspace_id, manager_name, commission_rate) VALUES (?, ?, 0)
+    ON CONFLICT(client_workspace_id, manager_name) DO UPDATE SET end_date = NULL`)
     .run(client_workspace_id, manager_name);
   recalcSplitRates(client_workspace_id);
   const splitRate = db.prepare('SELECT commission_rate FROM client_managers WHERE client_workspace_id = ? AND manager_name = ?').get(client_workspace_id, manager_name)?.commission_rate ?? 0;
@@ -10037,6 +10065,23 @@ app.delete('/api/admin/workload/assign', requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
+// Set an end date on a manager's assignment — preserves history for commission, hides from active workload
+app.put('/api/admin/workload/assign/end-date', requireAdmin, (req, res) => {
+  const { client_workspace_id, manager_name, end_date } = req.body || {};
+  if (!client_workspace_id || !manager_name) return res.status(400).json({ error: 'client_workspace_id and manager_name required' });
+  db.prepare('UPDATE client_managers SET end_date = ? WHERE client_workspace_id = ? AND manager_name = ?')
+    .run(end_date || null, client_workspace_id, manager_name);
+  // Sync manager_end_date on clients row if this is the primary manager
+  try {
+    const clientRow = db.prepare('SELECT id, campaign_manager FROM clients WHERE workspace_id = ?').get(client_workspace_id);
+    if (clientRow && (clientRow.campaign_manager || '').toLowerCase().trim() === (manager_name || '').toLowerCase().trim()) {
+      db.prepare('UPDATE clients SET manager_end_date = ? WHERE workspace_id = ?').run(end_date || null, client_workspace_id);
+    }
+  } catch {}
+  recalcSplitRates(client_workspace_id);
+  res.json({ ok: true });
+});
+
 // Remove manual commission override — rates are always auto-calculated
 app.put('/api/admin/workload/commission', requireAdmin, (req, res) => {
   const { client_workspace_id } = req.body || {};
@@ -10047,7 +10092,7 @@ app.put('/api/admin/workload/commission', requireAdmin, (req, res) => {
 app.get('/api/admin/clients', requireSession, async (req, res) => {
   try {
     const clients = db.prepare(
-      'SELECT id, username, workspace_id, workspace_name, plan_leads, price_per_lead, stripe_customer_id, contact_name, contact_email, contact_phone, website, notes, client_status, restart_date, campaign_manager, campaign_manager_2, commission_rate, manager_start_date, lead_target_monthly, created_at FROM clients ORDER BY created_at DESC'
+      'SELECT id, username, workspace_id, workspace_name, plan_leads, price_per_lead, stripe_customer_id, contact_name, contact_email, contact_phone, website, notes, client_status, restart_date, campaign_manager, campaign_manager_2, commission_rate, manager_start_date, manager_end_date, lead_target_monthly, created_at FROM clients ORDER BY created_at DESC'
     ).all();
     const pgDb = req.app.locals.pgDb;
     if (pgDb) {
@@ -10061,7 +10106,7 @@ app.get('/api/admin/clients', requireSession, async (req, res) => {
   } catch (err) {
     console.error('[clients] GET error:', err.message);
     res.json(db.prepare(
-      'SELECT id, username, workspace_id, workspace_name, plan_leads, price_per_lead, stripe_customer_id, contact_name, contact_email, contact_phone, website, notes, client_status, restart_date, campaign_manager, campaign_manager_2, commission_rate, manager_start_date, lead_target_monthly, created_at FROM clients ORDER BY created_at DESC'
+      'SELECT id, username, workspace_id, workspace_name, plan_leads, price_per_lead, stripe_customer_id, contact_name, contact_email, contact_phone, website, notes, client_status, restart_date, campaign_manager, campaign_manager_2, commission_rate, manager_start_date, manager_end_date, lead_target_monthly, created_at FROM clients ORDER BY created_at DESC'
     ).all());
   }
 });
@@ -10084,6 +10129,8 @@ app.post('/api/admin/clients', requireAdmin, (req, res) => {
 
 app.put('/api/admin/clients/:id', requireAdmin, (req, res) => {
   const { plan_leads, price_per_lead, contact_name, contact_email, contact_phone, website, notes, client_status, restart_date } = req.body || {};
+  // Read current row before update so we can detect manager transitions
+  const currentRow = db.prepare('SELECT workspace_id, campaign_manager FROM clients WHERE id = ?').get(req.params.id);
   const updates = [];
   const vals = [];
   if (plan_leads     !== undefined) { updates.push('plan_leads = ?');     vals.push(parseInt(plan_leads) || 0); }
@@ -10099,11 +10146,40 @@ app.put('/api/admin/clients/:id', requireAdmin, (req, res) => {
   if (req.body.campaign_manager_2 !== undefined) { updates.push('campaign_manager_2 = ?'); vals.push(req.body.campaign_manager_2); }
   if (req.body.commission_rate    !== undefined) { updates.push('commission_rate = ?');    vals.push(parseFloat(req.body.commission_rate) || 15); }
   if (req.body.manager_start_date !== undefined) { updates.push('manager_start_date = ?'); vals.push(req.body.manager_start_date || null); }
+  if (req.body.manager_end_date   !== undefined) { updates.push('manager_end_date = ?');   vals.push(req.body.manager_end_date || null); }
   if (req.body.lead_target_monthly !== undefined) { updates.push('lead_target_monthly = ?'); vals.push(parseInt(req.body.lead_target_monthly) || 0); }
   if (updates.length)
     db.prepare(`UPDATE clients SET ${updates.join(', ')} WHERE id = ?`).run(...vals, req.params.id);
+  // Sync manager_end_date to client_managers for the current primary manager
+  if (req.body.manager_end_date !== undefined && currentRow?.workspace_id && currentRow?.campaign_manager) {
+    try {
+      db.prepare('UPDATE client_managers SET end_date = ? WHERE client_workspace_id = ? AND manager_name = ? AND end_date IS NULL')
+        .run(req.body.manager_end_date || null, currentRow.workspace_id, currentRow.campaign_manager.trim());
+    } catch {}
+  }
+  // If campaign_manager changed, insert/activate new manager row in client_managers
+  if (req.body.campaign_manager !== undefined && currentRow?.workspace_id) {
+    const newMgr = (req.body.campaign_manager || '').trim();
+    if (newMgr) {
+      const startDate = req.body.manager_start_date !== undefined ? (req.body.manager_start_date || null) : null;
+      try {
+        const existing = db.prepare('SELECT id FROM client_managers WHERE client_workspace_id = ? AND manager_name = ?').get(currentRow.workspace_id, newMgr);
+        if (existing) {
+          const setParts = ['end_date = NULL'];
+          const setVals = [];
+          if (startDate !== null) { setParts.push('start_date = ?'); setVals.push(startDate); }
+          db.prepare(`UPDATE client_managers SET ${setParts.join(', ')} WHERE client_workspace_id = ? AND manager_name = ?`)
+            .run(...setVals, currentRow.workspace_id, newMgr);
+        } else {
+          db.prepare('INSERT INTO client_managers (client_workspace_id, manager_name, commission_rate, start_date) VALUES (?, ?, 0, ?)')
+            .run(currentRow.workspace_id, newMgr, startDate);
+        }
+        recalcSplitRates(currentRow.workspace_id);
+      } catch {}
+    }
+  }
   if (notes !== undefined) {
-    const row = db.prepare('SELECT workspace_id FROM clients WHERE id = ?').get(req.params.id);
+    const row = currentRow || db.prepare('SELECT workspace_id FROM clients WHERE id = ?').get(req.params.id);
     if (row?.workspace_id) {
       req.app.locals.pgDb?.query(
         `INSERT INTO client_notes (workspace_id, notes, updated_at) VALUES ($1, $2, NOW())

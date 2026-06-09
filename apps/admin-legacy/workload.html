@@ -123,8 +123,24 @@ td.cm-cell{text-align:center}
   </div>
 </div>
 
+<!-- End-date modal: shown when removing a CM to optionally preserve history -->
+<div id="endDateModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;align-items:center;justify-content:center">
+  <div style="background:#fff;border-radius:14px;padding:1.75rem;width:360px;box-shadow:0 20px 60px rgba(0,0,0,.2)">
+    <div style="font-size:15px;font-weight:700;margin-bottom:6px">Remove from workload</div>
+    <div id="endDateModalDesc" style="font-size:13px;color:var(--muted);margin-bottom:1.25rem"></div>
+    <label style="font-size:12px;font-weight:600;display:block;margin-bottom:6px">Set end date <span style="font-weight:400;color:var(--muted)">(preserves commission history up to this date)</span></label>
+    <input type="date" id="endDateInput" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:7px;font-size:13px;margin-bottom:1rem">
+    <div style="display:flex;gap:.75rem">
+      <button class="btn btn-primary" style="flex:1" onclick="confirmEndDate()">Set End Date</button>
+      <button class="btn" style="flex:1;background:#fee2e2;color:#dc2626;border:none" onclick="confirmRemoveImmediate()">Remove Immediately</button>
+    </div>
+    <button class="btn btn-ghost" style="width:100%;margin-top:.5rem" onclick="cancelEndDate()">Cancel</button>
+  </div>
+</div>
+
 <script>
 let managers = [], clients = [], assignments = {}, isViewOnly = false, defaultRate = 5;
+let _pendingEndDate = null; // { workspaceId, managerName, checkbox }
 
 async function load() {
   // Resolve session and workload data in parallel — session must be known before rendering
@@ -237,15 +253,56 @@ async function toggleAssign(workspaceId, managerName, checkbox) {
     const d = await r.json();
     if (!assignments[workspaceId]) assignments[workspaceId] = {};
     assignments[workspaceId][managerName] = d.commission_rate ?? 0;
+    await load();
+    flashSaved();
   } else {
-    if (assignments[workspaceId]) delete assignments[workspaceId][managerName];
-    await fetch('/api/admin/workload/assign', {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ client_workspace_id: workspaceId, manager_name: managerName }),
-    });
+    // Revert the checkbox until the user confirms via the modal
+    checkbox.checked = true;
+    const clientName = clients.find(c => c.workspace_id === workspaceId)?.workspace_name || workspaceId;
+    showEndDateModal(workspaceId, managerName, checkbox, clientName);
   }
-  // Reload to get updated auto-split rates for all CMs on this client
+}
+
+function showEndDateModal(workspaceId, managerName, checkbox, clientName) {
+  _pendingEndDate = { workspaceId, managerName, checkbox };
+  document.getElementById('endDateModalDesc').textContent = `${managerName} → ${clientName}`;
+  document.getElementById('endDateInput').value = new Date().toISOString().slice(0, 10);
+  const modal = document.getElementById('endDateModal');
+  modal.style.display = 'flex';
+}
+
+function cancelEndDate() {
+  document.getElementById('endDateModal').style.display = 'none';
+  _pendingEndDate = null;
+}
+
+async function confirmEndDate() {
+  if (!_pendingEndDate) return;
+  const { workspaceId, managerName } = _pendingEndDate;
+  const endDate = document.getElementById('endDateInput').value;
+  document.getElementById('endDateModal').style.display = 'none';
+  await fetch('/api/admin/workload/assign/end-date', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ client_workspace_id: workspaceId, manager_name: managerName, end_date: endDate || null }),
+  });
+  if (assignments[workspaceId]) delete assignments[workspaceId][managerName];
+  _pendingEndDate = null;
+  await load();
+  flashSaved();
+}
+
+async function confirmRemoveImmediate() {
+  if (!_pendingEndDate) return;
+  const { workspaceId, managerName } = _pendingEndDate;
+  document.getElementById('endDateModal').style.display = 'none';
+  if (assignments[workspaceId]) delete assignments[workspaceId][managerName];
+  await fetch('/api/admin/workload/assign', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ client_workspace_id: workspaceId, manager_name: managerName }),
+  });
+  _pendingEndDate = null;
   await load();
   flashSaved();
 }
