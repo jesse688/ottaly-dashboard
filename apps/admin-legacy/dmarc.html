@@ -98,6 +98,7 @@
           <th style="text-align:right">Reply Rate</th>
           <th style="text-align:right">Bounce Rate</th>
           <th style="text-align:right">Total Sent</th>
+          <th style="text-align:right">Sent 30d</th>
         </tr></thead>
         <tbody id="nonNoneTable"></tbody>
       </table>
@@ -140,42 +141,47 @@ async function loadData() {
     groups[key].push(m);
   }
 
-  // Compute stats per group — only include mailboxes with 20+ sends in rate averages.
+  // Compute stats per group — use 30-day reply rate where available, fall back to lifetime.
+  // Only include mailboxes with 20+ sends in rate averages.
   const stats = {};
   for (const [key, mbs] of Object.entries(groups)) {
-    const withSent = mbs.filter(m => (m.attributed_sent || 0) >= 20);
-    const avgRR    = withSent.length ? withSent.reduce((a,m)=>a+(m.reply_rate||0),0)/withSent.length : 0;
-    const avgBR    = withSent.length ? withSent.reduce((a,m)=>a+(m.bounce_rate||0),0)/withSent.length : 0;
-    const totalSent= mbs.reduce((a,m)=>a+(m.attributed_sent||0),0);
-    stats[key] = { count: mbs.length, withSent: withSent.length, avgRR, avgBR, totalSent };
+    const with30d   = mbs.filter(m => m.reply_rate_30d != null);
+    const withSent  = mbs.filter(m => (m.attributed_sent || 0) >= 20);
+    const avgRR30   = with30d.length  ? with30d.reduce((a,m)=>a+(m.reply_rate_30d||0),0)/with30d.length : null;
+    const avgRR     = withSent.length ? withSent.reduce((a,m)=>a+(m.reply_rate||0),0)/withSent.length   : 0;
+    const avgBR     = withSent.length ? withSent.reduce((a,m)=>a+(m.bounce_rate||0),0)/withSent.length  : 0;
+    const totalSent = mbs.reduce((a,m)=>a+(m.attributed_sent||0),0);
+    stats[key] = { count: mbs.length, with30d: with30d.length, withSent: withSent.length, avgRR30, avgRR, avgBR, totalSent };
   }
 
   // Summary cards
   const cards = document.getElementById('policyCards');
-  cards.innerHTML = POLICIES.map(p => `
+  cards.innerHTML = POLICIES.map(p => {
+    const s = stats[p];
+    const rrVal = s.avgRR30 != null ? s.avgRR30 : s.avgRR;
+    const rrLabel = s.avgRR30 != null ? 'Reply Rate (30d)' : 'Reply Rate (lifetime)';
+    const rrCls = s.withSent===0?'muted':rrVal>=0.02?'good':rrVal>=0.01?'med':'bad';
+    return `
     <div class="card" style="border-top:3px solid ${POLICY_COLOR[p]}">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem">
         <span class="badge" style="background:${POLICY_BG[p]};color:${POLICY_COLOR[p]}">${POLICY_LABEL[p]}</span>
-        <span style="font-size:1.5rem;font-weight:700;color:#111827">${stats[p].count}</span>
+        <span style="font-size:1.5rem;font-weight:700;color:#111827">${s.count}</span>
       </div>
-      <div class="stat-row"><span class="stat-label">Avg Reply Rate</span><span class="stat-val ${stats[p].withSent===0?'muted':stats[p].avgRR>=0.02?'good':stats[p].avgRR>=0.01?'med':'bad'}">${stats[p].withSent===0?'—':pct(stats[p].avgRR,20)}</span></div>
-      <div class="stat-row"><span class="stat-label">Avg Bounce Rate</span><span class="stat-val ${stats[p].withSent===0?'muted':stats[p].avgBR<0.02?'good':stats[p].avgBR<0.05?'med':'bad'}">${stats[p].withSent===0?'—':pct(stats[p].avgBR,20)}</span></div>
-      <div class="stat-row"><span class="stat-label">Total Sent</span><span class="stat-val">${fmtNum(stats[p].totalSent)}</span></div>
-      ${stats[p].withSent < stats[p].count ? `<div style="font-size:10px;color:#9ca3af;margin-top:6px">${stats[p].count - stats[p].withSent} mailbox${stats[p].count - stats[p].withSent!==1?'es':''} excluded (< 20 sends)</div>` : ''}
-    </div>
-  `).join('');
+      <div class="stat-row"><span class="stat-label">${rrLabel}</span><span class="stat-val ${rrCls}">${s.withSent===0?'—':pct(rrVal,20)}</span></div>
+      <div class="stat-row"><span class="stat-label">Avg Bounce Rate</span><span class="stat-val ${s.withSent===0?'muted':s.avgBR<0.02?'good':s.avgBR<0.05?'med':'bad'}">${s.withSent===0?'—':pct(s.avgBR,20)}</span></div>
+      <div class="stat-row"><span class="stat-label">Total Sent</span><span class="stat-val">${fmtNum(s.totalSent)}</span></div>
+      ${s.withSent < s.count ? `<div style="font-size:10px;color:#9ca3af;margin-top:6px">${s.count - s.withSent} mailbox${s.count-s.withSent!==1?'es':''} excluded (< 20 sends)</div>` : ''}
+    </div>`;
+  }).join('');
 
-  // Bar charts
+  // Bar charts — use 30d reply rate where available
   const labels = POLICIES.map(p => POLICY_LABEL[p]);
   const colors = POLICIES.map(p => POLICY_COLOR[p]);
 
   function barChart(id, values, fmt) {
     new Chart(document.getElementById(id), {
       type: 'bar',
-      data: {
-        labels,
-        datasets: [{ data: values, backgroundColor: colors, borderRadius: 6, borderSkipped: false }],
-      },
+      data: { labels, datasets: [{ data: values, backgroundColor: colors, borderRadius: 6, borderSkipped: false }] },
       options: {
         responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false }, tooltip: { callbacks: { label: item => fmt(item.parsed.y) } } },
@@ -187,11 +193,11 @@ async function loadData() {
     });
   }
 
-  barChart('chartRR',   POLICIES.map(p => +(stats[p].avgRR*100).toFixed(2)),   v => v.toFixed(2)+'%');
+  barChart('chartRR',   POLICIES.map(p => { const s=stats[p]; return +((s.avgRR30??s.avgRR)*100).toFixed(2); }), v => v.toFixed(2)+'%');
   barChart('chartBR',   POLICIES.map(p => +(stats[p].avgBR*100).toFixed(2)),   v => v.toFixed(2)+'%');
   barChart('chartSent', POLICIES.map(p => stats[p].totalSent), v => v.toLocaleString());
 
-  // Non-none table
+  // Non-none table — all mailboxes without p=none, sorted by sent desc
   const nonNone = mailboxes
     .filter(m => {
       const policy = m.auth?.dmarc_present ? (m.auth.dmarc_policy || 'none') : 'missing';
@@ -201,19 +207,22 @@ async function loadData() {
 
   const tbody = document.getElementById('nonNoneTable');
   if (!nonNone.length) {
-    tbody.innerHTML = '<tr><td colspan="7" style="padding:16px;text-align:center;color:#9ca3af">All mailboxes are on p=none ✅</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" style="padding:16px;text-align:center;color:#9ca3af">All mailboxes are on p=none ✅</td></tr>';
   } else {
     tbody.innerHTML = nonNone.map(m => {
       const p = m.auth?.dmarc_present ? (m.auth.dmarc_policy || 'none') : 'missing';
       const badgeClass = p === 'missing' ? 'badge-gray' : p === 'quarantine' ? 'badge-amber' : 'badge-red';
+      const rr30 = m.reply_rate_30d != null ? pct(m.reply_rate_30d, (m.sent_30d||0)) : null;
+      const rrLife = pct(m.reply_rate, m.attributed_sent);
       return `<tr>
         <td>${m.domain || '—'}</td>
         <td style="color:#6b7280">${m.email}</td>
         <td><span class="badge ${badgeClass}">${POLICY_LABEL[p] || p}</span></td>
         <td>${m.supplier || '—'}</td>
-        <td style="text-align:right">${pct(m.reply_rate, m.attributed_sent)}</td>
+        <td style="text-align:right">${rr30 ?? rrLife}${rr30 ? '<span style="font-size:10px;color:#9ca3af;margin-left:3px">30d</span>' : ''}</td>
         <td style="text-align:right">${pct(m.bounce_rate, m.attributed_sent)}</td>
         <td style="text-align:right">${m._ws_split ? `<span title="Estimated: workspace total ÷ mailbox count" style="color:#9ca3af">~</span>` : ''}${fmtNum(m.attributed_sent)}</td>
+        <td style="text-align:right;color:#9ca3af;font-size:11px">${fmtNum(m.sent_30d||0)}</td>
       </tr>`;
     }).join('');
   }

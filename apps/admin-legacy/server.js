@@ -7086,15 +7086,19 @@ async function buildMailboxStatsFromEvents(pgdb) {
     const { rows } = await pgdb.query(`
       SELECT
         sender_email,
-        COUNT(*) FILTER (WHERE event_type = 'sent')    AS sent,
-        COUNT(*) FILTER (WHERE event_type = 'bounce')  AS bounces
+        COUNT(*) FILTER (WHERE event_type = 'sent')                                    AS sent,
+        COUNT(*) FILTER (WHERE event_type = 'bounce')                                  AS bounces,
+        COUNT(*) FILTER (WHERE event_type = 'sent'   AND event_at >= NOW() - INTERVAL '30 days') AS sent_30d,
+        COUNT(*) FILTER (WHERE event_type IN ('reply','positive_reply') AND event_at >= NOW() - INTERVAL '30 days') AS replies_30d
       FROM email_events
       WHERE sender_email IS NOT NULL
       GROUP BY sender_email
     `);
     return new Map(rows.map(r => [r.sender_email, {
-      sent:    parseInt(r.sent,    10) || 0,
-      bounces: parseInt(r.bounces, 10) || 0,
+      sent:       parseInt(r.sent,       10) || 0,
+      bounces:    parseInt(r.bounces,    10) || 0,
+      sent_30d:   parseInt(r.sent_30d,   10) || 0,
+      replies_30d:parseInt(r.replies_30d,10) || 0,
     }]));
   } catch {
     return new Map();
@@ -7121,6 +7125,8 @@ function attachMailboxStats(mailboxes, { idx: campIndex, wsIdx }, eventsByMailbo
     if (ev && ev.sent > 0) {
       m.attributed_sent    = ev.sent;
       m.attributed_bounces = ev.bounces;
+      m.sent_30d           = ev.sent_30d    || 0;
+      m.replies_30d        = ev.replies_30d || 0;
       let campSent = 0, campReplies = 0;
       for (const cid of (m.campaign_ids || [])) {
         const c = campIndex.get(cid);
@@ -7173,12 +7179,17 @@ function attachMailboxStats(mailboxes, { idx: campIndex, wsIdx }, eventsByMailbo
     const s = m.attributed_sent    || 0;
     const r = m.attributed_replies || 0;
     const b = m.attributed_bounces || 0;
-    m.reply_rate  = s > 0 ? r / s : 0;
-    m.bounce_rate = s > 0 ? b / s : 0;
+    m.reply_rate    = s > 0 ? r / s : 0;
+    m.bounce_rate   = s > 0 ? b / s : 0;
+    const s30 = m.sent_30d    || 0;
+    const r30 = m.replies_30d || 0;
+    m.reply_rate_30d = s30 >= 20 ? r30 / s30 : null; // null = not enough volume
   }
 }
 
 // Pull auth + blacklist data from the domain_health table.
+// For domains not yet checked, kick off a background DNS check so the next
+// request has data. Returns immediately with whatever is already stored.
 async function attachDomainHealth(pgdb, mailboxes) {
   if (!pgdb) return;
   const domains = Array.from(new Set(mailboxes.map(m => m.domain).filter(Boolean)));
@@ -7189,6 +7200,17 @@ async function attachDomainHealth(pgdb, mailboxes) {
   );
   const byDom = new Map();
   for (const row of r.rows) byDom.set(row.domain, row);
+
+  // Fire-and-forget DNS checks for any domain not yet in domain_health.
+  const missing = domains.filter(d => !byDom.has(d));
+  if (missing.length && !_domainHealthRunning) {
+    Promise.all(missing.map(async domain => {
+      try {
+        const row = await checkDomain(domain, null);
+        await pgdb.upsertDomainHealth(row);
+      } catch {}
+    })).catch(() => {});
+  }
   for (const m of mailboxes) {
     const dh = byDom.get(m.domain);
     if (!dh) continue;
