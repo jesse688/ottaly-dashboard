@@ -10,9 +10,9 @@ export async function GET() {
          c.positive_reply_count, c.reply_rate, c.daily_limit,
          c.last_lead_sent, c.last_lead_replied, c.created_at, c.updated_at,
          w.name AS workspace_name,
-         CASE WHEN c.sent_count > 0
+         COALESCE(c.reply_rate, CASE WHEN c.sent_count > 0
               THEN ROUND(c.replied_count::numeric / c.sent_count, 4)
-              ELSE 0 END AS reply_rate_calc,
+              ELSE 0 END) AS reply_rate_calc,
          CASE WHEN c.sent_count > 0
               THEN ROUND(c.bounced_count::numeric / c.sent_count, 4)
               ELSE 0 END AS bounce_rate
