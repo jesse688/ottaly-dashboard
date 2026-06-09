@@ -6522,6 +6522,10 @@ app.get('/api/dmarc/impact', requireSession, async (req, res) => {
     const before_start = new Date(changeDate); before_start.setDate(before_start.getDate() - 30);
     const after_end   = new Date(changeDate); after_end.setDate(after_end.getDate() + 30);
 
+    // Find earliest event so we can warn if before window is out of range.
+    const minRow = await pgdb.query(`SELECT MIN(event_at)::date AS min_date FROM email_events WHERE sender_email IS NOT NULL`);
+    const data_start = minRow.rows[0]?.min_date || null;
+
     // Per sender_email counts in both windows.
     const evRows = await pgdb.query(`
       SELECT
@@ -6597,10 +6601,13 @@ app.get('/api/dmarc/impact', requireSession, async (req, res) => {
     }).filter(r => r.sent_before > 0 || r.sent_after > 0)
       .sort((a,b) => (b.sent_before+b.sent_after) - (a.sent_before+a.sent_after));
 
+    const beforeHasData = data_start && new Date(data_start) < new Date(changeDate);
     res.json({
       change_date:  changeDate,
       before_start: before_start.toISOString().slice(0,10),
       after_end:    after_end.toISOString().slice(0,10),
+      data_start,
+      before_has_data: beforeHasData,
       by_policy:    Object.fromEntries(Object.entries(groups).map(([k,g]) => [k, rates(g)])),
       by_mailbox:   domainRows,
     });

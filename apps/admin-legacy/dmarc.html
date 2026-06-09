@@ -117,9 +117,10 @@
     </div>
     <div id="impactLoading" style="display:none;color:#9ca3af;font-size:13px;padding:8px 0">Analysing…<div class="progress-bar-wrap"><div class="progress-bar"></div></div></div>
     <div id="impactContent" style="display:none">
+      <div id="impactWarning" style="display:none;background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:10px 14px;font-size:12px;color:#92400e;margin-bottom:1rem"></div>
       <!-- Summary cards: one per DMARC policy -->
       <div id="impactCards" style="display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin-bottom:1.5rem"></div>
-      <p style="font-size:11px;color:#9ca3af;margin-bottom:1rem">⚠ Reply data uses PlusVibe webhooks — sender attribution is available for sent &amp; bounce events. Reply rate may show lower than actual where webhooks omit the sending mailbox.</p>
+      <p style="font-size:11px;color:#9ca3af;margin-bottom:1rem">⚠ Bounce rate is the reliable metric here — PlusVibe reply webhooks don't tag the sending mailbox so reply rates can't be attributed per mailbox.</p>
       <!-- Per-mailbox detail table -->
       <div class="section-h">Per-mailbox detail</div>
       <div class="table-wrap">
@@ -281,9 +282,19 @@ async function loadImpact() {
   const data = await res.json();
   document.getElementById('impactLoading').style.display = 'none';
 
-  const fmt = d => new Date(d).toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' });
+  const fmt = d => new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' });
   document.getElementById('impactMeta').textContent =
     `${fmt(data.before_start)} → ${fmt(data.change_date)} vs ${fmt(data.change_date)} → ${fmt(data.after_end)}`;
+
+  // Warn if webhook data doesn't cover the before window
+  const warnEl = document.getElementById('impactWarning');
+  if (!data.before_has_data) {
+    const ds = data.data_start ? fmt(data.data_start) : 'unknown date';
+    warnEl.innerHTML = `<strong>No before-window data.</strong> Webhook tracking started ${ds} — there are no send events before ${fmt(data.change_date)} to compare against. The cards below show <em>current bounce rates by DMARC policy</em> only.`;
+    warnEl.style.display = '';
+  } else {
+    warnEl.style.display = 'none';
+  }
 
   // Summary cards by policy
   const cards = document.getElementById('impactCards');
@@ -294,44 +305,35 @@ async function loadImpact() {
 
   cards.innerHTML = POLICIES.map(p => {
     const s = byPolicy[p] || { sent_before:0, replies_before:0, bounces_before:0, sent_after:0, replies_after:0, bounces_after:0, mailboxes:0 };
-    const rrBefore = s.sent_before > 0 ? (s.replies_before / s.sent_before * 100) : null;
-    const rrAfter  = s.sent_after  > 0 ? (s.replies_after  / s.sent_after  * 100) : null;
-    const rrDelta  = (rrBefore != null && rrAfter != null) ? (rrAfter - rrBefore) : null;
     const brBefore = s.sent_before > 0 ? (s.bounces_before / s.sent_before * 100) : null;
     const brAfter  = s.sent_after  > 0 ? (s.bounces_after  / s.sent_after  * 100) : null;
+    const brDelta  = (brBefore != null && brAfter != null) ? (brAfter - brBefore) : null;
     const fmtRate  = v => v != null ? v.toFixed(2)+'%' : '—';
-    const deltaColor = rrDelta == null ? '#9ca3af' : rrDelta >= 0 ? '#059669' : '#dc2626';
-    const deltaSign  = rrDelta == null ? '' : rrDelta >= 0 ? '+' : '';
+    // For bounce rate, lower is better so invert colour logic
+    const deltaColor = brDelta == null ? '#9ca3af' : brDelta <= 0 ? '#059669' : '#dc2626';
+    const deltaSign  = brDelta == null ? '' : brDelta >= 0 ? '+' : '';
+    const noBefore = !data.before_has_data;
     return `<div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden">
       <div style="background:${PIMP_BG[p]};padding:10px 14px;border-bottom:1px solid #e5e7eb">
         <span style="font-weight:700;font-size:13px;color:${PIMP_HDR[p]}">${PIMP_LABEL[p]}</span>
         <span style="float:right;font-size:11px;color:#9ca3af">${s.mailboxes} mailbox${s.mailboxes===1?'':'es'}</span>
       </div>
-      <div style="padding:12px 14px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
-        <div>
-          <div style="font-size:10px;color:#9ca3af;margin-bottom:2px">Reply Rate Before</div>
-          <div style="font-size:18px;font-weight:700;color:#111">${fmtRate(rrBefore)}</div>
-          <div style="font-size:10px;color:#9ca3af">${(s.sent_before||0).toLocaleString()} sent</div>
-        </div>
-        <div>
-          <div style="font-size:10px;color:#9ca3af;margin-bottom:2px">Reply Rate After</div>
-          <div style="font-size:18px;font-weight:700;color:#111">${fmtRate(rrAfter)}</div>
-          <div style="font-size:10px;color:#9ca3af">${(s.sent_after||0).toLocaleString()} sent</div>
-        </div>
-        <div style="grid-column:1/-1;border-top:1px solid #f3f4f6;padding-top:8px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px">
+      <div style="padding:12px 14px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
           <div>
-            <div style="font-size:10px;color:#9ca3af">RR Change</div>
-            <div style="font-size:14px;font-weight:700;color:${deltaColor}">${rrDelta!=null ? deltaSign+rrDelta.toFixed(2)+'pp' : '—'}</div>
+            <div style="font-size:10px;color:#9ca3af;margin-bottom:2px">${noBefore ? 'Sent (after)' : 'Sent Before'}</div>
+            <div style="font-size:18px;font-weight:700;color:#111">${noBefore ? (s.sent_after||0).toLocaleString() : (s.sent_before||0).toLocaleString()}</div>
           </div>
           <div>
-            <div style="font-size:10px;color:#9ca3af">BR Before</div>
-            <div style="font-size:14px;font-weight:600;color:#374151">${fmtRate(brBefore)}</div>
-          </div>
-          <div>
-            <div style="font-size:10px;color:#9ca3af">BR After</div>
-            <div style="font-size:14px;font-weight:600;color:#374151">${fmtRate(brAfter)}</div>
+            <div style="font-size:10px;color:#9ca3af;margin-bottom:2px">Bounce Rate${noBefore ? '' : ' After'}</div>
+            <div style="font-size:18px;font-weight:700;color:${brAfter!=null&&brAfter>3?'#dc2626':brAfter!=null&&brAfter>1.5?'#d97706':'#059669'}">${fmtRate(brAfter)}</div>
           </div>
         </div>
+        ${!noBefore ? `<div style="border-top:1px solid #f3f4f6;padding-top:8px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px">
+          <div><div style="font-size:10px;color:#9ca3af">BR Before</div><div style="font-size:14px;font-weight:600;color:#374151">${fmtRate(brBefore)}</div></div>
+          <div><div style="font-size:10px;color:#9ca3af">BR After</div><div style="font-size:14px;font-weight:600;color:#374151">${fmtRate(brAfter)}</div></div>
+          <div><div style="font-size:10px;color:#9ca3af">BR Change</div><div style="font-size:14px;font-weight:700;color:${deltaColor}">${brDelta!=null ? deltaSign+brDelta.toFixed(2)+'pp' : '—'}</div></div>
+        </div>` : ''}
       </div>
     </div>`;
   }).join('');
