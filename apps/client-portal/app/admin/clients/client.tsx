@@ -140,6 +140,7 @@ export function AdminClientsClient() {
       fetch('/api/admin/clients').then(r => r.json()).then(setClients)
       const hookMsg = data.webhook === 'created' ? 'Webhook created ✓'
         : data.webhook === 'already-exists' ? 'Webhook already active ✓'
+        : data.webhook === 'created-replies-only' ? 'Webhook set (lead alerts activate after the first lead is marked; sync covers it meanwhile) ✓'
         : `Webhook: ${data.webhook ?? 'n/a'}`
       alert(`Client created. ${hookMsg}. Leads + emails are backfilling now.`)
     } finally { setSaving(false) }
@@ -157,7 +158,11 @@ export function AdminClientsClient() {
   async function registerWebhook(c: PortalClient) {
     const res = await fetch(`/api/admin/clients/${c.id}/webhook`, { method: 'POST' })
     const d = await res.json() as { ok?: boolean; reason?: string }
-    alert(d.ok ? (d.reason === 'already-exists' ? 'Webhook already active ✓' : 'Webhook registered ✓') : `Failed: ${d.reason}`)
+    alert(d.ok
+      ? (d.reason === 'already-exists' ? 'Webhook already active ✓'
+        : d.reason === 'created-replies-only' ? 'Webhook set for replies ✓ — lead alerts activate automatically once the first lead is marked (sync covers it meanwhile).'
+        : 'Webhook registered ✓')
+      : `Failed: ${d.reason}`)
   }
   async function handleResetPassword(id: string) {
     if (!resetPassword) return

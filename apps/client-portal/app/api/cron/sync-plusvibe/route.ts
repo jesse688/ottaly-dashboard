@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import pool from '@/lib/db'
+import { registerWebhook } from '@/lib/plusvibe'
 
 interface PVLead {
   id: string
@@ -29,7 +30,7 @@ export async function GET(req: NextRequest) {
   if (!PLUSVIBE_API_KEY) return NextResponse.json({ error: 'PLUSVIBE_API_KEY not configured' }, { status: 500 })
 
   try {
-    const results = { workspaces: 0, leads: 0, errors: [] as string[] }
+    const results = { workspaces: 0, leads: 0, webhooks: 0, errors: [] as string[] }
     const startTime = Date.now()
 
     // Fetch all workspaces from PlusVibe
@@ -101,6 +102,19 @@ export async function GET(req: NextRequest) {
       } catch (err) {
         results.errors.push(`Workspace ${ws.name}: ${String(err)}`)
       }
+    }
+
+    // Ensure / upgrade webhooks for every workspace that has a portal client.
+    // Reply-only hooks (created on empty workspaces) auto-upgrade to include the
+    // lead event once the "Lead" label has been used at least once.
+    try {
+      const clientWs = await pool.query(`SELECT DISTINCT workspace_id FROM portal_clients`)
+      for (const row of clientWs.rows) {
+        const r = await registerWebhook(row.workspace_id)
+        if (r.ok && r.reason === 'created') results.webhooks++
+      }
+    } catch (err) {
+      results.errors.push(`webhook upgrade: ${String(err)}`)
     }
 
     // Log to audit trail

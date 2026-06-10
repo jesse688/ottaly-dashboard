@@ -147,50 +147,65 @@ const WEBHOOK_TARGET =
   process.env.PLUSVIBE_WEBHOOK_TARGET_URL ||
   'https://ottaly-git.oix3xv.easypanel.host/webhook/plusvibe-reply'
 
-// Events the portal needs. Try the fuller set, but fall back to just the critical
-// "marked as lead" event if a workspace rejects any of them.
-const WEBHOOK_EVENTS_FULL = ['LEAD_MARKED_AS_LEAD', 'ALL_EMAIL_REPLIES']
-const WEBHOOK_EVENTS_MIN = ['LEAD_MARKED_AS_LEAD']
+// The "marked as lead" event is label-dependent — PlusVibe only knows it once a
+// workspace has actually used the "Lead" label. So for a brand-new workspace we
+// register the label-independent reply event now (always works), let the polling
+// cron catch the first lead, then auto-upgrade the hook to include the lead event
+// once it becomes available.
+const WEBHOOK_EVENT_SETS = [
+  ['LEAD_MARKED_AS_LEAD', 'ALL_EMAIL_REPLIES'],
+  ['LEAD_MARKED_AS_LEAD'],
+  ['ALL_EMAIL_REPLIES'],
+]
 
-interface PVHook { _id: string; url: string; status?: string; evt_types?: string[] }
+interface PVHook { _id: string; url: string; name?: string; status?: string; evt_types?: string[] }
+const hasLeadEvent = (h: PVHook) => (h.evt_types ?? []).includes('LEAD_MARKED_AS_LEAD')
 
 async function addHook(workspaceId: string, events: string[]): Promise<{ ok: boolean; status: number; body: string }> {
   const res = await fetch(`${BASE}/hook/add`, {
     method: 'POST',
     headers: { ...headers(), 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      workspace_id: workspaceId,
-      name: 'Ottaly Portal',
-      url: WEBHOOK_TARGET,
-      camp_ids: ['ALL'],
-      event_types: events,
-      is_slack: 0,
-      secret: '',
-      ignore_ooo: 1,
-      ignore_automatic: 1,
+      workspace_id: workspaceId, name: 'Ottaly Portal', url: WEBHOOK_TARGET,
+      camp_ids: ['ALL'], event_types: events, is_slack: 0, secret: '', ignore_ooo: 1, ignore_automatic: 1,
     }),
   })
   return { ok: res.ok, status: res.status, body: (await res.text().catch(() => '')).slice(0, 160) }
 }
 
-// Idempotently ensure a lead/reply webhook exists for a workspace, pointing at our
-// handler. Lists first (GET /hook/list) to avoid duplicates, then POST /hook/add,
-// falling back to the minimal event set if the fuller one is rejected.
+async function delHook(workspaceId: string, id: string): Promise<void> {
+  await fetch(`${BASE}/hook/del`, {
+    method: 'DELETE', headers: { ...headers(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspace_id: workspaceId, ids: [id] }),
+  }).catch(() => {})
+}
+
+// Ensure a lead/reply webhook exists for a workspace, pointing at our handler.
+// - Skips if any hook already includes the lead event (e.g. existing Database1.0).
+// - Upgrades our own reply-only hook to include the lead event once available.
+// - Falls back through event sets so it always lands something.
 export async function registerWebhook(workspaceId: string): Promise<{ ok: boolean; reason?: string }> {
   if (!KEY) return { ok: false, reason: 'no-api-key' }
   try {
     const list = await pv<{ hooks?: PVHook[] }>('/hook/list', { workspace_id: workspaceId }).catch(() => ({ hooks: [] as PVHook[] }))
-    const covered = (list.hooks ?? []).some(h =>
-      h.url === WEBHOOK_TARGET ||
-      h.url.includes('/webhook/plusvibe') ||
-      (h.evt_types ?? []).includes('LEAD_MARKED_AS_LEAD')
-    )
-    if (covered) return { ok: true, reason: 'already-exists' }
+    const hooks = list.hooks ?? []
 
-    let r = await addHook(workspaceId, WEBHOOK_EVENTS_FULL)
-    if (!r.ok) r = await addHook(workspaceId, WEBHOOK_EVENTS_MIN) // fallback: critical event only
-    if (!r.ok) return { ok: false, reason: `create-failed-${r.status}: ${r.body}` }
-    return { ok: true, reason: 'created' }
+    // Already covered by ANY hook that includes the lead event? Done.
+    if (hooks.some(hasLeadEvent)) return { ok: true, reason: 'already-exists' }
+
+    // Our own reply-only hook exists (created earlier on an empty workspace) —
+    // delete it so we can re-add now that the lead event may have become available.
+    const ourReplyOnly = hooks.find(h => h.name === 'Ottaly Portal' && h.url === WEBHOOK_TARGET && !hasLeadEvent(h))
+    if (ourReplyOnly) await delHook(workspaceId, ourReplyOnly._id)
+
+    let last = { ok: false, status: 0, body: '' }
+    for (const events of WEBHOOK_EVENT_SETS) {
+      const r = await addHook(workspaceId, events)
+      if (r.ok) return { ok: true, reason: events.includes('LEAD_MARKED_AS_LEAD') ? 'created' : 'created-replies-only' }
+      if (/already exist/i.test(r.body)) return { ok: true, reason: 'already-exists' }
+      last = r
+    }
+    return { ok: false, reason: `create-failed-${last.status}: ${last.body}` }
   } catch (err) {
     return { ok: false, reason: String(err) }
   }
