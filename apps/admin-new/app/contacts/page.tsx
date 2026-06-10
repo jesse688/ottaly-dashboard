@@ -1,15 +1,16 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
-import type { Contact, ContactFilters } from '@/types/contact'
+import { useEffect, useState, useCallback, CSSProperties } from 'react'
+import type { Contact } from '@/types/contact'
 
 const PAGE_SIZE = 50
 
-const STATUS_CLASS: Record<string, string> = {
-  verified: 'o-status o-status-good',
-  bounced: 'o-status o-status-critical',
-  unverified: 'o-status o-status-unknown',
-  lead: 'o-status o-status-active',
+const STATUS_CLASSES: Record<string, string> = {
+  new: 'status-new',
+  interested: 'status-interested',
+  replied: 'status-replied',
+  bounced: 'status-bounced',
+  active: 'status-active',
 }
 
 export default function ContactsPage() {
@@ -17,31 +18,37 @@ export default function ContactsPage() {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [filters, setFilters] = useState<ContactFilters>({
-    page: 1,
-    pageSize: PAGE_SIZE,
-    sortBy: 'email',
-    sortDir: 'asc',
-  })
+  const [currentPage, setCurrentPage] = useState(1)
+  const [sortBy, setSortBy] = useState('email')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [workspaceFilter, setWorkspaceFilter] = useState('')
+  const [sourceFilter, setSourceFilter] = useState('')
 
   const fetchContacts = useCallback(async () => {
     setLoading(true)
     try {
       const params = new URLSearchParams()
-      Object.entries(filters).forEach(([k, v]) => {
-        if (v !== undefined && v !== '') params.set(k, String(v))
-      })
-      const res = await fetch(`/api/contacts?${params}`)
+      params.set('page', String(currentPage))
+      params.set('pageSize', String(PAGE_SIZE))
+      params.set('sortBy', sortBy)
+      params.set('sortDir', sortDir)
+      if (searchQuery) params.set('search', searchQuery)
+      if (workspaceFilter) params.set('workspace', workspaceFilter)
+      if (sourceFilter) params.set('source', sourceFilter)
+
+      const res = await fetch(`/api/contacts/search?${params}`)
       if (!res.ok) throw new Error('Failed to fetch')
       const data = await res.json()
       setContacts(data.contacts ?? [])
       setTotal(data.total ?? 0)
-    } catch {
+    } catch (err) {
+      console.error('Fetch error:', err)
       setContacts([])
     } finally {
       setLoading(false)
     }
-  }, [filters])
+  }, [currentPage, sortBy, sortDir, searchQuery, workspaceFilter, sourceFilter])
 
   useEffect(() => { fetchContacts() }, [fetchContacts])
 
@@ -53,162 +60,179 @@ export default function ContactsPage() {
     })
   }
 
-  function toggleAll() {
-    if (selected.size === contacts.length) {
+  function toggleSelectAll() {
+    if (selected.size === contacts.length && contacts.length > 0) {
       setSelected(new Set())
     } else {
       setSelected(new Set(contacts.map(c => c.id)))
     }
   }
 
-  function setSort(col: string) {
-    setFilters(f => ({
-      ...f,
-      sortBy: col,
-      sortDir: f.sortBy === col && f.sortDir === 'asc' ? 'desc' : 'asc',
-      page: 1,
-    }))
+  function handleSort(col: string) {
+    if (sortBy === col) {
+      setSortDir(sortDir === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSortBy(col)
+      setSortDir('asc')
+    }
+    setCurrentPage(1)
   }
 
   const totalPages = Math.ceil(total / PAGE_SIZE)
+  const isAllSelected = selected.size > 0 && selected.size === contacts.length
 
   return (
-    <div className="o-page">
-      <div className="o-page-header">
-        <div>
-          <div className="o-page-title">Contacts</div>
-          <div className="o-page-sub">{total.toLocaleString()} total</div>
-        </div>
-        {selected.size > 0 && (
-          <div className="o-page-actions">
-            <span style={{ fontSize: 13, color: '#6B7280' }}>{selected.size} selected</span>
-            <button className="o-btn o-btn-ghost o-btn-sm">Export to Apollo</button>
-            <button className="o-btn o-btn-ghost o-btn-sm">Add to Campaign</button>
+    <div style={styles.container}>
+      {/* Header */}
+      <div style={styles.header}>
+        <div style={styles.headerLeft}>
+          <div style={styles.headerTitle}>Contacts</div>
+          <div style={styles.totalBadge}><span id="totalCount">{total.toLocaleString()}</span> total</div>
+          <div style={styles.searchBox}>
+            <div style={styles.searchIcon}>&#9906;</div>
+            <input
+              type="text"
+              placeholder="Search email, name, company..."
+              value={searchQuery}
+              onChange={e => {
+                setSearchQuery(e.target.value)
+                setCurrentPage(1)
+              }}
+              style={styles.searchInput}
+            />
           </div>
-        )}
-      </div>
-
-      <div className="o-toolbar">
-        <div className="o-search-wrap">
-          <span className="o-search-icon">
-            <svg width="15" height="15" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M10.293 10.293a1 1 0 011.414 0l2 2a1 1 0 01-1.414 1.414l-2-2a1 1 0 010-1.414z" fill="currentColor"/>
-              <circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" strokeWidth="1.5" fill="none"/>
-            </svg>
-          </span>
-          <input
-            type="text"
-            placeholder="Search email, name, company..."
-            value={filters.search ?? ''}
-            onChange={e => setFilters(f => ({ ...f, search: e.target.value, page: 1 }))}
-          />
         </div>
-        <select
-          className="o-select"
-          value={filters.status ?? 'all'}
-          onChange={e => setFilters(f => ({ ...f, status: e.target.value === 'all' ? undefined : e.target.value, page: 1 } as ContactFilters))}
-        >
-          <option value="all">All statuses</option>
-          <option value="verified">Verified</option>
-          <option value="unverified">Unverified</option>
-          <option value="bounced">Bounced</option>
-          <option value="lead">Lead</option>
-        </select>
-        <select
-          className="o-select"
-          value={filters.country ?? 'all'}
-          onChange={e => setFilters(f => ({ ...f, country: e.target.value === 'all' ? undefined : e.target.value, page: 1 } as ContactFilters))}
-        >
-          <option value="all">All countries</option>
-          <option value="United Kingdom">United Kingdom</option>
-          <option value="United States">United States</option>
-          <option value="Australia">Australia</option>
-          <option value="Canada">Canada</option>
-        </select>
-        {(filters.search || filters.status || filters.country) && (
-          <button
-            className="o-btn o-btn-ghost o-btn-sm"
-            onClick={() => setFilters(f => ({ ...f, search: undefined, status: undefined, country: undefined, page: 1 }))}
-          >
-            Clear filters
-          </button>
-        )}
+        <div style={styles.headerRight}>
+          <button style={{ ...styles.btn, ...styles.btnSecondary }}>⚙ Columns</button>
+          <button style={{ ...styles.btn, ...styles.btnPrimary }}>Import CSV</button>
+          <button style={{ ...styles.btn, ...styles.btnDanger }}>Delete from CSV</button>
+          <button style={{ ...styles.btn, ...styles.btnSecondary }}>⬇ Apollo Export</button>
+          <button style={{ ...styles.btn, ...styles.btnSecondary }}>↺ Reset Exports</button>
+          <button style={{ ...styles.btn, ...styles.btnSecondary }}>+ Add</button>
+        </div>
       </div>
 
-      <div className="o-table-wrap">
-        <table className="o-table">
-          <thead>
+      {/* Selection Bar */}
+      {selected.size > 0 && (
+        <div style={styles.selectionBar}>
+          <span style={styles.selectionCount}><span id="pushCount">{selected.size}</span> selected</span>
+          <div style={styles.selectionDivider}></div>
+          <button style={{ ...styles.btn, ...styles.btnSecondary, padding: '5px 12px' }}>
+            Select… (of {contacts.length})
+          </button>
+          <button style={{ ...styles.btn, ...styles.btnSecondary, padding: '5px 12px' }} onClick={() => setSelected(new Set())}>
+            Deselect All
+          </button>
+          <div style={{ flex: 1 }}></div>
+          <button style={{ ...styles.btn, ...styles.btnPlusVibe }}>🚀 Push to PlusVibe</button>
+        </div>
+      )}
+
+      {/* Filters */}
+      <div style={styles.filterBar}>
+        <select
+          value={workspaceFilter}
+          onChange={e => {
+            setWorkspaceFilter(e.target.value)
+            setCurrentPage(1)
+          }}
+          style={styles.select}
+        >
+          <option value="">All workspaces</option>
+          <option value="ottaly-global">Ottaly Global</option>
+          <option value="uk">UK</option>
+        </select>
+        <select
+          value={sourceFilter}
+          onChange={e => {
+            setSourceFilter(e.target.value)
+            setCurrentPage(1)
+          }}
+          style={styles.select}
+        >
+          <option value="">All sources</option>
+          <option value="apollo">Apollo</option>
+          <option value="manual">Manual</option>
+        </select>
+      </div>
+
+      {/* Table */}
+      <div style={styles.tableWrapper}>
+        <table style={styles.table}>
+          <thead style={styles.thead}>
             <tr>
-              <th style={{ width: 40 }}>
+              <th style={{ ...styles.th, width: 40 }}>
                 <input
                   type="checkbox"
-                  checked={selected.size === contacts.length && contacts.length > 0}
-                  onChange={toggleAll}
+                  checked={isAllSelected}
+                  onChange={toggleSelectAll}
+                  style={styles.checkbox}
                 />
               </th>
-              <th style={{ cursor: 'pointer' }} onClick={() => setSort('email')}>
-                Email {filters.sortBy === 'email' ? (filters.sortDir === 'asc' ? '↑' : '↓') : ''}
+              <th style={{ ...styles.th, cursor: 'pointer' }} onClick={() => handleSort('email')}>
+                EMAIL {sortBy === 'email' ? (sortDir === 'asc' ? '↑' : '↓') : ''}
               </th>
-              <th style={{ cursor: 'pointer' }} onClick={() => setSort('first_name')}>
-                Name {filters.sortBy === 'first_name' ? (filters.sortDir === 'asc' ? '↑' : '↓') : ''}
+              <th style={{ ...styles.th, cursor: 'pointer' }} onClick={() => handleSort('first_name')}>
+                FIRST NAME {sortBy === 'first_name' ? (sortDir === 'asc' ? '↑' : '↓') : ''}
               </th>
-              <th style={{ cursor: 'pointer' }} onClick={() => setSort('company_name')}>
-                Company {filters.sortBy === 'company_name' ? (filters.sortDir === 'asc' ? '↑' : '↓') : ''}
+              <th style={{ ...styles.th, cursor: 'pointer' }} onClick={() => handleSort('last_name')}>
+                LAST NAME {sortBy === 'last_name' ? (sortDir === 'asc' ? '↑' : '↓') : ''}
               </th>
-              <th style={{ cursor: 'pointer' }} onClick={() => setSort('job_title')}>
-                Title {filters.sortBy === 'job_title' ? (filters.sortDir === 'asc' ? '↑' : '↓') : ''}
+              <th style={{ ...styles.th, cursor: 'pointer' }} onClick={() => handleSort('company_name')}>
+                COMPANY {sortBy === 'company_name' ? (sortDir === 'asc' ? '↑' : '↓') : ''}
               </th>
-              <th>Location</th>
-              <th style={{ cursor: 'pointer' }} onClick={() => setSort('status')}>
-                Status {filters.sortBy === 'status' ? (filters.sortDir === 'asc' ? '↑' : '↓') : ''}
+              <th style={{ ...styles.th, cursor: 'pointer' }} onClick={() => handleSort('job_title')}>
+                JOB TITLE {sortBy === 'job_title' ? (sortDir === 'asc' ? '↑' : '↓') : ''}
+              </th>
+              <th style={{ ...styles.th, cursor: 'pointer' }} onClick={() => handleSort('status')}>
+                STATUS {sortBy === 'status' ? (sortDir === 'asc' ? '↑' : '↓') : ''}
               </th>
             </tr>
           </thead>
-          <tbody>
+          <tbody style={styles.tbody}>
             {loading ? (
-              Array.from({ length: 10 }).map((_, i) => (
-                <tr key={i}>
-                  {Array.from({ length: 7 }).map((_, j) => (
-                    <td key={j}>
-                      <span className="o-spin" />
-                    </td>
-                  ))}
-                </tr>
-              ))
+              <tr>
+                <td colSpan={7} style={styles.loadingCell}>Loading contacts...</td>
+              </tr>
             ) : contacts.length === 0 ? (
               <tr>
-                <td colSpan={7}>
-                  <div className="o-empty">No contacts found</div>
+                <td colSpan={7} style={styles.emptyCell}>
+                  <div style={styles.emptyState}>No contacts found</div>
                 </td>
               </tr>
             ) : (
               contacts.map(contact => (
-                <tr key={contact.id}>
-                  <td>
+                <tr key={contact.id} style={{
+                  ...styles.tr,
+                  ...(selected.has(contact.id) ? styles.trSelected : {})
+                }}>
+                  <td style={styles.td}>
                     <input
                       type="checkbox"
                       checked={selected.has(contact.id)}
                       onChange={() => toggleSelect(contact.id)}
+                      style={styles.checkbox}
                     />
                   </td>
-                  <td style={{ fontFamily: 'monospace', fontSize: 13 }}>{contact.email}</td>
-                  <td>
-                    {[contact.first_name, contact.last_name].filter(Boolean).join(' ') || '—'}
+                  <td style={{ ...styles.td, ...styles.emailCell }}>
+                    {contact.email || '—'}
                   </td>
-                  <td>{contact.company_name ?? '—'}</td>
-                  <td>
-                    <div>{contact.job_title ?? '—'}</div>
-                    {contact.seniority && (
-                      <div style={{ fontSize: 12, color: '#6B7280' }}>{contact.seniority}</div>
-                    )}
+                  <td style={styles.td}>
+                    {contact.first_name || '—'}
                   </td>
-                  <td style={{ fontSize: 13, color: '#6B7280' }}>
-                    {[contact.city, contact.country].filter(Boolean).join(', ') || '—'}
+                  <td style={styles.td}>
+                    {contact.last_name || '—'}
                   </td>
-                  <td>
+                  <td style={styles.td}>
+                    {contact.company_name || '—'}
+                  </td>
+                  <td style={styles.td}>
+                    <div>{contact.job_title || '—'}</div>
+                  </td>
+                  <td style={styles.td}>
                     {contact.status ? (
-                      <span className={STATUS_CLASS[contact.status] ?? 'o-status o-status-unknown'}>
-                        {contact.status}
+                      <span style={styles.statusBadge(contact.status)}>
+                        {contact.status.toUpperCase()}
                       </span>
                     ) : '—'}
                   </td>
@@ -219,29 +243,290 @@ export default function ContactsPage() {
         </table>
       </div>
 
-      {totalPages > 1 && (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 16 }}>
-          <span style={{ fontSize: 13, color: '#6B7280' }}>
-            Page {filters.page} of {totalPages} — {total.toLocaleString()} contacts
-          </span>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button
-              className="o-btn o-btn-ghost o-btn-sm"
-              disabled={filters.page === 1}
-              onClick={() => setFilters(f => ({ ...f, page: (f.page ?? 1) - 1 }))}
-            >
-              Previous
-            </button>
-            <button
-              className="o-btn o-btn-ghost o-btn-sm"
-              disabled={filters.page === totalPages}
-              onClick={() => setFilters(f => ({ ...f, page: (f.page ?? 1) + 1 }))}
-            >
-              Next
-            </button>
-          </div>
+      {/* Pagination */}
+      <div style={styles.paginationBar}>
+        <span style={styles.infoText}>
+          Showing {contacts.length > 0 ? (currentPage - 1) * PAGE_SIZE + 1 : 0} - {Math.min(currentPage * PAGE_SIZE, total)} of {total.toLocaleString()}
+        </span>
+        <div style={styles.paginationButtons}>
+          <button
+            style={{ ...styles.paginationBtn }}
+            disabled={currentPage === 1}
+            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+          >
+            Previous
+          </button>
+          {totalPages > 1 && Array.from({ length: Math.min(5, totalPages) }).map((_, i) => {
+            const page = i + 1
+            return (
+              <button
+                key={page}
+                style={{
+                  ...styles.paginationBtn,
+                  ...(currentPage === page ? styles.paginationBtnActive : {})
+                }}
+                onClick={() => setCurrentPage(page)}
+              >
+                {page}
+              </button>
+            )
+          })}
+          <button
+            style={{ ...styles.paginationBtn }}
+            disabled={currentPage === totalPages}
+            onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+          >
+            Next
+          </button>
         </div>
-      )}
+      </div>
     </div>
   )
+}
+
+const styles = {
+  container: {
+    display: 'flex',
+    flexDirection: 'column' as const,
+    height: '100vh',
+    background: '#f8f9fa',
+  },
+  header: {
+    padding: '16px 20px',
+    background: 'white',
+    borderBottom: '1px solid #e5e7eb',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: '12px',
+  },
+  headerLeft: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+    flex: 1,
+  },
+  headerTitle: {
+    fontSize: '17px',
+    fontWeight: 700,
+    color: '#1a1a1a',
+    whiteSpace: 'nowrap' as const,
+  },
+  totalBadge: {
+    background: '#f3f4f6',
+    color: '#374151',
+    fontSize: '12px',
+    fontWeight: 600,
+    padding: '3px 8px',
+    borderRadius: '10px',
+    whiteSpace: 'nowrap' as const,
+  },
+  searchBox: {
+    position: 'relative' as const,
+    flex: 1,
+    maxWidth: '360px',
+  },
+  searchIcon: {
+    position: 'absolute' as const,
+    left: '10px',
+    top: '50%',
+    transform: 'translateY(-50%)',
+    color: '#9ca3af',
+    fontSize: '14px',
+  },
+  searchInput: {
+    width: '100%',
+    padding: '8px 14px 8px 34px',
+    border: '1px solid #d1d5db',
+    borderRadius: '6px',
+    fontSize: '13px',
+    fontFamily: 'inherit',
+    boxSizing: 'border-box' as const,
+  },
+  headerRight: {
+    display: 'flex',
+    gap: '8px',
+    alignItems: 'center',
+    flexShrink: 0,
+  },
+  selectionBar: {
+    display: 'flex',
+    padding: '10px 20px',
+    background: '#eff6ff',
+    borderBottom: '1px solid #bfdbfe',
+    alignItems: 'center',
+    gap: '12px',
+    fontSize: '13px',
+  },
+  selectionCount: {
+    fontWeight: 600,
+    color: '#1e40af',
+  },
+  selectionDivider: {
+    width: '1px',
+    height: '16px',
+    background: '#93c5fd',
+  },
+  filterBar: {
+    display: 'flex',
+    gap: '8px',
+    padding: '12px 20px',
+    background: 'white',
+    borderBottom: '1px solid #e5e7eb',
+  },
+  select: {
+    padding: '5px 8px',
+    border: '1px solid #e5e7eb',
+    borderRadius: '5px',
+    fontSize: '12px',
+    fontFamily: 'inherit',
+  },
+  btn: {
+    padding: '7px 10px',
+    border: 'none',
+    borderRadius: '5px',
+    fontSize: '12px',
+    fontWeight: 600,
+    cursor: 'pointer',
+    transition: 'all 0.2s',
+    fontFamily: 'inherit',
+  },
+  btnPrimary: {
+    background: '#3b82f6',
+    color: 'white',
+  },
+  btnSecondary: {
+    background: '#e5e7eb',
+    color: '#1a1a1a',
+  },
+  btnDanger: {
+    background: '#dc2626',
+    color: 'white',
+  },
+  btnPlusVibe: {
+    background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+    color: 'white',
+  },
+  tableWrapper: {
+    background: 'white',
+    borderRadius: '8px',
+    border: '1px solid #e5e7eb',
+    overflow: 'hidden',
+    display: 'flex',
+    flexDirection: 'column' as const,
+    flex: 1,
+    margin: '20px',
+  },
+  table: {
+    width: '100%',
+    borderCollapse: 'collapse' as const,
+    fontSize: '13px',
+  },
+  thead: {
+    background: '#f9fafb',
+    borderBottom: '1px solid #e5e7eb',
+    position: 'sticky' as const,
+    top: 0,
+    zIndex: 10,
+  },
+  th: {
+    padding: '12px 16px',
+    textAlign: 'left' as const,
+    fontWeight: 600,
+    color: '#6b7280',
+    fontSize: '12px',
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.5px',
+    userSelect: 'none' as const,
+  },
+  tbody: {
+    flex: 1,
+    overflowY: 'auto' as const,
+  },
+  td: {
+    padding: '12px 16px',
+    borderBottom: '1px solid #f3f4f6',
+    verticalAlign: 'middle' as const,
+  },
+  tr: {
+    transition: 'background-color 0.15s',
+  },
+  trSelected: {
+    background: '#eff6ff',
+  },
+  emailCell: {
+    color: '#3b82f6',
+    fontWeight: 500,
+  },
+  checkbox: {
+    width: '18px',
+    height: '18px',
+    cursor: 'pointer',
+    accentColor: '#3b82f6',
+  },
+  loadingCell: {
+    padding: '60px 20px',
+    color: '#6b7280',
+    fontSize: '14px',
+    textAlign: 'center' as const,
+  },
+  emptyCell: {
+    padding: '80px 20px',
+  },
+  emptyState: {
+    textAlign: 'center' as const,
+    color: '#6b7280',
+  },
+  statusBadge: (status: string): CSSProperties => {
+    const base: CSSProperties = {
+      display: 'inline-block',
+      padding: '4px 10px',
+      borderRadius: '6px',
+      fontSize: '11px',
+      fontWeight: 600,
+      textTransform: 'uppercase',
+    }
+    const variants: Record<string, CSSProperties> = {
+      new: { ...base, background: '#dbeafe', color: '#1e40af' },
+      interested: { ...base, background: '#fef3c7', color: '#92400e' },
+      replied: { ...base, background: '#dcfce7', color: '#15803d' },
+      bounced: { ...base, background: '#fee2e2', color: '#7f1d1d' },
+      active: { ...base, background: '#d1fae5', color: '#065f46' },
+    }
+    return variants[status] || base
+  },
+  paginationBar: {
+    padding: '16px 20px',
+    background: '#f9fafb',
+    borderTop: '1px solid #e5e7eb',
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: '8px',
+  },
+  infoText: {
+    fontSize: '12px',
+    color: '#6b7280',
+    margin: '0 12px',
+  },
+  paginationButtons: {
+    display: 'flex',
+    gap: '4px',
+    alignItems: 'center',
+  },
+  paginationBtn: {
+    padding: '6px 10px',
+    border: '1px solid #d1d5db',
+    background: 'white',
+    borderRadius: '4px',
+    cursor: 'pointer',
+    fontSize: '12px',
+    fontWeight: 500,
+    transition: 'all 0.2s',
+  },
+  paginationBtnActive: {
+    background: '#3b82f6',
+    color: 'white',
+    borderColor: '#3b82f6',
+  },
 }

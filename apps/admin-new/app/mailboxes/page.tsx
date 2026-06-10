@@ -169,7 +169,7 @@ export default function MailboxesPage() {
             onChange={e => setSearch(e.target.value)}
           />
         </div>
-        <select className="o-select" value={status} onChange={e => { if (e.target.value) setStatus(e.target.value) }}>
+        <select className="o-select" value={status} onChange={e => setStatus(e.target.value)}>
           <option value="all">All statuses</option>
           <option value="active">Active</option>
           <option value="warming">Warming</option>
@@ -178,7 +178,7 @@ export default function MailboxesPage() {
           <option value="error">Error</option>
         </select>
         {suppliers.length > 0 && (
-          <select className="o-select" value={supplier} onChange={e => { if (e.target.value) setSupplier(e.target.value) }}>
+          <select className="o-select" value={supplier} onChange={e => setSupplier(e.target.value)}>
             <option value="all">All suppliers</option>
             {suppliers.map(s => (
               <option key={s} value={s}>{s}</option>

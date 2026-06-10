@@ -280,47 +280,66 @@ function ClientCard({ workspace: w, isAll }: ClientCardProps) {
   )
 
   const t = w.totals
-  const rrClass = t.replyRate >= 0.025 ? 'text-green-600' : t.replyRate >= 0.01 ? 'text-amber-600' : t.replyRate > 0 ? 'text-red-600' : 'text-gray-400'
-  const brClass = t.bounceRate >= 0.05 ? 'text-red-600' : t.bounceRate >= 0.02 ? 'text-amber-600' : 'text-green-600'
+
+  // Color classes matching legacy: .good, .med, .bad
+  const rrColorClass = t.replyRate >= 0.025 ? 'good' : t.replyRate >= 0.01 ? 'med' : t.replyRate > 0 ? 'bad' : ''
+  const brColorClass = t.bounceRate >= 0.05 ? 'bad' : t.bounceRate >= 0.02 ? 'med' : 'good'
+  const rtlColorClass = t.rtl >= 0.1 ? 'good' : t.rtl >= 0.05 ? 'med' : t.rtl > 0 ? '' : ''
+  const leadsColorClass = t.leads > 0 ? 'good' : ''
 
   function flipSeries(s: Series) {
     setToggles(prev => ({ ...prev, [s]: !prev[s] }))
   }
 
-  // Get latest day's reply rate (not period aggregate)
-  const latestDay = w.series.length > 0 ? w.series[w.series.length - 1] : null
-  const latestRR = latestDay && latestDay.sent > 0 ? latestDay.replies / latestDay.sent : 0
-  const latestRRClass = latestRR >= 0.025 ? 'text-green-600' : latestRR >= 0.01 ? 'text-amber-600' : latestRR > 0 ? 'text-red-600' : 'text-gray-400'
-
   return (
     <div
-      className="bg-white rounded-xl border overflow-hidden transition-shadow hover:shadow-md"
-      style={isAll ? { borderColor: '#224388', boxShadow: '0 1px 8px rgba(5,12,41,.08)' } : { borderColor: '#E2E6F0' }}
+      className={`bg-white rounded-[10px] border overflow-hidden transition-shadow ${isAll ? 'all-card' : ''}`}
+      style={isAll ? {
+        borderColor: '#224388',
+        boxShadow: '0 1px 8px rgba(5,12,41,.08)'
+      } : {
+        borderColor: '#E2E6F0'
+      }}
     >
-      {/* Main row */}
+      {/* Main row — matches legacy grid exactly */}
       <div
-        className="grid items-center gap-0 cursor-pointer px-4 py-3"
+        className={`grid items-center gap-0 cursor-pointer py-3 px-4 transition-shadow ${isAll ? 'bg-[#f4f6fc] hover:shadow-none' : 'hover:shadow-md'}`}
         style={{ gridTemplateColumns: '220px repeat(6, 1fr) 48px' }}
         onClick={() => setOpen(o => !o)}
       >
         <div className="min-w-0">
-          <div className={`text-sm font-semibold truncate ${isAll ? 'text-[#050C29]' : ''}`}>{w.name}</div>
-          <div className="text-[11px] text-gray-500 mt-0.5">
+          <div className={`text-[13px] font-semibold truncate whitespace-nowrap overflow-hidden text-ellipsis ${isAll ? 'text-[#050C29] font-bold' : ''}`}>
+            {w.name}
+          </div>
+          <div className="text-[11px] text-[#6B7280] mt-[1px]">
             {fmtNum(t.sent)} sent · {fmtNum(t.replies)} replies · {fmtNum(t.leads)} leads
           </div>
         </div>
-        <StatCell val={pct(latestRR)} lbl="Reply Rate" cls={latestRRClass} />
-        <StatCell val={pct(t.bounceRate)} lbl="Bounce Rate" cls={brClass} />
-        <StatCell val={pct(t.rtl)} lbl="RTL" cls={t.rtl >= 0.1 ? 'text-green-600' : t.rtl >= 0.05 ? 'text-amber-600' : ''} />
-        <StatCell val={fmtNum(t.leads)} lbl="Leads" cls={t.leads > 0 ? 'text-green-600' : ''} />
+
+        {/* Reply Rate — period aggregate (not latest day as in old code) */}
+        <StatCell val={pct(t.replyRate)} lbl="Reply Rate" colorClass={rrColorClass} />
+        {/* Bounce Rate */}
+        <StatCell val={pct(t.bounceRate)} lbl="Bounce Rate" colorClass={brColorClass} />
+        {/* RTL */}
+        <StatCell val={pct(t.rtl)} lbl="RTL" colorClass={rtlColorClass} />
+        {/* Leads */}
+        <StatCell val={fmtNum(t.leads)} lbl="Leads" colorClass={leadsColorClass} />
+        {/* Sends/Day */}
         <StatCell val={fmt(t.sendsPerDay, 0)} lbl="Sends/Day" />
+        {/* Replies/Day */}
         <StatCell val={fmt(t.repliesPerDay, 1)} lbl="Replies/Day" />
-        <div className="text-center text-[11px] text-gray-400 transition-transform duration-200" style={{ transform: open ? 'rotate(90deg)' : 'none' }}>▶</div>
+        {/* Chevron */}
+        <div
+          className="text-center text-[11px] text-[#6B7280] transition-transform duration-200"
+          style={{ transform: open ? 'rotate(90deg)' : 'none' }}
+        >
+          ▶
+        </div>
       </div>
 
-      {/* Expanded chart */}
+      {/* Expanded chart area */}
       {open && (
-        <div className="border-t border-gray-100 bg-[#fafbfd] px-4 pt-3 pb-4">
+        <div className="border-t border-[#E2E6F0] bg-[#fafbfd] px-4 pt-3 pb-4">
           <div className="flex items-center gap-2 mb-3 flex-wrap">
             {ALL_SERIES.map(s => {
               const on = toggles[s]
@@ -328,7 +347,7 @@ function ClientCard({ workspace: w, isAll }: ClientCardProps) {
                 <button
                   key={s}
                   onClick={() => flipSeries(s)}
-                  className="px-2.5 py-0.5 rounded-full text-[11px] font-medium border transition-all"
+                  className="px-[10px] py-[3px] rounded-[20px] text-[11px] font-medium border transition-all"
                   style={{
                     borderColor: SERIES_COLOR[s],
                     background: on ? SERIES_COLOR[s] : '#fff',
@@ -339,9 +358,14 @@ function ClientCard({ workspace: w, isAll }: ClientCardProps) {
                 </button>
               )
             })}
-            <span className="ml-auto text-[11px] text-gray-400 font-medium" title="Each point is the average of that day and the previous two">3-day rolling avg</span>
+            <span
+              className="ml-auto text-[11px] text-[#6B7280] font-medium"
+              title="Each point is the average of that day and the previous two — totals in the header row are not smoothed."
+            >
+              3-day rolling avg
+            </span>
           </div>
-          <div className="relative h-[220px]">
+          <div className="relative" style={{ height: '220px' }}>
             <StatsChart workspace={w} toggles={toggles} />
           </div>
         </div>
@@ -350,11 +374,28 @@ function ClientCard({ workspace: w, isAll }: ClientCardProps) {
   )
 }
 
-function StatCell({ val, lbl, cls = '' }: { val: string; lbl: string; cls?: string }) {
+function StatCell({
+  val,
+  lbl,
+  colorClass = '',
+}: {
+  val: string
+  lbl: string
+  colorClass?: 'good' | 'med' | 'bad' | ''
+}) {
+  const colorMap: Record<string, string> = {
+    good: '#059669',
+    med: '#D97706',
+    bad: '#DC2626',
+  }
+  const color = colorClass ? colorMap[colorClass] : undefined
+
   return (
     <div className="text-right px-2">
-      <div className={`text-sm font-bold ${cls}`}>{val}</div>
-      <div className="text-[10px] text-gray-400 uppercase tracking-wider mt-0.5">{lbl}</div>
+      <div className="text-[14px] font-bold" style={color ? { color } : undefined}>
+        {val}
+      </div>
+      <div className="text-[10px] text-[#6B7280] uppercase tracking-[0.4px] mt-[1px]">{lbl}</div>
     </div>
   )
 }
@@ -477,90 +518,151 @@ export default function StatsPage() {
   }
 
   return (
-    <div className="p-5 max-w-[1600px] mx-auto">
-      {/* Header */}
-      <div className="flex items-start justify-between mb-5 flex-wrap gap-3">
+    <div className="page" style={{ maxWidth: '1600px', margin: '0 auto', padding: '1.25rem 2rem' }}>
+      {/* Page header + period bar */}
+      <div className="page-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
         <div>
-          <h1 className="text-xl font-bold text-[#050C29]">Stats</h1>
-          <p className="text-xs text-gray-500 mt-0.5">Per-client email performance · reply rate · bounce rate · RTL · daily activity</p>
+          <div className="page-title" style={{ fontSize: '1.2rem', fontWeight: 700, color: '#050C29' }}>
+            Stats
+          </div>
+          <div className="page-sub" style={{ fontSize: '12px', color: '#6B7280', marginTop: '2px' }}>
+            Per-client email performance · reply rate · bounce rate · RTL · daily activity
+          </div>
         </div>
-        {/* Period picker */}
-        <div className="flex items-center gap-1.5 flex-wrap">
+
+        {/* Period bar */}
+        <div className="period-bar" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
           {PERIODS.map(p => (
             <button
               key={p.key}
               onClick={() => selectPeriod(p.key)}
-              className="px-3 py-1 rounded-md text-xs font-medium border transition-all"
-              style={activePeriod === p.key
-                ? { background: '#050C29', color: '#fff', borderColor: '#050C29' }
-                : { background: '#fff', color: '#6B7280', borderColor: '#E2E6F0' }
-              }
+              className={activePeriod === p.key ? 'active' : ''}
+              style={{
+                padding: '5px 12px',
+                border: `1px solid ${activePeriod === p.key ? '#050C29' : '#E2E6F0'}`,
+                background: activePeriod === p.key ? '#050C29' : '#fff',
+                borderRadius: '6px',
+                fontSize: '12px',
+                fontWeight: 500,
+                cursor: 'pointer',
+                color: activePeriod === p.key ? '#fff' : '#6B7280',
+                transition: 'all 0.15s',
+              }}
             >
               {p.label}
             </button>
           ))}
-          <span className="text-xs text-gray-400">Custom:</span>
+          <span style={{ color: '#6B7280', fontSize: '12px' }}>Custom:</span>
           <input
             type="date"
             value={customStart}
             onChange={e => setCustomStart(e.target.value)}
-            className="px-2 py-1 border border-gray-200 rounded-md text-xs font-mono outline-none"
+            style={{
+              padding: '5px 8px',
+              border: '1px solid #E2E6F0',
+              borderRadius: '6px',
+              fontSize: '12px',
+              fontFamily: 'inherit',
+              outline: 'none',
+            }}
           />
           <input
             type="date"
             value={customEnd}
             onChange={e => setCustomEnd(e.target.value)}
-            className="px-2 py-1 border border-gray-200 rounded-md text-xs font-mono outline-none"
+            style={{
+              padding: '5px 8px',
+              border: '1px solid #E2E6F0',
+              borderRadius: '6px',
+              fontSize: '12px',
+              fontFamily: 'inherit',
+              outline: 'none',
+            }}
           />
           <button
             onClick={applyCustom}
-            className="px-3 py-1 rounded-md text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-all"
+            style={{
+              padding: '5px 12px',
+              border: '1px solid #E2E6F0',
+              background: '#fff',
+              borderRadius: '6px',
+              fontSize: '12px',
+              fontWeight: 500,
+              cursor: 'pointer',
+              color: '#6B7280',
+              transition: 'all 0.15s',
+            }}
           >
             Apply
           </button>
-          {updatedAt && <span className="text-[11px] text-gray-400 ml-1">{updatedAt}</span>}
+          {updatedAt && (
+            <span style={{ fontSize: '11px', color: '#6B7280', marginLeft: '0.5rem' }}>
+              {updatedAt}
+            </span>
+          )}
           <button
             onClick={forceRefresh}
-            className="px-2.5 py-1 rounded-md text-[11px] font-semibold border border-gray-200 bg-white text-gray-500 hover:bg-gray-50 transition-all"
+            style={{
+              padding: '3px 10px',
+              border: '1px solid #E2E6F0',
+              background: '#fff',
+              borderRadius: '6px',
+              fontSize: '11px',
+              fontWeight: 600,
+              cursor: 'pointer',
+              color: '#6B7280',
+            }}
           >
             ↻ Refresh data
           </button>
         </div>
       </div>
 
-      {/* Loading */}
+      {/* Loading state */}
       {status === 'loading' && (
-        <div className="text-center py-12 text-sm text-gray-500">{statusMsg || 'Loading stats…'}</div>
+        <div className="spinner" style={{ textAlign: 'center', padding: '3rem', color: '#6B7280', fontSize: '13px' }}>
+          {statusMsg || 'Loading stats…'}
+        </div>
       )}
 
-      {/* Error / empty */}
+      {/* Error / empty state */}
       {(status === 'error' || status === 'empty') && (
-        <div className="text-center py-8 text-sm text-gray-500">{statusMsg}</div>
+        <div className="empty" style={{ textAlign: 'center', padding: '2rem', color: '#6B7280', fontSize: '13px' }}>
+          {statusMsg}
+        </div>
       )}
 
       {/* Content */}
       {status === 'ok' && rows.length > 0 && (
         <>
-          {/* Column headers */}
+          {/* Header row with column labels */}
           <div
-            className="grid px-4 py-2 text-[11px] font-bold uppercase tracking-wider text-gray-400"
-            style={{ gridTemplateColumns: '220px repeat(6, 1fr) 48px' }}
+            className="stats-header"
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '220px repeat(6, 1fr) 48px',
+              alignItems: 'center',
+              gap: 0,
+              padding: '0.5rem 1rem',
+              fontSize: '11px',
+              fontWeight: 700,
+              textTransform: 'uppercase',
+              letterSpacing: '0.4px',
+              color: '#6B7280',
+            }}
           >
             <div>Client</div>
-            <div className="text-right px-2">Reply Rate*</div>
-            <div className="text-right px-2">Bounce Rate</div>
-            <div className="text-right px-2">RTL</div>
-            <div className="text-right px-2">Leads</div>
-            <div className="text-right px-2">Sends/Day</div>
-            <div className="text-right px-2">Replies/Day</div>
+            <div style={{ textAlign: 'right', padding: '0 0.5rem' }}>Reply Rate</div>
+            <div style={{ textAlign: 'right', padding: '0 0.5rem' }}>Bounce Rate</div>
+            <div style={{ textAlign: 'right', padding: '0 0.5rem' }}>RTL</div>
+            <div style={{ textAlign: 'right', padding: '0 0.5rem' }}>Leads</div>
+            <div style={{ textAlign: 'right', padding: '0 0.5rem' }}>Sends / Day</div>
+            <div style={{ textAlign: 'right', padding: '0 0.5rem' }}>Replies / Day</div>
             <div />
           </div>
-          <div className="px-4 text-[10px] text-gray-400 mb-3">
-            * Latest day | Period aggregate for other columns
-          </div>
 
-          {/* Cards */}
-          <div className="flex flex-col gap-3">
+          {/* Client cards */}
+          <div className="clients-grid" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
             {rows.map(w => (
               <ClientCard key={w.workspace_id} workspace={w} isAll={w.workspace_id === '__all__'} />
             ))}
