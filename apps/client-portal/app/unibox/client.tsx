@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode, type ChangeEvent } from 'react'
 import { useRouter } from 'next/navigation'
 
 interface Lead {
@@ -125,7 +125,6 @@ export function UniboxClient({ companyName }: { companyName: string }) {
   const [labelDrop, setLabelDrop] = useState(false)
   const dropRef = useRef<HTMLDivElement>(null)
 
-  const [replyText, setReplyText] = useState('')
   const [replying, setReplying] = useState(false)
   const [replyMsg, setReplyMsg] = useState('')
 
@@ -180,7 +179,7 @@ export function UniboxClient({ companyName }: { companyName: string }) {
 
   function openLead(lead: Lead) {
     setSelected(lead)
-    setReplyText(''); setReplyMsg('')
+    setReplyMsg('')
     setDealEdit(false); setDealInput(lead.deal_value ?? '')
     setShowDispute(false); setThread(null)
     setLeads(prev => prev?.map(l => l.id === lead.id ? { ...l, has_unread: false } : l) ?? null)
@@ -230,16 +229,15 @@ export function UniboxClient({ companyName }: { companyName: string }) {
     setSelected(prev => prev ? { ...prev, deal_value: val || null } : prev)
   }
 
-  async function handleReply() {
-    if (!replyText.trim() || !selected) return
+  async function handleReply(text: string, html: string, cc: string) {
+    if (!text.trim() || !selected) return
     setReplying(true); setReplyMsg('')
     const res = await fetch(`/api/portal/leads/${selected.id}/reply`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body: replyText }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body: text, bodyHtml: html, cc }),
     })
     const d = await res.json().catch(() => ({})) as { ok?: boolean; sentLive?: boolean }
     setReplying(false)
     if (d.ok) {
-      setReplyText('')
       setReplyMsg(d.sentLive ? 'Reply sent.' : 'Reply received — our team will send it shortly.')
       openLead(selected)
       setTimeout(() => setReplyMsg(''), 4000)
@@ -314,7 +312,7 @@ export function UniboxClient({ companyName }: { companyName: string }) {
         <span className="text-gray-600 text-sm font-medium">{companyName}</span>
         <nav className="flex items-center gap-1 ml-4">
           <span className="px-3 py-1.5 text-indigo-600 bg-indigo-50 text-sm font-medium rounded-lg">Leads</span>
-          <a href="/invoices" className="px-3 py-1.5 text-gray-500 hover:text-gray-800 text-sm rounded-lg">Billing &amp; ROI</a>
+          <a href="/invoices" className="px-3 py-1.5 text-gray-500 hover:text-gray-800 text-sm rounded-lg">Billing</a>
         </nav>
         <div className="ml-auto flex items-center gap-4">
           {balance && (
@@ -493,8 +491,13 @@ export function UniboxClient({ companyName }: { companyName: string }) {
                       {/* body */}
                       <div className={`px-4 py-3 ${out ? 'bg-indigo-50/40' : 'bg-white'}`}>
                         {m.subject && <p className="text-xs font-medium text-gray-500 mb-2">{m.subject}</p>}
-                        <div className="text-sm text-gray-800 whitespace-pre-wrap break-words leading-relaxed">{main || '(no content)'}</div>
-                        {quoted && (
+                        {m.sent_via_portal && m.body_html ? (
+                          // We composed this HTML ourselves in the portal — safe to render.
+                          <div className="text-sm text-gray-800 break-words leading-relaxed [&_a]:text-indigo-600 [&_a]:underline [&_img]:max-w-full [&_img]:rounded" dangerouslySetInnerHTML={{ __html: m.body_html }} />
+                        ) : (
+                          <div className="text-sm text-gray-800 whitespace-pre-wrap break-words leading-relaxed">{main || '(no content)'}</div>
+                        )}
+                        {quoted && !m.sent_via_portal && (
                           <details className="mt-3">
                             <summary className="cursor-pointer text-xs text-gray-400 hover:text-gray-600 select-none flex items-center gap-1 w-fit">
                               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
@@ -509,18 +512,16 @@ export function UniboxClient({ companyName }: { companyName: string }) {
                 })}
               </div>
 
-              {/* reply composer */}
+              {/* reply composer — Gmail-style rich editor */}
               <div className="border-t border-gray-100 px-4 py-3 shrink-0">
-                <div className="rounded-xl border border-gray-200 overflow-hidden focus-within:border-indigo-300 focus-within:ring-1 focus-within:ring-indigo-200">
-                  <div className="px-3 py-2 bg-gray-50 border-b border-gray-100 text-xs text-gray-500"><span className="font-medium text-gray-700">Reply to:</span> {selected.email}</div>
-                  <textarea rows={3} placeholder={`Write your reply to ${selected.first_name ?? fullName(selected).split(' ')[0]}…`} value={replyText} onChange={e => setReplyText(e.target.value)} className="w-full px-3 py-2 text-sm text-gray-800 outline-none resize-none placeholder:text-gray-400" />
-                  <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-t border-gray-100">
-                    <span className="text-xs">{replyMsg ? <span className="text-green-600 font-medium">{replyMsg}</span> : <span className="text-gray-400">Sent via your campaign mailbox</span>}</span>
-                    <button onClick={handleReply} disabled={!replyText.trim() || replying} className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-medium rounded-lg">
-                      {replying ? 'Sending…' : <><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>Send</>}
-                    </button>
-                  </div>
-                </div>
+                <RichReply
+                  key={selected.id}
+                  toEmail={selected.email ?? ''}
+                  placeholderName={selected.first_name ?? fullName(selected).split(' ')[0]}
+                  sending={replying}
+                  statusMsg={replyMsg}
+                  onSend={handleReply}
+                />
               </div>
             </>
           )}
@@ -682,6 +683,115 @@ export function UniboxClient({ companyName }: { companyName: string }) {
           </div>
         </Modal>
       )}
+    </div>
+  )
+}
+
+// Gmail-style rich text reply: bold/italic/underline, font, size, link, image.
+function RichReply({ toEmail, placeholderName, sending, statusMsg, onSend }: {
+  toEmail: string; placeholderName: string; sending: boolean; statusMsg: string
+  onSend: (text: string, html: string, cc: string) => void
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [empty, setEmpty] = useState(true)
+  const [showCc, setShowCc] = useState(false)
+  const [cc, setCc] = useState('')
+
+  // execCommand keeps the contentEditable selection; use onMouseDown preventDefault
+  // on toolbar buttons so focus stays in the editor.
+  function exec(cmd: string, value?: string) {
+    document.execCommand(cmd, false, value)
+    ref.current?.focus()
+    setEmpty((ref.current?.innerText ?? '').trim().length === 0)
+  }
+  function onInput() { setEmpty((ref.current?.innerText ?? '').trim().length === 0) }
+  function addLink() {
+    const url = prompt('Link URL (https://…)')
+    if (url) exec('createLink', url)
+  }
+  function onPickImage(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => { exec('insertImage', String(reader.result)) }
+    reader.readAsDataURL(file)
+    e.target.value = ''
+  }
+  function send() {
+    const el = ref.current
+    if (!el) return
+    const text = el.innerText.trim()
+    if (!text) return
+    onSend(text, el.innerHTML, cc.trim())
+    el.innerHTML = ''
+    setEmpty(true); setCc(''); setShowCc(false)
+  }
+
+  const Btn = ({ cmd, val, title, children }: { cmd?: string; val?: string; title: string; children: ReactNode }) => (
+    <button type="button" title={title}
+      onMouseDown={e => { e.preventDefault(); if (cmd) exec(cmd, val) }}
+      className="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-200 text-gray-600 text-sm">
+      {children}
+    </button>
+  )
+
+  return (
+    <div className="rounded-xl border border-gray-200 overflow-hidden focus-within:border-indigo-300 focus-within:ring-1 focus-within:ring-indigo-200">
+      <div className="px-3 py-2 bg-gray-50 border-b border-gray-100 text-xs text-gray-500 flex items-center gap-2">
+        <span><span className="font-medium text-gray-700">Reply to:</span> {toEmail}</span>
+        {!showCc && <button type="button" onClick={() => setShowCc(true)} className="ml-auto text-indigo-600 hover:text-indigo-800">Cc</button>}
+      </div>
+      {showCc && (
+        <div className="px-3 py-1.5 border-b border-gray-100 flex items-center gap-2">
+          <span className="text-xs font-medium text-gray-500">Cc:</span>
+          <input value={cc} onChange={e => setCc(e.target.value)} placeholder="email@example.com, another@…" className="flex-1 text-sm outline-none text-gray-800 placeholder:text-gray-400" />
+        </div>
+      )}
+
+      {/* toolbar */}
+      <div className="flex items-center gap-0.5 px-2 py-1 border-b border-gray-100 bg-white flex-wrap">
+        <select onMouseDown={e => e.stopPropagation()} onChange={e => exec('fontName', e.target.value)} defaultValue="" title="Font"
+          className="h-7 text-xs border border-gray-200 rounded px-1 mr-1 outline-none bg-white text-gray-600">
+          <option value="" disabled>Font</option>
+          <option value="Arial">Sans</option>
+          <option value="Georgia">Serif</option>
+          <option value="Courier New">Mono</option>
+        </select>
+        <select onMouseDown={e => e.stopPropagation()} onChange={e => exec('fontSize', e.target.value)} defaultValue="" title="Size"
+          className="h-7 text-xs border border-gray-200 rounded px-1 mr-1 outline-none bg-white text-gray-600">
+          <option value="" disabled>Size</option>
+          <option value="2">Small</option>
+          <option value="3">Normal</option>
+          <option value="5">Large</option>
+          <option value="6">Huge</option>
+        </select>
+        <Btn cmd="bold" title="Bold"><strong>B</strong></Btn>
+        <Btn cmd="italic" title="Italic"><em>I</em></Btn>
+        <Btn cmd="underline" title="Underline"><u>U</u></Btn>
+        <Btn cmd="insertUnorderedList" title="Bulleted list">•</Btn>
+        <button type="button" title="Add link" onMouseDown={e => { e.preventDefault(); addLink() }} className="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-200 text-gray-600">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+        </button>
+        <button type="button" title="Add image" onMouseDown={e => { e.preventDefault(); fileRef.current?.click() }} className="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-200 text-gray-600">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
+        </button>
+        <input ref={fileRef} type="file" accept="image/*" onChange={onPickImage} className="hidden" />
+      </div>
+
+      {/* editable area */}
+      <div className="relative">
+        {empty && <span className="pointer-events-none absolute left-3 top-2 text-sm text-gray-400">Write your reply to {placeholderName}…</span>}
+        <div ref={ref} contentEditable suppressContentEditableWarning onInput={onInput}
+          className="min-h-[90px] max-h-60 overflow-y-auto px-3 py-2 text-sm text-gray-800 outline-none [&_a]:text-indigo-600 [&_a]:underline [&_img]:max-w-full [&_img]:rounded" />
+      </div>
+
+      <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-t border-gray-100">
+        <span className="text-xs">{statusMsg ? <span className="text-green-600 font-medium">{statusMsg}</span> : <span className="text-gray-400">Sent via your campaign mailbox</span>}</span>
+        <button onClick={send} disabled={empty || sending} className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-medium rounded-lg">
+          {sending ? 'Sending…' : <><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>Send</>}
+        </button>
+      </div>
     </div>
   )
 }

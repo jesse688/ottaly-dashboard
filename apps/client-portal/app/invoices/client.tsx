@@ -61,10 +61,6 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
     setTimeout(() => setMsg(''), 6000)
   }
 
-  const showSpend = !!bal?.showSpend
-  const roi = bal?.roi ?? null
-  const winning = showSpend && roi !== null && roi > 0
-
   return (
     <div className="min-h-screen bg-[#f7f8fc]" style={{ fontFamily: 'system-ui,-apple-system,sans-serif' }}>
       <header className="h-14 bg-white border-b border-gray-200 flex items-center px-5 gap-3 sticky top-0 z-10">
@@ -73,7 +69,7 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
         <span className="text-gray-600 text-sm font-medium">{companyName}</span>
         <nav className="flex items-center gap-1 ml-4">
           <a href="/unibox" className="px-3 py-1.5 text-gray-500 hover:text-gray-800 text-sm rounded-lg">Leads</a>
-          <span className="px-3 py-1.5 text-indigo-600 bg-indigo-50 text-sm font-medium rounded-lg">Billing &amp; ROI</span>
+          <span className="px-3 py-1.5 text-indigo-600 bg-indigo-50 text-sm font-medium rounded-lg">Billing</span>
         </nav>
         <button onClick={handleLogout} className="ml-auto text-gray-400 hover:text-gray-700 text-sm">Sign out</button>
       </header>
@@ -81,20 +77,9 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
       <div className="max-w-5xl mx-auto p-6">
         {msg && <div className="mb-4 px-4 py-2.5 bg-green-50 border border-green-200 text-green-800 text-sm rounded-lg">{msg}</div>}
 
-        {/* Winning banner — only when ROI is positive */}
-        {winning && bal && (
-          <div className="mb-6 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-600 p-5 text-white flex items-center gap-4">
-            <div className="text-4xl">📈</div>
-            <div>
-              <p className="text-lg font-bold">Your campaigns are returning +{roi}% ROI</p>
-              <p className="text-sm text-emerald-50">{fmt(bal.pipeline)} in deal value from {bal.leadsDelivered} leads delivered{bal.spent ? ` · ${fmt(bal.spent)} invested` : ''}.</p>
-            </div>
-          </div>
-        )}
-
-        {/* Metric cards */}
+        {/* Metric cards — leads + their own pipeline; no spend, no ROI */}
         <div className="grid grid-cols-4 gap-4 mb-6">
-          {/* Leads left — always, with top-up */}
+          {/* Leads left — with top-up */}
           <div className="bg-gradient-to-br from-indigo-600 to-indigo-700 rounded-2xl p-5 text-white">
             <p className="text-xs text-indigo-200 uppercase tracking-wider">Leads left</p>
             <p className="text-4xl font-bold mt-1">{bal ? bal.balance.toLocaleString() : '—'}</p>
@@ -103,23 +88,9 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
           </div>
 
           <Card label="Leads delivered" value={bal ? bal.leadsDelivered.toLocaleString() : '—'} sub="Real interested replies" />
-          <Card label="Pipeline value" value={bal ? fmt(bal.pipeline) : '—'} sub={`${bal?.dealsWon ?? 0} deals with value`} />
-
-          {/* Adaptive 4th card: ROI when winning, else Deals won (always positive) */}
-          {winning ? (
-            <Card label="ROI" value={`+${roi}%`} sub="Return on your spend" accent />
-          ) : (
-            <Card label="Deals won" value={bal ? bal.dealsWon.toLocaleString() : '—'} sub="Leads with a deal value" />
-          )}
+          <Card label="Pipeline value" value={bal ? fmt(bal.pipeline) : '—'} sub="Total deal value" />
+          <Card label="Deals won" value={bal ? bal.dealsWon.toLocaleString() : '—'} sub="Leads with a deal value" />
         </div>
-
-        {/* Spend line — only when allowed */}
-        {showSpend && bal?.spent !== undefined && (
-          <div className="mb-6 flex items-center justify-between bg-white rounded-xl border border-gray-100 px-5 py-3 text-sm">
-            <span className="text-gray-500">Invested in leads</span>
-            <span className="font-semibold text-gray-900">{fmt(bal.spent)}{bal.costPerLead ? ` · ${fmt(bal.costPerLead)}/lead` : ''}</span>
-          </div>
-        )}
 
         {/* Lead activity (lead units — positive framing, no money) */}
         <Panel title="Lead activity">

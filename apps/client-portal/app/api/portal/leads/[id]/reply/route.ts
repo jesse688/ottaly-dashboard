@@ -12,8 +12,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const session = await getSession()
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   const { id } = await params
-  const { body } = await req.json() as { body: string }
+  const { body, bodyHtml, cc } = await req.json() as { body: string; bodyHtml?: string; cc?: string }
   if (!body?.trim()) return NextResponse.json({ error: 'Empty reply' }, { status: 400 })
+  const html = bodyHtml?.trim() ? bodyHtml : `<p>${body.replace(/\n/g, '<br/>')}</p>`
+  const ccList = (cc ?? '').trim()
 
   const leadRes = await pool.query(
     'SELECT id, email, first_name, last_name FROM esp_leads WHERE id = $1 AND workspace_id = $2',
@@ -42,7 +44,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
      ) VALUES ($1,$2,$3,'OUT',$4,$5,$6,$7,$8,$9,$10,TRUE,NOW())`,
     [
       outId, session.workspaceId, lead.email.toLowerCase(), subject, body,
-      `<p>${body.replace(/\n/g, '<br/>')}</p>`, body.slice(0, 200),
+      html, body.slice(0, 200),
       eaccount ?? session.email, lead.email, eaccount ?? null,
     ]
   ).catch(err => console.error('[reply] persist failed:', err))
@@ -54,6 +56,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     eaccount,
     subject,
     bodyText: body,
+    bodyHtml: html,
+    cc: ccList || undefined,
     replyToMessageId,
   })
 
@@ -63,7 +67,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     clientId: session.clientId,
     kind: 'reply_sent',
     title: `${session.companyName} replied to ${who}`,
-    body: `${send.ok ? '✅ Sent live via PlusVibe' : '⚠️ NOT auto-sent (' + send.reason + ') — please send manually'}\nTo: ${lead.email}\nSubject: ${subject}\n\n${body}`,
+    body: `${send.ok ? '✅ Sent live via PlusVibe' : '⚠️ NOT auto-sent (' + send.reason + ') — please send manually'}\nTo: ${lead.email}${ccList ? `\nCc: ${ccList}` : ''}\nSubject: ${subject}\n\n${body}`,
   })
 
   return NextResponse.json({ ok: true, sentLive: send.ok })

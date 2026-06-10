@@ -117,6 +117,7 @@ export async function sendReply(input: {
   subject?: string
   bodyText: string
   bodyHtml?: string
+  cc?: string
   replyToMessageId?: string
 }): Promise<{ ok: boolean; reason?: string }> {
   const replyUrl = process.env.PLUSVIBE_REPLY_URL
@@ -130,6 +131,7 @@ export async function sendReply(input: {
         lead: input.leadEmail,
         eaccount: input.eaccount,
         subject: input.subject,
+        cc: input.cc,
         body: { text: input.bodyText, html: input.bodyHtml ?? `<p>${input.bodyText.replace(/\n/g, '<br/>')}</p>` },
         reply_to_message_id: input.replyToMessageId,
       }),
