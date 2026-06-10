@@ -1,103 +1,161 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import type { Mailbox } from '@/types/mailbox'
 
-const STATUS_MAP: Record<string, string> = {
-  active: 'o-status o-status-active',
-  disconnected: 'o-status o-status-critical',
-  warming: 'o-status o-status-warning',
-  paused: 'o-status o-status-inactive',
-  error: 'o-status o-status-critical',
-}
-
-interface MailboxStats {
-  sent: number
-  replies: number
-  bounces: number
-  contacted: number
+interface SupplierStats {
+  name: string
+  total: number
+  active: number
+  broken: number
   replyRate: number
   bounceRate: number
+  warmupPct: number
+  authClean: number
+  sentPerDay: number
+  trend?: { date: string; sent: number; replyRate: number; bounceRate: number }[]
 }
 
-type MailboxWithStats = Mailbox & { stats?: MailboxStats }
-
 export default function MailboxesPage() {
-  const [mailboxes, setMailboxes] = useState<MailboxWithStats[]>([])
-  const [filtered, setFiltered] = useState<MailboxWithStats[]>([])
+  const [suppliers, setSuppliers] = useState<SupplierStats[]>([])
   const [loading, setLoading] = useState(true)
-  const [search, setSearch] = useState('')
-  const [status, setStatus] = useState('all')
-  const [supplier, setSupplier] = useState('all')
+  const [lastRefresh, setLastRefresh] = useState<string>('')
 
   useEffect(() => {
-    ;(async () => {
+    const fetch = async () => {
       try {
-        const r = await fetch('/api/mailboxes')
-        const d = await r.json()
-        const boxes = (Array.isArray(d) ? d : d.mailboxes ?? []) as MailboxWithStats[]
-
-        // Fetch stats for each mailbox in parallel
-        const today = new Date().toISOString().slice(0, 10)
-        const nDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-
-        const statsPromises = boxes.map(async m => {
-          if (!m.workspace_id) return m
-          try {
-            const res = await fetch(
-              `/api/mailboxes/pv-stats?workspace_id=${encodeURIComponent(m.workspace_id)}&email_acc_id=${encodeURIComponent(m.id)}&start_date=${nDaysAgo}&end_date=${today}`
-            )
-            if (res.ok) {
-              const stats = (await res.json()) as MailboxStats
-              return { ...m, stats }
-            }
-          } catch { /* ignore */ }
-          return m
-        })
-
-        const withStats = await Promise.all(statsPromises)
-        setMailboxes(withStats)
-      } catch {
-        setMailboxes([])
+        const res = await fetch('/api/mailboxes/summary')
+        const data = await res.json()
+        setSuppliers(data.suppliers || [])
+        setLastRefresh(new Date().toLocaleString('en-GB'))
+      } catch (err) {
+        console.error('Failed to fetch mailboxes:', err)
       } finally {
         setLoading(false)
       }
-    })()
+    }
+    fetch()
   }, [])
 
-  const suppliers = [...new Set(mailboxes.map(m => m.supplier).filter(Boolean))] as string[]
+  const total = suppliers.reduce((s, x) => s + x.total, 0)
+  const unassigned = suppliers.find(s => !s.name || s.name === 'unassigned')?.total || 0
+  const needsAttention = suppliers.reduce((s, x) => s + x.broken, 0)
 
-  useEffect(() => {
-    let result = [...mailboxes]
-    if (search) {
-      const q = search.toLowerCase()
-      result = result.filter(m =>
-        m.email.toLowerCase().includes(q) ||
-        (m.workspace_name ?? '').toLowerCase().includes(q)
-      )
-    }
-    if (status !== 'all') result = result.filter(m => m.status === status)
-    if (supplier !== 'all') result = result.filter(m => m.supplier === supplier)
-    setFiltered(result)
-  }, [mailboxes, search, status, supplier])
+  const colors: Record<string, { bg: string; border: string; text: string }> = {
+    winnr: { bg: '#D1FAE5', border: '#059669', text: '#059669' },
+    mithun: { bg: '#FED7AA', border: '#D97706', text: '#D97706' },
+    inboxing: { bg: '#DBEAFE', border: '#0284C7', text: '#0284C7' },
+    maildoso: { bg: '#E9D5FF', border: '#9333EA', text: '#9333EA' },
+    default: { bg: '#F3F4F6', border: '#6B7280', text: '#6B7280' },
+  }
 
-  const needsAttention = filtered.filter(m => m.status === 'disconnected' || m.status === 'error').length
+  const getColor = (name: string) => {
+    const key = name?.toLowerCase() || 'default'
+    return colors[key] || colors.default
+  }
 
   return (
-    <div className="o-page">
-      <div className="o-page-header">
+    <div style={{ maxWidth: 1400, margin: '0 auto', padding: '1.5rem' }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
         <div>
-          <div className="o-page-title">Mailboxes</div>
-          <div className="o-page-sub">
-            {filtered.length} mailboxes
-            {needsAttention > 0 && (
-              <span style={{ marginLeft: 8, color: '#DC2626', fontWeight: 500 }}>· {needsAttention} need attention</span>
-            )}
-          </div>
+          <h1 style={{ fontSize: '1.3rem', fontWeight: 700 }}>Mailboxes</h1>
+          <p style={{ fontSize: 13, color: '#6B7280', marginTop: 4 }}>
+            Every sending mailbox across all clients. Assign each one a supplier and compare performance.
+          </p>
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ fontSize: 11, color: '#6B7280' }}>Last refresh: {lastRefresh}</div>
+          <button
+            onClick={() => window.location.reload()}
+            style={{ marginTop: 8, padding: '7px 14px', borderRadius: 6, border: '1px solid #E2E6F0', background: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+          >
+            🔄 Refresh
+          </button>
         </div>
       </div>
 
-      <div className="o-toolbar">
+      {/* Summary cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
+        <div style={{ background: '#fff', borderRadius: 8, border: '1px solid #E2E6F0', padding: '1.5rem' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: '#6B7280' }}>Total Mailboxes</div>
+          <div style={{ fontSize: '2rem', fontWeight: 700, marginTop: 8, color: '#050C29' }}>{total.toLocaleString()}</div>
+        </div>
+        <div style={{ background: '#FEF3C7', borderRadius: 8, border: '1px solid #FCD34D', padding: '1.5rem' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: '#92400E' }}>Unassigned Supplier</div>
+          <div style={{ fontSize: '2rem', fontWeight: 700, marginTop: 8, color: '#D97706' }}>{unassigned.toLocaleString()}</div>
+        </div>
+        <div style={{ background: '#FEE2E2', borderRadius: 8, border: '1px solid #FECACA', padding: '1.5rem' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: '#7F1D1D' }}>Need Attention</div>
+          <div style={{ fontSize: '2rem', fontWeight: 700, marginTop: 8, color: '#DC2626' }}>{needsAttention.toLocaleString()}</div>
+          <div style={{ fontSize: 11, color: '#991B1B', marginTop: 4 }}>click "Needs attention only" below</div>
+        </div>
+      </div>
+
+      {/* Supplier cards */}
+      <div style={{ marginBottom: '1.5rem' }}>
+        <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', color: '#6B7280', marginBottom: '1rem', letterSpacing: '0.05em' }}>
+          By Supplier — Who Performs Best
+        </div>
+        {loading ? (
+          <div style={{ textAlign: 'center', padding: '2rem', color: '#6B7280' }}>Loading supplier stats...</div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1rem' }}>
+            {suppliers.filter(s => s.name).map(supplier => {
+              const c = getColor(supplier.name)
+              return (
+                <div key={supplier.name} style={{ background: '#fff', borderRadius: 8, border: `2px solid ${c.border}`, borderTopColor: c.border, borderTopWidth: 3, overflow: 'hidden' }}>
+                  {/* Header */}
+                  <div style={{ background: c.bg, padding: '1rem', borderBottom: `2px solid ${c.border}` }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: c.text, textTransform: 'uppercase' }}>
+                      {supplier.name}
+                    </div>
+                    <div style={{ fontSize: 24, fontWeight: 700, marginTop: 4, color: c.text }}>
+                      {supplier.total.toLocaleString()}
+                    </div>
+                  </div>
+                  {/* Stats */}
+                  <div style={{ padding: '1rem' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', fontSize: 12, marginBottom: '0.75rem' }}>
+                      <div>
+                        <div style={{ color: '#6B7280', fontSize: 10, fontWeight: 600 }}>Active</div>
+                        <div style={{ fontSize: 16, fontWeight: 700, color: '#059669' }}>{supplier.active.toLocaleString()}</div>
+                      </div>
+                      <div>
+                        <div style={{ color: '#6B7280', fontSize: 10, fontWeight: 600 }}>Broken</div>
+                        <div style={{ fontSize: 16, fontWeight: 700, color: '#DC2626' }}>{supplier.broken.toLocaleString()}</div>
+                      </div>
+                      <div>
+                        <div style={{ color: '#6B7280', fontSize: 10, fontWeight: 600 }}>Reply Rate</div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: c.text }}>{supplier.replyRate.toFixed(2)}%</div>
+                      </div>
+                      <div>
+                        <div style={{ color: '#6B7280', fontSize: 10, fontWeight: 600 }}>Bounce Rate</div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: '#DC2626' }}>{supplier.bounceRate.toFixed(2)}%</div>
+                      </div>
+                      <div>
+                        <div style={{ color: '#6B7280', fontSize: 10, fontWeight: 600 }}>Warmup</div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: '#059669' }}>{supplier.warmupPct.toFixed(0)}%</div>
+                      </div>
+                      <div>
+                        <div style={{ color: '#6B7280', fontSize: 10, fontWeight: 600 }}>Sent/Day</div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: '#6B7280' }}>{supplier.sentPerDay.toFixed(0)}</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Legacy note */}
+      <div style={{ padding: '1rem', background: '#F0F9FF', borderRadius: 8, border: '1px solid #BFDBFE', color: '#1E40AF', fontSize: 12 }}>
+        ℹ️ Mailbox management (bulk assign, detailed charts) coming soon. Use <a href="https://admin.ottaly.co.uk/mailboxes" style={{ color: '#0284C7', textDecoration: 'underline' }}>admin.ottaly.co.uk</a> for full controls.
+      </div>
+    </div>
+  )
+}
         <div className="o-search-wrap">
           <span className="o-search-icon">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
