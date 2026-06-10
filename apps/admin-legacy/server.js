@@ -3503,49 +3503,74 @@ app.get('/api/debug/pv-provider-probe', requireSession, async (req, res) => {
     // x-api-key authenticates against api.pipl.ai, and pulls every recipient
     // value so we can map value->label empirically (match to Google 22604,
     // Microsoft 2489, Other 15812 for ButterflyEco/30d).
-    const piplStats = async (recp) => {
-      const url = `https://api.pipl.ai/v1/email-accounts-v2/email-stats`
-        + `?workspace_id=${wsId}&start_date=${start}&end_date=${end}`
-        + (recp ? `&recp_provider=${encodeURIComponent(recp)}` : '');
-      const r = await fetch(url, { headers: { 'x-api-key': PLUSVIBE_KEY } });
-      let body = null; try { body = await r.json(); } catch { /* non-json */ }
-      const h = body?.data?.header || body?.header || {};
-      return {
-        status: r.status, code: body?.code, msg: body?.message,
-        sent: h.total_sent_count, replies: h.total_reply_count,
-        ooo: h.total_ooo_reply_count, bounces: h.total_bounce_count,
-      };
+    const hdr = (raw) => raw?.data?.header || raw?.header || {};
+    const sentOf = (raw) => {
+      const h = hdr(raw);
+      if (typeof h.total_sent_count === 'number') return h.total_sent_count;
+      return sumSent(raw?.data?.chart ? raw.data : raw); // fallback to chart sum
     };
-
-    const piplBaseline = await piplStats('');
-    const authOk = piplBaseline.status === 200 && typeof piplBaseline.sent === 'number';
+    const recVal = (raw) => {
+      const h = hdr(raw);
+      return { sent: h.total_sent_count, replies: h.total_reply_count, ooo: h.total_ooo_reply_count, bounces: h.total_bounce_count };
+    };
     const values = ['GOOGLE_WORKSPACE', 'MICROSOFT365', 'REGULAR_ACCOUNT', 'PERSONAL_GMAIL'];
-    const byRecp = {};
-    for (const v of values) byRecp[v] = await piplStats(v);
-
-    // Map each recp_provider value to a UI label by matching its sent count to
-    // the known ButterflyEco targets (tolerant — UI window differs slightly).
     const targets = { google: 22604, microsoft: 2489, other: 15812 };
+
+    // ── PRIMARY: the v2 path on the PUBLIC plusvibe.ai API (our key works here)
+    // /account/email-stats had no recp filter, but the captured request used
+    // /email-accounts-v2/email-stats — that path may exist on plusvibe.ai too.
+    const pvV2 = {};
+    let pvV2Works = false;
+    try {
+      const baseV2 = await pvFetch(`/email-accounts-v2/email-stats?workspace_id=${wsId}&start_date=${start}&end_date=${end}`);
+      pvV2.__baseline = recVal(baseV2);
+      pvV2Works = typeof pvV2.__baseline.sent === 'number';
+      if (pvV2Works) {
+        for (const v of values) {
+          try {
+            const raw = await pvFetch(`/email-accounts-v2/email-stats?workspace_id=${wsId}&start_date=${start}&end_date=${end}&recp_provider=${encodeURIComponent(v)}`);
+            pvV2[v] = recVal(raw);
+          } catch (e) { pvV2[v] = `ERR ${e.message.slice(0,40)}`; }
+        }
+      }
+    } catch (e) { pvV2.__error = e.message.slice(0, 60); }
+
+    // ── FALLBACK: pipl.ai with alternate auth header schemes (x-api-key 401'd).
+    const piplAuthTests = {};
+    const schemes = {
+      'authorization_bearer': { Authorization: `Bearer ${PLUSVIBE_KEY}` },
+      'api-key':              { 'api-key': PLUSVIBE_KEY },
+      'apikey':               { apikey: PLUSVIBE_KEY },
+      'x-pipl-key':           { 'x-pipl-key': PLUSVIBE_KEY },
+    };
+    const piplUrl = `https://api.pipl.ai/v1/email-accounts-v2/email-stats?workspace_id=${wsId}&start_date=${start}&end_date=${end}`;
+    for (const [name, headers] of Object.entries(schemes)) {
+      try {
+        const r = await fetch(piplUrl, { headers });
+        let b = null; try { b = await r.json(); } catch {}
+        piplAuthTests[name] = { status: r.status, msg: b?.message, sent: hdr(b).total_sent_count };
+      } catch (e) { piplAuthTests[name] = { err: e.message.slice(0, 40) }; }
+    }
+
+    // Map values to labels if we got real numbers from the v2 path.
     const valueToLabel = {};
-    for (const [v, r] of Object.entries(byRecp)) {
-      if (typeof r.sent !== 'number') continue;
+    for (const v of values) {
+      const s = pvV2[v]?.sent;
+      if (typeof s !== 'number') continue;
       for (const [label, t] of Object.entries(targets)) {
-        if (Math.abs(r.sent - t) <= Math.max(2500, t * 0.15)) valueToLabel[v] = label;
+        if (Math.abs(s - t) <= Math.max(2500, t * 0.15)) valueToLabel[v] = label;
       }
     }
-    const recpSum = values.reduce((a, v) => a + (typeof byRecp[v]?.sent === 'number' ? byRecp[v].sent : 0), 0);
 
     res.json({
       workspace_id: wsId, start, end,
       plusvibe_baseline_total_sent: baseline,
-      pipl_auth_ok: authOk,
-      pipl_baseline: piplBaseline,
-      byRecp,
-      recpSum,
-      sumsToBaseline: Math.abs(recpSum - (piplBaseline.sent || baseline)) <= (piplBaseline.sent || baseline) * 0.03,
+      pv_v2_works: pvV2Works,
+      pvV2,
       valueToLabel,
+      pipl_auth_tests: piplAuthTests,
       recipient_targets: targets,
-      hint: 'If pipl_auth_ok is true, our x-api-key works on pipl.ai — I can build it. valueToLabel shows which recp_provider value maps to Google/Microsoft/Other. If pipl_auth_ok is false (401/403), the key does not work there and I need another auth path.',
+      hint: 'If pv_v2_works is true, /email-accounts-v2/email-stats works on plusvibe.ai with our key — durable, build it. valueToLabel maps recp_provider->label. Otherwise check pipl_auth_tests for a 200 scheme.',
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
