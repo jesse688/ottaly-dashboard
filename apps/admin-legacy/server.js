@@ -3492,83 +3492,60 @@ app.get('/api/debug/pv-provider-probe', requireSession, async (req, res) => {
       chartRowKeys: Object.keys(sampleRow),
     };
 
-    // Per PlusVibe docs, recipient provider values are GOOGLE / MICROSOFT /
-    // PERSONAL_GMAIL (the _WORKSPACE/_365/REGULAR_ACCOUNT set was the SENDER
-    // dimension). Test the `provider` param with these documented RECIPIENT
-    // values. Expected for ButterflyEco: GOOGLE≈22604, MICROSOFT≈2489, Other≈15812.
-    const sumAgg = (raw) => {
-      const chart = Array.isArray(raw) ? raw : (raw?.chart || []);
-      return chart.reduce((a, r) => ({
-        sent:    a.sent    + (r.total_sent_count   || 0),
-        replies: a.replies + (r.total_reply_count  || 0),
-        bounces: a.bounces + (r.total_bounce_count || 0),
-      }), { sent: 0, replies: 0, bounces: 0 });
+    // CONFIRMED via captured network request: the recipient split lives on
+    // PlusVibe's underlying pipl.ai backend, NOT the public plusvibe.ai API:
+    //   GET https://api.pipl.ai/v1/email-accounts-v2/email-stats
+    //       ?workspace_id&start_date&end_date&recp_provider=<VALUE[,VALUE]>
+    // Values: GOOGLE_WORKSPACE / MICROSOFT365 / REGULAR_ACCOUNT / PERSONAL_GMAIL.
+    // Response: { code, message, data: { header: {total_sent_count,...}, chart:[] } }
+    //
+    // The browser used a session token; this probe tests whether our server's
+    // x-api-key authenticates against api.pipl.ai, and pulls every recipient
+    // value so we can map value->label empirically (match to Google 22604,
+    // Microsoft 2489, Other 15812 for ButterflyEco/30d).
+    const piplStats = async (recp) => {
+      const url = `https://api.pipl.ai/v1/email-accounts-v2/email-stats`
+        + `?workspace_id=${wsId}&start_date=${start}&end_date=${end}`
+        + (recp ? `&recp_provider=${encodeURIComponent(recp)}` : '');
+      const r = await fetch(url, { headers: { 'x-api-key': PLUSVIBE_KEY } });
+      let body = null; try { body = await r.json(); } catch { /* non-json */ }
+      const h = body?.data?.header || body?.header || {};
+      return {
+        status: r.status, code: body?.code, msg: body?.message,
+        sent: h.total_sent_count, replies: h.total_reply_count,
+        ooo: h.total_ooo_reply_count, bounces: h.total_bounce_count,
+      };
     };
-    // provider=GOOGLE/MICROSOFT/PERSONAL_GMAIL all returned 0 — that endpoint's
-    // `provider` only speaks the SENDER vocabulary. The recipient types each
-    // carry a 24-char _id (from /email-placement/get/recipient-providers). The
-    // UI's recipient filter almost certainly passes that _id. Pull the ids and
-    // probe email-stats with them across candidate param names; flag matches to
-    // the known targets (Google 22604, Microsoft 2489).
-    let providerList = null, ids = {};
-    try {
-      providerList = await pvFetch(`/email-placement/get/recipient-providers?workspace_id=${wsId}`);
-      for (const grp of (providerList?.data || [])) {
-        for (const it of (grp.items || [])) ids[it.recipient_type] = it._id;
-      }
-    } catch (e) { providerList = `ERR ${e.message.slice(0, 40)}`; }
 
-    // The recipient split isn't on /account/email-stats. Sweep the
-    // /email-placement/ namespace (where recipient-providers lives) for a stats
-    // endpoint. For each candidate path, call it with workspace_id+dates and
-    // capture the raw response shape so we can spot a per-provider breakdown,
-    // then call it with a Google recipient filter and look for ~22604.
-    const googleId = ids.GOOGLE;
-    const dateQs = `workspace_id=${wsId}&start_date=${start}&end_date=${end}`;
-    const candidatePaths = [
-      '/email-placement/get/stats',
-      '/email-placement/get/email-stats',
-      '/email-placement/get/analytics',
-      '/email-placement/get/provider-stats',
-      '/email-placement/get/recipient-stats',
-      '/email-placement/get/placement-stats',
-      '/email-placement/get/dashboard',
-      '/email-placement/stats',
-      '/email-placement/email-stats',
-      '/email-placement/get/recipient-provider-stats',
-    ];
-    const trunc = (o) => { try { return JSON.parse(JSON.stringify(o).slice(0, 600)); } catch { return String(o).slice(0,600); } };
-    const sweep = [];
-    for (const path of candidatePaths) {
-      // 1) plain call — does this path even exist + what shape?
-      try {
-        const raw = await pvFetch(`${path}?${dateQs}`);
-        sweep.push({ path, ok: true, keys: Array.isArray(raw) ? `array[${raw.length}]` : Object.keys(raw || {}), sample: trunc(raw) });
-      } catch (e) {
-        sweep.push({ path, ok: false, err: e.message.slice(0, 50) });
-        continue; // path invalid — don't bother with the filtered variant
-      }
-      // 2) filtered by Google recipient — try a few filter param names, flag ~22604
-      for (const fp of ['recipient_provider', 'recipient_provider_id', 'provider', 'provider_id', 'recipient_type']) {
-        for (const [lbl, val] of [['GOOGLE', 'GOOGLE'], ['google_id', googleId]]) {
-          try {
-            const raw = await pvFetch(`${path}?${dateQs}&${fp}=${encodeURIComponent(val)}`);
-            const sent = sumAgg(raw).sent;
-            const hit = typeof sent === 'number' && Math.abs(sent - 22604) <= 2000;
-            if (sent > 0 || hit) sweep.push({ path, filter: `${fp}=${lbl}`, sent, ...(hit ? { MATCH: 'GOOGLE' } : {}) });
-          } catch { /* skip */ }
-        }
+    const piplBaseline = await piplStats('');
+    const authOk = piplBaseline.status === 200 && typeof piplBaseline.sent === 'number';
+    const values = ['GOOGLE_WORKSPACE', 'MICROSOFT365', 'REGULAR_ACCOUNT', 'PERSONAL_GMAIL'];
+    const byRecp = {};
+    for (const v of values) byRecp[v] = await piplStats(v);
+
+    // Map each recp_provider value to a UI label by matching its sent count to
+    // the known ButterflyEco targets (tolerant — UI window differs slightly).
+    const targets = { google: 22604, microsoft: 2489, other: 15812 };
+    const valueToLabel = {};
+    for (const [v, r] of Object.entries(byRecp)) {
+      if (typeof r.sent !== 'number') continue;
+      for (const [label, t] of Object.entries(targets)) {
+        if (Math.abs(r.sent - t) <= Math.max(2500, t * 0.15)) valueToLabel[v] = label;
       }
     }
+    const recpSum = values.reduce((a, v) => a + (typeof byRecp[v]?.sent === 'number' ? byRecp[v].sent : 0), 0);
 
     res.json({
       workspace_id: wsId, start, end,
-      baseline_total_sent: baseline,
-      recipient_ids: ids,
-      recipient_targets: { google: 22604, microsoft: 2489, other: 15812 },
-      sweep,
-      providerList,
-      hint: 'Look for a path that returned ok:true with a per-provider shape, or a MATCH (sent≈22604). If nothing, paste the network request from the UI recipient dropdown.',
+      plusvibe_baseline_total_sent: baseline,
+      pipl_auth_ok: authOk,
+      pipl_baseline: piplBaseline,
+      byRecp,
+      recpSum,
+      sumsToBaseline: Math.abs(recpSum - (piplBaseline.sent || baseline)) <= (piplBaseline.sent || baseline) * 0.03,
+      valueToLabel,
+      recipient_targets: targets,
+      hint: 'If pipl_auth_ok is true, our x-api-key works on pipl.ai — I can build it. valueToLabel shows which recp_provider value maps to Google/Microsoft/Other. If pipl_auth_ok is false (401/403), the key does not work there and I need another auth path.',
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
