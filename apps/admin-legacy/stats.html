@@ -133,7 +133,7 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-h
         <button class="prov-tab"        data-prov="other"   onclick="setProvider('other')">Other</button>
         <button class="prov-tab"        data-prov="unknown" onclick="setProvider('unknown')">Unknown</button>
       </div>
-      <span style="margin-left:auto;font-size:11px;color:var(--muted)" title="Based on each recipient mailbox's true MX provider (contacts.mx_provider), windowed by last-emailed date. Unknown = emailed but not yet verified (no true MX). All = sum of all four buckets. Independent of the per-client table above.">by recipient MX · sends in period</span>
+      <span id="providerNote" style="margin-left:auto;font-size:11px;color:var(--muted)" title="'All' totals match the per-client table exactly (same PlusVibe daily source). PlusVibe has no provider breakdown, so the split across Google/Outlook/Other/Unknown is estimated from the captured email_events recipient-MX ratios and apportioned to the true total. Coverage = share of sends the event log captured.">by recipient MX · sends in period</span>
     </div>
     <div id="providerCards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.6rem"></div>
   </div>
@@ -300,6 +300,15 @@ async function loadProviderStats(start, end) {
     const r = await fetch(`/api/stats/by-provider?start=${start}&end=${end}${wsParam}`);
     if (!r.ok) throw new Error(`${r.status}`);
     _providerData = await r.json();
+    // Coverage note: 'All' matches the client table; the split is estimated.
+    const note = document.getElementById('providerNote');
+    if (note) {
+      if (_providerData.estimated && _providerData.coverage != null) {
+        note.textContent = `provider split estimated · ${Math.round(_providerData.coverage * 100)}% event coverage`;
+      } else {
+        note.textContent = 'by recipient MX · sends in period';
+      }
+    }
     renderProviderCards();
   } catch (e) {
     document.getElementById('providerCards').innerHTML =
@@ -315,26 +324,29 @@ function renderProviderCards() {
   let row;
   if (_provider === 'all') {
     const t = list.reduce((a, p) => ({
-      sent:a.sent+p.sent, replies:a.replies+p.replies, bounces:a.bounces+p.bounces,
-      leads:a.leads+p.leads, unique_contacts:a.unique_contacts+p.unique_contacts,
-    }), { sent:0, replies:0, bounces:0, leads:0, unique_contacts:0 });
+      sent:a.sent+p.sent, replies:a.replies+p.replies, oooReplies:a.oooReplies+(p.oooReplies||0),
+      bounces:a.bounces+p.bounces, leads:a.leads+p.leads, unique_contacts:a.unique_contacts+p.unique_contacts,
+    }), { sent:0, replies:0, oooReplies:0, bounces:0, leads:0, unique_contacts:0 });
+    const realReplies = t.replies - t.oooReplies;
     row = { ...t,
-      replyRate:  t.sent>0 ? t.replies/t.sent : 0,
-      bounceRate: t.sent>0 ? t.bounces/t.sent : 0,
-      rtl:        t.replies>0 ? t.leads/t.replies : 0 };
+      replyRate:        t.sent>0 ? realReplies/t.sent : 0,
+      replyRateWithOoo: t.sent>0 ? t.replies/t.sent : 0,
+      bounceRate:       t.sent>0 ? t.bounces/t.sent : 0,
+      rtl:              t.replies>0 ? t.leads/t.replies : 0 };
   } else {
-    row = list.find(p => p.provider === _provider) || { sent:0, replies:0, bounces:0, leads:0, unique_contacts:0, replyRate:0, bounceRate:0, rtl:0 };
+    row = list.find(p => p.provider === _provider) || { sent:0, replies:0, oooReplies:0, bounces:0, leads:0, unique_contacts:0, replyRate:0, replyRateWithOoo:0, bounceRate:0, rtl:0 };
   }
   const rrClass = row.replyRate >= 0.025 ? 'good' : row.replyRate >= 0.01 ? 'med' : row.replyRate > 0 ? 'bad' : '';
   const brClass = row.bounceRate >= 0.05 ? 'bad' : row.bounceRate >= 0.02 ? 'med' : 'good';
   const rtlClass = row.rtl >= 0.1 ? 'good' : row.rtl >= 0.05 ? 'med' : '';
   const cards = [
-    ['Sent',        fmtNum(row.sent),        ''],
-    ['Reply Rate',  pct(row.replyRate),      rrClass],
-    ['Bounce Rate', pct(row.bounceRate),     brClass],
-    ['Leads',       fmtNum(row.leads),       row.leads>0?'good':''],
-    ['RTL',         pct(row.rtl),            rtlClass],
-    ['Contacts',    fmtNum(row.unique_contacts), ''],
+    ['Sent',             fmtNum(row.sent),                 ''],
+    ['Reply Rate',       pct(row.replyRate),               rrClass],
+    ['Reply Rate (OOO)', pct(row.replyRateWithOoo||0),     ''],
+    ['Bounce Rate',      pct(row.bounceRate),              brClass],
+    ['Leads',            fmtNum(row.leads),                row.leads>0?'good':''],
+    ['RTL',              pct(row.rtl),                     rtlClass],
+    ['Contacts',         fmtNum(row.unique_contacts),      ''],
   ];
   wrap.innerHTML = cards.map(([lbl,val,cls]) =>
     `<div class="prov-metric ${cls}"><div class="pm-val">${val}</div><div class="pm-lbl">${lbl}</div></div>`

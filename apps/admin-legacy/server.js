@@ -3277,27 +3277,104 @@ app.get('/api/stats/by-provider', requireSession, async (req, res) => {
 
     const { rows } = await pgdb.query(q, params);
 
-    // Always return all four buckets in a stable order, zero-filled, so the UI
-    // can render fixed cards without juggling missing keys.
+    // ── Anchor totals to the SAME source the client row uses ────────────────
+    // The "All Workspaces" client row sums PlusVibe's daily aggregate
+    // (perf_cache_daily) via computeWorkspaceStatsForRange. That source has NO
+    // provider dimension, so we cannot get exact per-provider counts from it.
+    //
+    // email_events is the ONLY source with a recipient provider, but it's
+    // webhook-captured and less complete than PlusVibe's daily totals — so its
+    // raw counts don't match the client row.
+    //
+    // Resolution: take the TRUE totals from the shared helper (so "All" equals
+    // the client row to the digit) and split them across providers using the
+    // RATIOS observed in email_events. Per-provider numbers are therefore
+    // proportional estimates; the "All" total is exact. The frontend labels the
+    // split as estimated. This is the closest possible to "same data, filtered
+    // by provider" given PlusVibe exposes no provider breakdown.
+    const truth = computeWorkspaceStatsForRange(wsIds, start, end);
+    const trueTotals = Object.values(truth).reduce((a, w) => ({
+      sent:       a.sent       + w.totals.sent,
+      replies:    a.replies    + w.totals.replies,     // includes OOO
+      oooReplies: a.oooReplies + w.totals.oooReplies,  // OOO subset
+      bounces:    a.bounces    + w.totals.bounces,
+      leads:      a.leads      + w.totals.leads,
+    }), { sent: 0, replies: 0, oooReplies: 0, bounces: 0, leads: 0 });
+
+    // Provider ratios from the event log (denominator = events we DID capture).
     const ORDER = ['google', 'outlook', 'other', 'unknown'];
     const byKey = Object.fromEntries(rows.map(r => [r.provider, r]));
-    const providers = ORDER.map(key => {
-      const r = byKey[key] || {};
-      const sent    = Number(r.sent    || 0);
-      const replies = Number(r.replies || 0);
-      const bounces = Number(r.bounces || 0);
-      const leads   = Number(r.leads   || 0);
+    const evt = ORDER.map(key => ({
+      key,
+      sent:    Number(byKey[key]?.sent    || 0),
+      replies: Number(byKey[key]?.replies || 0),
+      bounces: Number(byKey[key]?.bounces || 0),
+      leads:   Number(byKey[key]?.leads   || 0),
+      unique_contacts: Number(byKey[key]?.unique_contacts || 0),
+    }));
+    const evtTot = evt.reduce((a, e) => ({
+      sent: a.sent + e.sent, replies: a.replies + e.replies,
+      bounces: a.bounces + e.bounces, leads: a.leads + e.leads,
+    }), { sent: 0, replies: 0, bounces: 0, leads: 0 });
+
+    // Apportion each true total by the provider's share of the event log. If the
+    // event log is empty for a metric (no coverage), fall back to the sent-share
+    // so the row still splits sensibly instead of collapsing to zero. Largest-
+    // remainder rounding keeps the per-provider integers summing to the exact
+    // true total (no off-by-a-few from independent Math.round calls).
+    const apportion = (total, shareOf, fallbackShareOf, fallbackDenom) => {
+      const denom = shareOf.denom > 0 ? shareOf.denom : fallbackDenom;
+      const parts = evt.map(e => {
+        const num = shareOf.denom > 0 ? shareOf.pick(e) : fallbackShareOf(e);
+        return denom > 0 ? (total * num) / denom : 0;
+      });
+      const floors = parts.map(Math.floor);
+      let rem = total - floors.reduce((a, b) => a + b, 0);
+      const order = parts
+        .map((p, i) => ({ i, frac: p - Math.floor(p) }))
+        .sort((a, b) => b.frac - a.frac);
+      const out = floors.slice();
+      for (let k = 0; k < order.length && rem > 0; k++) { out[order[k].i]++; rem--; }
+      return out;
+    };
+
+    const sentSplit    = apportion(trueTotals.sent,    { denom: evtTot.sent,    pick: e => e.sent },    e => e.sent, evtTot.sent);
+    const replySplit   = apportion(trueTotals.replies, { denom: evtTot.replies, pick: e => e.replies }, e => e.sent, evtTot.sent);
+    const bounceSplit  = apportion(trueTotals.bounces, { denom: evtTot.bounces, pick: e => e.bounces }, e => e.sent, evtTot.sent);
+    const leadSplit    = apportion(trueTotals.leads,   { denom: evtTot.leads,   pick: e => e.leads },   e => e.sent, evtTot.sent);
+    // OOO has no per-provider signal in the event log, so split it by the same
+    // ratio as replies (OOO is a subset of replies). Guarantees oooSplit[i] <=
+    // replySplit[i] per provider AND sums to the true OOO total.
+    const oooSplit     = apportion(trueTotals.oooReplies, { denom: evtTot.replies, pick: e => e.replies }, e => e.sent, evtTot.sent);
+
+    const providers = evt.map((e, i) => {
+      const sent       = sentSplit[i];
+      const replies    = replySplit[i];               // with OOO
+      const oooReplies = Math.min(oooSplit[i], replies);
+      const realReplies = replies - oooReplies;        // without OOO
+      const bounces    = bounceSplit[i];
+      const leads      = leadSplit[i];
       return {
-        provider: key,
-        unique_contacts: Number(r.unique_contacts || 0),
-        sent, replies, bounces, leads,
-        replyRate:  sent    > 0 ? replies / sent    : 0,
-        bounceRate: sent    > 0 ? bounces / sent    : 0,
-        rtl:        replies > 0 ? leads   / replies : 0,
+        provider: e.key,
+        unique_contacts: e.unique_contacts,
+        sent, replies, oooReplies, bounces, leads,
+        // replyRate = without OOO (matches the per-client table's definition);
+        // replyRateWithOoo = all replies incl. auto-responders.
+        replyRate:        sent    > 0 ? realReplies / sent : 0,
+        replyRateWithOoo: sent    > 0 ? replies     / sent : 0,
+        bounceRate:       sent    > 0 ? bounces     / sent : 0,
+        rtl:              replies > 0 ? leads        / replies : 0,
       };
     });
 
-    res.json({ providers, start, end });
+    // estimated=true tells the UI to label the provider split as an estimate.
+    // coverage = how much of the true total the event log actually captured.
+    res.json({
+      providers, start, end,
+      estimated: true,
+      coverage: trueTotals.sent > 0 ? evtTot.sent / trueTotals.sent : null,
+      trueTotals,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
