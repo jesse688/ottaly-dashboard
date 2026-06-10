@@ -928,7 +928,6 @@ async function callReacherOnce(email) {
   await _acquireReacherSlot();
   try {
     const base = await resolveReacherBaseFor(m);
-    const endpoint = /\/v[01]\/check_email$/.test(base) ? base : `${base}/${m.version}/check_email`;
     const body = { to_email: email };
     if (REACHER_FROM_EMAIL) body.from_email = REACHER_FROM_EMAIL;
     if (REACHER_HELLO_NAME) body.hello_name = REACHER_HELLO_NAME;
@@ -945,8 +944,28 @@ async function callReacherOnce(email) {
 
     const headers = { 'Content-Type': 'application/json' };
     if (m.key) headers.authorization = m.key.startsWith('Bearer ') ? m.key : `Bearer ${m.key}`;
+
+    // The configured base may have its /vN suffix stripped by discovery, so we
+    // rebuild the endpoint from m.version. If Reacher 404s that route (wrong
+    // API version for this build — e.g. v1 SaaS route vs v0 self-hosted), flip
+    // the version once and retry. This self-heals a misconfigured REACHER_URL
+    // instead of burning every retry on a route that can never answer.
+    const buildEndpoint = () => (/\/v[01]\/check_email$/.test(base) ? base : `${base}/${m.version}/check_email`);
+    let versionFlipped = false;
     try {
-      const response = await fetchWithTimeout(endpoint, { method: 'POST', headers, body: JSON.stringify(body) }, REACHER_TIMEOUT_MS);
+      let response = await fetchWithTimeout(buildEndpoint(), { method: 'POST', headers, body: JSON.stringify(body) }, REACHER_TIMEOUT_MS);
+
+      // 404 on a bare base (no suffix on the configured URL) means the version
+      // we built is wrong for this Reacher build. Flip v0<->v1, pin it so later
+      // emails skip the dead route, and retry this one before giving up.
+      if (response.status === 404 && !/\/v[01]\/check_email$/.test(base)) {
+        const flipped = m.version === 'v1' ? 'v0' : 'v1';
+        console.warn(`[Reacher] 404 on ${m.version}/check_email — flipping to ${flipped} and retrying`);
+        m.version = flipped;
+        versionFlipped = true;
+        response = await fetchWithTimeout(buildEndpoint(), { method: 'POST', headers, body: JSON.stringify(body) }, REACHER_TIMEOUT_MS);
+      }
+
       const text = await response.text();
       let data = {};
       try { data = text ? JSON.parse(text) : {}; } catch {
@@ -960,6 +979,7 @@ async function callReacherOnce(email) {
         _recordReacherFailure(reason);
         return [{ email, status: 'unknown', confidence: 'low', reason }, m];
       }
+      if (versionFlipped) console.log(`[Reacher] Pinned to ${m.version}/check_email after version flip`);
       const today = _reacherTodayUtc();
       if (m.usageDate !== today) { m.usageDate = today; m.usageCount = 0; }
       m.usageCount++;
@@ -972,7 +992,7 @@ async function callReacherOnce(email) {
     } catch (err) {
       const isNetworkErr = !isAbortError(err) && /fetch failed|ECONNREFUSED|ENOTFOUND|network/i.test(err.message || '');
       if (isNetworkErr) {
-        console.warn(`[Reacher] Network error at ${endpoint}, will re-discover: ${err.message}`);
+        console.warn(`[Reacher] Network error at ${buildEndpoint()}, will re-discover: ${err.message}`);
         m.base = null;
         _reacherBase = null;
       }
