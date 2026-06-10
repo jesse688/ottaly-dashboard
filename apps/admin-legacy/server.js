@@ -3504,32 +3504,56 @@ app.get('/api/debug/pv-provider-probe', requireSession, async (req, res) => {
         bounces: a.bounces + (r.total_bounce_count || 0),
       }), { sent: 0, replies: 0, bounces: 0 });
     };
-    const recipientValues = ['GOOGLE', 'MICROSOFT', 'PERSONAL_GMAIL', 'REGULAR_ACCOUNT', 'OTHER'];
-    const byValue = {};
-    for (const v of recipientValues) {
-      try { byValue[v] = sumAgg(await pvFetch(`${base}&provider=${encodeURIComponent(v)}`)); }
-      catch (e) { byValue[v] = `ERR ${e.message.slice(0, 30)}`; }
-    }
-    const g  = byValue.GOOGLE?.sent || 0;
-    const m  = byValue.MICROSOFT?.sent || 0;
-    const pg = byValue.PERSONAL_GMAIL?.sent || 0;
-    const knownSum = g + m + pg;
-    const otherRemainder = baseline - knownSum; // everything not G/MS/PersonalGmail
+    // provider=GOOGLE/MICROSOFT/PERSONAL_GMAIL all returned 0 — that endpoint's
+    // `provider` only speaks the SENDER vocabulary. The recipient types each
+    // carry a 24-char _id (from /email-placement/get/recipient-providers). The
+    // UI's recipient filter almost certainly passes that _id. Pull the ids and
+    // probe email-stats with them across candidate param names; flag matches to
+    // the known targets (Google 22604, Microsoft 2489).
+    let providerList = null, ids = {};
+    try {
+      providerList = await pvFetch(`/email-placement/get/recipient-providers?workspace_id=${wsId}`);
+      for (const grp of (providerList?.data || [])) {
+        for (const it of (grp.items || [])) ids[it.recipient_type] = it._id;
+      }
+    } catch (e) { providerList = `ERR ${e.message.slice(0, 40)}`; }
 
-    // Also pull the workspace's actual recipient-provider list (separate doc'd
-    // endpoint) to confirm which provider values exist + their counts.
-    let providerList = null;
-    try { providerList = await pvFetch(`/email-placement/get/recipient-providers?workspace_id=${wsId}`); }
-    catch (e) { providerList = `ERR ${e.message.slice(0, 40)}`; }
+    const TARGETS = { GOOGLE: 22604, MICROSOFT: 2489 };
+    const near = (n) => {
+      for (const [k, t] of Object.entries(TARGETS)) {
+        if (typeof n === 'number' && Math.abs(n - t) <= Math.max(800, t * 0.08)) return k;
+      }
+      return null;
+    };
+    const paramNames = [
+      'provider', 'provider_id', 'recipient_provider', 'recipient_provider_id',
+      'recipient_type', 'recipient_type_id', 'lead_provider', 'lead_provider_id',
+      'mx_provider_id', 'placement_provider', 'recipient', 'recipient_id',
+    ];
+    const googleId = ids.GOOGLE, msId = ids.MICROSOFT;
+    const probes = [];
+    for (const p of paramNames) {
+      // test with Google id (expect ~22604) and the bare GOOGLE name as control
+      for (const [label, val] of [['google_id', googleId], ['ms_id', msId]]) {
+        if (!val) continue;
+        try {
+          const sent = sumAgg(await pvFetch(`${base}&${p}=${encodeURIComponent(val)}`)).sent;
+          const match = near(sent);
+          probes.push({ q: `${p}=<${label}>`, sent, ...(match ? { MATCH: match } : {}) });
+        } catch (e) { /* 400 invalid param — skip */ }
+      }
+    }
+    const matches = probes.filter(p => p.MATCH);
 
     res.json({
       workspace_id: wsId, start, end,
       baseline_total_sent: baseline,
+      recipient_ids: ids,
       recipient_targets: { google: 22604, microsoft: 2489, other: 15812 },
-      byValue,
-      derived: { google: g, microsoft: m, personal_gmail: pg, other_remainder: otherRemainder },
+      matches,
+      allProbes: probes,
       providerList,
-      hint: 'If byValue.GOOGLE.sent ≈ 22604 and byValue.MICROSOFT.sent ≈ 2489, provider=<value> is the recipient filter. Other = baseline - GOOGLE - MICROSOFT - PERSONAL_GMAIL.',
+      hint: 'A row in matches reveals the recipient param + that it takes the provider _id. If matches is empty, the filter lives on a different endpoint/POST body — I will need the network request.',
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
