@@ -76,6 +76,10 @@ async function runMigration() {
 
       // ── Client deal-stage label per lead (separate from internal/PV label) ──
       `ALTER TABLE portal_lead_data ADD COLUMN IF NOT EXISTS client_label TEXT`,
+      // Stages flagged with prompts_value ask the client for a deal value the
+      // moment a lead is moved into that stage (e.g. "Quote Sent", "Won").
+      `ALTER TABLE portal_client_labels ADD COLUMN IF NOT EXISTS prompts_value BOOLEAN NOT NULL DEFAULT FALSE`,
+      `ALTER TABLE portal_client_labels ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0`,
 
       // ── Real email conversations cached from PlusVibe /unibox/emails ──
       `CREATE TABLE IF NOT EXISTS portal_emails (

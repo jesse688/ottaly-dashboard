@@ -49,7 +49,7 @@ interface ThreadMsg {
   timestamp_created: string | null
 }
 
-interface CustomLabel { id: string; name: string; color: string }
+interface CustomLabel { id: string; name: string; color: string; prompts_value?: boolean }
 
 const COLOR_MAP: Record<string, string> = {
   purple: 'bg-purple-400', pink: 'bg-pink-400', orange: 'bg-orange-400',
@@ -135,6 +135,11 @@ export function UniboxClient({ companyName }: { companyName: string }) {
   const [showNewLabel, setShowNewLabel] = useState(false)
   const [newLabelName, setNewLabelName] = useState('')
   const [newLabelColor, setNewLabelColor] = useState('purple')
+  const [newLabelPromptsValue, setNewLabelPromptsValue] = useState(false)
+
+  // Stage-triggered deal-value prompt
+  const [valueStage, setValueStage] = useState<string | null>(null)
+  const [valueInput, setValueInput] = useState('')
 
   const router = useRouter()
 
@@ -177,6 +182,23 @@ export function UniboxClient({ companyName }: { companyName: string }) {
     setLeads(prev => prev?.map(l => l.id === leadId ? { ...l, client_label: label } : l) ?? null)
     setSelected(prev => prev?.id === leadId ? { ...prev, client_label: label } : prev)
     await fetch(`/api/portal/leads/${leadId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label }) })
+
+    // If the new stage captures a deal value and we don't have one yet, ask now
+    // (never off the bat — only when a lead reaches a value stage).
+    const meta = customLabels.find(c => c.name === label)
+    if (meta?.prompts_value && selected && selected.id === leadId && !selected.deal_value) {
+      setValueInput('')
+      setValueStage(label)
+    }
+  }
+
+  async function saveDealValue(val: string) {
+    if (!selected) return
+    await fetch(`/api/portal/leads/${selected.id}/data`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deal_value: val || null }),
+    })
+    setLeads(prev => prev?.map(l => l.id === selected.id ? { ...l, deal_value: val || null } : l) ?? null)
+    setSelected(prev => prev ? { ...prev, deal_value: val || null } : prev)
   }
 
   async function handleReply() {
@@ -198,13 +220,8 @@ export function UniboxClient({ companyName }: { companyName: string }) {
   }
 
   async function handleSaveDeal() {
-    if (!selected) return
-    await fetch(`/api/portal/leads/${selected.id}/data`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deal_value: dealInput || null }),
-    })
+    await saveDealValue(dealInput)
     setDealEdit(false)
-    setLeads(prev => prev?.map(l => l.id === selected.id ? { ...l, deal_value: dealInput || null } : l) ?? null)
-    setSelected(prev => prev ? { ...prev, deal_value: dealInput || null } : prev)
   }
 
   async function handleDisputeSubmit() {
@@ -221,11 +238,11 @@ export function UniboxClient({ companyName }: { companyName: string }) {
   async function handleCreateLabel() {
     if (!newLabelName.trim()) return
     const res = await fetch('/api/portal/labels', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newLabelName.trim(), color: newLabelColor }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newLabelName.trim(), color: newLabelColor, promptsValue: newLabelPromptsValue }),
     })
     const created = await res.json() as CustomLabel
     setCustomLabels(prev => [...prev, created])
-    setNewLabelName(''); setNewLabelColor('purple'); setShowNewLabel(false)
+    setNewLabelName(''); setNewLabelColor('purple'); setNewLabelPromptsValue(false); setShowNewLabel(false)
   }
 
   async function handleDeleteLabel(id: string) {
@@ -532,13 +549,36 @@ export function UniboxClient({ companyName }: { companyName: string }) {
       {/* new label modal */}
       {showNewLabel && (
         <Modal onClose={() => setShowNewLabel(false)} title="Create deal stage">
-          <input value={newLabelName} onChange={e => setNewLabelName(e.target.value)} placeholder="e.g. Meeting Booked, Sent Quote, Closed" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 mb-3" />
+          <input value={newLabelName} onChange={e => setNewLabelName(e.target.value)} placeholder="e.g. Meeting Booked, Quote Sent, Won" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 mb-3" />
           <div className="flex gap-2 mb-4">
             {CUSTOM_COLORS.map(c => <button key={c} onClick={() => setNewLabelColor(c)} className={`w-7 h-7 rounded-full ${COLOR_MAP[c]} ${newLabelColor === c ? 'ring-2 ring-offset-2 ring-gray-400' : ''}`} />)}
           </div>
+          <label className="flex items-start gap-2 mb-4 cursor-pointer">
+            <input type="checkbox" checked={newLabelPromptsValue} onChange={e => setNewLabelPromptsValue(e.target.checked)} className="mt-0.5" />
+            <span className="text-sm text-gray-700">Ask for the deal value when a lead reaches this stage
+              <span className="block text-xs text-gray-400">Turn on for stages like “Quote Sent” or “Won”. Leave off for early stages.</span>
+            </span>
+          </label>
           <div className="flex gap-2 justify-end">
             <button onClick={() => setShowNewLabel(false)} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
             <button onClick={handleCreateLabel} disabled={!newLabelName.trim()} className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg disabled:opacity-50">Create</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* stage-triggered deal-value prompt */}
+      {valueStage && selected && (
+        <Modal onClose={() => setValueStage(null)} title={`Deal value — ${valueStage}`}>
+          <p className="text-sm text-gray-500 mb-3">{fullName(selected)} moved to <strong>{valueStage}</strong>. What&apos;s this deal worth? You can skip and add it later.</p>
+          <div className="relative mb-4">
+            <span className="absolute left-3 top-2.5 text-gray-400">£</span>
+            <input type="number" min="0" autoFocus value={valueInput} onChange={e => setValueInput(e.target.value)} placeholder="0"
+              onKeyDown={e => { if (e.key === 'Enter' && valueInput) { saveDealValue(valueInput); setValueStage(null) } }}
+              className="w-full pl-7 pr-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" />
+          </div>
+          <div className="flex gap-2 justify-end">
+            <button onClick={() => setValueStage(null)} className="px-4 py-2 text-sm text-gray-600">Skip</button>
+            <button onClick={() => { saveDealValue(valueInput); setValueStage(null) }} disabled={!valueInput} className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg disabled:opacity-50">Save deal value</button>
           </div>
         </Modal>
       )}
