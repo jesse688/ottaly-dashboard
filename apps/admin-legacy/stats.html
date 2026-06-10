@@ -327,10 +327,11 @@ function renderProviderCards() {
       sent:a.sent+p.sent, replies:a.replies+p.replies, oooReplies:a.oooReplies+(p.oooReplies||0),
       bounces:a.bounces+p.bounces, leads:a.leads+p.leads, unique_contacts:a.unique_contacts+p.unique_contacts,
     }), { sent:0, replies:0, oooReplies:0, bounces:0, leads:0, unique_contacts:0 });
-    const realReplies = t.replies - t.oooReplies;
+    // replies = without-OOO (PlusVibe total_reply_count); with-OOO adds the
+    // separate OOO counter. Subtracting was wrong — it went negative.
     row = { ...t,
-      replyRate:        t.sent>0 ? realReplies/t.sent : 0,
-      replyRateWithOoo: t.sent>0 ? t.replies/t.sent : 0,
+      replyRate:        t.sent>0 ? t.replies/t.sent : 0,
+      replyRateWithOoo: t.sent>0 ? (t.replies + t.oooReplies)/t.sent : 0,
       bounceRate:       t.sent>0 ? t.bounces/t.sent : 0,
       rtl:              t.replies>0 ? t.leads/t.replies : 0 };
   } else {

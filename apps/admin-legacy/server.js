@@ -3018,7 +3018,12 @@ function computeWorkspaceStatsForRange(wsIds, start, end) {
       totals.bounces    += d.bounces;
       return { date, sent: d.sent, replies: d.replies, posReplies: d.posReplies, oooReplies: d.oooReplies, bounces: d.bounces, leads: dayLeads };
     });
-    const replyRate  = totals.sent > 0 ? (totals.replies - totals.oooReplies) / totals.sent : 0;
+    // replies (total_reply_count) is PlusVibe's real reply count, already
+    // excluding OOO — every other read of this field treats it that way. The
+    // old `replies - oooReplies` double-counted OOO and went NEGATIVE when
+    // PlusVibe's independent OOO counter exceeded it (the -0.5%/-2.5% reply
+    // rates in the client table). OOO is surfaced separately, not subtracted.
+    const replyRate  = totals.sent > 0 ? totals.replies / totals.sent : 0;
     const bounceRate = totals.sent    > 0 ? totals.bounces / totals.sent    : 0;
     const rtl        = totals.replies > 0 ? totals.leads   / totals.replies : 0;
     const sendsPerDay   = dates.length > 0 ? totals.sent    / dates.length : 0;
@@ -3343,27 +3348,29 @@ app.get('/api/stats/by-provider', requireSession, async (req, res) => {
     const bounceSplit  = apportion(trueTotals.bounces, { denom: evtTot.bounces, pick: e => e.bounces }, e => e.sent, evtTot.sent);
     const leadSplit    = apportion(trueTotals.leads,   { denom: evtTot.leads,   pick: e => e.leads },   e => e.sent, evtTot.sent);
     // OOO has no per-provider signal in the event log, so split it by the same
-    // ratio as replies (OOO is a subset of replies). Guarantees oooSplit[i] <=
-    // replySplit[i] per provider AND sums to the true OOO total.
+    // ratio as replies. PlusVibe returns total_reply_count and
+    // total_ooo_reply_count as INDEPENDENT counters — OOO is NOT a subset of
+    // replies (subtracting them yielded negative reply rates). So replies is
+    // already the without-OOO count; with-OOO = replies + ooo. This matches
+    // PlusVibe's own modal (Reply Rate 1.7% vs Reply Rate with OOO 7.1%).
     const oooSplit     = apportion(trueTotals.oooReplies, { denom: evtTot.replies, pick: e => e.replies }, e => e.sent, evtTot.sent);
 
     const providers = evt.map((e, i) => {
       const sent       = sentSplit[i];
-      const replies    = replySplit[i];               // with OOO
-      const oooReplies = Math.min(oooSplit[i], replies);
-      const realReplies = replies - oooReplies;        // without OOO
+      const replies    = replySplit[i];               // without OOO (PlusVibe total_reply_count)
+      const oooReplies = oooSplit[i];                  // separate OOO counter
       const bounces    = bounceSplit[i];
       const leads      = leadSplit[i];
       return {
         provider: e.key,
         unique_contacts: e.unique_contacts,
         sent, replies, oooReplies, bounces, leads,
-        // replyRate = without OOO (matches the per-client table's definition);
-        // replyRateWithOoo = all replies incl. auto-responders.
-        replyRate:        sent    > 0 ? realReplies / sent : 0,
-        replyRateWithOoo: sent    > 0 ? replies     / sent : 0,
-        bounceRate:       sent    > 0 ? bounces     / sent : 0,
-        rtl:              replies > 0 ? leads        / replies : 0,
+        // replyRate = without OOO (PlusVibe's plain "Reply Rate");
+        // replyRateWithOoo = replies + auto-responders.
+        replyRate:        sent    > 0 ? replies              / sent : 0,
+        replyRateWithOoo: sent    > 0 ? (replies + oooReplies) / sent : 0,
+        bounceRate:       sent    > 0 ? bounces              / sent : 0,
+        rtl:              replies > 0 ? leads                / replies : 0,
       };
     });
 
