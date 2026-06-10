@@ -14362,7 +14362,7 @@ function scheduleAudienceScoring(pgdb) {
     // contacts. Idempotent (ON CONFLICT DO NOTHING) so repeat boots are cheap.
     setTimeout(() => {
       pgdb.seedDomainMxCacheFromVerified()
-        .then(r => console.log(`[startup] Domain MX cache seed: ${r.domainsSeeded} domains seeded, ${r.contactsFilled} contacts classified from verified domains`))
+        .then(r => console.log(`[startup] Domain MX cache seed: recovered ${r.recovered} from verified tags, ${r.domainsSeeded} domains seeded, ${r.contactsFilled} contacts classified from verified domains`))
         .catch(err => console.warn('[startup] Domain MX cache seed failed:', err.message));
     }, 30000);
 

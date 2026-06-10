@@ -2398,12 +2398,53 @@ class PostgresDatabase {
     return { contactsUpdated: r.rowCount || 0 };
   }
 
+  // One-time recovery: until this fix, the verify path wrote the resolved MX
+  // provider into the `tags` array but NOT into the mx_provider column (the
+  // column write was missing). So historically-verified contacts have their
+  // real provider stuck in tags, and mx_provider is NULL for everyone.
+  //
+  // We recover it — but ONLY for contacts that were actually verified
+  // (email_verified_at IS NOT NULL). A contact's email_* tag has two possible
+  // sources: the real verifier (which also stamps email_verified_at) or
+  // Apollo's tech-stack guess via backfillEmailProviders (which sets tags
+  // only, never email_verified_at). Gating on email_verified_at recovers the
+  // trustworthy verifier results and ignores Apollo's untrusted guesses —
+  // exactly the distinction we must preserve.
+  async recoverMxProviderFromVerifiedTags() {
+    let recovered = 0;
+    for (let i = 0; i < 200; i++) {
+      const r = await this.query(`
+        UPDATE contacts SET mx_provider = CASE
+            WHEN 'email_google'  = ANY(tags) THEN 'email_google'
+            WHEN 'email_outlook' = ANY(tags) THEN 'email_outlook'
+            WHEN 'email_other'   = ANY(tags) THEN 'email_other'
+          END
+        WHERE id IN (
+          SELECT id FROM contacts
+          WHERE mx_provider IS NULL
+            AND email_verified_at IS NOT NULL
+            AND tags && ARRAY['email_google','email_outlook','email_other']
+          LIMIT 10000
+        )
+      `);
+      const n = r.rowCount || 0;
+      recovered += n;
+      if (n === 0) break;
+    }
+    return { recovered };
+  }
+
   // One-time seed: build the domain cache from contacts that ALREADY carry a
   // real verifier MX (mx_provider set + email_verified_at present), then fan
   // each domain's provider out to its still-unclassified contacts. Recovers a
   // large chunk of the back-catalogue instantly without trusting Apollo.
   // Keyset-batched by domain so no single statement runs long.
   async seedDomainMxCacheFromVerified() {
+    // First recover mx_provider from verifier-set tags (the column write was
+    // historically missing), so the per-domain seed below has data to read.
+    const rec = await this.recoverMxProviderFromVerifiedTags();
+    if (rec.recovered) console.log(`[seed] Recovered mx_provider from verified tags for ${rec.recovered} contacts`);
+
     // Per domain, take the most-recently-verified contact's provider as truth.
     const seed = await this.query(`
       INSERT INTO domain_mx_cache (domain, mx_provider, resolved_at)
@@ -2442,7 +2483,7 @@ class PostgresDatabase {
       filled += n;
       if (n === 0) break;
     }
-    return { domainsSeeded: seed.rowCount || 0, contactsFilled: filled };
+    return { recovered: rec.recovered, domainsSeeded: seed.rowCount || 0, contactsFilled: filled };
   }
 
   detectEmailProvider(technologiesStr) {
