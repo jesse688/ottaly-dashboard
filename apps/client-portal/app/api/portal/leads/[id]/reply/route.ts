@@ -1,0 +1,70 @@
+import { NextResponse, type NextRequest } from 'next/server'
+import { getSession } from '@/lib/auth'
+import pool from '@/lib/db'
+import { sendReply } from '@/lib/plusvibe'
+import { notifyAdmin } from '@/lib/notify'
+
+// POST — client replies to a lead.
+// 1. Persist the outgoing message to portal_emails (so it shows in the thread immediately)
+// 2. Attempt live send via PlusVibe
+// 3. Always notify the team (so a reply is never lost, even if live-send isn't wired)
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const session = await getSession()
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const { id } = await params
+  const { body } = await req.json() as { body: string }
+  if (!body?.trim()) return NextResponse.json({ error: 'Empty reply' }, { status: 400 })
+
+  const leadRes = await pool.query(
+    'SELECT id, email, first_name, last_name FROM esp_leads WHERE id = $1 AND workspace_id = $2',
+    [id, session.workspaceId]
+  )
+  if (!leadRes.rows.length) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  const lead = leadRes.rows[0]
+
+  // Find the latest inbound message for threading context (subject, mailbox, message id)
+  const ctx = await pool.query(
+    `SELECT subject, eaccount, message_id FROM portal_emails
+      WHERE workspace_id = $1 AND lower(lead_email) = lower($2) AND direction = 'IN'
+      ORDER BY timestamp_created DESC LIMIT 1`,
+    [session.workspaceId, lead.email]
+  )
+  const subject = ctx.rows[0]?.subject ?? 'Re: your enquiry'
+  const eaccount = ctx.rows[0]?.eaccount ?? undefined
+  const replyToMessageId = ctx.rows[0]?.message_id ?? undefined
+
+  // 1. Persist outgoing message (synthetic id so it's stable + idempotent-ish)
+  const outId = `portal-${id}-${Date.now()}`
+  await pool.query(
+    `INSERT INTO portal_emails (
+       id, workspace_id, lead_email, direction, subject, body_text, body_html,
+       content_preview, from_email, to_email, eaccount, sent_via_portal, timestamp_created
+     ) VALUES ($1,$2,$3,'OUT',$4,$5,$6,$7,$8,$9,$10,TRUE,NOW())`,
+    [
+      outId, session.workspaceId, lead.email.toLowerCase(), subject, body,
+      `<p>${body.replace(/\n/g, '<br/>')}</p>`, body.slice(0, 200),
+      eaccount ?? session.email, lead.email, eaccount ?? null,
+    ]
+  ).catch(err => console.error('[reply] persist failed:', err))
+
+  // 2. Attempt live send via PlusVibe
+  const send = await sendReply({
+    workspaceId: session.workspaceId,
+    leadEmail: lead.email,
+    eaccount,
+    subject,
+    bodyText: body,
+    replyToMessageId,
+  })
+
+  // 3. Notify team (always — guarantees the reply is actioned)
+  const who = [lead.first_name, lead.last_name].filter(Boolean).join(' ') || lead.email
+  await notifyAdmin({
+    clientId: session.clientId,
+    kind: 'reply_sent',
+    title: `${session.companyName} replied to ${who}`,
+    body: `${send.ok ? '✅ Sent live via PlusVibe' : '⚠️ NOT auto-sent (' + send.reason + ') — please send manually'}\nTo: ${lead.email}\nSubject: ${subject}\n\n${body}`,
+  })
+
+  return NextResponse.json({ ok: true, sentLive: send.ok })
+}

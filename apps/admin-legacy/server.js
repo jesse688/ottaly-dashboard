@@ -11436,6 +11436,33 @@ async function syncToEspLeads(body, eventType, email, dbPg) {
         SET first_replied_at = COALESCE(first_replied_at, $1), updated_at = $2
         WHERE id = $3 AND workspace_id = $4
       `, [now, now, leadId, workspaceId]);
+
+      // Store the real reply email into portal_emails so the client portal shows
+      // the genuine conversation (not a fabricated one). Best-effort, idempotent.
+      try {
+        const html = body?.reply?.html || body?.html || body?.body_html || '';
+        const text = body?.reply?.text || body?.message || body?.body || body?.content || body?.reply_text || '';
+        const subject = body?.subject || body?.reply?.subject || body?.email_subject || '';
+        const messageId = body?.message_id || body?.reply?.message_id || `wh-${leadId}-${Date.parse(now)}`;
+        const threadId = body?.thread_id || body?.reply?.thread_id || null;
+        const eaccount = body?.email_account || body?.eaccount || body?.workspace?.email || null;
+        if (text || html) {
+          await dbPg.query(`
+            INSERT INTO portal_emails (
+              id, workspace_id, lead_pv_id, lead_email, thread_id, campaign_id, direction,
+              subject, body_html, body_text, content_preview, from_email, to_email, eaccount,
+              pv_label, is_unread, message_id, timestamp_created, raw
+            ) VALUES ($1,$2,$3,$4,$5,$6,'IN',$7,$8,$9,$10,$11,$12,$13,$14,1,$15,$16,$17)
+            ON CONFLICT (id) DO NOTHING
+          `, [
+            messageId, workspaceId, leadId, String(email).toLowerCase(), threadId, campaignId,
+            subject, html, text, (text || '').slice(0, 200), String(email).toLowerCase(),
+            eaccount, eaccount, 'INTERESTED', messageId, now, JSON.stringify(body),
+          ]);
+        }
+      } catch (e) {
+        console.warn(`[Webhook] portal_emails insert failed: ${e.message}`);
+      }
     } else if (/lead/i.test(eventType)) {
       // Mark lead status
       await dbPg.query(`

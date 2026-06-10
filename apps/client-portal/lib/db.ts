@@ -66,6 +66,80 @@ async function runMigration() {
         paid_date DATE,
         created_at TIMESTAMPTZ DEFAULT NOW()
       )`,
+
+      // ── Per-client pricing + currency ──────────────────────────────
+      `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS cost_per_lead NUMERIC(12,2) NOT NULL DEFAULT 0`,
+      `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFAULT 'GBP'`,
+
+      // ── Client deal-stage label per lead (separate from internal/PV label) ──
+      `ALTER TABLE portal_lead_data ADD COLUMN IF NOT EXISTS client_label TEXT`,
+
+      // ── Real email conversations cached from PlusVibe /unibox/emails ──
+      `CREATE TABLE IF NOT EXISTS portal_emails (
+        id TEXT PRIMARY KEY,                       -- PlusVibe message id
+        workspace_id TEXT NOT NULL,
+        lead_pv_id TEXT,                           -- PlusVibe lead _id
+        lead_email TEXT NOT NULL,                  -- join key to esp_leads.email
+        thread_id TEXT,
+        campaign_id TEXT,
+        direction TEXT NOT NULL,                   -- IN | OUT
+        subject TEXT,
+        body_html TEXT,
+        body_text TEXT,
+        content_preview TEXT,
+        from_email TEXT,
+        to_email TEXT,
+        eaccount TEXT,                             -- sending mailbox
+        pv_label TEXT,                             -- OUT_OF_OFFICE / AUTOMATIC_REPLY / etc.
+        is_unread INTEGER DEFAULT 0,
+        message_id TEXT,                           -- RFC Message-ID (for live reply threading)
+        sent_via_portal BOOLEAN DEFAULT FALSE,     -- true if composed in our portal
+        timestamp_created TIMESTAMPTZ,
+        raw JSONB,
+        synced_at TIMESTAMPTZ DEFAULT NOW()
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_portal_emails_ws_lead ON portal_emails (workspace_id, lower(lead_email))`,
+      `CREATE INDEX IF NOT EXISTS idx_portal_emails_thread ON portal_emails (thread_id)`,
+
+      // ── Lead-credit balance ledger ─────────────────────────────────
+      // type: topup (+), lead_charge (-), dispute_refund (+), adjustment (+/-)
+      // amount is signed: positive = credit, negative = debit
+      `CREATE TABLE IF NOT EXISTS portal_ledger (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        client_id UUID NOT NULL REFERENCES portal_clients(id) ON DELETE CASCADE,
+        type TEXT NOT NULL,
+        amount NUMERIC(12,2) NOT NULL,
+        lead_id TEXT,                              -- esp_leads.id for lead_charge / refund
+        description TEXT,
+        created_by TEXT,                           -- 'system' | 'admin' | 'webhook'
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )`,
+      // One charge per (client, lead) and one refund per (client, lead) — idempotency guards
+      `CREATE UNIQUE INDEX IF NOT EXISTS uq_ledger_lead_charge ON portal_ledger (client_id, lead_id) WHERE type = 'lead_charge'`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS uq_ledger_lead_refund ON portal_ledger (client_id, lead_id) WHERE type = 'dispute_refund'`,
+      `CREATE INDEX IF NOT EXISTS idx_ledger_client ON portal_ledger (client_id, created_at DESC)`,
+
+      // ── Client top-up requests (manual confirm flow) ───────────────
+      `CREATE TABLE IF NOT EXISTS portal_topup_requests (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        client_id UUID NOT NULL REFERENCES portal_clients(id) ON DELETE CASCADE,
+        amount NUMERIC(12,2) NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',    -- pending | confirmed | cancelled
+        note TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        confirmed_at TIMESTAMPTZ
+      )`,
+
+      // ── Admin notifications inbox (top-up requests, invoice-paid pings, replies) ──
+      `CREATE TABLE IF NOT EXISTS portal_notifications (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        client_id UUID REFERENCES portal_clients(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,                        -- topup_request | invoice_paid | reply_sent | dispute
+        title TEXT NOT NULL,
+        body TEXT,
+        is_read BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )`,
     ]
     for (const sql of statements) {
       await pool.query(sql)

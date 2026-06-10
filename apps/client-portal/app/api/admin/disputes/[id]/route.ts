@@ -1,10 +1,12 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { getAdminSession } from '@/lib/auth'
 import pool from '@/lib/db'
+import { refundLead } from '@/lib/balance'
 
 interface DisputeRow {
   id: string
   lead_id: string
+  client_id: string
 }
 
 // PATCH — approve or deny a dispute
@@ -19,7 +21,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   }
 
   const disputeRes = await pool.query(
-    'SELECT id, lead_id FROM portal_lead_disputes WHERE id = $1',
+    'SELECT id, lead_id, client_id FROM portal_lead_disputes WHERE id = $1',
     [id]
   )
   if (!disputeRes.rows.length) return NextResponse.json({ error: 'Not found' }, { status: 404 })
@@ -34,10 +36,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   )
 
   if (action === 'approved') {
+    // Remove from the client's lead view AND refund the lead credit (idempotent).
     await pool.query(
       "UPDATE esp_leads SET label = 'NOT_INTERESTED' WHERE id = $1",
       [dispute.lead_id]
     )
+    await refundLead(dispute.client_id, dispute.lead_id)
   }
 
   return NextResponse.json({ ok: true })

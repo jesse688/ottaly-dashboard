@@ -11,6 +11,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     workspaceId?: string
     companyName?: string
     active?: boolean
+    costPerLead?: number
+    currency?: string
   }
 
   const sets: string[] = []
@@ -21,6 +23,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (body.workspaceId !== undefined) { values.push(body.workspaceId); sets.push(`workspace_id = $${values.length}`) }
   if (body.active !== undefined) { values.push(body.active); sets.push(`active = $${values.length}`) }
   if (body.password !== undefined) { values.push(sha256(body.password)); sets.push(`password_hash = $${values.length}`) }
+  if (body.costPerLead !== undefined) { values.push(body.costPerLead); sets.push(`cost_per_lead = $${values.length}`) }
+  if (body.currency !== undefined) { values.push(body.currency); sets.push(`currency = $${values.length}`) }
 
   if (!sets.length) return NextResponse.json({ error: 'Nothing to update' }, { status: 400 })
 
