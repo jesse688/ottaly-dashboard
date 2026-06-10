@@ -2682,8 +2682,10 @@ async function fetchWorkspaceProviderMix(wsId, maxPages = PROVIDER_MIX_MAX_PAGES
     if (!leads.length) break;
     for (const l of leads) {
       const b = buckets[pvMxToProviderBucket(l.mx)];
-      // sent_step = number of sequence emails sent to this lead (≈ emails sent).
-      b.sent    += Number(l.sent_step || 0) || 1;
+      // Count LEADS per provider (not sent_step). sent_step weighting inflated
+      // providers whose leads got more follow-ups (Microsoft ran ~2x high);
+      // plain lead-count distribution matched PlusVibe's email split closely.
+      b.sent    += 1;
       b.replies += Number(l.replied_count || 0);
       b.bounces += (l.bounce_msg ? 1 : 0);
     }
