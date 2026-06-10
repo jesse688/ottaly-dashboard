@@ -2927,14 +2927,20 @@ async function warmPerformanceCache() {
   return performanceWarmPromise;
 }
 
-// Load persisted cache from DB first so pages show data instantly on restart
+// Load persisted cache from DB so pages show data instantly on restart.
+// Auto-warming is DISABLED by design: the cache is built ONCE (here, only if
+// there's no persisted snapshot) and thereafter rebuilt solely when the user
+// clicks "Refresh data" (/api/stats/refresh). The old 2-min interval + 10-min
+// TTL meant the cache re-fetched constantly ("keeps wanting to cache") and,
+// against PlusVibe's 600ms rate limit, never settled. Now it's a stored
+// snapshot the user controls.
 setTimeout(async () => {
   await loadPerfCacheFromDb();
-  // Then schedule the first warm to refresh today's data + fill any gaps
-  setTimeout(warmPerformanceCache, 30000);
+  if (performanceCache.dailyStats.size === 0) {
+    // Cold start with no persisted data — populate the snapshot once.
+    warmPerformanceCache().catch(() => {});
+  }
 }, 10000);
-// Keep warming every 2 min after that
-setInterval(warmPerformanceCache, PERF_WARM_INTERVAL_MS);
 
 function readReadyPerformanceCache(wsIds, dates) {
   const daily = {};
@@ -3117,17 +3123,12 @@ app.get('/api/stats/summary', requireSession, async (req, res) => {
     const missing = !anyDataAtAll || wsIds.some(wsId =>
       wsHasAnyData[wsId] && dates.some(date => !performanceCache.dailyStats.has(`${wsId}|${date}`))
     );
-    // Stale (present but past TTL) — refresh in the background, do NOT block.
-    const anyStale = wsIds.some(wsId =>
-      wsHasAnyData[wsId] && dates.some(date => {
-        const cached = performanceCache.dailyStats.get(`${wsId}|${date}`);
-        const ttl = date === today ? PERF_TODAY_TTL_MS : PERF_OLD_TTL_MS;
-        return cached && Date.now() - cached.savedAt > ttl;
-      })
-    );
     const partial = missing;
-    if ((missing || anyStale) && !performanceCache.warming) {
-      // Background refresh; warmPerformanceCache fetches daily stats first.
+    // Auto-warm ONLY when data is genuinely absent (cold start, or a brand-new
+    // calendar day with no entries yet) — never merely because a snapshot is
+    // past its TTL. Routine staleness is left alone; the user re-fetches on
+    // demand via "Refresh data". This is what stops the constant re-caching.
+    if (missing && !performanceCache.warming) {
       warmPerformanceCache().catch(() => {});
     }
 
