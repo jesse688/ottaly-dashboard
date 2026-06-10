@@ -3492,39 +3492,60 @@ app.get('/api/debug/pv-provider-probe', requireSession, async (req, res) => {
       chartRowKeys: Object.keys(sampleRow),
     };
 
-    // The param is confirmed: `provider`. Now hunt the exact VALUE for each
-    // recipient bucket — GOOGLE_WORKSPACE returned 0, which is suspicious, so
-    // try every plausible Google/Microsoft/other spelling and see which are
-    // non-zero. Mutual-exclusivity: the real buckets should sum to baseline.
-    const candidateValues = [
-      'REGULAR_ACCOUNT',
-      'MICROSOFT365', 'MICROSOFT', 'OUTLOOK', 'OFFICE365', 'OFFICE_365', 'O365', 'EXCHANGE',
-      'GOOGLE_WORKSPACE', 'GOOGLE', 'GMAIL', 'GSUITE', 'G_SUITE', 'GOOGLE_APPS', 'GOOGLEAPPS',
-      'YAHOO', 'ZOHO', 'OTHER', 'UNKNOWN',
+    // `provider=GOOGLE_WORKSPACE/MICROSOFT365/REGULAR_ACCOUNT` turned out to be
+    // the SENDER mailbox split (Google=0, MS=19746, Regular=20589). We want the
+    // RECIPIENT split (UI shows Google=22604, Other=15812, Microsoft=2489 for
+    // ButterflyEco). Hunt the recipient filter: try many (param, value) combos
+    // and flag any whose sent count matches the known recipient targets.
+    const TARGETS = { google: 22604, other: 15812, microsoft: 2489 };
+    const near = (n) => {
+      if (typeof n !== 'number') return null;
+      for (const [k, t] of Object.entries(TARGETS)) {
+        if (Math.abs(n - t) <= Math.max(800, t * 0.08)) return k.toUpperCase();
+      }
+      return null;
+    };
+
+    // Param-name candidates for the RECIPIENT filter (the ones that 400'd before
+    // are excluded; these are fresh guesses), each tested with a Google-ish value.
+    const recipientParams = [
+      'lead_provider', 'to_provider', 'recipient', 'recipient_mx', 'lead_mx_provider',
+      'mx_status', 'email_type', 'contact_provider', 'lead_type', 'mailbox_provider',
+      'lead_email_provider', 'to_mx', 'recipient_type', 'lead_email_server', 'email_host',
+      'lead_host', 'lead_email_type', 'esp_type', 'lead_esp', 'to_type',
     ];
-    const valueResults = {};
-    for (const v of candidateValues) {
+    // Also re-test the confirmed `provider` param with label-style / lowercase
+    // values in case recipient uses the same param with different values.
+    const providerValueTests = ['google', 'microsoft', 'other', 'Google', 'Microsoft', 'Other', 'OTHER_PROVIDERS'];
+
+    const probes = [];
+    for (const p of recipientParams) {
+      for (const v of ['GOOGLE_WORKSPACE', 'google', 'GOOGLE']) {
+        try {
+          const raw = await pvFetch(`${base}&${p}=${encodeURIComponent(v)}`);
+          const sent = sumSent(raw);
+          const match = near(sent);
+          probes.push({ q: `${p}=${v}`, sent, ...(match ? { MATCH: match } : {}) });
+        } catch (e) { /* 400 = invalid param, skip silently */ }
+      }
+    }
+    for (const v of providerValueTests) {
       try {
         const raw = await pvFetch(`${base}&provider=${encodeURIComponent(v)}`);
-        valueResults[v] = sumSent(raw);
-      } catch (e) { valueResults[v] = `ERR ${e.message.slice(0, 40)}`; }
+        const sent = sumSent(raw);
+        const match = near(sent);
+        probes.push({ q: `provider=${v}`, sent, ...(match ? { MATCH: match } : {}) });
+      } catch (e) { probes.push({ q: `provider=${v}`, sent: `ERR400` }); }
     }
-    // Which values are non-zero (real buckets) and do they sum to baseline?
-    const nonZero = Object.entries(valueResults)
-      .filter(([, n]) => typeof n === 'number' && n > 0)
-      .map(([k, n]) => ({ value: k, sent: n }));
-    const nonZeroSum = nonZero.reduce((a, b) => a + b.sent, 0);
 
+    const matches = probes.filter(p => p.MATCH);
     res.json({
       workspace_id: wsId, start, end,
       baseline_total_sent: baseline,
-      param: 'provider',
-      shape,
-      valueResults,
-      nonZero,
-      nonZeroSum,
-      sumsToBaseline: Math.abs(nonZeroSum - baseline) <= baseline * 0.02,
-      hint: 'Non-zero values are the real recipient buckets. If they sum to baseline, that is the complete partition. Identify which value is Google.',
+      recipient_targets: TARGETS,
+      matches,
+      allProbes: probes.filter(p => typeof p.sent === 'number'),
+      hint: 'A row in `matches` (sent ≈ a recipient target) reveals the recipient param+value. If matches is empty, the recipient filter is a POST body or different endpoint — capture the network request.',
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
