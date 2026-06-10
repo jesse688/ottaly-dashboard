@@ -12264,6 +12264,41 @@ app.post('/api/contacts/mx-reseed', requireSession, async (req, res) => {
   }
 });
 
+// Live-MX scanner: classify every NULL-provider contact via real DNS MX
+// lookups (the same signal PlusVibe uses on import; no verification needed).
+// Runs in the BACKGROUND because a full scan is minutes long — poll
+// /api/contacts/mx-coverage to watch the unknown count fall and
+// /api/contacts/mx-scan (GET) for live job stats.
+let _mxScanJob = null; // { running, startedAt, stats, error, finishedAt }
+app.post('/api/contacts/mx-scan', requireSession, async (req, res) => {
+  const dbPg = req.app.locals.pgDb;
+  if (!dbPg) return res.status(503).json({ error: 'Database unavailable' });
+  if (!dbPg.scanContactsMxProvider) {
+    return res.status(501).json({ error: 'scan not supported on this DB backend' });
+  }
+  if (_mxScanJob?.running) {
+    return res.status(409).json({ error: 'scan already running', stats: _mxScanJob.stats });
+  }
+  const maxDomains  = Math.min(parseInt(req.body?.maxDomains || 200000, 10), 500000);
+  const concurrency = Math.min(parseInt(req.body?.concurrency || 20, 10), 50);
+
+  _mxScanJob = { running: true, startedAt: Date.now(), stats: null, error: null, finishedAt: null };
+  // Fire-and-forget; the request returns immediately.
+  dbPg.scanContactsMxProvider({
+    maxDomains, concurrency,
+    onProgress: (s) => { _mxScanJob.stats = s; },
+  })
+    .then((s) => { _mxScanJob = { ..._mxScanJob, running: false, stats: s, finishedAt: Date.now() };
+                   console.log('[mx-scan] done', JSON.stringify(s)); })
+    .catch((e) => { _mxScanJob = { ..._mxScanJob, running: false, error: e.message, finishedAt: Date.now() };
+                    console.error('[mx-scan] failed', e.message); });
+
+  res.json({ ok: true, started: true, maxDomains, concurrency });
+});
+app.get('/api/contacts/mx-scan', requireSession, (req, res) => {
+  res.json(_mxScanJob || { running: false, stats: null });
+});
+
 app.get('/api/contacts/push-jobs', (req, res) => {
   const jobs = [...pushJobs.values()]
     .sort((a, b) => b.created_at - a.created_at)

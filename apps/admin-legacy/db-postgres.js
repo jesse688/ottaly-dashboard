@@ -1,6 +1,7 @@
 const { Pool } = require('pg');
 const path = require('path');
 const fs = require('fs');
+const dnsPromises = require('dns').promises;
 
 class PostgresDatabase {
   constructor() {
@@ -2538,6 +2539,109 @@ class PostgresDatabase {
       if (n === 0) break;
     }
     return { recovered: rec.recovered, domainsSeeded: seed.rowCount || 0, contactsFilled: filled };
+  }
+
+  // Live DNS MX lookup for ONE domain → 'email_google' | 'email_outlook' |
+  // 'email_other' | null. This is the same method PlusVibe uses on import
+  // (resolve the domain's real mail servers; no verification needed) and is
+  // ground truth for provider — the actual servers receiving the domain's mail.
+  //
+  // Accuracy fix vs server.js lookupMxProvider(): a failed/empty resolve
+  // returns NULL, NOT 'email_other'. "DNS didn't answer" is unknown, not a real
+  // provider — mislabelling it 'Other' would poison Google/Microsoft domains on
+  // a transient timeout. NULL lets the next scan retry it.
+  async resolveDomainMxProvider(domain) {
+    if (!domain) return null;
+    let records;
+    try {
+      records = await dnsPromises.resolveMx(domain);
+    } catch (e) {
+      // ENOTFOUND / ENODATA = domain has no MX (dead/parked) → genuinely 'other'
+      // (it exists in our data but routes mail nowhere standard). SERVFAIL /
+      // TIMEOUT = transient → NULL so we retry.
+      if (e.code === 'ENOTFOUND' || e.code === 'ENODATA') return 'email_other';
+      return null;
+    }
+    if (!records || !records.length) return 'email_other';
+    const top = records.sort((a, b) => a.priority - b.priority)[0]?.exchange?.toLowerCase() || '';
+    if (!top) return 'email_other';
+    if (/google|gmail|googlemail/.test(top)) return 'email_google';
+    if (/outlook|microsoft|protection\.outlook|office365|hotmail/.test(top)) return 'email_outlook';
+    return 'email_other';
+  }
+
+  // Bulk scanner: live-MX-classify every contact that still has a NULL
+  // mx_provider, working one DISTINCT domain at a time (MX is a domain
+  // property, so one DNS lookup classifies every contact on it). Idempotent
+  // and resumable — re-run to pick up domains that previously timed out
+  // (they stay NULL, never get mislabelled).
+  //
+  // opts: { maxDomains, concurrency, onProgress }
+  // Returns { domainsScanned, domainsResolved, domainsFailed, contactsUpdated,
+  //           byProvider, exhausted }.
+  async scanContactsMxProvider(opts = {}) {
+    const maxDomains  = opts.maxDomains  || 100000;
+    const concurrency = Math.min(opts.concurrency || 20, 50);
+    const BATCH       = 500; // domains pulled from the DB per round
+
+    const stats = {
+      domainsScanned: 0, domainsResolved: 0, domainsFailed: 0,
+      contactsUpdated: 0,
+      byProvider: { email_google: 0, email_outlook: 0, email_other: 0 },
+      exhausted: false,
+    };
+    // Domains we've already attempted this run. Failed (transient) domains stay
+    // NULL in the DB, so the next SELECT would return them again — without this
+    // set the loop would spin forever on a batch that all timed out. We exclude
+    // attempted domains from the query so each round makes forward progress;
+    // a separate re-run (fresh set) retries the failures later.
+    const attempted = new Set();
+
+    while (stats.domainsScanned < maxDomains) {
+      // Distinct domains that still have a NULL-provider contact AND haven't
+      // been attempted yet this run. setDomainMxProvider fills resolved domains
+      // so they drop out naturally; the NOT-IN guard drops failed ones.
+      const skip = [...attempted];
+      const { rows } = await this.query(`
+        SELECT DISTINCT LOWER(SPLIT_PART(email, '@', 2)) AS domain
+        FROM contacts
+        WHERE mx_provider IS NULL
+          AND email IS NOT NULL
+          AND POSITION('@' IN email) > 0
+          AND ($2::text[] IS NULL OR LOWER(SPLIT_PART(email, '@', 2)) <> ALL($2))
+        LIMIT $1
+      `, [Math.min(BATCH, maxDomains - stats.domainsScanned), skip.length ? skip : null]);
+
+      if (!rows.length) { stats.exhausted = true; break; }
+      rows.forEach(r => r.domain && attempted.add(r.domain));
+
+      // Resolve this batch with bounded DNS concurrency.
+      let cursor = 0;
+      const worker = async () => {
+        while (cursor < rows.length) {
+          const domain = rows[cursor++]?.domain;
+          if (!domain) continue;
+          stats.domainsScanned++;
+          let provider = null;
+          try { provider = await this.resolveDomainMxProvider(domain); }
+          catch { provider = null; }
+          if (!provider) { stats.domainsFailed++; continue; }
+          try {
+            const { contactsUpdated } = await this.setDomainMxProvider(domain, provider);
+            stats.domainsResolved++;
+            stats.contactsUpdated += contactsUpdated;
+            stats.byProvider[provider] = (stats.byProvider[provider] || 0) + contactsUpdated;
+          } catch (e) {
+            stats.domainsFailed++;
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: concurrency }, worker));
+
+      if (opts.onProgress) opts.onProgress({ ...stats });
+    }
+
+    return stats;
   }
 
   detectEmailProvider(technologiesStr) {
