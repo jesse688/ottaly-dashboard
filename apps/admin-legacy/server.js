@@ -12153,6 +12153,7 @@ app.get('/api/contacts/mx-coverage', requireSession, async (req, res) => {
       unknown:             +row.unknown,
       verifiedNoProvider:  +row.verified_no_provider,
       domainsCached:       +dom.rows[0].n,
+      lastSeedError:       dbPg._lastSeedError || null,
     });
   } catch (e) {
     res.status(500).json({ error: e.message });

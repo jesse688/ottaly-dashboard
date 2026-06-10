@@ -2475,21 +2475,37 @@ class PostgresDatabase {
     if (rec.recovered) console.log(`[seed] Recovered mx_provider from verified tags for ${rec.recovered} contacts`);
 
     // Per domain, take the most-recently-verified contact's provider as truth.
-    const seed = await this.query(`
-      INSERT INTO domain_mx_cache (domain, mx_provider, resolved_at)
-      SELECT domain, mx_provider, last_at FROM (
-        SELECT DISTINCT ON (LOWER(SPLIT_PART(email, '@', 2)))
-          LOWER(SPLIT_PART(email, '@', 2)) AS domain,
-          mx_provider,
-          email_verified_at AS last_at
-        FROM contacts
-        WHERE mx_provider IN ('email_google','email_outlook','email_other')
-          AND email_verified_at IS NOT NULL
-          AND email IS NOT NULL AND position('@' in email) > 0
-        ORDER BY LOWER(SPLIT_PART(email, '@', 2)), email_verified_at DESC
-      ) s
-      ON CONFLICT (domain) DO NOTHING
-    `, [], { statementTimeoutMs: 120000 });
+    // Use a GROUP BY with a (verified_at, provider) argmax instead of DISTINCT
+    // ON: the DISTINCT ON forces a full functional sort of all ~115k matching
+    // rows in one statement, which was timing out and aborting the seed
+    // (leaving domainsCached=0 even after recovery succeeded). The aggregate
+    // form plans as a hash aggregate — far cheaper — and we surface any error
+    // instead of letting it abort silently.
+    let seedCount = 0;
+    try {
+      const seed = await this.query(`
+        INSERT INTO domain_mx_cache (domain, mx_provider, resolved_at)
+        SELECT domain,
+               (ARRAY_AGG(mx_provider ORDER BY email_verified_at DESC))[1] AS mx_provider,
+               MAX(email_verified_at)                                      AS resolved_at
+        FROM (
+          SELECT LOWER(SPLIT_PART(email, '@', 2)) AS domain,
+                 mx_provider,
+                 email_verified_at
+          FROM contacts
+          WHERE mx_provider IN ('email_google','email_outlook','email_other')
+            AND email_verified_at IS NOT NULL
+            AND email IS NOT NULL AND POSITION('@' IN email) > 0
+        ) v
+        GROUP BY domain
+        ON CONFLICT (domain) DO NOTHING
+      `, [], { statementTimeoutMs: 180000 });
+      seedCount = seed.rowCount || 0;
+    } catch (e) {
+      console.warn(`[seed] domain cache INSERT failed: ${e.message}`);
+      this._lastSeedError = e.message;
+    }
+    const seed = { rowCount: seedCount };
 
     // Fan the seeded providers out to contacts that have no mx_provider yet but
     // whose domain is now known. Batched by id to stay under statement_timeout
