@@ -1,0 +1,11 @@
+{
+  "remoteName": "origin",
+  "projects": [
+    {
+      "id": "prj_kZEAFW3Pfor3hcoQvYrRVEHBSAxF",
+      "name": "ottaly-dashboard-admin-new",
+      "directory": "apps/admin-new",
+      "orgId": "team_QCQ15gbinmwjTG9m8UXU2bbi"
+    }
+  ]
+}

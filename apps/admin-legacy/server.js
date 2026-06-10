@@ -3503,74 +3503,44 @@ app.get('/api/debug/pv-provider-probe', requireSession, async (req, res) => {
     // x-api-key authenticates against api.pipl.ai, and pulls every recipient
     // value so we can map value->label empirically (match to Google 22604,
     // Microsoft 2489, Other 15812 for ButterflyEco/30d).
-    const hdr = (raw) => raw?.data?.header || raw?.header || {};
-    const sentOf = (raw) => {
-      const h = hdr(raw);
-      if (typeof h.total_sent_count === 'number') return h.total_sent_count;
-      return sumSent(raw?.data?.chart ? raw.data : raw); // fallback to chart sum
-    };
-    const recVal = (raw) => {
-      const h = hdr(raw);
-      return { sent: h.total_sent_count, replies: h.total_reply_count, ooo: h.total_ooo_reply_count, bounces: h.total_bounce_count };
-    };
-    const values = ['GOOGLE_WORKSPACE', 'MICROSOFT365', 'REGULAR_ACCOUNT', 'PERSONAL_GMAIL'];
-    const targets = { google: 22604, microsoft: 2489, other: 15812 };
-
-    // ── PRIMARY: the v2 path on the PUBLIC plusvibe.ai API (our key works here)
-    // /account/email-stats had no recp filter, but the captured request used
-    // /email-accounts-v2/email-stats — that path may exist on plusvibe.ai too.
-    const pvV2 = {};
-    let pvV2Works = false;
+    // pipl.ai recipient endpoint rejects our key under every scheme; v2 path
+    // 404s on plusvibe.ai. So assess PATH B: does the PUBLIC /lead/workspace-leads
+    // endpoint (our key works) carry each lead's recipient `mx` field? If yes, we
+    // can sync mx per lead and compute the recipient split ourselves — durable.
+    let leadShape = null, mxField = null, mxSample = [], mxDistribution = {};
     try {
-      const baseV2 = await pvFetch(`/email-accounts-v2/email-stats?workspace_id=${wsId}&start_date=${start}&end_date=${end}`);
-      pvV2.__baseline = recVal(baseV2);
-      pvV2Works = typeof pvV2.__baseline.sent === 'number';
-      if (pvV2Works) {
-        for (const v of values) {
-          try {
-            const raw = await pvFetch(`/email-accounts-v2/email-stats?workspace_id=${wsId}&start_date=${start}&end_date=${end}&recp_provider=${encodeURIComponent(v)}`);
-            pvV2[v] = recVal(raw);
-          } catch (e) { pvV2[v] = `ERR ${e.message.slice(0,40)}`; }
+      const raw = await pvFetch(`/lead/workspace-leads?workspace_id=${wsId}&page=1&limit=50`);
+      const leads = Array.isArray(raw) ? raw : (raw?.leads || raw?.data || raw?.docs || []);
+      const first = leads[0] || {};
+      leadShape = { count: leads.length, firstLeadKeys: Object.keys(first) };
+      // Find the field holding the recipient provider (mx / GOOGLE_WORKSPACE etc.)
+      const candidates = ['mx', 'mx_provider', 'recp_provider', 'recipient_provider', 'provider', 'email_provider'];
+      for (const c of candidates) {
+        const vals = leads.map(l => l?.[c]).filter(Boolean);
+        if (vals.length) { mxField = c; mxSample = vals.slice(0, 8); break; }
+      }
+      // Also scan nested for any value that looks like the known mx vocabulary.
+      if (!mxField) {
+        for (const [k, v] of Object.entries(first)) {
+          if (typeof v === 'string' && /GOOGLE_WORKSPACE|MICROSOFT365|REGULAR_ACCOUNT|PERSONAL_GMAIL/.test(v)) { mxField = k; mxSample = [v]; break; }
         }
       }
-    } catch (e) { pvV2.__error = e.message.slice(0, 60); }
-
-    // ── FALLBACK: pipl.ai with alternate auth header schemes (x-api-key 401'd).
-    const piplAuthTests = {};
-    const schemes = {
-      'authorization_bearer': { Authorization: `Bearer ${PLUSVIBE_KEY}` },
-      'api-key':              { 'api-key': PLUSVIBE_KEY },
-      'apikey':               { apikey: PLUSVIBE_KEY },
-      'x-pipl-key':           { 'x-pipl-key': PLUSVIBE_KEY },
-    };
-    const piplUrl = `https://api.pipl.ai/v1/email-accounts-v2/email-stats?workspace_id=${wsId}&start_date=${start}&end_date=${end}`;
-    for (const [name, headers] of Object.entries(schemes)) {
-      try {
-        const r = await fetch(piplUrl, { headers });
-        let b = null; try { b = await r.json(); } catch {}
-        piplAuthTests[name] = { status: r.status, msg: b?.message, sent: hdr(b).total_sent_count };
-      } catch (e) { piplAuthTests[name] = { err: e.message.slice(0, 40) }; }
-    }
-
-    // Map values to labels if we got real numbers from the v2 path.
-    const valueToLabel = {};
-    for (const v of values) {
-      const s = pvV2[v]?.sent;
-      if (typeof s !== 'number') continue;
-      for (const [label, t] of Object.entries(targets)) {
-        if (Math.abs(s - t) <= Math.max(2500, t * 0.15)) valueToLabel[v] = label;
+      if (mxField) {
+        for (const l of leads) { const v = l[mxField] || 'NULL'; mxDistribution[v] = (mxDistribution[v] || 0) + 1; }
       }
-    }
+    } catch (e) { leadShape = `ERR ${e.message.slice(0, 50)}`; }
 
     res.json({
       workspace_id: wsId, start, end,
       plusvibe_baseline_total_sent: baseline,
-      pv_v2_works: pvV2Works,
-      pvV2,
-      valueToLabel,
-      pipl_auth_tests: piplAuthTests,
-      recipient_targets: targets,
-      hint: 'If pv_v2_works is true, /email-accounts-v2/email-stats works on plusvibe.ai with our key — durable, build it. valueToLabel maps recp_provider->label. Otherwise check pipl_auth_tests for a 200 scheme.',
+      pathA_pipl: 'BLOCKED — pipl.ai needs session auth; our key 401s under all schemes',
+      pathB_lead_mx: {
+        leadShape,
+        mxFieldFound: mxField,
+        mxSample,
+        mxDistribution,
+      },
+      hint: 'If mxFieldFound is set (e.g. "mx") and mxSample shows GOOGLE_WORKSPACE/MICROSOFT365/etc., PATH B is viable: sync this field per lead and compute the recipient split durably with our key.',
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
