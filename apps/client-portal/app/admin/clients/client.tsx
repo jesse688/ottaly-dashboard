@@ -142,6 +142,12 @@ export function AdminClientsClient() {
     await fetch(`/api/admin/clients/${c.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: !c.active }) })
     fetch('/api/admin/clients').then(r => r.json()).then(setClients)
   }
+  async function viewAsClient(c: PortalClient) {
+    // Mint a client session for this client, then open their portal in a new tab.
+    const res = await fetch(`/api/admin/clients/${c.id}/impersonate`, { method: 'POST' })
+    if (res.ok) window.open('/unibox', '_blank')
+    else alert('Could not open client view')
+  }
   async function handleResetPassword(id: string) {
     if (!resetPassword) return
     await fetch(`/api/admin/clients/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: resetPassword }) })
@@ -400,6 +406,8 @@ export function AdminClientsClient() {
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2 flex-wrap">
+                            <button onClick={() => viewAsClient(client)} className="text-xs font-medium text-emerald-600 hover:text-emerald-800">View as</button>
+                            <span className="text-gray-200">|</span>
                             <button onClick={() => setEditId(editId===client.id?null:client.id)} className="text-xs text-indigo-600 hover:text-indigo-800">Password</button>
                             <span className="text-gray-200">|</span>
                             <button onClick={() => openSettings(client)} className="text-xs text-indigo-600 hover:text-indigo-800">Settings</button>

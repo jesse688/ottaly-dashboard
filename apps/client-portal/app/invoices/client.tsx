@@ -52,8 +52,11 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
     setTimeout(() => setTopupMsg(''), 6000)
   }
 
-  const roi = summary && summary.total_paid > 0 && summary.total_deal_value > 0
-    ? Math.round((summary.total_deal_value - summary.total_paid) / summary.total_paid * 100) : null
+  // Pay-per-lead ROI: deal value vs what the delivered leads cost.
+  const leadsDelivered = bal ? bal.ledger.filter(l => l.type === 'lead_charge').length : 0
+  const spent = bal ? leadsDelivered * bal.costPerLead : 0
+  const dealValue = summary?.total_deal_value ?? 0
+  const roi = spent > 0 ? Math.round((dealValue - spent) / spent * 100) : null
 
   return (
     <div className="min-h-screen bg-[#f7f8fc]" style={{ fontFamily: 'system-ui,-apple-system,sans-serif' }}>
@@ -71,16 +74,17 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
       <div className="max-w-5xl mx-auto p-6">
         {topupMsg && <div className="mb-4 px-4 py-2.5 bg-green-50 border border-green-200 text-green-800 text-sm rounded-lg">{topupMsg}</div>}
 
-        {/* Balance hero */}
-        <div className="grid grid-cols-3 gap-4 mb-6">
-          <div className="col-span-1 bg-gradient-to-br from-indigo-600 to-indigo-700 rounded-2xl p-5 text-white">
-            <p className="text-xs text-indigo-200 uppercase tracking-wider">Lead balance</p>
-            <p className="text-3xl font-bold mt-1">{bal ? fmt(bal.balance) : '—'}</p>
-            {bal && bal.costPerLead > 0 && <p className="text-xs text-indigo-200 mt-1">{fmt(bal.costPerLead)} per lead · ~{Math.max(0, Math.floor(bal.balance / bal.costPerLead))} leads left</p>}
-            <button onClick={() => setShowTopup(true)} className="mt-3 w-full py-2 bg-white text-indigo-700 text-sm font-semibold rounded-lg hover:bg-indigo-50">Top up balance</button>
+        {/* Balance hero + metrics */}
+        <div className="grid grid-cols-4 gap-4 mb-6">
+          <div className="bg-gradient-to-br from-indigo-600 to-indigo-700 rounded-2xl p-5 text-white">
+            <p className="text-xs text-indigo-200 uppercase tracking-wider">Leads left</p>
+            <p className="text-4xl font-bold mt-1">{bal ? bal.balance.toLocaleString() : '—'}</p>
+            <p className="text-xs text-indigo-200 mt-1">{bal && bal.costPerLead > 0 ? `${fmt(bal.costPerLead)} per lead` : 'Pre-paid lead credits'}</p>
+            <button onClick={() => setShowTopup(true)} className="mt-3 w-full py-2 bg-white text-indigo-700 text-sm font-semibold rounded-lg hover:bg-indigo-50">Top up leads</button>
           </div>
-          <Card label="Total spent" value={summary ? fmt(summary.total_paid) : '—'} sub="Paid invoices" />
-          <Card label="Deal pipeline" value={summary ? fmt(summary.total_deal_value) : '—'} sub={roi !== null ? `ROI ${roi > 0 ? '+' : ''}${roi}%` : 'Set deal values on leads'} accent={roi !== null && roi > 0} />
+          <Card label="Spent on leads" value={fmt(spent)} sub={`${leadsDelivered} leads delivered`} />
+          <Card label="Deal pipeline" value={fmt(dealValue)} sub="Total deal value" />
+          <Card label="ROI" value={roi !== null ? `${roi > 0 ? '+' : ''}${roi}%` : '—'} sub={roi !== null ? (roi > 0 ? 'Profit on spend' : 'Loss on spend') : 'Add deal values to leads'} accent={roi !== null && roi > 0} />
         </div>
 
         {/* Ledger */}
@@ -129,10 +133,11 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
       {showTopup && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setShowTopup(false)}>
           <div className="bg-white rounded-2xl p-5 w-full max-w-md" onClick={e => e.stopPropagation()}>
-            <h3 className="text-base font-semibold text-gray-900 mb-1">Top up lead balance</h3>
-            <p className="text-sm text-gray-500 mb-3">Request a top-up and we&apos;ll confirm + credit your balance.</p>
-            <label className="block text-xs text-gray-500 mb-1">Amount (£)</label>
-            <input type="number" min="0" value={topupAmt} onChange={e => setTopupAmt(e.target.value)} placeholder="1000" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 mb-3" />
+            <h3 className="text-base font-semibold text-gray-900 mb-1">Top up leads</h3>
+            <p className="text-sm text-gray-500 mb-3">Request more lead credits and we&apos;ll confirm &amp; add them to your balance.</p>
+            <label className="block text-xs text-gray-500 mb-1">Number of leads</label>
+            <input type="number" min="0" value={topupAmt} onChange={e => setTopupAmt(e.target.value)} placeholder="25" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 mb-1" />
+            {bal && bal.costPerLead > 0 && Number(topupAmt) > 0 && <p className="text-xs text-gray-400 mb-3">≈ {fmt(Number(topupAmt) * bal.costPerLead)} at {fmt(bal.costPerLead)}/lead</p>}
             <label className="block text-xs text-gray-500 mb-1">Note (optional)</label>
             <input value={topupNote} onChange={e => setTopupNote(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 mb-4" />
             <div className="flex gap-2 justify-end">

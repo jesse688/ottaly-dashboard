@@ -140,6 +140,18 @@ async function runMigration() {
         is_read BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMPTZ DEFAULT NOW()
       )`,
+
+      // ── One-time migrations marker table ───────────────────────────
+      `CREATE TABLE IF NOT EXISTS portal_meta (key TEXT PRIMARY KEY, created_at TIMESTAMPTZ DEFAULT NOW())`,
+      // The ledger switched from money units to LEAD-COUNT units. Wipe any
+      // pre-existing money-denominated rows once so the balance rebuilds cleanly
+      // (lead_charges re-reconcile as -1 each; top-ups are re-added in leads).
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM portal_meta WHERE key = 'ledger_lead_units_v1') THEN
+           DELETE FROM portal_ledger;
+           INSERT INTO portal_meta(key) VALUES ('ledger_lead_units_v1');
+         END IF;
+       END $$;`,
     ]
     for (const sql of statements) {
       await pool.query(sql)

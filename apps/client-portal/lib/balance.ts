@@ -1,7 +1,8 @@
 import pool from './db'
 
-// The lead-credit balance is the signed sum of all ledger rows:
-//   topup (+) · dispute_refund (+) · adjustment (+/-) · lead_charge (-)
+// The lead balance is a COUNT OF LEADS (not money). Signed sum of ledger rows:
+//   topup (+N leads) · dispute_refund (+1) · adjustment (+/-) · lead_charge (-1)
+// cost_per_lead (£) is only used to value top-ups / show £ alongside — never the unit.
 export async function getBalance(clientId: string): Promise<number> {
   const r = await pool.query(
     `SELECT COALESCE(SUM(amount), 0) AS balance FROM portal_ledger WHERE client_id = $1`,
@@ -20,8 +21,9 @@ export async function getLedger(clientId: string, limit = 100) {
   return r.rows
 }
 
-// Ensure exactly one lead_charge exists per delivered (INTERESTED) lead for this
-// client. Idempotent via uq_ledger_lead_charge. No-op when cost_per_lead = 0.
+// Ensure exactly one lead_charge (-1 lead) exists per delivered (INTERESTED) lead
+// for this client. Idempotent via uq_ledger_lead_charge. Gated by cost_per_lead>0,
+// i.e. the lead balance only counts down once you've set up pricing for the client.
 // Returns number of new charges created.
 export async function reconcileLeadCharges(clientId: string): Promise<number> {
   const c = await pool.query(
@@ -30,19 +32,17 @@ export async function reconcileLeadCharges(clientId: string): Promise<number> {
   )
   const row = c.rows[0]
   if (!row) return 0
-  const cost = Number(row.cost_per_lead ?? 0)
-  if (cost <= 0) return 0
+  if (Number(row.cost_per_lead ?? 0) <= 0) return 0
 
-  // Insert a -cost charge for every INTERESTED plusvibe lead in the workspace
-  // that doesn't already have one. ON CONFLICT keeps it idempotent.
+  // -1 lead for every INTERESTED plusvibe lead in the workspace without a charge.
   const res = await pool.query(
     `INSERT INTO portal_ledger (client_id, type, amount, lead_id, description, created_by)
-     SELECT $1, 'lead_charge', $2, l.id,
+     SELECT $1, 'lead_charge', -1, l.id,
             'Lead delivered: ' || COALESCE(l.first_name,'') || ' ' || COALESCE(l.last_name,'') ||
             CASE WHEN l.company_name IS NOT NULL THEN ' (' || l.company_name || ')' ELSE '' END,
             'system'
        FROM esp_leads l
-      WHERE l.workspace_id = $3
+      WHERE l.workspace_id = $2
         AND l.source = 'plusvibe'
         AND l.label = 'INTERESTED'
         AND NOT EXISTS (
@@ -50,29 +50,27 @@ export async function reconcileLeadCharges(clientId: string): Promise<number> {
            WHERE pl.client_id = $1 AND pl.lead_id = l.id AND pl.type = 'lead_charge'
         )
      ON CONFLICT (client_id, lead_id) WHERE type = 'lead_charge' DO NOTHING`,
-    [clientId, -cost, row.workspace_id]
+    [clientId, row.workspace_id]
   )
   return res.rowCount ?? 0
 }
 
-// Credit the cost back when a non-lead dispute is approved. Idempotent.
+// Credit +1 lead back when a non-lead dispute is approved. Idempotent.
 export async function refundLead(clientId: string, leadId: string): Promise<void> {
-  const c = await pool.query(`SELECT cost_per_lead FROM portal_clients WHERE id = $1`, [clientId])
-  const cost = Number(c.rows[0]?.cost_per_lead ?? 0)
-  if (cost <= 0) return
   await pool.query(
     `INSERT INTO portal_ledger (client_id, type, amount, lead_id, description, created_by)
-     VALUES ($1, 'dispute_refund', $2, $3, 'Refund: non-lead approved', 'admin')
+     VALUES ($1, 'dispute_refund', 1, $2, 'Refund: non-lead approved', 'admin')
      ON CONFLICT (client_id, lead_id) WHERE type = 'dispute_refund' DO NOTHING`,
-    [clientId, cost, leadId]
+    [clientId, leadId]
   )
 }
 
-export async function addTopup(clientId: string, amount: number, note?: string): Promise<void> {
+// amount = number of LEADS to add to the balance.
+export async function addTopup(clientId: string, leads: number, note?: string): Promise<void> {
   await pool.query(
     `INSERT INTO portal_ledger (client_id, type, amount, description, created_by)
      VALUES ($1, 'topup', $2, $3, 'admin')`,
-    [clientId, Math.abs(amount), note ?? 'Top-up']
+    [clientId, Math.abs(leads), note ?? 'Top-up']
   )
 }
 

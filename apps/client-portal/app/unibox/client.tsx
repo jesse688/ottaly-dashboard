@@ -84,6 +84,24 @@ function fmtFull(d: string | null) {
   if (!d) return ''
   return new Date(d).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
+// Split an email body into the new content vs the quoted history below it, so each
+// message renders as just its own reply with prior thread tucked into a fold.
+function splitQuote(text: string): { main: string; quoted: string } {
+  if (!text) return { main: '', quoted: '' }
+  const patterns = [
+    /\n\s*-{2,}\s*Original Message\s*-{2,}/i,
+    /\nOn\s[\s\S]{0,140}?wrote:/,
+    /\n_{5,}/,
+    /\nFrom:\s.+\n(Sent|Date):\s/i,
+  ]
+  let idx = -1
+  for (const re of patterns) {
+    const m = text.match(re)
+    if (m && m.index !== undefined && (idx === -1 || m.index < idx)) idx = m.index
+  }
+  if (idx === -1) return { main: text.trim(), quoted: '' }
+  return { main: text.slice(0, idx).trim(), quoted: text.slice(idx).trim() }
+}
 function cleanCampaign(n: string | null) {
   if (!n) return null
   const s = n.replace(/\s*https?:\/\/\S+/g, '').replace(/_+$/, '').trim()
@@ -244,9 +262,9 @@ export function UniboxClient({ companyName }: { companyName: string }) {
         <div className="ml-auto flex items-center gap-4">
           {balance && (
             <a href="/invoices" className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gray-50 hover:bg-gray-100 border border-gray-200">
-              <span className="text-xs text-gray-500">Lead balance</span>
-              <span className={`text-sm font-semibold ${balance.balance < 0 ? 'text-red-600' : 'text-gray-900'}`}>
-                {balance.balance < 0 ? '-' : ''}£{Math.abs(balance.balance).toLocaleString()}
+              <span className="text-xs text-gray-500">Leads left</span>
+              <span className={`text-sm font-semibold ${balance.balance <= 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                {balance.balance.toLocaleString()}
               </span>
             </a>
           )}
@@ -377,27 +395,43 @@ export function UniboxClient({ companyName }: { companyName: string }) {
               {selected.dispute_status === 'denied' && <Banner color="red"><strong>Non-lead request denied.</strong> {selected.dispute_admin_note ?? ''}</Banner>}
               {selected.dispute_status === 'approved' && <Banner color="green"><strong>Non-lead approved.</strong> Credit refunded.</Banner>}
 
-              {/* thread body */}
-              <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+              {/* thread body — each message its own colour-coded block */}
+              <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3 bg-[#fafbfd]">
                 {thread === null ? (
-                  <div className="space-y-3">{Array.from({length:2}).map((_,i)=><div key={i} className="h-24 bg-gray-50 rounded-xl animate-pulse" />)}</div>
+                  <div className="space-y-3">{Array.from({length:2}).map((_,i)=><div key={i} className="h-24 bg-gray-100 rounded-xl animate-pulse" />)}</div>
                 ) : thread.length === 0 ? (
                   <div className="text-center text-sm text-gray-400 py-12">No messages synced yet for this lead.</div>
                 ) : thread.map(m => {
                   const out = m.direction === 'OUT'
+                  const { main, quoted } = splitQuote(m.body_text || m.content_preview || '')
                   return (
-                    <div key={m.id} className={`flex gap-3 ${out ? 'flex-row-reverse' : ''}`}>
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 ${out ? 'bg-indigo-100 text-indigo-700' : av(selected.id)}`}>{out ? 'O' : initials(selected)}</div>
-                      <div className={`flex-1 min-w-0 ${out ? 'items-end' : ''}`}>
-                        <div className={`flex items-baseline gap-2 mb-1 ${out ? 'justify-end' : ''}`}>
-                          <span className="text-sm font-semibold text-gray-900">{out ? (m.sent_via_portal ? `${companyName} (you)` : 'Ottaly') : fullName(selected)}</span>
-                          <span className="text-[11px] text-gray-400">{fmtFull(m.timestamp_created)}</span>
-                          {m.pv_label && m.pv_label !== 'INTERESTED' && <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">{m.pv_label.replace(/_/g,' ').toLowerCase()}</span>}
+                    <div key={m.id} className={`rounded-xl border overflow-hidden shadow-sm ${out ? 'border-indigo-200' : 'border-gray-200'}`}>
+                      {/* header strip — indigo = us, grey = the lead */}
+                      <div className={`flex items-center gap-2.5 px-4 py-2.5 ${out ? 'bg-indigo-50' : 'bg-gray-50'}`}>
+                        <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-semibold shrink-0 ${out ? 'bg-indigo-600 text-white' : av(selected.id)}`}>{out ? 'O' : initials(selected)}</div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-gray-900 leading-tight truncate">{out ? (m.sent_via_portal ? `${companyName} (you)` : 'Ottaly') : fullName(selected)}</p>
+                          <p className="text-[11px] text-gray-500 truncate">{out ? `to: ${selected.email}` : (m.from_email ?? selected.email)}</p>
                         </div>
-                        {m.subject && <p className={`text-xs text-gray-500 mb-1 ${out ? 'text-right' : ''}`}>{m.subject}</p>}
-                        <div className={`inline-block text-left rounded-xl border px-4 py-3 text-sm text-gray-700 whitespace-pre-wrap break-words max-w-full ${out ? 'bg-indigo-50 border-indigo-100' : 'bg-white border-gray-200 shadow-sm'}`}>
-                          {(m.body_text || m.content_preview || '(no content)').trim()}
+                        <div className="ml-auto flex items-center gap-2 shrink-0">
+                          {m.pv_label && m.pv_label !== 'INTERESTED' && <span className="text-[10px] bg-white border border-gray-200 text-gray-500 px-1.5 py-0.5 rounded capitalize">{m.pv_label.replace(/_/g,' ').toLowerCase()}</span>}
+                          <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${out ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-200 text-gray-600'}`}>{out ? 'Sent' : 'Received'}</span>
+                          <span className="text-[11px] text-gray-400 hidden sm:inline">{fmtFull(m.timestamp_created)}</span>
                         </div>
+                      </div>
+                      {/* body */}
+                      <div className={`px-4 py-3 ${out ? 'bg-indigo-50/40' : 'bg-white'}`}>
+                        {m.subject && <p className="text-xs font-medium text-gray-500 mb-2">{m.subject}</p>}
+                        <div className="text-sm text-gray-800 whitespace-pre-wrap break-words leading-relaxed">{main || '(no content)'}</div>
+                        {quoted && (
+                          <details className="mt-3">
+                            <summary className="cursor-pointer text-xs text-gray-400 hover:text-gray-600 select-none flex items-center gap-1 w-fit">
+                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
+                              Show quoted history
+                            </summary>
+                            <div className="mt-2 pl-3 border-l-2 border-gray-200 text-xs text-gray-400 whitespace-pre-wrap break-words">{quoted}</div>
+                          </details>
+                        )}
                       </div>
                     </div>
                   )
