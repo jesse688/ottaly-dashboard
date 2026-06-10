@@ -43,6 +43,7 @@ interface Workspace {
 
 interface IntelligenceData {
   workspaces: Workspace[]
+  optimisations?: Array<{ id: string; msg: string }>
   updatedAt: string
 }
 
