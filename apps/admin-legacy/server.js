@@ -11963,13 +11963,20 @@ app.get('/api/contacts/push-jobs/:id', (req, res) => {
 
 // POST starts job immediately, returns job ID — processing runs in background
 app.post('/api/contacts/verify-and-push', (req, res) => {
-  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 90 } = req.body;
+  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 90, emailProviders } = req.body;
   if (!workspace_id || !campaign_id || !Array.isArray(contact_ids) || !contact_ids.length) {
     return res.status(400).json({ error: 'workspace_id, campaign_id and contact_ids required' });
   }
 
   const db = req.app.locals.pgDb;
   if (!db) return res.status(500).json({ error: 'Database not available' });
+
+  // Allowed true-MX providers for this push, e.g. ['email_google','email_other'].
+  // Empty/absent = no provider restriction. 'unknown' is never an allowed push
+  // target: an unknown-MX contact must resolve to a real provider via the
+  // verifier first, then that real provider is checked against this list.
+  const allowedProviders = (typeof emailProviders === 'string' ? emailProviders : '')
+    .split(',').map(s => s.trim()).filter(p => p && p !== 'unknown');
 
   const sq = req.app.locals.sqliteDb;
   const jobId = require('crypto').randomUUID();
@@ -11979,6 +11986,7 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
     workspace_name: workspace_name || workspace_id,
     campaign_name: campaign_name || campaign_id,
     workspace_id, campaign_id,
+    allowedProviders,
     total: contact_ids.length,
     skipped: 0, verified: 0, safe: 0, risky: 0, invalid: 0, unknown: 0,
     pushed: 0, progress: 0,
@@ -12013,6 +12021,26 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
       const contacts = await db.getContactsById(contact_ids);
       if (!contacts.length) { job.status = 'failed'; job.error = 'No contacts found'; return; }
 
+      // Domain-MX pre-pass: fill mx_provider for any contact whose domain is
+      // already known in the cache, before we verify anything. MX is a domain
+      // property, so one prior resolution classifies every later contact on
+      // that domain — no repeat lookup. This also lets the provider gate drop
+      // wrong-provider contacts without spending a verification on them.
+      if (allowedProviders.length || true) {
+        const byDomain = new Map();
+        for (const c of contacts) {
+          if (c.mx_provider) continue;
+          const domain = (c.email || '').split('@')[1]?.toLowerCase();
+          if (domain) (byDomain.get(domain) || byDomain.set(domain, []).get(domain)).push(c);
+        }
+        for (const [domain, list] of byDomain) {
+          try {
+            const prov = await db.getDomainMxProvider(domain);
+            if (prov) list.forEach(c => { c.mx_provider = prov; });
+          } catch { /* cache miss / transient — verifier will resolve it */ }
+        }
+      }
+
       const cutoff = new Date(Date.now() - max_age_days * 24 * 60 * 60 * 1000).toISOString();
       // A 'fresh' verdict is recent AND has a real status. We re-verify
       // contacts whose previous result was 'unknown' (usually transient
@@ -12042,7 +12070,8 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
       const CONCURRENCY = Math.max(1, parseInt(process.env.PUSH_VERIFY_CONCURRENCY || '5', 10));
       const VERIFY_THEN_PUSH = Math.max(20, parseInt(process.env.VERIFY_THEN_PUSH || '100', 10));
       let doneCount = 0;
-      const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, snoozed: 0, missingEnrichment: 0 };
+      const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, snoozed: 0, missingEnrichment: 0, wrongProvider: 0 };
+      const allowedProviders = Array.isArray(job.allowedProviders) ? job.allowedProviders : [];
 
       // ── Shared filter constants ────────────────────────────────
       const campaignVertical = detectVertical((job.campaign_name || '') + ' ' + (job.workspace_name || ''));
@@ -12053,6 +12082,16 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
       const passesFilter = (c) => {
         if (verifyResults[c.id] !== 'safe' && verifyResults[c.id] !== 'safe_catchall') { skipped.unsafe++; return false; }
         if (c.do_not_contact)               { skipped.dnc++; return false; }
+        // True-MX provider gate. By the time a contact reaches here it has been
+        // verified, so c.mx_provider is its real provider (set by verifyOne /
+        // the domain cache). Enforce the user's provider filter against that
+        // truth — this is what stops a Microsoft-hosted contact slipping into a
+        // "Google + Other" push. A still-null mx_provider means the verifier
+        // couldn't resolve MX; exclude it rather than guess (safer than leaking
+        // a possibly-wrong provider into the campaign).
+        if (allowedProviders.length && !allowedProviders.includes(c.mx_provider)) {
+          skipped.wrongProvider++; return false;
+        }
         if ((!c.keywords || c.keywords.trim() === '') || (!c.industry || c.industry.trim() === '')) {
           skipped.missingEnrichment++; return false;
         }
@@ -12228,6 +12267,18 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
             : /outlook|microsoft|protection\.outlook|mail\.microsoft/.test(mxHost) ? 'email_outlook'
             : mxHost ? 'email_other'
             : null;
+          // Stamp the true provider onto the in-memory contact so passesFilter
+          // (which runs right after) sees it, and fan it out to the whole
+          // domain via the cache — MX is a domain property, so one resolution
+          // classifies every contact on that domain and they skip re-lookup.
+          if (mxProvider) {
+            c.mx_provider = mxProvider;
+            const domain = (c.email || '').split('@')[1]?.toLowerCase();
+            if (domain) {
+              try { await db.setDomainMxProvider(domain, mxProvider); }
+              catch (e) { console.warn('[verify] domain mx cache update failed:', e.message); }
+            }
+          }
           verifyResults[c.id] = status;
           batchUpdates.push({ id: c.id, email_status: status, email_verified_at: new Date().toISOString(), mx_provider: mxProvider, email: c.email });
         } catch {

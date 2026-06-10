@@ -154,6 +154,11 @@ export function AdminClientsClient() {
     if (res.ok) window.open('/unibox', '_blank')
     else alert('Could not open client view')
   }
+  async function registerWebhook(c: PortalClient) {
+    const res = await fetch(`/api/admin/clients/${c.id}/webhook`, { method: 'POST' })
+    const d = await res.json() as { ok?: boolean; reason?: string }
+    alert(d.ok ? (d.reason === 'already-exists' ? 'Webhook already active ✓' : 'Webhook registered ✓') : `Failed: ${d.reason}`)
+  }
   async function handleResetPassword(id: string) {
     if (!resetPassword) return
     await fetch(`/api/admin/clients/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: resetPassword }) })
@@ -422,6 +427,8 @@ export function AdminClientsClient() {
                             <button onClick={() => setEditId(editId===client.id?null:client.id)} className="text-xs text-indigo-600 hover:text-indigo-800">Password</button>
                             <span className="text-gray-200">|</span>
                             <button onClick={() => openSettings(client)} className="text-xs text-indigo-600 hover:text-indigo-800">Settings</button>
+                            <span className="text-gray-200">|</span>
+                            <button onClick={() => registerWebhook(client)} className="text-xs text-indigo-600 hover:text-indigo-800">Webhook</button>
                             <span className="text-gray-200">|</span>
                             <button onClick={() => toggleActive(client)} className="text-xs text-gray-500 hover:text-gray-800">{client.active ? 'Disable' : 'Enable'}</button>
                             <span className="text-gray-200">|</span>

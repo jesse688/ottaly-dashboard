@@ -147,18 +147,38 @@ const WEBHOOK_TARGET =
   process.env.PLUSVIBE_WEBHOOK_TARGET_URL ||
   'https://ottaly-git.oix3xv.easypanel.host/webhook/plusvibe-reply'
 
-// Same events the existing workspace webhook uses (incl. LEAD_MARKED_AS_LEAD).
-const WEBHOOK_EVENTS = ['ALL_EMAIL_REPLIES', 'EMAIL_SENT', 'LEAD_MARKED_AS_LEAD', 'BOUNCED_EMAIL']
+// Events the portal needs. Try the fuller set, but fall back to just the critical
+// "marked as lead" event if a workspace rejects any of them.
+const WEBHOOK_EVENTS_FULL = ['LEAD_MARKED_AS_LEAD', 'ALL_EMAIL_REPLIES']
+const WEBHOOK_EVENTS_MIN = ['LEAD_MARKED_AS_LEAD']
 
 interface PVHook { _id: string; url: string; status?: string; evt_types?: string[] }
 
+async function addHook(workspaceId: string, events: string[]): Promise<{ ok: boolean; status: number; body: string }> {
+  const res = await fetch(`${BASE}/hook/add`, {
+    method: 'POST',
+    headers: { ...headers(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      workspace_id: workspaceId,
+      name: 'Ottaly Portal',
+      url: WEBHOOK_TARGET,
+      camp_ids: ['ALL'],
+      event_types: events,
+      is_slack: 0,
+      secret: '',
+      ignore_ooo: 1,
+      ignore_automatic: 1,
+    }),
+  })
+  return { ok: res.ok, status: res.status, body: (await res.text().catch(() => '')).slice(0, 160) }
+}
+
 // Idempotently ensure a lead/reply webhook exists for a workspace, pointing at our
-// handler. Lists first (GET /hook/list) to avoid duplicates, then POST /hook/add.
+// handler. Lists first (GET /hook/list) to avoid duplicates, then POST /hook/add,
+// falling back to the minimal event set if the fuller one is rejected.
 export async function registerWebhook(workspaceId: string): Promise<{ ok: boolean; reason?: string }> {
   if (!KEY) return { ok: false, reason: 'no-api-key' }
   try {
-    // Dedupe on the handler path (domain may differ across deploys), or any hook
-    // already listening for lead-marked events -> the workspace is already covered.
     const list = await pv<{ hooks?: PVHook[] }>('/hook/list', { workspace_id: workspaceId }).catch(() => ({ hooks: [] as PVHook[] }))
     const covered = (list.hooks ?? []).some(h =>
       h.url === WEBHOOK_TARGET ||
@@ -167,22 +187,9 @@ export async function registerWebhook(workspaceId: string): Promise<{ ok: boolea
     )
     if (covered) return { ok: true, reason: 'already-exists' }
 
-    const res = await fetch(`${BASE}/hook/add`, {
-      method: 'POST',
-      headers: { ...headers(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        workspace_id: workspaceId,
-        name: 'Ottaly Portal',
-        url: WEBHOOK_TARGET,
-        camp_ids: ['ALL'],
-        event_types: WEBHOOK_EVENTS,
-        is_slack: 0,
-        secret: '',
-        ignore_ooo: 1,
-        ignore_automatic: 1,
-      }),
-    })
-    if (!res.ok) return { ok: false, reason: `create-failed-${res.status}: ${(await res.text().catch(() => '')).slice(0, 120)}` }
+    let r = await addHook(workspaceId, WEBHOOK_EVENTS_FULL)
+    if (!r.ok) r = await addHook(workspaceId, WEBHOOK_EVENTS_MIN) // fallback: critical event only
+    if (!r.ok) return { ok: false, reason: `create-failed-${r.status}: ${r.body}` }
     return { ok: true, reason: 'created' }
   } catch (err) {
     return { ok: false, reason: String(err) }
