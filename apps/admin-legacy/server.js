@@ -3492,34 +3492,39 @@ app.get('/api/debug/pv-provider-probe', requireSession, async (req, res) => {
       chartRowKeys: Object.keys(sampleRow),
     };
 
-    // Candidate param names × the three known mx values.
-    const params = ['mx', 'mx_provider', 'email_provider', 'provider',
-                    'recipient_provider', 'email_server', 'lead_mx', 'esp', 'mx_type'];
-    const values = ['REGULAR_ACCOUNT', 'GOOGLE_WORKSPACE', 'MICROSOFT365'];
-    const results = [];
-    for (const p of params) {
-      const row = { param: p };
-      for (const v of values) {
-        try {
-          const raw = await pvFetch(`${base}&${p}=${encodeURIComponent(v)}`);
-          row[v] = sumSent(raw);
-        } catch (e) { row[v] = `ERR ${e.message.slice(0,40)}`; }
-      }
-      // A param that actually filters: its three values sum to < baseline and
-      // differ from each other (and from baseline). An ignored param returns
-      // baseline for all three.
-      const nums = values.map(v => row[v]).filter(n => typeof n === 'number');
-      row._filters = nums.length === 3 && nums.some(n => n !== baseline) && nums.reduce((a,b)=>a+b,0) <= baseline * 1.05;
-      results.push(row);
+    // The param is confirmed: `provider`. Now hunt the exact VALUE for each
+    // recipient bucket — GOOGLE_WORKSPACE returned 0, which is suspicious, so
+    // try every plausible Google/Microsoft/other spelling and see which are
+    // non-zero. Mutual-exclusivity: the real buckets should sum to baseline.
+    const candidateValues = [
+      'REGULAR_ACCOUNT',
+      'MICROSOFT365', 'MICROSOFT', 'OUTLOOK', 'OFFICE365', 'OFFICE_365', 'O365', 'EXCHANGE',
+      'GOOGLE_WORKSPACE', 'GOOGLE', 'GMAIL', 'GSUITE', 'G_SUITE', 'GOOGLE_APPS', 'GOOGLEAPPS',
+      'YAHOO', 'ZOHO', 'OTHER', 'UNKNOWN',
+    ];
+    const valueResults = {};
+    for (const v of candidateValues) {
+      try {
+        const raw = await pvFetch(`${base}&provider=${encodeURIComponent(v)}`);
+        valueResults[v] = sumSent(raw);
+      } catch (e) { valueResults[v] = `ERR ${e.message.slice(0, 40)}`; }
     }
+    // Which values are non-zero (real buckets) and do they sum to baseline?
+    const nonZero = Object.entries(valueResults)
+      .filter(([, n]) => typeof n === 'number' && n > 0)
+      .map(([k, n]) => ({ value: k, sent: n }));
+    const nonZeroSum = nonZero.reduce((a, b) => a + b.sent, 0);
 
     res.json({
       workspace_id: wsId, start, end,
       baseline_total_sent: baseline,
-      expected_other_for_butterfly_30d: '~15812',
+      param: 'provider',
       shape,
-      results,
-      hint: 'Look for a row with _filters=true whose REGULAR_ACCOUNT ≈ 15812. That param name is the answer.',
+      valueResults,
+      nonZero,
+      nonZeroSum,
+      sumsToBaseline: Math.abs(nonZeroSum - baseline) <= baseline * 0.02,
+      hint: 'Non-zero values are the real recipient buckets. If they sum to baseline, that is the complete partition. Identify which value is Google.',
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
