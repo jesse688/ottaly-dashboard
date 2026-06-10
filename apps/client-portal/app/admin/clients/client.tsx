@@ -134,10 +134,14 @@ export function AdminClientsClient() {
     e.preventDefault(); setSaving(true); setError('')
     try {
       const res = await fetch('/api/admin/clients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...form, costPerLead: Number(form.costPerLead) || 0 }) })
-      const data = await res.json() as { error?: string }
+      const data = await res.json() as { error?: string; webhook?: string }
       if (!res.ok) { setError(data.error ?? 'Error'); return }
       setForm({ email:'', password:'', workspaceId:'', companyName:'', costPerLead:'' }); setShowForm(false)
       fetch('/api/admin/clients').then(r => r.json()).then(setClients)
+      const hookMsg = data.webhook === 'created' ? 'Webhook created ✓'
+        : data.webhook === 'already-exists' ? 'Webhook already active ✓'
+        : `Webhook: ${data.webhook ?? 'n/a'}`
+      alert(`Client created. ${hookMsg}. Leads + emails are backfilling now.`)
     } finally { setSaving(false) }
   }
   async function toggleActive(c: PortalClient) {

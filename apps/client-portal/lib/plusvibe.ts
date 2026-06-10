@@ -157,8 +157,15 @@ interface PVHook { _id: string; url: string; status?: string; evt_types?: string
 export async function registerWebhook(workspaceId: string): Promise<{ ok: boolean; reason?: string }> {
   if (!KEY) return { ok: false, reason: 'no-api-key' }
   try {
+    // Dedupe on the handler path (domain may differ across deploys), or any hook
+    // already listening for lead-marked events -> the workspace is already covered.
     const list = await pv<{ hooks?: PVHook[] }>('/hook/list', { workspace_id: workspaceId }).catch(() => ({ hooks: [] as PVHook[] }))
-    if ((list.hooks ?? []).some(h => h.url === WEBHOOK_TARGET)) return { ok: true, reason: 'already-exists' }
+    const covered = (list.hooks ?? []).some(h =>
+      h.url === WEBHOOK_TARGET ||
+      h.url.includes('/webhook/plusvibe') ||
+      (h.evt_types ?? []).includes('LEAD_MARKED_AS_LEAD')
+    )
+    if (covered) return { ok: true, reason: 'already-exists' }
 
     const res = await fetch(`${BASE}/hook/add`, {
       method: 'POST',
@@ -169,7 +176,7 @@ export async function registerWebhook(workspaceId: string): Promise<{ ok: boolea
         url: WEBHOOK_TARGET,
         camp_ids: ['ALL'],
         event_types: WEBHOOK_EVENTS,
-        is_slack: null,
+        is_slack: 0,
         secret: '',
         ignore_ooo: 1,
         ignore_automatic: 1,
