@@ -478,7 +478,16 @@ function renderClients() {
   const grid = document.getElementById('clientsGrid');
   grid.innerHTML = ws.map(w => {
     const t = effectiveTotals(w);
-    if (!t) return ''; // provider selected but this workspace's mix isn't synced yet
+    if (!t) {
+      // Provider tab selected but this client's mix hasn't synced yet — keep the
+      // client VISIBLE (never drop an active client) with a syncing placeholder.
+      return `<div class="client-card" id="card-${w.workspace_id}">
+        <div class="client-row" style="opacity:.55">
+          <div><div class="client-name">${w.name}</div>
+          <div class="client-sub">syncing provider split…</div></div>
+          <div class="stat-cell" style="grid-column:2/-1;text-align:right;color:var(--muted);font-size:12px">⏳ provider data loading</div>
+        </div></div>`;
+    }
     const rrClass = t.replyRate >= 0.025 ? 'good' : t.replyRate >= 0.01 ? 'med' : t.replyRate > 0 ? 'bad' : '';
     const brClass = t.bounceRate >= 0.05 ? 'bad' : t.bounceRate >= 0.02 ? 'med' : 'good';
     const rtlClass = t.rtl >= 0.1 ? 'good' : t.rtl >= 0.05 ? 'med' : t.rtl > 0 ? '' : '';

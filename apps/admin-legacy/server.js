@@ -2647,7 +2647,10 @@ const PERF_WARM_INTERVAL_MS = 2 * 60 * 1000;
 // fractions to the accurate per-day totals. The mix is stable, so it's synced
 // once on refresh and cached, not per-request.
 const providerMixCache = { byWs: new Map(), syncedAt: null, syncing: false };
-const PROVIDER_MIX_MAX_PAGES = 15; // up to 1500 leads/ws — a stable ratio, fast sync
+const PROVIDER_MIX_MAX_PAGES = 2000; // effectively full — stops at the last page
+                                     // (leads.length < 100). Full population = no
+                                     // campaign-order sampling bias. Persisted to
+                                     // DB so this heavy sync runs once.
 
 function pvMxToProviderBucket(mx) {
   const m = String(mx || '').toUpperCase();
@@ -2687,13 +2690,20 @@ async function fetchWorkspaceProviderMix(wsId, maxPages = PROVIDER_MIX_MAX_PAGES
 async function syncProviderMix(wsIds) {
   if (providerMixCache.syncing) return;
   providerMixCache.syncing = true;
+  const pgdb = app.locals.pgDb;
   try {
+    let done = 0;
     for (const wsId of wsIds) {
-      try { providerMixCache.byWs.set(wsId, await fetchWorkspaceProviderMix(wsId)); }
-      catch (e) { console.warn(`[provider-mix] ${wsId} failed: ${e.message}`); }
+      try {
+        const mix = await fetchWorkspaceProviderMix(wsId);
+        providerMixCache.byWs.set(wsId, mix);
+        // Persist each workspace as it finishes (incremental progress survives a
+        // restart; the full sweep only needs to run once).
+        if (pgdb) await pgdb.saveProviderMix(wsId, mix, Date.now()).catch(() => {});
+      } catch (e) { console.warn(`[provider-mix] ${wsId} failed: ${e.message}`); }
+      console.log(`[provider-mix] ${++done}/${wsIds.length} workspaces`);
     }
     providerMixCache.syncedAt = new Date().toISOString();
-    console.log(`[provider-mix] synced ${wsIds.length} workspaces`);
   } finally { providerMixCache.syncing = false; }
 }
 
@@ -3029,6 +3039,17 @@ setTimeout(async () => {
     // Cold start with no persisted data — populate the snapshot once.
     warmPerformanceCache().catch(() => {});
   }
+  // Load the persisted recipient-provider mix so the split is available instantly
+  // after a restart (the full lead sweep only re-runs on Refresh).
+  try {
+    const pgdb = app.locals.pgDb;
+    if (pgdb) {
+      const rows = await pgdb.loadProviderMix();
+      for (const r of rows) providerMixCache.byWs.set(r.ws_id, r.data);
+      if (rows.length) providerMixCache.syncedAt = new Date().toISOString();
+      console.log(`[provider-mix] loaded ${rows.length} workspaces from DB`);
+    }
+  } catch (e) { console.warn('[provider-mix] load failed:', e.message); }
 }, 10000);
 
 function readReadyPerformanceCache(wsIds, dates) {
@@ -3241,9 +3262,12 @@ app.get('/api/stats/summary', requireSession, async (req, res) => {
       // PlusVibe per-lead mx mix. Lets the Stats page filter the table by
       // Google / Outlook / Other. byProvider[p] = { sent, replies, bounces, leads }.
       byProvider: splitTotalsByProvider(wsId, wsStats[wsId].totals),
-    })).filter(w => w.totals.sent > 0 || w.totals.leads > 0);
-
-    workspaces.sort((a, b) => b.totals.replies - a.totals.replies);
+    }));
+    // Show ALL active clients (the requested behaviour), not only those with
+    // sends in the period — clients with activity sort first, zero-activity
+    // active clients still appear (so none ever look "missing").
+    workspaces.sort((a, b) =>
+      (b.totals.sent - a.totals.sent) || (b.totals.replies - a.totals.replies));
 
     res.json({
       workspaces,

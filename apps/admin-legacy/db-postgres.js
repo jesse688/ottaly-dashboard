@@ -341,6 +341,11 @@ class PostgresDatabase {
         data       JSONB NOT NULL,
         saved_at   BIGINT NOT NULL
       )`,
+      `CREATE TABLE IF NOT EXISTS provider_mix_cache (
+        ws_id      TEXT PRIMARY KEY,
+        data       JSONB NOT NULL,
+        saved_at   BIGINT NOT NULL
+      )`,
       `CREATE TABLE IF NOT EXISTS monthly_expenses (
         id            SERIAL PRIMARY KEY,
         label         TEXT NOT NULL,
@@ -3478,6 +3483,19 @@ class PostgresDatabase {
 
   async clearPerfCache() {
     await this.query(`TRUNCATE perf_cache_daily, perf_cache_leads`);
+  }
+
+  async loadProviderMix() {
+    const r = await this.query(`SELECT ws_id, data, saved_at FROM provider_mix_cache`);
+    return r.rows; // [{ ws_id, data, saved_at }]
+  }
+
+  async saveProviderMix(wsId, data, savedAt) {
+    await this.query(`
+      INSERT INTO provider_mix_cache (ws_id, data, saved_at)
+      VALUES ($1,$2,$3)
+      ON CONFLICT (ws_id) DO UPDATE SET data=EXCLUDED.data, saved_at=EXCLUDED.saved_at
+    `, [wsId, JSON.stringify(data), savedAt]);
   }
 
   // ── Revenue leads ──────────────────────────────────────────────────
