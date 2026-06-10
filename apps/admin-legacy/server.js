@@ -3465,6 +3465,65 @@ app.get('/api/combo-analysis/pv-sample', requireSession, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// TEMP PROBE: discover which PlusVibe email-stats query param filters by
+// recipient provider (the UI's "Other Providers" filter). Tries candidate
+// (param,value) combos and reports each one's summed sent count vs the
+// unfiltered baseline. The param whose REGULAR_ACCOUNT result ≈ 15,812 for
+// ButterflyEco/30d is the one we want. Also dumps the raw response shape in
+// case a provider breakdown is already present (no param needed).
+app.get('/api/debug/pv-provider-probe', requireSession, async (req, res) => {
+  try {
+    const wsId  = String(req.query.workspace_id || '69a9db307af7ef2854f57637'); // ButterflyEco
+    const end   = String(req.query.end   || new Date().toISOString().slice(0,10));
+    const start = String(req.query.start || new Date(Date.now() - 29*86400000).toISOString().slice(0,10));
+    const base  = `/account/email-stats?workspace_id=${wsId}&start_date=${start}&end_date=${end}`;
+    const sumSent = (raw) => {
+      const chart = Array.isArray(raw) ? raw : (raw?.chart || []);
+      return chart.reduce((a, r) => a + (r.total_sent_count || 0), 0);
+    };
+
+    // Baseline (no provider filter) + raw shape for inspection.
+    const baseRaw = await pvFetch(base);
+    const baseline = sumSent(baseRaw);
+    const sampleRow = (Array.isArray(baseRaw) ? baseRaw : (baseRaw?.chart || []))[0] || {};
+    const shape = {
+      topLevelType: Array.isArray(baseRaw) ? 'array' : typeof baseRaw,
+      topLevelKeys: Array.isArray(baseRaw) ? null : Object.keys(baseRaw || {}),
+      chartRowKeys: Object.keys(sampleRow),
+    };
+
+    // Candidate param names × the three known mx values.
+    const params = ['mx', 'mx_provider', 'email_provider', 'provider',
+                    'recipient_provider', 'email_server', 'lead_mx', 'esp', 'mx_type'];
+    const values = ['REGULAR_ACCOUNT', 'GOOGLE_WORKSPACE', 'MICROSOFT365'];
+    const results = [];
+    for (const p of params) {
+      const row = { param: p };
+      for (const v of values) {
+        try {
+          const raw = await pvFetch(`${base}&${p}=${encodeURIComponent(v)}`);
+          row[v] = sumSent(raw);
+        } catch (e) { row[v] = `ERR ${e.message.slice(0,40)}`; }
+      }
+      // A param that actually filters: its three values sum to < baseline and
+      // differ from each other (and from baseline). An ignored param returns
+      // baseline for all three.
+      const nums = values.map(v => row[v]).filter(n => typeof n === 'number');
+      row._filters = nums.length === 3 && nums.some(n => n !== baseline) && nums.reduce((a,b)=>a+b,0) <= baseline * 1.05;
+      results.push(row);
+    }
+
+    res.json({
+      workspace_id: wsId, start, end,
+      baseline_total_sent: baseline,
+      expected_other_for_butterfly_30d: '~15812',
+      shape,
+      results,
+      hint: 'Look for a row with _filters=true whose REGULAR_ACCOUNT ≈ 15812. That param name is the answer.',
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 
 // Historical backfill: approximate FROM×TO combos from PlusVibe workspace stats
 app.post('/api/combo-analysis/historical-backfill', requireSession, async (req, res) => {
