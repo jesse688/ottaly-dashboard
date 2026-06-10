@@ -2647,7 +2647,7 @@ const PERF_WARM_INTERVAL_MS = 2 * 60 * 1000;
 // fractions to the accurate per-day totals. The mix is stable, so it's synced
 // once on refresh and cached, not per-request.
 const providerMixCache = { byWs: new Map(), syncedAt: null, syncing: false };
-const PROVIDER_MIX_MAX_PAGES = 40; // up to 4000 leads/ws — a very stable ratio
+const PROVIDER_MIX_MAX_PAGES = 15; // up to 1500 leads/ws — a stable ratio, fast sync
 
 function pvMxToProviderBucket(mx) {
   const m = String(mx || '').toUpperCase();
@@ -2702,9 +2702,12 @@ async function syncProviderMix(wsIds) {
 // Falls back to all-"other" when no mix is available yet (so totals still sum).
 function splitTotalsByProvider(wsId, totals) {
   const mix = providerMixCache.byWs.get(wsId);
+  // No mix yet (sync still running) → return null rather than fabricating a
+  // split. The UI hides this workspace from provider tabs until its real mix
+  // lands, instead of dumping its whole volume into "Other" (confidently wrong).
+  if (!mix) return null;
   const empty = () => ({ sent: 0, replies: 0, bounces: 0, leads: 0 });
   const out = { google: empty(), outlook: empty(), other: empty() };
-  if (!mix) { out.other = { ...empty(), sent: totals.sent, replies: totals.replies, bounces: totals.bounces, leads: totals.leads }; return out; }
   for (const metric of ['sent', 'replies', 'bounces']) {
     const denom = mix.google[metric] + mix.outlook[metric] + mix.other[metric];
     if (denom <= 0) { out.other[metric] = totals[metric] || 0; continue; }

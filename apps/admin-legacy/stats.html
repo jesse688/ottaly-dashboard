@@ -436,10 +436,13 @@ function buildAllWorkspaces(list) {
 }
 
 // Effective totals for the currently-selected provider tab. 'all' → real
-// totals; a provider → that bucket's numbers with rates/per-day recomputed.
+// totals; a provider → that bucket's numbers. Returns null when this workspace
+// has no provider mix yet (still syncing) so the caller can hide its row.
 function effectiveTotals(w) {
-  if (_provider === 'all' || !w.byProvider?.[_provider]) return w.totals;
+  if (_provider === 'all') return w.totals;
+  if (!w.byProvider) return null;            // mix not synced yet for this ws
   const bp = w.byProvider[_provider];
+  if (!bp) return null;
   const days = (_data?.dates?.length) || (w.series?.length) || 1;
   return {
     ...bp,
@@ -475,6 +478,7 @@ function renderClients() {
   const grid = document.getElementById('clientsGrid');
   grid.innerHTML = ws.map(w => {
     const t = effectiveTotals(w);
+    if (!t) return ''; // provider selected but this workspace's mix isn't synced yet
     const rrClass = t.replyRate >= 0.025 ? 'good' : t.replyRate >= 0.01 ? 'med' : t.replyRate > 0 ? 'bad' : '';
     const brClass = t.bounceRate >= 0.05 ? 'bad' : t.bounceRate >= 0.02 ? 'med' : 'good';
     const rtlClass = t.rtl >= 0.1 ? 'good' : t.rtl >= 0.05 ? 'med' : t.rtl > 0 ? '' : '';
@@ -536,10 +540,12 @@ function renderClients() {
   renderProviderCards();
   const note = document.getElementById('providerNote');
   if (note) {
-    const syncedHint = _data?.providerMixSyncedAt ? '' : ' (syncing…)';
-    note.textContent = _provider === 'all'
-      ? `by recipient provider · from PlusVibe lead data${syncedHint}`
-      : `${_provider === 'outlook' ? 'Microsoft' : _provider[0].toUpperCase()+_provider.slice(1)} recipients · from PlusVibe${syncedHint}`;
+    const total = wsRaw.length;
+    const ready = wsRaw.filter(w => w.byProvider).length;
+    const syncing = ready < total ? ` · syncing ${ready}/${total} clients…` : '';
+    const label = _provider === 'all' ? 'by recipient provider'
+      : `${_provider === 'outlook' ? 'Microsoft' : _provider[0].toUpperCase()+_provider.slice(1)} recipients`;
+    note.textContent = `${label} · from PlusVibe lead data${syncing}`;
   }
 }
 
