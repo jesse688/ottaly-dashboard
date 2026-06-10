@@ -3518,42 +3518,57 @@ app.get('/api/debug/pv-provider-probe', requireSession, async (req, res) => {
       }
     } catch (e) { providerList = `ERR ${e.message.slice(0, 40)}`; }
 
-    const TARGETS = { GOOGLE: 22604, MICROSOFT: 2489 };
-    const near = (n) => {
-      for (const [k, t] of Object.entries(TARGETS)) {
-        if (typeof n === 'number' && Math.abs(n - t) <= Math.max(800, t * 0.08)) return k;
-      }
-      return null;
-    };
-    const paramNames = [
-      'provider', 'provider_id', 'recipient_provider', 'recipient_provider_id',
-      'recipient_type', 'recipient_type_id', 'lead_provider', 'lead_provider_id',
-      'mx_provider_id', 'placement_provider', 'recipient', 'recipient_id',
+    // The recipient split isn't on /account/email-stats. Sweep the
+    // /email-placement/ namespace (where recipient-providers lives) for a stats
+    // endpoint. For each candidate path, call it with workspace_id+dates and
+    // capture the raw response shape so we can spot a per-provider breakdown,
+    // then call it with a Google recipient filter and look for ~22604.
+    const googleId = ids.GOOGLE;
+    const dateQs = `workspace_id=${wsId}&start_date=${start}&end_date=${end}`;
+    const candidatePaths = [
+      '/email-placement/get/stats',
+      '/email-placement/get/email-stats',
+      '/email-placement/get/analytics',
+      '/email-placement/get/provider-stats',
+      '/email-placement/get/recipient-stats',
+      '/email-placement/get/placement-stats',
+      '/email-placement/get/dashboard',
+      '/email-placement/stats',
+      '/email-placement/email-stats',
+      '/email-placement/get/recipient-provider-stats',
     ];
-    const googleId = ids.GOOGLE, msId = ids.MICROSOFT;
-    const probes = [];
-    for (const p of paramNames) {
-      // test with Google id (expect ~22604) and the bare GOOGLE name as control
-      for (const [label, val] of [['google_id', googleId], ['ms_id', msId]]) {
-        if (!val) continue;
-        try {
-          const sent = sumAgg(await pvFetch(`${base}&${p}=${encodeURIComponent(val)}`)).sent;
-          const match = near(sent);
-          probes.push({ q: `${p}=<${label}>`, sent, ...(match ? { MATCH: match } : {}) });
-        } catch (e) { /* 400 invalid param — skip */ }
+    const trunc = (o) => { try { return JSON.parse(JSON.stringify(o).slice(0, 600)); } catch { return String(o).slice(0,600); } };
+    const sweep = [];
+    for (const path of candidatePaths) {
+      // 1) plain call — does this path even exist + what shape?
+      try {
+        const raw = await pvFetch(`${path}?${dateQs}`);
+        sweep.push({ path, ok: true, keys: Array.isArray(raw) ? `array[${raw.length}]` : Object.keys(raw || {}), sample: trunc(raw) });
+      } catch (e) {
+        sweep.push({ path, ok: false, err: e.message.slice(0, 50) });
+        continue; // path invalid — don't bother with the filtered variant
+      }
+      // 2) filtered by Google recipient — try a few filter param names, flag ~22604
+      for (const fp of ['recipient_provider', 'recipient_provider_id', 'provider', 'provider_id', 'recipient_type']) {
+        for (const [lbl, val] of [['GOOGLE', 'GOOGLE'], ['google_id', googleId]]) {
+          try {
+            const raw = await pvFetch(`${path}?${dateQs}&${fp}=${encodeURIComponent(val)}`);
+            const sent = sumAgg(raw).sent;
+            const hit = typeof sent === 'number' && Math.abs(sent - 22604) <= 2000;
+            if (sent > 0 || hit) sweep.push({ path, filter: `${fp}=${lbl}`, sent, ...(hit ? { MATCH: 'GOOGLE' } : {}) });
+          } catch { /* skip */ }
+        }
       }
     }
-    const matches = probes.filter(p => p.MATCH);
 
     res.json({
       workspace_id: wsId, start, end,
       baseline_total_sent: baseline,
       recipient_ids: ids,
       recipient_targets: { google: 22604, microsoft: 2489, other: 15812 },
-      matches,
-      allProbes: probes,
+      sweep,
       providerList,
-      hint: 'A row in matches reveals the recipient param + that it takes the provider _id. If matches is empty, the filter lives on a different endpoint/POST body — I will need the network request.',
+      hint: 'Look for a path that returned ok:true with a per-provider shape, or a MATCH (sent≈22604). If nothing, paste the network request from the UI recipient dropdown.',
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
