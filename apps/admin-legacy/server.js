@@ -3181,11 +3181,23 @@ app.get('/api/stats/by-provider', requireSession, async (req, res) => {
     const pgdb = app.locals.pgDb;
     if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
 
-    // Optional workspace filter — matches the CM filter the Stats page already
-    // passes to /api/stats/summary.
-    const wsIds = req.query.workspace_ids
+    // Scope to the SAME active-workspace set /api/stats/summary uses, so the
+    // provider strip total agrees with the "All Workspaces" client row. The
+    // canonical list is the SQLite clients table minus inactive clients; an
+    // explicit workspace_ids param (the CM filter) further narrows it. Without
+    // this, the strip counted email_events for EVERY workspace — including dead/
+    // paused clients not in the active set — and ran higher than the summary.
+    const activeIds = db.prepare(
+      `SELECT workspace_id FROM clients
+       WHERE workspace_id IS NOT NULL AND workspace_id != ''
+         AND COALESCE(client_status, '') != 'inactive'`
+    ).all().map(r => r.workspace_id);
+    const filterIds = req.query.workspace_ids
       ? String(req.query.workspace_ids).split(',').filter(Boolean)
       : null;
+    const wsIds = filterIds
+      ? activeIds.filter(id => filterIds.includes(id))
+      : activeIds;
 
     // Count REAL sent events in the window from email_events — one row per send,
     // bucketed by recipient provider — so this matches PlusVibe's "sends in
@@ -3199,11 +3211,10 @@ app.get('/api/stats/by-provider', requireSession, async (req, res) => {
     // send-anchored — counted per (workspace_id, lead_email) that received a
     // send in the window — identical to combo-analysis.
     const params = [start, end];
-    let wsClause = '';
-    if (wsIds && wsIds.length) {
-      params.push(wsIds);
-      wsClause = `AND ee.workspace_id = ANY($${params.length})`;
-    }
+    // wsIds is always the active set (optionally narrowed by the CM filter), so
+    // this clause always binds — matching the summary's scope exactly.
+    params.push(wsIds);
+    const wsClause = `AND ee.workspace_id = ANY($${params.length})`;
 
     const q = `
       WITH recipient_types AS (
