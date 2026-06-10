@@ -176,7 +176,7 @@ export default function CampaignsPage() {
   }
 
   async function applyOpt(i: number) {
-    if (!data) return
+    if (!data || !data.optimisations) return
     const o = data.optimisations[i]
     setOptStatuses(s => ({ ...s, [i]: 'applying' }))
     try {
