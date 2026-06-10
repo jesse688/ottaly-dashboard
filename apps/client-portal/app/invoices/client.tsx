@@ -9,14 +9,24 @@ interface Invoice {
   due_date: string | null; paid_date: string | null; created_at: string
 }
 interface Summary { total_paid: number; total_unpaid: number; total_deal_value: number }
-interface LedgerRow { id: string; type: string; amount: string; description: string | null; created_at: string }
-interface Balance { balance: number; costPerLead: number; currency: string; ledger: LedgerRow[] }
+interface LedgerRow { id: string; type: string; amount: number; description: string | null; created_at: string }
+interface Balance {
+  balance: number
+  leadsDelivered: number
+  pipeline: number
+  dealsWon: number
+  ledger: LedgerRow[]
+  showSpend: boolean
+  spent?: number
+  roi?: number | null
+  costPerLead?: number
+}
 
 function fmt(n: number) { return new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP', minimumFractionDigits: 0 }).format(n) }
 function fmtDate(d: string | null) { if (!d) return '—'; return new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) }
 
 const LEDGER_LABEL: Record<string, string> = {
-  topup: 'Top-up', lead_charge: 'Lead delivered', dispute_refund: 'Non-lead refund', adjustment: 'Adjustment',
+  topup: 'Leads added', lead_charge: 'Lead delivered', dispute_refund: 'Non-lead credited', adjustment: 'Adjustment',
 }
 
 export function InvoicesClient({ companyName }: { companyName: string }) {
@@ -26,7 +36,7 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
   const [showTopup, setShowTopup] = useState(false)
   const [topupAmt, setTopupAmt] = useState('')
   const [topupNote, setTopupNote] = useState('')
-  const [topupMsg, setTopupMsg] = useState('')
+  const [msg, setMsg] = useState('')
   const router = useRouter()
 
   function load() {
@@ -42,21 +52,18 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
     if (!amt || amt <= 0) return
     await fetch('/api/portal/topup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ amount: amt, note: topupNote || undefined }) })
     setShowTopup(false); setTopupAmt(''); setTopupNote('')
-    setTopupMsg('Top-up requested — we\'ll confirm shortly and credit your balance.')
-    setTimeout(() => setTopupMsg(''), 6000)
+    setMsg('Top-up requested — we\'ll confirm shortly and add the leads to your balance.')
+    setTimeout(() => setMsg(''), 6000)
   }
-
   async function markPaid(id: string) {
     await fetch(`/api/portal/invoices/${id}/paid`, { method: 'POST' })
-    setTopupMsg('Thanks — we\'ll confirm your payment shortly.')
-    setTimeout(() => setTopupMsg(''), 6000)
+    setMsg('Thanks — we\'ll confirm your payment shortly.')
+    setTimeout(() => setMsg(''), 6000)
   }
 
-  // Pay-per-lead ROI: deal value vs what the delivered leads cost.
-  const leadsDelivered = bal ? bal.ledger.filter(l => l.type === 'lead_charge').length : 0
-  const spent = bal ? leadsDelivered * bal.costPerLead : 0
-  const dealValue = summary?.total_deal_value ?? 0
-  const roi = spent > 0 ? Math.round((dealValue - spent) / spent * 100) : null
+  const showSpend = !!bal?.showSpend
+  const roi = bal?.roi ?? null
+  const winning = showSpend && roi !== null && roi > 0
 
   return (
     <div className="min-h-screen bg-[#f7f8fc]" style={{ fontFamily: 'system-ui,-apple-system,sans-serif' }}>
@@ -72,38 +79,62 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
       </header>
 
       <div className="max-w-5xl mx-auto p-6">
-        {topupMsg && <div className="mb-4 px-4 py-2.5 bg-green-50 border border-green-200 text-green-800 text-sm rounded-lg">{topupMsg}</div>}
+        {msg && <div className="mb-4 px-4 py-2.5 bg-green-50 border border-green-200 text-green-800 text-sm rounded-lg">{msg}</div>}
 
-        {/* Balance hero + metrics */}
+        {/* Winning banner — only when ROI is positive */}
+        {winning && bal && (
+          <div className="mb-6 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-600 p-5 text-white flex items-center gap-4">
+            <div className="text-4xl">📈</div>
+            <div>
+              <p className="text-lg font-bold">Your campaigns are returning +{roi}% ROI</p>
+              <p className="text-sm text-emerald-50">{fmt(bal.pipeline)} in deal value from {bal.leadsDelivered} leads delivered{bal.spent ? ` · ${fmt(bal.spent)} invested` : ''}.</p>
+            </div>
+          </div>
+        )}
+
+        {/* Metric cards */}
         <div className="grid grid-cols-4 gap-4 mb-6">
+          {/* Leads left — always, with top-up */}
           <div className="bg-gradient-to-br from-indigo-600 to-indigo-700 rounded-2xl p-5 text-white">
             <p className="text-xs text-indigo-200 uppercase tracking-wider">Leads left</p>
             <p className="text-4xl font-bold mt-1">{bal ? bal.balance.toLocaleString() : '—'}</p>
-            <p className="text-xs text-indigo-200 mt-1">{bal && bal.costPerLead > 0 ? `${fmt(bal.costPerLead)} per lead` : 'Pre-paid lead credits'}</p>
+            <p className="text-xs text-indigo-200 mt-1">Pre-paid lead credits</p>
             <button onClick={() => setShowTopup(true)} className="mt-3 w-full py-2 bg-white text-indigo-700 text-sm font-semibold rounded-lg hover:bg-indigo-50">Top up leads</button>
           </div>
-          <Card label="Spent on leads" value={fmt(spent)} sub={`${leadsDelivered} leads delivered`} />
-          <Card label="Deal pipeline" value={fmt(dealValue)} sub="Total deal value" />
-          <Card label="ROI" value={roi !== null ? `${roi > 0 ? '+' : ''}${roi}%` : '—'} sub={roi !== null ? (roi > 0 ? 'Profit on spend' : 'Loss on spend') : 'Add deal values to leads'} accent={roi !== null && roi > 0} />
+
+          <Card label="Leads delivered" value={bal ? bal.leadsDelivered.toLocaleString() : '—'} sub="Real interested replies" />
+          <Card label="Pipeline value" value={bal ? fmt(bal.pipeline) : '—'} sub={`${bal?.dealsWon ?? 0} deals with value`} />
+
+          {/* Adaptive 4th card: ROI when winning, else Deals won (always positive) */}
+          {winning ? (
+            <Card label="ROI" value={`+${roi}%`} sub="Return on your spend" accent />
+          ) : (
+            <Card label="Deals won" value={bal ? bal.dealsWon.toLocaleString() : '—'} sub="Leads with a deal value" />
+          )}
         </div>
 
-        {/* Ledger */}
-        <Panel title="Balance activity">
+        {/* Spend line — only when allowed */}
+        {showSpend && bal?.spent !== undefined && (
+          <div className="mb-6 flex items-center justify-between bg-white rounded-xl border border-gray-100 px-5 py-3 text-sm">
+            <span className="text-gray-500">Invested in leads</span>
+            <span className="font-semibold text-gray-900">{fmt(bal.spent)}{bal.costPerLead ? ` · ${fmt(bal.costPerLead)}/lead` : ''}</span>
+          </div>
+        )}
+
+        {/* Lead activity (lead units — positive framing, no money) */}
+        <Panel title="Lead activity">
           <table className="w-full text-sm">
-            <thead><tr className="border-b border-gray-100 bg-gray-50">{['Date','Activity','Amount'].map(h => <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}</tr></thead>
+            <thead><tr className="border-b border-gray-100 bg-gray-50">{['Date','Activity','Leads'].map(h => <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}</tr></thead>
             <tbody>
               {!bal ? <tr><td colSpan={3} className="px-4 py-6 text-center text-gray-400 text-sm">Loading…</td></tr>
               : bal.ledger.length === 0 ? <tr><td colSpan={3} className="px-4 py-8 text-center text-gray-400 text-sm">No activity yet</td></tr>
-              : bal.ledger.map(l => {
-                const amt = Number(l.amount)
-                return (
-                  <tr key={l.id} className="border-b border-gray-50">
-                    <td className="px-4 py-2.5 text-gray-500 text-xs">{fmtDate(l.created_at)}</td>
-                    <td className="px-4 py-2.5 text-gray-700">{l.description || LEDGER_LABEL[l.type] || l.type}</td>
-                    <td className={`px-4 py-2.5 font-medium ${amt < 0 ? 'text-red-600' : 'text-green-600'}`}>{amt < 0 ? '−' : '+'}{fmt(Math.abs(amt))}</td>
-                  </tr>
-                )
-              })}
+              : bal.ledger.map(l => (
+                <tr key={l.id} className="border-b border-gray-50">
+                  <td className="px-4 py-2.5 text-gray-500 text-xs">{fmtDate(l.created_at)}</td>
+                  <td className="px-4 py-2.5 text-gray-700">{l.description || LEDGER_LABEL[l.type] || l.type}</td>
+                  <td className={`px-4 py-2.5 font-medium ${l.amount < 0 ? 'text-gray-500' : 'text-green-600'}`}>{l.amount < 0 ? '' : '+'}{l.amount}</td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </Panel>
@@ -136,8 +167,7 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
             <h3 className="text-base font-semibold text-gray-900 mb-1">Top up leads</h3>
             <p className="text-sm text-gray-500 mb-3">Request more lead credits and we&apos;ll confirm &amp; add them to your balance.</p>
             <label className="block text-xs text-gray-500 mb-1">Number of leads</label>
-            <input type="number" min="0" value={topupAmt} onChange={e => setTopupAmt(e.target.value)} placeholder="25" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 mb-1" />
-            {bal && bal.costPerLead > 0 && Number(topupAmt) > 0 && <p className="text-xs text-gray-400 mb-3">≈ {fmt(Number(topupAmt) * bal.costPerLead)} at {fmt(bal.costPerLead)}/lead</p>}
+            <input type="number" min="0" value={topupAmt} onChange={e => setTopupAmt(e.target.value)} placeholder="25" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 mb-3" />
             <label className="block text-xs text-gray-500 mb-1">Note (optional)</label>
             <input value={topupNote} onChange={e => setTopupNote(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 mb-4" />
             <div className="flex gap-2 justify-end">
@@ -153,10 +183,10 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
 
 function Card({ label, value, sub, accent }: { label: string; value: string; sub: string; accent?: boolean }) {
   return (
-    <div className="bg-white rounded-2xl border border-gray-100 p-5">
-      <p className="text-xs text-gray-400 uppercase tracking-wider">{label}</p>
-      <p className="text-2xl font-bold text-gray-900 mt-1">{value}</p>
-      <p className={`text-xs mt-1 ${accent ? 'text-green-600 font-medium' : 'text-gray-400'}`}>{sub}</p>
+    <div className={`rounded-2xl border p-5 ${accent ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-gray-100'}`}>
+      <p className={`text-xs uppercase tracking-wider ${accent ? 'text-emerald-600' : 'text-gray-400'}`}>{label}</p>
+      <p className={`text-2xl font-bold mt-1 ${accent ? 'text-emerald-700' : 'text-gray-900'}`}>{value}</p>
+      <p className={`text-xs mt-1 ${accent ? 'text-emerald-600 font-medium' : 'text-gray-400'}`}>{sub}</p>
     </div>
   )
 }

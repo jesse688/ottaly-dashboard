@@ -13,6 +13,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     active?: boolean
     costPerLead?: number
     currency?: string
+    spendVisibility?: string
   }
 
   const sets: string[] = []
@@ -25,6 +26,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (body.password !== undefined) { values.push(sha256(body.password)); sets.push(`password_hash = $${values.length}`) }
   if (body.costPerLead !== undefined) { values.push(body.costPerLead); sets.push(`cost_per_lead = $${values.length}`) }
   if (body.currency !== undefined) { values.push(body.currency); sets.push(`currency = $${values.length}`) }
+  if (body.spendVisibility !== undefined) { values.push(body.spendVisibility); sets.push(`spend_visibility = $${values.length}`) }
 
   if (!sets.length) return NextResponse.json({ error: 'Nothing to update' }, { status: 400 })
 

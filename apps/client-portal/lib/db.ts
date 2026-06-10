@@ -70,6 +70,9 @@ async function runMigration() {
       // ── Per-client pricing + currency ──────────────────────────────
       `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS cost_per_lead NUMERIC(12,2) NOT NULL DEFAULT 0`,
       `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFAULT 'GBP'`,
+      // Spend visibility to the client: 'auto' (reveal spend+ROI only when ROI>0),
+      // 'hidden' (never show money/ROI — outcomes only), 'always' (full transparency).
+      `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS spend_visibility TEXT NOT NULL DEFAULT 'auto'`,
 
       // ── Client deal-stage label per lead (separate from internal/PV label) ──
       `ALTER TABLE portal_lead_data ADD COLUMN IF NOT EXISTS client_label TEXT`,

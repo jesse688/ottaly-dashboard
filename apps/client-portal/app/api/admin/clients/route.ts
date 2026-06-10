@@ -7,7 +7,7 @@ export async function GET() {
 
   const res = await pool.query(`
     SELECT pc.id, pc.email, pc.company_name, pc.workspace_id, pc.active, pc.created_at,
-           pc.cost_per_lead,
+           pc.cost_per_lead, pc.spend_visibility,
            w.name AS workspace_name
     FROM portal_clients pc
     LEFT JOIN esp_workspaces w ON w.id = pc.workspace_id AND w.source = 'plusvibe'

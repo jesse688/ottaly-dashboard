@@ -8,6 +8,7 @@ interface PortalClient {
   workspace_id: string; workspace_name: string | null
   active: boolean; created_at: string
   cost_per_lead: string | number | null
+  spend_visibility?: string
 }
 interface Workspace { id: string; name: string; active_campaigns: number }
 interface Dispute {
@@ -183,6 +184,11 @@ export function AdminClientsClient() {
     await fetch(`/api/admin/clients/${settingsClient.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ costPerLead: cpl }) })
     setSettingsClient({ ...settingsClient, cost_per_lead: cpl })
     fetch('/api/admin/clients').then(r => r.json()).then(setClients)
+  }
+  async function saveSpendVisibility(mode: string) {
+    if (!settingsClient) return
+    setSettingsClient({ ...settingsClient, spend_visibility: mode })
+    await fetch(`/api/admin/clients/${settingsClient.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ spendVisibility: mode }) })
   }
   async function addLedgerEntry() {
     if (!settingsClient) return
@@ -681,12 +687,26 @@ export function AdminClientsClient() {
                   ) : (
                     <>
                       <div className="mb-4">
-                        <p className="text-xs text-gray-500 mb-1">Current balance</p>
-                        <p className={`text-3xl font-bold ${ledgerData.balance < 0 ? 'text-red-600' : 'text-gray-900'}`}>{fmt(ledgerData.balance)}</p>
+                        <p className="text-xs text-gray-500 mb-1">Leads remaining</p>
+                        <p className={`text-3xl font-bold ${ledgerData.balance <= 0 ? 'text-red-600' : 'text-gray-900'}`}>{ledgerData.balance.toLocaleString()} <span className="text-base font-normal text-gray-400">leads</span></p>
+                      </div>
+
+                      {/* Spend visibility to the client */}
+                      <div className="mb-4 p-3 rounded-lg border border-gray-100">
+                        <label className="block text-xs text-gray-500 mb-1">Show spend &amp; ROI to client</label>
+                        <select
+                          value={settingsClient?.spend_visibility ?? 'auto'}
+                          onChange={e => saveSpendVisibility(e.target.value)}
+                          className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 bg-white">
+                          <option value="auto">Auto — reveal spend + ROI only when ROI is positive</option>
+                          <option value="hidden">Hidden — never show money/ROI (outcomes only)</option>
+                          <option value="always">Always — full transparency</option>
+                        </select>
+                        <p className="text-[11px] text-gray-400 mt-1">Auto keeps a struggling client focused on leads &amp; pipeline; the £ spend and ROI only appear once they&apos;re in profit.</p>
                       </div>
 
                       <div className="mb-4 p-3 rounded-lg border border-gray-100">
-                        <label className="block text-xs text-gray-500 mb-1">Cost per lead (£)</label>
+                        <label className="block text-xs text-gray-500 mb-1">Cost per lead (£) — used for ROI/spend</label>
                         <div className="flex items-center gap-2">
                           <input type="number" min="0" step="0.01" value={cplEdit} onChange={e => setCplEdit(e.target.value)} className="flex-1 px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" />
                           <button onClick={saveCostPerLead} className="px-3 py-2 bg-indigo-600 text-white text-xs font-medium rounded-lg">Save</button>
@@ -694,13 +714,13 @@ export function AdminClientsClient() {
                       </div>
 
                       <div className="mb-4 p-3 rounded-lg border border-gray-100">
-                        <p className="text-xs text-gray-500 mb-2">Add manual entry</p>
+                        <p className="text-xs text-gray-500 mb-2">Add / remove leads</p>
                         <div className="flex items-center gap-2">
                           <select value={entryForm.type} onChange={e => setEntryForm(f => ({...f,type:e.target.value}))} className="px-2 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 bg-white">
-                            <option value="topup">Top-up</option>
-                            <option value="adjustment">Adjustment</option>
+                            <option value="topup">Add leads</option>
+                            <option value="adjustment">Adjust (+/−)</option>
                           </select>
-                          <input type="number" step="0.01" value={entryForm.amount} onChange={e => setEntryForm(f => ({...f,amount:e.target.value}))} placeholder="Amount" className="w-24 px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" />
+                          <input type="number" step="1" value={entryForm.amount} onChange={e => setEntryForm(f => ({...f,amount:e.target.value}))} placeholder="Leads" className="w-24 px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" />
                           <input value={entryForm.note} onChange={e => setEntryForm(f => ({...f,note:e.target.value}))} placeholder="Note (optional)" className="flex-1 px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" />
                           <button onClick={addLedgerEntry} className="px-3 py-2 bg-indigo-600 text-white text-xs font-medium rounded-lg">Add</button>
                         </div>
@@ -710,7 +730,7 @@ export function AdminClientsClient() {
                         <table className="w-full text-sm">
                           <thead>
                             <tr className="border-b border-gray-100 bg-gray-50">
-                              {['Date','Type','Description','Amount'].map(h => <th key={h} className="px-3 py-2 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}
+                              {['Date','Type','Description','Leads'].map(h => <th key={h} className="px-3 py-2 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}
                             </tr>
                           </thead>
                           <tbody>
@@ -723,7 +743,7 @@ export function AdminClientsClient() {
                                   <td className="px-3 py-2 text-xs text-gray-500">{fmtDate(e.created_at)}</td>
                                   <td className="px-3 py-2 text-xs text-gray-600">{e.type}</td>
                                   <td className="px-3 py-2 text-xs text-gray-700 max-w-[10rem] truncate" title={e.description}>{e.description}</td>
-                                  <td className={`px-3 py-2 text-xs font-semibold ${amt < 0 ? 'text-red-600' : 'text-green-600'}`}>{amt < 0 ? '-' : '+'}{fmt(Math.abs(amt))}</td>
+                                  <td className={`px-3 py-2 text-xs font-semibold ${amt < 0 ? 'text-gray-500' : 'text-green-600'}`}>{amt < 0 ? '' : '+'}{amt} {Math.abs(amt) === 1 ? 'lead' : 'leads'}</td>
                                 </tr>
                               )
                             })}
