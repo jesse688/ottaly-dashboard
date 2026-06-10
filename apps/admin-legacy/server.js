@@ -2678,11 +2678,23 @@ function aggPvEmailStats(stats) {
 
 async function activePerformanceWorkspaces() {
   let clientRows = [];
-  try { clientRows = db.prepare(`SELECT workspace_id, client_status FROM clients`).all(); } catch {}
+  try { clientRows = db.prepare(`SELECT workspace_id, workspace_name, client_status FROM clients`).all(); } catch {}
   const [wsRaw] = await Promise.all([pvFetch('/workspaces')]);
   const inactiveIds = new Set(clientRows.filter(r => r.client_status === 'inactive').map(r => r.workspace_id));
   const workspaces = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.workspaces || wsRaw?.data || []);
-  return workspaces.filter(ws => !inactiveIds.has(ws.id));
+  const active = workspaces.filter(ws => !inactiveIds.has(ws.id));
+
+  // Union in any active SQLite client missing from the PlusVibe /workspaces
+  // response. A newly-added client lives in the clients table (so Client/Admin
+  // pages show it) before it surfaces in /workspaces — without this, the cache
+  // never fetches its stats, so the Stats page's sent>0 filter drops it.
+  const seen = new Set(active.map(ws => ws.id));
+  for (const r of clientRows) {
+    if (!r.workspace_id || r.client_status === 'inactive' || seen.has(r.workspace_id)) continue;
+    active.push({ id: r.workspace_id, name: r.workspace_name || r.workspace_id });
+    seen.add(r.workspace_id);
+  }
+  return active;
 }
 
 async function ensurePerformanceDailyStats(wsIds, dates, dailyStats = performanceCache.dailyStats, forceDates = new Set()) {
