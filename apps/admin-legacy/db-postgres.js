@@ -1196,11 +1196,20 @@ class PostgresDatabase {
     })().catch(err => console.error('[PostgreSQL] Migration IIFE error:', err.message));
   }
 
-  async query(sql, params) {
+  async query(sql, params, opts = {}) {
     const client = await this.pool.connect();
+    const raised = opts.statementTimeoutMs ? parseInt(opts.statementTimeoutMs, 10) : 0;
     try {
+      // Optional per-statement timeout for bulk maintenance queries that need
+      // longer than the pool's default 45s. Pooled connections are reused, so
+      // we restore the default in finally to avoid leaking the raised timeout
+      // to the next caller (SET LOCAL can't be used outside a transaction).
+      if (raised) await client.query(`SET statement_timeout = ${raised}`);
       return await client.query(sql, params);
     } finally {
+      if (raised) {
+        try { await client.query(`SET statement_timeout = 45000`); } catch { /* connection may be dead */ }
+      }
       client.release();
     }
   }
@@ -2411,25 +2420,45 @@ class PostgresDatabase {
   // trustworthy verifier results and ignores Apollo's untrusted guesses —
   // exactly the distinction we must preserve.
   async recoverMxProviderFromVerifiedTags() {
+    // Keyset-paginate by id so each batch SEEKS past the last id instead of
+    // re-scanning the whole ~979k-row table for "mx_provider IS NULL" every
+    // time (that repeated full scan is what tripped the 45s statement_timeout
+    // and aborted the run after 2 batches). Raise the timeout per-statement
+    // for the bulk UPDATE, and never let one slow batch kill the whole pass.
     let recovered = 0;
-    for (let i = 0; i < 200; i++) {
-      const r = await this.query(`
-        UPDATE contacts SET mx_provider = CASE
-            WHEN 'email_google'  = ANY(tags) THEN 'email_google'
-            WHEN 'email_outlook' = ANY(tags) THEN 'email_outlook'
-            WHEN 'email_other'   = ANY(tags) THEN 'email_other'
-          END
-        WHERE id IN (
-          SELECT id FROM contacts
-          WHERE mx_provider IS NULL
-            AND email_verified_at IS NOT NULL
-            AND tags && ARRAY['email_google','email_outlook','email_other']
-          LIMIT 10000
-        )
-      `);
+    let lastId = '00000000-0000-0000-0000-000000000000';
+    for (let i = 0; i < 1000; i++) {
+      let r;
+      try {
+        r = await this.query(`
+          WITH batch AS (
+            SELECT id, tags FROM contacts
+            WHERE id > $1
+              AND email_verified_at IS NOT NULL
+              AND mx_provider IS NULL
+              AND tags && ARRAY['email_google','email_outlook','email_other']
+            ORDER BY id
+            LIMIT 5000
+          )
+          UPDATE contacts c SET mx_provider = CASE
+              WHEN 'email_google'  = ANY(b.tags) THEN 'email_google'
+              WHEN 'email_outlook' = ANY(b.tags) THEN 'email_outlook'
+              WHEN 'email_other'   = ANY(b.tags) THEN 'email_other'
+            END
+          FROM batch b
+          WHERE c.id = b.id
+          RETURNING c.id
+        `, [lastId], { statementTimeoutMs: 120000 });
+      } catch (e) {
+        console.warn(`[seed] recovery batch ${i} failed (continuing): ${e.message}`);
+        break;
+      }
       const n = r.rowCount || 0;
-      recovered += n;
       if (n === 0) break;
+      recovered += n;
+      // Advance the cursor to the max id in this batch. RETURNING rows are not
+      // ordered, so take the explicit max rather than the last row.
+      lastId = r.rows.reduce((mx, row) => (row.id > mx ? row.id : mx), lastId);
     }
     return { recovered };
   }
@@ -2460,7 +2489,7 @@ class PostgresDatabase {
         ORDER BY LOWER(SPLIT_PART(email, '@', 2)), email_verified_at DESC
       ) s
       ON CONFLICT (domain) DO NOTHING
-    `);
+    `, [], { statementTimeoutMs: 120000 });
 
     // Fan the seeded providers out to contacts that have no mx_provider yet but
     // whose domain is now known. Batched by id to stay under statement_timeout
@@ -2478,7 +2507,7 @@ class PostgresDatabase {
           LIMIT 10000
         )
           AND dmc.domain = LOWER(SPLIT_PART(c.email, '@', 2))
-      `);
+      `, [], { statementTimeoutMs: 120000 });
       const n = r.rowCount || 0;
       filled += n;
       if (n === 0) break;
