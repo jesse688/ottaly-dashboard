@@ -2,52 +2,336 @@
 
 import { useEffect, useState } from 'react'
 
-interface Signal { id: number; timestamp: string; signal_type: string; workspace_id: string; metric_key: string; metric_value: number; unit: string; status: string; notes: string }
+interface Signal {
+  date: string
+  signal_type: string
+  metric_key: string
+  avg_value: number
+  max_value: number
+  sample_count: number
+}
 
-const STATUS_MAP: Record<string, string> = {
-  normal: 'o-status o-status-good',
-  warning: 'o-status o-status-warning',
-  critical: 'o-status o-status-critical',
+interface ExternalFactor {
+  date: string
+  type: string
+  description: string
+  severity: string
+}
+
+interface MetricSnapshot {
+  label: string
+  value: string
+  status: 'normal' | 'warning' | 'critical' | 'none'
 }
 
 export default function DiagnosticsPage() {
-  const [signals, setSignals] = useState<Signal[]>([])
-  const [filtered, setFiltered] = useState<Signal[]>([])
+  const [days, setDays] = useState(7)
+  const [allSignals, setAllSignals] = useState<Signal[]>([])
+  const [externalFactors, setExternalFactors] = useState<ExternalFactor[]>([])
+  const [selectedDate, setSelectedDate] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
-  const [hours, setHours] = useState('24')
-  const [status, setStatus] = useState('all')
-  const [search, setSearch] = useState('')
+  const [efDate, setEfDate] = useState(new Date().toISOString().slice(0, 10))
+  const [efType, setEfType] = useState('')
+  const [efDesc, setEfDesc] = useState('')
+  const [efSeverity, setEfSeverity] = useState('medium')
 
   useEffect(() => {
-    setLoading(true)
-    fetch(`/api/diagnostics?hours=${hours}`).then(r => r.json()).then(d => setSignals(d.signals ?? [])).catch(() => {}).finally(() => setLoading(false))
-  }, [hours])
+    const fetch = async () => {
+      setLoading(true)
+      try {
+        const [sigRes, efRes] = await Promise.all([
+          fetchApi(`/api/diagnostics/signals?days=${days}`),
+          fetchApi(`/api/diagnostics/external-factors?days=${days}`),
+        ])
+        setAllSignals(sigRes.signals || [])
+        setExternalFactors(efRes.factors || [])
+        if (!selectedDate) {
+          const yesterday = new Date()
+          yesterday.setDate(yesterday.getDate() - 1)
+          setSelectedDate(yesterday.toISOString().slice(0, 10))
+        }
+      } catch (err) {
+        console.error('Failed to fetch diagnostics:', err)
+      } finally {
+        setLoading(false)
+      }
+    }
+    fetch()
+  }, [days])
 
-  useEffect(() => {
-    let r = [...signals]
-    if (status !== 'all') r = r.filter(s => s.status === status)
-    if (search) { const q = search.toLowerCase(); r = r.filter(s => s.metric_key?.toLowerCase().includes(q) || s.signal_type?.toLowerCase().includes(q)) }
-    setFiltered(r)
-  }, [signals, status, search])
+  const fetchApi = async (path: string) => {
+    const res = await fetch(path)
+    return res.json()
+  }
 
-  const criticalCount = signals.filter(s => s.status === 'critical').length
+  const handleLogFactor = async () => {
+    if (!efDate || !efType || !efDesc) return
+    try {
+      await fetch('/api/diagnostics/external-factors', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: efDate, type: efType, description: efDesc, severity: efSeverity }),
+      })
+      setEfType('')
+      setEfDesc('')
+      // Reload factors
+      const res = await fetch(`/api/diagnostics/external-factors?days=${days}`)
+      const data = await res.json()
+      setExternalFactors(data.factors || [])
+    } catch (err) {
+      console.error('Failed to log factor:', err)
+    }
+  }
+
+  // Get signal status for a date and type
+  const getSignalStatus = (date: string, signalType: string): 'normal' | 'warning' | 'critical' | 'none' => {
+    const signals = allSignals.filter(s => s.date === date && s.signal_type === signalType)
+    if (!signals.length) return 'none'
+    const statuses = signals.map(s => {
+      const v = parseFloat(String(s.avg_value))
+      if (signalType === 'reply_rate') return v < 5 ? 'critical' : v < 10 ? 'warning' : 'normal'
+      if (signalType === 'bounce_rate') return v > 10 ? 'critical' : v > 5 ? 'warning' : 'normal'
+      if (signalType === 'warmup') return v < 60 ? 'critical' : v < 80 ? 'warning' : 'normal'
+      if (signalType === 'api_latency') return v > 1000 ? 'critical' : v > 500 ? 'warning' : 'normal'
+      return 'normal'
+    })
+    if (statuses.includes('critical')) return 'critical'
+    if (statuses.includes('warning')) return 'warning'
+    return 'normal'
+  }
+
+  const getDates = () => {
+    const dates = []
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date()
+      d.setDate(d.getDate() - i)
+      dates.push(d.toISOString().slice(0, 10))
+    }
+    return dates
+  }
+
+  const dates = getDates()
+  const signalTypes = ['reply_rate', 'bounce_rate', 'warmup', 'api_latency']
+  const signalLabels: Record<string, string> = {
+    reply_rate: 'Reply Rate',
+    bounce_rate: 'Bounce Rate',
+    warmup: 'Warmup %',
+    api_latency: 'API Latency',
+  }
+
+  const statusColors = {
+    normal: { bg: '#D1FAE5', border: '#059669' },
+    warning: { bg: '#FEF3C7', border: '#D97706' },
+    critical: { bg: '#FEE2E2', border: '#DC2626' },
+    none: { bg: '#F3F4F6', border: '#9CA3AF' },
+  }
 
   return (
-    <div className="o-page">
-      <div className="o-page-header">
+    <div style={{ maxWidth: 1400, margin: '0 auto', padding: '1.5rem' }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
         <div>
-          <div className="o-page-title">Diagnostics</div>
-          <div className="o-page-sub">
-            {filtered.length.toLocaleString()} signals
-            {criticalCount > 0 && <span style={{ marginLeft: 8, color: '#DC2626', fontWeight: 500 }}>· {criticalCount} critical</span>}
-          </div>
+          <h1 style={{ fontSize: '1.3rem', fontWeight: 700 }}>Diagnostics</h1>
+          <p style={{ fontSize: 13, color: '#6B7280', marginTop: 4 }}>Root cause analysis · click any day to see what drove performance</p>
+        </div>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          {[7, 14, 30].map(d => (
+            <button
+              key={d}
+              onClick={() => setDays(d)}
+              style={{ padding: '7px 14px', borderRadius: 6, border: '1px solid #E2E6F0', background: days === d ? '#050C29' : '#fff', color: days === d ? '#fff' : '#050C29', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+            >
+              {d} Days
+            </button>
+          ))}
         </div>
       </div>
 
-      <div className="o-toolbar">
-        <div className="o-search-wrap">
-          <span className="o-search-icon">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      {/* 3-Column Grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
+        {/* LEFT: Timeline + External Factors */}
+        <div>
+          {/* Timeline */}
+          <div style={{ background: '#fff', borderRadius: 8, border: '1px solid #E2E6F0', padding: '1rem', marginBottom: '1rem' }}>
+            <h3 style={{ fontSize: 12, fontWeight: 700, margin: '0 0 1rem 0' }}>Signal Timeline</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              {signalTypes.map(st => (
+                <div key={st} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, minWidth: 80 }}>{signalLabels[st]}</div>
+                  <div style={{ display: 'flex', gap: '2px' }}>
+                    {dates.map(d => {
+                      const status = getSignalStatus(d, st)
+                      const c = statusColors[status]
+                      return (
+                        <button
+                          key={d}
+                          onClick={() => setSelectedDate(d)}
+                          title={d}
+                          style={{
+                            width: 18,
+                            height: 18,
+                            borderRadius: 3,
+                            border: `1px solid ${c.border}`,
+                            background: c.bg,
+                            cursor: 'pointer',
+                            transition: 'all 0.2s',
+                            boxShadow: selectedDate === d ? `0 0 0 2px ${c.border}` : 'none',
+                          }}
+                        />
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* External Factors */}
+          <div style={{ background: '#fff', borderRadius: 8, border: '1px solid #E2E6F0', padding: '1rem' }}>
+            <h3 style={{ fontSize: 12, fontWeight: 700, margin: '0 0 0.75rem 0' }}>External Factors</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', fontSize: 12, marginBottom: '0.75rem' }}>
+              <input
+                type="date"
+                value={efDate}
+                onChange={e => setEfDate(e.target.value)}
+                style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #E2E6F0', fontSize: 12, outline: 'none' }}
+              />
+              <select
+                value={efType}
+                onChange={e => setEfType(e.target.value)}
+                style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #E2E6F0', fontSize: 12, outline: 'none' }}
+              >
+                <option value="">Factor type…</option>
+                <option value="strike">Strike / Industrial action</option>
+                <option value="outage">ISP / Email provider outage</option>
+                <option value="filter">Gmail / Outlook filter change</option>
+                <option value="ratelimit">Rate limit change</option>
+                <option value="maintenance">Scheduled maintenance</option>
+                <option value="other">Other</option>
+              </select>
+              <input
+                type="text"
+                value={efDesc}
+                onChange={e => setEfDesc(e.target.value)}
+                placeholder="Short description"
+                style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #E2E6F0', fontSize: 12, outline: 'none' }}
+              />
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <select
+                  value={efSeverity}
+                  onChange={e => setEfSeverity(e.target.value)}
+                  style={{ flex: 1, padding: '6px 10px', borderRadius: 6, border: '1px solid #E2E6F0', fontSize: 12, outline: 'none' }}
+                >
+                  <option value="low">Low impact</option>
+                  <option value="medium">Medium impact</option>
+                  <option value="high">High impact</option>
+                </select>
+                <button
+                  onClick={handleLogFactor}
+                  style={{ padding: '6px 12px', borderRadius: 6, background: '#050C29', color: '#fff', border: 'none', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}
+                >
+                  Log
+                </button>
+              </div>
+            </div>
+            {externalFactors.map(ef => (
+              <div key={`${ef.date}${ef.type}`} style={{ fontSize: 11, padding: '0.5rem', background: '#FFF7ED', border: '1px solid #FDE68A', borderRadius: 6, marginTop: '0.25rem' }}>
+                <strong style={{ color: '#92400E' }}>{ef.date}</strong>: {ef.description}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* CENTER: Metrics snapshot + Signals table */}
+        <div>
+          {selectedDate && (
+            <>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#050C29', marginBottom: '1rem' }}>
+                {new Date(selectedDate + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+              </div>
+              <div style={{ background: '#fff', borderRadius: 8, border: '1px solid #E2E6F0', padding: '1rem', marginBottom: '1rem' }}>
+                <h3 style={{ fontSize: 12, fontWeight: 700, margin: '0 0 0.75rem 0' }}>Metrics Snapshot</h3>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', fontSize: 12 }}>
+                  {signalTypes.map(st => {
+                    const signals = allSignals.filter(s => s.date === selectedDate && s.signal_type === st)
+                    const value = signals.length ? signals[0].avg_value : null
+                    return (
+                      <div key={st} style={{ padding: '0.75rem', background: '#F9FAFB', borderRadius: 6 }}>
+                        <div style={{ fontSize: 11, color: '#6B7280', fontWeight: 600 }}>{signalLabels[st]}</div>
+                        <div style={{ fontSize: 16, fontWeight: 700, marginTop: 4, color: '#050C29' }}>
+                          {value != null ? typeof value === 'number' ? value.toFixed(1) : value : '—'}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* Signals table */}
+          <div style={{ background: '#fff', borderRadius: 8, border: '1px solid #E2E6F0', padding: '1rem' }}>
+            <h3 style={{ fontSize: 12, fontWeight: 700, margin: '0 0 0.75rem 0' }}>All Signals — Selected Day</h3>
+            {!selectedDate ? (
+              <div style={{ color: '#6B7280', fontSize: 12 }}>← Click a day on the timeline to see signals</div>
+            ) : (
+              <div style={{ fontSize: 11 }}>
+                {allSignals
+                  .filter(s => s.date === selectedDate)
+                  .map((s, i) => (
+                    <div key={i} style={{ padding: '0.5rem 0', borderBottom: i < allSignals.filter(x => x.date === selectedDate).length - 1 ? '1px solid #F3F4F6' : 'none' }}>
+                      <div style={{ fontWeight: 600, color: '#050C29' }}>{signalLabels[s.signal_type] || s.signal_type}</div>
+                      <div style={{ color: '#6B7280', fontSize: 10, marginTop: 2 }}>
+                        {s.metric_key}: {s.avg_value.toFixed(1)} (max: {s.max_value.toFixed(1)})
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* RIGHT: RCA + Legend */}
+        <div>
+          {/* Root Cause */}
+          <div style={{ background: '#fff', borderRadius: 8, border: '1px solid #E2E6F0', padding: '1rem', marginBottom: '1rem' }}>
+            <h3 style={{ fontSize: 12, fontWeight: 700, margin: '0 0 0.75rem 0' }}>Root Cause Analysis</h3>
+            {!selectedDate ? (
+              <div style={{ color: '#6B7280', fontSize: 12 }}>Select a day to run diagnosis</div>
+            ) : (
+              <div style={{ fontSize: 11, color: '#050C29', lineHeight: 1.6 }}>
+                Based on signals for {selectedDate}:
+                <ul style={{ marginTop: '0.5rem', paddingLeft: '1.25rem', color: '#6B7280' }}>
+                  <li>Monitor key metrics for anomalies</li>
+                  <li>Check external factors log for events</li>
+                  <li>Review API latency trends</li>
+                  <li>Verify supplier performance stats</li>
+                </ul>
+              </div>
+            )}
+          </div>
+
+          {/* Legend */}
+          <div style={{ background: '#fff', borderRadius: 8, border: '1px solid #E2E6F0', padding: '1rem' }}>
+            <h3 style={{ fontSize: 12, fontWeight: 700, margin: '0 0 0.75rem 0' }}>Signal Guide</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', fontSize: 11 }}>
+              {(['normal', 'warning', 'critical', 'none'] as const).map(s => {
+                const labels = { normal: 'Normal', warning: 'Warning', critical: 'Critical', none: 'No data' }
+                const c = statusColors[s]
+                return (
+                  <div key={s} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <div style={{ width: 12, height: 12, borderRadius: 2, background: c.bg, border: `1px solid ${c.border}` }} />
+                    <strong>{labels[s]}</strong> — {s === 'normal' ? 'within healthy range' : s === 'warning' ? 'slightly degraded' : s === 'critical' ? 'likely causing issues' : 'signal not collected'}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
               <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
             </svg>
           </span>
