@@ -21,7 +21,7 @@ export default function MailboxesPage() {
   const [lastRefresh, setLastRefresh] = useState<string>('')
 
   useEffect(() => {
-    const fetch = async () => {
+    const loadData = async () => {
       try {
         const res = await fetch('/api/mailboxes/summary')
         const data = await res.json()
@@ -33,7 +33,7 @@ export default function MailboxesPage() {
         setLoading(false)
       }
     }
-    fetch()
+    loadData()
   }, [])
 
   const total = suppliers.reduce((s, x) => s + x.total, 0)

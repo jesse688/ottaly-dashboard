@@ -2,6 +2,8 @@
 
 import { useEffect, useState, useCallback } from 'react'
 
+// ── Types ────────────────────────────────────────────────────────────────────
+
 interface CampaignFlag {
   type: 'critical' | 'warning' | 'info'
   msg: string
@@ -9,6 +11,25 @@ interface CampaignFlag {
 
 interface VariantInsight {
   msg: string
+}
+
+interface Variation {
+  variation: string
+  name: string
+  sent: number
+  reply: number
+  pos_reply: number
+}
+
+interface VariationStep {
+  step: number
+  variations: Variation[]
+}
+
+interface StepReply {
+  step: number
+  sent: number
+  replies: number
 }
 
 interface Campaign {
@@ -30,6 +51,8 @@ interface Campaign {
   tier: 'top' | 'good' | 'warning' | 'critical' | 'new'
   flags: CampaignFlag[]
   variantInsights: VariantInsight[]
+  variationSteps: VariationStep[]
+  stepReplies: StepReply[]
 }
 
 interface Workspace {
@@ -41,13 +64,35 @@ interface Workspace {
   campaigns: Campaign[]
 }
 
+interface Optimisation {
+  wsId: string
+  wsName: string
+  campId: string
+  campName: string
+  step: number
+  confidence: 'high' | 'medium'
+  winner: { variation: string; rate: number; reply: number; sent: number }
+  losers: Array<{ variation: string; rate: number }>
+}
+
+interface TargetingPattern {
+  titleKey: string
+  sizeKey: string
+  kwKey: string
+  avgReplyRate: number
+  count: number
+  totalSent: number
+  campaigns: Array<{ wsName: string }>
+}
+
 interface IntelligenceData {
   workspaces: Workspace[]
-  optimisations?: Array<{ id: string; msg: string }>
+  optimisations: Optimisation[]
+  targetingPatterns: TargetingPattern[]
   updatedAt: string
 }
 
-type SortKey = 'sent' | 'exhaustion' | 'replyRate' | 'bounceRate' | 'positivePct' | 'leads'
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
 function shortName(name: string): string {
   const cleaned = name.replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim()
@@ -93,6 +138,8 @@ function apolloSummaryLine(name: string): string {
   return parts.join(' · ')
 }
 
+type SortKey = 'sent' | 'exhaustion' | 'replyRate' | 'bounceRate' | 'positivePct' | 'leads'
+
 function campaignSortValue(c: Campaign, key: SortKey): number {
   switch (key) {
     case 'sent':        return c.sent || 0
@@ -105,15 +152,277 @@ function campaignSortValue(c: Campaign, key: SortKey): number {
   }
 }
 
-// Legacy-style status badge
+// ── Sub-components ────────────────────────────────────────────────────────────
+
 function StatusBadge({ status }: { status: string }) {
-  const s = (status || '').toLowerCase()
-  const className =
-    s === 'active'    ? 'status-badge active' :
-    s === 'paused'    ? 'status-badge paused' :
-    s === 'completed' ? 'status-badge completed' :
-                        'status-badge draft'
-  return <span className={className}>{status || '—'}</span>
+  const s = status.toLowerCase()
+  const cls =
+    s === 'active'    ? 'o-status o-status-active' :
+    s === 'paused'    ? 'o-status o-status-warning' :
+    s === 'completed' ? 'o-status o-status-inactive' :
+                        'o-status o-status-unknown'
+  return <span className={cls}>{status}</span>
+}
+
+function TierDot({ tier }: { tier: Campaign['tier'] }) {
+  const color =
+    tier === 'top'      ? '#059669' :
+    tier === 'good'     ? '#10B981' :
+    tier === 'warning'  ? '#D97706' :
+    tier === 'critical' ? '#DC2626' :
+                          '#9CA3AF'
+  return <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', flexShrink: 0, background: color }} />
+}
+
+function RateVal({ tier, children }: { tier: Campaign['tier']; children: React.ReactNode }) {
+  const color =
+    tier === 'top'      ? '#059669' :
+    tier === 'good'     ? '#10B981' :
+    tier === 'warning'  ? '#D97706' :
+    tier === 'critical' ? '#DC2626' :
+                          '#6B7280'
+  return <span style={{ fontWeight: 700, fontSize: 13, color }}>{children}</span>
+}
+
+function FlagChip({ flag }: { flag: CampaignFlag }) {
+  const cls =
+    flag.type === 'critical' ? 'o-status o-status-critical' :
+    flag.type === 'warning'  ? 'o-status o-status-warning' :
+    flag.type === 'info'     ? 'o-status o-status-inactive' :
+                               'o-status o-status-good'
+  return (
+    <span className={cls} style={{ fontSize: 10 }}>
+      {flag.msg.split('—')[0].trim()}
+    </span>
+  )
+}
+
+function ExhaustBar({ pct, color }: { pct: number; color: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div style={{ width: 50, height: 5, borderRadius: 9999, background: '#E2E6F0', overflow: 'hidden' }}>
+        <div style={{ width: `${Math.min(pct, 100)}%`, height: '100%', borderRadius: 9999, background: color }} />
+      </div>
+      <span style={{ fontSize: 11, fontWeight: 600, color }}>{pct}%</span>
+    </div>
+  )
+}
+
+function InsightCard({ cls, msg }: { cls: string; msg: string }) {
+  const bgColor =
+    cls === 'critical' ? '#FEF2F2' :
+    cls === 'warning'  ? '#FFFBEB' :
+    cls === 'success'  ? '#F0FDF4' :
+                         '#EFF6FF'
+  const borderColor =
+    cls === 'critical' ? '#FECACA' :
+    cls === 'warning'  ? '#FDE68A' :
+    cls === 'success'  ? '#BBF7D0' :
+                         '#BFDBFE'
+  const textColor =
+    cls === 'critical' ? '#DC2626' :
+    cls === 'warning'  ? '#92400E' :
+    cls === 'success'  ? '#065F46' :
+                         '#1E40AF'
+  return (
+    <div style={{ background: bgColor, border: `1px solid ${borderColor}`, color: textColor, borderRadius: 7, padding: '8px 12px', marginBottom: 8, fontSize: 12, lineHeight: 1.6 }}>
+      {msg}
+    </div>
+  )
+}
+
+function ApolloCard({ name }: { name: string }) {
+  const a = parseApolloUrl(name)
+  if (!a) return null
+  const row = (label: string, val: string, color?: string) =>
+    val ? (
+      <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: '1px solid #F3F4F6', fontSize: 13 }}>
+        <span style={{ color: '#6B7280' }}>{label}</span>
+        <span style={{ fontWeight: 600, textAlign: 'right', fontSize: 12, maxWidth: 300, ...(color ? { color } : {}) }}>
+          {val}
+        </span>
+      </div>
+    ) : null
+  return (
+    <div className="o-card" style={{ marginBottom: 16 }}>
+      <div className="o-card-header">
+        <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: '#6B7280' }}>Apollo Targeting</span>
+        <a href={a.rawUrl} target="_blank" rel="noreferrer"
+           style={{ fontSize: 11, color: '#7C89CD', textDecoration: 'none', fontWeight: 400 }}>Open in Apollo ↗</a>
+      </div>
+      <div className="o-card-body">
+        {row('Job Titles', a.titles.join(', ') || a.seniority.join(', '))}
+        {a.titles.length && a.seniority.length ? row('Seniority', a.seniority.join(', ')) : null}
+        {row('Company Size', a.sizes.join(', '))}
+        {row('Locations', a.locations.join(', '))}
+        {row('Include Industries', a.inclKws.join(', '), '#059669')}
+        {row('Exclude Industries', a.exclKws.slice(0, 10).join(', ') + (a.exclKws.length > 10 ? ` +${a.exclKws.length - 10} more` : ''), '#DC2626')}
+        {row('Email Status', a.emailStatus.join(', '))}
+      </div>
+    </div>
+  )
+}
+
+function DetailPanel({ campaign, wsAvg }: { campaign: Campaign; wsAvg: number }) {
+  const insights: Array<{ cls: string; msg: string }> = []
+  campaign.flags.forEach(f =>
+    insights.push({ cls: f.type === 'critical' ? 'critical' : f.type === 'warning' ? 'warning' : 'success', msg: f.msg })
+  )
+  campaign.variantInsights.forEach(v => insights.push({ cls: 'success', msg: v.msg }))
+  if (!insights.length && campaign.sent >= 50)
+    insights.push({ cls: 'success', msg: 'No issues detected — campaign is performing within normal range.' })
+
+  const exclOOO = campaign.sent > 0
+    ? (((campaign.posReplies + campaign.negReplies + (campaign.neutralReplies || 0)) / campaign.sent) * 100).toFixed(2)
+    : null
+
+  const activeSteps = (campaign.variationSteps || []).filter(s =>
+    s.variations.some(v => v.sent >= 10)
+  )
+
+  const statRow = (label: string, value: React.ReactNode) => (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #F3F4F6', fontSize: 13 }}>
+      <span style={{ color: '#6B7280' }}>{label}</span>
+      <span style={{ fontWeight: 600 }}>{value}</span>
+    </div>
+  )
+
+  return (
+    <div style={{ padding: 20, display: 'grid', gap: 20, gridTemplateColumns: '1fr 1fr' }}>
+      {/* Left column */}
+      <div>
+        <ApolloCard name={campaign.name} />
+
+        {/* Campaign Stats */}
+        <div className="o-card" style={{ marginBottom: 16 }}>
+          <div className="o-card-header">
+            <div className="o-card-title">Campaign Stats</div>
+          </div>
+          <div className="o-card-body">
+            {statRow('Total Sends', campaign.sent.toLocaleString())}
+            {statRow('Total Replies', campaign.replies.toLocaleString())}
+            {statRow('Reply Rate (incl. OOO)',
+              <RateVal tier={campaign.tier}>{(campaign.replyRate * 100).toFixed(2)}%</RateVal>
+            )}
+            {exclOOO && statRow('Reply Rate (excl. OOO)',
+              <span style={{ color: '#7C89CD' }}>{exclOOO}%</span>
+            )}
+            {statRow('Workspace Avg (incl. OOO)', `${(wsAvg * 100).toFixed(2)}%`)}
+            {statRow('Positive Replies', <span style={{ color: '#059669' }}>{campaign.posReplies}</span>)}
+            {statRow('Negative Replies', <span style={{ color: '#DC2626' }}>{campaign.negReplies}</span>)}
+            {statRow('Bounces', campaign.bounces)}
+            {statRow('Actual Leads', <span style={{ color: '#1F6F78' }}>{campaign.leads}</span>)}
+            {statRow('Data Size', `${(campaign.dataSize || 0).toLocaleString()} contacts`)}
+            {statRow('Data Used',
+              `${campaign.leadContacted.toLocaleString()} / ${(campaign.dataSize || 0).toLocaleString()} (${campaign.exhaustion > 0 ? Math.round(campaign.exhaustion * 100) + '%' : '—'})`
+            )}
+            {campaign.lastReplied && statRow('Last Reply',
+              new Date(campaign.lastReplied).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+            )}
+          </div>
+        </div>
+
+        {/* Step Drop-off */}
+        {(campaign.stepReplies || []).filter(s => s.sent > 0).length > 1 && (
+          <div className="o-card" style={{ marginBottom: 16 }}>
+            <div className="o-card-header">
+              <div className="o-card-title">Step Drop-off</div>
+            </div>
+            <div className="o-card-body">
+              {(campaign.stepReplies || []).filter(s => s.sent > 0).map(s => {
+                const sr = s.sent > 0 ? s.replies / s.sent : 0
+                const barW = Math.min(Math.round(sr * 100 / 0.05), 80)
+                return (
+                  <div key={s.step} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #F3F4F6', fontSize: 13 }}>
+                    <span style={{ color: '#6B7280' }}>Step {s.step}</span>
+                    <span style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ display: 'inline-block', width: barW, height: 5, borderRadius: 2, background: '#1F6F78' }} />
+                      {(sr * 100).toFixed(2)}% ({s.replies}/{s.sent.toLocaleString()})
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Insights */}
+        <div className="o-card">
+          <div className="o-card-header">
+            <div className="o-card-title">Insights & Recommendations</div>
+          </div>
+          <div className="o-card-body">
+            {insights.length
+              ? insights.map((ins, i) => <InsightCard key={i} cls={ins.cls} msg={ins.msg} />)
+              : <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', color: '#1E40AF', borderRadius: 7, padding: '8px 12px', fontSize: 12 }}>Not enough sends for analysis</div>
+            }
+          </div>
+        </div>
+      </div>
+
+      {/* Right column — Variant Performance */}
+      <div className="o-card">
+        <div className="o-card-header">
+          <div className="o-card-title">
+            Variant Performance{' '}
+            {!campaign.variationSteps?.length && (
+              <span style={{ fontWeight: 400, textTransform: 'none', color: '#6B7280', fontSize: 12 }}>(needs 300+ sends)</span>
+            )}
+          </div>
+        </div>
+        <div className="o-card-body">
+          {activeSteps.length ? activeSteps.map(step => {
+            const vars = step.variations.filter(v => v.sent > 0)
+            if (!vars.length) return null
+            const maxRate = Math.max(...vars.map(v => v.sent > 0 ? v.reply / v.sent : 0))
+            return (
+              <div key={step.step} style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7280', marginBottom: 6 }}>STEP {step.step}</div>
+                <div className="o-table-wrap">
+                  <table className="o-table">
+                    <thead>
+                      <tr>
+                        <th>Variant</th>
+                        <th>Name</th>
+                        <th>Sent</th>
+                        <th>Reply Rate</th>
+                        <th>Pos Replies</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {vars.map(v => {
+                        const rate = v.sent > 0 ? v.reply / v.sent : 0
+                        const isBest = rate === maxRate && maxRate > 0
+                        const barW = maxRate > 0 ? Math.round(rate / maxRate * 80) : 0
+                        return (
+                          <tr key={v.variation} style={isBest ? { background: '#F0FDF4' } : {}}>
+                            <td>
+                              <strong>{v.variation}</strong>{isBest ? ' 🏆' : ''}
+                            </td>
+                            <td style={{ color: '#6B7280' }}>
+                              {v.name === '-' ? '' : v.name}
+                            </td>
+                            <td>{v.sent.toLocaleString()}</td>
+                            <td>
+                              <span style={{ display: 'inline-block', width: barW, height: 6, borderRadius: 2, verticalAlign: 'middle', marginRight: 4, background: '#1F6F78' }} />
+                              <strong>{(rate * 100).toFixed(2)}%</strong>
+                            </td>
+                            <td>{v.pos_reply}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )
+          }) : (
+            <div className="o-empty">No variant data available for this campaign</div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
@@ -176,7 +485,7 @@ export default function CampaignsPage() {
   }
 
   async function applyOpt(i: number) {
-    if (!data || !data.optimisations) return
+    if (!data) return
     const o = data.optimisations[i]
     setOptStatuses(s => ({ ...s, [i]: 'applying' }))
     try {
