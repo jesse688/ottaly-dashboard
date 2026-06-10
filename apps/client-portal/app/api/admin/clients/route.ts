@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { getAdminSession, sha256 } from '@/lib/auth'
+import { getAdminSession, sha256, generateAccessCode } from '@/lib/auth'
 import pool from '@/lib/db'
 import { backfillWorkspace } from '@/lib/sync'
 import { registerWebhook } from '@/lib/plusvibe'
@@ -8,7 +8,7 @@ export async function GET() {
   if (!await getAdminSession()) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const res = await pool.query(`
-    SELECT pc.id, pc.email, pc.company_name, pc.workspace_id, pc.active, pc.created_at,
+    SELECT pc.id, pc.username, pc.email, pc.company_name, pc.workspace_id, pc.active, pc.created_at,
            pc.cost_per_lead, pc.spend_visibility,
            w.name AS workspace_name
     FROM portal_clients pc
@@ -21,26 +21,31 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   if (!await getAdminSession()) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { email, password, workspaceId, companyName, costPerLead } = await req.json() as {
-    email: string
-    password: string
+  const b = await req.json() as {
+    username?: string
+    code?: string
+    email?: string
     workspaceId: string
     companyName: string
     costPerLead?: number
   }
+  const username = (b.username ?? '').trim()
+  const workspaceId = b.workspaceId
+  const companyName = b.companyName
+  const code = (b.code ?? '').trim() || generateAccessCode()
 
-  if (!email || !password || !workspaceId || !companyName) {
-    return NextResponse.json({ error: 'All fields required' }, { status: 400 })
+  if (!username || !workspaceId || !companyName) {
+    return NextResponse.json({ error: 'Username, company and workspace are required' }, { status: 400 })
   }
 
-  const passwordHash = sha256(password)
+  const passwordHash = sha256(code)
 
   try {
     const res = await pool.query(
-      `INSERT INTO portal_clients (email, password_hash, workspace_id, company_name, cost_per_lead)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO portal_clients (username, email, password_hash, workspace_id, company_name, cost_per_lead)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING id`,
-      [email.toLowerCase(), passwordHash, workspaceId, companyName, Number(costPerLead) || 0]
+      [username, (b.email ?? '').toLowerCase() || null, passwordHash, workspaceId, companyName, Number(b.costPerLead) || 0]
     )
 
     // Auto-backfill this client's workspace (leads + real email threads) so they
@@ -53,11 +58,12 @@ export async function POST(req: NextRequest) {
     // unless PLUSVIBE_WEBHOOK_CREATE_URL/TARGET_URL are configured (polling covers it otherwise).
     const hook = await registerWebhook(workspaceId)
 
-    return NextResponse.json({ ok: true, id: res.rows[0].id, webhook: hook.ok ? 'registered' : hook.reason })
+    // Return the plaintext code ONCE so the admin can send it to the client.
+    return NextResponse.json({ ok: true, id: res.rows[0].id, username, code, webhook: hook.ok ? 'registered' : hook.reason })
   } catch (err: unknown) {
     const pgErr = err as { code?: string }
     if (pgErr.code === '23505') {
-      return NextResponse.json({ error: 'Email already exists' }, { status: 409 })
+      return NextResponse.json({ error: 'That username is already taken' }, { status: 409 })
     }
     console.error('[admin/clients POST]', err)
     return NextResponse.json({ error: 'Database error' }, { status: 500 })

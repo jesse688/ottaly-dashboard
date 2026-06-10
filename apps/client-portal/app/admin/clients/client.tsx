@@ -4,7 +4,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
 
 interface PortalClient {
-  id: string; email: string; company_name: string
+  id: string; username?: string | null; email?: string | null; company_name: string
   workspace_id: string; workspace_name: string | null
   active: boolean; created_at: string
   cost_per_lead: string | number | null
@@ -69,7 +69,7 @@ export function AdminClientsClient() {
   // Client form
   const [showForm, setShowForm]   = useState(false)
   const [editId, setEditId]       = useState<string | null>(null)
-  const [form, setForm]           = useState({ email: '', password: '', workspaceId: '', companyName: '', costPerLead: '' })
+  const [form, setForm]           = useState({ username: '', code: '', email: '', workspaceId: '', companyName: '', costPerLead: '' })
   const [resetPassword, setResetPassword] = useState('')
   const [saving, setSaving]       = useState(false)
   const [error, setError]         = useState('')
@@ -134,15 +134,16 @@ export function AdminClientsClient() {
     e.preventDefault(); setSaving(true); setError('')
     try {
       const res = await fetch('/api/admin/clients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...form, costPerLead: Number(form.costPerLead) || 0 }) })
-      const data = await res.json() as { error?: string; webhook?: string }
+      const data = await res.json() as { error?: string; webhook?: string; username?: string; code?: string }
       if (!res.ok) { setError(data.error ?? 'Error'); return }
-      setForm({ email:'', password:'', workspaceId:'', companyName:'', costPerLead:'' }); setShowForm(false)
+      setForm({ username:'', code:'', email:'', workspaceId:'', companyName:'', costPerLead:'' }); setShowForm(false)
       fetch('/api/admin/clients').then(r => r.json()).then(setClients)
       const hookMsg = data.webhook === 'created' ? 'Webhook created ✓'
         : data.webhook === 'already-exists' ? 'Webhook already active ✓'
-        : data.webhook === 'created-replies-only' ? 'Webhook set (lead alerts activate after the first lead is marked; sync covers it meanwhile) ✓'
+        : data.webhook === 'created-replies-only' ? 'Webhook set (lead alerts activate after the first lead is marked) ✓'
         : `Webhook: ${data.webhook ?? 'n/a'}`
-      alert(`Client created. ${hookMsg}. Leads + emails are backfilling now.`)
+      // Show the login details so the admin can send them to the client.
+      alert(`Client created — send these login details:\n\nUsername: ${data.username}\nAccess code: ${data.code}\n\n${hookMsg}. Leads + emails are backfilling now.`)
     } finally { setSaving(false) }
   }
   async function toggleActive(c: PortalClient) {
@@ -166,7 +167,8 @@ export function AdminClientsClient() {
   }
   async function handleResetPassword(id: string) {
     if (!resetPassword) return
-    await fetch(`/api/admin/clients/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: resetPassword }) })
+    await fetch(`/api/admin/clients/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: resetPassword }) })
+    alert(`New access code set: ${resetPassword}\n\nSend it to the client.`)
     setResetPassword(''); setEditId(null)
   }
   async function handleDelete(id: string) {
@@ -391,8 +393,9 @@ export function AdminClientsClient() {
                       {workspaces.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
                     </select>
                   </div>
-                  <div><label className="block text-xs text-gray-500 mb-1">Login email</label><input required type="email" value={form.email} onChange={e => setForm(f=>({...f,email:e.target.value}))} placeholder="client@company.com" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
-                  <div><label className="block text-xs text-gray-500 mb-1">Password</label><input required type="text" value={form.password} onChange={e => setForm(f=>({...f,password:e.target.value}))} placeholder="Set a password" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
+                  <div><label className="block text-xs text-gray-500 mb-1">Username</label><input required value={form.username} onChange={e => setForm(f=>({...f,username:e.target.value}))} placeholder="e.g. gareth" autoCapitalize="none" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
+                  <div><label className="block text-xs text-gray-500 mb-1">Access code <span className="text-gray-400">(blank = auto-generate)</span></label><input value={form.code} onChange={e => setForm(f=>({...f,code:e.target.value}))} placeholder="Otta-7K2P" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
+                  <div className="col-span-2"><label className="block text-xs text-gray-500 mb-1">Email <span className="text-gray-400">(optional, for your records)</span></label><input type="email" value={form.email} onChange={e => setForm(f=>({...f,email:e.target.value}))} placeholder="client@company.com" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
                   <div><label className="block text-xs text-gray-500 mb-1">Cost per lead (£)</label><input type="number" min="0" step="0.01" value={form.costPerLead} onChange={e => setForm(f=>({...f,costPerLead:e.target.value}))} placeholder="0" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
                   {error && <p className="col-span-2 text-sm text-red-600">{error}</p>}
                   <div className="col-span-2 flex gap-2 justify-end">
@@ -407,7 +410,7 @@ export function AdminClientsClient() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-100 bg-gray-50">
-                    {['Company','Email','Workspace','Cost/lead','Status','Actions'].map(h => <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}
+                    {['Company','Username','Workspace','Cost/lead','Status','Actions'].map(h => <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}
                   </tr>
                 </thead>
                 <tbody>
@@ -419,7 +422,7 @@ export function AdminClientsClient() {
                     <>
                       <tr key={client.id} className="border-b border-gray-50 hover:bg-gray-50">
                         <td className="px-4 py-3 font-medium text-gray-900">{client.company_name}</td>
-                        <td className="px-4 py-3 text-gray-600 text-xs">{client.email}</td>
+                        <td className="px-4 py-3 text-gray-600 text-xs font-mono">{client.username ?? client.email ?? '—'}</td>
                         <td className="px-4 py-3 text-gray-600 text-xs">{client.workspace_name ?? client.workspace_id.slice(0,8)+'…'}</td>
                         <td className="px-4 py-3 text-gray-700 text-xs">{fmt(client.cost_per_lead ?? 0)}</td>
                         <td className="px-4 py-3">
@@ -429,7 +432,7 @@ export function AdminClientsClient() {
                           <div className="flex items-center gap-2 flex-wrap">
                             <button onClick={() => viewAsClient(client)} className="text-xs font-medium text-emerald-600 hover:text-emerald-800">View as</button>
                             <span className="text-gray-200">|</span>
-                            <button onClick={() => setEditId(editId===client.id?null:client.id)} className="text-xs text-indigo-600 hover:text-indigo-800">Password</button>
+                            <button onClick={() => setEditId(editId===client.id?null:client.id)} className="text-xs text-indigo-600 hover:text-indigo-800">Reset code</button>
                             <span className="text-gray-200">|</span>
                             <button onClick={() => openSettings(client)} className="text-xs text-indigo-600 hover:text-indigo-800">Settings</button>
                             <span className="text-gray-200">|</span>
@@ -445,8 +448,8 @@ export function AdminClientsClient() {
                         <tr key={`${client.id}-edit`} className="border-b border-gray-50 bg-indigo-50">
                           <td colSpan={6} className="px-4 py-3">
                             <div className="flex items-center gap-3">
-                              <span className="text-xs text-gray-600">New password:</span>
-                              <input type="text" value={resetPassword} onChange={e => setResetPassword(e.target.value)} placeholder="Enter new password" className="px-3 py-1.5 rounded-lg border border-gray-200 text-sm outline-none w-48" />
+                              <span className="text-xs text-gray-600">New access code:</span>
+                              <input type="text" value={resetPassword} onChange={e => setResetPassword(e.target.value)} placeholder="Enter or paste new code" className="px-3 py-1.5 rounded-lg border border-gray-200 text-sm outline-none w-48" />
                               <button onClick={() => handleResetPassword(client.id)} disabled={!resetPassword} className="px-3 py-1.5 bg-indigo-600 text-white text-xs font-medium rounded-lg disabled:opacity-60">Save</button>
                               <button onClick={() => { setEditId(null); setResetPassword('') }} className="text-xs text-gray-500">Cancel</button>
                             </div>

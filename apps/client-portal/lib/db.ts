@@ -25,6 +25,10 @@ async function runMigration() {
   try {
     const statements = [
       `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS hidden_fields TEXT[] DEFAULT '{}'`,
+      // Username login (+ access code stored in password_hash). Email becomes optional.
+      `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS username TEXT`,
+      `ALTER TABLE portal_clients ALTER COLUMN email DROP NOT NULL`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS uq_portal_clients_username ON portal_clients (lower(username)) WHERE username IS NOT NULL`,
       `CREATE TABLE IF NOT EXISTS portal_client_labels (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         client_id UUID NOT NULL REFERENCES portal_clients(id) ON DELETE CASCADE,

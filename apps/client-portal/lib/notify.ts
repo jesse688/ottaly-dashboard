@@ -4,7 +4,7 @@ import pool from './db'
 // ping Slack if a bot token + channel are configured. Never throws.
 export async function notifyAdmin(input: {
   clientId?: string
-  kind: 'topup_request' | 'invoice_paid' | 'reply_sent' | 'dispute'
+  kind: 'topup_request' | 'invoice_paid' | 'reply_sent' | 'dispute' | 'login_help'
   title: string
   body?: string
 }): Promise<void> {

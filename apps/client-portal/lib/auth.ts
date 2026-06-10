@@ -25,15 +25,26 @@ export function sha256(input: string): string {
   return createHash('sha256').update(input).digest('hex')
 }
 
+// Friendly access code like "Otta-7K2P" — easy to read out, no ambiguous chars.
+export function generateAccessCode(): string {
+  const alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
+  let s = ''
+  for (let i = 0; i < 5; i++) s += alphabet[Math.floor(Math.random() * alphabet.length)]
+  return `Otta-${s}`
+}
+
+// Log in with a username OR email as the identifier, plus the access code
+// (stored hashed in password_hash). Existing email+password clients still work.
 export async function validateClientCredentials(
-  email: string,
-  password: string
+  identifier: string,
+  code: string
 ): Promise<ClientSession | null> {
   const res = await pool.query(
     `SELECT id, workspace_id, company_name, email, password_hash
      FROM portal_clients
-     WHERE email = $1 AND active = true`,
-    [email.toLowerCase()]
+     WHERE (lower(username) = lower($1) OR lower(email) = lower($1)) AND active = true
+     LIMIT 1`,
+    [identifier.trim()]
   )
   if (!res.rows.length) return null
 
@@ -41,11 +52,11 @@ export async function validateClientCredentials(
     id: string
     workspace_id: string
     company_name: string
-    email: string
+    email: string | null
     password_hash: string
   }
 
-  const inputHash = Buffer.from(sha256(password))
+  const inputHash = Buffer.from(sha256(code))
   const storedHash = Buffer.from(row.password_hash)
   if (inputHash.length !== storedHash.length) return null
   try {
@@ -58,7 +69,7 @@ export async function validateClientCredentials(
     clientId: row.id,
     workspaceId: row.workspace_id,
     companyName: row.company_name,
-    email: row.email,
+    email: row.email ?? '',
   }
 }
 

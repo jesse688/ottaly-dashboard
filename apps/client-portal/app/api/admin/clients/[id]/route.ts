@@ -6,6 +6,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (!await getAdminSession()) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   const { id } = await params
   const body = await req.json() as {
+    username?: string
+    code?: string
     email?: string
     password?: string
     workspaceId?: string
@@ -19,11 +21,14 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const sets: string[] = []
   const values: unknown[] = []
 
-  if (body.email !== undefined) { values.push(body.email.toLowerCase()); sets.push(`email = $${values.length}`) }
+  if (body.username !== undefined) { values.push(body.username.trim()); sets.push(`username = $${values.length}`) }
+  if (body.email !== undefined) { values.push(body.email.toLowerCase() || null); sets.push(`email = $${values.length}`) }
   if (body.companyName !== undefined) { values.push(body.companyName); sets.push(`company_name = $${values.length}`) }
   if (body.workspaceId !== undefined) { values.push(body.workspaceId); sets.push(`workspace_id = $${values.length}`) }
   if (body.active !== undefined) { values.push(body.active); sets.push(`active = $${values.length}`) }
-  if (body.password !== undefined) { values.push(sha256(body.password)); sets.push(`password_hash = $${values.length}`) }
+  // Accept either { code } (new) or { password } (legacy) for the access code.
+  const newCode = body.code ?? body.password
+  if (newCode !== undefined) { values.push(sha256(newCode)); sets.push(`password_hash = $${values.length}`) }
   if (body.costPerLead !== undefined) { values.push(body.costPerLead); sets.push(`cost_per_lead = $${values.length}`) }
   if (body.currency !== undefined) { values.push(body.currency); sets.push(`currency = $${values.length}`) }
   if (body.spendVisibility !== undefined) { values.push(body.spendVisibility); sets.push(`spend_visibility = $${values.length}`) }
@@ -31,7 +36,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (!sets.length) return NextResponse.json({ error: 'Nothing to update' }, { status: 400 })
 
   values.push(id)
-  await pool.query(`UPDATE portal_clients SET ${sets.join(', ')} WHERE id = $${values.length}`, values)
+  try {
+    await pool.query(`UPDATE portal_clients SET ${sets.join(', ')} WHERE id = $${values.length}`, values)
+  } catch (err: unknown) {
+    if ((err as { code?: string }).code === '23505') return NextResponse.json({ error: 'That username is already taken' }, { status: 409 })
+    throw err
+  }
   return NextResponse.json({ ok: true })
 }
 
