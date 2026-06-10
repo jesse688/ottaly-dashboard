@@ -3187,36 +3187,80 @@ app.get('/api/stats/by-provider', requireSession, async (req, res) => {
       ? String(req.query.workspace_ids).split(',').filter(Boolean)
       : null;
 
-    // Bucket mx_provider into the three labels Jesse cares about + unknown.
-    const bucket = `
-      CASE COALESCE(mx_provider, 'unknown')
-        WHEN 'email_google'  THEN 'google'
-        WHEN 'email_outlook' THEN 'outlook'
-        WHEN 'email_other'   THEN 'other'
-        ELSE 'unknown'
-      END`;
-
+    // Count REAL sent events in the window from email_events — one row per send,
+    // bucketed by recipient provider — so this matches PlusVibe's "sends in
+    // period" figure. The old version summed contacts.email_count (a LIFETIME
+    // counter) for contacts touched in the window, which both over- and
+    // under-counted and scattered real "other" sends into Unknown.
+    //
+    // Recipient classification mirrors /api/combo-analysis exactly: prefer the
+    // DNS-resolved contacts.mx_provider; fall back to the event's provider_bucket
+    // (whose 'workspace' value also means "other"). Replies/bounces/leads are
+    // send-anchored — counted per (workspace_id, lead_email) that received a
+    // send in the window — identical to combo-analysis.
     const params = [start, end];
     let wsClause = '';
     if (wsIds && wsIds.length) {
       params.push(wsIds);
-      wsClause = `AND workspace_id = ANY($${params.length})`;
+      wsClause = `AND ee.workspace_id = ANY($${params.length})`;
     }
 
     const q = `
-      SELECT
-        ${bucket}                                                               AS provider,
-        COUNT(*)::int                                                            AS unique_contacts,
-        SUM(COALESCE(email_count, 0))::bigint                                   AS sent,
-        COUNT(*) FILTER (WHERE last_reply_at >= $1)::int                        AS replies,
-        COUNT(*) FILTER (WHERE bounced_at    >= $1)::int                        AS bounces,
-        COUNT(*) FILTER (WHERE marked_as_lead_at >= $1
-                            OR (status = 'interested' AND last_reply_at >= $1))::int AS leads
-      FROM contacts
-      WHERE last_emailed_at >= $1
-        AND last_emailed_at < ($2::date + interval '1 day')
-        ${wsClause}
-      GROUP BY 1
+      WITH recipient_types AS (
+        SELECT DISTINCT ON (lower(email))
+          lower(email) AS email_lower,
+          mx_provider  AS recipient_type
+        FROM contacts WHERE mx_provider IS NOT NULL ORDER BY lower(email)
+      ),
+      sends AS (
+        SELECT ee.workspace_id, lower(ee.lead_email) AS le,
+          CASE COALESCE(
+            rt.recipient_type,
+            CASE ee.provider_bucket
+              WHEN 'gmail'       THEN 'email_google'
+              WHEN 'google'      THEN 'email_google'
+              WHEN 'outlook'     THEN 'email_outlook'
+              WHEN 'workspace'   THEN 'email_other'
+              WHEN 'email_other' THEN 'email_other'
+              WHEN 'unknown'     THEN 'unknown'
+              ELSE               'unknown'
+            END
+          )
+            WHEN 'email_google'  THEN 'google'
+            WHEN 'email_outlook' THEN 'outlook'
+            WHEN 'email_other'   THEN 'other'
+            ELSE 'unknown'
+          END AS provider
+        FROM email_events ee
+        LEFT JOIN recipient_types rt ON rt.email_lower = lower(ee.lead_email)
+        WHERE ee.event_type = 'sent'
+          AND ee.event_at >= $1 AND ee.event_at < ($2::date + interval '1 day')
+          AND (ee.raw->>'seeded')::boolean IS NOT TRUE
+          ${wsClause}
+      )
+      SELECT s.provider,
+        COUNT(*)::int                AS sent,
+        COUNT(DISTINCT s.le)::int    AS unique_contacts,
+        COUNT(DISTINCT CASE WHEN EXISTS (
+          SELECT 1 FROM email_events e
+          WHERE e.workspace_id = s.workspace_id
+            AND lower(e.lead_email) = s.le
+            AND e.event_type IN ('reply','positive_reply')
+        ) THEN s.le END)::int        AS replies,
+        COUNT(DISTINCT CASE WHEN EXISTS (
+          SELECT 1 FROM email_events e
+          WHERE e.workspace_id = s.workspace_id
+            AND lower(e.lead_email) = s.le
+            AND e.event_type = 'bounce'
+        ) THEN s.le END)::int        AS bounces,
+        COUNT(DISTINCT CASE WHEN EXISTS (
+          SELECT 1 FROM email_events e
+          WHERE e.workspace_id = s.workspace_id
+            AND lower(e.lead_email) = s.le
+            AND e.event_type = 'lead'
+        ) THEN s.le END)::int        AS leads
+      FROM sends s
+      GROUP BY s.provider
       ORDER BY sent DESC
     `;
 
