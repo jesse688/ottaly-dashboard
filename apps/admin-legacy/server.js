@@ -12026,12 +12026,14 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
       // property, so one prior resolution classifies every later contact on
       // that domain — no repeat lookup. This also lets the provider gate drop
       // wrong-provider contacts without spending a verification on them.
-      if (allowedProviders.length || true) {
+      {
         const byDomain = new Map();
         for (const c of contacts) {
           if (c.mx_provider) continue;
           const domain = (c.email || '').split('@')[1]?.toLowerCase();
-          if (domain) (byDomain.get(domain) || byDomain.set(domain, []).get(domain)).push(c);
+          if (!domain) continue;
+          if (!byDomain.has(domain)) byDomain.set(domain, []);
+          byDomain.get(domain).push(c);
         }
         for (const [domain, list] of byDomain) {
           try {
@@ -14182,6 +14184,16 @@ function scheduleAudienceScoring(pgdb) {
         .then(r => console.log(`[startup] Email provider backfill: ${r.updated} contacts tagged`))
         .catch(err => console.warn('[startup] Email provider backfill failed:', err.message));
     }, 15000);
+
+    // Seed the true-MX domain cache from contacts already verified with a real
+    // MX provider. One-time recovery of the back-catalogue: each domain's
+    // verified provider is cached, then fanned out to its unclassified
+    // contacts. Idempotent (ON CONFLICT DO NOTHING) so repeat boots are cheap.
+    setTimeout(() => {
+      pgdb.seedDomainMxCacheFromVerified()
+        .then(r => console.log(`[startup] Domain MX cache seed: ${r.domainsSeeded} domains seeded, ${r.contactsFilled} contacts classified from verified domains`))
+        .catch(err => console.warn('[startup] Domain MX cache seed failed:', err.message));
+    }, 30000);
 
     // Audience scoring — daily at 6am
     scheduleAudienceScoring(pgdb);

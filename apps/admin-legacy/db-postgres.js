@@ -2412,7 +2412,29 @@ class PostgresDatabase {
       ) s
       ON CONFLICT (domain) DO NOTHING
     `);
-    return { domainsSeeded: seed.rowCount || 0 };
+
+    // Fan the seeded providers out to contacts that have no mx_provider yet but
+    // whose domain is now known. Batched by id to stay under statement_timeout
+    // and avoid a long lock on the ~469k-row contacts table.
+    let filled = 0;
+    for (let i = 0; i < 200; i++) {
+      const r = await this.query(`
+        UPDATE contacts c
+          SET mx_provider = dmc.mx_provider
+        FROM domain_mx_cache dmc
+        WHERE c.id IN (
+          SELECT c2.id FROM contacts c2
+          JOIN domain_mx_cache d2 ON d2.domain = split_part(lower(c2.email), '@', 2)
+          WHERE c2.mx_provider IS NULL AND c2.email IS NOT NULL
+          LIMIT 10000
+        )
+          AND dmc.domain = split_part(lower(c.email), '@', 2)
+      `);
+      const n = r.rowCount || 0;
+      filled += n;
+      if (n === 0) break;
+    }
+    return { domainsSeeded: seed.rowCount || 0, contactsFilled: filled };
   }
 
   detectEmailProvider(technologiesStr) {

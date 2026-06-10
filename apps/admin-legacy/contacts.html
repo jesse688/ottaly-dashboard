@@ -1150,7 +1150,11 @@
               <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;">
                 <input type="checkbox" id="emailOther" value="other"> Other <span id="otherCount" style="font-size:11px;color:#6b7280;margin-left:auto;">(0)</span>
               </label>
+              <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;" title="MX not resolved yet — verify these to discover their true provider">
+                <input type="checkbox" id="emailUnknown" value="unknown"> Unknown / not verified <span id="unknownCount" style="font-size:11px;color:#6b7280;margin-left:auto;">(0)</span>
+              </label>
             </div>
+            <p style="font-size:11px;color:#9ca3af;margin:2px 0 0;line-height:1.4;">Provider = true MX from the verifier, not Apollo's guess. Unknown = not yet verified.</p>
           </div>
         </div>
 
@@ -2121,6 +2125,8 @@
       document.getElementById('googleCount').textContent = `(${stats.google})`;
       document.getElementById('outlookCount').textContent = `(${stats.outlook})`;
       document.getElementById('otherCount').textContent = `(${stats.other})`;
+      const unk = document.getElementById('unknownCount');
+      if (unk) unk.textContent = `(${stats.unknown || 0})`;
     }
 
     // ── # Employees filter ─────────────────────────────────────────
@@ -2244,6 +2250,7 @@
       if (document.getElementById('emailGoogle').checked) emailProviders.push('email_google');
       if (document.getElementById('emailOutlook').checked) emailProviders.push('email_outlook');
       if (document.getElementById('emailOther').checked) emailProviders.push('email_other');
+      if (document.getElementById('emailUnknown')?.checked) emailProviders.push('unknown');
 
       const emailStatuses = ['vfSafe','vfSafeCatchall','vfRisky','vfInvalid','vfUnknown','vfNotVerified']
         .filter(id => document.getElementById(id)?.checked)
@@ -2352,7 +2359,7 @@
             const el = document.getElementById(id); if (el) el.checked = false;
           }); break;
         case 'email-provider':
-          ['emailGoogle','emailOutlook','emailOther'].forEach(id => {
+          ['emailGoogle','emailOutlook','emailOther','emailUnknown'].forEach(id => {
             const el = document.getElementById(id); if (el) el.checked = false;
           }); break;
         case 'intelligence':
@@ -2373,7 +2380,7 @@
         const el = document.getElementById(id);
         if (el) el.value = '';
       });
-      ['emailGoogle','emailOutlook','emailOther','vfSafe','vfSafeCatchall','vfRisky','vfInvalid','vfUnknown','vfNotVerified'].forEach(id => {
+      ['emailGoogle','emailOutlook','emailOther','emailUnknown','vfSafe','vfSafeCatchall','vfRisky','vfInvalid','vfUnknown','vfNotVerified'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.checked = false;
       });
@@ -2635,7 +2642,7 @@
         const el = document.getElementById(id);
         if (el && el.value) params.append(id, el.value);
       });
-      ['emailGoogle','emailOutlook','emailOther','filterRemote','filterExcludeRemote','filterExcludeDNC',
+      ['emailGoogle','emailOutlook','emailOther','emailUnknown','filterRemote','filterExcludeRemote','filterExcludeDNC',
        'filterNotExported','filterExportedOnly','filterSentToPV','filterNotSentToPV',
        'vfSafe','vfSafeCatchall','vfRisky','vfInvalid','vfUnknown','vfNotVerified'].forEach(id => {
         const el = document.getElementById(id);
@@ -2713,7 +2720,7 @@
       // restoration path so behaviour matches a bookmarked-URL reload.
       Object.keys(filterDefs).forEach(k => { filterDefs[k].selected = []; filterDefs[k].excluded = []; });
       ['globalSearch','company','status','ownsBuilding'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
-      ['emailGoogle','emailOutlook','emailOther','filterRemote','filterExcludeRemote','filterExcludeDNC','filterNotExported','filterExportedOnly','filterSentToPV','filterNotSentToPV','filterSentToPV','filterNotSentToPV'].forEach(id => { const el = document.getElementById(id); if (el) el.checked = false; });
+      ['emailGoogle','emailOutlook','emailOther','emailUnknown','filterRemote','filterExcludeRemote','filterExcludeDNC','filterNotExported','filterExportedOnly','filterSentToPV','filterNotSentToPV','filterSentToPV','filterNotSentToPV'].forEach(id => { const el = document.getElementById(id); if (el) el.checked = false; });
       window.location.hash = v.filters || '';
       restoreFiltersFromHash();
       search();
@@ -2747,7 +2754,7 @@
         const el = document.getElementById(id);
         if (el && v != null) { el.value = v; any = true; }
       });
-      ['emailGoogle','emailOutlook','emailOther','filterRemote','filterExcludeRemote','filterExcludeDNC',
+      ['emailGoogle','emailOutlook','emailOther','emailUnknown','filterRemote','filterExcludeRemote','filterExcludeDNC',
        'filterNotExported','filterExportedOnly','filterSentToPV','filterNotSentToPV',
        'vfSafe','vfSafeCatchall','vfRisky','vfInvalid','vfUnknown','vfNotVerified'].forEach(id => {
         const el = document.getElementById(id);
@@ -3305,10 +3312,18 @@
       const wsName = pvWorkspaces.find(w => w._id === wsId)?.name || wsId;
       const campName = document.getElementById('pvCampaign').selectedOptions[0]?.text || campId;
 
+      // Pass the active email-provider filter so the push enforces it against
+      // each contact's TRUE MX provider (resolved by the verifier), not Apollo's
+      // guess. Read straight off the same checkboxes the list filter uses.
+      const pushProviders = [];
+      if (document.getElementById('emailGoogle').checked)  pushProviders.push('email_google');
+      if (document.getElementById('emailOutlook').checked) pushProviders.push('email_outlook');
+      if (document.getElementById('emailOther').checked)   pushProviders.push('email_other');
+
       try {
         const endpoint = verifyFirst ? '/api/contacts/verify-and-push' : '/api/pv/push-contacts';
         const body = verifyFirst
-          ? { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, workspace_name: wsName, campaign_name: campName, include_risky: false, max_age_days: 90 }
+          ? { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, workspace_name: wsName, campaign_name: campName, include_risky: false, max_age_days: 90, emailProviders: pushProviders.join(',') }
           : { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, campaign_name: campName };
 
         const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -3350,6 +3365,7 @@
           if (sk.alreadyInCampaign) parts.push(`${sk.alreadyInCampaign} already in campaign`);
           if (sk.cooldownWorkspace) parts.push(`${sk.cooldownWorkspace} in cooldown`);
           if (sk.missingEnrichment) parts.push(`${sk.missingEnrichment} missing keywords/company size`);
+          if (sk.wrongProvider)     parts.push(`${sk.wrongProvider} wrong email provider`);
           const skipNote = parts.length ? ` · skipped ${parts.join(', ')}` : '';
           const tone = (data.pushed === 0 && parts.length) ? 'error' : 'success';
           showMessage(`${data.pushed} pushed to "${campName}"${skipNote}`, tone);
