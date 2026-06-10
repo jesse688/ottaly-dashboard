@@ -131,8 +131,9 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-h
         <button class="prov-tab"        data-prov="google"  onclick="setProvider('google')">Google</button>
         <button class="prov-tab"        data-prov="outlook" onclick="setProvider('outlook')">Outlook</button>
         <button class="prov-tab"        data-prov="other"   onclick="setProvider('other')">Other</button>
+        <button class="prov-tab"        data-prov="unknown" onclick="setProvider('unknown')">Unknown</button>
       </div>
-      <span style="margin-left:auto;font-size:11px;color:var(--muted)" title="Based on each recipient mailbox's true MX provider (contacts.mx_provider), windowed by last-emailed date. Independent of the per-client table above.">by recipient MX · sends in period</span>
+      <span style="margin-left:auto;font-size:11px;color:var(--muted)" title="Based on each recipient mailbox's true MX provider (contacts.mx_provider), windowed by last-emailed date. Unknown = emailed but not yet verified (no true MX). All = sum of all four buckets. Independent of the per-client table above.">by recipient MX · sends in period</span>
     </div>
     <div id="providerCards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.6rem"></div>
   </div>
