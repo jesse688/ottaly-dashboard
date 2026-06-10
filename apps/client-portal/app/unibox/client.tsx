@@ -32,6 +32,7 @@ interface Lead {
   dispute_reason: string | null
   dispute_admin_note: string | null
   has_unread: boolean
+  dispute_eligible: boolean
 }
 
 interface ThreadMsg {
@@ -63,6 +64,9 @@ const COLOR_BADGE: Record<string, string> = {
   lime: 'bg-lime-100 text-lime-700', rose: 'bg-rose-100 text-rose-700',
 }
 const CUSTOM_COLORS = Object.keys(COLOR_BADGE)
+
+const NONLEAD_CATEGORIES = ['No response after follow-ups', 'Out of office / auto-reply only', 'Not interested', 'Wrong contact / left company', 'Spam or invalid']
+const ICP_CATEGORIES = ['Wrong industry', 'Wrong job role / seniority', 'Wrong location', 'Wrong company size', 'Not our target market']
 const AV = ['bg-indigo-100 text-indigo-700','bg-pink-100 text-pink-700','bg-amber-100 text-amber-700','bg-teal-100 text-teal-700','bg-purple-100 text-purple-700','bg-blue-100 text-blue-700','bg-green-100 text-green-700','bg-rose-100 text-rose-700']
 
 function av(id: string) { let h=0; for(let i=0;i<id.length;i++) h=(h+id.charCodeAt(i))%AV.length; return AV[h] }
@@ -129,8 +133,16 @@ export function UniboxClient({ companyName }: { companyName: string }) {
   const [dealInput, setDealInput] = useState('')
 
   const [showDispute, setShowDispute] = useState(false)
+  const [disputeType, setDisputeType] = useState<'non_lead' | 'icp_mismatch'>('non_lead')
   const [disputeReason, setDisputeReason] = useState('')
+  const [disputeCategory, setDisputeCategory] = useState('')
+  const [disputeAck, setDisputeAck] = useState(false)
   const [disputeSaving, setDisputeSaving] = useState(false)
+  const [disputeError, setDisputeError] = useState('')
+
+  // drag-and-drop of leads onto deal stages
+  const [dragLeadId, setDragLeadId] = useState<string | null>(null)
+  const [dragOver, setDragOver] = useState<string | null>(null)
 
   const [showNewLabel, setShowNewLabel] = useState(false)
   const [newLabelName, setNewLabelName] = useState('')
@@ -192,6 +204,23 @@ export function UniboxClient({ companyName }: { companyName: string }) {
     }
   }
 
+  // Drag a lead row onto a stage in the sidebar to assign it.
+  async function dropOnStage(name: string | null) {
+    const leadId = dragLeadId
+    setDragOver(null); setDragLeadId(null)
+    if (!leadId) return
+    const lead = (leads ?? []).find(l => l.id === leadId) ?? null
+    setLeads(prev => prev?.map(l => l.id === leadId ? { ...l, client_label: name } : l) ?? null)
+    setSelected(prev => prev?.id === leadId ? { ...prev, client_label: name } : prev)
+    await fetch(`/api/portal/leads/${leadId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label: name }) })
+    // value stage with no value yet → open the lead and prompt
+    const meta = customLabels.find(c => c.name === name)
+    if (meta?.prompts_value && lead && !lead.deal_value) {
+      openLead(lead)
+      setValueInput(''); setValueStage(name)
+    }
+  }
+
   async function saveDealValue(val: string) {
     if (!selected) return
     await fetch(`/api/portal/leads/${selected.id}/data`, {
@@ -224,13 +253,24 @@ export function UniboxClient({ companyName }: { companyName: string }) {
     setDealEdit(false)
   }
 
+  function openDispute(type: 'non_lead' | 'icp_mismatch') {
+    setDisputeType(type); setDisputeReason(''); setDisputeCategory(''); setDisputeAck(false); setDisputeError(''); setShowDispute(true)
+  }
   async function handleDisputeSubmit() {
-    if (!disputeReason.trim() || !selected) return
-    setDisputeSaving(true)
-    await fetch(`/api/portal/leads/${selected.id}/dispute`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: disputeReason }),
+    if (!selected || !disputeCategory || disputeReason.trim().length < 10) return
+    if (disputeType === 'non_lead' && !disputeAck) return
+    setDisputeSaving(true); setDisputeError('')
+    const res = await fetch(`/api/portal/leads/${selected.id}/dispute`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: disputeType, category: disputeCategory, reason: disputeReason }),
     })
-    setDisputeSaving(false); setShowDispute(false); setDisputeReason('')
+    setDisputeSaving(false)
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({})) as { error?: string }
+      setDisputeError(d.error ?? 'Could not submit. Please try again.')
+      return
+    }
+    setShowDispute(false)
     setLeads(prev => prev?.map(l => l.id === selected.id ? { ...l, dispute_status: 'pending', dispute_reason: disputeReason } : l) ?? null)
     setSelected(prev => prev ? { ...prev, dispute_status: 'pending', dispute_reason: disputeReason } : prev)
   }
@@ -293,7 +333,12 @@ export function UniboxClient({ companyName }: { companyName: string }) {
         {/* Column 1 — sidebar */}
         <aside className="w-56 bg-white border-r border-gray-200 flex flex-col shrink-0">
           <div className="p-3">
-            <button onClick={() => setActiveLabel(null)} className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm font-medium ${activeLabel === null ? 'bg-indigo-50 text-indigo-700' : 'text-gray-700 hover:bg-gray-50'}`}>
+            <button
+              onClick={() => setActiveLabel(null)}
+              onDragOver={e => { if (dragLeadId) { e.preventDefault(); setDragOver('__inbox') } }}
+              onDragLeave={() => setDragOver(d => d === '__inbox' ? null : d)}
+              onDrop={e => { e.preventDefault(); dropOnStage(null) }}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm font-medium ${dragOver === '__inbox' ? 'ring-2 ring-indigo-400 bg-indigo-50' : activeLabel === null ? 'bg-indigo-50 text-indigo-700' : 'text-gray-700 hover:bg-gray-50'}`}>
               <span className="flex items-center gap-2">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 4h16v16H4z" opacity="0"/><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
                 Inbox
@@ -310,7 +355,12 @@ export function UniboxClient({ companyName }: { companyName: string }) {
           <div className="px-3 mt-1 flex-1 overflow-y-auto">
             {customLabels.length === 0 && <p className="text-xs text-gray-400 px-1 py-2">No stages yet. Click + to add (e.g. Meeting Booked, Closed).</p>}
             {customLabels.map(cl => (
-              <div key={cl.id} className={`group flex items-center justify-between px-3 py-1.5 rounded-lg text-sm cursor-pointer ${activeLabel === cl.name ? 'bg-gray-100' : 'hover:bg-gray-50'}`} onClick={() => setActiveLabel(activeLabel === cl.name ? null : cl.name)}>
+              <div key={cl.id}
+                onClick={() => setActiveLabel(activeLabel === cl.name ? null : cl.name)}
+                onDragOver={e => { if (dragLeadId) { e.preventDefault(); setDragOver(cl.id) } }}
+                onDragLeave={() => setDragOver(d => d === cl.id ? null : d)}
+                onDrop={e => { e.preventDefault(); dropOnStage(cl.name) }}
+                className={`group flex items-center justify-between px-3 py-1.5 rounded-lg text-sm cursor-pointer ${dragOver === cl.id ? 'ring-2 ring-indigo-400 bg-indigo-50' : activeLabel === cl.name ? 'bg-gray-100' : 'hover:bg-gray-50'}`}>
                 <span className="flex items-center gap-2 text-gray-700">
                   <span className={`w-2.5 h-2.5 rounded-full ${COLOR_MAP[cl.color] ?? 'bg-purple-400'}`} />{cl.name}
                 </span>
@@ -342,7 +392,11 @@ export function UniboxClient({ companyName }: { companyName: string }) {
             ) : filtered.map(l => {
               const cl = labelMeta(l.client_label)
               return (
-                <button key={l.id} onClick={() => openLead(l)} className={`w-full text-left px-4 py-3 border-b border-gray-50 hover:bg-gray-50 transition-colors ${selected?.id === l.id ? 'bg-indigo-50/60' : ''}`}>
+                <button key={l.id} onClick={() => openLead(l)}
+                  draggable
+                  onDragStart={() => setDragLeadId(l.id)}
+                  onDragEnd={() => { setDragLeadId(null); setDragOver(null) }}
+                  className={`w-full text-left px-4 py-3 border-b border-gray-50 hover:bg-gray-50 transition-colors ${dragLeadId === l.id ? 'opacity-50' : ''} ${selected?.id === l.id ? 'bg-indigo-50/60' : ''}`}>
                   <div className="flex gap-3">
                     <div className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 ${av(l.id)}`}>{initials(l)}</div>
                     <div className="flex-1 min-w-0">
@@ -522,26 +576,72 @@ export function UniboxClient({ companyName }: { companyName: string }) {
               </Section>
             )}
 
-            {/* quality control */}
-            <div className="p-4 mt-auto">
+            {/* report a problem — understated, two paths */}
+            <div className="p-4 mt-auto border-t border-gray-100">
               {selected.dispute_status ? (
-                <p className="text-xs text-center text-gray-400">Non-lead status: {selected.dispute_status}</p>
+                <p className="text-xs text-center text-gray-400">Reported · {selected.dispute_status}</p>
               ) : (
-                <button onClick={() => setShowDispute(true)} className="w-full py-2 border border-red-200 text-red-600 text-sm font-medium rounded-lg hover:bg-red-50">Not a Lead?</button>
+                <details className="group">
+                  <summary className="cursor-pointer text-xs text-gray-400 hover:text-gray-600 select-none flex items-center gap-1 w-fit mx-auto">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                    Report a problem with this lead
+                  </summary>
+                  <div className="mt-2 space-y-1.5">
+                    <button onClick={() => openDispute('icp_mismatch')} className="w-full text-left px-3 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-xs">
+                      <span className="font-medium text-gray-700">Doesn&apos;t fit our criteria</span>
+                      <span className="block text-gray-400">Wrong industry, role, location or size — not worth replying.</span>
+                    </button>
+                    {selected.dispute_eligible ? (
+                      <button onClick={() => openDispute('non_lead')} className="w-full text-left px-3 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-xs">
+                        <span className="font-medium text-gray-700">Tried, but no response</span>
+                        <span className="block text-gray-400">You replied / followed up and it went nowhere.</span>
+                      </button>
+                    ) : (
+                      <div className="w-full text-left px-3 py-2 rounded-lg border border-dashed border-gray-200 text-xs bg-gray-50">
+                        <span className="font-medium text-gray-400">Tried, but no response</span>
+                        <span className="block text-gray-400">Available once you&apos;ve replied &amp; followed up, or after 7 days.</span>
+                      </div>
+                    )}
+                  </div>
+                </details>
               )}
             </div>
           </aside>
         )}
       </div>
 
-      {/* dispute modal */}
+      {/* report modal — adapts to type */}
       {showDispute && selected && (
-        <Modal onClose={() => setShowDispute(false)} title="Report a non-lead">
-          <p className="text-sm text-gray-500 mb-3">Tell us why this isn&apos;t a valid lead. If approved, your lead credit is refunded.</p>
-          <textarea rows={4} value={disputeReason} onChange={e => setDisputeReason(e.target.value)} placeholder="e.g. Out of office auto-reply, wrong person, competitor…" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 mb-3" />
+        <Modal onClose={() => setShowDispute(false)} title={disputeType === 'icp_mismatch' ? "Doesn't fit our criteria" : 'Report a non-lead'}>
+          <p className="text-sm text-gray-500 mb-3">
+            {disputeType === 'icp_mismatch'
+              ? `Flag ${fullName(selected)} as the wrong fit for your campaign. Our team will review.`
+              : `Only report ${fullName(selected)} as a non-lead if you've genuinely replied and followed up with no result. Our team will review.`}
+          </p>
+
+          <label className="block text-xs text-gray-500 mb-1">Reason</label>
+          <select value={disputeCategory} onChange={e => setDisputeCategory(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 bg-white mb-3">
+            <option value="">Choose a reason…</option>
+            {(disputeType === 'icp_mismatch' ? ICP_CATEGORIES : NONLEAD_CATEGORIES).map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+
+          <label className="block text-xs text-gray-500 mb-1">Details</label>
+          <textarea rows={3} value={disputeReason} onChange={e => setDisputeReason(e.target.value)}
+            placeholder={disputeType === 'icp_mismatch' ? 'e.g. They’re a sole trader; we only serve 50+ staff companies.' : 'e.g. Replied twice over 2 weeks, sent a follow-up, no response at all.'}
+            className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 mb-3" />
+
+          {disputeType === 'non_lead' && (
+            <label className="flex items-start gap-2 mb-3 cursor-pointer">
+              <input type="checkbox" checked={disputeAck} onChange={e => setDisputeAck(e.target.checked)} className="mt-0.5" />
+              <span className="text-xs text-gray-600">I&apos;ve replied to this lead and genuinely followed up.</span>
+            </label>
+          )}
+
+          {disputeError && <p className="text-xs text-red-600 mb-3">{disputeError}</p>}
+
           <div className="flex gap-2 justify-end">
             <button onClick={() => setShowDispute(false)} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
-            <button onClick={handleDisputeSubmit} disabled={!disputeReason.trim() || disputeSaving} className="px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-lg disabled:opacity-50">{disputeSaving ? 'Submitting…' : 'Submit'}</button>
+            <button onClick={handleDisputeSubmit} disabled={disputeSaving || !disputeCategory || disputeReason.trim().length < 10 || (disputeType === 'non_lead' && !disputeAck)} className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg disabled:opacity-50">{disputeSaving ? 'Submitting…' : 'Submit for review'}</button>
           </div>
         </Modal>
       )}

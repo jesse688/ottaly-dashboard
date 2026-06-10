@@ -14,6 +14,7 @@ interface Workspace { id: string; name: string; active_campaigns: number }
 interface Dispute {
   id: string; lead_id: string; reason: string; status: string; admin_note: string | null
   created_at: string; resolved_at: string | null
+  category: string | null; dispute_type: string | null
   company_name: string; client_email: string
   first_name: string | null; last_name: string | null; lead_email: string; lead_company: string | null
 }
@@ -473,7 +474,13 @@ export function AdminClientsClient() {
                       </td>
                       <td className="px-4 py-3 text-xs text-gray-600">{d.company_name}</td>
                       <td className="px-4 py-3 text-xs text-gray-700 max-w-xs">
-                        <p className="truncate" title={d.reason}>{d.reason}</p>
+                        <div className="flex items-center gap-1.5 mb-0.5">
+                          <span className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium ${d.dispute_type === 'icp_mismatch' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
+                            {d.dispute_type === 'icp_mismatch' ? 'ICP mismatch' : 'Non-lead'}
+                          </span>
+                          {d.category && <span className="text-[11px] text-gray-500">{d.category}</span>}
+                        </div>
+                        <p className="truncate text-gray-600" title={d.reason}>{d.reason}</p>
                       </td>
                       <td className="px-4 py-3 text-xs text-gray-500">{fmtDate(d.created_at)}</td>
                       <td className="px-4 py-3">

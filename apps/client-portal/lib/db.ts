@@ -80,6 +80,10 @@ async function runMigration() {
       // moment a lead is moved into that stage (e.g. "Quote Sent", "Won").
       `ALTER TABLE portal_client_labels ADD COLUMN IF NOT EXISTS prompts_value BOOLEAN NOT NULL DEFAULT FALSE`,
       `ALTER TABLE portal_client_labels ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0`,
+      // Non-lead reports: type = 'non_lead' (tried, no response — effort-gated) or
+      // 'icp_mismatch' (wrong fit, not worth replying — no gate). category = sub-reason.
+      `ALTER TABLE portal_lead_disputes ADD COLUMN IF NOT EXISTS category TEXT`,
+      `ALTER TABLE portal_lead_disputes ADD COLUMN IF NOT EXISTS dispute_type TEXT NOT NULL DEFAULT 'non_lead'`,
 
       // ── Real email conversations cached from PlusVibe /unibox/emails ──
       `CREATE TABLE IF NOT EXISTS portal_emails (

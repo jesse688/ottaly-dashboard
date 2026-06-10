@@ -52,7 +52,16 @@ export async function GET() {
                 WHERE e.workspace_id = l.workspace_id
                   AND lower(e.lead_email) = lower(l.email)
                   AND e.direction = 'IN' AND e.is_unread = 1
-              ) AS has_unread
+              ) AS has_unread,
+              (
+                EXTRACT(EPOCH FROM (NOW() - COALESCE(l.first_replied_at, l.created_at))) >= 7*86400
+                OR EXISTS (
+                  SELECT 1 FROM portal_emails e2
+                  WHERE e2.workspace_id = l.workspace_id
+                    AND lower(e2.lead_email) = lower(l.email)
+                    AND (e2.direction = 'OUT' OR e2.sent_via_portal = TRUE)
+                )
+              ) AS dispute_eligible
        FROM esp_leads l
        LEFT JOIN portal_lead_data ld     ON ld.lead_id = l.id AND ld.client_id = $3
        LEFT JOIN portal_lead_disputes pd ON pd.lead_id = l.id AND pd.client_id = $3
