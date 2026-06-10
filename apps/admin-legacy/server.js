@@ -2636,6 +2636,89 @@ const PERF_TODAY_TTL_MS = 10 * 60 * 1000;
 const PERF_OLD_TTL_MS = 12 * 60 * 60 * 1000;
 const PERF_LEADS_TTL_MS = 15 * 60 * 1000;
 const PERF_WARM_INTERVAL_MS = 2 * 60 * 1000;
+
+// ── Recipient-provider mix (durable; from PlusVibe's per-lead `mx` field) ─────
+// PlusVibe's recipient split (Google/Microsoft/Other) is computed from each
+// lead's authoritative `mx` value (GOOGLE_WORKSPACE / MICROSOFT365 /
+// REGULAR_ACCOUNT / PERSONAL_GMAIL), available via /lead/workspace-leads — which
+// our API key CAN reach (the exact split endpoint on pipl.ai needs a session
+// token we don't have). We aggregate each workspace's leads by mx, weighted by
+// emails actually sent (sent_step), into provider fractions, then apply those
+// fractions to the accurate per-day totals. The mix is stable, so it's synced
+// once on refresh and cached, not per-request.
+const providerMixCache = { byWs: new Map(), syncedAt: null, syncing: false };
+const PROVIDER_MIX_MAX_PAGES = 40; // up to 4000 leads/ws — a very stable ratio
+
+function pvMxToProviderBucket(mx) {
+  const m = String(mx || '').toUpperCase();
+  if (m === 'MICROSOFT365' || /MICROSOFT|OUTLOOK|OFFICE|EXCHANGE/.test(m)) return 'outlook';
+  if (m === 'GOOGLE_WORKSPACE' || m === 'PERSONAL_GMAIL' || /GOOGLE|GMAIL/.test(m)) return 'google';
+  return 'other'; // REGULAR_ACCOUNT and anything else PlusVibe calls "Other"
+}
+
+// Page through a workspace's leads, bucketing sent/replies/bounces by recipient
+// provider. Returns { google:{sent,replies,bounces}, outlook:{...}, other:{...} }.
+async function fetchWorkspaceProviderMix(wsId, maxPages = PROVIDER_MIX_MAX_PAGES) {
+  const buckets = {
+    google:  { sent: 0, replies: 0, bounces: 0 },
+    outlook: { sent: 0, replies: 0, bounces: 0 },
+    other:   { sent: 0, replies: 0, bounces: 0 },
+  };
+  for (let page = 1; page <= maxPages; page++) {
+    let leads = [];
+    try {
+      const raw = await pvFetch(`/lead/workspace-leads?workspace_id=${wsId}&page=${page}&limit=100`);
+      leads = Array.isArray(raw) ? raw : (raw?.leads || raw?.data || raw?.docs || []);
+    } catch { break; }
+    if (!leads.length) break;
+    for (const l of leads) {
+      const b = buckets[pvMxToProviderBucket(l.mx)];
+      // sent_step = number of sequence emails sent to this lead (≈ emails sent).
+      b.sent    += Number(l.sent_step || 0) || 1;
+      b.replies += Number(l.replied_count || 0);
+      b.bounces += (l.bounce_msg ? 1 : 0);
+    }
+    if (leads.length < 100) break;
+  }
+  return buckets;
+}
+
+// Sync the provider mix for the given workspaces (background; non-blocking).
+async function syncProviderMix(wsIds) {
+  if (providerMixCache.syncing) return;
+  providerMixCache.syncing = true;
+  try {
+    for (const wsId of wsIds) {
+      try { providerMixCache.byWs.set(wsId, await fetchWorkspaceProviderMix(wsId)); }
+      catch (e) { console.warn(`[provider-mix] ${wsId} failed: ${e.message}`); }
+    }
+    providerMixCache.syncedAt = new Date().toISOString();
+    console.log(`[provider-mix] synced ${wsIds.length} workspaces`);
+  } finally { providerMixCache.syncing = false; }
+}
+
+// Given a workspace's accurate totals (from perf cache) and its provider mix,
+// split each metric across providers by that mix's fraction of the metric.
+// Falls back to all-"other" when no mix is available yet (so totals still sum).
+function splitTotalsByProvider(wsId, totals) {
+  const mix = providerMixCache.byWs.get(wsId);
+  const empty = () => ({ sent: 0, replies: 0, bounces: 0, leads: 0 });
+  const out = { google: empty(), outlook: empty(), other: empty() };
+  if (!mix) { out.other = { ...empty(), sent: totals.sent, replies: totals.replies, bounces: totals.bounces, leads: totals.leads }; return out; }
+  for (const metric of ['sent', 'replies', 'bounces']) {
+    const denom = mix.google[metric] + mix.outlook[metric] + mix.other[metric];
+    if (denom <= 0) { out.other[metric] = totals[metric] || 0; continue; }
+    for (const p of ['google', 'outlook', 'other']) {
+      out[p][metric] = Math.round((totals[metric] || 0) * (mix[p][metric] / denom));
+    }
+  }
+  // Leads have no per-mx signal in lead objects → split by the SENT fraction.
+  const sentDenom = mix.google.sent + mix.outlook.sent + mix.other.sent;
+  for (const p of ['google', 'outlook', 'other']) {
+    out[p].leads = sentDenom > 0 ? Math.round((totals.leads || 0) * (mix[p].sent / sentDenom)) : (p === 'other' ? (totals.leads || 0) : 0);
+  }
+  return out;
+}
 const EMPTY_PERF_AGG = { sent: 0, replies: 0, oooReplies: 0, posReplies: 0, bounces: 0, contacted: 0 };
 let performanceWarmPromise = null;
 
@@ -2917,6 +3000,9 @@ async function warmPerformanceCache() {
       console.log(`[performance cache] version ${performanceCache.version} ready — ${wsIds.length} workspaces`);
       // Persist to DB so next restart loads instantly
       savePerfCacheToDb().catch(() => {});
+      // Refresh the recipient-provider mix in the background (one extra pass of
+      // lead fetches; non-blocking so the Stats page renders immediately).
+      syncProviderMix(wsIds).catch(() => {});
     } catch (err) {
       console.error('[performance cache] warm failed:', err.message);
     } finally {
@@ -3132,6 +3218,14 @@ app.get('/api/stats/summary', requireSession, async (req, res) => {
       warmPerformanceCache().catch(() => {});
     }
 
+    // One-time recipient-provider mix sync (background) if it has never run —
+    // e.g. after a restart that loaded the perf cache from DB without warming.
+    // It rebuilds on manual Refresh thereafter; this just guarantees it's
+    // populated at least once without blocking the response.
+    if (!providerMixCache.syncedAt && !providerMixCache.syncing) {
+      syncProviderMix(wsIds).catch(() => {});
+    }
+
     // Build per-workspace aggregated stats + per-day series from the shared
     // helper so Stats and CM Performance always agree.
     const wsStats = computeWorkspaceStatsForRange(wsIds, start, end);
@@ -3140,6 +3234,10 @@ app.get('/api/stats/summary', requireSession, async (req, res) => {
       name: wsNames[wsId] || wsId,
       totals: wsStats[wsId].totals,
       series: wsStats[wsId].series,
+      // Recipient-provider split of this workspace's accurate totals, from the
+      // PlusVibe per-lead mx mix. Lets the Stats page filter the table by
+      // Google / Outlook / Other. byProvider[p] = { sent, replies, bounces, leads }.
+      byProvider: splitTotalsByProvider(wsId, wsStats[wsId].totals),
     })).filter(w => w.totals.sent > 0 || w.totals.leads > 0);
 
     workspaces.sort((a, b) => b.totals.replies - a.totals.replies);
@@ -3151,6 +3249,7 @@ app.get('/api/stats/summary', requireSession, async (req, res) => {
       end,
       partial,
       updatedAt: performanceCache.updatedAt,
+      providerMixSyncedAt: providerMixCache.syncedAt,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -3465,85 +3564,6 @@ app.get('/api/combo-analysis/pv-sample', requireSession, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// TEMP PROBE: discover which PlusVibe email-stats query param filters by
-// recipient provider (the UI's "Other Providers" filter). Tries candidate
-// (param,value) combos and reports each one's summed sent count vs the
-// unfiltered baseline. The param whose REGULAR_ACCOUNT result ≈ 15,812 for
-// ButterflyEco/30d is the one we want. Also dumps the raw response shape in
-// case a provider breakdown is already present (no param needed).
-app.get('/api/debug/pv-provider-probe', requireSession, async (req, res) => {
-  try {
-    const wsId  = String(req.query.workspace_id || '69a9db307af7ef2854f57637'); // ButterflyEco
-    const end   = String(req.query.end   || new Date().toISOString().slice(0,10));
-    const start = String(req.query.start || new Date(Date.now() - 29*86400000).toISOString().slice(0,10));
-    const base  = `/account/email-stats?workspace_id=${wsId}&start_date=${start}&end_date=${end}`;
-    const sumSent = (raw) => {
-      const chart = Array.isArray(raw) ? raw : (raw?.chart || []);
-      return chart.reduce((a, r) => a + (r.total_sent_count || 0), 0);
-    };
-
-    // Baseline (no provider filter) + raw shape for inspection.
-    const baseRaw = await pvFetch(base);
-    const baseline = sumSent(baseRaw);
-    const sampleRow = (Array.isArray(baseRaw) ? baseRaw : (baseRaw?.chart || []))[0] || {};
-    const shape = {
-      topLevelType: Array.isArray(baseRaw) ? 'array' : typeof baseRaw,
-      topLevelKeys: Array.isArray(baseRaw) ? null : Object.keys(baseRaw || {}),
-      chartRowKeys: Object.keys(sampleRow),
-    };
-
-    // CONFIRMED via captured network request: the recipient split lives on
-    // PlusVibe's underlying pipl.ai backend, NOT the public plusvibe.ai API:
-    //   GET https://api.pipl.ai/v1/email-accounts-v2/email-stats
-    //       ?workspace_id&start_date&end_date&recp_provider=<VALUE[,VALUE]>
-    // Values: GOOGLE_WORKSPACE / MICROSOFT365 / REGULAR_ACCOUNT / PERSONAL_GMAIL.
-    // Response: { code, message, data: { header: {total_sent_count,...}, chart:[] } }
-    //
-    // The browser used a session token; this probe tests whether our server's
-    // x-api-key authenticates against api.pipl.ai, and pulls every recipient
-    // value so we can map value->label empirically (match to Google 22604,
-    // Microsoft 2489, Other 15812 for ButterflyEco/30d).
-    // pipl.ai recipient endpoint rejects our key under every scheme; v2 path
-    // 404s on plusvibe.ai. So assess PATH B: does the PUBLIC /lead/workspace-leads
-    // endpoint (our key works) carry each lead's recipient `mx` field? If yes, we
-    // can sync mx per lead and compute the recipient split ourselves — durable.
-    let leadShape = null, mxField = null, mxSample = [], mxDistribution = {};
-    try {
-      const raw = await pvFetch(`/lead/workspace-leads?workspace_id=${wsId}&page=1&limit=50`);
-      const leads = Array.isArray(raw) ? raw : (raw?.leads || raw?.data || raw?.docs || []);
-      const first = leads[0] || {};
-      leadShape = { count: leads.length, firstLeadKeys: Object.keys(first) };
-      // Find the field holding the recipient provider (mx / GOOGLE_WORKSPACE etc.)
-      const candidates = ['mx', 'mx_provider', 'recp_provider', 'recipient_provider', 'provider', 'email_provider'];
-      for (const c of candidates) {
-        const vals = leads.map(l => l?.[c]).filter(Boolean);
-        if (vals.length) { mxField = c; mxSample = vals.slice(0, 8); break; }
-      }
-      // Also scan nested for any value that looks like the known mx vocabulary.
-      if (!mxField) {
-        for (const [k, v] of Object.entries(first)) {
-          if (typeof v === 'string' && /GOOGLE_WORKSPACE|MICROSOFT365|REGULAR_ACCOUNT|PERSONAL_GMAIL/.test(v)) { mxField = k; mxSample = [v]; break; }
-        }
-      }
-      if (mxField) {
-        for (const l of leads) { const v = l[mxField] || 'NULL'; mxDistribution[v] = (mxDistribution[v] || 0) + 1; }
-      }
-    } catch (e) { leadShape = `ERR ${e.message.slice(0, 50)}`; }
-
-    res.json({
-      workspace_id: wsId, start, end,
-      plusvibe_baseline_total_sent: baseline,
-      pathA_pipl: 'BLOCKED — pipl.ai needs session auth; our key 401s under all schemes',
-      pathB_lead_mx: {
-        leadShape,
-        mxFieldFound: mxField,
-        mxSample,
-        mxDistribution,
-      },
-      hint: 'If mxFieldFound is set (e.g. "mx") and mxSample shows GOOGLE_WORKSPACE/MICROSOFT365/etc., PATH B is viable: sync this field per lead and compute the recipient split durably with our key.',
-    });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
 
 
 // Historical backfill: approximate FROM×TO combos from PlusVibe workspace stats

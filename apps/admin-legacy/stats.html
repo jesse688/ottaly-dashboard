@@ -129,9 +129,8 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-h
       <div id="providerTabs" style="display:flex;gap:.25rem;flex-wrap:wrap">
         <button class="prov-tab active" data-prov="all"     onclick="setProvider('all')">All</button>
         <button class="prov-tab"        data-prov="google"  onclick="setProvider('google')">Google</button>
-        <button class="prov-tab"        data-prov="outlook" onclick="setProvider('outlook')">Outlook</button>
+        <button class="prov-tab"        data-prov="outlook" onclick="setProvider('outlook')">Microsoft</button>
         <button class="prov-tab"        data-prov="other"   onclick="setProvider('other')">Other</button>
-        <button class="prov-tab"        data-prov="unknown" onclick="setProvider('unknown')">Unknown</button>
       </div>
       <span id="providerNote" style="margin-left:auto;font-size:11px;color:var(--muted)" title="'All' totals match the per-client table exactly (same PlusVibe daily source). PlusVibe has no provider breakdown, so the split across Google/Outlook/Other/Unknown is estimated from the captured email_events recipient-MX ratios and apportioned to the true total. Coverage = share of sends the event log captured.">by recipient MX · sends in period</span>
     </div>
@@ -290,64 +289,27 @@ function setProvider(p) {
   document.querySelectorAll('.prov-tab').forEach(b =>
     b.classList.toggle('active', b.dataset.prov === p));
   renderProviderCards();
+  if (_data) renderClients(); // re-filter the client table by the selected provider
 }
 
-async function loadProviderStats(start, end) {
-  try {
-    const cmFilter = window.getCMFilter ? window.getCMFilter() : null;
-    const wsParam = cmFilter?.enabled && cmFilter.workspaceIds?.length
-      ? `&workspace_ids=${cmFilter.workspaceIds.join(',')}` : '';
-    const r = await fetch(`/api/stats/by-provider?start=${start}&end=${end}${wsParam}`);
-    if (!r.ok) throw new Error(`${r.status}`);
-    _providerData = await r.json();
-    // Coverage note: 'All' matches the client table; the split is estimated.
-    const note = document.getElementById('providerNote');
-    if (note) {
-      if (_providerData.estimated && _providerData.coverage != null) {
-        note.textContent = `provider split estimated · ${Math.round(_providerData.coverage * 100)}% event coverage`;
-      } else {
-        note.textContent = 'by recipient MX · sends in period';
-      }
-    }
-    renderProviderCards();
-  } catch (e) {
-    document.getElementById('providerCards').innerHTML =
-      `<div style="grid-column:1/-1;font-size:12px;color:var(--muted)">Couldn’t load provider breakdown: ${e.message}</div>`;
-  }
-}
-
+// The strip now reads directly from the summary's per-workspace byProvider
+// (PlusVibe per-lead mx mix applied to accurate totals) — same source as the
+// table, so "All" matches exactly and provider tabs are consistent everywhere.
 function renderProviderCards() {
   const wrap = document.getElementById('providerCards');
-  if (!_providerData?.providers) { wrap.innerHTML = '<div style="grid-column:1/-1;font-size:12px;color:var(--muted)">Loading…</div>'; return; }
-  const list = _providerData.providers;
-  // "All" = sum across buckets; otherwise the selected bucket.
-  let row;
-  if (_provider === 'all') {
-    const t = list.reduce((a, p) => ({
-      sent:a.sent+p.sent, replies:a.replies+p.replies, oooReplies:a.oooReplies+(p.oooReplies||0),
-      bounces:a.bounces+p.bounces, leads:a.leads+p.leads, unique_contacts:a.unique_contacts+p.unique_contacts,
-    }), { sent:0, replies:0, oooReplies:0, bounces:0, leads:0, unique_contacts:0 });
-    // replies = without-OOO (PlusVibe total_reply_count); with-OOO adds the
-    // separate OOO counter. Subtracting was wrong — it went negative.
-    row = { ...t,
-      replyRate:        t.sent>0 ? t.replies/t.sent : 0,
-      replyRateWithOoo: t.sent>0 ? (t.replies + t.oooReplies)/t.sent : 0,
-      bounceRate:       t.sent>0 ? t.bounces/t.sent : 0,
-      rtl:              t.replies>0 ? t.leads/t.replies : 0 };
-  } else {
-    row = list.find(p => p.provider === _provider) || { sent:0, replies:0, oooReplies:0, bounces:0, leads:0, unique_contacts:0, replyRate:0, replyRateWithOoo:0, bounceRate:0, rtl:0 };
-  }
-  const rrClass = row.replyRate >= 0.025 ? 'good' : row.replyRate >= 0.01 ? 'med' : row.replyRate > 0 ? 'bad' : '';
-  const brClass = row.bounceRate >= 0.05 ? 'bad' : row.bounceRate >= 0.02 ? 'med' : 'good';
-  const rtlClass = row.rtl >= 0.1 ? 'good' : row.rtl >= 0.05 ? 'med' : '';
+  const all = _rows && _rows[0]?.workspace_id === '__all__' ? _rows[0]
+            : buildAllWorkspaces(_data?.workspaces || []);
+  if (!all) { wrap.innerHTML = '<div style="grid-column:1/-1;font-size:12px;color:var(--muted)">Loading…</div>'; return; }
+  const t = effectiveTotals(all);
+  const rrClass = t.replyRate >= 0.025 ? 'good' : t.replyRate >= 0.01 ? 'med' : t.replyRate > 0 ? 'bad' : '';
+  const brClass = t.bounceRate >= 0.05 ? 'bad' : t.bounceRate >= 0.02 ? 'med' : 'good';
+  const rtlClass = t.rtl >= 0.1 ? 'good' : t.rtl >= 0.05 ? 'med' : '';
   const cards = [
-    ['Sent',             fmtNum(row.sent),                 ''],
-    ['Reply Rate',       pct(row.replyRate),               rrClass],
-    ['Reply Rate (OOO)', pct(row.replyRateWithOoo||0),     ''],
-    ['Bounce Rate',      pct(row.bounceRate),              brClass],
-    ['Leads',            fmtNum(row.leads),                row.leads>0?'good':''],
-    ['RTL',              pct(row.rtl),                     rtlClass],
-    ['Contacts',         fmtNum(row.unique_contacts),      ''],
+    ['Sent',        fmtNum(t.sent),    ''],
+    ['Reply Rate',  pct(t.replyRate),  rrClass],
+    ['Bounce Rate', pct(t.bounceRate), brClass],
+    ['Leads',       fmtNum(t.leads),   t.leads>0?'good':''],
+    ['RTL',         pct(t.rtl),        rtlClass],
   ];
   wrap.innerHTML = cards.map(([lbl,val,cls]) =>
     `<div class="prov-metric ${cls}"><div class="pm-val">${val}</div><div class="pm-lbl">${lbl}</div></div>`
@@ -357,10 +319,8 @@ function renderProviderCards() {
 async function loadStats(start, end, silent = false) {
   const periodChanged = (start !== _start || end !== _end);
   _start = start; _end = end;
-  // Refresh the provider strip on a real period change or a non-silent load —
-  // not on every silent partial-retry tick (the contacts data doesn't change
-  // between those, and they fire every few seconds while PlusVibe caches).
-  if (!silent || periodChanged) loadProviderStats(start, end);
+  // The provider strip now renders from the same summary payload as the table
+  // (see renderClients → renderProviderCards), so no separate fetch is needed.
   if (!silent) {
     _partialTries = 0;  // fresh period selection resets the retry budget
     document.getElementById('loading').style.display = '';
@@ -450,6 +410,15 @@ function buildAllWorkspaces(list) {
   });
   const series = Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date));
   const days = series.length || nDays || 1;
+  // Aggregate the recipient-provider split across all workspaces.
+  const byProvider = { google:{sent:0,replies:0,bounces:0,leads:0}, outlook:{sent:0,replies:0,bounces:0,leads:0}, other:{sent:0,replies:0,bounces:0,leads:0} };
+  list.forEach(w => {
+    for (const p of ['google','outlook','other']) {
+      const bp = w.byProvider?.[p]; if (!bp) continue;
+      byProvider[p].sent += bp.sent||0; byProvider[p].replies += bp.replies||0;
+      byProvider[p].bounces += bp.bounces||0; byProvider[p].leads += bp.leads||0;
+    }
+  });
   return {
     workspace_id: '__all__',
     name: `All Workspaces (${list.length})`,
@@ -462,6 +431,23 @@ function buildAllWorkspaces(list) {
       repliesPerDay: totals.replies / days,
     },
     series,
+    byProvider,
+  };
+}
+
+// Effective totals for the currently-selected provider tab. 'all' → real
+// totals; a provider → that bucket's numbers with rates/per-day recomputed.
+function effectiveTotals(w) {
+  if (_provider === 'all' || !w.byProvider?.[_provider]) return w.totals;
+  const bp = w.byProvider[_provider];
+  const days = (_data?.dates?.length) || (w.series?.length) || 1;
+  return {
+    ...bp,
+    replyRate:    bp.sent    > 0 ? bp.replies / bp.sent    : 0,
+    bounceRate:   bp.sent    > 0 ? bp.bounces / bp.sent    : 0,
+    rtl:          bp.replies > 0 ? bp.leads   / bp.replies : 0,
+    sendsPerDay:   bp.sent    / days,
+    repliesPerDay: bp.replies / days,
   };
 }
 
@@ -488,7 +474,7 @@ function renderClients() {
 
   const grid = document.getElementById('clientsGrid');
   grid.innerHTML = ws.map(w => {
-    const t = w.totals;
+    const t = effectiveTotals(w);
     const rrClass = t.replyRate >= 0.025 ? 'good' : t.replyRate >= 0.01 ? 'med' : t.replyRate > 0 ? 'bad' : '';
     const brClass = t.bounceRate >= 0.05 ? 'bad' : t.bounceRate >= 0.02 ? 'med' : 'good';
     const rtlClass = t.rtl >= 0.1 ? 'good' : t.rtl >= 0.05 ? 'med' : t.rtl > 0 ? '' : '';
@@ -545,6 +531,16 @@ function renderClients() {
   ws.forEach(w => {
     if (_expanded.has(w.workspace_id)) renderChart(w);
   });
+
+  // Keep the recipient-provider strip in sync (same data source as the table).
+  renderProviderCards();
+  const note = document.getElementById('providerNote');
+  if (note) {
+    const syncedHint = _data?.providerMixSyncedAt ? '' : ' (syncing…)';
+    note.textContent = _provider === 'all'
+      ? `by recipient provider · from PlusVibe lead data${syncedHint}`
+      : `${_provider === 'outlook' ? 'Microsoft' : _provider[0].toUpperCase()+_provider.slice(1)} recipients · from PlusVibe${syncedHint}`;
+  }
 }
 
 function toggleClient(wsId) {
