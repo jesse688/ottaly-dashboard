@@ -2647,10 +2647,11 @@ const PERF_WARM_INTERVAL_MS = 2 * 60 * 1000;
 // fractions to the accurate per-day totals. The mix is stable, so it's synced
 // once on refresh and cached, not per-request.
 const providerMixCache = { byWs: new Map(), syncedAt: null, syncing: false };
-const PROVIDER_MIX_MAX_PAGES = 2000; // effectively full — stops at the last page
-                                     // (leads.length < 100). Full population = no
-                                     // campaign-order sampling bias. Persisted to
-                                     // DB so this heavy sync runs once.
+const PROVIDER_MIX_MAX_PAGES = 40;   // ~4000 leads/ws, sorted by email so the
+                                     // sample is de-biased (spread across
+                                     // providers, not campaign-clustered). A full
+                                     // sweep is impractical under PlusVibe's
+                                     // ~100 req/min limit. Persisted to DB.
 
 function pvMxToProviderBucket(mx) {
   const m = String(mx || '').toUpperCase();
@@ -2670,7 +2671,12 @@ async function fetchWorkspaceProviderMix(wsId, maxPages = PROVIDER_MIX_MAX_PAGES
   for (let page = 1; page <= maxPages; page++) {
     let leads = [];
     try {
-      const raw = await pvFetch(`/lead/workspace-leads?workspace_id=${wsId}&page=${page}&limit=100`);
+      // Sort by email so a bounded sample is spread across providers rather than
+      // campaign-clustered (campaign order correlates with provider, which is
+      // what skewed the unsorted sample's Microsoft share). PlusVibe's ~100
+      // req/min limit makes a full sweep of 40k+ leads impractical (~minutes
+      // each); a de-biased ~4k-lead sample is representative and fast.
+      const raw = await pvFetch(`/lead/workspace-leads?workspace_id=${wsId}&page=${page}&limit=100&sort=email&direction=asc`);
       leads = Array.isArray(raw) ? raw : (raw?.leads || raw?.data || raw?.docs || []);
     } catch { break; }
     if (!leads.length) break;
