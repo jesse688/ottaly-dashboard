@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { getAdminSession, sha256 } from '@/lib/auth'
 import pool from '@/lib/db'
+import { backfillWorkspace } from '@/lib/sync'
+import { registerWebhook } from '@/lib/plusvibe'
 
 export async function GET() {
   if (!await getAdminSession()) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -40,7 +42,18 @@ export async function POST(req: NextRequest) {
        RETURNING id`,
       [email.toLowerCase(), passwordHash, workspaceId, companyName, Number(costPerLead) || 0]
     )
-    return NextResponse.json({ ok: true, id: res.rows[0].id })
+
+    // Auto-backfill this client's workspace (leads + real email threads) so they
+    // have data immediately. Runs in the background — client creation returns now.
+    backfillWorkspace(workspaceId)
+      .then(r => console.log(`[client-create] backfilled ${companyName}:`, r))
+      .catch(e => console.error(`[client-create] backfill failed for ${companyName}:`, e))
+
+    // Best-effort: register the PlusVibe lead webhook for this workspace. No-ops
+    // unless PLUSVIBE_WEBHOOK_CREATE_URL/TARGET_URL are configured (polling covers it otherwise).
+    const hook = await registerWebhook(workspaceId)
+
+    return NextResponse.json({ ok: true, id: res.rows[0].id, webhook: hook.ok ? 'registered' : hook.reason })
   } catch (err: unknown) {
     const pgErr = err as { code?: string }
     if (pgErr.code === '23505') {

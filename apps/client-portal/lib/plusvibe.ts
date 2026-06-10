@@ -141,4 +141,45 @@ export async function sendReply(input: {
   }
 }
 
+// Where PlusVibe should send lead/reply events. Defaults to the existing
+// admin-legacy handler (which already syncs to esp_leads + portal_emails).
+const WEBHOOK_TARGET =
+  process.env.PLUSVIBE_WEBHOOK_TARGET_URL ||
+  'https://ottaly-git.oix3xv.easypanel.host/webhook/plusvibe-reply'
+
+// Same events the existing workspace webhook uses (incl. LEAD_MARKED_AS_LEAD).
+const WEBHOOK_EVENTS = ['ALL_EMAIL_REPLIES', 'EMAIL_SENT', 'LEAD_MARKED_AS_LEAD', 'BOUNCED_EMAIL']
+
+interface PVHook { _id: string; url: string; status?: string; evt_types?: string[] }
+
+// Idempotently ensure a lead/reply webhook exists for a workspace, pointing at our
+// handler. Lists first (GET /hook/list) to avoid duplicates, then POST /hook/add.
+export async function registerWebhook(workspaceId: string): Promise<{ ok: boolean; reason?: string }> {
+  if (!KEY) return { ok: false, reason: 'no-api-key' }
+  try {
+    const list = await pv<{ hooks?: PVHook[] }>('/hook/list', { workspace_id: workspaceId }).catch(() => ({ hooks: [] as PVHook[] }))
+    if ((list.hooks ?? []).some(h => h.url === WEBHOOK_TARGET)) return { ok: true, reason: 'already-exists' }
+
+    const res = await fetch(`${BASE}/hook/add`, {
+      method: 'POST',
+      headers: { ...headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspace_id: workspaceId,
+        name: 'Ottaly Portal',
+        url: WEBHOOK_TARGET,
+        camp_ids: ['ALL'],
+        event_types: WEBHOOK_EVENTS,
+        is_slack: null,
+        secret: '',
+        ignore_ooo: 1,
+        ignore_automatic: 1,
+      }),
+    })
+    if (!res.ok) return { ok: false, reason: `create-failed-${res.status}: ${(await res.text().catch(() => '')).slice(0, 120)}` }
+    return { ok: true, reason: 'created' }
+  } catch (err) {
+    return { ok: false, reason: String(err) }
+  }
+}
+
 export const PV_LABELS = KEY ? true : false // truthy guard helper for callers
