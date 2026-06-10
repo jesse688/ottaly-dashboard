@@ -2699,31 +2699,58 @@ async function activePerformanceWorkspaces() {
 
 async function ensurePerformanceDailyStats(wsIds, dates, dailyStats = performanceCache.dailyStats, forceDates = new Set()) {
   const today = serverDateString(new Date());
-  // Build list of (wsId, date) pairs that actually need a fetch.
-  const needed = [];
-  for (const wsId of wsIds) {
-    for (const date of dates) {
-      const key = `${wsId}|${date}`;
-      const cached = dailyStats.get(key);
+  if (!dates.length) return {};
+  const dateSet = new Set(dates);
+  const sorted = [...dates].sort();
+  const rangeStart = sorted[0];
+  const rangeEnd   = sorted[sorted.length - 1];
+
+  // Only fetch workspaces that have at least one stale/missing/forced day.
+  const wsNeeding = wsIds.filter(wsId =>
+    dates.some(date => {
+      const cached = dailyStats.get(`${wsId}|${date}`);
       const ttl = date === today ? PERF_TODAY_TTL_MS : PERF_OLD_TTL_MS;
-      if (forceDates.has(date) || !cached || Date.now() - cached.savedAt > ttl) needed.push({ wsId, date, key });
-    }
-  }
-  // Fetch up to 8 at once — fast enough to feel instant, gentle on PlusVibe.
-  const CONC = 8;
-  for (let i = 0; i < needed.length; i += CONC) {
-    await Promise.allSettled(needed.slice(i, i + CONC).map(async ({ wsId, date, key }) => {
+      return forceDates.has(date) || !cached || Date.now() - cached.savedAt > ttl;
+    })
+  );
+
+  // ONE range call per workspace — NOT one per day. The old per-day version
+  // fired wsIds×dates calls (e.g. 18×30 = 540); with PV_MIN_GAP_MS=600 that's
+  // 5.4min of mandatory gaps per warm, but warms re-run every 2min, so it never
+  // finished and throttled days stayed zero — undercounting totals by ~50%
+  // (worse for heavy senders). PlusVibe returns a full per-day `chart` for a
+  // date range in a single call (same pattern as the intelligence backfill).
+  const CONC = 6;
+  for (let i = 0; i < wsNeeding.length; i += CONC) {
+    await Promise.allSettled(wsNeeding.slice(i, i + CONC).map(async wsId => {
       try {
-        const raw = await pvFetch(`/account/email-stats?workspace_id=${wsId}&start_date=${date}&end_date=${date}`);
-        dailyStats.set(key, { savedAt: Date.now(), data: aggPvEmailStats(raw) });
+        const raw = await pvFetch(`/account/email-stats?workspace_id=${wsId}&start_date=${rangeStart}&end_date=${rangeEnd}`);
+        const chart = Array.isArray(raw) ? raw : (raw?.chart || []);
+        const seen = new Set();
+        for (const row of chart) {
+          const date = (row.date || row.day || '').slice(0, 10);
+          if (!date || !dateSet.has(date)) continue;
+          // aggPvEmailStats([row]) reuses the exact field mapping for one day.
+          dailyStats.set(`${wsId}|${date}`, { savedAt: Date.now(), data: aggPvEmailStats([row]) });
+          seen.add(date);
+        }
+        // A day absent from the chart on a SUCCESSFUL fetch genuinely had 0
+        // sends — cache a real zero so it isn't retried forever. Never overwrite
+        // a prior non-zero value (defensive against a sparse chart response).
+        for (const date of dates) {
+          if (seen.has(date) || date > today) continue;
+          const key = `${wsId}|${date}`;
+          const prev = dailyStats.get(key);
+          if (!prev || (prev.data?.sent || 0) === 0) {
+            dailyStats.set(key, { savedAt: Date.now(), data: { ...EMPTY_PERF_AGG } });
+          }
+        }
       } catch {
-        // Fetch FAILED (429 exhausted / network / bad response). Do NOT cache a
-        // zero — a poisoned 0 is indistinguishable from a real "0 sends" day and
-        // the TTL would trust it for up to 12h, masking real data. Keep any prior
-        // good value; if none exists, store zeros but mark stale (savedAt:0) so
-        // the next pass retries instead of trusting the failure.
-        if (!dailyStats.has(key)) {
-          dailyStats.set(key, { savedAt: 0, data: { ...EMPTY_PERF_AGG } });
+        // Range fetch FAILED — keep any prior good values; seed only truly
+        // missing days as stale zeros (savedAt:0) so the next pass retries.
+        for (const date of dates) {
+          const key = `${wsId}|${date}`;
+          if (!dailyStats.has(key)) dailyStats.set(key, { savedAt: 0, data: { ...EMPTY_PERF_AGG } });
         }
       }
     }));
