@@ -2469,6 +2469,9 @@ class PostgresDatabase {
   // large chunk of the back-catalogue instantly without trusting Apollo.
   // Keyset-batched by domain so no single statement runs long.
   async seedDomainMxCacheFromVerified() {
+    // Clear any prior run's error so the diagnostic reflects THIS run's outcome
+    // (else a fixed seed still reports the old failure).
+    this._lastSeedError = null;
     // First recover mx_provider from verifier-set tags (the column write was
     // historically missing), so the per-domain seed below has data to read.
     const rec = await this.recoverMxProviderFromVerifiedTags();
@@ -2491,7 +2494,13 @@ class PostgresDatabase {
         FROM (
           SELECT LOWER(SPLIT_PART(email, '@', 2)) AS domain,
                  mx_provider,
-                 email_verified_at
+                 -- email_verified_at is declared TIMESTAMP but is stored as text
+                 -- on the live DB; cast explicitly so MAX()/ORDER BY produce a
+                 -- timestamp that matches domain_mx_cache.resolved_at. Without
+                 -- this the INSERT throws ("expression is of type text") and the
+                 -- whole seed aborts → domainsCached stays 0 and no contacts get
+                 -- classified. NULLIF guards empty-string text values.
+                 NULLIF(email_verified_at::text, '')::timestamp AS email_verified_at
           FROM contacts
           WHERE mx_provider IN ('email_google','email_outlook','email_other')
             AND email_verified_at IS NOT NULL

@@ -12247,6 +12247,23 @@ app.get('/api/contacts/mx-coverage', requireSession, async (req, res) => {
   }
 });
 
+// Manually re-run the domain-MX seed + recovery (normally boot-only). Lets us
+// backfill mx_provider for the back-catalogue without a server restart and
+// watch domainsCached climb via /api/contacts/mx-coverage. Idempotent.
+app.post('/api/contacts/mx-reseed', requireSession, async (req, res) => {
+  try {
+    const dbPg = req.app.locals.pgDb;
+    if (!dbPg) return res.status(503).json({ error: 'Database unavailable' });
+    if (!dbPg.seedDomainMxCacheFromVerified) {
+      return res.status(501).json({ error: 'seed not supported on this DB backend' });
+    }
+    const r = await dbPg.seedDomainMxCacheFromVerified();
+    res.json({ ok: true, ...r, lastSeedError: dbPg._lastSeedError || null });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/contacts/push-jobs', (req, res) => {
   const jobs = [...pushJobs.values()]
     .sort((a, b) => b.created_at - a.created_at)
