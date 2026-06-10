@@ -1341,6 +1341,7 @@
           <button class="btn" onclick="switchToImportTab(); setTimeout(() => document.getElementById('deleteCsvDropZone').scrollIntoView({behavior:'smooth'}), 100)" style="background:#dc2626;color:white;">Delete from CSV</button>
           <button class="btn btn-secondary" id="exportBtn" onclick="startApolloExport()">⬇ Apollo Export</button>
           <button class="btn btn-secondary" id="resetExportBtn" onclick="resetApolloExports()" title="Clear all 'exported to Apollo' stamps so every contact shows as not-exported again">↺ Reset Exports</button>
+          <button class="btn btn-secondary" id="mxScanBtn" onclick="classifyUnknownProviders(this)" title="Resolve each contact's email provider (Google/Outlook/Other) via a live DNS MX lookup — fills the 'Unknown' bucket on the Stats page. Runs in the background; safe to re-run.">🔍 Classify Providers</button>
           <button class="btn btn-secondary" onclick="openCreateContactModal()">+ Add</button>
         </div>
       </div>
@@ -4404,6 +4405,63 @@
       } finally {
         btn.disabled = false;
         btn.textContent = '↺ Reset Exports';
+      }
+    }
+
+    // Backfill mx_provider (Google/Outlook/Other) for every contact via live DNS
+    // MX lookups — fills the "Unknown" bucket on the Stats provider strip. Runs
+    // the cheap domain-cache reseed first, then kicks off the background DNS
+    // scan and polls coverage so the user watches Unknown fall.
+    let _mxScanPoll = null;
+    async function classifyUnknownProviders(btn) {
+      btn.disabled = true;
+      const orig = btn.textContent;
+      btn.textContent = '🔍 Starting…';
+      try {
+        // 1) Instant: fan known providers across domains from verified contacts.
+        await fetch('/api/contacts/mx-reseed', { method: 'POST' }).catch(() => {});
+
+        // 2) Kick off the background live-DNS scan.
+        const r = await fetch('/api/contacts/mx-scan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        if (r.status === 409) {
+          showMessage('A provider scan is already running — watching progress.', 'info');
+        } else if (!r.ok) {
+          const t = await r.text().catch(() => '');
+          showMessage(`Couldn’t start scan (${r.status}): ${t.slice(0, 200)}`, 'error');
+          btn.disabled = false; btn.textContent = orig;
+          return;
+        } else {
+          showMessage('Classifying providers in the background — this runs for a few minutes.', 'success');
+        }
+
+        // 3) Poll coverage so the button shows the unknown count dropping.
+        if (_mxScanPoll) clearInterval(_mxScanPoll);
+        const poll = async () => {
+          try {
+            const [cov, job] = await Promise.all([
+              fetch('/api/contacts/mx-coverage').then(x => x.json()),
+              fetch('/api/contacts/mx-scan').then(x => x.json()),
+            ]);
+            const unknown = (cov.unknown ?? 0).toLocaleString();
+            if (job && job.running === false && job.stats) {
+              clearInterval(_mxScanPoll); _mxScanPoll = null;
+              btn.disabled = false; btn.textContent = orig;
+              const s = job.stats;
+              showMessage(`Provider scan done — classified ${s.contactsUpdated.toLocaleString()} contacts (${s.domainsResolved.toLocaleString()} domains). ${unknown} still unknown.`, 'success');
+            } else {
+              btn.textContent = `🔍 ${unknown} unknown…`;
+            }
+          } catch { /* transient; keep polling */ }
+        };
+        _mxScanPoll = setInterval(poll, 4000);
+        poll();
+      } catch (err) {
+        showMessage('Provider scan error: ' + err.message, 'error');
+        btn.disabled = false; btn.textContent = orig;
       }
     }
 
