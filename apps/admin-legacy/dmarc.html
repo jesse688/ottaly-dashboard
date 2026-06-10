@@ -90,7 +90,7 @@
       </div>
     </div>
 
-    <div class="section-h">Mailboxes not on p=none</div>
+    <div class="section-h">Mailboxes not on p=reject or p=none</div>
     <div class="table-wrap">
       <table>
         <thead><tr>
@@ -233,17 +233,17 @@ async function loadData() {
   barChart('chartBR',   POLICIES.map(p => +(stats[p].avgBR*100).toFixed(2)),   v => v.toFixed(2)+'%');
   barChart('chartSent', POLICIES.map(p => stats[p].totalSent), v => v.toLocaleString());
 
-  // Non-none table — all mailboxes without p=none, sorted by sent desc
+  // Non-none/non-reject table — mailboxes not on p=reject and not on p=none, sorted by sent desc
   const nonNone = mailboxes
     .filter(m => {
       const policy = m.auth?.dmarc_present ? (m.auth.dmarc_policy || 'none') : 'missing';
-      return policy !== 'none';
+      return policy !== 'none' && policy !== 'reject';
     })
     .sort((a,b) => (b.attributed_sent||0) - (a.attributed_sent||0));
 
   const tbody = document.getElementById('nonNoneTable');
   if (!nonNone.length) {
-    tbody.innerHTML = '<tr><td colspan="8" style="padding:16px;text-align:center;color:#9ca3af">All mailboxes are on p=none ✅</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" style="padding:16px;text-align:center;color:#9ca3af">All mailboxes are on p=reject or p=none ✅</td></tr>';
   } else {
     tbody.innerHTML = nonNone.map(m => {
       const p = m.auth?.dmarc_present ? (m.auth.dmarc_policy || 'none') : 'missing';
