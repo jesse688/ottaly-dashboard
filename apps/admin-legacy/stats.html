@@ -73,6 +73,15 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-h
 .all-card{border-color:var(--navy-dark);box-shadow:0 1px 8px rgba(5,12,41,.08)}
 .all-card .client-row{background:#f4f6fc}
 .all-card .client-name{color:var(--navy-dark);font-weight:700}
+/* Recipient-provider selector + cards */
+.prov-tab{padding:4px 13px;border:1px solid var(--border);background:#fff;border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;color:var(--muted);transition:all .15s}
+.prov-tab.active{background:var(--navy-dark);color:#fff;border-color:var(--navy-dark)}
+.prov-metric{background:#fafbfd;border:1px solid var(--border);border-radius:8px;padding:.6rem .75rem;text-align:center}
+.prov-metric .pm-val{font-size:18px;font-weight:700;color:var(--navy-dark)}
+.prov-metric .pm-lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-top:2px}
+.prov-metric.good .pm-val{color:var(--green)}
+.prov-metric.bad  .pm-val{color:var(--red)}
+.prov-metric.med  .pm-val{color:var(--amber)}
 .spinner{text-align:center;padding:3rem;color:var(--muted);font-size:13px}
 .empty{text-align:center;padding:2rem;color:var(--muted);font-size:13px}
 
@@ -111,6 +120,21 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-h
       <span id="updatedAt"></span>
       <button id="refreshCacheBtn" onclick="forceRefreshCache()" style="padding:3px 10px;border:1px solid var(--border);background:#fff;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;color:var(--muted)">↻ Refresh data</button>
     </div>
+  </div>
+
+  <!-- Recipient-provider breakdown (additive; contacts.mx_provider based) -->
+  <div id="providerPanel" style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.85rem 1rem;margin-bottom:1.25rem">
+    <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.65rem">
+      <span style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)">Recipient provider</span>
+      <div id="providerTabs" style="display:flex;gap:.25rem;flex-wrap:wrap">
+        <button class="prov-tab active" data-prov="all"     onclick="setProvider('all')">All</button>
+        <button class="prov-tab"        data-prov="google"  onclick="setProvider('google')">Google</button>
+        <button class="prov-tab"        data-prov="outlook" onclick="setProvider('outlook')">Outlook</button>
+        <button class="prov-tab"        data-prov="other"   onclick="setProvider('other')">Other</button>
+      </div>
+      <span style="margin-left:auto;font-size:11px;color:var(--muted)" title="Based on each recipient mailbox's true MX provider (contacts.mx_provider), windowed by last-emailed date. Independent of the per-client table above.">by recipient MX · sends in period</span>
+    </div>
+    <div id="providerCards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.6rem"></div>
   </div>
 
   <div id="loading" class="spinner">Loading stats…</div>
@@ -256,8 +280,73 @@ let _partialRetryTimer = null;
 let _partialTries = 0;
 const MAX_PARTIAL_TRIES = 3;  // after this, render whatever we have rather than spin forever
 
+// ── Recipient-provider strip (additive; independent of the table below) ──
+let _provider = 'all';
+let _providerData = null;
+
+function setProvider(p) {
+  _provider = p;
+  document.querySelectorAll('.prov-tab').forEach(b =>
+    b.classList.toggle('active', b.dataset.prov === p));
+  renderProviderCards();
+}
+
+async function loadProviderStats(start, end) {
+  try {
+    const cmFilter = window.getCMFilter ? window.getCMFilter() : null;
+    const wsParam = cmFilter?.enabled && cmFilter.workspaceIds?.length
+      ? `&workspace_ids=${cmFilter.workspaceIds.join(',')}` : '';
+    const r = await fetch(`/api/stats/by-provider?start=${start}&end=${end}${wsParam}`);
+    if (!r.ok) throw new Error(`${r.status}`);
+    _providerData = await r.json();
+    renderProviderCards();
+  } catch (e) {
+    document.getElementById('providerCards').innerHTML =
+      `<div style="grid-column:1/-1;font-size:12px;color:var(--muted)">Couldn’t load provider breakdown: ${e.message}</div>`;
+  }
+}
+
+function renderProviderCards() {
+  const wrap = document.getElementById('providerCards');
+  if (!_providerData?.providers) { wrap.innerHTML = '<div style="grid-column:1/-1;font-size:12px;color:var(--muted)">Loading…</div>'; return; }
+  const list = _providerData.providers;
+  // "All" = sum across buckets; otherwise the selected bucket.
+  let row;
+  if (_provider === 'all') {
+    const t = list.reduce((a, p) => ({
+      sent:a.sent+p.sent, replies:a.replies+p.replies, bounces:a.bounces+p.bounces,
+      leads:a.leads+p.leads, unique_contacts:a.unique_contacts+p.unique_contacts,
+    }), { sent:0, replies:0, bounces:0, leads:0, unique_contacts:0 });
+    row = { ...t,
+      replyRate:  t.sent>0 ? t.replies/t.sent : 0,
+      bounceRate: t.sent>0 ? t.bounces/t.sent : 0,
+      rtl:        t.replies>0 ? t.leads/t.replies : 0 };
+  } else {
+    row = list.find(p => p.provider === _provider) || { sent:0, replies:0, bounces:0, leads:0, unique_contacts:0, replyRate:0, bounceRate:0, rtl:0 };
+  }
+  const rrClass = row.replyRate >= 0.025 ? 'good' : row.replyRate >= 0.01 ? 'med' : row.replyRate > 0 ? 'bad' : '';
+  const brClass = row.bounceRate >= 0.05 ? 'bad' : row.bounceRate >= 0.02 ? 'med' : 'good';
+  const rtlClass = row.rtl >= 0.1 ? 'good' : row.rtl >= 0.05 ? 'med' : '';
+  const cards = [
+    ['Sent',        fmtNum(row.sent),        ''],
+    ['Reply Rate',  pct(row.replyRate),      rrClass],
+    ['Bounce Rate', pct(row.bounceRate),     brClass],
+    ['Leads',       fmtNum(row.leads),       row.leads>0?'good':''],
+    ['RTL',         pct(row.rtl),            rtlClass],
+    ['Contacts',    fmtNum(row.unique_contacts), ''],
+  ];
+  wrap.innerHTML = cards.map(([lbl,val,cls]) =>
+    `<div class="prov-metric ${cls}"><div class="pm-val">${val}</div><div class="pm-lbl">${lbl}</div></div>`
+  ).join('');
+}
+
 async function loadStats(start, end, silent = false) {
+  const periodChanged = (start !== _start || end !== _end);
   _start = start; _end = end;
+  // Refresh the provider strip on a real period change or a non-silent load —
+  // not on every silent partial-retry tick (the contacts data doesn't change
+  // between those, and they fire every few seconds while PlusVibe caches).
+  if (!silent || periodChanged) loadProviderStats(start, end);
   if (!silent) {
     _partialTries = 0;  // fresh period selection resets the retry budget
     document.getElementById('loading').style.display = '';

@@ -3167,6 +3167,87 @@ app.get('/api/verify-split', requireSession, async (req, res) => {
   }
 });
 
+// ── Recipient-provider split for the Stats page ───────────────────────────
+// READ-ONLY, additive. Does NOT touch /api/stats/summary or the PlusVibe
+// performanceCache. Mirrors /api/verify-split's contacts-based windowing, but
+// buckets by the recipient mailbox's true MX provider (contacts.mx_provider:
+// email_google / email_outlook / email_other; NULL → unknown). Lets the Stats
+// page show sent/reply/bounce/lead rates filtered by recipient provider.
+app.get('/api/stats/by-provider', requireSession, async (req, res) => {
+  const start = String(req.query.start || '');
+  const end   = String(req.query.end   || '');
+  if (!start || !end) return res.status(400).json({ error: 'start and end required (YYYY-MM-DD)' });
+  try {
+    const pgdb = app.locals.pgDb;
+    if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
+
+    // Optional workspace filter — matches the CM filter the Stats page already
+    // passes to /api/stats/summary.
+    const wsIds = req.query.workspace_ids
+      ? String(req.query.workspace_ids).split(',').filter(Boolean)
+      : null;
+
+    // Bucket mx_provider into the three labels Jesse cares about + unknown.
+    const bucket = `
+      CASE COALESCE(mx_provider, 'unknown')
+        WHEN 'email_google'  THEN 'google'
+        WHEN 'email_outlook' THEN 'outlook'
+        WHEN 'email_other'   THEN 'other'
+        ELSE 'unknown'
+      END`;
+
+    const params = [start, end];
+    let wsClause = '';
+    if (wsIds && wsIds.length) {
+      params.push(wsIds);
+      wsClause = `AND workspace_id = ANY($${params.length})`;
+    }
+
+    const q = `
+      SELECT
+        ${bucket}                                                               AS provider,
+        COUNT(*)::int                                                            AS unique_contacts,
+        SUM(COALESCE(email_count, 0))::bigint                                   AS sent,
+        COUNT(*) FILTER (WHERE last_reply_at >= $1)::int                        AS replies,
+        COUNT(*) FILTER (WHERE bounced_at    >= $1)::int                        AS bounces,
+        COUNT(*) FILTER (WHERE marked_as_lead_at >= $1
+                            OR (status = 'interested' AND last_reply_at >= $1))::int AS leads
+      FROM contacts
+      WHERE last_emailed_at >= $1
+        AND last_emailed_at < ($2::date + interval '1 day')
+        ${wsClause}
+      GROUP BY 1
+      ORDER BY sent DESC
+    `;
+
+    const { rows } = await pgdb.query(q, params);
+
+    // Always return all four buckets in a stable order, zero-filled, so the UI
+    // can render fixed cards without juggling missing keys.
+    const ORDER = ['google', 'outlook', 'other', 'unknown'];
+    const byKey = Object.fromEntries(rows.map(r => [r.provider, r]));
+    const providers = ORDER.map(key => {
+      const r = byKey[key] || {};
+      const sent    = Number(r.sent    || 0);
+      const replies = Number(r.replies || 0);
+      const bounces = Number(r.bounces || 0);
+      const leads   = Number(r.leads   || 0);
+      return {
+        provider: key,
+        unique_contacts: Number(r.unique_contacts || 0),
+        sent, replies, bounces, leads,
+        replyRate:  sent    > 0 ? replies / sent    : 0,
+        bounceRate: sent    > 0 ? bounces / sent    : 0,
+        rtl:        replies > 0 ? leads   / replies : 0,
+      };
+    });
+
+    res.json({ providers, start, end });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Sender × Recipient provider combo analysis ────────────────────────────
 
 // Debug: show what top-level keys exist in raw JSONB + a sample record
