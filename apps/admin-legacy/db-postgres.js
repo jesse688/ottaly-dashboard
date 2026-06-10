@@ -744,6 +744,20 @@ class PostgresDatabase {
         notes        TEXT NOT NULL DEFAULT '',
         updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )`,
+      // True MX provider per email domain, resolved by the verifier. MX is a
+      // property of the domain, not the mailbox, so one lookup classifies the
+      // whole company — cached here and fanned out to every contact on the
+      // domain. Apollo's tech-stack guess is never written here; only a real
+      // verifier MX result. provider ∈ ('email_google','email_outlook',
+      // 'email_other'). Unresolvable MX is left uncached (contact stays NULL /
+      // Unknown for a re-check), never recorded as a false 'other'. The lookup
+      // index already exists as idx_contacts_email_domain (LOWER(SPLIT_PART(
+      // email,'@',2))) above — domain-cache queries use that same expression.
+      `CREATE TABLE IF NOT EXISTS domain_mx_cache (
+        domain       TEXT PRIMARY KEY,
+        mx_provider  TEXT NOT NULL,
+        resolved_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )`,
     ];
 
     // Migrations run with lock_timeout so a stuck previous-deploy query
@@ -1479,18 +1493,23 @@ class PostgresDatabase {
       if (!filters.emailProviders) return;
       const providers = filters.emailProviders.split(',').map(prov => prov.trim()).filter(Boolean);
       if (!providers.length) return;
+      // Provider is the TRUE MX provider only — never Apollo's tech-stack
+      // guess (tags/technologies), which is what leaked Microsoft contacts
+      // past a "Google + Other" filter. A contact matches a provider iff its
+      // mx_provider equals it. Contacts with an unknown MX (mx_provider IS
+      // NULL) deliberately match no provider here: they still appear via the
+      // 'unknown' pseudo-provider below so they can be pushed-then-verified,
+      // and the push-time gate enforces the real provider once the verifier
+      // stamps it. MX is a domain property, so domain_mx_cache backfills
+      // mx_provider for every contact on a domain once any one resolves.
       const orClauses = [];
       for (const prov of providers) {
-        if (prov === 'email_outlook') {
-          orClauses.push(`($${p} = ANY(tags) OR technologies ILIKE $${p+1} OR technologies ILIKE $${p+2} OR technologies ILIKE $${p+3})`);
-          params.push('email_outlook', '%outlook%', '%microsoft 365%', '%exchange%');
-          p += 4;
-        } else if (prov === 'email_google') {
-          orClauses.push(`($${p} = ANY(tags) OR technologies ILIKE $${p+1} OR technologies ILIKE $${p+2})`);
-          params.push('email_google', '%google workspace%', '%g suite%');
-          p += 3;
+        if (prov === 'unknown') {
+          // Not-yet-verified contacts — no true MX yet. Surfaced so the user
+          // can push them through the verifier to discover the real provider.
+          orClauses.push(`mx_provider IS NULL`);
         } else {
-          orClauses.push(`$${p} = ANY(tags)`);
+          orClauses.push(`mx_provider = $${p}`);
           params.push(prov);
           p += 1;
         }
@@ -1918,6 +1937,13 @@ class PostgresDatabase {
           UPDATE contacts SET
             email_status      = v.status,
             email_verified_at = v.verified_at::timestamp,
+            -- True MX provider → authoritative mx_provider column. This is what
+            -- the provider filter now reads. A null new value means the verifier
+            -- couldn't resolve MX this run; keep any known-good value rather than
+            -- wiping it to Unknown (re-checks happen on the next verify).
+            mx_provider       = COALESCE(v.mx_provider, contacts.mx_provider),
+            -- Keep the legacy tag in sync for display, but it is no longer used
+            -- for filtering.
             tags = CASE
               WHEN v.mx_provider IS NOT NULL THEN
                 array_append(
@@ -2285,15 +2311,22 @@ class PostgresDatabase {
   async getEmailProviderStats(workspaceId, filters = {}) {
     if (!workspaceId) {
       // Backwards-compat: original signature was zero-arg, workspace-wide.
+      // Counts on the TRUE MX provider (mx_provider), never Apollo's guess.
       const r = await this.query(`
         SELECT
-          COUNT(CASE WHEN 'email_google'  = ANY(tags) THEN 1 END) as google,
-          COUNT(CASE WHEN 'email_outlook' = ANY(tags) THEN 1 END) as outlook,
-          COUNT(CASE WHEN 'email_other'   = ANY(tags) THEN 1 END) as other
+          COUNT(CASE WHEN mx_provider = 'email_google'  THEN 1 END) as google,
+          COUNT(CASE WHEN mx_provider = 'email_outlook' THEN 1 END) as outlook,
+          COUNT(CASE WHEN mx_provider = 'email_other'   THEN 1 END) as other,
+          COUNT(CASE WHEN mx_provider IS NULL           THEN 1 END) as unknown
         FROM contacts
       `);
       const row = r.rows[0] || {};
-      return { google: parseInt(row.google) || 0, outlook: parseInt(row.outlook) || 0, other: parseInt(row.other) || 0 };
+      return {
+        google:  parseInt(row.google)  || 0,
+        outlook: parseInt(row.outlook) || 0,
+        other:   parseInt(row.other)   || 0,
+        unknown: parseInt(row.unknown) || 0,
+      };
     }
     const { emailProviders, ...rest } = filters;
     const { clauses, params } = this._buildFilterClauses(rest);
@@ -2308,24 +2341,108 @@ class PostgresDatabase {
 
     const sql = `
       SELECT
-        COUNT(CASE WHEN 'email_google'  = ANY(tags)
-                     OR technologies ILIKE '%google workspace%'
-                     OR technologies ILIKE '%g suite%'
-                     OR technologies ILIKE '%gmail%'
-                   THEN 1 END) as google,
-        COUNT(CASE WHEN 'email_outlook' = ANY(tags)
-                     OR technologies ILIKE '%outlook%'
-                     OR technologies ILIKE '%microsoft 365%'
-                     OR technologies ILIKE '%exchange%'
-                   THEN 1 END) as outlook,
-        COUNT(CASE WHEN 'email_other'   = ANY(tags) THEN 1 END) as other
+        COUNT(CASE WHEN mx_provider = 'email_google'  THEN 1 END) as google,
+        COUNT(CASE WHEN mx_provider = 'email_outlook' THEN 1 END) as outlook,
+        COUNT(CASE WHEN mx_provider = 'email_other'   THEN 1 END) as other,
+        COUNT(CASE WHEN mx_provider IS NULL           THEN 1 END) as unknown
       FROM contacts WHERE workspace_id = $1${where}
     `;
     const r = await this.query(sql, [workspaceId, ...params]);
     const row = r.rows[0] || {};
-    const value = { google: parseInt(row.google) || 0, outlook: parseInt(row.outlook) || 0, other: parseInt(row.other) || 0 };
+    const value = {
+      google:  parseInt(row.google)  || 0,
+      outlook: parseInt(row.outlook) || 0,
+      other:   parseInt(row.other)   || 0,
+      unknown: parseInt(row.unknown) || 0,
+    };
     this._filterCountCache.set(cacheKey, { value, ts: now });
     return value;
+  }
+
+  // ── True-MX domain cache ─────────────────────────────────────────────
+  // MX records belong to the domain, not the mailbox: every address on a
+  // domain shares them. So once the verifier resolves one mailbox's MX, we
+  // cache it per-domain and fan it out to every contact on that domain —
+  // most contacts then never need an individual lookup.
+
+  // Returns the cached true provider for a domain, or null if not yet known.
+  async getDomainMxProvider(domain) {
+    if (!domain) return null;
+    const r = await this.query(
+      `SELECT mx_provider FROM domain_mx_cache WHERE domain = $1`,
+      [domain.toLowerCase()]
+    );
+    return r.rows[0]?.mx_provider || null;
+  }
+
+  // Record a domain's true provider (newer wins) and fan it out to every
+  // contact on that domain. Only ever called with a real verifier MX result —
+  // never Apollo's guess, never an unresolved/unknown verdict.
+  async setDomainMxProvider(domain, provider) {
+    if (!domain || !provider) return { contactsUpdated: 0 };
+    const dom = domain.toLowerCase();
+    await this.query(
+      `INSERT INTO domain_mx_cache (domain, mx_provider, resolved_at)
+       VALUES ($1, $2, CURRENT_TIMESTAMP)
+       ON CONFLICT (domain) DO UPDATE
+         SET mx_provider = EXCLUDED.mx_provider, resolved_at = EXCLUDED.resolved_at`,
+      [dom, provider]
+    );
+    // Newer wins: overwrite every contact on the domain whose value differs.
+    const r = await this.query(
+      `UPDATE contacts SET mx_provider = $2
+         WHERE LOWER(SPLIT_PART(email, '@', 2)) = $1
+           AND mx_provider IS DISTINCT FROM $2`,
+      [dom, provider]
+    );
+    return { contactsUpdated: r.rowCount || 0 };
+  }
+
+  // One-time seed: build the domain cache from contacts that ALREADY carry a
+  // real verifier MX (mx_provider set + email_verified_at present), then fan
+  // each domain's provider out to its still-unclassified contacts. Recovers a
+  // large chunk of the back-catalogue instantly without trusting Apollo.
+  // Keyset-batched by domain so no single statement runs long.
+  async seedDomainMxCacheFromVerified() {
+    // Per domain, take the most-recently-verified contact's provider as truth.
+    const seed = await this.query(`
+      INSERT INTO domain_mx_cache (domain, mx_provider, resolved_at)
+      SELECT domain, mx_provider, last_at FROM (
+        SELECT DISTINCT ON (LOWER(SPLIT_PART(email, '@', 2)))
+          LOWER(SPLIT_PART(email, '@', 2)) AS domain,
+          mx_provider,
+          email_verified_at AS last_at
+        FROM contacts
+        WHERE mx_provider IN ('email_google','email_outlook','email_other')
+          AND email_verified_at IS NOT NULL
+          AND email IS NOT NULL AND position('@' in email) > 0
+        ORDER BY LOWER(SPLIT_PART(email, '@', 2)), email_verified_at DESC
+      ) s
+      ON CONFLICT (domain) DO NOTHING
+    `);
+
+    // Fan the seeded providers out to contacts that have no mx_provider yet but
+    // whose domain is now known. Batched by id to stay under statement_timeout
+    // and avoid a long lock on the ~469k-row contacts table.
+    let filled = 0;
+    for (let i = 0; i < 200; i++) {
+      const r = await this.query(`
+        UPDATE contacts c
+          SET mx_provider = dmc.mx_provider
+        FROM domain_mx_cache dmc
+        WHERE c.id IN (
+          SELECT c2.id FROM contacts c2
+          JOIN domain_mx_cache d2 ON d2.domain = LOWER(SPLIT_PART(c2.email, '@', 2))
+          WHERE c2.mx_provider IS NULL AND c2.email IS NOT NULL
+          LIMIT 10000
+        )
+          AND dmc.domain = LOWER(SPLIT_PART(c.email, '@', 2))
+      `);
+      const n = r.rowCount || 0;
+      filled += n;
+      if (n === 0) break;
+    }
+    return { domainsSeeded: seed.rowCount || 0, contactsFilled: filled };
   }
 
   detectEmailProvider(technologiesStr) {
