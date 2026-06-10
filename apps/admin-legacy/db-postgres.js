@@ -1364,14 +1364,25 @@ class PostgresDatabase {
     // Collapses N values into a single `col ILIKE ANY(ARRAY[...])` expression
     // — one parameter, one per-row eval, planner-friendly. Was previously N
     // chained OR clauses which timed out on big Apollo URLs (60+ keywords).
+    // Escape regex metacharacters so a user value like "real estate (b2b)" is
+    // matched literally, not as a regex. Used to build word-boundary patterns.
+    const reEsc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Build a case-insensitive whole-word regex from one or more values:
+    //   ['cat','dog'] -> '\y(cat|dog)\y'
+    // \y is Postgres's word boundary, so "cat" matches "cat" / "cat food" but
+    // NOT "education". Punctuation in the field still bounds words, so
+    // "real estate" matches inside "Real Estate & Property".
+    const wordRegex = (values) => `\\y(${values.map(reEsc).join('|')})\\y`;
+
     const colMulti = (cols, val) => {
       const values = val.split(',').map(v => v.trim()).filter(Boolean);
       if (values.length === 0) return;
       const colsArr = Array.isArray(cols) ? cols : [cols];
-      const patterns = values.map(v => `%${v}%`);
-      const orClauses = colsArr.map(c => `${c} ILIKE ANY($${p})`);
+      // Whole-word match (was substring ILIKE %val%, which wrongly matched
+      // "cat" inside "eduCATion"). ~* is case-insensitive regex.
+      const orClauses = colsArr.map(c => `${c} ~* $${p}`);
       clauses.push(`(${orClauses.join(' OR ')})`);
-      params.push(patterns);
+      params.push(wordRegex(values));
       p++;
     };
     // Exact-match variant for normalised fields (region/county/town).
@@ -1388,12 +1399,12 @@ class PostgresDatabase {
       const values = val.split(',').map(v => v.trim()).filter(Boolean);
       if (values.length === 0) return;
       const colsArr = Array.isArray(cols) ? cols : [cols];
-      const patterns = values.map(v => `%${v}%`);
-      // Single `NOT ILIKE ALL` per column instead of N chained AND clauses.
-      // NULLs treated as "no match" (i.e. row passes the exclusion).
-      const perCol = colsArr.map(c => `(${c} IS NULL OR ${c} NOT ILIKE ALL($${p}))`);
+      // Whole-word exclusion (matches colMulti): excluding "cat" must not also
+      // exclude "education". A row passes if NONE of its columns contain any
+      // excluded value as a whole word. NULL column = no match = row passes.
+      const perCol = colsArr.map(c => `(${c} IS NULL OR ${c} !~* $${p})`);
       clauses.push(`(${perCol.join(' AND ')})`);
-      params.push(patterns);
+      params.push(wordRegex(values));
       p++;
     };
 
@@ -1426,33 +1437,30 @@ class PostgresDatabase {
       if (!filters.keywords) return;
       const values = filters.keywords.split(',').map(v => v.trim()).filter(Boolean);
       if (!values.length) return;
-      const patterns = values.map(v => `%${v}%`);
-      clauses.push(`COALESCE(NULLIF(keywords,''), raw_data->>'Keywords') ILIKE ANY($${p})`);
-      params.push(patterns); p++;
+      // Whole-word match (was substring) — see colMulti/wordRegex.
+      clauses.push(`COALESCE(NULLIF(keywords,''), raw_data->>'Keywords') ~* $${p}`);
+      params.push(wordRegex(values)); p++;
     });
     safe('keywordsExclude', () => {
       if (!filters.keywordsExclude) return;
       const values = filters.keywordsExclude.split(',').map(v => v.trim()).filter(Boolean);
       if (!values.length) return;
-      const patterns = values.map(v => `%${v}%`);
-      clauses.push(`(COALESCE(NULLIF(keywords,''), raw_data->>'Keywords') IS NULL OR COALESCE(NULLIF(keywords,''), raw_data->>'Keywords') NOT ILIKE ALL($${p}))`);
-      params.push(patterns); p++;
+      clauses.push(`(COALESCE(NULLIF(keywords,''), raw_data->>'Keywords') IS NULL OR COALESCE(NULLIF(keywords,''), raw_data->>'Keywords') !~* $${p})`);
+      params.push(wordRegex(values)); p++;
     });
     safe('technologies', () => {
       if (!filters.technologies) return;
       const values = filters.technologies.split(',').map(v => v.trim()).filter(Boolean);
       if (!values.length) return;
-      const patterns = values.map(v => `%${v}%`);
-      clauses.push(`COALESCE(NULLIF(technologies,''), raw_data->>'Technologies') ILIKE ANY($${p})`);
-      params.push(patterns); p++;
+      clauses.push(`COALESCE(NULLIF(technologies,''), raw_data->>'Technologies') ~* $${p}`);
+      params.push(wordRegex(values)); p++;
     });
     safe('technologiesExclude', () => {
       if (!filters.technologiesExclude) return;
       const values = filters.technologiesExclude.split(',').map(v => v.trim()).filter(Boolean);
       if (!values.length) return;
-      const patterns = values.map(v => `%${v}%`);
-      clauses.push(`(COALESCE(NULLIF(technologies,''), raw_data->>'Technologies') IS NULL OR COALESCE(NULLIF(technologies,''), raw_data->>'Technologies') NOT ILIKE ALL($${p}))`);
-      params.push(patterns); p++;
+      clauses.push(`(COALESCE(NULLIF(technologies,''), raw_data->>'Technologies') IS NULL OR COALESCE(NULLIF(technologies,''), raw_data->>'Technologies') !~* $${p})`);
+      params.push(wordRegex(values)); p++;
     });
     safe('website',             () => { if (filters.website)             like('company_domain', filters.website); });
     safe('companyLinkedin',     () => { if (filters.companyLinkedin)     like('company_linkedin_url', filters.companyLinkedin); });
