@@ -1,6 +1,6 @@
 import { SignJWT, jwtVerify } from 'jose'
 import { cookies } from 'next/headers'
-import { createHash, timingSafeEqual } from 'crypto'
+import { createHash, timingSafeEqual, randomBytes } from 'crypto'
 import pool from './db'
 
 const SECRET = new TextEncoder().encode(
@@ -23,6 +23,11 @@ export interface ClientSession {
 
 export function sha256(input: string): string {
   return createHash('sha256').update(input).digest('hex')
+}
+
+// Unguessable token for a self-service invite link.
+export function generateInviteToken(): string {
+  return randomBytes(24).toString('base64url')
 }
 
 // Friendly access code like "Otta-7K2P" — easy to read out, no ambiguous chars.

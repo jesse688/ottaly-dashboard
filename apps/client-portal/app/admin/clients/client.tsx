@@ -134,16 +134,15 @@ export function AdminClientsClient() {
     e.preventDefault(); setSaving(true); setError('')
     try {
       const res = await fetch('/api/admin/clients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...form, costPerLead: Number(form.costPerLead) || 0 }) })
-      const data = await res.json() as { error?: string; webhook?: string; username?: string; code?: string }
+      const data = await res.json() as { error?: string; webhook?: string; username?: string; code?: string; inviteUrl?: string }
       if (!res.ok) { setError(data.error ?? 'Error'); return }
       setForm({ username:'', code:'', email:'', workspaceId:'', companyName:'', costPerLead:'' }); setShowForm(false)
       fetch('/api/admin/clients').then(r => r.json()).then(setClients)
-      const hookMsg = data.webhook === 'created' ? 'Webhook created ✓'
-        : data.webhook === 'already-exists' ? 'Webhook already active ✓'
-        : data.webhook === 'created-replies-only' ? 'Webhook set (lead alerts activate after the first lead is marked) ✓'
-        : `Webhook: ${data.webhook ?? 'n/a'}`
-      // Show the login details so the admin can send them to the client.
-      alert(`Client created — send these login details:\n\nUsername: ${data.username}\nAccess code: ${data.code}\n\n${hookMsg}. Leads + emails are backfilling now.`)
+      if (data.inviteUrl) {
+        prompt('Client created. Send them this invite link to set their own login:', data.inviteUrl)
+      } else {
+        alert(`Client created — send these login details:\n\nUsername: ${data.username}\nAccess code: ${data.code}\n\nLeads + emails are backfilling now.`)
+      }
     } finally { setSaving(false) }
   }
   async function toggleActive(c: PortalClient) {
@@ -155,6 +154,12 @@ export function AdminClientsClient() {
     const res = await fetch(`/api/admin/clients/${c.id}/impersonate`, { method: 'POST' })
     if (res.ok) window.open('/unibox', '_blank')
     else alert('Could not open client view')
+  }
+  async function makeInvite(c: PortalClient) {
+    const res = await fetch(`/api/admin/clients/${c.id}/invite`, { method: 'POST' })
+    const d = await res.json() as { inviteUrl?: string; error?: string }
+    if (d.inviteUrl) prompt(`Invite link for ${c.company_name} — they set their own username + code:`, d.inviteUrl)
+    else alert(d.error ?? 'Could not create invite link')
   }
   async function registerWebhook(c: PortalClient) {
     const res = await fetch(`/api/admin/clients/${c.id}/webhook`, { method: 'POST' })
@@ -393,8 +398,8 @@ export function AdminClientsClient() {
                       {workspaces.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
                     </select>
                   </div>
-                  <div><label className="block text-xs text-gray-500 mb-1">Username</label><input required value={form.username} onChange={e => setForm(f=>({...f,username:e.target.value}))} placeholder="e.g. gareth" autoCapitalize="none" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
-                  <div><label className="block text-xs text-gray-500 mb-1">Access code <span className="text-gray-400">(blank = auto-generate)</span></label><input value={form.code} onChange={e => setForm(f=>({...f,code:e.target.value}))} placeholder="Otta-7K2P" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
+                  <div><label className="block text-xs text-gray-500 mb-1">Username <span className="text-gray-400">(blank = send invite link)</span></label><input value={form.username} onChange={e => setForm(f=>({...f,username:e.target.value}))} placeholder="leave blank to let them choose" autoCapitalize="none" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
+                  <div><label className="block text-xs text-gray-500 mb-1">Access code <span className="text-gray-400">(blank = auto)</span></label><input value={form.code} onChange={e => setForm(f=>({...f,code:e.target.value}))} placeholder="Otta-7K2P" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
                   <div className="col-span-2"><label className="block text-xs text-gray-500 mb-1">Email <span className="text-gray-400">(optional, for your records)</span></label><input type="email" value={form.email} onChange={e => setForm(f=>({...f,email:e.target.value}))} placeholder="client@company.com" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
                   <div><label className="block text-xs text-gray-500 mb-1">Cost per lead (£)</label><input type="number" min="0" step="0.01" value={form.costPerLead} onChange={e => setForm(f=>({...f,costPerLead:e.target.value}))} placeholder="0" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
                   {error && <p className="col-span-2 text-sm text-red-600">{error}</p>}
@@ -431,6 +436,8 @@ export function AdminClientsClient() {
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2 flex-wrap">
                             <button onClick={() => viewAsClient(client)} className="text-xs font-medium text-emerald-600 hover:text-emerald-800">View as</button>
+                            <span className="text-gray-200">|</span>
+                            <button onClick={() => makeInvite(client)} className="text-xs text-indigo-600 hover:text-indigo-800">Invite link</button>
                             <span className="text-gray-200">|</span>
                             <button onClick={() => setEditId(editId===client.id?null:client.id)} className="text-xs text-indigo-600 hover:text-indigo-800">Reset code</button>
                             <span className="text-gray-200">|</span>
