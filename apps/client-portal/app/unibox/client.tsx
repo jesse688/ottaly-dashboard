@@ -5,80 +5,72 @@ import { useRouter } from 'next/navigation'
 
 interface Lead {
   id: string
-  email: string
+  email: string | null
   first_name: string | null
   last_name: string | null
   company_name: string | null
   status: string
   label: string | null
   first_replied_at: string | null
+  created_at: string | null
   campaign_name: string | null
   job_title: string | null
+  department: string | null
   industry: string | null
   city: string | null
+  state: string | null
   country: string | null
+  address_line: string | null
+  company_website: string | null
   linkedin_url: string | null
+  linkedin_company_url: string | null
   phone_number: string | null
   deal_value: string | null
   deal_notes: string | null
+  client_label: string | null
   dispute_status: string | null
   dispute_reason: string | null
   dispute_admin_note: string | null
+  has_unread: boolean
+}
+
+interface ThreadMsg {
+  id: string
+  direction: 'IN' | 'OUT'
+  subject: string | null
+  body_html: string | null
+  body_text: string | null
+  content_preview: string | null
+  from_email: string | null
+  to_email: string | null
+  eaccount: string | null
+  pv_label: string | null
+  sent_via_portal: boolean
+  timestamp_created: string | null
 }
 
 interface CustomLabel { id: string; name: string; color: string }
 
-// ── System labels ─────────────────────────────────────────────────────────
-const SYS_LABELS = [
-  { value: 'INTERESTED',        label: 'Lead',              dot: 'bg-green-400',  badge: 'bg-green-100 text-green-700' },
-  { value: 'MEETING_BOOKED',    label: 'Meeting Booked',    dot: 'bg-blue-400',   badge: 'bg-blue-100 text-blue-700' },
-  { value: 'MEETING_COMPLETED', label: 'Meeting Completed', dot: 'bg-teal-400',   badge: 'bg-teal-100 text-teal-700' },
-  { value: 'CLOSED',            label: 'Closed',            dot: 'bg-red-400',    badge: 'bg-red-100 text-red-600' },
-  { value: 'NOT_INTERESTED',    label: 'Not Interested',    dot: 'bg-gray-400',   badge: 'bg-gray-100 text-gray-500' },
-  { value: 'INFO',              label: 'Info',              dot: 'bg-yellow-400', badge: 'bg-yellow-100 text-yellow-700' },
-]
-
-const CUSTOM_COLORS = [
-  { value: 'purple',  cls: 'bg-purple-400' },
-  { value: 'pink',    cls: 'bg-pink-400' },
-  { value: 'orange',  cls: 'bg-orange-400' },
-  { value: 'cyan',    cls: 'bg-cyan-400' },
-  { value: 'lime',    cls: 'bg-lime-400' },
-  { value: 'rose',    cls: 'bg-rose-400' },
-]
 const COLOR_MAP: Record<string, string> = {
   purple: 'bg-purple-400', pink: 'bg-pink-400', orange: 'bg-orange-400',
   cyan: 'bg-cyan-400', lime: 'bg-lime-400', rose: 'bg-rose-400',
   green: 'bg-green-400', blue: 'bg-blue-400', teal: 'bg-teal-400',
   red: 'bg-red-400', gray: 'bg-gray-400', yellow: 'bg-yellow-400',
 }
+const COLOR_BADGE: Record<string, string> = {
+  purple: 'bg-purple-100 text-purple-700', pink: 'bg-pink-100 text-pink-700',
+  orange: 'bg-orange-100 text-orange-700', cyan: 'bg-cyan-100 text-cyan-700',
+  lime: 'bg-lime-100 text-lime-700', rose: 'bg-rose-100 text-rose-700',
+}
+const CUSTOM_COLORS = Object.keys(COLOR_BADGE)
+const AV = ['bg-indigo-100 text-indigo-700','bg-pink-100 text-pink-700','bg-amber-100 text-amber-700','bg-teal-100 text-teal-700','bg-purple-100 text-purple-700','bg-blue-100 text-blue-700','bg-green-100 text-green-700','bg-rose-100 text-rose-700']
 
-function dotFor(label: string | null, custom: CustomLabel[]) {
-  const sys = SYS_LABELS.find(l => l.value === label)
-  if (sys) return sys.dot
-  const cust = custom.find(l => l.name === label)
-  if (cust) return COLOR_MAP[cust.color] ?? 'bg-purple-400'
-  return 'bg-indigo-400'
-}
-function badgeFor(label: string | null, custom: CustomLabel[]) {
-  const sys = SYS_LABELS.find(l => l.value === label)
-  if (sys) return sys.badge
-  return 'bg-purple-100 text-purple-700'
-}
-function labelText(label: string | null, custom: CustomLabel[]) {
-  const sys = SYS_LABELS.find(l => l.value === label)
-  if (sys) return sys.label
-  const cust = custom.find(l => l.name === label)
-  if (cust) return cust.name
-  return label ?? 'Lead'
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────
+function av(id: string) { let h=0; for(let i=0;i<id.length;i++) h=(h+id.charCodeAt(i))%AV.length; return AV[h] }
 function initials(l: Lead) {
-  return ((l.first_name?.charAt(0) ?? '') + (l.last_name?.charAt(0) ?? '')).toUpperCase() || l.email.charAt(0).toUpperCase()
+  return ((l.first_name?.charAt(0) ?? '') + (l.last_name?.charAt(0) ?? '')).toUpperCase() || (l.email ?? '?').charAt(0).toUpperCase()
 }
 function fullName(l: Lead) {
-  return [l.first_name, l.last_name].filter(Boolean).join(' ') || l.email
+  return [l.first_name, l.last_name].filter(Boolean).join(' ') || l.email || 'Lead'
 }
 function fmtDate(d: string | null) {
   if (!d) return ''
@@ -88,60 +80,50 @@ function fmtDate(d: string | null) {
   if (days < 7) return date.toLocaleDateString('en-GB', { weekday: 'short' })
   return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
 }
-function fmtDateLong(d: string | null) {
-  if (!d) return '—'
-  return new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
+function fmtFull(d: string | null) {
+  if (!d) return ''
+  return new Date(d).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 function cleanCampaign(n: string | null) {
   if (!n) return null
-  const s = n.replace(/\s+https?:\/\/\S+/g, '').trim()
+  const s = n.replace(/\s*https?:\/\/\S+/g, '').replace(/_+$/, '').trim()
   const c = s || n
-  return c.length > 36 ? c.slice(0, 36) + '…' : c
+  return c.length > 40 ? c.slice(0, 40) + '…' : c
 }
-const AV = ['bg-indigo-100 text-indigo-700','bg-pink-100 text-pink-700','bg-amber-100 text-amber-700','bg-teal-100 text-teal-700','bg-purple-100 text-purple-700','bg-blue-100 text-blue-700','bg-green-100 text-green-700','bg-rose-100 text-rose-700']
-function av(id: string) { let h=0; for(let i=0;i<id.length;i++) h=(h+id.charCodeAt(i))%AV.length; return AV[h] }
 
-
-// ─────────────────────────────────────────────────────────────────────────
 export function UniboxClient({ companyName }: { companyName: string }) {
-  const [leads, setLeads]             = useState<Lead[] | null>(null)
-  const [selected, setSelected]       = useState<Lead | null>(null)
+  const [leads, setLeads] = useState<Lead[] | null>(null)
+  const [selected, setSelected] = useState<Lead | null>(null)
+  const [thread, setThread] = useState<ThreadMsg[] | null>(null)
   const [customLabels, setCustomLabels] = useState<CustomLabel[]>([])
-  const [activeLabel, setActiveLabel]  = useState<string | null>(null)
-  const [search, setSearch]            = useState('')
+  const [activeLabel, setActiveLabel] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+  const [balance, setBalance] = useState<{ balance: number; currency: string } | null>(null)
 
-  // label dropdown
-  const [labelDrop, setLabelDrop]      = useState(false)
+  const [labelDrop, setLabelDrop] = useState(false)
   const dropRef = useRef<HTMLDivElement>(null)
 
-  // reply composer
-  const [replyText, setReplyText]      = useState('')
-  const [replying, setReplying]        = useState(false)
-  const [replySent, setReplySent]      = useState(false)
+  const [replyText, setReplyText] = useState('')
+  const [replying, setReplying] = useState(false)
+  const [replyMsg, setReplyMsg] = useState('')
 
-  // deal value
-  const [dealEdit, setDealEdit]        = useState(false)
-  const [dealInput, setDealInput]      = useState('')
-  const [dealSaving, setDealSaving]    = useState(false)
+  const [dealEdit, setDealEdit] = useState(false)
+  const [dealInput, setDealInput] = useState('')
 
-  // dispute modal
-  const [showDispute, setShowDispute]  = useState(false)
+  const [showDispute, setShowDispute] = useState(false)
   const [disputeReason, setDisputeReason] = useState('')
   const [disputeSaving, setDisputeSaving] = useState(false)
 
-  // create label modal
   const [showNewLabel, setShowNewLabel] = useState(false)
   const [newLabelName, setNewLabelName] = useState('')
   const [newLabelColor, setNewLabelColor] = useState('purple')
-  const [labelSaving, setLabelSaving]  = useState(false)
 
   const router = useRouter()
 
   useEffect(() => {
     loadLeads()
-    fetch('/api/portal/labels').then(r => r.json()).then((d: CustomLabel[] | { error: string }) => {
-      if (Array.isArray(d)) setCustomLabels(d)
-    })
+    fetch('/api/portal/labels').then(r => r.json()).then((d) => Array.isArray(d) && setCustomLabels(d)).catch(() => {})
+    fetch('/api/portal/balance').then(r => r.json()).then((d) => !d.error && setBalance(d)).catch(() => {})
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -152,44 +134,57 @@ export function UniboxClient({ companyName }: { companyName: string }) {
   }, [])
 
   function loadLeads() {
-    fetch('/api/portal/leads/all').then(r => r.json()).then((d: Lead[] | { error: string }) => {
+    fetch('/api/portal/leads/all').then(r => r.json()).then((d) => {
       if (Array.isArray(d)) {
         setLeads(d)
-        if (d.length > 0) setSelected(prev => prev ? (d.find(l => l.id === prev.id) ?? d[0]) : d[0])
+        setSelected(prev => prev ? (d.find((l: Lead) => l.id === prev.id) ?? prev) : (d[0] ?? null))
+        if (!selected && d[0]) openLead(d[0])
       }
-    })
+    }).catch(() => setLeads([]))
   }
 
-  const allSystemLabels = leads ? Array.from(new Set(leads.map(l => l.label).filter(Boolean) as string[])) : []
-  const filtered = (leads ?? []).filter(l => {
-    const matchLabel = activeLabel === null || l.label === activeLabel
-    const q = search.toLowerCase()
-    return matchLabel && (!q || fullName(l).toLowerCase().includes(q) || (l.company_name ?? '').toLowerCase().includes(q) || l.email.toLowerCase().includes(q))
-  })
+  function openLead(lead: Lead) {
+    setSelected(lead)
+    setReplyText(''); setReplyMsg('')
+    setDealEdit(false); setDealInput(lead.deal_value ?? '')
+    setShowDispute(false); setThread(null)
+    setLeads(prev => prev?.map(l => l.id === lead.id ? { ...l, has_unread: false } : l) ?? null)
+    fetch(`/api/portal/leads/${lead.id}/thread`).then(r => r.json()).then((d) => {
+      setThread(Array.isArray(d) ? d : [])
+    }).catch(() => setThread([]))
+  }
 
-  async function handleLabelChange(leadId: string, newLabel: string) {
+  async function setClientLabel(leadId: string, label: string | null) {
     setLabelDrop(false)
-    setLeads(prev => prev?.map(l => l.id === leadId ? { ...l, label: newLabel } : l) ?? null)
-    setSelected(prev => prev?.id === leadId ? { ...prev, label: newLabel } : prev)
-    await fetch(`/api/portal/leads/${leadId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label: newLabel }) })
+    setLeads(prev => prev?.map(l => l.id === leadId ? { ...l, client_label: label } : l) ?? null)
+    setSelected(prev => prev?.id === leadId ? { ...prev, client_label: label } : prev)
+    await fetch(`/api/portal/leads/${leadId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label }) })
   }
 
   async function handleReply() {
     if (!replyText.trim() || !selected) return
-    setReplying(true)
-    await new Promise(r => setTimeout(r, 800))
-    setReplying(false); setReplyText(''); setReplySent(true)
-    setTimeout(() => setReplySent(false), 3000)
+    setReplying(true); setReplyMsg('')
+    const res = await fetch(`/api/portal/leads/${selected.id}/reply`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body: replyText }),
+    })
+    const d = await res.json().catch(() => ({})) as { ok?: boolean; sentLive?: boolean }
+    setReplying(false)
+    if (d.ok) {
+      setReplyText('')
+      setReplyMsg(d.sentLive ? 'Reply sent.' : 'Reply received — our team will send it shortly.')
+      openLead(selected)
+      setTimeout(() => setReplyMsg(''), 4000)
+    } else {
+      setReplyMsg('Could not send. Please try again.')
+    }
   }
 
   async function handleSaveDeal() {
     if (!selected) return
-    setDealSaving(true)
     await fetch(`/api/portal/leads/${selected.id}/data`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ deal_value: dealInput || null })
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deal_value: dealInput || null }),
     })
-    setDealSaving(false); setDealEdit(false)
+    setDealEdit(false)
     setLeads(prev => prev?.map(l => l.id === selected.id ? { ...l, deal_value: dealInput || null } : l) ?? null)
     setSelected(prev => prev ? { ...prev, deal_value: dealInput || null } : prev)
   }
@@ -198,8 +193,7 @@ export function UniboxClient({ companyName }: { companyName: string }) {
     if (!disputeReason.trim() || !selected) return
     setDisputeSaving(true)
     await fetch(`/api/portal/leads/${selected.id}/dispute`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reason: disputeReason })
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: disputeReason }),
     })
     setDisputeSaving(false); setShowDispute(false); setDisputeReason('')
     setLeads(prev => prev?.map(l => l.id === selected.id ? { ...l, dispute_status: 'pending', dispute_reason: disputeReason } : l) ?? null)
@@ -208,14 +202,12 @@ export function UniboxClient({ companyName }: { companyName: string }) {
 
   async function handleCreateLabel() {
     if (!newLabelName.trim()) return
-    setLabelSaving(true)
     const res = await fetch('/api/portal/labels', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: newLabelName.trim(), color: newLabelColor })
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newLabelName.trim(), color: newLabelColor }),
     })
     const created = await res.json() as CustomLabel
     setCustomLabels(prev => [...prev, created])
-    setNewLabelName(''); setNewLabelColor('purple'); setShowNewLabel(false); setLabelSaving(false)
+    setNewLabelName(''); setNewLabelColor('purple'); setShowNewLabel(false)
   }
 
   async function handleDeleteLabel(id: string) {
@@ -223,204 +215,156 @@ export function UniboxClient({ companyName }: { companyName: string }) {
     setCustomLabels(prev => prev.filter(l => l.id !== id))
   }
 
-  function openLead(lead: Lead) {
-    setSelected(lead); setReplySent(false); setReplyText('')
-    setDealEdit(false); setDealInput(lead.deal_value ?? '')
-    setShowDispute(false)
-  }
-
   async function handleLogout() {
     await fetch('/api/logout', { method: 'POST' }); router.push('/login')
   }
 
-  return (
-    <div className="h-screen flex flex-col overflow-hidden bg-white" style={{ fontFamily: 'system-ui,-apple-system,sans-serif' }}>
+  const counts: Record<string, number> = {}
+  for (const l of leads ?? []) if (l.client_label) counts[l.client_label] = (counts[l.client_label] ?? 0) + 1
 
+  const filtered = (leads ?? []).filter(l => {
+    const matchLabel = activeLabel === null || l.client_label === activeLabel
+    const q = search.toLowerCase()
+    return matchLabel && (!q || fullName(l).toLowerCase().includes(q) || (l.company_name ?? '').toLowerCase().includes(q) || (l.email ?? '').toLowerCase().includes(q))
+  })
+
+  const labelMeta = (name: string | null) => customLabels.find(c => c.name === name)
+
+  return (
+    <div className="h-screen flex flex-col overflow-hidden bg-[#f7f8fc]" style={{ fontFamily: 'system-ui,-apple-system,sans-serif' }}>
       {/* Top bar */}
-      <header className="h-12 bg-[#1a2332] flex items-center px-4 shrink-0 gap-3">
-        <div className="flex items-center gap-1.5">
-          <span className="text-white font-bold text-sm">Ottaly</span>
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-slate-500"><polyline points="6 9 12 15 18 9"/></svg>
-          <span className="text-slate-300 text-sm">{companyName}</span>
-        </div>
-        <nav className="flex items-center gap-1 ml-6">
-          <a href="/unibox" className="px-3 py-1 text-white bg-slate-700 text-xs rounded">Leads</a>
-          <a href="/invoices" className="px-3 py-1 text-slate-400 hover:text-white text-xs rounded transition-colors">Invoices &amp; ROI</a>
+      <header className="h-14 bg-white border-b border-gray-200 flex items-center px-5 shrink-0 gap-3">
+        <span className="text-[#1a2332] font-bold text-lg">Ottaly</span>
+        <span className="text-gray-300">|</span>
+        <span className="text-gray-600 text-sm font-medium">{companyName}</span>
+        <nav className="flex items-center gap-1 ml-4">
+          <span className="px-3 py-1.5 text-indigo-600 bg-indigo-50 text-sm font-medium rounded-lg">Leads</span>
+          <a href="/invoices" className="px-3 py-1.5 text-gray-500 hover:text-gray-800 text-sm rounded-lg">Billing &amp; ROI</a>
         </nav>
-        <div className="ml-auto">
-          <button onClick={handleLogout} className="w-7 h-7 rounded-full bg-slate-700 hover:bg-slate-600 flex items-center justify-center text-white text-xs font-semibold transition-colors">
-            {companyName.charAt(0).toUpperCase()}
-          </button>
+        <div className="ml-auto flex items-center gap-4">
+          {balance && (
+            <a href="/invoices" className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gray-50 hover:bg-gray-100 border border-gray-200">
+              <span className="text-xs text-gray-500">Lead balance</span>
+              <span className={`text-sm font-semibold ${balance.balance < 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                {balance.balance < 0 ? '-' : ''}£{Math.abs(balance.balance).toLocaleString()}
+              </span>
+            </a>
+          )}
+          <button onClick={handleLogout} className="text-gray-400 hover:text-gray-700 text-sm">Sign out</button>
         </div>
       </header>
 
-      <div className="flex flex-1 min-h-0">
-
-        {/* ── Sidebar ── */}
-        <aside className="w-48 border-r border-gray-100 flex flex-col shrink-0 bg-white">
-          <div
-            onClick={() => setActiveLabel(null)}
-            className={`flex items-center gap-2.5 px-4 py-2.5 cursor-pointer transition-colors border-l-2 ${activeLabel === null ? 'border-indigo-500 bg-gray-50 text-gray-900' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={activeLabel === null ? 'text-indigo-500' : 'text-gray-400'}>
-              <polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/>
-              <path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>
-            </svg>
-            <span className="text-sm font-medium">Inbox</span>
-            {leads && <span className="ml-auto text-xs text-gray-400">{leads.length}</span>}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Column 1 — sidebar */}
+        <aside className="w-56 bg-white border-r border-gray-200 flex flex-col shrink-0">
+          <div className="p-3">
+            <button onClick={() => setActiveLabel(null)} className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm font-medium ${activeLabel === null ? 'bg-indigo-50 text-indigo-700' : 'text-gray-700 hover:bg-gray-50'}`}>
+              <span className="flex items-center gap-2">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 4h16v16H4z" opacity="0"/><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+                Inbox
+              </span>
+              <span className="text-xs text-gray-400">{leads?.length ?? 0}</span>
+            </button>
           </div>
-
-          {/* Labels */}
-          {(allSystemLabels.length > 0 || customLabels.length > 0) && (
-            <div className="mt-1">
-              <div className="flex items-center justify-between px-4 py-1.5">
-                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Labels</p>
-                <button onClick={() => setShowNewLabel(true)} className="text-gray-400 hover:text-indigo-600 transition-colors" title="Add label">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                </button>
-              </div>
-              {allSystemLabels.map(label => (
-                <div
-                  key={label}
-                  onClick={() => setActiveLabel(label)}
-                  className={`flex items-center gap-2 px-4 py-2 cursor-pointer transition-colors border-l-2 text-sm ${activeLabel === label ? 'border-indigo-500 bg-gray-50 text-gray-900' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}
-                >
-                  <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${dotFor(label, customLabels)}`} />
-                  <span className="truncate text-xs">{labelText(label, customLabels)}</span>
-                  {leads && <span className="ml-auto text-xs text-gray-400">{leads.filter(l => l.label === label).length}</span>}
-                </div>
-              ))}
-              {customLabels.map(cl => (
-                <div
-                  key={cl.id}
-                  onClick={() => setActiveLabel(cl.name)}
-                  className={`flex items-center gap-2 px-4 py-2 cursor-pointer transition-colors border-l-2 text-sm group ${activeLabel === cl.name ? 'border-indigo-500 bg-gray-50 text-gray-900' : 'border-transparent text-gray-500 hover:bg-gray-50'}`}
-                >
-                  <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${COLOR_MAP[cl.color] ?? 'bg-purple-400'}`} />
-                  <span className="truncate text-xs">{cl.name}</span>
-                  <button
-                    onClick={e => { e.stopPropagation(); handleDeleteLabel(cl.id) }}
-                    className="ml-auto opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 transition-all"
-                  >
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {allSystemLabels.length === 0 && customLabels.length === 0 && (
-            <div className="mt-1 px-4 py-1.5">
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Labels</p>
-                <button onClick={() => setShowNewLabel(true)} className="text-gray-400 hover:text-indigo-600 transition-colors">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                </button>
-              </div>
-            </div>
-          )}
-
-          <div className="flex-1" />
-          <button onClick={handleLogout} className="flex items-center gap-2 px-4 py-3 text-xs text-gray-400 hover:text-gray-600 border-t border-gray-100 transition-colors">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
-            </svg>
-            Sign out
-          </button>
-        </aside>
-
-        {/* ── Lead list ── */}
-        <div className="w-[268px] border-r border-gray-100 flex flex-col shrink-0">
-          <div className="px-3 pt-3 pb-2 border-b border-gray-100">
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="text-sm font-semibold text-gray-900">Your Leads <span className="font-normal text-gray-400">({filtered.length})</span></h2>
-            </div>
-            <div className="relative">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-              <input type="text" placeholder="Search mail" value={search} onChange={e => setSearch(e.target.value)} className="w-full pl-8 pr-3 py-1.5 rounded-md border border-gray-200 text-xs outline-none focus:border-indigo-300 bg-gray-50" />
-            </div>
+          <div className="px-3 flex items-center justify-between">
+            <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Deal stages</span>
+            <button onClick={() => setShowNewLabel(true)} className="text-gray-400 hover:text-indigo-600" title="Create label">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </button>
           </div>
-
-          <div className="flex-1 overflow-y-auto">
-            {leads === null ? Array.from({length:6}).map((_,i) => (
-              <div key={i} className="flex gap-2.5 px-3 py-3 border-b border-gray-50">
-                <div className="w-8 h-8 rounded-full bg-gray-100 animate-pulse shrink-0" />
-                <div className="flex-1 space-y-2 py-0.5"><div className="h-3 bg-gray-100 rounded animate-pulse w-3/4" /><div className="h-3 bg-gray-100 rounded animate-pulse w-1/2" /></div>
+          <div className="px-3 mt-1 flex-1 overflow-y-auto">
+            {customLabels.length === 0 && <p className="text-xs text-gray-400 px-1 py-2">No stages yet. Click + to add (e.g. Meeting Booked, Closed).</p>}
+            {customLabels.map(cl => (
+              <div key={cl.id} className={`group flex items-center justify-between px-3 py-1.5 rounded-lg text-sm cursor-pointer ${activeLabel === cl.name ? 'bg-gray-100' : 'hover:bg-gray-50'}`} onClick={() => setActiveLabel(activeLabel === cl.name ? null : cl.name)}>
+                <span className="flex items-center gap-2 text-gray-700">
+                  <span className={`w-2.5 h-2.5 rounded-full ${COLOR_MAP[cl.color] ?? 'bg-purple-400'}`} />{cl.name}
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="text-xs text-gray-400">{counts[cl.name] ?? 0}</span>
+                  <button onClick={(e) => { e.stopPropagation(); handleDeleteLabel(cl.id) }} className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+                </span>
               </div>
-            )) : filtered.length === 0 ? (
-              <div className="px-4 py-10 text-center text-sm text-gray-400">No leads found</div>
-            ) : filtered.map(lead => (
-              <button key={lead.id} onClick={() => openLead(lead)} className={`w-full text-left px-3 py-3 border-b border-gray-50 transition-colors ${selected?.id === lead.id ? 'bg-indigo-50' : 'hover:bg-gray-50'}`}>
-                <div className="flex gap-2.5">
-                  <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 ${av(lead.id)}`}>{initials(lead)}</div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-start justify-between gap-1">
-                      <span className="text-xs font-semibold text-gray-900 truncate">{fullName(lead)}</span>
-                      <span className="text-[11px] text-gray-400 shrink-0">{fmtDate(lead.first_replied_at)}</span>
-                    </div>
-                    <div className="text-[11px] text-gray-500 truncate mt-0.5">{lead.company_name || lead.email}</div>
-                    <div className="flex items-center gap-1 mt-1.5 flex-wrap">
-                      {lead.campaign_name && (
-                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded text-[10px]">
-                          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.62 3.44A2 2 0 0 1 3.62 1.25h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 8a16 16 0 0 0 6.72 6.72l.95-.95a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
-                          {cleanCampaign(lead.campaign_name)}
-                        </span>
-                      )}
-                      {lead.label && <span className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium ${badgeFor(lead.label, customLabels)}`}>{labelText(lead.label, customLabels)}</span>}
-                      {lead.dispute_status === 'pending' && <span className="inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">Disputed</span>}
-                      {lead.deal_value && <span className="inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-50 text-green-700">£{parseFloat(lead.deal_value).toLocaleString()}</span>}
-                    </div>
-                  </div>
-                </div>
-              </button>
             ))}
           </div>
-        </div>
+        </aside>
 
-        {/* ── Detail view ── */}
-        {selected ? (
-          <div className="flex flex-1 min-w-0">
-            {/* Email thread */}
-            <div className="flex flex-col flex-1 min-w-0 border-r border-gray-100">
-              {/* Thread header */}
-              <div className="flex items-center gap-3 px-5 py-3 border-b border-gray-100 shrink-0">
-                <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-semibold shrink-0 ${av(selected.id)}`}>{initials(selected)}</div>
-                <div className="flex-1 min-w-0">
-                  <h3 className="text-sm font-semibold text-gray-900 truncate">{fullName(selected)}</h3>
-                  <p className="text-xs text-gray-500 truncate">{selected.email}</p>
+        {/* Column 2 — lead list */}
+        <section className="w-[380px] bg-white border-r border-gray-200 flex flex-col shrink-0">
+          <div className="px-4 py-3 border-b border-gray-100">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-sm font-semibold text-gray-900">Your Leads <span className="text-gray-400 font-normal">({filtered.length})</span></h2>
+            </div>
+            <div className="relative">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="absolute left-2.5 top-2.5 text-gray-400"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input placeholder="Search leads" value={search} onChange={e => setSearch(e.target.value)} className="w-full pl-8 pr-3 py-1.5 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-300 bg-gray-50" />
+            </div>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            {leads === null ? (
+              Array.from({ length: 6 }).map((_, i) => <div key={i} className="px-4 py-3 border-b border-gray-50"><div className="h-4 bg-gray-100 rounded animate-pulse mb-2" /><div className="h-3 bg-gray-50 rounded animate-pulse w-2/3" /></div>)
+            ) : filtered.length === 0 ? (
+              <div className="px-4 py-12 text-center text-sm text-gray-400">No leads yet</div>
+            ) : filtered.map(l => {
+              const cl = labelMeta(l.client_label)
+              return (
+                <button key={l.id} onClick={() => openLead(l)} className={`w-full text-left px-4 py-3 border-b border-gray-50 hover:bg-gray-50 transition-colors ${selected?.id === l.id ? 'bg-indigo-50/60' : ''}`}>
+                  <div className="flex gap-3">
+                    <div className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 ${av(l.id)}`}>{initials(l)}</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className={`text-sm truncate ${l.has_unread ? 'font-bold text-gray-900' : 'font-medium text-gray-800'}`}>{fullName(l)}</span>
+                        <span className="text-[11px] text-gray-400 shrink-0">{fmtDate(l.first_replied_at ?? l.created_at)}</span>
+                      </div>
+                      <p className="text-xs text-gray-500 truncate">{l.company_name ?? l.email}</p>
+                      <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                        {l.campaign_name && <span className="inline-flex items-center gap-1 text-[10px] text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded"><svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor"><path d="M3 11l19-9-9 19-2-8-8-2z"/></svg>{cleanCampaign(l.campaign_name)}</span>}
+                        <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-green-100 text-green-700 px-1.5 py-0.5 rounded">Lead</span>
+                        {cl && <span className={`inline-flex text-[10px] font-medium px-1.5 py-0.5 rounded ${COLOR_BADGE[cl.color] ?? 'bg-purple-100 text-purple-700'}`}>{cl.name}</span>}
+                        {l.dispute_status === 'pending' && <span className="inline-flex text-[10px] font-medium bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">Dispute</span>}
+                        {l.deal_value && <span className="inline-flex text-[10px] font-medium bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded">£{Number(l.deal_value).toLocaleString()}</span>}
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        </section>
+
+        {/* Column 3 — thread */}
+        <section className="flex-1 flex flex-col min-w-0 bg-white">
+          {!selected ? (
+            <div className="flex-1 flex flex-col items-center justify-center text-gray-400">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mb-3 text-gray-300"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 5L2 7"/></svg>
+              <p className="text-sm">Select a lead to read</p>
+            </div>
+          ) : (
+            <>
+              {/* thread header */}
+              <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-3 shrink-0">
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold ${av(selected.id)}`}>{initials(selected)}</div>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-gray-900 truncate">{fullName(selected)}</p>
+                  {selected.email && <p className="text-xs text-gray-500 truncate">{selected.email}</p>}
                 </div>
-                {/* Label dropdown */}
-                <div className="relative" ref={dropRef}>
-                  <button onClick={() => setLabelDrop(v => !v)} className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${badgeFor(selected.label, customLabels)}`}>
-                    <span className={`w-2 h-2 rounded-full ${dotFor(selected.label, customLabels)}`} />
-                    {labelText(selected.label, customLabels)}
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                {/* deal-stage dropdown */}
+                <div className="ml-auto relative" ref={dropRef}>
+                  <button onClick={() => setLabelDrop(v => !v)} className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-700 hover:bg-gray-50">
+                    {selected.client_label ? <><span className={`w-2 h-2 rounded-full ${COLOR_MAP[labelMeta(selected.client_label)?.color ?? 'purple']}`} />{selected.client_label}</> : <span className="text-gray-500">Set stage</span>}
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="6 9 12 15 18 9"/></svg>
                   </button>
                   {labelDrop && (
                     <div className="absolute right-0 top-full mt-1 w-52 bg-white rounded-xl shadow-lg border border-gray-100 py-1 z-20 max-h-72 overflow-y-auto">
-                      <p className="px-3 py-1.5 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">System Labels</p>
-                      {SYS_LABELS.map(({ value, label, dot }) => (
-                        <button key={value} onClick={() => handleLabelChange(selected.id, value)} className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors">
-                          <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${dot}`} />{label}
-                          {selected.label === value && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="ml-auto text-indigo-500"><polyline points="20 6 9 17 4 12"/></svg>}
+                      <button onClick={() => setClientLabel(selected.id, null)} className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-500 hover:bg-gray-50">Not set</button>
+                      {customLabels.map(cl => (
+                        <button key={cl.id} onClick={() => setClientLabel(selected.id, cl.name)} className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                          <span className={`w-2.5 h-2.5 rounded-full ${COLOR_MAP[cl.color]}`} />{cl.name}
+                          {selected.client_label === cl.name && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="ml-auto text-indigo-500"><polyline points="20 6 9 17 4 12"/></svg>}
                         </button>
                       ))}
-                      {customLabels.length > 0 && (
-                        <>
-                          <div className="border-t border-gray-100 my-1" />
-                          <p className="px-3 py-1.5 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Custom Labels</p>
-                          {customLabels.map(cl => (
-                            <button key={cl.id} onClick={() => handleLabelChange(selected.id, cl.name)} className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors">
-                              <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${COLOR_MAP[cl.color] ?? 'bg-purple-400'}`} />{cl.name}
-                              {selected.label === cl.name && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="ml-auto text-indigo-500"><polyline points="20 6 9 17 4 12"/></svg>}
-                            </button>
-                          ))}
-                        </>
-                      )}
                       <div className="border-t border-gray-100 mt-1 pt-1">
-                        <button onClick={() => { setLabelDrop(false); setShowNewLabel(true) }} className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-indigo-600 hover:bg-indigo-50 transition-colors">
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                          Create new label
+                        <button onClick={() => { setLabelDrop(false); setShowNewLabel(true) }} className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-indigo-600 hover:bg-indigo-50">
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Create stage
                         </button>
                       </div>
                     </div>
@@ -428,240 +372,186 @@ export function UniboxClient({ companyName }: { companyName: string }) {
                 </div>
               </div>
 
-              {selected.campaign_name && (
-                <div className="px-5 py-2 bg-gray-50 border-b border-gray-100 shrink-0">
-                  <span className="text-[11px] text-gray-500">{cleanCampaign(selected.campaign_name)}</span>
-                </div>
-              )}
+              {/* dispute banners */}
+              {selected.dispute_status === 'pending' && <Banner color="amber"><strong>Non-lead request pending review.</strong> {selected.dispute_reason}</Banner>}
+              {selected.dispute_status === 'denied' && <Banner color="red"><strong>Non-lead request denied.</strong> {selected.dispute_admin_note ?? ''}</Banner>}
+              {selected.dispute_status === 'approved' && <Banner color="green"><strong>Non-lead approved.</strong> Credit refunded.</Banner>}
 
-              {/* Thread body */}
+              {/* thread body */}
               <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
-                {/* Reply status */}
-                {selected.first_replied_at && (
-                  <div className="flex gap-3 px-5">
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 ${av(selected.id)}`}>{initials(selected)}</div>
-                    <div className="flex-1">
-                      <div className="flex items-baseline gap-2 mb-1">
-                        <span className="text-sm font-semibold text-gray-900">{fullName(selected)}</span>
-                        <span className="text-xs text-gray-400">{fmtDateLong(selected.first_replied_at)}</span>
-                      </div>
-                      <div className="text-xs text-gray-500 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg">
-                        Lead replied to your outreach
+                {thread === null ? (
+                  <div className="space-y-3">{Array.from({length:2}).map((_,i)=><div key={i} className="h-24 bg-gray-50 rounded-xl animate-pulse" />)}</div>
+                ) : thread.length === 0 ? (
+                  <div className="text-center text-sm text-gray-400 py-12">No messages synced yet for this lead.</div>
+                ) : thread.map(m => {
+                  const out = m.direction === 'OUT'
+                  return (
+                    <div key={m.id} className={`flex gap-3 ${out ? 'flex-row-reverse' : ''}`}>
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 ${out ? 'bg-indigo-100 text-indigo-700' : av(selected.id)}`}>{out ? 'O' : initials(selected)}</div>
+                      <div className={`flex-1 min-w-0 ${out ? 'items-end' : ''}`}>
+                        <div className={`flex items-baseline gap-2 mb-1 ${out ? 'justify-end' : ''}`}>
+                          <span className="text-sm font-semibold text-gray-900">{out ? (m.sent_via_portal ? `${companyName} (you)` : 'Ottaly') : fullName(selected)}</span>
+                          <span className="text-[11px] text-gray-400">{fmtFull(m.timestamp_created)}</span>
+                          {m.pv_label && m.pv_label !== 'INTERESTED' && <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">{m.pv_label.replace(/_/g,' ').toLowerCase()}</span>}
+                        </div>
+                        {m.subject && <p className={`text-xs text-gray-500 mb-1 ${out ? 'text-right' : ''}`}>{m.subject}</p>}
+                        <div className={`inline-block text-left rounded-xl border px-4 py-3 text-sm text-gray-700 whitespace-pre-wrap break-words max-w-full ${out ? 'bg-indigo-50 border-indigo-100' : 'bg-white border-gray-200 shadow-sm'}`}>
+                          {(m.body_text || m.content_preview || '(no content)').trim()}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                )}
+                  )
+                })}
               </div>
 
-              {/* Dispute banner */}
-              {selected.dispute_status === 'pending' && (
-                <div className="mx-5 mb-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 shrink-0">
-                  <strong>Non-lead request pending review.</strong> Reason: {selected.dispute_reason}
-                </div>
-              )}
-              {selected.dispute_status === 'denied' && (
-                <div className="mx-5 mb-2 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-800 shrink-0">
-                  <strong>Non-lead request denied.</strong>{selected.dispute_admin_note ? ` ${selected.dispute_admin_note}` : ''}
-                </div>
-              )}
-              {selected.dispute_status === 'approved' && (
-                <div className="mx-5 mb-2 px-3 py-2 bg-green-50 border border-green-200 rounded-lg text-xs text-green-800 shrink-0">
-                  <strong>Non-lead request approved.</strong> This lead has been removed.
-                </div>
-              )}
-
-              {/* Reply composer */}
+              {/* reply composer */}
               <div className="border-t border-gray-100 px-4 py-3 shrink-0">
-                <div className="rounded-xl border border-gray-200 overflow-hidden focus-within:border-indigo-300 focus-within:ring-1 focus-within:ring-indigo-200 transition-all">
-                  <div className="px-3 py-2 bg-gray-50 border-b border-gray-100 text-xs text-gray-500">
-                    <span className="font-medium text-gray-700">Reply to:</span> {selected.email}
-                  </div>
+                <div className="rounded-xl border border-gray-200 overflow-hidden focus-within:border-indigo-300 focus-within:ring-1 focus-within:ring-indigo-200">
+                  <div className="px-3 py-2 bg-gray-50 border-b border-gray-100 text-xs text-gray-500"><span className="font-medium text-gray-700">Reply to:</span> {selected.email}</div>
                   <textarea rows={3} placeholder={`Write your reply to ${selected.first_name ?? fullName(selected).split(' ')[0]}…`} value={replyText} onChange={e => setReplyText(e.target.value)} className="w-full px-3 py-2 text-sm text-gray-800 outline-none resize-none placeholder:text-gray-400" />
                   <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-t border-gray-100">
-                    <span className="text-xs text-gray-400">{replySent ? <span className="text-green-600 font-medium">Reply sent!</span> : 'via outreach@ottaly.co.uk'}</span>
-                    <button onClick={handleReply} disabled={!replyText.trim() || replying} className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-medium rounded-lg transition-colors">
-                      {replying ? 'Sending…' : <><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>Send Reply</>}
+                    <span className="text-xs">{replyMsg ? <span className="text-green-600 font-medium">{replyMsg}</span> : <span className="text-gray-400">Sent via your campaign mailbox</span>}</span>
+                    <button onClick={handleReply} disabled={!replyText.trim() || replying} className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-medium rounded-lg">
+                      {replying ? 'Sending…' : <><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>Send</>}
                     </button>
                   </div>
                 </div>
               </div>
+            </>
+          )}
+        </section>
+
+        {/* Column 4 — lead details */}
+        {selected && (
+          <aside className="w-72 bg-white border-l border-gray-200 flex flex-col shrink-0 overflow-y-auto">
+            <div className="p-5 text-center border-b border-gray-100">
+              <div className={`w-16 h-16 rounded-full mx-auto flex items-center justify-center text-lg font-semibold mb-2 ${av(selected.id)}`}>{initials(selected)}</div>
+              <p className="text-sm font-semibold text-gray-900">{fullName(selected)}</p>
+              {selected.job_title && <p className="text-xs text-gray-500 mt-0.5">{selected.job_title}</p>}
+              {selected.company_name && <p className="text-xs text-indigo-600 mt-0.5">{selected.company_name}</p>}
             </div>
 
-            {/* ── Lead detail sidebar ── */}
-            <div className="w-60 shrink-0 overflow-y-auto bg-gray-50 border-l border-gray-100">
-              {/* Contact card */}
-              <div className="px-4 py-4 bg-white border-b border-gray-200">
-                <div className="flex flex-col items-center text-center">
-                  <div className={`w-11 h-11 rounded-full flex items-center justify-center text-sm font-bold mb-2 ${av(selected.id)}`}>{initials(selected)}</div>
-                  <p className="text-sm font-semibold text-gray-900">{fullName(selected)}</p>
-                  {selected.job_title && <p className="text-xs text-gray-500 mt-0.5">{selected.job_title}</p>}
-                  {selected.company_name && <p className="text-xs text-indigo-600 mt-0.5 font-medium">{selected.company_name}</p>}
+            {/* deal value */}
+            <Section title="Deal value">
+              {dealEdit ? (
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1"><span className="absolute left-2 top-1.5 text-gray-400 text-sm">£</span><input type="number" min="0" value={dealInput} onChange={e => setDealInput(e.target.value)} autoFocus className="w-full pl-6 pr-2 py-1.5 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
+                  <button onClick={handleSaveDeal} className="px-3 py-1.5 bg-indigo-600 text-white text-xs font-medium rounded-lg">Save</button>
                 </div>
-              </div>
-
-              {/* Deal value */}
-              <div className="px-4 py-3 bg-white border-b border-gray-200 mt-2">
-                <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Deal Value</p>
-                {dealEdit ? (
-                  <div className="flex items-center gap-2">
-                    <div className="relative flex-1">
-                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-xs">£</span>
-                      <input type="number" min="0" step="100" placeholder="0" value={dealInput} onChange={e => setDealInput(e.target.value)} className="w-full pl-6 pr-2 py-1.5 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" autoFocus />
-                    </div>
-                    <button onClick={handleSaveDeal} disabled={dealSaving} className="px-2.5 py-1.5 bg-indigo-600 text-white text-xs font-medium rounded-lg disabled:opacity-60">Save</button>
-                    <button onClick={() => setDealEdit(false)} className="text-gray-400 hover:text-gray-600 text-xs">✕</button>
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-between">
-                    <span className="text-lg font-bold text-gray-900">
-                      {selected.deal_value ? `£${parseFloat(selected.deal_value).toLocaleString()}` : <span className="text-gray-400 text-sm font-normal">Not set</span>}
-                    </span>
-                    <button onClick={() => { setDealEdit(true); setDealInput(selected.deal_value ?? '') }} className="text-xs text-indigo-600 hover:text-indigo-800">
-                      {selected.deal_value ? 'Edit' : '+ Add'}
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {/* Status */}
-              <div className="px-4 py-3 bg-white border-b border-gray-200 mt-2">
-                <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Status</p>
-                <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium ${badgeFor(selected.label, customLabels)}`}>
-                  <span className={`w-2 h-2 rounded-full ${dotFor(selected.label, customLabels)}`} />
-                  {labelText(selected.label, customLabels)}
-                </span>
-              </div>
-
-              {/* Contact info */}
-              <div className="px-4 py-3 bg-white border-b border-gray-200 mt-2">
-                <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Contact</p>
-                <div className="space-y-2">
-                  <DR icon="email" label="Email" value={selected.email} />
-                  {selected.phone_number && <DR icon="phone" label="Phone" value={selected.phone_number} />}
-                  {selected.linkedin_url && (
-                    <div className="flex items-start gap-2">
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="mt-0.5 text-gray-400 shrink-0"><path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-2-2 2 2 0 0 0-2 2v7h-4v-7a6 6 0 0 1 6-6z"/><rect x="2" y="9" width="4" height="12"/><circle cx="4" cy="4" r="2"/></svg>
-                      <a href={selected.linkedin_url} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-600 hover:underline">LinkedIn Profile</a>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Company */}
-              {(selected.company_name || selected.industry || selected.city) && (
-                <div className="px-4 py-3 bg-white border-b border-gray-200 mt-2">
-                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Company</p>
-                  <div className="space-y-2">
-                    {selected.company_name && <DR icon="building" label="Name" value={selected.company_name} />}
-                    {selected.industry && <DR icon="tag" label="Industry" value={selected.industry} />}
-                    {(selected.city || selected.country) && <DR icon="location" label="Location" value={[selected.city, selected.country].filter(Boolean).join(', ')} />}
-                  </div>
+              ) : (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-semibold text-gray-900">{selected.deal_value ? `£${Number(selected.deal_value).toLocaleString()}` : 'Not set'}</span>
+                  <button onClick={() => { setDealEdit(true); setDealInput(selected.deal_value ?? '') }} className="text-xs text-indigo-600 hover:text-indigo-800">{selected.deal_value ? 'Edit' : '+ Add'}</button>
                 </div>
               )}
+            </Section>
 
-              {/* Not a lead */}
-              <div className="px-4 py-3 bg-white mt-2">
-                <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Quality Control</p>
-                {selected.dispute_status === 'pending' ? (
-                  <div className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2">
-                    Non-lead request pending admin review
-                  </div>
-                ) : selected.dispute_status === 'approved' ? (
-                  <div className="text-xs text-green-700 bg-green-50 rounded-lg px-3 py-2">
-                    Approved — removed from leads
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => setShowDispute(true)}
-                    className="w-full px-3 py-2 border border-red-200 text-red-600 hover:bg-red-50 text-xs font-medium rounded-lg transition-colors"
-                  >
-                    Not a Lead?
-                  </button>
-                )}
-              </div>
+            <Section title="Status">
+              <span className="inline-flex items-center gap-1.5 text-xs font-medium bg-green-100 text-green-700 px-2 py-1 rounded-full"><span className="w-1.5 h-1.5 rounded-full bg-green-500" />Lead</span>
+              {selected.client_label && <span className={`inline-flex ml-1.5 text-xs font-medium px-2 py-1 rounded-full ${COLOR_BADGE[labelMeta(selected.client_label)?.color ?? 'purple'] ?? 'bg-purple-100 text-purple-700'}`}>{selected.client_label}</span>}
+            </Section>
+
+            {(selected.email || selected.phone_number || selected.linkedin_url) && (
+              <Section title="Contact">
+                {selected.email && <Row icon="mail" label={selected.email} />}
+                {selected.phone_number && <Row icon="phone" label={selected.phone_number} />}
+                {selected.linkedin_url && <Row icon="link" label="LinkedIn profile" href={selected.linkedin_url} />}
+              </Section>
+            )}
+
+            {(selected.company_name || selected.industry || selected.city || selected.company_website || selected.department) && (
+              <Section title="Company & role">
+                {selected.company_name && <Row icon="building" label={selected.company_name} />}
+                {selected.company_website && <Row icon="globe" label={selected.company_website.replace(/^https?:\/\//,'')} href={selected.company_website} />}
+                {selected.job_title && <Row icon="badge" label={selected.job_title} />}
+                {selected.department && <Row icon="badge" label={selected.department} />}
+                {selected.industry && <Row icon="tag" label={selected.industry} />}
+                {(selected.city || selected.state || selected.country) && <Row icon="pin" label={[selected.city, selected.state, selected.country].filter(Boolean).join(', ')} />}
+                {selected.linkedin_company_url && <Row icon="link" label="Company LinkedIn" href={selected.linkedin_company_url} />}
+              </Section>
+            )}
+
+            {/* quality control */}
+            <div className="p-4 mt-auto">
+              {selected.dispute_status ? (
+                <p className="text-xs text-center text-gray-400">Non-lead status: {selected.dispute_status}</p>
+              ) : (
+                <button onClick={() => setShowDispute(true)} className="w-full py-2 border border-red-200 text-red-600 text-sm font-medium rounded-lg hover:bg-red-50">Not a Lead?</button>
+              )}
             </div>
-          </div>
-        ) : (
-          <div className="flex-1 flex items-center justify-center bg-gray-50">
-            <p className="text-sm text-gray-400">Select a lead to view</p>
-          </div>
+          </aside>
         )}
       </div>
 
-      {/* ── Dispute modal ── */}
+      {/* dispute modal */}
       {showDispute && selected && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setShowDispute(false)}>
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
-            <h2 className="text-base font-semibold text-gray-900 mb-1">Not a Lead?</h2>
-            <p className="text-sm text-gray-500 mb-4">Tell us why <strong>{fullName(selected)}</strong> shouldn&apos;t count as a lead. We&apos;ll review and get back to you.</p>
-            <textarea
-              rows={4}
-              placeholder="e.g. This person is a competitor, or the reply was out of office, etc."
-              value={disputeReason}
-              onChange={e => setDisputeReason(e.target.value)}
-              className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-sm outline-none focus:border-indigo-400 resize-none mb-4"
-              autoFocus
-            />
-            <div className="flex gap-2 justify-end">
-              <button onClick={() => { setShowDispute(false); setDisputeReason('') }} className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900">Cancel</button>
-              <button onClick={handleDisputeSubmit} disabled={!disputeReason.trim() || disputeSaving} className="px-5 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-xl disabled:opacity-60">
-                {disputeSaving ? 'Submitting…' : 'Submit for Review'}
-              </button>
-            </div>
+        <Modal onClose={() => setShowDispute(false)} title="Report a non-lead">
+          <p className="text-sm text-gray-500 mb-3">Tell us why this isn&apos;t a valid lead. If approved, your lead credit is refunded.</p>
+          <textarea rows={4} value={disputeReason} onChange={e => setDisputeReason(e.target.value)} placeholder="e.g. Out of office auto-reply, wrong person, competitor…" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 mb-3" />
+          <div className="flex gap-2 justify-end">
+            <button onClick={() => setShowDispute(false)} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
+            <button onClick={handleDisputeSubmit} disabled={!disputeReason.trim() || disputeSaving} className="px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-lg disabled:opacity-50">{disputeSaving ? 'Submitting…' : 'Submit'}</button>
           </div>
-        </div>
+        </Modal>
       )}
 
-      {/* ── Create label modal ── */}
+      {/* new label modal */}
       {showNewLabel && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setShowNewLabel(false)}>
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-5" onClick={e => e.stopPropagation()}>
-            <h2 className="text-sm font-semibold text-gray-900 mb-4">Create Custom Label</h2>
-            <div className="mb-3">
-              <label className="block text-xs text-gray-500 mb-1">Label name</label>
-              <input
-                type="text" placeholder="e.g. Hot Lead, Follow Up…" value={newLabelName}
-                onChange={e => setNewLabelName(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400"
-                autoFocus
-              />
-            </div>
-            <div className="mb-5">
-              <label className="block text-xs text-gray-500 mb-2">Colour</label>
-              <div className="flex gap-2 flex-wrap">
-                {CUSTOM_COLORS.map(c => (
-                  <button key={c.value} onClick={() => setNewLabelColor(c.value)} className={`w-7 h-7 rounded-full ${c.cls} transition-all ${newLabelColor === c.value ? 'ring-2 ring-offset-2 ring-indigo-500' : ''}`} />
-                ))}
-              </div>
-            </div>
-            <div className="flex gap-2 justify-end">
-              <button onClick={() => { setShowNewLabel(false); setNewLabelName('') }} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
-              <button onClick={handleCreateLabel} disabled={!newLabelName.trim() || labelSaving} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg disabled:opacity-60">
-                {labelSaving ? 'Creating…' : 'Create'}
-              </button>
-            </div>
+        <Modal onClose={() => setShowNewLabel(false)} title="Create deal stage">
+          <input value={newLabelName} onChange={e => setNewLabelName(e.target.value)} placeholder="e.g. Meeting Booked, Sent Quote, Closed" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 mb-3" />
+          <div className="flex gap-2 mb-4">
+            {CUSTOM_COLORS.map(c => <button key={c} onClick={() => setNewLabelColor(c)} className={`w-7 h-7 rounded-full ${COLOR_MAP[c]} ${newLabelColor === c ? 'ring-2 ring-offset-2 ring-gray-400' : ''}`} />)}
           </div>
-        </div>
+          <div className="flex gap-2 justify-end">
+            <button onClick={() => setShowNewLabel(false)} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
+            <button onClick={handleCreateLabel} disabled={!newLabelName.trim()} className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg disabled:opacity-50">Create</button>
+          </div>
+        </Modal>
       )}
     </div>
   )
 }
 
-// ── Detail row helper ─────────────────────────────────────────────────────
-function DR({ icon, label, value }: { icon: string; label: string; value: string }) {
-  const icons: Record<string, ReactNode> = {
-    email:    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>,
-    phone:    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.62 3.44A2 2 0 0 1 3.62 1.25h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 8a16 16 0 0 0 6.72 6.72l.95-.95a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>,
-    building: <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>,
-    tag:      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>,
-    location: <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>,
-  }
+function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="flex items-start gap-2">
-      <span className="mt-0.5 text-gray-400 shrink-0">{icons[icon]}</span>
-      <div className="min-w-0">
-        <p className="text-[10px] text-gray-400">{label}</p>
-        <p className="text-xs text-gray-800 break-all">{value}</p>
+    <div className="px-5 py-4 border-b border-gray-100">
+      <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">{title}</p>
+      {children}
+    </div>
+  )
+}
+function Row({ icon, label, href }: { icon: string; label: string; href?: string }) {
+  const inner = <span className="text-sm text-gray-700 break-words">{label}</span>
+  return (
+    <div className="flex items-start gap-2 mb-1.5">
+      <span className="text-gray-400 mt-0.5 shrink-0"><Icon name={icon} /></span>
+      {href ? <a href={href} target="_blank" rel="noreferrer" className="text-sm text-indigo-600 hover:underline break-words">{label}</a> : inner}
+    </div>
+  )
+}
+function Icon({ name }: { name: string }) {
+  const p: Record<string, ReactNode> = {
+    mail: <><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 5L2 7"/></>,
+    phone: <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/>,
+    link: <><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></>,
+    building: <><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4M8 6h.01M16 6h.01M8 10h.01M16 10h.01M8 14h.01M16 14h.01"/></>,
+    globe: <><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></>,
+    badge: <><path d="M12 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM4 20a8 8 0 0 1 16 0"/></>,
+    tag: <><path d="M20.59 13.41 13.42 20.6a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r="1"/></>,
+    pin: <><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></>,
+  }
+  return <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">{p[name]}</svg>
+}
+function Banner({ color, children }: { color: 'amber'|'red'|'green'; children: ReactNode }) {
+  const cls = { amber: 'bg-amber-50 border-amber-200 text-amber-800', red: 'bg-red-50 border-red-200 text-red-800', green: 'bg-green-50 border-green-200 text-green-800' }[color]
+  return <div className={`mx-5 mt-3 px-3 py-2 border rounded-lg text-xs shrink-0 ${cls}`}>{children}</div>
+}
+function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl p-5 w-full max-w-md" onClick={e => e.stopPropagation()}>
+        <h3 className="text-base font-semibold text-gray-900 mb-3">{title}</h3>
+        {children}
       </div>
     </div>
   )

@@ -65,8 +65,8 @@ export async function GET() {
     )
 
     // Suppress hidden fields server-side
-    const suppress = new Set<string>()
-    for (const key of hiddenFields) (FIELD_SUPPRESS[key] ?? []).forEach(f => suppress.add(f))
+    const suppress: string[] = []
+    for (const key of hiddenFields) for (const f of FIELD_SUPPRESS[key] ?? []) if (!suppress.includes(f)) suppress.push(f)
     const rows = res.rows.map(r => {
       const out = { ...r }
       for (const f of suppress) out[f] = null

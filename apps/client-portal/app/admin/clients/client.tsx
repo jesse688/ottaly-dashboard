@@ -7,6 +7,7 @@ interface PortalClient {
   id: string; email: string; company_name: string
   workspace_id: string; workspace_name: string | null
   active: boolean; created_at: string
+  cost_per_lead: string | number | null
 }
 interface Workspace { id: string; name: string; active_campaigns: number }
 interface Dispute {
@@ -20,16 +21,30 @@ interface Invoice {
   amount: string; currency: string; status: string
   due_date: string | null; paid_date: string | null; created_at: string; company_name: string
 }
+interface Topup {
+  id: string; client_id: string; amount: string; status: string; note: string | null
+  created_at: string; confirmed_at: string | null; company_name: string; email: string
+}
+interface LedgerEntry {
+  id: string; type: string; description: string; amount: string | number; created_at: string
+}
+interface Notification {
+  id: string; kind: string; title: string; body: string | null
+  is_read: boolean; created_at: string; company_name: string | null
+}
 
 const FIELDS = [
-  { key: 'email',     label: 'Email address' },
-  { key: 'phone',     label: 'Phone number' },
-  { key: 'job_title', label: 'Job title' },
-  { key: 'industry',  label: 'Industry' },
-  { key: 'location',  label: 'City / Country' },
-  { key: 'linkedin',  label: 'LinkedIn profile' },
-  { key: 'company',   label: 'Company name' },
-  { key: 'deal_value',label: 'Deal value' },
+  { key: 'email',      label: 'Email address' },
+  { key: 'phone',      label: 'Phone number' },
+  { key: 'first_name', label: 'First name' },
+  { key: 'last_name',  label: 'Last name' },
+  { key: 'job_title',  label: 'Job title' },
+  { key: 'department', label: 'Department' },
+  { key: 'industry',   label: 'Industry' },
+  { key: 'location',   label: 'City / Country' },
+  { key: 'linkedin',   label: 'LinkedIn profile' },
+  { key: 'company',    label: 'Company name' },
+  { key: 'deal_value', label: 'Deal value' },
 ]
 
 function fmt(n: string | number) {
@@ -42,25 +57,34 @@ function fmtDate(d: string | null) {
 
 // ── Main component ────────────────────────────────────────────────────────
 export function AdminClientsClient() {
-  const [tab, setTab]             = useState<'clients'|'disputes'|'invoices'>('clients')
+  const [tab, setTab]             = useState<'clients'|'disputes'|'invoices'|'topups'>('clients')
   const [clients, setClients]     = useState<PortalClient[] | null>(null)
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [disputes, setDisputes]   = useState<Dispute[] | null>(null)
   const [invoices, setInvoices]   = useState<Invoice[] | null>(null)
+  const [topups, setTopups]       = useState<Topup[] | null>(null)
 
   // Client form
   const [showForm, setShowForm]   = useState(false)
   const [editId, setEditId]       = useState<string | null>(null)
-  const [form, setForm]           = useState({ email: '', password: '', workspaceId: '', companyName: '' })
+  const [form, setForm]           = useState({ email: '', password: '', workspaceId: '', companyName: '', costPerLead: '' })
   const [resetPassword, setResetPassword] = useState('')
   const [saving, setSaving]       = useState(false)
   const [error, setError]         = useState('')
 
-  // Settings modal (labels + fields)
+  // Settings modal (labels + fields + balance)
   const [settingsClient, setSettingsClient]   = useState<PortalClient | null>(null)
-  const [settingsTab, setSettingsTab]         = useState<'labels'|'fields'>('labels')
+  const [settingsTab, setSettingsTab]         = useState<'labels'|'fields'|'balance'>('labels')
   const [labelData, setLabelData]             = useState<{ labels: { label: string; count: number }[]; hiddenLabels: string[] } | null>(null)
   const [fieldData, setFieldData]             = useState<{ hiddenFields: string[] } | null>(null)
+  const [ledgerData, setLedgerData]           = useState<{ balance: number; ledger: LedgerEntry[] } | null>(null)
+  const [cplEdit, setCplEdit]                 = useState('')
+  const [entryForm, setEntryForm]             = useState({ type: 'topup', amount: '', note: '' })
+
+  // Notifications
+  const [notifs, setNotifs]                   = useState<Notification[]>([])
+  const [unread, setUnread]                   = useState(0)
+  const [showNotifs, setShowNotifs]           = useState(false)
 
   // Sync status
   const [syncStatus, setSyncStatus]           = useState<{ status: { webhook: string; polling: string; alert: string } } | null>(null)
@@ -76,6 +100,7 @@ export function AdminClientsClient() {
     fetch('/api/admin/clients').then(r => r.json()).then(setClients)
     fetch('/api/admin/workspaces').then(r => r.json()).then(setWorkspaces)
     fetch('/api/admin/sync-status').then(r => r.json()).then(d => !d.error && setSyncStatus(d)).catch(() => {})
+    loadNotifs()
   }, [])
 
   useEffect(() => {
@@ -89,16 +114,27 @@ export function AdminClientsClient() {
         if (Array.isArray(d)) setInvoices(d)
       })
     }
-  }, [tab, disputes, invoices])
+    if (tab === 'topups' && !topups) {
+      fetch('/api/admin/topups').then(r => r.json()).then((d: Topup[] | { error: string }) => {
+        if (Array.isArray(d)) setTopups(d)
+      })
+    }
+  }, [tab, disputes, invoices, topups])
+
+  function loadNotifs() {
+    fetch('/api/admin/notifications').then(r => r.json()).then((d: { notifications: Notification[]; unread: number } | { error: string }) => {
+      if ('notifications' in d) { setNotifs(d.notifications); setUnread(d.unread) }
+    }).catch(() => {})
+  }
 
   // ── Clients ──
   async function handleCreate(e: FormEvent) {
     e.preventDefault(); setSaving(true); setError('')
     try {
-      const res = await fetch('/api/admin/clients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) })
+      const res = await fetch('/api/admin/clients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...form, costPerLead: Number(form.costPerLead) || 0 }) })
       const data = await res.json() as { error?: string }
       if (!res.ok) { setError(data.error ?? 'Error'); return }
-      setForm({ email:'', password:'', workspaceId:'', companyName:'' }); setShowForm(false)
+      setForm({ email:'', password:'', workspaceId:'', companyName:'', costPerLead:'' }); setShowForm(false)
       fetch('/api/admin/clients').then(r => r.json()).then(setClients)
     } finally { setSaving(false) }
   }
@@ -119,7 +155,8 @@ export function AdminClientsClient() {
 
   // ── Settings modal ──
   async function openSettings(c: PortalClient) {
-    setSettingsClient(c); setSettingsTab('labels'); setLabelData(null); setFieldData(null)
+    setSettingsClient(c); setSettingsTab('labels'); setLabelData(null); setFieldData(null); setLedgerData(null)
+    setCplEdit(String(Number(c.cost_per_lead ?? 0))); setEntryForm({ type: 'topup', amount: '', note: '' })
     const [lr, fr] = await Promise.all([
       fetch(`/api/admin/clients/${c.id}/labels`),
       fetch(`/api/admin/clients/${c.id}/fields`),
@@ -127,6 +164,27 @@ export function AdminClientsClient() {
     const [ld, fd] = await Promise.all([lr.json(), fr.json()])
     setLabelData(ld as { labels: { label: string; count: number }[]; hiddenLabels: string[] })
     setFieldData(fd as { hiddenFields: string[] })
+  }
+  async function loadLedger(clientId: string) {
+    setLedgerData(null)
+    const r = await fetch(`/api/admin/clients/${clientId}/ledger`)
+    const d = await r.json() as { balance: number; ledger: LedgerEntry[] }
+    setLedgerData(d)
+  }
+  async function saveCostPerLead() {
+    if (!settingsClient) return
+    const cpl = Number(cplEdit) || 0
+    await fetch(`/api/admin/clients/${settingsClient.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ costPerLead: cpl }) })
+    setSettingsClient({ ...settingsClient, cost_per_lead: cpl })
+    fetch('/api/admin/clients').then(r => r.json()).then(setClients)
+  }
+  async function addLedgerEntry() {
+    if (!settingsClient) return
+    const amount = Number(entryForm.amount)
+    if (!amount) return
+    await fetch(`/api/admin/clients/${settingsClient.id}/ledger`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: entryForm.type, amount, note: entryForm.note || undefined }) })
+    setEntryForm({ type: 'topup', amount: '', note: '' })
+    loadLedger(settingsClient.id)
   }
   async function toggleLabel(label: string) {
     if (!labelData || !settingsClient) return
@@ -171,7 +229,20 @@ export function AdminClientsClient() {
     await fetch('/api/admin/auth', { method: 'DELETE' }); router.push('/admin/login')
   }
 
+  // ── Top-ups ──
+  async function handleTopup(id: string, action: 'confirm' | 'cancel') {
+    await fetch(`/api/admin/topups/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }) })
+    fetch('/api/admin/topups').then(r => r.json()).then((d: Topup[] | { error: string }) => { if (Array.isArray(d)) setTopups(d) })
+  }
+
+  // ── Notifications ──
+  async function markAllNotifsRead() {
+    await fetch('/api/admin/notifications', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
+    loadNotifs()
+  }
+
   const pendingDisputes = disputes?.filter(d => d.status === 'pending').length ?? 0
+  const pendingTopups = topups?.filter(t => t.status === 'pending').length ?? 0
 
   return (
     <div className="min-h-screen bg-gray-50" style={{ fontFamily: 'system-ui,-apple-system,sans-serif' }}>
@@ -190,6 +261,39 @@ export function AdminClientsClient() {
           </div>
         )}
         <div className="ml-auto flex items-center gap-4">
+          <div className="relative">
+            <button onClick={() => setShowNotifs(v => !v)} className="relative text-slate-400 hover:text-white text-base px-1" aria-label="Notifications">
+              <span>🔔</span>
+              {unread > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-semibold flex items-center justify-center">{unread}</span>
+              )}
+            </button>
+            {showNotifs && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowNotifs(false)} />
+                <div className="absolute right-0 mt-2 w-80 bg-white rounded-xl shadow-xl border border-gray-100 z-50 overflow-hidden">
+                  <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100">
+                    <span className="text-sm font-semibold text-gray-900">Notifications</span>
+                    <button onClick={markAllNotifsRead} className="text-xs text-indigo-600 hover:text-indigo-800">Mark all read</button>
+                  </div>
+                  <div className="max-h-80 overflow-y-auto">
+                    {notifs.length === 0 ? (
+                      <p className="text-sm text-gray-400 text-center py-8">No notifications</p>
+                    ) : notifs.slice(0, 30).map(n => (
+                      <div key={n.id} className={`px-4 py-2.5 border-b border-gray-50 ${n.is_read ? '' : 'bg-indigo-50/50'}`}>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-sm font-medium text-gray-900">{n.title}</span>
+                          <span className="text-[11px] text-gray-400 whitespace-nowrap">{fmtDate(n.created_at)}</span>
+                        </div>
+                        {n.body && <p className="text-xs text-gray-600 mt-0.5">{n.body}</p>}
+                        {n.company_name && <p className="text-[11px] text-gray-400 mt-0.5">{n.company_name}</p>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
           <button onClick={async () => {
             if (!confirm('Run DB migration to create new tables?')) return
             const r = await fetch('/api/admin/migrate', { method: 'POST' })
@@ -221,7 +325,8 @@ export function AdminClientsClient() {
             { key: 'clients',  label: 'Clients',  badge: clients?.length },
             { key: 'disputes', label: 'Disputes', badge: pendingDisputes || undefined },
             { key: 'invoices', label: 'Invoices' },
-          ] as { key: 'clients'|'disputes'|'invoices'; label: string; badge?: number }[]).map(t => (
+            { key: 'topups',   label: 'Top-ups',  badge: pendingTopups || undefined },
+          ] as { key: 'clients'|'disputes'|'invoices'|'topups'; label: string; badge?: number }[]).map(t => (
             <button
               key={t.key}
               onClick={() => setTab(t.key)}
@@ -229,7 +334,7 @@ export function AdminClientsClient() {
             >
               {t.label}
               {t.badge !== undefined && (
-                <span className={`px-1.5 py-0.5 rounded-full text-xs font-semibold ${t.key === 'disputes' && pendingDisputes > 0 ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600'}`}>
+                <span className={`px-1.5 py-0.5 rounded-full text-xs font-semibold ${(t.key === 'disputes' && pendingDisputes > 0) || (t.key === 'topups' && pendingTopups > 0) ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600'}`}>
                   {t.badge}
                 </span>
               )}
@@ -261,6 +366,7 @@ export function AdminClientsClient() {
                   </div>
                   <div><label className="block text-xs text-gray-500 mb-1">Login email</label><input required type="email" value={form.email} onChange={e => setForm(f=>({...f,email:e.target.value}))} placeholder="client@company.com" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
                   <div><label className="block text-xs text-gray-500 mb-1">Password</label><input required type="text" value={form.password} onChange={e => setForm(f=>({...f,password:e.target.value}))} placeholder="Set a password" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
+                  <div><label className="block text-xs text-gray-500 mb-1">Cost per lead (£)</label><input type="number" min="0" step="0.01" value={form.costPerLead} onChange={e => setForm(f=>({...f,costPerLead:e.target.value}))} placeholder="0" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
                   {error && <p className="col-span-2 text-sm text-red-600">{error}</p>}
                   <div className="col-span-2 flex gap-2 justify-end">
                     <button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
@@ -274,20 +380,21 @@ export function AdminClientsClient() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-100 bg-gray-50">
-                    {['Company','Email','Workspace','Status','Actions'].map(h => <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}
+                    {['Company','Email','Workspace','Cost/lead','Status','Actions'].map(h => <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}
                   </tr>
                 </thead>
                 <tbody>
                   {clients === null ? Array.from({length:4}).map((_,i) => (
-                    <tr key={i} className="border-b border-gray-50">{Array.from({length:5}).map((_,j) => <td key={j} className="px-4 py-3"><div className="h-4 bg-gray-100 rounded animate-pulse" /></td>)}</tr>
+                    <tr key={i} className="border-b border-gray-50">{Array.from({length:6}).map((_,j) => <td key={j} className="px-4 py-3"><div className="h-4 bg-gray-100 rounded animate-pulse" /></td>)}</tr>
                   )) : clients.length === 0 ? (
-                    <tr><td colSpan={5} className="px-4 py-10 text-center text-gray-400 text-sm">No clients yet</td></tr>
+                    <tr><td colSpan={6} className="px-4 py-10 text-center text-gray-400 text-sm">No clients yet</td></tr>
                   ) : clients.map(client => (
                     <>
                       <tr key={client.id} className="border-b border-gray-50 hover:bg-gray-50">
                         <td className="px-4 py-3 font-medium text-gray-900">{client.company_name}</td>
                         <td className="px-4 py-3 text-gray-600 text-xs">{client.email}</td>
                         <td className="px-4 py-3 text-gray-600 text-xs">{client.workspace_name ?? client.workspace_id.slice(0,8)+'…'}</td>
+                        <td className="px-4 py-3 text-gray-700 text-xs">{fmt(client.cost_per_lead ?? 0)}</td>
                         <td className="px-4 py-3">
                           <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${client.active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>{client.active ? 'Active' : 'Disabled'}</span>
                         </td>
@@ -305,7 +412,7 @@ export function AdminClientsClient() {
                       </tr>
                       {editId === client.id && (
                         <tr key={`${client.id}-edit`} className="border-b border-gray-50 bg-indigo-50">
-                          <td colSpan={5} className="px-4 py-3">
+                          <td colSpan={6} className="px-4 py-3">
                             <div className="flex items-center gap-3">
                               <span className="text-xs text-gray-600">New password:</span>
                               <input type="text" value={resetPassword} onChange={e => setResetPassword(e.target.value)} placeholder="Enter new password" className="px-3 py-1.5 rounded-lg border border-gray-200 text-sm outline-none w-48" />
@@ -450,20 +557,69 @@ export function AdminClientsClient() {
             </div>
           </>
         )}
+
+        {/* ── TOP-UPS TAB ── */}
+        {tab === 'topups' && (
+          <>
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <h1 className="text-lg font-semibold text-gray-900">Top-up Requests</h1>
+                <p className="text-sm text-gray-500 mt-0.5">Clients have requested to add balance to their account</p>
+              </div>
+            </div>
+            <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-100 bg-gray-50">
+                    {['Client','Amount','Note','Requested','Status','Actions'].map(h => <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {topups === null ? Array.from({length:3}).map((_,i) => (
+                    <tr key={i} className="border-b border-gray-50">{Array.from({length:6}).map((_,j) => <td key={j} className="px-4 py-3"><div className="h-4 bg-gray-100 rounded animate-pulse" /></td>)}</tr>
+                  )) : topups.length === 0 ? (
+                    <tr><td colSpan={6} className="px-4 py-10 text-center text-gray-400 text-sm">No top-up requests yet</td></tr>
+                  ) : topups.map(t => (
+                    <tr key={t.id} className="border-b border-gray-50 hover:bg-gray-50">
+                      <td className="px-4 py-3 font-medium text-gray-900 text-xs">{t.company_name}</td>
+                      <td className="px-4 py-3 text-sm font-semibold text-gray-900">{fmt(t.amount)}</td>
+                      <td className="px-4 py-3 text-xs text-gray-700 max-w-xs truncate">{t.note ?? '—'}</td>
+                      <td className="px-4 py-3 text-xs text-gray-500">{fmtDate(t.created_at)}</td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${t.status === 'pending' ? 'bg-amber-100 text-amber-700' : t.status === 'confirmed' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                          {t.status.charAt(0).toUpperCase() + t.status.slice(1)}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        {t.status === 'pending' && (
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => handleTopup(t.id, 'confirm')} className="text-xs text-green-600 hover:text-green-800 font-medium">Confirm</button>
+                            <span className="text-gray-200">|</span>
+                            <button onClick={() => handleTopup(t.id, 'cancel')} className="text-xs text-red-500 hover:text-red-700 font-medium">Cancel</button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
       </div>
 
       {/* ── Settings modal ── */}
       {settingsClient && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setSettingsClient(null)}>
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+          <div className={`bg-white rounded-2xl shadow-xl w-full ${settingsTab === 'balance' ? 'max-w-lg' : 'max-w-md'} max-h-[90vh] overflow-y-auto`} onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 pt-5 pb-0">
               <h2 className="text-sm font-semibold text-gray-900">Settings — {settingsClient.company_name}</h2>
               <button onClick={() => setSettingsClient(null)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
             </div>
             {/* Modal tabs */}
             <div className="flex px-5 mt-3 border-b border-gray-100">
-              {([{ key:'labels', label:'Label Visibility' },{ key:'fields', label:'Field Visibility' }] as { key:'labels'|'fields'; label:string }[]).map(t => (
-                <button key={t.key} onClick={() => setSettingsTab(t.key)} className={`mr-4 pb-2.5 text-sm font-medium border-b-2 transition-colors ${settingsTab === t.key ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+              {([{ key:'labels', label:'Label Visibility' },{ key:'fields', label:'Field Visibility' },{ key:'balance', label:'Balance' }] as { key:'labels'|'fields'|'balance'; label:string }[]).map(t => (
+                <button key={t.key} onClick={() => { setSettingsTab(t.key); if (t.key === 'balance' && settingsClient) loadLedger(settingsClient.id) }} className={`mr-4 pb-2.5 text-sm font-medium border-b-2 transition-colors ${settingsTab === t.key ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
                   {t.label}
                 </button>
               ))}
@@ -508,6 +664,66 @@ export function AdminClientsClient() {
                      })}
                    </div>
                   }
+                </>
+              )}
+              {settingsTab === 'balance' && (
+                <>
+                  {ledgerData === null ? (
+                    <div className="space-y-3">{Array.from({length:4}).map((_,i) => <div key={i} className="h-8 bg-gray-100 rounded animate-pulse" />)}</div>
+                  ) : (
+                    <>
+                      <div className="mb-4">
+                        <p className="text-xs text-gray-500 mb-1">Current balance</p>
+                        <p className={`text-3xl font-bold ${ledgerData.balance < 0 ? 'text-red-600' : 'text-gray-900'}`}>{fmt(ledgerData.balance)}</p>
+                      </div>
+
+                      <div className="mb-4 p-3 rounded-lg border border-gray-100">
+                        <label className="block text-xs text-gray-500 mb-1">Cost per lead (£)</label>
+                        <div className="flex items-center gap-2">
+                          <input type="number" min="0" step="0.01" value={cplEdit} onChange={e => setCplEdit(e.target.value)} className="flex-1 px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" />
+                          <button onClick={saveCostPerLead} className="px-3 py-2 bg-indigo-600 text-white text-xs font-medium rounded-lg">Save</button>
+                        </div>
+                      </div>
+
+                      <div className="mb-4 p-3 rounded-lg border border-gray-100">
+                        <p className="text-xs text-gray-500 mb-2">Add manual entry</p>
+                        <div className="flex items-center gap-2">
+                          <select value={entryForm.type} onChange={e => setEntryForm(f => ({...f,type:e.target.value}))} className="px-2 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 bg-white">
+                            <option value="topup">Top-up</option>
+                            <option value="adjustment">Adjustment</option>
+                          </select>
+                          <input type="number" step="0.01" value={entryForm.amount} onChange={e => setEntryForm(f => ({...f,amount:e.target.value}))} placeholder="Amount" className="w-24 px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" />
+                          <input value={entryForm.note} onChange={e => setEntryForm(f => ({...f,note:e.target.value}))} placeholder="Note (optional)" className="flex-1 px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" />
+                          <button onClick={addLedgerEntry} className="px-3 py-2 bg-indigo-600 text-white text-xs font-medium rounded-lg">Add</button>
+                        </div>
+                      </div>
+
+                      <div className="border border-gray-100 rounded-lg overflow-hidden">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-gray-100 bg-gray-50">
+                              {['Date','Type','Description','Amount'].map(h => <th key={h} className="px-3 py-2 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {ledgerData.ledger.length === 0 ? (
+                              <tr><td colSpan={4} className="px-3 py-6 text-center text-gray-400 text-sm">No ledger entries</td></tr>
+                            ) : ledgerData.ledger.map(e => {
+                              const amt = Number(e.amount)
+                              return (
+                                <tr key={e.id} className="border-b border-gray-50">
+                                  <td className="px-3 py-2 text-xs text-gray-500">{fmtDate(e.created_at)}</td>
+                                  <td className="px-3 py-2 text-xs text-gray-600">{e.type}</td>
+                                  <td className="px-3 py-2 text-xs text-gray-700 max-w-[10rem] truncate" title={e.description}>{e.description}</td>
+                                  <td className={`px-3 py-2 text-xs font-semibold ${amt < 0 ? 'text-red-600' : 'text-green-600'}`}>{amt < 0 ? '-' : '+'}{fmt(Math.abs(amt))}</td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  )}
                 </>
               )}
             </div>

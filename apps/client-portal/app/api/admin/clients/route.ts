@@ -7,6 +7,7 @@ export async function GET() {
 
   const res = await pool.query(`
     SELECT pc.id, pc.email, pc.company_name, pc.workspace_id, pc.active, pc.created_at,
+           pc.cost_per_lead,
            w.name AS workspace_name
     FROM portal_clients pc
     LEFT JOIN esp_workspaces w ON w.id = pc.workspace_id AND w.source = 'plusvibe'
@@ -18,11 +19,12 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   if (!await getAdminSession()) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { email, password, workspaceId, companyName } = await req.json() as {
+  const { email, password, workspaceId, companyName, costPerLead } = await req.json() as {
     email: string
     password: string
     workspaceId: string
     companyName: string
+    costPerLead?: number
   }
 
   if (!email || !password || !workspaceId || !companyName) {
@@ -33,10 +35,10 @@ export async function POST(req: NextRequest) {
 
   try {
     const res = await pool.query(
-      `INSERT INTO portal_clients (email, password_hash, workspace_id, company_name)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO portal_clients (email, password_hash, workspace_id, company_name, cost_per_lead)
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING id`,
-      [email.toLowerCase(), passwordHash, workspaceId, companyName]
+      [email.toLowerCase(), passwordHash, workspaceId, companyName, Number(costPerLead) || 0]
     )
     return NextResponse.json({ ok: true, id: res.rows[0].id })
   } catch (err: unknown) {
