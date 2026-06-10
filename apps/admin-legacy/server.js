@@ -12120,6 +12120,45 @@ app.get('/api/contacts/verified-today', requireSession, async (req, res) => {
   }
 });
 
+// Read-only diagnostic: MX-provider coverage. Shows how many contacts have
+// been verified vs how many carry a true mx_provider, so the effect of the
+// tag→column recovery + domain-cache seed is visible after deploy.
+app.get('/api/contacts/mx-coverage', requireSession, async (req, res) => {
+  try {
+    const dbPg = req.app.locals.pgDb;
+    if (!dbPg) return res.status(503).json({ error: 'Database unavailable' });
+    const result = await dbPg.query(`
+      SELECT
+        COUNT(*)                                                                       AS total,
+        COUNT(*) FILTER (WHERE email_verified_at IS NOT NULL)                          AS verified,
+        COUNT(*) FILTER (WHERE mx_provider IS NOT NULL)                                AS has_provider,
+        COUNT(*) FILTER (WHERE mx_provider = 'email_google')                           AS google,
+        COUNT(*) FILTER (WHERE mx_provider = 'email_outlook')                          AS outlook,
+        COUNT(*) FILTER (WHERE mx_provider = 'email_other')                            AS other,
+        COUNT(*) FILTER (WHERE mx_provider IS NULL)                                    AS unknown,
+        -- Verified contacts still lacking a provider: the recovery's remaining
+        -- work (e.g. verified with an unresolved/unknown MX, so no email_* tag).
+        COUNT(*) FILTER (WHERE email_verified_at IS NOT NULL AND mx_provider IS NULL)  AS verified_no_provider
+      FROM contacts
+    `);
+    const dom = await dbPg.query(`SELECT COUNT(*) AS n FROM domain_mx_cache`);
+    const row = result.rows[0];
+    res.json({
+      total:               +row.total,
+      verified:            +row.verified,
+      hasProvider:         +row.has_provider,
+      google:              +row.google,
+      outlook:             +row.outlook,
+      other:               +row.other,
+      unknown:             +row.unknown,
+      verifiedNoProvider:  +row.verified_no_provider,
+      domainsCached:       +dom.rows[0].n,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/contacts/push-jobs', (req, res) => {
   const jobs = [...pushJobs.values()]
     .sort((a, b) => b.created_at - a.created_at)
