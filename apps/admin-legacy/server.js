@@ -12040,6 +12040,11 @@ function initPausedJobsTable(sq) {
     verified_count INTEGER DEFAULT 0,
     pushed_count INTEGER DEFAULT 0
   )`);
+  // Persist the provider filter so a paused→resumed (or boot-restored) job
+  // still enforces it. Without this, resume rebuilt the job WITHOUT
+  // allowedProviders and the gate silently disabled — every MX leaked through.
+  // Added via ALTER for existing DBs; ignore the "duplicate column" error.
+  try { sq.exec(`ALTER TABLE paused_push_jobs ADD COLUMN allowed_providers TEXT DEFAULT ''`); } catch { /* already exists */ }
 }
 
 // On boot, restore paused jobs into the in-memory map so the UI shows them.
@@ -12057,6 +12062,7 @@ function restorePausedJobs(sq) {
         campaign_id: row.campaign_id,
         workspace_name: row.workspace_name || row.workspace_id,
         campaign_name: row.campaign_name || row.campaign_id,
+        allowedProviders: (row.allowed_providers || '').split(',').map(s => s.trim()).filter(Boolean),
         total: contactIds.length,
         verified: row.verified_count || 0,
         pushed: row.pushed_count || 0,
@@ -12212,11 +12218,12 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
     try {
       initPausedJobsTable(sq);
       sq.prepare(`INSERT OR REPLACE INTO paused_push_jobs
-        (id, workspace_id, campaign_id, workspace_name, campaign_name, contact_ids, include_risky, max_age_days)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        (id, workspace_id, campaign_id, workspace_name, campaign_name, contact_ids, include_risky, max_age_days, allowed_providers)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         jobId, workspace_id, campaign_id,
         workspace_name || workspace_id, campaign_name || campaign_id,
-        JSON.stringify(contact_ids), include_risky ? 1 : 0, max_age_days
+        JSON.stringify(contact_ids), include_risky ? 1 : 0, max_age_days,
+        allowedProviders.join(',')
       );
     } catch (e) { console.warn('[push] Could not persist job to SQLite:', e.message); }
   }
@@ -12717,6 +12724,10 @@ app.post('/api/contacts/push-jobs/:id/resume', async (req, res) => {
   const max_age_days = row.max_age_days || 90;
   const workspace_id = row.workspace_id;
   const campaign_id  = row.campaign_id;
+  // Restore the provider filter so the resumed job keeps enforcing it.
+  const allowedProviders = (row.allowed_providers || '')
+    .split(',').map(s => s.trim()).filter(Boolean);
+  job.allowedProviders = allowedProviders;
 
   // Re-run the worker — isFreshVerdict inside will skip already-verified contacts,
   // so only contacts that were not yet verified (or got 'unknown') will be re-sent to Reacher.
@@ -12724,6 +12735,26 @@ app.post('/api/contacts/push-jobs/:id/resume', async (req, res) => {
     try {
       const contacts = await db.getContactsById(contact_ids);
       if (!contacts.length) { job.status = 'failed'; job.error = 'No contacts found'; return; }
+
+      // Domain-MX pre-pass (same as the main worker): fill mx_provider from the
+      // domain cache for contacts whose domain is already known, so the gate
+      // can judge already-verified contacts without re-verifying.
+      {
+        const byDomain = new Map();
+        for (const c of contacts) {
+          if (c.mx_provider) continue;
+          const domain = (c.email || '').split('@')[1]?.toLowerCase();
+          if (!domain) continue;
+          if (!byDomain.has(domain)) byDomain.set(domain, []);
+          byDomain.get(domain).push(c);
+        }
+        for (const [domain, list] of byDomain) {
+          try {
+            const prov = await db.getDomainMxProvider(domain);
+            if (prov) list.forEach(c => { c.mx_provider = prov; });
+          } catch { /* cache miss / transient — verifier will resolve it */ }
+        }
+      }
 
       const cutoff = new Date(Date.now() - max_age_days * 24 * 60 * 60 * 1000).toISOString();
       const isFreshVerdict = c =>
@@ -12743,7 +12774,8 @@ app.post('/api/contacts/push-jobs/:id/resume', async (req, res) => {
       const CONCURRENCY = Math.max(1, parseInt(process.env.PUSH_VERIFY_CONCURRENCY || '5', 10));
       const VERIFY_THEN_PUSH = Math.max(20, parseInt(process.env.VERIFY_THEN_PUSH || '100', 10));
       let doneCount = 0;
-      const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, snoozed: 0 };
+      const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, snoozed: 0, wrongProvider: 0 };
+      const allowedProvidersResume = Array.isArray(job.allowedProviders) ? job.allowedProviders : [];
 
       const campaignVertical = detectVertical((job.campaign_name || '') + ' ' + (job.workspace_name || ''));
       const today       = new Date().toISOString().slice(0, 10);
@@ -12753,6 +12785,11 @@ app.post('/api/contacts/push-jobs/:id/resume', async (req, res) => {
       const passesFilter = (c) => {
         if (verifyResults[c.id] !== 'safe' && verifyResults[c.id] !== 'safe_catchall') { skipped.unsafe++; return false; }
         if (c.do_not_contact) { skipped.dnc++; return false; }
+        // True-MX provider gate (same as the main worker) — without this a
+        // resumed job leaked every provider regardless of the filter.
+        if (allowedProvidersResume.length && !allowedProvidersResume.includes(c.mx_provider)) {
+          skipped.wrongProvider++; return false;
+        }
         const pushed = Array.isArray(c.pushed_campaigns)
           ? c.pushed_campaigns
           : (typeof c.pushed_campaigns === 'string' ? JSON.parse(c.pushed_campaigns || '[]') : []);
@@ -12865,6 +12902,16 @@ app.post('/api/contacts/push-jobs/:id/resume', async (req, res) => {
           const mxProvider = /google|gmail/.test(mxHost) ? 'email_google'
             : /outlook|microsoft|protection\.outlook|mail\.microsoft/.test(mxHost) ? 'email_outlook'
             : mxHost ? 'email_other' : null;
+          // Stamp the in-memory contact so the provider gate sees the real MX,
+          // and fan it out to the domain cache (same as the main worker).
+          if (mxProvider) {
+            c.mx_provider = mxProvider;
+            const domain = (c.email || '').split('@')[1]?.toLowerCase();
+            if (domain) {
+              try { await db.setDomainMxProvider(domain, mxProvider); }
+              catch (e) { console.warn('[verify] domain mx cache update failed:', e.message); }
+            }
+          }
           verifyResults[c.id] = status;
           batchUpdates.push({ id: c.id, email_status: status, email_verified_at: new Date().toISOString(), mx_provider: mxProvider, email: c.email });
         } catch {
