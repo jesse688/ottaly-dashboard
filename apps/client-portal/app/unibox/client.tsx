@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState, type ReactNode, type ChangeEvent } from 'react'
+import { useEffect, useRef, useState, type ReactNode, type ChangeEvent, type KeyboardEvent } from 'react'
 import { useRouter } from 'next/navigation'
 
 interface Lead {
@@ -738,6 +738,39 @@ export function UniboxClient({ companyName }: { companyName: string }) {
   )
 }
 
+// Gmail-style recipient field: each address becomes a chip on space/comma/enter.
+function RecipientInput({ value, onChange, placeholder }: {
+  value: string[]; onChange: (v: string[]) => void; placeholder: string
+}) {
+  const [draft, setDraft] = useState('')
+  const isValid = (a: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(a)
+  function commit(s: string) {
+    const parts = s.split(/[\s,;]+/).map(x => x.trim()).filter(Boolean)
+    if (parts.length) onChange([...value, ...parts])
+  }
+  function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if ((e.key === 'Enter' || e.key === ',' || e.key === ';' || e.key === ' ') && draft.trim()) {
+      e.preventDefault(); commit(draft); setDraft('')
+    } else if (e.key === 'Backspace' && !draft && value.length) {
+      onChange(value.slice(0, -1))
+    }
+  }
+  return (
+    <div className="flex-1 flex flex-wrap items-center gap-1">
+      {value.map((a, i) => (
+        <span key={i} className={`inline-flex items-center gap-1 text-xs pl-2 pr-1 py-0.5 rounded-full ${isValid(a) ? 'bg-indigo-50 text-indigo-700' : 'bg-red-50 text-red-600'}`} title={isValid(a) ? '' : 'This doesn’t look like a valid email'}>
+          {a}
+          <button type="button" onClick={() => onChange(value.filter((_, j) => j !== i))} className="w-4 h-4 flex items-center justify-center rounded-full hover:bg-black/10">×</button>
+        </span>
+      ))}
+      <input value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={onKeyDown}
+        onBlur={() => { if (draft.trim()) { commit(draft); setDraft('') } }}
+        placeholder={value.length ? '' : placeholder}
+        className="flex-1 min-w-[120px] text-sm outline-none bg-transparent text-gray-800 placeholder:text-gray-400 py-1" />
+    </div>
+  )
+}
+
 // Gmail-style rich text reply: editable To, Cc, bold/italic/underline, font,
 // size, link, image — and a forward seed that prefills quoted content.
 function RichReply({ toEmail, placeholderName, sending, statusMsg, seed, onSend }: {
@@ -748,16 +781,16 @@ function RichReply({ toEmail, placeholderName, sending, statusMsg, seed, onSend 
   const ref = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const [empty, setEmpty] = useState(true)
-  const [to, setTo] = useState(toEmail)
+  const [to, setTo] = useState<string[]>(toEmail ? [toEmail] : [])
   const [showCc, setShowCc] = useState(false)
-  const [cc, setCc] = useState('')
+  const [cc, setCc] = useState<string[]>([])
 
   // Forward seed: prefill the editor with quoted content and clear the recipient.
   useEffect(() => {
     if (seed && ref.current) {
       ref.current.innerHTML = seed.html
       setEmpty((ref.current.innerText ?? '').trim().length === 0)
-      setTo('')
+      setTo([])
       ref.current.focus()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -785,10 +818,10 @@ function RichReply({ toEmail, placeholderName, sending, statusMsg, seed, onSend 
     const el = ref.current
     if (!el) return
     const text = el.innerText.trim()
-    if (!text || !to.trim()) return
-    onSend(text, el.innerHTML, to.trim(), cc.trim())
+    if (!text || !to.length) return
+    onSend(text, el.innerHTML, to.join(', '), cc.join(', '))
     el.innerHTML = ''
-    setEmpty(true); setCc(''); setShowCc(false); setTo(toEmail)
+    setEmpty(true); setCc([]); setShowCc(false); setTo(toEmail ? [toEmail] : [])
   }
 
   const Btn = ({ cmd, val, title, children }: { cmd?: string; val?: string; title: string; children: ReactNode }) => (
@@ -801,15 +834,15 @@ function RichReply({ toEmail, placeholderName, sending, statusMsg, seed, onSend 
 
   return (
     <div className="rounded-xl border border-gray-200 overflow-hidden focus-within:border-indigo-300 focus-within:ring-1 focus-within:ring-indigo-200">
-      <div className="px-3 py-1.5 bg-gray-50 border-b border-gray-100 flex items-center gap-2">
-        <span className="text-xs font-medium text-gray-500 w-7">To:</span>
-        <input value={to} onChange={e => setTo(e.target.value)} placeholder="recipient@example.com" className="flex-1 text-sm outline-none bg-transparent text-gray-800 placeholder:text-gray-400" />
-        {!showCc && <button type="button" onClick={() => setShowCc(true)} className="text-xs text-indigo-600 hover:text-indigo-800">Cc</button>}
+      <div className="px-3 py-1.5 bg-gray-50 border-b border-gray-100 flex items-start gap-2">
+        <span className="text-xs font-medium text-gray-500 w-7 mt-1.5">To:</span>
+        <RecipientInput value={to} onChange={setTo} placeholder="add recipients…" />
+        {!showCc && <button type="button" onClick={() => setShowCc(true)} className="text-xs text-indigo-600 hover:text-indigo-800 mt-1.5 shrink-0">Cc</button>}
       </div>
       {showCc && (
-        <div className="px-3 py-1.5 border-b border-gray-100 flex items-center gap-2">
-          <span className="text-xs font-medium text-gray-500 w-7">Cc:</span>
-          <input value={cc} onChange={e => setCc(e.target.value)} placeholder="email@example.com, another@… (comma-separated)" className="flex-1 text-sm outline-none text-gray-800 placeholder:text-gray-400" />
+        <div className="px-3 py-1.5 border-b border-gray-100 flex items-start gap-2">
+          <span className="text-xs font-medium text-gray-500 w-7 mt-1.5">Cc:</span>
+          <RecipientInput value={cc} onChange={setCc} placeholder="add cc…" />
         </div>
       )}
 
@@ -852,7 +885,7 @@ function RichReply({ toEmail, placeholderName, sending, statusMsg, seed, onSend 
 
       <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-t border-gray-100">
         <span className="text-xs">{statusMsg ? <span className="text-green-600 font-medium">{statusMsg}</span> : <span className="text-gray-400">Sent via your campaign mailbox</span>}</span>
-        <button onClick={send} disabled={empty || sending || !to.trim()} className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-medium rounded-lg">
+        <button onClick={send} disabled={empty || sending || !to.length} className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-medium rounded-lg">
           {sending ? 'Sending…' : <><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>Send</>}
         </button>
       </div>
