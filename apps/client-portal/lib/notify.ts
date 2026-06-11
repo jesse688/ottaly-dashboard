@@ -23,6 +23,7 @@ export async function notifyAdmin(input: {
   if (!token || !channel) return
   try {
     await fetch('https://slack.com/api/chat.postMessage', {
+      signal: AbortSignal.timeout(10000),
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({

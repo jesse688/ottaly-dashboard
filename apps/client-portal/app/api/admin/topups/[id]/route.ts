@@ -1,32 +1,62 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { getAdminSession } from '@/lib/auth'
 import pool from '@/lib/db'
-import { addTopup, getBalance } from '@/lib/balance'
+import { getBalance } from '@/lib/balance'
 
 // PATCH — confirm or cancel a top-up request.
-// Confirming credits the client's ledger by the requested amount.
+// Confirm = payment received: flips status (guarded — double-click/races lose),
+// credits the ledger, and marks the linked invoice paid, in one transaction.
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   if (!await getAdminSession()) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   const { id } = await params
   const { action } = await req.json() as { action: 'confirm' | 'cancel' }
 
-  const r = await pool.query(
-    `SELECT id, client_id, amount, status FROM portal_topup_requests WHERE id = $1`,
-    [id]
-  )
-  if (!r.rows.length) return NextResponse.json({ error: 'Not found' }, { status: 404 })
-  const req_ = r.rows[0]
-  if (req_.status !== 'pending') return NextResponse.json({ error: 'Already resolved' }, { status: 400 })
-
   if (action === 'confirm') {
-    await addTopup(req_.client_id, Number(req_.amount), 'Top-up confirmed')
-    await pool.query(
-      `UPDATE portal_topup_requests SET status = 'confirmed', confirmed_at = NOW() WHERE id = $1`,
-      [id]
-    )
-    return NextResponse.json({ ok: true, balance: await getBalance(req_.client_id) })
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      // Conditional flip first — only ONE confirm can ever win.
+      const upd = await client.query(
+        `UPDATE portal_topup_requests SET status = 'confirmed', confirmed_at = NOW()
+          WHERE id = $1 AND status = 'pending'
+          RETURNING client_id, amount, invoice_id`,
+        [id]
+      )
+      if (!upd.rows.length) {
+        await client.query('ROLLBACK')
+        return NextResponse.json({ error: 'Already resolved' }, { status: 409 })
+      }
+      const r = upd.rows[0]
+      await client.query(
+        `INSERT INTO portal_ledger (client_id, type, amount, description, created_by)
+         VALUES ($1, 'topup', $2, 'Top-up confirmed', 'admin')`,
+        [r.client_id, Math.floor(Number(r.amount))]
+      )
+      if (r.invoice_id) {
+        await client.query(
+          `UPDATE portal_invoices SET status = 'paid', paid_date = NOW() WHERE id = $1 AND status = 'unpaid'`,
+          [r.invoice_id]
+        )
+      }
+      await client.query('COMMIT')
+      return NextResponse.json({ ok: true, balance: await getBalance(r.client_id) })
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {})
+      console.error('[topup confirm]', err)
+      return NextResponse.json({ error: 'Could not confirm' }, { status: 500 })
+    } finally {
+      client.release()
+    }
   }
 
-  await pool.query(`UPDATE portal_topup_requests SET status = 'cancelled' WHERE id = $1`, [id])
+  // Cancel: guarded flip + void the unpaid draft invoice.
+  const upd = await pool.query(
+    `UPDATE portal_topup_requests SET status = 'cancelled' WHERE id = $1 AND status = 'pending' RETURNING invoice_id`,
+    [id]
+  )
+  if (!upd.rows.length) return NextResponse.json({ error: 'Already resolved' }, { status: 409 })
+  if (upd.rows[0].invoice_id) {
+    await pool.query(`DELETE FROM portal_invoices WHERE id = $1 AND status = 'unpaid'`, [upd.rows[0].invoice_id])
+  }
   return NextResponse.json({ ok: true })
 }

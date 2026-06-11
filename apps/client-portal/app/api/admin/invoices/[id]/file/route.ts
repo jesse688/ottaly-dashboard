@@ -12,6 +12,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const file = form.get('file')
   if (!(file instanceof File)) return NextResponse.json({ error: 'No file uploaded' }, { status: 400 })
   if (file.size > 10 * 1024 * 1024) return NextResponse.json({ error: 'File too large (max 10MB)' }, { status: 400 })
+  const ALLOWED = ['application/pdf', 'image/png', 'image/jpeg']
+  if (file.type && !ALLOWED.includes(file.type)) {
+    return NextResponse.json({ error: 'Only PDF, PNG or JPEG files are allowed' }, { status: 400 })
+  }
 
   const buf = Buffer.from(await file.arrayBuffer())
   const r = await pool.query(

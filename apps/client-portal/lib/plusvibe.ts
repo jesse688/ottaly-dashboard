@@ -19,7 +19,7 @@ async function pv<T>(path: string, params: Record<string, string | number | unde
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v))
   }
-  const res = await fetch(url.toString(), { headers: headers() })
+  const res = await fetch(url.toString(), { headers: headers(), signal: AbortSignal.timeout(15000) })
   if (!res.ok) {
     const txt = await res.text().catch(() => '')
     throw new Error(`PlusVibe ${path} -> ${res.status}: ${txt.slice(0, 200)}`)
@@ -124,6 +124,7 @@ export async function sendReply(input: {
   if (!replyUrl) return { ok: false, reason: 'no-reply-endpoint-configured' }
   try {
     const res = await fetch(replyUrl, {
+      signal: AbortSignal.timeout(15000),
       method: 'POST',
       headers: { ...headers(), 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -165,6 +166,7 @@ const hasLeadEvent = (h: PVHook) => (h.evt_types ?? []).includes('LEAD_MARKED_AS
 
 async function addHook(workspaceId: string, events: string[]): Promise<{ ok: boolean; status: number; body: string }> {
   const res = await fetch(`${BASE}/hook/add`, {
+      signal: AbortSignal.timeout(15000),
     method: 'POST',
     headers: { ...headers(), 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -177,6 +179,7 @@ async function addHook(workspaceId: string, events: string[]): Promise<{ ok: boo
 
 async function delHook(workspaceId: string, id: string): Promise<void> {
   await fetch(`${BASE}/hook/del`, {
+      signal: AbortSignal.timeout(15000),
     method: 'DELETE', headers: { ...headers(), 'Content-Type': 'application/json' },
     body: JSON.stringify({ workspace_id: workspaceId, ids: [id] }),
   }).catch(() => {})
@@ -220,6 +223,7 @@ export const PV_LABELS = KEY ? true : false // truthy guard helper for callers
 export async function updateLeadStatus(workspaceId: string, leadEmail: string, status: string): Promise<{ ok: boolean; reason?: string }> {
   try {
     const res = await fetch(`${BASE}/lead/update-lead-status?workspace_id=${encodeURIComponent(workspaceId)}`, {
+      signal: AbortSignal.timeout(15000),
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': KEY },
       body: JSON.stringify({ workspace_id: workspaceId, email: leadEmail, lead_email: leadEmail, new_status: status, status }),

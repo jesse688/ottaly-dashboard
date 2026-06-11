@@ -35,7 +35,8 @@ export async function GET(req: NextRequest) {
 
     // Fetch all workspaces from PlusVibe
     const wsRes = await fetch(`${PLUSVIBE_API_URL}/workspaces`, {
-      headers: { 'x-api-key': PLUSVIBE_API_KEY }
+      headers: { 'x-api-key': PLUSVIBE_API_KEY },
+      signal: AbortSignal.timeout(15000),
     })
     if (!wsRes.ok) throw new Error(`PlusVibe API error: ${wsRes.statusText}`)
     const workspaces = await wsRes.json() as { id: string; name: string }[]
@@ -52,7 +53,7 @@ export async function GET(req: NextRequest) {
         while (true) {
           const leadRes = await fetch(
             `${PLUSVIBE_API_URL}/lead/workspace-leads?workspace_id=${ws.id}&label=INTERESTED&page=${page}&limit=${limit}`,
-            { headers: { 'x-api-key': PLUSVIBE_API_KEY } }
+            { headers: { 'x-api-key': PLUSVIBE_API_KEY }, signal: AbortSignal.timeout(15000) }
           )
           if (!leadRes.ok) break
           const response = await leadRes.json() as PVLead[] | { data?: PVLead[]; leads?: PVLead[] }

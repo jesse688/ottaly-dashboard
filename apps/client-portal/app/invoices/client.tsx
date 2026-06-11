@@ -14,6 +14,8 @@ interface TopupReq { id: string; amount: number; status: string; note: string | 
 interface LedgerRow { id: string; type: string; amount: number; description: string | null; created_at: string }
 interface Balance {
   balance: number
+  added?: number
+  used?: number
   leadsDelivered: number
   pipeline: number
   dealsWon: number
@@ -47,15 +49,15 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
   const router = useRouter()
 
   function load() {
-    fetch('/api/portal/invoices').then(r => r.json()).then((d) => { setInvoices(d.invoices) }).catch(() => {})
+    fetch('/api/portal/invoices').then(r => r.json()).then((d) => { if (Array.isArray(d?.invoices)) setInvoices(d.invoices) }).catch(() => {})
     fetch('/api/portal/balance').then(r => r.json()).then((d) => !d.error && setBal(d)).catch(() => {})
     fetch('/api/portal/topup').then(r => r.json()).then((d) => { if (Array.isArray(d.requests)) setTopups(d.requests); if (d.minTopup) setMinTopup(d.minTopup); if (Array.isArray(d.buckets)) setBuckets(d.buckets) }).catch(() => {})
     fetch('/api/portal/payment-info').then(r => r.json()).then((d) => !d.error && setPayInfo(d)).catch(() => {})
   }
 
-  // Balance breakdown for the client: total leads added vs used.
-  const added = (bal?.ledger ?? []).filter(l => l.amount > 0).reduce((s, l) => s + l.amount, 0)
-  const used = Math.abs((bal?.ledger ?? []).filter(l => l.amount < 0).reduce((s, l) => s + l.amount, 0))
+  // Balance breakdown — server-computed totals (ledger list is capped at 500).
+  const added = bal?.added ?? 0
+  const used = bal?.used ?? 0
   useEffect(() => { load() }, [])
 
   async function handleLogout() { await fetch('/api/logout', { method: 'POST' }); router.push('/login') }
@@ -192,8 +194,8 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
               <div className="px-5 py-3 border-b border-gray-100"><h2 className="text-sm font-semibold text-[#050c29]">Lead activity</h2></div>
               <div className="max-h-[280px] overflow-y-auto divide-y divide-gray-50">
                 {!bal ? <p className="px-5 py-6 text-center text-gray-400 text-sm">Loading…</p>
-                : bal.ledger.length === 0 ? <p className="px-5 py-8 text-center text-gray-400 text-sm">No activity yet</p>
-                : bal.ledger.map(l => (
+                : (bal.ledger ?? []).length === 0 ? <p className="px-5 py-8 text-center text-gray-400 text-sm">No activity yet</p>
+                : (bal.ledger ?? []).map(l => (
                   <div key={l.id} className="flex items-center gap-3 px-5 py-2.5">
                     <span className="text-xs text-gray-400 w-20 shrink-0">{fmtDate(l.created_at)}</span>
                     <span className="flex-1 text-sm text-gray-700 truncate">{l.description || LEDGER_LABEL[l.type] || l.type}</span>

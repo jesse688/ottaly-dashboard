@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import pool from '@/lib/db'
+import pool, { ready } from '@/lib/db'
 import { notifyClientOfLead } from '@/lib/email'
 
 // GET /api/cron/notify-leads?secret=<CRON_SECRET>
@@ -12,15 +12,17 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  await ready()
   const missing = await pool.query(
-    `SELECT l.id, l.workspace_id
+    `SELECT DISTINCT l.id, l.workspace_id, COALESCE(l.first_replied_at, l.created_at) AS delivered_at
        FROM esp_leads l
        JOIN portal_clients pc ON pc.workspace_id = l.workspace_id AND pc.active = true
-      WHERE l.source = 'plusvibe' AND l.label = 'INTERESTED'
-        AND NOT EXISTS (
-          SELECT 1 FROM portal_lead_notifications n
-           WHERE n.client_id = pc.id AND n.lead_id = l.id
-        )
+       LEFT JOIN portal_lead_notifications n ON n.client_id = pc.id AND n.lead_id = l.id
+      WHERE l.source = 'plusvibe' AND (l.label = 'INTERESTED' OR l.status = 'INTERESTED')
+        -- never email a client about leads that predate their account (blast guard)
+        AND COALESCE(l.first_replied_at, l.created_at) >= pc.created_at
+        AND (n.id IS NULL OR (n.status = 'failed' AND n.attempts < 5 AND n.next_retry_at <= NOW()))
+      ORDER BY delivered_at DESC NULLS LAST
       LIMIT 25`
   )
 

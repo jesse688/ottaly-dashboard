@@ -3,6 +3,7 @@ import pool from '@/lib/db'
 import crypto from 'crypto'
 import { notifyClientOfLead } from '@/lib/email'
 import { enrichLead } from '@/lib/sync'
+import { ready } from '@/lib/db'
 
 interface PlusVibeWebhookPayload {
   event: string
@@ -26,8 +27,10 @@ interface PlusVibeWebhookPayload {
 function verifySignature(payload: string, signature: string): boolean {
   const secret = process.env.PLUSVIBE_WEBHOOK_SECRET
   if (!secret) {
-    console.warn('[webhook] PLUSVIBE_WEBHOOK_SECRET not configured, skipping signature verification')
-    return true
+    // Fail CLOSED: without a secret anyone could forge leads + trigger client
+    // emails. The admin webhook + sweeper still ingest leads, so nothing is lost.
+    console.error('[webhook] PLUSVIBE_WEBHOOK_SECRET not configured — rejecting webhook')
+    return false
   }
   const computed = crypto.createHmac('sha256', secret).update(payload).digest('hex')
   const exp = Buffer.from(computed)
@@ -41,6 +44,7 @@ function verifySignature(payload: string, signature: string): boolean {
 // POST /api/webhooks/plusvibe
 // Receives real-time updates from PlusVibe (lead status, label, reply)
 export async function POST(req: NextRequest) {
+  await ready() // never race table creation / the notified-leads seed
   const body = await req.text()
   const signature = req.headers.get('x-plusvibe-signature') || ''
 
@@ -81,26 +85,26 @@ export async function POST(req: NextRequest) {
       const tsIdx = n + 1, idIdx = n + 2, wsIdx = n + 3
       const params = [...Object.values(updates), new Date().toISOString(), event.lead_id, event.workspace_id]
 
-      // Upsert: update if exists, insert if not
-      await pool.query(`
+      // Upsert: update if exists, insert if not (branch on rowCount — no
+      // separate COUNT query that could race a concurrent insert)
+      const updateRes = await pool.query(`
         UPDATE esp_leads
         SET ${setClauses}, updated_at = $${tsIdx}
         WHERE id = $${idIdx} AND workspace_id = $${wsIdx}
       `, params)
 
-      // If no rows updated, insert
-      const updateRes = await pool.query(`
-        SELECT COUNT(*) FROM esp_leads WHERE id = $1 AND workspace_id = $2
-      `, [event.lead_id, event.workspace_id])
-
-      if (Number(updateRes.rows[0].count) === 0) {
+      if ((updateRes.rowCount ?? 0) === 0) {
         await pool.query(`
           INSERT INTO esp_leads (
             id, workspace_id, campaign_id, source,
             email, first_name, last_name, company_name, status, label,
             first_replied_at, created_at, updated_at
           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
-          ON CONFLICT (id) DO NOTHING
+          ON CONFLICT (id) DO UPDATE SET
+            status = COALESCE(EXCLUDED.status, esp_leads.status),
+            label = COALESCE(EXCLUDED.label, esp_leads.label),
+            first_replied_at = COALESCE(esp_leads.first_replied_at, EXCLUDED.first_replied_at),
+            updated_at = NOW()
         `, [
           event.lead_id,
           event.workspace_id,
@@ -139,6 +143,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true })
   } catch (err) {
     console.error('[webhook] error:', err)
-    return NextResponse.json({ error: String(err) }, { status: 500 })
+    return NextResponse.json({ error: 'Webhook processing failed' }, { status: 500 })
   }
 }

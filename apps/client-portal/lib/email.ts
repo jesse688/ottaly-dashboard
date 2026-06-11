@@ -33,21 +33,30 @@ function firstName(contactName: string | null, companyName: string | null): stri
   return (contactName || companyName || '').trim().split(/\s+/)[0] || 'there'
 }
 
-// Fill {merge_tags} in a template string.
+// Escape HTML so lead-controlled content (names, messages) can never inject
+// markup into the email we send.
+function esc(v: string): string {
+  return v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+}
+
+// Fill {merge_tags} in a template string (values HTML-escaped).
 function render(tpl: string, vars: Record<string, string>): string {
-  return tpl.replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? '')
+  return tpl.replace(/\{(\w+)\}/g, (_, k) => esc(vars[k] ?? ''))
 }
 
 // Low-level send via Resend. No-ops (logs) if RESEND_API_KEY isn't configured.
-export async function sendEmail(to: string, subject: string, text: string): Promise<{ ok: boolean; reason?: string }> {
+export async function sendEmail(to: string, subject: string, text: string, idempotencyKey?: string): Promise<{ ok: boolean; reason?: string }> {
   const key = process.env.RESEND_API_KEY
   if (!key) { console.warn('[email] RESEND_API_KEY not set — skipping send'); return { ok: false, reason: 'no_api_key' } }
   if (!to) return { ok: false, reason: 'no_recipient' }
   try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }
+    if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      headers,
       body: JSON.stringify({ from: FROM, to, subject, html: text.replace(/\n/g, '<br>') }),
+      signal: AbortSignal.timeout(15000),
     })
     if (!res.ok) { const body = await res.text(); console.error('[email] resend error:', res.status, body); return { ok: false, reason: `resend_${res.status}` } }
     return { ok: true }
@@ -82,8 +91,9 @@ async function getLeadMessage(workspaceId: string, leadEmail: string | null): Pr
     let msg = (r.rows[0]?.body_text || r.rows[0]?.content_preview || '') as string
     if (!msg) {
       const { data } = await getEmails(workspaceId, { lead: leadEmail })
-      const inbound = data.filter(m => (m.direction ?? 'IN') === 'IN')
-      const last = inbound[inbound.length - 1] || data[data.length - 1]
+      const inbound = data.filter(m => m.direction === 'IN')
+        .sort((a, b) => String(a.timestamp_created ?? '').localeCompare(String(b.timestamp_created ?? '')))
+      const last = inbound[inbound.length - 1]
       msg = last?.body?.text || last?.content_preview || ''
     }
     return cleanMessage(msg)
@@ -124,14 +134,27 @@ export async function notifyClientOfLead(workspaceId: string, leadId: string): P
 
   let anySent = false
   for (const c of clients.rows) {
-    // Claim the (client, lead) slot atomically — only the first claim sends.
+    // Claim the (client, lead) slot atomically. First claim sends; a 'failed'
+    // claim can be re-claimed with backoff up to 5 attempts. Sent/sending rows
+    // are never re-claimed, so a lead can never produce two emails.
     const claim = await pool.query(
-      `INSERT INTO portal_lead_notifications (client_id, lead_id) VALUES ($1, $2)
-       ON CONFLICT (client_id, lead_id) DO NOTHING RETURNING id`,
+      `INSERT INTO portal_lead_notifications (client_id, lead_id, status, attempts, next_retry_at)
+       VALUES ($1, $2, 'sending', 1, NOW() + interval '5 minutes')
+       ON CONFLICT (client_id, lead_id) DO UPDATE
+         SET status = 'sending',
+             attempts = portal_lead_notifications.attempts + 1,
+             next_retry_at = NOW() + (interval '5 minutes' * (portal_lead_notifications.attempts + 1))
+       WHERE portal_lead_notifications.status = 'failed'
+         AND portal_lead_notifications.attempts < 5
+         AND portal_lead_notifications.next_retry_at <= NOW()
+       RETURNING id`,
       [c.id, leadId]
     )
-    if (!claim.rows.length) continue // already notified for this lead
-    if (!c.email) continue
+    if (!claim.rows.length) continue // already sent/sending, or retries exhausted
+    if (!c.email) {
+      await pool.query(`UPDATE portal_lead_notifications SET status = 'sent' WHERE client_id = $1 AND lead_id = $2`, [c.id, leadId]).catch(() => {})
+      continue
+    }
 
     await reconcileLeadCharges(c.id)
     const balance = await getBalance(c.id)
@@ -139,11 +162,14 @@ export async function notifyClientOfLead(workspaceId: string, leadId: string): P
     // Only include the lead's message on the normal (unlocked) email.
     const leadMessage = locked ? '' : await getLeadMessage(workspaceId, lead.rows[0].email)
     const { subject, body } = await buildLeadEmail(c, lead.rows[0], balance, locked, leadMessage)
-    const res = await sendEmail(c.email, subject, body)
-    if (res.ok) { anySent = true }
-    else {
-      // Send failed — release the claim so a later run (cron) can retry.
-      await pool.query(`DELETE FROM portal_lead_notifications WHERE client_id = $1 AND lead_id = $2`, [c.id, leadId]).catch(() => {})
+    // Idempotency-Key means even an ambiguous failure (timeout after Resend
+    // accepted) can be retried without a duplicate landing in the inbox.
+    const res = await sendEmail(c.email, subject, body, `lead/${c.id}/${leadId}`)
+    if (res.ok) {
+      anySent = true
+      await pool.query(`UPDATE portal_lead_notifications SET status = 'sent', sent_at = NOW() WHERE client_id = $1 AND lead_id = $2`, [c.id, leadId]).catch(() => {})
+    } else {
+      await pool.query(`UPDATE portal_lead_notifications SET status = 'failed' WHERE client_id = $1 AND lead_id = $2`, [c.id, leadId]).catch(() => {})
     }
   }
   return { sent: anySent }

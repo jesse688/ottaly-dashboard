@@ -32,6 +32,14 @@ export async function GET() {
     const dealsWon = Number(pipe.rows[0]?.deals_won ?? 0)
     const leadsDelivered = ledgerAll.filter(l => l.type === 'lead_charge').length
 
+    // Server-side added/used totals (the ledger sent to the client is capped).
+    const tot = await pool.query(
+      `SELECT COALESCE(SUM(amount) FILTER (WHERE amount > 0), 0) AS added,
+              ABS(COALESCE(SUM(amount) FILTER (WHERE amount < 0), 0)) AS used
+         FROM portal_ledger WHERE client_id = $1`,
+      [session.clientId]
+    )
+
     const spent = leadsDelivered * costPerLead
     const roiRaw = spent > 0 ? Math.round((pipeline - spent) / spent * 100) : null
 
@@ -45,6 +53,8 @@ export async function GET() {
 
     return NextResponse.json({
       balance,                 // leads left (always)
+      added: Number(tot.rows[0]?.added ?? 0),
+      used: Number(tot.rows[0]?.used ?? 0),
       lowThreshold,            // warn "Low on leads" at/below this (always)
       leadsDelivered,          // always (positive framing)
       pipeline,                // always (positive)

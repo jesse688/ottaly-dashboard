@@ -9,6 +9,25 @@ function minOf(row: { min_topup?: number | null } | undefined): number {
   return Number.isFinite(n) && n > 0 ? n : 10
 }
 
+interface ClientPricingRow {
+  cost_per_lead?: number | string | null
+  currency?: string | null
+  topup_buckets?: { leads: number; pricePerLead: number }[] | null
+  min_topup?: number | null
+}
+
+// One pricing rule for create AND edit: bucket amounts use the bucket's price,
+// custom amounts must clear the per-client minimum and use cost_per_lead.
+export function priceTopup(row: ClientPricingRow | undefined, amt: number):
+  { pricePerLead: number; total: number; currency: string } | { error: string } {
+  const buckets = Array.isArray(row?.topup_buckets) ? row.topup_buckets : []
+  const bucket = buckets.find(b => Number(b.leads) === amt)
+  if (!bucket && amt < minOf(row)) return { error: `The minimum top-up is ${minOf(row)} leads.` }
+  const pricePerLead = bucket ? Number(bucket.pricePerLead) : Number(row?.cost_per_lead ?? 0)
+  if (!Number.isFinite(pricePerLead) || pricePerLead < 0) return { error: 'Pricing is not configured for this amount — contact us.' }
+  return { pricePerLead, total: amt * pricePerLead, currency: row?.currency ?? 'GBP' }
+}
+
 // POST — client requests a balance top-up. Enforces the minimum, records a
 // pending request, and generates a draft invoice. Admin confirms -> credits leads.
 export async function POST(req: NextRequest) {
@@ -20,19 +39,10 @@ export async function POST(req: NextRequest) {
   if (!amt || amt <= 0) return NextResponse.json({ error: 'Invalid amount' }, { status: 400 })
 
   const client = await pool.query('SELECT cost_per_lead, currency, topup_buckets, min_topup FROM portal_clients WHERE id = $1', [session.clientId])
-  const costPerLead = Number(client.rows[0]?.cost_per_lead ?? 0)
-  const currency = client.rows[0]?.currency ?? 'GBP'
-  const buckets: { leads: number; pricePerLead: number }[] = Array.isArray(client.rows[0]?.topup_buckets) ? client.rows[0].topup_buckets : []
-
-  // If the requested amount matches a preset bucket, use the bucket's price.
-  // Otherwise it's a custom amount and must clear this client's minimum.
-  const bucket = buckets.find(b => Number(b.leads) === amt)
-  if (!bucket) {
-    const min = minOf(client.rows[0])
-    if (amt < min) return NextResponse.json({ error: `The minimum top-up is ${min} leads.` }, { status: 400 })
-  }
-  const pricePerLead = bucket ? Number(bucket.pricePerLead) : costPerLead
-  const invoiceAmount = amt * pricePerLead
+  const priced = priceTopup(client.rows[0], amt)
+  if ('error' in priced) return NextResponse.json({ error: priced.error }, { status: 400 })
+  const currency = priced.currency
+  const invoiceAmount = priced.total
 
   // Draft invoice for the requested leads (so the client has something to pay).
   const inv = await pool.query(

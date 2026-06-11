@@ -18,7 +18,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const data: Buffer = row.file_data
   return new NextResponse(new Uint8Array(data), {
     headers: {
-      'Content-Type': row.file_mime || 'application/pdf',
+      // Whitelisted type + nosniff so an uploaded file can never execute in the portal origin.
+      'Content-Type': ['application/pdf', 'image/png', 'image/jpeg'].includes(row.file_mime) ? row.file_mime : 'application/pdf',
+      'X-Content-Type-Options': 'nosniff',
       'Content-Disposition': `inline; filename="${(row.file_name || 'invoice.pdf').replace(/"/g, '')}"`,
     },
   })

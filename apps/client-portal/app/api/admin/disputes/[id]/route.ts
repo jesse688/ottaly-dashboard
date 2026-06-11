@@ -29,12 +29,14 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   const dispute = disputeRes.rows[0] as DisputeRow
 
-  await pool.query(
+  // Only pending disputes can transition — approve/deny twice or flip later is rejected.
+  const upd = await pool.query(
     `UPDATE portal_lead_disputes
      SET status = $1, admin_note = $2, resolved_at = NOW()
-     WHERE id = $3`,
+     WHERE id = $3 AND status = 'pending'`,
     [action, note ?? null, id]
   )
+  if ((upd.rowCount ?? 0) === 0) return NextResponse.json({ error: 'Already resolved' }, { status: 409 })
 
   if (action === 'approved') {
     // Remove from the client's lead view AND refund the lead credit (idempotent).

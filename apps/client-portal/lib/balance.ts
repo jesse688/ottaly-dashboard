@@ -90,9 +90,13 @@ export async function reconcileLeadCharges(clientId: string): Promise<number> {
 
 // Credit +1 lead back when a non-lead dispute is approved. Idempotent.
 export async function refundLead(clientId: string, leadId: string): Promise<void> {
+  // Only refund a lead that was actually charged — never mint credits.
   await pool.query(
     `INSERT INTO portal_ledger (client_id, type, amount, lead_id, description, created_by)
-     VALUES ($1, 'dispute_refund', 1, $2, 'Refund: non-lead approved', 'admin')
+     SELECT $1, 'dispute_refund', 1, $2, 'Refund: non-lead approved', 'admin'
+      WHERE EXISTS (
+        SELECT 1 FROM portal_ledger WHERE client_id = $1 AND lead_id = $2 AND type = 'lead_charge'
+      )
      ON CONFLICT (client_id, lead_id) WHERE type = 'dispute_refund' DO NOTHING`,
     [clientId, leadId]
   )
@@ -100,10 +104,11 @@ export async function refundLead(clientId: string, leadId: string): Promise<void
 
 // amount = number of LEADS to add to the balance.
 export async function addTopup(clientId: string, leads: number, note?: string): Promise<void> {
+  if (!Number.isFinite(leads) || leads <= 0) throw new Error(`addTopup: invalid lead count ${leads}`)
   await pool.query(
     `INSERT INTO portal_ledger (client_id, type, amount, description, created_by)
      VALUES ($1, 'topup', $2, $3, 'admin')`,
-    [clientId, Math.abs(leads), note ?? 'Top-up']
+    [clientId, Math.floor(leads), note ?? 'Top-up']
   )
 }
 

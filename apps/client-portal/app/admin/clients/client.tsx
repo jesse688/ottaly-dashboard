@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, type FormEvent } from 'react'
+import { Fragment, useEffect, useState, type FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
 
 interface Bucket { leads: number; pricePerLead: number }
@@ -135,8 +135,8 @@ export function AdminClientsClient() {
   }
 
   useEffect(() => {
-    fetch('/api/admin/clients').then(r => r.json()).then(setClients)
-    fetch('/api/admin/workspaces').then(r => r.json()).then(setWorkspaces)
+    fetch('/api/admin/clients').then(r => r.json()).then(d => { if (Array.isArray(d)) setClients(d) }).catch(() => {})
+    fetch('/api/admin/workspaces').then(r => r.json()).then(d => { if (Array.isArray(d)) setWorkspaces(d) }).catch(() => {})
     fetch('/api/admin/sync-status').then(r => r.json()).then(d => !d.error && setSyncStatus(d)).catch(() => {})
     loadNotifs()
   }, [])
@@ -173,13 +173,13 @@ export function AdminClientsClient() {
       const data = await res.json() as { error?: string; email?: string; inviteUrl?: string }
       if (!res.ok) { setError(data.error ?? 'Error'); return }
       setForm({ username:'', code:'', email:'', workspaceId:'', companyName:'', contactName:'', costPerLead:'', lowLeadsThreshold:'5' }); setShowForm(false)
-      fetch('/api/admin/clients').then(r => r.json()).then(setClients)
+      fetch('/api/admin/clients').then(r => r.json()).then(d => { if (Array.isArray(d)) setClients(d) }).catch(() => {})
       prompt(`Client created. Send ${data.email} this link to set their own access code:`, data.inviteUrl ?? '')
     } finally { setSaving(false) }
   }
   async function toggleActive(c: PortalClient) {
     await fetch(`/api/admin/clients/${c.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: !c.active }) })
-    fetch('/api/admin/clients').then(r => r.json()).then(setClients)
+    fetch('/api/admin/clients').then(r => r.json()).then(d => { if (Array.isArray(d)) setClients(d) }).catch(() => {})
   }
   async function viewAsClient(c: PortalClient) {
     // Mint a client session for this client, then open their portal in a new tab.
@@ -216,7 +216,7 @@ export function AdminClientsClient() {
   async function handleDelete(id: string) {
     if (!confirm('Delete this client login?')) return
     await fetch(`/api/admin/clients/${id}`, { method: 'DELETE' })
-    fetch('/api/admin/clients').then(r => r.json()).then(setClients)
+    fetch('/api/admin/clients').then(r => r.json()).then(d => { if (Array.isArray(d)) setClients(d) }).catch(() => {})
   }
 
   // ── Settings modal ──
@@ -230,8 +230,11 @@ export function AdminClientsClient() {
       fetch(`/api/admin/clients/${c.id}/fields`),
     ])
     const [ld, fd] = await Promise.all([lr.json(), fr.json()])
-    setLabelData(ld as { labels: { label: string; count: number }[]; hiddenLabels: string[] })
-    setFieldData(fd as { hiddenFields: string[] })
+    const ldT = ld as { labels?: { label: string; count: number }[]; hiddenLabels?: string[] }
+    if (Array.isArray(ldT?.labels)) setLabelData(ldT as { labels: { label: string; count: number }[]; hiddenLabels: string[] })
+    else setLabelData({ labels: [], hiddenLabels: [] })
+    const fdT = fd as { hiddenFields?: string[] }
+    setFieldData(Array.isArray(fdT?.hiddenFields) ? (fdT as { hiddenFields: string[] }) : { hiddenFields: [] })
   }
   async function loadLedger(clientId: string) {
     setLedgerData(null)
@@ -244,7 +247,7 @@ export function AdminClientsClient() {
     const cpl = Number(cplEdit) || 0
     await fetch(`/api/admin/clients/${settingsClient.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ costPerLead: cpl }) })
     setSettingsClient({ ...settingsClient, cost_per_lead: cpl })
-    fetch('/api/admin/clients').then(r => r.json()).then(setClients)
+    fetch('/api/admin/clients').then(r => r.json()).then(d => { if (Array.isArray(d)) setClients(d) }).catch(() => {})
   }
   async function saveBuckets() {
     if (!settingsClient) return
@@ -256,7 +259,7 @@ export function AdminClientsClient() {
     await fetch(`/api/admin/clients/${settingsClient.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topupBuckets: clean, minTopup: min }) })
     setBucketEdit(clean)
     setSettingsClient({ ...settingsClient, topup_buckets: clean, min_topup: min })
-    fetch('/api/admin/clients').then(r => r.json()).then(setClients)
+    fetch('/api/admin/clients').then(r => r.json()).then(d => { if (Array.isArray(d)) setClients(d) }).catch(() => {})
     alert('Top-up settings saved.')
   }
   async function saveSpendVisibility(mode: string) {
@@ -561,8 +564,8 @@ export function AdminClientsClient() {
                   )) : clients.length === 0 ? (
                     <tr><td colSpan={6} className="px-4 py-10 text-center text-gray-400 text-sm">No clients yet</td></tr>
                   ) : clients.map(client => (
-                    <>
-                      <tr key={client.id} className="border-b border-gray-50 hover:bg-gray-50">
+                    <Fragment key={client.id}>
+                      <tr className="border-b border-gray-50 hover:bg-gray-50">
                         <td className="px-4 py-3 font-medium text-gray-900">{client.company_name}</td>
                         <td className="px-4 py-3 text-gray-600 text-xs font-mono">{client.username ?? client.email ?? '—'}</td>
                         <td className="px-4 py-3 text-gray-600 text-xs">{client.workspace_name ?? client.workspace_id.slice(0,8)+'…'}</td>
@@ -602,7 +605,7 @@ export function AdminClientsClient() {
                           </td>
                         </tr>
                       )}
-                    </>
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
@@ -773,7 +776,7 @@ export function AdminClientsClient() {
                   ) : topups.map(t => (
                     <tr key={t.id} className="border-b border-gray-50 hover:bg-gray-50">
                       <td className="px-4 py-3 font-medium text-gray-900 text-xs">{t.company_name}</td>
-                      <td className="px-4 py-3 text-sm font-semibold text-gray-900">{fmt(t.amount)}</td>
+                      <td className="px-4 py-3 text-sm font-semibold text-gray-900">{Number(t.amount).toLocaleString()} leads</td>
                       <td className="px-4 py-3 text-xs text-gray-700 max-w-xs truncate">{t.note ?? '—'}</td>
                       <td className="px-4 py-3 text-xs text-gray-500">{fmtDate(t.created_at)}</td>
                       <td className="px-4 py-3">

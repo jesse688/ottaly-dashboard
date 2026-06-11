@@ -78,6 +78,12 @@ export async function POST(req: NextRequest) {
   if (!clientId || !description || amount == null) {
     return NextResponse.json({ error: 'clientId, description, and amount are required' }, { status: 400 })
   }
+  if (!Number.isFinite(Number(amount)) || Number(amount) < 0) {
+    return NextResponse.json({ error: 'Amount must be a non-negative number' }, { status: 400 })
+  }
+  if (status !== undefined && !['unpaid', 'paid', 'void'].includes(status)) {
+    return NextResponse.json({ error: 'Invalid status' }, { status: 400 })
+  }
 
   const res = await pool.query(
     `INSERT INTO portal_invoices (client_id, invoice_number, description, amount, currency, status, due_date)

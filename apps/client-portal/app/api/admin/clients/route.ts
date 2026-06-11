@@ -53,10 +53,22 @@ export async function POST(req: NextRequest) {
       [email, email, workspaceId, companyName, contactName || null, Number(b.costPerLead) || 0, Number.isFinite(Number(b.lowLeadsThreshold)) ? Math.max(0, Math.floor(Number(b.lowLeadsThreshold))) : 5, inviteToken]
     )
 
+
+    // Blast guard: mark every lead that ALREADY exists in this workspace as
+    // notified, so the new client only gets emails for leads arriving from now on.
+    const seedNotified = () => pool.query(
+      `INSERT INTO portal_lead_notifications (client_id, lead_id, status)
+         SELECT $1, l.id, 'sent' FROM esp_leads l
+          WHERE l.workspace_id = $2 AND l.source = 'plusvibe' AND l.label = 'INTERESTED'
+         ON CONFLICT (client_id, lead_id) DO NOTHING`,
+      [res.rows[0].id, workspaceId]
+    )
+    await seedNotified()
+
     // Auto-backfill this client's workspace (leads + real email threads) so they
     // have data immediately. Runs in the background — client creation returns now.
     backfillWorkspace(workspaceId)
-      .then(r => console.log(`[client-create] backfilled ${companyName}:`, r))
+      .then(async r => { await seedNotified().catch(() => {}); console.log(`[client-create] backfilled ${companyName}:`, r) })
       .catch(e => console.error(`[client-create] backfill failed for ${companyName}:`, e))
 
     // Best-effort: register the PlusVibe lead webhook for this workspace. No-ops

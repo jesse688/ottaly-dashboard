@@ -4,15 +4,20 @@ declare global {
   // eslint-disable-next-line no-var
   var _portalPgPool: Pool | undefined
   var _portalMigrated: boolean | undefined
+  var _portalMigratedPromise: Promise<void> | undefined
 }
 
 function createPool() {
-  return new Pool({
+  const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     max: 5,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 5000,
   })
+  // A dropped idle connection (DB restart / network blip) emits 'error' on the
+  // pool; without a listener Node kills the process. Log and let pg recover.
+  pool.on('error', (err) => console.error('[db] idle client error:', err.message))
+  return pool
 }
 
 const pool = globalThis._portalPgPool ?? createPool()
@@ -20,8 +25,6 @@ if (process.env.NODE_ENV !== 'production') globalThis._portalPgPool = pool
 
 // Run migration once per process start
 async function runMigration() {
-  if (globalThis._portalMigrated) return
-  globalThis._portalMigrated = true
   try {
     const statements = [
       `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS hidden_fields TEXT[] DEFAULT '{}'`,
@@ -187,6 +190,11 @@ async function runMigration() {
         sent_at TIMESTAMPTZ DEFAULT NOW(),
         UNIQUE (client_id, lead_id)
       )`,
+      // Retry state: failed sends keep their claim (no double-send on ambiguous
+      // failures) and retry with backoff, capped — instead of delete-and-respin.
+      `ALTER TABLE portal_lead_notifications ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'sent'`,
+      `ALTER TABLE portal_lead_notifications ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0`,
+      `ALTER TABLE portal_lead_notifications ADD COLUMN IF NOT EXISTS next_retry_at TIMESTAMPTZ`,
 
       // Mark every lead that ALREADY exists as "notified" so enabling email
       // notifications doesn't blast clients with their whole back-catalogue —
@@ -223,11 +231,20 @@ async function runMigration() {
     console.log('[db] migration complete')
   } catch (err) {
     console.error('[db] migration error:', err)
-    globalThis._portalMigrated = false
+    // Clear the cached promise so the next ready() call retries the migration.
+    globalThis._portalMigratedPromise = undefined
+    throw err
   }
 }
 
+// Awaitable migration guard — webhook/cron/notify paths await this so they never
+// race table creation or the notified-leads seed on a cold start.
+export function ready(): Promise<void> {
+  globalThis._portalMigratedPromise ??= runMigration()
+  return globalThis._portalMigratedPromise.catch(() => {})
+}
+
 // Kick off migration immediately (non-blocking)
-runMigration()
+void ready()
 
 export default pool
