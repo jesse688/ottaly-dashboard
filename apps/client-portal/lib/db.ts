@@ -182,6 +182,14 @@ export function ready(): Promise<void> {
 }
 
 // Kick off migration immediately (non-blocking)
-ready()
+ready().then(() => {
+  // Auto-register Bison webhook after DB is ready (idempotent)
+  import('./bison').then(({ registerWebhook }) => {
+    registerWebhook().then(r => {
+      if (r.ok) console.log('[bison] webhook', r.reason)
+      else console.warn('[bison] webhook register failed:', r.reason)
+    })
+  }).catch(() => {})
+})
 
 export default pool

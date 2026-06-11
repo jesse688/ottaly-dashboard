@@ -14425,6 +14425,29 @@ function scheduleAudienceScoring(pgdb) {
   }
   scheduleEspSync();
   startSlackBot();
+
+  // Auto-register Bison webhooks on startup (idempotent — checks before creating)
+  setTimeout(async function() {
+    try {
+      const wsRaw = await bisonFetch('/api/workspaces/v1.1');
+      const workspaces = (wsRaw.data || []).map(normBisonWs);
+      for (const ws of workspaces) {
+        await bisonSwitch(ws.id);
+        const existing = await bisonFetch('/api/webhook-url').catch(() => ({ data: [] }));
+        const adminUrl = process.env.BISON_WEBHOOK_ADMIN_URL || 'https://ottaly-git.oix3xv.easypanel.host/webhook/plusvibe-reply';
+        const already = (existing.data || []).some(function(h) { return h.url === adminUrl; });
+        if (!already) {
+          await bisonFetch('/api/webhook-url', { method: 'POST', body: { name: 'Ottaly Admin', url: adminUrl, events: ['lead_interested', 'lead_replied', 'email_sent', 'email_bounced', 'untracked_reply_received'] } });
+          console.log('[bison] webhook registered for workspace', ws.id);
+        } else {
+          console.log('[bison] webhook already exists for workspace', ws.id);
+        }
+      }
+    } catch (e) {
+      console.warn('[bison] webhook auto-register failed:', e.message);
+    }
+  }, 5000);
+
   const server = app.listen(PORT, () => console.log(`Ottaly running on http://localhost:${PORT}`));
 
   server.on('upgrade', (req, socket, head) => {
