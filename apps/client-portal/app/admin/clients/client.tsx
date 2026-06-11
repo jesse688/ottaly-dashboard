@@ -101,7 +101,18 @@ export function AdminClientsClient() {
   const [showTpl, setShowTpl]                 = useState(false)
   const [tplSaved, setTplSaved]               = useState(false)
 
+  // Speed-to-Lead report
+  const [speed, setSpeed]                     = useState<{ goalMinutes: number; rows: { id: string; company_name: string; avg_secs: number; n: number }[] } | null>(null)
+  const [showSpeed, setShowSpeed]             = useState(false)
+
   const router = useRouter()
+
+  function fmtDur(secs: number) {
+    if (secs < 60) return `${secs}s`
+    const m = Math.round(secs / 60); if (m < 60) return `${m}m`
+    const h = Math.floor(m / 60), rm = m % 60; if (h < 24) return rm ? `${h}h ${rm}m` : `${h}h`
+    return `${Math.floor(h / 24)}d`
+  }
 
   async function loadTemplates() {
     const r = await fetch('/api/admin/settings').then(r => r.json()).catch(() => null)
@@ -274,6 +285,12 @@ export function AdminClientsClient() {
     await fetch(`/api/admin/invoices/${id}`, { method: 'DELETE' })
     fetch('/api/admin/invoices').then(r => r.json()).then((d: Invoice[] | { error: string }) => { if (Array.isArray(d)) setInvoices(d) })
   }
+  async function uploadInvoiceFile(id: string, file: File) {
+    const fd = new FormData(); fd.append('file', file)
+    const res = await fetch(`/api/admin/invoices/${id}/file`, { method: 'POST', body: fd })
+    const d = await res.json()
+    alert(res.ok ? `Attached ${d.file_name} — the client can now download it.` : (d.error ?? 'Upload failed.'))
+  }
 
   async function handleLogout() {
     await fetch('/api/admin/auth', { method: 'DELETE' }); router.push('/admin/login')
@@ -401,10 +418,32 @@ export function AdminClientsClient() {
             <div className="flex items-center justify-between mb-5">
               <h1 className="text-lg font-semibold text-gray-900">Client Logins</h1>
               <div className="flex items-center gap-2">
+                <button onClick={() => { setShowSpeed(v => { const n = !v; if (n && !speed) fetch('/api/admin/speed').then(r => r.json()).then(d => !d.error && setSpeed(d)).catch(() => {}); return n }) }} className="px-4 py-2 border border-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">Speed to Lead</button>
                 <button onClick={() => { setShowTpl(v => { const n = !v; if (n && !tpl) loadTemplates(); return n }) }} className="px-4 py-2 border border-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">Notification emails</button>
                 <button onClick={() => { setShowForm(v => !v); setError('') }} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg">+ Add client</button>
               </div>
             </div>
+
+            {showSpeed && (
+              <div className="bg-white border border-gray-200 rounded-xl p-5 mb-5">
+                <h2 className="text-sm font-semibold text-gray-900 mb-1">Speed to Lead <span className="text-gray-400 font-normal">— goal 5 min</span></h2>
+                <p className="text-xs text-gray-500 mb-3">Average time from a lead replying to the client responding.</p>
+                {!speed ? <p className="text-sm text-gray-400">Loading…</p> : speed.rows.length === 0 ? <p className="text-sm text-gray-400">No responses measured yet.</p> : (
+                  <table className="w-full text-sm">
+                    <thead><tr className="border-b border-gray-100 text-left text-xs text-gray-500 uppercase">{['Client','Avg speed','Leads'].map(h => <th key={h} className="py-2 pr-4">{h}</th>)}</tr></thead>
+                    <tbody>
+                      {speed.rows.map(row => (
+                        <tr key={row.id} className="border-b border-gray-50">
+                          <td className="py-2 pr-4 text-gray-800">{row.company_name}</td>
+                          <td className={`py-2 pr-4 font-semibold ${row.avg_secs <= speed.goalMinutes * 60 ? 'text-green-600' : 'text-amber-600'}`}>{fmtDur(row.avg_secs)}</td>
+                          <td className="py-2 pr-4 text-gray-500">{row.n}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
 
             {showTpl && (
               <div className="bg-white border border-gray-200 rounded-xl p-5 mb-5">
@@ -415,6 +454,10 @@ export function AdminClientsClient() {
                 <p className="text-xs text-gray-500 mb-4">Merge tags: <code className="bg-gray-100 px-1 rounded">{'{first_name}'}</code> <code className="bg-gray-100 px-1 rounded">{'{lead_name}'}</code> <code className="bg-gray-100 px-1 rounded">{'{lead_company}'}</code> <code className="bg-gray-100 px-1 rounded">{'{balance}'}</code> <code className="bg-gray-100 px-1 rounded">{'{login_url}'}</code></p>
                 {!tpl ? <p className="text-sm text-gray-400">Loading…</p> : (
                   <div className="space-y-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-1">Minimum top-up (leads)</label>
+                      <input type="number" min="1" value={tpl.min_topup ?? '10'} onChange={e => setTpl({ ...tpl, min_topup: e.target.value })} className="w-32 px-3 py-2 rounded-lg border border-gray-200 text-sm" />
+                    </div>
                     <div className="grid md:grid-cols-2 gap-4">
                       <div>
                         <p className="text-xs font-semibold text-gray-700 mb-1">Normal — when they have leads left</p>
@@ -644,6 +687,11 @@ export function AdminClientsClient() {
                         <div className="flex items-center gap-2">
                           {inv.status === 'unpaid' && <button onClick={() => markPaid(inv.id)} className="text-xs text-green-600 hover:text-green-800">Mark paid</button>}
                           {inv.status === 'unpaid' && <span className="text-gray-200">|</span>}
+                          <label className="text-xs text-indigo-600 hover:text-indigo-800 cursor-pointer">
+                            Upload PDF
+                            <input type="file" accept="application/pdf,image/*" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) uploadInvoiceFile(inv.id, f); e.target.value = '' }} />
+                          </label>
+                          <span className="text-gray-200">|</span>
                           <button onClick={() => deleteInvoice(inv.id)} className="text-xs text-red-500 hover:text-red-700">Delete</button>
                         </div>
                       </td>

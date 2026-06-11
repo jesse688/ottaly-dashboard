@@ -75,6 +75,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   })
 
   // 3. Notify team (always — guarantees the reply is actioned)
+  // Stamp the client's first response time (for Speed to Lead) — once per lead.
+  await pool.query(
+    `INSERT INTO portal_lead_data (lead_id, client_id, first_responded_at)
+     VALUES ($1, $2, NOW())
+     ON CONFLICT (lead_id, client_id) DO UPDATE
+       SET first_responded_at = COALESCE(portal_lead_data.first_responded_at, NOW())`,
+    [id, session.clientId]
+  ).catch(() => {})
+
   const who = [lead.first_name, lead.last_name].filter(Boolean).join(' ') || lead.email
   await notifyAdmin({
     clientId: session.clientId,

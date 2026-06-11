@@ -44,14 +44,17 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (!await ownsLead(id, session.workspaceId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const body = await req.json() as { deal_value?: string; notes?: string; archived?: boolean; replied_off?: boolean }
 
+  // Marking 'replied off-dashboard' also counts as the first response (Speed to Lead).
+  const respondedAt = body.replied_off === true ? 'NOW()' : 'NULL'
   const res = await pool.query(
-    `INSERT INTO portal_lead_data (lead_id, client_id, deal_value, notes, archived, replied_off, updated_at)
-     VALUES ($1, $2, $3, $4, COALESCE($5, FALSE), COALESCE($6, FALSE), NOW())
+    `INSERT INTO portal_lead_data (lead_id, client_id, deal_value, notes, archived, replied_off, first_responded_at, updated_at)
+     VALUES ($1, $2, $3, $4, COALESCE($5, FALSE), COALESCE($6, FALSE), ${respondedAt}, NOW())
      ON CONFLICT (lead_id, client_id) DO UPDATE
        SET deal_value = COALESCE(EXCLUDED.deal_value, portal_lead_data.deal_value),
            notes = COALESCE(EXCLUDED.notes, portal_lead_data.notes),
            archived = COALESCE($5, portal_lead_data.archived),
            replied_off = COALESCE($6, portal_lead_data.replied_off),
+           first_responded_at = COALESCE(portal_lead_data.first_responded_at, ${respondedAt}),
            updated_at = NOW()
      RETURNING deal_value, notes, archived, replied_off`,
     [id, session.clientId, body.deal_value ?? null, body.notes ?? null, body.archived ?? null, body.replied_off ?? null]

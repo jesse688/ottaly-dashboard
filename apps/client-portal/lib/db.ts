@@ -92,6 +92,14 @@ async function runMigration() {
       // moment a lead is moved into that stage (e.g. "Quote Sent", "Won").
       `ALTER TABLE portal_lead_data ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE`,
       `ALTER TABLE portal_lead_data ADD COLUMN IF NOT EXISTS replied_off BOOLEAN NOT NULL DEFAULT FALSE`,
+      // When the client first responded (portal reply or 'replied off-dashboard') —
+      // used to measure Speed to Lead.
+      `ALTER TABLE portal_lead_data ADD COLUMN IF NOT EXISTS first_responded_at TIMESTAMPTZ`,
+      // Admin-uploaded invoice PDF (stored in-DB) + link a top-up request to its invoice.
+      `ALTER TABLE portal_invoices ADD COLUMN IF NOT EXISTS file_data BYTEA`,
+      `ALTER TABLE portal_invoices ADD COLUMN IF NOT EXISTS file_name TEXT`,
+      `ALTER TABLE portal_invoices ADD COLUMN IF NOT EXISTS file_mime TEXT`,
+      `ALTER TABLE portal_topup_requests ADD COLUMN IF NOT EXISTS invoice_id UUID`,
       `ALTER TABLE portal_client_labels ADD COLUMN IF NOT EXISTS prompts_value BOOLEAN NOT NULL DEFAULT FALSE`,
       `ALTER TABLE portal_client_labels ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0`,
       // Non-lead reports: type = 'non_lead' (tried, no response — effort-gated) or

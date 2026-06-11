@@ -30,7 +30,8 @@ export async function GET(_req: NextRequest) {
 
   const [invoicesRes, summaryRes, dealRes] = await Promise.all([
     pool.query(
-      `SELECT id, invoice_number, description, amount, currency, status, due_date, paid_date, created_at
+      `SELECT id, invoice_number, description, amount, currency, status, due_date, paid_date, created_at,
+              (file_data IS NOT NULL) AS has_file
        FROM portal_invoices
        WHERE client_id = $1
        ORDER BY created_at DESC`,
