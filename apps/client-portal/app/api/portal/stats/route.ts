@@ -25,7 +25,7 @@ export async function GET() {
         `SELECT COUNT(*) AS total_campaigns,
                 COUNT(*) FILTER (WHERE status = 'active') AS active_campaigns
          FROM esp_campaigns
-         WHERE workspace_id = $1 AND source = 'plusvibe'`,
+         WHERE workspace_id = $1 AND source IN ('plusvibe', 'bison')`,
         [workspaceId]
       ),
       pool.query(
@@ -33,7 +33,7 @@ export async function GET() {
            COUNT(*) FILTER (WHERE status IN ('INTERESTED', 'MEETING_BOOKED')) AS total_leads,
            COUNT(*) FILTER (WHERE status = 'MEETING_BOOKED') AS total_meetings
          FROM esp_leads
-         WHERE workspace_id = $1 AND source = 'plusvibe'`,
+         WHERE workspace_id = $1 AND source IN ('plusvibe', 'bison')`,
         [workspaceId]
       ),
     ])

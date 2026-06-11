@@ -325,7 +325,7 @@ export function AdminClientsClient() {
             Run Migration
           </button>
           <button onClick={async () => {
-            if (!confirm('Backfill all PlusVibe leads from API? This may take several minutes.')) return
+            if (!confirm('Backfill all leads from EmailBison API? This may take several minutes.')) return
             const r = await fetch('/api/admin/backfill-leads', { method: 'POST' })
             const d = await r.json() as { leads?: number; error?: string; errors?: string[] }
             if (d.error) {

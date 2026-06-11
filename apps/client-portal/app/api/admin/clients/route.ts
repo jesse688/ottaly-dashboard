@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { getAdminSession, sha256 } from '@/lib/auth'
 import pool from '@/lib/db'
 import { backfillWorkspace } from '@/lib/sync'
-import { registerWebhook } from '@/lib/plusvibe'
+import { registerWebhook } from '@/lib/bison'
 
 export async function GET() {
   if (!await getAdminSession()) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -12,7 +12,7 @@ export async function GET() {
            pc.cost_per_lead, pc.spend_visibility,
            w.name AS workspace_name
     FROM portal_clients pc
-    LEFT JOIN esp_workspaces w ON w.id = pc.workspace_id AND w.source = 'plusvibe'
+    LEFT JOIN esp_workspaces w ON w.id = pc.workspace_id AND w.source IN ('plusvibe', 'bison')
     ORDER BY pc.company_name ASC
   `)
   return NextResponse.json(res.rows)
@@ -49,9 +49,9 @@ export async function POST(req: NextRequest) {
       .then(r => console.log(`[client-create] backfilled ${companyName}:`, r))
       .catch(e => console.error(`[client-create] backfill failed for ${companyName}:`, e))
 
-    // Best-effort: register the PlusVibe lead webhook for this workspace. No-ops
-    // unless PLUSVIBE_WEBHOOK_CREATE_URL/TARGET_URL are configured (polling covers it otherwise).
-    const hook = await registerWebhook(workspaceId)
+    // Best-effort: register the Bison lead webhook. No-ops
+    // unless BISON_API_KEY is configured (polling covers it otherwise).
+    const hook = await registerWebhook()
 
     return NextResponse.json({ ok: true, id: res.rows[0].id, webhook: hook.ok ? 'registered' : hook.reason })
   } catch (err: unknown) {

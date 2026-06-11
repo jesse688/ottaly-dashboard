@@ -24,21 +24,21 @@ export async function GET() {
 
     // Leads with source=plusvibe
     const plusvibe = await pool.query(
-      "SELECT COUNT(*) FROM esp_leads WHERE workspace_id = $1 AND source = 'plusvibe'",
+      "SELECT COUNT(*) FROM esp_leads WHERE workspace_id = $1 AND source IN ('plusvibe', 'bison')",
       [session.workspaceId]
     )
     results.plusvibe_leads = Number(plusvibe.rows[0].count)
 
     // Leads with label set
     const labeled = await pool.query(
-      "SELECT COUNT(*) FROM esp_leads WHERE workspace_id = $1 AND source = 'plusvibe' AND label IS NOT NULL",
+      "SELECT COUNT(*) FROM esp_leads WHERE workspace_id = $1 AND source IN ('plusvibe', 'bison') AND label IS NOT NULL",
       [session.workspaceId]
     )
     results.labeled_plusvibe_leads = Number(labeled.rows[0].count)
 
     // Sample of distinct labels
     const labels = await pool.query(
-      "SELECT DISTINCT label, COUNT(*) FROM esp_leads WHERE workspace_id = $1 AND source = 'plusvibe' GROUP BY label ORDER BY count DESC",
+      "SELECT DISTINCT label, COUNT(*) FROM esp_leads WHERE workspace_id = $1 AND source IN ('plusvibe', 'bison') GROUP BY label ORDER BY count DESC",
       [session.workspaceId]
     )
     results.labels = labels.rows
@@ -61,8 +61,8 @@ export async function GET() {
     const allWsAny = await pool.query(
       `SELECT w.id, w.name, COUNT(*) AS total_leads, COUNT(*) FILTER (WHERE l.label IS NOT NULL) AS labeled_leads
        FROM esp_workspaces w
-       LEFT JOIN esp_leads l ON l.workspace_id = w.id AND l.source = 'plusvibe'
-       WHERE w.source = 'plusvibe'
+       LEFT JOIN esp_leads l ON l.workspace_id = w.id AND l.source IN ('plusvibe', 'bison')
+       WHERE w.source IN ('plusvibe', 'bison')
        GROUP BY w.id, w.name
        ORDER BY total_leads DESC`
     )

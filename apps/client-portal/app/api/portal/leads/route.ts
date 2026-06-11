@@ -17,16 +17,16 @@ export async function GET(req: NextRequest) {
                 label, first_replied_at, created_at
          FROM esp_leads
          WHERE workspace_id = $1
-           AND source = 'plusvibe'
-           AND status IN ('INTERESTED', 'MEETING_BOOKED')
+           AND source IN ('plusvibe', 'bison')
+           AND (status IN ('INTERESTED', 'MEETING_BOOKED') OR label = 'INTERESTED')
          ORDER BY first_replied_at DESC NULLS LAST, created_at DESC
          LIMIT $2 OFFSET $3`,
         [session.workspaceId, pageSize, offset]
       ),
       pool.query(
         `SELECT COUNT(*) FROM esp_leads
-         WHERE workspace_id = $1 AND source = 'plusvibe'
-           AND status IN ('INTERESTED', 'MEETING_BOOKED')`,
+         WHERE workspace_id = $1 AND source IN ('plusvibe', 'bison')
+           AND (status IN ('INTERESTED', 'MEETING_BOOKED') OR label = 'INTERESTED')`,
         [session.workspaceId]
       ),
     ])

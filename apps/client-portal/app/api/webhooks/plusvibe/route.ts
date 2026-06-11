@@ -1,122 +1,149 @@
+// EmailBison webhook handler.
+// Bison sends: { event: { type, workspace_id, workspace_name }, data: { ... } }
+// Key event types: lead_interested, lead_replied, untracked_reply_received
 import { NextResponse, type NextRequest } from 'next/server'
 import pool from '@/lib/db'
+import { ready } from '@/lib/db'
 import crypto from 'crypto'
+import { enrichLead } from '@/lib/sync'
 
-interface PlusVibeWebhookPayload {
-  event: string
-  timestamp: number
-  workspace_id: string
-  lead_id: string
-  campaign_id?: string
+interface BisonWebhookEvent {
+  event: {
+    type: string
+    name: string
+    workspace_id: number
+    workspace_name: string
+  }
   data: {
-    status?: string
-    label?: string
-    has_replied?: boolean
-    email?: string
-    first_name?: string
-    last_name?: string
-    company_name?: string
+    lead?: {
+      id: number
+      email: string
+      first_name?: string | null
+      last_name?: string | null
+      company?: string | null
+      status?: string | null
+    }
+    reply?: {
+      id: number
+      interested?: boolean
+      lead_id?: number | null
+      from_email_address?: string | null
+      date_received?: string | null
+    }
     [key: string]: unknown
   }
 }
 
-// Verify PlusVibe webhook signature (HMAC-SHA256)
 function verifySignature(payload: string, signature: string): boolean {
-  const secret = process.env.PLUSVIBE_WEBHOOK_SECRET
+  const secret = process.env.BISON_WEBHOOK_SECRET || process.env.PLUSVIBE_WEBHOOK_SECRET
   if (!secret) {
-    console.warn('[webhook] PLUSVIBE_WEBHOOK_SECRET not configured, skipping signature verification')
-    return true
+    console.error('[webhook] BISON_WEBHOOK_SECRET not configured — rejecting unsigned request')
+    return false
   }
-  const computed = crypto.createHmac('sha256', secret).update(payload).digest('hex')
-  return crypto.timingSafeEqual(Buffer.from(computed), Buffer.from(signature))
+  try {
+    const computed = crypto.createHmac('sha256', secret).update(payload).digest('hex')
+    const sigBuf = Buffer.from(signature.replace(/^sha256=/, ''), 'hex')
+    const compBuf = Buffer.from(computed, 'hex')
+    if (sigBuf.length !== compBuf.length) return false
+    return crypto.timingSafeEqual(sigBuf, compBuf)
+  } catch {
+    return false
+  }
 }
 
-// POST /api/webhooks/plusvibe
-// Receives real-time updates from PlusVibe (lead status, label, reply)
 export async function POST(req: NextRequest) {
-  const body = await req.text()
-  const signature = req.headers.get('x-plusvibe-signature') || ''
+  await ready()
 
-  // Verify webhook signature
+  const body = await req.text()
+  const signature =
+    req.headers.get('x-bison-signature') ||
+    req.headers.get('x-webhook-signature') ||
+    req.headers.get('x-plusvibe-signature') ||
+    ''
+
   if (!verifySignature(body, signature)) {
-    console.warn('[webhook] Invalid signature')
+    console.warn('[webhook] Invalid or missing signature')
     return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
   }
 
   try {
-    const event = JSON.parse(body) as PlusVibeWebhookPayload
-    console.log(`[webhook] received event: ${event.event} for lead ${event.lead_id}`)
+    const event = JSON.parse(body) as BisonWebhookEvent
+    const eventType = event.event?.type ?? ''
+    const workspaceId = String(event.event?.workspace_id ?? '')
+    const lead = event.data?.lead
+    const reply = event.data?.reply
 
-    // Build update fields based on event type
-    const updates: Record<string, unknown> = {}
-    if (event.data.status) updates.status = event.data.status
-    if (event.data.label) updates.label = event.data.label
-    if (event.data.has_replied) updates.first_replied_at = new Date().toISOString() // On webhook, set to now
-    if (event.data.email) updates.email = event.data.email
-    if (event.data.first_name) updates.first_name = event.data.first_name
-    if (event.data.last_name) updates.last_name = event.data.last_name
-    if (event.data.company_name) updates.company_name = event.data.company_name
+    console.log(`[webhook] ${eventType} workspace=${workspaceId} lead=${lead?.id ?? reply?.lead_id}`)
 
-    // Never overwrite first_replied_at if already set
-    const setClauses = Object.entries(updates)
-      .map(([key], i) => {
-        if (key === 'first_replied_at') {
-          return `first_replied_at = COALESCE(first_replied_at, $${i + 1})`
-        }
-        return `${key} = $${i + 1}`
-      })
-      .join(', ')
+    if (lead) {
+      const leadId = String(lead.id)
+      const isInterested = eventType === 'lead_interested' || reply?.interested === true
 
-    const values = Object.values(updates)
-    values.push(event.workspace_id, event.lead_id, new Date().toISOString())
+      const updateRes = await pool.query(
+        `UPDATE esp_leads SET
+           email       = COALESCE(esp_leads.email, $1),
+           first_name  = COALESCE(esp_leads.first_name, $2),
+           last_name   = COALESCE(esp_leads.last_name, $3),
+           company_name = COALESCE(esp_leads.company_name, $4),
+           status      = CASE WHEN $5 THEN 'INTERESTED' ELSE COALESCE(esp_leads.status, $6) END,
+           label       = CASE WHEN $5 THEN 'INTERESTED' ELSE esp_leads.label END,
+           first_replied_at = COALESCE(esp_leads.first_replied_at, $7),
+           source      = 'bison',
+           updated_at  = NOW()
+         WHERE id = $8 AND workspace_id = $9
+         RETURNING id`,
+        [
+          lead.email,
+          lead.first_name ?? null,
+          lead.last_name ?? null,
+          lead.company ?? null,
+          isInterested,
+          lead.status ?? null,
+          reply?.date_received ?? new Date().toISOString(),
+          leadId,
+          workspaceId,
+        ]
+      )
 
-    if (Object.keys(updates).length > 0) {
-      // Upsert: update if exists, insert if not
-      await pool.query(`
-        UPDATE esp_leads
-        SET ${setClauses}, updated_at = $${values.length - 1}
-        WHERE id = $${values.length} AND workspace_id = $${values.length - 2}
-      `, [...Object.values(updates), event.workspace_id, event.lead_id])
+      if (updateRes.rowCount === 0) {
+        // Lead not in DB yet — insert it
+        await pool.query(
+          `INSERT INTO esp_leads (
+             id, workspace_id, source,
+             email, first_name, last_name, company_name,
+             status, label, first_replied_at, created_at, updated_at
+           ) VALUES ($1,$2,'bison',$3,$4,$5,$6,$7,$8,$9,NOW(),NOW())
+           ON CONFLICT (id) DO UPDATE SET
+             email=$3, first_name=$4, last_name=$5, company_name=$6,
+             status=$7, label=$8, first_replied_at=COALESCE(esp_leads.first_replied_at,$9),
+             source='bison', updated_at=NOW()`,
+          [
+            leadId, workspaceId,
+            lead.email,
+            lead.first_name ?? null,
+            lead.last_name ?? null,
+            lead.company ?? null,
+            isInterested ? 'INTERESTED' : lead.status ?? null,
+            isInterested ? 'INTERESTED' : null,
+            reply?.date_received ?? new Date().toISOString(),
+          ]
+        )
+      }
 
-      // If no rows updated, insert
-      const updateRes = await pool.query(`
-        SELECT COUNT(*) FROM esp_leads WHERE id = $1 AND workspace_id = $2
-      `, [event.lead_id, event.workspace_id])
-
-      if (Number(updateRes.rows[0].count) === 0) {
-        await pool.query(`
-          INSERT INTO esp_leads (
-            id, workspace_id, campaign_id, source,
-            email, first_name, last_name, company_name, status, label,
-            first_replied_at, created_at, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
-          ON CONFLICT (id) DO NOTHING
-        `, [
-          event.lead_id,
-          event.workspace_id,
-          event.campaign_id || null,
-          'plusvibe',
-          event.data.email || null,
-          event.data.first_name || null,
-          event.data.last_name || null,
-          event.data.company_name || null,
-          event.data.status || null,
-          event.data.label || null,
-          event.data.has_replied ? new Date().toISOString() : null,
-        ])
+      if (isInterested) {
+        await enrichLead(workspaceId, leadId)
       }
     }
 
-    // Log webhook to audit trail
-    await pool.query(`
-      INSERT INTO esp_sync_log (source, workspace_id, status, leads_synced, finished_at)
-      VALUES ($1, $2, $3, $4, NOW())
-    `, ['plusvibe-webhook', event.workspace_id, 'success', 1])
+    await pool.query(
+      `INSERT INTO esp_sync_log (source, workspace_id, status, leads_synced, finished_at)
+       VALUES ('bison-webhook', $1, 'success', 1, NOW())`,
+      [workspaceId]
+    )
 
-    console.log(`[webhook] processed event: ${event.event}`)
     return NextResponse.json({ ok: true })
   } catch (err) {
     console.error('[webhook] error:', err)
-    return NextResponse.json({ error: String(err) }, { status: 500 })
+    return NextResponse.json({ error: 'Webhook processing failed' }, { status: 500 })
   }
 }

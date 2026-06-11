@@ -9,8 +9,8 @@ export async function GET() {
     SELECT w.id, w.name,
            COUNT(c.id) FILTER (WHERE c.status = 'active') AS active_campaigns
     FROM esp_workspaces w
-    LEFT JOIN esp_campaigns c ON c.workspace_id = w.id AND c.source = 'plusvibe'
-    WHERE w.source = 'plusvibe'
+    LEFT JOIN esp_campaigns c ON c.workspace_id = w.id AND c.source IN ('plusvibe', 'bison')
+    WHERE w.source IN ('plusvibe', 'bison')
     GROUP BY w.id, w.name
     ORDER BY w.name ASC
   `)

@@ -21,7 +21,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const labelsRes = await pool.query(
     `SELECT DISTINCT label, COUNT(*) AS count
      FROM esp_leads
-     WHERE workspace_id = $1 AND source = 'plusvibe' AND label IS NOT NULL
+     WHERE workspace_id = $1 AND source IN ('plusvibe', 'bison') AND label IS NOT NULL
      GROUP BY label ORDER BY count DESC`,
     [workspace_id]
   )

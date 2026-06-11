@@ -1,11 +1,10 @@
 import pool from './db'
-import { getLeads, getEmails } from './plusvibe'
+import { getLeads, getLeadReplies } from './bison'
 import { reconcileLeadCharges } from './balance'
 
-const MAX_EMAIL_PAGES = 80
-
-// Backfill a single workspace from PlusVibe: INTERESTED leads + real email
-// conversations, then reconcile lead-charges for any clients in it. Idempotent.
+// Backfill interested leads + email threads from EmailBison into local DB.
+// Bison has no workspace_id param — API key scopes to one workspace.
+// workspaceId is stored as a string label for our DB (maps to portal_clients.workspace_id).
 export async function backfillWorkspace(
   workspaceId: string,
   opts: { withEmails?: boolean } = {}
@@ -19,22 +18,29 @@ export async function backfillWorkspace(
   let page = 1
   const limit = 100
   while (true) {
-    const leads = await getLeads(workspaceId, 'INTERESTED', page, limit)
+    const leads = await getLeads(page, limit)
     if (!leads.length) break
+
     for (const lead of leads) {
       await pool.query(
         `INSERT INTO esp_leads (
            id, workspace_id, campaign_id, source,
            email, first_name, last_name, company_name, status, label, raw, created_at, updated_at
-         ) VALUES ($1,$2,$3,'plusvibe',$4,$5,$6,$7,$8,'INTERESTED',$9,$10,NOW())
+         ) VALUES ($1,$2,$3,'bison',$4,$5,$6,$7,$8,'INTERESTED',$9,$10,NOW())
          ON CONFLICT (id) DO UPDATE SET
            email=$4, first_name=$5, last_name=$6, company_name=$7,
            status=$8, label='INTERESTED', raw=$9, updated_at=NOW()`,
         [
-          lead._id, workspaceId, lead.campaign_id ?? null,
-          lead.email, lead.first_name ?? null, lead.last_name ?? null,
-          lead.company_name ?? null, lead.status ?? null,
-          JSON.stringify(lead), lead.created_at ?? new Date().toISOString(),
+          String(lead.id),
+          workspaceId,
+          null, // Bison doesn't return campaign_id on list endpoint
+          lead.email,
+          lead.first_name ?? null,
+          lead.last_name ?? null,
+          lead.company ?? null,
+          lead.status ?? null,
+          JSON.stringify(lead),
+          lead.created_at ?? new Date().toISOString(),
         ]
       )
       leadCount++
@@ -43,37 +49,53 @@ export async function backfillWorkspace(
     page++
   }
 
-  // 2. Real email conversations -> portal_emails
+  // 2. Email conversations -> portal_emails
   if (withEmails) {
-    let trail = ''
-    let pages = 0
-    while (pages < MAX_EMAIL_PAGES) {
-      const { pageTrail, data } = await getEmails(workspaceId, { pageTrail: trail || undefined })
-      if (!data.length) break
-      for (const m of data) {
-        await pool.query(
-          `INSERT INTO portal_emails (
-             id, workspace_id, lead_pv_id, lead_email, thread_id, campaign_id, direction,
-             subject, body_html, body_text, content_preview, from_email, to_email, eaccount,
-             pv_label, is_unread, message_id, timestamp_created, raw
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
-           ON CONFLICT (id) DO UPDATE SET is_unread=$16, pv_label=$15, body_html=$9, body_text=$10, synced_at=NOW()`,
-          [
-            m.id, workspaceId, m.lead_id ?? null,
-            (m.lead ?? m.from_address_email ?? '').toLowerCase(),
-            m.thread_id ?? null, m.campaign_id ?? null, m.direction ?? 'IN',
-            m.subject ?? null, m.body?.html ?? null, m.body?.text ?? null,
-            m.content_preview ?? null, m.from_address_email ?? null,
-            m.to_address_email_list ?? null, m.eaccount ?? null,
-            m.label ?? null, m.is_unread ?? 0, m.message_id ?? null,
-            m.timestamp_created ?? null, JSON.stringify(m),
-          ]
-        )
-        emailCount++
+    // Fetch reply threads for all INTERESTED leads in this workspace
+    const leadsRes = await pool.query(
+      `SELECT id, email FROM esp_leads WHERE workspace_id = $1 AND source = 'bison' LIMIT 500`,
+      [workspaceId]
+    )
+    for (const row of leadsRes.rows) {
+      try {
+        const replies = await getLeadReplies(row.id)
+        for (const m of replies) {
+          const direction = m.folder?.toLowerCase() === 'sent' ? 'OUT' : 'IN'
+          await pool.query(
+            `INSERT INTO portal_emails (
+               id, workspace_id, lead_pv_id, lead_email, thread_id, campaign_id, direction,
+               subject, body_html, body_text, content_preview, from_email, to_email, eaccount,
+               pv_label, is_unread, message_id, timestamp_created, raw
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+             ON CONFLICT (id) DO UPDATE SET
+               is_unread=$16, body_html=$9, body_text=$10, synced_at=NOW()`,
+            [
+              String(m.id),
+              workspaceId,
+              m.lead_id ? String(m.lead_id) : row.id,
+              row.email,
+              m.parent_id ? String(m.parent_id) : null,
+              m.campaign_id ? String(m.campaign_id) : null,
+              direction,
+              m.subject ?? null,
+              m.html_body ?? null,
+              m.text_body ?? null,
+              m.text_body?.slice(0, 200) ?? null,
+              m.from_email_address ?? null,
+              m.primary_to_email_address ?? null,
+              null, // eaccount — not exposed in Bison reply object
+              m.interested ? 'INTERESTED' : null,
+              m.read ? 0 : 1,
+              m.raw_message_id ?? null,
+              m.date_received ?? null,
+              JSON.stringify(m),
+            ]
+          )
+          emailCount++
+        }
+      } catch {
+        // skip this lead's emails if fetch fails
       }
-      if (!pageTrail || pageTrail === trail) break
-      trail = pageTrail
-      pages++
     }
   }
 
@@ -82,4 +104,31 @@ export async function backfillWorkspace(
   for (const c of clients.rows) charges += await reconcileLeadCharges(c.id)
 
   return { leads: leadCount, emails: emailCount, charges }
+}
+
+// Enrich a single lead from Bison (called from webhook on INTERESTED event).
+export async function enrichLead(workspaceId: string, leadId: string): Promise<void> {
+  try {
+    const { getLead } = await import('./bison')
+    const lead = await getLead(leadId)
+    if (!lead) return
+    await pool.query(
+      `UPDATE esp_leads SET
+         first_name = COALESCE(first_name, $1),
+         last_name  = COALESCE(last_name,  $2),
+         company_name = COALESCE(company_name, $3),
+         raw = $4, updated_at = NOW()
+       WHERE id = $5 AND workspace_id = $6`,
+      [
+        lead.first_name ?? null,
+        lead.last_name ?? null,
+        lead.company ?? null,
+        JSON.stringify(lead),
+        leadId,
+        workspaceId,
+      ]
+    )
+  } catch {
+    // best-effort, don't block webhook
+  }
 }

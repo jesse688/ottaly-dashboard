@@ -43,7 +43,7 @@ export async function reconcileLeadCharges(clientId: string): Promise<number> {
             'system'
        FROM esp_leads l
       WHERE l.workspace_id = $2
-        AND l.source = 'plusvibe'
+        AND l.source IN ('plusvibe', 'bison')
         AND l.label = 'INTERESTED'
         AND NOT EXISTS (
           SELECT 1 FROM portal_ledger pl

@@ -24,8 +24,8 @@ export async function GET() {
     const leadCounts = await pool.query(`
       SELECT w.id, w.name, COUNT(l.id) as lead_count
       FROM esp_workspaces w
-      LEFT JOIN esp_leads l ON l.workspace_id = w.id AND l.source = 'plusvibe'
-      WHERE w.source = 'plusvibe'
+      LEFT JOIN esp_leads l ON l.workspace_id = w.id AND l.source IN ('plusvibe', 'bison')
+      WHERE w.source IN ('plusvibe', 'bison')
       GROUP BY w.id, w.name
       ORDER BY lead_count DESC
     `)
@@ -40,8 +40,8 @@ export async function GET() {
     `)
 
     // Determine staleness
-    const lastWebhook = lastSyncs.rows.find(r => r.source === 'plusvibe-webhook')
-    const lastPolling = lastSyncs.rows.find(r => r.source === 'plusvibe-polling')
+    const lastWebhook = lastSyncs.rows.find(r => r.source === 'bison-webhook' || r.source === 'plusvibe-webhook')
+    const lastPolling = lastSyncs.rows.find(r => r.source === 'bison-polling' || r.source === 'plusvibe-polling')
 
     let webhookStatus = 'unknown'
     let pollingStatus = 'unknown'

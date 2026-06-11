@@ -19,7 +19,7 @@ export async function GET() {
               THEN ROUND(c.bounced_count::numeric / c.sent_count, 4)
               ELSE 0 END AS bounce_rate
        FROM esp_campaigns c
-       WHERE c.workspace_id = $1 AND c.source = 'plusvibe'
+       WHERE c.workspace_id = $1 AND c.source IN ('plusvibe', 'bison')
        ORDER BY c.last_lead_sent DESC NULLS LAST, c.created_at DESC`,
       [session.workspaceId]
     )

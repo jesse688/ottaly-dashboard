@@ -174,7 +174,14 @@ async function runMigration() {
   }
 }
 
+// Awaitable migration gate — webhook/cron await this to avoid processing before tables exist
+let _migrationPromise: Promise<void> | null = null
+export function ready(): Promise<void> {
+  if (!_migrationPromise) _migrationPromise = runMigration()
+  return _migrationPromise
+}
+
 // Kick off migration immediately (non-blocking)
-runMigration()
+ready()
 
 export default pool
