@@ -12793,21 +12793,24 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
         if ((!c.keywords || c.keywords.trim() === '') || (!c.industry || c.industry.trim() === '')) {
           skipped.missingEnrichment++; return false;
         }
-        // Bulletproof per-campaign dedup: check the full pushed_campaigns
-        // history, not just last_campaign_name (which only remembers the
-        // most-recent push and leaks when campaigns interleave).
-        const pushed = Array.isArray(c.pushed_campaigns)
-          ? c.pushed_campaigns
-          : (typeof c.pushed_campaigns === 'string' ? JSON.parse(c.pushed_campaigns || '[]') : []);
-        if (pushed.some(p =>
-          p.workspace_id === job.workspace_id &&
-          (p.campaign_id === job.campaign_id || (targetCampLc && (p.campaign_name || '').toLowerCase() === targetCampLc))
-        )) { skipped.alreadyInCampaign++; return false; }
-        // Legacy guard kept for contacts imported pre-pushed_campaigns —
-        // last_campaign_name comes from PlusVibe CSV imports.
-        if (targetCampLc && c.last_campaign_name
-            && c.last_campaign_name.toLowerCase() === targetCampLc) {
-          skipped.alreadyInCampaign++; return false;
+        // For CSV-only export, skip campaign dedup — user is manually importing
+        if (!job.verifyOnly) {
+          // Bulletproof per-campaign dedup: check the full pushed_campaigns
+          // history, not just last_campaign_name (which only remembers the
+          // most-recent push and leaks when campaigns interleave).
+          const pushed = Array.isArray(c.pushed_campaigns)
+            ? c.pushed_campaigns
+            : (typeof c.pushed_campaigns === 'string' ? JSON.parse(c.pushed_campaigns || '[]') : []);
+          if (pushed.some(p =>
+            p.workspace_id === job.workspace_id &&
+            (p.campaign_id === job.campaign_id || (targetCampLc && (p.campaign_name || '').toLowerCase() === targetCampLc))
+          )) { skipped.alreadyInCampaign++; return false; }
+          // Legacy guard kept for contacts imported pre-pushed_campaigns —
+          // last_campaign_name comes from PlusVibe CSV imports.
+          if (targetCampLc && c.last_campaign_name
+              && c.last_campaign_name.toLowerCase() === targetCampLc) {
+            skipped.alreadyInCampaign++; return false;
+          }
         }
         if (job.workspace_id) {
           const emailed = typeof c.emailed_workspaces === 'string'

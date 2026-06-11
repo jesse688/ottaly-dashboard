@@ -3514,11 +3514,37 @@
                 ${active ? `<button onclick="cancelPushJob('${j.id}')" style="background:#ef4444;color:white;border:none;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;">Cancel</button>` : ''}
                 ${paused ? `<button onclick="resumePushJob('${j.id}')" style="background:#22c55e;color:white;border:none;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;">Resume</button>` : ''}
                 ${paused ? `<button onclick="cancelPushJob('${j.id}')" style="background:#ef4444;color:white;border:none;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;">Cancel</button>` : ''}
+                ${j.verifyOnly && j.status === 'completed' && j.safe_ids?.length ? `<button onclick="downloadJobCsv('${j.id}')" style="background:#6366f1;color:white;border:none;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;">⬇ CSV</button>` : ''}
               </div>
             </div>
           </div>`;
         }).join('');
       } catch {}
+    }
+
+    async function downloadJobCsv(jobId) {
+      try {
+        const r = await fetch(`/api/contacts/push-jobs/${jobId}`);
+        const job = await r.json();
+        if (!job.safe_ids?.length) { showMessage('No verified contacts in this job', 'error'); return; }
+        const cr = await fetch('/api/admin/database/contacts/by-ids', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids: job.safe_ids })
+        });
+        const cd = await cr.json();
+        const contacts = cd.contacts || [];
+        if (!contacts.length) { showMessage('No contact data returned', 'error'); return; }
+        const cols = ['email','first_name','last_name','company_name','company_website','job_title','industry','city','state','country','phone_number'];
+        const csv = [cols.join(','), ...contacts.map(c => cols.map(k => `"${String(c[k]||'').replace(/"/g,'""')}"`).join(','))].join('\n');
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `verified-contacts-${contacts.length}.csv`;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        showMessage(`Downloaded ${contacts.length} verified contacts`, 'success');
+      } catch (err) { showMessage('Download failed: ' + err.message, 'error'); }
     }
 
     async function cancelPushJob(jobId) {
@@ -3591,8 +3617,12 @@
           const job = await r.json();
           if (!['completed','failed','cancelled'].includes(job.status)) return;
           clearInterval(poll);
-          if (job.status !== 'completed' || !job.safe_ids?.length) {
-            showMessage(`Verification done — no safe contacts to export (${job.safe || 0} safe, ${job.invalid || 0} invalid)`, 'error');
+          if (job.status !== 'completed') {
+            showMessage(`Verification ${job.status} — no CSV downloaded`, 'error');
+            return;
+          }
+          if (!job.safe_ids || !job.safe_ids.length) {
+            showMessage(`Verification done — no safe contacts found (${job.safe || 0} safe, ${job.invalid || 0} invalid, ${job.risky || 0} risky)`, 'error');
             return;
           }
           // Fetch verified safe contacts and build CSV
@@ -3603,7 +3633,7 @@
           });
           const cd = await cr.json();
           const contacts = cd.contacts || [];
-          if (!contacts.length) { showMessage('No contact data returned', 'error'); return; }
+          if (!contacts.length) { showMessage('No contact data returned from DB', 'error'); return; }
           const cols = ['email','first_name','last_name','company_name','company_website','job_title','industry','city','state','country','phone_number'];
           const header = cols.join(',');
           const rows = contacts.map(c => cols.map(k => `"${String(c[k]||'').replace(/"/g,'""')}"`).join(','));
@@ -3611,10 +3641,17 @@
           const blob = new Blob([csv], { type: 'text/csv' });
           const url = URL.createObjectURL(blob);
           const a = document.createElement('a');
-          a.href = url; a.download = `verified-contacts-${contacts.length}.csv`; a.click();
-          URL.revokeObjectURL(url);
-          showMessage(`Downloaded ${contacts.length} verified contacts`, 'success');
-        } catch {}
+          a.href = url;
+          a.download = `verified-contacts-${contacts.length}.csv`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+          showMessage(`✅ Downloaded ${contacts.length} verified contacts`, 'success');
+        } catch (err) {
+          clearInterval(poll);
+          showMessage('CSV download error: ' + err.message, 'error');
+        }
       }, 3000);
     }
 
