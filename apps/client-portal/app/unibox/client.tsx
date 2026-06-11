@@ -90,15 +90,16 @@ function fmtFull(d: string | null) {
   if (!d) return ''
   return new Date(d).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
-// Split an email body into the new content vs the quoted history below it, so each
-// message renders as just its own reply with prior thread tucked into a fold.
+// Split an email body into the new reply vs the quoted history below it, so the
+// client reads the actual reply and our earlier email tucks into a fold.
 function splitQuote(text: string): { main: string; quoted: string } {
   if (!text) return { main: '', quoted: '' }
   const patterns = [
     /\n\s*-{2,}\s*Original Message\s*-{2,}/i,
-    /\nOn\s[\s\S]{0,140}?wrote:/,
+    /\n\s*>?\s*On\b[\s\S]{0,200}?\bwrote:\s*/,   // "On <date> <name> wrote:" (optional > prefix)
+    /\n\s*>/,                                     // first Gmail-style quoted line
     /\n_{5,}/,
-    /\nFrom:\s.+\n(Sent|Date):\s/i,
+    /\n\s*From:\s.+\n\s*(Sent|Date):\s/i,
   ]
   let idx = -1
   for (const re of patterns) {
@@ -106,7 +107,9 @@ function splitQuote(text: string): { main: string; quoted: string } {
     if (m && m.index !== undefined && (idx === -1 || m.index < idx)) idx = m.index
   }
   if (idx === -1) return { main: text.trim(), quoted: '' }
-  return { main: text.slice(0, idx).trim(), quoted: text.slice(idx).trim() }
+  // Strip leading "> " quote markers from the folded history for readability.
+  const quoted = text.slice(idx).replace(/^[ \t]*>+[ \t]?/gm, '').trim()
+  return { main: text.slice(0, idx).trim(), quoted }
 }
 
 export function UniboxClient({ companyName }: { companyName: string }) {
@@ -545,13 +548,13 @@ export function UniboxClient({ companyName }: { companyName: string }) {
                           // We composed this HTML ourselves in the portal — safe to render.
                           <div className="text-sm text-gray-800 break-words leading-relaxed [&_a]:text-indigo-600 [&_a]:underline [&_img]:max-w-full [&_img]:rounded" dangerouslySetInnerHTML={{ __html: m.body_html }} />
                         ) : (
-                          <div className="text-sm text-gray-800 whitespace-pre-wrap break-words leading-relaxed">{main || '(no content)'}</div>
+                          <div className="text-[15px] text-gray-900 whitespace-pre-wrap break-words leading-relaxed">{main || '(no content)'}</div>
                         )}
                         {quoted && !m.sent_via_portal && (
-                          <details className="mt-3">
-                            <summary className="cursor-pointer text-xs text-gray-400 hover:text-gray-600 select-none flex items-center gap-1 w-fit">
+                          <details className="mt-3 border-t border-dashed border-gray-200 pt-2">
+                            <summary className="cursor-pointer text-xs text-gray-400 hover:text-gray-600 select-none flex items-center gap-1.5 w-fit">
                               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
-                              Show quoted history
+                              Show earlier email (our outreach)
                             </summary>
                             <div className="mt-2 pl-3 border-l-2 border-gray-200 text-xs text-gray-400 whitespace-pre-wrap break-words">{quoted}</div>
                           </details>
