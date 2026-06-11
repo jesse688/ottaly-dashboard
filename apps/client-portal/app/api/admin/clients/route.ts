@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { getAdminSession, hashCode, generateAccessCode, generateInviteToken, portalBaseUrl } from '@/lib/auth'
+import { getAdminSession, generateInviteToken, portalBaseUrl } from '@/lib/auth'
 import pool from '@/lib/db'
 import { backfillWorkspace } from '@/lib/sync'
 import { registerWebhook } from '@/lib/plusvibe'
@@ -22,33 +22,32 @@ export async function POST(req: NextRequest) {
   if (!await getAdminSession()) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const b = await req.json() as {
-    username?: string
-    code?: string
     email?: string
     workspaceId: string
     companyName: string
     costPerLead?: number
   }
-  const username = (b.username ?? '').trim()
+  const email = (b.email ?? '').trim().toLowerCase()
   const workspaceId = b.workspaceId
   const companyName = b.companyName
 
+  if (!email || !email.includes('@')) {
+    return NextResponse.json({ error: 'A valid client email is required' }, { status: 400 })
+  }
   if (!workspaceId || !companyName) {
     return NextResponse.json({ error: 'Company and workspace are required' }, { status: 400 })
   }
 
-  // If no username given, create a shell account + invite link (client self-onboards).
-  const useInvite = !username
-  const code = (b.code ?? '').trim() || generateAccessCode()
-  const passwordHash = useInvite ? null : hashCode(code)
-  const inviteToken = useInvite ? generateInviteToken() : null
+  // The email is the login identifier (username). No code is set — the client
+  // creates their own via the invite link.
+  const inviteToken = generateInviteToken()
 
   try {
     const res = await pool.query(
       `INSERT INTO portal_clients (username, email, password_hash, workspace_id, company_name, cost_per_lead, invite_token)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       VALUES ($1, $2, NULL, $3, $4, $5, $6)
        RETURNING id`,
-      [username || null, (b.email ?? '').toLowerCase() || null, passwordHash, workspaceId, companyName, Number(b.costPerLead) || 0, inviteToken]
+      [email, email, workspaceId, companyName, Number(b.costPerLead) || 0, inviteToken]
     )
 
     // Auto-backfill this client's workspace (leads + real email threads) so they
@@ -61,17 +60,13 @@ export async function POST(req: NextRequest) {
     // unless PLUSVIBE_WEBHOOK_CREATE_URL/TARGET_URL are configured (polling covers it otherwise).
     const hook = await registerWebhook(workspaceId)
 
-    // Either return the credentials, or an invite link for the client to self-onboard.
-    const inviteUrl = inviteToken ? `${portalBaseUrl(req)}/invite/${inviteToken}` : undefined
-    return NextResponse.json({
-      ok: true, id: res.rows[0].id,
-      ...(useInvite ? { inviteUrl } : { username, code }),
-      webhook: hook.ok ? 'registered' : hook.reason,
-    })
+    // The client sets their own code via this invite link.
+    const inviteUrl = `${portalBaseUrl(req)}/invite/${inviteToken}`
+    return NextResponse.json({ ok: true, id: res.rows[0].id, email, inviteUrl, webhook: hook.ok ? 'registered' : hook.reason })
   } catch (err: unknown) {
     const pgErr = err as { code?: string }
     if (pgErr.code === '23505') {
-      return NextResponse.json({ error: 'That username is already taken' }, { status: 409 })
+      return NextResponse.json({ error: 'A client with that email already exists' }, { status: 409 })
     }
     console.error('[admin/clients POST]', err)
     return NextResponse.json({ error: 'Database error' }, { status: 500 })

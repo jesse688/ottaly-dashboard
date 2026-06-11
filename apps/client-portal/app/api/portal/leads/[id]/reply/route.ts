@@ -12,7 +12,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const session = await getSession()
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   const { id } = await params
-  const { body, bodyHtml, cc } = await req.json() as { body: string; bodyHtml?: string; cc?: string }
+  const { body, bodyHtml, cc, to } = await req.json() as { body: string; bodyHtml?: string; cc?: string; to?: string }
   if (!body?.trim()) return NextResponse.json({ error: 'Empty reply' }, { status: 400 })
   const html = bodyHtml?.trim() ? bodyHtml : `<p>${body.replace(/\n/g, '<br/>')}</p>`
   const ccList = (cc ?? '').trim()
@@ -23,6 +23,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   )
   if (!leadRes.rows.length) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const lead = leadRes.rows[0]
+  // Recipient — defaults to the lead, but the client can send/forward to another address.
+  const toAddr = (to ?? '').trim() || lead.email
 
   // Find the latest inbound message for threading context (subject, mailbox, message id)
   const ctx = await pool.query(
@@ -45,14 +47,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     [
       outId, session.workspaceId, lead.email.toLowerCase(), subject, body,
       html, body.slice(0, 200),
-      eaccount ?? session.email, lead.email, eaccount ?? null,
+      eaccount ?? session.email, toAddr, eaccount ?? null,
     ]
   ).catch(err => console.error('[reply] persist failed:', err))
 
   // 2. Attempt live send via PlusVibe
   const send = await sendReply({
     workspaceId: session.workspaceId,
-    leadEmail: lead.email,
+    leadEmail: toAddr,
     eaccount,
     subject,
     bodyText: body,
@@ -66,8 +68,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   await notifyAdmin({
     clientId: session.clientId,
     kind: 'reply_sent',
-    title: `${session.companyName} replied to ${who}`,
-    body: `${send.ok ? '✅ Sent live via PlusVibe' : '⚠️ NOT auto-sent (' + send.reason + ') — please send manually'}\nTo: ${lead.email}${ccList ? `\nCc: ${ccList}` : ''}\nSubject: ${subject}\n\n${body}`,
+    title: `${session.companyName} replied re: ${who}`,
+    body: `${send.ok ? '✅ Sent live via PlusVibe' : '⚠️ NOT auto-sent (' + send.reason + ') — please send manually'}\nTo: ${toAddr}${ccList ? `\nCc: ${ccList}` : ''}\nSubject: ${subject}\n\n${body}`,
   })
 
   return NextResponse.json({ ok: true, sentLive: send.ok })

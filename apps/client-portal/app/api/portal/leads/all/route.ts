@@ -61,7 +61,14 @@ export async function GET() {
                     AND lower(e2.lead_email) = lower(l.email)
                     AND (e2.direction = 'OUT' OR e2.sent_via_portal = TRUE)
                 )
-              ) AS dispute_eligible
+              ) AS dispute_eligible,
+              COALESCE(ld.archived, FALSE) AS archived,
+              EXISTS (
+                SELECT 1 FROM portal_emails e3
+                WHERE e3.workspace_id = l.workspace_id
+                  AND lower(e3.lead_email) = lower(l.email)
+                  AND e3.sent_via_portal = TRUE
+              ) AS has_sent
        FROM esp_leads l
        LEFT JOIN portal_lead_data ld     ON ld.lead_id = l.id AND ld.client_id = $3
        LEFT JOIN portal_lead_disputes pd ON pd.lead_id = l.id AND pd.client_id = $3

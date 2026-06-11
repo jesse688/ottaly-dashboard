@@ -133,16 +133,12 @@ export function AdminClientsClient() {
   async function handleCreate(e: FormEvent) {
     e.preventDefault(); setSaving(true); setError('')
     try {
-      const res = await fetch('/api/admin/clients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...form, costPerLead: Number(form.costPerLead) || 0 }) })
-      const data = await res.json() as { error?: string; webhook?: string; username?: string; code?: string; inviteUrl?: string }
+      const res = await fetch('/api/admin/clients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: form.email, companyName: form.companyName, workspaceId: form.workspaceId, costPerLead: Number(form.costPerLead) || 0 }) })
+      const data = await res.json() as { error?: string; email?: string; inviteUrl?: string }
       if (!res.ok) { setError(data.error ?? 'Error'); return }
       setForm({ username:'', code:'', email:'', workspaceId:'', companyName:'', costPerLead:'' }); setShowForm(false)
       fetch('/api/admin/clients').then(r => r.json()).then(setClients)
-      if (data.inviteUrl) {
-        prompt('Client created. Send them this invite link to set their own login:', data.inviteUrl)
-      } else {
-        alert(`Client created — send these login details:\n\nUsername: ${data.username}\nAccess code: ${data.code}\n\nLeads + emails are backfilling now.`)
-      }
+      prompt(`Client created. Send ${data.email} this link to set their own access code:`, data.inviteUrl ?? '')
     } finally { setSaving(false) }
   }
   async function toggleActive(c: PortalClient) {
@@ -398,9 +394,7 @@ export function AdminClientsClient() {
                       {workspaces.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
                     </select>
                   </div>
-                  <div><label className="block text-xs text-gray-500 mb-1">Username <span className="text-gray-400">(blank = send invite link)</span></label><input value={form.username} onChange={e => setForm(f=>({...f,username:e.target.value}))} placeholder="leave blank to let them choose" autoCapitalize="none" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
-                  <div><label className="block text-xs text-gray-500 mb-1">Access code <span className="text-gray-400">(blank = auto)</span></label><input value={form.code} onChange={e => setForm(f=>({...f,code:e.target.value}))} placeholder="Otta-7K2P" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
-                  <div className="col-span-2"><label className="block text-xs text-gray-500 mb-1">Email <span className="text-gray-400">(optional, for your records)</span></label><input type="email" value={form.email} onChange={e => setForm(f=>({...f,email:e.target.value}))} placeholder="client@company.com" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
+                  <div className="col-span-2"><label className="block text-xs text-gray-500 mb-1">Client email <span className="text-gray-400">(this is their login — they&apos;ll set their own code)</span></label><input required type="email" value={form.email} onChange={e => setForm(f=>({...f,email:e.target.value}))} placeholder="client@company.com" autoCapitalize="none" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
                   <div><label className="block text-xs text-gray-500 mb-1">Cost per lead (£)</label><input type="number" min="0" step="0.01" value={form.costPerLead} onChange={e => setForm(f=>({...f,costPerLead:e.target.value}))} placeholder="0" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
                   {error && <p className="col-span-2 text-sm text-red-600">{error}</p>}
                   <div className="col-span-2 flex gap-2 justify-end">
@@ -415,7 +409,7 @@ export function AdminClientsClient() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-100 bg-gray-50">
-                    {['Company','Username','Workspace','Cost/lead','Status','Actions'].map(h => <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}
+                    {['Company','Login email','Workspace','Cost/lead','Status','Actions'].map(h => <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}
                   </tr>
                 </thead>
                 <tbody>

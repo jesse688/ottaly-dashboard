@@ -33,6 +33,8 @@ interface Lead {
   dispute_admin_note: string | null
   has_unread: boolean
   dispute_eligible: boolean
+  archived: boolean
+  has_sent: boolean
 }
 
 interface ThreadMsg {
@@ -106,12 +108,6 @@ function splitQuote(text: string): { main: string; quoted: string } {
   if (idx === -1) return { main: text.trim(), quoted: '' }
   return { main: text.slice(0, idx).trim(), quoted: text.slice(idx).trim() }
 }
-function cleanCampaign(n: string | null) {
-  if (!n) return null
-  const s = n.replace(/\s*https?:\/\/\S+/g, '').replace(/_+$/, '').trim()
-  const c = s || n
-  return c.length > 40 ? c.slice(0, 40) + '…' : c
-}
 
 export function UniboxClient({ companyName }: { companyName: string }) {
   const [leads, setLeads] = useState<Lead[] | null>(null)
@@ -119,8 +115,11 @@ export function UniboxClient({ companyName }: { companyName: string }) {
   const [thread, setThread] = useState<ThreadMsg[] | null>(null)
   const [customLabels, setCustomLabels] = useState<CustomLabel[]>([])
   const [activeLabel, setActiveLabel] = useState<string | null>(null)
+  const [view, setView] = useState<'inbox' | 'unread' | 'sent' | 'archived'>('inbox')
   const [search, setSearch] = useState('')
   const [balance, setBalance] = useState<{ balance: number; currency: string } | null>(null)
+  // Forward: seeds the composer with quoted content + an empty recipient.
+  const [forwardSeed, setForwardSeed] = useState<{ id: number; html: string } | null>(null)
 
   const [labelDrop, setLabelDrop] = useState(false)
   const dropRef = useRef<HTMLDivElement>(null)
@@ -229,11 +228,25 @@ export function UniboxClient({ companyName }: { companyName: string }) {
     setSelected(prev => prev ? { ...prev, deal_value: val || null } : prev)
   }
 
-  async function handleReply(text: string, html: string, cc: string) {
+  async function toggleArchive(lead: Lead) {
+    const archived = !lead.archived
+    setLeads(prev => prev?.map(l => l.id === lead.id ? { ...l, archived } : l) ?? null)
+    setSelected(prev => prev?.id === lead.id ? { ...prev, archived } : prev)
+    await fetch(`/api/portal/leads/${lead.id}/data`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ archived }) })
+  }
+
+  function handleForward(m: ThreadMsg) {
+    const orig = (m.body_text || m.content_preview || '').trim()
+    const header = `---------- Forwarded message ----------\nFrom: ${m.from_email ?? (selected ? fullName(selected) : '')}\nSubject: ${m.subject ?? ''}\n\n`
+    const html = `<p></p><p>${(header + orig).replace(/\n/g, '<br/>')}</p>`
+    setForwardSeed({ id: Date.now(), html })
+  }
+
+  async function handleReply(text: string, html: string, to: string, cc: string) {
     if (!text.trim() || !selected) return
     setReplying(true); setReplyMsg('')
     const res = await fetch(`/api/portal/leads/${selected.id}/reply`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body: text, bodyHtml: html, cc }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body: text, bodyHtml: html, to, cc }),
     })
     const d = await res.json().catch(() => ({})) as { ok?: boolean; sentLive?: boolean }
     setReplying(false)
@@ -295,10 +308,23 @@ export function UniboxClient({ companyName }: { companyName: string }) {
   const counts: Record<string, number> = {}
   for (const l of leads ?? []) if (l.client_label) counts[l.client_label] = (counts[l.client_label] ?? 0) + 1
 
+  const inView = (l: Lead) =>
+    view === 'archived' ? l.archived
+    : l.archived ? false
+    : view === 'unread' ? l.has_unread
+    : view === 'sent' ? l.has_sent
+    : true
+  const viewCounts = {
+    inbox: (leads ?? []).filter(l => !l.archived).length,
+    unread: (leads ?? []).filter(l => !l.archived && l.has_unread).length,
+    sent: (leads ?? []).filter(l => !l.archived && l.has_sent).length,
+    archived: (leads ?? []).filter(l => l.archived).length,
+  }
+
   const filtered = (leads ?? []).filter(l => {
     const matchLabel = activeLabel === null || l.client_label === activeLabel
     const q = search.toLowerCase()
-    return matchLabel && (!q || fullName(l).toLowerCase().includes(q) || (l.company_name ?? '').toLowerCase().includes(q) || (l.email ?? '').toLowerCase().includes(q))
+    return inView(l) && matchLabel && (!q || fullName(l).toLowerCase().includes(q) || (l.company_name ?? '').toLowerCase().includes(q) || (l.email ?? '').toLowerCase().includes(q))
   })
 
   const labelMeta = (name: string | null) => customLabels.find(c => c.name === name)
@@ -330,19 +356,26 @@ export function UniboxClient({ companyName }: { companyName: string }) {
       <div className="flex-1 flex overflow-hidden">
         {/* Column 1 — sidebar */}
         <aside className="w-56 bg-white border-r border-gray-200 flex flex-col shrink-0">
-          <div className="p-3">
-            <button
-              onClick={() => setActiveLabel(null)}
-              onDragOver={e => { if (dragLeadId) { e.preventDefault(); setDragOver('__inbox') } }}
-              onDragLeave={() => setDragOver(d => d === '__inbox' ? null : d)}
-              onDrop={e => { e.preventDefault(); dropOnStage(null) }}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm font-medium ${dragOver === '__inbox' ? 'ring-2 ring-indigo-400 bg-indigo-50' : activeLabel === null ? 'bg-indigo-50 text-indigo-700' : 'text-gray-700 hover:bg-gray-50'}`}>
-              <span className="flex items-center gap-2">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 4h16v16H4z" opacity="0"/><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
-                Inbox
-              </span>
-              <span className="text-xs text-gray-400">{leads?.length ?? 0}</span>
-            </button>
+          <div className="p-3 space-y-0.5">
+            {([
+              { key: 'inbox', label: 'Inbox', icon: <path d="M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/> },
+              { key: 'unread', label: 'Unread', icon: <><path d="M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><circle cx="18" cy="6" r="3" fill="currentColor" stroke="none"/></> },
+              { key: 'sent', label: 'Sent', icon: <path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z"/> },
+              { key: 'archived', label: 'Archived', icon: <><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4"/></> },
+            ] as { key: 'inbox'|'unread'|'sent'|'archived'; label: string; icon: ReactNode }[]).map(v => (
+              <button key={v.key}
+                onClick={() => setView(v.key)}
+                onDragOver={v.key === 'inbox' ? e => { if (dragLeadId) { e.preventDefault(); setDragOver('__inbox') } } : undefined}
+                onDragLeave={v.key === 'inbox' ? () => setDragOver(d => d === '__inbox' ? null : d) : undefined}
+                onDrop={v.key === 'archived' ? e => { e.preventDefault(); if (dragLeadId) { const l=(leads??[]).find(x=>x.id===dragLeadId); if(l) toggleArchive({...l, archived:false}); setDragLeadId(null); setDragOver(null) } } : v.key === 'inbox' ? e => { e.preventDefault(); dropOnStage(null) } : undefined}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm font-medium ${dragOver === '__inbox' && v.key==='inbox' ? 'ring-2 ring-indigo-400 bg-indigo-50' : view === v.key ? 'bg-indigo-50 text-indigo-700' : 'text-gray-700 hover:bg-gray-50'}`}>
+                <span className="flex items-center gap-2">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">{v.icon}</svg>
+                  {v.label}
+                </span>
+                <span className="text-xs text-gray-400">{viewCounts[v.key]}</span>
+              </button>
+            ))}
           </div>
           <div className="px-3 flex items-center justify-between">
             <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Deal stages</span>
@@ -404,7 +437,6 @@ export function UniboxClient({ companyName }: { companyName: string }) {
                       </div>
                       <p className="text-xs text-gray-500 truncate">{l.company_name ?? l.email}</p>
                       <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-                        {l.campaign_name && <span className="inline-flex items-center gap-1 text-[10px] text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded"><svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor"><path d="M3 11l19-9-9 19-2-8-8-2z"/></svg>{cleanCampaign(l.campaign_name)}</span>}
                         <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-green-100 text-green-700 px-1.5 py-0.5 rounded">Lead</span>
                         {cl && <span className={`inline-flex text-[10px] font-medium px-1.5 py-0.5 rounded ${COLOR_BADGE[cl.color] ?? 'bg-purple-100 text-purple-700'}`}>{cl.name}</span>}
                         {l.dispute_status === 'pending' && <span className="inline-flex text-[10px] font-medium bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">Dispute</span>}
@@ -434,8 +466,12 @@ export function UniboxClient({ companyName }: { companyName: string }) {
                   <p className="text-sm font-semibold text-gray-900 truncate">{fullName(selected)}</p>
                   {selected.email && <p className="text-xs text-gray-500 truncate">{selected.email}</p>}
                 </div>
+                <button onClick={() => toggleArchive(selected)} title={selected.archived ? 'Unarchive' : 'Archive'} className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-600 hover:bg-gray-50">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4"/></svg>
+                  {selected.archived ? 'Unarchive' : 'Archive'}
+                </button>
                 {/* deal-stage dropdown */}
-                <div className="ml-auto relative" ref={dropRef}>
+                <div className="relative" ref={dropRef}>
                   <button onClick={() => setLabelDrop(v => !v)} className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-700 hover:bg-gray-50">
                     {selected.client_label ? <><span className={`w-2 h-2 rounded-full ${COLOR_MAP[labelMeta(selected.client_label)?.color ?? 'purple']}`} />{selected.client_label}</> : <span className="text-gray-500">Set stage</span>}
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="6 9 12 15 18 9"/></svg>
@@ -485,6 +521,9 @@ export function UniboxClient({ companyName }: { companyName: string }) {
                         <div className="ml-auto flex items-center gap-2 shrink-0">
                           {m.pv_label && m.pv_label !== 'INTERESTED' && <span className="text-[10px] bg-white border border-gray-200 text-gray-500 px-1.5 py-0.5 rounded capitalize">{m.pv_label.replace(/_/g,' ').toLowerCase()}</span>}
                           <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${out ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-200 text-gray-600'}`}>{out ? 'Sent' : 'Received'}</span>
+                          <button onClick={() => handleForward(m)} title="Forward" className="text-gray-400 hover:text-indigo-600">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 17 20 12 15 7"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/></svg>
+                          </button>
                           <span className="text-[11px] text-gray-400 hidden sm:inline">{fmtFull(m.timestamp_created)}</span>
                         </div>
                       </div>
@@ -520,6 +559,7 @@ export function UniboxClient({ companyName }: { companyName: string }) {
                   placeholderName={selected.first_name ?? fullName(selected).split(' ')[0]}
                   sending={replying}
                   statusMsg={replyMsg}
+                  seed={forwardSeed}
                   onSend={handleReply}
                 />
               </div>
@@ -687,19 +727,31 @@ export function UniboxClient({ companyName }: { companyName: string }) {
   )
 }
 
-// Gmail-style rich text reply: bold/italic/underline, font, size, link, image.
-function RichReply({ toEmail, placeholderName, sending, statusMsg, onSend }: {
+// Gmail-style rich text reply: editable To, Cc, bold/italic/underline, font,
+// size, link, image — and a forward seed that prefills quoted content.
+function RichReply({ toEmail, placeholderName, sending, statusMsg, seed, onSend }: {
   toEmail: string; placeholderName: string; sending: boolean; statusMsg: string
-  onSend: (text: string, html: string, cc: string) => void
+  seed: { id: number; html: string } | null
+  onSend: (text: string, html: string, to: string, cc: string) => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const [empty, setEmpty] = useState(true)
+  const [to, setTo] = useState(toEmail)
   const [showCc, setShowCc] = useState(false)
   const [cc, setCc] = useState('')
 
-  // execCommand keeps the contentEditable selection; use onMouseDown preventDefault
-  // on toolbar buttons so focus stays in the editor.
+  // Forward seed: prefill the editor with quoted content and clear the recipient.
+  useEffect(() => {
+    if (seed && ref.current) {
+      ref.current.innerHTML = seed.html
+      setEmpty((ref.current.innerText ?? '').trim().length === 0)
+      setTo('')
+      ref.current.focus()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seed?.id])
+
   function exec(cmd: string, value?: string) {
     document.execCommand(cmd, false, value)
     ref.current?.focus()
@@ -722,10 +774,10 @@ function RichReply({ toEmail, placeholderName, sending, statusMsg, onSend }: {
     const el = ref.current
     if (!el) return
     const text = el.innerText.trim()
-    if (!text) return
-    onSend(text, el.innerHTML, cc.trim())
+    if (!text || !to.trim()) return
+    onSend(text, el.innerHTML, to.trim(), cc.trim())
     el.innerHTML = ''
-    setEmpty(true); setCc(''); setShowCc(false)
+    setEmpty(true); setCc(''); setShowCc(false); setTo(toEmail)
   }
 
   const Btn = ({ cmd, val, title, children }: { cmd?: string; val?: string; title: string; children: ReactNode }) => (
@@ -738,14 +790,15 @@ function RichReply({ toEmail, placeholderName, sending, statusMsg, onSend }: {
 
   return (
     <div className="rounded-xl border border-gray-200 overflow-hidden focus-within:border-indigo-300 focus-within:ring-1 focus-within:ring-indigo-200">
-      <div className="px-3 py-2 bg-gray-50 border-b border-gray-100 text-xs text-gray-500 flex items-center gap-2">
-        <span><span className="font-medium text-gray-700">Reply to:</span> {toEmail}</span>
-        {!showCc && <button type="button" onClick={() => setShowCc(true)} className="ml-auto text-indigo-600 hover:text-indigo-800">Cc</button>}
+      <div className="px-3 py-1.5 bg-gray-50 border-b border-gray-100 flex items-center gap-2">
+        <span className="text-xs font-medium text-gray-500 w-7">To:</span>
+        <input value={to} onChange={e => setTo(e.target.value)} placeholder="recipient@example.com" className="flex-1 text-sm outline-none bg-transparent text-gray-800 placeholder:text-gray-400" />
+        {!showCc && <button type="button" onClick={() => setShowCc(true)} className="text-xs text-indigo-600 hover:text-indigo-800">Cc</button>}
       </div>
       {showCc && (
         <div className="px-3 py-1.5 border-b border-gray-100 flex items-center gap-2">
-          <span className="text-xs font-medium text-gray-500">Cc:</span>
-          <input value={cc} onChange={e => setCc(e.target.value)} placeholder="email@example.com, another@…" className="flex-1 text-sm outline-none text-gray-800 placeholder:text-gray-400" />
+          <span className="text-xs font-medium text-gray-500 w-7">Cc:</span>
+          <input value={cc} onChange={e => setCc(e.target.value)} placeholder="email@example.com, another@… (comma-separated)" className="flex-1 text-sm outline-none text-gray-800 placeholder:text-gray-400" />
         </div>
       )}
 
@@ -788,7 +841,7 @@ function RichReply({ toEmail, placeholderName, sending, statusMsg, onSend }: {
 
       <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-t border-gray-100">
         <span className="text-xs">{statusMsg ? <span className="text-green-600 font-medium">{statusMsg}</span> : <span className="text-gray-400">Sent via your campaign mailbox</span>}</span>
-        <button onClick={send} disabled={empty || sending} className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-medium rounded-lg">
+        <button onClick={send} disabled={empty || sending || !to.trim()} className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-medium rounded-lg">
           {sending ? 'Sending…' : <><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>Send</>}
         </button>
       </div>

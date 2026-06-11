@@ -7,27 +7,29 @@ export default function InvitePage() {
   const { token } = useParams<{ token: string }>()
   const router = useRouter()
   const [company, setCompany] = useState<string | null>(null)
+  const [email, setEmail] = useState('')
   const [invalid, setInvalid] = useState(false)
-  const [username, setUsername] = useState('')
   const [code, setCode] = useState('')
+  const [confirm, setConfirm] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
     fetch(`/api/invite/${token}`).then(async r => {
       if (!r.ok) { setInvalid(true); return }
-      const d = await r.json() as { companyName: string }
-      setCompany(d.companyName)
+      const d = await r.json() as { companyName: string; email: string }
+      setCompany(d.companyName); setEmail(d.email)
     }).catch(() => setInvalid(true))
   }, [token])
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
-    if (username.trim().length < 3 || code.trim().length < 4) return
+    if (code.trim().length < 4) { setError('Choose a code with at least 4 characters.'); return }
+    if (code.trim() !== confirm.trim()) { setError('The codes don’t match.'); return }
     setLoading(true); setError('')
     const res = await fetch(`/api/invite/${token}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, code }),
+      body: JSON.stringify({ code }),
     })
     setLoading(false)
     if (!res.ok) { const d = await res.json() as { error: string }; setError(d.error ?? 'Something went wrong'); return }
@@ -45,22 +47,26 @@ export default function InvitePage() {
           <p className="text-sm text-center text-gray-500">This invite link is invalid or has already been used. Please contact your account manager.</p>
         ) : (
           <>
-            <h1 className="text-xl font-semibold text-gray-900 text-center mb-1">Set up your login</h1>
+            <h1 className="text-xl font-semibold text-gray-900 text-center mb-1">Set your access code</h1>
             <p className="text-sm text-gray-500 text-center mb-6">{company ? `for ${company}` : 'Loading…'}</p>
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="block text-sm text-gray-700 mb-1">Choose a username</label>
-                <input value={username} onChange={e => setUsername(e.target.value)} placeholder="e.g. gareth" autoFocus autoCapitalize="none"
+                <label className="block text-sm text-gray-700 mb-1">Your login email</label>
+                <input value={email} readOnly className="w-full px-3 py-2 rounded-lg border border-gray-200 bg-gray-50 text-sm text-gray-600 outline-none" />
+              </div>
+              <div>
+                <label className="block text-sm text-gray-700 mb-1">Create an access code</label>
+                <input value={code} onChange={e => setCode(e.target.value)} placeholder="something memorable" autoFocus
                   className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-200" />
               </div>
               <div>
-                <label className="block text-sm text-gray-700 mb-1">Choose an access code</label>
-                <input value={code} onChange={e => setCode(e.target.value)} placeholder="something memorable"
+                <label className="block text-sm text-gray-700 mb-1">Confirm access code</label>
+                <input value={confirm} onChange={e => setConfirm(e.target.value)} placeholder="re-enter your code"
                   className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-200" />
-                <p className="text-xs text-gray-400 mt-1">You&apos;ll use these to log in next time.</p>
+                <p className="text-xs text-gray-400 mt-1">You&apos;ll log in with your email + this code.</p>
               </div>
               {error && <p className="text-sm text-red-600">{error}</p>}
-              <button type="submit" disabled={loading || username.trim().length < 3 || code.trim().length < 4}
+              <button type="submit" disabled={loading || code.trim().length < 4 || !confirm}
                 className="w-full py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-sm font-semibold">
                 {loading ? 'Setting up…' : 'Create my login'}
               </button>

@@ -5,6 +5,7 @@ import pool from '@/lib/db'
 interface LeadDataRow {
   deal_value: string | null
   notes: string | null
+  archived?: boolean
 }
 
 // GET — returns deal_value and notes for this lead+client
@@ -31,19 +32,20 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { id } = await params
-  const body = await req.json() as { deal_value?: string; notes?: string }
+  const body = await req.json() as { deal_value?: string; notes?: string; archived?: boolean }
 
   const res = await pool.query(
-    `INSERT INTO portal_lead_data (lead_id, client_id, deal_value, notes, updated_at)
-     VALUES ($1, $2, $3, $4, NOW())
+    `INSERT INTO portal_lead_data (lead_id, client_id, deal_value, notes, archived, updated_at)
+     VALUES ($1, $2, $3, $4, COALESCE($5, FALSE), NOW())
      ON CONFLICT (lead_id, client_id) DO UPDATE
        SET deal_value = COALESCE(EXCLUDED.deal_value, portal_lead_data.deal_value),
            notes = COALESCE(EXCLUDED.notes, portal_lead_data.notes),
+           archived = COALESCE($5, portal_lead_data.archived),
            updated_at = NOW()
-     RETURNING deal_value, notes`,
-    [id, session.clientId, body.deal_value ?? null, body.notes ?? null]
+     RETURNING deal_value, notes, archived`,
+    [id, session.clientId, body.deal_value ?? null, body.notes ?? null, body.archived ?? null]
   )
 
   const row = res.rows[0] as LeadDataRow
-  return NextResponse.json({ deal_value: row.deal_value, notes: row.notes })
+  return NextResponse.json({ deal_value: row.deal_value, notes: row.notes, archived: row.archived })
 }

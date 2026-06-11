@@ -59,8 +59,8 @@ export default function LoginPage() {
         {mode === 'login' ? (
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-sm text-gray-700 mb-1">Username</label>
-              <input value={username} onChange={e => setUsername(e.target.value)} placeholder="e.g. gareth" autoFocus autoCapitalize="none" autoComplete="username"
+              <label className="block text-sm text-gray-700 mb-1">Email</label>
+              <input type="email" value={username} onChange={e => setUsername(e.target.value)} placeholder="you@company.com" autoFocus autoCapitalize="none" autoComplete="username"
                 className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-200 transition-colors" />
             </div>
             <div>
@@ -91,10 +91,10 @@ export default function LoginPage() {
               <p className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2.5">{forgotMsg}</p>
             ) : (
               <>
-                <p className="text-sm text-gray-500">Enter your username and we&apos;ll let your account manager know to resend your code.</p>
+                <p className="text-sm text-gray-500">Enter your email and we&apos;ll let your account manager know to resend your code.</p>
                 <div>
-                  <label className="block text-sm text-gray-700 mb-1">Username</label>
-                  <input value={username} onChange={e => setUsername(e.target.value)} placeholder="e.g. gareth" autoFocus autoCapitalize="none"
+                  <label className="block text-sm text-gray-700 mb-1">Email</label>
+                  <input type="email" value={username} onChange={e => setUsername(e.target.value)} placeholder="you@company.com" autoFocus autoCapitalize="none"
                     className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-200" />
                 </div>
                 <button type="submit" disabled={loading || !username}
