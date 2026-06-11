@@ -74,6 +74,7 @@ const SECTIONS: Section[] = [
       { href: '/audience',     label: 'Audience' },
       { href: '/diagnostics',  label: 'Diagnostics' },
       { href: '/intelligence', label: 'Intelligence' },
+      { href: '/gateway-analysis', label: 'Gateways' },
     ],
   },
   {
