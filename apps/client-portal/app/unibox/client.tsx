@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState, type ReactNode, type ChangeEvent, type KeyboardEvent } from 'react'
+import { Logo } from '@/app/components/Logo'
 import { useRouter } from 'next/navigation'
 
 interface Lead {
@@ -120,7 +121,7 @@ export function UniboxClient({ companyName }: { companyName: string }) {
   const [thread, setThread] = useState<ThreadMsg[] | null>(null)
   const [customLabels, setCustomLabels] = useState<CustomLabel[]>([])
   const [activeLabel, setActiveLabel] = useState<string | null>(null)
-  const [view, setView] = useState<'inbox' | 'unread' | 'sent' | 'archived'>('inbox')
+  const [view, setView] = useState<'inbox' | 'unread' | 'sent' | 'archived'>('unread')
   const [search, setSearch] = useState('')
   const [balance, setBalance] = useState<{ balance: number; currency: string } | null>(null)
   // Forward: seeds the composer with quoted content + an empty recipient.
@@ -314,10 +315,10 @@ export function UniboxClient({ companyName }: { companyName: string }) {
   const labelMeta = (name: string | null) => customLabels.find(c => c.name === name)
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden bg-[#f7f8fc]" style={{ fontFamily: 'system-ui,-apple-system,sans-serif' }}>
+    <div className="h-screen flex flex-col overflow-hidden bg-[#f7f8fc]" style={{ fontFamily: 'var(--font-inter), system-ui, sans-serif' }}>
       {/* Top bar */}
       <header className="h-14 bg-white border-b border-gray-200 flex items-center px-5 shrink-0 gap-3">
-        <span className="text-[#1a2332] font-bold text-lg">Ottaly</span>
+        <Logo />
         <span className="text-gray-300">|</span>
         <span className="text-gray-600 text-sm font-medium">{companyName}</span>
         <nav className="flex items-center gap-1 ml-4">
@@ -460,9 +461,9 @@ export function UniboxClient({ companyName }: { companyName: string }) {
                 ) : selected.replied_off ? (
                   <button onClick={() => toggleRepliedOff(selected)} title="Mark as not replied" className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-green-600 hover:text-gray-500"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>Replied off-dashboard</button>
                 ) : (
-                  <button onClick={() => toggleRepliedOff(selected)} title="I've replied to this lead outside the dashboard" className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-600 hover:bg-gray-50">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="20 6 9 17 4 12"/></svg>
-                    Replied off-dashboard
+                  <button onClick={() => toggleRepliedOff(selected)} title="I've replied to this lead outside the dashboard" className="ml-auto inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold text-white bg-[#1F6F78] hover:bg-[#195a61] shadow-sm">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                    Mark as replied
                   </button>
                 )}
                 <button onClick={() => toggleArchive(selected)} title={selected.archived ? 'Unarchive' : 'Archive'} className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-600 hover:bg-gray-50">

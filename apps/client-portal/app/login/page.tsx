@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
+import { Logo } from '@/app/components/Logo'
 
 export default function LoginPage() {
   const [username, setUsername] = useState('')
@@ -52,9 +53,9 @@ export default function LoginPage() {
     <div className="min-h-screen bg-white flex items-center justify-center px-4">
       <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-8 w-full max-w-sm">
         <div className="flex justify-center mb-6">
-          <span className="bg-slate-800 text-white text-sm font-bold px-4 py-1.5 rounded">Ottaly</span>
+          <Logo size="lg" />
         </div>
-        <h1 className="text-xl font-semibold text-gray-900 text-center mb-6">Ottaly Login Portal</h1>
+        <h1 className="text-lg font-semibold text-gray-900 text-center mb-6">Client Login</h1>
 
         {mode === 'login' ? (
           <form onSubmit={handleSubmit} className="space-y-4">

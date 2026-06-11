@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type FormEvent } from 'react'
 import { useParams, useRouter } from 'next/navigation'
+import { Logo } from '@/app/components/Logo'
 
 export default function InvitePage() {
   const { token } = useParams<{ token: string }>()
@@ -40,7 +41,7 @@ export default function InvitePage() {
     <div className="min-h-screen bg-white flex items-center justify-center px-4">
       <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-8 w-full max-w-sm">
         <div className="flex justify-center mb-6">
-          <span className="bg-slate-800 text-white text-sm font-bold px-4 py-1.5 rounded">Ottaly</span>
+          <Logo size="lg" />
         </div>
 
         {invalid ? (

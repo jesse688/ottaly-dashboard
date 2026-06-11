@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, type ReactNode } from 'react'
+import { Logo } from '@/app/components/Logo'
 import { useRouter } from 'next/navigation'
 
 interface Invoice {
@@ -62,9 +63,9 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
   }
 
   return (
-    <div className="min-h-screen bg-[#f7f8fc]" style={{ fontFamily: 'system-ui,-apple-system,sans-serif' }}>
+    <div className="min-h-screen bg-[#f7f8fc]" style={{ fontFamily: 'var(--font-inter), system-ui, sans-serif' }}>
       <header className="h-14 bg-white border-b border-gray-200 flex items-center px-5 gap-3 sticky top-0 z-10">
-        <span className="text-[#1a2332] font-bold text-lg">Ottaly</span>
+        <Logo />
         <span className="text-gray-300">|</span>
         <span className="text-gray-600 text-sm font-medium">{companyName}</span>
         <nav className="flex items-center gap-1 ml-4">
