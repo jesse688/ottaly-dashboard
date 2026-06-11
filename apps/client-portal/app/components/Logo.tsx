@@ -12,7 +12,7 @@ export function Logo({ size = 'sm', onDark = false }: { size?: 'sm' | 'lg'; onDa
   if (imgOk) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
-      <img src="/ottaly-logo.png" alt="Ottaly — Predictable Pipeline" className={`${h} w-auto`} onError={() => setImgOk(false)} />
+      <img src="/ottaly-logo.svg" alt="Ottaly — Predictable Pipeline" className={`${h} w-auto`} onError={() => setImgOk(false)} />
     )
   }
   return (
