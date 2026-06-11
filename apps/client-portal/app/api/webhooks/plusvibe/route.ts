@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import pool from '@/lib/db'
 import crypto from 'crypto'
+import { notifyClientOfLead } from '@/lib/email'
 
 interface PlusVibeWebhookPayload {
   event: string
@@ -120,6 +121,15 @@ export async function POST(req: NextRequest) {
       INSERT INTO esp_sync_log (source, workspace_id, status, leads_synced, finished_at)
       VALUES ($1, $2, $3, $4, NOW())
     `, ['plusvibe-webhook', event.workspace_id, 'success', 1])
+
+    // New lead in the portal = a lead that became INTERESTED. Email the client
+    // (once per lead — dedup is enforced inside notifyClientOfLead).
+    const becameLead = event.data.status === 'INTERESTED' || event.data.label === 'INTERESTED'
+    if (becameLead) {
+      try {
+        await notifyClientOfLead(event.workspace_id, event.lead_id)
+      } catch (e) { console.error('[webhook] notify failed:', e) }
+    }
 
     console.log(`[webhook] processed event: ${event.event}`)
     return NextResponse.json({ ok: true })

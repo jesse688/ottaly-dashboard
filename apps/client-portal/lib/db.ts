@@ -166,6 +166,32 @@ async function runMigration() {
         created_at TIMESTAMPTZ DEFAULT NOW()
       )`,
 
+      // ── New-lead email dedup: exactly one notification per (client, lead) ──
+      `CREATE TABLE IF NOT EXISTS portal_lead_notifications (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        client_id UUID NOT NULL REFERENCES portal_clients(id) ON DELETE CASCADE,
+        lead_id TEXT NOT NULL,
+        sent_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (client_id, lead_id)
+      )`,
+
+      // Mark every lead that ALREADY exists as "notified" so enabling email
+      // notifications doesn't blast clients with their whole back-catalogue —
+      // only leads arriving after this point will trigger a send. Idempotent.
+      `INSERT INTO portal_lead_notifications (client_id, lead_id)
+         SELECT pc.id, l.id
+           FROM portal_clients pc
+           JOIN esp_leads l ON l.workspace_id = pc.workspace_id
+            AND l.source = 'plusvibe' AND l.label = 'INTERESTED'
+         ON CONFLICT (client_id, lead_id) DO NOTHING`,
+
+      // ── Global settings (editable in admin) e.g. notification templates ──
+      `CREATE TABLE IF NOT EXISTS portal_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )`,
+
       // ── One-time migrations marker table ───────────────────────────
       `CREATE TABLE IF NOT EXISTS portal_meta (key TEXT PRIMARY KEY, created_at TIMESTAMPTZ DEFAULT NOW())`,
       // The ledger switched from money units to LEAD-COUNT units. Wipe any
