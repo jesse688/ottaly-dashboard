@@ -3431,13 +3431,13 @@
           // ── Headline status text ─────────────────────────────
           let statusLabel;
           if (j.status === 'verifying') {
-            statusLabel = `🔍 Verifying with Reacher — ${j.verified||0}/${j.toVerify||0}`;
+            statusLabel = j.verifyOnly ? `🔍 Verifying for CSV — ${j.verified||0}/${j.toVerify||0}` : `🔍 Verifying with Reacher — ${j.verified||0}/${j.toVerify||0}`;
           } else if (j.status === 'pushing') {
             statusLabel = `🚀 Pushing to PlusVibe — ${j.pushed||0} sent`;
           } else if (j.status === 'n2b_verifying') {
             statusLabel = `🔬 No2Bounce validating ${j.n2bTotal||0} catch-all contacts…`;
           } else if (j.status === 'completed') {
-            statusLabel = `✅ Done — ${j.pushed||0} pushed`;
+            statusLabel = j.verifyOnly ? `✅ Verified — ${j.safe_ids?.length||0} safe contacts ready` : `✅ Done — ${j.pushed||0} pushed`;
           } else if (j.status === 'cancelled') {
             statusLabel = '⛔ Cancelled';
           } else if (j.status === 'pausing') {
@@ -3543,31 +3543,79 @@
     }
 
     async function downloadPushCsv() {
-      const ids = [..._selectedIds];
-      if (!ids.length) { showMessage('No contacts selected', 'error'); return; }
-      // Fetch full contact data for selected IDs then build CSV
+      const contactIds = [..._selectedIds];
+      if (!contactIds.length) { showMessage('No contacts selected', 'error'); return; }
+
+      const wsId   = document.getElementById('pvWorkspace').value;
+      const campId = document.getElementById('pvCampaign').value;
+      const useN2b = document.getElementById('useN2b').checked;
+      if (!wsId)   { showMessage('Select a client first (Filter for Client)', 'error'); return; }
+      if (!campId) { showMessage('Select a campaign first', 'error'); return; }
+
+      const wsName   = pvWorkspaces.find(w => w._id === wsId)?.name || wsId;
+      const campName = document.getElementById('pvCampaign').selectedOptions[0]?.text || campId;
+      const pushProviders = [];
+      if (document.getElementById('emailGoogle').checked)  pushProviders.push('email_google');
+      if (document.getElementById('emailOutlook').checked) pushProviders.push('email_outlook');
+      if (document.getElementById('emailOther').checked)   pushProviders.push('email_other');
+
+      // Start a verify-only job (no push to PlusVibe)
+      let jobId;
       try {
-        const r = await fetch('/api/admin/database/contacts/by-ids', {
+        const r = await fetch('/api/contacts/verify-and-push', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ids })
+          body: JSON.stringify({
+            workspace_id: wsId, campaign_id: campId,
+            contact_ids: contactIds, workspace_name: wsName, campaign_name: campName,
+            include_risky: false, max_age_days: 90,
+            emailProviders: pushProviders.join(','),
+            use_n2b: useN2b,
+            verify_only: true,
+          })
         });
         const d = await r.json();
-        const contacts = d.contacts || [];
-        if (!contacts.length) { showMessage('No contact data found', 'error'); return; }
-        // PlusVibe CSV columns
-        const cols = ['email','first_name','last_name','company_name','company_website','job_title','industry','city','state','country','phone_number'];
-        const header = cols.join(',');
-        const rows = contacts.map(c => cols.map(k => {
-          const v = c[k] || '';
-          return `"${String(v).replace(/"/g, '""')}"`;
-        }).join(','));
-        const csv = [header, ...rows].join('\n');
-        const blob = new Blob([csv], { type: 'text/csv' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a'); a.href = url; a.download = `push-contacts-${ids.length}.csv`; a.click();
-        URL.revokeObjectURL(url);
-      } catch (err) { showMessage('CSV export failed: ' + err.message, 'error'); }
+        if (!r.ok || !d.jobId) { showMessage(d.error || 'Failed to start verification', 'error'); return; }
+        jobId = d.jobId;
+      } catch (err) { showMessage('Error: ' + err.message, 'error'); return; }
+
+      closePushModal();
+      deselectAll();
+      showMessage(`Verifying ${contactIds.length} contacts — CSV will download when done…`, 'success');
+      startQueuePolling();
+
+      // Poll until job is done, then trigger CSV download
+      const poll = setInterval(async () => {
+        try {
+          const r = await fetch(`/api/contacts/push-jobs/${jobId}`);
+          const job = await r.json();
+          if (!['completed','failed','cancelled'].includes(job.status)) return;
+          clearInterval(poll);
+          if (job.status !== 'completed' || !job.safe_ids?.length) {
+            showMessage(`Verification done — no safe contacts to export (${job.safe || 0} safe, ${job.invalid || 0} invalid)`, 'error');
+            return;
+          }
+          // Fetch verified safe contacts and build CSV
+          const cr = await fetch('/api/admin/database/contacts/by-ids', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids: job.safe_ids })
+          });
+          const cd = await cr.json();
+          const contacts = cd.contacts || [];
+          if (!contacts.length) { showMessage('No contact data returned', 'error'); return; }
+          const cols = ['email','first_name','last_name','company_name','company_website','job_title','industry','city','state','country','phone_number'];
+          const header = cols.join(',');
+          const rows = contacts.map(c => cols.map(k => `"${String(c[k]||'').replace(/"/g,'""')}"`).join(','));
+          const csv = [header, ...rows].join('\n');
+          const blob = new Blob([csv], { type: 'text/csv' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url; a.download = `verified-contacts-${contacts.length}.csv`; a.click();
+          URL.revokeObjectURL(url);
+          showMessage(`Downloaded ${contacts.length} verified contacts`, 'success');
+        } catch {}
+      }, 3000);
     }
 
     function showMessage(text, type = 'success') {

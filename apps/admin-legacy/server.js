@@ -12653,7 +12653,7 @@ app.get('/api/contacts/push-jobs/:id', (req, res) => {
 
 // POST starts job immediately, returns job ID — processing runs in background
 app.post('/api/contacts/verify-and-push', (req, res) => {
-  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 90, emailProviders, use_n2b = false } = req.body;
+  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 90, emailProviders, use_n2b = false, verify_only = false } = req.body;
   if (!workspace_id || !campaign_id || !Array.isArray(contact_ids) || !contact_ids.length) {
     return res.status(400).json({ error: 'workspace_id, campaign_id and contact_ids required' });
   }
@@ -12678,6 +12678,8 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
     workspace_id, campaign_id,
     allowedProviders,
     useN2b: !!use_n2b,
+    verifyOnly: !!verify_only,
+    safe_ids: [],
     total: contact_ids.length,
     skipped: 0, verified: 0, safe: 0, risky: 0, invalid: 0, unknown: 0,
     pushed: 0, progress: 0,
@@ -13003,12 +13005,16 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
       // ── Phase 1: push already-verified contacts immediately ────
       const alreadyPassing = alreadyVerified.filter(passesFilter);
       if (alreadyPassing.length) {
-        job.status = 'pushing';
-        await pushLeads(alreadyPassing);
-        if (job.status === 'failed' || job.cancelled || job.paused) {
-          if (job.paused) job.status = 'pausing';
-          else job.status = job.cancelled ? 'cancelled' : job.status;
-          return;
+        if (job.verifyOnly) {
+          alreadyPassing.forEach(c => job.safe_ids.push(c.id));
+        } else {
+          job.status = 'pushing';
+          await pushLeads(alreadyPassing);
+          if (job.status === 'failed' || job.cancelled || job.paused) {
+            if (job.paused) job.status = 'pausing';
+            else job.status = job.cancelled ? 'cancelled' : job.status;
+            return;
+          }
         }
       }
 
@@ -13043,12 +13049,15 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
             .catch(err => console.warn('[verify] background DB write failed:', err.message));
         }
 
-        // Push passing contacts from this batch right now
         const passing = chunk.filter(passesFilter);
         if (passing.length) {
-          job.status = 'pushing';
-          await pushLeads(passing);
-          if (job.status === 'failed') return;
+          if (job.verifyOnly) {
+            passing.forEach(c => job.safe_ids.push(c.id));
+          } else {
+            job.status = 'pushing';
+            await pushLeads(passing);
+            if (job.status === 'failed') return;
+          }
         }
       }
 
@@ -13116,8 +13125,12 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
         console.log(`[No2Bounce] Results: ${n2bSafe} confirmed safe, ${n2bInvalid} invalid, ${riskyContacts.length - n2bUpdates.length} no result`);
 
         if (n2bPush.length && !job.cancelled) {
-          job.status = 'pushing';
-          await pushLeads(n2bPush);
+          if (job.verifyOnly) {
+            n2bPush.forEach(c => job.safe_ids.push(c.id));
+          } else {
+            job.status = 'pushing';
+            await pushLeads(n2bPush);
+          }
         }
       }
 
