@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { getSession } from '@/lib/auth'
 import pool from '@/lib/db'
 import { getEmails } from '@/lib/plusvibe'
+import { getLockedLeadIds } from '@/lib/balance'
 
 // GET — the real email conversation for a lead, newest-last.
 // Reads cached portal_emails first; if empty, pulls live from PlusVibe and caches.
@@ -15,6 +16,12 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     [id, session.workspaceId]
   )
   if (!leadRes.rows.length) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+
+  // Locked lead (delivered while out of credit) — the conversation stays hidden
+  // until the client tops up. Never return its emails.
+  const lockedIds = await getLockedLeadIds(session.clientId)
+  if (lockedIds.has(id)) return NextResponse.json({ locked: true, messages: [] }, { status: 403 })
+
   const leadEmail: string = leadRes.rows[0].email
 
   async function readCache() {

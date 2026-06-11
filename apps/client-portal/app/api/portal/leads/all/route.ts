@@ -1,6 +1,14 @@
 import { NextResponse } from 'next/server'
 import { getSession } from '@/lib/auth'
 import pool from '@/lib/db'
+import { getLockedLeadIds, reconcileLeadCharges } from '@/lib/balance'
+
+// Fields hidden on a locked lead (delivered while out of credit) — everything
+// identifying stays server-side until the client tops up. first/last name remain
+// so we can show a "New lead from Ken — top up to unlock" teaser.
+const LOCKED_SUPPRESS = ['email', 'company_name', 'company_website', 'phone_number',
+  'job_title', 'department', 'industry', 'city', 'state', 'country', 'address_line',
+  'linkedin_url', 'linkedin_company_url', 'campaign_name']
 
 // Map a hidden_fields key -> which output fields it suppresses (server-side, so
 // hidden data never reaches the browser).
@@ -81,12 +89,20 @@ export async function GET() {
       [session.workspaceId, hiddenLabels, session.clientId]
     )
 
+    // Make sure lead charges are up to date, then work out which leads are locked
+    // (delivered while the client was out of credit).
+    await reconcileLeadCharges(session.clientId)
+    const lockedIds = await getLockedLeadIds(session.clientId)
+
     // Suppress hidden fields server-side
     const suppress: string[] = []
     for (const key of hiddenFields) for (const f of FIELD_SUPPRESS[key] ?? []) if (!suppress.includes(f)) suppress.push(f)
     const rows = res.rows.map(r => {
       const out = { ...r }
       for (const f of suppress) out[f] = null
+      const locked = lockedIds.has(r.id)
+      if (locked) for (const f of LOCKED_SUPPRESS) out[f] = null
+      out.locked = locked
       return out
     })
 

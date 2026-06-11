@@ -37,6 +37,7 @@ interface Lead {
   archived: boolean
   has_sent: boolean
   replied_off: boolean
+  locked: boolean
 }
 const isReplied = (l: Lead) => l.has_sent || l.replied_off
 
@@ -125,7 +126,7 @@ export function UniboxClient({ companyName, clientName }: { companyName: string;
   const [activeLabel, setActiveLabel] = useState<string | null>(null)
   const [view, setView] = useState<'inbox' | 'unread' | 'sent' | 'archived'>('unread')
   const [search, setSearch] = useState('')
-  const [balance, setBalance] = useState<{ balance: number; currency: string } | null>(null)
+  const [balance, setBalance] = useState<{ balance: number; currency: string; lowThreshold: number } | null>(null)
   // Friendly greeting on every load/refresh — auto-dismisses after a few seconds.
   const [showWelcome, setShowWelcome] = useState(true)
   // Forward: seeds the composer with quoted content + an empty recipient.
@@ -194,6 +195,8 @@ export function UniboxClient({ companyName, clientName }: { companyName: string;
     setSelected(lead)
     setReplyMsg('')
     setShowDispute(false); setThread(null)
+    // Locked leads never load their conversation.
+    if (lead.locked) { setThread([]); return }
     setLeads(prev => prev?.map(l => l.id === lead.id ? { ...l, has_unread: false } : l) ?? null)
     fetch(`/api/portal/leads/${lead.id}/thread`).then(r => r.json()).then((d) => {
       setThread(Array.isArray(d) ? d : [])
@@ -350,9 +353,16 @@ export function UniboxClient({ companyName, clientName }: { companyName: string;
         <div className="ml-auto flex items-center gap-4">
           {balance && (
             balance.balance <= 0 ? (
-              <a href="/invoices" className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#ffb700] text-[#050c29] text-sm font-semibold hover:brightness-95">
+              // Out of leads → red "Top Up Now"
+              <a href="/invoices" className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500 text-white text-sm font-semibold hover:bg-red-600 shadow-sm animate-pulse">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                Out of leads — top up
+                Top Up Now
+              </a>
+            ) : balance.balance <= balance.lowThreshold ? (
+              // Running low → brand yellow warning
+              <a href="/invoices" className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#ffb700] text-[#050c29] text-sm font-semibold hover:brightness-95">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                Low on leads · {balance.balance} left
               </a>
             ) : (
               <a href="/invoices" className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 border border-white/20">
@@ -436,14 +446,18 @@ export function UniboxClient({ companyName, clientName }: { companyName: string;
                   onDragEnd={() => { setDragLeadId(null); setDragOver(null) }}
                   className={`w-full text-left px-4 py-3 border-b border-gray-50 hover:bg-gray-50 transition-colors ${dragLeadId === l.id ? 'opacity-50' : ''} ${selected?.id === l.id ? 'bg-brand-50/60' : ''}`}>
                   <div className="flex gap-3">
-                    <div className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 ${av(l.id)}`}>{initials(l)}</div>
+                    <div className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 ${l.locked ? 'bg-[#fff4d6] text-[#b8860b]' : av(l.id)}`}>
+                      {l.locked ? <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> : initials(l)}
+                    </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-2">
-                        <span className={`text-sm truncate ${l.has_unread ? 'font-bold text-[#050c29]' : 'font-medium text-gray-800'}`}>{fullName(l)}</span>
+                        <span className={`text-sm truncate ${l.has_unread ? 'font-bold text-[#050c29]' : 'font-medium text-gray-800'}`}>{l.locked ? `New lead${l.first_name ? ` from ${l.first_name}` : ''}` : fullName(l)}</span>
                         <span className="text-[11px] text-gray-400 shrink-0">{fmtDate(l.first_replied_at ?? l.created_at)}</span>
                       </div>
-                      <p className="text-xs text-gray-500 truncate">{l.company_name ?? l.email}</p>
-                      {(cl || l.dispute_status === 'pending') && (
+                      {l.locked
+                        ? <p className="text-xs text-[#b8860b] font-medium truncate">🔒 Top up to unlock</p>
+                        : <p className="text-xs text-gray-500 truncate">{l.company_name ?? l.email}</p>}
+                      {(cl || l.dispute_status === 'pending') && !l.locked && (
                         <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                         {cl && <span className={`inline-flex text-[10px] font-medium px-1.5 py-0.5 rounded ${COLOR_BADGE[cl.color] ?? 'bg-purple-100 text-purple-700'}`}>{cl.name}</span>}
                         {l.dispute_status === 'pending' && <span className="inline-flex text-[10px] font-medium bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">Dispute</span>}
@@ -463,6 +477,15 @@ export function UniboxClient({ companyName, clientName }: { companyName: string;
             <div className="flex-1 flex flex-col items-center justify-center text-gray-400">
               <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mb-3 text-gray-300"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 5L2 7"/></svg>
               <p className="text-sm">Select a lead to read</p>
+            </div>
+          ) : selected.locked ? (
+            <div className="flex-1 flex flex-col items-center justify-center text-center px-8 bg-[#fafbfd]">
+              <div className="w-16 h-16 rounded-full bg-[#fff4d6] text-[#b8860b] flex items-center justify-center mb-5">
+                <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+              </div>
+              <h2 className="font-heading text-xl font-semibold text-[#050c29] mb-1">A new lead is waiting{selected.first_name ? `, from ${selected.first_name}` : ''}</h2>
+              <p className="text-sm text-gray-500 max-w-sm mb-6">You&apos;ve used all your leads, so this one is locked. Top up and once it&apos;s confirmed, the contact details and conversation unlock straight away.</p>
+              <a href="/invoices" className="px-5 py-2.5 bg-[#ffb700] text-[#050c29] text-sm font-semibold rounded-lg hover:brightness-95 shadow-sm">Top up to unlock</a>
             </div>
           ) : (
             <>
@@ -579,8 +602,8 @@ export function UniboxClient({ companyName, clientName }: { companyName: string;
           )}
         </section>
 
-        {/* Column 4 — lead details */}
-        {selected && (
+        {/* Column 4 — lead details (hidden while the lead is locked) */}
+        {selected && !selected.locked && (
           <aside className="w-72 bg-white border-l border-gray-200 flex flex-col shrink-0 overflow-y-auto">
             <div className="p-5 text-center border-b border-gray-100">
               <div className={`w-16 h-16 rounded-full mx-auto flex items-center justify-center text-lg font-semibold mb-2 ${av(selected.id)}`}>{initials(selected)}</div>

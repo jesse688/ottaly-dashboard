@@ -3,6 +3,7 @@ import { getSession } from '@/lib/auth'
 import pool from '@/lib/db'
 import { sendReply } from '@/lib/plusvibe'
 import { notifyAdmin } from '@/lib/notify'
+import { getLockedLeadIds } from '@/lib/balance'
 
 // POST — client replies to a lead.
 // 1. Persist the outgoing message to portal_emails (so it shows in the thread immediately)
@@ -25,6 +26,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   )
   if (!leadRes.rows.length) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const lead = leadRes.rows[0]
+
+  // Can't reply to a locked lead (delivered while out of credit) — top up first.
+  const lockedIds = await getLockedLeadIds(session.clientId)
+  if (lockedIds.has(id)) return NextResponse.json({ error: 'This lead is locked. Top up to unlock it before replying.' }, { status: 403 })
 
   // Recipients — default to the lead; client can send/forward to multiple addresses.
   const toAddrs = parseAddrs(to)

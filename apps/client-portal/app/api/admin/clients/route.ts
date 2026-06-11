@@ -26,6 +26,7 @@ export async function POST(req: NextRequest) {
     workspaceId: string
     companyName: string
     contactName?: string
+    lowLeadsThreshold?: number
     costPerLead?: number
   }
   const email = (b.email ?? '').trim().toLowerCase()
@@ -46,10 +47,10 @@ export async function POST(req: NextRequest) {
 
   try {
     const res = await pool.query(
-      `INSERT INTO portal_clients (username, email, password_hash, workspace_id, company_name, contact_name, cost_per_lead, invite_token)
-       VALUES ($1, $2, NULL, $3, $4, $5, $6, $7)
+      `INSERT INTO portal_clients (username, email, password_hash, workspace_id, company_name, contact_name, cost_per_lead, low_leads_threshold, invite_token)
+       VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8)
        RETURNING id`,
-      [email, email, workspaceId, companyName, contactName || null, Number(b.costPerLead) || 0, inviteToken]
+      [email, email, workspaceId, companyName, contactName || null, Number(b.costPerLead) || 0, Number.isFinite(Number(b.lowLeadsThreshold)) ? Math.max(0, Math.floor(Number(b.lowLeadsThreshold))) : 5, inviteToken]
     )
 
     // Auto-backfill this client's workspace (leads + real email threads) so they

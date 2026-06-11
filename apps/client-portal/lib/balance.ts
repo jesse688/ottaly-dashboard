@@ -11,6 +11,32 @@ export async function getBalance(clientId: string): Promise<number> {
   return Number(r.rows[0]?.balance ?? 0)
 }
 
+// Leads delivered while the client is out of credit are "locked" — shown as a
+// teaser (name only) with contact details + conversation hidden until a top-up
+// is paid. Locking is DERIVED from the ledger, not stored: the newest
+// (delivered − creditsGranted) charged leads are locked, so a paid top-up
+// automatically unlocks the oldest locked leads, up to the amount paid.
+export async function getLockedLeadIds(clientId: string): Promise<Set<string>> {
+  const r = await pool.query(
+    `SELECT COALESCE(SUM(amount) FILTER (WHERE type <> 'lead_charge'), 0) AS credits,
+            COUNT(*) FILTER (WHERE type = 'lead_charge')                  AS delivered
+       FROM portal_ledger WHERE client_id = $1`,
+    [clientId]
+  )
+  const credits = Number(r.rows[0]?.credits ?? 0)
+  const delivered = Number(r.rows[0]?.delivered ?? 0)
+  const lockedCount = Math.max(0, delivered - credits)
+  if (lockedCount === 0) return new Set<string>()
+
+  const locked = await pool.query(
+    `SELECT lead_id FROM portal_ledger
+      WHERE client_id = $1 AND type = 'lead_charge' AND lead_id IS NOT NULL
+      ORDER BY created_at DESC LIMIT $2`,
+    [clientId, lockedCount]
+  )
+  return new Set<string>(locked.rows.map(x => x.lead_id as string))
+}
+
 export async function getLedger(clientId: string, limit = 100) {
   const r = await pool.query(
     `SELECT id, type, amount, lead_id, description, created_by, created_at

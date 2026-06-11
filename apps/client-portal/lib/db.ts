@@ -83,6 +83,8 @@ async function runMigration() {
       // Spend visibility to the client: 'auto' (reveal spend+ROI only when ROI>0),
       // 'hidden' (never show money/ROI — outcomes only), 'always' (full transparency).
       `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS spend_visibility TEXT NOT NULL DEFAULT 'auto'`,
+      // Below this lead balance the header warns "Low on leads" (yellow). At 0 it's "Top Up Now" (red).
+      `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS low_leads_threshold INTEGER NOT NULL DEFAULT 5`,
 
       // ── Client deal-stage label per lead (separate from internal/PV label) ──
       `ALTER TABLE portal_lead_data ADD COLUMN IF NOT EXISTS client_label TEXT`,

@@ -16,6 +16,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     costPerLead?: number
     currency?: string
     spendVisibility?: string
+
+    lowLeadsThreshold?: number
   }
 
   const sets: string[] = []
@@ -32,6 +34,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (body.costPerLead !== undefined) { values.push(body.costPerLead); sets.push(`cost_per_lead = $${values.length}`) }
   if (body.currency !== undefined) { values.push(body.currency); sets.push(`currency = $${values.length}`) }
   if (body.spendVisibility !== undefined) { values.push(body.spendVisibility); sets.push(`spend_visibility = $${values.length}`) }
+  if (body.lowLeadsThreshold !== undefined) { values.push(Math.max(0, Math.floor(Number(body.lowLeadsThreshold)))); sets.push(`low_leads_threshold = $${values.length}`) }
 
   if (!sets.length) return NextResponse.json({ error: 'Nothing to update' }, { status: 400 })
 
