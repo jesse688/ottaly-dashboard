@@ -63,6 +63,7 @@ export async function GET() {
                 )
               ) AS dispute_eligible,
               COALESCE(ld.archived, FALSE) AS archived,
+              COALESCE(ld.replied_off, FALSE) AS replied_off,
               EXISTS (
                 SELECT 1 FROM portal_emails e3
                 WHERE e3.workspace_id = l.workspace_id

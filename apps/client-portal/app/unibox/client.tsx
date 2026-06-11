@@ -35,7 +35,9 @@ interface Lead {
   dispute_eligible: boolean
   archived: boolean
   has_sent: boolean
+  replied_off: boolean
 }
+const isReplied = (l: Lead) => l.has_sent || l.replied_off
 
 interface ThreadMsg {
   id: string
@@ -130,9 +132,6 @@ export function UniboxClient({ companyName }: { companyName: string }) {
   const [replying, setReplying] = useState(false)
   const [replyMsg, setReplyMsg] = useState('')
 
-  const [dealEdit, setDealEdit] = useState(false)
-  const [dealInput, setDealInput] = useState('')
-
   const [showDispute, setShowDispute] = useState(false)
   const [disputeType, setDisputeType] = useState<'non_lead' | 'icp_mismatch'>('non_lead')
   const [disputeReason, setDisputeReason] = useState('')
@@ -148,11 +147,6 @@ export function UniboxClient({ companyName }: { companyName: string }) {
   const [showNewLabel, setShowNewLabel] = useState(false)
   const [newLabelName, setNewLabelName] = useState('')
   const [newLabelColor, setNewLabelColor] = useState('purple')
-  const [newLabelPromptsValue, setNewLabelPromptsValue] = useState(false)
-
-  // Stage-triggered deal-value prompt
-  const [valueStage, setValueStage] = useState<string | null>(null)
-  const [valueInput, setValueInput] = useState('')
 
   const router = useRouter()
 
@@ -169,10 +163,10 @@ export function UniboxClient({ companyName }: { companyName: string }) {
     return () => document.removeEventListener('mousedown', h)
   }, [])
 
-  // Show the new-lead count in the browser tab (a quiet "notification").
+  // Show the unread (not-yet-replied) count in the browser tab.
   useEffect(() => {
-    const n = (leads ?? []).filter(l => !l.archived && l.has_unread).length
-    document.title = n > 0 ? `(${n}) New leads · Ottaly` : 'Ottaly Portal'
+    const n = (leads ?? []).filter(l => !l.archived && !(l.has_sent || l.replied_off)).length
+    document.title = n > 0 ? `(${n}) Unread · Ottaly` : 'Ottaly Portal'
   }, [leads])
 
   function loadLeads() {
@@ -188,7 +182,6 @@ export function UniboxClient({ companyName }: { companyName: string }) {
   function openLead(lead: Lead) {
     setSelected(lead)
     setReplyMsg('')
-    setDealEdit(false); setDealInput(lead.deal_value ?? '')
     setShowDispute(false); setThread(null)
     setLeads(prev => prev?.map(l => l.id === lead.id ? { ...l, has_unread: false } : l) ?? null)
     fetch(`/api/portal/leads/${lead.id}/thread`).then(r => r.json()).then((d) => {
@@ -201,14 +194,6 @@ export function UniboxClient({ companyName }: { companyName: string }) {
     setLeads(prev => prev?.map(l => l.id === leadId ? { ...l, client_label: label } : l) ?? null)
     setSelected(prev => prev?.id === leadId ? { ...prev, client_label: label } : prev)
     await fetch(`/api/portal/leads/${leadId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label }) })
-
-    // If the new stage captures a deal value and we don't have one yet, ask now
-    // (never off the bat — only when a lead reaches a value stage).
-    const meta = customLabels.find(c => c.name === label)
-    if (meta?.prompts_value && selected && selected.id === leadId && !selected.deal_value) {
-      setValueInput('')
-      setValueStage(label)
-    }
   }
 
   // Drag a lead row onto a stage in the sidebar to assign it.
@@ -216,25 +201,9 @@ export function UniboxClient({ companyName }: { companyName: string }) {
     const leadId = dragLeadId
     setDragOver(null); setDragLeadId(null)
     if (!leadId) return
-    const lead = (leads ?? []).find(l => l.id === leadId) ?? null
     setLeads(prev => prev?.map(l => l.id === leadId ? { ...l, client_label: name } : l) ?? null)
     setSelected(prev => prev?.id === leadId ? { ...prev, client_label: name } : prev)
     await fetch(`/api/portal/leads/${leadId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label: name }) })
-    // value stage with no value yet → open the lead and prompt
-    const meta = customLabels.find(c => c.name === name)
-    if (meta?.prompts_value && lead && !lead.deal_value) {
-      openLead(lead)
-      setValueInput(''); setValueStage(name)
-    }
-  }
-
-  async function saveDealValue(val: string) {
-    if (!selected) return
-    await fetch(`/api/portal/leads/${selected.id}/data`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deal_value: val || null }),
-    })
-    setLeads(prev => prev?.map(l => l.id === selected.id ? { ...l, deal_value: val || null } : l) ?? null)
-    setSelected(prev => prev ? { ...prev, deal_value: val || null } : prev)
   }
 
   async function toggleArchive(lead: Lead) {
@@ -261,16 +230,21 @@ export function UniboxClient({ companyName }: { companyName: string }) {
     setReplying(false)
     if (d.ok) {
       setReplyMsg(d.sentLive ? 'Reply sent.' : 'Reply received — our team will send it shortly.')
-      openLead(selected)
+      // Replying on the dashboard moves the lead out of Unread.
+      setLeads(prev => prev?.map(l => l.id === selected.id ? { ...l, has_sent: true } : l) ?? null)
+      setSelected(prev => prev ? { ...prev, has_sent: true } : prev)
+      openLead({ ...selected, has_sent: true })
       setTimeout(() => setReplyMsg(''), 4000)
     } else {
       setReplyMsg('Could not send. Please try again.')
     }
   }
 
-  async function handleSaveDeal() {
-    await saveDealValue(dealInput)
-    setDealEdit(false)
+  async function toggleRepliedOff(lead: Lead) {
+    const replied_off = !lead.replied_off
+    setLeads(prev => prev?.map(l => l.id === lead.id ? { ...l, replied_off } : l) ?? null)
+    setSelected(prev => prev?.id === lead.id ? { ...prev, replied_off } : prev)
+    await fetch(`/api/portal/leads/${lead.id}/data`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ replied_off }) })
   }
 
   function openDispute(type: 'non_lead' | 'icp_mismatch') {
@@ -298,11 +272,11 @@ export function UniboxClient({ companyName }: { companyName: string }) {
   async function handleCreateLabel() {
     if (!newLabelName.trim()) return
     const res = await fetch('/api/portal/labels', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newLabelName.trim(), color: newLabelColor, promptsValue: newLabelPromptsValue }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newLabelName.trim(), color: newLabelColor }),
     })
     const created = await res.json() as CustomLabel
     setCustomLabels(prev => [...prev, created])
-    setNewLabelName(''); setNewLabelColor('purple'); setNewLabelPromptsValue(false); setShowNewLabel(false)
+    setNewLabelName(''); setNewLabelColor('purple'); setShowNewLabel(false)
   }
 
   async function handleDeleteLabel(id: string) {
@@ -317,15 +291,16 @@ export function UniboxClient({ companyName }: { companyName: string }) {
   const counts: Record<string, number> = {}
   for (const l of leads ?? []) if (l.client_label) counts[l.client_label] = (counts[l.client_label] ?? 0) + 1
 
+  // Unread = a new lead not yet replied to (on or off the dashboard).
   const inView = (l: Lead) =>
     view === 'archived' ? l.archived
     : l.archived ? false
-    : view === 'unread' ? l.has_unread
+    : view === 'unread' ? !isReplied(l)
     : view === 'sent' ? l.has_sent
     : true
   const viewCounts = {
     inbox: (leads ?? []).filter(l => !l.archived).length,
-    unread: (leads ?? []).filter(l => !l.archived && l.has_unread).length,
+    unread: (leads ?? []).filter(l => !l.archived && !isReplied(l)).length,
     sent: (leads ?? []).filter(l => !l.archived && l.has_sent).length,
     archived: (leads ?? []).filter(l => l.archived).length,
   }
@@ -371,7 +346,7 @@ export function UniboxClient({ companyName }: { companyName: string }) {
           <div className="p-3 space-y-0.5">
             {([
               { key: 'inbox', label: 'Inbox', icon: <path d="M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/> },
-              { key: 'unread', label: 'New leads', icon: <><path d="M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><circle cx="18" cy="6" r="3" fill="currentColor" stroke="none"/></> },
+              { key: 'unread', label: 'Unread', icon: <><path d="M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><circle cx="18" cy="6" r="3" fill="currentColor" stroke="none"/></> },
               { key: 'sent', label: 'Sent', icon: <path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z"/> },
               { key: 'archived', label: 'Archived', icon: <><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4"/></> },
             ] as { key: 'inbox'|'unread'|'sent'|'archived'; label: string; icon: ReactNode }[]).map(v => (
@@ -454,7 +429,6 @@ export function UniboxClient({ companyName }: { companyName: string }) {
                         <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-green-100 text-green-700 px-1.5 py-0.5 rounded">Lead</span>
                         {cl && <span className={`inline-flex text-[10px] font-medium px-1.5 py-0.5 rounded ${COLOR_BADGE[cl.color] ?? 'bg-purple-100 text-purple-700'}`}>{cl.name}</span>}
                         {l.dispute_status === 'pending' && <span className="inline-flex text-[10px] font-medium bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">Dispute</span>}
-                        {l.deal_value && <span className="inline-flex text-[10px] font-medium bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded">£{Number(l.deal_value).toLocaleString()}</span>}
                       </div>
                     </div>
                   </div>
@@ -480,7 +454,18 @@ export function UniboxClient({ companyName }: { companyName: string }) {
                   <p className="text-sm font-semibold text-gray-900 truncate">{fullName(selected)}</p>
                   {selected.email && <p className="text-xs text-gray-500 truncate">{selected.email}</p>}
                 </div>
-                <button onClick={() => toggleArchive(selected)} title={selected.archived ? 'Unarchive' : 'Archive'} className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-600 hover:bg-gray-50">
+                {/* Replied off-dashboard: moves a new lead out of Unread */}
+                {selected.has_sent ? (
+                  <span className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-green-600"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>Replied</span>
+                ) : selected.replied_off ? (
+                  <button onClick={() => toggleRepliedOff(selected)} title="Mark as not replied" className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-green-600 hover:text-gray-500"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>Replied off-dashboard</button>
+                ) : (
+                  <button onClick={() => toggleRepliedOff(selected)} title="I've replied to this lead outside the dashboard" className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-600 hover:bg-gray-50">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="20 6 9 17 4 12"/></svg>
+                    Replied off-dashboard
+                  </button>
+                )}
+                <button onClick={() => toggleArchive(selected)} title={selected.archived ? 'Unarchive' : 'Archive'} className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-600 hover:bg-gray-50">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4"/></svg>
                   {selected.archived ? 'Unarchive' : 'Archive'}
                 </button>
@@ -591,20 +576,6 @@ export function UniboxClient({ companyName }: { companyName: string }) {
               {selected.company_name && <p className="text-xs text-indigo-600 mt-0.5">{selected.company_name}</p>}
             </div>
 
-            {/* deal value */}
-            <Section title="Deal value">
-              {dealEdit ? (
-                <div className="flex items-center gap-2">
-                  <div className="relative flex-1"><span className="absolute left-2 top-1.5 text-gray-400 text-sm">£</span><input type="number" min="0" value={dealInput} onChange={e => setDealInput(e.target.value)} autoFocus className="w-full pl-6 pr-2 py-1.5 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
-                  <button onClick={handleSaveDeal} className="px-3 py-1.5 bg-indigo-600 text-white text-xs font-medium rounded-lg">Save</button>
-                </div>
-              ) : (
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-semibold text-gray-900">{selected.deal_value ? `£${Number(selected.deal_value).toLocaleString()}` : 'Not set'}</span>
-                  <button onClick={() => { setDealEdit(true); setDealInput(selected.deal_value ?? '') }} className="text-xs text-indigo-600 hover:text-indigo-800">{selected.deal_value ? 'Edit' : '+ Add'}</button>
-                </div>
-              )}
-            </Section>
 
             <Section title="Status">
               <span className="inline-flex items-center gap-1.5 text-xs font-medium bg-green-100 text-green-700 px-2 py-1 rounded-full"><span className="w-1.5 h-1.5 rounded-full bg-green-500" />Lead</span>
@@ -708,32 +679,9 @@ export function UniboxClient({ companyName }: { companyName: string }) {
           <div className="flex gap-2 mb-4">
             {CUSTOM_COLORS.map(c => <button key={c} onClick={() => setNewLabelColor(c)} className={`w-7 h-7 rounded-full ${COLOR_MAP[c]} ${newLabelColor === c ? 'ring-2 ring-offset-2 ring-gray-400' : ''}`} />)}
           </div>
-          <label className="flex items-start gap-2 mb-4 cursor-pointer">
-            <input type="checkbox" checked={newLabelPromptsValue} onChange={e => setNewLabelPromptsValue(e.target.checked)} className="mt-0.5" />
-            <span className="text-sm text-gray-700">Ask for the deal value when a lead reaches this stage
-              <span className="block text-xs text-gray-400">Turn on for stages like “Quote Sent” or “Won”. Leave off for early stages.</span>
-            </span>
-          </label>
           <div className="flex gap-2 justify-end">
             <button onClick={() => setShowNewLabel(false)} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
             <button onClick={handleCreateLabel} disabled={!newLabelName.trim()} className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg disabled:opacity-50">Create</button>
-          </div>
-        </Modal>
-      )}
-
-      {/* stage-triggered deal-value prompt */}
-      {valueStage && selected && (
-        <Modal onClose={() => setValueStage(null)} title={`Deal value — ${valueStage}`}>
-          <p className="text-sm text-gray-500 mb-3">{fullName(selected)} moved to <strong>{valueStage}</strong>. What&apos;s this deal worth? You can skip and add it later.</p>
-          <div className="relative mb-4">
-            <span className="absolute left-3 top-2.5 text-gray-400">£</span>
-            <input type="number" min="0" autoFocus value={valueInput} onChange={e => setValueInput(e.target.value)} placeholder="0"
-              onKeyDown={e => { if (e.key === 'Enter' && valueInput) { saveDealValue(valueInput); setValueStage(null) } }}
-              className="w-full pl-7 pr-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" />
-          </div>
-          <div className="flex gap-2 justify-end">
-            <button onClick={() => setValueStage(null)} className="px-4 py-2 text-sm text-gray-600">Skip</button>
-            <button onClick={() => { saveDealValue(valueInput); setValueStage(null) }} disabled={!valueInput} className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg disabled:opacity-50">Save deal value</button>
           </div>
         </Modal>
       )}
