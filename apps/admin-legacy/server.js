@@ -47,6 +47,9 @@ const ADMIN_KEY              = process.env.ADMIN_KEY              || 'ottaly-adm
 // No need to also rotate JWT_SECRET — the password change is sufficient.
 const SESSION_SECRET         = JWT_SECRET + ':' + ADMIN_KEY;
 const PLUSVIBE_KEY           = process.env.PLUSVIBE_KEY           || '6425e882-f33fb46a-2837ff5a-eb535a60';
+const BISON_API_KEY = process.env.BISON_API_KEY || process.env.PLUSVIBE_KEY || '';
+const BISON_BASE = (process.env.BISON_API_URL || 'https://send.ottaly.co.uk').replace(/\/$/, '');
+let _bisonWsId = null;
 const ANTHROPIC_API_KEY      = process.env.ANTHROPIC_API_KEY      || '';
 const SLACK_SIGNING_SECRET   = process.env.SLACK_SIGNING_SECRET   || '';
 const ANTHROPIC_MODEL        = process.env.ANTHROPIC_MODEL        || 'claude-haiku-4-5-20251001';
@@ -2105,19 +2108,17 @@ app.post('/api/leads/:id/nonlead', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-// ── Full thread from PlusVibe ──────────────────────────────
+// ── Full thread from EmailBison ──────────────────────────────
 app.get('/api/leads/:id/thread', requireAuth, async (req, res) => {
   const row = db.prepare('SELECT data FROM leads WHERE id = ? AND workspace_id = ?')
     .get(req.params.id, req.client.workspace_id);
   if (!row) return res.status(404).json({ error: 'Lead not found' });
   const lead = JSON.parse(row.data);
   try {
-    const r = await fetch(
-      `https://api.plusvibe.ai/api/v1/unibox/emails?workspace_id=${lead.workspace_id}&thread_id=${lead.last_thread_id}`,
-      { headers: { 'x-api-key': PLUSVIBE_KEY } }
-    );
-    if (!r.ok) throw new Error(`PlusVibe ${r.status}`);
-    res.json({ source: 'plusvibe', data: await r.json() });
+    await bisonSwitch(lead.workspace_id);
+    var threadRaw = await bisonFetch('/api/replies/' + (lead.last_thread_id || lead.bison_reply_id) + '/conversation-thread');
+    var threadMsgs = [].concat(threadRaw.data && threadRaw.data.older_messages || [], threadRaw.data && threadRaw.data.current_reply ? [threadRaw.data.current_reply] : [], threadRaw.data && threadRaw.data.newer_messages || []).map(function(m) { return { id: m.id, direction: m.folder === 'Sent' ? 'OUT' : 'IN', subject: m.subject, body: { html: m.html_body, text: m.text_body }, timestamp_created: m.date_received, from_address_email: m.from_email_address, to_address_email_list: m.primary_to_email_address, is_unread: m.read ? 0 : 1 }; });
+    res.json({ source: 'bison', data: { messages: threadMsgs } });
   } catch {
     res.json({
       source: 'webhook',
@@ -2140,25 +2141,12 @@ app.post('/api/leads/:id/reply', requireAuth, async (req, res) => {
   const lead   = JSON.parse(row.data);
   const { body } = req.body || {};
   if (!body?.trim()) return res.status(400).json({ error: 'Reply body required' });
-  const htmlBody = body.includes('<') ? body : `<p>${body.replace(/\n/g, '</p><p>')}</p>`;
+  const body_text = typeof body === 'string' ? body : (body && body.text) || '';
   try {
-    const r = await fetch(
-      `https://api.plusvibe.ai/api/v1/unibox/emails/reply?workspace_id=${lead.workspace_id}`,
-      {
-        method:  'POST',
-        headers: { 'x-api-key': PLUSVIBE_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          reply_to_id: lead.last_email_id,
-          subject:     `Re: ${lead.last_lead_reply_subject || lead.latest_subject || ''}`,
-          from:        lead.email_account_name,
-          to:          lead.email,
-          body:        htmlBody,
-        })
-      }
-    );
-    const result = await r.json();
-    if (!r.ok) return res.status(r.status).json(result);
-    res.json({ ok: true, result });
+    await bisonSwitch(lead.workspace_id);
+    var replyPayload = { message: (body && body.text) || body_text || '', content_type: 'text', reply_all: true };
+    var replyRes = await bisonFetch('/api/replies/' + (lead.last_thread_id || lead.bison_reply_id) + '/reply', { method: 'POST', body: replyPayload });
+    res.json({ ok: true, result: replyRes });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -2273,14 +2261,14 @@ pvFetch = async function pvFetch(path, retries = 5, opts = {}) {
     if (wait > 0) await new Promise(r => setTimeout(r, wait));
     _pvLastCall = Date.now();
 
-    const init = { headers: { 'x-api-key': PLUSVIBE_KEY } };
+    const init = { headers: { 'Authorization': 'Bearer ' + BISON_API_KEY } };
     if (opts.body) {
       init.method = opts.method || 'POST';
       init.headers['Content-Type'] = 'application/json';
       init.body = typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body);
     }
     const _pvStart = Date.now();
-    const r = await fetch(`https://api.plusvibe.ai/api/v1${path}`, init);
+    const r = await fetch(BISON_BASE + '/api' + path, init);
     const _pvMs = Date.now() - _pvStart;
     const _pvEndpoint = path.split('?')[0];
     // Log every 10th call (sampling) plus all non-200s to avoid DB pressure
@@ -2303,6 +2291,59 @@ pvFetch = async function pvFetch(path, retries = 5, opts = {}) {
   }
   throw new Error(`PlusVibe 429: ${path} (gave up after ${retries} retries)`);
 };
+
+async function bisonSwitch(wsId) {
+  if (_bisonWsId === String(wsId)) return;
+  await fetch(BISON_BASE + '/api/workspaces/v1.1/switch-workspace', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + BISON_API_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspace_id: Number(wsId) }),
+    signal: AbortSignal.timeout(10000),
+  }).catch(() => {});
+  _bisonWsId = String(wsId);
+}
+
+async function bisonFetch(path, opts) {
+  opts = opts || {};
+  if (opts.wsId) await bisonSwitch(opts.wsId);
+  var url = new URL(BISON_BASE + path);
+  if (opts.params) {
+    Object.keys(opts.params).forEach(function(k) {
+      if (opts.params[k] !== undefined && opts.params[k] !== null) url.searchParams.set(k, String(opts.params[k]));
+    });
+  }
+  var init = {
+    method: opts.method || 'GET',
+    headers: { 'Authorization': 'Bearer ' + BISON_API_KEY, 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(15000),
+  };
+  if (opts.body) init.body = JSON.stringify(opts.body);
+  var r = await fetch(url.toString(), init);
+  if (!r.ok) {
+    var txt = await r.text().catch(function() { return ''; });
+    throw new Error('Bison ' + path + ' -> ' + r.status + ': ' + txt.slice(0, 200));
+  }
+  return r.json();
+}
+
+function normBisonWs(ws) {
+  return { id: String(ws.id), name: ws.name };
+}
+
+function pivotBisonStats(bisonData) {
+  var out = {};
+  var labelMap = { 'Sent': 'total_sent_count', 'Replied': 'total_reply_count', 'Bounced': 'total_bounce_count', 'Total Opens': 'total_open_count', 'Interested': 'total_pos_reply_count' };
+  (bisonData || []).forEach(function(series) {
+    var field = labelMap[series.label];
+    if (!field) return;
+    (series.dates || []).forEach(function(pair) {
+      var date = pair[0], count = pair[1];
+      if (!out[date]) out[date] = { date: date, total_sent_count: 0, total_reply_count: 0, total_bounce_count: 0, total_open_count: 0, total_pos_reply_count: 0, total_ooo_reply_count: 0, total_contacted_count: 0 };
+      out[date][field] = count;
+    });
+  });
+  return out;
+}
 
 function normalizePvLabel(label) {
   return String(label || '').trim().replace(/\s+/g, '_').toUpperCase();
@@ -2407,8 +2448,9 @@ async function refreshRevenueCache() {
         for (let page = 1; page <= 20; page++) {
           let batch;
           try {
-            const raw = await pvFetch(`/lead/workspace-leads?workspace_id=${ws.id}&label=${label}&page=${page}&limit=100`);
-            batch = Array.isArray(raw) ? raw : (raw?.leads || raw?.data || []);
+            bisonSwitch(ws.id);
+            const raw_b = await bisonFetch('/api/leads', { wsId: ws.id, params: { page: page, per_page: 100 } });
+            batch = (raw_b.data || []).map(function(l) { return Object.assign({}, l, { _id: String(l.id), id: String(l.id), company_name: l.company || l.company_name, job_title: l.title || l.job_title, label: l.interested ? 'INTERESTED' : (l.status || '') }); });
           } catch(e) { break; }
           if (!batch.length) break;
           batch.forEach(l => {
@@ -2689,7 +2731,9 @@ async function ensurePerformanceDailyStats(wsIds, dates, dailyStats = performanc
   for (let i = 0; i < needed.length; i += CONC) {
     await Promise.allSettled(needed.slice(i, i + CONC).map(async ({ wsId, date, key }) => {
       try {
-        const raw = await pvFetch(`/account/email-stats?workspace_id=${wsId}&start_date=${date}&end_date=${date}`);
+        await bisonSwitch(wsId);
+        var bStats = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { params: { start_date: date, end_date: date } });
+        var raw = Object.values(pivotBisonStats((bStats.data || bStats) || []));
         dailyStats.set(key, { savedAt: Date.now(), data: aggPvEmailStats(raw) });
       } catch {
         // Fetch FAILED (429 exhausted / network / bad response). Do NOT cache a
@@ -2732,8 +2776,9 @@ async function fetchPerformanceLabeledLeads(wsId) {
     for (let page = 1; page <= 20; page++) {
       let batch = [];
       try {
-        const raw = await pvFetch(`/lead/workspace-leads?workspace_id=${wsId}&label=${label}&page=${page}&limit=100`);
-        batch = Array.isArray(raw) ? raw : (raw?.leads || raw?.data || []);
+        bisonSwitch(wsId);
+        const raw_b = await bisonFetch('/api/leads', { wsId: wsId, params: { page: page, per_page: 100 } });
+        batch = (raw_b.data || []).map(function(l) { return Object.assign({}, l, { _id: String(l.id), id: String(l.id), company_name: l.company || l.company_name, job_title: l.title || l.job_title, label: l.interested ? 'INTERESTED' : (l.status || '') }); });
       } catch { break; }
       if (!batch.length) break;
       batch.forEach(l => {
@@ -3186,7 +3231,9 @@ app.get('/api/combo-analysis/pv-sample', requireSession, async (req, res) => {
     if (!ws) return res.json({ error: 'No workspaces found' });
     const today = new Date().toISOString().slice(0,10);
     const week  = new Date(Date.now() - 7*86400000).toISOString().slice(0,10);
-    const raw = await pvFetch(`/account/email-stats?workspace_id=${ws.id}&start_date=${week}&end_date=${today}`);
+    await bisonSwitch(ws.id);
+    var bStats = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { params: { start_date: week, end_date: today } });
+    var raw = Object.values(pivotBisonStats((bStats.data || bStats) || []));
     res.json({ workspace_id: ws.id, workspace_name: ws.name, raw });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -3235,8 +3282,10 @@ app.post('/api/combo-analysis/historical-backfill', requireSession, async (req, 
           ? Object.fromEntries(cRows.map(r => [r.prov, r.n / cTotal]))
           : { unknown: 1 };
 
-        // Fetch daily stats from PlusVibe
-        const pvData = await pvFetch(`/account/email-stats?workspace_id=${ws.id}&start_date=${start}&end_date=${end}`);
+        // Fetch daily stats from Bison
+        await bisonSwitch(ws.id);
+        var bStats = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { params: { start_date: start, end_date: end } });
+        var pvData = Object.values(pivotBisonStats((bStats.data || bStats) || []));
         const chart  = Array.isArray(pvData) ? pvData : (pvData?.chart || []);
 
         for (const day of chart) {
@@ -3606,7 +3655,9 @@ async function refreshCampaignCache() {
       if (inactiveIds.has(ws.id)) continue;
       await new Promise(r => setTimeout(r, 1200)); // rate limit: 1.2s between workspaces (~25 ws = 30s total)
       try {
-        const campaigns = await pvFetch(`/campaign/list-all?workspace_id=${ws.id}`);
+        await bisonSwitch(ws.id || wsId || workspace_id);
+        var camp_raw = await bisonFetch('/api/campaigns', { wsId: ws.id || wsId || workspace_id });
+        var campaigns = (camp_raw.data || []).map(function(c) { return { id: c.id, camp_name: c.name, status: c.status, sent_count: c.emails_sent || 0, replied_count: c.replied || 0, unique_opened_count: c.unique_opens || 0, bounced_count: c.bounced || 0, lead_count: c.total_leads || 0, lead_contacted_count: c.total_leads_contacted || 0, positive_reply_count: 0, sequences: [] }; });
         if (!Array.isArray(campaigns) || !campaigns.length) continue;
         const active = campaigns.filter(c => (c.sent_count || 0) >= 50);
         const wsAvgReplyRate = active.length
@@ -3629,7 +3680,7 @@ async function refreshCampaignCache() {
           let variantInsights = [], variationSteps = [];
           if ((c.sent_count || 0) >= 300) {
             try {
-              const vstats = await pvFetch(`/campaign/get/variation-stats?campaign_id=${c.id}&workspace_id=${ws.id}`);
+              var vstats = { data: [], steps: [] }; // A/B variant stats not available in EmailBison
               if (Array.isArray(vstats)) { variationSteps = vstats; variantInsights = analyzeVariants(vstats); }
             } catch {}
           }
@@ -5580,7 +5631,9 @@ app.post('/api/intelligence/deep-backfill', requireAdmin, async (req, res) => {
     for (let i = 0; i < wsIds.length; i += CONC) {
       await Promise.allSettled(wsIds.slice(i, i + CONC).map(async wsId => {
         try {
-          const raw = await pvFetch(`/account/email-stats?workspace_id=${wsId}&start_date=${start}&end_date=${end}`);
+          await bisonSwitch(wsId);
+          var bStats = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { params: { start_date: start, end_date: end } });
+          var raw = Object.values(pivotBisonStats((bStats.data || bStats) || []));
           const chart = Array.isArray(raw) ? raw : (raw?.chart || []);
           for (const row of chart) {
             const date = (row.date || row.day || '').slice(0, 10);
@@ -6558,6 +6611,105 @@ app.post('/api/domains/:domain/restore', requireSession, async (req, res) => {
 
 app.get('/domains', (req, res) => res.sendFile(path.join(__dirname, 'domains.html')));
 app.get('/domains.html', (req, res) => res.sendFile(path.join(__dirname, 'domains.html')));
+
+// ─────────────────────────────────────────────────────────────────────
+// Gateway deliverability — reply/lead/bounce per inbound email gateway
+// (Mimecast, Proofpoint, Barracuda, Cisco, Google, Microsoft, ...).
+//
+// The gateway is NOT stored: contacts.mx_provider only buckets to
+// google/outlook/other. scripts/gateway-analysis.js re-resolves MX into the
+// gateway_mx_cache table; this endpoint joins that cache to live contact facts.
+//   - sent  = contacts.emailed_workspaces <> '{}'  (NOT email_events 'sent',
+//             whose webhook coverage is incomplete)
+//   - reply = email_events by lead_email, counted DISTINCT (rows are dup'd)
+//   - OOO   = email_events.raw->>'label' OUT_OF_OFFICE/AUTOMATIC_REPLY
+app.get('/api/gateway-analysis', requireSession, async (req, res) => {
+  try {
+    const { rows } = await pgdb.query(`
+      WITH sent AS (
+        SELECT c.id,
+               lower(split_part(c.email,'@',2)) AS domain,
+               lower(c.email)                   AS email,
+               c.bounced_at
+        FROM contacts c
+        WHERE COALESCE(c.emailed_workspaces,'{}'::jsonb) <> '{}'::jsonb
+          AND c.email LIKE '%@%'
+      ),
+      ev AS (
+        SELECT lower(lead_email) AS email,
+               bool_or(event_type IN ('reply','positive_reply','all_email_replies')) AS replied,
+               bool_or(event_type IN ('reply','positive_reply','all_email_replies')
+                       AND COALESCE(raw->>'label','') NOT IN ('OUT_OF_OFFICE','AUTOMATIC_REPLY')) AS replied_substantive,
+               bool_or(event_type = 'lead'
+                       OR raw->>'label' IN ('LEAD','INTERESTED_NONLEAD'))            AS is_lead,
+               bool_or(event_type = 'bounce')                                         AS bounced_ev
+        FROM email_events
+        GROUP BY 1
+      ),
+      per_contact AS (
+        SELECT COALESCE(g.gateway,'NO MX / unresolved') AS gateway,
+               s.domain,
+               e.replied,
+               e.replied_substantive,
+               e.is_lead,
+               (e.bounced_ev OR s.bounced_at IS NOT NULL) AS bounced
+        FROM sent s
+        JOIN gateway_mx_cache g ON g.domain = s.domain
+        LEFT JOIN ev e ON e.email = s.email
+      )
+      SELECT gateway,
+             count(DISTINCT domain)                  AS domains,
+             count(*)                                 AS sent,
+             count(*) FILTER (WHERE replied)          AS replied,
+             count(*) FILTER (WHERE replied_substantive) AS replied_no_ooo,
+             count(*) FILTER (WHERE is_lead)          AS leads,
+             count(*) FILTER (WHERE bounced)          AS bounced
+      FROM per_contact
+      GROUP BY gateway
+      ORDER BY sent DESC`);
+
+    const gateways = rows.map(r => {
+      const sent = Number(r.sent);
+      const replied = Number(r.replied);
+      const repliedNoOoo = Number(r.replied_no_ooo);
+      const leads = Number(r.leads);
+      const bounced = Number(r.bounced);
+      return {
+        gateway: r.gateway,
+        domains: Number(r.domains),
+        sent,
+        replyRate:      sent ? (100 * replied) / sent : 0,
+        replyRateNoOoo: sent ? (100 * repliedNoOoo) / sent : 0,
+        leadRate:       sent ? (100 * leads) / sent : 0,
+        rtl:            sent ? (1000 * leads) / sent : 0,  // leads per 1,000 sent
+        bounceRate:     sent ? (100 * bounced) / sent : 0,
+        replied, leads, bounced,
+      };
+    });
+
+    const cov = await pgdb.query(`
+      SELECT
+        (SELECT count(*) FROM gateway_mx_cache) AS resolved,
+        (SELECT count(DISTINCT lower(split_part(email,'@',2)))
+           FROM contacts
+          WHERE COALESCE(emailed_workspaces,'{}'::jsonb) <> '{}'::jsonb
+            AND email LIKE '%@%') AS total`);
+
+    res.json({
+      gateways,
+      coverage: {
+        resolved: Number(cov.rows[0] && cov.rows[0].resolved || 0),
+        total:    Number(cov.rows[0] && cov.rows[0].total || 0),
+      },
+    });
+  } catch (err) {
+    console.error('[gateway-analysis]', err.message);
+    res.status(500).json({ error: 'Database error' });
+  }
+});
+
+app.get('/gateway-analysis',      (req, res) => res.sendFile(path.join(__dirname, 'gateway-analysis.html')));
+app.get('/gateway-analysis.html', (req, res) => res.sendFile(path.join(__dirname, 'gateway-analysis.html')));
 
 // ─────────────────────────────────────────────────────────────────────
 // Google Postmaster Tools — daily domain + IP reputation, spam rate
@@ -8782,7 +8934,9 @@ app.post('/api/copy/refresh-templates', requireSession, async (req, res) => {
     const { workspace_id } = req.query;
     if (!workspace_id) return res.status(400).json({ error: 'Missing workspace_id' });
 
-    const campaigns = await pvFetch(`/campaign/list-all?workspace_id=${workspace_id}`);
+    await bisonSwitch(ws.id || wsId || workspace_id);
+    var camp_raw = await bisonFetch('/api/campaigns', { wsId: ws.id || wsId || workspace_id });
+    var campaigns = (camp_raw.data || []).map(function(c) { return { id: c.id, camp_name: c.name, status: c.status, sent_count: c.emails_sent || 0, replied_count: c.replied || 0, unique_opened_count: c.unique_opens || 0, bounced_count: c.bounced || 0, lead_count: c.total_leads || 0, lead_contacted_count: c.total_leads_contacted || 0, positive_reply_count: 0, sequences: [] }; });
     if (!Array.isArray(campaigns)) return res.status(502).json({ error: 'PlusVibe returned no campaigns' });
 
     let captured = 0;
@@ -9094,7 +9248,9 @@ app.post('/api/campaigns/apply-optimisation', requireSession, async (req, res) =
     return res.status(400).json({ error: 'Missing params' });
   try {
     // Get current campaign sequence structure
-    const campaigns = await pvFetch(`/campaign/list-all?workspace_id=${wsId}`);
+    await bisonSwitch(ws.id || wsId || workspace_id);
+    var camp_raw = await bisonFetch('/api/campaigns', { wsId: ws.id || wsId || workspace_id });
+    var campaigns = (camp_raw.data || []).map(function(c) { return { id: c.id, camp_name: c.name, status: c.status, sent_count: c.emails_sent || 0, replied_count: c.replied || 0, unique_opened_count: c.unique_opens || 0, bounced_count: c.bounced || 0, lead_count: c.total_leads || 0, lead_contacted_count: c.total_leads_contacted || 0, positive_reply_count: 0, sequences: [] }; });
     const camp = (Array.isArray(campaigns) ? campaigns : []).find(c => c.id === campId);
     if (!camp) return res.status(404).json({ error: 'Campaign not found' });
 
@@ -9110,14 +9266,9 @@ app.post('/api/campaigns/apply-optimisation', requireSession, async (req, res) =
       };
     });
 
-    const r = await fetch(`https://api.plusvibe.ai/api/v1/campaign/update/campaign`, {
-      method: 'PATCH',
-      headers: { 'x-api-key': PLUSVIBE_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workspace_id: wsId, id: campId, sequences })
-    });
-    const result = await r.json();
-    if (!r.ok) return res.status(r.status).json({ error: result.message || 'PlusVibe error', raw: result });
-    res.json({ ok: true, result });
+    console.warn('[bison] A/B variant deactivation not supported in EmailBison — skipping');
+    var updateResult = { success: false, reason: 'not-supported-in-bison' };
+    res.json({ ok: true, result: updateResult });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -9128,8 +9279,8 @@ app.get('/api/pv/workspace-leads', async (req, res) => {
   try {
     const qs = new URLSearchParams({ workspace_id, page: page || 1, limit: limit || 100 });
     if (label) qs.set('label', label);
-    const r = await fetch(`https://api.plusvibe.ai/api/v1/lead/workspace-leads?${qs}`, {
-      headers: { 'x-api-key': PLUSVIBE_KEY }
+    const r = await fetch(BISON_BASE + '/api/lead/workspace-leads?' + qs.toString(), {
+      headers: { 'Authorization': 'Bearer ' + BISON_API_KEY }
     });
     res.json(await r.json());
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -9138,8 +9289,8 @@ app.get('/api/pv/workspace-leads', async (req, res) => {
 // ── Admin — workspaces ─────────────────────────────────────
 app.get('/api/admin/workspaces', requireAdmin, async (req, res) => {
   try {
-    const r = await fetch('https://api.plusvibe.ai/api/v1/workspaces', {
-      headers: { 'x-api-key': PLUSVIBE_KEY }
+    const r = await fetch(BISON_BASE + '/api/workspaces', {
+      headers: { 'Authorization': 'Bearer ' + BISON_API_KEY }
     });
     res.json(await r.json());
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -10208,8 +10359,8 @@ app.post('/api/admin/nonlead-requests/:id/reject', requireAdmin, (req, res) => {
 // ── PlusVibe — campaigns for a workspace ──────────────────
 app.get('/api/pv/workspaces', async (req, res) => {
   try {
-    const r = await fetch('https://api.plusvibe.ai/api/v1/workspaces', {
-      headers: { 'x-api-key': PLUSVIBE_KEY }
+    const r = await fetch(BISON_BASE + '/api/workspaces', {
+      headers: { 'Authorization': 'Bearer ' + BISON_API_KEY }
     });
     const data = await r.json();
     if (!r.ok) return res.status(r.status).json({ error: data.error || 'Failed to fetch workspaces' });
@@ -10223,8 +10374,8 @@ app.get('/api/pv/campaigns', async (req, res) => {
   const { workspace_id } = req.query;
   if (!workspace_id) return res.status(400).json({ error: 'Missing workspace_id' });
   try {
-    const r = await fetch(`https://api.plusvibe.ai/api/v1/campaign/list?workspace_id=${workspace_id}&limit=100`, {
-      headers: { 'x-api-key': PLUSVIBE_KEY }
+    const r = await fetch(BISON_BASE + `/api/campaign/list?workspace_id=${workspace_id}&limit=100`, {
+      headers: { 'Authorization': 'Bearer ' + BISON_API_KEY }
     });
     const data = await r.json();
     if (!r.ok) return res.status(r.status).json({ error: data.error || 'Failed to fetch campaigns' });
@@ -10329,16 +10480,29 @@ app.post('/api/pv/push-contacts', async (req, res) => {
     let pushed = 0;
     for (let i = 0; i < leads.length; i += BATCH) {
       const batch = leads.slice(i, i + BATCH);
-      const r = await fetch('https://api.plusvibe.ai/api/v1/lead/add', {
-        method: 'POST',
-        headers: { 'x-api-key': PLUSVIBE_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspace_id, campaign_id, leads: batch })
+      await bisonSwitch(workspace_id);
+      var bisonLeadPayload = (batch).map(function(l) {
+        var cv = [];
+        if (l.phone_number) cv.push({ name: 'phone_number', value: String(l.phone_number) });
+        if (l.city) cv.push({ name: 'city', value: String(l.city) });
+        if (l.state) cv.push({ name: 'state', value: String(l.state) });
+        if (l.country) cv.push({ name: 'country', value: String(l.country) });
+        if (l.industry) cv.push({ name: 'industry', value: String(l.industry) });
+        if (l.linkedin_person_url) cv.push({ name: 'linkedin_person_url', value: String(l.linkedin_person_url) });
+        if (l.linkedin_company_url) cv.push({ name: 'linkedin_company_url', value: String(l.linkedin_company_url) });
+        if (l.company_website) cv.push({ name: 'company_website', value: String(l.company_website) });
+        if (l.department) cv.push({ name: 'department', value: String(l.department) });
+        if (l.address_line) cv.push({ name: 'address_line', value: String(l.address_line) });
+        return { email: l.email, first_name: l.first_name || null, last_name: l.last_name || null, title: l.job_title || l.title || null, company: l.company_name || l.company || null, custom_variables: cv };
       });
-      const data = await r.json();
-      if (!r.ok) {
-        console.error('[PV Push] Error:', data);
-        return res.status(r.status).json({ error: data.message || 'PlusVibe error', pushed });
+      var createRes = await bisonFetch('/api/leads/create-or-update/multiple', { method: 'POST', body: { leads: bisonLeadPayload } });
+      if (campaign_id && createRes && createRes.data) {
+        var leadIds = (createRes.data.leads || createRes.data || []).map(function(l) { return l.id; }).filter(Boolean);
+        if (leadIds.length) {
+          await bisonFetch('/api/campaigns/' + campaign_id + '/leads', { method: 'POST', body: { lead_ids: leadIds } }).catch(function(e) { console.warn('[bison] campaign-assign partial failure:', e.message); });
+        }
       }
+      var r = { ok: true };
       pushed += batch.length;
     }
 
@@ -11343,7 +11507,7 @@ async function captureVariationStats(workspaceId, campaignId) {
   } catch {}
   let stored = 0;
   try {
-    const vstats = await pvFetch(`/campaign/get/variation-stats?campaign_id=${campaignId}&workspace_id=${workspaceId}`);
+    var vstats = { data: [], steps: [] }; // A/B variant stats not available in EmailBison
     if (!Array.isArray(vstats)) return 0;
     for (const st of vstats) {
       const step = parseInt(st.step ?? st.seq_number ?? 1, 10) || 1;
@@ -12199,20 +12363,29 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
           if (job.cancelled || job.paused) return;
           const slice = batch.slice(i, i + 100);
           let r, d = {};
-          for (let attempt = 0; attempt < 4; attempt++) {
-            if (job.cancelled || job.paused) return;
-            r = await fetch('https://api.plusvibe.ai/api/v1/lead/add', {
-              method: 'POST',
-              headers: { 'x-api-key': PLUSVIBE_KEY, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ workspace_id, campaign_id, leads: slice.map(toLead) })
-            });
-            try { d = await r.json(); } catch { d = {}; }
-            if (r.status !== 429) break;
-            const wait = [10000, 20000, 40000][attempt] || 40000;
-            console.warn(`[push] PlusVibe 429 — backing off ${wait / 1000}s`);
-            await new Promise(res => setTimeout(res, wait));
+          await bisonSwitch(workspace_id);
+          var bisonLeadPayload = (slice.map(toLead)).map(function(l) {
+            var cv = [];
+            if (l.phone_number) cv.push({ name: 'phone_number', value: String(l.phone_number) });
+            if (l.city) cv.push({ name: 'city', value: String(l.city) });
+            if (l.state) cv.push({ name: 'state', value: String(l.state) });
+            if (l.country) cv.push({ name: 'country', value: String(l.country) });
+            if (l.industry) cv.push({ name: 'industry', value: String(l.industry) });
+            if (l.linkedin_person_url) cv.push({ name: 'linkedin_person_url', value: String(l.linkedin_person_url) });
+            if (l.linkedin_company_url) cv.push({ name: 'linkedin_company_url', value: String(l.linkedin_company_url) });
+            if (l.company_website) cv.push({ name: 'company_website', value: String(l.company_website) });
+            if (l.department) cv.push({ name: 'department', value: String(l.department) });
+            if (l.address_line) cv.push({ name: 'address_line', value: String(l.address_line) });
+            return { email: l.email, first_name: l.first_name || null, last_name: l.last_name || null, title: l.job_title || l.title || null, company: l.company_name || l.company || null, custom_variables: cv };
+          });
+          var createRes = await bisonFetch('/api/leads/create-or-update/multiple', { method: 'POST', body: { leads: bisonLeadPayload } });
+          if (campaign_id && createRes && createRes.data) {
+            var leadIds = (createRes.data.leads || createRes.data || []).map(function(l) { return l.id; }).filter(Boolean);
+            if (leadIds.length) {
+              await bisonFetch('/api/campaigns/' + campaign_id + '/leads', { method: 'POST', body: { lead_ids: leadIds } }).catch(function(e) { console.warn('[bison] campaign-assign partial failure:', e.message); });
+            }
           }
-          if (!r.ok) { job.error = d.message || `PlusVibe error (${r.status})`; job.status = 'failed'; return; }
+          r = { ok: true };
           // Stamp pushed_campaigns so future verify-and-push runs against
           // this same campaign skip these contacts cleanly. Fire-and-forget
           // — a stamp failure must not roll back the actual push.
@@ -12604,20 +12777,29 @@ app.post('/api/contacts/push-jobs/:id/resume', async (req, res) => {
           if (job.cancelled || job.paused) return;
           const slice = batch.slice(i, i + 100);
           let r, d = {};
-          for (let attempt = 0; attempt < 4; attempt++) {
-            if (job.cancelled || job.paused) return;
-            r = await fetch('https://api.plusvibe.ai/api/v1/lead/add', {
-              method: 'POST',
-              headers: { 'x-api-key': PLUSVIBE_KEY, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ workspace_id, campaign_id, leads: slice.map(toLead) })
-            });
-            try { d = await r.json(); } catch { d = {}; }
-            if (r.status !== 429) break;
-            const wait = [10000, 20000, 40000][attempt] || 40000;
-            console.warn(`[push] PlusVibe 429 — backing off ${wait / 1000}s`);
-            await new Promise(res => setTimeout(res, wait));
+          await bisonSwitch(workspace_id);
+          var bisonLeadPayload = (slice.map(toLead)).map(function(l) {
+            var cv = [];
+            if (l.phone_number) cv.push({ name: 'phone_number', value: String(l.phone_number) });
+            if (l.city) cv.push({ name: 'city', value: String(l.city) });
+            if (l.state) cv.push({ name: 'state', value: String(l.state) });
+            if (l.country) cv.push({ name: 'country', value: String(l.country) });
+            if (l.industry) cv.push({ name: 'industry', value: String(l.industry) });
+            if (l.linkedin_person_url) cv.push({ name: 'linkedin_person_url', value: String(l.linkedin_person_url) });
+            if (l.linkedin_company_url) cv.push({ name: 'linkedin_company_url', value: String(l.linkedin_company_url) });
+            if (l.company_website) cv.push({ name: 'company_website', value: String(l.company_website) });
+            if (l.department) cv.push({ name: 'department', value: String(l.department) });
+            if (l.address_line) cv.push({ name: 'address_line', value: String(l.address_line) });
+            return { email: l.email, first_name: l.first_name || null, last_name: l.last_name || null, title: l.job_title || l.title || null, company: l.company_name || l.company || null, custom_variables: cv };
+          });
+          var createRes = await bisonFetch('/api/leads/create-or-update/multiple', { method: 'POST', body: { leads: bisonLeadPayload } });
+          if (campaign_id && createRes && createRes.data) {
+            var leadIds = (createRes.data.leads || createRes.data || []).map(function(l) { return l.id; }).filter(Boolean);
+            if (leadIds.length) {
+              await bisonFetch('/api/campaigns/' + campaign_id + '/leads', { method: 'POST', body: { lead_ids: leadIds } }).catch(function(e) { console.warn('[bison] campaign-assign partial failure:', e.message); });
+            }
           }
-          if (!r.ok) { job.error = d.message || `PlusVibe error (${r.status})`; job.status = 'failed'; return; }
+          r = { ok: true };
           try {
             const ids = slice.map(c => c.id).filter(Boolean);
             if (ids.length && db.stampPushedCampaign) {
@@ -13962,8 +14144,10 @@ function scheduleDiagnosticsDaily(pgdb, diagnostics) {
       if (seen.has(wsId)) continue;
       seen.add(wsId);
       try {
-        const data = await pvFetch(`/email-accounts?workspace_id=${wsId}&limit=200`);
-        const accounts = data?.data || data?.accounts || (Array.isArray(data) ? data : []);
+        await bisonSwitch(wsId);
+        var ea_bison = await bisonFetch('/api/sender-emails', { wsId: wsId });
+        var ea_data = (ea_bison.data || []).map(function(a) { return { _id: String(a.id), id: String(a.id), email: a.email || a.name, status: a.status === 'connected' ? 'active' : 'inactive', warmup_status: a.warmup_enabled ? 'ACTIVE' : 'PAUSED', daily_limit: a.daily_limit || 0, warmup_details: { inbox_pct: 0, spam_pct: 0 } }; });
+        const accounts = ea_data;
         for (const acc of accounts) {
           if (acc.warmup_details) {
             diagnostics.logSignal({ signal_type: 'email_account_health', workspace_id: wsId,
