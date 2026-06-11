@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { getAdminSession } from '@/lib/auth'
 import pool from '@/lib/db'
 import { refundLead } from '@/lib/balance'
+import { updateLeadStatus } from '@/lib/plusvibe'
 
 interface DisputeRow {
   id: string
@@ -42,6 +43,18 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       [dispute.lead_id]
     )
     await refundLead(dispute.client_id, dispute.lead_id)
+
+    // Sync to PlusVibe: NON_LEAD label makes the admin dashboard's revenue
+    // logic exclude this lead automatically. Best-effort — surfaced if it fails.
+    const lead = await pool.query('SELECT email, workspace_id FROM esp_leads WHERE id = $1', [dispute.lead_id])
+    if (lead.rows[0]?.email) {
+      const pv = await updateLeadStatus(lead.rows[0].workspace_id, lead.rows[0].email, 'NON_LEAD')
+      if (!pv.ok) {
+        console.error('[dispute] PV NON_LEAD label failed:', pv.reason)
+        return NextResponse.json({ ok: true, pvSynced: false, warning: 'Approved & refunded, but PlusVibe NON_LEAD label failed — mark it in PlusVibe manually so revenue excludes it.' })
+      }
+      return NextResponse.json({ ok: true, pvSynced: true })
+    }
   }
 
   return NextResponse.json({ ok: true })

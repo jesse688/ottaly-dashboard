@@ -106,6 +106,11 @@ export function AdminClientsClient() {
   const [showTpl, setShowTpl]                 = useState(false)
   const [tplSaved, setTplSaved]               = useState(false)
 
+  // Import-from-admin candidates
+  const [importList, setImportList]           = useState<{ workspaceId: string; companyName: string; contactName: string; email: string; costPerLead: number }[] | null>(null)
+  const [showImport, setShowImport]           = useState(false)
+  const [importErr, setImportErr]             = useState('')
+
   // Speed-to-Lead report
   const [speed, setSpeed]                     = useState<{ goalMinutes: number; rows: { id: string; company_name: string; avg_secs: number; n: number }[] } | null>(null)
   const [showSpeed, setShowSpeed]             = useState(false)
@@ -438,11 +443,31 @@ export function AdminClientsClient() {
             <div className="flex items-center justify-between mb-5">
               <h1 className="text-lg font-semibold text-gray-900">Client Logins</h1>
               <div className="flex items-center gap-2">
+                <button onClick={async () => { setShowImport(v => !v); setImportErr(''); if (!importList) { const r = await fetch('/api/admin/clients/import'); const d = await r.json(); if (r.ok) setImportList(d.candidates); else setImportErr(d.error ?? 'Import failed') } }} className="px-4 py-2 border border-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">Import from admin</button>
                 <button onClick={() => { setShowSpeed(v => { const n = !v; if (n && !speed) fetch('/api/admin/speed').then(r => r.json()).then(d => !d.error && setSpeed(d)).catch(() => {}); return n }) }} className="px-4 py-2 border border-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">Speed to Lead</button>
                 <button onClick={() => { setShowTpl(v => { const n = !v; if (n && !tpl) loadTemplates(); return n }) }} className="px-4 py-2 border border-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">Notification emails</button>
                 <button onClick={() => { setShowForm(v => !v); setError('') }} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg">+ Add client</button>
               </div>
             </div>
+
+            {showImport && (
+              <div className="bg-white border border-gray-200 rounded-xl p-5 mb-5">
+                <h2 className="text-sm font-semibold text-gray-900 mb-1">Import from admin dashboard</h2>
+                <p className="text-xs text-gray-500 mb-3">Clients that exist in the admin dashboard but have no portal login yet. Click one to pre-fill the form (price synced automatically).</p>
+                {importErr && <p className="text-sm text-red-600">{importErr}</p>}
+                {!importErr && importList === null && <p className="text-sm text-gray-400">Loading…</p>}
+                {importList?.length === 0 && <p className="text-sm text-gray-400">All admin clients already have portal access. ✓</p>}
+                <div className="space-y-2">
+                  {(importList ?? []).map(c => (
+                    <button key={c.workspaceId} onClick={() => { setForm(f => ({ ...f, workspaceId: c.workspaceId, companyName: c.companyName, contactName: c.contactName, email: c.email, costPerLead: String(c.costPerLead || '') })); setShowImport(false); setShowForm(true) }}
+                      className="w-full flex items-center justify-between px-4 py-2.5 rounded-lg border border-gray-100 hover:border-indigo-300 hover:bg-indigo-50 text-left">
+                      <span className="text-sm font-medium text-gray-900">{c.companyName || c.workspaceId}</span>
+                      <span className="text-xs text-gray-500">{c.email || 'no email'} · {fmt(c.costPerLead)}/lead</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {showSpeed && (
               <div className="bg-white border border-gray-200 rounded-xl p-5 mb-5">

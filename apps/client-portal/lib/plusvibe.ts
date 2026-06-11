@@ -214,3 +214,17 @@ export async function registerWebhook(workspaceId: string): Promise<{ ok: boolea
 }
 
 export const PV_LABELS = KEY ? true : false // truthy guard helper for callers
+
+// Set a lead's status/label in PlusVibe (e.g. NON_LEAD on approved disputes) so
+// the admin dashboard's revenue logic auto-excludes it. Best-effort.
+export async function updateLeadStatus(workspaceId: string, leadEmail: string, status: string): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    const res = await fetch(`${BASE}/lead/update-lead-status?workspace_id=${encodeURIComponent(workspaceId)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': KEY },
+      body: JSON.stringify({ workspace_id: workspaceId, email: leadEmail, lead_email: leadEmail, new_status: status, status }),
+    })
+    if (!res.ok) return { ok: false, reason: `pv_${res.status}: ${(await res.text()).slice(0, 200)}` }
+    return { ok: true }
+  } catch (err) { return { ok: false, reason: String(err) } }
+}
