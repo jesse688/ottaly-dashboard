@@ -2441,6 +2441,7 @@ async function refreshRevenueCache() {
               last_name:      existing?.last_name  || l.last_name   || l.lastName   || '',
               lead_email:     email,
               lead_price:     wsPrice,
+              mx:             existing?.mx || l.mx || null,  // recipient provider (PlusVibe mx) for accurate per-provider lead counts
               label:          isPvNonLeadLabel(scanLabel) || isPvNonLeadLabel(leadLabel) ? 'NON_LEAD' : (existing?.label || leadLabel || scanLabel),
               date:           stableDate,
               client_inactive: wsInactive,
@@ -2718,7 +2719,7 @@ async function syncProviderMix(wsIds) {
 // Given a workspace's accurate totals (from perf cache) and its provider mix,
 // split each metric across providers by that mix's fraction of the metric.
 // Falls back to all-"other" when no mix is available yet (so totals still sum).
-function splitTotalsByProvider(wsId, totals) {
+function splitTotalsByProvider(wsId, totals, leadsByProvider) {
   const mix = providerMixCache.byWs.get(wsId);
   // No mix yet (sync still running) → return null rather than fabricating a
   // split. The UI hides this workspace from provider tabs until its real mix
@@ -2726,6 +2727,9 @@ function splitTotalsByProvider(wsId, totals) {
   if (!mix) return null;
   const empty = () => ({ sent: 0, replies: 0, bounces: 0, leads: 0 });
   const out = { google: empty(), outlook: empty(), other: empty() };
+  // sent/replies/bounces: apportion the accurate totals by the lead-mix ratio
+  // (PlusVibe's daily aggregate has no provider dimension, so this is the only
+  // way to split those — it's an estimate but sums exactly to the total).
   for (const metric of ['sent', 'replies', 'bounces']) {
     const denom = mix.google[metric] + mix.outlook[metric] + mix.other[metric];
     if (denom <= 0) { out.other[metric] = totals[metric] || 0; continue; }
@@ -2733,10 +2737,10 @@ function splitTotalsByProvider(wsId, totals) {
       out[p][metric] = Math.round((totals[metric] || 0) * (mix[p][metric] / denom));
     }
   }
-  // Leads have no per-mx signal in lead objects → split by the SENT fraction.
-  const sentDenom = mix.google.sent + mix.outlook.sent + mix.other.sent;
+  // LEADS: use the REAL count per provider (each lead carries an mx), not an
+  // estimate — so the Leads column is exact and traceable to specific leads.
   for (const p of ['google', 'outlook', 'other']) {
-    out[p].leads = sentDenom > 0 ? Math.round((totals.leads || 0) * (mix[p].sent / sentDenom)) : (p === 'other' ? (totals.leads || 0) : 0);
+    out[p].leads = leadsByProvider?.[p] || 0;
   }
   return out;
 }
@@ -3191,7 +3195,12 @@ function computeWorkspaceStatsForRange(wsIds, start, end) {
     const rtl        = totals.replies > 0 ? totals.leads   / totals.replies : 0;
     const sendsPerDay   = dates.length > 0 ? totals.sent    / dates.length : 0;
     const repliesPerDay = dates.length > 0 ? totals.replies / dates.length : 0;
-    out[wsId] = { totals: { ...totals, replyRate, bounceRate, rtl, sendsPerDay, repliesPerDay }, series };
+    // REAL per-provider lead counts from each lead's recipient mx — not
+    // apportioned. This is exact (every lead carries an mx), so the Leads column
+    // under a provider tab is the true count, traceable to specific leads.
+    const leadsByProvider = { google: 0, outlook: 0, other: 0 };
+    for (const l of wsLeads) leadsByProvider[pvMxToProviderBucket(l.mx)]++;
+    out[wsId] = { totals: { ...totals, replyRate, bounceRate, rtl, sendsPerDay, repliesPerDay }, series, leadsByProvider };
   }
   return out;
 }
@@ -3269,7 +3278,7 @@ app.get('/api/stats/summary', requireSession, async (req, res) => {
       // Recipient-provider split of this workspace's accurate totals, from the
       // PlusVibe per-lead mx mix. Lets the Stats page filter the table by
       // Google / Outlook / Other. byProvider[p] = { sent, replies, bounces, leads }.
-      byProvider: splitTotalsByProvider(wsId, wsStats[wsId].totals),
+      byProvider: splitTotalsByProvider(wsId, wsStats[wsId].totals, wsStats[wsId].leadsByProvider),
     }));
     // Show ALL active clients (the requested behaviour), not only those with
     // sends in the period — clients with activity sort first, zero-activity
