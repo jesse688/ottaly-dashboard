@@ -15,7 +15,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const { body, bodyHtml, cc, to } = await req.json() as { body: string; bodyHtml?: string; cc?: string; to?: string }
   if (!body?.trim()) return NextResponse.json({ error: 'Empty reply' }, { status: 400 })
   const html = bodyHtml?.trim() ? bodyHtml : `<p>${body.replace(/\n/g, '<br/>')}</p>`
-  const ccList = (cc ?? '').trim()
+
+  // Recipients can be separated by comma, space or semicolon.
+  const parseAddrs = (s?: string) => (s ?? '').split(/[\s,;]+/).map(x => x.trim()).filter(x => x.includes('@'))
 
   const leadRes = await pool.query(
     'SELECT id, email, first_name, last_name FROM esp_leads WHERE id = $1 AND workspace_id = $2',
@@ -23,8 +25,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   )
   if (!leadRes.rows.length) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const lead = leadRes.rows[0]
-  // Recipient — defaults to the lead, but the client can send/forward to another address.
-  const toAddr = (to ?? '').trim() || lead.email
+
+  // Recipients — default to the lead; client can send/forward to multiple addresses.
+  const toAddrs = parseAddrs(to)
+  const toList = (toAddrs.length ? toAddrs : [lead.email]).join(', ')
+  const ccList = parseAddrs(cc).join(', ')
+  const toAddr = toAddrs[0] || lead.email
 
   // Find the latest inbound message for threading context (subject, mailbox, message id)
   const ctx = await pool.query(
@@ -47,7 +53,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     [
       outId, session.workspaceId, lead.email.toLowerCase(), subject, body,
       html, body.slice(0, 200),
-      eaccount ?? session.email, toAddr, eaccount ?? null,
+      eaccount ?? session.email, toList, eaccount ?? null,
     ]
   ).catch(err => console.error('[reply] persist failed:', err))
 
@@ -69,7 +75,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     clientId: session.clientId,
     kind: 'reply_sent',
     title: `${session.companyName} replied re: ${who}`,
-    body: `${send.ok ? '✅ Sent live via PlusVibe' : '⚠️ NOT auto-sent (' + send.reason + ') — please send manually'}\nTo: ${toAddr}${ccList ? `\nCc: ${ccList}` : ''}\nSubject: ${subject}\n\n${body}`,
+    body: `${send.ok ? '✅ Sent live via PlusVibe' : '⚠️ NOT auto-sent (' + send.reason + ') — please send manually'}\nTo: ${toList}${ccList ? `\nCc: ${ccList}` : ''}\nSubject: ${subject}\n\n${body}`,
   })
 
   return NextResponse.json({ ok: true, sentLive: send.ok })

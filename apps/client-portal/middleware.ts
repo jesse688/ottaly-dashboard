@@ -31,7 +31,14 @@ export async function middleware(req: NextRequest) {
   }
 
   // Public client paths
-  if (pathname.startsWith('/login') || pathname.startsWith('/api/auth') || pathname.startsWith('/api/admin')) {
+  if (
+    pathname.startsWith('/login') ||
+    pathname.startsWith('/invite') ||
+    pathname.startsWith('/api/auth') ||
+    pathname.startsWith('/api/invite') ||
+    pathname.startsWith('/api/forgot') ||
+    pathname.startsWith('/api/admin')
+  ) {
     return NextResponse.next()
   }
 

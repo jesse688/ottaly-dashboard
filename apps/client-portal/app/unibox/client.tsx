@@ -166,6 +166,12 @@ export function UniboxClient({ companyName }: { companyName: string }) {
     return () => document.removeEventListener('mousedown', h)
   }, [])
 
+  // Show the new-lead count in the browser tab (a quiet "notification").
+  useEffect(() => {
+    const n = (leads ?? []).filter(l => !l.archived && l.has_unread).length
+    document.title = n > 0 ? `(${n}) New leads · Ottaly` : 'Ottaly Portal'
+  }, [leads])
+
   function loadLeads() {
     fetch('/api/portal/leads/all').then(r => r.json()).then((d) => {
       if (Array.isArray(d)) {
@@ -337,7 +343,10 @@ export function UniboxClient({ companyName }: { companyName: string }) {
         <span className="text-gray-300">|</span>
         <span className="text-gray-600 text-sm font-medium">{companyName}</span>
         <nav className="flex items-center gap-1 ml-4">
-          <span className="px-3 py-1.5 text-indigo-600 bg-indigo-50 text-sm font-medium rounded-lg">Leads</span>
+          <span className="px-3 py-1.5 text-indigo-600 bg-indigo-50 text-sm font-medium rounded-lg inline-flex items-center gap-1.5">
+            Leads
+            {viewCounts.unread > 0 && <span className="min-w-[18px] text-center text-[11px] font-semibold px-1.5 py-0.5 rounded-full bg-red-500 text-white">{viewCounts.unread}</span>}
+          </span>
           <a href="/invoices" className="px-3 py-1.5 text-gray-500 hover:text-gray-800 text-sm rounded-lg">Billing</a>
         </nav>
         <div className="ml-auto flex items-center gap-4">
@@ -359,7 +368,7 @@ export function UniboxClient({ companyName }: { companyName: string }) {
           <div className="p-3 space-y-0.5">
             {([
               { key: 'inbox', label: 'Inbox', icon: <path d="M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/> },
-              { key: 'unread', label: 'Unread', icon: <><path d="M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><circle cx="18" cy="6" r="3" fill="currentColor" stroke="none"/></> },
+              { key: 'unread', label: 'New leads', icon: <><path d="M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><circle cx="18" cy="6" r="3" fill="currentColor" stroke="none"/></> },
               { key: 'sent', label: 'Sent', icon: <path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z"/> },
               { key: 'archived', label: 'Archived', icon: <><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4"/></> },
             ] as { key: 'inbox'|'unread'|'sent'|'archived'; label: string; icon: ReactNode }[]).map(v => (
@@ -373,7 +382,9 @@ export function UniboxClient({ companyName }: { companyName: string }) {
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">{v.icon}</svg>
                   {v.label}
                 </span>
-                <span className="text-xs text-gray-400">{viewCounts[v.key]}</span>
+                {v.key === 'unread'
+                  ? (viewCounts.unread > 0 && <span className="min-w-[18px] text-center text-[11px] font-semibold px-1.5 py-0.5 rounded-full bg-red-500 text-white">{viewCounts.unread}</span>)
+                  : <span className="text-xs text-gray-400">{viewCounts[v.key]}</span>}
               </button>
             ))}
           </div>
