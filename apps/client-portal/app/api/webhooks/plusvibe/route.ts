@@ -28,7 +28,12 @@ function verifySignature(payload: string, signature: string): boolean {
     return true
   }
   const computed = crypto.createHmac('sha256', secret).update(payload).digest('hex')
-  return crypto.timingSafeEqual(Buffer.from(computed), Buffer.from(signature))
+  const exp = Buffer.from(computed)
+  const sig = Buffer.from(signature)
+  // timingSafeEqual throws if lengths differ — guard so a malformed signature is
+  // a clean rejection (401), not an uncaught RangeError (500).
+  if (sig.length !== exp.length) return false
+  return crypto.timingSafeEqual(exp, sig)
 }
 
 // POST /api/webhooks/plusvibe
@@ -67,16 +72,19 @@ export async function POST(req: NextRequest) {
       })
       .join(', ')
 
-    const values = Object.values(updates)
-    values.push(event.workspace_id, event.lead_id, new Date().toISOString())
-
     if (Object.keys(updates).length > 0) {
+      // Param order: update fields ($1..$N), then timestamp, lead_id, workspace_id.
+      // The bound array and the highest $N must match exactly.
+      const n = Object.keys(updates).length
+      const tsIdx = n + 1, idIdx = n + 2, wsIdx = n + 3
+      const params = [...Object.values(updates), new Date().toISOString(), event.lead_id, event.workspace_id]
+
       // Upsert: update if exists, insert if not
       await pool.query(`
         UPDATE esp_leads
-        SET ${setClauses}, updated_at = $${values.length - 1}
-        WHERE id = $${values.length} AND workspace_id = $${values.length - 2}
-      `, [...Object.values(updates), event.workspace_id, event.lead_id])
+        SET ${setClauses}, updated_at = $${tsIdx}
+        WHERE id = $${idIdx} AND workspace_id = $${wsIdx}
+      `, params)
 
       // If no rows updated, insert
       const updateRes = await pool.query(`

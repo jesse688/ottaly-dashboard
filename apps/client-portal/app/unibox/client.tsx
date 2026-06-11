@@ -177,7 +177,7 @@ export function UniboxClient({ companyName, clientName }: { companyName: string;
 
   // Show the unread (not-yet-replied) count in the browser tab.
   useEffect(() => {
-    const n = (leads ?? []).filter(l => !l.archived && !(l.has_sent || l.replied_off)).length
+    const n = (leads ?? []).filter(l => !l.archived && !l.locked && !(l.has_sent || l.replied_off)).length
     document.title = n > 0 ? `(${n}) Unread · Ottaly` : 'Ottaly Portal'
   }, [leads])
 
@@ -312,7 +312,7 @@ export function UniboxClient({ companyName, clientName }: { companyName: string;
     : true
   const viewCounts = {
     inbox: (leads ?? []).filter(l => !l.archived).length,
-    unread: (leads ?? []).filter(l => !l.archived && !isReplied(l)).length,
+    unread: (leads ?? []).filter(l => !l.archived && !l.locked && !isReplied(l)).length,
     sent: (leads ?? []).filter(l => !l.archived && l.has_sent).length,
     archived: (leads ?? []).filter(l => l.archived).length,
   }
@@ -614,7 +614,6 @@ export function UniboxClient({ companyName, clientName }: { companyName: string;
 
 
             <Section title="Status">
-              <span className="inline-flex items-center gap-1.5 text-xs font-medium bg-green-100 text-green-700 px-2 py-1 rounded-full"><span className="w-1.5 h-1.5 rounded-full bg-green-500" />Lead</span>
               {selected.client_label && <span className={`inline-flex ml-1.5 text-xs font-medium px-2 py-1 rounded-full ${COLOR_BADGE[labelMeta(selected.client_label)?.color ?? 'purple'] ?? 'bg-purple-100 text-purple-700'}`}>{selected.client_label}</span>}
             </Section>
 
@@ -689,7 +688,7 @@ export function UniboxClient({ companyName, clientName }: { companyName: string;
 
           <div className="flex items-baseline justify-between mb-1">
             <label className="block text-xs text-gray-500">Details <span className="text-gray-400">(at least 10 characters)</span></label>
-            <span className={`text-[11px] font-medium ${disputeReason.trim().length < 10 ? 'text-[#ea6b25]' : 'text-green-600'}`}>{disputeReason.trim().length}/10</span>
+            <span className={`text-[11px] font-medium ${disputeReason.trim().length < 10 ? 'text-[#ea6b25]' : 'text-green-600'}`}>{Math.min(disputeReason.trim().length, 10)}/10</span>
           </div>
           <textarea rows={3} value={disputeReason} onChange={e => setDisputeReason(e.target.value)}
             placeholder={disputeType === 'icp_mismatch' ? 'e.g. They’re a sole trader; we only serve 50+ staff companies.' : 'e.g. Replied twice over 2 weeks, sent a follow-up, no response at all.'}

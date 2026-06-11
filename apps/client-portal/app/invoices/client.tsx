@@ -84,7 +84,7 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
           {/* Leads left — with top-up */}
           <div className="bg-gradient-to-br from-brand-600 to-brand-700 rounded-2xl p-5 text-white">
             <p className="text-xs text-brand-200 uppercase tracking-wider">Leads left</p>
-            <p className="text-4xl font-bold mt-1">{bal ? bal.balance.toLocaleString() : '—'}</p>
+            <p className="text-4xl font-bold mt-1">{bal ? Math.max(0, bal.balance).toLocaleString() : '—'}</p>
             <p className="text-xs text-brand-200 mt-1">Pre-paid lead credits</p>
             <button onClick={() => setShowTopup(true)} className="mt-3 w-full py-2 bg-white text-brand-700 text-sm font-semibold rounded-lg hover:bg-brand-50">Top up leads</button>
           </div>

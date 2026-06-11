@@ -9,12 +9,20 @@ interface LeadDataRow {
   replied_off?: boolean
 }
 
+// Confirm the lead actually belongs to this client's workspace before reading or
+// writing its data — same ownership guard the thread/reply/dispute routes use.
+async function ownsLead(leadId: string, workspaceId: string): Promise<boolean> {
+  const r = await pool.query('SELECT 1 FROM esp_leads WHERE id = $1 AND workspace_id = $2 LIMIT 1', [leadId, workspaceId])
+  return r.rows.length > 0
+}
+
 // GET — returns deal_value and notes for this lead+client
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getSession()
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { id } = await params
+  if (!await ownsLead(id, session.workspaceId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
   const res = await pool.query(
     'SELECT deal_value, notes FROM portal_lead_data WHERE lead_id = $1 AND client_id = $2',
@@ -33,6 +41,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { id } = await params
+  if (!await ownsLead(id, session.workspaceId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const body = await req.json() as { deal_value?: string; notes?: string; archived?: boolean; replied_off?: boolean }
 
   const res = await pool.query(

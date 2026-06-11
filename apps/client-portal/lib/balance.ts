@@ -28,10 +28,17 @@ export async function getLockedLeadIds(clientId: string): Promise<Set<string>> {
   const lockedCount = Math.max(0, delivered - credits)
   if (lockedCount === 0) return new Set<string>()
 
+  // Lock the NEWEST-delivered leads, ordered by the same real-world delivery key
+  // the client list sorts on (first_replied_at, then created_at) — NOT the ledger
+  // row insert time, which can differ. lead id is a stable tiebreaker so the locked
+  // set is deterministic across refreshes even when timestamps tie.
   const locked = await pool.query(
-    `SELECT lead_id FROM portal_ledger
-      WHERE client_id = $1 AND type = 'lead_charge' AND lead_id IS NOT NULL
-      ORDER BY created_at DESC LIMIT $2`,
+    `SELECT pl.lead_id
+       FROM portal_ledger pl
+       JOIN esp_leads l ON l.id = pl.lead_id
+      WHERE pl.client_id = $1 AND pl.type = 'lead_charge' AND pl.lead_id IS NOT NULL
+      ORDER BY COALESCE(l.first_replied_at, l.created_at) DESC NULLS LAST, l.id DESC
+      LIMIT $2`,
     [clientId, lockedCount]
   )
   return new Set<string>(locked.rows.map(x => x.lead_id as string))
