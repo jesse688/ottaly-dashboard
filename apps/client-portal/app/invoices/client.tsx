@@ -41,6 +41,7 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
   const [topupNote, setTopupNote] = useState('')
   const [topups, setTopups] = useState<TopupReq[]>([])
   const [minTopup, setMinTopup] = useState(10)
+  const [buckets, setBuckets] = useState<{ leads: number; pricePerLead: number }[]>([])
   const [topupErr, setTopupErr] = useState('')
   const [msg, setMsg] = useState('')
   const router = useRouter()
@@ -48,12 +49,22 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
   function load() {
     fetch('/api/portal/invoices').then(r => r.json()).then((d) => { setInvoices(d.invoices); setSummary(d.summary) }).catch(() => {})
     fetch('/api/portal/balance').then(r => r.json()).then((d) => !d.error && setBal(d)).catch(() => {})
-    fetch('/api/portal/topup').then(r => r.json()).then((d) => { if (Array.isArray(d.requests)) setTopups(d.requests); if (d.minTopup) setMinTopup(d.minTopup) }).catch(() => {})
+    fetch('/api/portal/topup').then(r => r.json()).then((d) => { if (Array.isArray(d.requests)) setTopups(d.requests); if (d.minTopup) setMinTopup(d.minTopup); if (Array.isArray(d.buckets)) setBuckets(d.buckets) }).catch(() => {})
   }
   useEffect(() => { load() }, [])
 
   async function handleLogout() { await fetch('/api/logout', { method: 'POST' }); router.push('/login') }
 
+  async function requestTopup(leads: number) {
+    setTopupErr('')
+    const res = await fetch('/api/portal/topup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ amount: leads, note: topupNote || undefined }) })
+    const d = await res.json()
+    if (!res.ok) { setTopupErr(d.error ?? 'Could not submit.'); return }
+    setShowTopup(false); setTopupAmt(''); setTopupNote('')
+    setMsg('Top-up requested — an invoice has been created. We\'ll add the leads once it\'s confirmed.')
+    setTimeout(() => setMsg(''), 6000)
+    load()
+  }
   async function submitTopup() {
     setTopupErr('')
     const amt = Math.floor(Number(topupAmt))
@@ -185,6 +196,22 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
           <div className="bg-white rounded-2xl p-5 w-full max-w-md" onClick={e => e.stopPropagation()}>
             <h3 className="text-base font-semibold text-[#050c29] mb-1">Top up leads</h3>
             <p className="text-sm text-gray-500 mb-3">Request more lead credits and we&apos;ll confirm &amp; add them to your balance.</p>
+
+            {buckets.length > 0 && (
+              <div className="mb-4">
+                <label className="block text-xs text-gray-500 mb-2">Choose a package</label>
+                <div className="grid grid-cols-1 gap-2">
+                  {buckets.map((b, i) => (
+                    <button key={i} onClick={() => requestTopup(b.leads)} className="flex items-center justify-between px-4 py-3 rounded-xl border border-gray-200 hover:border-brand-400 hover:bg-brand-50 text-left transition-colors">
+                      <span className="text-sm font-semibold text-[#050c29]">{b.leads} leads</span>
+                      <span className="text-sm text-gray-600">{fmt(b.leads * b.pricePerLead)} <span className="text-xs text-gray-400">({fmt(b.pricePerLead)}/lead)</span></span>
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-gray-400 mt-2">Or request a custom amount below.</p>
+              </div>
+            )}
+
             <label className="block text-xs text-gray-500 mb-1">Number of leads <span className="text-gray-400">(minimum {minTopup})</span></label>
             <input type="number" min={minTopup} value={topupAmt} onChange={e => { setTopupAmt(e.target.value); setTopupErr('') }} placeholder={String(minTopup)} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-brand-400 mb-1" />
             {topupErr && <p className="text-xs text-red-600 mb-2">{topupErr}</p>}

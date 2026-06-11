@@ -3,12 +3,14 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
 
+interface Bucket { leads: number; pricePerLead: number }
 interface PortalClient {
   id: string; username?: string | null; email?: string | null; company_name: string
   workspace_id: string; workspace_name: string | null
   active: boolean; created_at: string
   cost_per_lead: string | number | null
   spend_visibility?: string
+  topup_buckets?: Bucket[]
 }
 interface Workspace { id: string; name: string; active_campaigns: number }
 interface Dispute {
@@ -76,7 +78,8 @@ export function AdminClientsClient() {
 
   // Settings modal (labels + fields + balance)
   const [settingsClient, setSettingsClient]   = useState<PortalClient | null>(null)
-  const [settingsTab, setSettingsTab]         = useState<'labels'|'fields'|'balance'>('labels')
+  const [settingsTab, setSettingsTab]         = useState<'labels'|'fields'|'balance'|'topups'>('labels')
+  const [bucketEdit, setBucketEdit]           = useState<Bucket[]>([])
   const [labelData, setLabelData]             = useState<{ labels: { label: string; count: number }[]; hiddenLabels: string[] } | null>(null)
   const [fieldData, setFieldData]             = useState<{ hiddenFields: string[] } | null>(null)
   const [ledgerData, setLedgerData]           = useState<{ balance: number; ledger: LedgerEntry[] } | null>(null)
@@ -213,6 +216,7 @@ export function AdminClientsClient() {
   async function openSettings(c: PortalClient) {
     setSettingsClient(c); setSettingsTab('labels'); setLabelData(null); setFieldData(null); setLedgerData(null)
     setCplEdit(String(Number(c.cost_per_lead ?? 0))); setEntryForm({ type: 'topup', amount: '', note: '' })
+    setBucketEdit(Array.isArray(c.topup_buckets) ? c.topup_buckets : [])
     const [lr, fr] = await Promise.all([
       fetch(`/api/admin/clients/${c.id}/labels`),
       fetch(`/api/admin/clients/${c.id}/fields`),
@@ -233,6 +237,18 @@ export function AdminClientsClient() {
     await fetch(`/api/admin/clients/${settingsClient.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ costPerLead: cpl }) })
     setSettingsClient({ ...settingsClient, cost_per_lead: cpl })
     fetch('/api/admin/clients').then(r => r.json()).then(setClients)
+  }
+  async function saveBuckets() {
+    if (!settingsClient) return
+    const clean = bucketEdit
+      .map(b => ({ leads: Math.floor(Number(b.leads)), pricePerLead: Number(b.pricePerLead) }))
+      .filter(b => b.leads > 0 && b.pricePerLead >= 0)
+      .sort((a, b) => a.leads - b.leads)
+    await fetch(`/api/admin/clients/${settingsClient.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topupBuckets: clean }) })
+    setBucketEdit(clean)
+    setSettingsClient({ ...settingsClient, topup_buckets: clean })
+    fetch('/api/admin/clients').then(r => r.json()).then(setClients)
+    alert('Top-up buckets saved.')
   }
   async function saveSpendVisibility(mode: string) {
     if (!settingsClient) return
@@ -763,7 +779,7 @@ export function AdminClientsClient() {
             </div>
             {/* Modal tabs */}
             <div className="flex px-5 mt-3 border-b border-gray-100">
-              {([{ key:'labels', label:'Label Visibility' },{ key:'fields', label:'Field Visibility' },{ key:'balance', label:'Balance' }] as { key:'labels'|'fields'|'balance'; label:string }[]).map(t => (
+              {([{ key:'labels', label:'Label Visibility' },{ key:'fields', label:'Field Visibility' },{ key:'balance', label:'Balance' },{ key:'topups', label:'Top-up buckets' }] as { key:'labels'|'fields'|'balance'|'topups'; label:string }[]).map(t => (
                 <button key={t.key} onClick={() => { setSettingsTab(t.key); if (t.key === 'balance' && settingsClient) loadLedger(settingsClient.id) }} className={`mr-4 pb-2.5 text-sm font-medium border-b-2 transition-colors ${settingsTab === t.key ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
                   {t.label}
                 </button>
@@ -883,6 +899,29 @@ export function AdminClientsClient() {
                       </div>
                     </>
                   )}
+                </>
+              )}
+
+              {settingsTab === 'topups' && (
+                <>
+                  <p className="text-xs text-gray-500 mb-3">Preset top-up options this client can pick from, each with its own price per lead (volume pricing). Leave empty to let them request any amount above the global minimum.</p>
+                  <div className="space-y-2 mb-3">
+                    <div className="flex items-center gap-2 text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-1">
+                      <span className="w-24">Leads</span><span className="w-28">£ / lead</span><span className="flex-1">Total</span>
+                    </div>
+                    {bucketEdit.map((b, i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <input type="number" min="1" value={b.leads} onChange={e => setBucketEdit(bs => bs.map((x, j) => j === i ? { ...x, leads: Number(e.target.value) } : x))} className="w-24 px-3 py-2 rounded-lg border border-gray-200 text-sm" />
+                        <input type="number" min="0" step="0.01" value={b.pricePerLead} onChange={e => setBucketEdit(bs => bs.map((x, j) => j === i ? { ...x, pricePerLead: Number(e.target.value) } : x))} className="w-28 px-3 py-2 rounded-lg border border-gray-200 text-sm" />
+                        <span className="flex-1 text-sm text-gray-600">{fmt((Number(b.leads) || 0) * (Number(b.pricePerLead) || 0))}</span>
+                        <button onClick={() => setBucketEdit(bs => bs.filter((_, j) => j !== i))} className="text-gray-300 hover:text-red-500" title="Remove"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+                      </div>
+                    ))}
+                  </div>
+                  <button onClick={() => setBucketEdit(bs => [...bs, { leads: 10, pricePerLead: 0 }])} className="text-xs text-indigo-600 hover:text-indigo-800 font-medium mb-4">+ Add bucket</button>
+                  <div className="flex justify-end">
+                    <button onClick={saveBuckets} className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg">Save buckets</button>
+                  </div>
                 </>
               )}
             </div>

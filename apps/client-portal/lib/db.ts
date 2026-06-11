@@ -85,6 +85,9 @@ async function runMigration() {
       `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS spend_visibility TEXT NOT NULL DEFAULT 'auto'`,
       // Below this lead balance the header warns "Low on leads" (yellow). At 0 it's "Top Up Now" (red).
       `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS low_leads_threshold INTEGER NOT NULL DEFAULT 5`,
+      // Per-client top-up buckets: [{ leads, pricePerLead }] — preset purchase
+      // options with volume pricing (e.g. 10 @ £100 each, 30 @ £80 each).
+      `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS topup_buckets JSONB NOT NULL DEFAULT '[]'`,
 
       // ── Client deal-stage label per lead (separate from internal/PV label) ──
       `ALTER TABLE portal_lead_data ADD COLUMN IF NOT EXISTS client_label TEXT`,

@@ -156,6 +156,7 @@ export async function sendTestNotification(clientId: string): Promise<{ ok: bool
   const sampleLead = { first_name: 'Sam', company_name: 'Acme Ltd' }
   const sampleMsg = "Hi, thanks for reaching out — yes, this is something we're looking into. Could you send over a bit more detail and some availability for a quick call?"
   const { subject, body } = await buildLeadEmail(client, sampleLead, balance, balance <= 0, sampleMsg)
-  const res = await sendEmail(client.email, `[TEST] ${subject}`, body)
+  // Send exactly as a real notification would look (no "[TEST]" prefix).
+  const res = await sendEmail(client.email, subject, body)
   return { ok: res.ok, reason: res.reason, to: client.email }
 }

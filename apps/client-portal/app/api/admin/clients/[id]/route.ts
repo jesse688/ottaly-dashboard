@@ -18,6 +18,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     spendVisibility?: string
 
     lowLeadsThreshold?: number
+    topupBuckets?: { leads: number; pricePerLead: number }[]
   }
 
   const sets: string[] = []
@@ -35,6 +36,14 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (body.currency !== undefined) { values.push(body.currency); sets.push(`currency = $${values.length}`) }
   if (body.spendVisibility !== undefined) { values.push(body.spendVisibility); sets.push(`spend_visibility = $${values.length}`) }
   if (body.lowLeadsThreshold !== undefined) { values.push(Math.max(0, Math.floor(Number(body.lowLeadsThreshold)))); sets.push(`low_leads_threshold = $${values.length}`) }
+  if (body.topupBuckets !== undefined) {
+    // Sanitise: keep only valid {leads>0, pricePerLead>=0}, sorted by leads asc.
+    const clean = (body.topupBuckets ?? [])
+      .map(b => ({ leads: Math.floor(Number(b.leads)), pricePerLead: Number(b.pricePerLead) }))
+      .filter(b => b.leads > 0 && b.pricePerLead >= 0)
+      .sort((a, b) => a.leads - b.leads)
+    values.push(JSON.stringify(clean)); sets.push(`topup_buckets = $${values.length}`)
+  }
 
   if (!sets.length) return NextResponse.json({ error: 'Nothing to update' }, { status: 400 })
 

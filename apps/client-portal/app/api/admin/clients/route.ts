@@ -8,7 +8,7 @@ export async function GET() {
   if (!await getAdminSession()) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const res = await pool.query(`
-    SELECT pc.id, pc.username, pc.email, pc.company_name, pc.contact_name, pc.workspace_id, pc.active, pc.created_at,
+    SELECT pc.id, pc.username, pc.email, pc.company_name, pc.contact_name, pc.workspace_id, pc.active, pc.created_at, pc.topup_buckets,
            pc.cost_per_lead, pc.spend_visibility,
            w.name AS workspace_name
     FROM portal_clients pc

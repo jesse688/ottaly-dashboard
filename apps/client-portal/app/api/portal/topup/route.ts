@@ -20,13 +20,20 @@ export async function POST(req: NextRequest) {
   const amt = Math.floor(Number(amount))
   if (!amt || amt <= 0) return NextResponse.json({ error: 'Invalid amount' }, { status: 400 })
 
-  const min = await getMinTopup()
-  if (amt < min) return NextResponse.json({ error: `The minimum top-up is ${min} leads.` }, { status: 400 })
-
-  const client = await pool.query('SELECT cost_per_lead, currency FROM portal_clients WHERE id = $1', [session.clientId])
+  const client = await pool.query('SELECT cost_per_lead, currency, topup_buckets FROM portal_clients WHERE id = $1', [session.clientId])
   const costPerLead = Number(client.rows[0]?.cost_per_lead ?? 0)
   const currency = client.rows[0]?.currency ?? 'GBP'
-  const invoiceAmount = amt * costPerLead
+  const buckets: { leads: number; pricePerLead: number }[] = Array.isArray(client.rows[0]?.topup_buckets) ? client.rows[0].topup_buckets : []
+
+  // If the requested amount matches a preset bucket, use the bucket's price.
+  // Otherwise it's a custom amount and must clear the global minimum.
+  const bucket = buckets.find(b => Number(b.leads) === amt)
+  if (!bucket) {
+    const min = await getMinTopup()
+    if (amt < min) return NextResponse.json({ error: `The minimum top-up is ${min} leads.` }, { status: 400 })
+  }
+  const pricePerLead = bucket ? Number(bucket.pricePerLead) : costPerLead
+  const invoiceAmount = amt * pricePerLead
 
   // Draft invoice for the requested leads (so the client has something to pay).
   const inv = await pool.query(
@@ -55,13 +62,15 @@ export async function POST(req: NextRequest) {
 export async function GET() {
   const session = await getSession()
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  const [reqs, min] = await Promise.all([
+  const [reqs, min, client] = await Promise.all([
     pool.query(
       `SELECT id, amount, status, note, invoice_id, created_at, confirmed_at
          FROM portal_topup_requests WHERE client_id = $1 ORDER BY created_at DESC`,
       [session.clientId]
     ),
     getMinTopup(),
+    pool.query('SELECT topup_buckets, currency FROM portal_clients WHERE id = $1', [session.clientId]),
   ])
-  return NextResponse.json({ requests: reqs.rows, minTopup: min })
+  const buckets = Array.isArray(client.rows[0]?.topup_buckets) ? client.rows[0].topup_buckets : []
+  return NextResponse.json({ requests: reqs.rows, minTopup: min, buckets, currency: client.rows[0]?.currency ?? 'GBP' })
 }
