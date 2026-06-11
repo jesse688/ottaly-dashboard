@@ -11340,6 +11340,22 @@ app.get('/api/admin/database/contacts', requireAdmin, async (req, res) => {
   res.json({ contacts, total: parseInt(count, 10) });
 });
 
+app.post('/api/admin/database/contacts/by-ids', requireSession, async (req, res) => {
+  const pgdb = req.app.locals.pgDb;
+  if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
+  const { ids } = req.body;
+  if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'ids required' });
+  if (ids.length > 2000) return res.status(400).json({ error: 'Max 2000 at a time' });
+  const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
+  const r = await pgdb.query(
+    `SELECT id, email, first_name, last_name, company_name, company_domain AS company_website,
+            job_title, industry, city, state, country, phone
+     FROM contacts WHERE id IN (${placeholders})`,
+    ids
+  );
+  res.json({ contacts: r.rows });
+});
+
 app.delete('/api/admin/database/contacts', requireAdmin, async (req, res) => {
   const pgdb = req.app.locals.pgDb;
   if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
@@ -12890,7 +12906,10 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
             console.warn(`[push] PlusVibe 429 — backing off ${wait / 1000}s`);
             await new Promise(res => setTimeout(res, wait));
           }
-          if (!r.ok) { job.error = d.message || `PlusVibe error (${r.status})`; job.status = 'failed'; return; }
+          if (!r.ok) {
+            console.error(`[push] PlusVibe ${r.status} — ${JSON.stringify(d)} — sample lead: ${JSON.stringify(slice[0] ? toLead(slice[0]) : {})}`);
+            job.error = d.message || `PlusVibe error (${r.status})`; job.status = 'failed'; return;
+          }
           // Stamp pushed_campaigns so future verify-and-push runs against
           // this same campaign skip these contacts cleanly. Fire-and-forget
           // — a stamp failure must not roll back the actual push.
@@ -13326,7 +13345,10 @@ app.post('/api/contacts/push-jobs/:id/resume', async (req, res) => {
             console.warn(`[push] PlusVibe 429 — backing off ${wait / 1000}s`);
             await new Promise(res => setTimeout(res, wait));
           }
-          if (!r.ok) { job.error = d.message || `PlusVibe error (${r.status})`; job.status = 'failed'; return; }
+          if (!r.ok) {
+            console.error(`[push] PlusVibe ${r.status} — ${JSON.stringify(d)} — sample lead: ${JSON.stringify(slice[0] ? toLead(slice[0]) : {})}`);
+            job.error = d.message || `PlusVibe error (${r.status})`; job.status = 'failed'; return;
+          }
           try {
             const ids = slice.map(c => c.id).filter(Boolean);
             if (ids.length && db.stampPushedCampaign) {

@@ -1567,14 +1567,14 @@
 
         <div class="form-group">
           <label>Client Workspace</label>
-          <select id="pvWorkspace" onchange="loadPvCampaigns()" style="width:100%;padding:10px 12px;">
-            <option value="">Loading workspaces...</option>
-          </select>
+          <div id="pvWorkspaceDisplay" style="padding:10px 12px;border:1px solid #e5e7eb;border-radius:7px;font-size:13px;background:#f8fafc;font-weight:600;color:#374151;">—</div>
+          <!-- hidden so existing executePush() code that reads pvWorkspace still works -->
+          <input type="hidden" id="pvWorkspace">
         </div>
         <div class="form-group">
           <label>Campaign</label>
           <select id="pvCampaign" style="width:100%;padding:10px 12px;">
-            <option value="">Select a workspace first</option>
+            <option value="">Loading campaigns…</option>
           </select>
         </div>
 
@@ -1613,8 +1613,9 @@
         <div id="pushError" style="display:none;background:#fee2e2;color:#dc2626;padding:10px 14px;border-radius:6px;font-size:13px;margin-top:12px;"></div>
       </div>
 
-      <div class="modal-footer">
+      <div class="modal-footer" style="flex-wrap:wrap;gap:.5rem;">
         <button class="btn btn-secondary" onclick="closePushModal()">Cancel</button>
+        <button class="btn btn-ghost" onclick="downloadPushCsv()" title="Download selected contacts as CSV to import manually into PlusVibe">⬇ Download CSV</button>
         <button id="pushConfirmBtn" class="btn btn-plusvibe" onclick="executePush()">Push Contacts</button>
       </div>
     </div>
@@ -3251,31 +3252,28 @@
     async function openPushModal() {
       if (_selectedIds.size === 0) { showMessage('Select contacts first', 'error'); return; }
 
+      // Require a client to be selected in the sidebar filter first
+      const clientSel = document.getElementById('clientFilter');
+      const wsId = clientSel?.value;
+      const wsName = clientSel?.options[clientSel.selectedIndex]?.dataset?.name || clientSel?.options[clientSel.selectedIndex]?.text || '';
+      if (!wsId) {
+        showMessage('Please select a client using "Filter for Client" first, then push.', 'error');
+        return;
+      }
+
+      document.getElementById('pvWorkspace').value = wsId;
+      document.getElementById('pvWorkspaceDisplay').textContent = wsName || wsId;
       document.getElementById('pushCountModal').textContent = _selectedIds.size.toLocaleString();
       document.getElementById('pushStep1').style.display = '';
       document.getElementById('pushConfirmBtn').style.display = '';
       document.getElementById('pushError').style.display = 'none';
       document.getElementById('pushModal').classList.add('active');
 
-      // Reset dropdowns
-      const wsEl = document.getElementById('pvWorkspace');
-      const campEl = document.getElementById('pvCampaign');
-      wsEl.innerHTML = '<option value="">Loading...</option>';
-      campEl.innerHTML = '<option value="">Select a workspace first</option>';
+      // Store for wsName lookup in executePush
+      pvWorkspaces = [{ _id: wsId, name: wsName }];
 
-      // Load workspaces (active clients only)
-      try {
-        const [pvRes, statusRes] = await Promise.all([
-          fetch('/api/pv/workspaces').then(r => r.json()),
-          fetch('/api/client-status').then(r => r.json()).catch(() => [])
-        ]);
-        const inactiveIds = new Set((statusRes || []).filter(c => c.client_status === 'inactive').map(c => c.workspace_id));
-        pvWorkspaces = (pvRes.workspaces || []).filter(w => !inactiveIds.has(w._id));
-        wsEl.innerHTML = '<option value="">— Select workspace —</option>' +
-          pvWorkspaces.map(w => `<option value="${w._id}">${w.name}</option>`).join('');
-      } catch (err) {
-        wsEl.innerHTML = '<option value="">Failed to load</option>';
-      }
+      // Load campaigns for this workspace immediately
+      await loadPvCampaigns();
     }
 
     async function loadPvCampaigns() {
@@ -3542,6 +3540,34 @@
 
     function closePushModal() {
       document.getElementById('pushModal').classList.remove('active');
+    }
+
+    async function downloadPushCsv() {
+      const ids = [..._selectedIds];
+      if (!ids.length) { showMessage('No contacts selected', 'error'); return; }
+      // Fetch full contact data for selected IDs then build CSV
+      try {
+        const r = await fetch('/api/admin/database/contacts/by-ids', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids })
+        });
+        const d = await r.json();
+        const contacts = d.contacts || [];
+        if (!contacts.length) { showMessage('No contact data found', 'error'); return; }
+        // PlusVibe CSV columns
+        const cols = ['email','first_name','last_name','company_name','company_website','job_title','industry','city','state','country','phone_number'];
+        const header = cols.join(',');
+        const rows = contacts.map(c => cols.map(k => {
+          const v = c[k] || '';
+          return `"${String(v).replace(/"/g, '""')}"`;
+        }).join(','));
+        const csv = [header, ...rows].join('\n');
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = `push-contacts-${ids.length}.csv`; a.click();
+        URL.revokeObjectURL(url);
+      } catch (err) { showMessage('CSV export failed: ' + err.message, 'error'); }
     }
 
     function showMessage(text, type = 'success') {
