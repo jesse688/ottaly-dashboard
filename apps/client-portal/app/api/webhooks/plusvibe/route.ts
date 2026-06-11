@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import pool from '@/lib/db'
 import crypto from 'crypto'
 import { notifyClientOfLead } from '@/lib/email'
+import { enrichLead } from '@/lib/sync'
 
 interface PlusVibeWebhookPayload {
   event: string
@@ -127,8 +128,11 @@ export async function POST(req: NextRequest) {
     const becameLead = event.data.status === 'INTERESTED' || event.data.label === 'INTERESTED'
     if (becameLead) {
       try {
+        // Fill in phone, job title, industry, location, LinkedIn, etc. from the
+        // full PlusVibe record before notifying (so the email + details are complete).
+        if (event.data.email) await enrichLead(event.workspace_id, event.data.email)
         await notifyClientOfLead(event.workspace_id, event.lead_id)
-      } catch (e) { console.error('[webhook] notify failed:', e) }
+      } catch (e) { console.error('[webhook] enrich/notify failed:', e) }
     }
 
     console.log(`[webhook] processed event: ${event.event}`)

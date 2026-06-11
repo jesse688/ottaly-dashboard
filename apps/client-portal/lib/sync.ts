@@ -4,6 +4,34 @@ import { reconcileLeadCharges } from './balance'
 
 const MAX_EMAIL_PAGES = 80
 
+// Enrich one lead with its full PlusVibe record (phone, job title, industry,
+// location, LinkedIn, etc.) — webhook-created leads arrive with only basic fields,
+// so we look the lead up and overwrite raw + the structured columns with the
+// complete data. Best-effort; scans recent INTERESTED leads (cap 5 pages).
+export async function enrichLead(workspaceId: string, leadEmail: string): Promise<boolean> {
+  if (!leadEmail) return false
+  try {
+    for (let page = 1; page <= 5; page++) {
+      const leads = await getLeads(workspaceId, 'INTERESTED', page, 100)
+      if (!leads.length) break
+      const lead = leads.find(l => (l.email ?? '').toLowerCase() === leadEmail.toLowerCase())
+      if (lead) {
+        await pool.query(
+          `INSERT INTO esp_leads (id, workspace_id, campaign_id, source, email, first_name, last_name, company_name, status, label, raw, created_at, updated_at)
+           VALUES ($1,$2,$3,'plusvibe',$4,$5,$6,$7,$8,'INTERESTED',$9,$10,NOW())
+           ON CONFLICT (id) DO UPDATE SET
+             email=$4, first_name=$5, last_name=$6, company_name=$7, status=$8, label='INTERESTED', raw=$9, updated_at=NOW()`,
+          [lead._id, workspaceId, lead.campaign_id ?? null, lead.email, lead.first_name ?? null, lead.last_name ?? null,
+           lead.company_name ?? null, lead.status ?? null, JSON.stringify(lead), lead.created_at ?? new Date().toISOString()]
+        )
+        return true
+      }
+      if (leads.length < 100) break
+    }
+  } catch (err) { console.error('[enrichLead] failed:', err) }
+  return false
+}
+
 // Backfill a single workspace from PlusVibe: INTERESTED leads + real email
 // conversations, then reconcile lead-charges for any clients in it. Idempotent.
 export async function backfillWorkspace(
