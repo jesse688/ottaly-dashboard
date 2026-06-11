@@ -64,15 +64,15 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
 
   return (
     <div className="min-h-screen bg-[#f7f8fc]" style={{ fontFamily: 'var(--font-inter), system-ui, sans-serif' }}>
-      <header className="h-14 bg-white border-b border-gray-200 flex items-center px-5 gap-3 sticky top-0 z-10">
-        <Logo />
-        <span className="text-gray-300">|</span>
-        <span className="text-gray-600 text-sm font-medium">{companyName}</span>
+      <header className="h-14 bg-[#224388] flex items-center px-5 gap-3 sticky top-0 z-10">
+        <span className="bg-white rounded-lg px-2 py-1 flex items-center"><Logo /></span>
+        <span className="text-white/30">|</span>
+        <span className="text-white/90 text-sm font-medium">{companyName}</span>
         <nav className="flex items-center gap-1 ml-4">
-          <a href="/unibox" className="px-3 py-1.5 text-gray-500 hover:text-gray-800 text-sm rounded-lg">Leads</a>
-          <span className="px-3 py-1.5 text-brand-600 bg-brand-50 text-sm font-medium rounded-lg">Billing</span>
+          <a href="/unibox" className="px-3 py-1.5 text-white/70 hover:text-white text-sm rounded-lg">Leads</a>
+          <span className="px-3 py-1.5 text-white bg-white/15 text-sm font-medium rounded-lg">Billing</span>
         </nav>
-        <button onClick={handleLogout} className="ml-auto text-gray-400 hover:text-gray-700 text-sm">Sign out</button>
+        <button onClick={handleLogout} className="ml-auto text-white/70 hover:text-white text-sm">Sign out</button>
       </header>
 
       <div className="max-w-5xl mx-auto p-6">
@@ -121,7 +121,7 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
                 <tr key={inv.id} className="border-b border-gray-50 hover:bg-gray-50">
                   <td className="px-4 py-3 font-mono text-xs text-gray-600">{inv.invoice_number ?? '—'}</td>
                   <td className="px-4 py-3 text-gray-800 max-w-xs truncate">{inv.description}</td>
-                  <td className="px-4 py-3 font-semibold text-[#0d2c62]">{fmt(parseFloat(inv.amount))}</td>
+                  <td className="px-4 py-3 font-semibold text-[#050c29]">{fmt(parseFloat(inv.amount))}</td>
                   <td className="px-4 py-3"><span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${inv.status === 'paid' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>{inv.status === 'paid' ? 'Paid' : 'Unpaid'}</span></td>
                   <td className="px-4 py-3 text-gray-500 text-xs">{fmtDate(inv.due_date)}</td>
                   <td className="px-4 py-3 text-right">{inv.status === 'unpaid' && <button onClick={() => markPaid(inv.id)} className="text-xs text-brand-600 hover:text-brand-800 font-medium">I&apos;ve paid</button>}</td>
@@ -135,7 +135,7 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
       {showTopup && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setShowTopup(false)}>
           <div className="bg-white rounded-2xl p-5 w-full max-w-md" onClick={e => e.stopPropagation()}>
-            <h3 className="text-base font-semibold text-[#0d2c62] mb-1">Top up leads</h3>
+            <h3 className="text-base font-semibold text-[#050c29] mb-1">Top up leads</h3>
             <p className="text-sm text-gray-500 mb-3">Request more lead credits and we&apos;ll confirm &amp; add them to your balance.</p>
             <label className="block text-xs text-gray-500 mb-1">Number of leads</label>
             <input type="number" min="0" value={topupAmt} onChange={e => setTopupAmt(e.target.value)} placeholder="25" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-brand-400 mb-3" />
@@ -156,7 +156,7 @@ function Card({ label, value, sub, accent }: { label: string; value: string; sub
   return (
     <div className={`rounded-2xl border p-5 ${accent ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-gray-100'}`}>
       <p className={`text-xs uppercase tracking-wider ${accent ? 'text-emerald-600' : 'text-gray-400'}`}>{label}</p>
-      <p className={`text-2xl font-bold mt-1 ${accent ? 'text-emerald-700' : 'text-[#0d2c62]'}`}>{value}</p>
+      <p className={`text-2xl font-bold mt-1 ${accent ? 'text-emerald-700' : 'text-[#050c29]'}`}>{value}</p>
       <p className={`text-xs mt-1 ${accent ? 'text-emerald-600 font-medium' : 'text-gray-400'}`}>{sub}</p>
     </div>
   )
@@ -164,7 +164,7 @@ function Card({ label, value, sub, accent }: { label: string; value: string; sub
 function Panel({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden mb-6">
-      <div className="px-5 py-3.5 border-b border-gray-100"><h2 className="text-sm font-semibold text-[#0d2c62]">{title}</h2></div>
+      <div className="px-5 py-3.5 border-b border-gray-100"><h2 className="text-sm font-semibold text-[#050c29]">{title}</h2></div>
       <div className="overflow-x-auto">{children}</div>
     </div>
   )

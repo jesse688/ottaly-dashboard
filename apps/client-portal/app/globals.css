@@ -3,20 +3,25 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* Ottaly brand kit — primary deep blue #224388, navy text #0D2C62,
-   teal accent #1F6F78, orange accent #EA6B25 (used sparingly). */
+/* Ottaly brand kit — BG-Secondary #224388, Text-Primary #050C29,
+   Accent 1 teal #1F6F78, Accent 2 yellow #FFB700 (used sparingly). */
 @theme {
-  --color-brand-50:  #eef2fb;
-  --color-brand-100: #d2e4f8;
+  --color-brand-50:  #eef3fb;
+  --color-brand-100: #d2e4f8;  /* BG-Quaternary */
   --color-brand-200: #b3cdf0;
-  --color-brand-300: #7c89cd;
+  --color-brand-300: #7c89cd;  /* BG-Tertiary */
   --color-brand-400: #5168b0;
   --color-brand-500: #324f98;
-  --color-brand-600: #224388;
+  --color-brand-600: #224388;  /* BG-Secondary / primary */
   --color-brand-700: #1b3670;
-  --color-brand-800: #0d2c62;
+  --color-brand-800: #050c29;  /* Text-Primary */
   --color-teal-accent: #1f6f78;
-  --color-orange-accent: #ea6b25;
+  --color-yellow-accent: #ffb700;
+}
+
+/* Genos = primary headings, Inter = body */
+h1, h2, h3, h4, h5, h6, .font-heading {
+  font-family: var(--font-genos), var(--font-inter), system-ui, sans-serif;
 }
 
 @theme inline {

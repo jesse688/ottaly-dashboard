@@ -48,7 +48,7 @@ export default function InvitePage() {
           <p className="text-sm text-center text-gray-500">This invite link is invalid or has already been used. Please contact your account manager.</p>
         ) : (
           <>
-            <h1 className="text-xl font-semibold text-[#0d2c62] text-center mb-1">Set your access code</h1>
+            <h1 className="text-xl font-semibold text-[#050c29] text-center mb-1">Set your access code</h1>
             <p className="text-sm text-gray-500 text-center mb-6">{company ? `for ${company}` : 'Loading…'}</p>
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>

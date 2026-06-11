@@ -55,7 +55,7 @@ export default function LoginPage() {
         <div className="flex justify-center mb-6">
           <Logo size="lg" />
         </div>
-        <h1 className="text-lg font-semibold text-[#0d2c62] text-center mb-6">Client Login</h1>
+        <h1 className="text-lg font-semibold text-[#050c29] text-center mb-6">Client Login</h1>
 
         {mode === 'login' ? (
           <form onSubmit={handleSubmit} className="space-y-4">

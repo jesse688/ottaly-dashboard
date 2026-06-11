@@ -317,27 +317,27 @@ export function UniboxClient({ companyName }: { companyName: string }) {
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-[#f7f8fc]" style={{ fontFamily: 'var(--font-inter), system-ui, sans-serif' }}>
       {/* Top bar */}
-      <header className="h-14 bg-white border-b border-gray-200 flex items-center px-5 shrink-0 gap-3">
-        <Logo />
-        <span className="text-gray-300">|</span>
-        <span className="text-gray-600 text-sm font-medium">{companyName}</span>
+      <header className="h-14 bg-[#224388] flex items-center px-5 shrink-0 gap-3">
+        <span className="bg-white rounded-lg px-2 py-1 flex items-center"><Logo /></span>
+        <span className="text-white/30">|</span>
+        <span className="text-white/90 text-sm font-medium">{companyName}</span>
         <nav className="flex items-center gap-1 ml-4">
-          <span className="px-3 py-1.5 text-brand-600 bg-brand-50 text-sm font-medium rounded-lg inline-flex items-center gap-1.5">
+          <span className="px-3 py-1.5 text-white bg-white/15 text-sm font-medium rounded-lg inline-flex items-center gap-1.5">
             Leads
-            {viewCounts.unread > 0 && <span className="min-w-[18px] text-center text-[11px] font-semibold px-1.5 py-0.5 rounded-full bg-[#ea6b25] text-white">{viewCounts.unread}</span>}
+            {viewCounts.unread > 0 && <span className="min-w-[18px] text-center text-[11px] font-semibold px-1.5 py-0.5 rounded-full bg-[#ffb700] text-[#050c29]">{viewCounts.unread}</span>}
           </span>
-          <a href="/invoices" className="px-3 py-1.5 text-gray-500 hover:text-gray-800 text-sm rounded-lg">Billing</a>
+          <a href="/invoices" className="px-3 py-1.5 text-white/70 hover:text-white text-sm rounded-lg">Billing</a>
         </nav>
         <div className="ml-auto flex items-center gap-4">
           {balance && (
-            <a href="/invoices" className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gray-50 hover:bg-gray-100 border border-gray-200">
-              <span className="text-xs text-gray-500">Leads left</span>
-              <span className={`text-sm font-semibold ${balance.balance <= 0 ? 'text-red-600' : 'text-[#0d2c62]'}`}>
+            <a href="/invoices" className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 border border-white/20">
+              <span className="text-xs text-white/70">Leads left</span>
+              <span className={`text-sm font-semibold ${balance.balance <= 0 ? 'text-[#ffb700]' : 'text-white'}`}>
                 {balance.balance.toLocaleString()}
               </span>
             </a>
           )}
-          <button onClick={handleLogout} className="text-gray-400 hover:text-gray-700 text-sm">Sign out</button>
+          <button onClick={handleLogout} className="text-white/70 hover:text-white text-sm">Sign out</button>
         </div>
       </header>
 
@@ -362,7 +362,7 @@ export function UniboxClient({ companyName }: { companyName: string }) {
                   {v.label}
                 </span>
                 {v.key === 'unread'
-                  ? (viewCounts.unread > 0 && <span className="min-w-[18px] text-center text-[11px] font-semibold px-1.5 py-0.5 rounded-full bg-[#ea6b25] text-white">{viewCounts.unread}</span>)
+                  ? (viewCounts.unread > 0 && <span className="min-w-[18px] text-center text-[11px] font-semibold px-1.5 py-0.5 rounded-full bg-[#ffb700] text-[#050c29]">{viewCounts.unread}</span>)
                   : <span className="text-xs text-gray-400">{viewCounts[v.key]}</span>}
               </button>
             ))}
@@ -398,7 +398,7 @@ export function UniboxClient({ companyName }: { companyName: string }) {
         <section className="w-[380px] bg-white border-r border-gray-200 flex flex-col shrink-0">
           <div className="px-4 py-3 border-b border-gray-100">
             <div className="flex items-center justify-between mb-2">
-              <h2 className="text-sm font-semibold text-[#0d2c62]">Your Leads <span className="text-gray-400 font-normal">({filtered.length})</span></h2>
+              <h2 className="text-sm font-semibold text-[#050c29]">Your Leads <span className="text-gray-400 font-normal">({filtered.length})</span></h2>
             </div>
             <div className="relative">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="absolute left-2.5 top-2.5 text-gray-400"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -422,7 +422,7 @@ export function UniboxClient({ companyName }: { companyName: string }) {
                     <div className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 ${av(l.id)}`}>{initials(l)}</div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-2">
-                        <span className={`text-sm truncate ${l.has_unread ? 'font-bold text-[#0d2c62]' : 'font-medium text-gray-800'}`}>{fullName(l)}</span>
+                        <span className={`text-sm truncate ${l.has_unread ? 'font-bold text-[#050c29]' : 'font-medium text-gray-800'}`}>{fullName(l)}</span>
                         <span className="text-[11px] text-gray-400 shrink-0">{fmtDate(l.first_replied_at ?? l.created_at)}</span>
                       </div>
                       <p className="text-xs text-gray-500 truncate">{l.company_name ?? l.email}</p>
@@ -452,7 +452,7 @@ export function UniboxClient({ companyName }: { companyName: string }) {
               <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-3 shrink-0">
                 <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold ${av(selected.id)}`}>{initials(selected)}</div>
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-[#0d2c62] truncate">{fullName(selected)}</p>
+                  <p className="text-sm font-semibold text-[#050c29] truncate">{fullName(selected)}</p>
                   {selected.email && <p className="text-xs text-gray-500 truncate">{selected.email}</p>}
                 </div>
                 {/* Replied off-dashboard: moves a new lead out of Unread */}
@@ -514,7 +514,7 @@ export function UniboxClient({ companyName }: { companyName: string }) {
                       <div className={`flex items-center gap-2.5 px-4 py-2.5 ${out ? 'bg-brand-50' : 'bg-gray-50'}`}>
                         <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-semibold shrink-0 ${out ? 'bg-brand-600 text-white' : av(selected.id)}`}>{out ? 'O' : initials(selected)}</div>
                         <div className="min-w-0">
-                          <p className="text-sm font-semibold text-[#0d2c62] leading-tight truncate">{out ? (m.sent_via_portal ? `${companyName} (you)` : 'Ottaly') : fullName(selected)}</p>
+                          <p className="text-sm font-semibold text-[#050c29] leading-tight truncate">{out ? (m.sent_via_portal ? `${companyName} (you)` : 'Ottaly') : fullName(selected)}</p>
                           <p className="text-[11px] text-gray-500 truncate">{out ? `to: ${selected.email}` : (m.from_email ?? selected.email)}</p>
                         </div>
                         <div className="ml-auto flex items-center gap-2 shrink-0">
@@ -533,7 +533,7 @@ export function UniboxClient({ companyName }: { companyName: string }) {
                           // We composed this HTML ourselves in the portal — safe to render.
                           <div className="text-sm text-gray-800 break-words leading-relaxed [&_a]:text-brand-600 [&_a]:underline [&_img]:max-w-full [&_img]:rounded" dangerouslySetInnerHTML={{ __html: m.body_html }} />
                         ) : (
-                          <div className="text-[15px] text-[#0d2c62] whitespace-pre-wrap break-words leading-relaxed">{main || '(no content)'}</div>
+                          <div className="text-[15px] text-[#050c29] whitespace-pre-wrap break-words leading-relaxed">{main || '(no content)'}</div>
                         )}
                         {quoted && !m.sent_via_portal && (
                           <details className="mt-3 border-t border-dashed border-gray-200 pt-2">
@@ -571,7 +571,7 @@ export function UniboxClient({ companyName }: { companyName: string }) {
           <aside className="w-72 bg-white border-l border-gray-200 flex flex-col shrink-0 overflow-y-auto">
             <div className="p-5 text-center border-b border-gray-100">
               <div className={`w-16 h-16 rounded-full mx-auto flex items-center justify-center text-lg font-semibold mb-2 ${av(selected.id)}`}>{initials(selected)}</div>
-              <p className="text-sm font-semibold text-[#0d2c62]">{fullName(selected)}</p>
+              <p className="text-sm font-semibold text-[#050c29]">{fullName(selected)}</p>
               {selected.job_title && <p className="text-xs text-gray-500 mt-0.5">{selected.job_title}</p>}
               {selected.company_name && <p className="text-xs text-brand-600 mt-0.5">{selected.company_name}</p>}
             </div>
@@ -882,7 +882,7 @@ function Modal({ title, children, onClose }: { title: string; children: ReactNod
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={onClose}>
       <div className="bg-white rounded-2xl p-5 w-full max-w-md" onClick={e => e.stopPropagation()}>
-        <h3 className="text-base font-semibold text-[#0d2c62] mb-3">{title}</h3>
+        <h3 className="text-base font-semibold text-[#050c29] mb-3">{title}</h3>
         {children}
       </div>
     </div>
