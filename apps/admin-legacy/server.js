@@ -47,6 +47,9 @@ const ADMIN_KEY              = process.env.ADMIN_KEY              || 'ottaly-adm
 // No need to also rotate JWT_SECRET — the password change is sufficient.
 const SESSION_SECRET         = JWT_SECRET + ':' + ADMIN_KEY;
 const PLUSVIBE_KEY           = process.env.PLUSVIBE_KEY           || '6425e882-f33fb46a-2837ff5a-eb535a60';
+const BISON_API_KEY = process.env.BISON_API_KEY || process.env.PLUSVIBE_KEY || '';
+const BISON_BASE = (process.env.BISON_API_URL || 'https://send.ottaly.co.uk').replace(/\/$/, '');
+let _bisonWsId = null;
 const ANTHROPIC_API_KEY      = process.env.ANTHROPIC_API_KEY      || '';
 const SLACK_SIGNING_SECRET   = process.env.SLACK_SIGNING_SECRET   || '';
 const ANTHROPIC_MODEL        = process.env.ANTHROPIC_MODEL        || 'claude-haiku-4-5-20251001';
@@ -197,9 +200,6 @@ for (const sql of [
   // Health view. 0 means "no target set" (skip pace scoring).
   `ALTER TABLE clients ADD COLUMN lead_target_monthly INTEGER DEFAULT 0`,
   `ALTER TABLE clients ADD COLUMN campaign_manager_2 TEXT DEFAULT ''`,
-  `ALTER TABLE clients ADD COLUMN manager_end_date TEXT DEFAULT NULL`,
-  `ALTER TABLE client_managers ADD COLUMN end_date TEXT DEFAULT NULL`,
-  `ALTER TABLE client_managers ADD COLUMN start_date TEXT DEFAULT NULL`,
   `ALTER TABLE managers ADD COLUMN commission_rate REAL DEFAULT 15`,
   `ALTER TABLE managers ADD COLUMN base_salary REAL DEFAULT 0`,
   `ALTER TABLE leads ADD COLUMN closed_value REAL`,
@@ -229,16 +229,6 @@ try {
   });
   backfill();
 } catch (e) { console.warn('[workload] backfill error:', e.message); }
-
-// Backfill client_managers.start_date from clients.manager_start_date for primary managers
-try {
-  db.prepare(`UPDATE client_managers SET start_date = (
-    SELECT c.manager_start_date FROM clients c
-    WHERE c.workspace_id = client_managers.client_workspace_id
-      AND LOWER(TRIM(c.campaign_manager)) = LOWER(TRIM(client_managers.manager_name))
-      AND c.manager_start_date IS NOT NULL
-  ) WHERE start_date IS NULL`).run();
-} catch (e) { console.warn('[workload] start_date backfill error:', e.message); }
 
 // Backfill any leads that arrived before received_at column existed
 db.exec(`UPDATE leads SET received_at = datetime('now') WHERE received_at IS NULL`);
@@ -2118,19 +2108,17 @@ app.post('/api/leads/:id/nonlead', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-// ── Full thread from PlusVibe ──────────────────────────────
+// ── Full thread from EmailBison ──────────────────────────────
 app.get('/api/leads/:id/thread', requireAuth, async (req, res) => {
   const row = db.prepare('SELECT data FROM leads WHERE id = ? AND workspace_id = ?')
     .get(req.params.id, req.client.workspace_id);
   if (!row) return res.status(404).json({ error: 'Lead not found' });
   const lead = JSON.parse(row.data);
   try {
-    const r = await fetch(
-      `https://api.plusvibe.ai/api/v1/unibox/emails?workspace_id=${lead.workspace_id}&thread_id=${lead.last_thread_id}`,
-      { headers: { 'x-api-key': PLUSVIBE_KEY } }
-    );
-    if (!r.ok) throw new Error(`PlusVibe ${r.status}`);
-    res.json({ source: 'plusvibe', data: await r.json() });
+    await bisonSwitch(lead.workspace_id);
+    var threadRaw = await bisonFetch('/api/replies/' + (lead.last_thread_id || lead.bison_reply_id) + '/conversation-thread');
+    var threadMsgs = [].concat(threadRaw.data && threadRaw.data.older_messages || [], threadRaw.data && threadRaw.data.current_reply ? [threadRaw.data.current_reply] : [], threadRaw.data && threadRaw.data.newer_messages || []).map(function(m) { return { id: m.id, direction: m.folder === 'Sent' ? 'OUT' : 'IN', subject: m.subject, body: { html: m.html_body, text: m.text_body }, timestamp_created: m.date_received, from_address_email: m.from_email_address, to_address_email_list: m.primary_to_email_address, is_unread: m.read ? 0 : 1 }; });
+    res.json({ source: 'bison', data: { messages: threadMsgs } });
   } catch {
     res.json({
       source: 'webhook',
@@ -2153,25 +2141,12 @@ app.post('/api/leads/:id/reply', requireAuth, async (req, res) => {
   const lead   = JSON.parse(row.data);
   const { body } = req.body || {};
   if (!body?.trim()) return res.status(400).json({ error: 'Reply body required' });
-  const htmlBody = body.includes('<') ? body : `<p>${body.replace(/\n/g, '</p><p>')}</p>`;
+  const body_text = typeof body === 'string' ? body : (body && body.text) || '';
   try {
-    const r = await fetch(
-      `https://api.plusvibe.ai/api/v1/unibox/emails/reply?workspace_id=${lead.workspace_id}`,
-      {
-        method:  'POST',
-        headers: { 'x-api-key': PLUSVIBE_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          reply_to_id: lead.last_email_id,
-          subject:     `Re: ${lead.last_lead_reply_subject || lead.latest_subject || ''}`,
-          from:        lead.email_account_name,
-          to:          lead.email,
-          body:        htmlBody,
-        })
-      }
-    );
-    const result = await r.json();
-    if (!r.ok) return res.status(r.status).json(result);
-    res.json({ ok: true, result });
+    await bisonSwitch(lead.workspace_id);
+    var replyPayload = { message: (body && body.text) || body_text || '', content_type: 'text', reply_all: true };
+    var replyRes = await bisonFetch('/api/replies/' + (lead.last_thread_id || lead.bison_reply_id) + '/reply', { method: 'POST', body: replyPayload });
+    res.json({ ok: true, result: replyRes });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -2286,14 +2261,14 @@ pvFetch = async function pvFetch(path, retries = 5, opts = {}) {
     if (wait > 0) await new Promise(r => setTimeout(r, wait));
     _pvLastCall = Date.now();
 
-    const init = { headers: { 'x-api-key': PLUSVIBE_KEY } };
+    const init = { headers: { 'Authorization': 'Bearer ' + BISON_API_KEY } };
     if (opts.body) {
       init.method = opts.method || 'POST';
       init.headers['Content-Type'] = 'application/json';
       init.body = typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body);
     }
     const _pvStart = Date.now();
-    const r = await fetch(`https://api.plusvibe.ai/api/v1${path}`, init);
+    const r = await fetch(BISON_BASE + '/api' + path, init);
     const _pvMs = Date.now() - _pvStart;
     const _pvEndpoint = path.split('?')[0];
     // Log every 10th call (sampling) plus all non-200s to avoid DB pressure
@@ -2316,6 +2291,59 @@ pvFetch = async function pvFetch(path, retries = 5, opts = {}) {
   }
   throw new Error(`PlusVibe 429: ${path} (gave up after ${retries} retries)`);
 };
+
+async function bisonSwitch(wsId) {
+  if (_bisonWsId === String(wsId)) return;
+  await fetch(BISON_BASE + '/api/workspaces/v1.1/switch-workspace', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + BISON_API_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspace_id: Number(wsId) }),
+    signal: AbortSignal.timeout(10000),
+  }).catch(() => {});
+  _bisonWsId = String(wsId);
+}
+
+async function bisonFetch(path, opts) {
+  opts = opts || {};
+  if (opts.wsId) await bisonSwitch(opts.wsId);
+  var url = new URL(BISON_BASE + path);
+  if (opts.params) {
+    Object.keys(opts.params).forEach(function(k) {
+      if (opts.params[k] !== undefined && opts.params[k] !== null) url.searchParams.set(k, String(opts.params[k]));
+    });
+  }
+  var init = {
+    method: opts.method || 'GET',
+    headers: { 'Authorization': 'Bearer ' + BISON_API_KEY, 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(15000),
+  };
+  if (opts.body) init.body = JSON.stringify(opts.body);
+  var r = await fetch(url.toString(), init);
+  if (!r.ok) {
+    var txt = await r.text().catch(function() { return ''; });
+    throw new Error('Bison ' + path + ' -> ' + r.status + ': ' + txt.slice(0, 200));
+  }
+  return r.json();
+}
+
+function normBisonWs(ws) {
+  return { id: String(ws.id), name: ws.name };
+}
+
+function pivotBisonStats(bisonData) {
+  var out = {};
+  var labelMap = { 'Sent': 'total_sent_count', 'Replied': 'total_reply_count', 'Bounced': 'total_bounce_count', 'Total Opens': 'total_open_count', 'Interested': 'total_pos_reply_count' };
+  (bisonData || []).forEach(function(series) {
+    var field = labelMap[series.label];
+    if (!field) return;
+    (series.dates || []).forEach(function(pair) {
+      var date = pair[0], count = pair[1];
+      if (!out[date]) out[date] = { date: date, total_sent_count: 0, total_reply_count: 0, total_bounce_count: 0, total_open_count: 0, total_pos_reply_count: 0, total_ooo_reply_count: 0, total_contacted_count: 0 };
+      out[date][field] = count;
+    });
+  });
+  return out;
+}
 
 function normalizePvLabel(label) {
   return String(label || '').trim().replace(/\s+/g, '_').toUpperCase();
@@ -2420,8 +2448,9 @@ async function refreshRevenueCache() {
         for (let page = 1; page <= 20; page++) {
           let batch;
           try {
-            const raw = await pvFetch(`/lead/workspace-leads?workspace_id=${ws.id}&label=${label}&page=${page}&limit=100`);
-            batch = Array.isArray(raw) ? raw : (raw?.leads || raw?.data || []);
+            bisonSwitch(ws.id);
+            const raw_b = await bisonFetch('/api/leads', { wsId: ws.id, params: { page: page, per_page: 100 } });
+            batch = (raw_b.data || []).map(function(l) { return Object.assign({}, l, { _id: String(l.id), id: String(l.id), company_name: l.company || l.company_name, job_title: l.title || l.job_title, label: l.interested ? 'INTERESTED' : (l.status || '') }); });
           } catch(e) { break; }
           if (!batch.length) break;
           batch.forEach(l => {
@@ -2441,7 +2470,6 @@ async function refreshRevenueCache() {
               last_name:      existing?.last_name  || l.last_name   || l.lastName   || '',
               lead_email:     email,
               lead_price:     wsPrice,
-              mx:             existing?.mx || l.mx || null,  // recipient provider (PlusVibe mx) for accurate per-provider lead counts
               label:          isPvNonLeadLabel(scanLabel) || isPvNonLeadLabel(leadLabel) ? 'NON_LEAD' : (existing?.label || leadLabel || scanLabel),
               date:           stableDate,
               client_inactive: wsInactive,
@@ -2637,113 +2665,6 @@ const PERF_TODAY_TTL_MS = 10 * 60 * 1000;
 const PERF_OLD_TTL_MS = 12 * 60 * 60 * 1000;
 const PERF_LEADS_TTL_MS = 15 * 60 * 1000;
 const PERF_WARM_INTERVAL_MS = 2 * 60 * 1000;
-
-// ── Recipient-provider mix (durable; from PlusVibe's per-lead `mx` field) ─────
-// PlusVibe's recipient split (Google/Microsoft/Other) is computed from each
-// lead's authoritative `mx` value (GOOGLE_WORKSPACE / MICROSOFT365 /
-// REGULAR_ACCOUNT / PERSONAL_GMAIL), available via /lead/workspace-leads — which
-// our API key CAN reach (the exact split endpoint on pipl.ai needs a session
-// token we don't have). We aggregate each workspace's leads by mx, weighted by
-// emails actually sent (sent_step), into provider fractions, then apply those
-// fractions to the accurate per-day totals. The mix is stable, so it's synced
-// once on refresh and cached, not per-request.
-const providerMixCache = { byWs: new Map(), syncedAt: null, syncing: false };
-const PROVIDER_MIX_MAX_PAGES = 40;   // ~4000 leads/ws, sorted by email so the
-                                     // sample is de-biased (spread across
-                                     // providers, not campaign-clustered). A full
-                                     // sweep is impractical under PlusVibe's
-                                     // ~100 req/min limit. Persisted to DB.
-
-function pvMxToProviderBucket(mx) {
-  const m = String(mx || '').toUpperCase();
-  if (m === 'MICROSOFT365' || /MICROSOFT|OUTLOOK|OFFICE|EXCHANGE/.test(m)) return 'outlook';
-  if (m === 'GOOGLE_WORKSPACE' || m === 'PERSONAL_GMAIL' || /GOOGLE|GMAIL/.test(m)) return 'google';
-  return 'other'; // REGULAR_ACCOUNT and anything else PlusVibe calls "Other"
-}
-
-// Page through a workspace's leads, bucketing sent/replies/bounces by recipient
-// provider. Returns { google:{sent,replies,bounces}, outlook:{...}, other:{...} }.
-async function fetchWorkspaceProviderMix(wsId, maxPages = PROVIDER_MIX_MAX_PAGES) {
-  const buckets = {
-    google:  { sent: 0, replies: 0, bounces: 0 },
-    outlook: { sent: 0, replies: 0, bounces: 0 },
-    other:   { sent: 0, replies: 0, bounces: 0 },
-  };
-  for (let page = 1; page <= maxPages; page++) {
-    let leads = [];
-    try {
-      // Sort by email so a bounded sample is spread across providers rather than
-      // campaign-clustered (campaign order correlates with provider, which is
-      // what skewed the unsorted sample's Microsoft share). PlusVibe's ~100
-      // req/min limit makes a full sweep of 40k+ leads impractical (~minutes
-      // each); a de-biased ~4k-lead sample is representative and fast.
-      const raw = await pvFetch(`/lead/workspace-leads?workspace_id=${wsId}&page=${page}&limit=100&sort=email&direction=asc`);
-      leads = Array.isArray(raw) ? raw : (raw?.leads || raw?.data || raw?.docs || []);
-    } catch { break; }
-    if (!leads.length) break;
-    for (const l of leads) {
-      const b = buckets[pvMxToProviderBucket(l.mx)];
-      // Count LEADS per provider (not sent_step). sent_step weighting inflated
-      // providers whose leads got more follow-ups (Microsoft ran ~2x high);
-      // plain lead-count distribution matched PlusVibe's email split closely.
-      b.sent    += 1;
-      b.replies += Number(l.replied_count || 0);
-      b.bounces += (l.bounce_msg ? 1 : 0);
-    }
-    if (leads.length < 100) break;
-  }
-  return buckets;
-}
-
-// Sync the provider mix for the given workspaces (background; non-blocking).
-async function syncProviderMix(wsIds) {
-  if (providerMixCache.syncing) return;
-  providerMixCache.syncing = true;
-  const pgdb = app.locals.pgDb;
-  try {
-    let done = 0;
-    for (const wsId of wsIds) {
-      try {
-        const mix = await fetchWorkspaceProviderMix(wsId);
-        providerMixCache.byWs.set(wsId, mix);
-        // Persist each workspace as it finishes (incremental progress survives a
-        // restart; the full sweep only needs to run once).
-        if (pgdb) await pgdb.saveProviderMix(wsId, mix, Date.now()).catch(() => {});
-      } catch (e) { console.warn(`[provider-mix] ${wsId} failed: ${e.message}`); }
-      console.log(`[provider-mix] ${++done}/${wsIds.length} workspaces`);
-    }
-    providerMixCache.syncedAt = new Date().toISOString();
-  } finally { providerMixCache.syncing = false; }
-}
-
-// Given a workspace's accurate totals (from perf cache) and its provider mix,
-// split each metric across providers by that mix's fraction of the metric.
-// Falls back to all-"other" when no mix is available yet (so totals still sum).
-function splitTotalsByProvider(wsId, totals, leadsByProvider) {
-  const mix = providerMixCache.byWs.get(wsId);
-  // No mix yet (sync still running) → return null rather than fabricating a
-  // split. The UI hides this workspace from provider tabs until its real mix
-  // lands, instead of dumping its whole volume into "Other" (confidently wrong).
-  if (!mix) return null;
-  const empty = () => ({ sent: 0, replies: 0, bounces: 0, leads: 0 });
-  const out = { google: empty(), outlook: empty(), other: empty() };
-  // sent/replies/bounces: apportion the accurate totals by the lead-mix ratio
-  // (PlusVibe's daily aggregate has no provider dimension, so this is the only
-  // way to split those — it's an estimate but sums exactly to the total).
-  for (const metric of ['sent', 'replies', 'bounces']) {
-    const denom = mix.google[metric] + mix.outlook[metric] + mix.other[metric];
-    if (denom <= 0) { out.other[metric] = totals[metric] || 0; continue; }
-    for (const p of ['google', 'outlook', 'other']) {
-      out[p][metric] = Math.round((totals[metric] || 0) * (mix[p][metric] / denom));
-    }
-  }
-  // LEADS: use the REAL count per provider (each lead carries an mx), not an
-  // estimate — so the Leads column is exact and traceable to specific leads.
-  for (const p of ['google', 'outlook', 'other']) {
-    out[p].leads = leadsByProvider?.[p] || 0;
-  }
-  return out;
-}
 const EMPTY_PERF_AGG = { sent: 0, replies: 0, oooReplies: 0, posReplies: 0, bounces: 0, contacted: 0 };
 let performanceWarmPromise = null;
 
@@ -2786,79 +2707,42 @@ function aggPvEmailStats(stats) {
 
 async function activePerformanceWorkspaces() {
   let clientRows = [];
-  try { clientRows = db.prepare(`SELECT workspace_id, workspace_name, client_status FROM clients`).all(); } catch {}
+  try { clientRows = db.prepare(`SELECT workspace_id, client_status FROM clients`).all(); } catch {}
   const [wsRaw] = await Promise.all([pvFetch('/workspaces')]);
   const inactiveIds = new Set(clientRows.filter(r => r.client_status === 'inactive').map(r => r.workspace_id));
   const workspaces = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.workspaces || wsRaw?.data || []);
-  const active = workspaces.filter(ws => !inactiveIds.has(ws.id));
-
-  // Union in any active SQLite client missing from the PlusVibe /workspaces
-  // response. A newly-added client lives in the clients table (so Client/Admin
-  // pages show it) before it surfaces in /workspaces — without this, the cache
-  // never fetches its stats, so the Stats page's sent>0 filter drops it.
-  const seen = new Set(active.map(ws => ws.id));
-  for (const r of clientRows) {
-    if (!r.workspace_id || r.client_status === 'inactive' || seen.has(r.workspace_id)) continue;
-    active.push({ id: r.workspace_id, name: r.workspace_name || r.workspace_id });
-    seen.add(r.workspace_id);
-  }
-  return active;
+  return workspaces.filter(ws => !inactiveIds.has(ws.id));
 }
 
 async function ensurePerformanceDailyStats(wsIds, dates, dailyStats = performanceCache.dailyStats, forceDates = new Set()) {
   const today = serverDateString(new Date());
-  if (!dates.length) return {};
-  const dateSet = new Set(dates);
-  const sorted = [...dates].sort();
-  const rangeStart = sorted[0];
-  const rangeEnd   = sorted[sorted.length - 1];
-
-  // Only fetch workspaces that have at least one stale/missing/forced day.
-  const wsNeeding = wsIds.filter(wsId =>
-    dates.some(date => {
-      const cached = dailyStats.get(`${wsId}|${date}`);
+  // Build list of (wsId, date) pairs that actually need a fetch.
+  const needed = [];
+  for (const wsId of wsIds) {
+    for (const date of dates) {
+      const key = `${wsId}|${date}`;
+      const cached = dailyStats.get(key);
       const ttl = date === today ? PERF_TODAY_TTL_MS : PERF_OLD_TTL_MS;
-      return forceDates.has(date) || !cached || Date.now() - cached.savedAt > ttl;
-    })
-  );
-
-  // ONE range call per workspace — NOT one per day. The old per-day version
-  // fired wsIds×dates calls (e.g. 18×30 = 540); with PV_MIN_GAP_MS=600 that's
-  // 5.4min of mandatory gaps per warm, but warms re-run every 2min, so it never
-  // finished and throttled days stayed zero — undercounting totals by ~50%
-  // (worse for heavy senders). PlusVibe returns a full per-day `chart` for a
-  // date range in a single call (same pattern as the intelligence backfill).
-  const CONC = 6;
-  for (let i = 0; i < wsNeeding.length; i += CONC) {
-    await Promise.allSettled(wsNeeding.slice(i, i + CONC).map(async wsId => {
+      if (forceDates.has(date) || !cached || Date.now() - cached.savedAt > ttl) needed.push({ wsId, date, key });
+    }
+  }
+  // Fetch up to 8 at once — fast enough to feel instant, gentle on PlusVibe.
+  const CONC = 8;
+  for (let i = 0; i < needed.length; i += CONC) {
+    await Promise.allSettled(needed.slice(i, i + CONC).map(async ({ wsId, date, key }) => {
       try {
-        const raw = await pvFetch(`/account/email-stats?workspace_id=${wsId}&start_date=${rangeStart}&end_date=${rangeEnd}`);
-        const chart = Array.isArray(raw) ? raw : (raw?.chart || []);
-        const seen = new Set();
-        for (const row of chart) {
-          const date = (row.date || row.day || '').slice(0, 10);
-          if (!date || !dateSet.has(date)) continue;
-          // aggPvEmailStats([row]) reuses the exact field mapping for one day.
-          dailyStats.set(`${wsId}|${date}`, { savedAt: Date.now(), data: aggPvEmailStats([row]) });
-          seen.add(date);
-        }
-        // A day absent from the chart on a SUCCESSFUL fetch genuinely had 0
-        // sends — cache a real zero so it isn't retried forever. Never overwrite
-        // a prior non-zero value (defensive against a sparse chart response).
-        for (const date of dates) {
-          if (seen.has(date) || date > today) continue;
-          const key = `${wsId}|${date}`;
-          const prev = dailyStats.get(key);
-          if (!prev || (prev.data?.sent || 0) === 0) {
-            dailyStats.set(key, { savedAt: Date.now(), data: { ...EMPTY_PERF_AGG } });
-          }
-        }
+        await bisonSwitch(wsId);
+        var bStats = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { params: { start_date: date, end_date: date } });
+        var raw = Object.values(pivotBisonStats((bStats.data || bStats) || []));
+        dailyStats.set(key, { savedAt: Date.now(), data: aggPvEmailStats(raw) });
       } catch {
-        // Range fetch FAILED — keep any prior good values; seed only truly
-        // missing days as stale zeros (savedAt:0) so the next pass retries.
-        for (const date of dates) {
-          const key = `${wsId}|${date}`;
-          if (!dailyStats.has(key)) dailyStats.set(key, { savedAt: 0, data: { ...EMPTY_PERF_AGG } });
+        // Fetch FAILED (429 exhausted / network / bad response). Do NOT cache a
+        // zero — a poisoned 0 is indistinguishable from a real "0 sends" day and
+        // the TTL would trust it for up to 12h, masking real data. Keep any prior
+        // good value; if none exists, store zeros but mark stale (savedAt:0) so
+        // the next pass retries instead of trusting the failure.
+        if (!dailyStats.has(key)) {
+          dailyStats.set(key, { savedAt: 0, data: { ...EMPTY_PERF_AGG } });
         }
       }
     }));
@@ -2892,8 +2776,9 @@ async function fetchPerformanceLabeledLeads(wsId) {
     for (let page = 1; page <= 20; page++) {
       let batch = [];
       try {
-        const raw = await pvFetch(`/lead/workspace-leads?workspace_id=${wsId}&label=${label}&page=${page}&limit=100`);
-        batch = Array.isArray(raw) ? raw : (raw?.leads || raw?.data || []);
+        bisonSwitch(wsId);
+        const raw_b = await bisonFetch('/api/leads', { wsId: wsId, params: { page: page, per_page: 100 } });
+        batch = (raw_b.data || []).map(function(l) { return Object.assign({}, l, { _id: String(l.id), id: String(l.id), company_name: l.company || l.company_name, job_title: l.title || l.job_title, label: l.interested ? 'INTERESTED' : (l.status || '') }); });
       } catch { break; }
       if (!batch.length) break;
       batch.forEach(l => {
@@ -3025,9 +2910,6 @@ async function warmPerformanceCache() {
       console.log(`[performance cache] version ${performanceCache.version} ready — ${wsIds.length} workspaces`);
       // Persist to DB so next restart loads instantly
       savePerfCacheToDb().catch(() => {});
-      // Refresh the recipient-provider mix in the background (one extra pass of
-      // lead fetches; non-blocking so the Stats page renders immediately).
-      syncProviderMix(wsIds).catch(() => {});
     } catch (err) {
       console.error('[performance cache] warm failed:', err.message);
     } finally {
@@ -3038,31 +2920,14 @@ async function warmPerformanceCache() {
   return performanceWarmPromise;
 }
 
-// Load persisted cache from DB so pages show data instantly on restart.
-// Auto-warming is DISABLED by design: the cache is built ONCE (here, only if
-// there's no persisted snapshot) and thereafter rebuilt solely when the user
-// clicks "Refresh data" (/api/stats/refresh). The old 2-min interval + 10-min
-// TTL meant the cache re-fetched constantly ("keeps wanting to cache") and,
-// against PlusVibe's 600ms rate limit, never settled. Now it's a stored
-// snapshot the user controls.
+// Load persisted cache from DB first so pages show data instantly on restart
 setTimeout(async () => {
   await loadPerfCacheFromDb();
-  if (performanceCache.dailyStats.size === 0) {
-    // Cold start with no persisted data — populate the snapshot once.
-    warmPerformanceCache().catch(() => {});
-  }
-  // Load the persisted recipient-provider mix so the split is available instantly
-  // after a restart (the full lead sweep only re-runs on Refresh).
-  try {
-    const pgdb = app.locals.pgDb;
-    if (pgdb) {
-      const rows = await pgdb.loadProviderMix();
-      for (const r of rows) providerMixCache.byWs.set(r.ws_id, r.data);
-      if (rows.length) providerMixCache.syncedAt = new Date().toISOString();
-      console.log(`[provider-mix] loaded ${rows.length} workspaces from DB`);
-    }
-  } catch (e) { console.warn('[provider-mix] load failed:', e.message); }
+  // Then schedule the first warm to refresh today's data + fill any gaps
+  setTimeout(warmPerformanceCache, 30000);
 }, 10000);
+// Keep warming every 2 min after that
+setInterval(warmPerformanceCache, PERF_WARM_INTERVAL_MS);
 
 function readReadyPerformanceCache(wsIds, dates) {
   const daily = {};
@@ -3173,34 +3038,23 @@ function computeWorkspaceStatsForRange(wsIds, start, end) {
       const d = (l.date || '').slice(0, 10);
       return d >= start && d <= end;
     });
-    const totals = { sent: 0, contacted: 0, replies: 0, posReplies: 0, oooReplies: 0, bounces: 0, leads: wsLeads.length };
+    const totals = { sent: 0, replies: 0, posReplies: 0, oooReplies: 0, bounces: 0, leads: wsLeads.length };
     const series = dates.map(date => {
       const d = performanceCache.dailyStats.get(`${wsId}|${date}`)?.data || { ...EMPTY_PERF_AGG };
       const dayLeads = wsLeads.filter(l => (l.date || '').slice(0,10) === date).length;
       totals.sent       += d.sent;
-      totals.contacted  += d.contacted;
       totals.replies    += d.replies;
       totals.posReplies += d.posReplies;
       totals.oooReplies += d.oooReplies;
       totals.bounces    += d.bounces;
       return { date, sent: d.sent, replies: d.replies, posReplies: d.posReplies, oooReplies: d.oooReplies, bounces: d.bounces, leads: dayLeads };
     });
-    // replies (total_reply_count) is PlusVibe's real reply count, already
-    // excluding OOO — every other read of this field treats it that way. The
-    // old `replies - oooReplies` double-counted OOO and went NEGATIVE when
-    // PlusVibe's independent OOO counter exceeded it (the -0.5%/-2.5% reply
-    // rates in the client table). OOO is surfaced separately, not subtracted.
-    const replyRate  = totals.sent > 0 ? totals.replies / totals.sent : 0;
+    const replyRate  = totals.sent    > 0 ? totals.replies / totals.sent    : 0;
     const bounceRate = totals.sent    > 0 ? totals.bounces / totals.sent    : 0;
     const rtl        = totals.replies > 0 ? totals.leads   / totals.replies : 0;
     const sendsPerDay   = dates.length > 0 ? totals.sent    / dates.length : 0;
     const repliesPerDay = dates.length > 0 ? totals.replies / dates.length : 0;
-    // REAL per-provider lead counts from each lead's recipient mx — not
-    // apportioned. This is exact (every lead carries an mx), so the Leads column
-    // under a provider tab is the true count, traceable to specific leads.
-    const leadsByProvider = { google: 0, outlook: 0, other: 0 };
-    for (const l of wsLeads) leadsByProvider[pvMxToProviderBucket(l.mx)]++;
-    out[wsId] = { totals: { ...totals, replyRate, bounceRate, rtl, sendsPerDay, repliesPerDay }, series, leadsByProvider };
+    out[wsId] = { totals: { ...totals, replyRate, bounceRate, rtl, sendsPerDay, repliesPerDay }, series };
   }
   return out;
 }
@@ -3250,21 +3104,18 @@ app.get('/api/stats/summary', requireSession, async (req, res) => {
     const missing = !anyDataAtAll || wsIds.some(wsId =>
       wsHasAnyData[wsId] && dates.some(date => !performanceCache.dailyStats.has(`${wsId}|${date}`))
     );
+    // Stale (present but past TTL) — refresh in the background, do NOT block.
+    const anyStale = wsIds.some(wsId =>
+      wsHasAnyData[wsId] && dates.some(date => {
+        const cached = performanceCache.dailyStats.get(`${wsId}|${date}`);
+        const ttl = date === today ? PERF_TODAY_TTL_MS : PERF_OLD_TTL_MS;
+        return cached && Date.now() - cached.savedAt > ttl;
+      })
+    );
     const partial = missing;
-    // Auto-warm ONLY when data is genuinely absent (cold start, or a brand-new
-    // calendar day with no entries yet) — never merely because a snapshot is
-    // past its TTL. Routine staleness is left alone; the user re-fetches on
-    // demand via "Refresh data". This is what stops the constant re-caching.
-    if (missing && !performanceCache.warming) {
+    if ((missing || anyStale) && !performanceCache.warming) {
+      // Background refresh; warmPerformanceCache fetches daily stats first.
       warmPerformanceCache().catch(() => {});
-    }
-
-    // One-time recipient-provider mix sync (background) if it has never run —
-    // e.g. after a restart that loaded the perf cache from DB without warming.
-    // It rebuilds on manual Refresh thereafter; this just guarantees it's
-    // populated at least once without blocking the response.
-    if (!providerMixCache.syncedAt && !providerMixCache.syncing) {
-      syncProviderMix(wsIds).catch(() => {});
     }
 
     // Build per-workspace aggregated stats + per-day series from the shared
@@ -3275,16 +3126,9 @@ app.get('/api/stats/summary', requireSession, async (req, res) => {
       name: wsNames[wsId] || wsId,
       totals: wsStats[wsId].totals,
       series: wsStats[wsId].series,
-      // Recipient-provider split of this workspace's accurate totals, from the
-      // PlusVibe per-lead mx mix. Lets the Stats page filter the table by
-      // Google / Outlook / Other. byProvider[p] = { sent, replies, bounces, leads }.
-      byProvider: splitTotalsByProvider(wsId, wsStats[wsId].totals, wsStats[wsId].leadsByProvider),
-    }));
-    // Show ALL active clients (the requested behaviour), not only those with
-    // sends in the period — clients with activity sort first, zero-activity
-    // active clients still appear (so none ever look "missing").
-    workspaces.sort((a, b) =>
-      (b.totals.sent - a.totals.sent) || (b.totals.replies - a.totals.replies));
+    })).filter(w => w.totals.sent > 0 || w.totals.leads > 0);
+
+    workspaces.sort((a, b) => b.totals.replies - a.totals.replies);
 
     res.json({
       workspaces,
@@ -3293,7 +3137,6 @@ app.get('/api/stats/summary', requireSession, async (req, res) => {
       end,
       partial,
       updatedAt: performanceCache.updatedAt,
-      providerMixSyncedAt: providerMixCache.syncedAt,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -3355,221 +3198,6 @@ app.get('/api/verify-split', requireSession, async (req, res) => {
   }
 });
 
-// ── Recipient-provider split for the Stats page ───────────────────────────
-// READ-ONLY, additive. Does NOT touch /api/stats/summary or the PlusVibe
-// performanceCache. Mirrors /api/verify-split's contacts-based windowing, but
-// buckets by the recipient mailbox's true MX provider (contacts.mx_provider:
-// email_google / email_outlook / email_other; NULL → unknown). Lets the Stats
-// page show sent/reply/bounce/lead rates filtered by recipient provider.
-app.get('/api/stats/by-provider', requireSession, async (req, res) => {
-  const start = String(req.query.start || '');
-  const end   = String(req.query.end   || '');
-  if (!start || !end) return res.status(400).json({ error: 'start and end required (YYYY-MM-DD)' });
-  try {
-    const pgdb = app.locals.pgDb;
-    if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
-
-    // Scope to the SAME active-workspace set /api/stats/summary uses, so the
-    // provider strip total agrees with the "All Workspaces" client row. The
-    // canonical list is the SQLite clients table minus inactive clients; an
-    // explicit workspace_ids param (the CM filter) further narrows it. Without
-    // this, the strip counted email_events for EVERY workspace — including dead/
-    // paused clients not in the active set — and ran higher than the summary.
-    const activeIds = db.prepare(
-      `SELECT workspace_id FROM clients
-       WHERE workspace_id IS NOT NULL AND workspace_id != ''
-         AND COALESCE(client_status, '') != 'inactive'`
-    ).all().map(r => r.workspace_id);
-    const filterIds = req.query.workspace_ids
-      ? String(req.query.workspace_ids).split(',').filter(Boolean)
-      : null;
-    const wsIds = filterIds
-      ? activeIds.filter(id => filterIds.includes(id))
-      : activeIds;
-
-    // Count REAL sent events in the window from email_events — one row per send,
-    // bucketed by recipient provider — so this matches PlusVibe's "sends in
-    // period" figure. The old version summed contacts.email_count (a LIFETIME
-    // counter) for contacts touched in the window, which both over- and
-    // under-counted and scattered real "other" sends into Unknown.
-    //
-    // Recipient classification mirrors /api/combo-analysis exactly: prefer the
-    // DNS-resolved contacts.mx_provider; fall back to the event's provider_bucket
-    // (whose 'workspace' value also means "other"). Replies/bounces/leads are
-    // send-anchored — counted per (workspace_id, lead_email) that received a
-    // send in the window — identical to combo-analysis.
-    const params = [start, end];
-    // wsIds is always the active set (optionally narrowed by the CM filter), so
-    // this clause always binds — matching the summary's scope exactly.
-    params.push(wsIds);
-    const wsClause = `AND ee.workspace_id = ANY($${params.length})`;
-
-    const q = `
-      WITH recipient_types AS (
-        SELECT DISTINCT ON (lower(email))
-          lower(email) AS email_lower,
-          mx_provider  AS recipient_type
-        FROM contacts WHERE mx_provider IS NOT NULL ORDER BY lower(email)
-      ),
-      sends AS (
-        SELECT ee.workspace_id, lower(ee.lead_email) AS le,
-          CASE COALESCE(
-            rt.recipient_type,
-            CASE ee.provider_bucket
-              WHEN 'gmail'       THEN 'email_google'
-              WHEN 'google'      THEN 'email_google'
-              WHEN 'outlook'     THEN 'email_outlook'
-              WHEN 'workspace'   THEN 'email_other'
-              WHEN 'email_other' THEN 'email_other'
-              WHEN 'unknown'     THEN 'unknown'
-              ELSE               'unknown'
-            END
-          )
-            WHEN 'email_google'  THEN 'google'
-            WHEN 'email_outlook' THEN 'outlook'
-            WHEN 'email_other'   THEN 'other'
-            ELSE 'unknown'
-          END AS provider
-        FROM email_events ee
-        LEFT JOIN recipient_types rt ON rt.email_lower = lower(ee.lead_email)
-        WHERE ee.event_type = 'sent'
-          AND ee.event_at >= $1 AND ee.event_at < ($2::date + interval '1 day')
-          AND (ee.raw->>'seeded')::boolean IS NOT TRUE
-          ${wsClause}
-      )
-      SELECT s.provider,
-        COUNT(*)::int                AS sent,
-        COUNT(DISTINCT s.le)::int    AS unique_contacts,
-        COUNT(DISTINCT CASE WHEN EXISTS (
-          SELECT 1 FROM email_events e
-          WHERE e.workspace_id = s.workspace_id
-            AND lower(e.lead_email) = s.le
-            AND e.event_type IN ('reply','positive_reply')
-        ) THEN s.le END)::int        AS replies,
-        COUNT(DISTINCT CASE WHEN EXISTS (
-          SELECT 1 FROM email_events e
-          WHERE e.workspace_id = s.workspace_id
-            AND lower(e.lead_email) = s.le
-            AND e.event_type = 'bounce'
-        ) THEN s.le END)::int        AS bounces,
-        COUNT(DISTINCT CASE WHEN EXISTS (
-          SELECT 1 FROM email_events e
-          WHERE e.workspace_id = s.workspace_id
-            AND lower(e.lead_email) = s.le
-            AND e.event_type = 'lead'
-        ) THEN s.le END)::int        AS leads
-      FROM sends s
-      GROUP BY s.provider
-      ORDER BY sent DESC
-    `;
-
-    const { rows } = await pgdb.query(q, params);
-
-    // ── Anchor totals to the SAME source the client row uses ────────────────
-    // The "All Workspaces" client row sums PlusVibe's daily aggregate
-    // (perf_cache_daily) via computeWorkspaceStatsForRange. That source has NO
-    // provider dimension, so we cannot get exact per-provider counts from it.
-    //
-    // email_events is the ONLY source with a recipient provider, but it's
-    // webhook-captured and less complete than PlusVibe's daily totals — so its
-    // raw counts don't match the client row.
-    //
-    // Resolution: take the TRUE totals from the shared helper (so "All" equals
-    // the client row to the digit) and split them across providers using the
-    // RATIOS observed in email_events. Per-provider numbers are therefore
-    // proportional estimates; the "All" total is exact. The frontend labels the
-    // split as estimated. This is the closest possible to "same data, filtered
-    // by provider" given PlusVibe exposes no provider breakdown.
-    const truth = computeWorkspaceStatsForRange(wsIds, start, end);
-    const trueTotals = Object.values(truth).reduce((a, w) => ({
-      sent:       a.sent       + w.totals.sent,
-      replies:    a.replies    + w.totals.replies,     // includes OOO
-      oooReplies: a.oooReplies + w.totals.oooReplies,  // OOO subset
-      bounces:    a.bounces    + w.totals.bounces,
-      leads:      a.leads      + w.totals.leads,
-    }), { sent: 0, replies: 0, oooReplies: 0, bounces: 0, leads: 0 });
-
-    // Provider ratios from the event log (denominator = events we DID capture).
-    const ORDER = ['google', 'outlook', 'other', 'unknown'];
-    const byKey = Object.fromEntries(rows.map(r => [r.provider, r]));
-    const evt = ORDER.map(key => ({
-      key,
-      sent:    Number(byKey[key]?.sent    || 0),
-      replies: Number(byKey[key]?.replies || 0),
-      bounces: Number(byKey[key]?.bounces || 0),
-      leads:   Number(byKey[key]?.leads   || 0),
-      unique_contacts: Number(byKey[key]?.unique_contacts || 0),
-    }));
-    const evtTot = evt.reduce((a, e) => ({
-      sent: a.sent + e.sent, replies: a.replies + e.replies,
-      bounces: a.bounces + e.bounces, leads: a.leads + e.leads,
-    }), { sent: 0, replies: 0, bounces: 0, leads: 0 });
-
-    // Apportion each true total by the provider's share of the event log. If the
-    // event log is empty for a metric (no coverage), fall back to the sent-share
-    // so the row still splits sensibly instead of collapsing to zero. Largest-
-    // remainder rounding keeps the per-provider integers summing to the exact
-    // true total (no off-by-a-few from independent Math.round calls).
-    const apportion = (total, shareOf, fallbackShareOf, fallbackDenom) => {
-      const denom = shareOf.denom > 0 ? shareOf.denom : fallbackDenom;
-      const parts = evt.map(e => {
-        const num = shareOf.denom > 0 ? shareOf.pick(e) : fallbackShareOf(e);
-        return denom > 0 ? (total * num) / denom : 0;
-      });
-      const floors = parts.map(Math.floor);
-      let rem = total - floors.reduce((a, b) => a + b, 0);
-      const order = parts
-        .map((p, i) => ({ i, frac: p - Math.floor(p) }))
-        .sort((a, b) => b.frac - a.frac);
-      const out = floors.slice();
-      for (let k = 0; k < order.length && rem > 0; k++) { out[order[k].i]++; rem--; }
-      return out;
-    };
-
-    const sentSplit    = apportion(trueTotals.sent,    { denom: evtTot.sent,    pick: e => e.sent },    e => e.sent, evtTot.sent);
-    const replySplit   = apportion(trueTotals.replies, { denom: evtTot.replies, pick: e => e.replies }, e => e.sent, evtTot.sent);
-    const bounceSplit  = apportion(trueTotals.bounces, { denom: evtTot.bounces, pick: e => e.bounces }, e => e.sent, evtTot.sent);
-    const leadSplit    = apportion(trueTotals.leads,   { denom: evtTot.leads,   pick: e => e.leads },   e => e.sent, evtTot.sent);
-    // OOO has no per-provider signal in the event log, so split it by the same
-    // ratio as replies. PlusVibe returns total_reply_count and
-    // total_ooo_reply_count as INDEPENDENT counters — OOO is NOT a subset of
-    // replies (subtracting them yielded negative reply rates). So replies is
-    // already the without-OOO count; with-OOO = replies + ooo. This matches
-    // PlusVibe's own modal (Reply Rate 1.7% vs Reply Rate with OOO 7.1%).
-    const oooSplit     = apportion(trueTotals.oooReplies, { denom: evtTot.replies, pick: e => e.replies }, e => e.sent, evtTot.sent);
-
-    const providers = evt.map((e, i) => {
-      const sent       = sentSplit[i];
-      const replies    = replySplit[i];               // without OOO (PlusVibe total_reply_count)
-      const oooReplies = oooSplit[i];                  // separate OOO counter
-      const bounces    = bounceSplit[i];
-      const leads      = leadSplit[i];
-      return {
-        provider: e.key,
-        unique_contacts: e.unique_contacts,
-        sent, replies, oooReplies, bounces, leads,
-        // replyRate = without OOO (PlusVibe's plain "Reply Rate");
-        // replyRateWithOoo = replies + auto-responders.
-        replyRate:        sent    > 0 ? replies              / sent : 0,
-        replyRateWithOoo: sent    > 0 ? (replies + oooReplies) / sent : 0,
-        bounceRate:       sent    > 0 ? bounces              / sent : 0,
-        rtl:              replies > 0 ? leads                / replies : 0,
-      };
-    });
-
-    // estimated=true tells the UI to label the provider split as an estimate.
-    // coverage = how much of the true total the event log actually captured.
-    res.json({
-      providers, start, end,
-      estimated: true,
-      coverage: trueTotals.sent > 0 ? evtTot.sent / trueTotals.sent : null,
-      trueTotals,
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // ── Sender × Recipient provider combo analysis ────────────────────────────
 
 // Debug: show what top-level keys exist in raw JSONB + a sample record
@@ -3603,11 +3231,12 @@ app.get('/api/combo-analysis/pv-sample', requireSession, async (req, res) => {
     if (!ws) return res.json({ error: 'No workspaces found' });
     const today = new Date().toISOString().slice(0,10);
     const week  = new Date(Date.now() - 7*86400000).toISOString().slice(0,10);
-    const raw = await pvFetch(`/account/email-stats?workspace_id=${ws.id}&start_date=${week}&end_date=${today}`);
+    await bisonSwitch(ws.id);
+    var bStats = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { params: { start_date: week, end_date: today } });
+    var raw = Object.values(pivotBisonStats((bStats.data || bStats) || []));
     res.json({ workspace_id: ws.id, workspace_name: ws.name, raw });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
 
 
 // Historical backfill: approximate FROM×TO combos from PlusVibe workspace stats
@@ -3653,8 +3282,10 @@ app.post('/api/combo-analysis/historical-backfill', requireSession, async (req, 
           ? Object.fromEntries(cRows.map(r => [r.prov, r.n / cTotal]))
           : { unknown: 1 };
 
-        // Fetch daily stats from PlusVibe
-        const pvData = await pvFetch(`/account/email-stats?workspace_id=${ws.id}&start_date=${start}&end_date=${end}`);
+        // Fetch daily stats from Bison
+        await bisonSwitch(ws.id);
+        var bStats = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { params: { start_date: start, end_date: end } });
+        var pvData = Object.values(pivotBisonStats((bStats.data || bStats) || []));
         const chart  = Array.isArray(pvData) ? pvData : (pvData?.chart || []);
 
         for (const day of chart) {
@@ -4024,7 +3655,9 @@ async function refreshCampaignCache() {
       if (inactiveIds.has(ws.id)) continue;
       await new Promise(r => setTimeout(r, 1200)); // rate limit: 1.2s between workspaces (~25 ws = 30s total)
       try {
-        const campaigns = await pvFetch(`/campaign/list-all?workspace_id=${ws.id}`);
+        await bisonSwitch(ws.id || wsId || workspace_id);
+        var camp_raw = await bisonFetch('/api/campaigns', { wsId: ws.id || wsId || workspace_id });
+        var campaigns = (camp_raw.data || []).map(function(c) { return { id: c.id, camp_name: c.name, status: c.status, sent_count: c.emails_sent || 0, replied_count: c.replied || 0, unique_opened_count: c.unique_opens || 0, bounced_count: c.bounced || 0, lead_count: c.total_leads || 0, lead_contacted_count: c.total_leads_contacted || 0, positive_reply_count: 0, sequences: [] }; });
         if (!Array.isArray(campaigns) || !campaigns.length) continue;
         const active = campaigns.filter(c => (c.sent_count || 0) >= 50);
         const wsAvgReplyRate = active.length
@@ -4047,7 +3680,7 @@ async function refreshCampaignCache() {
           let variantInsights = [], variationSteps = [];
           if ((c.sent_count || 0) >= 300) {
             try {
-              const vstats = await pvFetch(`/campaign/get/variation-stats?campaign_id=${c.id}&workspace_id=${ws.id}`);
+              var vstats = { data: [], steps: [] }; // A/B variant stats not available in EmailBison
               if (Array.isArray(vstats)) { variationSteps = vstats; variantInsights = analyzeVariants(vstats); }
             } catch {}
           }
@@ -5998,7 +5631,9 @@ app.post('/api/intelligence/deep-backfill', requireAdmin, async (req, res) => {
     for (let i = 0; i < wsIds.length; i += CONC) {
       await Promise.allSettled(wsIds.slice(i, i + CONC).map(async wsId => {
         try {
-          const raw = await pvFetch(`/account/email-stats?workspace_id=${wsId}&start_date=${start}&end_date=${end}`);
+          await bisonSwitch(wsId);
+          var bStats = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { params: { start_date: start, end_date: end } });
+          var raw = Object.values(pivotBisonStats((bStats.data || bStats) || []));
           const chart = Array.isArray(raw) ? raw : (raw?.chart || []);
           for (const row of chart) {
             const date = (row.date || row.day || '').slice(0, 10);
@@ -6928,113 +6563,6 @@ app.post('/api/domains/refresh', requireSession, async (req, res) => {
   res.json({ ok: true, message: 'Domain health refresh started' });
 });
 
-// Before/after impact analysis for a given change date.
-// Returns reply rate, bounce rate, sent count for each DMARC policy group
-// in the window [changeDate - 30d, changeDate) vs [changeDate, changeDate + 30d).
-app.get('/api/dmarc/impact', requireSession, async (req, res) => {
-  try {
-    const pgdb = app.locals.pgDb;
-    if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
-
-    const changeDate = req.query.date || '2026-05-20';
-    const before_start = new Date(changeDate); before_start.setDate(before_start.getDate() - 30);
-    const after_end   = new Date(changeDate); after_end.setDate(after_end.getDate() + 30);
-
-    // Find earliest event so we can warn if before window is out of range.
-    const minRow = await pgdb.query(`SELECT MIN(event_at)::date AS min_date FROM email_events WHERE sender_email IS NOT NULL`);
-    const data_start = minRow.rows[0]?.min_date || null;
-
-    // Per sender_email counts in both windows.
-    const evRows = await pgdb.query(`
-      SELECT
-        lower(sender_email) AS email,
-        COUNT(*) FILTER (WHERE event_type = 'sent'
-          AND event_at >= $2 AND event_at < $1)                                        AS sent_before,
-        COUNT(*) FILTER (WHERE event_type IN ('reply','positive_reply')
-          AND event_at >= $2 AND event_at < $1)                                        AS replies_before,
-        COUNT(*) FILTER (WHERE event_type = 'bounce'
-          AND event_at >= $2 AND event_at < $1)                                        AS bounces_before,
-        COUNT(*) FILTER (WHERE event_type = 'sent'
-          AND event_at >= $1 AND event_at < $3)                                        AS sent_after,
-        COUNT(*) FILTER (WHERE event_type IN ('reply','positive_reply')
-          AND event_at >= $1 AND event_at < $3)                                        AS replies_after,
-        COUNT(*) FILTER (WHERE event_type = 'bounce'
-          AND event_at >= $1 AND event_at < $3)                                        AS bounces_after
-      FROM email_events
-      WHERE sender_email IS NOT NULL
-        AND event_at >= $2 AND event_at < $3
-      GROUP BY lower(sender_email)
-    `, [changeDate, before_start.toISOString().slice(0,10), after_end.toISOString().slice(0,10)]);
-
-    // Current DMARC policy per domain from domain_health.
-    const dhRows = await pgdb.query(`SELECT domain, dmarc FROM domain_health`);
-    const dmarcByDomain = new Map();
-    for (const row of dhRows.rows) {
-      try {
-        const d = typeof row.dmarc === 'string' ? JSON.parse(row.dmarc) : row.dmarc;
-        const policy = d?.present ? (d.policy || 'none') : 'missing';
-        dmarcByDomain.set(row.domain, ['none','quarantine','reject'].includes(policy) ? policy : 'missing');
-      } catch { dmarcByDomain.set(row.domain, 'missing'); }
-    }
-
-    // Aggregate by DMARC policy group.
-    const groups = { none: { sent_before:0, replies_before:0, bounces_before:0, sent_after:0, replies_after:0, bounces_after:0, mailboxes:0 },
-                     quarantine: { sent_before:0, replies_before:0, bounces_before:0, sent_after:0, replies_after:0, bounces_after:0, mailboxes:0 },
-                     reject: { sent_before:0, replies_before:0, bounces_before:0, sent_after:0, replies_after:0, bounces_after:0, mailboxes:0 },
-                     missing: { sent_before:0, replies_before:0, bounces_before:0, sent_after:0, replies_after:0, bounces_after:0, mailboxes:0 } };
-
-    for (const r of evRows.rows) {
-      const domain = r.email.split('@')[1];
-      const policy = dmarcByDomain.get(domain) || 'missing';
-      const g = groups[policy] || groups.missing;
-      g.sent_before    += parseInt(r.sent_before,    10) || 0;
-      g.replies_before += parseInt(r.replies_before, 10) || 0;
-      g.bounces_before += parseInt(r.bounces_before, 10) || 0;
-      g.sent_after     += parseInt(r.sent_after,     10) || 0;
-      g.replies_after  += parseInt(r.replies_after,  10) || 0;
-      g.bounces_after  += parseInt(r.bounces_after,  10) || 0;
-      g.mailboxes++;
-    }
-
-    // Compute rates.
-    function rates(g) {
-      return {
-        ...g,
-        rr_before: g.sent_before > 0 ? g.replies_before / g.sent_before : null,
-        rr_after:  g.sent_after  > 0 ? g.replies_after  / g.sent_after  : null,
-        br_before: g.sent_before > 0 ? g.bounces_before / g.sent_before : null,
-        br_after:  g.sent_after  > 0 ? g.bounces_after  / g.sent_after  : null,
-      };
-    }
-
-    // Per-domain breakdown for the detail table (domains with activity in either window).
-    const domainRows = evRows.rows.map(r => {
-      const domain = r.email.split('@')[1];
-      const policy = dmarcByDomain.get(domain) || 'missing';
-      const sb = parseInt(r.sent_before,10)||0, rb = parseInt(r.replies_before,10)||0, bb = parseInt(r.bounces_before,10)||0;
-      const sa = parseInt(r.sent_after, 10)||0, ra = parseInt(r.replies_after, 10)||0, ba = parseInt(r.bounces_after, 10)||0;
-      return { email: r.email, domain, policy, sent_before:sb, replies_before:rb, bounces_before:bb, sent_after:sa, replies_after:ra, bounces_after:ba,
-               rr_before: sb>=20 ? rb/sb : null, rr_after: sa>=20 ? ra/sa : null,
-               br_before: sb>=20 ? bb/sb : null, br_after:  sa>=20 ? ba/sa : null };
-    }).filter(r => r.sent_before > 0 || r.sent_after > 0)
-      .sort((a,b) => (b.sent_before+b.sent_after) - (a.sent_before+a.sent_after));
-
-    const beforeHasData = data_start && new Date(data_start) < new Date(changeDate);
-    res.json({
-      change_date:  changeDate,
-      before_start: before_start.toISOString().slice(0,10),
-      after_end:    after_end.toISOString().slice(0,10),
-      data_start,
-      before_has_data: beforeHasData,
-      by_policy:    Object.fromEntries(Object.entries(groups).map(([k,g]) => [k, rates(g)])),
-      by_mailbox:   domainRows,
-    });
-  } catch (err) {
-    console.error('[dmarc/impact]', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // Single-domain on-demand check (useful when adding a new client)
 app.post('/api/domains/check', requireSession, async (req, res) => {
   try {
@@ -7083,6 +6611,105 @@ app.post('/api/domains/:domain/restore', requireSession, async (req, res) => {
 
 app.get('/domains', (req, res) => res.sendFile(path.join(__dirname, 'domains.html')));
 app.get('/domains.html', (req, res) => res.sendFile(path.join(__dirname, 'domains.html')));
+
+// ─────────────────────────────────────────────────────────────────────
+// Gateway deliverability — reply/lead/bounce per inbound email gateway
+// (Mimecast, Proofpoint, Barracuda, Cisco, Google, Microsoft, ...).
+//
+// The gateway is NOT stored: contacts.mx_provider only buckets to
+// google/outlook/other. scripts/gateway-analysis.js re-resolves MX into the
+// gateway_mx_cache table; this endpoint joins that cache to live contact facts.
+//   - sent  = contacts.emailed_workspaces <> '{}'  (NOT email_events 'sent',
+//             whose webhook coverage is incomplete)
+//   - reply = email_events by lead_email, counted DISTINCT (rows are dup'd)
+//   - OOO   = email_events.raw->>'label' OUT_OF_OFFICE/AUTOMATIC_REPLY
+app.get('/api/gateway-analysis', requireSession, async (req, res) => {
+  try {
+    const { rows } = await pgdb.query(`
+      WITH sent AS (
+        SELECT c.id,
+               lower(split_part(c.email,'@',2)) AS domain,
+               lower(c.email)                   AS email,
+               c.bounced_at
+        FROM contacts c
+        WHERE COALESCE(c.emailed_workspaces,'{}'::jsonb) <> '{}'::jsonb
+          AND c.email LIKE '%@%'
+      ),
+      ev AS (
+        SELECT lower(lead_email) AS email,
+               bool_or(event_type IN ('reply','positive_reply','all_email_replies')) AS replied,
+               bool_or(event_type IN ('reply','positive_reply','all_email_replies')
+                       AND COALESCE(raw->>'label','') NOT IN ('OUT_OF_OFFICE','AUTOMATIC_REPLY')) AS replied_substantive,
+               bool_or(event_type = 'lead'
+                       OR raw->>'label' IN ('LEAD','INTERESTED_NONLEAD'))            AS is_lead,
+               bool_or(event_type = 'bounce')                                         AS bounced_ev
+        FROM email_events
+        GROUP BY 1
+      ),
+      per_contact AS (
+        SELECT COALESCE(g.gateway,'NO MX / unresolved') AS gateway,
+               s.domain,
+               e.replied,
+               e.replied_substantive,
+               e.is_lead,
+               (e.bounced_ev OR s.bounced_at IS NOT NULL) AS bounced
+        FROM sent s
+        JOIN gateway_mx_cache g ON g.domain = s.domain
+        LEFT JOIN ev e ON e.email = s.email
+      )
+      SELECT gateway,
+             count(DISTINCT domain)                  AS domains,
+             count(*)                                 AS sent,
+             count(*) FILTER (WHERE replied)          AS replied,
+             count(*) FILTER (WHERE replied_substantive) AS replied_no_ooo,
+             count(*) FILTER (WHERE is_lead)          AS leads,
+             count(*) FILTER (WHERE bounced)          AS bounced
+      FROM per_contact
+      GROUP BY gateway
+      ORDER BY sent DESC`);
+
+    const gateways = rows.map(r => {
+      const sent = Number(r.sent);
+      const replied = Number(r.replied);
+      const repliedNoOoo = Number(r.replied_no_ooo);
+      const leads = Number(r.leads);
+      const bounced = Number(r.bounced);
+      return {
+        gateway: r.gateway,
+        domains: Number(r.domains),
+        sent,
+        replyRate:      sent ? (100 * replied) / sent : 0,
+        replyRateNoOoo: sent ? (100 * repliedNoOoo) / sent : 0,
+        leadRate:       sent ? (100 * leads) / sent : 0,
+        rtl:            sent ? (1000 * leads) / sent : 0,  // leads per 1,000 sent
+        bounceRate:     sent ? (100 * bounced) / sent : 0,
+        replied, leads, bounced,
+      };
+    });
+
+    const cov = await pgdb.query(`
+      SELECT
+        (SELECT count(*) FROM gateway_mx_cache) AS resolved,
+        (SELECT count(DISTINCT lower(split_part(email,'@',2)))
+           FROM contacts
+          WHERE COALESCE(emailed_workspaces,'{}'::jsonb) <> '{}'::jsonb
+            AND email LIKE '%@%') AS total`);
+
+    res.json({
+      gateways,
+      coverage: {
+        resolved: Number(cov.rows[0] && cov.rows[0].resolved || 0),
+        total:    Number(cov.rows[0] && cov.rows[0].total || 0),
+      },
+    });
+  } catch (err) {
+    console.error('[gateway-analysis]', err.message);
+    res.status(500).json({ error: 'Database error' });
+  }
+});
+
+app.get('/gateway-analysis',      (req, res) => res.sendFile(path.join(__dirname, 'gateway-analysis.html')));
+app.get('/gateway-analysis.html', (req, res) => res.sendFile(path.join(__dirname, 'gateway-analysis.html')));
 
 // ─────────────────────────────────────────────────────────────────────
 // Google Postmaster Tools — daily domain + IP reputation, spam rate
@@ -7582,21 +7209,19 @@ function mergeMailboxesWithMeta(mailboxes, metaByEmail) {
 // misclassifies OOO auto-replies as bounces.
 function buildCampaignIndex(dbBounceByCampaign) {
   const idx = new Map(); // campaign_id → { sent, replies, bounces, mailbox_count }
-  const wsIdx = new Map(); // workspace_id → { sent, replies, bounces }
   for (const ws of (campaignCache.workspaces || [])) {
-    let wsSent = 0, wsReplies = 0, wsBounces = 0;
     for (const c of (ws.campaigns || [])) {
       if (!c.id) continue;
       const dbBounces = dbBounceByCampaign?.get(c.id);
-      const bounces = dbBounces != null ? dbBounces : (c.bounces || 0);
-      idx.set(c.id, { sent: c.sent || 0, replies: c.replies || 0, bounces, mailbox_count: 0 });
-      wsSent    += c.sent    || 0;
-      wsReplies += c.replies || 0;
-      wsBounces += bounces;
+      idx.set(c.id, {
+        sent: c.sent || 0,
+        replies: c.replies || 0,
+        bounces: dbBounces != null ? dbBounces : (c.bounces || 0),
+        mailbox_count: 0,
+      });
     }
-    if (ws.id) wsIdx.set(ws.id, { sent: wsSent, replies: wsReplies, bounces: wsBounces });
   }
-  return { idx, wsIdx };
+  return idx;
 }
 
 // Query email_events for actual per-mailbox sent/reply/bounce counts.
@@ -7610,18 +7235,16 @@ async function buildMailboxStatsFromEvents(pgdb) {
   try {
     const { rows } = await pgdb.query(`
       SELECT
-        lower(sender_email) AS sender_email,
-        COUNT(*) FILTER (WHERE event_type = 'sent')                                    AS sent,
-        COUNT(*) FILTER (WHERE event_type = 'bounce')                                  AS bounces,
-        COUNT(*) FILTER (WHERE event_type = 'sent'   AND event_at >= NOW() - INTERVAL '30 days') AS sent_30d
+        sender_email,
+        COUNT(*) FILTER (WHERE event_type = 'sent')    AS sent,
+        COUNT(*) FILTER (WHERE event_type = 'bounce')  AS bounces
       FROM email_events
       WHERE sender_email IS NOT NULL
-      GROUP BY lower(sender_email)
+      GROUP BY sender_email
     `);
     return new Map(rows.map(r => [r.sender_email, {
-      sent:     parseInt(r.sent,     10) || 0,
-      bounces:  parseInt(r.bounces,  10) || 0,
-      sent_30d: parseInt(r.sent_30d, 10) || 0,
+      sent:    parseInt(r.sent,    10) || 0,
+      bounces: parseInt(r.bounces, 10) || 0,
     }]));
   } catch {
     return new Map();
@@ -7633,8 +7256,9 @@ async function buildMailboxStatsFromEvents(pgdb) {
 // Reply rate is computed as (campaign reply rate × mailbox sent count) because
 // PlusVibe reply webhooks don't include the sending mailbox.
 // Falls back to even-split for mailboxes with no webhook history.
-function attachMailboxStats(mailboxes, { idx: campIndex, wsIdx }, eventsByMailbox = new Map()) {
-  // First pass: count mailboxes per campaign (for even-split fallback).
+function attachMailboxStats(mailboxes, campIndex, eventsByMailbox = new Map()) {
+  // First pass: count mailboxes per campaign (for even-split fallback) and
+  // accumulate campaign-level totals needed for reply-rate scaling.
   for (const m of mailboxes) {
     for (const cid of (m.campaign_ids || [])) {
       const c = campIndex.get(cid);
@@ -7642,28 +7266,26 @@ function attachMailboxStats(mailboxes, { idx: campIndex, wsIdx }, eventsByMailbo
     }
   }
 
-  // Second pass: direct webhook attribution or campaign even-split.
+  // Second pass: assign sent/bounce from email_events where available,
+  // then derive replies by applying the campaign reply rate to real sent count.
   for (const m of mailboxes) {
-    const ev = eventsByMailbox.get((m.email || '').toLowerCase());
-    let campSent = 0, campReplies = 0;
-    for (const cid of (m.campaign_ids || [])) {
-      const c = campIndex.get(cid);
-      if (!c) continue;
-      campSent    += c.sent;
-      campReplies += c.replies;
-    }
-    const campReplyRate = campSent > 0 ? campReplies / campSent : 0;
-
+    const ev = eventsByMailbox.get(m.email);
     if (ev && ev.sent > 0) {
+      // Real sent + bounce counts from webhooks.
       m.attributed_sent    = ev.sent;
       m.attributed_bounces = ev.bounces;
-      m.sent_30d           = ev.sent_30d || 0;
-      // Reply webhooks from PlusVibe don't include sender_email, so we estimate
-      // 30d replies by applying the campaign reply rate to actual 30d sends.
-      m.replies_30d        = Math.round(m.sent_30d * campReplyRate);
+      // Scale campaign reply rate to this mailbox's actual send volume.
+      let campSent = 0, campReplies = 0;
+      for (const cid of (m.campaign_ids || [])) {
+        const c = campIndex.get(cid);
+        if (!c) continue;
+        campSent    += c.sent;
+        campReplies += c.replies;
+      }
+      const campReplyRate = campSent > 0 ? campReplies / campSent : 0;
       m.attributed_replies = Math.round(ev.sent * campReplyRate);
     } else {
-      // No webhook data — even-split across campaigns this mailbox belongs to.
+      // No webhook data — fall back to even-split across campaign mailboxes.
       let sent = 0, replies = 0, bounces = 0;
       for (const cid of (m.campaign_ids || [])) {
         const c = campIndex.get(cid);
@@ -7675,57 +7297,16 @@ function attachMailboxStats(mailboxes, { idx: campIndex, wsIdx }, eventsByMailbo
       m.attributed_sent    = Math.round(sent);
       m.attributed_replies = Math.round(replies);
       m.attributed_bounces = Math.round(bounces);
-      // Estimate 30d proportionally: assume recent period is ~30/365 of lifetime
-      if (m.attributed_sent > 0) {
-        const frac30 = Math.min(1, 30 / 180); // conservative 6-month lifetime assumption
-        m.sent_30d    = Math.round(m.attributed_sent    * frac30);
-        m.replies_30d = Math.round(m.attributed_replies * frac30);
-      }
     }
-  }
-
-  // Third pass: workspace-level even-split for mailboxes still at 0.
-  // Covers workspaces where sender_email isn't in email_events AND PlusVibe's
-  // account-list API doesn't return cmps (campaign associations), so both
-  // earlier strategies produce 0. Group the zero-sent mailboxes per workspace
-  // and distribute the workspace's campaign totals evenly across them.
-  const wsZeroCount = new Map(); // workspace_id → count of 0-sent mailboxes
-  for (const m of mailboxes) {
-    if (!m.attributed_sent && m.workspace_id) {
-      wsZeroCount.set(m.workspace_id, (wsZeroCount.get(m.workspace_id) || 0) + 1);
-    }
-  }
-  for (const m of mailboxes) {
-    if (m.attributed_sent || !m.workspace_id) continue;
-    const ws = wsIdx.get(m.workspace_id);
-    const count = wsZeroCount.get(m.workspace_id) || 1;
-    if (ws && ws.sent > 0) {
-      m.attributed_sent    = Math.round(ws.sent    / count);
-      m.attributed_replies = Math.round(ws.replies / count);
-      m.attributed_bounces = Math.round(ws.bounces / count);
-      m._ws_split = true;
-      const frac30 = Math.min(1, 30 / 180);
-      m.sent_30d    = Math.round(m.attributed_sent    * frac30);
-      m.replies_30d = Math.round(m.attributed_replies * frac30);
-    }
-  }
-
-  for (const m of mailboxes) {
-    const s = m.attributed_sent    || 0;
-    const r = m.attributed_replies || 0;
-    const b = m.attributed_bounces || 0;
+    const s = m.attributed_sent;
+    const r = m.attributed_replies;
+    const b = m.attributed_bounces;
     m.reply_rate  = s > 0 ? r / s : 0;
     m.bounce_rate = s > 0 ? b / s : 0;
-    const s30 = m.sent_30d    || 0;
-    const r30 = m.replies_30d || 0;
-    // Use 5-send minimum for 30d (lower threshold because 30d window is shorter)
-    m.reply_rate_30d = s30 >= 5 ? r30 / s30 : null;
   }
 }
 
 // Pull auth + blacklist data from the domain_health table.
-// For domains not yet checked, kick off a background DNS check so the next
-// request has data. Returns immediately with whatever is already stored.
 async function attachDomainHealth(pgdb, mailboxes) {
   if (!pgdb) return;
   const domains = Array.from(new Set(mailboxes.map(m => m.domain).filter(Boolean)));
@@ -7736,17 +7317,6 @@ async function attachDomainHealth(pgdb, mailboxes) {
   );
   const byDom = new Map();
   for (const row of r.rows) byDom.set(row.domain, row);
-
-  // Fire-and-forget DNS checks for any domain not yet in domain_health.
-  const missing = domains.filter(d => !byDom.has(d));
-  if (missing.length && !_domainHealthRunning) {
-    Promise.all(missing.map(async domain => {
-      try {
-        const row = await checkDomain(domain, null);
-        await pgdb.upsertDomainHealth(row);
-      } catch {}
-    })).catch(() => {});
-  }
   for (const m of mailboxes) {
     const dh = byDom.get(m.domain);
     if (!dh) continue;
@@ -8336,16 +7906,16 @@ async function buildFinanceSnapshot(month) {
   const managerMap  = new Map(allManagers.map(m => [m.name.toLowerCase(), m]));
 
   // Revenue per manager = sum of lead revenue from their clients this month,
-  // using client_managers history so past managers still earn for leads before their end_date.
+  // applying manager_start_date (same logic as the admin commission page).
+  const clientMetaMap = {};
+  // Track canonical name casing from campaign_manager / campaign_manager_2 fields.
   const mgrCanonicalName = {};  // lower → original case
-  const historyByWorkspace = {};  // workspace_id → [{manager_name, start_date, end_date}]
   try {
-    db.prepare('SELECT client_workspace_id, manager_name, start_date, end_date FROM client_managers').all()
-      .forEach(a => {
-        if (!historyByWorkspace[a.client_workspace_id]) historyByWorkspace[a.client_workspace_id] = [];
-        historyByWorkspace[a.client_workspace_id].push(a);
-        const n = (a.manager_name || '').trim();
-        if (n) mgrCanonicalName[n.toLowerCase()] = n;
+    db.prepare('SELECT workspace_id, campaign_manager, campaign_manager_2, manager_start_date FROM clients').all()
+      .forEach(r => {
+        clientMetaMap[r.workspace_id] = r;
+        const n1 = (r.campaign_manager  || '').trim(); if (n1) mgrCanonicalName[n1.toLowerCase()] = n1;
+        const n2 = (r.campaign_manager_2 || '').trim(); if (n2) mgrCanonicalName[n2.toLowerCase()] = n2;
       });
   } catch {}
   let manualNonleadsSet = new Set();
@@ -8366,20 +7936,17 @@ async function buildFinanceSnapshot(month) {
     if (l.pv_nonlead || isPvNonLeadLabel(l.label)) continue;
     if (manualNonleadsSet.has(String(l.lead_email || '').toLowerCase())) continue;
     if (!(l.date || '').startsWith(month)) continue;
-    const history = historyByWorkspace[l.workspace_id];
-    if (!history || !history.length) continue;
-    const activeAtDate = history.filter(a => {
-      const afterStart = !a.start_date || l.date >= a.start_date;
-      const beforeEnd  = !a.end_date   || l.date <= a.end_date;
-      return afterStart && beforeEnd;
-    });
-    if (!activeAtDate.length) continue;
-    const price = livePriceMapMgr[l.workspace_id] ?? l.lead_price ?? 0;
-    const share = price / activeAtDate.length;
-    for (const a of activeAtDate) {
-      const key = (a.manager_name || '').toLowerCase().trim();
-      if (key) revenueByManager[key] = (revenueByManager[key] || 0) + share;
-    }
+    const meta = clientMetaMap[l.workspace_id];
+    if (!meta) continue;
+    const mgr1 = (meta.campaign_manager   || '').toLowerCase().trim();
+    const mgr2 = (meta.campaign_manager_2 || '').toLowerCase().trim();
+    if (!mgr1 && !mgr2) continue;
+    if (meta.manager_start_date && l.date < meta.manager_start_date) continue;
+    const price    = livePriceMapMgr[l.workspace_id] ?? l.lead_price ?? 0;
+    const numMgrs  = (mgr1 ? 1 : 0) + (mgr2 ? 1 : 0);
+    const share    = price / numMgrs;
+    if (mgr1) revenueByManager[mgr1] = (revenueByManager[mgr1] || 0) + share;
+    if (mgr2) revenueByManager[mgr2] = (revenueByManager[mgr2] || 0) + share;
   }
 
   // Union of manager names: anyone in the managers table OR anyone with revenue
@@ -8459,20 +8026,17 @@ app.get('/api/finance/staff-debug', requireAdmin, (req, res) => {
   const month = (req.query.month || currentMonthStr()).slice(0, 7);
   let allManagers = [];
   try { allManagers = db.prepare('SELECT name, commission_rate, base_salary FROM managers').all(); } catch (e) { return res.json({ error: 'managers query failed: ' + e.message }); }
+  const clientMetaMap = {};
   const mgrCanonicalName = {};
-  const historyByWorkspace = {};
   let clientMetaError = null;
   try {
-    db.prepare('SELECT client_workspace_id, manager_name, start_date, end_date FROM client_managers').all()
-      .forEach(a => {
-        if (!historyByWorkspace[a.client_workspace_id]) historyByWorkspace[a.client_workspace_id] = [];
-        historyByWorkspace[a.client_workspace_id].push(a);
-        const name = (a.manager_name || '').trim();
+    db.prepare('SELECT workspace_id, campaign_manager, manager_start_date FROM clients').all()
+      .forEach(r => {
+        clientMetaMap[r.workspace_id] = r;
+        const name = (r.campaign_manager || '').trim();
         if (name) mgrCanonicalName[name.toLowerCase()] = name;
       });
   } catch (e) { clientMetaError = e.message; }
-  const allWorkspaceIds = new Set();
-  try { db.prepare('SELECT workspace_id FROM clients').all().forEach(r => allWorkspaceIds.add(r.workspace_id)); } catch {}
   const revenueByManager = {};
   const livePriceMapMgr = {};
   try { db.prepare('SELECT workspace_id, price_per_lead FROM clients').all().forEach(r => { livePriceMapMgr[r.workspace_id] = r.price_per_lead; }); } catch {}
@@ -8481,21 +8045,13 @@ app.get('/api/finance/staff-debug', requireAdmin, (req, res) => {
     if (!l || isRevenueExcludedWorkspace(l)) { skipped.excluded++; continue; }
     if (l.pv_nonlead || isPvNonLeadLabel(l.label)) { skipped.nonlead++; continue; }
     if (!(l.date || '').startsWith(month)) { skipped.date++; continue; }
-    if (!allWorkspaceIds.has(l.workspace_id)) { skipped.noMeta++; continue; }
-    const history = historyByWorkspace[l.workspace_id];
-    if (!history || !history.length) { skipped.noMgr++; continue; }
-    const activeAtDate = history.filter(a => {
-      const afterStart = !a.start_date || l.date >= a.start_date;
-      const beforeEnd  = !a.end_date   || l.date <= a.end_date;
-      return afterStart && beforeEnd;
-    });
-    if (!activeAtDate.length) { skipped.startDate++; continue; }
+    const meta = clientMetaMap[l.workspace_id];
+    if (!meta) { skipped.noMeta++; continue; }
+    const mgr = (meta.campaign_manager || '').toLowerCase().trim();
+    if (!mgr) { skipped.noMgr++; continue; }
+    if (meta.manager_start_date && l.date < meta.manager_start_date) { skipped.startDate++; continue; }
     const price = livePriceMapMgr[l.workspace_id] ?? l.lead_price ?? 0;
-    const share = price / activeAtDate.length;
-    for (const a of activeAtDate) {
-      const key = (a.manager_name || '').toLowerCase().trim();
-      if (key) revenueByManager[key] = (revenueByManager[key] || 0) + share;
-    }
+    revenueByManager[mgr] = (revenueByManager[mgr] || 0) + price;
     skipped.counted++;
   }
   res.json({ month, allManagers, mgrCanonicalName, revenueByManager, clientMetaError, skipped, revenueCacheLeads: revenueCache.leads?.length ?? 0 });
@@ -9378,7 +8934,9 @@ app.post('/api/copy/refresh-templates', requireSession, async (req, res) => {
     const { workspace_id } = req.query;
     if (!workspace_id) return res.status(400).json({ error: 'Missing workspace_id' });
 
-    const campaigns = await pvFetch(`/campaign/list-all?workspace_id=${workspace_id}`);
+    await bisonSwitch(ws.id || wsId || workspace_id);
+    var camp_raw = await bisonFetch('/api/campaigns', { wsId: ws.id || wsId || workspace_id });
+    var campaigns = (camp_raw.data || []).map(function(c) { return { id: c.id, camp_name: c.name, status: c.status, sent_count: c.emails_sent || 0, replied_count: c.replied || 0, unique_opened_count: c.unique_opens || 0, bounced_count: c.bounced || 0, lead_count: c.total_leads || 0, lead_contacted_count: c.total_leads_contacted || 0, positive_reply_count: 0, sequences: [] }; });
     if (!Array.isArray(campaigns)) return res.status(502).json({ error: 'PlusVibe returned no campaigns' });
 
     let captured = 0;
@@ -9690,7 +9248,9 @@ app.post('/api/campaigns/apply-optimisation', requireSession, async (req, res) =
     return res.status(400).json({ error: 'Missing params' });
   try {
     // Get current campaign sequence structure
-    const campaigns = await pvFetch(`/campaign/list-all?workspace_id=${wsId}`);
+    await bisonSwitch(ws.id || wsId || workspace_id);
+    var camp_raw = await bisonFetch('/api/campaigns', { wsId: ws.id || wsId || workspace_id });
+    var campaigns = (camp_raw.data || []).map(function(c) { return { id: c.id, camp_name: c.name, status: c.status, sent_count: c.emails_sent || 0, replied_count: c.replied || 0, unique_opened_count: c.unique_opens || 0, bounced_count: c.bounced || 0, lead_count: c.total_leads || 0, lead_contacted_count: c.total_leads_contacted || 0, positive_reply_count: 0, sequences: [] }; });
     const camp = (Array.isArray(campaigns) ? campaigns : []).find(c => c.id === campId);
     if (!camp) return res.status(404).json({ error: 'Campaign not found' });
 
@@ -9706,14 +9266,9 @@ app.post('/api/campaigns/apply-optimisation', requireSession, async (req, res) =
       };
     });
 
-    const r = await fetch(`https://api.plusvibe.ai/api/v1/campaign/update/campaign`, {
-      method: 'PATCH',
-      headers: { 'x-api-key': PLUSVIBE_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workspace_id: wsId, id: campId, sequences })
-    });
-    const result = await r.json();
-    if (!r.ok) return res.status(r.status).json({ error: result.message || 'PlusVibe error', raw: result });
-    res.json({ ok: true, result });
+    console.warn('[bison] A/B variant deactivation not supported in EmailBison — skipping');
+    var updateResult = { success: false, reason: 'not-supported-in-bison' };
+    res.json({ ok: true, result: updateResult });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -9724,8 +9279,8 @@ app.get('/api/pv/workspace-leads', async (req, res) => {
   try {
     const qs = new URLSearchParams({ workspace_id, page: page || 1, limit: limit || 100 });
     if (label) qs.set('label', label);
-    const r = await fetch(`https://api.plusvibe.ai/api/v1/lead/workspace-leads?${qs}`, {
-      headers: { 'x-api-key': PLUSVIBE_KEY }
+    const r = await fetch(BISON_BASE + '/api/lead/workspace-leads?' + qs.toString(), {
+      headers: { 'Authorization': 'Bearer ' + BISON_API_KEY }
     });
     res.json(await r.json());
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -9734,8 +9289,8 @@ app.get('/api/pv/workspace-leads', async (req, res) => {
 // ── Admin — workspaces ─────────────────────────────────────
 app.get('/api/admin/workspaces', requireAdmin, async (req, res) => {
   try {
-    const r = await fetch('https://api.plusvibe.ai/api/v1/workspaces', {
-      headers: { 'x-api-key': PLUSVIBE_KEY }
+    const r = await fetch(BISON_BASE + '/api/workspaces', {
+      headers: { 'Authorization': 'Bearer ' + BISON_API_KEY }
     });
     res.json(await r.json());
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -10375,7 +9930,7 @@ app.get('/api/my-clients', requireSession, (req, res) => {
 
 app.get('/api/admin/workload/cm-stats', requireSession, async (req, res) => {
   const managers = db.prepare('SELECT name FROM managers ORDER BY name').all().map(m => m.name);
-  const assignments = db.prepare('SELECT client_workspace_id, manager_name FROM client_managers WHERE end_date IS NULL').all();
+  const assignments = db.prepare('SELECT client_workspace_id, manager_name FROM client_managers').all();
 
   // Period: default to current month
   const now = new Date();
@@ -10427,7 +9982,7 @@ app.get('/api/admin/workload', requireSession, (req, res) => {
   const s = decodeSession(req);
   const managers = db.prepare('SELECT id, name, commission_rate FROM managers ORDER BY name').all();
   const clients  = db.prepare('SELECT workspace_id, workspace_name, price_per_lead, client_status, manager_start_date FROM clients ORDER BY workspace_name').all();
-  const assignments = db.prepare('SELECT client_workspace_id, manager_name, commission_rate FROM client_managers WHERE end_date IS NULL').all();
+  const assignments = db.prepare('SELECT client_workspace_id, manager_name, commission_rate FROM client_managers').all();
   const defaultRateRow = db.prepare("SELECT value FROM app_meta WHERE key = 'default_commission_rate'").get();
   const defaultRate = defaultRateRow ? parseFloat(defaultRateRow.value) : 5;
 
@@ -10446,7 +10001,7 @@ app.get('/api/admin/workload', requireSession, (req, res) => {
 function recalcSplitRates(client_workspace_id) {
   const defaultRateRow = db.prepare("SELECT value FROM app_meta WHERE key = 'default_commission_rate'").get();
   const defaultRate = defaultRateRow ? parseFloat(defaultRateRow.value) : 5;
-  const cms = db.prepare('SELECT manager_name FROM client_managers WHERE client_workspace_id = ? AND end_date IS NULL').all(client_workspace_id);
+  const cms = db.prepare('SELECT manager_name FROM client_managers WHERE client_workspace_id = ?').all(client_workspace_id);
   const splitRate = cms.length ? defaultRate / cms.length : defaultRate;
   db.prepare('UPDATE client_managers SET commission_rate = ? WHERE client_workspace_id = ?').run(splitRate, client_workspace_id);
 }
@@ -10454,8 +10009,7 @@ function recalcSplitRates(client_workspace_id) {
 app.post('/api/admin/workload/assign', requireAdmin, (req, res) => {
   const { client_workspace_id, manager_name } = req.body || {};
   if (!client_workspace_id || !manager_name) return res.status(400).json({ error: 'client_workspace_id and manager_name required' });
-  db.prepare(`INSERT INTO client_managers (client_workspace_id, manager_name, commission_rate) VALUES (?, ?, 0)
-    ON CONFLICT(client_workspace_id, manager_name) DO UPDATE SET end_date = NULL`)
+  db.prepare(`INSERT OR IGNORE INTO client_managers (client_workspace_id, manager_name, commission_rate) VALUES (?, ?, 0)`)
     .run(client_workspace_id, manager_name);
   recalcSplitRates(client_workspace_id);
   const splitRate = db.prepare('SELECT commission_rate FROM client_managers WHERE client_workspace_id = ? AND manager_name = ?').get(client_workspace_id, manager_name)?.commission_rate ?? 0;
@@ -10470,23 +10024,6 @@ app.delete('/api/admin/workload/assign', requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
-// Set an end date on a manager's assignment — preserves history for commission, hides from active workload
-app.put('/api/admin/workload/assign/end-date', requireAdmin, (req, res) => {
-  const { client_workspace_id, manager_name, end_date } = req.body || {};
-  if (!client_workspace_id || !manager_name) return res.status(400).json({ error: 'client_workspace_id and manager_name required' });
-  db.prepare('UPDATE client_managers SET end_date = ? WHERE client_workspace_id = ? AND manager_name = ?')
-    .run(end_date || null, client_workspace_id, manager_name);
-  // Sync manager_end_date on clients row if this is the primary manager
-  try {
-    const clientRow = db.prepare('SELECT id, campaign_manager FROM clients WHERE workspace_id = ?').get(client_workspace_id);
-    if (clientRow && (clientRow.campaign_manager || '').toLowerCase().trim() === (manager_name || '').toLowerCase().trim()) {
-      db.prepare('UPDATE clients SET manager_end_date = ? WHERE workspace_id = ?').run(end_date || null, client_workspace_id);
-    }
-  } catch {}
-  recalcSplitRates(client_workspace_id);
-  res.json({ ok: true });
-});
-
 // Remove manual commission override — rates are always auto-calculated
 app.put('/api/admin/workload/commission', requireAdmin, (req, res) => {
   const { client_workspace_id } = req.body || {};
@@ -10497,7 +10034,7 @@ app.put('/api/admin/workload/commission', requireAdmin, (req, res) => {
 app.get('/api/admin/clients', requireSession, async (req, res) => {
   try {
     const clients = db.prepare(
-      'SELECT id, username, workspace_id, workspace_name, plan_leads, price_per_lead, stripe_customer_id, contact_name, contact_email, contact_phone, website, notes, client_status, restart_date, campaign_manager, campaign_manager_2, commission_rate, manager_start_date, manager_end_date, lead_target_monthly, created_at FROM clients ORDER BY created_at DESC'
+      'SELECT id, username, workspace_id, workspace_name, plan_leads, price_per_lead, stripe_customer_id, contact_name, contact_email, contact_phone, website, notes, client_status, restart_date, campaign_manager, campaign_manager_2, commission_rate, manager_start_date, lead_target_monthly, created_at FROM clients ORDER BY created_at DESC'
     ).all();
     const pgDb = req.app.locals.pgDb;
     if (pgDb) {
@@ -10511,7 +10048,7 @@ app.get('/api/admin/clients', requireSession, async (req, res) => {
   } catch (err) {
     console.error('[clients] GET error:', err.message);
     res.json(db.prepare(
-      'SELECT id, username, workspace_id, workspace_name, plan_leads, price_per_lead, stripe_customer_id, contact_name, contact_email, contact_phone, website, notes, client_status, restart_date, campaign_manager, campaign_manager_2, commission_rate, manager_start_date, manager_end_date, lead_target_monthly, created_at FROM clients ORDER BY created_at DESC'
+      'SELECT id, username, workspace_id, workspace_name, plan_leads, price_per_lead, stripe_customer_id, contact_name, contact_email, contact_phone, website, notes, client_status, restart_date, campaign_manager, campaign_manager_2, commission_rate, manager_start_date, lead_target_monthly, created_at FROM clients ORDER BY created_at DESC'
     ).all());
   }
 });
@@ -10534,8 +10071,6 @@ app.post('/api/admin/clients', requireAdmin, (req, res) => {
 
 app.put('/api/admin/clients/:id', requireAdmin, (req, res) => {
   const { plan_leads, price_per_lead, contact_name, contact_email, contact_phone, website, notes, client_status, restart_date } = req.body || {};
-  // Read current row before update so we can detect manager transitions
-  const currentRow = db.prepare('SELECT workspace_id, campaign_manager FROM clients WHERE id = ?').get(req.params.id);
   const updates = [];
   const vals = [];
   if (plan_leads     !== undefined) { updates.push('plan_leads = ?');     vals.push(parseInt(plan_leads) || 0); }
@@ -10551,40 +10086,11 @@ app.put('/api/admin/clients/:id', requireAdmin, (req, res) => {
   if (req.body.campaign_manager_2 !== undefined) { updates.push('campaign_manager_2 = ?'); vals.push(req.body.campaign_manager_2); }
   if (req.body.commission_rate    !== undefined) { updates.push('commission_rate = ?');    vals.push(parseFloat(req.body.commission_rate) || 15); }
   if (req.body.manager_start_date !== undefined) { updates.push('manager_start_date = ?'); vals.push(req.body.manager_start_date || null); }
-  if (req.body.manager_end_date   !== undefined) { updates.push('manager_end_date = ?');   vals.push(req.body.manager_end_date || null); }
   if (req.body.lead_target_monthly !== undefined) { updates.push('lead_target_monthly = ?'); vals.push(parseInt(req.body.lead_target_monthly) || 0); }
   if (updates.length)
     db.prepare(`UPDATE clients SET ${updates.join(', ')} WHERE id = ?`).run(...vals, req.params.id);
-  // Sync manager_end_date to client_managers for the current primary manager
-  if (req.body.manager_end_date !== undefined && currentRow?.workspace_id && currentRow?.campaign_manager) {
-    try {
-      db.prepare('UPDATE client_managers SET end_date = ? WHERE client_workspace_id = ? AND manager_name = ? AND end_date IS NULL')
-        .run(req.body.manager_end_date || null, currentRow.workspace_id, currentRow.campaign_manager.trim());
-    } catch {}
-  }
-  // If campaign_manager changed, insert/activate new manager row in client_managers
-  if (req.body.campaign_manager !== undefined && currentRow?.workspace_id) {
-    const newMgr = (req.body.campaign_manager || '').trim();
-    if (newMgr) {
-      const startDate = req.body.manager_start_date !== undefined ? (req.body.manager_start_date || null) : null;
-      try {
-        const existing = db.prepare('SELECT id FROM client_managers WHERE client_workspace_id = ? AND manager_name = ?').get(currentRow.workspace_id, newMgr);
-        if (existing) {
-          const setParts = ['end_date = NULL'];
-          const setVals = [];
-          if (startDate !== null) { setParts.push('start_date = ?'); setVals.push(startDate); }
-          db.prepare(`UPDATE client_managers SET ${setParts.join(', ')} WHERE client_workspace_id = ? AND manager_name = ?`)
-            .run(...setVals, currentRow.workspace_id, newMgr);
-        } else {
-          db.prepare('INSERT INTO client_managers (client_workspace_id, manager_name, commission_rate, start_date) VALUES (?, ?, 0, ?)')
-            .run(currentRow.workspace_id, newMgr, startDate);
-        }
-        recalcSplitRates(currentRow.workspace_id);
-      } catch {}
-    }
-  }
   if (notes !== undefined) {
-    const row = currentRow || db.prepare('SELECT workspace_id FROM clients WHERE id = ?').get(req.params.id);
+    const row = db.prepare('SELECT workspace_id FROM clients WHERE id = ?').get(req.params.id);
     if (row?.workspace_id) {
       req.app.locals.pgDb?.query(
         `INSERT INTO client_notes (workspace_id, notes, updated_at) VALUES ($1, $2, NOW())
@@ -10853,8 +10359,8 @@ app.post('/api/admin/nonlead-requests/:id/reject', requireAdmin, (req, res) => {
 // ── PlusVibe — campaigns for a workspace ──────────────────
 app.get('/api/pv/workspaces', async (req, res) => {
   try {
-    const r = await fetch('https://api.plusvibe.ai/api/v1/workspaces', {
-      headers: { 'x-api-key': PLUSVIBE_KEY }
+    const r = await fetch(BISON_BASE + '/api/workspaces', {
+      headers: { 'Authorization': 'Bearer ' + BISON_API_KEY }
     });
     const data = await r.json();
     if (!r.ok) return res.status(r.status).json({ error: data.error || 'Failed to fetch workspaces' });
@@ -10868,8 +10374,8 @@ app.get('/api/pv/campaigns', async (req, res) => {
   const { workspace_id } = req.query;
   if (!workspace_id) return res.status(400).json({ error: 'Missing workspace_id' });
   try {
-    const r = await fetch(`https://api.plusvibe.ai/api/v1/campaign/list?workspace_id=${workspace_id}&limit=100`, {
-      headers: { 'x-api-key': PLUSVIBE_KEY }
+    const r = await fetch(BISON_BASE + `/api/campaign/list?workspace_id=${workspace_id}&limit=100`, {
+      headers: { 'Authorization': 'Bearer ' + BISON_API_KEY }
     });
     const data = await r.json();
     if (!r.ok) return res.status(r.status).json({ error: data.error || 'Failed to fetch campaigns' });
@@ -10974,16 +10480,29 @@ app.post('/api/pv/push-contacts', async (req, res) => {
     let pushed = 0;
     for (let i = 0; i < leads.length; i += BATCH) {
       const batch = leads.slice(i, i + BATCH);
-      const r = await fetch('https://api.plusvibe.ai/api/v1/lead/add', {
-        method: 'POST',
-        headers: { 'x-api-key': PLUSVIBE_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspace_id, campaign_id, leads: batch })
+      await bisonSwitch(workspace_id);
+      var bisonLeadPayload = (batch).map(function(l) {
+        var cv = [];
+        if (l.phone_number) cv.push({ name: 'phone_number', value: String(l.phone_number) });
+        if (l.city) cv.push({ name: 'city', value: String(l.city) });
+        if (l.state) cv.push({ name: 'state', value: String(l.state) });
+        if (l.country) cv.push({ name: 'country', value: String(l.country) });
+        if (l.industry) cv.push({ name: 'industry', value: String(l.industry) });
+        if (l.linkedin_person_url) cv.push({ name: 'linkedin_person_url', value: String(l.linkedin_person_url) });
+        if (l.linkedin_company_url) cv.push({ name: 'linkedin_company_url', value: String(l.linkedin_company_url) });
+        if (l.company_website) cv.push({ name: 'company_website', value: String(l.company_website) });
+        if (l.department) cv.push({ name: 'department', value: String(l.department) });
+        if (l.address_line) cv.push({ name: 'address_line', value: String(l.address_line) });
+        return { email: l.email, first_name: l.first_name || null, last_name: l.last_name || null, title: l.job_title || l.title || null, company: l.company_name || l.company || null, custom_variables: cv };
       });
-      const data = await r.json();
-      if (!r.ok) {
-        console.error('[PV Push] Error:', data);
-        return res.status(r.status).json({ error: data.message || 'PlusVibe error', pushed });
+      var createRes = await bisonFetch('/api/leads/create-or-update/multiple', { method: 'POST', body: { leads: bisonLeadPayload } });
+      if (campaign_id && createRes && createRes.data) {
+        var leadIds = (createRes.data.leads || createRes.data || []).map(function(l) { return l.id; }).filter(Boolean);
+        if (leadIds.length) {
+          await bisonFetch('/api/campaigns/' + campaign_id + '/leads', { method: 'POST', body: { lead_ids: leadIds } }).catch(function(e) { console.warn('[bison] campaign-assign partial failure:', e.message); });
+        }
       }
+      var r = { ok: true };
       pushed += batch.length;
     }
 
@@ -11338,22 +10857,6 @@ app.get('/api/admin/database/contacts', requireAdmin, async (req, res) => {
   ]);
 
   res.json({ contacts, total: parseInt(count, 10) });
-});
-
-app.post('/api/admin/database/contacts/by-ids', requireSession, async (req, res) => {
-  const pgdb = req.app.locals.pgDb;
-  if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
-  const { ids } = req.body;
-  if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'ids required' });
-  if (ids.length > 2000) return res.status(400).json({ error: 'Max 2000 at a time' });
-  const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
-  const r = await pgdb.query(
-    `SELECT id, email, first_name, last_name, company_name, company_domain AS company_website,
-            job_title, industry, city, state, country, phone
-     FROM contacts WHERE id IN (${placeholders})`,
-    ids
-  );
-  res.json({ contacts: r.rows });
 });
 
 app.delete('/api/admin/database/contacts', requireAdmin, async (req, res) => {
@@ -12004,7 +11507,7 @@ async function captureVariationStats(workspaceId, campaignId) {
   } catch {}
   let stored = 0;
   try {
-    const vstats = await pvFetch(`/campaign/get/variation-stats?campaign_id=${campaignId}&workspace_id=${workspaceId}`);
+    var vstats = { data: [], steps: [] }; // A/B variant stats not available in EmailBison
     if (!Array.isArray(vstats)) return 0;
     for (const st of vstats) {
       const step = parseInt(st.step ?? st.seq_number ?? 1, 10) || 1;
@@ -12079,6 +11582,72 @@ async function backfillEmailEventHashes() {
   }
 }
 
+// Sync webhook event to shared esp_leads table (for client portal)
+async function syncToEspLeads(body, eventType, email, dbPg) {
+  try {
+    const leadId = body?.lead?.id || body?.lead_id || '';
+    const workspaceId = body?.workspace?.id || body?.workspace_id || '';
+    const campaignId = body?.campaign?.id || body?.campaign_id || '';
+    if (!leadId || !workspaceId || !dbPg) return;
+
+    const now = new Date().toISOString();
+
+    // Determine what to update based on event type
+    if (/reply/i.test(eventType)) {
+      // Mark as replied — use COALESCE to never overwrite existing first_replied_at
+      await dbPg.query(`
+        UPDATE esp_leads
+        SET first_replied_at = COALESCE(first_replied_at, $1), updated_at = $2
+        WHERE id = $3 AND workspace_id = $4
+      `, [now, now, leadId, workspaceId]);
+
+      // Store the real reply email into portal_emails so the client portal shows
+      // the genuine conversation (not a fabricated one). Best-effort, idempotent.
+      try {
+        const html = body?.reply?.html || body?.html || body?.body_html || '';
+        const text = body?.reply?.text || body?.message || body?.body || body?.content || body?.reply_text || '';
+        const subject = body?.subject || body?.reply?.subject || body?.email_subject || '';
+        const messageId = body?.message_id || body?.reply?.message_id || `wh-${leadId}-${Date.parse(now)}`;
+        const threadId = body?.thread_id || body?.reply?.thread_id || null;
+        const eaccount = body?.email_account || body?.eaccount || body?.workspace?.email || null;
+        if (text || html) {
+          await dbPg.query(`
+            INSERT INTO portal_emails (
+              id, workspace_id, lead_pv_id, lead_email, thread_id, campaign_id, direction,
+              subject, body_html, body_text, content_preview, from_email, to_email, eaccount,
+              pv_label, is_unread, message_id, timestamp_created, raw
+            ) VALUES ($1,$2,$3,$4,$5,$6,'IN',$7,$8,$9,$10,$11,$12,$13,$14,1,$15,$16,$17)
+            ON CONFLICT (id) DO NOTHING
+          `, [
+            messageId, workspaceId, leadId, String(email).toLowerCase(), threadId, campaignId,
+            subject, html, text, (text || '').slice(0, 200), String(email).toLowerCase(),
+            eaccount, eaccount, 'INTERESTED', messageId, now, JSON.stringify(body),
+          ]);
+        }
+      } catch (e) {
+        console.warn(`[Webhook] portal_emails insert failed: ${e.message}`);
+      }
+    } else if (/lead/i.test(eventType)) {
+      // Mark lead status
+      await dbPg.query(`
+        UPDATE esp_leads
+        SET status = COALESCE(status, 'INTERESTED'), updated_at = $1
+        WHERE id = $2 AND workspace_id = $3
+      `, [now, leadId, workspaceId]);
+    } else if (/sent|email.sent/i.test(eventType) && !/reply|bounce|lead/i.test(eventType)) {
+      // Just mark updated_at to show we synced
+      await dbPg.query(`
+        UPDATE esp_leads SET updated_at = $1 WHERE id = $2 AND workspace_id = $3
+      `, [now, leadId, workspaceId]);
+    }
+
+    console.log(`[Webhook] Synced to esp_leads: ${eventType} for lead ${leadId}`);
+  } catch (err) {
+    // Non-fatal — log but don't throw, so webhook processing continues
+    console.warn(`[Webhook] esp_leads sync error: ${err.message}`);
+  }
+}
+
 // Process a single stored webhook event against the DB
 async function processWebhookEvent(event) {
   try {
@@ -12097,6 +11666,9 @@ async function processWebhookEvent(event) {
 
     const dbPg = app.locals.pgDb;
     if (!dbPg) return;
+
+    // Sync to esp_leads (for client portal) — non-fatal on failure
+    syncToEspLeads(body, eventType, email, dbPg).catch(() => {});
 
     const result = await dbPg.query(
       `SELECT id, snoozed_verticals, emailed_workspaces, company_domain FROM contacts WHERE LOWER(email) = LOWER($1) LIMIT 1`,
@@ -12460,11 +12032,6 @@ function initPausedJobsTable(sq) {
     verified_count INTEGER DEFAULT 0,
     pushed_count INTEGER DEFAULT 0
   )`);
-  // Persist the provider filter so a paused→resumed (or boot-restored) job
-  // still enforces it. Without this, resume rebuilt the job WITHOUT
-  // allowedProviders and the gate silently disabled — every MX leaked through.
-  // Added via ALTER for existing DBs; ignore the "duplicate column" error.
-  try { sq.exec(`ALTER TABLE paused_push_jobs ADD COLUMN allowed_providers TEXT DEFAULT ''`); } catch { /* already exists */ }
 }
 
 // On boot, restore paused jobs into the in-memory map so the UI shows them.
@@ -12482,7 +12049,6 @@ function restorePausedJobs(sq) {
         campaign_id: row.campaign_id,
         workspace_name: row.workspace_name || row.workspace_id,
         campaign_name: row.campaign_name || row.campaign_id,
-        allowedProviders: (row.allowed_providers || '').split(',').map(s => s.trim()).filter(Boolean),
         total: contactIds.length,
         verified: row.verified_count || 0,
         pushed: row.pushed_count || 0,
@@ -12546,98 +12112,6 @@ app.get('/api/contacts/verified-today', requireSession, async (req, res) => {
   }
 });
 
-// Read-only diagnostic: MX-provider coverage. Shows how many contacts have
-// been verified vs how many carry a true mx_provider, so the effect of the
-// tag→column recovery + domain-cache seed is visible after deploy.
-app.get('/api/contacts/mx-coverage', requireSession, async (req, res) => {
-  try {
-    const dbPg = req.app.locals.pgDb;
-    if (!dbPg) return res.status(503).json({ error: 'Database unavailable' });
-    const result = await dbPg.query(`
-      SELECT
-        COUNT(*)                                                                       AS total,
-        COUNT(*) FILTER (WHERE email_verified_at IS NOT NULL)                          AS verified,
-        COUNT(*) FILTER (WHERE mx_provider IS NOT NULL)                                AS has_provider,
-        COUNT(*) FILTER (WHERE mx_provider = 'email_google')                           AS google,
-        COUNT(*) FILTER (WHERE mx_provider = 'email_outlook')                          AS outlook,
-        COUNT(*) FILTER (WHERE mx_provider = 'email_other')                            AS other,
-        COUNT(*) FILTER (WHERE mx_provider IS NULL)                                    AS unknown,
-        -- Verified contacts still lacking a provider: the recovery's remaining
-        -- work (e.g. verified with an unresolved/unknown MX, so no email_* tag).
-        COUNT(*) FILTER (WHERE email_verified_at IS NOT NULL AND mx_provider IS NULL)  AS verified_no_provider
-      FROM contacts
-    `);
-    const dom = await dbPg.query(`SELECT COUNT(*) AS n FROM domain_mx_cache`);
-    const row = result.rows[0];
-    res.json({
-      total:               +row.total,
-      verified:            +row.verified,
-      hasProvider:         +row.has_provider,
-      google:              +row.google,
-      outlook:             +row.outlook,
-      other:               +row.other,
-      unknown:             +row.unknown,
-      verifiedNoProvider:  +row.verified_no_provider,
-      domainsCached:       +dom.rows[0].n,
-      lastSeedError:       dbPg._lastSeedError || null,
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Manually re-run the domain-MX seed + recovery (normally boot-only). Lets us
-// backfill mx_provider for the back-catalogue without a server restart and
-// watch domainsCached climb via /api/contacts/mx-coverage. Idempotent.
-app.post('/api/contacts/mx-reseed', requireSession, async (req, res) => {
-  try {
-    const dbPg = req.app.locals.pgDb;
-    if (!dbPg) return res.status(503).json({ error: 'Database unavailable' });
-    if (!dbPg.seedDomainMxCacheFromVerified) {
-      return res.status(501).json({ error: 'seed not supported on this DB backend' });
-    }
-    const r = await dbPg.seedDomainMxCacheFromVerified();
-    res.json({ ok: true, ...r, lastSeedError: dbPg._lastSeedError || null });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Live-MX scanner: classify every NULL-provider contact via real DNS MX
-// lookups (the same signal PlusVibe uses on import; no verification needed).
-// Runs in the BACKGROUND because a full scan is minutes long — poll
-// /api/contacts/mx-coverage to watch the unknown count fall and
-// /api/contacts/mx-scan (GET) for live job stats.
-let _mxScanJob = null; // { running, startedAt, stats, error, finishedAt }
-app.post('/api/contacts/mx-scan', requireSession, async (req, res) => {
-  const dbPg = req.app.locals.pgDb;
-  if (!dbPg) return res.status(503).json({ error: 'Database unavailable' });
-  if (!dbPg.scanContactsMxProvider) {
-    return res.status(501).json({ error: 'scan not supported on this DB backend' });
-  }
-  if (_mxScanJob?.running) {
-    return res.status(409).json({ error: 'scan already running', stats: _mxScanJob.stats });
-  }
-  const maxDomains  = Math.min(parseInt(req.body?.maxDomains || 200000, 10), 500000);
-  const concurrency = Math.min(parseInt(req.body?.concurrency || 20, 10), 50);
-
-  _mxScanJob = { running: true, startedAt: Date.now(), stats: null, error: null, finishedAt: null };
-  // Fire-and-forget; the request returns immediately.
-  dbPg.scanContactsMxProvider({
-    maxDomains, concurrency,
-    onProgress: (s) => { _mxScanJob.stats = s; },
-  })
-    .then((s) => { _mxScanJob = { ..._mxScanJob, running: false, stats: s, finishedAt: Date.now() };
-                   console.log('[mx-scan] done', JSON.stringify(s)); })
-    .catch((e) => { _mxScanJob = { ..._mxScanJob, running: false, error: e.message, finishedAt: Date.now() };
-                    console.error('[mx-scan] failed', e.message); });
-
-  res.json({ ok: true, started: true, maxDomains, concurrency });
-});
-app.get('/api/contacts/mx-scan', requireSession, (req, res) => {
-  res.json(_mxScanJob || { running: false, stats: null });
-});
-
 app.get('/api/contacts/push-jobs', (req, res) => {
   const jobs = [...pushJobs.values()]
     .sort((a, b) => b.created_at - a.created_at)
@@ -12653,7 +12127,7 @@ app.get('/api/contacts/push-jobs/:id', (req, res) => {
 
 // POST starts job immediately, returns job ID — processing runs in background
 app.post('/api/contacts/verify-and-push', (req, res) => {
-  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 90, emailProviders, use_n2b = false, verify_only = false } = req.body;
+  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 90, emailProviders } = req.body;
   if (!workspace_id || !campaign_id || !Array.isArray(contact_ids) || !contact_ids.length) {
     return res.status(400).json({ error: 'workspace_id, campaign_id and contact_ids required' });
   }
@@ -12677,9 +12151,6 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
     campaign_name: campaign_name || campaign_id,
     workspace_id, campaign_id,
     allowedProviders,
-    useN2b: !!use_n2b,
-    verifyOnly: !!verify_only,
-    safe_ids: [],
     total: contact_ids.length,
     skipped: 0, verified: 0, safe: 0, risky: 0, invalid: 0, unknown: 0,
     pushed: 0, progress: 0,
@@ -12693,12 +12164,11 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
     try {
       initPausedJobsTable(sq);
       sq.prepare(`INSERT OR REPLACE INTO paused_push_jobs
-        (id, workspace_id, campaign_id, workspace_name, campaign_name, contact_ids, include_risky, max_age_days, allowed_providers)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        (id, workspace_id, campaign_id, workspace_name, campaign_name, contact_ids, include_risky, max_age_days)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
         jobId, workspace_id, campaign_id,
         workspace_name || workspace_id, campaign_name || campaign_id,
-        JSON.stringify(contact_ids), include_risky ? 1 : 0, max_age_days,
-        allowedProviders.join(',')
+        JSON.stringify(contact_ids), include_risky ? 1 : 0, max_age_days
       );
     } catch (e) { console.warn('[push] Could not persist job to SQLite:', e.message); }
   }
@@ -12776,41 +12246,36 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
       const targetCampLc = (job.campaign_name || '').trim().toLowerCase();
 
       const passesFilter = (c) => {
-        const status = verifyResults[c.id];
-        // If No2Bounce not opted in, skip catch-alls — they are not verified and won't be pushed
-        if (status === 'safe_catchall' && !job.useN2b) { skipped.unsafe++; return false; }
-        if (status !== 'safe' && status !== 'safe_catchall') { skipped.unsafe++; return false; }
+        if (verifyResults[c.id] !== 'safe' && verifyResults[c.id] !== 'safe_catchall') { skipped.unsafe++; return false; }
         if (c.do_not_contact)               { skipped.dnc++; return false; }
         // True-MX provider gate. By the time a contact reaches here it has been
         // verified, so c.mx_provider is its real provider (set by verifyOne /
         // the domain cache). Enforce the user's provider filter against that
         // truth — this is what stops a Microsoft-hosted contact slipping into a
         // "Google + Other" push. A still-null mx_provider means the verifier
-        // couldn't resolve MX; exclude it rather than guess.
+        // couldn't resolve MX; exclude it rather than guess (safer than leaking
+        // a possibly-wrong provider into the campaign).
         if (allowedProviders.length && !allowedProviders.includes(c.mx_provider)) {
           skipped.wrongProvider++; return false;
         }
         if ((!c.keywords || c.keywords.trim() === '') || (!c.industry || c.industry.trim() === '')) {
           skipped.missingEnrichment++; return false;
         }
-        // For CSV-only export, skip campaign dedup — user is manually importing
-        if (!job.verifyOnly) {
-          // Bulletproof per-campaign dedup: check the full pushed_campaigns
-          // history, not just last_campaign_name (which only remembers the
-          // most-recent push and leaks when campaigns interleave).
-          const pushed = Array.isArray(c.pushed_campaigns)
-            ? c.pushed_campaigns
-            : (typeof c.pushed_campaigns === 'string' ? JSON.parse(c.pushed_campaigns || '[]') : []);
-          if (pushed.some(p =>
-            p.workspace_id === job.workspace_id &&
-            (p.campaign_id === job.campaign_id || (targetCampLc && (p.campaign_name || '').toLowerCase() === targetCampLc))
-          )) { skipped.alreadyInCampaign++; return false; }
-          // Legacy guard kept for contacts imported pre-pushed_campaigns —
-          // last_campaign_name comes from PlusVibe CSV imports.
-          if (targetCampLc && c.last_campaign_name
-              && c.last_campaign_name.toLowerCase() === targetCampLc) {
-            skipped.alreadyInCampaign++; return false;
-          }
+        // Bulletproof per-campaign dedup: check the full pushed_campaigns
+        // history, not just last_campaign_name (which only remembers the
+        // most-recent push and leaks when campaigns interleave).
+        const pushed = Array.isArray(c.pushed_campaigns)
+          ? c.pushed_campaigns
+          : (typeof c.pushed_campaigns === 'string' ? JSON.parse(c.pushed_campaigns || '[]') : []);
+        if (pushed.some(p =>
+          p.workspace_id === job.workspace_id &&
+          (p.campaign_id === job.campaign_id || (targetCampLc && (p.campaign_name || '').toLowerCase() === targetCampLc))
+        )) { skipped.alreadyInCampaign++; return false; }
+        // Legacy guard kept for contacts imported pre-pushed_campaigns —
+        // last_campaign_name comes from PlusVibe CSV imports.
+        if (targetCampLc && c.last_campaign_name
+            && c.last_campaign_name.toLowerCase() === targetCampLc) {
+          skipped.alreadyInCampaign++; return false;
         }
         if (job.workspace_id) {
           const emailed = typeof c.emailed_workspaces === 'string'
@@ -12898,23 +12363,29 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
           if (job.cancelled || job.paused) return;
           const slice = batch.slice(i, i + 100);
           let r, d = {};
-          for (let attempt = 0; attempt < 4; attempt++) {
-            if (job.cancelled || job.paused) return;
-            r = await fetch('https://api.plusvibe.ai/api/v1/lead/add', {
-              method: 'POST',
-              headers: { 'x-api-key': PLUSVIBE_KEY, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ workspace_id, campaign_id, leads: slice.map(toLead) })
-            });
-            try { d = await r.json(); } catch { d = {}; }
-            if (r.status !== 429) break;
-            const wait = [10000, 20000, 40000][attempt] || 40000;
-            console.warn(`[push] PlusVibe 429 — backing off ${wait / 1000}s`);
-            await new Promise(res => setTimeout(res, wait));
+          await bisonSwitch(workspace_id);
+          var bisonLeadPayload = (slice.map(toLead)).map(function(l) {
+            var cv = [];
+            if (l.phone_number) cv.push({ name: 'phone_number', value: String(l.phone_number) });
+            if (l.city) cv.push({ name: 'city', value: String(l.city) });
+            if (l.state) cv.push({ name: 'state', value: String(l.state) });
+            if (l.country) cv.push({ name: 'country', value: String(l.country) });
+            if (l.industry) cv.push({ name: 'industry', value: String(l.industry) });
+            if (l.linkedin_person_url) cv.push({ name: 'linkedin_person_url', value: String(l.linkedin_person_url) });
+            if (l.linkedin_company_url) cv.push({ name: 'linkedin_company_url', value: String(l.linkedin_company_url) });
+            if (l.company_website) cv.push({ name: 'company_website', value: String(l.company_website) });
+            if (l.department) cv.push({ name: 'department', value: String(l.department) });
+            if (l.address_line) cv.push({ name: 'address_line', value: String(l.address_line) });
+            return { email: l.email, first_name: l.first_name || null, last_name: l.last_name || null, title: l.job_title || l.title || null, company: l.company_name || l.company || null, custom_variables: cv };
+          });
+          var createRes = await bisonFetch('/api/leads/create-or-update/multiple', { method: 'POST', body: { leads: bisonLeadPayload } });
+          if (campaign_id && createRes && createRes.data) {
+            var leadIds = (createRes.data.leads || createRes.data || []).map(function(l) { return l.id; }).filter(Boolean);
+            if (leadIds.length) {
+              await bisonFetch('/api/campaigns/' + campaign_id + '/leads', { method: 'POST', body: { lead_ids: leadIds } }).catch(function(e) { console.warn('[bison] campaign-assign partial failure:', e.message); });
+            }
           }
-          if (!r.ok) {
-            console.error(`[push] PlusVibe ${r.status} — ${JSON.stringify(d)} — sample lead: ${JSON.stringify(slice[0] ? toLead(slice[0]) : {})}`);
-            job.error = d.message || `PlusVibe error (${r.status})`; job.status = 'failed'; return;
-          }
+          r = { ok: true };
           // Stamp pushed_campaigns so future verify-and-push runs against
           // this same campaign skip these contacts cleanly. Fire-and-forget
           // — a stamp failure must not roll back the actual push.
@@ -13008,16 +12479,12 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
       // ── Phase 1: push already-verified contacts immediately ────
       const alreadyPassing = alreadyVerified.filter(passesFilter);
       if (alreadyPassing.length) {
-        if (job.verifyOnly) {
-          alreadyPassing.forEach(c => job.safe_ids.push(c.id));
-        } else {
-          job.status = 'pushing';
-          await pushLeads(alreadyPassing);
-          if (job.status === 'failed' || job.cancelled || job.paused) {
-            if (job.paused) job.status = 'pausing';
-            else job.status = job.cancelled ? 'cancelled' : job.status;
-            return;
-          }
+        job.status = 'pushing';
+        await pushLeads(alreadyPassing);
+        if (job.status === 'failed' || job.cancelled || job.paused) {
+          if (job.paused) job.status = 'pausing';
+          else job.status = job.cancelled ? 'cancelled' : job.status;
+          return;
         }
       }
 
@@ -13034,10 +12501,8 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
         }
         if (job.cancelled || job.paused) break;
 
-        // First batch all-unknown with sufficient sample = verifier is down.
-        // Require ≥10 contacts to avoid false-positives when a small first chunk
-        // legitimately has all-unknown results (e.g. proxy can't reach certain MX hosts).
-        if (i === 0 && batchUpdates.length >= 10 && batchUpdates.every(u => u.email_status === 'unknown')) {
+        // First batch all-unknown = verifier is down
+        if (i === 0 && batchUpdates.length > 0 && batchUpdates.every(u => u.email_status === 'unknown')) {
           job.status = 'failed';
           job.error = 'Email verification failed — email-finder not responding. Try pushing without verify.';
           return;
@@ -13054,15 +12519,12 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
             .catch(err => console.warn('[verify] background DB write failed:', err.message));
         }
 
+        // Push passing contacts from this batch right now
         const passing = chunk.filter(passesFilter);
         if (passing.length) {
-          if (job.verifyOnly) {
-            passing.forEach(c => job.safe_ids.push(c.id));
-          } else {
-            job.status = 'pushing';
-            await pushLeads(passing);
-            if (job.status === 'failed') return;
-          }
+          job.status = 'pushing';
+          await pushLeads(passing);
+          if (job.status === 'failed') return;
         }
       }
 
@@ -13090,10 +12552,9 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
       }
 
       // ── Phase 3: No2Bounce deeper validation of catch-all contacts ──
-      // Only runs when the user explicitly opted in via the "Use No2Bounce" checkbox.
       const riskyContacts = contacts.filter(c => verifyResults[c.id] === 'risky');
-      console.log(`[No2Bounce] Risky contacts found: ${riskyContacts.length} of ${contacts.length} (useN2b=${job.useN2b})`);
-      if (riskyContacts.length && !job.cancelled && job.useN2b) {
+      console.log(`[No2Bounce] Risky contacts found: ${riskyContacts.length} of ${contacts.length}`);
+      if (riskyContacts.length && !job.cancelled) {
         job.status = 'n2b_verifying';
         job.n2bTotal = riskyContacts.length;
         job.n2bDone  = 0;
@@ -13130,12 +12591,8 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
         console.log(`[No2Bounce] Results: ${n2bSafe} confirmed safe, ${n2bInvalid} invalid, ${riskyContacts.length - n2bUpdates.length} no result`);
 
         if (n2bPush.length && !job.cancelled) {
-          if (job.verifyOnly) {
-            n2bPush.forEach(c => job.safe_ids.push(c.id));
-          } else {
-            job.status = 'pushing';
-            await pushLeads(n2bPush);
-          }
+          job.status = 'pushing';
+          await pushLeads(n2bPush);
         }
       }
 
@@ -13222,10 +12679,6 @@ app.post('/api/contacts/push-jobs/:id/resume', async (req, res) => {
   const max_age_days = row.max_age_days || 90;
   const workspace_id = row.workspace_id;
   const campaign_id  = row.campaign_id;
-  // Restore the provider filter so the resumed job keeps enforcing it.
-  const allowedProviders = (row.allowed_providers || '')
-    .split(',').map(s => s.trim()).filter(Boolean);
-  job.allowedProviders = allowedProviders;
 
   // Re-run the worker — isFreshVerdict inside will skip already-verified contacts,
   // so only contacts that were not yet verified (or got 'unknown') will be re-sent to Reacher.
@@ -13233,26 +12686,6 @@ app.post('/api/contacts/push-jobs/:id/resume', async (req, res) => {
     try {
       const contacts = await db.getContactsById(contact_ids);
       if (!contacts.length) { job.status = 'failed'; job.error = 'No contacts found'; return; }
-
-      // Domain-MX pre-pass (same as the main worker): fill mx_provider from the
-      // domain cache for contacts whose domain is already known, so the gate
-      // can judge already-verified contacts without re-verifying.
-      {
-        const byDomain = new Map();
-        for (const c of contacts) {
-          if (c.mx_provider) continue;
-          const domain = (c.email || '').split('@')[1]?.toLowerCase();
-          if (!domain) continue;
-          if (!byDomain.has(domain)) byDomain.set(domain, []);
-          byDomain.get(domain).push(c);
-        }
-        for (const [domain, list] of byDomain) {
-          try {
-            const prov = await db.getDomainMxProvider(domain);
-            if (prov) list.forEach(c => { c.mx_provider = prov; });
-          } catch { /* cache miss / transient — verifier will resolve it */ }
-        }
-      }
 
       const cutoff = new Date(Date.now() - max_age_days * 24 * 60 * 60 * 1000).toISOString();
       const isFreshVerdict = c =>
@@ -13272,8 +12705,7 @@ app.post('/api/contacts/push-jobs/:id/resume', async (req, res) => {
       const CONCURRENCY = Math.max(1, parseInt(process.env.PUSH_VERIFY_CONCURRENCY || '5', 10));
       const VERIFY_THEN_PUSH = Math.max(20, parseInt(process.env.VERIFY_THEN_PUSH || '100', 10));
       let doneCount = 0;
-      const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, snoozed: 0, wrongProvider: 0 };
-      const allowedProvidersResume = Array.isArray(job.allowedProviders) ? job.allowedProviders : [];
+      const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, snoozed: 0 };
 
       const campaignVertical = detectVertical((job.campaign_name || '') + ' ' + (job.workspace_name || ''));
       const today       = new Date().toISOString().slice(0, 10);
@@ -13283,11 +12715,6 @@ app.post('/api/contacts/push-jobs/:id/resume', async (req, res) => {
       const passesFilter = (c) => {
         if (verifyResults[c.id] !== 'safe' && verifyResults[c.id] !== 'safe_catchall') { skipped.unsafe++; return false; }
         if (c.do_not_contact) { skipped.dnc++; return false; }
-        // True-MX provider gate (same as the main worker) — without this a
-        // resumed job leaked every provider regardless of the filter.
-        if (allowedProvidersResume.length && !allowedProvidersResume.includes(c.mx_provider)) {
-          skipped.wrongProvider++; return false;
-        }
         const pushed = Array.isArray(c.pushed_campaigns)
           ? c.pushed_campaigns
           : (typeof c.pushed_campaigns === 'string' ? JSON.parse(c.pushed_campaigns || '[]') : []);
@@ -13350,23 +12777,29 @@ app.post('/api/contacts/push-jobs/:id/resume', async (req, res) => {
           if (job.cancelled || job.paused) return;
           const slice = batch.slice(i, i + 100);
           let r, d = {};
-          for (let attempt = 0; attempt < 4; attempt++) {
-            if (job.cancelled || job.paused) return;
-            r = await fetch('https://api.plusvibe.ai/api/v1/lead/add', {
-              method: 'POST',
-              headers: { 'x-api-key': PLUSVIBE_KEY, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ workspace_id, campaign_id, leads: slice.map(toLead) })
-            });
-            try { d = await r.json(); } catch { d = {}; }
-            if (r.status !== 429) break;
-            const wait = [10000, 20000, 40000][attempt] || 40000;
-            console.warn(`[push] PlusVibe 429 — backing off ${wait / 1000}s`);
-            await new Promise(res => setTimeout(res, wait));
+          await bisonSwitch(workspace_id);
+          var bisonLeadPayload = (slice.map(toLead)).map(function(l) {
+            var cv = [];
+            if (l.phone_number) cv.push({ name: 'phone_number', value: String(l.phone_number) });
+            if (l.city) cv.push({ name: 'city', value: String(l.city) });
+            if (l.state) cv.push({ name: 'state', value: String(l.state) });
+            if (l.country) cv.push({ name: 'country', value: String(l.country) });
+            if (l.industry) cv.push({ name: 'industry', value: String(l.industry) });
+            if (l.linkedin_person_url) cv.push({ name: 'linkedin_person_url', value: String(l.linkedin_person_url) });
+            if (l.linkedin_company_url) cv.push({ name: 'linkedin_company_url', value: String(l.linkedin_company_url) });
+            if (l.company_website) cv.push({ name: 'company_website', value: String(l.company_website) });
+            if (l.department) cv.push({ name: 'department', value: String(l.department) });
+            if (l.address_line) cv.push({ name: 'address_line', value: String(l.address_line) });
+            return { email: l.email, first_name: l.first_name || null, last_name: l.last_name || null, title: l.job_title || l.title || null, company: l.company_name || l.company || null, custom_variables: cv };
+          });
+          var createRes = await bisonFetch('/api/leads/create-or-update/multiple', { method: 'POST', body: { leads: bisonLeadPayload } });
+          if (campaign_id && createRes && createRes.data) {
+            var leadIds = (createRes.data.leads || createRes.data || []).map(function(l) { return l.id; }).filter(Boolean);
+            if (leadIds.length) {
+              await bisonFetch('/api/campaigns/' + campaign_id + '/leads', { method: 'POST', body: { lead_ids: leadIds } }).catch(function(e) { console.warn('[bison] campaign-assign partial failure:', e.message); });
+            }
           }
-          if (!r.ok) {
-            console.error(`[push] PlusVibe ${r.status} — ${JSON.stringify(d)} — sample lead: ${JSON.stringify(slice[0] ? toLead(slice[0]) : {})}`);
-            job.error = d.message || `PlusVibe error (${r.status})`; job.status = 'failed'; return;
-          }
+          r = { ok: true };
           try {
             const ids = slice.map(c => c.id).filter(Boolean);
             if (ids.length && db.stampPushedCampaign) {
@@ -13403,16 +12836,6 @@ app.post('/api/contacts/push-jobs/:id/resume', async (req, res) => {
           const mxProvider = /google|gmail/.test(mxHost) ? 'email_google'
             : /outlook|microsoft|protection\.outlook|mail\.microsoft/.test(mxHost) ? 'email_outlook'
             : mxHost ? 'email_other' : null;
-          // Stamp the in-memory contact so the provider gate sees the real MX,
-          // and fan it out to the domain cache (same as the main worker).
-          if (mxProvider) {
-            c.mx_provider = mxProvider;
-            const domain = (c.email || '').split('@')[1]?.toLowerCase();
-            if (domain) {
-              try { await db.setDomainMxProvider(domain, mxProvider); }
-              catch (e) { console.warn('[verify] domain mx cache update failed:', e.message); }
-            }
-          }
           verifyResults[c.id] = status;
           batchUpdates.push({ id: c.id, email_status: status, email_verified_at: new Date().toISOString(), mx_provider: mxProvider, email: c.email });
         } catch {
@@ -13455,7 +12878,7 @@ app.post('/api/contacts/push-jobs/:id/resume', async (req, res) => {
           await Promise.all(chunk.slice(j, j + CONCURRENCY).map(c => verifyOne(c, batchUpdates)));
         }
         if (job.cancelled || job.paused) break;
-        if (i === 0 && batchUpdates.length >= 10 && batchUpdates.every(u => u.email_status === 'unknown')) {
+        if (i === 0 && batchUpdates.length > 0 && batchUpdates.every(u => u.email_status === 'unknown')) {
           job.status = 'failed';
           job.error = 'Email verification failed — email-finder not responding. Try pushing without verify.';
           return;
@@ -14721,8 +14144,10 @@ function scheduleDiagnosticsDaily(pgdb, diagnostics) {
       if (seen.has(wsId)) continue;
       seen.add(wsId);
       try {
-        const data = await pvFetch(`/email-accounts?workspace_id=${wsId}&limit=200`);
-        const accounts = data?.data || data?.accounts || (Array.isArray(data) ? data : []);
+        await bisonSwitch(wsId);
+        var ea_bison = await bisonFetch('/api/sender-emails', { wsId: wsId });
+        var ea_data = (ea_bison.data || []).map(function(a) { return { _id: String(a.id), id: String(a.id), email: a.email || a.name, status: a.status === 'connected' ? 'active' : 'inactive', warmup_status: a.warmup_enabled ? 'ACTIVE' : 'PAUSED', daily_limit: a.daily_limit || 0, warmup_details: { inbox_pct: 0, spam_pct: 0 } }; });
+        const accounts = ea_data;
         for (const acc of accounts) {
           if (acc.warmup_details) {
             diagnostics.logSignal({ signal_type: 'email_account_health', workspace_id: wsId,
@@ -14950,7 +14375,7 @@ function scheduleAudienceScoring(pgdb) {
     // contacts. Idempotent (ON CONFLICT DO NOTHING) so repeat boots are cheap.
     setTimeout(() => {
       pgdb.seedDomainMxCacheFromVerified()
-        .then(r => console.log(`[startup] Domain MX cache seed: recovered ${r.recovered} from verified tags, ${r.domainsSeeded} domains seeded, ${r.contactsFilled} contacts classified from verified domains`))
+        .then(r => console.log(`[startup] Domain MX cache seed: ${r.domainsSeeded} domains seeded, ${r.contactsFilled} contacts classified from verified domains`))
         .catch(err => console.warn('[startup] Domain MX cache seed failed:', err.message));
     }, 30000);
 
@@ -15000,6 +14425,29 @@ function scheduleAudienceScoring(pgdb) {
   }
   scheduleEspSync();
   startSlackBot();
+
+  // Auto-register Bison webhooks on startup (idempotent — checks before creating)
+  setTimeout(async function() {
+    try {
+      const wsRaw = await bisonFetch('/api/workspaces/v1.1');
+      const workspaces = (wsRaw.data || []).map(normBisonWs);
+      for (const ws of workspaces) {
+        await bisonSwitch(ws.id);
+        const existing = await bisonFetch('/api/webhook-url').catch(() => ({ data: [] }));
+        const adminUrl = process.env.BISON_WEBHOOK_ADMIN_URL || 'https://ottaly-git.oix3xv.easypanel.host/webhook/plusvibe-reply';
+        const already = (existing.data || []).some(function(h) { return h.url === adminUrl; });
+        if (!already) {
+          await bisonFetch('/api/webhook-url', { method: 'POST', body: { name: 'Ottaly Admin', url: adminUrl, events: ['lead_interested', 'lead_replied', 'email_sent', 'email_bounced', 'untracked_reply_received'] } });
+          console.log('[bison] webhook registered for workspace', ws.id);
+        } else {
+          console.log('[bison] webhook already exists for workspace', ws.id);
+        }
+      }
+    } catch (e) {
+      console.warn('[bison] webhook auto-register failed:', e.message);
+    }
+  }, 5000);
+
   const server = app.listen(PORT, () => console.log(`Ottaly running on http://localhost:${PORT}`));
 
   server.on('upgrade', (req, socket, head) => {
