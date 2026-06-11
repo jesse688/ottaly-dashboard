@@ -13034,8 +13034,10 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
         }
         if (job.cancelled || job.paused) break;
 
-        // First batch all-unknown = verifier is down
-        if (i === 0 && batchUpdates.length > 0 && batchUpdates.every(u => u.email_status === 'unknown')) {
+        // First batch all-unknown with sufficient sample = verifier is down.
+        // Require ≥10 contacts to avoid false-positives when a small first chunk
+        // legitimately has all-unknown results (e.g. proxy can't reach certain MX hosts).
+        if (i === 0 && batchUpdates.length >= 10 && batchUpdates.every(u => u.email_status === 'unknown')) {
           job.status = 'failed';
           job.error = 'Email verification failed — email-finder not responding. Try pushing without verify.';
           return;
@@ -13453,7 +13455,7 @@ app.post('/api/contacts/push-jobs/:id/resume', async (req, res) => {
           await Promise.all(chunk.slice(j, j + CONCURRENCY).map(c => verifyOne(c, batchUpdates)));
         }
         if (job.cancelled || job.paused) break;
-        if (i === 0 && batchUpdates.length > 0 && batchUpdates.every(u => u.email_status === 'unknown')) {
+        if (i === 0 && batchUpdates.length >= 10 && batchUpdates.every(u => u.email_status === 'unknown')) {
           job.status = 'failed';
           job.error = 'Email verification failed — email-finder not responding. Try pushing without verify.';
           return;
