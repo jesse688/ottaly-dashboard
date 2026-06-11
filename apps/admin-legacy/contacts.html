@@ -1581,10 +1581,19 @@
         <!-- Verify options -->
         <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:14px;margin-top:12px;">
           <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;font-weight:600;color:#374151;">
-            <input type="checkbox" id="verifyBeforePush" style="accent-color:#3b82f6;width:16px;height:16px;">
+            <input type="checkbox" id="verifyBeforePush" style="accent-color:#3b82f6;width:16px;height:16px;" onchange="toggleN2bOption()">
             Verify emails before pushing <span style="font-size:10px;background:#dbeafe;color:#1d4ed8;padding:1px 5px;border-radius:4px;margin-left:4px;">Recommended</span>
           </label>
           <p style="font-size:11px;color:#9ca3af;margin:4px 0 0 26px;">Only safe/valid emails pushed. Runs in background — you can keep browsing. Skips emails verified in the last 90 days.</p>
+
+          <!-- No2Bounce option — only visible when verify is on -->
+          <div id="n2bOption" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid #e5e7eb;">
+            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;font-weight:600;color:#374151;">
+              <input type="checkbox" id="useN2b" style="accent-color:#a855f7;width:16px;height:16px;">
+              🔬 Use No2Bounce to verify catch-alls
+            </label>
+            <p style="font-size:11px;color:#9ca3af;margin:4px 0 0 26px;">Catch-all addresses are sent to No2Bounce for deeper validation. Only confirmed deliverable ones get pushed. <strong style="color:#374151;">If unchecked, catch-alls are skipped entirely.</strong></p>
+          </div>
         </div>
 
         <!-- Enrichment rule notice -->
@@ -3297,6 +3306,12 @@
       }
     }
 
+    function toggleN2bOption() {
+      const verify = document.getElementById('verifyBeforePush').checked;
+      document.getElementById('n2bOption').style.display = verify ? '' : 'none';
+      if (!verify) document.getElementById('useN2b').checked = false;
+    }
+
     let pushQueueTimer = null;
 
     async function executePush() {
@@ -3304,6 +3319,7 @@
       const campId = document.getElementById('pvCampaign').value;
       const errEl = document.getElementById('pushError');
       const verifyFirst = document.getElementById('verifyBeforePush').checked;
+      const useN2b      = verifyFirst && document.getElementById('useN2b').checked;
       const saveFilter  = document.getElementById('saveFilterToCampaign').checked;
 
       if (!wsId) { errEl.textContent = 'Please select a workspace.'; errEl.style.display = ''; return; }
@@ -3324,7 +3340,7 @@
       try {
         const endpoint = verifyFirst ? '/api/contacts/verify-and-push' : '/api/pv/push-contacts';
         const body = verifyFirst
-          ? { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, workspace_name: wsName, campaign_name: campName, include_risky: false, max_age_days: 90, emailProviders: pushProviders.join(',') }
+          ? { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, workspace_name: wsName, campaign_name: campName, include_risky: false, max_age_days: 90, emailProviders: pushProviders.join(','), use_n2b: useN2b }
           : { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, campaign_name: campName };
 
         const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });

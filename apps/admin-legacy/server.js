@@ -12637,7 +12637,7 @@ app.get('/api/contacts/push-jobs/:id', (req, res) => {
 
 // POST starts job immediately, returns job ID — processing runs in background
 app.post('/api/contacts/verify-and-push', (req, res) => {
-  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 90, emailProviders } = req.body;
+  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 90, emailProviders, use_n2b = false } = req.body;
   if (!workspace_id || !campaign_id || !Array.isArray(contact_ids) || !contact_ids.length) {
     return res.status(400).json({ error: 'workspace_id, campaign_id and contact_ids required' });
   }
@@ -12661,6 +12661,7 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
     campaign_name: campaign_name || campaign_id,
     workspace_id, campaign_id,
     allowedProviders,
+    useN2b: !!use_n2b,
     total: contact_ids.length,
     skipped: 0, verified: 0, safe: 0, risky: 0, invalid: 0, unknown: 0,
     pushed: 0, progress: 0,
@@ -12757,7 +12758,10 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
       const targetCampLc = (job.campaign_name || '').trim().toLowerCase();
 
       const passesFilter = (c) => {
-        if (verifyResults[c.id] !== 'safe' && verifyResults[c.id] !== 'safe_catchall') { skipped.unsafe++; return false; }
+        const status = verifyResults[c.id];
+        // If No2Bounce not opted in, skip catch-alls — they are not verified and won't be pushed
+        if (status === 'safe_catchall' && !job.useN2b) { skipped.unsafe++; return false; }
+        if (status !== 'safe' && status !== 'safe_catchall') { skipped.unsafe++; return false; }
         if (c.do_not_contact)               { skipped.dnc++; return false; }
         // True-MX provider gate. By the time a contact reaches here it has been
         // verified, so c.mx_provider is its real provider (set by verifyOne /
@@ -13053,9 +13057,10 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
       }
 
       // ── Phase 3: No2Bounce deeper validation of catch-all contacts ──
+      // Only runs when the user explicitly opted in via the "Use No2Bounce" checkbox.
       const riskyContacts = contacts.filter(c => verifyResults[c.id] === 'risky');
-      console.log(`[No2Bounce] Risky contacts found: ${riskyContacts.length} of ${contacts.length}`);
-      if (riskyContacts.length && !job.cancelled) {
+      console.log(`[No2Bounce] Risky contacts found: ${riskyContacts.length} of ${contacts.length} (useN2b=${job.useN2b})`);
+      if (riskyContacts.length && !job.cancelled && job.useN2b) {
         job.status = 'n2b_verifying';
         job.n2bTotal = riskyContacts.length;
         job.n2bDone  = 0;
