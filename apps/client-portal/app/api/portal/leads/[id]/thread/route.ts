@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { getSession } from '@/lib/auth'
 import pool from '@/lib/db'
-import { getEmails } from '@/lib/plusvibe'
+import { getLeadReplies } from '@/lib/bison'
 import { getLockedLeadIds } from '@/lib/balance'
 
 // GET — the real email conversation for a lead, newest-last.
@@ -39,11 +39,12 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
   let rows = await readCache()
 
-  // Nothing cached yet — fetch live from PlusVibe and store, then re-read.
+  // Nothing cached yet — fetch live from EmailBison and store, then re-read.
   if (rows.length === 0) {
     try {
-      const { data } = await getEmails(session.workspaceId, { lead: leadEmail })
-      for (const m of data) {
+      const replies = await getLeadReplies(id)
+      for (const m of replies) {
+        const direction = m.folder?.toLowerCase() === 'sent' ? 'OUT' : 'IN'
         await pool.query(
           `INSERT INTO portal_emails (
              id, workspace_id, lead_pv_id, lead_email, thread_id, campaign_id, direction,
@@ -52,13 +53,18 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
            ON CONFLICT (id) DO NOTHING`,
           [
-            m.id, session.workspaceId, m.lead_id ?? null, leadEmail.toLowerCase(),
-            m.thread_id ?? null, m.campaign_id ?? null, m.direction ?? 'IN',
-            m.subject ?? null, m.body?.html ?? null, m.body?.text ?? null,
-            m.content_preview ?? null, m.from_address_email ?? null,
-            m.to_address_email_list ?? null, m.eaccount ?? null,
-            m.label ?? null, m.is_unread ?? 0, m.message_id ?? null,
-            m.timestamp_created ?? null, JSON.stringify(m),
+            String(m.id), session.workspaceId,
+            m.lead_id ? String(m.lead_id) : null,
+            leadEmail.toLowerCase(),
+            m.parent_id ? String(m.parent_id) : null,
+            m.campaign_id ? String(m.campaign_id) : null,
+            direction,
+            m.subject ?? null, m.html_body ?? null, m.text_body ?? null,
+            m.text_body?.slice(0, 200) ?? null,
+            m.from_email_address ?? null, m.primary_to_email_address ?? null,
+            null, m.interested ? 'INTERESTED' : null,
+            m.read ? 0 : 1, m.raw_message_id ?? null,
+            m.date_received ?? null, JSON.stringify(m),
           ]
         )
       }

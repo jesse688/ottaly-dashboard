@@ -11,7 +11,7 @@ export async function GET() {
             ROUND(AVG(EXTRACT(EPOCH FROM (ld.first_responded_at - l.first_replied_at))))::int AS avg_secs,
             COUNT(*)::int AS n
        FROM portal_clients pc
-       JOIN esp_leads l ON l.workspace_id = pc.workspace_id AND l.source = 'plusvibe'
+       JOIN esp_leads l ON l.workspace_id = pc.workspace_id AND l.source IN ('plusvibe', 'bison')
             AND l.label = 'INTERESTED' AND l.first_replied_at IS NOT NULL
        JOIN portal_lead_data ld ON ld.lead_id = l.id AND ld.client_id = pc.id
             AND ld.first_responded_at IS NOT NULL AND ld.first_responded_at >= l.first_replied_at

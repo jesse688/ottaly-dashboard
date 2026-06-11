@@ -59,7 +59,7 @@ export async function POST(req: NextRequest) {
     const seedNotified = () => pool.query(
       `INSERT INTO portal_lead_notifications (client_id, lead_id, status)
          SELECT $1, l.id, 'sent' FROM esp_leads l
-          WHERE l.workspace_id = $2 AND l.source = 'plusvibe' AND l.label = 'INTERESTED'
+          WHERE l.workspace_id = $2 AND l.source IN ('plusvibe', 'bison') AND l.label = 'INTERESTED'
          ON CONFLICT (client_id, lead_id) DO NOTHING`,
       [res.rows[0].id, workspaceId]
     )

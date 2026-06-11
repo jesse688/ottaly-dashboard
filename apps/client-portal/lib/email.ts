@@ -208,7 +208,7 @@ export async function sendTestNotification(clientId: string): Promise<{ ok: bool
   // only if this client has no leads yet.
   const leadRes = await pool.query(
     `SELECT id, first_name, company_name, email FROM esp_leads
-      WHERE workspace_id = $1 AND source = 'plusvibe' AND label = 'INTERESTED'
+      WHERE workspace_id = $1 AND source IN ('plusvibe', 'bison') AND label = 'INTERESTED'
       ORDER BY first_replied_at DESC NULLS LAST, created_at DESC LIMIT 1`,
     [client.workspace_id]
   )

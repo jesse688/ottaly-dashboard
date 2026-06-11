@@ -13,7 +13,7 @@ export async function GET() {
             EXTRACT(EPOCH FROM (ld.first_responded_at - l.first_replied_at)) AS secs
        FROM esp_leads l
        JOIN portal_lead_data ld ON ld.lead_id = l.id AND ld.client_id = $1
-      WHERE l.workspace_id = $2 AND l.source = 'plusvibe' AND l.label = 'INTERESTED'
+      WHERE l.workspace_id = $2 AND l.source IN ('plusvibe', 'bison') AND l.label = 'INTERESTED'
         AND l.first_replied_at IS NOT NULL AND ld.first_responded_at IS NOT NULL
         AND ld.first_responded_at >= l.first_replied_at`,
     [session.clientId, session.workspaceId]

@@ -203,7 +203,7 @@ async function runMigration() {
          SELECT pc.id, l.id
            FROM portal_clients pc
            JOIN esp_leads l ON l.workspace_id = pc.workspace_id
-            AND l.source = 'plusvibe' AND l.label = 'INTERESTED'
+            AND l.source IN ('plusvibe', 'bison') AND l.label = 'INTERESTED'
          ON CONFLICT (client_id, lead_id) DO NOTHING`,
 
       // ── Global settings (editable in admin) e.g. notification templates ──
@@ -244,7 +244,14 @@ export function ready(): Promise<void> {
   return globalThis._portalMigratedPromise.catch(() => {})
 }
 
-// Kick off migration immediately (non-blocking)
-void ready()
+// Kick off migration immediately; auto-register Bison webhook once DB is ready.
+ready().then(() => {
+  import('./bison').then(({ registerWebhook }) => {
+    registerWebhook().then(r => {
+      if (r.ok) console.log('[bison] webhook', r.reason)
+      else console.warn('[bison] webhook register failed:', r.reason)
+    })
+  }).catch(() => {})
+})
 
 export default pool
