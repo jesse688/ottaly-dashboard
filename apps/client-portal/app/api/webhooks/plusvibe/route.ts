@@ -5,141 +5,134 @@ import { notifyClientOfLead } from '@/lib/email'
 import { enrichLead } from '@/lib/sync'
 import { ready } from '@/lib/db'
 
-interface PlusVibeWebhookPayload {
-  event: string
-  timestamp: number
-  workspace_id: string
-  lead_id: string
-  campaign_id?: string
+interface BisonWebhookPayload {
+  event: {
+    type: string
+    workspace_id?: string | number
+    workspace_name?: string
+  }
   data: {
-    status?: string
-    label?: string
-    has_replied?: boolean
-    email?: string
-    first_name?: string
-    last_name?: string
-    company_name?: string
-    [key: string]: unknown
+    lead?: {
+      id?: string | number
+      email?: string
+      first_name?: string
+      last_name?: string
+      company_name?: string
+      status?: string
+      campaign_id?: string | number
+      [key: string]: unknown
+    }
+    reply?: {
+      id?: string | number
+      lead_id?: string | number
+      folder?: string
+      html_body?: string
+      text_body?: string
+      subject?: string
+      from_email_address?: string
+      primary_to_email_address?: string
+      date_received?: string
+      raw_message_id?: string
+      [key: string]: unknown
+    }
   }
 }
 
-// Verify PlusVibe webhook signature (HMAC-SHA256)
 function verifySignature(payload: string, signature: string): boolean {
-  const secret = process.env.PLUSVIBE_WEBHOOK_SECRET
+  const secret = process.env.BISON_WEBHOOK_SECRET || process.env.PLUSVIBE_WEBHOOK_SECRET
   if (!secret) {
-    // Fail CLOSED: without a secret anyone could forge leads + trigger client
-    // emails. The admin webhook + sweeper still ingest leads, so nothing is lost.
-    console.error('[webhook] PLUSVIBE_WEBHOOK_SECRET not configured — rejecting webhook')
+    console.error('[webhook] BISON_WEBHOOK_SECRET not configured — rejecting webhook')
     return false
   }
   const computed = crypto.createHmac('sha256', secret).update(payload).digest('hex')
   const exp = Buffer.from(computed)
   const sig = Buffer.from(signature)
-  // timingSafeEqual throws if lengths differ — guard so a malformed signature is
-  // a clean rejection (401), not an uncaught RangeError (500).
   if (sig.length !== exp.length) return false
   return crypto.timingSafeEqual(exp, sig)
 }
 
-// POST /api/webhooks/plusvibe
-// Receives real-time updates from PlusVibe (lead status, label, reply)
 export async function POST(req: NextRequest) {
-  await ready() // never race table creation / the notified-leads seed
+  await ready()
   const body = await req.text()
-  const signature = req.headers.get('x-plusvibe-signature') || ''
+  const signature =
+    req.headers.get('x-bison-signature') ||
+    req.headers.get('x-webhook-signature') ||
+    req.headers.get('x-plusvibe-signature') || ''
 
-  // Verify webhook signature
   if (!verifySignature(body, signature)) {
     console.warn('[webhook] Invalid signature')
     return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
   }
 
   try {
-    const event = JSON.parse(body) as PlusVibeWebhookPayload
-    console.log(`[webhook] received event: ${event.event} for lead ${event.lead_id}`)
+    const event = JSON.parse(body) as BisonWebhookPayload
+    const eventType = event.event?.type ?? ''
+    const workspaceId = event.event?.workspace_id ? String(event.event.workspace_id) : 'bison-default'
+    const lead = event.data?.lead
+    const reply = event.data?.reply
 
-    // Build update fields based on event type
-    const updates: Record<string, unknown> = {}
-    if (event.data.status) updates.status = event.data.status
-    if (event.data.label) updates.label = event.data.label
-    if (event.data.has_replied) updates.first_replied_at = new Date().toISOString() // On webhook, set to now
-    if (event.data.email) updates.email = event.data.email
-    if (event.data.first_name) updates.first_name = event.data.first_name
-    if (event.data.last_name) updates.last_name = event.data.last_name
-    if (event.data.company_name) updates.company_name = event.data.company_name
+    console.log(`[webhook] received event: ${eventType} workspace: ${workspaceId}`)
 
-    // Never overwrite first_replied_at if already set
-    const setClauses = Object.entries(updates)
-      .map(([key], i) => {
-        if (key === 'first_replied_at') {
-          return `first_replied_at = COALESCE(first_replied_at, $${i + 1})`
-        }
-        return `${key} = $${i + 1}`
-      })
-      .join(', ')
+    if (lead?.email && (eventType === 'lead_interested' || eventType === 'lead_replied')) {
+      const leadId = lead.id ? String(lead.id) : null
+      if (leadId) {
+        await pool.query(
+          `INSERT INTO esp_leads (id, workspace_id, campaign_id, source, email, first_name, last_name, company_name, status, label, first_replied_at, created_at, updated_at)
+           VALUES ($1,$2,$3,'bison',$4,$5,$6,$7,$8,'INTERESTED',$9,NOW(),NOW())
+           ON CONFLICT (id) DO UPDATE SET
+             status = COALESCE(EXCLUDED.status, esp_leads.status),
+             label = COALESCE(EXCLUDED.label, esp_leads.label),
+             first_replied_at = COALESCE(esp_leads.first_replied_at, EXCLUDED.first_replied_at),
+             updated_at = NOW()`,
+          [
+            leadId, workspaceId,
+            lead.campaign_id ? String(lead.campaign_id) : null,
+            lead.email, lead.first_name ?? null, lead.last_name ?? null,
+            lead.company_name ?? null, lead.status ?? null,
+            eventType === 'lead_replied' ? new Date().toISOString() : null,
+          ]
+        )
+      }
 
-    if (Object.keys(updates).length > 0) {
-      // Param order: update fields ($1..$N), then timestamp, lead_id, workspace_id.
-      // The bound array and the highest $N must match exactly.
-      const n = Object.keys(updates).length
-      const tsIdx = n + 1, idIdx = n + 2, wsIdx = n + 3
-      const params = [...Object.values(updates), new Date().toISOString(), event.lead_id, event.workspace_id]
-
-      // Upsert: update if exists, insert if not (branch on rowCount — no
-      // separate COUNT query that could race a concurrent insert)
-      const updateRes = await pool.query(`
-        UPDATE esp_leads
-        SET ${setClauses}, updated_at = $${tsIdx}
-        WHERE id = $${idIdx} AND workspace_id = $${wsIdx}
-      `, params)
-
-      if ((updateRes.rowCount ?? 0) === 0) {
-        await pool.query(`
-          INSERT INTO esp_leads (
-            id, workspace_id, campaign_id, source,
-            email, first_name, last_name, company_name, status, label,
-            first_replied_at, created_at, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
-          ON CONFLICT (id) DO UPDATE SET
-            status = COALESCE(EXCLUDED.status, esp_leads.status),
-            label = COALESCE(EXCLUDED.label, esp_leads.label),
-            first_replied_at = COALESCE(esp_leads.first_replied_at, EXCLUDED.first_replied_at),
-            updated_at = NOW()
-        `, [
-          event.lead_id,
-          event.workspace_id,
-          event.campaign_id || null,
-          'plusvibe',
-          event.data.email || null,
-          event.data.first_name || null,
-          event.data.last_name || null,
-          event.data.company_name || null,
-          event.data.status || null,
-          event.data.label || null,
-          event.data.has_replied ? new Date().toISOString() : null,
-        ])
+      if (eventType === 'lead_interested') {
+        try {
+          await enrichLead(workspaceId, lead.email)
+          if (leadId) await notifyClientOfLead(workspaceId, leadId)
+        } catch (e) { console.error('[webhook] enrich/notify failed:', e) }
       }
     }
 
-    // Log webhook to audit trail
-    await pool.query(`
-      INSERT INTO esp_sync_log (source, workspace_id, status, leads_synced, finished_at)
-      VALUES ($1, $2, $3, $4, NOW())
-    `, ['plusvibe-webhook', event.workspace_id, 'success', 1])
-
-    // New lead in the portal = a lead that became INTERESTED. Email the client
-    // (once per lead — dedup is enforced inside notifyClientOfLead).
-    const becameLead = event.data.status === 'INTERESTED' || event.data.label === 'INTERESTED'
-    if (becameLead) {
-      try {
-        // Fill in phone, job title, industry, location, LinkedIn, etc. from the
-        // full PlusVibe record before notifying (so the email + details are complete).
-        if (event.data.email) await enrichLead(event.workspace_id, event.data.email)
-        await notifyClientOfLead(event.workspace_id, event.lead_id)
-      } catch (e) { console.error('[webhook] enrich/notify failed:', e) }
+    // Cache inbound reply in portal_emails for thread display
+    if (reply?.id && eventType !== 'lead_interested') {
+      const leadEmail = lead?.email ?? ''
+      const direction = reply.folder?.toLowerCase() === 'sent' ? 'OUT' : 'IN'
+      if (leadEmail) {
+        await pool.query(
+          `INSERT INTO portal_emails (id, workspace_id, lead_pv_id, lead_email, direction, subject, body_html, body_text, content_preview, from_email, to_email, is_unread, message_id, timestamp_created, raw)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+           ON CONFLICT (id) DO NOTHING`,
+          [
+            String(reply.id), workspaceId,
+            lead?.id ? String(lead.id) : null,
+            leadEmail.toLowerCase(), direction,
+            reply.subject ?? null, reply.html_body ?? null, reply.text_body ?? null,
+            reply.text_body?.slice(0, 200) ?? null,
+            reply.from_email_address ?? null, reply.primary_to_email_address ?? null,
+            direction === 'IN' ? 1 : 0,
+            reply.raw_message_id ?? null,
+            reply.date_received ?? null,
+            JSON.stringify(reply),
+          ]
+        ).catch(err => console.error('[webhook] portal_emails insert failed:', err))
+      }
     }
 
-    console.log(`[webhook] processed event: ${event.event}`)
+    await pool.query(
+      `INSERT INTO esp_sync_log (source, workspace_id, status, leads_synced, finished_at)
+       VALUES ($1, $2, $3, $4, NOW())`,
+      ['bison-webhook', workspaceId, 'success', 1]
+    ).catch(() => {})
+
     return NextResponse.json({ ok: true })
   } catch (err) {
     console.error('[webhook] error:', err)

@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { getSession } from '@/lib/auth'
 import pool from '@/lib/db'
-import { sendReply } from '@/lib/plusvibe'
+import { sendReply } from '@/lib/bison'
 import { notifyAdmin } from '@/lib/notify'
 import { getLockedLeadIds } from '@/lib/balance'
 
@@ -37,16 +37,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const ccList = parseAddrs(cc).join(', ')
   const toAddr = toAddrs[0] || lead.email
 
-  // Find the latest inbound message for threading context (subject, mailbox, message id)
+  // Find the latest inbound message for threading context (subject, Bison reply ID)
   const ctx = await pool.query(
-    `SELECT subject, eaccount, message_id FROM portal_emails
+    `SELECT id, subject, eaccount, message_id FROM portal_emails
       WHERE workspace_id = $1 AND lower(lead_email) = lower($2) AND direction = 'IN'
       ORDER BY timestamp_created DESC LIMIT 1`,
     [session.workspaceId, lead.email]
   )
   const subject = ctx.rows[0]?.subject ?? 'Re: your enquiry'
   const eaccount = ctx.rows[0]?.eaccount ?? undefined
-  const replyToMessageId = ctx.rows[0]?.message_id ?? undefined
+  // Bison stores integer reply IDs; portal_emails.id holds the stringified integer.
+  const latestReplyId = ctx.rows[0]?.id ? parseInt(ctx.rows[0].id, 10) : null
 
   // 1. Persist outgoing message (synthetic id so it's stable + idempotent-ish)
   const outId = `portal-${id}-${Date.now()}`
@@ -62,17 +63,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     ]
   ).catch(err => console.error('[reply] persist failed:', err))
 
-  // 2. Attempt live send via PlusVibe
-  const send = await sendReply({
-    workspaceId: session.workspaceId,
-    leadEmail: toAddr,
-    eaccount,
-    subject,
-    bodyText: body,
-    bodyHtml: html,
-    cc: ccList || undefined,
-    replyToMessageId,
-  })
+  // 2. Attempt live send via EmailBison (needs the integer reply ID of the last inbound)
+  let send: { ok: boolean; reason?: string } = { ok: false, reason: 'no-reply-id-in-cache' }
+  if (latestReplyId && !isNaN(latestReplyId)) {
+    send = await sendReply({
+      replyId: latestReplyId,
+      bodyText: body,
+      bodyHtml: html,
+      replyAll: true,
+      ccEmails: ccList ? ccList.split(',').map(s => s.trim()).filter(Boolean) : undefined,
+    })
+  }
 
   // 3. Notify team (always — guarantees the reply is actioned)
   // Stamp the client's first response time (for Speed to Lead) — once per lead.
@@ -89,7 +90,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     clientId: session.clientId,
     kind: 'reply_sent',
     title: `${session.companyName} replied re: ${who}`,
-    body: `${send.ok ? '✅ Sent live via PlusVibe' : '⚠️ NOT auto-sent (' + send.reason + ') — please send manually'}\nTo: ${toList}${ccList ? `\nCc: ${ccList}` : ''}\nSubject: ${subject}\n\n${body}`,
+    body: `${send.ok ? '✅ Sent live via EmailBison' : '⚠️ NOT auto-sent (' + send.reason + ') — please send manually'}\nTo: ${toList}${ccList ? `\nCc: ${ccList}` : ''}\nSubject: ${subject}\n\n${body}`,
   })
 
   return NextResponse.json({ ok: true, sentLive: send.ok })

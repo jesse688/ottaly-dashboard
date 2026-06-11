@@ -82,7 +82,7 @@ export async function GET() {
        LEFT JOIN portal_lead_data ld     ON ld.lead_id = l.id AND ld.client_id = $3
        LEFT JOIN portal_lead_disputes pd ON pd.lead_id = l.id AND pd.client_id = $3
        WHERE l.workspace_id = $1
-         AND l.source = 'plusvibe'
+         AND l.source IN ('plusvibe', 'bison')
          AND l.label = 'INTERESTED'
          AND ($2::text[] = '{}' OR l.label != ALL($2::text[]))
        ORDER BY l.first_replied_at DESC NULLS LAST, l.created_at DESC`,

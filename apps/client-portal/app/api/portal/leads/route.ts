@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
                 label, first_replied_at, created_at
          FROM esp_leads
          WHERE workspace_id = $1
-           AND source = 'plusvibe'
+           AND source IN ('plusvibe', 'bison')
            AND status IN ('INTERESTED', 'MEETING_BOOKED')
          ORDER BY first_replied_at DESC NULLS LAST, created_at DESC
          LIMIT $2 OFFSET $3`,
@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
       ),
       pool.query(
         `SELECT COUNT(*) FROM esp_leads
-         WHERE workspace_id = $1 AND source = 'plusvibe'
+         WHERE workspace_id = $1 AND source IN ('plusvibe', 'bison')
            AND status IN ('INTERESTED', 'MEETING_BOOKED')`,
         [session.workspaceId]
       ),

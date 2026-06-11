@@ -7,8 +7,8 @@ import { backfillWorkspace } from '@/lib/sync'
 // Idempotent. ?emails=0 skips the slower email pull.
 export async function POST(req: NextRequest) {
   if (!await getAdminSession()) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  if (!process.env.PLUSVIBE_API_KEY && !process.env.PLUSVIBE_KEY) {
-    return NextResponse.json({ error: 'PLUSVIBE_API_KEY not configured' }, { status: 500 })
+  if (!process.env.BISON_API_KEY && !process.env.PLUSVIBE_API_KEY && !process.env.PLUSVIBE_KEY) {
+    return NextResponse.json({ error: 'BISON_API_KEY not configured' }, { status: 500 })
   }
   const withEmails = new URL(req.url).searchParams.get('emails') !== '0'
 
@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
     const workspaces = await getWorkspaces()
     for (const ws of workspaces) {
       try {
-        const r = await backfillWorkspace(ws.id, { withEmails })
+        const r = await backfillWorkspace(String(ws.id), { withEmails })
         results.workspaces++; results.leads += r.leads; results.emails += r.emails; results.charges += r.charges
       } catch (err) {
         results.errors.push(`Workspace ${ws.name}: ${String(err)}`)
