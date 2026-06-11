@@ -24,7 +24,7 @@ export default function InvitePage() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
-    if (code.trim().length < 4) { setError('Choose a code with at least 4 characters.'); return }
+    if (code.trim().length < 3) { setError('Choose a code with at least 3 characters.'); return }
     if (code.trim() !== confirm.trim()) { setError('The codes don’t match.'); return }
     setLoading(true); setError('')
     const res = await fetch(`/api/invite/${token}`, {
@@ -66,7 +66,7 @@ export default function InvitePage() {
                 <p className="text-xs text-gray-400 mt-1">You&apos;ll log in with your email + this code.</p>
               </div>
               {error && <p className="text-sm text-red-600">{error}</p>}
-              <button type="submit" disabled={loading || code.trim().length < 4 || !confirm}
+              <button type="submit" disabled={loading || !code.trim() || !confirm.trim()}
                 className="w-full py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-sm font-semibold">
                 {loading ? 'Setting up…' : 'Create my login'}
               </button>

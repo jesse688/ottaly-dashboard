@@ -19,7 +19,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   const { token } = await params
   const { code } = await req.json() as { code?: string }
   const c = (code ?? '').trim()
-  if (c.length < 4) return NextResponse.json({ error: 'Choose a code with at least 4 characters.' }, { status: 400 })
+  if (c.length < 3) return NextResponse.json({ error: 'Choose a code with at least 3 characters.' }, { status: 400 })
 
   const r = await pool.query(
     `SELECT id, workspace_id, company_name, email FROM portal_clients
