@@ -48,7 +48,7 @@ export default function InvitePage() {
           <p className="text-sm text-center text-gray-500">This invite link is invalid or has already been used. Please contact your account manager.</p>
         ) : (
           <>
-            <h1 className="text-xl font-semibold text-gray-900 text-center mb-1">Set your access code</h1>
+            <h1 className="text-xl font-semibold text-[#0d2c62] text-center mb-1">Set your access code</h1>
             <p className="text-sm text-gray-500 text-center mb-6">{company ? `for ${company}` : 'Loading…'}</p>
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
@@ -58,17 +58,17 @@ export default function InvitePage() {
               <div>
                 <label className="block text-sm text-gray-700 mb-1">Create an access code</label>
                 <input value={code} onChange={e => setCode(e.target.value)} placeholder="something memorable" autoFocus
-                  className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-200" />
+                  className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-brand-400 focus:ring-1 focus:ring-brand-200" />
               </div>
               <div>
                 <label className="block text-sm text-gray-700 mb-1">Confirm access code</label>
                 <input value={confirm} onChange={e => setConfirm(e.target.value)} placeholder="re-enter your code"
-                  className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-200" />
+                  className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-brand-400 focus:ring-1 focus:ring-brand-200" />
                 <p className="text-xs text-gray-400 mt-1">You&apos;ll log in with your email + this code.</p>
               </div>
               {error && <p className="text-sm text-red-600">{error}</p>}
               <button type="submit" disabled={loading || !code.trim() || !confirm.trim()}
-                className="w-full py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-sm font-semibold">
+                className="w-full py-2.5 rounded-lg bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white text-sm font-semibold">
                 {loading ? 'Setting up…' : 'Create my login'}
               </button>
             </form>
