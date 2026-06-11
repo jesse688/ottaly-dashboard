@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { getAdminSession } from '@/lib/auth'
 import pool from '@/lib/db'
+import { notifyClientOfInvoice } from '@/lib/email'
 
 interface InvoiceWithClient {
   id: string
@@ -92,6 +93,11 @@ export async function POST(req: NextRequest) {
       dueDate ?? null,
     ]
   )
+
+  // Email the client that a new invoice is waiting (unpaid invoices only).
+  if ((status ?? 'unpaid') === 'unpaid') {
+    notifyClientOfInvoice(clientId, { description, amount: Number(amount), currency: currency ?? 'GBP' }).catch(() => {})
+  }
 
   return NextResponse.json(res.rows[0] as InvoiceRow, { status: 201 })
 }

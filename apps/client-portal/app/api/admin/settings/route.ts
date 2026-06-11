@@ -3,8 +3,13 @@ import { getAdminSession } from '@/lib/auth'
 import pool from '@/lib/db'
 import { DEFAULT_TEMPLATES } from '@/lib/email'
 
-// All editable global settings = notification templates + the minimum top-up.
-const DEFAULT_SETTINGS: Record<string, string> = { ...DEFAULT_TEMPLATES, min_topup: '10' }
+// All editable global settings = notification templates + payment details shown
+// to clients when they pay an invoice.
+const DEFAULT_SETTINGS: Record<string, string> = {
+  ...DEFAULT_TEMPLATES,
+  payment_instructions: 'Bank transfer:\nAccount name: Ottaly Ltd\nSort code: 00-00-00\nAccount number: 00000000\nReference: your company name',
+  payment_link: '',
+}
 
 // GET — current settings (defaults merged with any saved overrides).
 export async function GET() {

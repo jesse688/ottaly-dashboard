@@ -11,6 +11,7 @@ interface PortalClient {
   cost_per_lead: string | number | null
   spend_visibility?: string
   topup_buckets?: Bucket[]
+  min_topup?: number
 }
 interface Workspace { id: string; name: string; active_campaigns: number }
 interface Dispute {
@@ -80,6 +81,7 @@ export function AdminClientsClient() {
   const [settingsClient, setSettingsClient]   = useState<PortalClient | null>(null)
   const [settingsTab, setSettingsTab]         = useState<'labels'|'fields'|'balance'|'topups'>('labels')
   const [bucketEdit, setBucketEdit]           = useState<Bucket[]>([])
+  const [minEdit, setMinEdit]                 = useState('10')
   const [labelData, setLabelData]             = useState<{ labels: { label: string; count: number }[]; hiddenLabels: string[] } | null>(null)
   const [fieldData, setFieldData]             = useState<{ hiddenFields: string[] } | null>(null)
   const [ledgerData, setLedgerData]           = useState<{ balance: number; ledger: LedgerEntry[] } | null>(null)
@@ -217,6 +219,7 @@ export function AdminClientsClient() {
     setSettingsClient(c); setSettingsTab('labels'); setLabelData(null); setFieldData(null); setLedgerData(null)
     setCplEdit(String(Number(c.cost_per_lead ?? 0))); setEntryForm({ type: 'topup', amount: '', note: '' })
     setBucketEdit(Array.isArray(c.topup_buckets) ? c.topup_buckets : [])
+    setMinEdit(String(c.min_topup ?? 10))
     const [lr, fr] = await Promise.all([
       fetch(`/api/admin/clients/${c.id}/labels`),
       fetch(`/api/admin/clients/${c.id}/fields`),
@@ -244,11 +247,12 @@ export function AdminClientsClient() {
       .map(b => ({ leads: Math.floor(Number(b.leads)), pricePerLead: Number(b.pricePerLead) }))
       .filter(b => b.leads > 0 && b.pricePerLead >= 0)
       .sort((a, b) => a.leads - b.leads)
-    await fetch(`/api/admin/clients/${settingsClient.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topupBuckets: clean }) })
+    const min = Math.max(1, Math.floor(Number(minEdit) || 10))
+    await fetch(`/api/admin/clients/${settingsClient.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topupBuckets: clean, minTopup: min }) })
     setBucketEdit(clean)
-    setSettingsClient({ ...settingsClient, topup_buckets: clean })
+    setSettingsClient({ ...settingsClient, topup_buckets: clean, min_topup: min })
     fetch('/api/admin/clients').then(r => r.json()).then(setClients)
-    alert('Top-up buckets saved.')
+    alert('Top-up settings saved.')
   }
   async function saveSpendVisibility(mode: string) {
     if (!settingsClient) return
@@ -470,10 +474,6 @@ export function AdminClientsClient() {
                 <p className="text-xs text-gray-500 mb-4">Merge tags: <code className="bg-gray-100 px-1 rounded">{'{first_name}'}</code> <code className="bg-gray-100 px-1 rounded">{'{lead_name}'}</code> <code className="bg-gray-100 px-1 rounded">{'{lead_company}'}</code> <code className="bg-gray-100 px-1 rounded">{'{lead_message}'}</code> <code className="bg-gray-100 px-1 rounded">{'{balance}'}</code> <code className="bg-gray-100 px-1 rounded">{'{login_url}'}</code><br/><span className="text-gray-400">{'{lead_message}'} = what the lead wrote (normal email only — kept out of the locked email).</span></p>
                 {!tpl ? <p className="text-sm text-gray-400">Loading…</p> : (
                   <div className="space-y-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-700 mb-1">Minimum top-up (leads)</label>
-                      <input type="number" min="1" value={tpl.min_topup ?? '10'} onChange={e => setTpl({ ...tpl, min_topup: e.target.value })} className="w-32 px-3 py-2 rounded-lg border border-gray-200 text-sm" />
-                    </div>
                     <div className="grid md:grid-cols-2 gap-4">
                       <div>
                         <p className="text-xs font-semibold text-gray-700 mb-1">Normal — when they have leads left</p>
@@ -486,8 +486,13 @@ export function AdminClientsClient() {
                         <textarea rows={6} value={tpl.notif_locked_body} onChange={e => setTpl({ ...tpl, notif_locked_body: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm font-mono" />
                       </div>
                     </div>
+                    <div className="border-t border-gray-100 pt-4">
+                      <p className="text-xs font-semibold text-gray-700 mb-1">Payment details (shown when a client pays an invoice)</p>
+                      <textarea rows={4} value={tpl.payment_instructions ?? ''} onChange={e => setTpl({ ...tpl, payment_instructions: e.target.value })} placeholder="Bank name, account, sort code, reference…" className="w-full px-3 py-2 mb-2 rounded-lg border border-gray-200 text-sm" />
+                      <input value={tpl.payment_link ?? ''} onChange={e => setTpl({ ...tpl, payment_link: e.target.value })} placeholder="Optional pay-online link (e.g. Stripe URL)" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm" />
+                    </div>
                     <div className="flex justify-end">
-                      <button onClick={saveTemplates} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg">Save templates</button>
+                      <button onClick={saveTemplates} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg">Save settings</button>
                     </div>
                   </div>
                 )}
@@ -904,7 +909,12 @@ export function AdminClientsClient() {
 
               {settingsTab === 'topups' && (
                 <>
-                  <p className="text-xs text-gray-500 mb-3">Preset top-up options this client can pick from, each with its own price per lead (volume pricing). Leave empty to let them request any amount above the global minimum.</p>
+                  <div className="mb-4">
+                    <label className="block text-xs font-semibold text-gray-700 mb-1">Minimum custom top-up (leads)</label>
+                    <input type="number" min="1" value={minEdit} onChange={e => setMinEdit(e.target.value)} className="w-32 px-3 py-2 rounded-lg border border-gray-200 text-sm" />
+                    <p className="text-[11px] text-gray-400 mt-1">Applies when the client types a custom amount (presets below override this).</p>
+                  </div>
+                  <p className="text-xs text-gray-500 mb-3">Preset top-up options this client can pick from, each with its own price per lead (volume pricing).</p>
                   <div className="space-y-2 mb-3">
                     <div className="flex items-center gap-2 text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-1">
                       <span className="w-24">Leads</span><span className="w-28">£ / lead</span><span className="flex-1">Total</span>

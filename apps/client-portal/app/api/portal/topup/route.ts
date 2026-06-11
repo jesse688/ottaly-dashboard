@@ -3,10 +3,9 @@ import { getSession } from '@/lib/auth'
 import pool from '@/lib/db'
 import { notifyAdmin } from '@/lib/notify'
 
-// The minimum top-up (number of leads), set globally by admin.
-async function getMinTopup(): Promise<number> {
-  const r = await pool.query(`SELECT value FROM portal_settings WHERE key = 'min_topup'`)
-  const n = Number(r.rows[0]?.value ?? 10)
+// The minimum custom top-up (leads), set per-client.
+function minOf(row: { min_topup?: number | null } | undefined): number {
+  const n = Number(row?.min_topup ?? 10)
   return Number.isFinite(n) && n > 0 ? n : 10
 }
 
@@ -20,16 +19,16 @@ export async function POST(req: NextRequest) {
   const amt = Math.floor(Number(amount))
   if (!amt || amt <= 0) return NextResponse.json({ error: 'Invalid amount' }, { status: 400 })
 
-  const client = await pool.query('SELECT cost_per_lead, currency, topup_buckets FROM portal_clients WHERE id = $1', [session.clientId])
+  const client = await pool.query('SELECT cost_per_lead, currency, topup_buckets, min_topup FROM portal_clients WHERE id = $1', [session.clientId])
   const costPerLead = Number(client.rows[0]?.cost_per_lead ?? 0)
   const currency = client.rows[0]?.currency ?? 'GBP'
   const buckets: { leads: number; pricePerLead: number }[] = Array.isArray(client.rows[0]?.topup_buckets) ? client.rows[0].topup_buckets : []
 
   // If the requested amount matches a preset bucket, use the bucket's price.
-  // Otherwise it's a custom amount and must clear the global minimum.
+  // Otherwise it's a custom amount and must clear this client's minimum.
   const bucket = buckets.find(b => Number(b.leads) === amt)
   if (!bucket) {
-    const min = await getMinTopup()
+    const min = minOf(client.rows[0])
     if (amt < min) return NextResponse.json({ error: `The minimum top-up is ${min} leads.` }, { status: 400 })
   }
   const pricePerLead = bucket ? Number(bucket.pricePerLead) : costPerLead
@@ -62,15 +61,14 @@ export async function POST(req: NextRequest) {
 export async function GET() {
   const session = await getSession()
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  const [reqs, min, client] = await Promise.all([
+  const [reqs, client] = await Promise.all([
     pool.query(
       `SELECT id, amount, status, note, invoice_id, created_at, confirmed_at
          FROM portal_topup_requests WHERE client_id = $1 ORDER BY created_at DESC`,
       [session.clientId]
     ),
-    getMinTopup(),
-    pool.query('SELECT topup_buckets, currency FROM portal_clients WHERE id = $1', [session.clientId]),
+    pool.query('SELECT topup_buckets, currency, min_topup FROM portal_clients WHERE id = $1', [session.clientId]),
   ])
   const buckets = Array.isArray(client.rows[0]?.topup_buckets) ? client.rows[0].topup_buckets : []
-  return NextResponse.json({ requests: reqs.rows, minTopup: min, buckets, currency: client.rows[0]?.currency ?? 'GBP' })
+  return NextResponse.json({ requests: reqs.rows, minTopup: minOf(client.rows[0]), buckets, currency: client.rows[0]?.currency ?? 'GBP' })
 }

@@ -19,6 +19,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
     lowLeadsThreshold?: number
     topupBuckets?: { leads: number; pricePerLead: number }[]
+    minTopup?: number
   }
 
   const sets: string[] = []
@@ -44,6 +45,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       .sort((a, b) => a.leads - b.leads)
     values.push(JSON.stringify(clean)); sets.push(`topup_buckets = $${values.length}`)
   }
+  if (body.minTopup !== undefined) { values.push(Math.max(1, Math.floor(Number(body.minTopup)))); sets.push(`min_topup = $${values.length}`) }
 
   if (!sets.length) return NextResponse.json({ error: 'Nothing to update' }, { status: 400 })
 

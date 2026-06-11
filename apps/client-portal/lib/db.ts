@@ -88,6 +88,8 @@ async function runMigration() {
       // Per-client top-up buckets: [{ leads, pricePerLead }] — preset purchase
       // options with volume pricing (e.g. 10 @ £100 each, 30 @ £80 each).
       `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS topup_buckets JSONB NOT NULL DEFAULT '[]'`,
+      // Per-client minimum custom top-up (leads).
+      `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS min_topup INTEGER NOT NULL DEFAULT 10`,
 
       // ── Client deal-stage label per lead (separate from internal/PV label) ──
       `ALTER TABLE portal_lead_data ADD COLUMN IF NOT EXISTS client_label TEXT`,

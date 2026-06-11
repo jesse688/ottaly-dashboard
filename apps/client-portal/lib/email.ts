@@ -15,6 +15,9 @@ export const DEFAULT_TEMPLATES = {
   notif_locked_subject: 'Ottaly — New Lead (locked)',
   notif_locked_body:
     "Hi {first_name},\n\nA new lead just came in — but you're out of leads, so it's locked 🔒. Top up and it unlocks straight away.\n\n{login_url}/invoices\n\nBest,\nThe Ottaly Team",
+  invoice_subject: 'Ottaly — New Invoice',
+  invoice_body:
+    'Hi {first_name},\n\nYou have a new invoice: {description} — {amount}.\n\nLog in to view and pay it:\n{login_url}/invoices\n\nBest,\nThe Ottaly Team',
 }
 export type TemplateKey = keyof typeof DEFAULT_TEMPLATES
 
@@ -146,17 +149,54 @@ export async function notifyClientOfLead(workspaceId: string, leadId: string): P
   return { sent: anySent }
 }
 
-// Send a sample notification to a client's email so admins can preview wording.
+// Email a client that a new invoice is waiting. Best-effort.
+export async function notifyClientOfInvoice(clientId: string, invoice: { description: string; amount: number; currency?: string }): Promise<void> {
+  try {
+    const c = await pool.query(`SELECT email, contact_name, company_name FROM portal_clients WHERE id = $1`, [clientId])
+    const client = c.rows[0]
+    if (!client?.email) return
+    const tpl = await getTemplates()
+    const cur = invoice.currency || 'GBP'
+    const amount = new Intl.NumberFormat('en-GB', { style: 'currency', currency: cur, minimumFractionDigits: 0 }).format(invoice.amount)
+    const vars = {
+      first_name: firstName(client.contact_name, client.company_name),
+      description: invoice.description,
+      amount,
+      login_url: BASE_URL,
+    }
+    await sendEmail(client.email, render(tpl.invoice_subject, vars), render(tpl.invoice_body, vars))
+  } catch (err) { console.error('[email] invoice notify failed:', err) }
+}
+
+// Send a notification to a client's email so admins can preview it. Uses the
+// client's MOST RECENT real lead so the email is 100% identical to a live one.
 export async function sendTestNotification(clientId: string): Promise<{ ok: boolean; reason?: string; to?: string }> {
-  const c = await pool.query(`SELECT email, contact_name, company_name FROM portal_clients WHERE id = $1`, [clientId])
+  const c = await pool.query(`SELECT email, contact_name, company_name, workspace_id FROM portal_clients WHERE id = $1`, [clientId])
   if (!c.rows.length) return { ok: false, reason: 'no_client' }
   const client = c.rows[0]
   if (!client.email) return { ok: false, reason: 'no_email' }
   const balance = await getBalance(clientId)
-  const sampleLead = { first_name: 'Sam', company_name: 'Acme Ltd' }
-  const sampleMsg = "Hi, thanks for reaching out — yes, this is something we're looking into. Could you send over a bit more detail and some availability for a quick call?"
-  const { subject, body } = await buildLeadEmail(client, sampleLead, balance, balance <= 0, sampleMsg)
-  // Send exactly as a real notification would look (no "[TEST]" prefix).
+  const locked = balance <= 0
+
+  // Real latest lead → real name/company/message. Falls back to a generic example
+  // only if this client has no leads yet.
+  const leadRes = await pool.query(
+    `SELECT id, first_name, company_name, email FROM esp_leads
+      WHERE workspace_id = $1 AND source = 'plusvibe' AND label = 'INTERESTED'
+      ORDER BY first_replied_at DESC NULLS LAST, created_at DESC LIMIT 1`,
+    [client.workspace_id]
+  )
+  let lead: { first_name: string | null; company_name: string | null }
+  let leadMessage: string
+  if (leadRes.rows.length) {
+    lead = leadRes.rows[0]
+    leadMessage = locked ? '' : await getLeadMessage(client.workspace_id, leadRes.rows[0].email)
+  } else {
+    lead = { first_name: 'Sam', company_name: 'Acme Ltd' }
+    leadMessage = locked ? '' : "Hi, thanks for reaching out — yes, this is something we're looking into. Could you send some availability for a quick call?"
+  }
+
+  const { subject, body } = await buildLeadEmail(client, lead, balance, locked, leadMessage)
   const res = await sendEmail(client.email, subject, body)
   return { ok: res.ok, reason: res.reason, to: client.email }
 }

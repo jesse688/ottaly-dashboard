@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState } from 'react'
 import { Logo } from '@/app/components/Logo'
 import { useRouter } from 'next/navigation'
 
@@ -10,7 +10,6 @@ interface Invoice {
   due_date: string | null; paid_date: string | null; created_at: string
   has_file?: boolean
 }
-interface Summary { total_paid: number; total_unpaid: number; total_deal_value: number }
 interface TopupReq { id: string; amount: number; status: string; note: string | null; created_at: string }
 interface LedgerRow { id: string; type: string; amount: number; description: string | null; created_at: string }
 interface Balance {
@@ -34,7 +33,6 @@ const LEDGER_LABEL: Record<string, string> = {
 
 export function InvoicesClient({ companyName }: { companyName: string }) {
   const [invoices, setInvoices] = useState<Invoice[] | null>(null)
-  const [summary, setSummary] = useState<Summary | null>(null)
   const [bal, setBal] = useState<Balance | null>(null)
   const [showTopup, setShowTopup] = useState(false)
   const [topupAmt, setTopupAmt] = useState('')
@@ -43,14 +41,21 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
   const [minTopup, setMinTopup] = useState(10)
   const [buckets, setBuckets] = useState<{ leads: number; pricePerLead: number }[]>([])
   const [topupErr, setTopupErr] = useState('')
+  const [payInfo, setPayInfo] = useState<{ instructions: string; link: string } | null>(null)
+  const [payInvoice, setPayInvoice] = useState<Invoice | null>(null)
   const [msg, setMsg] = useState('')
   const router = useRouter()
 
   function load() {
-    fetch('/api/portal/invoices').then(r => r.json()).then((d) => { setInvoices(d.invoices); setSummary(d.summary) }).catch(() => {})
+    fetch('/api/portal/invoices').then(r => r.json()).then((d) => { setInvoices(d.invoices) }).catch(() => {})
     fetch('/api/portal/balance').then(r => r.json()).then((d) => !d.error && setBal(d)).catch(() => {})
     fetch('/api/portal/topup').then(r => r.json()).then((d) => { if (Array.isArray(d.requests)) setTopups(d.requests); if (d.minTopup) setMinTopup(d.minTopup); if (Array.isArray(d.buckets)) setBuckets(d.buckets) }).catch(() => {})
+    fetch('/api/portal/payment-info').then(r => r.json()).then((d) => !d.error && setPayInfo(d)).catch(() => {})
   }
+
+  // Balance breakdown for the client: total leads added vs used.
+  const added = (bal?.ledger ?? []).filter(l => l.amount > 0).reduce((s, l) => s + l.amount, 0)
+  const used = Math.abs((bal?.ledger ?? []).filter(l => l.amount < 0).reduce((s, l) => s + l.amount, 0))
   useEffect(() => { load() }, [])
 
   async function handleLogout() { await fetch('/api/logout', { method: 'POST' }); router.push('/login') }
@@ -94,6 +99,7 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
     await fetch(`/api/portal/invoices/${id}/paid`, { method: 'POST' })
     setMsg('Thanks — we\'ll confirm your payment shortly.')
     setTimeout(() => setMsg(''), 6000)
+    load()
   }
 
   return (
@@ -110,86 +116,119 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
         <button onClick={handleLogout} className="ml-auto text-white/70 hover:text-white text-sm">Sign out</button>
       </header>
 
-      <div className="max-w-5xl mx-auto p-6">
+      <div className="max-w-6xl mx-auto p-4 md:p-6">
         {msg && <div className="mb-4 px-4 py-2.5 bg-green-50 border border-green-200 text-green-800 text-sm rounded-lg">{msg}</div>}
 
-        {/* Metric cards — leads + their own pipeline; no spend, no ROI */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-          {/* Leads left — with top-up */}
-          <div className="bg-gradient-to-br from-brand-600 to-brand-700 rounded-2xl p-5 text-white">
-            <p className="text-xs text-brand-200 uppercase tracking-wider">Leads left</p>
-            <p className="text-4xl font-bold mt-1">{bal ? Math.max(0, bal.balance).toLocaleString() : '—'}</p>
-            <p className="text-xs text-brand-200 mt-1">Pre-paid lead credits</p>
-            <button onClick={() => setShowTopup(true)} className="mt-3 w-full py-2 bg-white text-brand-700 text-sm font-semibold rounded-lg hover:bg-brand-50">Top up leads</button>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-5 items-start">
+          {/* LEFT — balance + top-up + pending requests */}
+          <div className="space-y-4 lg:space-y-5">
+            <div className="bg-gradient-to-br from-brand-600 to-brand-700 rounded-2xl p-5 text-white">
+              <p className="text-xs text-brand-200 uppercase tracking-wider">Leads left</p>
+              <p className="text-5xl font-bold mt-1">{bal ? Math.max(0, bal.balance).toLocaleString() : '—'}</p>
+              <div className="flex gap-4 mt-3 text-xs">
+                <span className="text-brand-100">+{added.toLocaleString()} added</span>
+                <span className="text-brand-200">−{used.toLocaleString()} used</span>
+              </div>
+              <button onClick={() => setShowTopup(true)} className="mt-4 w-full py-2.5 bg-white text-brand-700 text-sm font-semibold rounded-lg hover:bg-brand-50">Top up leads</button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <Card label="Delivered" value={bal ? bal.leadsDelivered.toLocaleString() : '—'} sub="Interested replies" />
+              <Card label="Deals won" value={bal ? bal.dealsWon.toLocaleString() : '—'} sub="With a deal value" />
+            </div>
+
+            {topups.filter(t => t.status === 'pending').length > 0 && (
+              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
+                <p className="text-sm font-semibold text-amber-900 mb-2">Awaiting payment</p>
+                <div className="space-y-2">
+                  {topups.filter(t => t.status === 'pending').map(t => (
+                    <div key={t.id} className="bg-white rounded-lg px-3 py-2 border border-amber-100">
+                      <p className="text-sm text-gray-800"><strong>{t.amount}</strong> leads <span className="inline-flex ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-700">Invoice raised · awaiting payment</span></p>
+                      <p className="text-[11px] text-gray-400 mt-0.5">Requested {fmtDate(t.created_at)}</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <button onClick={() => editTopup(t)} className="text-xs font-medium text-brand-600 hover:text-brand-800">Edit</button>
+                        <span className="text-gray-200">|</span>
+                        <button onClick={() => cancelTopup(t)} className="text-xs font-medium text-red-500 hover:text-red-700">Cancel</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
-          <Card label="Leads delivered" value={bal ? bal.leadsDelivered.toLocaleString() : '—'} sub="Real interested replies" />
-          <Card label="Deals won" value={bal ? bal.dealsWon.toLocaleString() : '—'} sub="Leads with a deal value" />
-        </div>
+          {/* RIGHT — invoices (prominent) + activity */}
+          <div className="lg:col-span-2 space-y-4 lg:space-y-5">
+            <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+              <div className="px-5 py-3 border-b border-gray-100"><h2 className="text-sm font-semibold text-[#050c29]">Invoices</h2></div>
+              <div className="divide-y divide-gray-50 max-h-[420px] overflow-y-auto">
+                {invoices === null ? <p className="px-5 py-6 text-center text-gray-400 text-sm">Loading…</p>
+                : invoices.length === 0 ? <p className="px-5 py-10 text-center text-gray-400 text-sm">No invoices yet</p>
+                : invoices.map(inv => {
+                  const paid = inv.status === 'paid'
+                  return (
+                    <div key={inv.id} className="flex items-center gap-3 px-5 py-3 hover:bg-gray-50">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-800 truncate">{inv.description}</p>
+                        <p className="text-xs text-gray-400">{inv.invoice_number ? `${inv.invoice_number} · ` : ''}{fmt(parseFloat(inv.amount))}{inv.due_date ? ` · due ${fmtDate(inv.due_date)}` : ''}</p>
+                      </div>
+                      {inv.has_file && <a href={`/api/portal/invoices/${inv.id}/file`} target="_blank" rel="noopener noreferrer" className="text-xs text-brand-600 hover:text-brand-800 font-medium shrink-0">PDF</a>}
+                      {paid ? (
+                        <span className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-green-100 text-green-700 shrink-0">
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>Paid
+                        </span>
+                      ) : (
+                        <button onClick={() => setPayInvoice(inv)} className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-500 text-white hover:bg-red-600 shrink-0">
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>Unpaid — Pay
+                        </button>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
 
-        {/* Pending top-up requests — client can edit or cancel before we confirm */}
-        {topups.filter(t => t.status === 'pending').length > 0 && (
-          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6">
-            <p className="text-sm font-semibold text-amber-900 mb-2">Pending top-up requests</p>
-            <div className="space-y-2">
-              {topups.filter(t => t.status === 'pending').map(t => (
-                <div key={t.id} className="flex items-center justify-between gap-3 bg-white rounded-lg px-3 py-2 border border-amber-100">
-                  <span className="text-sm text-gray-700"><strong>{t.amount}</strong> leads <span className="text-gray-400">· requested {fmtDate(t.created_at)} · awaiting confirmation</span></span>
-                  <span className="flex items-center gap-2 shrink-0">
-                    <button onClick={() => editTopup(t)} className="text-xs font-medium text-brand-600 hover:text-brand-800">Edit</button>
-                    <span className="text-gray-200">|</span>
-                    <button onClick={() => cancelTopup(t)} className="text-xs font-medium text-red-500 hover:text-red-700">Cancel</button>
-                  </span>
-                </div>
-              ))}
+            <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+              <div className="px-5 py-3 border-b border-gray-100"><h2 className="text-sm font-semibold text-[#050c29]">Lead activity</h2></div>
+              <div className="max-h-[280px] overflow-y-auto divide-y divide-gray-50">
+                {!bal ? <p className="px-5 py-6 text-center text-gray-400 text-sm">Loading…</p>
+                : bal.ledger.length === 0 ? <p className="px-5 py-8 text-center text-gray-400 text-sm">No activity yet</p>
+                : bal.ledger.map(l => (
+                  <div key={l.id} className="flex items-center gap-3 px-5 py-2.5">
+                    <span className="text-xs text-gray-400 w-20 shrink-0">{fmtDate(l.created_at)}</span>
+                    <span className="flex-1 text-sm text-gray-700 truncate">{l.description || LEDGER_LABEL[l.type] || l.type}</span>
+                    <span className={`text-sm font-semibold ${l.amount < 0 ? 'text-gray-400' : 'text-green-600'}`}>{l.amount < 0 ? '' : '+'}{l.amount}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
-        )}
-
-        {/* Lead activity (lead units — positive framing, no money) */}
-        <Panel title="Lead activity">
-          <table className="w-full text-sm">
-            <thead><tr className="border-b border-gray-100 bg-gray-50">{['Date','Activity','Leads'].map(h => <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}</tr></thead>
-            <tbody>
-              {!bal ? <tr><td colSpan={3} className="px-4 py-6 text-center text-gray-400 text-sm">Loading…</td></tr>
-              : bal.ledger.length === 0 ? <tr><td colSpan={3} className="px-4 py-8 text-center text-gray-400 text-sm">No activity yet</td></tr>
-              : bal.ledger.map(l => (
-                <tr key={l.id} className="border-b border-gray-50">
-                  <td className="px-4 py-2.5 text-gray-500 text-xs">{fmtDate(l.created_at)}</td>
-                  <td className="px-4 py-2.5 text-gray-700">{l.description || LEDGER_LABEL[l.type] || l.type}</td>
-                  <td className={`px-4 py-2.5 font-medium ${l.amount < 0 ? 'text-gray-500' : 'text-green-600'}`}>{l.amount < 0 ? '' : '+'}{l.amount}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Panel>
-
-        {/* Invoices */}
-        <Panel title="Invoices">
-          <table className="w-full text-sm">
-            <thead><tr className="border-b border-gray-100 bg-gray-50">{['Invoice','Description','Amount','Status','Due',''].map(h => <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}</tr></thead>
-            <tbody>
-              {invoices === null ? <tr><td colSpan={6} className="px-4 py-6 text-center text-gray-400 text-sm">Loading…</td></tr>
-              : invoices.length === 0 ? <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400 text-sm">No invoices yet</td></tr>
-              : invoices.map(inv => (
-                <tr key={inv.id} className="border-b border-gray-50 hover:bg-gray-50">
-                  <td className="px-4 py-3 font-mono text-xs text-gray-600">{inv.invoice_number ?? '—'}</td>
-                  <td className="px-4 py-3 text-gray-800 max-w-xs truncate">{inv.description}</td>
-                  <td className="px-4 py-3 font-semibold text-[#050c29]">{fmt(parseFloat(inv.amount))}</td>
-                  <td className="px-4 py-3"><span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${inv.status === 'paid' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>{inv.status === 'paid' ? 'Paid' : 'Unpaid'}</span></td>
-                  <td className="px-4 py-3 text-gray-500 text-xs">{fmtDate(inv.due_date)}</td>
-                  <td className="px-4 py-3 text-right">
-                    <span className="inline-flex items-center gap-3">
-                      {inv.has_file && <a href={`/api/portal/invoices/${inv.id}/file`} target="_blank" rel="noopener noreferrer" className="text-xs text-brand-600 hover:text-brand-800 font-medium">Download PDF</a>}
-                      {inv.status === 'unpaid' && <button onClick={() => markPaid(inv.id)} className="text-xs text-brand-600 hover:text-brand-800 font-medium">I&apos;ve paid</button>}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Panel>
+        </div>
       </div>
+
+      {/* Pay invoice modal — shows bank details / pay link set in admin */}
+      {payInvoice && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setPayInvoice(null)}>
+          <div className="bg-white rounded-2xl p-5 w-full max-w-md" onClick={e => e.stopPropagation()}>
+            <h3 className="text-base font-semibold text-[#050c29] mb-1">Pay invoice</h3>
+            <p className="text-sm text-gray-500 mb-4">{payInvoice.description} — <strong className="text-[#050c29]">{fmt(parseFloat(payInvoice.amount))}</strong></p>
+            {payInfo?.link && (
+              <a href={payInfo.link} target="_blank" rel="noopener noreferrer" className="block w-full text-center py-2.5 mb-3 bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold rounded-lg">Pay online</a>
+            )}
+            {payInfo?.instructions && (
+              <div className="bg-gray-50 border border-gray-100 rounded-lg p-3 mb-4">
+                <p className="text-xs font-semibold text-gray-500 mb-1">Bank transfer details</p>
+                <pre className="text-sm text-gray-700 whitespace-pre-wrap font-sans">{payInfo.instructions}</pre>
+              </div>
+            )}
+            {payInvoice.has_file && <a href={`/api/portal/invoices/${payInvoice.id}/file`} target="_blank" rel="noopener noreferrer" className="block text-sm text-brand-600 hover:text-brand-800 mb-4">Download invoice PDF</a>}
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setPayInvoice(null)} className="px-4 py-2 text-sm text-gray-600">Close</button>
+              <button onClick={() => { markPaid(payInvoice.id); setPayInvoice(null) }} className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg">I&apos;ve paid</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showTopup && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setShowTopup(false)}>
@@ -234,14 +273,6 @@ function Card({ label, value, sub, accent }: { label: string; value: string; sub
       <p className={`text-xs uppercase tracking-wider ${accent ? 'text-emerald-600' : 'text-gray-400'}`}>{label}</p>
       <p className={`text-2xl font-bold mt-1 ${accent ? 'text-emerald-700' : 'text-[#050c29]'}`}>{value}</p>
       <p className={`text-xs mt-1 ${accent ? 'text-emerald-600 font-medium' : 'text-gray-400'}`}>{sub}</p>
-    </div>
-  )
-}
-function Panel({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden mb-6">
-      <div className="px-5 py-3.5 border-b border-gray-100"><h2 className="text-sm font-semibold text-[#050c29]">{title}</h2></div>
-      <div className="overflow-x-auto">{children}</div>
     </div>
   )
 }
