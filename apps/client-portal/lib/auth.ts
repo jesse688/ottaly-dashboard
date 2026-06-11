@@ -1,6 +1,6 @@
 import { SignJWT, jwtVerify } from 'jose'
 import { cookies } from 'next/headers'
-import { createHash, timingSafeEqual, randomBytes } from 'crypto'
+import { createHash, randomBytes } from 'crypto'
 import pool from './db'
 
 const SECRET = new TextEncoder().encode(
@@ -23,6 +23,12 @@ export interface ClientSession {
 
 export function sha256(input: string): string {
   return createHash('sha256').update(input).digest('hex')
+}
+
+// Hash an access code. Normalised (trimmed + lowercased) so clients don't get
+// locked out over capitalisation or stray spaces — "Gareth02" === "gareth02".
+export function hashCode(code: string): string {
+  return sha256(code.trim().toLowerCase())
 }
 
 // Unguessable token for a self-service invite link.
@@ -72,14 +78,11 @@ export async function validateClientCredentials(
     password_hash: string
   }
 
-  const inputHash = Buffer.from(sha256(code))
-  const storedHash = Buffer.from(row.password_hash)
-  if (inputHash.length !== storedHash.length) return null
-  try {
-    if (!timingSafeEqual(inputHash, storedHash)) return null
-  } catch {
-    return null
-  }
+  // Accept the normalised hash (new, case-insensitive codes) OR the exact-case
+  // hash (legacy email+password clients) so nothing breaks.
+  const stored = row.password_hash ?? ''
+  const matches = stored === hashCode(code) || stored === sha256(code)
+  if (!matches) return null
 
   return {
     clientId: row.id,

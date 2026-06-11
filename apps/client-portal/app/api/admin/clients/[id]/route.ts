@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { getAdminSession, sha256 } from '@/lib/auth'
+import { getAdminSession, hashCode } from '@/lib/auth'
 import pool from '@/lib/db'
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -28,7 +28,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (body.active !== undefined) { values.push(body.active); sets.push(`active = $${values.length}`) }
   // Accept either { code } (new) or { password } (legacy) for the access code.
   const newCode = body.code ?? body.password
-  if (newCode !== undefined) { values.push(sha256(newCode)); sets.push(`password_hash = $${values.length}`) }
+  if (newCode !== undefined) { values.push(hashCode(newCode)); sets.push(`password_hash = $${values.length}`) }
   if (body.costPerLead !== undefined) { values.push(body.costPerLead); sets.push(`cost_per_lead = $${values.length}`) }
   if (body.currency !== undefined) { values.push(body.currency); sets.push(`currency = $${values.length}`) }
   if (body.spendVisibility !== undefined) { values.push(body.spendVisibility); sets.push(`spend_visibility = $${values.length}`) }

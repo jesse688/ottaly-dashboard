@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { getAdminSession, sha256, generateAccessCode, generateInviteToken, portalBaseUrl } from '@/lib/auth'
+import { getAdminSession, hashCode, generateAccessCode, generateInviteToken, portalBaseUrl } from '@/lib/auth'
 import pool from '@/lib/db'
 import { backfillWorkspace } from '@/lib/sync'
 import { registerWebhook } from '@/lib/plusvibe'
@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
   // If no username given, create a shell account + invite link (client self-onboards).
   const useInvite = !username
   const code = (b.code ?? '').trim() || generateAccessCode()
-  const passwordHash = useInvite ? null : sha256(code)
+  const passwordHash = useInvite ? null : hashCode(code)
   const inviteToken = useInvite ? generateInviteToken() : null
 
   try {

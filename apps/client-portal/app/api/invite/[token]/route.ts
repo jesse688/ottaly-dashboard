@@ -1,7 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { cookies } from 'next/headers'
 import pool from '@/lib/db'
-import { sha256, createClientSession, COOKIE } from '@/lib/auth'
+import { hashCode, createClientSession, COOKIE } from '@/lib/auth'
 
 // GET — validate an invite token; return the company name for display.
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ token: string }> }) {
@@ -34,16 +33,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   try {
     await pool.query(
       `UPDATE portal_clients SET username = $1, password_hash = $2, invite_token = NULL WHERE id = $3`,
-      [u, sha256(c), client.id]
+      [u, hashCode(c), client.id]
     )
   } catch (err: unknown) {
     if ((err as { code?: string }).code === '23505') return NextResponse.json({ error: 'That username is taken — try another.' }, { status: 409 })
     throw err
   }
 
-  // Log them straight in.
+  // Log them straight in — set the cookie ON the response so it reliably attaches.
   const tok = await createClientSession({ clientId: client.id, workspaceId: client.workspace_id, companyName: client.company_name, email: client.email ?? '' })
-  const store = await cookies()
-  store.set(COOKIE, tok, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', path: '/', maxAge: 60 * 60 * 24 * 30 })
-  return NextResponse.json({ ok: true })
+  const res = NextResponse.json({ ok: true })
+  res.cookies.set(COOKIE, tok, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', path: '/', maxAge: 60 * 60 * 24 * 30 })
+  return res
 }
