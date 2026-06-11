@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { getAdminSession, generateInviteToken } from '@/lib/auth'
+import { getAdminSession, generateInviteToken, portalBaseUrl } from '@/lib/auth'
 import pool from '@/lib/db'
 
 // POST — (re)generate a self-service invite link for a client.
@@ -12,5 +12,5 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     [token, id]
   )
   if (!r.rows.length) return NextResponse.json({ error: 'Not found' }, { status: 404 })
-  return NextResponse.json({ ok: true, inviteUrl: `${new URL(req.url).origin}/invite/${token}` })
+  return NextResponse.json({ ok: true, inviteUrl: `${portalBaseUrl(req)}/invite/${token}` })
 }

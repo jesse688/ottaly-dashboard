@@ -30,6 +30,17 @@ export function generateInviteToken(): string {
   return randomBytes(24).toString('base64url')
 }
 
+// Public base URL for building client-facing links. Behind Easypanel's proxy,
+// req.url resolves to the internal bind (0.0.0.0:3001), so prefer an explicit
+// env, then the forwarded host, then the known domain.
+export function portalBaseUrl(req: Request): string {
+  if (process.env.PORTAL_BASE_URL) return process.env.PORTAL_BASE_URL.replace(/\/$/, '')
+  const host = req.headers.get('x-forwarded-host') || req.headers.get('host') || ''
+  const proto = req.headers.get('x-forwarded-proto') || 'https'
+  if (host && !/(^|\W)(0\.0\.0\.0|localhost|127\.0\.0\.1)/.test(host)) return `${proto}://${host}`
+  return 'https://login.ottaly.co.uk'
+}
+
 // Friendly access code like "Otta-7K2P" — easy to read out, no ambiguous chars.
 export function generateAccessCode(): string {
   const alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'

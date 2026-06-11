@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { getAdminSession, sha256, generateAccessCode, generateInviteToken } from '@/lib/auth'
+import { getAdminSession, sha256, generateAccessCode, generateInviteToken, portalBaseUrl } from '@/lib/auth'
 import pool from '@/lib/db'
 import { backfillWorkspace } from '@/lib/sync'
 import { registerWebhook } from '@/lib/plusvibe'
@@ -62,7 +62,7 @@ export async function POST(req: NextRequest) {
     const hook = await registerWebhook(workspaceId)
 
     // Either return the credentials, or an invite link for the client to self-onboard.
-    const inviteUrl = inviteToken ? `${new URL(req.url).origin}/invite/${inviteToken}` : undefined
+    const inviteUrl = inviteToken ? `${portalBaseUrl(req)}/invite/${inviteToken}` : undefined
     return NextResponse.json({
       ok: true, id: res.rows[0].id,
       ...(useInvite ? { inviteUrl } : { username, code }),
