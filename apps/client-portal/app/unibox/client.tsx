@@ -129,6 +129,9 @@ export function UniboxClient({ companyName, clientName }: { companyName: string;
   const [balance, setBalance] = useState<{ balance: number; currency: string; lowThreshold: number } | null>(null)
   // Friendly greeting on every load/refresh — auto-dismisses after a few seconds.
   const [showWelcome, setShowWelcome] = useState(true)
+  // Mobile drawers: left sidebar (views/stages) and right contact panel.
+  const [showSidebar, setShowSidebar] = useState(false)
+  const [showDetails, setShowDetails] = useState(false)
   // Forward: seeds the composer with quoted content + an empty recipient.
   const [forwardSeed, setForwardSeed] = useState<{ id: number; html: string } | null>(null)
 
@@ -194,7 +197,7 @@ export function UniboxClient({ companyName, clientName }: { companyName: string;
   function openLead(lead: Lead) {
     setSelected(lead)
     setReplyMsg('')
-    setShowDispute(false); setThread(null)
+    setShowDispute(false); setThread(null); setShowDetails(false)
     // Locked leads never load their conversation.
     if (lead.locked) { setThread([]); return }
     setLeads(prev => prev?.map(l => l.id === lead.id ? { ...l, has_unread: false } : l) ?? null)
@@ -338,11 +341,14 @@ export function UniboxClient({ companyName, clientName }: { companyName: string;
         </button>
       )}
       {/* Top bar */}
-      <header className="h-14 bg-[#224388] flex items-center px-5 shrink-0 gap-3">
+      <header className="h-14 bg-[#224388] flex items-center px-3 md:px-5 shrink-0 gap-2 md:gap-3">
+        <button onClick={() => setShowSidebar(true)} className="md:hidden text-white/80 hover:text-white p-1 -ml-1" aria-label="Menu">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
         <span className="flex items-center [&_img]:brightness-0 [&_img]:invert"><Logo onDark /></span>
-        <span className="text-white/30">|</span>
-        <span className="text-white/90 text-sm font-medium">{companyName}</span>
-        <nav className="flex items-center gap-1 ml-4">
+        <span className="hidden sm:inline text-white/30">|</span>
+        <span className="hidden sm:inline text-white/90 text-sm font-medium truncate max-w-[140px]">{companyName}</span>
+        <nav className="hidden md:flex items-center gap-1 ml-4">
           <span className="px-3 py-1.5 text-white bg-white/15 text-sm font-medium rounded-lg inline-flex items-center gap-1.5">
             Leads
             {viewCounts.unread > 0 && <span className="min-w-[18px] text-center text-[11px] font-semibold px-1.5 py-0.5 rounded-full bg-[#ffb700] text-[#050c29]">{viewCounts.unread}</span>}
@@ -350,7 +356,7 @@ export function UniboxClient({ companyName, clientName }: { companyName: string;
           <a href="/invoices" className="px-3 py-1.5 text-white/70 hover:text-white text-sm rounded-lg">Billing</a>
           <a href="/account" className="px-3 py-1.5 text-white/70 hover:text-white text-sm rounded-lg">Account</a>
         </nav>
-        <div className="ml-auto flex items-center gap-4">
+        <div className="ml-auto flex items-center gap-2 md:gap-4">
           {balance && (
             balance.balance <= 0 ? (
               // Out of leads → red "Top Up Now"
@@ -371,13 +377,15 @@ export function UniboxClient({ companyName, clientName }: { companyName: string;
               </a>
             )
           )}
-          <button onClick={handleLogout} className="text-white/70 hover:text-white text-sm">Sign out</button>
+          <button onClick={handleLogout} className="hidden md:block text-white/70 hover:text-white text-sm">Sign out</button>
         </div>
       </header>
 
-      <div className="flex-1 flex overflow-hidden">
-        {/* Column 1 — sidebar */}
-        <aside className="w-56 bg-white border-r border-gray-200 flex flex-col shrink-0">
+      <div className="flex-1 flex overflow-hidden relative">
+        {/* Mobile backdrop for the sidebar drawer */}
+        {showSidebar && <div className="md:hidden fixed inset-0 top-14 bg-black/30 z-30" onClick={() => setShowSidebar(false)} />}
+        {/* Column 1 — sidebar (drawer on mobile) */}
+        <aside className={`${showSidebar ? 'flex' : 'hidden'} md:flex fixed md:static top-14 md:top-auto bottom-0 left-0 z-40 w-64 md:w-56 bg-white border-r border-gray-200 flex-col shrink-0 shadow-xl md:shadow-none`}>
           <div className="p-3 space-y-0.5">
             {([
               { key: 'inbox', label: 'All leads', icon: <path d="M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/> },
@@ -386,7 +394,7 @@ export function UniboxClient({ companyName, clientName }: { companyName: string;
               { key: 'archived', label: 'Archived', icon: <><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4"/></> },
             ] as { key: 'inbox'|'unread'|'sent'|'archived'; label: string; icon: ReactNode }[]).map(v => (
               <button key={v.key}
-                onClick={() => setView(v.key)}
+                onClick={() => { setView(v.key); setShowSidebar(false) }}
                 onDragOver={v.key === 'inbox' ? e => { if (dragLeadId) { e.preventDefault(); setDragOver('__inbox') } } : undefined}
                 onDragLeave={v.key === 'inbox' ? () => setDragOver(d => d === '__inbox' ? null : d) : undefined}
                 onDrop={v.key === 'archived' ? e => { e.preventDefault(); if (dragLeadId) { const l=(leads??[]).find(x=>x.id===dragLeadId); if(l) toggleArchive({...l, archived:false}); setDragLeadId(null); setDragOver(null) } } : v.key === 'inbox' ? e => { e.preventDefault(); dropOnStage(null) } : undefined}
@@ -419,10 +427,16 @@ export function UniboxClient({ companyName, clientName }: { companyName: string;
               </div>
             ))}
           </div>
+          {/* Mobile-only nav (desktop has these in the top bar) */}
+          <div className="md:hidden border-t border-gray-100 p-3 space-y-0.5">
+            <a href="/invoices" className="block px-3 py-2 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50">Billing</a>
+            <a href="/account" className="block px-3 py-2 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50">Account</a>
+            <button onClick={handleLogout} className="block w-full text-left px-3 py-2 rounded-lg text-sm font-medium text-gray-500 hover:bg-gray-50">Sign out</button>
+          </div>
         </aside>
 
-        {/* Column 2 — lead list */}
-        <section className="w-[380px] bg-white border-r border-gray-200 flex flex-col shrink-0">
+        {/* Column 2 — lead list (full width on mobile; hidden once a lead is open) */}
+        <section className={`${selected ? 'hidden md:flex' : 'flex'} w-full md:w-[380px] bg-white border-r border-gray-200 flex-col shrink-0`}>
           <div className="px-4 py-3 border-b border-gray-100">
             <div className="flex items-center justify-between mb-2">
               <h2 className="text-sm font-semibold text-[#050c29]">Your Leads <span className="text-gray-400 font-normal">({filtered.length})</span></h2>
@@ -471,15 +485,18 @@ export function UniboxClient({ companyName, clientName }: { companyName: string;
           </div>
         </section>
 
-        {/* Column 3 — thread */}
-        <section className="flex-1 flex flex-col min-w-0 bg-white">
+        {/* Column 3 — thread (full screen on mobile when a lead is open) */}
+        <section className={`${selected ? 'flex' : 'hidden md:flex'} flex-1 flex-col min-w-0 bg-white`}>
           {!selected ? (
             <div className="flex-1 flex flex-col items-center justify-center text-gray-400">
               <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mb-3 text-gray-300"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 5L2 7"/></svg>
               <p className="text-sm">Select a lead to read</p>
             </div>
           ) : selected.locked ? (
-            <div className="flex-1 flex flex-col items-center justify-center text-center px-8 bg-[#fafbfd]">
+            <div className="flex-1 flex flex-col items-center justify-center text-center px-8 bg-[#fafbfd] relative">
+              <button onClick={() => { setSelected(null); setThread(null) }} className="md:hidden absolute top-3 left-3 text-gray-500 hover:text-gray-800 p-1" aria-label="Back to leads">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+              </button>
               <div className="w-16 h-16 rounded-full bg-[#fff4d6] text-[#b8860b] flex items-center justify-center mb-5">
                 <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
               </div>
@@ -490,8 +507,11 @@ export function UniboxClient({ companyName, clientName }: { companyName: string;
           ) : (
             <>
               {/* thread header */}
-              <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-3 shrink-0">
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold ${av(selected.id)}`}>{initials(selected)}</div>
+              <div className="px-3 md:px-5 py-3 border-b border-gray-100 flex items-center gap-2 md:gap-3 shrink-0">
+                <button onClick={() => { setSelected(null); setThread(null) }} className="md:hidden text-gray-500 hover:text-gray-800 p-1 -ml-1" aria-label="Back to leads">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+                </button>
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 ${av(selected.id)}`}>{initials(selected)}</div>
                 <div className="min-w-0">
                   <p className="font-heading text-base font-semibold text-[#050c29] truncate tracking-tight">{fullName(selected)}</p>
                   {selected.email && <p className="text-xs text-gray-500 truncate">{selected.email}</p>}
@@ -528,6 +548,10 @@ export function UniboxClient({ companyName, clientName }: { companyName: string;
                     </div>
                   )}
                 </div>
+                {/* Contact details toggle (drawer below lg) */}
+                <button onClick={() => setShowDetails(true)} className="lg:hidden inline-flex items-center px-2 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50" aria-label="Lead details">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                </button>
               </div>
 
               {/* dispute banners */}
@@ -602,9 +626,14 @@ export function UniboxClient({ companyName, clientName }: { companyName: string;
           )}
         </section>
 
-        {/* Column 4 — lead details (hidden while the lead is locked) */}
+        {/* Mobile/tablet backdrop for the details drawer */}
+        {showDetails && selected && !selected.locked && <div className="lg:hidden fixed inset-0 top-14 bg-black/30 z-30" onClick={() => setShowDetails(false)} />}
+        {/* Column 4 — lead details (inline at lg+, drawer below; hidden while locked) */}
         {selected && !selected.locked && (
-          <aside className="w-72 bg-white border-l border-gray-200 flex flex-col shrink-0 overflow-y-auto">
+          <aside className={`${showDetails ? 'flex' : 'hidden'} lg:flex fixed lg:static top-14 lg:top-auto bottom-0 right-0 z-40 w-80 lg:w-72 bg-white border-l border-gray-200 flex-col shrink-0 overflow-y-auto shadow-xl lg:shadow-none`}>
+            <button onClick={() => setShowDetails(false)} className="lg:hidden absolute top-3 right-3 text-gray-400 hover:text-gray-700 p-1" aria-label="Close details">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
             <div className="p-5 text-center border-b border-gray-100">
               <div className={`w-16 h-16 rounded-full mx-auto flex items-center justify-center text-lg font-semibold mb-2 ${av(selected.id)}`}>{initials(selected)}</div>
               <p className="text-sm font-semibold text-[#050c29]">{fullName(selected)}</p>

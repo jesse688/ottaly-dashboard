@@ -80,7 +80,7 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
         {msg && <div className="mb-4 px-4 py-2.5 bg-green-50 border border-green-200 text-green-800 text-sm rounded-lg">{msg}</div>}
 
         {/* Metric cards — leads + their own pipeline; no spend, no ROI */}
-        <div className="grid grid-cols-3 gap-4 mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
           {/* Leads left — with top-up */}
           <div className="bg-gradient-to-br from-brand-600 to-brand-700 rounded-2xl p-5 text-white">
             <p className="text-xs text-brand-200 uppercase tracking-wider">Leads left</p>
