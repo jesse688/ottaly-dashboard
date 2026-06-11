@@ -451,7 +451,7 @@ export function AdminClientsClient() {
                   <h2 className="text-sm font-semibold text-gray-900">New-lead notification emails</h2>
                   {tplSaved && <span className="text-xs text-green-600 font-medium">Saved ✓</span>}
                 </div>
-                <p className="text-xs text-gray-500 mb-4">Merge tags: <code className="bg-gray-100 px-1 rounded">{'{first_name}'}</code> <code className="bg-gray-100 px-1 rounded">{'{lead_name}'}</code> <code className="bg-gray-100 px-1 rounded">{'{lead_company}'}</code> <code className="bg-gray-100 px-1 rounded">{'{balance}'}</code> <code className="bg-gray-100 px-1 rounded">{'{login_url}'}</code></p>
+                <p className="text-xs text-gray-500 mb-4">Merge tags: <code className="bg-gray-100 px-1 rounded">{'{first_name}'}</code> <code className="bg-gray-100 px-1 rounded">{'{lead_name}'}</code> <code className="bg-gray-100 px-1 rounded">{'{lead_company}'}</code> <code className="bg-gray-100 px-1 rounded">{'{lead_message}'}</code> <code className="bg-gray-100 px-1 rounded">{'{balance}'}</code> <code className="bg-gray-100 px-1 rounded">{'{login_url}'}</code><br/><span className="text-gray-400">{'{lead_message}'} = what the lead wrote (normal email only — kept out of the locked email).</span></p>
                 {!tpl ? <p className="text-sm text-gray-400">Loading…</p> : (
                   <div className="space-y-4">
                     <div>

@@ -1,14 +1,17 @@
 import pool from './db'
 import { getBalance, getLockedLeadIds, reconcileLeadCharges } from './balance'
+import { getEmails } from './plusvibe'
 
 const FROM = process.env.EMAIL_FROM || 'Ottaly <info@ottaly.co.uk>'
 const BASE_URL = (process.env.PORTAL_BASE_URL || 'https://login.ottaly.co.uk').replace(/\/$/, '')
 
 // Default notification templates (editable in admin → portal_settings).
+// {lead_message} = what the lead actually wrote (normal email only; locked email
+// never includes it so out-of-credit leads stay private).
 export const DEFAULT_TEMPLATES = {
   notif_subject: 'Ottaly — New Lead',
   notif_body:
-    'Hi {first_name},\n\nYou have a new lead 🎉 — log in to view it. Your lead balance is now {balance}.\n\nLead: {lead_name}{lead_company}\n\n{login_url}\n\nBest,\nThe Ottaly Team',
+    'Hi {first_name},\n\nYou have a new lead 🎉 — {lead_name}{lead_company}.\n\nWhat they said:\n"{lead_message}"\n\nLog in to reply. Your lead balance is now {balance}.\n\n{login_url}\n\nBest,\nThe Ottaly Team',
   notif_locked_subject: 'Ottaly — New Lead (locked)',
   notif_locked_body:
     "Hi {first_name},\n\nA new lead just came in — but you're out of leads, so it's locked 🔒. Top up and it unlocks straight away.\n\n{login_url}/invoices\n\nBest,\nThe Ottaly Team",
@@ -51,14 +54,48 @@ export async function sendEmail(to: string, subject: string, text: string): Prom
   }
 }
 
+// Trim a raw inbound email down to just the lead's message — strip quoted history
+// and cap the length so the notification stays readable.
+function cleanMessage(raw: string): string {
+  if (!raw) return ''
+  let t = raw.split(/\n\s*>?\s*On\b[\s\S]{0,200}?\bwrote:/)[0]
+  t = t.split(/\n-{2,}\s*Original Message/i)[0]
+  t = t.replace(/^\s*>.*$/gm, '').replace(/\n{3,}/g, '\n\n').trim()
+  if (t.length > 600) t = t.slice(0, 600).trimEnd() + '…'
+  return t
+}
+
+// What the lead actually wrote — newest inbound message. Reads the cache first,
+// falls back to a live PlusVibe fetch. Best-effort; returns '' on any failure.
+async function getLeadMessage(workspaceId: string, leadEmail: string | null): Promise<string> {
+  if (!leadEmail) return ''
+  try {
+    const r = await pool.query(
+      `SELECT body_text, content_preview FROM portal_emails
+        WHERE workspace_id = $1 AND lower(lead_email) = lower($2) AND direction = 'IN'
+        ORDER BY timestamp_created DESC NULLS LAST LIMIT 1`,
+      [workspaceId, leadEmail]
+    )
+    let msg = (r.rows[0]?.body_text || r.rows[0]?.content_preview || '') as string
+    if (!msg) {
+      const { data } = await getEmails(workspaceId, { lead: leadEmail })
+      const inbound = data.filter(m => (m.direction ?? 'IN') === 'IN')
+      const last = inbound[inbound.length - 1] || data[data.length - 1]
+      msg = last?.body?.text || last?.content_preview || ''
+    }
+    return cleanMessage(msg)
+  } catch { return '' }
+}
+
 // Build the rendered subject/body a given client+lead would receive (also used
 // by the admin "send test" preview).
-async function buildLeadEmail(client: { contact_name: string | null; company_name: string | null }, lead: { first_name: string | null; company_name: string | null }, balance: number, locked: boolean) {
+async function buildLeadEmail(client: { contact_name: string | null; company_name: string | null }, lead: { first_name: string | null; company_name: string | null }, balance: number, locked: boolean, leadMessage: string) {
   const tpl = await getTemplates()
   const vars = {
     first_name: firstName(client.contact_name, client.company_name),
     lead_name: [lead.first_name].filter(Boolean).join(' ') || 'a new contact',
     lead_company: lead.company_name ? ` (${lead.company_name})` : '',
+    lead_message: leadMessage || '(log in to read the full message)',
     balance: String(Math.max(0, balance)),
     login_url: BASE_URL,
   }
@@ -79,7 +116,7 @@ export async function notifyClientOfLead(workspaceId: string, leadId: string): P
   )
   if (!clients.rows.length) return { sent: false, reason: 'no_client' }
 
-  const lead = await pool.query(`SELECT first_name, company_name FROM esp_leads WHERE id = $1`, [leadId])
+  const lead = await pool.query(`SELECT first_name, company_name, email FROM esp_leads WHERE id = $1`, [leadId])
   if (!lead.rows.length) return { sent: false, reason: 'no_lead' }
 
   let anySent = false
@@ -96,7 +133,9 @@ export async function notifyClientOfLead(workspaceId: string, leadId: string): P
     await reconcileLeadCharges(c.id)
     const balance = await getBalance(c.id)
     const locked = (await getLockedLeadIds(c.id)).has(leadId)
-    const { subject, body } = await buildLeadEmail(c, lead.rows[0], balance, locked)
+    // Only include the lead's message on the normal (unlocked) email.
+    const leadMessage = locked ? '' : await getLeadMessage(workspaceId, lead.rows[0].email)
+    const { subject, body } = await buildLeadEmail(c, lead.rows[0], balance, locked, leadMessage)
     const res = await sendEmail(c.email, subject, body)
     if (res.ok) { anySent = true }
     else {
@@ -115,7 +154,8 @@ export async function sendTestNotification(clientId: string): Promise<{ ok: bool
   if (!client.email) return { ok: false, reason: 'no_email' }
   const balance = await getBalance(clientId)
   const sampleLead = { first_name: 'Sam', company_name: 'Acme Ltd' }
-  const { subject, body } = await buildLeadEmail(client, sampleLead, balance, balance <= 0)
+  const sampleMsg = "Hi, thanks for reaching out — yes, this is something we're looking into. Could you send over a bit more detail and some availability for a quick call?"
+  const { subject, body } = await buildLeadEmail(client, sampleLead, balance, balance <= 0, sampleMsg)
   const res = await sendEmail(client.email, `[TEST] ${subject}`, body)
   return { ok: res.ok, reason: res.reason, to: client.email }
 }
