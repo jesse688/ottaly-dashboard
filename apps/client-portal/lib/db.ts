@@ -25,6 +25,8 @@ async function runMigration() {
   try {
     const statements = [
       `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS hidden_fields TEXT[] DEFAULT '{}'`,
+      // Contact/person name for a personal greeting ("Welcome back, Gareth").
+      `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS contact_name TEXT`,
       // Username login (+ access code stored in password_hash). Email becomes optional.
       `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS username TEXT`,
       `ALTER TABLE portal_clients ALTER COLUMN email DROP NOT NULL`,

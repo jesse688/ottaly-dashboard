@@ -17,6 +17,7 @@ const ADMIN_KEY = process.env.PORTAL_ADMIN_KEY ?? 'Ottaly2025$'
 export interface ClientSession {
   workspaceId: string
   companyName: string
+  contactName: string
   email: string
   clientId: string
 }
@@ -62,7 +63,7 @@ export async function validateClientCredentials(
   code: string
 ): Promise<ClientSession | null> {
   const res = await pool.query(
-    `SELECT id, workspace_id, company_name, email, password_hash
+    `SELECT id, workspace_id, company_name, contact_name, email, password_hash
      FROM portal_clients
      WHERE (lower(username) = lower($1) OR lower(email) = lower($1)) AND active = true
      LIMIT 1`,
@@ -74,6 +75,7 @@ export async function validateClientCredentials(
     id: string
     workspace_id: string
     company_name: string
+    contact_name: string | null
     email: string | null
     password_hash: string
   }
@@ -88,6 +90,7 @@ export async function validateClientCredentials(
     clientId: row.id,
     workspaceId: row.workspace_id,
     companyName: row.company_name,
+    contactName: row.contact_name ?? '',
     email: row.email ?? '',
   }
 }
@@ -123,6 +126,7 @@ export async function getSession(): Promise<ClientSession | null> {
       clientId: payload.clientId as string,
       workspaceId: payload.workspaceId as string,
       companyName: payload.companyName as string,
+      contactName: (payload.contactName as string) ?? '',
       email: payload.email as string,
     }
   } catch {

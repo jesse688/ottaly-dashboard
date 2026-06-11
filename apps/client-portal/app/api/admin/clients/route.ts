@@ -8,7 +8,7 @@ export async function GET() {
   if (!await getAdminSession()) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const res = await pool.query(`
-    SELECT pc.id, pc.username, pc.email, pc.company_name, pc.workspace_id, pc.active, pc.created_at,
+    SELECT pc.id, pc.username, pc.email, pc.company_name, pc.contact_name, pc.workspace_id, pc.active, pc.created_at,
            pc.cost_per_lead, pc.spend_visibility,
            w.name AS workspace_name
     FROM portal_clients pc
@@ -25,11 +25,13 @@ export async function POST(req: NextRequest) {
     email?: string
     workspaceId: string
     companyName: string
+    contactName?: string
     costPerLead?: number
   }
   const email = (b.email ?? '').trim().toLowerCase()
   const workspaceId = b.workspaceId
   const companyName = b.companyName
+  const contactName = (b.contactName ?? '').trim()
 
   if (!email || !email.includes('@')) {
     return NextResponse.json({ error: 'A valid client email is required' }, { status: 400 })
@@ -44,10 +46,10 @@ export async function POST(req: NextRequest) {
 
   try {
     const res = await pool.query(
-      `INSERT INTO portal_clients (username, email, password_hash, workspace_id, company_name, cost_per_lead, invite_token)
-       VALUES ($1, $2, NULL, $3, $4, $5, $6)
+      `INSERT INTO portal_clients (username, email, password_hash, workspace_id, company_name, contact_name, cost_per_lead, invite_token)
+       VALUES ($1, $2, NULL, $3, $4, $5, $6, $7)
        RETURNING id`,
-      [email, email, workspaceId, companyName, Number(b.costPerLead) || 0, inviteToken]
+      [email, email, workspaceId, companyName, contactName || null, Number(b.costPerLead) || 0, inviteToken]
     )
 
     // Auto-backfill this client's workspace (leads + real email threads) so they

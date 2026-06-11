@@ -69,7 +69,7 @@ export function AdminClientsClient() {
   // Client form
   const [showForm, setShowForm]   = useState(false)
   const [editId, setEditId]       = useState<string | null>(null)
-  const [form, setForm]           = useState({ username: '', code: '', email: '', workspaceId: '', companyName: '', costPerLead: '' })
+  const [form, setForm]           = useState({ username: '', code: '', email: '', workspaceId: '', companyName: '', contactName: '', costPerLead: '' })
   const [resetPassword, setResetPassword] = useState('')
   const [saving, setSaving]       = useState(false)
   const [error, setError]         = useState('')
@@ -133,10 +133,10 @@ export function AdminClientsClient() {
   async function handleCreate(e: FormEvent) {
     e.preventDefault(); setSaving(true); setError('')
     try {
-      const res = await fetch('/api/admin/clients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: form.email, companyName: form.companyName, workspaceId: form.workspaceId, costPerLead: Number(form.costPerLead) || 0 }) })
+      const res = await fetch('/api/admin/clients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: form.email, companyName: form.companyName, contactName: form.contactName, workspaceId: form.workspaceId, costPerLead: Number(form.costPerLead) || 0 }) })
       const data = await res.json() as { error?: string; email?: string; inviteUrl?: string }
       if (!res.ok) { setError(data.error ?? 'Error'); return }
-      setForm({ username:'', code:'', email:'', workspaceId:'', companyName:'', costPerLead:'' }); setShowForm(false)
+      setForm({ username:'', code:'', email:'', workspaceId:'', companyName:'', contactName:'', costPerLead:'' }); setShowForm(false)
       fetch('/api/admin/clients').then(r => r.json()).then(setClients)
       prompt(`Client created. Send ${data.email} this link to set their own access code:`, data.inviteUrl ?? '')
     } finally { setSaving(false) }
@@ -388,6 +388,7 @@ export function AdminClientsClient() {
                 <h2 className="text-sm font-semibold text-gray-800 mb-4">New client login</h2>
                 <form onSubmit={handleCreate} className="grid grid-cols-2 gap-3">
                   <div><label className="block text-xs text-gray-500 mb-1">Company name</label><input required value={form.companyName} onChange={e => setForm(f => ({...f,companyName:e.target.value}))} placeholder="Acme Corp" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
+                  <div><label className="block text-xs text-gray-500 mb-1">Client name <span className="text-gray-400">(for greeting)</span></label><input value={form.contactName} onChange={e => setForm(f => ({...f,contactName:e.target.value}))} placeholder="Gareth" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
                   <div><label className="block text-xs text-gray-500 mb-1">Workspace</label>
                     <select required value={form.workspaceId} onChange={e => { const ws=workspaces.find(w=>w.id===e.target.value); setForm(f=>({...f,workspaceId:e.target.value,companyName:f.companyName||(ws?.name??'')})) }} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 bg-white">
                       <option value="">Select workspace…</option>

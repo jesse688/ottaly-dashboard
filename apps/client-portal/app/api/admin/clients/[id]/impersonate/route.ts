@@ -11,7 +11,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   const { id } = await params
 
   const r = await pool.query(
-    `SELECT id, workspace_id, company_name, email FROM portal_clients WHERE id = $1`,
+    `SELECT id, workspace_id, company_name, contact_name, email FROM portal_clients WHERE id = $1`,
     [id]
   )
   if (!r.rows.length) return NextResponse.json({ error: 'Not found' }, { status: 404 })
@@ -21,6 +21,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     clientId: c.id,
     workspaceId: c.workspace_id,
     companyName: c.company_name,
+    contactName: c.contact_name ?? '',
     email: c.email,
   })
 

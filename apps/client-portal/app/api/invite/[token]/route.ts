@@ -22,7 +22,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   if (c.length < 3) return NextResponse.json({ error: 'Choose a code with at least 3 characters.' }, { status: 400 })
 
   const r = await pool.query(
-    `SELECT id, workspace_id, company_name, email FROM portal_clients
+    `SELECT id, workspace_id, company_name, contact_name, email FROM portal_clients
      WHERE invite_token = $1 AND active = true LIMIT 1`,
     [token]
   )
@@ -35,7 +35,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   )
 
   // Log them straight in — set the cookie ON the response so it reliably attaches.
-  const tok = await createClientSession({ clientId: client.id, workspaceId: client.workspace_id, companyName: client.company_name, email: client.email ?? '' })
+  const tok = await createClientSession({ clientId: client.id, workspaceId: client.workspace_id, companyName: client.company_name, contactName: client.contact_name ?? '', email: client.email ?? '' })
   const res = NextResponse.json({ ok: true })
   res.cookies.set(COOKIE, tok, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', path: '/', maxAge: 60 * 60 * 24 * 30 })
   return res

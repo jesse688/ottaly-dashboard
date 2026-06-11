@@ -115,7 +115,9 @@ function splitQuote(text: string): { main: string; quoted: string } {
   return { main: text.slice(0, idx).trim(), quoted }
 }
 
-export function UniboxClient({ companyName }: { companyName: string }) {
+export function UniboxClient({ companyName, clientName }: { companyName: string; clientName: string }) {
+  // First name for the greeting; falls back to the company/account name.
+  const greetingName = (clientName || companyName || '').trim().split(/\s+/)[0] || 'there'
   const [leads, setLeads] = useState<Lead[] | null>(null)
   const [selected, setSelected] = useState<Lead | null>(null)
   const [thread, setThread] = useState<ThreadMsg[] | null>(null)
@@ -124,6 +126,8 @@ export function UniboxClient({ companyName }: { companyName: string }) {
   const [view, setView] = useState<'inbox' | 'unread' | 'sent' | 'archived'>('unread')
   const [search, setSearch] = useState('')
   const [balance, setBalance] = useState<{ balance: number; currency: string } | null>(null)
+  // Friendly greeting on every load/refresh — auto-dismisses after a few seconds.
+  const [showWelcome, setShowWelcome] = useState(true)
   // Forward: seeds the composer with quoted content + an empty recipient.
   const [forwardSeed, setForwardSeed] = useState<{ id: number; html: string } | null>(null)
 
@@ -162,6 +166,12 @@ export function UniboxClient({ companyName }: { companyName: string }) {
     function h(e: MouseEvent) { if (dropRef.current && !dropRef.current.contains(e.target as Node)) setLabelDrop(false) }
     document.addEventListener('mousedown', h)
     return () => document.removeEventListener('mousedown', h)
+  }, [])
+
+  // Auto-dismiss the welcome greeting.
+  useEffect(() => {
+    const t = setTimeout(() => setShowWelcome(false), 4500)
+    return () => clearTimeout(t)
   }, [])
 
   // Show the unread (not-yet-replied) count in the browser tab.
@@ -314,6 +324,15 @@ export function UniboxClient({ companyName }: { companyName: string }) {
 
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-[#f7f8fc]" style={{ fontFamily: 'var(--font-inter), system-ui, sans-serif' }}>
+      {/* Welcome greeting — shows on every load, auto-dismisses */}
+      {showWelcome && (
+        <div className="fixed top-[68px] left-1/2 -translate-x-1/2 z-50 animate-in fade-in slide-in-from-top-2 duration-500">
+          <div className="flex items-center gap-2.5 bg-white border border-gray-200 shadow-lg rounded-full pl-4 pr-5 py-2.5">
+            <span className="text-lg leading-none">👋</span>
+            <span className="font-heading text-sm font-semibold text-[#050c29]">Welcome back, {greetingName}</span>
+          </div>
+        </div>
+      )}
       {/* Top bar */}
       <header className="h-14 bg-[#224388] flex items-center px-5 shrink-0 gap-3">
         <span className="flex items-center [&_img]:brightness-0 [&_img]:invert"><Logo onDark /></span>
