@@ -71,6 +71,7 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
         <nav className="flex items-center gap-1 ml-4">
           <a href="/unibox" className="px-3 py-1.5 text-white/70 hover:text-white text-sm rounded-lg">Leads</a>
           <span className="px-3 py-1.5 text-white bg-white/15 text-sm font-medium rounded-lg">Billing</span>
+          <a href="/account" className="px-3 py-1.5 text-white/70 hover:text-white text-sm rounded-lg">Account</a>
         </nav>
         <button onClick={handleLogout} className="ml-auto text-white/70 hover:text-white text-sm">Sign out</button>
       </header>

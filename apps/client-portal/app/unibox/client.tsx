@@ -170,7 +170,7 @@ export function UniboxClient({ companyName, clientName }: { companyName: string;
 
   // Auto-dismiss the welcome greeting.
   useEffect(() => {
-    const t = setTimeout(() => setShowWelcome(false), 4500)
+    const t = setTimeout(() => setShowWelcome(false), 3900)
     return () => clearTimeout(t)
   }, [])
 
@@ -324,14 +324,15 @@ export function UniboxClient({ companyName, clientName }: { companyName: string;
 
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-[#f7f8fc]" style={{ fontFamily: 'var(--font-inter), system-ui, sans-serif' }}>
-      {/* Welcome greeting — shows on every load, auto-dismisses */}
+      {/* Welcome splash — full-screen brand blue on every load, auto-dismisses */}
       {showWelcome && (
-        <div className="fixed top-[68px] left-1/2 -translate-x-1/2 z-50 animate-in fade-in slide-in-from-top-2 duration-500">
-          <div className="flex items-center gap-2.5 bg-white border border-gray-200 shadow-lg rounded-full pl-4 pr-5 py-2.5">
-            <span className="text-lg leading-none">👋</span>
-            <span className="font-heading text-sm font-semibold text-[#050c29]">Welcome back, {greetingName}</span>
-          </div>
-        </div>
+        <button
+          onClick={() => setShowWelcome(false)}
+          className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-[#224388] text-white cursor-default animate-out fade-out duration-700 [animation-delay:3.2s] [animation-fill-mode:forwards]">
+          <span className="mb-6 [&_img]:h-12 [&_img]:w-auto [&_img]:brightness-0 [&_img]:invert animate-in fade-in zoom-in-95 duration-500"><Logo onDark /></span>
+          <p className="text-white/60 text-sm tracking-wide uppercase animate-in fade-in slide-in-from-bottom-2 duration-700">Welcome back</p>
+          <h1 className="font-heading text-5xl sm:text-6xl font-semibold tracking-tight mt-2 animate-in fade-in slide-in-from-bottom-3 duration-700">{greetingName}</h1>
+        </button>
       )}
       {/* Top bar */}
       <header className="h-14 bg-[#224388] flex items-center px-5 shrink-0 gap-3">
@@ -344,6 +345,7 @@ export function UniboxClient({ companyName, clientName }: { companyName: string;
             {viewCounts.unread > 0 && <span className="min-w-[18px] text-center text-[11px] font-semibold px-1.5 py-0.5 rounded-full bg-[#ffb700] text-[#050c29]">{viewCounts.unread}</span>}
           </span>
           <a href="/invoices" className="px-3 py-1.5 text-white/70 hover:text-white text-sm rounded-lg">Billing</a>
+          <a href="/account" className="px-3 py-1.5 text-white/70 hover:text-white text-sm rounded-lg">Account</a>
         </nav>
         <div className="ml-auto flex items-center gap-4">
           {balance && (
@@ -662,10 +664,14 @@ export function UniboxClient({ companyName, clientName }: { companyName: string;
             {(disputeType === 'icp_mismatch' ? ICP_CATEGORIES : NONLEAD_CATEGORIES).map(c => <option key={c} value={c}>{c}</option>)}
           </select>
 
-          <label className="block text-xs text-gray-500 mb-1">Details</label>
+          <div className="flex items-baseline justify-between mb-1">
+            <label className="block text-xs text-gray-500">Details <span className="text-gray-400">(at least 10 characters)</span></label>
+            <span className={`text-[11px] font-medium ${disputeReason.trim().length < 10 ? 'text-[#ea6b25]' : 'text-green-600'}`}>{disputeReason.trim().length}/10</span>
+          </div>
           <textarea rows={3} value={disputeReason} onChange={e => setDisputeReason(e.target.value)}
             placeholder={disputeType === 'icp_mismatch' ? 'e.g. They’re a sole trader; we only serve 50+ staff companies.' : 'e.g. Replied twice over 2 weeks, sent a follow-up, no response at all.'}
-            className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-brand-400 mb-3" />
+            className={`w-full px-3 py-2 rounded-lg border text-sm outline-none mb-1 ${disputeReason.length > 0 && disputeReason.trim().length < 10 ? 'border-[#ea6b25] focus:border-[#ea6b25]' : 'border-gray-200 focus:border-brand-400'}`} />
+          <p className="text-[11px] text-gray-400 mb-3">{disputeReason.trim().length < 10 ? `Please add ${10 - disputeReason.trim().length} more character${10 - disputeReason.trim().length === 1 ? '' : 's'} so we can review this properly.` : 'Looks good — ready to submit.'}</p>
 
           {disputeType === 'non_lead' && (
             <label className="flex items-start gap-2 mb-3 cursor-pointer">
