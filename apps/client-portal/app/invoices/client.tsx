@@ -65,7 +65,7 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
   return (
     <div className="min-h-screen bg-[#f7f8fc]" style={{ fontFamily: 'var(--font-inter), system-ui, sans-serif' }}>
       <header className="h-14 bg-[#224388] flex items-center px-5 gap-3 sticky top-0 z-10">
-        <span className="bg-white rounded-lg px-2 py-1 flex items-center"><Logo /></span>
+        <span className="flex items-center [&_img]:brightness-0 [&_img]:invert"><Logo onDark /></span>
         <span className="text-white/30">|</span>
         <span className="text-white/90 text-sm font-medium">{companyName}</span>
         <nav className="flex items-center gap-1 ml-4">

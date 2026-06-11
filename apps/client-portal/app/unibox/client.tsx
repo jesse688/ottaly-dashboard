@@ -280,17 +280,15 @@ export function UniboxClient({ companyName }: { companyName: string }) {
     setNewLabelName(''); setNewLabelColor('purple'); setShowNewLabel(false)
   }
 
-  async function handleDeleteLabel(id: string) {
-    await fetch(`/api/portal/labels/${id}`, { method: 'DELETE' })
-    setCustomLabels(prev => prev.filter(l => l.id !== id))
-  }
-
   async function handleLogout() {
     await fetch('/api/logout', { method: 'POST' }); router.push('/login')
   }
 
   const counts: Record<string, number> = {}
   for (const l of leads ?? []) if (l.client_label) counts[l.client_label] = (counts[l.client_label] ?? 0) + 1
+
+  // Stages clients see: hide internal/dev stages like "test".
+  const clientStages = customLabels.filter(cl => cl.name.trim().toLowerCase() !== 'test')
 
   // Unread = a new lead not yet replied to (on or off the dashboard).
   const inView = (l: Lead) =>
@@ -318,7 +316,7 @@ export function UniboxClient({ companyName }: { companyName: string }) {
     <div className="h-screen flex flex-col overflow-hidden bg-[#f7f8fc]" style={{ fontFamily: 'var(--font-inter), system-ui, sans-serif' }}>
       {/* Top bar */}
       <header className="h-14 bg-[#224388] flex items-center px-5 shrink-0 gap-3">
-        <span className="bg-white rounded-lg px-2 py-1 flex items-center"><Logo /></span>
+        <span className="flex items-center [&_img]:brightness-0 [&_img]:invert"><Logo onDark /></span>
         <span className="text-white/30">|</span>
         <span className="text-white/90 text-sm font-medium">{companyName}</span>
         <nav className="flex items-center gap-1 ml-4">
@@ -330,12 +328,17 @@ export function UniboxClient({ companyName }: { companyName: string }) {
         </nav>
         <div className="ml-auto flex items-center gap-4">
           {balance && (
-            <a href="/invoices" className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 border border-white/20">
-              <span className="text-xs text-white/70">Leads left</span>
-              <span className={`text-sm font-semibold ${balance.balance <= 0 ? 'text-[#ffb700]' : 'text-white'}`}>
-                {balance.balance.toLocaleString()}
-              </span>
-            </a>
+            balance.balance <= 0 ? (
+              <a href="/invoices" className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#ffb700] text-[#050c29] text-sm font-semibold hover:brightness-95">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                Out of leads — top up
+              </a>
+            ) : (
+              <a href="/invoices" className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 border border-white/20">
+                <span className="text-xs text-white/70">Leads left</span>
+                <span className="text-sm font-semibold text-white">{balance.balance.toLocaleString()}</span>
+              </a>
+            )
           )}
           <button onClick={handleLogout} className="text-white/70 hover:text-white text-sm">Sign out</button>
         </div>
@@ -346,8 +349,8 @@ export function UniboxClient({ companyName }: { companyName: string }) {
         <aside className="w-56 bg-white border-r border-gray-200 flex flex-col shrink-0">
           <div className="p-3 space-y-0.5">
             {([
-              { key: 'inbox', label: 'Inbox', icon: <path d="M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/> },
-              { key: 'unread', label: 'Unread', icon: <><path d="M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><circle cx="18" cy="6" r="3" fill="currentColor" stroke="none"/></> },
+              { key: 'inbox', label: 'All leads', icon: <path d="M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/> },
+              { key: 'unread', label: 'Needs reply', icon: <><path d="M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><circle cx="18" cy="6" r="3" fill="currentColor" stroke="none"/></> },
               { key: 'sent', label: 'Sent', icon: <path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z"/> },
               { key: 'archived', label: 'Archived', icon: <><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4"/></> },
             ] as { key: 'inbox'|'unread'|'sent'|'archived'; label: string; icon: ReactNode }[]).map(v => (
@@ -369,13 +372,9 @@ export function UniboxClient({ companyName }: { companyName: string }) {
           </div>
           <div className="px-3 flex items-center justify-between">
             <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Deal stages</span>
-            <button onClick={() => setShowNewLabel(true)} className="text-gray-400 hover:text-brand-600" title="Create label">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            </button>
           </div>
           <div className="px-3 mt-1 flex-1 overflow-y-auto">
-            {customLabels.length === 0 && <p className="text-xs text-gray-400 px-1 py-2">No stages yet. Click + to add (e.g. Meeting Booked, Closed).</p>}
-            {customLabels.map(cl => (
+            {clientStages.map(cl => (
               <div key={cl.id}
                 onClick={() => setActiveLabel(activeLabel === cl.name ? null : cl.name)}
                 onDragOver={e => { if (dragLeadId) { e.preventDefault(); setDragOver(cl.id) } }}
@@ -385,10 +384,7 @@ export function UniboxClient({ companyName }: { companyName: string }) {
                 <span className="flex items-center gap-2 text-gray-700">
                   <span className={`w-2.5 h-2.5 rounded-full ${COLOR_MAP[cl.color] ?? 'bg-purple-400'}`} />{cl.name}
                 </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="text-xs text-gray-400">{counts[cl.name] ?? 0}</span>
-                  <button onClick={(e) => { e.stopPropagation(); handleDeleteLabel(cl.id) }} className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
-                </span>
+                <span className="text-xs text-gray-400">{counts[cl.name] ?? 0}</span>
               </div>
             ))}
           </div>
@@ -426,11 +422,12 @@ export function UniboxClient({ companyName }: { companyName: string }) {
                         <span className="text-[11px] text-gray-400 shrink-0">{fmtDate(l.first_replied_at ?? l.created_at)}</span>
                       </div>
                       <p className="text-xs text-gray-500 truncate">{l.company_name ?? l.email}</p>
-                      <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-                        <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-green-100 text-green-700 px-1.5 py-0.5 rounded">Lead</span>
+                      {(cl || l.dispute_status === 'pending') && (
+                        <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                         {cl && <span className={`inline-flex text-[10px] font-medium px-1.5 py-0.5 rounded ${COLOR_BADGE[cl.color] ?? 'bg-purple-100 text-purple-700'}`}>{cl.name}</span>}
                         {l.dispute_status === 'pending' && <span className="inline-flex text-[10px] font-medium bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">Dispute</span>}
                       </div>
+                      )}
                     </div>
                   </div>
                 </button>
@@ -452,7 +449,7 @@ export function UniboxClient({ companyName }: { companyName: string }) {
               <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-3 shrink-0">
                 <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold ${av(selected.id)}`}>{initials(selected)}</div>
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-[#050c29] truncate">{fullName(selected)}</p>
+                  <p className="font-heading text-base font-semibold text-[#050c29] truncate tracking-tight">{fullName(selected)}</p>
                   {selected.email && <p className="text-xs text-gray-500 truncate">{selected.email}</p>}
                 </div>
                 {/* Replied off-dashboard: moves a new lead out of Unread */}
@@ -478,17 +475,12 @@ export function UniboxClient({ companyName }: { companyName: string }) {
                   {labelDrop && (
                     <div className="absolute right-0 top-full mt-1 w-52 bg-white rounded-xl shadow-lg border border-gray-100 py-1 z-20 max-h-72 overflow-y-auto">
                       <button onClick={() => setClientLabel(selected.id, null)} className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-500 hover:bg-gray-50">Not set</button>
-                      {customLabels.map(cl => (
+                      {clientStages.map(cl => (
                         <button key={cl.id} onClick={() => setClientLabel(selected.id, cl.name)} className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
                           <span className={`w-2.5 h-2.5 rounded-full ${COLOR_MAP[cl.color]}`} />{cl.name}
                           {selected.client_label === cl.name && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="ml-auto text-brand-500"><polyline points="20 6 9 17 4 12"/></svg>}
                         </button>
                       ))}
-                      <div className="border-t border-gray-100 mt-1 pt-1">
-                        <button onClick={() => { setLabelDrop(false); setShowNewLabel(true) }} className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-brand-600 hover:bg-brand-50">
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Create stage
-                        </button>
-                      </div>
                     </div>
                   )}
                 </div>
@@ -836,7 +828,7 @@ function RichReply({ toEmail, placeholderName, sending, statusMsg, seed, onSend 
 
       <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-t border-gray-100">
         <span className="text-xs">{statusMsg ? <span className="text-green-600 font-medium">{statusMsg}</span> : <span className="text-gray-400">Sent via your campaign mailbox</span>}</span>
-        <button onClick={send} disabled={empty || sending || !to.length} className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-white text-xs font-medium rounded-lg">
+        <button onClick={send} disabled={empty || sending || !to.length} className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-brand-600 hover:bg-brand-700 text-white disabled:bg-gray-300 disabled:text-gray-500 text-xs font-medium rounded-lg">
           {sending ? 'Sending…' : <><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>Send</>}
         </button>
       </div>
