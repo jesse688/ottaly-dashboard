@@ -35,7 +35,7 @@ let _activeTeam: string | null = null
 export async function switchWorkspace(teamId: string | number): Promise<void> {
   const id = String(teamId)
   if (_activeTeam === id) return
-  await bison('POST', '/api/workspaces/v1.1/switch-workspace', undefined, { workspace_id: Number(teamId) })
+  await bison('POST', '/api/workspaces/v1.1/switch-workspace', undefined, { team_id: Number(teamId) })
   _activeTeam = id
 }
 
