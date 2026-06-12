@@ -1837,7 +1837,7 @@ app.get('/api/nav-settings', requireSession, async (req, res) => {
 // Wipes vertical snoozes and reply-intelligence notes set by the old
 // over-active parser. Deliberately leaves do_not_contact intact —
 // 'remove me' replies that legitimately set DNC should stand.
-app.post('/api/admin/clear-snoozes', requireSession, async (req, res) => {
+app.post('/api/admin/clear-snoozes', requireAdmin, async (req, res) => {
   try {
     const dbPg = app.locals.pgDb;
     if (!dbPg) return res.status(503).json({ error: 'Postgres not available' });
@@ -9217,7 +9217,7 @@ app.post('/api/campaigns/apply-optimisation', requireSession, async (req, res) =
 });
 
 // ── PlusVibe proxy (kept for performance.html agency scan) ────
-app.get('/api/pv/workspace-leads', async (req, res) => {
+app.get('/api/pv/workspace-leads', requireSession, async (req, res) => {
   const { workspace_id, label, page, limit } = req.query;
   if (!workspace_id) return res.status(400).json({ error: 'Missing workspace_id' });
   try {
@@ -10301,7 +10301,7 @@ app.post('/api/admin/nonlead-requests/:id/reject', requireAdmin, (req, res) => {
 }
 
 // ── PlusVibe — campaigns for a workspace ──────────────────
-app.get('/api/pv/workspaces', async (req, res) => {
+app.get('/api/pv/workspaces', requireSession, async (req, res) => {
   try {
     const r = await fetch('https://api.plusvibe.ai/api/v1/workspaces', {
       headers: { 'x-api-key': PLUSVIBE_KEY }
@@ -10314,7 +10314,7 @@ app.get('/api/pv/workspaces', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/pv/campaigns', async (req, res) => {
+app.get('/api/pv/campaigns', requireSession, async (req, res) => {
   const { workspace_id } = req.query;
   if (!workspace_id) return res.status(400).json({ error: 'Missing workspace_id' });
   try {
@@ -10328,7 +10328,7 @@ app.get('/api/pv/campaigns', async (req, res) => {
 });
 
 // ── PlusVibe — push contacts to campaign ──────────────────
-app.post('/api/pv/push-contacts', async (req, res) => {
+app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
   const { workspace_id, campaign_id, contact_ids } = req.body;
   if (!workspace_id || !campaign_id || !Array.isArray(contact_ids) || contact_ids.length === 0) {
     return res.status(400).json({ error: 'workspace_id, campaign_id and contact_ids required' });
@@ -10455,7 +10455,7 @@ app.post('/api/pv/push-contacts', async (req, res) => {
 // ── Email Verify 2.0 — Proxy Management ──────────────────────
 
 // GET /api/ev2/proxies
-app.get('/api/ev2/proxies', (req, res) => {
+app.get('/api/ev2/proxies', requireSession, (req, res) => {
   if (!db) return res.status(500).json({ error: 'DB not available' });
   const rows = db.prepare('SELECT * FROM ev2_proxies ORDER BY added_at DESC').all();
   res.json({ proxies: rows });
@@ -10482,7 +10482,7 @@ app.get('/api/ev2/active-proxy', (req, res) => {
 });
 
 // POST /api/ev2/proxies — bulk add (newline-separated IP:PORT:USER:PASS or IP:PORT)
-app.post('/api/ev2/proxies', (req, res) => {
+app.post('/api/ev2/proxies', requireSession, (req, res) => {
   if (!db) return res.status(500).json({ error: 'DB not available' });
   const { lines } = req.body;
   if (!lines) return res.status(400).json({ error: 'lines required' });
@@ -10506,21 +10506,21 @@ app.post('/api/ev2/proxies', (req, res) => {
 });
 
 // DELETE /api/ev2/proxies/:id
-app.delete('/api/ev2/proxies/:id', (req, res) => {
+app.delete('/api/ev2/proxies/:id', requireSession, (req, res) => {
   if (!db) return res.status(500).json({ error: 'DB not available' });
   db.prepare('DELETE FROM ev2_proxies WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
 });
 
 // DELETE /api/ev2/proxies — clear all
-app.delete('/api/ev2/proxies', (req, res) => {
+app.delete('/api/ev2/proxies', requireSession, (req, res) => {
   if (!db) return res.status(500).json({ error: 'DB not available' });
   db.prepare('DELETE FROM ev2_proxies').run();
   res.json({ ok: true });
 });
 
 // POST /api/ev2/proxies/:id/test — HTTP request through proxy to confirm auth works
-app.post('/api/ev2/proxies/:id/test', (req, res) => {
+app.post('/api/ev2/proxies/:id/test', requireSession, (req, res) => {
   if (!db) return res.status(500).json({ error: 'DB not available' });
   const row = db.prepare('SELECT * FROM ev2_proxies WHERE id = ?').get(req.params.id);
   if (!row) return res.status(404).json({ error: 'Proxy not found' });
@@ -10579,7 +10579,7 @@ app.post('/api/ev2/proxies/:id/test', (req, res) => {
 });
 
 // POST /api/ev2/verify — verify list of emails using rotating proxies
-app.post('/api/ev2/verify', async (req, res) => {
+app.post('/api/ev2/verify', requireSession, async (req, res) => {
   if (!db) return res.status(500).json({ error: 'DB not available' });
   const { emails, useProxy = true } = req.body;
   if (!Array.isArray(emails) || emails.length === 0) return res.status(400).json({ error: 'emails array required' });
@@ -12058,21 +12058,21 @@ app.get('/api/contacts/verified-today', requireSession, async (req, res) => {
   }
 });
 
-app.get('/api/contacts/push-jobs', (req, res) => {
+app.get('/api/contacts/push-jobs', requireSession, (req, res) => {
   const jobs = [...pushJobs.values()]
     .sort((a, b) => b.created_at - a.created_at)
     .slice(0, 20);
   res.json({ jobs });
 });
 
-app.get('/api/contacts/push-jobs/:id', (req, res) => {
+app.get('/api/contacts/push-jobs/:id', requireSession, (req, res) => {
   const job = pushJobs.get(req.params.id);
   if (!job) return res.status(404).json({ error: 'Job not found' });
   res.json(job);
 });
 
 // POST starts job immediately, returns job ID — processing runs in background
-app.post('/api/contacts/verify-and-push', (req, res) => {
+app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
   const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 90, emailProviders } = req.body;
   if (!workspace_id || !campaign_id || !Array.isArray(contact_ids) || !contact_ids.length) {
     return res.status(400).json({ error: 'workspace_id, campaign_id and contact_ids required' });
@@ -12565,7 +12565,7 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
 });
 
 // Cancel a push job
-app.post('/api/contacts/push-jobs/:id/cancel', (req, res) => {
+app.post('/api/contacts/push-jobs/:id/cancel', requireSession, (req, res) => {
   const job = pushJobs.get(req.params.id);
   if (!job) return res.status(404).json({ error: 'Not found' });
   job.cancelled = true;
@@ -12575,7 +12575,7 @@ app.post('/api/contacts/push-jobs/:id/cancel', (req, res) => {
 });
 
 // Pause a push job — sets paused flag; worker exits after current batch
-app.post('/api/contacts/push-jobs/:id/pause', (req, res) => {
+app.post('/api/contacts/push-jobs/:id/pause', requireSession, (req, res) => {
   const job = pushJobs.get(req.params.id);
   if (!job) return res.status(404).json({ error: 'Not found' });
   if (!['verifying','pushing','n2b_verifying'].includes(job.status)) {
@@ -12587,7 +12587,7 @@ app.post('/api/contacts/push-jobs/:id/pause', (req, res) => {
 });
 
 // Resume a paused job — spawns a new worker that skips already-verified contacts
-app.post('/api/contacts/push-jobs/:id/resume', async (req, res) => {
+app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) => {
   const job = pushJobs.get(req.params.id);
   if (!job) return res.status(404).json({ error: 'Not found' });
   if (job.status !== 'paused') return res.status(400).json({ error: 'Job is not paused' });
