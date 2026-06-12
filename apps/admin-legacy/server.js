@@ -55,6 +55,34 @@ const BISON_API_KEY = process.env.BISON_API_KEY || process.env.PLUSVIBE_KEY || '
 const BISON_BASE = (process.env.BISON_API_URL || 'https://send.ottaly.co.uk').replace(/\/$/, '');
 let _bisonWsId = null;
 
+// Module-scope Bison helper. The existing bisonSwitch/bisonFetch are scoped to
+// the if(db) block and aren't reachable from the /api/bison/* routes, so these
+// routes use this self-contained version. Always switches workspace when wsId
+// is given (POST /api/workspaces/v1.1/switch-workspace { workspace_id }).
+async function bisonReq(path, opts = {}) {
+  if (opts.wsId) {
+    await fetch(BISON_BASE + '/api/workspaces/v1.1/switch-workspace', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + BISON_API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspace_id: Number(opts.wsId) }),
+      signal: AbortSignal.timeout(10000),
+    });
+  }
+  const url = new URL(BISON_BASE + path);
+  if (opts.params) for (const [k, v] of Object.entries(opts.params)) { if (v != null) url.searchParams.set(k, String(v)); }
+  const init = {
+    method: opts.method || 'GET',
+    headers: { Authorization: 'Bearer ' + BISON_API_KEY, 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(20000),
+  };
+  if (opts.body) init.body = JSON.stringify(opts.body);
+  const r = await fetch(url.toString(), init);
+  const txt = await r.text();
+  let data; try { data = txt ? JSON.parse(txt) : {}; } catch { data = { raw: txt }; }
+  if (!r.ok) throw new Error('Bison ' + path + ' -> ' + r.status + ': ' + txt.slice(0, 200));
+  return data;
+}
+
 // Known PlusVibe workspace_id → Bison team_id map (Bison's /api/workspaces only
 // returns the token user's OWN teams, not all client teams, so we map clients
 // explicitly). Update here when a client is added/migrated to Bison.
@@ -10677,15 +10705,14 @@ app.get('/api/bison/campaigns', requireSession, async (req, res) => {
   const wsId = String(req.query.ws_id || '');
   if (!wsId) return res.status(400).json({ error: 'ws_id required' });
   try {
-    // Match the proven stats path exactly: explicit switch first, then fetch.
-    await bisonSwitch(wsId);
-    const data = await bisonFetch('/api/campaigns', { wsId });
+    const data = await bisonReq('/api/campaigns', { wsId });
     // ?raw=1 → return the unparsed Bison response for diagnosis.
     if (req.query.raw) return res.json({ raw: data });
-    // Handle a few possible shapes: {data:[...]}, [...], {data:{data:[...]}}.
+    // Handle a few possible shapes: {data:[...]}, [...], {data:{data:[...]}}, {data:{campaigns:[...]}}.
     const list = Array.isArray(data) ? data
       : Array.isArray(data?.data) ? data.data
       : Array.isArray(data?.data?.data) ? data.data.data
+      : Array.isArray(data?.data?.campaigns) ? data.data.campaigns
       : [];
     res.json({ campaigns: list.map(c => ({ id: String(c.id), name: c.name, status: c.status })) });
   } catch (err) {
@@ -10717,25 +10744,26 @@ app.post('/api/bison/push-contacts', requireSession, async (req, res) => {
     console.log(`[bison-push] filtered ${allContacts.length} → ${contacts.length}`, skipped);
     if (contacts.length === 0) return res.json({ success: true, pushed: 0, total: 0, skipped });
 
-    // 1. Create/update leads (≤500/req), collecting Bison ids. bisonFetch switches
-    //    the workspace via opts.wsId before the call.
+    // 1. Create/update leads (≤500/req), collecting Bison ids. Mirrors the
+    //    proven verify-and-push Bison path: create-or-update/multiple, then read
+    //    ids from data.leads || data.
     const leadIds = [];
     for (let i = 0; i < contacts.length; i += 500) {
       const slice = contacts.slice(i, i + 500);
-      const resp = await bisonFetch('/api/leads/create-or-update/multiple', {
+      const resp = await bisonReq('/api/leads/create-or-update/multiple', {
         wsId: ws_id, method: 'POST',
-        body: { type: 'patch', leads: slice.map(contactToBisonLead) },
+        body: { leads: slice.map(contactToBisonLead) },
       });
-      const rows = Array.isArray(resp) ? resp : (resp.data ?? []);
-      for (const row of rows) { if (row?.id != null) leadIds.push(row.id); }
+      const rows = (resp && resp.data && (resp.data.leads || resp.data)) || [];
+      for (const row of (Array.isArray(rows) ? rows : [])) { if (row?.id != null) leadIds.push(row.id); }
     }
     if (leadIds.length === 0) return res.status(502).json({ error: 'Bison created no leads', pushed: 0, skipped });
 
-    // 2. Import the leads into the campaign.
+    // 2. Assign the leads to the campaign (proven endpoint: /campaigns/{id}/leads).
     let pushed = 0;
     for (let i = 0; i < leadIds.length; i += 1000) {
       const idSlice = leadIds.slice(i, i + 1000);
-      await bisonFetch(`/api/campaigns/${campaign_id}/import-leads-by-ids`, {
+      await bisonReq(`/api/campaigns/${campaign_id}/leads`, {
         wsId: ws_id, method: 'POST', body: { lead_ids: idSlice },
       });
       pushed += idSlice.length;
