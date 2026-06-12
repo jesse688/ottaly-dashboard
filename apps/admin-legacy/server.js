@@ -1867,6 +1867,54 @@ app.get('/api/nav-settings', requireSession, async (req, res) => {
 // Wipes vertical snoozes and reply-intelligence notes set by the old
 // over-active parser. Deliberately leaves do_not_contact intact —
 // 'remove me' replies that legitimately set DNC should stand.
+// POST /api/admin/sync-leads-to-portal
+// One-time/repeatable backfill: copy historical PlusVibe leads from the SQLite
+// `leads` table (populated by /webhook/lead) into Postgres esp_leads, so the
+// client portal dashboard exposes them. source='plusvibe', status='INTERESTED'.
+// Idempotent (ON CONFLICT (id, source)). Frozen history — never deletes.
+app.post('/api/admin/sync-leads-to-portal', requireAdmin, async (req, res) => {
+  const dbPg = app.locals.pgDb;
+  if (!dbPg || !db) return res.status(500).json({ error: 'DB not available' });
+  try {
+    // Active leads only (status active or NULL = real leads, matching the admin
+    // count). Each row: id (PV _id), workspace_id, data (JSON).
+    const rows = db.prepare(
+      `SELECT id, workspace_id, data FROM leads WHERE status = 'active' OR status IS NULL`
+    ).all();
+
+    let synced = 0, skipped = 0;
+    const perWs = {};
+    for (const r of rows) {
+      let d; try { d = JSON.parse(r.data || '{}'); } catch { d = {}; }
+      const email = (d.email || '').toString().trim().toLowerCase();
+      if (!r.workspace_id || !email.includes('@')) { skipped++; continue; }
+      try {
+        await dbPg.query(
+          `INSERT INTO esp_leads
+             (id, source, workspace_id, campaign_id, email, first_name, last_name,
+              company_name, status, label, created_at, updated_at, raw, synced_at)
+           VALUES ($1,'plusvibe',$2,$3,$4,$5,$6,$7,'INTERESTED','INTERESTED',$8,$8,$9,now())
+           ON CONFLICT (id, source) DO UPDATE SET
+             status='INTERESTED', label='INTERESTED',
+             email=EXCLUDED.email, first_name=EXCLUDED.first_name,
+             last_name=EXCLUDED.last_name, company_name=EXCLUDED.company_name,
+             synced_at=now()`,
+          [String(r.id), r.workspace_id, d.campaign_id || null, email,
+           d.first_name || null, d.last_name || null, d.company_name || null,
+           d.created_at || new Date().toISOString(), JSON.stringify(d)]
+        );
+        synced++;
+        perWs[r.workspace_id] = (perWs[r.workspace_id] || 0) + 1;
+      } catch (e) { skipped++; }
+    }
+    console.log(`[sync-leads-to-portal] synced ${synced}, skipped ${skipped}, across ${Object.keys(perWs).length} workspace(s)`);
+    res.json({ ok: true, synced, skipped, workspaces: Object.keys(perWs).length, perWorkspace: perWs });
+  } catch (err) {
+    console.error('[sync-leads-to-portal]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/admin/clear-snoozes', requireAdmin, async (req, res) => {
   try {
     const dbPg = app.locals.pgDb;
