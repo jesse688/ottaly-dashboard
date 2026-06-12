@@ -10576,6 +10576,149 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
   }
 });
 
+// ── Push to EmailBison (reuses the existing bisonFetch/bisonSwitch helpers) ──
+// Separate path from PlusVibe (PV endpoint above unchanged). Bison 2-step:
+// create/update leads → import-by-ids into the campaign, after switch-workspace.
+
+// Shared contact→pushable filter (same rules as the PV path). Pure function.
+function filterPushableContacts(allContacts, { cooldownWorkspaceId, campaignName }) {
+  const cooloffDate = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const campaignNameLc = (campaignName || '').toString().trim().toLowerCase();
+  const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, missingEnrichment: 0 };
+  const PUSHABLE_STATUSES = new Set(['safe', 'safe_catchall']);
+  const contacts = allContacts.filter(c => {
+    if (!PUSHABLE_STATUSES.has((c.email_status || '').toLowerCase())) { skipped.unsafe++; return false; }
+    if (c.do_not_contact) { skipped.dnc++; return false; }
+    if ((!c.keywords || c.keywords.trim() === '') || (!c.industry || c.industry.trim() === '')) {
+      skipped.missingEnrichment++; return false;
+    }
+    if (campaignNameLc && c.last_campaign_name && c.last_campaign_name.toLowerCase() === campaignNameLc) {
+      skipped.alreadyInCampaign++; return false;
+    }
+    if (cooldownWorkspaceId) {
+      const emailed = typeof c.emailed_workspaces === 'string'
+        ? JSON.parse(c.emailed_workspaces || '{}')
+        : (c.emailed_workspaces || {});
+      const lastSent = emailed[cooldownWorkspaceId]?.last_sent;
+      if (lastSent && lastSent >= cooloffDate) { skipped.cooldownWorkspace++; return false; }
+    }
+    return true;
+  });
+  return { contacts, skipped };
+}
+
+// Map an Ottaly contact to a Bison lead (custom_variables = array of {name,value}).
+function contactToBisonLead(c) {
+  const raw = typeof c.raw_data === 'string' ? JSON.parse(c.raw_data || '{}') : (c.raw_data || {});
+  const cv = [];
+  const add = (name, value) => { if (value !== undefined && value !== null && value !== '') cv.push({ name, value: String(value) }); };
+  add('phone_number', c.phone);
+  add('company_website', c.company_domain);
+  add('job_title', c.job_title);
+  add('industry', raw.Industry || c.industry);
+  add('linkedin_person_url', c.linkedin_url);
+  add('linkedin_company_url', c.company_linkedin_url);
+  add('city', c.company_city || c.city);
+  add('state', c.company_county || c.company_state || c.state);
+  add('country', c.company_country || c.country);
+  add('seniority', c.seniority);
+  add('keywords', raw.Keywords || c.keywords);
+  return {
+    email:      c.email,
+    first_name: c.first_name || '',
+    last_name:  c.last_name || '',
+    title:      c.job_title || '',
+    company:    c.company_name || '',
+    custom_variables: cv,
+  };
+}
+
+// GET /api/bison/workspaces — live Bison workspace list for the push dropdown.
+app.get('/api/bison/workspaces', requireSession, async (req, res) => {
+  try {
+    const data = await bisonFetch('/api/workspaces');
+    const list = Array.isArray(data) ? data : (data.data ?? []);
+    res.json({ workspaces: list.map(normBisonWs) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/bison/campaigns?ws_id=  — live Bison campaigns for a workspace.
+app.get('/api/bison/campaigns', requireSession, async (req, res) => {
+  const wsId = String(req.query.ws_id || '');
+  if (!wsId) return res.status(400).json({ error: 'ws_id required' });
+  try {
+    const data = await bisonFetch('/api/campaigns', { wsId, params: { per_page: 100 } });
+    const list = Array.isArray(data) ? data : (data.data ?? []);
+    res.json({ campaigns: list.map(c => ({ id: String(c.id), name: c.name, status: c.status })) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/bison/push-contacts
+// body: { ws_id, campaign_id, contact_ids, campaign_name?, cooldown_workspace_id? }
+//  - ws_id:        Bison workspace id (switch-workspace target)
+//  - campaign_id:  Bison campaign to import into
+//  - cooldown_workspace_id: the client's PV workspace_id, for the shared 60-day
+//                  per-client cooldown stamp (optional).
+app.post('/api/bison/push-contacts', requireSession, async (req, res) => {
+  const { ws_id, campaign_id, contact_ids } = req.body;
+  if (!ws_id || !campaign_id || !Array.isArray(contact_ids) || contact_ids.length === 0) {
+    return res.status(400).json({ error: 'ws_id, campaign_id and contact_ids required' });
+  }
+  if (!BISON_API_KEY) return res.status(500).json({ error: 'BISON_API_KEY not configured' });
+  try {
+    if (!db.getContactsById) return res.status(500).json({ error: 'Contacts DB not available' });
+    const allContacts = await db.getContactsById(contact_ids);
+    if (allContacts.length === 0) return res.status(404).json({ error: 'No contacts found' });
+
+    const cooldownWorkspaceId = req.body.cooldown_workspace_id || null;
+    const { contacts, skipped } = filterPushableContacts(allContacts, {
+      cooldownWorkspaceId, campaignName: req.body.campaign_name,
+    });
+    console.log(`[bison-push] filtered ${allContacts.length} → ${contacts.length}`, skipped);
+    if (contacts.length === 0) return res.json({ success: true, pushed: 0, total: 0, skipped });
+
+    // 1. Create/update leads (≤500/req), collecting Bison ids. bisonFetch switches
+    //    the workspace via opts.wsId before the call.
+    const leadIds = [];
+    for (let i = 0; i < contacts.length; i += 500) {
+      const slice = contacts.slice(i, i + 500);
+      const resp = await bisonFetch('/api/leads/create-or-update/multiple', {
+        wsId: ws_id, method: 'POST',
+        body: { type: 'patch', leads: slice.map(contactToBisonLead) },
+      });
+      const rows = Array.isArray(resp) ? resp : (resp.data ?? []);
+      for (const row of rows) { if (row?.id != null) leadIds.push(row.id); }
+    }
+    if (leadIds.length === 0) return res.status(502).json({ error: 'Bison created no leads', pushed: 0, skipped });
+
+    // 2. Import the leads into the campaign.
+    let pushed = 0;
+    for (let i = 0; i < leadIds.length; i += 1000) {
+      const idSlice = leadIds.slice(i, i + 1000);
+      await bisonFetch(`/api/campaigns/${campaign_id}/import-leads-by-ids`, {
+        wsId: ws_id, method: 'POST', body: { lead_ids: idSlice },
+      });
+      pushed += idSlice.length;
+    }
+
+    // 3. Shared per-client cooldown stamp (keyed by PV workspace_id).
+    const pushedIds = contacts.map(c => c.id).filter(Boolean);
+    if (pushedIds.length && cooldownWorkspaceId && db.stampPushedCampaign) {
+      db.stampPushedCampaign(pushedIds, cooldownWorkspaceId, String(campaign_id), req.body.campaign_name || '')
+        .catch(err => console.warn('[bison-push] stamp failed:', err.message));
+    }
+
+    res.json({ success: true, pushed, total: contacts.length, skipped });
+  } catch (err) {
+    console.error('[Bison Push]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Email Verify 2.0 — Proxy Management ──────────────────────
 
 // GET /api/ev2/proxies
