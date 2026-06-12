@@ -42,6 +42,9 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 
 const app  = express();
+// Behind Easypanel's reverse proxy — trust the first proxy hop so
+// express-rate-limit reads the real client IP from X-Forwarded-For.
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
 
 const JWT_SECRET             = process.env.JWT_SECRET             || 'ottaly-dev-secret-change-in-prod';
@@ -14703,11 +14706,10 @@ function scheduleAudienceScoring(pgdb) {
     const adminUrl = process.env.BISON_WEBHOOK_ADMIN_URL || 'https://ottaly-git.oix3xv.easypanel.host/webhook/plusvibe-reply';
     for (const team of BISON_TEAMS) {
       try {
-        await bisonSwitch(team.team_id);
-        const existing = await bisonFetch('/api/webhook-url').catch(() => ({ data: [] }));
+        const existing = await bisonReq('/api/webhook-url', { wsId: team.team_id }).catch(() => ({ data: [] }));
         const already = (existing.data || []).some(function(h) { return h.url === adminUrl; });
         if (!already) {
-          await bisonFetch('/api/webhook-url', { method: 'POST', body: { name: 'Ottaly Admin', url: adminUrl, events: ['lead_interested', 'lead_replied', 'email_sent', 'email_bounced', 'untracked_reply_received'] } });
+          await bisonReq('/api/webhook-url', { wsId: team.team_id, method: 'POST', body: { name: 'Ottaly Admin', url: adminUrl, events: ['lead_interested', 'lead_replied', 'email_sent', 'email_bounced', 'untracked_reply_received'] } });
           console.log(`[bison] webhook registered for ${team.name} (team ${team.team_id})`);
         } else {
           console.log(`[bison] webhook already exists for ${team.name} (team ${team.team_id})`);
