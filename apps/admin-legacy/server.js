@@ -1868,44 +1868,53 @@ app.get('/api/nav-settings', requireSession, async (req, res) => {
 // over-active parser. Deliberately leaves do_not_contact intact —
 // 'remove me' replies that legitimately set DNC should stand.
 // POST /api/admin/sync-leads-to-portal
-// One-time/repeatable backfill: copy historical PlusVibe leads from the SQLite
-// `leads` table (populated by /webhook/lead) into Postgres esp_leads, so the
-// client portal dashboard exposes them. source='plusvibe', status='INTERESTED'.
-// Idempotent (ON CONFLICT (id, source)). Frozen history — never deletes.
+// Backfill historical PlusVibe leads into Postgres esp_leads so the client portal
+// dashboards expose them. SOURCE = perf_cache_leads (the SAME persisted labeled-
+// leads cache the admin dashboard counts), so the portal count matches admin
+// exactly. Keeps only qualified leads (label NOT non-lead, _pv_nonlead false).
+// Writes source='plusvibe', status='INTERESTED'. Idempotent (ON CONFLICT). Frozen
+// history — never deletes.
 app.post('/api/admin/sync-leads-to-portal', requireAdmin, async (req, res) => {
   const dbPg = app.locals.pgDb;
-  if (!dbPg || !db) return res.status(500).json({ error: 'DB not available' });
+  if (!dbPg) return res.status(500).json({ error: 'DB not available' });
+  // Same non-lead exclusion the admin uses (NON_LEAD / WEAK_LEAD / Non Lead…).
+  const NON_LEAD = /(^|[_\-\s])non([_\-\s]?lead)?([_\-\s]|$)/i;
   try {
-    // Active leads only (status active or NULL = real leads, matching the admin
-    // count). Each row: id (PV _id), workspace_id, data (JSON).
-    const rows = db.prepare(
-      `SELECT id, workspace_id, data FROM leads WHERE status = 'active' OR status IS NULL`
-    ).all();
-
+    const { rows } = await dbPg.query(`SELECT ws_id, data FROM perf_cache_leads`);
     let synced = 0, skipped = 0;
     const perWs = {};
-    for (const r of rows) {
-      let d; try { d = JSON.parse(r.data || '{}'); } catch { d = {}; }
-      const email = (d.email || '').toString().trim().toLowerCase();
-      if (!r.workspace_id || !email.includes('@')) { skipped++; continue; }
-      try {
-        await dbPg.query(
-          `INSERT INTO esp_leads
-             (id, source, workspace_id, campaign_id, email, first_name, last_name,
-              company_name, status, label, created_at, updated_at, raw, synced_at)
-           VALUES ($1,'plusvibe',$2,$3,$4,$5,$6,$7,'INTERESTED','INTERESTED',$8,$8,$9,now())
-           ON CONFLICT (id, source) DO UPDATE SET
-             status='INTERESTED', label='INTERESTED',
-             email=EXCLUDED.email, first_name=EXCLUDED.first_name,
-             last_name=EXCLUDED.last_name, company_name=EXCLUDED.company_name,
-             synced_at=now()`,
-          [String(r.id), r.workspace_id, d.campaign_id || null, email,
-           d.first_name || null, d.last_name || null, d.company_name || null,
-           d.created_at || new Date().toISOString(), JSON.stringify(d)]
-        );
-        synced++;
-        perWs[r.workspace_id] = (perWs[r.workspace_id] || 0) + 1;
-      } catch (e) { skipped++; }
+    for (const row of rows) {
+      const wsId = row.ws_id;
+      const leads = Array.isArray(row.data) ? row.data
+        : (typeof row.data === 'string' ? (() => { try { return JSON.parse(row.data); } catch { return []; } })() : []);
+      const seen = new Set();
+      for (const l of leads) {
+        const email = (l.email || '').toString().trim().toLowerCase();
+        const label = String(l.label || '');
+        if (!wsId || !email.includes('@')) { skipped++; continue; }
+        if (l._pv_nonlead || NON_LEAD.test(label)) { skipped++; continue; } // exclude non-leads
+        if (seen.has(email)) { skipped++; continue; }                       // dedup within workspace
+        seen.add(email);
+        const id = String(l._id || l.id || `${wsId}:${email}`);
+        try {
+          await dbPg.query(
+            `INSERT INTO esp_leads
+               (id, source, workspace_id, campaign_id, email, first_name, last_name,
+                company_name, status, label, created_at, updated_at, raw, synced_at)
+             VALUES ($1,'plusvibe',$2,$3,$4,$5,$6,$7,'INTERESTED','INTERESTED',$8,$8,$9,now())
+             ON CONFLICT (id, source) DO UPDATE SET
+               status='INTERESTED', label='INTERESTED',
+               email=EXCLUDED.email, first_name=EXCLUDED.first_name,
+               last_name=EXCLUDED.last_name, company_name=EXCLUDED.company_name,
+               synced_at=now()`,
+            [id, wsId, l.campaign_id || null, email,
+             l.first_name || null, l.last_name || null, l.company_name || l.company || null,
+             l.created_at || l.date || new Date().toISOString(), JSON.stringify(l)]
+          );
+          synced++;
+          perWs[wsId] = (perWs[wsId] || 0) + 1;
+        } catch (e) { skipped++; }
+      }
     }
     console.log(`[sync-leads-to-portal] synced ${synced}, skipped ${skipped}, across ${Object.keys(perWs).length} workspace(s)`);
     res.json({ ok: true, synced, skipped, workspaces: Object.keys(perWs).length, perWorkspace: perWs });
