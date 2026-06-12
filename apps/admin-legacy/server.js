@@ -2640,7 +2640,16 @@ app.get('/api/avg-lead-price', requireSession, (req, res) => {
   const totalLeads   = leads.length;
   const avg          = totalLeads > 0 ? totalRevenue / totalLeads : 0;
 
-  res.json({ avg_lead_price_gbp: parseFloat(avg.toFixed(2)), total_leads: totalLeads, total_revenue: parseFloat(totalRevenue.toFixed(2)), period: 'all-time' });
+  // Managers need avg_lead_price_gbp for commission, but must NOT see
+  // agency-wide revenue totals (policy: managers ≠ Revenue/Finance). Strip the
+  // aggregate figures for non-admins; commission.html only reads avg_lead_price_gbp.
+  const isAdmin = decodeSession(req)?.role === 'admin';
+  const payload = { avg_lead_price_gbp: parseFloat(avg.toFixed(2)), period: 'all-time' };
+  if (isAdmin) {
+    payload.total_leads = totalLeads;
+    payload.total_revenue = parseFloat(totalRevenue.toFixed(2));
+  }
+  res.json(payload);
 });
 
 app.get('/api/revenue/leads', requireSession, (req, res) => {
@@ -2693,7 +2702,10 @@ app.post('/api/nonlead/restore', requireSession, (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/revenue/stats-by-workspace', requireSession, (req, res) => {
+// Admin-only: agency-wide per-workspace revenue totals. clients.html already
+// skips this for managers (isManager ? {} : fetch(...)), so requireAdmin enforces
+// the Revenue-is-admin-only policy server-side without breaking any manager flow.
+app.get('/api/revenue/stats-by-workspace', requireAdmin, (req, res) => {
   // Always use current price from DB so changing a price reflects immediately
   const currentPrices = db.prepare('SELECT workspace_id, price_per_lead FROM clients').all();
   const livePriceMap  = {};
