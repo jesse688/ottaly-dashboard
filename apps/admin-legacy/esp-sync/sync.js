@@ -161,7 +161,13 @@ async function syncWorkspace(adapter, workspaceId, workspaceName) {
     await client.query('BEGIN')
     const c = await upsertCampaigns(client, source, campaigns)
     const a = await upsertEmailAccounts(client, source, accounts)
-    const l = await upsertLeads(client, source, leads)
+    // NOTE: esp_leads writes are DISABLED for the PlusVibe sync. The client
+    // portal's lead set is owned by the revenue_leads backfill (the admin's
+    // authoritative lead source) + Bison going forward. Letting esp-sync also
+    // write esp_leads (with label='INTERESTED' on replied-but-not-lead rows)
+    // caused the portal lead counts to drift above the admin count. Campaigns
+    // and email-account sync still run.
+    const l = (source === 'plusvibe') ? 0 : await upsertLeads(client, source, leads)
     await logSync(client, source, workspaceId, 'success', { campaigns: c, accounts: a, leads: l })
     await client.query('COMMIT')
 
