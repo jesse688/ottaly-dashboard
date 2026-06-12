@@ -36,6 +36,14 @@ const contactsAPI = require('./api-contacts');
 const { cleanCompanyName, normalizeJobTitle } = require('./csv-importer');
 const { locationCustomVars } = require('./location-normalizer');
 const { google } = require('googleapis');
+const Sentry = require('@sentry/node');
+const compression = require('compression');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const NodeCache = require('node-cache');
+
+// Cache for expensive API endpoints
+const apiCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -515,10 +523,35 @@ app.use('/email-finder-tool', (req, res) => {
   req.pipe(proxyReq);
 });
 
+// Sentry must be first
+Sentry.init({
+  dsn: process.env.SENTRY_DSN || '',
+  environment: process.env.NODE_ENV || 'production',
+  tracesSampleRate: 0.1,
+});
+app.use(Sentry.Handlers.requestHandler());
+app.use(Sentry.Handlers.tracingHandler());
+
+// Security + performance
+app.use(helmet({ contentSecurityPolicy: false }));
+app.use(compression());
+
+// Rate limit all /api/ routes
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 500,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.path === '/api/stripe/webhook',
+});
+app.use('/api/', apiLimiter);
+
 // ── Middleware ─────────────────────────────────────────────
 app.use(express.json({ limit: '50mb' }));
 app.use(express.text({ limit: '500mb', type: 'text/csv' })); // raw CSV uploads — no JSON overhead
 app.use(express.static(path.join(__dirname), {
+  maxAge: '1d',
+  etag: true,
   setHeaders(res, filePath) {
     if (filePath.endsWith('.html')) {
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
@@ -613,6 +646,27 @@ app.post('/api/slack/slash',
   }
 )
 
+// ── Route modules ────────────────────────────────────────
+// These modules are the extracted, maintainable form of the routes below.
+// They are NOT yet active (app.use commented out) — each group is being
+// incrementally validated before the inline duplicates are removed.
+// To activate a group: uncomment its app.use() line AND delete the
+// corresponding inline routes further below in this file.
+//
+// Pattern: each module exports makeRouter(ctx) where ctx supplies
+// shared dependencies (db, stripe, middlewares, caches, etc.).
+//
+// Status:
+//   routes/auth.js          — ready (mirrors lines 650–1922)
+//   routes/admin.js         — ready (mirrors lines 1684–10890)
+//   routes/client-portal.js — ready (mirrors lines 1951–2325)
+//   routes/webhooks.js      — ready (mirrors lines 372–647)
+//   routes/stats.js         — ready (mirrors lines 3004–4260)
+//   routes/campaigns.js     — ready (mirrors lines 3846–8989)
+//   routes/diagnostics.js   — ready (mirrors lines 5448–5808)
+//   routes/health.js        — ready (mirrors lines 5808–6260)
+//   routes/revenue.js       — ready (mirrors lines 2578–8190)
+//
 // ── Auth endpoints ────────────────────────────────────────
 app.get('/api/session', (req, res) => {
   const s = decodeSession(req);
@@ -661,62 +715,74 @@ app.get('/api/contacts/export', requireSession, async (req, res) => {
 
   if (!regions.length) return res.status(400).json({ error: 'companyRegion required' });
 
-  const placeholders = regions.map((_, i) => `$${i + 1}`).join(',');
-  const countRes = await pgdb.query(
-    `SELECT COUNT(*) AS n FROM contacts WHERE company_region = ANY(ARRAY[${placeholders}]::text[]) AND email IS NOT NULL`,
-    regions
-  );
-  const total = parseInt(countRes.rows[0].n, 10);
+  try {
+    const placeholders = regions.map((_, i) => `$${i + 1}`).join(',');
+    const countRes = await pgdb.query(
+      `SELECT COUNT(*) AS n FROM contacts WHERE company_region = ANY(ARRAY[${placeholders}]::text[]) AND email IS NOT NULL`,
+      regions
+    );
+    const total = parseInt(countRes.rows[0].n, 10);
 
-  const params = [...regions, limit, offset];
-  const { rows } = await pgdb.query(
-    `SELECT email, first_name, last_name, company_name, company_domain, apollo_id
-     FROM contacts
-     WHERE company_region = ANY(ARRAY[${placeholders}]::text[]) AND email IS NOT NULL
-     ORDER BY company_domain, email
-     LIMIT $${regions.length + 1} OFFSET $${regions.length + 2}`,
-    params
-  );
+    const params = [...regions, limit, offset];
+    const { rows } = await pgdb.query(
+      `SELECT email, first_name, last_name, company_name, company_domain, apollo_id
+       FROM contacts
+       WHERE company_region = ANY(ARRAY[${placeholders}]::text[]) AND email IS NOT NULL
+       ORDER BY company_domain, email
+       LIMIT $${regions.length + 1} OFFSET $${regions.length + 2}`,
+      params
+    );
 
-  // Minimal upload: give Apollo just enough to identify the contact and company.
-  // Phone, LinkedIn, title, industry, location are intentionally omitted so
-  // Apollo fills them from its own live database (paid enrichment fields).
-  const cols = ['First Name', 'Last Name', 'Email', 'Company Name', 'Website', 'Apollo Contact Id'];
-  const esc  = v => v == null ? '' : `"${String(v).replace(/"/g,'""')}"`;
-  const csv  = [cols.join(','), ...rows.map(r => [
-    r.first_name, r.last_name, r.email, r.company_name, r.company_domain, r.apollo_id
-  ].map(esc).join(','))].join('\n');
+    // Minimal upload: give Apollo just enough to identify the contact and company.
+    // Phone, LinkedIn, title, industry, location are intentionally omitted so
+    // Apollo fills them from its own live database (paid enrichment fields).
+    const cols = ['First Name', 'Last Name', 'Email', 'Company Name', 'Website', 'Apollo Contact Id'];
+    const esc  = v => v == null ? '' : `"${String(v).replace(/"/g,'""')}"`;
+    const csv  = [cols.join(','), ...rows.map(r => [
+      r.first_name, r.last_name, r.email, r.company_name, r.company_domain, r.apollo_id
+    ].map(esc).join(','))].join('\n');
 
-  const hasMore   = offset + rows.length < total;
-  const nextOffset = offset + rows.length;
-  res.setHeader('Content-Type', 'text/csv');
-  res.setHeader('Content-Disposition', `attachment; filename="export-${offset}.csv"`);
-  res.setHeader('X-Has-More', hasMore ? 'true' : 'false');
-  res.setHeader('X-Next-Offset', String(nextOffset));
-  res.setHeader('X-Rows-In-File', String(rows.length));
-  res.send(csv);
+    const hasMore   = offset + rows.length < total;
+    const nextOffset = offset + rows.length;
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="export-${offset}.csv"`);
+    res.setHeader('X-Has-More', hasMore ? 'true' : 'false');
+    res.setHeader('X-Next-Offset', String(nextOffset));
+    res.setHeader('X-Rows-In-File', String(rows.length));
+    res.send(csv);
+  } catch (err) {
+    console.error('[contacts/export]', err);
+    Sentry.captureException(err);
+    res.status(500).json({ error: err.message || 'Internal server error' });
+  }
 });
 
 app.get('/api/admin/export-missing-enrichment', requireAdmin, async (req, res) => {
   const pgdb = app.locals.pgDb;
   if (!pgdb) return res.status(503).json({ error: 'Database not available' });
-  const { rows } = await pgdb.query(`
-    SELECT workspace_id, email, first_name, last_name, company_name, company_domain,
-           job_title, industry, city, state, country, linkedin_url,
-           num_employees, keywords
-    FROM contacts
-    WHERE (keywords IS NULL OR keywords = '')
-       OR num_employees IS NULL
-       OR (industry IS NULL OR industry = '')
-       OR (city IS NULL OR city = '')
-    ORDER BY workspace_id, company_domain
-  `);
-  const cols = ['workspace_id','email','first_name','last_name','company_name','company_domain','job_title','industry','city','state','country','linkedin_url','num_employees','keywords'];
-  const escape = v => v == null ? '' : `"${String(v).replace(/"/g, '""')}"`;
-  const csv = [cols.join(','), ...rows.map(r => cols.map(c => escape(r[c])).join(','))].join('\n');
-  res.setHeader('Content-Type', 'text/csv');
-  res.setHeader('Content-Disposition', 'attachment; filename="missing_enrichment.csv"');
-  res.send(csv);
+  try {
+    const { rows } = await pgdb.query(`
+      SELECT workspace_id, email, first_name, last_name, company_name, company_domain,
+             job_title, industry, city, state, country, linkedin_url,
+             num_employees, keywords
+      FROM contacts
+      WHERE (keywords IS NULL OR keywords = '')
+         OR num_employees IS NULL
+         OR (industry IS NULL OR industry = '')
+         OR (city IS NULL OR city = '')
+      ORDER BY workspace_id, company_domain
+    `);
+    const cols = ['workspace_id','email','first_name','last_name','company_name','company_domain','job_title','industry','city','state','country','linkedin_url','num_employees','keywords'];
+    const escape = v => v == null ? '' : `"${String(v).replace(/"/g, '""')}"`;
+    const csv = [cols.join(','), ...rows.map(r => cols.map(c => escape(r[c])).join(','))].join('\n');
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="missing_enrichment.csv"');
+    res.send(csv);
+  } catch (err) {
+    console.error('[admin/export-missing-enrichment]', err);
+    Sentry.captureException(err);
+    res.status(500).json({ error: err.message || 'Internal server error' });
+  }
 });
 
 // ── AI Enrichment helpers ─────────────────────────────────────────────────
@@ -1877,7 +1943,15 @@ app.post('/api/login', (req, res) => {
 });
 
 // ── Webhook — receives leads from N8n ──────────────────────
+// Set LEAD_WEBHOOK_SECRET in env and pass the same value as the
+// x-webhook-secret header from N8n to lock down this endpoint.
+const LEAD_WEBHOOK_SECRET = process.env.LEAD_WEBHOOK_SECRET || '';
 app.post('/webhook/lead', (req, res) => {
+  if (LEAD_WEBHOOK_SECRET) {
+    const provided = req.headers['x-webhook-secret'] || '';
+    if (provided !== LEAD_WEBHOOK_SECRET)
+      return res.status(401).json({ error: 'Unauthorized' });
+  }
   const payload = Array.isArray(req.body) ? req.body[0]?.body : req.body;
   if (!payload?.workspace_id || !payload?._id)
     return res.status(400).json({ error: 'Missing workspace_id or _id' });
@@ -2170,32 +2244,38 @@ app.post('/api/stripe/checkout', requireAuth, async (req, res) => {
   const c = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.client.id);
   if (!c.price_per_lead) return res.status(400).json({ error: 'No price configured for this account. Contact support.' });
 
-  let customerId = c.stripe_customer_id;
-  if (!customerId) {
-    const customer = await stripe.customers.create({
-      metadata: { client_id: String(c.id), username: c.username }
-    });
-    customerId = customer.id;
-    db.prepare('UPDATE clients SET stripe_customer_id = ? WHERE id = ?').run(customerId, c.id);
-  }
+  try {
+    let customerId = c.stripe_customer_id;
+    if (!customerId) {
+      const customer = await stripe.customers.create({
+        metadata: { client_id: String(c.id), username: c.username }
+      });
+      customerId = customer.id;
+      db.prepare('UPDATE clients SET stripe_customer_id = ? WHERE id = ?').run(customerId, c.id);
+    }
 
-  const session = await stripe.checkout.sessions.create({
-    customer:             customerId,
-    payment_method_types: ['card'],
-    line_items: [{
-      price_data: {
-        currency:     'gbp',
-        unit_amount:  Math.round(c.price_per_lead * 100),
-        product_data: { name: `Ottaly Leads — ${qty} lead${qty > 1 ? 's' : ''}` },
-      },
-      quantity: qty,
-    }],
-    mode:        'payment',
-    success_url: `${APP_URL}/client.html?payment=success`,
-    cancel_url:  `${APP_URL}/client.html`,
-    metadata:    { client_id: String(c.id), leads_count: String(qty) },
-  });
-  res.json({ url: session.url });
+    const session = await stripe.checkout.sessions.create({
+      customer:             customerId,
+      payment_method_types: ['card'],
+      line_items: [{
+        price_data: {
+          currency:     'gbp',
+          unit_amount:  Math.round(c.price_per_lead * 100),
+          product_data: { name: `Ottaly Leads — ${qty} lead${qty > 1 ? 's' : ''}` },
+        },
+        quantity: qty,
+      }],
+      mode:        'payment',
+      success_url: `${APP_URL}/client.html?payment=success`,
+      cancel_url:  `${APP_URL}/client.html`,
+      metadata:    { client_id: String(c.id), leads_count: String(qty) },
+    });
+    res.json({ url: session.url });
+  } catch (err) {
+    console.error('[stripe/checkout]', err);
+    Sentry.captureException(err);
+    res.status(500).json({ error: err.message || 'Internal server error' });
+  }
 });
 
 // ── Stripe customer portal ─────────────────────────────────
@@ -2204,15 +2284,21 @@ app.post('/api/stripe/portal', requireAuth, async (req, res) => {
   const c = db.prepare('SELECT stripe_customer_id FROM clients WHERE id = ?').get(req.client.id);
   if (!c?.stripe_customer_id)
     return res.status(400).json({ error: 'No billing account yet. Make a purchase first.' });
-  const session = await stripe.billingPortal.sessions.create({
-    customer:   c.stripe_customer_id,
-    return_url: `${APP_URL}/client.html`,
-  });
-  res.json({ url: session.url });
+  try {
+    const session = await stripe.billingPortal.sessions.create({
+      customer:   c.stripe_customer_id,
+      return_url: `${APP_URL}/client.html`,
+    });
+    res.json({ url: session.url });
+  } catch (err) {
+    console.error('[stripe/portal]', err);
+    Sentry.captureException(err);
+    res.status(500).json({ error: err.message || 'Internal server error' });
+  }
 });
 
 // ── Agency lead counts (uses SQLite received_at) ──────────
-app.get('/api/agency/leads', (req, res) => {
+app.get('/api/agency/leads', requireSession, (req, res) => {
   const { workspace_id, start_date, end_date } = req.query;
   if (!workspace_id || !start_date || !end_date)
     return res.status(400).json({ error: 'Missing params' });
@@ -2227,9 +2313,13 @@ app.get('/api/agency/leads', (req, res) => {
   res.json({ count: row.count });
 });
 
-// ── Client status (public — single source of truth for all pages) ──
-app.get('/api/client-status', (req, res) => {
+// ── Client status (session-protected — single source of truth for all pages) ──
+app.get('/api/client-status', requireSession, (req, res) => {
+  const cacheKey = 'client_status';
+  const cached = apiCache.get(cacheKey);
+  if (cached !== undefined) return res.json(cached);
   const rows = db.prepare(`SELECT workspace_id, workspace_name, client_status, restart_date FROM clients`).all();
+  apiCache.set(cacheKey, rows, 30);
   res.json(rows);
 });
 
@@ -2245,9 +2335,13 @@ app.post('/api/client-status/:id', requireAdmin, (req, res) => {
   refreshCampaignCache().catch(() => {});
 });
 
-// ── Workspace prices (public — used by Revenue page) ──────
-app.get('/api/workspace-prices', (req, res) => {
+// ── Workspace prices (session-protected — used by Revenue page) ──────
+app.get('/api/workspace-prices', requireSession, (req, res) => {
+  const cacheKey = 'workspace_prices';
+  const cached = apiCache.get(cacheKey);
+  if (cached !== undefined) return res.json(cached);
   const rows = db.prepare(`SELECT workspace_id, workspace_name, price_per_lead, client_status, contact_name, campaign_manager, campaign_manager_2, commission_rate, manager_start_date FROM clients`).all();
+  apiCache.set(cacheKey, rows, 60);
   res.json(rows);
 });
 
@@ -2504,6 +2598,7 @@ setInterval(refreshRevenueCache, 3 * 60 * 1000);
 let _zarRateCache = { rate: null, fetchedAt: 0 };
 app.get('/api/gbp-zar-rate', requireSession, async (req, res) => {
   const now = Date.now();
+  res.set('Cache-Control', 'public, s-maxage=1800, max-age=1800');
   if (_zarRateCache.rate && now - _zarRateCache.fetchedAt < 30 * 60 * 1000) {
     return res.json({ rate: _zarRateCache.rate, source: 'cache' });
   }
@@ -2544,7 +2639,11 @@ app.get('/api/avg-lead-price', requireSession, (req, res) => {
   res.json({ avg_lead_price_gbp: parseFloat(avg.toFixed(2)), total_leads: totalLeads, total_revenue: parseFloat(totalRevenue.toFixed(2)), period: 'all-time' });
 });
 
-app.get('/api/revenue/leads', (req, res) => {
+app.get('/api/revenue/leads', requireSession, (req, res) => {
+  const cacheKey = 'revenue_leads';
+  const cached = apiCache.get(cacheKey);
+  if (cached !== undefined) return res.json(cached);
+
   // Apply non-lead overrides from SQLite
   const overrides = db.prepare(`SELECT email, reason, marked_at, active FROM nonlead_overrides`).all();
   const nonleadMap = {};
@@ -2567,11 +2666,13 @@ app.get('/api/revenue/leads', (req, res) => {
       nonlead_date:   o?.active ? o.marked_at : (pvNonlead ? l.date : ''),
     };
   });
-  res.json({ ...revenueCache, leads });
+  const result = { ...revenueCache, leads };
+  apiCache.set(cacheKey, result, 60);
+  res.json(result);
 });
 
 // Mark lead as non-lead
-app.post('/api/nonlead/mark', (req, res) => {
+app.post('/api/nonlead/mark', requireSession, (req, res) => {
   const { email, reason } = req.body || {};
   if (!email) return res.status(400).json({ error: 'Missing email' });
   db.prepare(`INSERT INTO nonlead_overrides (email, reason, active) VALUES (?, ?, 1)
@@ -2581,14 +2682,14 @@ app.post('/api/nonlead/mark', (req, res) => {
 });
 
 // Restore lead to active
-app.post('/api/nonlead/restore', (req, res) => {
+app.post('/api/nonlead/restore', requireSession, (req, res) => {
   const { email } = req.body || {};
   if (!email) return res.status(400).json({ error: 'Missing email' });
   db.prepare(`UPDATE nonlead_overrides SET active=0 WHERE email=?`).run(email.toLowerCase());
   res.json({ ok: true });
 });
 
-app.get('/api/revenue/stats-by-workspace', (req, res) => {
+app.get('/api/revenue/stats-by-workspace', requireSession, (req, res) => {
   // Always use current price from DB so changing a price reflects immediately
   const currentPrices = db.prepare('SELECT workspace_id, price_per_lead FROM clients').all();
   const livePriceMap  = {};
@@ -3018,6 +3119,10 @@ app.get('/api/stats/summary', requireSession, async (req, res) => {
   const start = String(req.query.start || '');
   const end   = String(req.query.end   || '');
   if (!start || !end) return res.status(400).json({ error: 'start and end required (YYYY-MM-DD)' });
+  const _wsIdsParam = req.query.workspace_ids ? String(req.query.workspace_ids) : '';
+  const cacheKey = 'stats_summary_' + JSON.stringify({ start, end, workspace_ids: _wsIdsParam });
+  const _cachedSummary = apiCache.get(cacheKey);
+  if (_cachedSummary !== undefined) return res.json(_cachedSummary);
   try {
     // Use SQLite clients table — no PlusVibe API call needed.
     const clientRows = db.prepare(
@@ -3085,14 +3190,17 @@ app.get('/api/stats/summary', requireSession, async (req, res) => {
 
     workspaces.sort((a, b) => b.totals.replies - a.totals.replies);
 
-    res.json({
+    const _summaryResult = {
       workspaces,
       dates,
       start,
       end,
       partial,
       updatedAt: performanceCache.updatedAt,
-    });
+    };
+    // Only cache complete (non-partial) responses so stale callers still trigger a background warm.
+    if (!partial) apiCache.set(cacheKey, _summaryResult, 60);
+    res.json(_summaryResult);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -3363,6 +3471,9 @@ app.get('/api/combo-analysis', requireSession, async (req, res) => {
   const start = String(req.query.start || '');
   const end   = String(req.query.end   || '');
   if (!start || !end) return res.status(400).json({ error: 'start and end required' });
+  const cacheKey = 'combo_analysis_' + JSON.stringify({ start, end });
+  const cached = apiCache.get(cacheKey);
+  if (cached !== undefined) return res.json(cached);
   try {
     const pgdb = app.locals.pgDb;
     if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
@@ -3469,7 +3580,9 @@ app.get('/api/combo-analysis', requireSession, async (req, res) => {
         AND (raw->>'seeded')::boolean IS NOT TRUE
     `, [start, end]);
 
-    res.json({ rows, coverage: cov[0], hasApprox, start, end });
+    const comboResult = { rows, coverage: cov[0], hasApprox, start, end };
+    apiCache.set(cacheKey, comboResult, 300);
+    res.json(comboResult);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -3751,7 +3864,13 @@ setTimeout(hydrateCampaignCacheFromDisk, 2000);
 setTimeout(refreshCampaignCache, 90000); // after mailbox (20s) + performance (60s) settle
 setInterval(refreshCampaignCache, 30 * 60 * 1000);
 
-app.get('/api/campaigns/intelligence', (req, res) => res.json(campaignCache));
+app.get('/api/campaigns/intelligence', requireSession, (req, res) => {
+  const cacheKey = 'campaigns_intelligence';
+  const cached = apiCache.get(cacheKey);
+  if (cached !== undefined) return res.json(cached);
+  apiCache.set(cacheKey, campaignCache, 120);
+  res.json(campaignCache);
+});
 
 // ─────────────────────────────────────────────────────────────────────
 // CENTRAL WORKSPACE STATS — single source of truth for every page
@@ -4134,9 +4253,14 @@ app.post('/api/metrics/refresh', requireSession, async (req, res) => {
 
 // Read endpoints — canonical metric source for every dashboard.
 app.get('/api/metrics', requireSession, async (req, res) => {
+  const cacheKey = 'metrics_all';
+  const cached = apiCache.get(cacheKey);
+  if (cached !== undefined) return res.json(cached);
   try {
     const rows = await getAllWorkspaceStats(app.locals.pgDb);
-    res.json({ ok: true, count: rows.length, workspaces: rows });
+    const metricsResult = { ok: true, count: rows.length, workspaces: rows };
+    apiCache.set(cacheKey, metricsResult, 120);
+    res.json(metricsResult);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -5954,49 +6078,6 @@ Output STRICT JSON only:
   }
 });
 
-// Admin: diagnose Claude API connectivity. Returns the raw status/body
-// from a minimal call so 401/wrong-key/wrong-model show up immediately
-// instead of being silently swallowed by the briefing fallback.
-app.get('/api/health/ai-test', requireAdmin, async (req, res) => {
-  if (!ANTHROPIC_API_KEY) {
-    return res.json({ ok: false, reason: 'no_key', message: 'ANTHROPIC_API_KEY is not set on the server' });
-  }
-  try {
-    const r = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: ANTHROPIC_MODEL,
-        max_tokens: 16,
-        messages: [{ role: 'user', content: 'Reply with the single word "ok".' }],
-      }),
-    });
-    const body = await r.text();
-    if (r.ok) {
-      let parsed = null; try { parsed = JSON.parse(body); } catch {}
-      return res.json({
-        ok: true,
-        model: ANTHROPIC_MODEL,
-        reply: parsed?.content?.[0]?.text?.trim() || '(empty)',
-        key_preview: ANTHROPIC_API_KEY.slice(0, 18) + '…' + ANTHROPIC_API_KEY.slice(-6),
-      });
-    }
-    res.json({
-      ok: false,
-      status: r.status,
-      model: ANTHROPIC_MODEL,
-      key_preview: ANTHROPIC_API_KEY.slice(0, 18) + '…' + ANTHROPIC_API_KEY.slice(-6),
-      body: body.slice(0, 500),
-    });
-  } catch (err) {
-    res.json({ ok: false, error: err.message });
-  }
-});
-
 // Admin: force a snapshot rebuild for everyone (or one workspace). Useful
 // during development and after large config changes.
 // Diagnostic: confirms whether the Claude API key is configured and works.
@@ -7266,6 +7347,9 @@ function groupMailboxStats(mailboxes, keyFn) {
 }
 
 app.get('/api/mailboxes', requireSession, async (req, res) => {
+  const cacheKey = 'mailboxes_all';
+  const cachedMailboxes = apiCache.get(cacheKey);
+  if (cachedMailboxes !== undefined) return res.json(cachedMailboxes);
   try {
     const pgdb = app.locals.pgDb;
     const meta = pgdb ? await pgdb.listMailboxMeta() : [];
@@ -7317,7 +7401,7 @@ app.get('/api/mailboxes', requireSession, async (req, res) => {
 
     const needs_attention = merged.filter(m => Array.isArray(m.attention) && m.attention.length).length;
 
-    res.json({
+    const mailboxesResult = {
       mailboxes: merged,
       stats: { bySupplier, byType, byClient, bySupplierType },
       summary: {
@@ -7328,7 +7412,9 @@ app.get('/api/mailboxes', requireSession, async (req, res) => {
       types: TYPES_ALLOWED,
       lastRun: _mailboxCache.lastRun,
       running: _mailboxCache.running,
-    });
+    };
+    apiCache.set(cacheKey, mailboxesResult, 300);
+    res.json(mailboxesResult);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -8938,27 +9024,32 @@ app.get('/api/finance/trend', requireAdmin, async (req, res) => {
       const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
       const month = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
 
-      const rev = await revenueByWorkspaceForMonth(month);
-      const totalRevenue = Object.values(rev).reduce((s, v) => s + v.revenue, 0);
+      try {
+        const rev = await revenueByWorkspaceForMonth(month);
+        const totalRevenue = Object.values(rev).reduce((s, v) => s + v.revenue, 0);
 
-      // Mailbox cost — sum unit costs from meta for active mailboxes
-      const pricingRows = pgdb ? await pgdb.listMailboxPricing() : [];
-      const prices = pricingMap(pricingRows);
-      const metaRows = pgdb ? await pgdb.listMailboxMeta() : [];
-      const metaByEmail = new Map(metaRows.map(m => [m.email, m]));
-      const allMbx = mergeMailboxesWithMeta(_mailboxCache.mailboxes || [], metaByEmail);
-      const totalMailboxCost = allMbx.reduce((s, m) => s + mailboxUnitCost(m, prices), 0);
+        // Mailbox cost — sum unit costs from meta for active mailboxes
+        const pricingRows = pgdb ? await pgdb.listMailboxPricing() : [];
+        const prices = pricingMap(pricingRows);
+        const metaRows = pgdb ? await pgdb.listMailboxMeta() : [];
+        const metaByEmail = new Map(metaRows.map(m => [m.email, m]));
+        const allMbx = mergeMailboxesWithMeta(_mailboxCache.mailboxes || [], metaByEmail);
+        const totalMailboxCost = allMbx.reduce((s, m) => s + mailboxUnitCost(m, prices), 0);
 
-      // Active opex — convert to GBP using that month's FX rates
-      const allExp = pgdb ? await pgdb.listMonthlyExpenses() : [];
-      let trendFx = { GBP: 1, USD: 1, EUR: 1, ZAR: 1 };
-      try { trendFx = { ...trendFx, ...(await getFxRatesForMonth(month)) }; } catch {}
-      const opex = allExp.filter(e => expenseActiveInMonth(e, month)).reduce((s, e) => {
-        const rate = trendFx[(e.currency || 'GBP').toUpperCase()];
-        return s + parseFloat(e.amount) * (rate != null ? rate : 1);
-      }, 0);
+        // Active opex — convert to GBP using that month's FX rates
+        const allExp = pgdb ? await pgdb.listMonthlyExpenses() : [];
+        let trendFx = { GBP: 1, USD: 1, EUR: 1, ZAR: 1 };
+        try { trendFx = { ...trendFx, ...(await getFxRatesForMonth(month)) }; } catch {}
+        const opex = allExp.filter(e => expenseActiveInMonth(e, month)).reduce((s, e) => {
+          const rate = trendFx[(e.currency || 'GBP').toUpperCase()];
+          return s + parseFloat(e.amount) * (rate != null ? rate : 1);
+        }, 0);
 
-      months.push({ month, revenue: totalRevenue, mailbox_cost: totalMailboxCost, opex });
+        months.push({ month, revenue: totalRevenue, mailbox_cost: totalMailboxCost, opex });
+      } catch (monthErr) {
+        console.error(`[finance/trend] error for month ${month}:`, monthErr.message);
+        months.push({ month, revenue: null, mailbox_cost: null, opex: null, error: monthErr.message });
+      }
     }
     res.json({ months });
   } catch (err) {
@@ -10542,6 +10633,15 @@ app.get('/database.html',    (req, res) => res.sendFile(path.join(__dirname, 'da
 
 // ── Database admin API ────────────────────────────────────────────────────
 
+// ── API response cache management ────────────────────────────────────────
+app.post('/api/admin/cache/clear', requireAdmin, (req, res) => {
+  apiCache.flushAll();
+  res.json({ ok: true, message: 'Cache cleared' });
+});
+app.get('/api/admin/cache/stats', requireAdmin, (req, res) => {
+  res.json(apiCache.getStats());
+});
+
 app.get('/api/admin/send-time-analysis', requireAdmin, async (req, res) => {
   const pgdb = req.app.locals.pgDb;
   if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
@@ -11851,31 +11951,37 @@ async function n2bVerify(emails, jobRef) {
 // ── Verify & Push Job Queue ───────────────────────────────────────────────
 const pushJobs = new Map(); // jobId → job state
 
-// Paused jobs persist in SQLite so they survive server restarts.
-// Table is created lazily here (server.js runs after db setup).
-function initPausedJobsTable(sq) {
-  if (!sq) return;
-  sq.exec(`CREATE TABLE IF NOT EXISTS paused_push_jobs (
-    id TEXT PRIMARY KEY,
-    workspace_id TEXT,
-    campaign_id TEXT,
-    workspace_name TEXT,
-    campaign_name TEXT,
-    contact_ids TEXT,
-    include_risky INTEGER DEFAULT 0,
-    max_age_days INTEGER DEFAULT 90,
-    paused_at TEXT DEFAULT (datetime('now')),
-    verified_count INTEGER DEFAULT 0,
-    pushed_count INTEGER DEFAULT 0
-  )`);
+// Create the paused_push_jobs table in Postgres (called once after pgDb is ready).
+async function initPausedJobsTablePg(pgPool) {
+  if (!pgPool) return;
+  try {
+    await pgPool.query(`
+      CREATE TABLE IF NOT EXISTS paused_push_jobs (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT,
+        campaign_id TEXT,
+        workspace_name TEXT,
+        campaign_name TEXT,
+        contact_ids TEXT,
+        include_risky INTEGER DEFAULT 0,
+        max_age_days INTEGER DEFAULT 90,
+        created_at BIGINT DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT,
+        verified_count INTEGER DEFAULT 0,
+        pushed_count INTEGER DEFAULT 0
+      )
+    `);
+    console.log('[DB] paused_push_jobs table ready (Postgres)');
+  } catch (err) {
+    console.error('[DB] paused_push_jobs create failed:', err.message);
+  }
 }
 
 // On boot, restore paused jobs into the in-memory map so the UI shows them.
-function restorePausedJobs(sq) {
-  if (!sq) return;
+async function restorePausedJobs(pgPool) {
+  if (!pgPool) return;
   try {
-    initPausedJobsTable(sq);
-    const rows = sq.prepare('SELECT * FROM paused_push_jobs').all();
+    await initPausedJobsTablePg(pgPool);
+    const { rows } = await pgPool.query('SELECT * FROM paused_push_jobs');
     for (const row of rows) {
       const contactIds = JSON.parse(row.contact_ids || '[]');
       pushJobs.set(row.id, {
@@ -11895,7 +12001,7 @@ function restorePausedJobs(sq) {
         error: null
       });
     }
-    if (rows.length) console.log(`[push] Restored ${rows.length} paused job(s) from SQLite`);
+    if (rows.length) console.log(`[push] Restored ${rows.length} paused job(s) from Postgres`);
   } catch (e) {
     console.warn('[push] Could not restore paused jobs:', e.message);
   }
@@ -11978,7 +12084,7 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
   const allowedProviders = (typeof emailProviders === 'string' ? emailProviders : '')
     .split(',').map(s => s.trim()).filter(p => p && p !== 'unknown');
 
-  const sq = req.app.locals.sqliteDb;
+  const pgPool = req.app.locals.pgDb;
   const jobId = require('crypto').randomUUID();
   const job = {
     id: jobId,
@@ -11995,19 +12101,20 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
   };
   pushJobs.set(jobId, job);
 
-  // Persist to SQLite so Pause/Resume survives server restarts
-  if (sq) {
-    try {
-      initPausedJobsTable(sq);
-      sq.prepare(`INSERT OR REPLACE INTO paused_push_jobs
-        (id, workspace_id, campaign_id, workspace_name, campaign_name, contact_ids, include_risky, max_age_days)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
-        jobId, workspace_id, campaign_id,
-        workspace_name || workspace_id, campaign_name || campaign_id,
-        JSON.stringify(contact_ids), include_risky ? 1 : 0, max_age_days
-      );
-    } catch (e) { console.warn('[push] Could not persist job to SQLite:', e.message); }
-  }
+  // Persist to Postgres so Pause/Resume survives server restarts
+  pgPool.query(
+    `INSERT INTO paused_push_jobs
+      (id, workspace_id, campaign_id, workspace_name, campaign_name, contact_ids, include_risky, max_age_days)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      ON CONFLICT (id) DO UPDATE SET
+        workspace_id=EXCLUDED.workspace_id, campaign_id=EXCLUDED.campaign_id,
+        workspace_name=EXCLUDED.workspace_name, campaign_name=EXCLUDED.campaign_name,
+        contact_ids=EXCLUDED.contact_ids, include_risky=EXCLUDED.include_risky,
+        max_age_days=EXCLUDED.max_age_days`,
+    [jobId, workspace_id, campaign_id,
+     workspace_name || workspace_id, campaign_name || campaign_id,
+     JSON.stringify(contact_ids), include_risky ? 1 : 0, max_age_days]
+  ).catch(e => console.warn('[push] Could not persist job to Postgres:', e.message));
 
   // Clean up old completed jobs (keep last 20)
   const allJobs = [...pushJobs.entries()].sort((a, b) => b[1].created_at - a[1].created_at);
@@ -12353,13 +12460,13 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
         }
       }
 
-      // If paused mid-loop, update SQLite record and stop
+      // If paused mid-loop, update Postgres record and stop
       if (job.paused) {
         job.status = 'paused';
-        if (sq) {
-          try { sq.prepare(`UPDATE paused_push_jobs SET verified_count = ?, pushed_count = ? WHERE id = ?`)
-            .run(job.verified || 0, job.pushed || 0, job.id); } catch {}
-        }
+        pgPool.query(
+          `UPDATE paused_push_jobs SET verified_count = $1, pushed_count = $2 WHERE id = $3`,
+          [job.verified || 0, job.pushed || 0, job.id]
+        ).catch(() => {});
         return;
       }
 
@@ -12432,17 +12539,15 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
       console.log(`[push] ${job.id} done — pushed ${job.pushed}, verify breakdown:`, breakdown, 'skipped:', skipped);
 
       if (job.paused) {
-        // Paused mid-run — update the SQLite record with current progress
-        if (sq) {
-          try {
-            sq.prepare(`UPDATE paused_push_jobs SET verified_count = ?, pushed_count = ? WHERE id = ?`)
-              .run(job.verified || 0, job.pushed || 0, job.id);
-          } catch {}
-        }
+        // Paused mid-run — update the Postgres record with current progress
+        pgPool.query(
+          `UPDATE paused_push_jobs SET verified_count = $1, pushed_count = $2 WHERE id = $3`,
+          [job.verified || 0, job.pushed || 0, job.id]
+        ).catch(() => {});
         // Keep status as 'paused' — do not mark completed/cancelled
       } else {
-        // Completed or cancelled — delete from SQLite
-        if (sq) { try { sq.prepare(`DELETE FROM paused_push_jobs WHERE id = ?`).run(job.id); } catch {} }
+        // Completed or cancelled — delete from Postgres
+        pgPool.query(`DELETE FROM paused_push_jobs WHERE id = $1`, [job.id]).catch(() => {});
         job.status = job.cancelled ? 'cancelled' : 'completed';
         job.progress = 100;
       }
@@ -12450,7 +12555,7 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
       job.status = 'failed';
       job.error = err.message;
       console.error('[Verify+Push]', err.message);
-      if (sq) { try { sq.prepare(`DELETE FROM paused_push_jobs WHERE id = ?`).run(job.id); } catch {} }
+      pgPool.query(`DELETE FROM paused_push_jobs WHERE id = $1`, [job.id]).catch(() => {});
     }
   })();
 });
@@ -12460,8 +12565,8 @@ app.post('/api/contacts/push-jobs/:id/cancel', (req, res) => {
   const job = pushJobs.get(req.params.id);
   if (!job) return res.status(404).json({ error: 'Not found' });
   job.cancelled = true;
-  const sq = req.app.locals.sqliteDb;
-  if (sq) { try { sq.prepare(`DELETE FROM paused_push_jobs WHERE id = ?`).run(job.id); } catch {} }
+  const pgPool = req.app.locals.pgDb;
+  if (pgPool) pgPool.query(`DELETE FROM paused_push_jobs WHERE id = $1`, [job.id]).catch(() => {});
   res.json({ ok: true });
 });
 
@@ -12483,13 +12588,14 @@ app.post('/api/contacts/push-jobs/:id/resume', async (req, res) => {
   if (!job) return res.status(404).json({ error: 'Not found' });
   if (job.status !== 'paused') return res.status(400).json({ error: 'Job is not paused' });
 
-  const sq = req.app.locals.sqliteDb;
-  const db = req.app.locals.pgDb;
+  const pgPool = req.app.locals.pgDb;
+  const db = pgPool;
   if (!db) return res.status(500).json({ error: 'Database not available' });
 
   let row;
   try {
-    row = sq && sq.prepare(`SELECT * FROM paused_push_jobs WHERE id = ?`).get(job.id);
+    const result = await pgPool.query('SELECT * FROM paused_push_jobs WHERE id = $1', [job.id]);
+    row = result.rows[0];
   } catch {}
   if (!row) return res.status(404).json({ error: 'Paused job record not found — cannot resume' });
 
@@ -12713,10 +12819,10 @@ app.post('/api/contacts/push-jobs/:id/resume', async (req, res) => {
 
       if (job.paused) {
         job.status = 'paused';
-        if (sq) {
-          try { sq.prepare(`UPDATE paused_push_jobs SET verified_count = ?, pushed_count = ? WHERE id = ?`)
-            .run(job.verified || 0, job.pushed || 0, job.id); } catch {}
-        }
+        pgPool.query(
+          `UPDATE paused_push_jobs SET verified_count = $1, pushed_count = $2 WHERE id = $3`,
+          [job.verified || 0, job.pushed || 0, job.id]
+        ).catch(() => {});
         return;
       }
 
@@ -12758,7 +12864,7 @@ app.post('/api/contacts/push-jobs/:id/resume', async (req, res) => {
       }
 
       job.skipped = skipped;
-      if (sq) { try { sq.prepare(`DELETE FROM paused_push_jobs WHERE id = ?`).run(job.id); } catch {} }
+      pgPool.query(`DELETE FROM paused_push_jobs WHERE id = $1`, [job.id]).catch(() => {});
       job.status = job.cancelled ? 'cancelled' : 'completed';
       job.progress = 100;
     } catch (err) {
@@ -14132,7 +14238,7 @@ function scheduleAudienceScoring(pgdb) {
   if (pgdb) {
     app.locals.pgDb = pgdb;
     app.locals.sqliteDb = db;
-    restorePausedJobs(db);
+    restorePausedJobs(pgdb);
 
     // One-time backfill: copy existing SQLite client notes into Postgres.
     // ON CONFLICT DO NOTHING means this never overwrites a note that was
@@ -14229,6 +14335,16 @@ function scheduleAudienceScoring(pgdb) {
   }
   scheduleEspSync();
   startSlackBot();
+
+  // Sentry error handler must be after routes, before other error handlers
+  app.use(Sentry.Handlers.errorHandler());
+
+  // Generic error fallback
+  app.use((err, req, res, next) => {
+    console.error('[Server Error]', err);
+    res.status(500).json({ error: 'Internal server error' });
+  });
+
   const server = app.listen(PORT, () => console.log(`Ottaly running on http://localhost:${PORT}`));
 
   server.on('upgrade', (req, socket, head) => {
