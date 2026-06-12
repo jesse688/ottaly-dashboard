@@ -14,20 +14,19 @@ class PostgresDatabase {
     // Support any PostgreSQL connection string via DATABASE_URL
     const dbUrl = process.env.DATABASE_URL || '';
     const sslDisabled = dbUrl.includes('sslmode=disable') || dbUrl.includes('localhost') || dbUrl.includes('127.0.0.1');
-    // Pool sized for high concurrency — parallel index builds, webhook
-    // bursts, dashboard fan-out (search + count + employee buckets +
-    // email-provider counts), and CSV imports all share the pool.
-    // Requires Postgres max_connections >= 200 (2 app instances × 60 pool).
+    // Pool sized conservatively — max=20 supports 2 app instances at
+    // 40 total connections, well within Postgres default max_connections=100.
+    // Dashboard fan-out queries (search + count + buckets) are sequential
+    // within a request so 20 is ample. Raise only after profiling shows
+    // genuine contention, not as a first response to timeouts.
+    // statement_timeout=45s kills runaway queries; schema migrations
+    // override this to 60s via SET statement_timeout per-session.
     const config = dbUrl ? {
       connectionString: dbUrl,
       ssl: sslDisabled ? false : { rejectUnauthorized: false },
-      max: 60,
+      max: 20,
       idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 10000,
-      // Kill runaway queries fast. 120s was pegging CPU because expensive
-      // ILIKE-OR searches that previously timed out at 30s now ran to
-      // completion. 45s catches genuinely-stuck queries while keeping the
-      // CPU ceiling sane. Bump only after query plans are confirmed cheap.
+      connectionTimeoutMillis: 3000,
       statement_timeout: 45000,
     } : {
       user: process.env.DB_USER || 'ottaly',
@@ -35,17 +34,27 @@ class PostgresDatabase {
       host: process.env.DB_HOST || 'localhost',
       port: parseInt(process.env.DB_PORT || '5432', 10),
       database: process.env.DB_NAME || 'ottaly_contacts',
-      max: 60,
+      max: 20,
       idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 5000,
+      connectionTimeoutMillis: 3000,
       statement_timeout: 45000,
     };
 
     this.pool = new Pool(config);
 
     this.pool.on('error', (err) => {
-      console.error('[PostgreSQL Pool Error]', err);
+      console.error('[PG Pool] Unexpected error:', err.message);
     });
+
+    this.pool.healthCheck = async () => {
+      const client = await this.pool.connect();
+      try {
+        await client.query('SELECT 1');
+        return true;
+      } finally {
+        client.release();
+      }
+    };
 
     try {
       const client = await this.pool.connect();
