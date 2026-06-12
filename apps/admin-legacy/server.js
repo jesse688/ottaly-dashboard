@@ -1880,13 +1880,24 @@ app.post('/api/admin/sync-leads-to-portal', requireAdmin, async (req, res) => {
   // Same non-lead exclusion the admin uses (NON_LEAD / WEAK_LEAD / Non Lead…).
   const NON_LEAD = /(^|[_\-\s])non([_\-\s]?lead)?([_\-\s]|$)/i;
   try {
-    const { rows } = await dbPg.query(`SELECT ws_id, data FROM perf_cache_leads`);
+    // Source = the IN-MEMORY labeled-leads cache (what the admin dashboard
+    // displays). The perf_cache_leads TABLE is unreliable (its save fails), so
+    // we read performanceCache.labeledLeads directly. Ensure every active client
+    // workspace is populated first so nothing is missed.
+    let wsIds = [];
+    try {
+      wsIds = db.prepare(
+        `SELECT workspace_id FROM clients WHERE workspace_id IS NOT NULL AND workspace_id != '' AND (client_status IS NULL OR client_status != 'inactive')`
+      ).all().map(r => r.workspace_id);
+    } catch { /* fall back to whatever's cached */ }
+    try { await ensurePerformanceLabeledLeads(wsIds, performanceCache.labeledLeads, false); } catch (e) {
+      console.warn('[sync-leads-to-portal] ensure cache failed (using existing):', e.message);
+    }
+
     let synced = 0, skipped = 0;
     const perWs = {};
-    for (const row of rows) {
-      const wsId = row.ws_id;
-      const leads = Array.isArray(row.data) ? row.data
-        : (typeof row.data === 'string' ? (() => { try { return JSON.parse(row.data); } catch { return []; } })() : []);
+    for (const [wsId, val] of performanceCache.labeledLeads) {
+      const leads = Array.isArray(val?.data) ? val.data : [];
       const seen = new Set();
       for (const l of leads) {
         const email = (l.email || '').toString().trim().toLowerCase();
