@@ -10746,6 +10746,26 @@ app.post('/api/bison/push-contacts', requireSession, async (req, res) => {
     console.log(`[bison-push] filtered ${allContacts.length} → ${contacts.length}`, skipped);
     if (contacts.length === 0) return res.json({ success: true, pushed: 0, total: 0, skipped });
 
+    // 0. Ensure the workspace has every custom variable our leads use — Bison
+    //    422s if a lead references a custom variable that doesn't exist. Fetch
+    //    existing, create any missing. Best-effort: a creation failure doesn't
+    //    abort the push (the create-leads step will surface any real error).
+    const neededVars = new Set();
+    for (const c of contacts) for (const cv of contactToBisonLead(c).custom_variables) neededVars.add(cv.name);
+    try {
+      const existingResp = await bisonReq('/api/custom-variables', { wsId: ws_id });
+      const existingList = Array.isArray(existingResp) ? existingResp : (existingResp?.data ?? []);
+      const existing = new Set(existingList.map(v => (v.name || v.slug || '').toLowerCase()));
+      for (const name of neededVars) {
+        if (!existing.has(name.toLowerCase())) {
+          await bisonReq('/api/custom-variables', { wsId: ws_id, method: 'POST', body: { name } })
+            .catch(e => console.warn(`[bison-push] create custom var "${name}" failed:`, e.message));
+        }
+      }
+    } catch (e) {
+      console.warn('[bison-push] custom-variable ensure step failed (continuing):', e.message);
+    }
+
     // 1. Create/update leads (≤500/req), collecting Bison ids. Mirrors the
     //    proven verify-and-push Bison path: create-or-update/multiple, then read
     //    ids from data.leads || data.
