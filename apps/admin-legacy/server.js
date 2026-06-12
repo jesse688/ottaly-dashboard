@@ -6523,72 +6523,48 @@ function inactiveWorkspaceIds() {
 }
 
 async function listSendingMailboxes() {
-  const wsRaw = await pvFetch('/workspaces');
-  const allWorkspaces = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.workspaces || []);
-  const workspaces = allWorkspaces;
-
+  // Source sending mailboxes from EmailBison (the PlusVibe API key is deprecated).
+  // Iterate the known BISON_TEAMS client workspaces, switching to each and
+  // listing its sender emails. Uses the module-scope bisonReq helper.
   const mailboxes = [];
   const seenEmails = new Set();
-  let working = null;
-  const errorsByCandidate = new Map();
-
-  for (const ws of workspaces) {
-    // Skip workspaces that don't even authorise the API key — those return
-    // 400 regardless of path.
-    let found = 0;
-    const candidates = working ? [working] : ACCOUNT_LIST_CANDIDATES;
-    for (const cand of candidates) {
-      try {
-        const resp = await callAccountList(cand, ws);
-        const list = Array.isArray(resp) ? resp : (resp?.accounts || resp?.email_accounts || resp?.data || []);
-        if (!Array.isArray(list)) continue;
-        if (!list.length && !working) continue; // empty might mean wrong shape — try next
-        working = cand;
-        for (const a of list) {
-          const email = (a.email || a.from_email || a.username || a.sender_email || '').toString().trim().toLowerCase();
-          if (!email.includes('@') || seenEmails.has(email)) continue;
-          seenEmails.add(email);
-          // Pull the richer fields we already have on hand — used by the
-          // Mailboxes page to show daily limit, warmup config and the
-          // campaigns this mailbox is attached to. Defensive parsing: the
-          // PlusVibe payload shape isn't strictly typed.
-          const payload = a.payload || {};
-          const warmup = payload.warmup || {};
-          const fullName = [payload?.name?.first_name, payload?.name?.last_name].filter(Boolean).join(' ');
-          mailboxes.push({
-            email,
-            account_id: a._id || a.id || null,
-            domain: email.split('@')[1],
-            workspace_id: ws.id,
-            workspace_name: ws.name,
-            status: a.status || null,
-            warmup_status: a.warmup_status || null,
-            provider: a.provider || null,
-            name: fullName || null,
-            daily_limit: typeof payload.daily_limit === 'number' ? payload.daily_limit : null,
-            sending_gap: typeof payload.sending_gap === 'number' ? payload.sending_gap : null,
-            warmup_limit: typeof warmup.limit === 'number' ? warmup.limit : null,
-            warmup_reply_rate: typeof warmup.reply_rate === 'number' ? warmup.reply_rate : null,
-            warmup_enabled_at: a.warmup_enb_dt || null,
-            campaigns_count: Array.isArray(payload.cmps) ? payload.cmps.length : 0,
-            campaign_ids:    Array.isArray(payload.cmps) ? payload.cmps.map(c => c.id).filter(Boolean) : [],
-            created_at: a.timestamp_created || null,
-            updated_at: a.timestamp_updated || null,
-          });
-          found++;
-        }
-        break;
-      } catch (err) {
-        const key = `${cand.method} ${typeof cand.path === 'function' ? cand.path({id:'X'}).split('?')[0] : cand.path}`;
-        errorsByCandidate.set(key, err.message);
+  for (const team of BISON_TEAMS) {
+    try {
+      const resp = await bisonReq('/api/sender-emails', { wsId: team.team_id, params: { per_page: 200 } });
+      const list = Array.isArray(resp) ? resp : (resp?.data ?? []);
+      let found = 0;
+      for (const a of list) {
+        const email = (a.email || a.email_address || a.name || '').toString().trim().toLowerCase();
+        if (!email.includes('@') || seenEmails.has(email)) continue;
+        seenEmails.add(email);
+        mailboxes.push({
+          email,
+          account_id: a.id != null ? String(a.id) : null,
+          domain: email.split('@')[1],
+          workspace_id: team.pv,          // canonical client id (PV workspace_id)
+          workspace_name: team.name,
+          bison_team_id: team.team_id,
+          status: a.status === 'connected' ? 'active' : (a.status || (a.is_connected === false ? 'inactive' : 'active')),
+          warmup_status: (a.warmup_enabled ?? a.warmup?.enabled) ? 'ACTIVE' : 'PAUSED',
+          provider: a.type || a.provider || a.smtp_host || null,
+          name: a.name || [a.first_name, a.last_name].filter(Boolean).join(' ') || null,
+          daily_limit: typeof a.daily_limit === 'number' ? a.daily_limit : null,
+          sending_gap: null,
+          warmup_limit: a.warmup?.daily_limit ?? null,
+          warmup_reply_rate: null,
+          warmup_enabled_at: null,
+          campaigns_count: 0,
+          campaign_ids: [],
+          created_at: a.created_at || null,
+          updated_at: a.updated_at || null,
+        });
+        found++;
       }
+      if (found) console.log(`[mailboxes] ${team.name}: ${found} mailbox(es)`);
+      await new Promise(r => setTimeout(r, 250)); // pace between workspaces
+    } catch (err) {
+      console.warn(`[mailboxes] sender-emails failed for ${team.name} (team ${team.team_id}):`, err.message);
     }
-    if (found) console.log(`[domain-health] ${ws.name}: ${found} mailbox(es)`);
-  }
-
-  if (!working && errorsByCandidate.size) {
-    console.warn('[domain-health] No working account-list path. Tried:');
-    for (const [k, v] of errorsByCandidate) console.warn(`  ${k} → ${v}`);
   }
   return mailboxes;
 }
