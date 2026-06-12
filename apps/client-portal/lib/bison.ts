@@ -96,15 +96,33 @@ export async function getWorkspaces(): Promise<BisonWorkspace[]> {
 
 // ── Leads ────────────────────────────────────────────────────────────────────
 
-// Fetch all leads with `interested` status (equivalent to PlusVibe INTERESTED label).
+// Resolve the workspace's "lead" tag id (the marker used to flag a real lead).
+// Cached per process. Returns null if the tag doesn't exist.
+let _leadTagId: number | null | undefined
+async function getLeadTagId(): Promise<number | null> {
+  if (_leadTagId !== undefined) return _leadTagId
+  try {
+    const data = await bison<{ data?: Array<{ id: number; name: string }> }>('GET', '/api/tags')
+    const list = Array.isArray(data) ? (data as unknown as Array<{ id: number; name: string }>) : data.data ?? []
+    const tag = list.find(t => (t.name || '').toLowerCase() === 'lead')
+    _leadTagId = tag ? tag.id : null
+  } catch {
+    _leadTagId = null
+  }
+  return _leadTagId
+}
+
+// Fetch leads flagged as real leads. Primary marker is the "lead" TAG (the
+// user's convention in Bison); if that tag isn't found we fall back to the old
+// status=interested filter so behaviour never regresses.
 // Bison uses cursor-free pagination: page (1-based) + per_page.
 export async function getLeads(page = 1, perPage = 100): Promise<BisonLead[]> {
-  const data = await bison<{ data?: BisonLead[] }>('GET', '/api/leads', {
-    'filters[lead_campaign_status]': 'replied',
-    status: 'interested',
-    page,
-    per_page: perPage,
-  })
+  const leadTagId = await getLeadTagId()
+  const params: Record<string, string | number | boolean | undefined> =
+    leadTagId != null
+      ? { 'filters[tag_ids][]': leadTagId, page, per_page: perPage }
+      : { 'filters[lead_campaign_status]': 'replied', status: 'interested', page, per_page: perPage }
+  const data = await bison<{ data?: BisonLead[] }>('GET', '/api/leads', params)
   return Array.isArray(data) ? (data as unknown as BisonLead[]) : data.data ?? []
 }
 
