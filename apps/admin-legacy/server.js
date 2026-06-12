@@ -36,6 +36,10 @@ const contactsAPI = require('./api-contacts');
 const { cleanCompanyName, normalizeJobTitle } = require('./csv-importer');
 const { locationCustomVars } = require('./location-normalizer');
 const { google } = require('googleapis');
+const Sentry = require('@sentry/node');
+const compression = require('compression');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -517,6 +521,26 @@ app.use('/email-finder-tool', (req, res) => {
   });
   req.pipe(proxyReq);
 });
+
+// ── Sentry + security + performance middleware (must precede routes) ───────
+// @sentry/node v8+: Express request/tracing handlers are automatic; only the
+// error handler is wired explicitly (see Sentry.setupExpressErrorHandler below).
+Sentry.init({
+  dsn: process.env.SENTRY_DSN || '',
+  environment: process.env.NODE_ENV || 'production',
+  tracesSampleRate: 0.1,
+});
+app.use(helmet({ contentSecurityPolicy: false }));
+app.use(compression());
+// Rate-limit the API surface (stripe webhook excluded — it has its own verify).
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 500,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.path === '/api/stripe/webhook',
+});
+app.use('/api/', apiLimiter);
 
 // ── Middleware ─────────────────────────────────────────────
 app.use(express.json({ limit: '50mb' }));
@@ -1592,6 +1616,28 @@ app.get('/api/build-version', (req, res) => {
   res.json({ version: BUILD_VERSION });
 });
 
+// Liveness/readiness probe for Easypanel/uptime monitoring. No auth — 200 when
+// the process is up and Postgres answers SELECT 1, else 503.
+app.get('/healthz', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const health = { status: 'ok', uptime: Math.round(process.uptime()), db: 'unknown' };
+  try {
+    const pgPool = req.app.locals.pgDb;
+    if (pgPool && typeof pgPool.query === 'function') {
+      await pgPool.query('SELECT 1');
+      health.db = 'ok';
+    } else {
+      health.db = 'unconfigured';
+    }
+    res.json(health);
+  } catch (err) {
+    health.status = 'degraded';
+    health.db = 'error';
+    health.error = err.message;
+    res.status(503).json(health);
+  }
+});
+
 // Hoisted to module scope so functions defined after the if(db) block (e.g.
 // runAudienceScoringAll) can still reference pvFetch. Assignment happens
 // inside the if(db) block at runtime.
@@ -1770,7 +1816,7 @@ app.get('/api/nav-settings', requireSession, async (req, res) => {
 // Wipes vertical snoozes and reply-intelligence notes set by the old
 // over-active parser. Deliberately leaves do_not_contact intact —
 // 'remove me' replies that legitimately set DNC should stand.
-app.post('/api/admin/clear-snoozes', requireSession, async (req, res) => {
+app.post('/api/admin/clear-snoozes', requireAdmin, async (req, res) => {
   try {
     const dbPg = app.locals.pgDb;
     if (!dbPg) return res.status(503).json({ error: 'Postgres not available' });
@@ -2583,10 +2629,19 @@ app.get('/api/avg-lead-price', requireSession, (req, res) => {
   const totalLeads   = leads.length;
   const avg          = totalLeads > 0 ? totalRevenue / totalLeads : 0;
 
-  res.json({ avg_lead_price_gbp: parseFloat(avg.toFixed(2)), total_leads: totalLeads, total_revenue: parseFloat(totalRevenue.toFixed(2)), period: 'all-time' });
+  // Managers need avg_lead_price_gbp for commission, but must NOT see
+  // agency-wide revenue totals (policy: managers ≠ Revenue/Finance). Strip the
+  // aggregate figures for non-admins; commission.html only reads avg_lead_price_gbp.
+  const isAdmin = decodeSession(req)?.role === 'admin';
+  const payload = { avg_lead_price_gbp: parseFloat(avg.toFixed(2)), period: 'all-time' };
+  if (isAdmin) {
+    payload.total_leads = totalLeads;
+    payload.total_revenue = parseFloat(totalRevenue.toFixed(2));
+  }
+  res.json(payload);
 });
 
-app.get('/api/revenue/leads', (req, res) => {
+app.get('/api/revenue/leads', requireSession, (req, res) => {
   // Apply non-lead overrides from SQLite
   const overrides = db.prepare(`SELECT email, reason, marked_at, active FROM nonlead_overrides`).all();
   const nonleadMap = {};
@@ -2630,7 +2685,7 @@ app.post('/api/nonlead/restore', (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/revenue/stats-by-workspace', (req, res) => {
+app.get('/api/revenue/stats-by-workspace', requireAdmin, (req, res) => {
   // Always use current price from DB so changing a price reflects immediately
   const currentPrices = db.prepare('SELECT workspace_id, price_per_lead FROM clients').all();
   const livePriceMap  = {};
@@ -9273,7 +9328,7 @@ app.post('/api/campaigns/apply-optimisation', requireSession, async (req, res) =
 });
 
 // ── PlusVibe proxy (kept for performance.html agency scan) ────
-app.get('/api/pv/workspace-leads', async (req, res) => {
+app.get('/api/pv/workspace-leads', requireSession, async (req, res) => {
   const { workspace_id, label, page, limit } = req.query;
   if (!workspace_id) return res.status(400).json({ error: 'Missing workspace_id' });
   try {
@@ -10357,7 +10412,7 @@ app.post('/api/admin/nonlead-requests/:id/reject', requireAdmin, (req, res) => {
 }
 
 // ── PlusVibe — campaigns for a workspace ──────────────────
-app.get('/api/pv/workspaces', async (req, res) => {
+app.get('/api/pv/workspaces', requireSession, async (req, res) => {
   try {
     const r = await fetch(BISON_BASE + '/api/workspaces', {
       headers: { 'Authorization': 'Bearer ' + BISON_API_KEY }
@@ -10370,7 +10425,7 @@ app.get('/api/pv/workspaces', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/pv/campaigns', async (req, res) => {
+app.get('/api/pv/campaigns', requireSession, async (req, res) => {
   const { workspace_id } = req.query;
   if (!workspace_id) return res.status(400).json({ error: 'Missing workspace_id' });
   try {
@@ -10384,7 +10439,7 @@ app.get('/api/pv/campaigns', async (req, res) => {
 });
 
 // ── PlusVibe — push contacts to campaign ──────────────────
-app.post('/api/pv/push-contacts', async (req, res) => {
+app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
   const { workspace_id, campaign_id, contact_ids } = req.body;
   if (!workspace_id || !campaign_id || !Array.isArray(contact_ids) || contact_ids.length === 0) {
     return res.status(400).json({ error: 'workspace_id, campaign_id and contact_ids required' });
@@ -10521,10 +10576,153 @@ app.post('/api/pv/push-contacts', async (req, res) => {
   }
 });
 
+// ── Push to EmailBison (reuses the existing bisonFetch/bisonSwitch helpers) ──
+// Separate path from PlusVibe (PV endpoint above unchanged). Bison 2-step:
+// create/update leads → import-by-ids into the campaign, after switch-workspace.
+
+// Shared contact→pushable filter (same rules as the PV path). Pure function.
+function filterPushableContacts(allContacts, { cooldownWorkspaceId, campaignName }) {
+  const cooloffDate = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const campaignNameLc = (campaignName || '').toString().trim().toLowerCase();
+  const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, missingEnrichment: 0 };
+  const PUSHABLE_STATUSES = new Set(['safe', 'safe_catchall']);
+  const contacts = allContacts.filter(c => {
+    if (!PUSHABLE_STATUSES.has((c.email_status || '').toLowerCase())) { skipped.unsafe++; return false; }
+    if (c.do_not_contact) { skipped.dnc++; return false; }
+    if ((!c.keywords || c.keywords.trim() === '') || (!c.industry || c.industry.trim() === '')) {
+      skipped.missingEnrichment++; return false;
+    }
+    if (campaignNameLc && c.last_campaign_name && c.last_campaign_name.toLowerCase() === campaignNameLc) {
+      skipped.alreadyInCampaign++; return false;
+    }
+    if (cooldownWorkspaceId) {
+      const emailed = typeof c.emailed_workspaces === 'string'
+        ? JSON.parse(c.emailed_workspaces || '{}')
+        : (c.emailed_workspaces || {});
+      const lastSent = emailed[cooldownWorkspaceId]?.last_sent;
+      if (lastSent && lastSent >= cooloffDate) { skipped.cooldownWorkspace++; return false; }
+    }
+    return true;
+  });
+  return { contacts, skipped };
+}
+
+// Map an Ottaly contact to a Bison lead (custom_variables = array of {name,value}).
+function contactToBisonLead(c) {
+  const raw = typeof c.raw_data === 'string' ? JSON.parse(c.raw_data || '{}') : (c.raw_data || {});
+  const cv = [];
+  const add = (name, value) => { if (value !== undefined && value !== null && value !== '') cv.push({ name, value: String(value) }); };
+  add('phone_number', c.phone);
+  add('company_website', c.company_domain);
+  add('job_title', c.job_title);
+  add('industry', raw.Industry || c.industry);
+  add('linkedin_person_url', c.linkedin_url);
+  add('linkedin_company_url', c.company_linkedin_url);
+  add('city', c.company_city || c.city);
+  add('state', c.company_county || c.company_state || c.state);
+  add('country', c.company_country || c.country);
+  add('seniority', c.seniority);
+  add('keywords', raw.Keywords || c.keywords);
+  return {
+    email:      c.email,
+    first_name: c.first_name || '',
+    last_name:  c.last_name || '',
+    title:      c.job_title || '',
+    company:    c.company_name || '',
+    custom_variables: cv,
+  };
+}
+
+// GET /api/bison/workspaces — live Bison workspace list for the push dropdown.
+app.get('/api/bison/workspaces', requireSession, async (req, res) => {
+  try {
+    const data = await bisonFetch('/api/workspaces');
+    const list = Array.isArray(data) ? data : (data.data ?? []);
+    res.json({ workspaces: list.map(normBisonWs) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/bison/campaigns?ws_id=  — live Bison campaigns for a workspace.
+app.get('/api/bison/campaigns', requireSession, async (req, res) => {
+  const wsId = String(req.query.ws_id || '');
+  if (!wsId) return res.status(400).json({ error: 'ws_id required' });
+  try {
+    const data = await bisonFetch('/api/campaigns', { wsId, params: { per_page: 100 } });
+    const list = Array.isArray(data) ? data : (data.data ?? []);
+    res.json({ campaigns: list.map(c => ({ id: String(c.id), name: c.name, status: c.status })) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/bison/push-contacts
+// body: { ws_id, campaign_id, contact_ids, campaign_name?, cooldown_workspace_id? }
+//  - ws_id:        Bison workspace id (switch-workspace target)
+//  - campaign_id:  Bison campaign to import into
+//  - cooldown_workspace_id: the client's PV workspace_id, for the shared 60-day
+//                  per-client cooldown stamp (optional).
+app.post('/api/bison/push-contacts', requireSession, async (req, res) => {
+  const { ws_id, campaign_id, contact_ids } = req.body;
+  if (!ws_id || !campaign_id || !Array.isArray(contact_ids) || contact_ids.length === 0) {
+    return res.status(400).json({ error: 'ws_id, campaign_id and contact_ids required' });
+  }
+  if (!BISON_API_KEY) return res.status(500).json({ error: 'BISON_API_KEY not configured' });
+  try {
+    if (!db.getContactsById) return res.status(500).json({ error: 'Contacts DB not available' });
+    const allContacts = await db.getContactsById(contact_ids);
+    if (allContacts.length === 0) return res.status(404).json({ error: 'No contacts found' });
+
+    const cooldownWorkspaceId = req.body.cooldown_workspace_id || null;
+    const { contacts, skipped } = filterPushableContacts(allContacts, {
+      cooldownWorkspaceId, campaignName: req.body.campaign_name,
+    });
+    console.log(`[bison-push] filtered ${allContacts.length} → ${contacts.length}`, skipped);
+    if (contacts.length === 0) return res.json({ success: true, pushed: 0, total: 0, skipped });
+
+    // 1. Create/update leads (≤500/req), collecting Bison ids. bisonFetch switches
+    //    the workspace via opts.wsId before the call.
+    const leadIds = [];
+    for (let i = 0; i < contacts.length; i += 500) {
+      const slice = contacts.slice(i, i + 500);
+      const resp = await bisonFetch('/api/leads/create-or-update/multiple', {
+        wsId: ws_id, method: 'POST',
+        body: { type: 'patch', leads: slice.map(contactToBisonLead) },
+      });
+      const rows = Array.isArray(resp) ? resp : (resp.data ?? []);
+      for (const row of rows) { if (row?.id != null) leadIds.push(row.id); }
+    }
+    if (leadIds.length === 0) return res.status(502).json({ error: 'Bison created no leads', pushed: 0, skipped });
+
+    // 2. Import the leads into the campaign.
+    let pushed = 0;
+    for (let i = 0; i < leadIds.length; i += 1000) {
+      const idSlice = leadIds.slice(i, i + 1000);
+      await bisonFetch(`/api/campaigns/${campaign_id}/import-leads-by-ids`, {
+        wsId: ws_id, method: 'POST', body: { lead_ids: idSlice },
+      });
+      pushed += idSlice.length;
+    }
+
+    // 3. Shared per-client cooldown stamp (keyed by PV workspace_id).
+    const pushedIds = contacts.map(c => c.id).filter(Boolean);
+    if (pushedIds.length && cooldownWorkspaceId && db.stampPushedCampaign) {
+      db.stampPushedCampaign(pushedIds, cooldownWorkspaceId, String(campaign_id), req.body.campaign_name || '')
+        .catch(err => console.warn('[bison-push] stamp failed:', err.message));
+    }
+
+    res.json({ success: true, pushed, total: contacts.length, skipped });
+  } catch (err) {
+    console.error('[Bison Push]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Email Verify 2.0 — Proxy Management ──────────────────────
 
 // GET /api/ev2/proxies
-app.get('/api/ev2/proxies', (req, res) => {
+app.get('/api/ev2/proxies', requireSession, (req, res) => {
   if (!db) return res.status(500).json({ error: 'DB not available' });
   const rows = db.prepare('SELECT * FROM ev2_proxies ORDER BY added_at DESC').all();
   res.json({ proxies: rows });
@@ -10551,7 +10749,7 @@ app.get('/api/ev2/active-proxy', (req, res) => {
 });
 
 // POST /api/ev2/proxies — bulk add (newline-separated IP:PORT:USER:PASS or IP:PORT)
-app.post('/api/ev2/proxies', (req, res) => {
+app.post('/api/ev2/proxies', requireSession, (req, res) => {
   if (!db) return res.status(500).json({ error: 'DB not available' });
   const { lines } = req.body;
   if (!lines) return res.status(400).json({ error: 'lines required' });
@@ -10575,21 +10773,21 @@ app.post('/api/ev2/proxies', (req, res) => {
 });
 
 // DELETE /api/ev2/proxies/:id
-app.delete('/api/ev2/proxies/:id', (req, res) => {
+app.delete('/api/ev2/proxies/:id', requireSession, (req, res) => {
   if (!db) return res.status(500).json({ error: 'DB not available' });
   db.prepare('DELETE FROM ev2_proxies WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
 });
 
 // DELETE /api/ev2/proxies — clear all
-app.delete('/api/ev2/proxies', (req, res) => {
+app.delete('/api/ev2/proxies', requireSession, (req, res) => {
   if (!db) return res.status(500).json({ error: 'DB not available' });
   db.prepare('DELETE FROM ev2_proxies').run();
   res.json({ ok: true });
 });
 
 // POST /api/ev2/proxies/:id/test — HTTP request through proxy to confirm auth works
-app.post('/api/ev2/proxies/:id/test', (req, res) => {
+app.post('/api/ev2/proxies/:id/test', requireSession, (req, res) => {
   if (!db) return res.status(500).json({ error: 'DB not available' });
   const row = db.prepare('SELECT * FROM ev2_proxies WHERE id = ?').get(req.params.id);
   if (!row) return res.status(404).json({ error: 'Proxy not found' });
@@ -10648,7 +10846,7 @@ app.post('/api/ev2/proxies/:id/test', (req, res) => {
 });
 
 // POST /api/ev2/verify — verify list of emails using rotating proxies
-app.post('/api/ev2/verify', async (req, res) => {
+app.post('/api/ev2/verify', requireSession, async (req, res) => {
   if (!db) return res.status(500).json({ error: 'DB not available' });
   const { emails, useProxy = true } = req.body;
   if (!Array.isArray(emails) || emails.length === 0) return res.status(400).json({ error: 'emails array required' });
@@ -11809,7 +12007,15 @@ async function processWebhookEvent(event) {
   }
 }
 
+// Optional shared-secret guard. Only enforced when PV_WEBHOOK_SECRET is set, so
+// live PlusVibe traffic is never dropped before the secret is configured on both
+// ends. Set PV_WEBHOOK_SECRET in env + pass it as x-webhook-secret to lock down.
+const PV_WEBHOOK_SECRET = process.env.PV_WEBHOOK_SECRET || '';
 app.post('/webhook/plusvibe-reply', (req, res) => {
+  if (PV_WEBHOOK_SECRET) {
+    const provided = req.headers['x-webhook-secret'] || '';
+    if (provided !== PV_WEBHOOK_SECRET) return res.status(401).json({ error: 'Unauthorized' });
+  }
   res.json({ ok: true }); // respond to PlusVibe immediately (< 5s required)
 
   const body = req.body;
@@ -12112,21 +12318,21 @@ app.get('/api/contacts/verified-today', requireSession, async (req, res) => {
   }
 });
 
-app.get('/api/contacts/push-jobs', (req, res) => {
+app.get('/api/contacts/push-jobs', requireSession, (req, res) => {
   const jobs = [...pushJobs.values()]
     .sort((a, b) => b.created_at - a.created_at)
     .slice(0, 20);
   res.json({ jobs });
 });
 
-app.get('/api/contacts/push-jobs/:id', (req, res) => {
+app.get('/api/contacts/push-jobs/:id', requireSession, (req, res) => {
   const job = pushJobs.get(req.params.id);
   if (!job) return res.status(404).json({ error: 'Job not found' });
   res.json(job);
 });
 
 // POST starts job immediately, returns job ID — processing runs in background
-app.post('/api/contacts/verify-and-push', (req, res) => {
+app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
   const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 90, emailProviders } = req.body;
   if (!workspace_id || !campaign_id || !Array.isArray(contact_ids) || !contact_ids.length) {
     return res.status(400).json({ error: 'workspace_id, campaign_id and contact_ids required' });
@@ -12631,7 +12837,7 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
 });
 
 // Cancel a push job
-app.post('/api/contacts/push-jobs/:id/cancel', (req, res) => {
+app.post('/api/contacts/push-jobs/:id/cancel', requireSession, (req, res) => {
   const job = pushJobs.get(req.params.id);
   if (!job) return res.status(404).json({ error: 'Not found' });
   job.cancelled = true;
@@ -12641,7 +12847,7 @@ app.post('/api/contacts/push-jobs/:id/cancel', (req, res) => {
 });
 
 // Pause a push job — sets paused flag; worker exits after current batch
-app.post('/api/contacts/push-jobs/:id/pause', (req, res) => {
+app.post('/api/contacts/push-jobs/:id/pause', requireSession, (req, res) => {
   const job = pushJobs.get(req.params.id);
   if (!job) return res.status(404).json({ error: 'Not found' });
   if (!['verifying','pushing','n2b_verifying'].includes(job.status)) {
@@ -12653,7 +12859,7 @@ app.post('/api/contacts/push-jobs/:id/pause', (req, res) => {
 });
 
 // Resume a paused job — spawns a new worker that skips already-verified contacts
-app.post('/api/contacts/push-jobs/:id/resume', async (req, res) => {
+app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) => {
   const job = pushJobs.get(req.params.id);
   if (!job) return res.status(404).json({ error: 'Not found' });
   if (job.status !== 'paused') return res.status(400).json({ error: 'Job is not paused' });
@@ -14447,6 +14653,13 @@ function scheduleAudienceScoring(pgdb) {
       console.warn('[bison] webhook auto-register failed:', e.message);
     }
   }, 5000);
+
+  // Sentry error handler after routes, before the generic fallback (v8+ API).
+  Sentry.setupExpressErrorHandler(app);
+  app.use((err, req, res, next) => {
+    console.error('[Server Error]', err);
+    res.status(500).json({ error: 'Internal server error' });
+  });
 
   const server = app.listen(PORT, () => console.log(`Ottaly running on http://localhost:${PORT}`));
 
