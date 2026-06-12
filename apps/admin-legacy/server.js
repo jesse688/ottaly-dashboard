@@ -10433,14 +10433,27 @@ app.post('/api/admin/nonlead-requests/:id/reject', requireAdmin, (req, res) => {
 
 // ── PlusVibe — campaigns for a workspace ──────────────────
 app.get('/api/pv/workspaces', requireSession, async (req, res) => {
+  // Source the client list from the local clients table — the live PlusVibe API
+  // key is deprecated, and Bison's /api/workspaces only returns the token's own
+  // team (not all clients). The clients table has every client keyed by its
+  // PlusVibe workspace_id (used for the filter, cooldown, and PV push).
   try {
+    if (db && db.prepare) {
+      const rows = db.prepare(
+        `SELECT workspace_id, workspace_name FROM clients
+          WHERE workspace_id IS NOT NULL AND workspace_id != '' ORDER BY workspace_name`
+      ).all();
+      if (rows.length) {
+        return res.json({ workspaces: rows.map(r => ({ _id: r.workspace_id, name: r.workspace_name })) });
+      }
+    }
+    // Fallback: Bison workspaces (token's own teams) if the clients table is empty.
     const r = await fetch(BISON_BASE + '/api/workspaces', {
       headers: { 'Authorization': 'Bearer ' + BISON_API_KEY }
     });
     const data = await r.json();
     if (!r.ok) return res.status(r.status).json({ error: data.error || 'Failed to fetch workspaces' });
-    // Convert PlusVibe response format (array with id) to frontend format (with _id)
-    const workspaces = Array.isArray(data) ? data : data.workspaces || [];
+    const workspaces = Array.isArray(data) ? data : (data.data || data.workspaces || []);
     res.json({ workspaces: workspaces.map(w => ({ _id: w.id || w._id, name: w.name })) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -10664,8 +10677,16 @@ app.get('/api/bison/campaigns', requireSession, async (req, res) => {
   const wsId = String(req.query.ws_id || '');
   if (!wsId) return res.status(400).json({ error: 'ws_id required' });
   try {
-    const data = await bisonFetch('/api/campaigns', { wsId, params: { per_page: 100 } });
-    const list = Array.isArray(data) ? data : (data.data ?? []);
+    // Match the proven stats path exactly: explicit switch first, then fetch.
+    await bisonSwitch(wsId);
+    const data = await bisonFetch('/api/campaigns', { wsId });
+    // ?raw=1 → return the unparsed Bison response for diagnosis.
+    if (req.query.raw) return res.json({ raw: data });
+    // Handle a few possible shapes: {data:[...]}, [...], {data:{data:[...]}}.
+    const list = Array.isArray(data) ? data
+      : Array.isArray(data?.data) ? data.data
+      : Array.isArray(data?.data?.data) ? data.data.data
+      : [];
     res.json({ campaigns: list.map(c => ({ id: String(c.id), name: c.name, status: c.status })) });
   } catch (err) {
     res.status(500).json({ error: err.message });
