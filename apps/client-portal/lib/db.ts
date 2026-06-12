@@ -82,6 +82,10 @@ async function runMigration() {
 
       // ── Per-client pricing + currency ──────────────────────────────
       `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS cost_per_lead NUMERIC(12,2) NOT NULL DEFAULT 0`,
+      // One-off "start from scratch" marker. When set, lead auto-charging only
+      // bills leads delivered AFTER this timestamp — pre-reset/backfilled leads
+      // are never re-billed. Auto-charging stays ON for new leads going forward.
+      `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS charges_reset_at TIMESTAMPTZ`,
       `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFAULT 'GBP'`,
       // Spend visibility to the client: 'auto' (reveal spend+ROI only when ROI>0),
       // 'hidden' (never show money/ROI — outcomes only), 'always' (full transparency).

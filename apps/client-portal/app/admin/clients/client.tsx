@@ -270,7 +270,8 @@ export function AdminClientsClient() {
   async function addLedgerEntry() {
     if (!settingsClient) return
     const amount = Number(entryForm.amount)
-    if (!amount) return
+    // 'set' allows 0 (set balance to 0); topup/adjustment need a non-zero amount.
+    if (entryForm.amount === '' || Number.isNaN(amount) || (entryForm.type !== 'set' && !amount)) return
     await fetch(`/api/admin/clients/${settingsClient.id}/ledger`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: entryForm.type, amount, note: entryForm.note || undefined }) })
     setEntryForm({ type: 'topup', amount: '', note: '' })
     loadLedger(settingsClient.id)
@@ -899,8 +900,9 @@ export function AdminClientsClient() {
                           <select value={entryForm.type} onChange={e => setEntryForm(f => ({...f,type:e.target.value}))} className="px-2 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 bg-white">
                             <option value="topup">Add leads</option>
                             <option value="adjustment">Adjust (+/−)</option>
+                            <option value="set">Set balance to</option>
                           </select>
-                          <input type="number" step="1" value={entryForm.amount} onChange={e => setEntryForm(f => ({...f,amount:e.target.value}))} placeholder="Leads" className="w-24 px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" />
+                          <input type="number" step="1" value={entryForm.amount} onChange={e => setEntryForm(f => ({...f,amount:e.target.value}))} placeholder={entryForm.type === 'set' ? 'New balance' : 'Leads'} className="w-24 px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" />
                           <input value={entryForm.note} onChange={e => setEntryForm(f => ({...f,note:e.target.value}))} placeholder="Note (optional)" className="flex-1 px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" />
                           <button onClick={addLedgerEntry} className="px-3 py-2 bg-indigo-600 text-white text-xs font-medium rounded-lg">Add</button>
                         </div>
