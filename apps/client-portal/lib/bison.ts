@@ -152,15 +152,23 @@ async function getLeadTagId(): Promise<number | null> {
 // Bison uses cursor-free pagination: page (1-based) + per_page.
 export async function getLeads(page = 1, perPage = 100, teamId?: string | number | null): Promise<BisonLead[]> {
   if (teamId != null && teamId !== '') {
-    try { await switchWorkspace(teamId) } catch { /* fall through on its own workspace */ }
+    try {
+      await switchWorkspace(teamId)
+      if (page === 1) console.log(`[bison.getLeads] switched to team ${teamId}`)
+    } catch (e) {
+      console.warn(`[bison.getLeads] switch to team ${teamId} FAILED (key may not be super-admin):`, (e as Error).message)
+    }
   }
   const leadTagId = await getLeadTagId()
+  if (page === 1) console.log(`[bison.getLeads] team=${teamId ?? 'default'} leadTagId=${leadTagId ?? 'none(fallback status=interested)'}`)
   const params: Record<string, string | number | boolean | undefined> =
     leadTagId != null
       ? { 'filters[tag_ids][]': leadTagId, page, per_page: perPage }
       : { 'filters[lead_campaign_status]': 'replied', status: 'interested', page, per_page: perPage }
   const data = await bison<{ data?: BisonLead[] }>('GET', '/api/leads', params)
-  return Array.isArray(data) ? (data as unknown as BisonLead[]) : data.data ?? []
+  const out = Array.isArray(data) ? (data as unknown as BisonLead[]) : data.data ?? []
+  if (page === 1) console.log(`[bison.getLeads] team=${teamId ?? 'default'} page1 returned ${out.length} lead(s)`)
+  return out
 }
 
 // Fetch a single lead by ID or email.
