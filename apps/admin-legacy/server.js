@@ -10733,8 +10733,10 @@ app.post('/api/bison/push-contacts', requireSession, async (req, res) => {
   }
   if (!BISON_API_KEY) return res.status(500).json({ error: 'BISON_API_KEY not configured' });
   try {
-    if (!db.getContactsById) return res.status(500).json({ error: 'Contacts DB not available' });
-    const allContacts = await db.getContactsById(contact_ids);
+    // Contacts live in Postgres (app.locals.pgDb), not the top-level SQLite db.
+    const pgDb = req.app.locals.pgDb;
+    if (!pgDb || !pgDb.getContactsById) return res.status(500).json({ error: 'Contacts DB not available' });
+    const allContacts = await pgDb.getContactsById(contact_ids);
     if (allContacts.length === 0) return res.status(404).json({ error: 'No contacts found' });
 
     const cooldownWorkspaceId = req.body.cooldown_workspace_id || null;
@@ -10771,8 +10773,8 @@ app.post('/api/bison/push-contacts', requireSession, async (req, res) => {
 
     // 3. Shared per-client cooldown stamp (keyed by PV workspace_id).
     const pushedIds = contacts.map(c => c.id).filter(Boolean);
-    if (pushedIds.length && cooldownWorkspaceId && db.stampPushedCampaign) {
-      db.stampPushedCampaign(pushedIds, cooldownWorkspaceId, String(campaign_id), req.body.campaign_name || '')
+    if (pushedIds.length && cooldownWorkspaceId && pgDb.stampPushedCampaign) {
+      pgDb.stampPushedCampaign(pushedIds, cooldownWorkspaceId, String(campaign_id), req.body.campaign_name || '')
         .catch(err => console.warn('[bison-push] stamp failed:', err.message));
     }
 
