@@ -1867,14 +1867,14 @@ app.get('/api/nav-settings', requireSession, async (req, res) => {
 // Wipes vertical snoozes and reply-intelligence notes set by the old
 // over-active parser. Deliberately leaves do_not_contact intact —
 // 'remove me' replies that legitimately set DNC should stand.
-// POST /api/admin/sync-leads-to-portal
-// Backfill historical PlusVibe leads into Postgres esp_leads so the client portal
-// dashboards expose them. SOURCE = perf_cache_leads (the SAME persisted labeled-
-// leads cache the admin dashboard counts), so the portal count matches admin
-// exactly. Keeps only qualified leads (label NOT non-lead, _pv_nonlead false).
-// Writes source='plusvibe', status='INTERESTED'. Idempotent (ON CONFLICT). Frozen
-// history — never deletes.
+// POST /api/admin/sync-leads-to-portal — RETIRED.
+// Historical PV leads are backfilled directly via SQL from the revenue_leads
+// table (the authoritative source the admin counts) into esp_leads. The earlier
+// cache/SQLite-based versions pulled the wrong/empty sources and could write
+// Bison test leads as plusvibe, so this is disabled. See revenue_leads backfill.
 app.post('/api/admin/sync-leads-to-portal', requireAdmin, async (req, res) => {
+  return res.status(410).json({ error: 'Retired — historical leads are backfilled via SQL from revenue_leads.' });
+  // eslint-disable-next-line no-unreachable
   const dbPg = app.locals.pgDb;
   if (!dbPg) return res.status(500).json({ error: 'DB not available' });
   // Same non-lead exclusion the admin uses (NON_LEAD / WEAK_LEAD / Non Lead…).

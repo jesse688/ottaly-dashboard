@@ -154,21 +154,6 @@ body.manager-view .admin-only{display:none !important}
       <div class="page-sub" id="pageSubtitle">Loading…</div>
     </div>
     <button class="btn btn-primary admin-only" onclick="openModal()">+ Add Client</button>
-    <button class="btn admin-only" id="syncLeadsBtn" onclick="syncLeadsToPortal()" style="margin-left:8px;background:#7c3aed;color:#fff;" title="Copy historical PlusVibe leads into the client portal dashboards">↧ Sync PV Leads to Portal</button>
-    <script>
-      async function syncLeadsToPortal() {
-        const btn = document.getElementById('syncLeadsBtn');
-        if (!confirm('Sync all historical PlusVibe leads into the client portal dashboards? Safe + re-runnable.')) return;
-        btn.disabled = true; const orig = btn.textContent; btn.textContent = 'Syncing…';
-        try {
-          const r = await fetch('/api/admin/sync-leads-to-portal', { method: 'POST' });
-          const d = await r.json();
-          if (!r.ok) { alert('Sync failed: ' + (d.error || r.status)); return; }
-          alert(`✅ Synced ${d.synced} lead(s) across ${d.workspaces} client(s) to the portal. (${d.skipped} skipped.)`);
-        } catch (e) { alert('Sync error: ' + e.message); }
-        finally { btn.disabled = false; btn.textContent = orig; }
-      }
-    </script>
   </div>
 
   <div class="summary">
