@@ -36,6 +36,10 @@ const contactsAPI = require('./api-contacts');
 const { cleanCompanyName, normalizeJobTitle } = require('./csv-importer');
 const { locationCustomVars } = require('./location-normalizer');
 const { google } = require('googleapis');
+const Sentry = require('@sentry/node');
+const compression = require('compression');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -517,6 +521,26 @@ app.use('/email-finder-tool', (req, res) => {
   });
   req.pipe(proxyReq);
 });
+
+// ── Sentry + security + performance middleware (must precede routes) ───────
+// @sentry/node v8+: Express request/tracing handlers are automatic; only the
+// error handler is wired explicitly (see Sentry.setupExpressErrorHandler below).
+Sentry.init({
+  dsn: process.env.SENTRY_DSN || '',
+  environment: process.env.NODE_ENV || 'production',
+  tracesSampleRate: 0.1,
+});
+app.use(helmet({ contentSecurityPolicy: false }));
+app.use(compression());
+// Rate-limit the API surface (stripe webhook excluded — it has its own verify).
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 500,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.path === '/api/stripe/webhook',
+});
+app.use('/api/', apiLimiter);
 
 // ── Middleware ─────────────────────────────────────────────
 app.use(express.json({ limit: '50mb' }));
@@ -1590,6 +1614,28 @@ const BUILD_VERSION = String(Date.now());
 app.get('/api/build-version', (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json({ version: BUILD_VERSION });
+});
+
+// Liveness/readiness probe for Easypanel/uptime monitoring. No auth — 200 when
+// the process is up and Postgres answers SELECT 1, else 503.
+app.get('/healthz', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const health = { status: 'ok', uptime: Math.round(process.uptime()), db: 'unknown' };
+  try {
+    const pgPool = req.app.locals.pgDb;
+    if (pgPool && typeof pgPool.query === 'function') {
+      await pgPool.query('SELECT 1');
+      health.db = 'ok';
+    } else {
+      health.db = 'unconfigured';
+    }
+    res.json(health);
+  } catch (err) {
+    health.status = 'degraded';
+    health.db = 'error';
+    health.error = err.message;
+    res.status(503).json(health);
+  }
 });
 
 // Hoisted to module scope so functions defined after the if(db) block (e.g.
@@ -14464,6 +14510,13 @@ function scheduleAudienceScoring(pgdb) {
       console.warn('[bison] webhook auto-register failed:', e.message);
     }
   }, 5000);
+
+  // Sentry error handler after routes, before the generic fallback (v8+ API).
+  Sentry.setupExpressErrorHandler(app);
+  app.use((err, req, res, next) => {
+    console.error('[Server Error]', err);
+    res.status(500).json({ error: 'Internal server error' });
+  });
 
   const server = app.listen(PORT, () => console.log(`Ottaly running on http://localhost:${PORT}`));
 
