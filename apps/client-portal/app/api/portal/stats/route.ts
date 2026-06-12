@@ -30,10 +30,15 @@ export async function GET() {
       ),
       pool.query(
         `SELECT
-           COUNT(*) FILTER (WHERE status IN ('INTERESTED', 'MEETING_BOOKED')) AS total_leads,
+           COUNT(*) AS total_leads,
            COUNT(*) FILTER (WHERE status = 'MEETING_BOOKED') AS total_meetings
-         FROM esp_leads
-         WHERE workspace_id = $1 AND source IN ('plusvibe', 'bison')`,
+         FROM (
+           SELECT DISTINCT ON (lower(email)) status
+           FROM esp_leads
+           WHERE workspace_id = $1 AND source IN ('plusvibe', 'bison')
+             AND status IN ('INTERESTED', 'MEETING_BOOKED')
+           ORDER BY lower(email), (source = 'bison') DESC, created_at DESC
+         ) d`,
         [workspaceId]
       ),
     ])

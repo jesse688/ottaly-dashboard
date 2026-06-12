@@ -85,6 +85,14 @@ export async function GET() {
          AND l.source IN ('plusvibe', 'bison')
          AND l.label = 'INTERESTED'
          AND ($2::text[] = '{}' OR l.label != ALL($2::text[]))
+         -- Dedup PV/Bison: drop a frozen PV row when a Bison row exists for the
+         -- same email (Bison wins), so migrated clients aren't double-counted.
+         AND NOT (l.source = 'plusvibe' AND EXISTS (
+           SELECT 1 FROM esp_leads b
+           WHERE b.workspace_id = l.workspace_id
+             AND lower(b.email) = lower(l.email)
+             AND b.source = 'bison' AND b.label = 'INTERESTED'
+         ))
        ORDER BY l.first_replied_at DESC NULLS LAST, l.created_at DESC`,
       [session.workspaceId, hiddenLabels, session.clientId]
     )
