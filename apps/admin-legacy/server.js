@@ -1634,6 +1634,31 @@ app.get('/api/build-version', (req, res) => {
   res.json({ version: BUILD_VERSION });
 });
 
+// Liveness/readiness probe for Easypanel/uptime monitoring. No auth — returns
+// 200 when the process is up and the Postgres pool answers SELECT 1, else 503.
+app.get('/healthz', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const health = { status: 'ok', uptime: Math.round(process.uptime()), db: 'unknown' };
+  try {
+    const pgPool = req.app.locals.pgDb;
+    if (pgPool && typeof pgPool.healthCheck === 'function') {
+      await pgPool.healthCheck();
+      health.db = 'ok';
+    } else if (pgPool && typeof pgPool.query === 'function') {
+      await pgPool.query('SELECT 1');
+      health.db = 'ok';
+    } else {
+      health.db = 'unconfigured';
+    }
+    res.json(health);
+  } catch (err) {
+    health.status = 'degraded';
+    health.db = 'error';
+    health.error = err.message;
+    res.status(503).json(health);
+  }
+});
+
 // Hoisted to module scope so functions defined after the if(db) block (e.g.
 // runAudienceScoringAll) can still reference pvFetch. Assignment happens
 // inside the if(db) block at runtime.
