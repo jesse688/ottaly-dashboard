@@ -60,14 +60,16 @@ export async function getLedger(clientId: string, limit = 100) {
 // Returns number of new charges created.
 export async function reconcileLeadCharges(clientId: string): Promise<number> {
   const c = await pool.query(
-    `SELECT workspace_id, cost_per_lead FROM portal_clients WHERE id = $1`,
+    `SELECT workspace_id, cost_per_lead, charges_reset_at FROM portal_clients WHERE id = $1`,
     [clientId]
   )
   const row = c.rows[0]
   if (!row) return 0
   if (Number(row.cost_per_lead ?? 0) <= 0) return 0
 
-  // -1 lead for every INTERESTED plusvibe lead in the workspace without a charge.
+  // -1 lead for every INTERESTED lead in the workspace without a charge. If a
+  // charges_reset_at is set (a one-off "start from scratch"), only charge leads
+  // delivered AFTER that point — pre-reset/backfilled leads are never re-billed.
   const res = await pool.query(
     `INSERT INTO portal_ledger (client_id, type, amount, lead_id, description, created_by)
      SELECT $1, 'lead_charge', -1, l.id,
@@ -78,12 +80,14 @@ export async function reconcileLeadCharges(clientId: string): Promise<number> {
       WHERE l.workspace_id = $2
         AND l.source IN ('plusvibe', 'bison')
         AND l.label = 'INTERESTED'
+        AND ($3::timestamptz IS NULL
+             OR COALESCE(l.first_replied_at, l.created_at, l.synced_at) > $3::timestamptz)
         AND NOT EXISTS (
           SELECT 1 FROM portal_ledger pl
            WHERE pl.client_id = $1 AND pl.lead_id = l.id AND pl.type = 'lead_charge'
         )
      ON CONFLICT (client_id, lead_id) WHERE type = 'lead_charge' DO NOTHING`,
-    [clientId, row.workspace_id]
+    [clientId, row.workspace_id, row.charges_reset_at ?? null]
   )
   return res.rowCount ?? 0
 }
