@@ -10785,7 +10785,7 @@ app.post('/api/bison/push-contacts', requireSession, async (req, res) => {
     let pushed = 0;
     for (let i = 0; i < leadIds.length; i += 1000) {
       const idSlice = leadIds.slice(i, i + 1000);
-      await bisonReq(`/api/campaigns/${campaign_id}/leads`, {
+      await bisonReq(`/api/campaigns/${campaign_id}/leads/attach-leads`, {
         wsId: ws_id, method: 'POST', body: { lead_ids: idSlice },
       });
       pushed += idSlice.length;
