@@ -3619,7 +3619,7 @@
         const ws = res.workspaces || [];
         if (!ws.length) { wsEl.innerHTML = '<option value="">No Bison workspaces found</option>'; return; }
         wsEl.innerHTML = '<option value="">— Select workspace —</option>' +
-          ws.map(w => `<option value="${w.id}">${w.name}</option>`).join('');
+          ws.map(w => `<option value="${w.id}" data-pv="${w.pv_workspace_id || ''}">${w.name}</option>`).join('');
       } catch (err) {
         wsEl.innerHTML = '<option value="">Failed to load</option>';
       }
@@ -3648,9 +3648,11 @@
       if (!wsId) { errEl.textContent = 'Please select a Bison workspace.'; errEl.style.display = ''; return; }
       if (!campId) { errEl.textContent = 'Please select a campaign.'; errEl.style.display = ''; return; }
 
-      // Use the sidebar client filter (PV workspace_id) for the shared cooldown.
-      const clientSel = document.getElementById('clientFilter');
-      const cooldownWsId = clientSel?.value || null;
+      // Shared cooldown keyed by the client's PV workspace_id: prefer the
+      // selected Bison workspace's mapped pv id, fall back to the sidebar filter.
+      const wsEl2 = document.getElementById('bisonWorkspace');
+      const cooldownWsId = wsEl2.selectedOptions[0]?.dataset.pv
+        || document.getElementById('clientFilter')?.value || null;
       const campName = document.getElementById('bisonCampaign').selectedOptions[0]?.text || campId;
       const btn = document.getElementById('bisonPushConfirmBtn');
       btn.disabled = true; btn.textContent = 'Pushing…';

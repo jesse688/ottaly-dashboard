@@ -54,6 +54,26 @@ const PLUSVIBE_KEY           = process.env.PLUSVIBE_KEY           || '6425e882-f
 const BISON_API_KEY = process.env.BISON_API_KEY || process.env.PLUSVIBE_KEY || '';
 const BISON_BASE = (process.env.BISON_API_URL || 'https://send.ottaly.co.uk').replace(/\/$/, '');
 let _bisonWsId = null;
+
+// Known PlusVibe workspace_id → Bison team_id map (Bison's /api/workspaces only
+// returns the token user's OWN teams, not all client teams, so we map clients
+// explicitly). Update here when a client is added/migrated to Bison.
+const BISON_TEAMS = [
+  { team_id: '3',  name: 'Ottaly',              pv: '690ee665bcb253de4fb44538' },
+  { team_id: '4',  name: 'AccrueAccounting',    pv: '6912ddfef9582848982b9a62' },
+  { team_id: '5',  name: 'ButterflyEco',        pv: '69a9db307af7ef2854f57637' },
+  { team_id: '12', name: 'MagnaMoney',          pv: '6a0cc49a4a80688441614dfb' },
+  { team_id: '13', name: 'Bruud',               pv: '69ffaf6904ca7138af16013a' },
+  { team_id: '14', name: 'GXI-Furniture',       pv: '69c43d1e07bf312ff0026643' },
+  { team_id: '15', name: 'GXI',                 pv: '69c43d1407bf312ff0026642' },
+  { team_id: '17', name: 'Indigo',              pv: '695259c3d6154e27d164bcf7' },
+  { team_id: '18', name: 'Enviro',              pv: '699714b02f0830a7148fcf3e' },
+  { team_id: '19', name: 'PPC',                 pv: '695259dc8de377db7577dc45' },
+  { team_id: '20', name: 'Jumping Spider (JSM)',pv: '697e20f02db8460f8ba68792' },
+  { team_id: '21', name: 'HydrationCompany',    pv: '69525a0eceae00718efdaeaa' },
+  { team_id: '22', name: 'Animo',               pv: '69a686632f5aaca7d9602c1f' },
+  { team_id: '23', name: 'ButterflyEco SOP',    pv: '6a1d40b3bb80380c1be750c6' },
+];
 const ANTHROPIC_API_KEY      = process.env.ANTHROPIC_API_KEY      || '';
 const SLACK_SIGNING_SECRET   = process.env.SLACK_SIGNING_SECRET   || '';
 const ANTHROPIC_MODEL        = process.env.ANTHROPIC_MODEL        || 'claude-haiku-4-5-20251001';
@@ -10633,15 +10653,10 @@ function contactToBisonLead(c) {
   };
 }
 
-// GET /api/bison/workspaces — live Bison workspace list for the push dropdown.
-app.get('/api/bison/workspaces', requireSession, async (req, res) => {
-  try {
-    const data = await bisonFetch('/api/workspaces');
-    const list = Array.isArray(data) ? data : (data.data ?? []);
-    res.json({ workspaces: list.map(normBisonWs) });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+// GET /api/bison/workspaces — Bison workspaces for the push dropdown. Uses the
+// known BISON_TEAMS map (the token's /api/workspaces only lists its own teams).
+app.get('/api/bison/workspaces', requireSession, (req, res) => {
+  res.json({ workspaces: BISON_TEAMS.map(t => ({ id: t.team_id, name: t.name, pv_workspace_id: t.pv })) });
 });
 
 // GET /api/bison/campaigns?ws_id=  — live Bison campaigns for a workspace.
