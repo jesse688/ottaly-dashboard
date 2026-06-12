@@ -240,19 +240,51 @@ async function run() {
       .map(a => a.slice(2).split('='))
   )
 
-  // --source forces a single ESP for ALL workspaces (manual/debug). Without it,
-  // each workspace is routed by its esp_routing (dual mode).
   const forcedSource = args.source || null
-  if (forcedSource && !ADAPTERS[forcedSource]) {
-    console.error(`Unknown source: ${forcedSource}`); process.exit(1)
+  if (forcedSource && !['plusvibe', 'bison'].includes(forcedSource)) {
+    console.error(`Unknown source: ${forcedSource} (use plusvibe|bison)`); process.exit(1)
+  }
+  const total = { campaigns: 0, accounts: 0, leads: 0 }
+
+  // ── TEST / DEBUG PATH: --source=bison ─────────────────────────────────────
+  // Sync Bison directly by its OWN workspaces (team_ids), independent of
+  // esp_routing and WITHOUT touching any PlusVibe (source='plusvibe') data.
+  // Safe while clients are still live on PlusVibe — Bison rows are written under
+  // source='bison' and coexist. --workspace=<team_id> limits to one workspace.
+  if (forcedSource === 'bison') {
+    log('Starting Bison-only test sync (by Bison team_id; does not touch PlusVibe data)')
+    const setupClient = await pool.connect()
+    let bisonWorkspaces
+    try {
+      bisonWorkspaces = await ADAPTERS.bison.getWorkspaces()
+      for (const ws of bisonWorkspaces) await upsertWorkspace(setupClient, 'bison', ws)
+    } finally { setupClient.release() }
+    const only = args.workspace ? String(args.workspace) : null
+    const toSync = only ? bisonWorkspaces.filter(w => String(w.id) === only) : bisonWorkspaces
+    log(`Syncing ${toSync.length} Bison workspace(s)...`)
+    for (const ws of toSync) {
+      const r = await syncWorkspace(ADAPTERS.bison, ws.id, `${ws.name} [bison]`)
+      if (r) { total.campaigns += r.campaigns; total.accounts += r.accounts; total.leads += r.leads }
+    }
+    const dc = await pool.connect()
+    try { await dedupeMailboxes(dc) } finally { dc.release() }
+    log(`Done. Total: ${total.campaigns} campaigns, ${total.accounts} accounts, ${total.leads} leads`)
+    await pool.end()
+    return
   }
 
-  log(forcedSource
-    ? `Starting sync (forced source=${forcedSource})`
-    : `Starting sync (per-workspace routing via esp_routing)`)
+  // ── NORMAL PATH: per-workspace routing via esp_routing ────────────────────
+  // PlusVibe is the canonical client roster (every client has a PV workspace_id
+  // even mid-migration). esp_routing decides each client's ESP(s):
+  //   'plusvibe' (default) → PV only
+  //   'bison'              → Bison only (clean cutover)
+  //   'both'               → BOTH synced; stats union with Bison-wins per-mailbox
+  //                          dedup (a mailbox on Bison is counted from Bison, not
+  //                          PV; PV-only mailboxes counted from PV).
+  log(forcedSource === 'plusvibe'
+    ? 'Starting sync (forced source=plusvibe)'
+    : 'Starting sync (per-workspace routing via esp_routing)')
 
-  // 1. Load routing + discover workspaces from PlusVibe (still the canonical
-  //    client roster — every client has a PV workspace_id even after migrating).
   const setupClient = await pool.connect()
   let routing, pvWorkspaces
   try {
@@ -267,30 +299,28 @@ async function run() {
   const toSync = targetId ? pvWorkspaces.filter(w => w.id === targetId) : pvWorkspaces
   log(`Syncing ${toSync.length} workspaces...`)
 
-  const total = { campaigns: 0, accounts: 0, leads: 0 }
   for (const ws of toSync) {
     const provider = forcedSource || routing.byPvId.get(String(ws.id)) || 'plusvibe'
-    const adapter = ADAPTERS[provider]
 
-    // Bison is keyed by team_id, not the PV workspace_id. Resolve it; skip if a
-    // client is marked bison but has no team_id mapping (avoids syncing the
-    // wrong workspace). PlusVibe uses the workspace_id directly.
-    let adapterWsId = ws.id
-    if (provider === 'bison') {
-      const teamId = routing.bisonTeamId.get(String(ws.id))
-      if (!teamId) { log(`  skip ${ws.name} — esp_provider=bison but no bison_team_id`); continue }
-      adapterWsId = teamId
+    // PlusVibe leg (runs for 'plusvibe' and 'both').
+    if (provider === 'plusvibe' || provider === 'both') {
+      const r = await syncWorkspace(ADAPTERS.plusvibe, ws.id, `${ws.name} [plusvibe]`)
+      if (r) { total.campaigns += r.campaigns; total.accounts += r.accounts; total.leads += r.leads }
     }
 
-    const result = await syncWorkspace(adapter, adapterWsId, `${ws.name} [${provider}]`)
-    if (result) {
-      total.campaigns += result.campaigns
-      total.accounts += result.accounts
-      total.leads += result.leads
+    // Bison leg (runs for 'bison' and 'both'). Keyed by team_id from routing.
+    if (provider === 'bison' || provider === 'both') {
+      const teamId = routing.bisonTeamId.get(String(ws.id))
+      if (!teamId) {
+        log(`  skip ${ws.name} Bison leg — esp_provider=${provider} but no bison_team_id`)
+      } else {
+        const r = await syncWorkspace(ADAPTERS.bison, teamId, `${ws.name} [bison]`)
+        if (r) { total.campaigns += r.campaigns; total.accounts += r.accounts; total.leads += r.leads }
+      }
     }
   }
 
-  // 2. Bison-wins mailbox dedup across the freshly-synced roster.
+  // Bison-wins mailbox dedup across the freshly-synced roster.
   const dedupClient = await pool.connect()
   try { await dedupeMailboxes(dedupClient) } finally { dedupClient.release() }
 

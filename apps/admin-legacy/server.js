@@ -10619,7 +10619,7 @@ app.get('/api/bison/workspaces', requireSession, async (req, res) => {
              COALESCE(w.name, r.pv_workspace_id) AS name
       FROM esp_routing r
       LEFT JOIN esp_workspaces w ON w.id = r.bison_team_id AND w.source = 'bison'
-      WHERE r.esp_provider = 'bison' AND r.bison_team_id IS NOT NULL
+      WHERE r.esp_provider IN ('bison', 'both') AND r.bison_team_id IS NOT NULL
       ORDER BY name`);
     res.json({ workspaces: rows });
   } catch (err) {

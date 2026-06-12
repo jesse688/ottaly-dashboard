@@ -12,10 +12,17 @@
 -- canonical client id, retained even after a client moves to Bison).
 
 -- 1. Per-workspace ESP routing (Postgres — readable by sync.js and the API).
+--    esp_provider:
+--      'plusvibe' (default) → sync/push PlusVibe only (current behaviour)
+--      'bison'              → Bison only (clean cutover; PV history kept, frozen)
+--      'both'               → sync BOTH; stats union with Bison-wins per-mailbox
+--                             dedup (a mailbox present on Bison is counted from
+--                             Bison, not PV; PV-only mailboxes counted from PV).
+--                             Use during a transition when a client sends on both.
 CREATE TABLE IF NOT EXISTS esp_routing (
   pv_workspace_id TEXT PRIMARY KEY,                 -- canonical client id (PlusVibe workspace_id)
-  esp_provider    TEXT NOT NULL DEFAULT 'plusvibe', -- 'plusvibe' | 'bison'
-  bison_team_id   TEXT,                             -- Bison team_id (required when esp_provider='bison')
+  esp_provider    TEXT NOT NULL DEFAULT 'plusvibe', -- 'plusvibe' | 'bison' | 'both'
+  bison_team_id   TEXT,                             -- Bison team_id (required when esp_provider IN ('bison','both'))
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
