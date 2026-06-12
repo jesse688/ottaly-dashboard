@@ -5,5 +5,12 @@ import { UniboxClient } from './client'
 export default async function UniboxPage() {
   const session = await getSession()
   if (!session) redirect('/login')
-  return <UniboxClient companyName={session.companyName} clientName={session.contactName} />
+  return (
+    <UniboxClient
+      companyName={session.companyName}
+      clientName={session.contactName}
+      workspaces={session.workspaces ?? []}
+      activeWorkspaceId={session.workspaceId}
+    />
+  )
 }

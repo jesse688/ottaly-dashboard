@@ -126,7 +126,17 @@ function splitQuote(text: string): { main: string; quoted: string } {
   return { main: text.slice(0, idx).trim(), quoted }
 }
 
-export function UniboxClient({ companyName, clientName }: { companyName: string; clientName: string }) {
+export function UniboxClient({ companyName, clientName, workspaces = [], activeWorkspaceId }: { companyName: string; clientName: string; workspaces?: Array<{ clientId: string; workspaceId: string; companyName: string }>; activeWorkspaceId?: string }) {
+  async function switchWorkspace(workspaceId: string) {
+    if (!workspaceId || workspaceId === activeWorkspaceId) return
+    try {
+      const r = await fetch('/api/portal/switch-workspace', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspaceId }),
+      })
+      if (r.ok) window.location.reload()
+    } catch { /* ignore — stay on current workspace */ }
+  }
   // First name for the greeting; falls back to the company/account name.
   const greetingName = (clientName || companyName || '').trim().split(/\s+/)[0] || 'there'
   const [leads, setLeads] = useState<Lead[] | null>(null)
@@ -359,7 +369,20 @@ export function UniboxClient({ companyName, clientName }: { companyName: string;
         </button>
         <span className="flex items-center [&_img]:brightness-0 [&_img]:invert"><Logo onDark /></span>
         <span className="hidden sm:inline text-white/30">|</span>
-        <span className="hidden sm:inline text-white/90 text-sm font-medium truncate max-w-[140px]">{companyName}</span>
+        {workspaces.length > 1 ? (
+          <select
+            value={activeWorkspaceId}
+            onChange={(e) => switchWorkspace(e.target.value)}
+            title="Switch workspace"
+            className="hidden sm:inline-block bg-white/10 text-white text-sm font-medium rounded-md px-2 py-1 border border-white/20 max-w-[180px] cursor-pointer focus:outline-none"
+          >
+            {workspaces.map((w) => (
+              <option key={w.workspaceId} value={w.workspaceId} className="text-black">{w.companyName}</option>
+            ))}
+          </select>
+        ) : (
+          <span className="hidden sm:inline text-white/90 text-sm font-medium truncate max-w-[140px]">{companyName}</span>
+        )}
         <nav className="hidden md:flex items-center gap-1 ml-4">
           <span className="px-3 py-1.5 text-white bg-white/15 text-sm font-medium rounded-lg inline-flex items-center gap-1.5">
             Leads

@@ -38,6 +38,20 @@ async function runMigration() {
       // Self-service invite link: client opens it and sets their own username + code.
       `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS invite_token TEXT`,
       `CREATE UNIQUE INDEX IF NOT EXISTS uq_portal_clients_invite ON portal_clients (invite_token) WHERE invite_token IS NOT NULL`,
+      // Multi-user / multi-workspace access. One login (identifier+code) can be
+      // granted access to MANY client workspaces; a client workspace can have
+      // MANY logins. Each row = "this login may view this client's workspace".
+      // Login resolution checks here first, then falls back to portal_clients
+      // (legacy single-login clients keep working unchanged).
+      `CREATE TABLE IF NOT EXISTS portal_user_access (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        identifier TEXT NOT NULL,
+        password_hash TEXT NOT NULL,
+        client_id UUID NOT NULL REFERENCES portal_clients(id) ON DELETE CASCADE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        UNIQUE (identifier, client_id)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_portal_user_access_identifier ON portal_user_access (lower(identifier))`,
       `CREATE TABLE IF NOT EXISTS portal_client_labels (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         client_id UUID NOT NULL REFERENCES portal_clients(id) ON DELETE CASCADE,

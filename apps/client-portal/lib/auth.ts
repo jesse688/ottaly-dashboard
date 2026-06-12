@@ -14,12 +14,22 @@ export const COOKIE = 'ottaly_portal_session'
 export const ADMIN_COOKIE = 'ottaly_portal_admin'
 const ADMIN_KEY = process.env.PORTAL_ADMIN_KEY ?? 'Ottaly2025$'
 
+export interface WorkspaceRef {
+  clientId: string
+  workspaceId: string
+  companyName: string
+}
+
 export interface ClientSession {
+  // ACTIVE workspace (every existing query uses these — shape unchanged).
   workspaceId: string
   companyName: string
   contactName: string
   email: string
   clientId: string
+  // All workspaces this login can access (length 1 for legacy single-workspace
+  // logins). The workspace switcher picks which is active.
+  workspaces?: WorkspaceRef[]
 }
 
 export function sha256(input: string): string {
@@ -62,12 +72,42 @@ export async function validateClientCredentials(
   identifier: string,
   code: string
 ): Promise<ClientSession | null> {
+  const id = identifier.trim()
+
+  // 1) Multi-workspace logins: portal_user_access maps one identifier to one or
+  //    more client workspaces. Accept the normalised OR exact-case hash.
+  const access = await pool.query(
+    `SELECT ua.password_hash, c.id AS client_id, c.workspace_id, c.company_name, c.contact_name, c.email
+     FROM portal_user_access ua
+     JOIN portal_clients c ON c.id = ua.client_id AND c.active = true
+     WHERE lower(ua.identifier) = lower($1)
+     ORDER BY c.company_name`,
+    [id]
+  )
+  if (access.rows.length) {
+    const ok = access.rows.some(r => r.password_hash === hashCode(code) || r.password_hash === sha256(code))
+    if (!ok) return null
+    const workspaces: WorkspaceRef[] = access.rows.map(r => ({
+      clientId: r.client_id, workspaceId: r.workspace_id, companyName: r.company_name,
+    }))
+    const first = access.rows[0]
+    return {
+      clientId: first.client_id,
+      workspaceId: first.workspace_id,
+      companyName: first.company_name,
+      contactName: first.contact_name ?? '',
+      email: first.email ?? '',
+      workspaces,
+    }
+  }
+
+  // 2) Legacy single-workspace login on portal_clients (unchanged behaviour).
   const res = await pool.query(
     `SELECT id, workspace_id, company_name, contact_name, email, password_hash
      FROM portal_clients
      WHERE (lower(username) = lower($1) OR lower(email) = lower($1)) AND active = true
      LIMIT 1`,
-    [identifier.trim()]
+    [id]
   )
   if (!res.rows.length) return null
 
@@ -79,9 +119,6 @@ export async function validateClientCredentials(
     email: string | null
     password_hash: string
   }
-
-  // Accept the normalised hash (new, case-insensitive codes) OR the exact-case
-  // hash (legacy email+password clients) so nothing breaks.
   const stored = row.password_hash ?? ''
   const matches = stored === hashCode(code) || stored === sha256(code)
   if (!matches) return null
@@ -92,6 +129,7 @@ export async function validateClientCredentials(
     companyName: row.company_name,
     contactName: row.contact_name ?? '',
     email: row.email ?? '',
+    workspaces: [{ clientId: row.id, workspaceId: row.workspace_id, companyName: row.company_name }],
   }
 }
 
@@ -128,6 +166,7 @@ export async function getSession(): Promise<ClientSession | null> {
       companyName: payload.companyName as string,
       contactName: (payload.contactName as string) ?? '',
       email: payload.email as string,
+      workspaces: (payload.workspaces as WorkspaceRef[] | undefined),
     }
   } catch {
     return null
