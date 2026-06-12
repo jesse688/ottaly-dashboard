@@ -11749,7 +11749,17 @@ async function processWebhookEvent(event) {
   }
 }
 
+// Optional shared-secret guard. Mirrors /webhook/lead: only enforced when
+// PV_WEBHOOK_SECRET is set, so live PlusVibe traffic is never dropped before
+// the secret is configured on both ends. Set PV_WEBHOOK_SECRET in env and pass
+// the same value as the x-webhook-secret header from PlusVibe to lock this down.
+const PV_WEBHOOK_SECRET = process.env.PV_WEBHOOK_SECRET || '';
 app.post('/webhook/plusvibe-reply', (req, res) => {
+  if (PV_WEBHOOK_SECRET) {
+    const provided = req.headers['x-webhook-secret'] || '';
+    if (provided !== PV_WEBHOOK_SECRET)
+      return res.status(401).json({ error: 'Unauthorized' });
+  }
   res.json({ ok: true }); // respond to PlusVibe immediately (< 5s required)
 
   const body = req.body;
