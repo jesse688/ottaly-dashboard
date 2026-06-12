@@ -6,6 +6,39 @@
 const BASE = (process.env.BISON_API_URL || 'https://send.ottaly.co.uk').replace(/\/$/, '')
 const KEY = process.env.BISON_API_KEY || ''
 
+// PlusVibe workspace_id → Bison team_id. portal_clients.workspace_id holds the
+// PV id; Bison needs the team_id to switch workspace. Requires a SUPER-ADMIN
+// BISON_API_KEY (one that can switch into every client team). Update when a
+// client is added/migrated to Bison.
+const PV_TO_BISON_TEAM: Record<string, string> = {
+  '690ee665bcb253de4fb44538': '3',   // Ottaly
+  '6912ddfef9582848982b9a62': '4',   // AccrueAccounting
+  '69a9db307af7ef2854f57637': '5',   // ButterflyEco
+  '6a0cc49a4a80688441614dfb': '12',  // MagnaMoney
+  '69ffaf6904ca7138af16013a': '13',  // Bruud
+  '69c43d1e07bf312ff0026643': '14',  // GXI-Furniture
+  '69c43d1407bf312ff0026642': '15',  // GXI
+  '695259c3d6154e27d164bcf7': '17',  // Indigo
+  '699714b02f0830a7148fcf3e': '18',  // Enviro
+  '695259dc8de377db7577dc45': '19',  // PPC
+  '697e20f02db8460f8ba68792': '20',  // Jumping Spider (JSM)
+  '69525a0eceae00718efdaeaa': '21',  // HydrationCompany
+  '69a686632f5aaca7d9602c1f': '22',  // Animo
+  '6a1d40b3bb80380c1be750c6': '23',  // ButterflyEco SOP
+}
+export function bisonTeamForWorkspace(workspaceId: string): string | null {
+  return PV_TO_BISON_TEAM[workspaceId] ?? null
+}
+
+let _activeTeam: string | null = null
+// Switch the (super-admin) token's active workspace. Stateful — serialize calls.
+export async function switchWorkspace(teamId: string | number): Promise<void> {
+  const id = String(teamId)
+  if (_activeTeam === id) return
+  await bison('POST', '/api/workspaces/v1.1/switch-workspace', undefined, { workspace_id: Number(teamId) })
+  _activeTeam = id
+}
+
 function headers(extra: Record<string, string> = {}): Record<string, string> {
   return { Authorization: `Bearer ${KEY}`, 'Content-Type': 'application/json', ...extra }
 }
@@ -96,15 +129,37 @@ export async function getWorkspaces(): Promise<BisonWorkspace[]> {
 
 // ── Leads ────────────────────────────────────────────────────────────────────
 
-// Fetch all leads with `interested` status (equivalent to PlusVibe INTERESTED label).
+// Resolve the CURRENT workspace's "lead" tag id (the marker used to flag a real
+// lead). NOT cached globally — tag ids differ per workspace, and getLeads may
+// switch workspace. Returns null if the tag doesn't exist.
+async function getLeadTagId(): Promise<number | null> {
+  try {
+    const data = await bison<{ data?: Array<{ id: number; name: string }> }>('GET', '/api/tags')
+    const list = Array.isArray(data) ? (data as unknown as Array<{ id: number; name: string }>) : data.data ?? []
+    const tag = list.find(t => (t.name || '').toLowerCase() === 'lead')
+    return tag ? tag.id : null
+  } catch {
+    return null
+  }
+}
+
+// Fetch leads flagged as real leads for a given client workspace.
+// - teamId (optional): the client's Bison team_id — switches workspace first so
+//   a super-admin key can pull EACH client's leads (without it, a single-key
+//   token only ever sees its own workspace → 0 leads for everyone else).
+// - Marker: the "lead" TAG (the user's convention). Falls back to
+//   status=interested if no "lead" tag exists, so behaviour never regresses.
 // Bison uses cursor-free pagination: page (1-based) + per_page.
-export async function getLeads(page = 1, perPage = 100): Promise<BisonLead[]> {
-  const data = await bison<{ data?: BisonLead[] }>('GET', '/api/leads', {
-    'filters[lead_campaign_status]': 'replied',
-    status: 'interested',
-    page,
-    per_page: perPage,
-  })
+export async function getLeads(page = 1, perPage = 100, teamId?: string | number | null): Promise<BisonLead[]> {
+  if (teamId != null && teamId !== '') {
+    try { await switchWorkspace(teamId) } catch { /* fall through on its own workspace */ }
+  }
+  const leadTagId = await getLeadTagId()
+  const params: Record<string, string | number | boolean | undefined> =
+    leadTagId != null
+      ? { 'filters[tag_ids][]': leadTagId, page, per_page: perPage }
+      : { 'filters[lead_campaign_status]': 'replied', status: 'interested', page, per_page: perPage }
+  const data = await bison<{ data?: BisonLead[] }>('GET', '/api/leads', params)
   return Array.isArray(data) ? (data as unknown as BisonLead[]) : data.data ?? []
 }
 

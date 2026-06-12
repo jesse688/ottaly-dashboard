@@ -1,5 +1,5 @@
 import pool from './db'
-import { getLeads, getLeadReplies } from './bison'
+import { getLeads, getLeadReplies, bisonTeamForWorkspace } from './bison'
 import { reconcileLeadCharges } from './balance'
 
 // Enrich a newly-arrived lead with its full Bison record. Best-effort.
@@ -7,7 +7,7 @@ export async function enrichLead(workspaceId: string, leadEmail: string): Promis
   if (!leadEmail) return false
   try {
     for (let page = 1; page <= 5; page++) {
-      const leads = await getLeads(page, 100)
+      const leads = await getLeads(page, 100, bisonTeamForWorkspace(workspaceId))
       if (!leads.length) break
       const lead = leads.find(l => (l.email ?? '').toLowerCase() === leadEmail.toLowerCase())
       if (lead) {
@@ -40,7 +40,7 @@ export async function backfillWorkspace(
 
   let page = 1
   while (true) {
-    const leads = await getLeads(page, 100)
+    const leads = await getLeads(page, 100, bisonTeamForWorkspace(workspaceId))
     if (!leads.length) break
     for (const lead of leads) {
       await pool.query(
