@@ -159,15 +159,15 @@ export async function getLeads(page = 1, perPage = 100, teamId?: string | number
       console.warn(`[bison.getLeads] switch to team ${teamId} FAILED (key may not be super-admin):`, (e as Error).message)
     }
   }
-  const leadTagId = await getLeadTagId()
-  if (page === 1) console.log(`[bison.getLeads] team=${teamId ?? 'default'} leadTagId=${leadTagId ?? 'none(fallback status=interested)'}`)
-  const params: Record<string, string | number | boolean | undefined> =
-    leadTagId != null
-      ? { 'filters[tag_ids][]': leadTagId, page, per_page: perPage }
-      : { 'filters[lead_campaign_status]': 'replied', status: 'interested', page, per_page: perPage }
+  // Lead marker = Bison 'interested' status — matches PlusVibe's INTERESTED
+  // label and the admin dashboard count. (The 'lead' TAG was too narrow: only a
+  // subset of interested leads carry it, so it under-counted.)
+  const params: Record<string, string | number | boolean | undefined> = {
+    status: 'interested', page, per_page: perPage,
+  }
   const data = await bison<{ data?: BisonLead[] }>('GET', '/api/leads', params)
   const out = Array.isArray(data) ? (data as unknown as BisonLead[]) : data.data ?? []
-  if (page === 1) console.log(`[bison.getLeads] team=${teamId ?? 'default'} page1 returned ${out.length} lead(s)`)
+  if (page === 1) console.log(`[bison.getLeads] team=${teamId ?? 'default'} page1 returned ${out.length} interested lead(s)`)
   return out
 }
 

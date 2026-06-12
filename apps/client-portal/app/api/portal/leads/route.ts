@@ -21,22 +21,32 @@ export async function GET(req: NextRequest) {
     await reconcileLeadCharges(session.clientId)
     const lockedIds = await getLockedLeadIds(session.clientId)
 
+    // Dedup PlusVibe-vs-Bison by email — the same lead can exist as frozen PV
+    // history AND a live Bison row. Bison wins (newest source of truth), so a
+    // migrated client isn't double-counted (e.g. 42 PV + 88 Bison → 88 unique).
     const [dataRes, countRes] = await Promise.all([
       pool.query(
         `SELECT id, email, first_name, last_name, company_name, status,
                 label, first_replied_at, created_at
-         FROM esp_leads
-         WHERE workspace_id = $1
-           AND source IN ('plusvibe', 'bison')
-           AND status IN ('INTERESTED', 'MEETING_BOOKED')
+         FROM (
+           SELECT DISTINCT ON (lower(email)) *
+           FROM esp_leads
+           WHERE workspace_id = $1
+             AND source IN ('plusvibe', 'bison')
+             AND status IN ('INTERESTED', 'MEETING_BOOKED')
+           ORDER BY lower(email), (source = 'bison') DESC, created_at DESC
+         ) deduped
          ORDER BY first_replied_at DESC NULLS LAST, created_at DESC
          LIMIT $2 OFFSET $3`,
         [session.workspaceId, pageSize, offset]
       ),
       pool.query(
-        `SELECT COUNT(*) FROM esp_leads
-         WHERE workspace_id = $1 AND source IN ('plusvibe', 'bison')
-           AND status IN ('INTERESTED', 'MEETING_BOOKED')`,
+        `SELECT COUNT(*) FROM (
+           SELECT DISTINCT lower(email)
+           FROM esp_leads
+           WHERE workspace_id = $1 AND source IN ('plusvibe', 'bison')
+             AND status IN ('INTERESTED', 'MEETING_BOOKED')
+         ) d`,
         [session.workspaceId]
       ),
     ])
