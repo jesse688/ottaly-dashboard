@@ -17,15 +17,17 @@ require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') }
 
 const { Pool } = require('pg')
 const { PlusVibeAdapter } = require('./adapters/plusvibe')
+const { BisonAdapter } = require('./adapters/bison')
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   max: 5,
 })
 
-// Registry — add Email Bison here when ready
+// Registry of ESP adapters by source name.
 const ADAPTERS = {
   plusvibe: new PlusVibeAdapter(),
+  bison:    new BisonAdapter(),
 }
 
 function log(msg) {
@@ -177,6 +179,60 @@ async function syncWorkspace(adapter, workspaceId, workspaceName) {
   }
 }
 
+/**
+ * Build the per-workspace ESP routing map from the esp_routing table (Postgres).
+ *
+ * Keyed by PlusVibe workspace_id (the app's canonical client id, kept even after
+ * a client moves to Bison). For Bison-routed clients bison_team_id gives the id
+ * used by switch-workspace. Returns:
+ *   { byPvId: Map<pvWorkspaceId, 'plusvibe'|'bison'>,
+ *     bisonTeamId: Map<pvWorkspaceId, bisonTeamId> }
+ * Any workspace with no row defaults to 'plusvibe' (current behaviour preserved).
+ */
+async function loadEspRouting(client) {
+  const byPvId = new Map()
+  const bisonTeamId = new Map()
+  try {
+    const { rows } = await client.query(
+      `SELECT pv_workspace_id, esp_provider, bison_team_id FROM esp_routing`
+    )
+    for (const r of rows) {
+      byPvId.set(String(r.pv_workspace_id), (r.esp_provider || 'plusvibe').toLowerCase())
+      if (r.bison_team_id != null) bisonTeamId.set(String(r.pv_workspace_id), String(r.bison_team_id))
+    }
+  } catch (err) {
+    // If the table doesn't exist yet (migration not run), fall back to all-PlusVibe.
+    log(`esp_routing lookup failed (${err.message}) — defaulting all workspaces to plusvibe`)
+  }
+  return { byPvId, bisonTeamId }
+}
+
+/**
+ * Mailbox dedup — Bison wins. For any email account email address present under
+ * BOTH source='bison' and source='plusvibe', mark the PlusVibe copy as
+ * superseded so stats/health count it once (the Bison row is authoritative).
+ * This NEVER deletes the row or touches historical email_events — it only flags
+ * the live roster duplicate. Idempotent.
+ */
+async function dedupeMailboxes(client) {
+  const sql = `
+    UPDATE esp_email_accounts pv
+    SET superseded_by_bison = TRUE
+    WHERE pv.source = 'plusvibe'
+      AND pv.superseded_by_bison IS DISTINCT FROM TRUE
+      AND EXISTS (
+        SELECT 1 FROM esp_email_accounts b
+        WHERE b.source = 'bison'
+          AND lower(b.email) = lower(pv.email)
+      )`
+  try {
+    const r = await client.query(sql)
+    if (r.rowCount) log(`mailbox dedup: ${r.rowCount} PlusVibe account(s) superseded by Bison`)
+  } catch (err) {
+    log(`mailbox dedup skipped (${err.message}) — superseded_by_bison column may be missing`)
+  }
+}
+
 async function run() {
   const args = Object.fromEntries(
     process.argv.slice(2)
@@ -184,36 +240,59 @@ async function run() {
       .map(a => a.slice(2).split('='))
   )
 
-  const sourceName = args.source ?? 'plusvibe'
-  const adapter = ADAPTERS[sourceName]
-  if (!adapter) { console.error(`Unknown source: ${sourceName}`); process.exit(1) }
-
-  log(`Starting sync (source=${sourceName})`)
-
-  const client = await pool.connect()
-  let workspaces
-  try {
-    workspaces = await adapter.getWorkspaces()
-    for (const ws of workspaces) await upsertWorkspace(client, sourceName, ws)
-  } finally {
-    client.release()
+  // --source forces a single ESP for ALL workspaces (manual/debug). Without it,
+  // each workspace is routed by its esp_routing (dual mode).
+  const forcedSource = args.source || null
+  if (forcedSource && !ADAPTERS[forcedSource]) {
+    console.error(`Unknown source: ${forcedSource}`); process.exit(1)
   }
 
-  // Filter to specific workspace if requested
-  const targetId = args.workspace
-  const toSync = targetId ? workspaces.filter(w => w.id === targetId) : workspaces
+  log(forcedSource
+    ? `Starting sync (forced source=${forcedSource})`
+    : `Starting sync (per-workspace routing via esp_routing)`)
 
+  // 1. Load routing + discover workspaces from PlusVibe (still the canonical
+  //    client roster — every client has a PV workspace_id even after migrating).
+  const setupClient = await pool.connect()
+  let routing, pvWorkspaces
+  try {
+    routing = await loadEspRouting(setupClient)
+    pvWorkspaces = await ADAPTERS.plusvibe.getWorkspaces()
+    for (const ws of pvWorkspaces) await upsertWorkspace(setupClient, 'plusvibe', ws)
+  } finally {
+    setupClient.release()
+  }
+
+  const targetId = args.workspace
+  const toSync = targetId ? pvWorkspaces.filter(w => w.id === targetId) : pvWorkspaces
   log(`Syncing ${toSync.length} workspaces...`)
 
-  let total = { campaigns: 0, accounts: 0, leads: 0 }
+  const total = { campaigns: 0, accounts: 0, leads: 0 }
   for (const ws of toSync) {
-    const result = await syncWorkspace(adapter, ws.id, ws.name)
+    const provider = forcedSource || routing.byPvId.get(String(ws.id)) || 'plusvibe'
+    const adapter = ADAPTERS[provider]
+
+    // Bison is keyed by team_id, not the PV workspace_id. Resolve it; skip if a
+    // client is marked bison but has no team_id mapping (avoids syncing the
+    // wrong workspace). PlusVibe uses the workspace_id directly.
+    let adapterWsId = ws.id
+    if (provider === 'bison') {
+      const teamId = routing.bisonTeamId.get(String(ws.id))
+      if (!teamId) { log(`  skip ${ws.name} — esp_provider=bison but no bison_team_id`); continue }
+      adapterWsId = teamId
+    }
+
+    const result = await syncWorkspace(adapter, adapterWsId, `${ws.name} [${provider}]`)
     if (result) {
       total.campaigns += result.campaigns
       total.accounts += result.accounts
       total.leads += result.leads
     }
   }
+
+  // 2. Bison-wins mailbox dedup across the freshly-synced roster.
+  const dedupClient = await pool.connect()
+  try { await dedupeMailboxes(dedupClient) } finally { dedupClient.release() }
 
   log(`Done. Total: ${total.campaigns} campaigns, ${total.accounts} accounts, ${total.leads} leads`)
   await pool.end()
