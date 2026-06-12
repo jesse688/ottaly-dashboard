@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # ESP Sync — run this on a cron schedule in Easypanel
 # Cron: 0 * * * * (every hour)
 # Add to Easypanel ottaly-stable service → Advanced → Cron Jobs
