@@ -184,6 +184,25 @@ export async function getLeadReplies(leadId: number | string): Promise<BisonRepl
   return Array.isArray(data) ? (data as unknown as BisonReply[]) : data.data ?? []
 }
 
+// Fetch a lead's email thread by EMAIL within a specific client workspace.
+// This is the correct entry point for the portal: the stored esp_leads.id may be
+// a PlusVibe id (for backfilled history), which Bison doesn't recognise. So we
+// (1) switch into the client's team, (2) resolve the real Bison lead by email,
+// (3) pull that Bison lead's replies. Returns [] if the lead has no Bison record
+// (e.g. pure PV-history lead never sent through Bison) — no thread to show.
+export async function getLeadRepliesByEmail(
+  email: string,
+  teamId?: string | number | null,
+): Promise<BisonReply[]> {
+  if (!email) return []
+  if (teamId != null && teamId !== '') {
+    try { await switchWorkspace(teamId) } catch { /* fall through on its own workspace */ }
+  }
+  const lead = await getLead(email)
+  if (!lead?.id) return []
+  return getLeadReplies(lead.id)
+}
+
 // ── Replies / sending ────────────────────────────────────────────────────────
 
 // Reply to an existing message thread.

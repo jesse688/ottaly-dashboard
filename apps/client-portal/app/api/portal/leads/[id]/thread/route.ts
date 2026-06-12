@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { getSession } from '@/lib/auth'
 import pool from '@/lib/db'
-import { getLeadReplies } from '@/lib/bison'
+import { getLeadRepliesByEmail, bisonTeamForWorkspace } from '@/lib/bison'
 import { getLockedLeadIds } from '@/lib/balance'
 
 // GET — the real email conversation for a lead, newest-last.
@@ -42,7 +42,13 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   // Nothing cached yet — fetch live from EmailBison and store, then re-read.
   if (rows.length === 0) {
     try {
-      const replies = await getLeadReplies(id)
+      // Resolve by EMAIL within the client's Bison team: the stored esp_leads.id
+      // may be a PlusVibe id (backfilled history) Bison won't recognise, and the
+      // super-admin token must be switched into the right workspace first.
+      const replies = await getLeadRepliesByEmail(
+        leadEmail,
+        bisonTeamForWorkspace(session.workspaceId)
+      )
       for (const m of replies) {
         const direction = m.folder?.toLowerCase() === 'sent' ? 'OUT' : 'IN'
         await pool.query(
