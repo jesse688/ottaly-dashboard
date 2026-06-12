@@ -129,46 +129,40 @@ export async function getWorkspaces(): Promise<BisonWorkspace[]> {
 
 // ── Leads ────────────────────────────────────────────────────────────────────
 
-// Resolve the CURRENT workspace's "lead" tag id (the marker used to flag a real
-// lead). NOT cached globally — tag ids differ per workspace, and getLeads may
-// switch workspace. Returns null if the tag doesn't exist.
-async function getLeadTagId(): Promise<number | null> {
-  try {
-    const data = await bison<{ data?: Array<{ id: number; name: string }> }>('GET', '/api/tags')
-    const list = Array.isArray(data) ? (data as unknown as Array<{ id: number; name: string }>) : data.data ?? []
-    const tag = list.find(t => (t.name || '').toLowerCase() === 'lead')
-    return tag ? tag.id : null
-  } catch {
-    return null
-  }
-}
-
-// Fetch leads flagged as real leads for a given client workspace.
-// - teamId (optional): the client's Bison team_id — switches workspace first so
-//   a super-admin key can pull EACH client's leads (without it, a single-key
-//   token only ever sees its own workspace → 0 leads for everyone else).
-// - Marker: the "lead" TAG (the user's convention). Falls back to
-//   status=interested if no "lead" tag exists, so behaviour never regresses.
-// Bison uses cursor-free pagination: page (1-based) + per_page.
+// Fetch a client workspace's INTERESTED leads — the real leads.
+//
+// The lead marker is the `interested` BOOLEAN on each Bison lead (this is what
+// the admin dashboard counts). NOTE: Bison's `status` field is the *verification*
+// status (verified/risky/unverified/…), NOT the lead status — filtering by
+// status=interested does NOT work. So we page through the workspace's leads and
+// keep interested===true.
+//
+// teamId switches to the client's Bison team first (super-admin key) so each
+// client's leads are pulled. Pagination is handled INTERNALLY: page 1 returns
+// the FULL interested set; later pages return [] so existing while-loop callers
+// (`if (!leads.length) break`) terminate after one pass.
+const MAX_LEAD_PAGES = 100 // safety cap = 10k raw leads per workspace
 export async function getLeads(page = 1, perPage = 100, teamId?: string | number | null): Promise<BisonLead[]> {
+  if (page > 1) return []
   if (teamId != null && teamId !== '') {
     try {
       await switchWorkspace(teamId)
-      if (page === 1) console.log(`[bison.getLeads] switched to team ${teamId}`)
     } catch (e) {
       console.warn(`[bison.getLeads] switch to team ${teamId} FAILED (key may not be super-admin):`, (e as Error).message)
     }
   }
-  // Lead marker = Bison 'interested' status — matches PlusVibe's INTERESTED
-  // label and the admin dashboard count. (The 'lead' TAG was too narrow: only a
-  // subset of interested leads carry it, so it under-counted.)
-  const params: Record<string, string | number | boolean | undefined> = {
-    status: 'interested', page, per_page: perPage,
+  const interested: BisonLead[] = []
+  let scanned = 0
+  for (let p = 1; p <= MAX_LEAD_PAGES; p++) {
+    const data = await bison<{ data?: BisonLead[] }>('GET', '/api/leads', { page: p, per_page: 100 })
+    const batch = Array.isArray(data) ? (data as unknown as BisonLead[]) : data.data ?? []
+    if (!batch.length) break
+    scanned += batch.length
+    for (const l of batch) if ((l as { interested?: boolean }).interested === true) interested.push(l)
+    if (batch.length < 100) break
   }
-  const data = await bison<{ data?: BisonLead[] }>('GET', '/api/leads', params)
-  const out = Array.isArray(data) ? (data as unknown as BisonLead[]) : data.data ?? []
-  if (page === 1) console.log(`[bison.getLeads] team=${teamId ?? 'default'} page1 returned ${out.length} interested lead(s)`)
-  return out
+  console.log(`[bison.getLeads] team=${teamId ?? 'default'} scanned ${scanned} → ${interested.length} interested lead(s)`)
+  return interested
 }
 
 // Fetch a single lead by ID or email.
