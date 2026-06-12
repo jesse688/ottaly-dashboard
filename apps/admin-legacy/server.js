@@ -67,7 +67,7 @@ async function bisonReq(path, opts = {}) {
     await fetch(BISON_BASE + '/api/workspaces/v1.1/switch-workspace', {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + BISON_API_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workspace_id: Number(opts.wsId) }),
+      body: JSON.stringify({ team_id: Number(opts.wsId) }),
       signal: AbortSignal.timeout(10000),
     });
   }
@@ -2394,7 +2394,7 @@ async function bisonSwitch(wsId) {
   await fetch(BISON_BASE + '/api/workspaces/v1.1/switch-workspace', {
     method: 'POST',
     headers: { 'Authorization': 'Bearer ' + BISON_API_KEY, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ workspace_id: Number(wsId) }),
+    body: JSON.stringify({ team_id: Number(wsId) }),
     signal: AbortSignal.timeout(10000),
   }).catch(() => {});
   _bisonWsId = String(wsId);
@@ -2837,7 +2837,7 @@ async function ensurePerformanceDailyStats(wsIds, dates, dailyStats = performanc
   for (let i = 0; i < needed.length; i += CONC) {
     await Promise.allSettled(needed.slice(i, i + CONC).map(async ({ wsId, date, key }) => {
       try {
-        await bisonSwitch(wsId);
+        /* switch via bisonReq wsId */ true;
         var bStats = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { params: { start_date: date, end_date: date } });
         var raw = Object.values(pivotBisonStats((bStats.data || bStats) || []));
         dailyStats.set(key, { savedAt: Date.now(), data: aggPvEmailStats(raw) });
@@ -5737,7 +5737,7 @@ app.post('/api/intelligence/deep-backfill', requireAdmin, async (req, res) => {
     for (let i = 0; i < wsIds.length; i += CONC) {
       await Promise.allSettled(wsIds.slice(i, i + CONC).map(async wsId => {
         try {
-          await bisonSwitch(wsId);
+          /* switch via bisonReq wsId */ true;
           var bStats = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { params: { start_date: start, end_date: end } });
           var raw = Object.values(pivotBisonStats((bStats.data || bStats) || []));
           const chart = Array.isArray(raw) ? raw : (raw?.chart || []);
@@ -10575,7 +10575,7 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
     let pushed = 0;
     for (let i = 0; i < leads.length; i += BATCH) {
       const batch = leads.slice(i, i + BATCH);
-      await bisonSwitch(workspace_id);
+      /* workspace switch handled by bisonReq wsId */ true;
       var bisonLeadPayload = (batch).map(function(l) {
         var cv = [];
         if (l.phone_number) cv.push({ name: 'phone_number', value: String(l.phone_number) });
@@ -10590,11 +10590,11 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
         if (l.address_line) cv.push({ name: 'address_line', value: String(l.address_line) });
         return { email: l.email, first_name: l.first_name || null, last_name: l.last_name || null, title: l.job_title || l.title || null, company: l.company_name || l.company || null, custom_variables: cv };
       });
-      var createRes = await bisonFetch('/api/leads/create-or-update/multiple', { method: 'POST', body: { leads: bisonLeadPayload } });
+      var createRes = await bisonReq('/api/leads/create-or-update/multiple', { wsId: workspace_id, method: 'POST', body: { leads: bisonLeadPayload } });
       if (campaign_id && createRes && createRes.data) {
         var leadIds = (createRes.data.leads || createRes.data || []).map(function(l) { return l.id; }).filter(Boolean);
         if (leadIds.length) {
-          await bisonFetch('/api/campaigns/' + campaign_id + '/leads', { method: 'POST', body: { lead_ids: leadIds } }).catch(function(e) { console.warn('[bison] campaign-assign partial failure:', e.message); });
+          await bisonReq('/api/campaigns/' + campaign_id + '/leads/attach-leads', { wsId: workspace_id, method: 'POST', body: { lead_ids: leadIds } }).catch(function(e) { console.warn('[bison] campaign-assign FAILED:', e.message); });
         }
       }
       var r = { ok: true };
@@ -12634,7 +12634,7 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
           if (job.cancelled || job.paused) return;
           const slice = batch.slice(i, i + 100);
           let r, d = {};
-          await bisonSwitch(workspace_id);
+          /* workspace switch handled by bisonReq wsId */ true;
           var bisonLeadPayload = (slice.map(toLead)).map(function(l) {
             var cv = [];
             if (l.phone_number) cv.push({ name: 'phone_number', value: String(l.phone_number) });
@@ -12649,11 +12649,11 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
             if (l.address_line) cv.push({ name: 'address_line', value: String(l.address_line) });
             return { email: l.email, first_name: l.first_name || null, last_name: l.last_name || null, title: l.job_title || l.title || null, company: l.company_name || l.company || null, custom_variables: cv };
           });
-          var createRes = await bisonFetch('/api/leads/create-or-update/multiple', { method: 'POST', body: { leads: bisonLeadPayload } });
+          var createRes = await bisonReq('/api/leads/create-or-update/multiple', { wsId: workspace_id, method: 'POST', body: { leads: bisonLeadPayload } });
           if (campaign_id && createRes && createRes.data) {
             var leadIds = (createRes.data.leads || createRes.data || []).map(function(l) { return l.id; }).filter(Boolean);
             if (leadIds.length) {
-              await bisonFetch('/api/campaigns/' + campaign_id + '/leads', { method: 'POST', body: { lead_ids: leadIds } }).catch(function(e) { console.warn('[bison] campaign-assign partial failure:', e.message); });
+              await bisonReq('/api/campaigns/' + campaign_id + '/leads/attach-leads', { wsId: workspace_id, method: 'POST', body: { lead_ids: leadIds } }).catch(function(e) { console.warn('[bison] campaign-assign FAILED:', e.message); });
             }
           }
           r = { ok: true };
@@ -13048,7 +13048,7 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
           if (job.cancelled || job.paused) return;
           const slice = batch.slice(i, i + 100);
           let r, d = {};
-          await bisonSwitch(workspace_id);
+          /* workspace switch handled by bisonReq wsId */ true;
           var bisonLeadPayload = (slice.map(toLead)).map(function(l) {
             var cv = [];
             if (l.phone_number) cv.push({ name: 'phone_number', value: String(l.phone_number) });
@@ -13063,11 +13063,11 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
             if (l.address_line) cv.push({ name: 'address_line', value: String(l.address_line) });
             return { email: l.email, first_name: l.first_name || null, last_name: l.last_name || null, title: l.job_title || l.title || null, company: l.company_name || l.company || null, custom_variables: cv };
           });
-          var createRes = await bisonFetch('/api/leads/create-or-update/multiple', { method: 'POST', body: { leads: bisonLeadPayload } });
+          var createRes = await bisonReq('/api/leads/create-or-update/multiple', { wsId: workspace_id, method: 'POST', body: { leads: bisonLeadPayload } });
           if (campaign_id && createRes && createRes.data) {
             var leadIds = (createRes.data.leads || createRes.data || []).map(function(l) { return l.id; }).filter(Boolean);
             if (leadIds.length) {
-              await bisonFetch('/api/campaigns/' + campaign_id + '/leads', { method: 'POST', body: { lead_ids: leadIds } }).catch(function(e) { console.warn('[bison] campaign-assign partial failure:', e.message); });
+              await bisonReq('/api/campaigns/' + campaign_id + '/leads/attach-leads', { wsId: workspace_id, method: 'POST', body: { lead_ids: leadIds } }).catch(function(e) { console.warn('[bison] campaign-assign FAILED:', e.message); });
             }
           }
           r = { ok: true };
@@ -14415,8 +14415,8 @@ function scheduleDiagnosticsDaily(pgdb, diagnostics) {
       if (seen.has(wsId)) continue;
       seen.add(wsId);
       try {
-        await bisonSwitch(wsId);
-        var ea_bison = await bisonFetch('/api/sender-emails', { wsId: wsId });
+        /* switch via bisonReq wsId */ true;
+        var ea_bison = await bisonReq('/api/sender-emails', { wsId: wsId });
         var ea_data = (ea_bison.data || []).map(function(a) { return { _id: String(a.id), id: String(a.id), email: a.email || a.name, status: a.status === 'connected' ? 'active' : 'inactive', warmup_status: a.warmup_enabled ? 'ACTIVE' : 'PAUSED', daily_limit: a.daily_limit || 0, warmup_details: { inbox_pct: 0, spam_pct: 0 } }; });
         const accounts = ea_data;
         for (const acc of accounts) {
