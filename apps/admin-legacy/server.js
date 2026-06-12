@@ -10464,6 +10464,185 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
   }
 });
 
+// ── EmailBison push (dual-ESP) ────────────────────────────────
+// Separate path from PlusVibe (the PV endpoint above is byte-for-byte
+// unchanged). Bison uses a super-admin Bearer token + a STATEFUL workspace
+// switch, then a 2-step import: create/update leads → import-by-ids into the
+// campaign. See memory/reference_bison_api.md.
+const BISON_API_URL = (process.env.BISON_API_URL || 'https://send.ottaly.co.uk').replace(/\/$/, '');
+const BISON_API_KEY = process.env.BISON_API_KEY || ''; // super-admin token
+
+async function bisonApi(method, path, body) {
+  const r = await fetch(`${BISON_API_URL}${path}`, {
+    method,
+    headers: { Authorization: `Bearer ${BISON_API_KEY}`, 'Content-Type': 'application/json' },
+    body: body && method !== 'GET' ? JSON.stringify(body) : undefined,
+  });
+  const text = await r.text();
+  let data; try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
+  if (!r.ok) throw new Error(`Bison ${method} ${path} → ${r.status}: ${text.slice(0, 200)}`);
+  return data;
+}
+
+// Shared contact→pushable filter (same rules as the PV path). Returns
+// { contacts, skipped }. Pure function of inputs — no ESP specifics.
+function filterPushableContacts(allContacts, { cooldownWorkspaceId, campaignName }) {
+  const cooloffDate = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const campaignNameLc = (campaignName || '').toString().trim().toLowerCase();
+  const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, missingEnrichment: 0 };
+  const PUSHABLE_STATUSES = new Set(['safe', 'safe_catchall']);
+  const contacts = allContacts.filter(c => {
+    if (!PUSHABLE_STATUSES.has((c.email_status || '').toLowerCase())) { skipped.unsafe++; return false; }
+    if (c.do_not_contact) { skipped.dnc++; return false; }
+    if ((!c.keywords || c.keywords.trim() === '') || (!c.industry || c.industry.trim() === '')) {
+      skipped.missingEnrichment++; return false;
+    }
+    if (campaignNameLc && c.last_campaign_name && c.last_campaign_name.toLowerCase() === campaignNameLc) {
+      skipped.alreadyInCampaign++; return false;
+    }
+    if (cooldownWorkspaceId) {
+      const emailed = typeof c.emailed_workspaces === 'string'
+        ? JSON.parse(c.emailed_workspaces || '{}')
+        : (c.emailed_workspaces || {});
+      const lastSent = emailed[cooldownWorkspaceId]?.last_sent;
+      if (lastSent && lastSent >= cooloffDate) { skipped.cooldownWorkspace++; return false; }
+    }
+    return true;
+  });
+  return { contacts, skipped };
+}
+
+// Map an Ottaly contact to a Bison lead. Bison custom_variables is an ARRAY of
+// {name,value} (PlusVibe used an object). Native fields: company, title.
+function contactToBisonLead(c) {
+  const raw = typeof c.raw_data === 'string' ? JSON.parse(c.raw_data || '{}') : (c.raw_data || {});
+  const cv = [];
+  const add = (name, value) => { if (value !== undefined && value !== null && value !== '') cv.push({ name, value: String(value) }); };
+  add('phone_number', c.phone);
+  add('company_website', c.company_domain);
+  add('job_title', c.job_title);
+  add('industry', raw.Industry || c.industry);
+  add('linkedin_person_url', c.linkedin_url);
+  add('linkedin_company_url', c.company_linkedin_url);
+  add('city', c.company_city || c.city);
+  add('state', c.company_county || c.company_state || c.state);
+  add('country', c.company_country || c.country);
+  add('seniority', c.seniority);
+  add('keywords', raw.Keywords || c.keywords);
+  return {
+    email:      c.email,
+    first_name: c.first_name || '',
+    last_name:  c.last_name || '',
+    title:      c.job_title || '',
+    company:    c.company_name || '',
+    custom_variables: cv,
+  };
+}
+
+// POST /api/bison/push-contacts
+// body: { team_id, campaign_id, contact_ids, campaign_name?, cooldown_workspace_id? }
+//  - team_id:        Bison team_id (which workspace to switch to)
+//  - campaign_id:    Bison campaign id to import into
+//  - cooldown_workspace_id: the client's PlusVibe workspace_id, used ONLY for the
+//                    shared 60-day per-client cooldown stamp (keeps cooldown
+//                    consistent across both ESPs). Optional.
+app.post('/api/bison/push-contacts', requireSession, async (req, res) => {
+  const { team_id, campaign_id, contact_ids } = req.body;
+  if (!team_id || !campaign_id || !Array.isArray(contact_ids) || contact_ids.length === 0) {
+    return res.status(400).json({ error: 'team_id, campaign_id and contact_ids required' });
+  }
+  if (!BISON_API_KEY) return res.status(500).json({ error: 'BISON_API_KEY not configured' });
+  try {
+    const db = req.app.locals.pgDb;
+    if (!db) return res.status(500).json({ error: 'Database not available' });
+
+    const allContacts = await db.getContactsById(contact_ids);
+    if (allContacts.length === 0) return res.status(404).json({ error: 'No contacts found' });
+
+    const cooldownWorkspaceId = req.body.cooldown_workspace_id || null;
+    const { contacts, skipped } = filterPushableContacts(allContacts, {
+      cooldownWorkspaceId, campaignName: req.body.campaign_name,
+    });
+    console.log(`[bison-push] filtered ${allContacts.length} → ${contacts.length}`, skipped);
+    if (contacts.length === 0) return res.json({ success: true, pushed: 0, total: 0, skipped });
+
+    // 1. Switch the super-admin token to this workspace.
+    await bisonApi('POST', '/api/workspaces/switch-workspace', { team_id: Number(team_id) });
+
+    // 2. Create/update the leads (≤500 per request), collecting their Bison ids.
+    const leadIds = [];
+    const BATCH = 500;
+    for (let i = 0; i < contacts.length; i += BATCH) {
+      const slice = contacts.slice(i, i + BATCH);
+      const resp = await bisonApi('POST', '/api/leads/create-or-update/multiple', {
+        type: 'patch', // keep existing fields/custom-vars not passed
+        leads: slice.map(contactToBisonLead),
+      });
+      const rows = Array.isArray(resp) ? resp : (resp.data ?? []);
+      for (const row of rows) { if (row?.id != null) leadIds.push(row.id); }
+    }
+    if (leadIds.length === 0) {
+      return res.status(502).json({ error: 'Bison created no leads', pushed: 0, skipped });
+    }
+
+    // 3. Import the leads into the campaign (in id batches).
+    let pushed = 0;
+    for (let i = 0; i < leadIds.length; i += 1000) {
+      const idSlice = leadIds.slice(i, i + 1000);
+      await bisonApi('POST', `/api/campaigns/${campaign_id}/import-leads-by-ids`, { lead_ids: idSlice });
+      pushed += idSlice.length;
+    }
+
+    // 4. Stamp the shared per-client cooldown (keyed by PV workspace_id so it
+    //    matches the PlusVibe path). Fire-and-forget.
+    const pushedIds = contacts.map(c => c.id).filter(Boolean);
+    if (pushedIds.length && cooldownWorkspaceId && db.stampPushedCampaign) {
+      db.stampPushedCampaign(pushedIds, cooldownWorkspaceId, String(campaign_id), req.body.campaign_name || '')
+        .catch(err => console.warn('[bison-push] stamp failed:', err.message));
+    }
+
+    res.json({ success: true, pushed, total: contacts.length, skipped });
+  } catch (err) {
+    console.error('[Bison Push]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/bison/workspaces — Bison-routed clients (from synced data + routing).
+// Returns [{ team_id, name, pv_workspace_id }] for the push dropdown.
+app.get('/api/bison/workspaces', requireSession, async (req, res) => {
+  try {
+    const db = req.app.locals.pgDb;
+    if (!db) return res.status(500).json({ error: 'Database not available' });
+    const { rows } = await db.query(`
+      SELECT r.bison_team_id AS team_id, r.pv_workspace_id,
+             COALESCE(w.name, r.pv_workspace_id) AS name
+      FROM esp_routing r
+      LEFT JOIN esp_workspaces w ON w.id = r.bison_team_id AND w.source = 'bison'
+      WHERE r.esp_provider = 'bison' AND r.bison_team_id IS NOT NULL
+      ORDER BY name`);
+    res.json({ workspaces: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/bison/campaigns?team_id=  — synced Bison campaigns for a workspace.
+app.get('/api/bison/campaigns', requireSession, async (req, res) => {
+  const teamId = String(req.query.team_id || '');
+  if (!teamId) return res.status(400).json({ error: 'team_id required' });
+  try {
+    const db = req.app.locals.pgDb;
+    if (!db) return res.status(500).json({ error: 'Database not available' });
+    const { rows } = await db.query(
+      `SELECT id, name, status FROM esp_campaigns
+       WHERE source = 'bison' AND workspace_id = $1 ORDER BY name`, [teamId]);
+    res.json({ campaigns: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Email Verify 2.0 — Proxy Management ──────────────────────
 
 // GET /api/ev2/proxies
