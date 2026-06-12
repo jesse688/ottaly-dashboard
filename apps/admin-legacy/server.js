@@ -523,14 +523,14 @@ app.use('/email-finder-tool', (req, res) => {
   req.pipe(proxyReq);
 });
 
-// Sentry must be first
+// Sentry must be initialised before routes. In @sentry/node v8+ the Express
+// request/tracing handlers are automatic — only the error handler is wired
+// explicitly (see Sentry.setupExpressErrorHandler below, after the routes).
 Sentry.init({
   dsn: process.env.SENTRY_DSN || '',
   environment: process.env.NODE_ENV || 'production',
   tracesSampleRate: 0.1,
 });
-app.use(Sentry.Handlers.requestHandler());
-app.use(Sentry.Handlers.tracingHandler());
 
 // Security + performance
 app.use(helmet({ contentSecurityPolicy: false }));
@@ -646,27 +646,6 @@ app.post('/api/slack/slash',
   }
 )
 
-// ── Route modules ────────────────────────────────────────
-// These modules are the extracted, maintainable form of the routes below.
-// They are NOT yet active (app.use commented out) — each group is being
-// incrementally validated before the inline duplicates are removed.
-// To activate a group: uncomment its app.use() line AND delete the
-// corresponding inline routes further below in this file.
-//
-// Pattern: each module exports makeRouter(ctx) where ctx supplies
-// shared dependencies (db, stripe, middlewares, caches, etc.).
-//
-// Status:
-//   routes/auth.js          — ready (mirrors lines 650–1922)
-//   routes/admin.js         — ready (mirrors lines 1684–10890)
-//   routes/client-portal.js — ready (mirrors lines 1951–2325)
-//   routes/webhooks.js      — ready (mirrors lines 372–647)
-//   routes/stats.js         — ready (mirrors lines 3004–4260)
-//   routes/campaigns.js     — ready (mirrors lines 3846–8989)
-//   routes/diagnostics.js   — ready (mirrors lines 5448–5808)
-//   routes/health.js        — ready (mirrors lines 5808–6260)
-//   routes/revenue.js       — ready (mirrors lines 2578–8190)
-//
 // ── Auth endpoints ────────────────────────────────────────
 app.get('/api/session', (req, res) => {
   const s = decodeSession(req);
@@ -14336,8 +14315,9 @@ function scheduleAudienceScoring(pgdb) {
   scheduleEspSync();
   startSlackBot();
 
-  // Sentry error handler must be after routes, before other error handlers
-  app.use(Sentry.Handlers.errorHandler());
+  // Sentry error handler must be after routes, before other error handlers.
+  // v8+ API: setupExpressErrorHandler replaces the removed Sentry.Handlers.errorHandler().
+  Sentry.setupExpressErrorHandler(app);
 
   // Generic error fallback
   app.use((err, req, res, next) => {
