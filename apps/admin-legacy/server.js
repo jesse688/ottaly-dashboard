@@ -1898,6 +1898,29 @@ app.post('/api/admin/bison-key/test', requireAdmin, async (req, res) => {
 // Diagnostic: live per-workspace mailbox count straight from Bison, paginated.
 // Lets us see exactly where the dashboard count diverges from Bison's real total
 // (e.g. 165 shown vs ~1000 expected) without waiting for the 30-min cache.
+// Export every email currently in the mailbox cache (what the dashboard sees).
+// Use to diff against a known list. ?domain=foo.co.uk filters; default returns all.
+app.get('/api/admin/mailbox-emails', requireAdmin, (req, res) => {
+  const all = (_mailboxCache.mailboxes || []).map(m => m.email).sort();
+  res.json({ total: all.length, lastRun: _mailboxCache.lastRun, emails: all });
+});
+
+// Diff a posted list against the mailbox cache. Body: { emails: [...] }.
+// Returns which of YOUR emails are missing from the dashboard, and which extra
+// emails the dashboard has that aren't in your list.
+app.post('/api/admin/mailbox-diff', requireAdmin, (req, res) => {
+  const yours = new Set((req.body?.emails || []).map(e => String(e).trim().toLowerCase()).filter(Boolean));
+  const dash = new Set((_mailboxCache.mailboxes || []).map(m => m.email));
+  const missing = [...yours].filter(e => !dash.has(e)).sort();   // in your list, not on dashboard
+  const extra   = [...dash].filter(e => !yours.has(e)).sort();   // on dashboard, not in your list
+  res.json({
+    your_count: yours.size,
+    dashboard_count: dash.size,
+    missing_from_dashboard: missing,
+    extra_on_dashboard: extra,
+  });
+});
+
 app.get('/api/admin/mailbox-debug', requireAdmin, async (req, res) => {
   if (!getBisonKey()) return res.status(400).json({ error: 'No Bison key configured' });
   try {
