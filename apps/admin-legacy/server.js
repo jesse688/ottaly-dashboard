@@ -2141,21 +2141,40 @@ app.get('/api/admin/revenue-leads-debug', requireAdmin, async (req, res) => {
   }
 });
 
-// Delete a bad batch: all revenue_leads for a client inserted within the same
-// second (updated_at). Use after inspecting /revenue-leads-debug. Returns count.
+// Delete a bad batch: revenue_leads for a client inserted within the same second
+// (updated_at). Optionally scope to a workspace_id for precision. Use after
+// inspecting /revenue-leads-debug. Returns count.
 app.post('/api/admin/revenue-leads-purge-batch', requireAdmin, async (req, res) => {
   const dbPg = app.locals.pgDb;
   if (!dbPg) return res.status(503).json({ error: 'DB unavailable' });
-  const { client_name, inserted_at } = req.body || {};
+  const { client_name, inserted_at, workspace_id } = req.body || {};
   if (!client_name || !inserted_at) return res.status(400).json({ error: 'client_name and inserted_at (a second timestamp) required' });
   try {
-    const r = await dbPg.query(
-      `DELETE FROM revenue_leads
-        WHERE client_name = $1 AND date_trunc('second', updated_at) = $2::timestamp`,
-      [client_name, inserted_at]
-    );
+    const params = [client_name, inserted_at];
+    let sql = `DELETE FROM revenue_leads
+        WHERE client_name = $1 AND date_trunc('second', updated_at) = $2::timestamp`;
+    if (workspace_id) { params.push(workspace_id); sql += ` AND workspace_id = $3`; }
+    const r = await dbPg.query(sql, params);
     refreshRevenueCache().catch(() => {});
     res.json({ ok: true, deleted: r.rowCount || 0 });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Targeted cleanup: revenue_leads keyed by a Bison NUMERIC team_id instead of the
+// canonical PV workspace_id are phantom rows written by the (now-removed) broken
+// live-fetch. Real workspace_ids are long hex strings; Bison team ids are short
+// integers. Delete any row whose workspace_id is purely numeric.
+app.post('/api/admin/revenue-leads-purge-numeric-ws', requireAdmin, async (req, res) => {
+  const dbPg = app.locals.pgDb;
+  if (!dbPg) return res.status(503).json({ error: 'DB unavailable' });
+  try {
+    const preview = await dbPg.query(`SELECT workspace_id, client_name, COUNT(*)::int AS n FROM revenue_leads WHERE workspace_id ~ '^[0-9]+$' GROUP BY workspace_id, client_name`);
+    if (req.query.dry === '1') return res.json({ dry_run: true, would_delete: preview.rows });
+    const r = await dbPg.query(`DELETE FROM revenue_leads WHERE workspace_id ~ '^[0-9]+$'`);
+    refreshRevenueCache().catch(() => {});
+    res.json({ ok: true, deleted: r.rowCount || 0, groups: preview.rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
