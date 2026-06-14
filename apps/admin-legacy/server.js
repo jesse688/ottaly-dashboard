@@ -191,6 +191,28 @@ async function bisonListSenderEmails(wsId) {
   return out;
 }
 
+// Ensure a Bison workspace has every custom variable in `names` BEFORE pushing
+// leads — Bison 422s ("You do not have a custom variable named X") if a lead
+// references one that doesn't exist. Best-effort: a create failure is logged, not
+// thrown. Used by every push path (incl. verify-and-push). wsId = Bison team id.
+async function ensureBisonCustomVars(wsId, names) {
+  const needed = [...new Set([...names].filter(Boolean))];
+  if (!needed.length) return;
+  try {
+    const existingResp = await bisonReq('/api/custom-variables', { wsId });
+    const existingList = Array.isArray(existingResp) ? existingResp : (existingResp?.data ?? []);
+    const existing = new Set(existingList.map(v => (v.name || v.slug || '').toLowerCase()));
+    for (const name of needed) {
+      if (!existing.has(String(name).toLowerCase())) {
+        await bisonReq('/api/custom-variables', { wsId, method: 'POST', body: { name } })
+          .catch(e => console.warn(`[bison] create custom var "${name}" failed:`, e.message));
+      }
+    }
+  } catch (e) {
+    console.warn('[bison] ensure custom-vars failed (continuing):', e.message);
+  }
+}
+
 // Known PlusVibe workspace_id → Bison team_id map (Bison's /api/workspaces only
 // returns the token user's OWN teams, not all client teams, so we map clients
 // explicitly). Update here when a client is added/migrated to Bison.
@@ -748,6 +770,14 @@ function clearSessionCookie(res) {
 }
 
 function requireAdmin(req, res, next) {
+  // Claude (MCP) gets MANAGER-level access only — never admin-only routes. The
+  // MCP server marks every call with x-claude-write:1, so admin-only endpoints
+  // (finance, revenue, payslips, commission, managers, database, fresh-start…)
+  // are refused for Claude even though it holds the admin key. This is the
+  // authoritative wall; CLAUDE_FINANCE_BLOCK is belt-and-braces on top.
+  if (req.headers['x-claude-write'] === '1') {
+    return res.status(403).json({ error: 'This is an admin-only area. Claude has manager-level access only.', claudeBlocked: true });
+  }
   const s = decodeSession(req);
   if (s?.role === 'admin') return next();
   // Legacy header fallback
@@ -821,13 +851,9 @@ const CLAUDE_CAPABILITIES = [
     desc: 'Refresh copy templates and manage suppressions.',
     methods: ['POST', 'DELETE'], prefixes: ['/api/copy/'] },
 
-  // ── Finance (high risk) ──
-  { id: 'revenue', label: 'Revenue / pricing', group: 'Finance', risk: 'high', default: false,
-    desc: 'Edit client pricing, manual revenue entries and finance expenses.',
-    methods: ['POST', 'PUT', 'PATCH', 'DELETE'], prefixes: ['/api/revenue', '/api/finance/'] },
-  { id: 'clients', label: 'Client records', group: 'Finance', risk: 'high', default: false,
-    desc: 'Edit client records, notes, status and verticals (not delete).',
-    methods: ['POST', 'PUT', 'PATCH'], prefixes: ['/api/admin/clients', '/api/clients/', '/api/client-status', '/api/admin/client-verticals'] },
+  // NOTE: revenue / finance / pricing / client-records capabilities are
+  // intentionally absent. Money is walled off from Claude entirely (see
+  // CLAUDE_FINANCE_BLOCK) — it can't read or write it, so there's nothing to toggle.
 ];
 const CLAUDE_PERM_DEFAULTS = (() => {
   const o = { enabled: true };
@@ -852,52 +878,39 @@ function claudeWriteDecision(perms, method, path) {
   return { ok: true, capability: cap.id };
 }
 
-// ── Claude write ARM (PIN-gated, one-shot) ───────────────────────────
-// On top of the capability toggles, every Claude write must be individually
-// "armed" by someone who knows the PIN. Arming sets a single-use token in
-// app_settings; the first write consumes it and re-locks. This stops other team
-// members (who share the MCP connection) from making Claude write anything —
-// they can read freely but can't arm. The PIN lives only in the DB (hashed) and
-// in the admin's head — never in the MCP config or anywhere Claude can read it.
-const CLAUDE_ARM_TTL_MS = 2 * 60 * 1000; // an unused arm goes stale after 2 min
-// PIN that must be entered to arm a Claude write. Defaults to '2025'; override
-// with CLAUDE_ARM_PIN in the environment. Kept server-side only — never sent to
-// the browser, never in the MCP config.
-const CLAUDE_ARM_PIN = String(process.env.CLAUDE_ARM_PIN || '2025');
-
-async function getClaudeArm(pgdb) {
-  if (!pgdb) return { armed: false };
-  return await pgdb.getSetting('claude_write_arm', { armed: false });
+// Finance/revenue is OFF-LIMITS to Claude entirely — not readable, not writable,
+// not even via the generic dashboard_get/dashboard_post escape hatches. Any path
+// starting with one of these is refused for Claude-marked requests, regardless of
+// method or capability toggles. (Combo-analysis is deliverability data, not money,
+// so it stays readable.)
+const CLAUDE_FINANCE_BLOCK = [
+  '/api/revenue',
+  '/api/finance',
+  '/api/payslips',
+  '/api/admin/payslips',
+  '/api/workspace-prices',
+  '/api/avg-lead-price',
+  '/api/admin/commission',
+  '/api/admin/default-commission',
+];
+function isClaudeFinancePath(path) {
+  return CLAUDE_FINANCE_BLOCK.some((p) => path.startsWith(p));
 }
 
-// True only if there is a fresh, unconsumed one-shot arm.
-function armIsLive(arm) {
-  return !!(arm && arm.armed && arm.armed_at && (nowMs() - arm.armed_at) < CLAUDE_ARM_TTL_MS);
-}
-function nowMs() { return Date.now(); }
-
-// Gate applied to write routes: if the request carries the Claude marker header,
-// it must (1) satisfy the capability toggles AND (2) consume a live PIN arm.
-// Non-Claude operators are unaffected.
+// Gate for Claude-marked requests (x-claude-write:1, set by the MCP server on
+// EVERY call). Finance/revenue is always refused — reads and writes alike. Other
+// reads pass through; other writes must satisfy the capability toggles. Non-Claude
+// operators are completely unaffected.
 async function enforceClaudePerms(req, res, next) {
   if (req.headers['x-claude-write'] !== '1') return next();
-  const pgdb = req.app.locals.pgDb;
+  if (isClaudeFinancePath(req.path)) {
+    return res.status(403).json({ error: 'Revenue & finance data are not accessible to Claude.', claudeBlocked: true });
+  }
+  if (req.method === 'GET' || req.method === 'HEAD') return next(); // non-finance reads are fine
   try {
-    const perms = await getClaudePerms(pgdb);
+    const perms = await getClaudePerms(req.app.locals.pgDb);
     const decision = claudeWriteDecision(perms, req.method, req.path);
     if (!decision.ok) return res.status(403).json({ error: decision.reason, claudeBlocked: true });
-
-    // Capability allowed — now require a fresh one-shot arm.
-    const arm = await getClaudeArm(pgdb);
-    if (!armIsLive(arm)) {
-      return res.status(403).json({
-        error: 'Claude writes are LOCKED. Ask the PIN holder to arm one write in the dashboard (Settings → Claude Access → Arm), then retry.',
-        claudeBlocked: true, claudeLocked: true,
-      });
-    }
-    // Consume the arm so exactly one write goes through.
-    if (pgdb) await pgdb.setSetting('claude_write_arm', { armed: false, consumed_at: nowMs() });
-    console.log(`[claude-arm] consumed for ${req.method} ${req.path}`);
     next();
   } catch (err) {
     return res.status(500).json({ error: 'Claude permission check failed: ' + err.message });
@@ -2075,47 +2088,6 @@ app.post('/api/admin/claude-permissions', requireAdmin, async (req, res) => {
       capabilities: CLAUDE_CAPABILITIES.map((c) => ({
         id: c.id, label: c.label, group: c.group, risk: c.risk, desc: c.desc,
         methods: c.methods, endpointCount: c.prefixes.length, enabled: !!next[c.id] })) });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Claude write ARM (PIN-gated, one-shot) ───────────────
-// Current lock state for the panel. Never returns the PIN.
-app.get('/api/admin/claude-arm', requireAdmin, async (req, res) => {
-  try {
-    const arm = await getClaudeArm(req.app.locals.pgDb);
-    res.json({ armed: armIsLive(arm), ttlSeconds: Math.round(CLAUDE_ARM_TTL_MS / 1000) });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Arm exactly one Claude write. Requires the correct PIN. Constant-time compare.
-app.post('/api/admin/claude-arm', requireAdmin, async (req, res) => {
-  const pgdb = req.app.locals.pgDb;
-  if (!pgdb) return res.status(503).json({ error: 'Database unavailable' });
-  const pin = String((req.body && req.body.pin) || '');
-  const a = Buffer.from(pin);
-  const b = Buffer.from(CLAUDE_ARM_PIN);
-  const ok = a.length === b.length && crypto.timingSafeEqual(a, b);
-  if (!ok) return res.status(403).json({ error: 'Wrong PIN.' });
-  try {
-    await pgdb.setSetting('claude_write_arm', { armed: true, armed_at: nowMs() });
-    console.log('[claude-arm] armed (one write)');
-    res.json({ ok: true, armed: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Lock immediately (clear any pending arm). No PIN needed to LOCK.
-app.delete('/api/admin/claude-arm', requireAdmin, async (req, res) => {
-  const pgdb = req.app.locals.pgDb;
-  if (!pgdb) return res.status(503).json({ error: 'Database unavailable' });
-  try {
-    await pgdb.setSetting('claude_write_arm', { armed: false, locked_at: nowMs() });
-    res.json({ ok: true, armed: false });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -11687,6 +11659,8 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
         if (l.address_line) cv.push({ name: 'address_line', value: String(l.address_line) });
         return { email: l.email, first_name: l.first_name || null, last_name: l.last_name || null, title: l.job_title || l.title || null, company: l.company_name || l.company || null, custom_variables: cv };
       });
+      // Ensure every custom var these leads use exists in the workspace, or Bison 422s.
+      await ensureBisonCustomVars(workspace_id, new Set(bisonLeadPayload.flatMap(function(l){ return (l.custom_variables||[]).map(function(v){ return v.name; }); })));
       var createRes = await bisonReq('/api/leads/create-or-update/multiple', { wsId: workspace_id, method: 'POST', body: { leads: bisonLeadPayload } });
       if (campaign_id && createRes && createRes.data) {
         var leadIds = (createRes.data.leads || createRes.data || []).map(function(l) { return l.id; }).filter(Boolean);
@@ -13770,6 +13744,8 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
             if (l.address_line) cv.push({ name: 'address_line', value: String(l.address_line) });
             return { email: l.email, first_name: l.first_name || null, last_name: l.last_name || null, title: l.job_title || l.title || null, company: l.company_name || l.company || null, custom_variables: cv };
           });
+          // Ensure every custom var these leads use exists in the workspace, or Bison 422s.
+          await ensureBisonCustomVars(workspace_id, new Set(bisonLeadPayload.flatMap(function(l){ return (l.custom_variables||[]).map(function(v){ return v.name; }); })));
           var createRes = await bisonReq('/api/leads/create-or-update/multiple', { wsId: workspace_id, method: 'POST', body: { leads: bisonLeadPayload } });
           if (campaign_id && createRes && createRes.data) {
             var leadIds = (createRes.data.leads || createRes.data || []).map(function(l) { return l.id; }).filter(Boolean);
@@ -13849,8 +13825,10 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
           verifyResults[c.id] = status;
           batchUpdates.push({ id: c.id, email_status: status, email_verified_at: new Date().toISOString(), mx_provider: mxProvider, email: c.email });
         } catch {
+          // Network/timeout reaching the finder itself = a real outage signal
+          // (distinct from an SMTP-level "unknown" the finder returns normally).
           verifyResults[c.id] = 'unknown';
-          batchUpdates.push({ id: c.id, email_status: 'unknown', email_verified_at: new Date().toISOString() });
+          batchUpdates.push({ id: c.id, email_status: 'unknown', email_verified_at: new Date().toISOString(), _netfail: true });
         }
         doneCount++;
         job.verified  = doneCount;
@@ -13893,8 +13871,11 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
         }
         if (job.cancelled || job.paused) break;
 
-        // First batch all-unknown = verifier is down
-        if (i === 0 && batchUpdates.length > 0 && batchUpdates.every(u => u.email_status === 'unknown')) {
+        // First batch all NETWORK failures = the finder is truly unreachable.
+        // (SMTP-level "unknown" — greylisting, proxy/MX timeouts, blacklisted
+        // verifier IP — is normal and must NOT abort the job; those emails just
+        // stay unknown and are skipped from the safe push, the rest proceed.)
+        if (i === 0 && batchUpdates.length > 0 && batchUpdates.every(u => u._netfail)) {
           job.status = 'failed';
           job.error = 'Email verification failed — email-finder not responding. Try pushing without verify.';
           return;
@@ -14184,6 +14165,8 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
             if (l.address_line) cv.push({ name: 'address_line', value: String(l.address_line) });
             return { email: l.email, first_name: l.first_name || null, last_name: l.last_name || null, title: l.job_title || l.title || null, company: l.company_name || l.company || null, custom_variables: cv };
           });
+          // Ensure every custom var these leads use exists in the workspace, or Bison 422s.
+          await ensureBisonCustomVars(workspace_id, new Set(bisonLeadPayload.flatMap(function(l){ return (l.custom_variables||[]).map(function(v){ return v.name; }); })));
           var createRes = await bisonReq('/api/leads/create-or-update/multiple', { wsId: workspace_id, method: 'POST', body: { leads: bisonLeadPayload } });
           if (campaign_id && createRes && createRes.data) {
             var leadIds = (createRes.data.leads || createRes.data || []).map(function(l) { return l.id; }).filter(Boolean);
@@ -14231,8 +14214,10 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
           verifyResults[c.id] = status;
           batchUpdates.push({ id: c.id, email_status: status, email_verified_at: new Date().toISOString(), mx_provider: mxProvider, email: c.email });
         } catch {
+          // Network/timeout reaching the finder itself = a real outage signal
+          // (distinct from an SMTP-level "unknown" the finder returns normally).
           verifyResults[c.id] = 'unknown';
-          batchUpdates.push({ id: c.id, email_status: 'unknown', email_verified_at: new Date().toISOString() });
+          batchUpdates.push({ id: c.id, email_status: 'unknown', email_verified_at: new Date().toISOString(), _netfail: true });
         }
         doneCount++;
         job.verified      = doneCount;
@@ -14270,7 +14255,9 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
           await Promise.all(chunk.slice(j, j + CONCURRENCY).map(c => verifyOne(c, batchUpdates)));
         }
         if (job.cancelled || job.paused) break;
-        if (i === 0 && batchUpdates.length > 0 && batchUpdates.every(u => u.email_status === 'unknown')) {
+        // Only abort if the finder is truly unreachable (all NETWORK failures);
+        // SMTP-level "unknown" (greylist/timeout/blacklist) is normal — skip those.
+        if (i === 0 && batchUpdates.length > 0 && batchUpdates.every(u => u._netfail)) {
           job.status = 'failed';
           job.error = 'Email verification failed — email-finder not responding. Try pushing without verify.';
           return;
