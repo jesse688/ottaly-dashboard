@@ -3,6 +3,38 @@ import { getSession } from '@/lib/auth'
 import pool from '@/lib/db'
 import { getLeadRepliesByEmail, bisonTeamForWorkspace } from '@/lib/bison'
 import { getLockedLeadIds } from '@/lib/balance'
+import { extractSignatureFields, ALL_SIGNATURE_FIELDS, type SignatureField } from '@/lib/signature'
+
+// Pull contact details out of the lead's latest inbound email and OVERRIDE the
+// stored values in esp_leads.raw (their own email is the freshest source). Which
+// fields are scanned is the global 'signature_extract_fields' setting. Best-effort.
+async function applySignatureExtraction(leadId: string, workspaceId: string, rows: Array<Record<string, unknown>>, leadEmail: string) {
+  try {
+    const cfg = await pool.query(`SELECT value FROM portal_settings WHERE key = 'signature_extract_fields'`)
+    const raw = cfg.rows[0]?.value
+    // Default to all fields when unset; empty string = feature disabled.
+    const fields: SignatureField[] = raw === undefined
+      ? ALL_SIGNATURE_FIELDS
+      : String(raw).split(',').map(s => s.trim()).filter(Boolean) as SignatureField[]
+    if (!fields.length) return
+
+    const inbound = rows.filter(r => r.direction === 'IN')
+    const latest = inbound[inbound.length - 1]
+    if (!latest) return
+    const body = String(latest.body_html || latest.body_text || '')
+    const found = extractSignatureFields(body, fields, leadEmail)
+    if (!Object.keys(found).length) return
+
+    // Merge into raw, overriding the configured keys with the fresh values.
+    await pool.query(
+      `UPDATE esp_leads SET raw = COALESCE(raw, '{}'::jsonb) || $1::jsonb, updated_at = NOW()
+        WHERE id = $2 AND workspace_id = $3`,
+      [JSON.stringify(found), leadId, workspaceId]
+    )
+  } catch (err) {
+    console.error('[thread] signature extraction failed:', err)
+  }
+}
 
 // GET — the real email conversation for a lead, newest-last.
 // Reads cached portal_emails first; if empty, pulls live from PlusVibe and caches.
@@ -86,6 +118,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       WHERE workspace_id = $1 AND lower(lead_email) = lower($2) AND is_unread = 1`,
     [session.workspaceId, leadEmail]
   ).catch(() => {})
+
+  // Refresh contact details from the latest inbound email signature.
+  await applySignatureExtraction(id, session.workspaceId, rows, leadEmail)
 
   return NextResponse.json(rows)
 }

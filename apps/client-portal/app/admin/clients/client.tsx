@@ -597,6 +597,34 @@ export function AdminClientsClient() {
                       <textarea rows={4} value={tpl.payment_instructions ?? ''} onChange={e => setTpl({ ...tpl, payment_instructions: e.target.value })} placeholder="Bank name, account, sort code, reference…" className="w-full px-3 py-2 mb-2 rounded-lg border border-gray-200 text-sm" />
                       <input value={tpl.payment_link ?? ''} onChange={e => setTpl({ ...tpl, payment_link: e.target.value })} placeholder="Optional pay-online link (e.g. Stripe URL)" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm" />
                     </div>
+                    <div className="border-t border-gray-100 pt-4">
+                      <p className="text-xs font-semibold text-gray-700 mb-1">Extract from email signature</p>
+                      <p className="text-xs text-gray-400 mb-2">When a lead replies, pull these details from their email and update the contact panel (overrides older data — their own email is the freshest source).</p>
+                      {(() => {
+                        const SIG_FIELDS: { key: string; label: string }[] = [
+                          { key: 'phone_number', label: 'Phone / mobile' },
+                          { key: 'company_website', label: 'Website' },
+                          { key: 'linkedin_person_url', label: 'LinkedIn (person)' },
+                          { key: 'linkedin_company_url', label: 'LinkedIn (company)' },
+                          { key: 'job_title', label: 'Job title' },
+                        ]
+                        const enabled = (tpl.signature_extract_fields ?? '').split(',').map(s => s.trim()).filter(Boolean)
+                        return (
+                          <div className="grid grid-cols-2 gap-1.5">
+                            {SIG_FIELDS.map(f => (
+                              <label key={f.key} className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                                <input type="checkbox" checked={enabled.includes(f.key)}
+                                  onChange={e => {
+                                    const next = e.target.checked ? [...enabled, f.key] : enabled.filter(x => x !== f.key)
+                                    setTpl({ ...tpl, signature_extract_fields: next.join(',') })
+                                  }} />
+                                {f.label}
+                              </label>
+                            ))}
+                          </div>
+                        )
+                      })()}
+                    </div>
                     <div className="flex justify-end">
                       <button onClick={saveTemplates} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg">Save settings</button>
                     </div>

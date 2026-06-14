@@ -9,6 +9,9 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   ...DEFAULT_TEMPLATES,
   payment_instructions: 'Bank transfer:\nAccount name: Ottaly Ltd\nSort code: 00-00-00\nAccount number: 00000000\nReference: your company name',
   payment_link: '',
+  // Which contact fields to extract from a lead's email signature and override
+  // their stored value with (comma-separated raw keys). Empty = feature off.
+  signature_extract_fields: 'phone_number,company_website,linkedin_person_url,linkedin_company_url,job_title',
 }
 
 // GET — current settings (defaults merged with any saved overrides).
