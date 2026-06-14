@@ -2165,16 +2165,31 @@ app.post('/api/admin/revenue-leads-purge-batch', requireAdmin, async (req, res) 
 // Targeted cleanup: revenue_leads keyed by a Bison NUMERIC team_id instead of the
 // canonical PV workspace_id are phantom rows written by the (now-removed) broken
 // live-fetch. Real workspace_ids are long hex strings; Bison team ids are short
-// integers. Delete any row whose workspace_id is purely numeric.
+// integers. GET previews (paste in browser address bar); POST deletes.
+async function previewNumericWsLeads(dbPg) {
+  const r = await dbPg.query(`SELECT workspace_id, client_name, COUNT(*)::int AS n FROM revenue_leads WHERE workspace_id ~ '^[0-9]+$' GROUP BY workspace_id, client_name`);
+  return r.rows;
+}
+// GET = safe preview (no delete). Open this URL in your browser to check first.
+app.get('/api/admin/revenue-leads-purge-numeric-ws', requireAdmin, async (req, res) => {
+  const dbPg = app.locals.pgDb;
+  if (!dbPg) return res.status(503).json({ error: 'DB unavailable' });
+  try {
+    const rows = await previewNumericWsLeads(dbPg);
+    const total = rows.reduce((s, r) => s + r.n, 0);
+    res.json({ preview_only: true, would_delete_total: total, would_delete: rows,
+      note: 'Nothing deleted. To actually delete, POST to this same URL.' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+// POST = actually delete.
 app.post('/api/admin/revenue-leads-purge-numeric-ws', requireAdmin, async (req, res) => {
   const dbPg = app.locals.pgDb;
   if (!dbPg) return res.status(503).json({ error: 'DB unavailable' });
   try {
-    const preview = await dbPg.query(`SELECT workspace_id, client_name, COUNT(*)::int AS n FROM revenue_leads WHERE workspace_id ~ '^[0-9]+$' GROUP BY workspace_id, client_name`);
-    if (req.query.dry === '1') return res.json({ dry_run: true, would_delete: preview.rows });
+    const groups = await previewNumericWsLeads(dbPg);
     const r = await dbPg.query(`DELETE FROM revenue_leads WHERE workspace_id ~ '^[0-9]+$'`);
     refreshRevenueCache().catch(() => {});
-    res.json({ ok: true, deleted: r.rowCount || 0, groups: preview.rows });
+    res.json({ ok: true, deleted: r.rowCount || 0, groups });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
