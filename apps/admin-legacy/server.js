@@ -2878,24 +2878,38 @@ async function refreshRevenueCache() {
       nameMap[p.workspace_id]   = p.workspace_name || '';
     });
 
+    // ws.id here is the canonical PV workspace_id (the /workspaces redirect maps
+    // Bison team ids → PV ids). Bison's /api/leads needs the numeric TEAM id, so
+    // map PV → team_id for the lead fetch. Without this the switch-workspace gets
+    // NaN, silently fails, and leads (→ revenue) come back wrong/empty.
+    const teamIdByPv = new Map(BISON_TEAMS.map(t => [String(t.pv), String(t.team_id)]));
     const leads = [];
     for (const ws of workspaces) {
       if (isRevenueExcludedWorkspace({ id: ws.id, name: nameMap[ws.id] || ws.name || ws.workspace_name })) continue;
       const wsPrice    = priceMap[ws.id]  || 0;
       const wsInactive = statusMap[ws.id] === 'inactive';
+      const bisonTeamId = teamIdByPv.get(String(ws.id)) || ws.bison_team_id || ws.id;
       const byLeadKey = new Map();
-      for (const label of LEAD_LABELS) {
-        for (let page = 1; page <= 20; page++) {
+      // Bison /api/leads pages reliably; it does NOT honour an arbitrary label,
+      // so we fetch ALL leads once (not per-label) and derive the label from the
+      // lead payload. per_page may be capped server-side — page until a short page.
+      {
+        let prevSig = '';
+        for (let page = 1; page <= 200; page++) {
           let batch;
           try {
-            const raw_b = await bisonFetch('/api/leads', { wsId: ws.id, params: { page: page, per_page: 100 } });
+            const raw_b = await bisonFetch('/api/leads', { wsId: bisonTeamId, params: { page: page, per_page: 100 } });
             batch = (raw_b.data || []).map(function(l) { return Object.assign({}, l, { _id: String(l.id), id: String(l.id), company_name: l.company || l.company_name, job_title: l.title || l.job_title, label: l.interested ? 'INTERESTED' : (l.status || '') }); });
           } catch(e) { break; }
           if (!batch.length) break;
+          // Stop when Bison repeats a page (it may cap per_page below 100, so
+          // "batch.length < 100" is NOT a safe end signal — it would drop leads).
+          const sig = batch.map(l => l.id).join(',');
+          if (sig === prevSig) break;
+          prevSig = sig;
           batch.forEach(l => {
             const leadKey = stableLeadKey(ws.id, l);
-            const scanLabel = normalizePvLabel(label);
-            const leadLabel = normalizePvLabel(l.label || label);
+            const leadLabel = normalizePvLabel(l.label || '');
             const existing = byLeadKey.get(leadKey);
             const email = l.email || existing?.lead_email || '';
             const stableDate = existing?.date || getStableRevenueLeadDate(ws.id, leadKey, email, sourceLeadDate(l));
@@ -2909,14 +2923,13 @@ async function refreshRevenueCache() {
               last_name:      existing?.last_name  || l.last_name   || l.lastName   || '',
               lead_email:     email,
               lead_price:     wsPrice,
-              label:          isPvNonLeadLabel(scanLabel) || isPvNonLeadLabel(leadLabel) ? 'NON_LEAD' : (existing?.label || leadLabel || scanLabel),
+              label:          isPvNonLeadLabel(leadLabel) ? 'NON_LEAD' : (existing?.label || leadLabel),
               date:           stableDate,
               client_inactive: wsInactive,
-              pv_nonlead:     Boolean(existing?.pv_nonlead || isPvNonLeadLabel(scanLabel) || isPvNonLeadLabel(leadLabel)),
+              pv_nonlead:     Boolean(existing?.pv_nonlead || isPvNonLeadLabel(leadLabel)),
             };
             byLeadKey.set(leadKey, merged);
           });
-          if (batch.length < 100) break;
         }
       }
       leads.push(...byLeadKey.values());
