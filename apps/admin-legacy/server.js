@@ -2864,11 +2864,14 @@ function resetStaleFirstSeenOnce() {
 async function refreshRevenueCache() {
   resetStaleFirstSeenOnce();
   try {
-    const [wsRaw, prices] = await Promise.all([
-      pvFetch('/workspaces'),
-      Promise.resolve(db.prepare('SELECT workspace_id, workspace_name, price_per_lead, client_status FROM clients').all())
-    ]);
-    const workspaces = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.workspaces || wsRaw?.data || []);
+    // REVENUE = FROZEN STORAGE ONLY. The historical lead/revenue data lives in
+    // the revenue_leads table (Postgres). We do NOT live-fetch leads from Bison
+    // here: Bison leads have different IDs than the stored PlusVibe-era leads, so
+    // merging them would double-count the same person and inflate revenue. New
+    // leads enter revenue_leads via the reply webhook going forward. This keeps
+    // the historical figure exact and stable. (Decision: 2026-06-14.)
+    const pgdb = app.locals?.pgDb;
+    const prices = db.prepare('SELECT workspace_id, workspace_name, price_per_lead, client_status FROM clients').all();
     const priceMap = {};
     const statusMap = {};
     const nameMap = {};
@@ -2878,107 +2881,37 @@ async function refreshRevenueCache() {
       nameMap[p.workspace_id]   = p.workspace_name || '';
     });
 
-    // ws.id here is the canonical PV workspace_id (the /workspaces redirect maps
-    // Bison team ids → PV ids). Bison's /api/leads needs the numeric TEAM id, so
-    // map PV → team_id for the lead fetch. Without this the switch-workspace gets
-    // NaN, silently fails, and leads (→ revenue) come back wrong/empty.
-    const teamIdByPv = new Map(BISON_TEAMS.map(t => [String(t.pv), String(t.team_id)]));
     const leads = [];
-    for (const ws of workspaces) {
-      if (isRevenueExcludedWorkspace({ id: ws.id, name: nameMap[ws.id] || ws.name || ws.workspace_name })) continue;
-      const wsPrice    = priceMap[ws.id]  || 0;
-      const wsInactive = statusMap[ws.id] === 'inactive';
-      const bisonTeamId = teamIdByPv.get(String(ws.id)) || ws.bison_team_id || ws.id;
-      const byLeadKey = new Map();
-      // Bison /api/leads pages reliably; it does NOT honour an arbitrary label,
-      // so we fetch ALL leads once (not per-label) and derive the label from the
-      // lead payload. per_page may be capped server-side — page until a short page.
-      {
-        let prevSig = '';
-        for (let page = 1; page <= 200; page++) {
-          let batch;
-          try {
-            const raw_b = await bisonFetch('/api/leads', { wsId: bisonTeamId, params: { page: page, per_page: 100 } });
-            batch = (raw_b.data || []).map(function(l) { return Object.assign({}, l, { _id: String(l.id), id: String(l.id), company_name: l.company || l.company_name, job_title: l.title || l.job_title, label: l.interested ? 'INTERESTED' : (l.status || '') }); });
-          } catch(e) { break; }
-          if (!batch.length) break;
-          // Stop when Bison repeats a page (it may cap per_page below 100, so
-          // "batch.length < 100" is NOT a safe end signal — it would drop leads).
-          const sig = batch.map(l => l.id).join(',');
-          if (sig === prevSig) break;
-          prevSig = sig;
-          batch.forEach(l => {
-            const leadKey = stableLeadKey(ws.id, l);
-            const leadLabel = normalizePvLabel(l.label || '');
-            const existing = byLeadKey.get(leadKey);
-            const email = l.email || existing?.lead_email || '';
-            const stableDate = existing?.date || getStableRevenueLeadDate(ws.id, leadKey, email, sourceLeadDate(l));
-            const merged = {
-              ...(existing || {}),
-              lead_key:       leadKey,
-              client_name:    ws.name || ws.workspace_name || 'Unknown',
-              workspace_id:   ws.id,
-              campaign:       existing?.campaign || l.camp_name || '',
-              first_name:     existing?.first_name || l.first_name  || l.firstName  || '',
-              last_name:      existing?.last_name  || l.last_name   || l.lastName   || '',
-              lead_email:     email,
-              lead_price:     wsPrice,
-              label:          isPvNonLeadLabel(leadLabel) ? 'NON_LEAD' : (existing?.label || leadLabel),
-              date:           stableDate,
-              client_inactive: wsInactive,
-              pv_nonlead:     Boolean(existing?.pv_nonlead || isPvNonLeadLabel(leadLabel)),
-            };
-            byLeadKey.set(leadKey, merged);
-          });
-        }
-      }
-      leads.push(...byLeadKey.values());
-    }
-
-    // Persist all current leads to Postgres so they survive workspace deletion
-    const pgdb = app.locals?.pgDb;
-    const liveWsIds = new Set(workspaces.map(ws => ws.id).filter(Boolean));
     if (pgdb) {
       try {
-        // Stamp workspace_name from the clients table onto each lead before upserting
-        for (const l of leads) {
-          l.workspace_name = nameMap[l.workspace_id] || l.client_name || '';
-        }
-        await pgdb.upsertRevenueLeads(leads);
-      } catch (err) {
-        console.warn('[revenue cache] Postgres upsert failed:', err.message);
-      }
-
-      // Restore leads from workspaces deleted in PlusVibe
-      try {
-        const deletedRows = await pgdb.getDeletedWorkspaceLeads(liveWsIds);
-        if (deletedRows.length > 0) {
-          const deletedWsCount = new Set(deletedRows.map(r => r.workspace_id)).size;
-          console.log(`[revenue cache] restoring ${deletedRows.length} leads from ${deletedWsCount} deleted workspace(s)`);
-          for (const row of deletedRows) {
-            leads.push({
-              lead_key:        row.lead_key,
-              client_name:     row.client_name || row.workspace_name || row.workspace_id,
-              workspace_id:    row.workspace_id,
-              campaign:        row.campaign    || '',
-              first_name:      row.first_name  || '',
-              last_name:       row.last_name   || '',
-              lead_email:      row.lead_email  || '',
-              lead_price:      Number(row.lead_price) || 0,
-              label:           row.label       || '',
-              date:            row.date        || '',
-              client_inactive: false,
-              pv_nonlead:      Boolean(row.pv_nonlead),
-            });
-          }
+        // Empty set → all stored leads (the method returns everything when the
+        // live set is empty). This IS the revenue dataset now.
+        const storedRows = await pgdb.getDeletedWorkspaceLeads(new Set());
+        for (const row of storedRows) {
+          if (isRevenueExcludedWorkspace({ id: row.workspace_id, name: row.client_name || row.workspace_name })) continue;
+          leads.push({
+            lead_key:        row.lead_key,
+            client_name:     nameMap[row.workspace_id] || row.client_name || row.workspace_name || row.workspace_id,
+            workspace_id:    row.workspace_id,
+            campaign:        row.campaign    || '',
+            first_name:      row.first_name  || '',
+            last_name:       row.last_name   || '',
+            lead_email:      row.lead_email  || '',
+            // Use the current client price if set, else the price stored with the lead.
+            lead_price:      (priceMap[row.workspace_id] ?? Number(row.lead_price)) || 0,
+            label:           row.label       || '',
+            date:            row.date        || '',
+            client_inactive: statusMap[row.workspace_id] === 'inactive',
+            pv_nonlead:      Boolean(row.pv_nonlead),
+          });
         }
       } catch (err) {
-        console.warn('[revenue cache] deleted workspace restore failed:', err.message);
+        console.warn('[revenue cache] load from storage failed:', err.message);
       }
     }
 
     revenueCache = { leads, updatedAt: new Date().toISOString() };
-    console.log(`[revenue cache] refreshed — ${leads.length} total leads`);
+    console.log(`[revenue cache] refreshed — ${leads.length} total leads (from storage)`);
 
     // Lead counts in workspace_stats come from revenueCache — recompute so
     // Capacity / Audience / Health show the latest numbers right away.
@@ -12796,7 +12729,7 @@ app.post('/webhook/plusvibe-reply', (req, res) => {
   }
   res.json({ ok: true }); // respond to PlusVibe immediately (< 5s required)
 
-  const body = req.body;
+  const body = req.body || {};
   // PlusVibe uses `webhook_event` (values like EMAIL_SENT / EMAIL_REPLIED /
   // EMAIL_BOUNCED). Check it first so we stop defaulting everything to
   // 'reply' and running the intelligence parser over our own outgoing
@@ -12804,12 +12737,17 @@ app.post('/webhook/plusvibe-reply', (req, res) => {
   const eventType = body?.webhook_event || body?.event || body?.type || body?.event_type || 'reply';
   const email = body?.lead?.email || body?.email || body?.contact?.email || body?.lead?.Email || body?.Email || body?.lead_email || '';
 
-  // Store raw webhook in SQLite immediately — survives server restarts
+  // Store raw webhook in SQLite immediately — survives server restarts.
+  // Coerce every bound value to a non-undefined string: better-sqlite3 throws
+  // "Too few parameter values were provided" if any ? binds to undefined, which
+  // happened when a webhook arrived with an empty/unparsed body (JSON.stringify
+  // (undefined) === undefined).
   try {
+    const payloadStr = JSON.stringify(body) || '{}';
     const stored = db.prepare(`
       INSERT INTO webhook_events (source, event_type, email, payload, processed)
       VALUES ('plusvibe', ?, ?, ?, 0)
-    `).run(eventType, email.toLowerCase(), JSON.stringify(body));
+    `).run(String(eventType || 'reply'), String(email || '').toLowerCase(), payloadStr);
 
     // Process async — delete on success, keep with error on failure.
     // Failed webhooks are auto-retried by the loop below every 60s, so
