@@ -849,6 +849,7 @@ function RichReply({ toEmail, placeholderName, sending, statusMsg, seed, onSend 
   const ref = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const [empty, setEmpty] = useState(true)
+  const [chars, setChars] = useState(0)
   const [to, setTo] = useState<string[]>(toEmail ? [toEmail] : [])
   const [showCc, setShowCc] = useState(false)
   const [cc, setCc] = useState<string[]>([])
@@ -857,19 +858,24 @@ function RichReply({ toEmail, placeholderName, sending, statusMsg, seed, onSend 
   useEffect(() => {
     if (seed && ref.current) {
       ref.current.innerHTML = seed.html
-      setEmpty((ref.current.innerText ?? '').trim().length === 0)
+      syncState()
       setTo([])
       ref.current.focus()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seed?.id])
 
+  function syncState() {
+    const t = (ref.current?.innerText ?? '').trim()
+    setEmpty(t.length === 0)
+    setChars(t.length)
+  }
   function exec(cmd: string, value?: string) {
     document.execCommand(cmd, false, value)
     ref.current?.focus()
-    setEmpty((ref.current?.innerText ?? '').trim().length === 0)
+    syncState()
   }
-  function onInput() { setEmpty((ref.current?.innerText ?? '').trim().length === 0) }
+  function onInput() { syncState() }
   function addLink() {
     const url = prompt('Link URL (https://…)')
     if (url) exec('createLink', url)
@@ -889,73 +895,88 @@ function RichReply({ toEmail, placeholderName, sending, statusMsg, seed, onSend 
     if (!text || !to.length) return
     onSend(text, el.innerHTML, to.join(', '), cc.join(', '))
     el.innerHTML = ''
-    setEmpty(true); setCc([]); setShowCc(false); setTo(toEmail ? [toEmail] : [])
+    setEmpty(true); setChars(0); setCc([]); setShowCc(false); setTo(toEmail ? [toEmail] : [])
   }
 
   const Btn = ({ cmd, val, title, children }: { cmd?: string; val?: string; title: string; children: ReactNode }) => (
     <button type="button" title={title}
       onMouseDown={e => { e.preventDefault(); if (cmd) exec(cmd, val) }}
-      className="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-200 text-gray-600 text-sm">
+      className="w-8 h-8 flex items-center justify-center rounded-md hover:bg-gray-100 text-gray-600 text-[15px]">
       {children}
     </button>
   )
 
   return (
-    <div className="rounded-xl border border-gray-200 overflow-hidden focus-within:border-brand-300 focus-within:ring-1 focus-within:ring-brand-200">
-      <div className="px-3 py-1.5 bg-gray-50 border-b border-gray-100 flex items-start gap-2">
-        <span className="text-xs font-medium text-gray-500 w-7 mt-1.5">To:</span>
+    <div className="rounded-xl border border-gray-200 shadow-sm bg-white overflow-hidden focus-within:border-brand-300 focus-within:ring-1 focus-within:ring-brand-200">
+      {/* header */}
+      <div className="px-4 py-2.5 border-b border-gray-100 flex items-center justify-between">
+        <span className="text-sm font-semibold text-[#050c29]">Reply message</span>
+        <span className="text-xs text-gray-400">to {placeholderName}</span>
+      </div>
+
+      {/* recipients */}
+      <div className="px-4 py-2 border-b border-gray-100 flex items-start gap-2">
+        <span className="text-xs font-medium text-gray-500 w-9 mt-2">To:</span>
         <RecipientInput value={to} onChange={setTo} placeholder="add recipients…" />
-        {!showCc && <button type="button" onClick={() => setShowCc(true)} className="text-xs text-brand-600 hover:text-brand-800 mt-1.5 shrink-0">Cc</button>}
+        {!showCc && <button type="button" onClick={() => setShowCc(true)} className="text-xs font-medium text-brand-600 hover:text-brand-800 mt-2 shrink-0">Cc</button>}
       </div>
       {showCc && (
-        <div className="px-3 py-1.5 border-b border-gray-100 flex items-start gap-2">
-          <span className="text-xs font-medium text-gray-500 w-7 mt-1.5">Cc:</span>
+        <div className="px-4 py-2 border-b border-gray-100 flex items-start gap-2">
+          <span className="text-xs font-medium text-gray-500 w-9 mt-2">Cc:</span>
           <RecipientInput value={cc} onChange={setCc} placeholder="add cc…" />
         </div>
       )}
 
       {/* toolbar */}
-      <div className="flex items-center gap-0.5 px-2 py-1 border-b border-gray-100 bg-white flex-wrap">
+      <div className="flex items-center gap-1 px-3 py-1.5 border-b border-gray-100 bg-gray-50/60 flex-wrap">
         <select onMouseDown={e => e.stopPropagation()} onChange={e => exec('fontName', e.target.value)} defaultValue="" title="Font"
-          className="h-7 text-xs border border-gray-200 rounded px-1 mr-1 outline-none bg-white text-gray-600">
+          className="h-8 text-xs border border-gray-200 rounded-md px-2 mr-1 outline-none bg-white text-gray-600">
           <option value="" disabled>Font</option>
           <option value="Arial">Sans</option>
           <option value="Georgia">Serif</option>
           <option value="Courier New">Mono</option>
         </select>
         <select onMouseDown={e => e.stopPropagation()} onChange={e => exec('fontSize', e.target.value)} defaultValue="" title="Size"
-          className="h-7 text-xs border border-gray-200 rounded px-1 mr-1 outline-none bg-white text-gray-600">
+          className="h-8 text-xs border border-gray-200 rounded-md px-2 mr-1 outline-none bg-white text-gray-600">
           <option value="" disabled>Size</option>
           <option value="2">Small</option>
           <option value="3">Normal</option>
           <option value="5">Large</option>
           <option value="6">Huge</option>
         </select>
+        <span className="w-px h-5 bg-gray-200 mx-1" />
         <Btn cmd="bold" title="Bold"><strong>B</strong></Btn>
         <Btn cmd="italic" title="Italic"><em>I</em></Btn>
         <Btn cmd="underline" title="Underline"><u>U</u></Btn>
+        <span className="w-px h-5 bg-gray-200 mx-1" />
         <Btn cmd="insertUnorderedList" title="Bulleted list">•</Btn>
-        <button type="button" title="Add link" onMouseDown={e => { e.preventDefault(); addLink() }} className="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-200 text-gray-600">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+        <Btn cmd="insertOrderedList" title="Numbered list"><span className="text-xs font-semibold">1.</span></Btn>
+        <span className="w-px h-5 bg-gray-200 mx-1" />
+        <button type="button" title="Add link" onMouseDown={e => { e.preventDefault(); addLink() }} className="w-8 h-8 flex items-center justify-center rounded-md hover:bg-gray-100 text-gray-600">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
         </button>
-        <button type="button" title="Add image" onMouseDown={e => { e.preventDefault(); fileRef.current?.click() }} className="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-200 text-gray-600">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
+        <button type="button" title="Add image" onMouseDown={e => { e.preventDefault(); fileRef.current?.click() }} className="w-8 h-8 flex items-center justify-center rounded-md hover:bg-gray-100 text-gray-600">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
         </button>
         <input ref={fileRef} type="file" accept="image/*" onChange={onPickImage} className="hidden" />
       </div>
 
-      {/* editable area */}
+      {/* editable area — larger, roomier like PV */}
       <div className="relative">
-        {empty && <span className="pointer-events-none absolute left-3 top-2 text-sm text-gray-400">Write your reply to {placeholderName}…</span>}
+        {empty && <span className="pointer-events-none absolute left-4 top-3 text-sm text-gray-400">Write your reply to {placeholderName}…</span>}
         <div ref={ref} contentEditable suppressContentEditableWarning onInput={onInput}
-          className="min-h-[90px] max-h-60 overflow-y-auto px-3 py-2 text-sm text-gray-800 outline-none [&_a]:text-brand-600 [&_a]:underline [&_img]:max-w-full [&_img]:rounded" />
+          className="min-h-[200px] max-h-[420px] overflow-y-auto px-4 py-3 text-sm leading-relaxed text-gray-800 outline-none [&_a]:text-brand-600 [&_a]:underline [&_img]:max-w-full [&_img]:rounded" />
       </div>
 
-      <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-t border-gray-100">
-        <span className="text-xs">{statusMsg ? <span className="text-green-600 font-medium">{statusMsg}</span> : <span className="text-gray-400">Sent via your campaign mailbox</span>}</span>
-        <button onClick={send} disabled={empty || sending || !to.length} className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-brand-600 hover:bg-brand-700 text-white disabled:bg-gray-300 disabled:text-gray-500 text-xs font-medium rounded-lg">
-          {sending ? 'Sending…' : <><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>Send</>}
-        </button>
+      {/* footer */}
+      <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-t border-gray-100">
+        <div className="flex items-center gap-3">
+          <button onClick={send} disabled={empty || sending || !to.length} className="inline-flex items-center gap-1.5 px-5 py-2 bg-brand-600 hover:bg-brand-700 text-white disabled:bg-gray-300 disabled:text-gray-500 text-sm font-semibold rounded-lg">
+            {sending ? 'Sending…' : <><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>Send</>}
+          </button>
+          <span className="text-xs">{statusMsg ? <span className="text-green-600 font-medium">{statusMsg}</span> : <span className="text-gray-400">Sent via your campaign mailbox</span>}</span>
+        </div>
+        <span className="text-xs text-gray-400">{chars > 0 ? `${chars} character${chars === 1 ? '' : 's'}` : ''}</span>
       </div>
     </div>
   )

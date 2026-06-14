@@ -1,18 +1,22 @@
 'use client'
 
 import { useState } from 'react'
+import logoNavy from '@/public/ottaly-logo.svg'
+import logoWhite from '@/public/ottaly-logo-dark.svg'
 
-// Shows /ottaly-logo.png (or .svg) if present; otherwise a clean uppercase
-// "OTTALY · PREDICTABLE PIPELINE" wordmark matching the brand, so it always
-// looks polished even before the asset is added.
+// The real Ottaly logo (otter mark + "OTTALY · PREDICTABLE PIPELINE" wordmark),
+// imported as a bundled static asset so it can never 404 (a hardcoded /path
+// would silently fall back to the text wordmark if the deploy was stale). Falls
+// back to a clean text wordmark only if the image genuinely fails to render.
 export function Logo({ size = 'sm', onDark = false }: { size?: 'sm' | 'lg'; onDark?: boolean }) {
   const [imgOk, setImgOk] = useState(true)
   const h = size === 'lg' ? 'h-12' : 'h-8'
+  const src = (onDark ? logoWhite : logoNavy) as unknown as string
 
   if (imgOk) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
-      <img src="/ottaly-logo.svg" alt="Ottaly — Predictable Pipeline" className={`${h} w-auto`} onError={() => setImgOk(false)} />
+      <img src={src} alt="Ottaly — Predictable Pipeline" className={`${h} w-auto`} onError={() => setImgOk(false)} />
     )
   }
   return (
