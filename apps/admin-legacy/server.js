@@ -81,6 +81,12 @@ async function hydrateFreshStart(pgdb) {
 }
 // Clamp a requested start date up to the fresh-start floor (unless historical
 // is on or no floor is set). Always returns a 'YYYY-MM-DD' string.
+//
+// SCOPE — IMPORTANT: this is ONLY for sequencer stats/performance views (sent,
+// replies, bounces, warmup, campaigns). It MUST NOT be applied to finance,
+// revenue, or commission endpoints — revenue is reported across ALL time
+// regardless of the cutover. If you add a stats route, clamp its start param;
+// if you add a finance/revenue route, do NOT.
 function clampStartDate(startStr) {
   if (_showHistorical || !_freshStartDate || !startStr) return startStr;
   return startStr < _freshStartDate ? _freshStartDate : startStr;
@@ -8187,6 +8193,127 @@ app.post('/api/mailboxes/enable-warmup', requireSession, async (req, res) => {
 
 app.get('/mailboxes',      (req, res) => res.sendFile(path.join(__dirname, 'mailboxes.html')));
 app.get('/mailboxes.html', (req, res) => res.sendFile(path.join(__dirname, 'mailboxes.html')));
+
+// ── Warmup overview (Bison /api/warmup/sender-emails) ───────────────────────
+// Per-mailbox warmup health across all workspaces. Like /api/sender-emails,
+// Bison caps ~15 rows/page, so we paginate per workspace.
+async function bisonListWarmupSenderEmails(wsId, startDate, endDate) {
+  const out = [];
+  let prevSig = '';
+  for (let page = 1; page <= 300; page++) {
+    const resp = await bisonReq('/api/warmup/sender-emails', {
+      wsId,
+      params: { per_page: 200, page, start_date: startDate, end_date: endDate },
+    });
+    const list = Array.isArray(resp) ? resp : (resp?.data ?? []);
+    if (!list.length) break;
+    const sig = list.map(a => a.id ?? a.email ?? '').join(',');
+    if (sig === prevSig) break;
+    prevSig = sig;
+    out.push(...list);
+  }
+  return out;
+}
+
+// Categorise a warmup mailbox into a health bucket for the dashboard.
+function warmupHealth(a) {
+  const score = Number(a.warmup_score ?? 0);
+  const bouncesCaused = Number(a.warmup_bounces_caused_count ?? 0);
+  const disabledForBouncing = Number(a.warmup_disabled_for_bouncing_count ?? 0);
+  if (disabledForBouncing > 0) return 'disabled_bouncing';
+  if (bouncesCaused > 0) return 'bouncing';
+  if (score > 0 && score < 80) return 'low_score';
+  if (score >= 80) return 'healthy';
+  return 'unknown'; // score 0 / just started
+}
+
+app.get('/api/warmup', requireSession, async (req, res) => {
+  if (!getBisonKey()) return res.status(400).json({ error: 'No Bison key configured' });
+  const today = serverDateString(new Date());
+  const start = String(req.query.start || serverDateString(new Date(Date.now() - 10 * 86400000)));
+  const end   = String(req.query.end || today);
+  try {
+    // Build the same workspace list the mailbox page uses (live Bison + PV map).
+    const pvByTeamId = new Map(BISON_TEAMS.map(t => [String(t.team_id), t]));
+    const wsRaw = await bisonReq('/api/workspaces/v1.1');
+    const wsList = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.data || []);
+    const inactive = inactiveWorkspaceIds();
+
+    const mailboxes = [];
+    const seen = new Set();
+    for (const w of wsList) {
+      const mapped = pvByTeamId.get(String(w.id));
+      const pv = mapped ? mapped.pv : String(w.id);
+      if (inactive.has(pv)) continue;
+      const name = mapped ? mapped.name : (w.name || `Workspace ${w.id}`);
+      try {
+        const list = await bisonListWarmupSenderEmails(String(w.id), start, end);
+        for (const a of list) {
+          const email = (a.email || a.name || '').toString().trim().toLowerCase();
+          if (!email.includes('@') || seen.has(email)) continue;
+          seen.add(email);
+          mailboxes.push({
+            email,
+            domain: a.domain || email.split('@')[1],
+            workspace_id: pv,
+            workspace_name: name,
+            bison_team_id: String(w.id),
+            account_id: a.id != null ? String(a.id) : null,
+            warmup_score: Number(a.warmup_score ?? 0),
+            sent: Number(a.warmup_emails_sent ?? 0),
+            replies: Number(a.warmup_replies_received ?? 0),
+            saved_from_spam: Number(a.warmup_emails_saved_from_spam ?? 0),
+            bounces_received: Number(a.warmup_bounces_received_count ?? 0),
+            bounces_caused: Number(a.warmup_bounces_caused_count ?? 0),
+            disabled_for_bouncing: Number(a.warmup_disabled_for_bouncing_count ?? 0),
+            health: warmupHealth(a),
+          });
+        }
+      } catch (err) {
+        console.warn(`[warmup] ${name} (team ${w.id}) failed:`, err.message);
+      }
+    }
+
+    // Summary: counts per health bucket + averages.
+    const summary = { total: mailboxes.length, healthy: 0, low_score: 0, bouncing: 0, disabled_bouncing: 0, unknown: 0 };
+    let scoreSum = 0, scoreN = 0;
+    for (const m of mailboxes) {
+      summary[m.health] = (summary[m.health] || 0) + 1;
+      if (m.warmup_score > 0) { scoreSum += m.warmup_score; scoreN++; }
+    }
+    summary.avg_score = scoreN ? Math.round(scoreSum / scoreN) : 0;
+    summary.at_risk = summary.low_score + summary.bouncing + summary.disabled_bouncing;
+
+    res.json({ start, end, summary, mailboxes });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// Enable / disable warmup for a set of mailboxes (Bison sender-email IDs).
+// Body: { workspace_id, account_ids: [bisonSenderEmailId, ...] }. Stateful per ws.
+async function warmupSetState(req, res, action) {
+  const { workspace_id, account_ids } = req.body || {};
+  if (!workspace_id || !Array.isArray(account_ids) || !account_ids.length)
+    return res.status(400).json({ error: 'workspace_id and account_ids required' });
+  const team = BISON_TEAMS.find(t => t.pv === String(workspace_id));
+  const wsId = team ? team.team_id : workspace_id;
+  const sender_email_ids = account_ids.map(id => Number(id)).filter(Number.isFinite);
+  if (!sender_email_ids.length) return res.status(400).json({ error: 'No valid account_ids' });
+  try {
+    const r = await bisonReq(`/api/warmup/sender-emails/${action}`, {
+      wsId, method: 'PATCH', body: { sender_email_ids },
+    });
+    res.json({ ok: true, action, count: sender_email_ids.length, result: r });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+}
+app.post('/api/warmup/enable',  requireSession, (req, res) => warmupSetState(req, res, 'enable'));
+app.post('/api/warmup/disable', requireSession, (req, res) => warmupSetState(req, res, 'disable'));
+
+app.get('/warmup',      (req, res) => res.sendFile(path.join(__dirname, 'warmup.html')));
+app.get('/warmup.html', (req, res) => res.sendFile(path.join(__dirname, 'warmup.html')));
 app.get('/health',         (req, res) => res.sendFile(path.join(__dirname, 'health.html')));
 app.get('/health.html',    (req, res) => res.sendFile(path.join(__dirname, 'health.html')));
 
