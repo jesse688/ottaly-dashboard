@@ -6773,12 +6773,34 @@ function inactiveWorkspaceIds() {
 
 async function listSendingMailboxes() {
   // Source sending mailboxes from EmailBison (the PlusVibe API key is deprecated).
-  // Iterate the known BISON_TEAMS client workspaces, switching to each and
-  // listing its sender emails. Uses the module-scope bisonReq helper.
+  // Iterate ALL Bison workspaces (live from /api/workspaces/v1.1) — not just the
+  // hardcoded BISON_TEAMS — so every client's mailboxes appear, including new
+  // workspaces not yet added to the map. Each Bison team is tagged with its
+  // canonical PV id (from BISON_TEAMS) when known, so client-status filtering and
+  // joins keep matching; unmapped teams fall back to the Bison id.
   const mailboxes = [];
   const seenEmails = new Set();
   const PER_PAGE = 200;
-  for (const team of BISON_TEAMS) {
+
+  const pvByTeamId = new Map(BISON_TEAMS.map(t => [String(t.team_id), t]));
+  let teams = [];
+  try {
+    const wsRaw = await bisonReq('/api/workspaces/v1.1');
+    const list = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.data || []);
+    teams = list.map(w => {
+      const mapped = pvByTeamId.get(String(w.id));
+      return {
+        team_id: String(w.id),
+        name: mapped ? mapped.name : (w.name || `Workspace ${w.id}`),
+        pv: mapped ? mapped.pv : String(w.id), // unmapped → key by Bison id
+      };
+    });
+  } catch (err) {
+    console.warn('[mailboxes] live workspace list failed, falling back to BISON_TEAMS:', err.message);
+    teams = BISON_TEAMS;
+  }
+
+  for (const team of teams) {
     try {
       let found = 0;
       // Bison /api/sender-emails is paginated. Page through until a page comes
@@ -6823,7 +6845,7 @@ async function listSendingMailboxes() {
       console.warn(`[mailboxes] sender-emails failed for ${team.name} (team ${team.team_id}):`, err.message);
     }
   }
-  console.log(`[mailboxes] total ${mailboxes.length} across ${BISON_TEAMS.length} workspaces`);
+  console.log(`[mailboxes] total ${mailboxes.length} across ${teams.length} workspaces`);
   return mailboxes;
 }
 
@@ -10409,7 +10431,13 @@ app.post('/api/admin/clients', requireAdmin, (req, res) => {
          contact_name || '', contact_email || '', contact_phone || '', website || '', notes || '',
          parseInt(lead_target_monthly) || 0);
     res.json({ ok: true });
-  } catch { res.status(400).json({ error: 'Username already exists' }); }
+  } catch (err) {
+    // A UNIQUE violation on username is the common case; surface anything else
+    // so a real failure (missing column, bad type) isn't masked as a dup.
+    const dup = /UNIQUE|unique|duplicate/.test(err.message || '');
+    console.error('[add-client] insert failed:', err.message);
+    res.status(400).json({ error: dup ? 'Username already exists' : ('Could not create client: ' + err.message) });
+  }
 });
 
 app.put('/api/admin/clients/:id', requireAdmin, (req, res) => {
