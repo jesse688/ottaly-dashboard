@@ -1905,29 +1905,41 @@ app.get('/api/admin/mailbox-emails', requireAdmin, (req, res) => {
   res.json({ total: all.length, lastRun: _mailboxCache.lastRun, emails: all });
 });
 
-// Hunt for a sender email / domain across EVERY Bison workspace using Bison's
-// own ?search= filter. Tells us definitively whether a "missing" mailbox exists
-// in Bison at all, in which workspace, and its status (some list views hide
-// not-connected accounts). GET /api/admin/mailbox-find?q=gxifitouts
+// Hunt for a sender email / domain across EVERY Bison workspace. Bison's own
+// ?search= is fuzzy and unreliable, so we pull the FULL sender-email list per
+// workspace (all pages, all statuses) and filter client-side by exact substring.
+// Tells us definitively whether a "missing" mailbox is in Bison, in which
+// workspace, and its status. GET /api/admin/mailbox-find?q=gxifitouts
+// Optional ?statuses=1 includes a per-workspace status breakdown.
 app.get('/api/admin/mailbox-find', requireAdmin, async (req, res) => {
   if (!getBisonKey()) return res.status(400).json({ error: 'No Bison key configured' });
-  const q = String(req.query.q || '').trim();
+  const q = String(req.query.q || '').trim().toLowerCase();
   if (!q) return res.status(400).json({ error: 'q (search term) required' });
   try {
     const wsRaw = await bisonReq('/api/workspaces/v1.1');
     const workspaces = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.data || []);
     const hits = [];
+    const scanned = [];
     for (const w of workspaces) {
       try {
-        // Search across all statuses by NOT passing a status filter.
-        const resp = await bisonReq('/api/sender-emails', { wsId: String(w.id), params: { search: q, per_page: 200 } });
-        const list = Array.isArray(resp) ? resp : (resp?.data ?? []);
+        const list = await bisonListSenderEmails(String(w.id)); // full paginated list
+        const statusCounts = {};
+        let wsHits = 0;
         for (const a of list) {
-          hits.push({ team_id: String(w.id), workspace: w.name, email: a.email || a.name, status: a.status, type: a.type });
+          const email = String(a.email || a.name || '').toLowerCase();
+          const st = String(a.status || 'unknown');
+          statusCounts[st] = (statusCounts[st] || 0) + 1;
+          if (email.includes(q)) {
+            hits.push({ team_id: String(w.id), workspace: w.name, email, status: a.status, type: a.type });
+            wsHits++;
+          }
         }
-      } catch (e) { /* skip workspace on error */ }
+        scanned.push({ team_id: String(w.id), workspace: w.name, total: list.length, hits: wsHits, statuses: statusCounts });
+      } catch (e) {
+        scanned.push({ team_id: String(w.id), workspace: w.name, error: e.message });
+      }
     }
-    res.json({ q, matches: hits.length, hits });
+    res.json({ q, matches: hits.length, hits, scanned });
   } catch (err) {
     res.status(502).json({ error: err.message });
   }
