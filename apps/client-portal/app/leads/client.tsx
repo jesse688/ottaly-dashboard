@@ -663,13 +663,15 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
                         </div>
                       </div>
                       {/* body */}
-                      <div className={`px-4 py-3 ${out ? 'bg-brand-50/40' : 'bg-white'}`}>
-                        {m.subject && <p className="text-xs font-medium text-gray-500 mb-2">{m.subject}</p>}
+                      <div className={`px-5 py-4 ${out ? 'bg-brand-50/40' : 'bg-white'}`}>
+                        {m.subject && <p className="text-xs font-medium text-gray-500 mb-3">{m.subject}</p>}
                         {m.sent_via_portal && m.body_html ? (
                           // We composed this HTML ourselves in the portal — safe to render.
-                          <div className="text-sm text-gray-800 break-words leading-relaxed [&_a]:text-brand-600 [&_a]:underline [&_img]:max-w-full [&_img]:rounded" dangerouslySetInnerHTML={{ __html: m.body_html }} />
+                          <div className="text-sm text-gray-800 break-words leading-[1.55] max-w-[68ch] [&_p]:my-2 [&_a]:text-brand-600 [&_a]:underline [&_img]:max-w-full [&_img]:rounded" dangerouslySetInnerHTML={{ __html: m.body_html }} />
                         ) : (
-                          <div className="text-[15px] text-[#050c29] whitespace-pre-wrap break-words leading-relaxed">{main || '(no content)'}</div>
+                          // Plain/derived text: collapse runs of blank lines so HTML→text
+                          // bodies don't show huge gaps; readable column + calm line-height.
+                          <div className="text-sm text-[#1a2332] whitespace-pre-wrap break-words leading-[1.55] max-w-[68ch]">{(main || '(no content)').replace(/\n{3,}/g, '\n\n').trim()}</div>
                         )}
                         {quoted && !m.sent_via_portal && (
                           <details className="mt-3 border-t border-dashed border-gray-200 pt-2">
@@ -886,10 +888,18 @@ function RichReply({ toEmail, placeholderName, sending, statusMsg, seed, onSend 
   const [to, setTo] = useState<string[]>(toEmail ? [toEmail] : [])
   const [showCc, setShowCc] = useState(false)
   const [cc, setCc] = useState<string[]>([])
+  // Collapsed by default — a slim bar that reclaims reading space. Clicking it
+  // (or a forward seed arriving) expands the full composer and focuses it.
+  const [expanded, setExpanded] = useState(false)
+  function expand() {
+    setExpanded(true)
+    setTimeout(() => ref.current?.focus(), 0)
+  }
 
   // Forward seed: prefill the editor with quoted content and clear the recipient.
   useEffect(() => {
     if (seed && ref.current) {
+      setExpanded(true)
       ref.current.innerHTML = seed.html
       syncState()
       setTo([])
@@ -943,7 +953,7 @@ function RichReply({ toEmail, placeholderName, sending, statusMsg, seed, onSend 
     if (!text || !to.length) return
     onSend(text, el.innerHTML, to.join(', '), cc.join(', '))
     el.innerHTML = ''
-    setEmpty(true); setChars(0); setCc([]); setShowCc(false); setTo(toEmail ? [toEmail] : [])
+    setEmpty(true); setChars(0); setCc([]); setShowCc(false); setTo(toEmail ? [toEmail] : []); setExpanded(false)
   }
 
   const Btn = ({ cmd, val, title, children }: { cmd?: string; val?: string; title: string; children: ReactNode }) => (
@@ -954,12 +964,27 @@ function RichReply({ toEmail, placeholderName, sending, statusMsg, seed, onSend 
     </button>
   )
 
+  // Collapsed: a slim click-to-expand bar, so reading gets the space.
+  if (!expanded) {
+    return (
+      <button type="button" onClick={expand}
+        className="w-full flex items-center gap-3 rounded-xl border border-gray-200 shadow-sm bg-white px-4 py-3 text-left hover:border-brand-300 hover:bg-gray-50/60 transition-colors">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-brand-600 shrink-0"><path d="M3 21l1.9-5.7a8.5 8.5 0 1 1 3.8 3.8z"/></svg>
+        <span className="text-sm text-gray-500 flex-1">Reply to {placeholderName}…</span>
+        <span className="text-xs font-medium text-brand-600">Write reply →</span>
+      </button>
+    )
+  }
+
   return (
     <div className="rounded-xl border border-gray-200 shadow-sm bg-white overflow-hidden focus-within:border-brand-300 focus-within:ring-1 focus-within:ring-brand-200">
       {/* header */}
       <div className="px-4 py-2.5 border-b border-gray-100 flex items-center justify-between">
         <span className="text-sm font-semibold text-[#050c29]">Reply message</span>
-        <span className="text-xs text-gray-400">to {placeholderName}</span>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-gray-400">to {placeholderName}</span>
+          <button type="button" onClick={() => setExpanded(false)} title="Collapse" className="text-gray-400 hover:text-gray-600 text-sm leading-none">▾</button>
+        </div>
       </div>
 
       {/* recipients */}
@@ -1013,7 +1038,7 @@ function RichReply({ toEmail, placeholderName, sending, statusMsg, seed, onSend 
       <div className="relative">
         {empty && <span className="pointer-events-none absolute left-4 top-3 text-sm text-gray-400">Write your reply to {placeholderName}…</span>}
         <div ref={ref} contentEditable suppressContentEditableWarning onInput={onInput}
-          className="min-h-[200px] max-h-[420px] overflow-y-auto px-4 py-3 text-sm leading-relaxed text-gray-800 outline-none [&_a]:text-brand-600 [&_a]:underline [&_img]:max-w-full [&_img]:rounded" />
+          className="min-h-[160px] max-h-[380px] overflow-y-auto px-4 py-3 text-sm leading-[1.55] text-gray-800 outline-none [&_a]:text-brand-600 [&_a]:underline [&_img]:max-w-full [&_img]:rounded" />
       </div>
 
       {/* footer */}
