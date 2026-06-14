@@ -39,30 +39,42 @@ export async function GET() {
       LIMIT 20
     `)
 
-    // Determine staleness
-    const lastWebhook = lastSyncs.rows.find(r => r.source === 'plusvibe-webhook')
-    const lastPolling = lastSyncs.rows.find(r => r.source === 'plusvibe-polling')
+    // Determine staleness.
+    // Webhooks are EVENT-DRIVEN: they only fire when a lead actually replies, so
+    // "no webhook in the last hour" is normal, not a fault. We key webhook health
+    // off the most recent inbound email landing in portal_emails (the real "is
+    // data flowing" signal) OR a logged webhook event, whichever is newer.
+    // Polling is SCHEDULED, so a long gap there IS a real problem.
+    const lastWebhookLog = lastSyncs.rows.find(r => r.source === 'plusvibe-webhook' || r.source === 'bison-webhook')
+    const lastPolling = lastSyncs.rows.find(r => r.source === 'bison-polling' || r.source === 'plusvibe-polling')
 
-    let webhookStatus = 'unknown'
+    const lastInbound = await pool.query(
+      `SELECT MAX(COALESCE(timestamp_created, synced_at)) AS last_in FROM portal_emails WHERE direction = 'IN'`
+    ).catch(() => ({ rows: [{ last_in: null }] }))
+
+    const webhookTimes = [lastWebhookLog?.last_finished, lastInbound.rows[0]?.last_in]
+      .filter(Boolean).map(t => new Date(t as string).getTime())
+    const newestWebhook = webhookTimes.length ? Math.max(...webhookTimes) : null
+
+    let webhookStatus = 'idle'   // configured, just nothing recent — not an error
     let pollingStatus = 'unknown'
     let alert = ''
 
-    if (lastWebhook?.last_finished) {
-      const age = (now.getTime() - new Date(lastWebhook.last_finished).getTime()) / 1000 / 60
-      webhookStatus = age < 60 ? 'healthy' : age < 120 ? 'stale' : 'down'
+    if (newestWebhook) {
+      const ageHrs = (now.getTime() - newestWebhook) / 1000 / 60 / 60
+      // Replies are sporadic — only flag if NOTHING has arrived in a long while.
+      webhookStatus = ageHrs < 24 ? 'healthy' : ageHrs < 72 ? 'idle' : 'stale'
     }
 
     if (lastPolling?.last_finished) {
       const age = (now.getTime() - new Date(lastPolling.last_finished).getTime()) / 1000 / 60
-      pollingStatus = age < 45 ? 'healthy' : age < 90 ? 'stale' : 'down'
+      pollingStatus = age < 60 ? 'healthy' : age < 180 ? 'stale' : 'down'
     }
 
-    if (webhookStatus === 'down' && pollingStatus === 'down') {
-      alert = '⚠️ Both webhook and polling are down — data may be stale'
-    } else if (webhookStatus === 'down') {
-      alert = '⚠️ Webhook is down — relying on polling only'
-    } else if (pollingStatus === 'down') {
-      alert = '⚠️ Polling is down — relying on webhook only'
+    if (pollingStatus === 'down') {
+      alert = '⚠️ Polling hasn’t run recently — check the sync cron'
+    } else if (webhookStatus === 'stale' && pollingStatus !== 'healthy') {
+      alert = '⚠️ No replies have synced in days — verify the Bison webhook'
     }
 
     return NextResponse.json({

@@ -353,6 +353,29 @@ export function AdminClientsClient() {
     setFieldData({ hiddenFields: hidden })
     await fetch(`/api/admin/clients/${settingsClient.id}/fields`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hiddenFields: hidden }) })
   }
+  // Apply the CURRENT client's field/label visibility to every client at once.
+  async function applyFieldsToAll() {
+    if (!fieldData) return
+    if (!confirm(`Apply this field visibility to ALL clients? This overwrites each client's current field settings.`)) return
+    const r = await fetch('/api/admin/bulk-apply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hiddenFields: fieldData.hiddenFields }) })
+    const d = await r.json() as { clientsUpdated?: number }
+    alert(r.ok ? `Applied to ${d.clientsUpdated ?? 'all'} clients ✓` : 'Failed to apply')
+  }
+  async function applyLabelsToAll() {
+    if (!labelData) return
+    if (!confirm(`Apply this label visibility to ALL clients? This overwrites each client's current label settings.`)) return
+    const r = await fetch('/api/admin/bulk-apply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hiddenLabels: labelData.hiddenLabels }) })
+    const d = await r.json() as { clientsUpdated?: number }
+    alert(r.ok ? `Applied to ${d.clientsUpdated ?? 'all'} clients ✓` : 'Failed to apply')
+  }
+  // Apply the global settings panel (templates, payment, signature fields) — these
+  // are already global, but this gives an explicit "save to everyone" affordance.
+  async function applySettingsToAll() {
+    if (!tpl) return
+    if (!confirm('Save these settings as the global defaults for all clients?')) return
+    const r = await fetch('/api/admin/bulk-apply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings: tpl }) })
+    alert(r.ok ? 'Saved for all clients ✓' : 'Failed to save')
+  }
 
   // ── Disputes ──
   async function handleDispute(id: string, action: 'approved' | 'denied', note?: string) {
@@ -412,15 +435,23 @@ export function AdminClientsClient() {
         <Logo size="sm" onDark />
         <span className="text-slate-500 text-xs">|</span>
         <span className="text-slate-300 text-sm">Portal Admin</span>
-        {syncStatus?.status && (
-          <div className="flex items-center gap-2 text-xs ml-4">
-            <span className={`w-2 h-2 rounded-full ${syncStatus.status.webhook === 'healthy' ? 'bg-green-400' : syncStatus.status.webhook === 'stale' ? 'bg-yellow-400' : 'bg-red-400'}`}></span>
-            <span className="text-slate-400">Webhook: {syncStatus.status.webhook}</span>
-            <span className="text-slate-500">·</span>
-            <span className={`w-2 h-2 rounded-full ${syncStatus.status.polling === 'healthy' ? 'bg-green-400' : syncStatus.status.polling === 'stale' ? 'bg-yellow-400' : 'bg-red-400'}`}></span>
-            <span className="text-slate-400">Polling: {syncStatus.status.polling}</span>
-          </div>
-        )}
+        {syncStatus?.status && (() => {
+          // green = healthy, grey = idle (configured, just quiet), amber = stale, red = down/unknown
+          const dot = (s: string) =>
+            s === 'healthy' ? 'bg-green-400'
+            : s === 'idle' ? 'bg-slate-400'
+            : s === 'stale' ? 'bg-yellow-400'
+            : 'bg-red-400'
+          return (
+            <div className="flex items-center gap-2 text-xs ml-4">
+              <span className={`w-2 h-2 rounded-full ${dot(syncStatus.status.webhook)}`}></span>
+              <span className="text-slate-400">Webhook: {syncStatus.status.webhook}</span>
+              <span className="text-slate-500">·</span>
+              <span className={`w-2 h-2 rounded-full ${dot(syncStatus.status.polling)}`}></span>
+              <span className="text-slate-400">Polling: {syncStatus.status.polling}</span>
+            </div>
+          )
+        })()}
         <div className="ml-auto flex items-center gap-4">
           <div className="relative">
             <button onClick={() => setShowNotifs(v => !v)} className="relative text-slate-400 hover:text-white text-base px-1" aria-label="Notifications">
@@ -514,7 +545,7 @@ export function AdminClientsClient() {
               <div className="flex items-center gap-2">
                 <button onClick={async () => { setShowImport(v => !v); setImportErr(''); if (!importList) { const r = await fetch('/api/admin/clients/import'); const d = await r.json(); if (r.ok) setImportList(d.candidates); else setImportErr(d.error ?? 'Import failed') } }} className="px-4 py-2 border border-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">Import from admin</button>
                 <button onClick={() => { setShowSpeed(v => { const n = !v; if (n && !speed) fetch('/api/admin/speed').then(r => r.json()).then(d => !d.error && setSpeed(d)).catch(() => {}); return n }) }} className="px-4 py-2 border border-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">Speed to Lead</button>
-                <button onClick={() => { setShowTpl(v => { const n = !v; if (n && !tpl) loadTemplates(); return n }) }} className="px-4 py-2 border border-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">Notification emails</button>
+                <button onClick={() => { setShowTpl(v => { const n = !v; if (n && !tpl) loadTemplates(); return n }) }} className="px-4 py-2 border border-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">Settings</button>
                 <button onClick={() => { setShowForm(v => !v); setError('') }} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg">+ Add client</button>
               </div>
             </div>
@@ -575,7 +606,7 @@ export function AdminClientsClient() {
             {showTpl && (
               <div className="bg-white border border-gray-200 rounded-xl p-5 mb-5">
                 <div className="flex items-center justify-between mb-1">
-                  <h2 className="text-sm font-semibold text-gray-900">New-lead notification emails</h2>
+                  <h2 className="text-sm font-semibold text-gray-900">Global settings</h2>
                   {tplSaved && <span className="text-xs text-green-600 font-medium">Saved ✓</span>}
                 </div>
                 <p className="text-xs text-gray-500 mb-4">Merge tags: <code className="bg-gray-100 px-1 rounded">{'{first_name}'}</code> <code className="bg-gray-100 px-1 rounded">{'{lead_name}'}</code> <code className="bg-gray-100 px-1 rounded">{'{lead_company}'}</code> <code className="bg-gray-100 px-1 rounded">{'{lead_message}'}</code> <code className="bg-gray-100 px-1 rounded">{'{balance}'}</code> <code className="bg-gray-100 px-1 rounded">{'{login_url}'}</code><br/><span className="text-gray-400">{'{lead_message}'} = what the lead wrote (normal email only — kept out of the locked email).</span></p>
@@ -626,7 +657,8 @@ export function AdminClientsClient() {
                         )
                       })()}
                     </div>
-                    <div className="flex justify-end">
+                    <div className="flex justify-end gap-2">
+                      <button onClick={applySettingsToAll} className="px-4 py-2 border border-indigo-200 text-indigo-700 hover:bg-indigo-50 text-sm font-medium rounded-lg">Apply to all clients</button>
                       <button onClick={saveTemplates} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg">Save settings</button>
                     </div>
                   </div>
@@ -1016,7 +1048,10 @@ export function AdminClientsClient() {
             <div className="p-5">
               {settingsTab === 'labels' && (
                 <>
-                  <p className="text-xs text-gray-500 mb-3">Toggle which lead labels this client can see in their portal.</p>
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-xs text-gray-500">Toggle which lead labels this client can see in their portal.</p>
+                    <button onClick={applyLabelsToAll} className="shrink-0 ml-3 text-xs font-medium text-indigo-600 hover:text-indigo-800 border border-indigo-200 rounded-lg px-2.5 py-1">Apply to all clients</button>
+                  </div>
                   {labelData === null ? Array.from({length:3}).map((_,i) => <div key={i} className="h-8 bg-gray-100 rounded animate-pulse mb-2" />) :
                    labelData.labels.length === 0 ? <p className="text-sm text-gray-400 text-center py-4">No labels found</p> :
                    <div className="space-y-2">
@@ -1037,7 +1072,10 @@ export function AdminClientsClient() {
               )}
               {settingsTab === 'fields' && (
                 <>
-                  <p className="text-xs text-gray-500 mb-3">Toggle which lead detail fields this client can see in their portal.</p>
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-xs text-gray-500">Toggle which lead detail fields this client can see in their portal.</p>
+                    <button onClick={applyFieldsToAll} className="shrink-0 ml-3 text-xs font-medium text-indigo-600 hover:text-indigo-800 border border-indigo-200 rounded-lg px-2.5 py-1">Apply to all clients</button>
+                  </div>
                   {fieldData === null ? Array.from({length:4}).map((_,i) => <div key={i} className="h-8 bg-gray-100 rounded animate-pulse mb-2" />) :
                    <div className="space-y-2">
                      {FIELDS.map(f => {

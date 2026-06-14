@@ -46,7 +46,7 @@ export default function LoginPage() {
       body: JSON.stringify({ username }),
     }).catch(() => {})
     setLoading(false)
-    setForgotMsg("Thanks — we've notified your account manager, who will resend your code shortly.")
+    setForgotMsg("If that email is registered, we've sent a link to choose a new access code. Check your inbox.")
   }
 
   return (
