@@ -1905,6 +1905,34 @@ app.get('/api/admin/mailbox-emails', requireAdmin, (req, res) => {
   res.json({ total: all.length, lastRun: _mailboxCache.lastRun, emails: all });
 });
 
+// Hunt for a sender email / domain across EVERY Bison workspace using Bison's
+// own ?search= filter. Tells us definitively whether a "missing" mailbox exists
+// in Bison at all, in which workspace, and its status (some list views hide
+// not-connected accounts). GET /api/admin/mailbox-find?q=gxifitouts
+app.get('/api/admin/mailbox-find', requireAdmin, async (req, res) => {
+  if (!getBisonKey()) return res.status(400).json({ error: 'No Bison key configured' });
+  const q = String(req.query.q || '').trim();
+  if (!q) return res.status(400).json({ error: 'q (search term) required' });
+  try {
+    const wsRaw = await bisonReq('/api/workspaces/v1.1');
+    const workspaces = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.data || []);
+    const hits = [];
+    for (const w of workspaces) {
+      try {
+        // Search across all statuses by NOT passing a status filter.
+        const resp = await bisonReq('/api/sender-emails', { wsId: String(w.id), params: { search: q, per_page: 200 } });
+        const list = Array.isArray(resp) ? resp : (resp?.data ?? []);
+        for (const a of list) {
+          hits.push({ team_id: String(w.id), workspace: w.name, email: a.email || a.name, status: a.status, type: a.type });
+        }
+      } catch (e) { /* skip workspace on error */ }
+    }
+    res.json({ q, matches: hits.length, hits });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // Diff a posted list against the mailbox cache. Body: { emails: [...] }.
 // Returns which of YOUR emails are missing from the dashboard, and which extra
 // emails the dashboard has that aren't in your list.
