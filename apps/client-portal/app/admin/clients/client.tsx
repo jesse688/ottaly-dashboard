@@ -109,6 +109,11 @@ export function AdminClientsClient() {
   // Notification email templates (global)
   const [tpl, setTpl]                         = useState<Record<string, string> | null>(null)
   const [showTpl, setShowTpl]                 = useState(false)
+  // Bison API key (super-admin) management
+  const [bisonKey, setBisonKey]               = useState<{ configured: boolean; source: string; masked: string | null } | null>(null)
+  const [bisonKeyInput, setBisonKeyInput]     = useState('')
+  const [bisonTest, setBisonTest]             = useState('')
+  const [bisonBusy, setBisonBusy]             = useState(false)
   const [tplSaved, setTplSaved]               = useState(false)
 
   // Import-from-admin candidates
@@ -143,6 +148,30 @@ export function AdminClientsClient() {
   async function loadTemplates() {
     const r = await fetch('/api/admin/settings').then(r => r.json()).catch(() => null)
     if (r && !r.error) setTpl(r)
+    fetch('/api/admin/bison-key').then(r => r.json()).then(d => !d.error && setBisonKey(d)).catch(() => {})
+  }
+  async function saveBisonKey() {
+    if (!bisonKeyInput.trim()) return
+    setBisonBusy(true); setBisonTest('')
+    const r = await fetch('/api/admin/bison-key', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: bisonKeyInput.trim() }) })
+    const d = await r.json()
+    setBisonBusy(false)
+    if (!r.ok) { setBisonTest(`❌ ${d.error ?? 'Save failed'}`); return }
+    setBisonKeyInput(''); setBisonTest('✓ Saved')
+    fetch('/api/admin/bison-key').then(r => r.json()).then(setBisonKey).catch(() => {})
+  }
+  async function testBisonKey() {
+    setBisonBusy(true); setBisonTest('Testing…')
+    const r = await fetch('/api/admin/bison-key/test', { method: 'POST' })
+    const d = await r.json()
+    setBisonBusy(false)
+    setBisonTest(r.ok ? `${d.superAdmin ? '✅' : '⚠️'} ${d.note}` : `❌ ${d.error ?? 'Test failed'}`)
+  }
+  async function clearBisonKey() {
+    if (!confirm('Clear the saved Bison key and fall back to the env var?')) return
+    await fetch('/api/admin/bison-key', { method: 'DELETE' })
+    setBisonTest('');
+    fetch('/api/admin/bison-key').then(r => r.json()).then(setBisonKey).catch(() => {})
   }
   async function saveTemplates() {
     if (!tpl) return
@@ -669,6 +698,24 @@ export function AdminClientsClient() {
                           </div>
                         )
                       })()}
+                    </div>
+                    <div className="border-t border-gray-100 pt-4">
+                      <p className="text-xs font-semibold text-gray-700 mb-1">Bison API key (super-admin)</p>
+                      <p className="text-xs text-gray-400 mb-2">The portal needs its OWN super-admin key — separate from the admin dashboard — or they collide on Bison&apos;s &quot;one workspace per session&quot; and you&apos;ll see &quot;Multiple workspaces detected&quot;. Test confirms it can see all client workspaces.</p>
+                      <div className="flex items-center gap-2 mb-2 text-xs">
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full ${bisonKey?.configured ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                          {bisonKey?.configured ? `Set (${bisonKey.masked})` : 'Not set'}
+                        </span>
+                        {bisonKey?.configured && <span className="text-gray-400">source: {bisonKey.source}</span>}
+                      </div>
+                      <div className="flex gap-2">
+                        <input type="password" value={bisonKeyInput} onChange={e => setBisonKeyInput(e.target.value)} placeholder="Paste super-admin Bison API key" autoComplete="off"
+                          className="flex-1 px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 font-mono" />
+                        <button onClick={saveBisonKey} disabled={bisonBusy || !bisonKeyInput.trim()} className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg disabled:opacity-60">Save</button>
+                        <button onClick={testBisonKey} disabled={bisonBusy || !bisonKey?.configured} className="px-3 py-2 border border-gray-200 text-gray-700 hover:bg-gray-50 text-sm font-medium rounded-lg disabled:opacity-60">Test</button>
+                        {bisonKey?.source === 'dashboard' && <button onClick={clearBisonKey} className="px-3 py-2 text-sm text-gray-500 hover:text-red-600">Clear</button>}
+                      </div>
+                      {bisonTest && <p className="text-xs mt-2 text-gray-600">{bisonTest}</p>}
                     </div>
                     <div className="flex justify-end gap-2">
                       <button onClick={applySettingsToAll} className="px-4 py-2 border border-indigo-200 text-indigo-700 hover:bg-indigo-50 text-sm font-medium rounded-lg">Apply to all clients</button>

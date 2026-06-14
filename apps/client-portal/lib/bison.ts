@@ -3,8 +3,33 @@
 // Base URL: BISON_API_URL env (defaults to self-hosted instance)
 // Workspace context: each API key belongs to one workspace — no workspace_id param needed.
 
+import pool from './db'
+
 const BASE = (process.env.BISON_API_URL || 'https://send.ottaly.co.uk').replace(/\/$/, '')
-const KEY = process.env.BISON_API_KEY || ''
+const ENV_KEY = process.env.BISON_API_KEY || ''
+
+// Bison key resolution: a key saved in the admin Settings UI (portal_settings
+// 'bison_api_key') OVERRIDES the BISON_API_KEY env var, which is the fallback.
+// Cached briefly so we don't hit the DB on every request, but a key changed in
+// the UI takes effect within ~10s — no redeploy. Must be a SUPER-ADMIN key
+// (one that can switch into every client team).
+let _keyCache: { val: string; at: number } | null = null
+export async function getBisonKey(): Promise<string> {
+  if (_keyCache && Date.now() - _keyCache.at < 10_000) return _keyCache.val
+  let saved = ''
+  try {
+    const r = await pool.query(`SELECT value FROM portal_settings WHERE key = 'bison_api_key'`)
+    saved = (r.rows[0]?.value || '').trim()
+  } catch { /* table may not exist yet on first boot */ }
+  const val = saved || ENV_KEY
+  _keyCache = { val, at: Date.now() }
+  return val
+}
+export function bisonKeySource(): 'dashboard' | 'env' | 'none' {
+  if (_keyCache?.val && _keyCache.val !== ENV_KEY) return 'dashboard'
+  return ENV_KEY ? 'env' : 'none'
+}
+export function invalidateBisonKeyCache() { _keyCache = null; _activeTeam = null }
 
 // PlusVibe workspace_id → Bison team_id. portal_clients.workspace_id holds the
 // PV id; Bison needs the team_id to switch workspace. Requires a SUPER-ADMIN
@@ -31,7 +56,23 @@ export function bisonTeamForWorkspace(workspaceId: string): string | null {
 }
 
 let _activeTeam: string | null = null
-// Switch the (super-admin) token's active workspace. Stateful — serialize calls.
+
+// Bison's API is STATEFUL: switch-workspace changes the active workspace for the
+// WHOLE token and Bison enforces "one workspace per session". If two requests
+// interleave a switch+fetch on the same token, Bison throws "Multiple workspaces
+// detected in same session" and the fetch lands on the wrong workspace. So we
+// chain every switch+fetch sequence through a single gate — only one runs at a
+// time. (admin-legacy does the same with _bisonGate; this is the portal's copy.)
+let _gate: Promise<unknown> = Promise.resolve()
+function withBisonLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = _gate.then(fn, fn)
+  // Keep the chain alive even if a step rejects.
+  _gate = run.then(() => undefined, () => undefined)
+  return run
+}
+
+// Switch the (super-admin) token's active workspace. Stateful — caller must hold
+// the lock (use withTeam). Skips the network call if already on that team.
 export async function switchWorkspace(teamId: string | number): Promise<void> {
   const id = String(teamId)
   if (_activeTeam === id) return
@@ -39,8 +80,21 @@ export async function switchWorkspace(teamId: string | number): Promise<void> {
   _activeTeam = id
 }
 
-function headers(extra: Record<string, string> = {}): Record<string, string> {
-  return { Authorization: `Bearer ${KEY}`, 'Content-Type': 'application/json', ...extra }
+// Atomically switch into a client's team and run a fetch, serialized against all
+// other team operations so concurrent client loads never trip Bison's session
+// guard. This is the correct entry point for any per-client Bison read.
+export async function withTeam<T>(teamId: string | number | null | undefined, fn: () => Promise<T>): Promise<T> {
+  return withBisonLock(async () => {
+    if (teamId != null && teamId !== '') {
+      try { await switchWorkspace(teamId) } catch { /* fall through on its own workspace */ }
+    }
+    return fn()
+  })
+}
+
+async function headers(extra: Record<string, string> = {}): Promise<Record<string, string>> {
+  const key = await getBisonKey()
+  return { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...extra }
 }
 
 async function bison<T>(
@@ -57,7 +111,7 @@ async function bison<T>(
   }
   const init: RequestInit = {
     method,
-    headers: headers(),
+    headers: await headers(),
     signal: AbortSignal.timeout(15000),
   }
   if (body && method !== 'GET') init.body = JSON.stringify(body)
@@ -144,25 +198,22 @@ export async function getWorkspaces(): Promise<BisonWorkspace[]> {
 const MAX_LEAD_PAGES = 100 // safety cap = 10k raw leads per workspace
 export async function getLeads(page = 1, perPage = 100, teamId?: string | number | null): Promise<BisonLead[]> {
   if (page > 1) return []
-  if (teamId != null && teamId !== '') {
-    try {
-      await switchWorkspace(teamId)
-    } catch (e) {
-      console.warn(`[bison.getLeads] switch to team ${teamId} FAILED (key may not be super-admin):`, (e as Error).message)
+  // Serialized switch+fetch so concurrent client loads don't trip Bison's
+  // one-workspace-per-session guard ("Multiple workspaces detected").
+  return withTeam(teamId, async () => {
+    const interested: BisonLead[] = []
+    let scanned = 0
+    for (let p = 1; p <= MAX_LEAD_PAGES; p++) {
+      const data = await bison<{ data?: BisonLead[] }>('GET', '/api/leads', { page: p, per_page: 100 })
+      const batch = Array.isArray(data) ? (data as unknown as BisonLead[]) : data.data ?? []
+      if (!batch.length) break
+      scanned += batch.length
+      for (const l of batch) if ((l as { interested?: boolean }).interested === true) interested.push(l)
+      if (batch.length < 100) break
     }
-  }
-  const interested: BisonLead[] = []
-  let scanned = 0
-  for (let p = 1; p <= MAX_LEAD_PAGES; p++) {
-    const data = await bison<{ data?: BisonLead[] }>('GET', '/api/leads', { page: p, per_page: 100 })
-    const batch = Array.isArray(data) ? (data as unknown as BisonLead[]) : data.data ?? []
-    if (!batch.length) break
-    scanned += batch.length
-    for (const l of batch) if ((l as { interested?: boolean }).interested === true) interested.push(l)
-    if (batch.length < 100) break
-  }
-  console.log(`[bison.getLeads] team=${teamId ?? 'default'} scanned ${scanned} → ${interested.length} interested lead(s)`)
-  return interested
+    console.log(`[bison.getLeads] team=${teamId ?? 'default'} scanned ${scanned} → ${interested.length} interested lead(s)`)
+    return interested
+  })
 }
 
 // Fetch a single lead by ID or email.
@@ -195,12 +246,12 @@ export async function getLeadRepliesByEmail(
   teamId?: string | number | null,
 ): Promise<BisonReply[]> {
   if (!email) return []
-  if (teamId != null && teamId !== '') {
-    try { await switchWorkspace(teamId) } catch { /* fall through on its own workspace */ }
-  }
-  const lead = await getLead(email)
-  if (!lead?.id) return []
-  return getLeadReplies(lead.id)
+  // Serialized so a thread-open doesn't race a list-load's workspace switch.
+  return withTeam(teamId, async () => {
+    const lead = await getLead(email)
+    if (!lead?.id) return []
+    return getLeadReplies(lead.id)
+  })
 }
 
 // ── Replies / sending ────────────────────────────────────────────────────────
@@ -258,7 +309,7 @@ const WEBHOOK_EVENTS = ['lead_interested', 'lead_replied', 'untracked_reply_rece
 interface BisonHook { id: number; name: string; url: string; events: string[] }
 
 export async function registerWebhook(): Promise<{ ok: boolean; reason?: string }> {
-  if (!KEY) return { ok: false, reason: 'no-api-key' }
+  if (!await getBisonKey()) return { ok: false, reason: 'no-api-key' }
   try {
     const list = await bison<{ data?: BisonHook[] }>('GET', '/api/webhook-url').catch(() => ({ data: [] as BisonHook[] }))
     const covered = (list.data ?? []).some(h =>
@@ -280,4 +331,6 @@ export async function registerWebhook(): Promise<{ ok: boolean; reason?: string 
   }
 }
 
-export const BISON_CONFIGURED = KEY.length > 0
+// Best-effort sync flag (env presence). The real key may also come from the
+// Settings override — use getBisonKey() when correctness matters.
+export const BISON_CONFIGURED = ENV_KEY.length > 0
