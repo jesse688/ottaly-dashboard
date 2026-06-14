@@ -132,7 +132,7 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-h
         <button class="prov-tab"        data-prov="outlook" onclick="setProvider('outlook')">Microsoft</button>
         <button class="prov-tab"        data-prov="other"   onclick="setProvider('other')">Other</button>
       </div>
-      <span id="providerNote" style="margin-left:auto;font-size:11px;color:var(--muted)" title="'All' totals match the per-client table exactly (same PlusVibe daily source). PlusVibe has no provider breakdown, so the split across Google/Outlook/Other/Unknown is estimated from the captured email_events recipient-MX ratios and apportioned to the true total. Coverage = share of sends the event log captured.">by recipient MX · sends in period</span>
+      <span id="providerNote" style="margin-left:auto;font-size:11px;color:var(--muted)" title="'All' totals match the per-client table exactly (same Bison daily source). Bison has no provider breakdown, so the split across Google/Outlook/Other/Unknown is estimated from the captured email_events recipient-MX ratios and apportioned to the true total. Coverage = share of sends the event log captured.">by recipient MX · sends in period</span>
     </div>
     <div id="providerCards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.6rem"></div>
   </div>
@@ -463,7 +463,7 @@ function renderClients() {
     // Partial + no rows means the PlusVibe fetch hasn't landed yet (or is failing),
     // not a genuinely empty period — say so, and the background retry will refill.
     em.textContent = _data?.partial
-      ? 'Still caching stats from PlusVibe — this will refresh automatically.'
+      ? 'Still caching stats from Bison — this will refresh automatically.'
       : 'No data for this period.';
     em.style.display = '';
     return;
@@ -554,7 +554,7 @@ function renderClients() {
     const syncing = ready < total ? ` · syncing ${ready}/${total} clients…` : '';
     const label = _provider === 'all' ? 'by recipient provider'
       : `${_provider === 'outlook' ? 'Microsoft' : _provider[0].toUpperCase()+_provider.slice(1)} recipients`;
-    note.textContent = `${label} · from PlusVibe lead data${syncing}`;
+    note.textContent = `${label} · from Bison lead data${syncing}`;
   }
 }
 

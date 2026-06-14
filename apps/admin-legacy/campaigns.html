@@ -372,7 +372,7 @@ function renderOptimisations() {
       </div>
       <div class="opt-actions">
         <span id="optStatus${i}" style="font-size:12px;color:var(--muted)"></span>
-        <button class="btn-apply" onclick="applyOpt(${i})" id="optBtn${i}">Apply in PlusVibe</button>
+        <button class="btn-apply" onclick="applyOpt(${i})" id="optBtn${i}">Apply in Bison</button>
       </div>
     </div>`).join('');
 }
@@ -401,7 +401,7 @@ async function applyOpt(i) {
     st.textContent = '';
   } catch(e) {
     btn.disabled = false;
-    btn.textContent = 'Apply in PlusVibe';
+    btn.textContent = 'Apply in Bison';
     st.textContent = '⚠️ ' + e.message;
     st.style.color = 'var(--red)';
   }

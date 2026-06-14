@@ -1183,10 +1183,10 @@
               <input type="checkbox" id="filterExportedOnly" style="accent-color:#3b82f6"> Exported to Apollo only
             </label>
             <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;">
-              <input type="checkbox" id="filterSentToPV" style="accent-color:#16a34a"> ✅ Sent to PlusVibe
+              <input type="checkbox" id="filterSentToPV" style="accent-color:#16a34a"> ✅ Sent to Bison
             </label>
             <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;">
-              <input type="checkbox" id="filterNotSentToPV" style="accent-color:#f59e0b"> ⏳ Not sent to PlusVibe
+              <input type="checkbox" id="filterNotSentToPV" style="accent-color:#f59e0b"> ⏳ Not sent to Bison
             </label>
           </div>
         </div>
@@ -1391,7 +1391,7 @@
         </button>
         <div style="flex:1;"></div>
         <button class="btn btn-plusvibe" id="pushBtn" onclick="openPushModal()">
-          🚀 Push to PlusVibe
+          🚀 Push to Bison (legacy)
         </button>
         <button class="btn btn-plusvibe" id="pushBisonBtn" onclick="openBisonPushModal()" style="margin-left:8px;background:#7c3aed;">
           🚀 Push to Bison
@@ -1560,7 +1560,7 @@
   <!-- Push to PlusVibe Modal -->
   <div id="pushModal" class="modal">
     <div class="modal-content" style="max-width:500px;">
-      <div class="modal-header">🚀 Push to PlusVibe</div>
+      <div class="modal-header">🚀 Push to Bison</div>
 
       <!-- Step 1: Configure -->
       <div id="pushStep1">
@@ -1618,7 +1618,7 @@
 
       <div class="modal-footer" style="flex-wrap:wrap;gap:.5rem;">
         <button class="btn btn-secondary" onclick="closePushModal()">Cancel</button>
-        <button class="btn btn-ghost" onclick="downloadPushCsv()" title="Download selected contacts as CSV to import manually into PlusVibe">⬇ Download CSV</button>
+        <button class="btn btn-ghost" onclick="downloadPushCsv()" title="Download selected contacts as CSV to import manually into Bison">⬇ Download CSV</button>
         <button id="pushConfirmBtn" class="btn btn-plusvibe" onclick="executePush()">Push Contacts</button>
       </div>
     </div>
@@ -1639,13 +1639,29 @@
           </select>
         </div>
         <div class="form-group">
+          <label>Destination</label>
+          <div style="display:flex;gap:16px;margin-top:4px;">
+            <label style="display:flex;align-items:center;gap:6px;font-weight:normal;cursor:pointer;">
+              <input type="radio" name="bisonPushMode" value="existing" checked onchange="onBisonModeChange()"> Send to existing campaign
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;font-weight:normal;cursor:pointer;">
+              <input type="radio" name="bisonPushMode" value="new" onchange="onBisonModeChange()"> Build new campaign
+            </label>
+          </div>
+        </div>
+        <div class="form-group" id="bisonExistingWrap">
           <label>Campaign</label>
           <select id="bisonCampaign" style="width:100%;padding:10px 12px;">
             <option value="">Select a workspace first</option>
           </select>
         </div>
+        <div class="form-group" id="bisonNewWrap" style="display:none;">
+          <label>New campaign name (Draft)</label>
+          <input type="text" id="bisonNewCampaignName" style="width:100%;padding:10px 12px;" placeholder="New campaign name">
+          <p style="font-size:11px;color:#6b7280;margin:6px 0 0;">Auto-named from your active filters. Created as a Draft — edit/launch it in Bison when ready.</p>
+        </div>
         <div style="background:#fefce8;border:1px solid #fde047;border-radius:8px;padding:14px;margin-top:10px;">
-          <p style="font-size:12px;color:#854d0e;margin:0;">Only safe/verified contacts with keywords + industry are pushed. 60-day per-client cooldown applies (shared with PlusVibe, based on the client filter selection). This path does not verify — contacts must already be verified.</p>
+          <p style="font-size:12px;color:#854d0e;margin:0;">Only safe/verified contacts with keywords + industry are pushed. 60-day per-client cooldown applies (shared with Bison, based on the client filter selection). This path does not verify — contacts must already be verified.</p>
         </div>
         <div id="bisonPushError" style="display:none;background:#fee2e2;color:#dc2626;padding:10px 14px;border-radius:6px;font-size:13px;margin-top:12px;"></div>
       </div>
@@ -3468,7 +3484,7 @@
           if (j.status === 'verifying') {
             statusLabel = j.verifyOnly ? `🔍 Verifying for CSV — ${j.verified||0}/${j.toVerify||0}` : `🔍 Verifying with Reacher — ${j.verified||0}/${j.toVerify||0}`;
           } else if (j.status === 'pushing') {
-            statusLabel = `🚀 Pushing to PlusVibe — ${j.pushed||0} sent`;
+            statusLabel = `🚀 Pushing to Bison — ${j.pushed||0} sent`;
           } else if (j.status === 'n2b_verifying') {
             statusLabel = `🔬 No2Bounce validating ${j.n2bTotal||0} catch-all contacts…`;
           } else if (j.status === 'completed') {
@@ -3604,11 +3620,53 @@
     }
 
     // ── Push to Bison ──────────────────────────────────────────
+    // Build an auto campaign name from the currently-active filters (NOT the
+    // client — the workspace already identifies them). Caps each list to 2
+    // values and appends a short date. Falls back to "New campaign · <date>".
+    function buildCampaignName() {
+      const cap = (arr) => (arr || []).filter(Boolean).slice(0, 2).join(', ');
+      const sel = (key) => (filterDefs[key] && filterDefs[key].selected) || [];
+      const parts = [];
+
+      const industries = cap(sel('industry'));     if (industries) parts.push(industries);
+      const keywords   = cap(sel('keywords'));      if (keywords && !industries) parts.push(keywords);
+      const seniority  = cap(sel('seniority'));     if (seniority) parts.push(seniority);
+      const jobTitles  = cap(sel('jobTitle'));      if (jobTitles) parts.push(jobTitles);
+
+      const empRanges = (typeof _employeeSelected !== 'undefined') ? [..._employeeSelected] : [];
+      if (empRanges.length) parts.push(empRanges.slice(0, 2).join(', '));
+
+      // Location: first non-empty of person then company fields.
+      const locKeys = ['city','state','country','personRegion','companyCity','companyState','companyCountry','companyRegion'];
+      for (const k of locKeys) {
+        const v = cap(sel(k));
+        if (v) { parts.push(v); break; }
+      }
+
+      const d = new Date();
+      const date = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+      const meaningful = parts.filter(Boolean);
+      return (meaningful.length ? meaningful.join(' · ') : 'New campaign') + ' · ' + date;
+    }
+
+    // Toggle modal UI between existing-campaign dropdown and new-campaign name.
+    function onBisonModeChange() {
+      const mode = (document.querySelector('input[name="bisonPushMode"]:checked') || {}).value || 'existing';
+      document.getElementById('bisonExistingWrap').style.display = mode === 'new' ? 'none' : '';
+      document.getElementById('bisonNewWrap').style.display = mode === 'new' ? '' : 'none';
+    }
+
     async function openBisonPushModal() {
       if (_selectedIds.size === 0) { showMessage('Select contacts first', 'error'); return; }
       document.getElementById('bisonPushCount').textContent = _selectedIds.size.toLocaleString();
       document.getElementById('bisonPushError').style.display = 'none';
       document.getElementById('bisonPushModal').classList.add('active');
+
+      // Reset to "existing" mode and regenerate the auto-name from current filters.
+      const modeExisting = document.querySelector('input[name="bisonPushMode"][value="existing"]');
+      if (modeExisting) modeExisting.checked = true;
+      document.getElementById('bisonNewCampaignName').value = buildCampaignName();
+      onBisonModeChange();
 
       const wsEl = document.getElementById('bisonWorkspace');
       const campEl = document.getElementById('bisonCampaign');
@@ -3643,21 +3701,45 @@
 
     async function executeBisonPush() {
       const wsId = document.getElementById('bisonWorkspace').value;
-      const campId = document.getElementById('bisonCampaign').value;
       const errEl = document.getElementById('bisonPushError');
+      const mode = (document.querySelector('input[name="bisonPushMode"]:checked') || {}).value || 'existing';
       if (!wsId) { errEl.textContent = 'Please select a Bison workspace.'; errEl.style.display = ''; return; }
-      if (!campId) { errEl.textContent = 'Please select a campaign.'; errEl.style.display = ''; return; }
+
+      let campId = document.getElementById('bisonCampaign').value;
+      let campName;
+      if (mode === 'new') {
+        campName = document.getElementById('bisonNewCampaignName').value.trim();
+        if (!campName) { errEl.textContent = 'Please enter a campaign name.'; errEl.style.display = ''; return; }
+      } else {
+        if (!campId) { errEl.textContent = 'Please select a campaign.'; errEl.style.display = ''; return; }
+        campName = document.getElementById('bisonCampaign').selectedOptions[0]?.text || campId;
+      }
 
       // Shared cooldown keyed by the client's PV workspace_id: prefer the
       // selected Bison workspace's mapped pv id, fall back to the sidebar filter.
       const wsEl2 = document.getElementById('bisonWorkspace');
       const cooldownWsId = wsEl2.selectedOptions[0]?.dataset.pv
         || document.getElementById('clientFilter')?.value || null;
-      const campName = document.getElementById('bisonCampaign').selectedOptions[0]?.text || campId;
       const btn = document.getElementById('bisonPushConfirmBtn');
-      btn.disabled = true; btn.textContent = 'Pushing…';
+      btn.disabled = true;
       errEl.style.display = 'none';
       try {
+        // Build-new mode: create the Draft campaign first, then push into it.
+        if (mode === 'new') {
+          btn.textContent = 'Creating campaign…';
+          const cr = await fetch('/api/bison/create-campaign', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ws_id: wsId, name: campName }),
+          });
+          const cdata = await cr.json();
+          if (!cr.ok || !cdata.campaign?.id) {
+            errEl.textContent = cdata.error || 'Failed to create campaign'; errEl.style.display = ''; return;
+          }
+          campId = cdata.campaign.id;
+          campName = cdata.campaign.name || campName;
+        }
+
+        btn.textContent = 'Pushing…';
         const r = await fetch('/api/bison/push-contacts', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -3670,7 +3752,11 @@
         closeBisonPushModal();
         const sk = data.skipped || {};
         const skTotal = Object.values(sk).reduce((a, b) => a + (b || 0), 0);
-        showMessage(`✅ Pushed ${data.pushed} contact(s) to Bison${skTotal ? ` (${skTotal} skipped)` : ''}.`, 'success');
+        if (mode === 'new') {
+          showMessage(`✅ Created draft campaign '${campName}' and pushed ${data.pushed} contact(s)${skTotal ? ` (${skTotal} skipped)` : ''}. Launch it in Bison when ready.`, 'success');
+        } else {
+          showMessage(`✅ Pushed ${data.pushed} contact(s) to Bison${skTotal ? ` (${skTotal} skipped)` : ''}.`, 'success');
+        }
       } catch (err) {
         errEl.textContent = err.message; errEl.style.display = '';
       } finally {

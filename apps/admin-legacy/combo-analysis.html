@@ -133,7 +133,7 @@ tr:hover td{background:#f7f8fb}
 
   <div id="coverageBar" class="coverage-bar" style="display:none"></div>
   <div id="approxBanner" style="display:none;background:#FFF7ED;border:1px solid #FED7AA;border-radius:8px;padding:.6rem 1rem;margin-bottom:.75rem;font-size:12px;color:#92400E">
-    ⚠️ <strong>Some data is estimated</strong> — built from workspace-level PlusVibe stats + mailbox type distribution. Exact per-send data accumulates automatically going forward.
+    ⚠️ <strong>Some data is estimated</strong> — built from workspace-level Bison stats + mailbox type distribution. Exact per-send data accumulates automatically going forward.
   </div>
 
   <!-- Best / Worst -->
@@ -235,7 +235,7 @@ function render() {
   document.getElementById('approxBanner').style.display = _data.hasApprox ? 'block' : 'none';
 
   if (!rows.length) {
-    document.getElementById('matrixWrap').innerHTML = '<div class="spinner">No data — click <b>Historical Backfill</b> to load from PlusVibe, or wait for webhook events to accumulate</div>';
+    document.getElementById('matrixWrap').innerHTML = '<div class="spinner">No data — click <b>Historical Backfill</b> to load from Bison, or wait for webhook events to accumulate</div>';
     return;
   }
 
@@ -369,7 +369,7 @@ function renderTable(rows) {
 
 /* ─── Historical backfill ─── */
 async function runHistoricalBackfill() {
-  if (!confirm('Build historical combo data from PlusVibe API?\n\nThis fetches up to 90 days of workspace stats and distributes them proportionally by mailbox type and contact provider. Takes ~30 seconds.\n\nData is approximate but accurate enough for directional analysis.')) return;
+  if (!confirm('Build historical combo data from Bison API?\n\nThis fetches up to 90 days of workspace stats and distributes them proportionally by mailbox type and contact provider. Takes ~30 seconds.\n\nData is approximate but accurate enough for directional analysis.')) return;
   const btn = document.querySelector('button[onclick="runHistoricalBackfill()"]');
   btn.disabled = true; btn.textContent = 'Running…';
   try {

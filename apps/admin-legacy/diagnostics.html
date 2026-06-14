@@ -537,11 +537,11 @@ function runDiagnosticRules(date) {
   // R2: PlusVibe API latency spike
   if (latency !== null && latency > 500) {
     hypotheses.push({
-      label: 'PlusVibe API Degradation',
+      label: 'Bison API Degradation',
       icon: '🔌',
       confidence: latency > 1000 ? 0.88 : 0.65,
       evidence: `API latency ${Math.round(latency)}ms (normal < 500ms).${rrDrop > 0.2 ? ` Reply rate dropped ${(rrDrop*100).toFixed(0)}%.` : ''}`,
-      action: 'Check PlusVibe status page. Raises send delays — not a campaign issue.',
+      action: 'Check Bison status page. Raises send delays — not a campaign issue.',
       actionClass: 'warning',
     });
   }

@@ -141,7 +141,7 @@ function render() {
   document.getElementById('summary').style.display  = 'flex';
   document.getElementById('generatedAt').textContent = `Generated ${new Date(generated_at).toLocaleString()}`;
   document.getElementById('assumptions').innerHTML =
-    `Capacity = sum of each mailbox's <b>actual PlusVibe daily_limit</b> × <b>${assumptions.working_days_per_month}</b> working days/month. Avg Leads/mo and Avg Sent/mo are <b>rolling 3-month averages</b> (falls back to lifetime if recent activity is too thin).`;
+    `Capacity = sum of each mailbox's <b>actual Bison daily_limit</b> × <b>${assumptions.working_days_per_month}</b> working days/month. Avg Leads/mo and Avg Sent/mo are <b>rolling 3-month averages</b> (falls back to lifetime if recent activity is too thin).`;
 
   // Sort
   const sorted = active.slice().sort((a, b) => {

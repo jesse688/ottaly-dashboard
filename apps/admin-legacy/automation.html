@@ -80,7 +80,7 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text)}
         <button class="btn btn-primary" onclick="startRun()">Run Pipeline</button>
         <button class="btn btn-ghost" onclick="loadRuns()">Refresh</button>
       </div>
-      <p class="hint" style="margin-top:1rem">Dry run checks server wiring without logging into Apollo. Live runs need Apollo credentials, a PlusVibe key, and optional Google Drive verifier settings in EasyPanel environment variables.</p>
+      <p class="hint" style="margin-top:1rem">Dry run checks server wiring without logging into Apollo. Live runs need Apollo credentials, a Bison key, and optional Google Drive verifier settings in EasyPanel environment variables.</p>
     </section>
 
     <section class="panel">
@@ -113,7 +113,7 @@ async function loadBrowserStatus(){
   const data=await r.json();
   automationBrowserUrl=data.url||'';
   document.getElementById('browserStatus').textContent=data.running
-    ? `Running on ${data.url}. Use this to log into Apollo/Drive/PlusVibe once.`
+    ? `Running on ${data.url}. Use this to log into Apollo/Drive/Bison once.`
     : `Stopped. Start it, then open the browser.`;
   const log=document.getElementById('browserLog');
   log.textContent=data.log_tail||'';

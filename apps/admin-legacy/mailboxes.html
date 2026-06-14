@@ -861,7 +861,7 @@ async function bulkApply(field) {
 async function bulkRemove() {
   if (!selected.size) return;
   const n = selected.size;
-  if (!confirm(`Remove ${n} mailbox${n === 1 ? '' : 'es'} from the dashboard?\n\nThey will be hidden here but remain in PlusVibe. You can restore them by contacting an admin.`)) return;
+  if (!confirm(`Remove ${n} mailbox${n === 1 ? '' : 'es'} from the dashboard?\n\nThey will be hidden here but remain in Bison. You can restore them by contacting an admin.`)) return;
   try {
     const r = await fetch('/api/mailboxes/bulk-remove', {
       method: 'POST', headers: {'Content-Type':'application/json'},

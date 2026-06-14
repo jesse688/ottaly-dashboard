@@ -1002,7 +1002,7 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
         }
 
         if (staleCount > 0) {
-            alerts.push({ cls: 'red', msg: `🔴 <strong>Action required:</strong> ${staleCount} profiled or high-bounce template${staleCount > 1 ? 's' : ''} still sending — pause ${staleCount > 1 ? 'these variants' : 'this variant'} in PlusVibe. <a href="/copy.html" style="color:inherit;text-decoration:underline">See flagged copy →</a>` });
+            alerts.push({ cls: 'red', msg: `🔴 <strong>Action required:</strong> ${staleCount} profiled or high-bounce template${staleCount > 1 ? 's' : ''} still sending — pause ${staleCount > 1 ? 'these variants' : 'this variant'} in Bison. <a href="/copy.html" style="color:inherit;text-decoration:underline">See flagged copy →</a>` });
         }
 
         document.getElementById('alerts').innerHTML = alerts.map(a =>

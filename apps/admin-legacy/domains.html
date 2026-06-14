@@ -354,7 +354,7 @@ function render() {
 }
 
 async function removeDomain(domain) {
-  if (!confirm(`Remove ${domain} from the dashboard?\n\nThe domain stays in PlusVibe, but it won't show up here and won't be re-added on the next auto-refresh.`)) return;
+  if (!confirm(`Remove ${domain} from the dashboard?\n\nThe domain stays in Bison, but it won't show up here and won't be re-added on the next auto-refresh.`)) return;
   try {
     const r = await fetch('/api/domains/' + encodeURIComponent(domain), { method: 'DELETE' });
     if (!r.ok) { toast('Remove failed'); return; }
