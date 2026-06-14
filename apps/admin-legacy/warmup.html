@@ -64,7 +64,7 @@ tr:hover td{background:#FAFBFE}
     </div>
     <div style="display:flex;gap:.5rem;align-items:center">
       <span id="meta" class="muted" style="font-size:12px"></span>
-      <button class="btn" id="refreshBtn" onclick="load()">↻ Refresh</button>
+      <button class="btn" id="refreshBtn" onclick="forceRefresh()">↻ Refresh</button>
     </div>
   </div>
 
@@ -125,6 +125,12 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true})).then(s=>{
   load();
 });
 
+let _pollTimer = null;
+// Force the server to rebuild its cache, then poll for the fresh result.
+async function forceRefresh() {
+  try { await fetch('/api/warmup/refresh', { method: 'POST' }); } catch {}
+  load();
+}
 async function load() {
   const btn = document.getElementById('refreshBtn');
   btn.disabled = true; btn.textContent = '↻ Loading…';
@@ -133,9 +139,23 @@ async function load() {
     const r = await fetch('/api/warmup');
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || 'Failed to load');
+
+    // First-ever load builds the cache in the background (slow — 22 workspaces).
+    // The API returns warming:true with no data; poll until it's ready.
+    if (d.warming && (!d.mailboxes || !d.mailboxes.length)) {
+      document.getElementById('meta').textContent = 'Building warmup data from Bison… (first load can take a minute)';
+      document.getElementById('rows').innerHTML =
+        '<tr><td colspan="9" style="text-align:center;padding:2rem" class="muted">Fetching warmup stats across all workspaces…</td></tr>';
+      if (d.error) document.getElementById('err').textContent = 'Last refresh error: ' + d.error;
+      clearTimeout(_pollTimer);
+      _pollTimer = setTimeout(load, 5000);
+      return;
+    }
+
     DATA = d.mailboxes || [];
     renderSummary(d.summary || {});
-    document.getElementById('meta').textContent = `${d.start} → ${d.end} · ${DATA.length} mailboxes`;
+    const age = d.lastRun ? ` · updated ${new Date(d.lastRun).toLocaleTimeString()}` : '';
+    document.getElementById('meta').textContent = `${d.start} → ${d.end} · ${DATA.length} mailboxes${age}`;
     render();
   } catch (e) {
     document.getElementById('err').textContent = 'Could not load warmup data: ' + e.message;
@@ -224,7 +244,7 @@ async function bulkWarmup(action){
       if(!r.ok) throw new Error(d.error || `${action} failed`);
     }
     clearSel();
-    await load();
+    await forceRefresh();
   } catch(e){ document.getElementById('err').textContent = `Bulk ${action} failed: ${e.message}`; }
 }
 </script>

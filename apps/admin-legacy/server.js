@@ -8240,67 +8240,102 @@ function warmupHealth(a) {
   return 'unknown'; // score 0 / just started
 }
 
+// Gather warmup data across all workspaces (SLOW — 22 ws × paginated Bison calls,
+// serialized through the Bison mutex). Must run in the background, never inline on
+// a page request, or the request times out (this is why the page "didn't work").
+async function gatherWarmupData() {
+  const today = serverDateString(new Date());
+  const start = serverDateString(new Date(Date.now() - 10 * 86400000));
+  const end   = today;
+  const pvByTeamId = new Map(BISON_TEAMS.map(t => [String(t.team_id), t]));
+  const wsRaw = await bisonReq('/api/workspaces/v1.1');
+  const wsList = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.data || []);
+  const inactive = inactiveWorkspaceIds();
+
+  const mailboxes = [];
+  const seen = new Set();
+  for (const w of wsList) {
+    const mapped = pvByTeamId.get(String(w.id));
+    const pv = mapped ? mapped.pv : String(w.id);
+    if (inactive.has(pv)) continue;
+    const name = mapped ? mapped.name : (w.name || `Workspace ${w.id}`);
+    try {
+      const list = await bisonListWarmupSenderEmails(String(w.id), start, end);
+      for (const a of list) {
+        const email = (a.email || a.name || '').toString().trim().toLowerCase();
+        if (!email.includes('@') || seen.has(email)) continue;
+        seen.add(email);
+        mailboxes.push({
+          email,
+          domain: a.domain || email.split('@')[1],
+          workspace_id: pv,
+          workspace_name: name,
+          bison_team_id: String(w.id),
+          account_id: a.id != null ? String(a.id) : null,
+          warmup_score: Number(a.warmup_score ?? 0),
+          sent: Number(a.warmup_emails_sent ?? 0),
+          replies: Number(a.warmup_replies_received ?? 0),
+          saved_from_spam: Number(a.warmup_emails_saved_from_spam ?? 0),
+          bounces_received: Number(a.warmup_bounces_received_count ?? 0),
+          bounces_caused: Number(a.warmup_bounces_caused_count ?? 0),
+          disabled_for_bouncing: Number(a.warmup_disabled_for_bouncing_count ?? 0),
+          health: warmupHealth(a),
+        });
+      }
+    } catch (err) {
+      console.warn(`[warmup] ${name} (team ${w.id}) failed:`, err.message);
+    }
+  }
+
+  const summary = { total: mailboxes.length, healthy: 0, low_score: 0, bouncing: 0, disabled_bouncing: 0, unknown: 0 };
+  let scoreSum = 0, scoreN = 0;
+  for (const m of mailboxes) {
+    summary[m.health] = (summary[m.health] || 0) + 1;
+    if (m.warmup_score > 0) { scoreSum += m.warmup_score; scoreN++; }
+  }
+  summary.avg_score = scoreN ? Math.round(scoreSum / scoreN) : 0;
+  summary.at_risk = summary.low_score + summary.bouncing + summary.disabled_bouncing;
+
+  return { start, end, summary, mailboxes };
+}
+
+let _warmupCache = { data: null, lastRun: null, running: false, error: null };
+async function refreshWarmupCache() {
+  if (_warmupCache.running || !getBisonKey()) return;
+  _warmupCache.running = true;
+  try {
+    const data = await gatherWarmupData();
+    _warmupCache.data = data;
+    _warmupCache.lastRun = new Date().toISOString();
+    _warmupCache.error = null;
+    console.log(`[warmup] cache refreshed — ${data.mailboxes.length} mailbox(es)`);
+  } catch (err) {
+    _warmupCache.error = err.message;
+    console.error('[warmup] refresh failed:', err.message);
+  } finally {
+    _warmupCache.running = false;
+  }
+}
+// First run 45s after boot (after mailbox cache), then every 30 min.
+setTimeout(refreshWarmupCache, 45000);
+setInterval(refreshWarmupCache, 30 * 60 * 1000);
+
 app.get('/api/warmup', requireSession, async (req, res) => {
   if (!getBisonKey()) return res.status(400).json({ error: 'No Bison key configured' });
-  const today = serverDateString(new Date());
-  const start = String(req.query.start || serverDateString(new Date(Date.now() - 10 * 86400000)));
-  const end   = String(req.query.end || today);
-  try {
-    // Build the same workspace list the mailbox page uses (live Bison + PV map).
-    const pvByTeamId = new Map(BISON_TEAMS.map(t => [String(t.team_id), t]));
-    const wsRaw = await bisonReq('/api/workspaces/v1.1');
-    const wsList = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.data || []);
-    const inactive = inactiveWorkspaceIds();
-
-    const mailboxes = [];
-    const seen = new Set();
-    for (const w of wsList) {
-      const mapped = pvByTeamId.get(String(w.id));
-      const pv = mapped ? mapped.pv : String(w.id);
-      if (inactive.has(pv)) continue;
-      const name = mapped ? mapped.name : (w.name || `Workspace ${w.id}`);
-      try {
-        const list = await bisonListWarmupSenderEmails(String(w.id), start, end);
-        for (const a of list) {
-          const email = (a.email || a.name || '').toString().trim().toLowerCase();
-          if (!email.includes('@') || seen.has(email)) continue;
-          seen.add(email);
-          mailboxes.push({
-            email,
-            domain: a.domain || email.split('@')[1],
-            workspace_id: pv,
-            workspace_name: name,
-            bison_team_id: String(w.id),
-            account_id: a.id != null ? String(a.id) : null,
-            warmup_score: Number(a.warmup_score ?? 0),
-            sent: Number(a.warmup_emails_sent ?? 0),
-            replies: Number(a.warmup_replies_received ?? 0),
-            saved_from_spam: Number(a.warmup_emails_saved_from_spam ?? 0),
-            bounces_received: Number(a.warmup_bounces_received_count ?? 0),
-            bounces_caused: Number(a.warmup_bounces_caused_count ?? 0),
-            disabled_for_bouncing: Number(a.warmup_disabled_for_bouncing_count ?? 0),
-            health: warmupHealth(a),
-          });
-        }
-      } catch (err) {
-        console.warn(`[warmup] ${name} (team ${w.id}) failed:`, err.message);
-      }
-    }
-
-    // Summary: counts per health bucket + averages.
-    const summary = { total: mailboxes.length, healthy: 0, low_score: 0, bouncing: 0, disabled_bouncing: 0, unknown: 0 };
-    let scoreSum = 0, scoreN = 0;
-    for (const m of mailboxes) {
-      summary[m.health] = (summary[m.health] || 0) + 1;
-      if (m.warmup_score > 0) { scoreSum += m.warmup_score; scoreN++; }
-    }
-    summary.avg_score = scoreN ? Math.round(scoreSum / scoreN) : 0;
-    summary.at_risk = summary.low_score + summary.bouncing + summary.disabled_bouncing;
-
-    res.json({ start, end, summary, mailboxes });
-  } catch (err) {
-    res.status(502).json({ error: err.message });
+  // Serve the cache instantly. If it's never been built, kick off a refresh and
+  // tell the page it's warming (it polls), rather than blocking the request for
+  // minutes while we fetch 22 workspaces.
+  if (_warmupCache.data) {
+    return res.json({ ...(_warmupCache.data), lastRun: _warmupCache.lastRun, warming: _warmupCache.running });
   }
+  if (!_warmupCache.running) refreshWarmupCache().catch(() => {});
+  res.json({
+    warming: true,
+    lastRun: null,
+    error: _warmupCache.error,
+    summary: { total: 0, healthy: 0, low_score: 0, bouncing: 0, disabled_bouncing: 0, unknown: 0, avg_score: 0, at_risk: 0 },
+    mailboxes: [],
+  });
 });
 
 // Enable / disable warmup for a set of mailboxes (Bison sender-email IDs).
@@ -8324,6 +8359,12 @@ async function warmupSetState(req, res, action) {
 }
 app.post('/api/warmup/enable',  requireSession, (req, res) => warmupSetState(req, res, 'enable'));
 app.post('/api/warmup/disable', requireSession, (req, res) => warmupSetState(req, res, 'disable'));
+
+// Force a warmup cache rebuild (after enable/disable, or manual refresh button).
+app.post('/api/warmup/refresh', requireSession, (req, res) => {
+  refreshWarmupCache().catch(() => {});
+  res.json({ ok: true, warming: true });
+});
 
 app.get('/warmup',      (req, res) => res.sendFile(path.join(__dirname, 'warmup.html')));
 app.get('/warmup.html', (req, res) => res.sendFile(path.join(__dirname, 'warmup.html')));
