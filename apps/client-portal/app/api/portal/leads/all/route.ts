@@ -53,7 +53,7 @@ export async function GET() {
               l.raw->>'linkedin_person_url'  AS linkedin_url,
               l.raw->>'linkedin_company_url' AS linkedin_company_url,
               l.raw->>'phone_number'         AS phone_number,
-              ld.deal_value, ld.notes AS deal_notes, ld.client_label,
+              ld.deal_value, ld.notes AS deal_notes, ld.client_label, ld.first_responded_at,
               pd.status AS dispute_status, pd.reason AS dispute_reason, pd.admin_note AS dispute_admin_note,
               EXISTS (
                 SELECT 1 FROM portal_emails e

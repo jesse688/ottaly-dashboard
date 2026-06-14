@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode, type ChangeEvent, type KeyboardEvent } from 'react'
 import { Logo } from '@/app/components/Logo'
 import { WarmupBar } from '@/app/components/WarmupBar'
+import { SpeedTimer } from '@/app/components/SpeedTimer'
 import { useRouter } from 'next/navigation'
 
 interface Lead {
@@ -14,6 +15,7 @@ interface Lead {
   status: string
   label: string | null
   first_replied_at: string | null
+  first_responded_at: string | null
   created_at: string | null
   campaign_name: string | null
   job_title: string | null
@@ -545,6 +547,16 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
                       {l.locked
                         ? <p className="text-xs text-[#b8860b] font-medium truncate">🔒 Top up to unlock</p>
                         : <p className="text-xs text-gray-500 truncate">{l.company_name ?? l.email}</p>}
+                      {!l.locked && l.first_replied_at && (
+                        <div className="mt-1.5">
+                          <SpeedTimer
+                            repliedAt={l.first_replied_at}
+                            respondedAt={l.first_responded_at}
+                            done={l.has_sent || l.replied_off}
+                            size="sm"
+                          />
+                        </div>
+                      )}
                       {(cl || l.dispute_status === 'pending') && !l.locked && (
                         <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                         {cl && <span className={`inline-flex text-[10px] font-medium px-1.5 py-0.5 rounded ${COLOR_BADGE[cl.color] ?? 'bg-purple-100 text-purple-700'}`}>{cl.name}</span>}
@@ -587,7 +599,17 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
                 </button>
                 <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 ${av(selected.id)}`}>{initials(selected)}</div>
                 <div className="min-w-0">
-                  <p className="font-heading text-base font-semibold text-[#050c29] truncate tracking-tight">{fullName(selected)}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="font-heading text-base font-semibold text-[#050c29] truncate tracking-tight">{fullName(selected)}</p>
+                    {selected.first_replied_at && (
+                      <SpeedTimer
+                        repliedAt={selected.first_replied_at}
+                        respondedAt={selected.first_responded_at}
+                        done={selected.has_sent || selected.replied_off}
+                        size="lg"
+                      />
+                    )}
+                  </div>
                   {selected.email && <p className="text-xs text-gray-500 truncate">{selected.email}</p>}
                 </div>
                 {/* Replied off-dashboard: moves a new lead out of Unread */}
