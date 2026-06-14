@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode, type ChangeEvent, type KeyboardEvent } from 'react'
 import { Logo } from '@/app/components/Logo'
+import { WarmupBar } from '@/app/components/WarmupBar'
 import { useRouter } from 'next/navigation'
 
 interface Lead {
@@ -443,6 +444,8 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
           <button onClick={handleLogout} className="hidden md:block text-white/70 hover:text-white text-sm">Sign out</button>
         </div>
       </header>
+
+      <WarmupBar />
 
       <div className="flex-1 flex overflow-hidden relative">
         {/* Mobile backdrop for the sidebar drawer */}

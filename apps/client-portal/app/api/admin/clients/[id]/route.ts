@@ -20,6 +20,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     lowLeadsThreshold?: number
     topupBuckets?: { leads: number; pricePerLead: number }[]
     minTopup?: number
+    warmupStartDate?: string | null
+    warmupDays?: number
   }
 
   const sets: string[] = []
@@ -34,6 +36,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const newCode = body.code ?? body.password
   if (newCode !== undefined) { values.push(hashCode(newCode)); sets.push(`password_hash = $${values.length}`) }
   if (body.costPerLead !== undefined) { values.push(body.costPerLead); sets.push(`cost_per_lead = $${values.length}`) }
+  if (body.warmupStartDate !== undefined) { values.push(body.warmupStartDate || null); sets.push(`warmup_start_date = $${values.length}`) }
+  if (body.warmupDays !== undefined) { values.push(Math.max(1, Math.floor(Number(body.warmupDays) || 14))); sets.push(`warmup_days = $${values.length}`) }
   if (body.currency !== undefined) { values.push(body.currency); sets.push(`currency = $${values.length}`) }
   if (body.spendVisibility !== undefined) { values.push(body.spendVisibility); sets.push(`spend_visibility = $${values.length}`) }
   if (body.lowLeadsThreshold !== undefined) { values.push(Math.max(0, Math.floor(Number(body.lowLeadsThreshold)))); sets.push(`low_leads_threshold = $${values.length}`) }

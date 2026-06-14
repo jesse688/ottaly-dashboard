@@ -106,6 +106,11 @@ async function runMigration() {
       // bills leads delivered AFTER this timestamp — pre-reset/backfilled leads
       // are never re-billed. Auto-charging stays ON for new leads going forward.
       `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS charges_reset_at TIMESTAMPTZ`,
+      // Email-warmup window shown to the client as a progress bar ("how much
+      // longer until leads start?"). Admin sets the start date + duration; when
+      // start is null the bar is hidden. Default 14-day warmup.
+      `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS warmup_start_date DATE`,
+      `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS warmup_days INTEGER NOT NULL DEFAULT 14`,
       `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFAULT 'GBP'`,
       // Spend visibility to the client: 'auto' (reveal spend+ROI only when ROI>0),
       // 'hidden' (never show money/ROI — outcomes only), 'always' (full transparency).

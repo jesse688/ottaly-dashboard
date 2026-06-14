@@ -13,6 +13,8 @@ interface PortalClient {
   spend_visibility?: string
   topup_buckets?: Bucket[]
   min_topup?: number
+  warmup_start_date?: string | null
+  warmup_days?: number | null
 }
 interface Workspace { id: string; name: string; active_campaigns: number }
 interface Dispute {
@@ -80,13 +82,15 @@ export function AdminClientsClient() {
 
   // Settings modal (labels + fields + balance)
   const [settingsClient, setSettingsClient]   = useState<PortalClient | null>(null)
-  const [settingsTab, setSettingsTab]         = useState<'labels'|'fields'|'balance'|'topups'>('labels')
+  const [settingsTab, setSettingsTab]         = useState<'labels'|'fields'|'balance'|'topups'|'warmup'>('labels')
   const [bucketEdit, setBucketEdit]           = useState<Bucket[]>([])
   const [minEdit, setMinEdit]                 = useState('10')
   const [labelData, setLabelData]             = useState<{ labels: { label: string; count: number }[]; hiddenLabels: string[] } | null>(null)
   const [fieldData, setFieldData]             = useState<{ hiddenFields: string[] } | null>(null)
   const [ledgerData, setLedgerData]           = useState<{ balance: number; ledger: LedgerEntry[] } | null>(null)
   const [cplEdit, setCplEdit]                 = useState('')
+  const [warmStart, setWarmStart]             = useState('')
+  const [warmDays, setWarmDays]               = useState('14')
   const [entryForm, setEntryForm]             = useState({ type: 'topup', amount: '', note: '' })
 
   // Notifications
@@ -288,6 +292,8 @@ export function AdminClientsClient() {
   async function openSettings(c: PortalClient) {
     setSettingsClient(c); setSettingsTab('labels'); setLabelData(null); setFieldData(null); setLedgerData(null)
     setCplEdit(String(Number(c.cost_per_lead ?? 0))); setEntryForm({ type: 'topup', amount: '', note: '' })
+    setWarmStart(c.warmup_start_date ? String(c.warmup_start_date).slice(0, 10) : '')
+    setWarmDays(String(c.warmup_days ?? 14))
     setBucketEdit(Array.isArray(c.topup_buckets) ? c.topup_buckets : [])
     setMinEdit(String(c.min_topup ?? 10))
     const [lr, fr] = await Promise.all([
@@ -313,6 +319,13 @@ export function AdminClientsClient() {
     await fetch(`/api/admin/clients/${settingsClient.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ costPerLead: cpl }) })
     setSettingsClient({ ...settingsClient, cost_per_lead: cpl })
     fetch('/api/admin/clients').then(r => r.json()).then(d => { if (Array.isArray(d)) setClients(d) }).catch(() => {})
+  }
+  async function saveWarmup() {
+    if (!settingsClient) return
+    const days = Math.max(1, Math.floor(Number(warmDays) || 14))
+    await fetch(`/api/admin/clients/${settingsClient.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ warmupStartDate: warmStart || null, warmupDays: days }) })
+    setSettingsClient({ ...settingsClient, warmup_start_date: warmStart || null, warmup_days: days })
+    alert(warmStart ? `Warmup set: starts ${warmStart}, ${days} days.` : 'Warmup cleared (bar hidden for client).')
   }
   async function saveBuckets() {
     if (!settingsClient) return
@@ -1039,7 +1052,7 @@ export function AdminClientsClient() {
             </div>
             {/* Modal tabs */}
             <div className="flex px-5 mt-3 border-b border-gray-100">
-              {([{ key:'labels', label:'Label Visibility' },{ key:'fields', label:'Field Visibility' },{ key:'balance', label:'Balance' },{ key:'topups', label:'Top-up buckets' }] as { key:'labels'|'fields'|'balance'|'topups'; label:string }[]).map(t => (
+              {([{ key:'labels', label:'Label Visibility' },{ key:'fields', label:'Field Visibility' },{ key:'balance', label:'Balance' },{ key:'topups', label:'Top-up buckets' },{ key:'warmup', label:'Warmup' }] as { key:'labels'|'fields'|'balance'|'topups'|'warmup'; label:string }[]).map(t => (
                 <button key={t.key} onClick={() => { setSettingsTab(t.key); if (t.key === 'balance' && settingsClient) loadLedger(settingsClient.id) }} className={`mr-4 pb-2.5 text-sm font-medium border-b-2 transition-colors ${settingsTab === t.key ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
                   {t.label}
                 </button>
@@ -1193,6 +1206,30 @@ export function AdminClientsClient() {
                   <button onClick={() => setBucketEdit(bs => [...bs, { leads: 10, pricePerLead: 0 }])} className="text-xs text-indigo-600 hover:text-indigo-800 font-medium mb-4">+ Add bucket</button>
                   <div className="flex justify-end">
                     <button onClick={saveBuckets} className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg">Save buckets</button>
+                  </div>
+                </>
+              )}
+              {settingsTab === 'warmup' && (
+                <>
+                  <p className="text-xs text-gray-500 mb-3">Set the client&apos;s email-warmup window. They&apos;ll see a progress bar (&quot;warming up → campaign live&quot;) at the top of their portal. Leave the start date empty to hide it.</p>
+                  <div className="space-y-3 max-w-sm">
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">Warmup start date</label>
+                      <input type="date" value={warmStart} onChange={e => setWarmStart(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">Warmup duration (days)</label>
+                      <input type="number" min="1" value={warmDays} onChange={e => setWarmDays(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" />
+                    </div>
+                    {warmStart && (() => {
+                      const d = Math.max(1, Math.floor(Number(warmDays) || 14))
+                      const end = new Date(warmStart); end.setDate(end.getDate() + d)
+                      return <p className="text-xs text-gray-400">Goes live on <span className="font-medium text-gray-600">{end.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'})}</span> ({d} days).</p>
+                    })()}
+                    <div className="flex gap-2">
+                      <button onClick={saveWarmup} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg">Save warmup</button>
+                      {warmStart && <button onClick={() => { setWarmStart(''); }} className="px-3 py-2 text-sm text-gray-500 hover:text-gray-700">Clear</button>}
+                    </div>
                   </div>
                 </>
               )}
