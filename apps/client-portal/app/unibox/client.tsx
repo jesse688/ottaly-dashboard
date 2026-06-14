@@ -871,8 +871,23 @@ function RichReply({ toEmail, placeholderName, sending, statusMsg, seed, onSend 
     setChars(t.length)
   }
   function exec(cmd: string, value?: string) {
+    const el = ref.current
+    if (!el) return
+    // The command acts on the current selection INSIDE the editable, so focus
+    // first. If nothing in the editor is selected (e.g. user clicked a toolbar
+    // button before clicking into the box), drop the caret at the end so list /
+    // formatting commands have somewhere to apply — otherwise execCommand no-ops.
+    const sel = window.getSelection()
+    const inEditor = sel && sel.rangeCount > 0 && el.contains(sel.anchorNode)
+    el.focus()
+    if (!inEditor) {
+      const range = document.createRange()
+      range.selectNodeContents(el)
+      range.collapse(false)
+      sel?.removeAllRanges()
+      sel?.addRange(range)
+    }
     document.execCommand(cmd, false, value)
-    ref.current?.focus()
     syncState()
   }
   function onInput() { syncState() }

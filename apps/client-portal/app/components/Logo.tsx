@@ -1,17 +1,18 @@
 'use client'
 
 import { useState } from 'react'
-import logoNavy from '@/public/ottaly-logo.svg'
-import logoWhite from '@/public/ottaly-logo-dark.svg'
 
-// The real Ottaly logo (otter mark + "OTTALY · PREDICTABLE PIPELINE" wordmark),
-// imported as a bundled static asset so it can never 404 (a hardcoded /path
-// would silently fall back to the text wordmark if the deploy was stale). Falls
-// back to a clean text wordmark only if the image genuinely fails to render.
+// The logo files live in /public and are served at these URLs. We reference them
+// as plain public paths (NOT `import logo from '...svg'`, which Next turns into a
+// StaticImageData object — passing that object to <img src> renders
+// "[object Object]" and the image breaks). Falls back to a text wordmark only if
+// the file genuinely 404s.
+const SRC = { navy: '/ottaly-logo.svg', white: '/ottaly-logo-dark.svg' }
+
 export function Logo({ size = 'sm', onDark = false }: { size?: 'sm' | 'lg'; onDark?: boolean }) {
   const [imgOk, setImgOk] = useState(true)
   const h = size === 'lg' ? 'h-12' : 'h-8'
-  const src = (onDark ? logoWhite : logoNavy) as unknown as string
+  const src = onDark ? SRC.white : SRC.navy
 
   if (imgOk) {
     return (
