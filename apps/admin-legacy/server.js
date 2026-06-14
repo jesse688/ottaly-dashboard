@@ -852,14 +852,52 @@ function claudeWriteDecision(perms, method, path) {
   return { ok: true, capability: cap.id };
 }
 
+// ── Claude write ARM (PIN-gated, one-shot) ───────────────────────────
+// On top of the capability toggles, every Claude write must be individually
+// "armed" by someone who knows the PIN. Arming sets a single-use token in
+// app_settings; the first write consumes it and re-locks. This stops other team
+// members (who share the MCP connection) from making Claude write anything —
+// they can read freely but can't arm. The PIN lives only in the DB (hashed) and
+// in the admin's head — never in the MCP config or anywhere Claude can read it.
+const CLAUDE_ARM_TTL_MS = 2 * 60 * 1000; // an unused arm goes stale after 2 min
+// PIN that must be entered to arm a Claude write. Defaults to '2025'; override
+// with CLAUDE_ARM_PIN in the environment. Kept server-side only — never sent to
+// the browser, never in the MCP config.
+const CLAUDE_ARM_PIN = String(process.env.CLAUDE_ARM_PIN || '2025');
+
+async function getClaudeArm(pgdb) {
+  if (!pgdb) return { armed: false };
+  return await pgdb.getSetting('claude_write_arm', { armed: false });
+}
+
+// True only if there is a fresh, unconsumed one-shot arm.
+function armIsLive(arm) {
+  return !!(arm && arm.armed && arm.armed_at && (nowMs() - arm.armed_at) < CLAUDE_ARM_TTL_MS);
+}
+function nowMs() { return Date.now(); }
+
 // Gate applied to write routes: if the request carries the Claude marker header,
-// it must satisfy claudeWriteDecision. Non-Claude operators are unaffected.
+// it must (1) satisfy the capability toggles AND (2) consume a live PIN arm.
+// Non-Claude operators are unaffected.
 async function enforceClaudePerms(req, res, next) {
   if (req.headers['x-claude-write'] !== '1') return next();
+  const pgdb = req.app.locals.pgDb;
   try {
-    const perms = await getClaudePerms(req.app.locals.pgDb);
+    const perms = await getClaudePerms(pgdb);
     const decision = claudeWriteDecision(perms, req.method, req.path);
     if (!decision.ok) return res.status(403).json({ error: decision.reason, claudeBlocked: true });
+
+    // Capability allowed — now require a fresh one-shot arm.
+    const arm = await getClaudeArm(pgdb);
+    if (!armIsLive(arm)) {
+      return res.status(403).json({
+        error: 'Claude writes are LOCKED. Ask the PIN holder to arm one write in the dashboard (Settings → Claude Access → Arm), then retry.',
+        claudeBlocked: true, claudeLocked: true,
+      });
+    }
+    // Consume the arm so exactly one write goes through.
+    if (pgdb) await pgdb.setSetting('claude_write_arm', { armed: false, consumed_at: nowMs() });
+    console.log(`[claude-arm] consumed for ${req.method} ${req.path}`);
     next();
   } catch (err) {
     return res.status(500).json({ error: 'Claude permission check failed: ' + err.message });
@@ -2037,6 +2075,47 @@ app.post('/api/admin/claude-permissions', requireAdmin, async (req, res) => {
       capabilities: CLAUDE_CAPABILITIES.map((c) => ({
         id: c.id, label: c.label, group: c.group, risk: c.risk, desc: c.desc,
         methods: c.methods, endpointCount: c.prefixes.length, enabled: !!next[c.id] })) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Claude write ARM (PIN-gated, one-shot) ───────────────
+// Current lock state for the panel. Never returns the PIN.
+app.get('/api/admin/claude-arm', requireAdmin, async (req, res) => {
+  try {
+    const arm = await getClaudeArm(req.app.locals.pgDb);
+    res.json({ armed: armIsLive(arm), ttlSeconds: Math.round(CLAUDE_ARM_TTL_MS / 1000) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Arm exactly one Claude write. Requires the correct PIN. Constant-time compare.
+app.post('/api/admin/claude-arm', requireAdmin, async (req, res) => {
+  const pgdb = req.app.locals.pgDb;
+  if (!pgdb) return res.status(503).json({ error: 'Database unavailable' });
+  const pin = String((req.body && req.body.pin) || '');
+  const a = Buffer.from(pin);
+  const b = Buffer.from(CLAUDE_ARM_PIN);
+  const ok = a.length === b.length && crypto.timingSafeEqual(a, b);
+  if (!ok) return res.status(403).json({ error: 'Wrong PIN.' });
+  try {
+    await pgdb.setSetting('claude_write_arm', { armed: true, armed_at: nowMs() });
+    console.log('[claude-arm] armed (one write)');
+    res.json({ ok: true, armed: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Lock immediately (clear any pending arm). No PIN needed to LOCK.
+app.delete('/api/admin/claude-arm', requireAdmin, async (req, res) => {
+  const pgdb = req.app.locals.pgDb;
+  if (!pgdb) return res.status(503).json({ error: 'Database unavailable' });
+  try {
+    await pgdb.setSetting('claude_write_arm', { armed: false, locked_at: nowMs() });
+    res.json({ ok: true, armed: false });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

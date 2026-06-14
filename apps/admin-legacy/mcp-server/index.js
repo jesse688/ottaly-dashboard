@@ -244,7 +244,7 @@ tool(
 
 tool(
   "dashboard_post",
-  "Write to a dashboard endpoint via POST/PUT/PATCH — the universal mutator (create campaign filters, tag mailboxes, etc.). Call list_write_endpoints first to find the path. `path` must start with /api/ and have any :placeholder substituted. Writes are gated by the Claude Access panel: a disabled capability returns HTTP 403 with claudeBlocked — relay that message, don't retry. Example: path=/api/campaign-filters, method=POST, body={workspace_id, campaign_id, workspace_name, campaign_name, filters:{...}}.",
+  "Write to a dashboard endpoint via POST/PUT/PATCH — the universal mutator (create campaign filters, tag mailboxes, etc.). Call list_write_endpoints first to find the path. `path` must start with /api/ and have any :placeholder substituted. TWO gates apply: (1) the capability must be enabled in the Claude Access panel; (2) EACH write must be PIN-armed by a human in the dashboard — writes are LOCKED by default and one arm allows exactly one write. A 403 with claudeLocked:true means 'ask the PIN holder to arm one write, then retry'; claudeBlocked without claudeLocked means the capability is off. Relay these messages to the user; do not loop-retry. Example: path=/api/campaign-filters, method=POST, body={workspace_id, campaign_id, workspace_name, campaign_name, filters:{...}}.",
   {
     path: z.string().describe("API path starting with /api/, e.g. /api/campaign-filters"),
     method: z.enum(["POST", "PUT", "PATCH"]).optional().describe("HTTP method (default POST)"),

@@ -223,6 +223,18 @@ tbody tr:hover { background:#FAFBFC; }
         </div>
         <label class="cap-switch"><input type="checkbox" id="claudeMaster" onchange="saveClaudePerms()"><span class="cap-slider"></span></label>
       </div>
+
+      <!-- One-shot PIN arm -->
+      <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;padding:.7rem .85rem;border:1px solid #FED7AA;border-radius:10px;background:#FFFBEB;margin-bottom:.9rem;">
+        <div style="flex:1;min-width:220px;">
+          <div style="font-size:14px;font-weight:700;color:#111827;">Write lock <span id="claudeArmBadge" style="font-size:11px;font-weight:700;padding:.1rem .45rem;border-radius:5px;background:#FEE2E2;color:#991B1B;">LOCKED</span></div>
+          <div style="font-size:12.5px;color:#6B7280;">Every Claude write needs the PIN. Arming unlocks <strong>one</strong> write, then re-locks. Stops anyone without the PIN from making Claude change things.</div>
+        </div>
+        <input type="password" id="claudeArmPin" placeholder="PIN" inputmode="numeric" autocomplete="off" style="width:90px;padding:.5rem .6rem;border:1px solid #D1D5DB;border-radius:8px;font-size:14px;text-align:center;">
+        <button class="btn btn-primary" onclick="armClaude()">Arm one write</button>
+        <button class="btn" onclick="lockClaude()" style="border:1px solid #D1D5DB;color:#B91C1C;">Lock now</button>
+      </div>
+
       <div id="claudeCaps"></div>
       <div id="claudePermStatus" style="margin-top:.85rem;font-size:13px;color:#6B7280;">Loading…</div>
     </div>
@@ -480,7 +492,7 @@ tbody tr:hover { background:#FAFBFC; }
 
 async function tryLoad() {
   try {
-    await Promise.all([fetchClients(), fetchWorkspaces(), fetchNonleadRequests(), fetchManagerCommissions(), fetchPageVisibility(), fetchPayslips(), loadBisonKey(), loadFreshStart(), loadClaudePerms()]);
+    await Promise.all([fetchClients(), fetchWorkspaces(), fetchNonleadRequests(), fetchManagerCommissions(), fetchPageVisibility(), fetchPayslips(), loadBisonKey(), loadFreshStart(), loadClaudePerms(), loadClaudeArm()]);
     return true;
   } catch { return false; }
 }
@@ -745,6 +757,46 @@ async function saveClaudePerms() {
     renderClaudeCaps(d);
     setClaudeStatus('✓ Saved.', '#059669');
   } catch (e) { setClaudeStatus('Save failed: ' + e.message, '#B91C1C'); }
+}
+
+// ── Claude write lock (one-shot PIN arm) ────────────────
+function setArmBadge(armed) {
+  const b = document.getElementById('claudeArmBadge');
+  if (!b) return;
+  if (armed) { b.textContent = 'ARMED · 1 write'; b.style.background = '#DCFCE7'; b.style.color = '#166534'; }
+  else { b.textContent = 'LOCKED'; b.style.background = '#FEE2E2'; b.style.color = '#991B1B'; }
+}
+
+async function loadClaudeArm() {
+  try {
+    const d = await fetch('/api/admin/claude-arm', { headers: adminHeaders() }).then(r => r.json());
+    setArmBadge(!!d.armed);
+  } catch (e) { /* non-fatal */ }
+}
+
+async function armClaude() {
+  const pinEl = document.getElementById('claudeArmPin');
+  const pin = (pinEl.value || '').trim();
+  if (!pin) { setClaudeStatus('Enter the PIN to arm.', '#B91C1C'); return; }
+  setClaudeStatus('Arming…');
+  try {
+    const r = await fetch('/api/admin/claude-arm', { method: 'POST', headers: { ...adminHeaders(), 'Content-Type': 'application/json' }, body: JSON.stringify({ pin }) });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Arm failed');
+    pinEl.value = '';
+    setArmBadge(true);
+    setClaudeStatus('✓ Armed — Claude may make ONE write (within 2 min), then it re-locks.', '#059669');
+  } catch (e) { setClaudeStatus('Arm failed: ' + e.message, '#B91C1C'); }
+}
+
+async function lockClaude() {
+  try {
+    const r = await fetch('/api/admin/claude-arm', { method: 'DELETE', headers: adminHeaders() });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Lock failed');
+    setArmBadge(false);
+    setClaudeStatus('Locked. Claude can read but not write until armed again.', '#6B7280');
+  } catch (e) { setClaudeStatus('Lock failed: ' + e.message, '#B91C1C'); }
 }
 
 // ── Fresh start / Show historical ───────────────────────
