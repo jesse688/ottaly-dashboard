@@ -55,7 +55,7 @@ export function AccountClient({ companyName }: { companyName: string }) {
         <span className="text-white/30">|</span>
         <span className="text-white/90 text-sm font-medium">{companyName}</span>
         <nav className="flex items-center gap-1 ml-4">
-          <a href="/unibox" className="px-3 py-1.5 text-white/70 hover:text-white text-sm rounded-lg">Leads</a>
+          <a href="/leads" className="px-3 py-1.5 text-white/70 hover:text-white text-sm rounded-lg">Leads</a>
           <a href="/invoices" className="px-3 py-1.5 text-white/70 hover:text-white text-sm rounded-lg">Billing</a>
           <span className="px-3 py-1.5 text-white bg-white/15 text-sm font-medium rounded-lg">Account</span>
         </nav>

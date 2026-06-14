@@ -196,7 +196,7 @@ export function AdminClientsClient() {
   async function viewAsClient(c: PortalClient) {
     // Mint a client session for this client, then open their portal in a new tab.
     const res = await fetch(`/api/admin/clients/${c.id}/impersonate`, { method: 'POST' })
-    if (res.ok) window.open('/unibox', '_blank')
+    if (res.ok) window.open('/leads', '_blank')
     else alert('Could not open client view')
   }
   async function makeInvite(c: PortalClient) {

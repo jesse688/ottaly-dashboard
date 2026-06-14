@@ -1,16 +1,7 @@
-import { getSession } from '@/lib/auth'
 import { redirect } from 'next/navigation'
-import { UniboxClient } from './client'
 
-export default async function UniboxPage() {
-  const session = await getSession()
-  if (!session) redirect('/login')
-  return (
-    <UniboxClient
-      companyName={session.companyName}
-      clientName={session.contactName}
-      workspaces={session.workspaces ?? []}
-      activeWorkspaceId={session.workspaceId}
-    />
-  )
+// The leads inbox lives at /leads now (URL matches the "Leads" nav label).
+// Keep /unibox as a permanent redirect for old links/bookmarks.
+export default function UniboxRedirect() {
+  redirect('/leads')
 }

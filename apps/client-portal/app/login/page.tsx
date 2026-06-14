@@ -29,7 +29,7 @@ export default function LoginPage() {
         setError(data.error ?? 'Login failed')
         return
       }
-      router.push('/unibox'); router.refresh()
+      router.push('/leads'); router.refresh()
     } catch {
       setError('Something went wrong. Please try again.')
     } finally {

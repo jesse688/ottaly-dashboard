@@ -36,7 +36,7 @@ export default function MultiWorkspaceInvitePage() {
     })
     setLoading(false)
     if (!res.ok) { const d = await res.json() as { error: string }; setError(d.error ?? 'Something went wrong'); return }
-    router.push('/unibox'); router.refresh()
+    router.push('/leads'); router.refresh()
   }
 
   return (
