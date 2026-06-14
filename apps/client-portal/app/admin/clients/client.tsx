@@ -629,11 +629,18 @@ export function AdminClientsClient() {
               </div>
             )}
 
-            <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-              <table className="w-full text-sm">
+            <div className="bg-white rounded-xl border border-gray-100">
+              <table className="w-full text-sm table-fixed">
                 <thead>
                   <tr className="border-b border-gray-100 bg-gray-50">
-                    {['Company','Login email','Workspace','Cost/lead','Status','Actions'].map(h => <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}
+                    {[
+                      { h: 'Company', w: 'w-[22%]' },
+                      { h: 'Login email', w: 'w-[26%]' },
+                      { h: 'Workspace', w: 'w-[16%]' },
+                      { h: 'Cost/lead', w: 'w-[10%]' },
+                      { h: 'Status', w: 'w-[10%]' },
+                      { h: 'Actions', w: 'w-[16%]' },
+                    ].map(c => <th key={c.h} className={`${c.w} px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider`}>{c.h}</th>)}
                   </tr>
                 </thead>
                 <tbody>
@@ -644,38 +651,36 @@ export function AdminClientsClient() {
                   ) : visibleClients.map(client => (
                     <Fragment key={client.id}>
                       <tr className="border-b border-gray-50 hover:bg-gray-50">
-                        <td className="px-4 py-2.5 font-medium text-gray-900 whitespace-nowrap">{client.company_name}</td>
-                        <td className="px-4 py-2.5 text-gray-600 text-xs font-mono whitespace-nowrap">{client.username ?? client.email ?? '—'}</td>
-                        <td className="px-4 py-2.5 text-gray-600 text-xs whitespace-nowrap">{client.workspace_name ?? client.workspace_id.slice(0,8)+'…'}</td>
+                        <td className="px-4 py-2.5 font-medium text-gray-900 truncate" title={client.company_name}>{client.company_name}</td>
+                        <td className="px-4 py-2.5 text-gray-600 text-xs font-mono truncate" title={client.username ?? client.email ?? ''}>{client.username ?? client.email ?? '—'}</td>
+                        <td className="px-4 py-2.5 text-gray-600 text-xs truncate" title={client.workspace_name ?? client.workspace_id}>{client.workspace_name ?? client.workspace_id.slice(0,8)+'…'}</td>
                         <td className="px-4 py-2.5 text-gray-700 text-xs whitespace-nowrap">{fmt(client.cost_per_lead ?? 0)}</td>
                         <td className="px-4 py-2.5">
                           <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${client.active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>{client.active ? 'Active' : 'Disabled'}</span>
                         </td>
-                        <td className="px-4 py-2.5">
-                          <div className="flex items-center gap-3 whitespace-nowrap">
-                            <button onClick={() => viewAsClient(client)} className="text-xs font-medium text-emerald-600 hover:text-emerald-800">View as</button>
-                            <button onClick={() => openSettings(client)} className="text-xs text-indigo-600 hover:text-indigo-800">Settings</button>
-                            <button onClick={() => openLogins(client)} className="text-xs text-indigo-600 hover:text-indigo-800">Logins</button>
-                            <div className="relative">
-                              <button onClick={() => setMenuId(menuId === client.id ? null : client.id)} className="text-xs text-gray-500 hover:text-gray-900 px-1.5 py-0.5 rounded hover:bg-gray-100" aria-label="More actions">⋯</button>
-                              {menuId === client.id && (
-                                <>
-                                  <div className="fixed inset-0 z-10" onClick={() => setMenuId(null)} />
-                                  <div className="absolute right-0 top-7 z-20 w-40 bg-white rounded-lg border border-gray-200 shadow-lg py-1 text-left">
-                                    {[
-                                      { label: 'Invite link', fn: () => makeInvite(client), cls: 'text-gray-700' },
-                                      { label: 'Test email', fn: () => sendTest(client), cls: 'text-gray-700' },
-                                      { label: 'Reset code', fn: () => setEditId(editId===client.id?null:client.id), cls: 'text-gray-700' },
-                                      { label: 'Webhook', fn: () => registerWebhook(client), cls: 'text-gray-700' },
-                                      { label: client.active ? 'Disable' : 'Enable', fn: () => toggleActive(client), cls: 'text-gray-700' },
-                                      { label: 'Delete', fn: () => handleDelete(client.id), cls: 'text-red-600' },
-                                    ].map(item => (
-                                      <button key={item.label} onClick={() => { setMenuId(null); item.fn() }} className={`block w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 ${item.cls}`}>{item.label}</button>
-                                    ))}
-                                  </div>
-                                </>
-                              )}
-                            </div>
+                        <td className="px-4 py-2.5 text-right">
+                          <div className="relative inline-block text-left">
+                            <button onClick={() => setMenuId(menuId === client.id ? null : client.id)} className="text-xs font-medium text-indigo-600 hover:text-indigo-800 px-2 py-1 rounded hover:bg-indigo-50 whitespace-nowrap" aria-label="Actions">Actions ▾</button>
+                            {menuId === client.id && (
+                              <>
+                                <div className="fixed inset-0 z-10" onClick={() => setMenuId(null)} />
+                                <div className="absolute right-0 top-8 z-20 w-44 bg-white rounded-lg border border-gray-200 shadow-lg py-1 text-left">
+                                  {[
+                                    { label: 'View as', fn: () => viewAsClient(client), cls: 'text-emerald-700 font-medium' },
+                                    { label: 'Settings', fn: () => openSettings(client), cls: 'text-gray-700' },
+                                    { label: 'Logins', fn: () => openLogins(client), cls: 'text-gray-700' },
+                                    { label: 'Invite link', fn: () => makeInvite(client), cls: 'text-gray-700' },
+                                    { label: 'Test email', fn: () => sendTest(client), cls: 'text-gray-700' },
+                                    { label: 'Reset code', fn: () => setEditId(editId===client.id?null:client.id), cls: 'text-gray-700' },
+                                    { label: 'Webhook', fn: () => registerWebhook(client), cls: 'text-gray-700' },
+                                    { label: client.active ? 'Disable' : 'Enable', fn: () => toggleActive(client), cls: 'text-gray-700' },
+                                    { label: 'Delete', fn: () => handleDelete(client.id), cls: 'text-red-600 border-t border-gray-100 mt-1 pt-1.5' },
+                                  ].map(item => (
+                                    <button key={item.label} onClick={() => { setMenuId(null); item.fn() }} className={`block w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 ${item.cls}`}>{item.label}</button>
+                                  ))}
+                                </div>
+                              </>
+                            )}
                           </div>
                         </td>
                       </tr>
