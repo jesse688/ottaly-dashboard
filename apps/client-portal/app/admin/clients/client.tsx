@@ -115,6 +115,17 @@ export function AdminClientsClient() {
   const [speed, setSpeed]                     = useState<{ goalMinutes: number; rows: { id: string; company_name: string; avg_secs: number; n: number }[] } | null>(null)
   const [showSpeed, setShowSpeed]             = useState(false)
 
+  // Search + per-row actions menu
+  const [query, setQuery]                     = useState('')
+  const [menuId, setMenuId]                   = useState<string | null>(null)
+
+  // Logins (multi-workspace access) modal
+  const [loginsClient, setLoginsClient]       = useState<PortalClient | null>(null)
+  const [logins, setLogins]                   = useState<{ identifier: string; has_code: boolean; workspaces: { clientId: string; company: string; workspaceId: string }[] }[] | null>(null)
+  const [newLoginEmail, setNewLoginEmail]     = useState('')
+  const [newLoginWs, setNewLoginWs]           = useState<string[]>([])
+  const [loginsBusy, setLoginsBusy]           = useState(false)
+
   const router = useRouter()
 
   function fmtDur(secs: number) {
@@ -218,6 +229,59 @@ export function AdminClientsClient() {
     await fetch(`/api/admin/clients/${id}`, { method: 'DELETE' })
     fetch('/api/admin/clients').then(r => r.json()).then(d => { if (Array.isArray(d)) setClients(d) }).catch(() => {})
   }
+
+  // ── Logins (multi-workspace access) ──
+  function openLogins(c: PortalClient) {
+    setLoginsClient(c); setLogins(null); setNewLoginEmail(''); setNewLoginWs([c.id])
+    fetch(`/api/admin/clients/${c.id}/logins`).then(r => r.json())
+      .then(d => setLogins(d.logins ?? [])).catch(() => setLogins([]))
+  }
+  async function addLogin() {
+    if (!loginsClient || !newLoginEmail.trim()) return
+    setLoginsBusy(true)
+    const res = await fetch(`/api/admin/clients/${loginsClient.id}/logins`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: newLoginEmail.trim(), workspaceIds: newLoginWs.length ? newLoginWs : [loginsClient.id] }),
+    })
+    const d = await res.json() as { ok?: boolean; hasCode?: boolean; inviteUrl?: string; error?: string }
+    setLoginsBusy(false)
+    if (!res.ok) { alert(d.error ?? 'Could not add login'); return }
+    if (d.inviteUrl) prompt(`Login added. Send ${newLoginEmail.trim()} this link to set their access code (unlocks every workspace granted):`, d.inviteUrl)
+    else alert('Login added — it reuses this person’s existing access code.')
+    setNewLoginEmail('')
+    openLogins(loginsClient)
+  }
+  async function removeLogin(identifier: string, clientId: string) {
+    if (!loginsClient) return
+    if (!confirm(`Remove ${identifier}'s access to this workspace?`)) return
+    await fetch(`/api/admin/clients/${loginsClient.id}/logins`, {
+      method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier, clientId }),
+    })
+    openLogins(loginsClient)
+  }
+  async function reinviteLogin(identifier: string) {
+    if (!loginsClient) return
+    // Re-grant to the SAME workspaces the login already has, which re-mints an
+    // invite token when there's no code yet (idempotent for existing rows).
+    const row = (logins ?? []).find(l => l.identifier === identifier)
+    const wsIds = (row?.workspaces ?? []).map(w => w.clientId)
+    const res = await fetch(`/api/admin/clients/${loginsClient.id}/logins`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier, workspaceIds: wsIds }),
+    })
+    const d = await res.json() as { inviteUrl?: string }
+    if (d.inviteUrl) prompt(`Invite link for ${identifier}:`, d.inviteUrl)
+    else alert('This login already has a code set.')
+  }
+
+  // Filter clients by the search box (company, login email, workspace name/id).
+  const visibleClients = (clients ?? []).filter(c => {
+    const q = query.trim().toLowerCase()
+    if (!q) return true
+    return [c.company_name, c.username, c.email, c.workspace_name, c.workspace_id]
+      .some(v => (v ?? '').toLowerCase().includes(q))
+  })
 
   // ── Settings modal ──
   async function openSettings(c: PortalClient) {
@@ -454,6 +518,19 @@ export function AdminClientsClient() {
               </div>
             </div>
 
+            <div className="relative mb-4">
+              <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z" /></svg>
+              <input
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                placeholder="Search clients by company, email, or workspace…"
+                className="w-full pl-9 pr-9 py-2.5 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-200"
+              />
+              {query && (
+                <button onClick={() => setQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-lg leading-none">×</button>
+              )}
+            </div>
+
             {showImport && (
               <div className="bg-white border border-gray-200 rounded-xl p-5 mb-5">
                 <h2 className="text-sm font-semibold text-gray-900 mb-1">Import from admin dashboard</h2>
@@ -562,35 +639,43 @@ export function AdminClientsClient() {
                 <tbody>
                   {clients === null ? Array.from({length:4}).map((_,i) => (
                     <tr key={i} className="border-b border-gray-50">{Array.from({length:6}).map((_,j) => <td key={j} className="px-4 py-3"><div className="h-4 bg-gray-100 rounded animate-pulse" /></td>)}</tr>
-                  )) : clients.length === 0 ? (
-                    <tr><td colSpan={6} className="px-4 py-10 text-center text-gray-400 text-sm">No clients yet</td></tr>
-                  ) : clients.map(client => (
+                  )) : visibleClients.length === 0 ? (
+                    <tr><td colSpan={6} className="px-4 py-10 text-center text-gray-400 text-sm">{query ? `No clients match “${query}”` : 'No clients yet'}</td></tr>
+                  ) : visibleClients.map(client => (
                     <Fragment key={client.id}>
                       <tr className="border-b border-gray-50 hover:bg-gray-50">
-                        <td className="px-4 py-3 font-medium text-gray-900">{client.company_name}</td>
-                        <td className="px-4 py-3 text-gray-600 text-xs font-mono">{client.username ?? client.email ?? '—'}</td>
-                        <td className="px-4 py-3 text-gray-600 text-xs">{client.workspace_name ?? client.workspace_id.slice(0,8)+'…'}</td>
-                        <td className="px-4 py-3 text-gray-700 text-xs">{fmt(client.cost_per_lead ?? 0)}</td>
-                        <td className="px-4 py-3">
+                        <td className="px-4 py-2.5 font-medium text-gray-900 whitespace-nowrap">{client.company_name}</td>
+                        <td className="px-4 py-2.5 text-gray-600 text-xs font-mono whitespace-nowrap">{client.username ?? client.email ?? '—'}</td>
+                        <td className="px-4 py-2.5 text-gray-600 text-xs whitespace-nowrap">{client.workspace_name ?? client.workspace_id.slice(0,8)+'…'}</td>
+                        <td className="px-4 py-2.5 text-gray-700 text-xs whitespace-nowrap">{fmt(client.cost_per_lead ?? 0)}</td>
+                        <td className="px-4 py-2.5">
                           <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${client.active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>{client.active ? 'Active' : 'Disabled'}</span>
                         </td>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-2 flex-wrap">
+                        <td className="px-4 py-2.5">
+                          <div className="flex items-center gap-3 whitespace-nowrap">
                             <button onClick={() => viewAsClient(client)} className="text-xs font-medium text-emerald-600 hover:text-emerald-800">View as</button>
-                            <span className="text-gray-200">|</span>
-                            <button onClick={() => makeInvite(client)} className="text-xs text-indigo-600 hover:text-indigo-800">Invite link</button>
-                            <span className="text-gray-200">|</span>
-                            <button onClick={() => sendTest(client)} className="text-xs text-indigo-600 hover:text-indigo-800">Test email</button>
-                            <span className="text-gray-200">|</span>
-                            <button onClick={() => setEditId(editId===client.id?null:client.id)} className="text-xs text-indigo-600 hover:text-indigo-800">Reset code</button>
-                            <span className="text-gray-200">|</span>
                             <button onClick={() => openSettings(client)} className="text-xs text-indigo-600 hover:text-indigo-800">Settings</button>
-                            <span className="text-gray-200">|</span>
-                            <button onClick={() => registerWebhook(client)} className="text-xs text-indigo-600 hover:text-indigo-800">Webhook</button>
-                            <span className="text-gray-200">|</span>
-                            <button onClick={() => toggleActive(client)} className="text-xs text-gray-500 hover:text-gray-800">{client.active ? 'Disable' : 'Enable'}</button>
-                            <span className="text-gray-200">|</span>
-                            <button onClick={() => handleDelete(client.id)} className="text-xs text-red-500 hover:text-red-700">Delete</button>
+                            <button onClick={() => openLogins(client)} className="text-xs text-indigo-600 hover:text-indigo-800">Logins</button>
+                            <div className="relative">
+                              <button onClick={() => setMenuId(menuId === client.id ? null : client.id)} className="text-xs text-gray-500 hover:text-gray-900 px-1.5 py-0.5 rounded hover:bg-gray-100" aria-label="More actions">⋯</button>
+                              {menuId === client.id && (
+                                <>
+                                  <div className="fixed inset-0 z-10" onClick={() => setMenuId(null)} />
+                                  <div className="absolute right-0 top-7 z-20 w-40 bg-white rounded-lg border border-gray-200 shadow-lg py-1 text-left">
+                                    {[
+                                      { label: 'Invite link', fn: () => makeInvite(client), cls: 'text-gray-700' },
+                                      { label: 'Test email', fn: () => sendTest(client), cls: 'text-gray-700' },
+                                      { label: 'Reset code', fn: () => setEditId(editId===client.id?null:client.id), cls: 'text-gray-700' },
+                                      { label: 'Webhook', fn: () => registerWebhook(client), cls: 'text-gray-700' },
+                                      { label: client.active ? 'Disable' : 'Enable', fn: () => toggleActive(client), cls: 'text-gray-700' },
+                                      { label: 'Delete', fn: () => handleDelete(client.id), cls: 'text-red-600' },
+                                    ].map(item => (
+                                      <button key={item.label} onClick={() => { setMenuId(null); item.fn() }} className={`block w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 ${item.cls}`}>{item.label}</button>
+                                    ))}
+                                  </div>
+                                </>
+                              )}
+                            </div>
                           </div>
                         </td>
                       </tr>
@@ -804,6 +889,81 @@ export function AdminClientsClient() {
       </div>
 
       {/* ── Settings modal ── */}
+      {loginsClient && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setLoginsClient(null)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-gray-100">
+              <h2 className="text-sm font-semibold text-gray-900">Logins — {loginsClient.company_name}</h2>
+              <button onClick={() => setLoginsClient(null)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+            </div>
+            <div className="p-5 space-y-5">
+              <p className="text-xs text-gray-500">Multiple people can log in to a client. One login (email) can also be given access to several workspaces — they get a workspace switcher. Each person sets their own access code via the invite link.</p>
+
+              {/* Existing logins */}
+              <div>
+                <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Current logins</h3>
+                {logins === null ? (
+                  <div className="h-10 bg-gray-50 rounded animate-pulse" />
+                ) : logins.length === 0 ? (
+                  <p className="text-sm text-gray-400">No additional logins yet — only the main client login.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {logins.map(l => (
+                      <div key={l.identifier} className="border border-gray-100 rounded-lg p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="text-sm font-mono text-gray-800 truncate">{l.identifier}</div>
+                            <div className="text-xs mt-0.5">
+                              {l.has_code
+                                ? <span className="text-green-600">● Code set</span>
+                                : <span className="text-amber-600">● Invite pending</span>}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            {!l.has_code && <button onClick={() => reinviteLogin(l.identifier)} className="text-xs text-indigo-600 hover:text-indigo-800">Invite link</button>}
+                          </div>
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {l.workspaces.map(w => (
+                            <span key={w.clientId} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-100 text-xs text-gray-700">
+                              {w.company}
+                              <button onClick={() => removeLogin(l.identifier, w.clientId)} className="text-gray-400 hover:text-red-600" title="Remove access to this workspace">×</button>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Add a login */}
+              <div className="border-t border-gray-100 pt-4">
+                <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Add a login</h3>
+                <label className="block text-xs text-gray-500 mb-1">Email (their login identifier)</label>
+                <input type="email" value={newLoginEmail} onChange={e => setNewLoginEmail(e.target.value)} placeholder="person@company.com" autoCapitalize="none"
+                  className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 mb-3" />
+                <label className="block text-xs text-gray-500 mb-1">Give this login access to:</label>
+                <div className="max-h-40 overflow-y-auto border border-gray-100 rounded-lg p-2 space-y-1 mb-3">
+                  {(clients ?? []).map(c => (
+                    <label key={c.id} className="flex items-center gap-2 text-sm px-1 py-0.5 cursor-pointer hover:bg-gray-50 rounded">
+                      <input type="checkbox" checked={newLoginWs.includes(c.id)}
+                        onChange={e => setNewLoginWs(prev => e.target.checked ? [...prev, c.id] : prev.filter(x => x !== c.id))} />
+                      <span className="text-gray-700">{c.company_name}</span>
+                      <span className="text-gray-400 text-xs">{c.workspace_name ?? ''}</span>
+                    </label>
+                  ))}
+                </div>
+                <button onClick={addLogin} disabled={loginsBusy || !newLoginEmail.trim() || newLoginWs.length === 0}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg disabled:opacity-60">
+                  {loginsBusy ? 'Adding…' : 'Add login & get invite link'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {settingsClient && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setSettingsClient(null)}>
           <div className={`bg-white rounded-2xl shadow-xl w-full ${settingsTab === 'balance' ? 'max-w-lg' : 'max-w-md'} max-h-[90vh] overflow-y-auto`} onClick={e => e.stopPropagation()}>

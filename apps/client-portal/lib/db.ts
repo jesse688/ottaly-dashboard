@@ -52,6 +52,12 @@ async function runMigration() {
         UNIQUE (identifier, client_id)
       )`,
       `CREATE INDEX IF NOT EXISTS idx_portal_user_access_identifier ON portal_user_access (lower(identifier))`,
+      // Admin can create a login before the client picks a code (self-service
+      // invite), so the hash may be empty until claimed; invite_token is shared
+      // across all of one identifier's rows so claiming it sets every workspace.
+      `ALTER TABLE portal_user_access ALTER COLUMN password_hash DROP NOT NULL`,
+      `ALTER TABLE portal_user_access ADD COLUMN IF NOT EXISTS invite_token TEXT`,
+      `CREATE INDEX IF NOT EXISTS idx_portal_user_access_invite ON portal_user_access (invite_token) WHERE invite_token IS NOT NULL`,
       `CREATE TABLE IF NOT EXISTS portal_client_labels (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         client_id UUID NOT NULL REFERENCES portal_clients(id) ON DELETE CASCADE,
