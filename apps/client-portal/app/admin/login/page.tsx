@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { Logo } from '@/app/components/Logo'
 
 export default function AdminLoginPage() {
   const [password, setPassword] = useState('')
@@ -33,7 +34,7 @@ export default function AdminLoginPage() {
     <div className="min-h-screen bg-white flex items-center justify-center">
       <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-8 w-full max-w-sm">
         <div className="flex justify-center mb-6">
-          <span className="bg-slate-800 text-white text-sm font-bold px-4 py-1.5 rounded">Ottaly</span>
+          <Logo size="lg" />
         </div>
         <h1 className="text-xl font-semibold text-gray-900 text-center mb-1">Portal Admin</h1>
         <p className="text-sm text-gray-500 text-center mb-6">Manage client logins</p>

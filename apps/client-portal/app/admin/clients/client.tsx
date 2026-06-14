@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useState, type FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
+import { Logo } from '@/app/components/Logo'
 
 interface Bucket { leads: number; pricePerLead: number }
 interface PortalClient {
@@ -408,7 +409,7 @@ export function AdminClientsClient() {
     <div className="min-h-screen bg-gray-50" style={{ fontFamily: 'system-ui,-apple-system,sans-serif' }}>
       {/* Top bar */}
       <header className="h-12 bg-[#1a2332] flex items-center px-6 gap-3">
-        <span className="text-white font-bold text-sm">Ottaly</span>
+        <Logo size="sm" onDark />
         <span className="text-slate-500 text-xs">|</span>
         <span className="text-slate-300 text-sm">Portal Admin</span>
         {syncStatus?.status && (
