@@ -171,6 +171,22 @@ tbody tr:hover { background:#FAFBFC; }
 <div id="adminPanel">
   <div class="container">
 
+    <!-- Bison API key -->
+    <div class="section-title">Bison API Key</div>
+    <div class="card" style="margin-bottom:1rem;">
+      <p style="font-size:13px;color:#6B7280;margin-bottom:1rem;">
+        The EmailBison API key the dashboard uses for all mailbox, campaign, lead and stats calls.
+        A key saved here overrides the server's environment variable and takes effect immediately — no restart needed.
+      </p>
+      <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
+        <input type="password" id="bisonKeyInput" placeholder="Paste Bison API key" style="flex:1;min-width:260px;padding:.55rem .75rem;border:1px solid #D1D5DB;border-radius:8px;font-size:14px;">
+        <button class="btn btn-primary" onclick="saveBisonKey()">Save</button>
+        <button class="btn" onclick="testBisonKey()" style="border:1px solid #D1D5DB;">Test connection</button>
+        <button class="btn" onclick="clearBisonKey()" style="border:1px solid #D1D5DB;color:#B91C1C;">Use env key</button>
+      </div>
+      <div id="bisonKeyStatus" style="margin-top:.75rem;font-size:13px;color:#6B7280;">Loading…</div>
+    </div>
+
     <!-- Default commission rate -->
     <div class="section-title">Campaign Managers</div>
     <div class="card" style="margin-bottom:1rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
@@ -343,8 +359,8 @@ tbody tr:hover { background:#FAFBFC; }
       <div id="payslipList" style="margin-top:1rem"></div>
     </div>
 
-    <!-- PlusVibe workspaces -->
-    <div class="section-title">PlusVibe Workspaces</div>
+    <!-- Bison workspaces -->
+    <div class="section-title">Bison Workspaces</div>
     <div class="card">
       <p style="font-size:13px;color:#9CA3AF;margin-bottom:1rem;">Click a workspace to fill the Workspace ID field above.</p>
       <div class="ws-grid" id="wsGrid"><p style="color:#9CA3AF;font-size:13px;">Loading…</p></div>
@@ -405,7 +421,7 @@ tbody tr:hover { background:#FAFBFC; }
 
 async function tryLoad() {
   try {
-    await Promise.all([fetchClients(), fetchWorkspaces(), fetchNonleadRequests(), fetchManagerCommissions(), fetchPageVisibility(), fetchPayslips()]);
+    await Promise.all([fetchClients(), fetchWorkspaces(), fetchNonleadRequests(), fetchManagerCommissions(), fetchPageVisibility(), fetchPayslips(), loadBisonKey()]);
     return true;
   } catch { return false; }
 }
@@ -547,6 +563,60 @@ async function saveKey() {
 
 function adminHeaders() {
   return { 'Content-Type': 'application/json' };
+}
+
+// ── Bison API key settings ──────────────────────────────
+function setBisonStatus(html, color) {
+  const el = document.getElementById('bisonKeyStatus');
+  if (el) { el.innerHTML = html; el.style.color = color || '#6B7280'; }
+}
+
+async function loadBisonKey() {
+  try {
+    const d = await fetch('/api/admin/bison-key', { headers: adminHeaders() }).then(r => r.json());
+    if (d.configured) {
+      const src = d.source === 'dashboard' ? 'saved here' : 'from environment';
+      setBisonStatus(`Current key: <strong>${d.masked}</strong> <span style="color:#9CA3AF">(${src})</span>`, '#059669');
+    } else {
+      setBisonStatus('No Bison key configured — paste one above to enable Bison calls.', '#B91C1C');
+    }
+  } catch (e) { setBisonStatus('Could not load key status: ' + e.message, '#B91C1C'); }
+}
+
+async function saveBisonKey() {
+  const input = document.getElementById('bisonKeyInput');
+  const key = input.value.trim();
+  if (!key) { setBisonStatus('Enter a key first.', '#B91C1C'); return; }
+  setBisonStatus('Saving…');
+  try {
+    const r = await fetch('/api/admin/bison-key', { method: 'POST', headers: adminHeaders(), body: JSON.stringify({ key }) });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Save failed');
+    input.value = '';
+    setBisonStatus(`Saved <strong>${d.masked}</strong>. Testing…`, '#059669');
+    await testBisonKey();
+  } catch (e) { setBisonStatus('Save failed: ' + e.message, '#B91C1C'); }
+}
+
+async function testBisonKey() {
+  setBisonStatus('Testing connection to Bison…');
+  try {
+    const r = await fetch('/api/admin/bison-key/test', { method: 'POST', headers: adminHeaders() });
+    const d = await r.json();
+    if (!r.ok || !d.ok) throw new Error(d.error || 'Test failed');
+    setBisonStatus(`✓ Connected to Bison — ${d.workspaces} workspace(s) visible.`, '#059669');
+  } catch (e) { setBisonStatus('✗ Connection failed: ' + e.message, '#B91C1C'); }
+}
+
+async function clearBisonKey() {
+  if (!confirm('Remove the dashboard key and fall back to the environment variable?')) return;
+  setBisonStatus('Clearing…');
+  try {
+    const r = await fetch('/api/admin/bison-key', { method: 'DELETE', headers: adminHeaders() });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Clear failed');
+    await loadBisonKey();
+  } catch (e) { setBisonStatus('Clear failed: ' + e.message, '#B91C1C'); }
 }
 
 let commissionClients = [];

@@ -758,8 +758,10 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
 
 <script>
     const CFG = {
-        API_KEY:   '6425e882-f33fb46a-2837ff5a-eb535a60',
-        BASE:      'https://api.plusvibe.ai/api/v1',
+        // Server-side compatibility shim (Express /api/perfshim/*) that returns the
+        // same response shapes this page parses, sourced from EmailBison. Same-origin,
+        // session-cookie auth — no PlusVibe API key in the browser anymore.
+        BASE:      '/api/perfshim',
         REFRESH_MS: 3 * 60 * 1000,
         STORE_KEY:  'ottaly_perf_v2'
     };
@@ -816,8 +818,9 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
 
     // ── API ───────────────────────────────────────────────────
     async function get(path) {
+        // Same-origin call to the perfshim — the session cookie is sent automatically.
         const r = await fetch(`${CFG.BASE}${path}`, {
-            headers: { 'x-api-key': CFG.API_KEY, 'Content-Type': 'application/json' }
+            headers: { 'Content-Type': 'application/json' }
         });
         if (!r.ok) throw new Error(`HTTP ${r.status} — ${path}`);
         return r.json();

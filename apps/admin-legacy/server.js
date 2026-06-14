@@ -54,7 +54,14 @@ const ADMIN_KEY              = process.env.ADMIN_KEY              || 'ottaly-adm
 // No need to also rotate JWT_SECRET — the password change is sufficient.
 const SESSION_SECRET         = JWT_SECRET + ':' + ADMIN_KEY;
 const PLUSVIBE_KEY           = process.env.PLUSVIBE_KEY           || '6425e882-f33fb46a-2837ff5a-eb535a60';
-const BISON_API_KEY = process.env.BISON_API_KEY || process.env.PLUSVIBE_KEY || '';
+// Bison API key resolution: a key saved via the admin dashboard (stored in
+// app_settings, hydrated into _bisonKeyOverride on boot) takes precedence over
+// the BISON_API_KEY env var, which now acts as a fallback/seed. getBisonKey()
+// is the single source of truth — every Bison request reads it live so a key
+// changed in the UI takes effect without a server restart.
+const BISON_ENV_KEY = process.env.BISON_API_KEY || process.env.PLUSVIBE_KEY || '';
+let _bisonKeyOverride = null; // set from app_settings on boot + on save
+function getBisonKey() { return _bisonKeyOverride || BISON_ENV_KEY; }
 const BISON_BASE = (process.env.BISON_API_URL || 'https://send.ottaly.co.uk').replace(/\/$/, '');
 let _bisonWsId = null;
 
@@ -66,7 +73,7 @@ async function bisonReq(path, opts = {}) {
   if (opts.wsId) {
     await fetch(BISON_BASE + '/api/workspaces/v1.1/switch-workspace', {
       method: 'POST',
-      headers: { Authorization: 'Bearer ' + BISON_API_KEY, 'Content-Type': 'application/json' },
+      headers: { Authorization: 'Bearer ' + getBisonKey(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ team_id: Number(opts.wsId) }),
       signal: AbortSignal.timeout(10000),
     });
@@ -75,7 +82,7 @@ async function bisonReq(path, opts = {}) {
   if (opts.params) for (const [k, v] of Object.entries(opts.params)) { if (v != null) url.searchParams.set(k, String(v)); }
   const init = {
     method: opts.method || 'GET',
-    headers: { Authorization: 'Bearer ' + BISON_API_KEY, 'Content-Type': 'application/json' },
+    headers: { Authorization: 'Bearer ' + getBisonKey(), 'Content-Type': 'application/json' },
     signal: AbortSignal.timeout(20000),
   };
   if (opts.body) init.body = JSON.stringify(opts.body);
@@ -1736,6 +1743,60 @@ app.get('/api/admin/verify', (req, res) => {
   res.status(401).json({ ok: false });
 });
 
+// ── Bison API key (admin only) ───────────────────────────
+// The key lives in app_settings and overrides BISON_API_KEY (env). We never
+// return the full key to the browser — only a masked hint (last 4 chars).
+app.get('/api/admin/bison-key', requireAdmin, (req, res) => {
+  const key = getBisonKey();
+  res.json({
+    configured: !!key,
+    source: _bisonKeyOverride ? 'dashboard' : (BISON_ENV_KEY ? 'env' : 'none'),
+    masked: key ? '••••••••' + key.slice(-4) : null,
+  });
+});
+
+app.post('/api/admin/bison-key', requireAdmin, async (req, res) => {
+  const pgdb = req.app.locals.pgDb;
+  if (!pgdb) return res.status(503).json({ error: 'Database unavailable' });
+  const key = (req.body && req.body.key != null ? String(req.body.key) : '').trim();
+  if (!key) return res.status(400).json({ error: 'key is required' });
+  try {
+    await pgdb.setSetting('bison_api_key', key);
+    _bisonKeyOverride = key;        // takes effect immediately, no restart
+    _bisonWsId = null;              // force a workspace re-switch on next call
+    res.json({ ok: true, masked: '••••••••' + key.slice(-4) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Clear the dashboard key and fall back to the env var.
+app.delete('/api/admin/bison-key', requireAdmin, async (req, res) => {
+  const pgdb = req.app.locals.pgDb;
+  if (!pgdb) return res.status(503).json({ error: 'Database unavailable' });
+  try {
+    await pgdb.setSetting('bison_api_key', '');
+    _bisonKeyOverride = null;
+    _bisonWsId = null;
+    res.json({ ok: true, source: BISON_ENV_KEY ? 'env' : 'none' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Test the currently-effective key against Bison. Reports workspace count so
+// the admin gets instant confirmation the dashboard is talking to Bison.
+app.post('/api/admin/bison-key/test', requireAdmin, async (req, res) => {
+  if (!getBisonKey()) return res.status(400).json({ ok: false, error: 'No Bison key configured' });
+  try {
+    const data = await bisonReq('/api/workspaces/v1.1');
+    const list = Array.isArray(data) ? data : (data?.data || []);
+    res.json({ ok: true, workspaces: list.length });
+  } catch (err) {
+    res.status(502).json({ ok: false, error: err.message });
+  }
+});
+
 // ── Manager management (admin only) ──────────────────────
 app.get('/api/admin/managers', requireAdmin, (req, res) => {
   res.json(db.prepare('SELECT id, name, commission_rate, base_salary, created_at FROM managers ORDER BY name').all());
@@ -2419,6 +2480,30 @@ const PV_MIN_GAP_MS = 600; // 100 req/min max → 600ms between calls
 
 pvFetch = async function pvFetch(path, retries = 5, opts = {}) {
   // opts.method, opts.body — POSTs supply a JSON body. Default is GET.
+  //
+  // Bison migration: legacy callers do pvFetch('/workspaces'), but on Bison the
+  // workspace list lives at /api/workspaces/v1.1 and returns { data: [...] } with
+  // numeric ids. Redirect here so every caller (revenue/performance/campaign
+  // caches, combo-analysis) keeps working — they already normalise the
+  // { workspaces } / { data } / array shapes. Without this they 404 and the
+  // dependent caches silently stop populating.
+  if (path === '/workspaces') {
+    // Bison returns numeric team ids, but the rest of the app keys workspaces by
+    // the canonical PlusVibe workspace_id (stored in clients.workspace_id and in
+    // BISON_TEAMS[].pv). Map each Bison team back to its PV id so client-status
+    // filtering and revenue/campaign joins keep matching. Bison teams with no PV
+    // mapping (BISON_TEAMS) are skipped — they aren't tracked as clients.
+    const wsRaw = await bisonReq('/api/workspaces/v1.1');
+    const list = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.data || []);
+    const byTeamId = new Map(BISON_TEAMS.map(t => [String(t.team_id), t]));
+    const workspaces = list
+      .map(w => {
+        const t = byTeamId.get(String(w.id));
+        return t ? { id: t.pv, name: t.name, bison_team_id: String(w.id) } : null;
+      })
+      .filter(Boolean);
+    return { workspaces };
+  }
   for (let attempt = 0; attempt <= retries; attempt++) {
     // Enforce minimum gap between ALL PlusVibe requests
     const now = Date.now();
@@ -2426,7 +2511,7 @@ pvFetch = async function pvFetch(path, retries = 5, opts = {}) {
     if (wait > 0) await new Promise(r => setTimeout(r, wait));
     _pvLastCall = Date.now();
 
-    const init = { headers: { 'Authorization': 'Bearer ' + BISON_API_KEY } };
+    const init = { headers: { 'Authorization': 'Bearer ' + getBisonKey() } };
     if (opts.body) {
       init.method = opts.method || 'POST';
       init.headers['Content-Type'] = 'application/json';
@@ -2461,7 +2546,7 @@ async function bisonSwitch(wsId) {
   if (_bisonWsId === String(wsId)) return;
   await fetch(BISON_BASE + '/api/workspaces/v1.1/switch-workspace', {
     method: 'POST',
-    headers: { 'Authorization': 'Bearer ' + BISON_API_KEY, 'Content-Type': 'application/json' },
+    headers: { 'Authorization': 'Bearer ' + getBisonKey(), 'Content-Type': 'application/json' },
     body: JSON.stringify({ team_id: Number(wsId) }),
     signal: AbortSignal.timeout(10000),
   }).catch(() => {});
@@ -2479,7 +2564,7 @@ async function bisonFetch(path, opts) {
   }
   var init = {
     method: opts.method || 'GET',
-    headers: { 'Authorization': 'Bearer ' + BISON_API_KEY, 'Content-Type': 'application/json' },
+    headers: { 'Authorization': 'Bearer ' + getBisonKey(), 'Content-Type': 'application/json' },
     signal: AbortSignal.timeout(15000),
   };
   if (opts.body) init.body = JSON.stringify(opts.body);
@@ -7861,9 +7946,16 @@ app.post('/api/mailboxes/enable-warmup', requireSession, async (req, res) => {
 
     const results = [];
     for (const [workspace_id, ids] of Object.entries(byWorkspace)) {
-      const r = await pvFetch('/account/bulk-update-warmup', 1, {
+      // Bison: PATCH /api/warmup/sender-emails/enable { sender_email_ids }, stateful
+      // per workspace. account_id in the cache is the Bison sender-email id;
+      // workspace_id is the canonical PV id, so map it to the Bison team_id.
+      const team = BISON_TEAMS.find(t => t.pv === String(workspace_id));
+      const wsId = team ? team.team_id : workspace_id;
+      const sender_email_ids = ids.map(id => Number(id)).filter(n => Number.isFinite(n));
+      const r = await bisonReq('/api/warmup/sender-emails/enable', {
+        wsId,
         method: 'PATCH',
-        body: { workspace_id, ids, warmup_status: 'ACTIVE' },
+        body: { sender_email_ids },
       });
       results.push({ workspace_id, count: ids.length, result: r });
     }
@@ -9430,7 +9522,7 @@ app.get('/api/pv/workspace-leads', requireSession, async (req, res) => {
     const qs = new URLSearchParams({ workspace_id, page: page || 1, limit: limit || 100 });
     if (label) qs.set('label', label);
     const r = await fetch(BISON_BASE + '/api/lead/workspace-leads?' + qs.toString(), {
-      headers: { 'Authorization': 'Bearer ' + BISON_API_KEY }
+      headers: { 'Authorization': 'Bearer ' + getBisonKey() }
     });
     res.json(await r.json());
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -9439,11 +9531,12 @@ app.get('/api/pv/workspace-leads', requireSession, async (req, res) => {
 // ── Admin — workspaces ─────────────────────────────────────
 app.get('/api/admin/workspaces', requireAdmin, async (req, res) => {
   try {
-    const r = await fetch(BISON_BASE + '/api/workspaces', {
-      headers: { 'Authorization': 'Bearer ' + BISON_API_KEY }
-    });
-    res.json(await r.json());
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    // Bison workspaces: /api/workspaces/v1.1 → { data: [{id,name,...}] }.
+    // admin.html expects a bare array of {id,name}, so unwrap + normalise.
+    const raw = await bisonReq('/api/workspaces/v1.1');
+    const list = Array.isArray(raw) ? raw : (raw?.data || []);
+    res.json(list.map(w => ({ id: String(w.id), name: w.name })));
+  } catch (err) { res.status(502).json({ error: err.message }); }
 });
 
 // ── Admin — clients ────────────────────────────────────────
@@ -10522,28 +10615,180 @@ app.get('/api/pv/workspaces', requireSession, async (req, res) => {
         return res.json({ workspaces: rows.map(r => ({ _id: r.workspace_id, name: r.workspace_name })) });
       }
     }
-    // Fallback: Bison workspaces (token's own teams) if the clients table is empty.
-    const r = await fetch(BISON_BASE + '/api/workspaces', {
-      headers: { 'Authorization': 'Bearer ' + BISON_API_KEY }
-    });
-    const data = await r.json();
-    if (!r.ok) return res.status(r.status).json({ error: data.error || 'Failed to fetch workspaces' });
-    const workspaces = Array.isArray(data) ? data : (data.data || data.workspaces || []);
-    res.json({ workspaces: workspaces.map(w => ({ _id: w.id || w._id, name: w.name })) });
+    // Fallback: Bison workspaces if the clients table is empty.
+    const data = await bisonReq('/api/workspaces/v1.1');
+    const workspaces = Array.isArray(data) ? data : (data?.data || []);
+    res.json({ workspaces: workspaces.map(w => ({ _id: String(w.id), name: w.name })) });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Performance/Actions compatibility shim ───────────────────
+// performance.html and actions.html were written against the (now deprecated)
+// PlusVibe browser API. Rather than rewrite their rendering logic, these routes
+// reproduce the exact response shapes those pages already parse, but sourced
+// from EmailBison. The pages call /api/perfshim/* same-origin with the session
+// cookie; we map their PlusVibe workspace_id -> Bison team_id via BISON_TEAMS.
+// Every route degrades to an empty-but-valid shape (never a 500) so the pages
+// keep rendering even when Bison errors or a workspace isn't mapped to a team.
+function perfshimTeamId(workspace_id) {
+  const team = BISON_TEAMS.find(t => t.pv === String(workspace_id));
+  return team ? team.team_id : null;
+}
+
+// 1. GET /account/email-stats — summed totals for a workspace + date range.
+// Source: Bison line-area-chart-stats (stateful: bisonReq wsId switches the
+// workspace first), pivoted via pivotBisonStats and summed via aggPvEmailStats.
+// Returns { header: { ...totals } } which aggEmailStats() reads directly.
+app.get('/api/perfshim/account/email-stats', requireSession, async (req, res) => {
+  const { workspace_id, start_date, end_date } = req.query;
+  const empty = { header: { total_sent_count: 0, total_reply_count: 0, total_ooo_reply_count: 0, total_pos_reply_count: 0, total_bounce_count: 0, total_contacted_count: 0 } };
+  try {
+    const wsId = perfshimTeamId(workspace_id);
+    if (!wsId) return res.json(empty);
+    const bStats = await bisonReq('/api/workspaces/v1.1/line-area-chart-stats', {
+      wsId,
+      params: { start_date, end_date },
+    });
+    const rows = Object.values(pivotBisonStats((bStats.data || bStats) || []));
+    const agg = aggPvEmailStats(rows); // { sent, replies, oooReplies, posReplies, bounces, contacted }
+    res.json({ header: {
+      total_sent_count:      agg.sent,
+      total_reply_count:     agg.replies,
+      total_ooo_reply_count: agg.oooReplies, // Bison has no OOO dimension -> 0 (see pivotBisonStats)
+      total_pos_reply_count: agg.posReplies,
+      total_bounce_count:    agg.bounces,
+      total_contacted_count: agg.contacted,
+    } });
+  } catch (err) {
+    console.warn('[perfshim] email-stats failed for ws', workspace_id, '-', err.message);
+    res.json(empty);
+  }
+});
+
+// 2. GET /analytics/campaign/stats — array of campaigns for renderCampaigns()/agg().
+// Source: Bison /api/campaigns mapped to the PV campaign-stat field names.
+app.get('/api/perfshim/analytics/campaign/stats', requireSession, async (req, res) => {
+  const { workspace_id } = req.query;
+  try {
+    const wsId = perfshimTeamId(workspace_id);
+    if (!wsId) return res.json([]);
+    const data = await bisonReq('/api/campaigns', { wsId });
+    const list = (data?.data || []).map(c => ({
+      camp_name:            c.name,
+      name:                 c.name,
+      status:               c.status,
+      sent_count:           c.emails_sent || 0,
+      replied_count:        c.replied || 0,
+      ooo_reply_count:      0, // Bison has no OOO dimension
+      positive_reply_count: 0, // Bison campaign list has no positive-reply field
+      bounced_count:        c.bounced || 0,
+      lead_contacted_count: c.total_leads_contacted || 0,
+    }));
+    res.json(list);
+  } catch (err) {
+    console.warn('[perfshim] campaign/stats failed for ws', workspace_id, '-', err.message);
+    res.json([]);
+  }
+});
+
+// 3. GET /account/list — sending accounts for renderSummary() capacity calc.
+// Source: Bison /api/sender-emails. status connected -> 'ACTIVE'; daily_limit
+// nested under payload (the page reads a.status === 'ACTIVE' and a.payload.daily_limit).
+app.get('/api/perfshim/account/list', requireSession, async (req, res) => {
+  const { workspace_id } = req.query;
+  try {
+    const wsId = perfshimTeamId(workspace_id);
+    if (!wsId) return res.json([]);
+    const resp = await bisonReq('/api/sender-emails', { wsId, params: { per_page: 500 } });
+    const list = Array.isArray(resp) ? resp : (resp?.data ?? []);
+    const accounts = list.map(a => {
+      const connected = a.status === 'connected' || a.is_connected === true;
+      const paused = a.status === 'paused';
+      return {
+        status: connected ? 'ACTIVE' : (paused ? 'PAUSED' : 'INACTIVE'),
+        payload: { daily_limit: typeof a.daily_limit === 'number' ? a.daily_limit : 0 },
+      };
+    });
+    res.json(accounts);
+  } catch (err) {
+    console.warn('[perfshim] account/list failed for ws', workspace_id, '-', err.message);
+    res.json([]);
+  }
+});
+
+// 4. GET /account/warmup-stats — { emailAcc: { inbox_percent, total_inboxes } }.
+// total_inboxes = count of sender emails with warmup enabled (accurate).
+// inbox_percent: Bison has no direct "inbox placement %" equivalent in the
+// sender-emails payload, so we return 0 rather than fabricate a misleading
+// number. renderSummary() shows '—' when inbox_percent is 0/absent.
+app.get('/api/perfshim/account/warmup-stats', requireSession, async (req, res) => {
+  const { workspace_id } = req.query;
+  const empty = { emailAcc: { inbox_percent: 0, total_inboxes: 0 } };
+  try {
+    const wsId = perfshimTeamId(workspace_id);
+    if (!wsId) return res.json(empty);
+    const resp = await bisonReq('/api/sender-emails', { wsId, params: { per_page: 500 } });
+    const list = Array.isArray(resp) ? resp : (resp?.data ?? []);
+    const warming = list.filter(a => (a.warmup_enabled ?? a.warmup?.enabled) === true).length;
+    res.json({ emailAcc: { inbox_percent: 0, total_inboxes: warming } });
+  } catch (err) {
+    console.warn('[perfshim] warmup-stats failed for ws', workspace_id, '-', err.message);
+    res.json(empty);
+  }
+});
+
+// 5. GET /lead/count/lead-status — { NOT_CONTACTED, CONTACTED, REPLIED, BOUNCED, COMPLETED }.
+// Bison has no direct lead-status-count endpoint, so we derive what we can from
+// campaign aggregates: CONTACTED = sum(total_leads_contacted), REPLIED = sum(replied),
+// BOUNCED = sum(bounced). NOT_CONTACTED and COMPLETED have no Bison equivalent
+// here, so they're 0 (accurate-or-zero, never fabricated).
+app.get('/api/perfshim/lead/count/lead-status', requireSession, async (req, res) => {
+  const { workspace_id } = req.query;
+  const empty = { NOT_CONTACTED: 0, CONTACTED: 0, REPLIED: 0, BOUNCED: 0, COMPLETED: 0 };
+  try {
+    const wsId = perfshimTeamId(workspace_id);
+    if (!wsId) return res.json(empty);
+    const data = await bisonReq('/api/campaigns', { wsId });
+    const out = { ...empty };
+    (data?.data || []).forEach(c => {
+      out.CONTACTED += c.total_leads_contacted || 0;
+      out.REPLIED   += c.replied || 0;
+      out.BOUNCED   += c.bounced || 0;
+    });
+    res.json(out);
+  } catch (err) {
+    console.warn('[perfshim] lead-status failed for ws', workspace_id, '-', err.message);
+    res.json(empty);
+  }
+});
+
+// 6. GET /lead/workspace-leads — per-label lead listing (used by fetchLabeledLeads).
+// TODO: faithfully mapping PlusVibe label-filtered leads to Bison /api/leads is
+// non-trivial (Bison labels/status model differs). The pages tolerate an empty
+// result (.catch(()=>[])), so return [] for now — leaves lead-detection inert
+// rather than broken. Wire up to Bison /api/leads label filtering when needed.
+app.get('/api/perfshim/lead/workspace-leads', requireSession, (req, res) => {
+  res.json([]);
 });
 
 app.get('/api/pv/campaigns', requireSession, async (req, res) => {
   const { workspace_id } = req.query;
   if (!workspace_id) return res.status(400).json({ error: 'Missing workspace_id' });
   try {
-    const r = await fetch(BISON_BASE + `/api/campaign/list?workspace_id=${workspace_id}&limit=100`, {
-      headers: { 'Authorization': 'Bearer ' + BISON_API_KEY }
-    });
-    const data = await r.json();
-    if (!r.ok) return res.status(r.status).json({ error: data.error || 'Failed to fetch campaigns' });
-    res.json({ list: Array.isArray(data) ? data : data.list || [] });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    // Bison is stateful: bisonReq wsId switches the workspace, then /api/campaigns
+    // returns { data: [{id,name,status,...}] }. The workspace_id here is the
+    // canonical PV id, so map it to the Bison team_id first.
+    const team = BISON_TEAMS.find(t => t.pv === String(workspace_id));
+    const wsId = team ? team.team_id : workspace_id;
+    const data = await bisonReq('/api/campaigns', { wsId });
+    const list = (data?.data || []).map(c => ({
+      id: c.id,
+      name: c.name,          // contacts.html renders c.name in the dropdown
+      camp_name: c.name,     // older callers expect camp_name
+      status: c.status,
+    }));
+    res.json({ list });
+  } catch (err) { res.status(502).json({ error: err.message }); }
 });
 
 // ── PlusVibe — push contacts to campaign ──────────────────
@@ -10778,7 +11023,7 @@ app.post('/api/bison/push-contacts', requireSession, async (req, res) => {
   if (!ws_id || !campaign_id || !Array.isArray(contact_ids) || contact_ids.length === 0) {
     return res.status(400).json({ error: 'ws_id, campaign_id and contact_ids required' });
   }
-  if (!BISON_API_KEY) return res.status(500).json({ error: 'BISON_API_KEY not configured' });
+  if (!getBisonKey()) return res.status(500).json({ error: 'Bison API key not configured — set it in admin settings' });
   try {
     // Contacts live in Postgres (app.locals.pgDb), not the top-level SQLite db.
     const pgDb = req.app.locals.pgDb;
@@ -14658,6 +14903,16 @@ function scheduleAudienceScoring(pgdb) {
     app.locals.pgDb = pgdb;
     app.locals.sqliteDb = db;
     restorePausedJobs(db);
+
+    // Hydrate the dashboard-set Bison API key (if any) so it takes precedence
+    // over the env var. A key saved later via /api/admin/bison-key updates
+    // _bisonKeyOverride directly, so no restart is needed.
+    pgdb.getSetting('bison_api_key', null).then((saved) => {
+      if (saved && typeof saved === 'string' && saved.trim()) {
+        _bisonKeyOverride = saved.trim();
+        console.log('[bison] using dashboard-set API key (…' + _bisonKeyOverride.slice(-4) + ')');
+      }
+    }).catch((e) => console.warn('[bison] key hydrate failed:', e.message));
 
     // One-time backfill: copy existing SQLite client notes into Postgres.
     // ON CONFLICT DO NOTHING means this never overwrites a note that was

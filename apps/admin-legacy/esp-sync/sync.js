@@ -190,7 +190,21 @@ async function run() {
       .map(a => a.slice(2).split('='))
   )
 
-  const sourceName = args.source ?? 'plusvibe'
+  const sourceName = args.source ?? process.env.ESP_SYNC_SOURCE ?? 'plusvibe'
+
+  // PlusVibe is retired: the API key is deprecated and the esp_* tables are now
+  // fed by Bison webhooks (esp_leads) + the revenue_leads backfill. Running the
+  // PlusVibe sync just fails on getWorkspaces (invalid key) every hour. Skip it
+  // unless explicitly forced (ESP_SYNC_FORCE=1 / --force), and exit cleanly so
+  // the hourly scheduler doesn't log a fatal crash. A future Bison adapter can
+  // be added to ADAPTERS and selected via ESP_SYNC_SOURCE=bison.
+  const forced = args.force != null || process.env.ESP_SYNC_FORCE === '1'
+  if (sourceName === 'plusvibe' && !forced) {
+    log('PlusVibe sync is retired (key deprecated; esp_* now fed by Bison webhooks). Skipping. Set ESP_SYNC_FORCE=1 to override.')
+    await pool.end()
+    return
+  }
+
   const adapter = ADAPTERS[sourceName]
   if (!adapter) { console.error(`Unknown source: ${sourceName}`); process.exit(1) }
 
