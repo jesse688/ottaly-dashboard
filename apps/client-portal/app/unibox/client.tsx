@@ -106,6 +106,28 @@ function fmtDuration(secs: number): string {
 }
 // Split an email body into the new reply vs the quoted history below it, so the
 // client reads the actual reply and our earlier email tucks into a fold.
+// Some messages (esp. received mail) arrive with ONLY an HTML body and no
+// plain-text part. Strip the HTML to readable text so they don't show as
+// "(no content)". Best-effort — good enough for display.
+function htmlToText(html: string): string {
+  if (!html) return ''
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|tr|li|h[1-6]|blockquote)>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/&[a-z]+;/gi, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
 function splitQuote(text: string): { main: string; quoted: string } {
   if (!text) return { main: '', quoted: '' }
   const patterns = [
@@ -610,7 +632,12 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
                   <div className="text-center text-sm text-gray-400 py-12">No messages synced yet for this lead.</div>
                 ) : thread.map(m => {
                   const out = m.direction === 'OUT'
-                  const { main, quoted } = splitQuote(m.body_text || m.content_preview || '')
+                  // Prefer plain text; fall back to preview, then to HTML stripped
+                  // to text (received mail often has only an HTML body).
+                  const bodySource = (m.body_text && m.body_text.trim())
+                    || (m.content_preview && m.content_preview.trim())
+                    || (m.body_html ? htmlToText(m.body_html) : '')
+                  const { main, quoted } = splitQuote(bodySource)
                   return (
                     <div key={m.id} className={`rounded-xl border overflow-hidden shadow-sm ${out ? 'border-brand-200' : 'border-gray-200'}`}>
                       {/* header strip — indigo = us, grey = the lead */}
