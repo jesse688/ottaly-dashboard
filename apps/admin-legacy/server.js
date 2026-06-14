@@ -62,6 +62,29 @@ const PLUSVIBE_KEY           = process.env.PLUSVIBE_KEY           || '6425e882-f
 const BISON_ENV_KEY = process.env.BISON_API_KEY || process.env.PLUSVIBE_KEY || '';
 let _bisonKeyOverride = null; // set from app_settings on boot + on save
 function getBisonKey() { return _bisonKeyOverride || BISON_ENV_KEY; }
+
+// ── "Fresh start" (Bison-era) date floor ─────────────────────────────────
+// When the dashboard is switched to a fresh start, we record the cutover date
+// and, by default, clamp every stats date range so nothing before it shows —
+// giving a clean Bison-era view without deleting any PlusVibe-era data. A global
+// "Show historical" toggle removes the clamp. Both live in app_settings, cached
+// here and refreshed on change. MUST be module-scope (not inside the if(db)
+// block) — hydrateFreshStart() is called from the startup path in a different
+// scope, and a function declared inside a block isn't visible there.
+let _freshStartDate = null;   // 'YYYY-MM-DD' cutover, or null = never enabled
+let _showHistorical = false;  // true = ignore the clamp, show everything
+async function hydrateFreshStart(pgdb) {
+  try {
+    _freshStartDate = (await pgdb.getSetting('fresh_start_date', null)) || null;
+    _showHistorical = (await pgdb.getSetting('show_historical', false)) === true;
+  } catch (e) { console.warn('[fresh-start] hydrate failed:', e.message); }
+}
+// Clamp a requested start date up to the fresh-start floor (unless historical
+// is on or no floor is set). Always returns a 'YYYY-MM-DD' string.
+function clampStartDate(startStr) {
+  if (_showHistorical || !_freshStartDate || !startStr) return startStr;
+  return startStr < _freshStartDate ? _freshStartDate : startStr;
+}
 const BISON_BASE = (process.env.BISON_API_URL || 'https://send.ottaly.co.uk').replace(/\/$/, '');
 let _bisonWsId = null;
 
@@ -3005,28 +3028,6 @@ function serverDateString(date) {
   return date.getFullYear() + '-' +
     String(date.getMonth() + 1).padStart(2, '0') + '-' +
     String(date.getDate()).padStart(2, '0');
-}
-
-// ── "Fresh start" (Bison-era) date floor ─────────────────────────────────
-// When the dashboard is switched to a fresh start, we record the cutover date
-// and, by default, clamp every stats date range so nothing before it shows —
-// giving a clean Bison-era view without deleting any PlusVibe-era data. A global
-// "Show historical" toggle removes the clamp to reveal the full history again.
-// Both live in app_settings, cached here and refreshed on change (read on every
-// stats request, so we avoid a DB hit per call).
-let _freshStartDate = null;   // 'YYYY-MM-DD' cutover, or null = never enabled
-let _showHistorical = false;  // true = ignore the clamp, show everything
-async function hydrateFreshStart(pgdb) {
-  try {
-    _freshStartDate = (await pgdb.getSetting('fresh_start_date', null)) || null;
-    _showHistorical = (await pgdb.getSetting('show_historical', false)) === true;
-  } catch (e) { console.warn('[fresh-start] hydrate failed:', e.message); }
-}
-// Clamp a requested start date up to the fresh-start floor (unless historical
-// is on or no floor is set). Always returns a 'YYYY-MM-DD' string.
-function clampStartDate(startStr) {
-  if (_showHistorical || !_freshStartDate || !startStr) return startStr;
-  return startStr < _freshStartDate ? _freshStartDate : startStr;
 }
 
 function serverDateList(startStr, endStr) {
