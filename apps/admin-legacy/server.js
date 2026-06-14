@@ -65,32 +65,51 @@ function getBisonKey() { return _bisonKeyOverride || BISON_ENV_KEY; }
 const BISON_BASE = (process.env.BISON_API_URL || 'https://send.ottaly.co.uk').replace(/\/$/, '');
 let _bisonWsId = null;
 
+// Bison's API is STATEFUL: switch-workspace changes the active workspace for the
+// whole token, and Bison treats that as one logged-in session ("only one login
+// at a time"). Our background crons loop over every workspace, so without
+// serialization two switch+fetch sequences can interleave on the same token —
+// one fetch lands on the wrong workspace, and the rapid switching trips Bison's
+// session guard. _bisonGate chains every token operation so each switch+fetch
+// pair runs atomically, start to finish, against the shared key.
+let _bisonGate = Promise.resolve();
+function withBisonLock(fn) {
+  const run = _bisonGate.then(fn, fn); // run regardless of prior outcome
+  // Keep the chain alive even if this op throws — swallow here, caller still sees the real result/error.
+  _bisonGate = run.then(() => {}, () => {});
+  return run;
+}
+
 // Module-scope Bison helper. The existing bisonSwitch/bisonFetch are scoped to
 // the if(db) block and aren't reachable from the /api/bison/* routes, so these
 // routes use this self-contained version. Always switches workspace when wsId
 // is given (POST /api/workspaces/v1.1/switch-workspace { workspace_id }).
 async function bisonReq(path, opts = {}) {
-  if (opts.wsId) {
-    await fetch(BISON_BASE + '/api/workspaces/v1.1/switch-workspace', {
-      method: 'POST',
+  // Serialize the whole switch+fetch sequence on the shared token (see _bisonGate).
+  return withBisonLock(async () => {
+    if (opts.wsId && _bisonWsId !== String(opts.wsId)) {
+      await fetch(BISON_BASE + '/api/workspaces/v1.1/switch-workspace', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + getBisonKey(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team_id: Number(opts.wsId) }),
+        signal: AbortSignal.timeout(10000),
+      });
+      _bisonWsId = String(opts.wsId);
+    }
+    const url = new URL(BISON_BASE + path);
+    if (opts.params) for (const [k, v] of Object.entries(opts.params)) { if (v != null) url.searchParams.set(k, String(v)); }
+    const init = {
+      method: opts.method || 'GET',
       headers: { Authorization: 'Bearer ' + getBisonKey(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ team_id: Number(opts.wsId) }),
-      signal: AbortSignal.timeout(10000),
-    });
-  }
-  const url = new URL(BISON_BASE + path);
-  if (opts.params) for (const [k, v] of Object.entries(opts.params)) { if (v != null) url.searchParams.set(k, String(v)); }
-  const init = {
-    method: opts.method || 'GET',
-    headers: { Authorization: 'Bearer ' + getBisonKey(), 'Content-Type': 'application/json' },
-    signal: AbortSignal.timeout(20000),
-  };
-  if (opts.body) init.body = JSON.stringify(opts.body);
-  const r = await fetch(url.toString(), init);
-  const txt = await r.text();
-  let data; try { data = txt ? JSON.parse(txt) : {}; } catch { data = { raw: txt }; }
-  if (!r.ok) throw new Error('Bison ' + path + ' -> ' + r.status + ': ' + txt.slice(0, 200));
-  return data;
+      signal: AbortSignal.timeout(20000),
+    };
+    if (opts.body) init.body = JSON.stringify(opts.body);
+    const r = await fetch(url.toString(), init);
+    const txt = await r.text();
+    let data; try { data = txt ? JSON.parse(txt) : {}; } catch { data = { raw: txt }; }
+    if (!r.ok) throw new Error('Bison ' + path + ' -> ' + r.status + ': ' + txt.slice(0, 200));
+    return data;
+  });
 }
 
 // Known PlusVibe workspace_id → Bison team_id map (Bison's /api/workspaces only
@@ -2341,8 +2360,7 @@ app.get('/api/leads/:id/thread', requireAuth, async (req, res) => {
   if (!row) return res.status(404).json({ error: 'Lead not found' });
   const lead = JSON.parse(row.data);
   try {
-    await bisonSwitch(lead.workspace_id);
-    var threadRaw = await bisonFetch('/api/replies/' + (lead.last_thread_id || lead.bison_reply_id) + '/conversation-thread');
+    var threadRaw = await bisonFetch('/api/replies/' + (lead.last_thread_id || lead.bison_reply_id) + '/conversation-thread', { wsId: lead.workspace_id });
     var threadMsgs = [].concat(threadRaw.data && threadRaw.data.older_messages || [], threadRaw.data && threadRaw.data.current_reply ? [threadRaw.data.current_reply] : [], threadRaw.data && threadRaw.data.newer_messages || []).map(function(m) { return { id: m.id, direction: m.folder === 'Sent' ? 'OUT' : 'IN', subject: m.subject, body: { html: m.html_body, text: m.text_body }, timestamp_created: m.date_received, from_address_email: m.from_email_address, to_address_email_list: m.primary_to_email_address, is_unread: m.read ? 0 : 1 }; });
     res.json({ source: 'bison', data: { messages: threadMsgs } });
   } catch {
@@ -2369,9 +2387,8 @@ app.post('/api/leads/:id/reply', requireAuth, async (req, res) => {
   if (!body?.trim()) return res.status(400).json({ error: 'Reply body required' });
   const body_text = typeof body === 'string' ? body : (body && body.text) || '';
   try {
-    await bisonSwitch(lead.workspace_id);
     var replyPayload = { message: (body && body.text) || body_text || '', content_type: 'text', reply_all: true };
-    var replyRes = await bisonFetch('/api/replies/' + (lead.last_thread_id || lead.bison_reply_id) + '/reply', { method: 'POST', body: replyPayload });
+    var replyRes = await bisonFetch('/api/replies/' + (lead.last_thread_id || lead.bison_reply_id) + '/reply', { wsId: lead.workspace_id, method: 'POST', body: replyPayload });
     res.json({ ok: true, result: replyRes });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -2542,7 +2559,8 @@ pvFetch = async function pvFetch(path, retries = 5, opts = {}) {
   throw new Error(`PlusVibe 429: ${path} (gave up after ${retries} retries)`);
 };
 
-async function bisonSwitch(wsId) {
+// Low-level switch (assumes caller already holds the Bison lock).
+async function _bisonSwitchUnlocked(wsId) {
   if (_bisonWsId === String(wsId)) return;
   await fetch(BISON_BASE + '/api/workspaces/v1.1/switch-workspace', {
     method: 'POST',
@@ -2553,27 +2571,38 @@ async function bisonSwitch(wsId) {
   _bisonWsId = String(wsId);
 }
 
+// Standalone switch — serialized through the gate. Most callers now pass wsId
+// straight to bisonFetch (which switches atomically with its fetch), so this is
+// only needed when a later bisonFetch is called WITHOUT wsId and relies on the
+// active workspace persisting. Even then it's gated so it can't race a cron.
+async function bisonSwitch(wsId) {
+  return withBisonLock(() => _bisonSwitchUnlocked(wsId));
+}
+
 async function bisonFetch(path, opts) {
   opts = opts || {};
-  if (opts.wsId) await bisonSwitch(opts.wsId);
-  var url = new URL(BISON_BASE + path);
-  if (opts.params) {
-    Object.keys(opts.params).forEach(function(k) {
-      if (opts.params[k] !== undefined && opts.params[k] !== null) url.searchParams.set(k, String(opts.params[k]));
-    });
-  }
-  var init = {
-    method: opts.method || 'GET',
-    headers: { 'Authorization': 'Bearer ' + getBisonKey(), 'Content-Type': 'application/json' },
-    signal: AbortSignal.timeout(15000),
-  };
-  if (opts.body) init.body = JSON.stringify(opts.body);
-  var r = await fetch(url.toString(), init);
-  if (!r.ok) {
-    var txt = await r.text().catch(function() { return ''; });
-    throw new Error('Bison ' + path + ' -> ' + r.status + ': ' + txt.slice(0, 200));
-  }
-  return r.json();
+  // Serialize switch+fetch as one atomic unit on the shared token (see _bisonGate).
+  return withBisonLock(async () => {
+    if (opts.wsId) await _bisonSwitchUnlocked(opts.wsId);
+    var url = new URL(BISON_BASE + path);
+    if (opts.params) {
+      Object.keys(opts.params).forEach(function(k) {
+        if (opts.params[k] !== undefined && opts.params[k] !== null) url.searchParams.set(k, String(opts.params[k]));
+      });
+    }
+    var init = {
+      method: opts.method || 'GET',
+      headers: { 'Authorization': 'Bearer ' + getBisonKey(), 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(15000),
+    };
+    if (opts.body) init.body = JSON.stringify(opts.body);
+    var r = await fetch(url.toString(), init);
+    if (!r.ok) {
+      var txt = await r.text().catch(function() { return ''; });
+      throw new Error('Bison ' + path + ' -> ' + r.status + ': ' + txt.slice(0, 200));
+    }
+    return r.json();
+  });
 }
 
 function normBisonWs(ws) {
@@ -2698,7 +2727,6 @@ async function refreshRevenueCache() {
         for (let page = 1; page <= 20; page++) {
           let batch;
           try {
-            bisonSwitch(ws.id);
             const raw_b = await bisonFetch('/api/leads', { wsId: ws.id, params: { page: page, per_page: 100 } });
             batch = (raw_b.data || []).map(function(l) { return Object.assign({}, l, { _id: String(l.id), id: String(l.id), company_name: l.company || l.company_name, job_title: l.title || l.job_title, label: l.interested ? 'INTERESTED' : (l.status || '') }); });
           } catch(e) { break; }
@@ -3035,7 +3063,6 @@ async function fetchPerformanceLabeledLeads(wsId) {
     for (let page = 1; page <= 20; page++) {
       let batch = [];
       try {
-        bisonSwitch(wsId);
         const raw_b = await bisonFetch('/api/leads', { wsId: wsId, params: { page: page, per_page: 100 } });
         batch = (raw_b.data || []).map(function(l) { return Object.assign({}, l, { _id: String(l.id), id: String(l.id), company_name: l.company || l.company_name, job_title: l.title || l.job_title, label: l.interested ? 'INTERESTED' : (l.status || '') }); });
       } catch { break; }
@@ -3490,8 +3517,7 @@ app.get('/api/combo-analysis/pv-sample', requireSession, async (req, res) => {
     if (!ws) return res.json({ error: 'No workspaces found' });
     const today = new Date().toISOString().slice(0,10);
     const week  = new Date(Date.now() - 7*86400000).toISOString().slice(0,10);
-    await bisonSwitch(ws.id);
-    var bStats = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { params: { start_date: week, end_date: today } });
+    var bStats = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { wsId: ws.id, params: { start_date: week, end_date: today } });
     var raw = Object.values(pivotBisonStats((bStats.data || bStats) || []));
     res.json({ workspace_id: ws.id, workspace_name: ws.name, raw });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -3542,8 +3568,7 @@ app.post('/api/combo-analysis/historical-backfill', requireSession, async (req, 
           : { unknown: 1 };
 
         // Fetch daily stats from Bison
-        await bisonSwitch(ws.id);
-        var bStats = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { params: { start_date: start, end_date: end } });
+        var bStats = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { wsId: ws.id, params: { start_date: start, end_date: end } });
         var pvData = Object.values(pivotBisonStats((bStats.data || bStats) || []));
         const chart  = Array.isArray(pvData) ? pvData : (pvData?.chart || []);
 
@@ -3914,7 +3939,6 @@ async function refreshCampaignCache() {
       if (inactiveIds.has(ws.id)) continue;
       await new Promise(r => setTimeout(r, 1200)); // rate limit: 1.2s between workspaces (~25 ws = 30s total)
       try {
-        await bisonSwitch(ws.id || wsId || workspace_id);
         var camp_raw = await bisonFetch('/api/campaigns', { wsId: ws.id || wsId || workspace_id });
         var campaigns = (camp_raw.data || []).map(function(c) { return { id: c.id, camp_name: c.name, status: c.status, sent_count: c.emails_sent || 0, replied_count: c.replied || 0, unique_opened_count: c.unique_opens || 0, bounced_count: c.bounced || 0, lead_count: c.total_leads || 0, lead_contacted_count: c.total_leads_contacted || 0, positive_reply_count: 0, sequences: [] }; });
         if (!Array.isArray(campaigns) || !campaigns.length) continue;
@@ -9176,7 +9200,6 @@ app.post('/api/copy/refresh-templates', requireSession, async (req, res) => {
     const { workspace_id } = req.query;
     if (!workspace_id) return res.status(400).json({ error: 'Missing workspace_id' });
 
-    await bisonSwitch(ws.id || wsId || workspace_id);
     var camp_raw = await bisonFetch('/api/campaigns', { wsId: ws.id || wsId || workspace_id });
     var campaigns = (camp_raw.data || []).map(function(c) { return { id: c.id, camp_name: c.name, status: c.status, sent_count: c.emails_sent || 0, replied_count: c.replied || 0, unique_opened_count: c.unique_opens || 0, bounced_count: c.bounced || 0, lead_count: c.total_leads || 0, lead_contacted_count: c.total_leads_contacted || 0, positive_reply_count: 0, sequences: [] }; });
     if (!Array.isArray(campaigns)) return res.status(502).json({ error: 'PlusVibe returned no campaigns' });
@@ -9490,7 +9513,6 @@ app.post('/api/campaigns/apply-optimisation', requireSession, async (req, res) =
     return res.status(400).json({ error: 'Missing params' });
   try {
     // Get current campaign sequence structure
-    await bisonSwitch(ws.id || wsId || workspace_id);
     var camp_raw = await bisonFetch('/api/campaigns', { wsId: ws.id || wsId || workspace_id });
     var campaigns = (camp_raw.data || []).map(function(c) { return { id: c.id, camp_name: c.name, status: c.status, sent_count: c.emails_sent || 0, replied_count: c.replied || 0, unique_opened_count: c.unique_opens || 0, bounced_count: c.bounced || 0, lead_count: c.total_leads || 0, lead_contacted_count: c.total_leads_contacted || 0, positive_reply_count: 0, sequences: [] }; });
     const camp = (Array.isArray(campaigns) ? campaigns : []).find(c => c.id === campId);
