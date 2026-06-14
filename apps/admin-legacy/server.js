@@ -135,6 +135,37 @@ async function bisonReq(path, opts = {}) {
   });
 }
 
+// Bison replacement for the old PlusVibe `/lead/workspace-leads` endpoint.
+// PlusVibe filtered leads by a `label` string; Bison filters by
+// filters[lead_campaign_status] (e.g. 'replied'/'interested') on /api/leads and
+// returns { data: [...] } with page/per_page paging. Returns a plain array of
+// leads (already unwrapped) so callers can iterate like the old PV batches.
+// The `wsId` here is the canonical PV workspace_id used elsewhere; map it to the
+// Bison team_id first. A PV label is loosely mapped to a Bison campaign-status
+// filter; unknown labels fall back to no filter (all leads).
+const PV_LABEL_TO_BISON_STATUS = {
+  REPLIED: 'replied', INTERESTED: 'interested', INFO: 'replied',
+  NOT_INTERESTED: 'not_interested', NEGATIVE_REPLY: 'not_interested',
+  LEAD: 'interested', WEAK_LEAD: 'interested', AWAITING_REPLY: 'replied',
+};
+async function bisonWorkspaceLeads(wsId, opts = {}) {
+  const team = BISON_TEAMS.find(t => t.pv === String(wsId));
+  const teamId = team ? team.team_id : String(wsId);
+  const params = { page: opts.page || 1, per_page: opts.perPage || 100 };
+  if (opts.label) {
+    const status = PV_LABEL_TO_BISON_STATUS[String(opts.label).toUpperCase()];
+    if (status) params['filters[lead_campaign_status]'] = status;
+  }
+  const raw = await bisonReq('/api/leads', { wsId: teamId, params });
+  const list = Array.isArray(raw) ? raw : (raw?.data || []);
+  // Normalise Bison lead fields to the keys downstream code reads (it already
+  // checks `company`/`title` variants, but make email/_id reliable).
+  return list.map(l => Object.assign({}, l, {
+    _id: l.id != null ? String(l.id) : (l._id || null),
+    email: l.email || l.email_address || null,
+  }));
+}
+
 // Known PlusVibe workspace_id → Bison team_id map (Bison's /api/workspaces only
 // returns the token user's OWN teams, not all client teams, so we map clients
 // explicitly). Update here when a client is added/migrated to Bison.
@@ -1836,6 +1867,39 @@ app.post('/api/admin/bison-key/test', requireAdmin, async (req, res) => {
     res.json({ ok: true, workspaces: list.length });
   } catch (err) {
     res.status(502).json({ ok: false, error: err.message });
+  }
+});
+
+// Diagnostic: live per-workspace mailbox count straight from Bison, paginated.
+// Lets us see exactly where the dashboard count diverges from Bison's real total
+// (e.g. 165 shown vs ~1000 expected) without waiting for the 30-min cache.
+app.get('/api/admin/mailbox-debug', requireAdmin, async (req, res) => {
+  if (!getBisonKey()) return res.status(400).json({ error: 'No Bison key configured' });
+  try {
+    const wsRaw = await bisonReq('/api/workspaces/v1.1');
+    const workspaces = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.data || []);
+    const PER_PAGE = 200;
+    const perWorkspace = [];
+    let total = 0;
+    for (const w of workspaces) {
+      let count = 0, pages = 0, firstPageLen = null, err = null;
+      try {
+        for (let page = 1; page <= 50; page++) {
+          const resp = await bisonReq('/api/sender-emails', { wsId: String(w.id), params: { per_page: PER_PAGE, page } });
+          const list = Array.isArray(resp) ? resp : (resp?.data ?? []);
+          if (page === 1) firstPageLen = list.length;
+          count += list.length;
+          pages = page;
+          if (list.length < PER_PAGE) break;
+        }
+      } catch (e) { err = e.message; }
+      total += count;
+      perWorkspace.push({ team_id: String(w.id), name: w.name, count, pages, first_page_len: firstPageLen, error: err });
+    }
+    perWorkspace.sort((a, b) => b.count - a.count);
+    res.json({ total, workspace_count: workspaces.length, per_page: PER_PAGE, workspaces: perWorkspace });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
   }
 });
 
@@ -9636,18 +9700,16 @@ app.post('/api/campaigns/apply-optimisation', requireSession, async (req, res) =
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── PlusVibe proxy (kept for performance.html agency scan) ────
+// ── Workspace-leads proxy (now Bison-backed) ────
 app.get('/api/pv/workspace-leads', requireSession, async (req, res) => {
   const { workspace_id, label, page, limit } = req.query;
   if (!workspace_id) return res.status(400).json({ error: 'Missing workspace_id' });
   try {
-    const qs = new URLSearchParams({ workspace_id, page: page || 1, limit: limit || 100 });
-    if (label) qs.set('label', label);
-    const r = await fetch(BISON_BASE + '/api/lead/workspace-leads?' + qs.toString(), {
-      headers: { 'Authorization': 'Bearer ' + getBisonKey() }
+    const leads = await bisonWorkspaceLeads(workspace_id, {
+      label, page: parseInt(page) || 1, perPage: parseInt(limit) || 100,
     });
-    res.json(await r.json());
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    res.json({ leads });
+  } catch (err) { res.status(502).json({ error: err.message }); }
 });
 
 // ── Admin — workspaces ─────────────────────────────────────
@@ -10193,8 +10255,7 @@ app.post('/api/audience/backfill-employee-size', requireSession, async (req, res
       for (let page = 1; page <= 500; page++) {
         let batch;
         try {
-          const raw = await pvFetch(`/lead/workspace-leads?workspace_id=${wsId}&page=${page}&limit=100`);
-          batch = Array.isArray(raw) ? raw : (raw?.leads || raw?.data || []);
+          batch = await bisonWorkspaceLeads(wsId, { page, perPage: 100 });
         } catch { break; }
         if (!batch.length) break;
         for (const l of batch) {
@@ -10891,12 +10952,16 @@ app.get('/api/perfshim/lead/count/lead-status', requireSession, async (req, res)
 });
 
 // 6. GET /lead/workspace-leads — per-label lead listing (used by fetchLabeledLeads).
-// TODO: faithfully mapping PlusVibe label-filtered leads to Bison /api/leads is
-// non-trivial (Bison labels/status model differs). The pages tolerate an empty
-// result (.catch(()=>[])), so return [] for now — leaves lead-detection inert
-// rather than broken. Wire up to Bison /api/leads label filtering when needed.
-app.get('/api/perfshim/lead/workspace-leads', requireSession, (req, res) => {
-  res.json([]);
+// Now Bison-backed via bisonWorkspaceLeads (label → filters[lead_campaign_status]).
+app.get('/api/perfshim/lead/workspace-leads', requireSession, async (req, res) => {
+  const { workspace_id, label, page, limit } = req.query;
+  if (!workspace_id) return res.json([]);
+  try {
+    const leads = await bisonWorkspaceLeads(workspace_id, {
+      label, page: parseInt(page) || 1, perPage: parseInt(limit) || 100,
+    });
+    res.json(leads);
+  } catch { res.json([]); } // pages tolerate empty; never error the scan
 });
 
 app.get('/api/pv/campaigns', requireSession, async (req, res) => {
@@ -13749,8 +13814,7 @@ app.get('/api/audience/pv-lead-debug', requireAdmin, async (req, res) => {
   const wsId = String(req.query.workspace_id || '');
   if (!wsId) return res.status(400).json({ error: 'workspace_id required' });
   try {
-    const raw = await pvFetch(`/lead/workspace-leads?workspace_id=${wsId}&page=1&limit=3`);
-    const leads = Array.isArray(raw) ? raw : (raw?.leads || raw?.data || []);
+    const leads = await bisonWorkspaceLeads(wsId, { page: 1, perPage: 3 });
     const sample = leads.map(l => ({
       keys: Object.keys(l),
       num_employees:           l.num_employees,
@@ -13962,8 +14026,7 @@ async function autoSeedWorkspaceResponders(pgdb, workspaceId, _pvFetch) {
     for (let page = 1; page <= 50; page++) {
       let batch;
       try {
-        const raw = await pv(`/lead/workspace-leads?workspace_id=${workspaceId}&label=${label}&page=${page}&limit=100`);
-        batch = Array.isArray(raw) ? raw : (raw?.leads || raw?.data || []);
+        batch = await bisonWorkspaceLeads(workspaceId, { label, page, perPage: 100 });
       } catch (err) {
         console.warn(`[audience-seed] ws=${workspaceId} label=${label} page=${page} error:`, err.message);
         break;
@@ -13995,8 +14058,7 @@ async function autoSeedWorkspaceResponders(pgdb, workspaceId, _pvFetch) {
   for (let page = 1; !skipFullPull && page <= 500; page++) {
     let batch;
     try {
-      const raw = await pv(`/lead/workspace-leads?workspace_id=${workspaceId}&page=${page}&limit=100`);
-      batch = Array.isArray(raw) ? raw : (raw?.leads || raw?.data || []);
+      batch = await bisonWorkspaceLeads(workspaceId, { page, perPage: 100 });
     } catch (err) {
       console.warn(`[audience-seed] ws=${workspaceId} all page=${page} error:`, err.message);
       break;
