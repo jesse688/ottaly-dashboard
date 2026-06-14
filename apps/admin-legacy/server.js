@@ -166,6 +166,25 @@ async function bisonWorkspaceLeads(wsId, opts = {}) {
   }));
 }
 
+// List ALL sender emails (mailboxes) for one Bison workspace, paginated.
+// IMPORTANT: Bison ignores per_page and returns a fixed ~15 rows/page, so we MUST
+// page until an empty page (or a repeated page) — a single call only yields ~15.
+// `wsId` is the Bison team_id. Returns the raw account objects.
+async function bisonListSenderEmails(wsId) {
+  const out = [];
+  let prevSig = '';
+  for (let page = 1; page <= 300; page++) {
+    const resp = await bisonReq('/api/sender-emails', { wsId, params: { per_page: 200, page } });
+    const list = Array.isArray(resp) ? resp : (resp?.data ?? []);
+    if (!list.length) break;
+    const sig = list.map(a => a.id ?? a.email ?? '').join(',');
+    if (sig === prevSig) break;
+    prevSig = sig;
+    out.push(...list);
+  }
+  return out;
+}
+
 // Known PlusVibe workspace_id → Bison team_id map (Bison's /api/workspaces only
 // returns the token user's OWN teams, not all client teams, so we map clients
 // explicitly). Update here when a client is added/migrated to Bison.
@@ -1882,15 +1901,18 @@ app.get('/api/admin/mailbox-debug', requireAdmin, async (req, res) => {
     const perWorkspace = [];
     let total = 0;
     for (const w of workspaces) {
-      let count = 0, pages = 0, firstPageLen = null, err = null;
+      let count = 0, pages = 0, firstPageLen = null, err = null, prevSig = '';
       try {
-        for (let page = 1; page <= 50; page++) {
+        for (let page = 1; page <= 300; page++) {
           const resp = await bisonReq('/api/sender-emails', { wsId: String(w.id), params: { per_page: PER_PAGE, page } });
           const list = Array.isArray(resp) ? resp : (resp?.data ?? []);
           if (page === 1) firstPageLen = list.length;
+          if (!list.length) break;
+          const sig = list.map(a => a.id ?? a.email ?? '').join(',');
+          if (sig === prevSig) break; // Bison repeated the page → end
+          prevSig = sig;
           count += list.length;
           pages = page;
-          if (list.length < PER_PAGE) break;
         }
       } catch (e) { err = e.message; }
       total += count;
@@ -6867,12 +6889,20 @@ async function listSendingMailboxes() {
   for (const team of teams) {
     try {
       let found = 0;
-      // Bison /api/sender-emails is paginated. Page through until a page comes
-      // back short (fewer than PER_PAGE) — otherwise workspaces with >200
-      // mailboxes silently lose everything past the first page.
-      for (let page = 1; page <= 50; page++) {
+      let prevSig = '';
+      // Bison /api/sender-emails is paginated and IGNORES per_page — it returns a
+      // fixed ~15 rows/page. So we must page until a page comes back EMPTY (not
+      // "shorter than per_page", which would stop after page 1). We dedup emails
+      // GLOBALLY across workspaces, so "no new emails this page" is NOT a safe stop
+      // signal — instead detect Bison repeating a page by its row-id signature.
+      // Cap pages high enough for the biggest workspace (15/page × ~1000 ≈ 70).
+      for (let page = 1; page <= 300; page++) {
         const resp = await bisonReq('/api/sender-emails', { wsId: team.team_id, params: { per_page: PER_PAGE, page } });
         const list = Array.isArray(resp) ? resp : (resp?.data ?? []);
+        if (!list.length) break; // no more rows for this workspace
+        const sig = list.map(a => a.id ?? a.email ?? '').join(',');
+        if (sig === prevSig) break; // Bison repeated the same page → reached the end
+        prevSig = sig;
         for (const a of list) {
           const email = (a.email || a.email_address || a.name || '').toString().trim().toLowerCase();
           if (!email.includes('@') || seenEmails.has(email)) continue;
@@ -6900,8 +6930,6 @@ async function listSendingMailboxes() {
           });
           found++;
         }
-        // Short page → no more results for this workspace.
-        if (list.length < PER_PAGE) break;
       }
       if (found) console.log(`[mailboxes] ${team.name}: ${found} mailbox(es)`);
       await new Promise(r => setTimeout(r, 250)); // pace between workspaces
@@ -10888,8 +10916,7 @@ app.get('/api/perfshim/account/list', requireSession, async (req, res) => {
   try {
     const wsId = perfshimTeamId(workspace_id);
     if (!wsId) return res.json([]);
-    const resp = await bisonReq('/api/sender-emails', { wsId, params: { per_page: 500 } });
-    const list = Array.isArray(resp) ? resp : (resp?.data ?? []);
+    const list = await bisonListSenderEmails(wsId); // paginated — Bison caps ~15/page
     const accounts = list.map(a => {
       const connected = a.status === 'connected' || a.is_connected === true;
       const paused = a.status === 'paused';
@@ -10916,8 +10943,7 @@ app.get('/api/perfshim/account/warmup-stats', requireSession, async (req, res) =
   try {
     const wsId = perfshimTeamId(workspace_id);
     if (!wsId) return res.json(empty);
-    const resp = await bisonReq('/api/sender-emails', { wsId, params: { per_page: 500 } });
-    const list = Array.isArray(resp) ? resp : (resp?.data ?? []);
+    const list = await bisonListSenderEmails(wsId); // paginated — Bison caps ~15/page
     const warming = list.filter(a => (a.warmup_enabled ?? a.warmup?.enabled) === true).length;
     res.json({ emailAcc: { inbox_percent: 0, total_inboxes: warming } });
   } catch (err) {
@@ -14918,9 +14944,8 @@ function scheduleDiagnosticsDaily(pgdb, diagnostics) {
       if (seen.has(wsId)) continue;
       seen.add(wsId);
       try {
-        /* switch via bisonReq wsId */ true;
-        var ea_bison = await bisonReq('/api/sender-emails', { wsId: wsId });
-        var ea_data = (ea_bison.data || []).map(function(a) { return { _id: String(a.id), id: String(a.id), email: a.email || a.name, status: a.status === 'connected' ? 'active' : 'inactive', warmup_status: a.warmup_enabled ? 'ACTIVE' : 'PAUSED', daily_limit: a.daily_limit || 0, warmup_details: { inbox_pct: 0, spam_pct: 0 } }; });
+        var ea_list = await bisonListSenderEmails(wsId); // paginated (Bison caps ~15/page)
+        var ea_data = ea_list.map(function(a) { return { _id: String(a.id), id: String(a.id), email: a.email || a.name, status: a.status === 'connected' ? 'active' : 'inactive', warmup_status: a.warmup_enabled ? 'ACTIVE' : 'PAUSED', daily_limit: a.daily_limit || 0, warmup_details: { inbox_pct: 0, spam_pct: 0 } }; });
         const accounts = ea_data;
         for (const acc of accounts) {
           if (acc.warmup_details) {
