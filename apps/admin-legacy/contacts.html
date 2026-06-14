@@ -1391,10 +1391,10 @@
         </button>
         <div style="flex:1;"></div>
         <button class="btn btn-plusvibe" id="pushBtn" onclick="openPushModal()">
-          🚀 Push to Bison (legacy)
+          ✅ Verify &amp; Push
         </button>
         <button class="btn btn-plusvibe" id="pushBisonBtn" onclick="openBisonPushModal()" style="margin-left:8px;background:#7c3aed;">
-          🚀 Push to Bison
+          🚀 Push to Campaign
         </button>
       </div>
 
@@ -3624,29 +3624,35 @@
     // client — the workspace already identifies them). Caps each list to 2
     // values and appends a short date. Falls back to "New campaign · <date>".
     function buildCampaignName() {
-      const cap = (arr) => (arr || []).filter(Boolean).slice(0, 2).join(', ');
       const sel = (key) => (filterDefs[key] && filterDefs[key].selected) || [];
+      // Title-case the FIRST value of a category only — keeps the name short.
+      const one = (arr) => {
+        const a = (arr || []).filter(Boolean);
+        if (!a.length) return '';
+        return a[0].replace(/\b\w/g, c => c.toUpperCase());
+      };
       const parts = [];
 
-      const industries = cap(sel('industry'));     if (industries) parts.push(industries);
-      const keywords   = cap(sel('keywords'));      if (keywords && !industries) parts.push(keywords);
-      const seniority  = cap(sel('seniority'));     if (seniority) parts.push(seniority);
-      const jobTitles  = cap(sel('jobTitle'));      if (jobTitles) parts.push(jobTitles);
+      // Priority order — one short value each. Company size matters, so it sits
+      // right after industry and is always kept.
+      // 1) industry (or keywords if no industry)
+      const industry = one(sel('industry'));
+      if (industry) parts.push(industry);
+      else { const kw = one(sel('keywords')); if (kw) parts.push(kw); }
 
+      // 2) company size (employee ranges) — important, label with "emp"
       const empRanges = (typeof _employeeSelected !== 'undefined') ? [..._employeeSelected] : [];
-      if (empRanges.length) parts.push(empRanges.slice(0, 2).join(', '));
+      if (empRanges.length) parts.push(empRanges[0] + ' emp');
 
-      // Location: first non-empty of person then company fields.
+      // 3) seniority
+      const seniority = one(sel('seniority')); if (seniority) parts.push(seniority);
+
+      // 4) location (first set field)
       const locKeys = ['city','state','country','personRegion','companyCity','companyState','companyCountry','companyRegion'];
-      for (const k of locKeys) {
-        const v = cap(sel(k));
-        if (v) { parts.push(v); break; }
-      }
+      for (const k of locKeys) { const v = one(sel(k)); if (v) { parts.push(v); break; } }
 
-      const d = new Date();
-      const date = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-      const meaningful = parts.filter(Boolean);
-      return (meaningful.length ? meaningful.join(' · ') : 'New campaign') + ' · ' + date;
+      const date = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+      return (parts.length ? parts.join(' · ') : 'New campaign') + ' · ' + date;
     }
 
     // Toggle modal UI between existing-campaign dropdown and new-campaign name.
