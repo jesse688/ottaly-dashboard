@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ottaly — Mailbox Diff</title>
+<link rel="stylesheet" href="/ottaly.css">
+<style>
+  body{font-family:'Inter',system-ui,sans-serif;background:#F0F2F8;color:#050C29;margin:0;padding:2rem}
+  .wrap{max-width:1100px;margin:0 auto}
+  h1{font-size:1.3rem;margin:0 0 .25rem}
+  .sub{color:#6B7280;font-size:13px;margin-bottom:1.25rem}
+  textarea{width:100%;height:240px;border:1px solid #D1D5DB;border-radius:8px;padding:10px;font-family:ui-monospace,monospace;font-size:12px;box-sizing:border-box}
+  .row{display:flex;gap:.75rem;align-items:center;margin:.75rem 0;flex-wrap:wrap}
+  button{padding:.55rem 1rem;border-radius:8px;border:1px solid #224388;background:#224388;color:#fff;font-weight:600;cursor:pointer}
+  button.ghost{background:#fff;color:#224388}
+  select{padding:.5rem;border:1px solid #D1D5DB;border-radius:8px}
+  .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;margin:1rem 0}
+  .card{background:#fff;border:1px solid #E2E6F0;border-radius:10px;padding:1rem}
+  .card .n{font-size:1.6rem;font-weight:800}
+  .card .l{font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:#6B7280}
+  .list{background:#fff;border:1px solid #E2E6F0;border-radius:10px;padding:1rem;margin-top:1rem}
+  .list h3{margin:.25rem 0 .5rem;font-size:13px}
+  .list pre{white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:12px;color:#991B1B;margin:0}
+  .ok{color:#166534}
+  #status{font-size:13px;color:#6B7280}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Mailbox Diff &amp; Supplier Tag</h1>
+  <div class="sub">Paste a list of mailbox emails (one per line). Compare against what the dashboard pulled from Bison, and optionally tag them all with a supplier.</div>
+
+  <textarea id="emails" placeholder="paste mailbox emails, one per line"></textarea>
+
+  <div class="row">
+    <button onclick="runDiff()">Compare to dashboard</button>
+    <span style="margin-left:1rem">Then tag the matched ones as</span>
+    <select id="supplier">
+      <option>Winnr</option><option>Maildoso</option><option>Mithun</option><option>Inboxing</option>
+    </select>
+    <button class="ghost" onclick="tagAll()">Tag pasted list</button>
+    <span id="status"></span>
+  </div>
+
+  <div class="cards" id="cards" style="display:none">
+    <div class="card"><div class="l">Your list</div><div class="n" id="cYours">—</div></div>
+    <div class="card"><div class="l">On dashboard</div><div class="n" id="cDash">—</div></div>
+    <div class="card"><div class="l">Missing from dashboard</div><div class="n" id="cMissing" style="color:#DC2626">—</div></div>
+  </div>
+
+  <div class="list" id="missingWrap" style="display:none">
+    <h3>Missing from dashboard (in your list, NOT pulled from Bison):</h3>
+    <pre id="missing"></pre>
+  </div>
+  <div class="list" id="extraWrap" style="display:none">
+    <h3>Extra on dashboard (pulled from Bison, NOT in your list):</h3>
+    <pre id="extra" style="color:#6B7280"></pre>
+  </div>
+</div>
+
+<script>
+function getEmails(){ return document.getElementById('emails').value.split('\n').map(s=>s.trim()).filter(Boolean); }
+
+async function runDiff(){
+  const emails = getEmails();
+  if(!emails.length){ document.getElementById('status').textContent='Paste some emails first.'; return; }
+  document.getElementById('status').textContent='Comparing…';
+  try{
+    const r = await fetch('/api/admin/mailbox-diff', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({emails})});
+    if(!r.ok) throw new Error('HTTP '+r.status+' — is the latest build deployed?');
+    const d = await r.json();
+    document.getElementById('cards').style.display='grid';
+    document.getElementById('cYours').textContent = d.your_count;
+    document.getElementById('cDash').textContent = d.dashboard_count;
+    document.getElementById('cMissing').textContent = d.missing_from_dashboard.length;
+    document.getElementById('missingWrap').style.display = 'block';
+    document.getElementById('missing').textContent = d.missing_from_dashboard.length ? d.missing_from_dashboard.join('\n') : '(none — all your mailboxes are on the dashboard ✓)';
+    document.getElementById('missing').className = d.missing_from_dashboard.length ? '' : 'ok';
+    document.getElementById('extraWrap').style.display = 'block';
+    document.getElementById('extra').textContent = d.extra_on_dashboard.join('\n') || '(none)';
+    document.getElementById('status').textContent='';
+  }catch(e){ document.getElementById('status').textContent = 'Error: '+e.message; }
+}
+
+async function tagAll(){
+  const emails = getEmails();
+  const value = document.getElementById('supplier').value;
+  if(!emails.length){ document.getElementById('status').textContent='Paste some emails first.'; return; }
+  if(!confirm(`Tag ${emails.length} mailbox(es) as supplier "${value}"?`)) return;
+  document.getElementById('status').textContent='Tagging…';
+  try{
+    const r = await fetch('/api/mailboxes/bulk-tag', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({emails, field:'supplier', value})});
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.error||'Failed');
+    document.getElementById('status').textContent = `Tagged ${d.changed ?? d.updated ?? emails.length} as ${value}.`;
+  }catch(e){ document.getElementById('status').textContent = 'Error: '+e.message; }
+}
+</script>
+</body>
+</html>

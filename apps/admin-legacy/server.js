@@ -8249,6 +8249,8 @@ app.post('/api/mailboxes/enable-warmup', requireSession, async (req, res) => {
 
 app.get('/mailboxes',      (req, res) => res.sendFile(path.join(__dirname, 'mailboxes.html')));
 app.get('/mailboxes.html', (req, res) => res.sendFile(path.join(__dirname, 'mailboxes.html')));
+app.get('/mailbox-diff',      (req, res) => res.sendFile(path.join(__dirname, 'mailbox-diff.html')));
+app.get('/mailbox-diff.html', (req, res) => res.sendFile(path.join(__dirname, 'mailbox-diff.html')));
 
 // ── Warmup overview (Bison /api/warmup/sender-emails) ───────────────────────
 // Per-mailbox warmup health across all workspaces. Like /api/sender-emails,
