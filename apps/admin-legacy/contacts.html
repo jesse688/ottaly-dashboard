@@ -1391,10 +1391,7 @@
         </button>
         <div style="flex:1;"></div>
         <button class="btn btn-plusvibe" id="pushBtn" onclick="openPushModal()">
-          ✅ Verify &amp; Push
-        </button>
-        <button class="btn btn-plusvibe" id="pushBisonBtn" onclick="openBisonPushModal()" style="margin-left:8px;background:#7c3aed;">
-          🚀 Push to Campaign
+          🚀 Verify &amp; Push to Bison
         </button>
       </div>
 
@@ -1576,9 +1573,21 @@
         </div>
         <div class="form-group">
           <label>Campaign</label>
+          <div style="display:flex;gap:14px;margin-bottom:8px;font-size:13px;">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+              <input type="radio" name="pushCampMode" value="existing" checked onchange="onPushCampModeChange()"> Existing campaign
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+              <input type="radio" name="pushCampMode" value="new" onchange="onPushCampModeChange()"> + Build new campaign
+            </label>
+          </div>
           <select id="pvCampaign" style="width:100%;padding:10px 12px;">
             <option value="">Loading campaigns…</option>
           </select>
+          <div id="pushNewCampWrap" style="display:none;">
+            <input type="text" id="pushNewCampaignName" style="width:100%;padding:10px 12px;" placeholder="New campaign name">
+            <p style="font-size:11px;color:#9ca3af;margin:4px 0 0;">Auto-named from your filters (editable). Created as a Draft in Bison — launch it there when ready.</p>
+          </div>
         </div>
 
         <!-- Verify options -->
@@ -3323,8 +3332,21 @@
       // Store for wsName lookup in executePush
       pvWorkspaces = [{ _id: wsId, name: wsName }];
 
+      // Reset campaign mode to "existing" and pre-fill the auto-generated name.
+      const existingRadio = document.querySelector('input[name="pushCampMode"][value="existing"]');
+      if (existingRadio) existingRadio.checked = true;
+      document.getElementById('pushNewCampaignName').value = buildCampaignName();
+      onPushCampModeChange();
+
       // Load campaigns for this workspace immediately
       await loadPvCampaigns();
+    }
+
+    // Toggle the push modal's campaign field between existing dropdown and new-name input.
+    function onPushCampModeChange() {
+      const mode = (document.querySelector('input[name="pushCampMode"]:checked') || {}).value || 'existing';
+      document.getElementById('pvCampaign').style.display      = mode === 'new' ? 'none' : '';
+      document.getElementById('pushNewCampWrap').style.display = mode === 'new' ? '' : 'none';
     }
 
     async function loadPvCampaigns() {
@@ -3365,18 +3387,43 @@
 
     async function executePush() {
       const wsId = document.getElementById('pvWorkspace').value;
-      const campId = document.getElementById('pvCampaign').value;
       const errEl = document.getElementById('pushError');
       const verifyFirst = document.getElementById('verifyBeforePush').checked;
       const useN2b      = verifyFirst && document.getElementById('useN2b').checked;
       const saveFilter  = document.getElementById('saveFilterToCampaign').checked;
+      const campMode    = (document.querySelector('input[name="pushCampMode"]:checked') || {}).value || 'existing';
 
       if (!wsId) { errEl.textContent = 'Please select a workspace.'; errEl.style.display = ''; return; }
-      if (!campId) { errEl.textContent = 'Please select a campaign.'; errEl.style.display = ''; return; }
 
       const contactIds = [..._selectedIds];
       const wsName = pvWorkspaces.find(w => w._id === wsId)?.name || wsId;
-      const campName = document.getElementById('pvCampaign').selectedOptions[0]?.text || campId;
+
+      // Resolve the target campaign. For "new", create a Draft in Bison first,
+      // then push into it. Verification still runs either way (below).
+      let campId, campName;
+      if (campMode === 'new') {
+        campName = (document.getElementById('pushNewCampaignName').value || '').trim();
+        if (!campName) { errEl.textContent = 'Enter a name for the new campaign.'; errEl.style.display = ''; return; }
+        const btn = document.getElementById('pushConfirmBtn');
+        btn.disabled = true; const orig = btn.textContent; btn.textContent = 'Creating campaign…';
+        try {
+          const cr = await fetch('/api/bison/create-campaign', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ws_id: wsId, name: campName }),
+          });
+          const cd = await cr.json();
+          if (!cr.ok || !cd.campaign) throw new Error(cd.error || 'Failed to create campaign');
+          campId = cd.campaign.id;
+        } catch (e) {
+          errEl.textContent = 'Create campaign failed: ' + e.message; errEl.style.display = '';
+          btn.disabled = false; btn.textContent = orig; return;
+        }
+        btn.disabled = false; btn.textContent = orig;
+      } else {
+        campId = document.getElementById('pvCampaign').value;
+        campName = document.getElementById('pvCampaign').selectedOptions[0]?.text || campId;
+        if (!campId) { errEl.textContent = 'Please select a campaign.'; errEl.style.display = ''; return; }
+      }
 
       // Pass the active email-provider filter so the push enforces it against
       // each contact's TRUE MX provider (resolved by the verifier), not Apollo's
