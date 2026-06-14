@@ -243,6 +243,19 @@ export function AdminClientsClient() {
     const d = await res.json() as { ok?: boolean; to?: string; error?: string }
     alert(res.ok ? `Test notification sent to ${d.to}.` : (d.error ?? 'Could not send test email.'))
   }
+  async function createTestLead(c: PortalClient) {
+    const res = await fetch('/api/admin/test-lead', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workspaceId: c.workspace_id }) })
+    const d = await res.json() as { ok?: boolean; email?: string; error?: string }
+    alert(res.ok
+      ? `Test lead created for ${c.company_name} (${d.email}).\n\nClick "View as" to see it — it appears as a fresh INTERESTED lead with a live Speed-to-Lead timer + a signature to test extraction.`
+      : (d.error ?? 'Could not create test lead.'))
+  }
+  async function removeTestLeads(c: PortalClient) {
+    if (!confirm(`Remove all TEST leads from ${c.company_name}? (Only deletes the fake test_* leads, never real ones.)`)) return
+    const res = await fetch('/api/admin/test-lead', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workspaceId: c.workspace_id }) })
+    const d = await res.json() as { leadsRemoved?: number; emailsRemoved?: number }
+    alert(`Removed ${d.leadsRemoved ?? 0} test lead(s).`)
+  }
   async function registerWebhook(c: PortalClient) {
     const res = await fetch(`/api/admin/clients/${c.id}/webhook`, { method: 'POST' })
     const d = await res.json() as { ok?: boolean; reason?: string }
@@ -792,6 +805,8 @@ export function AdminClientsClient() {
                                     { label: 'Logins', fn: () => openLogins(client), cls: 'text-gray-700' },
                                     { label: 'Invite link', fn: () => makeInvite(client), cls: 'text-gray-700' },
                                     { label: 'Test email', fn: () => sendTest(client), cls: 'text-gray-700' },
+                                    { label: '➕ Create test lead', fn: () => createTestLead(client), cls: 'text-gray-700' },
+                                    { label: '🧹 Remove test leads', fn: () => removeTestLeads(client), cls: 'text-gray-700' },
                                     { label: 'Reset code', fn: () => setEditId(editId===client.id?null:client.id), cls: 'text-gray-700' },
                                     { label: 'Webhook', fn: () => registerWebhook(client), cls: 'text-gray-700' },
                                     { label: client.active ? 'Disable' : 'Enable', fn: () => toggleActive(client), cls: 'text-gray-700' },
