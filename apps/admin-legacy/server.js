@@ -774,17 +774,60 @@ function requireSession(req, res, next) {
 // header (x-claude-write) the MCP server sets. When that header is present, the
 // write must map to an enabled capability or it's refused — this is how Jesse
 // turns Claude's abilities on/off live, without a redeploy.
+// Each capability maps to a set of (method, path-prefix) write routes. `risk` drives
+// the UI badge; `group` clusters rows. System/auth/irreversible routes (login,
+// stripe webhook, fresh-start, delete-database, pv-shutdown, managers, bison-key)
+// are deliberately NOT represented here, so Claude can never be granted them.
 const CLAUDE_CAPABILITIES = [
-  { id: 'campaign_filters', label: 'Campaign filters', default: true,
+  // ── Campaigns & filters ──
+  { id: 'campaign_filters', label: 'Campaign filters', group: 'Campaigns', risk: 'low', default: true,
+    desc: 'Create and delete saved campaign filters.',
     methods: ['POST', 'DELETE'], prefixes: ['/api/campaign-filters'] },
-  { id: 'mailbox_tagging', label: 'Mailbox tagging', default: true,
-    methods: ['POST'], prefixes: ['/api/mailboxes/bulk-tag'] },
-  { id: 'blocklist', label: 'Blocklist edits', default: false,
-    methods: ['POST', 'DELETE'], prefixes: ['/api/blocklist', '/api/blocklist'] },
-  { id: 'campaigns', label: 'Campaign create / edit', default: false,
-    methods: ['POST', 'PUT', 'PATCH'], prefixes: ['/api/campaigns', '/api/campaign/'] },
-  { id: 'revenue', label: 'Revenue / pricing', default: false,
-    methods: ['POST', 'PUT', 'PATCH', 'DELETE'], prefixes: ['/api/revenue', '/api/clients'] },
+  { id: 'campaign_create', label: 'Create campaigns', group: 'Campaigns', risk: 'med', default: false,
+    desc: 'Create new Bison campaigns and push contacts into them.',
+    methods: ['POST'], prefixes: ['/api/bison/create-campaign', '/api/bison/push-contacts', '/api/pv/push-contacts'] },
+  { id: 'campaign_optimise', label: 'Apply campaign optimisations', group: 'Campaigns', risk: 'med', default: false,
+    desc: 'Apply suggested optimisations to running campaigns.',
+    methods: ['POST'], prefixes: ['/api/campaigns/apply-optimisation'] },
+
+  // ── Mailboxes & domains ──
+  { id: 'mailbox_tagging', label: 'Mailbox tagging', group: 'Mailboxes', risk: 'low', default: true,
+    desc: 'Bulk-tag mailboxes by selection or by domain, and assign suppliers.',
+    methods: ['POST'], prefixes: ['/api/mailboxes/bulk-tag', '/api/mailboxes/assign-suppliers'] },
+  { id: 'mailbox_warmup', label: 'Mailbox warmup', group: 'Mailboxes', risk: 'med', default: false,
+    desc: 'Enable / disable warmup on mailboxes.',
+    methods: ['POST'], prefixes: ['/api/mailboxes/enable-warmup', '/api/warmup/enable', '/api/warmup/disable'] },
+  { id: 'mailbox_billing', label: 'Mailbox billing edits', group: 'Mailboxes', risk: 'high', default: false,
+    desc: 'Change mailbox billing rows and bulk-remove mailboxes.',
+    methods: ['POST', 'PUT'], prefixes: ['/api/mailboxes/bulk-billing', '/api/mailboxes/bulk-remove', '/api/mailboxes/'] },
+  { id: 'domains', label: 'Domain actions', group: 'Mailboxes', risk: 'med', default: false,
+    desc: 'Check, refresh, restore or remove sending domains.',
+    methods: ['POST', 'DELETE'], prefixes: ['/api/domains'] },
+
+  // ── Leads ──
+  { id: 'lead_status', label: 'Lead status & values', group: 'Leads', risk: 'med', default: false,
+    desc: 'Mark leads / non-leads, set lead value, log replies.',
+    methods: ['POST'], prefixes: ['/api/leads/', '/api/nonlead/'] },
+
+  // ── Health & ops ──
+  { id: 'health_actions', label: 'Health actions', group: 'Health & ops', risk: 'low', default: false,
+    desc: 'Complete, dismiss or reopen health action items and copy alerts.',
+    methods: ['POST'], prefixes: ['/api/health/actions', '/api/health/copy-alerts'] },
+  { id: 'ops_refresh', label: 'Trigger refreshes', group: 'Health & ops', risk: 'low', default: false,
+    desc: 'Kick off data refreshes (stats, metrics, mailboxes, health, audience).',
+    methods: ['POST'], prefixes: ['/api/stats/refresh', '/api/metrics/refresh', '/api/mailboxes/refresh',
+      '/api/health/refresh', '/api/audience/refresh', '/api/postmaster/refresh', '/api/warmup/refresh'] },
+  { id: 'copy', label: 'Copy / templates', group: 'Health & ops', risk: 'med', default: false,
+    desc: 'Refresh copy templates and manage suppressions.',
+    methods: ['POST', 'DELETE'], prefixes: ['/api/copy/'] },
+
+  // ── Finance (high risk) ──
+  { id: 'revenue', label: 'Revenue / pricing', group: 'Finance', risk: 'high', default: false,
+    desc: 'Edit client pricing, manual revenue entries and finance expenses.',
+    methods: ['POST', 'PUT', 'PATCH', 'DELETE'], prefixes: ['/api/revenue', '/api/finance/'] },
+  { id: 'clients', label: 'Client records', group: 'Finance', risk: 'high', default: false,
+    desc: 'Edit client records, notes, status and verticals (not delete).',
+    methods: ['POST', 'PUT', 'PATCH'], prefixes: ['/api/admin/clients', '/api/clients/', '/api/client-status', '/api/admin/client-verticals'] },
 ];
 const CLAUDE_PERM_DEFAULTS = (() => {
   const o = { enabled: true };
@@ -1965,7 +2008,8 @@ app.get('/api/admin/claude-permissions', requireAdmin, async (req, res) => {
     res.json({
       enabled: perms.enabled,
       capabilities: CLAUDE_CAPABILITIES.map((c) => ({
-        id: c.id, label: c.label, enabled: !!perms[c.id],
+        id: c.id, label: c.label, group: c.group, risk: c.risk, desc: c.desc,
+        methods: c.methods, endpointCount: c.prefixes.length, enabled: !!perms[c.id],
       })),
     });
   } catch (err) {
@@ -1990,7 +2034,9 @@ app.post('/api/admin/claude-permissions', requireAdmin, async (req, res) => {
     await pgdb.setSetting('claude_permissions', next);
     console.log('[claude-permissions] updated:', JSON.stringify(next));
     res.json({ ok: true, enabled: next.enabled,
-      capabilities: CLAUDE_CAPABILITIES.map((c) => ({ id: c.id, label: c.label, enabled: !!next[c.id] })) });
+      capabilities: CLAUDE_CAPABILITIES.map((c) => ({
+        id: c.id, label: c.label, group: c.group, risk: c.risk, desc: c.desc,
+        methods: c.methods, endpointCount: c.prefixes.length, enabled: !!next[c.id] })) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

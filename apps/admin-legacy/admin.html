@@ -188,18 +188,43 @@ tbody tr:hover { background:#FAFBFC; }
     </div>
 
     <!-- Claude Access -->
+    <style>
+      .cap-switch{position:relative;display:inline-block;width:42px;height:24px;flex:0 0 auto}
+      .cap-switch input{opacity:0;width:0;height:0;position:absolute}
+      .cap-slider{position:absolute;inset:0;cursor:pointer;background:#D1D5DB;border-radius:999px;transition:.2s}
+      .cap-slider:before{content:"";position:absolute;height:18px;width:18px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s;box-shadow:0 1px 2px rgba(0,0,0,.2)}
+      .cap-switch input:checked + .cap-slider{background:#2563EB}
+      .cap-switch input:checked + .cap-slider:before{transform:translateX(18px)}
+      .cap-switch input:disabled + .cap-slider{opacity:.45;cursor:not-allowed}
+      .cap-row{display:flex;align-items:flex-start;gap:.9rem;padding:.7rem .85rem;border:1px solid #E5E7EB;border-radius:10px;background:#fff;transition:.15s}
+      .cap-row:hover{border-color:#C7D2FE;background:#FAFBFF}
+      .cap-meta{flex:1;min-width:0}
+      .cap-name{font-size:14px;font-weight:600;color:#111827;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+      .cap-desc{font-size:12.5px;color:#6B7280;margin-top:.15rem;line-height:1.4}
+      .cap-sub{font-size:11px;color:#9CA3AF;margin-top:.3rem;font-family:ui-monospace,monospace}
+      .risk{font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:.1rem .4rem;border-radius:5px}
+      .risk-low{background:#DCFCE7;color:#166534}
+      .risk-med{background:#FEF3C7;color:#92400E}
+      .risk-high{background:#FEE2E2;color:#991B1B}
+      .cap-group-title{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#9CA3AF;margin:1rem 0 .5rem}
+      .cap-group-title:first-child{margin-top:.25rem}
+    </style>
     <div class="section-title">Claude Access</div>
     <div class="card" style="margin-bottom:1rem;">
       <p style="font-size:13px;color:#6B7280;margin-bottom:1rem;">
         Controls what Claude (via the MCP connection) is allowed to <strong>create or change</strong> on the dashboard.
-        Reading is always allowed. Turn a capability off and Claude loses it immediately — no restart.
-        The master switch disables all Claude writes at once.
+        Reading is always allowed. Toggle a capability and Claude gains/loses it immediately — no restart.
+        Sensitive actions (logins, Stripe, deleting clients/managers, fresh-start) are never grantable here.
       </p>
-      <label style="display:flex;align-items:center;gap:.6rem;font-size:14px;font-weight:600;cursor:pointer;padding:.5rem 0;border-bottom:1px solid #E5E7EB;margin-bottom:.5rem;">
-        <input type="checkbox" id="claudeMaster" onchange="saveClaudePerms()"> Master write access
-      </label>
-      <div id="claudeCaps" style="display:flex;flex-direction:column;gap:.4rem;"></div>
-      <div id="claudePermStatus" style="margin-top:.75rem;font-size:13px;color:#6B7280;">Loading…</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.7rem .85rem;border:1px solid #D1D5DB;border-radius:10px;background:#F9FAFB;margin-bottom:.5rem;">
+        <div>
+          <div style="font-size:14px;font-weight:700;color:#111827;">Master write access</div>
+          <div style="font-size:12.5px;color:#6B7280;">Off = Claude can read but never write, regardless of the toggles below.</div>
+        </div>
+        <label class="cap-switch"><input type="checkbox" id="claudeMaster" onchange="saveClaudePerms()"><span class="cap-slider"></span></label>
+      </div>
+      <div id="claudeCaps"></div>
+      <div id="claudePermStatus" style="margin-top:.85rem;font-size:13px;color:#6B7280;">Loading…</div>
     </div>
 
     <!-- Fresh start / historical data -->
@@ -659,15 +684,44 @@ function setClaudeStatus(html, color) {
   if (el) { el.innerHTML = html; el.style.color = color || '#6B7280'; }
 }
 
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
 function renderClaudeCaps(data) {
   document.getElementById('claudeMaster').checked = !!data.enabled;
   const wrap = document.getElementById('claudeCaps');
   wrap.innerHTML = '';
-  for (const c of (data.capabilities || [])) {
-    const row = document.createElement('label');
-    row.style.cssText = 'display:flex;align-items:center;gap:.6rem;font-size:14px;cursor:pointer;opacity:' + (data.enabled ? '1' : '.5');
-    row.innerHTML = `<input type="checkbox" data-cap="${c.id}" ${c.enabled ? 'checked' : ''} ${data.enabled ? '' : 'disabled'} onchange="saveClaudePerms()"> ${c.label}`;
-    wrap.appendChild(row);
+  const caps = data.capabilities || [];
+  const master = !!data.enabled;
+  // Preserve catalog order while grouping
+  const groups = [];
+  for (const c of caps) {
+    let g = groups.find(x => x.name === (c.group || 'Other'));
+    if (!g) { g = { name: c.group || 'Other', items: [] }; groups.push(g); }
+    g.items.push(c);
+  }
+  for (const g of groups) {
+    const title = document.createElement('div');
+    title.className = 'cap-group-title';
+    title.textContent = g.name;
+    wrap.appendChild(title);
+    const stack = document.createElement('div');
+    stack.style.cssText = 'display:flex;flex-direction:column;gap:.5rem;';
+    for (const c of g.items) {
+      const methods = (c.methods || []).join(' · ');
+      const n = c.endpointCount || 0;
+      const row = document.createElement('div');
+      row.className = 'cap-row';
+      row.style.opacity = master ? '1' : '.55';
+      row.innerHTML = `
+        <div class="cap-meta">
+          <div class="cap-name">${esc(c.label)} <span class="risk risk-${esc(c.risk||'low')}">${esc(c.risk||'low')}</span></div>
+          <div class="cap-desc">${esc(c.desc||'')}</div>
+          <div class="cap-sub">${esc(methods)} · ${n} route${n===1?'':'s'}</div>
+        </div>
+        <label class="cap-switch"><input type="checkbox" data-cap="${esc(c.id)}" ${c.enabled?'checked':''} ${master?'':'disabled'} onchange="saveClaudePerms()"><span class="cap-slider"></span></label>`;
+      stack.appendChild(row);
+    }
+    wrap.appendChild(stack);
   }
 }
 
