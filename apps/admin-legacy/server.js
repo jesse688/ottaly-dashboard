@@ -701,6 +701,12 @@ app.use('/api/', apiLimiter);
 // ── Middleware ─────────────────────────────────────────────
 app.use(express.json({ limit: '50mb' }));
 app.use(express.text({ limit: '500mb', type: 'text/csv' })); // raw CSV uploads — no JSON overhead
+// Claude-write permission gate. No-op unless the request carries x-claude-write:1
+// (set only by the MCP server), so it never affects human operators.
+app.use((req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD' || req.headers['x-claude-write'] !== '1') return next();
+  return enforceClaudePerms(req, res, next);
+});
 app.use(express.static(path.join(__dirname), {
   setHeaders(res, filePath) {
     if (filePath.endsWith('.html')) {
@@ -759,6 +765,62 @@ function requireSession(req, res, next) {
   if (s?.role === 'admin' || s?.role === 'manager') return next();
   if (req.headers['x-admin-key'] === ADMIN_KEY) return next();
   return res.status(401).json({ error: 'Unauthorized' });
+}
+
+// ── Claude (MCP) write permissions ───────────────────────────────────
+// Capability toggles, owned from the admin "Claude Access" panel and stored in
+// app_settings under `claude_permissions`. The MCP write tools authenticate with
+// the admin key like any operator, so we distinguish *Claude* calls by a marker
+// header (x-claude-write) the MCP server sets. When that header is present, the
+// write must map to an enabled capability or it's refused — this is how Jesse
+// turns Claude's abilities on/off live, without a redeploy.
+const CLAUDE_CAPABILITIES = [
+  { id: 'campaign_filters', label: 'Campaign filters', default: true,
+    methods: ['POST', 'DELETE'], prefixes: ['/api/campaign-filters'] },
+  { id: 'mailbox_tagging', label: 'Mailbox tagging', default: true,
+    methods: ['POST'], prefixes: ['/api/mailboxes/bulk-tag'] },
+  { id: 'blocklist', label: 'Blocklist edits', default: false,
+    methods: ['POST', 'DELETE'], prefixes: ['/api/blocklist', '/api/blocklist'] },
+  { id: 'campaigns', label: 'Campaign create / edit', default: false,
+    methods: ['POST', 'PUT', 'PATCH'], prefixes: ['/api/campaigns', '/api/campaign/'] },
+  { id: 'revenue', label: 'Revenue / pricing', default: false,
+    methods: ['POST', 'PUT', 'PATCH', 'DELETE'], prefixes: ['/api/revenue', '/api/clients'] },
+];
+const CLAUDE_PERM_DEFAULTS = (() => {
+  const o = { enabled: true };
+  for (const c of CLAUDE_CAPABILITIES) o[c.id] = c.default;
+  return o;
+})();
+
+async function getClaudePerms(pgdb) {
+  if (!pgdb) return { ...CLAUDE_PERM_DEFAULTS };
+  const saved = await pgdb.getSetting('claude_permissions', null);
+  return saved ? { ...CLAUDE_PERM_DEFAULTS, ...saved } : { ...CLAUDE_PERM_DEFAULTS };
+}
+
+// Returns { ok } or { ok:false, reason } for a Claude-originated write.
+function claudeWriteDecision(perms, method, path) {
+  if (!perms.enabled) return { ok: false, reason: 'Claude write access is turned off (master switch).' };
+  const cap = CLAUDE_CAPABILITIES.find(
+    (c) => c.methods.includes(method) && c.prefixes.some((p) => path.startsWith(p))
+  );
+  if (!cap) return { ok: false, reason: `No Claude capability covers ${method} ${path}. Enable it or do it from the UI.` };
+  if (!perms[cap.id]) return { ok: false, reason: `Capability "${cap.label}" is turned off for Claude.` };
+  return { ok: true, capability: cap.id };
+}
+
+// Gate applied to write routes: if the request carries the Claude marker header,
+// it must satisfy claudeWriteDecision. Non-Claude operators are unaffected.
+async function enforceClaudePerms(req, res, next) {
+  if (req.headers['x-claude-write'] !== '1') return next();
+  try {
+    const perms = await getClaudePerms(req.app.locals.pgDb);
+    const decision = claudeWriteDecision(perms, req.method, req.path);
+    if (!decision.ok) return res.status(403).json({ error: decision.reason, claudeBlocked: true });
+    next();
+  } catch (err) {
+    return res.status(500).json({ error: 'Claude permission check failed: ' + err.message });
+  }
 }
 
 // ── Slack slash commands ──────────────────────────────────
@@ -1895,6 +1957,45 @@ app.post('/api/admin/bison-key/test', requireAdmin, async (req, res) => {
   }
 });
 
+// ── Claude Access (admin only) ───────────────────────────
+// Read the capability catalog + current toggles for the "Claude Access" panel.
+app.get('/api/admin/claude-permissions', requireAdmin, async (req, res) => {
+  try {
+    const perms = await getClaudePerms(req.app.locals.pgDb);
+    res.json({
+      enabled: perms.enabled,
+      capabilities: CLAUDE_CAPABILITIES.map((c) => ({
+        id: c.id, label: c.label, enabled: !!perms[c.id],
+      })),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Save toggles. Body: { enabled?, capabilities?: { [id]: bool } }. Only known
+// keys are persisted, so the stored object can't drift from the catalog.
+app.post('/api/admin/claude-permissions', requireAdmin, async (req, res) => {
+  const pgdb = req.app.locals.pgDb;
+  if (!pgdb) return res.status(503).json({ error: 'Database unavailable' });
+  try {
+    const current = await getClaudePerms(pgdb);
+    const body = req.body || {};
+    const next = { ...current };
+    if (typeof body.enabled === 'boolean') next.enabled = body.enabled;
+    const caps = body.capabilities || {};
+    for (const c of CLAUDE_CAPABILITIES) {
+      if (typeof caps[c.id] === 'boolean') next[c.id] = caps[c.id];
+    }
+    await pgdb.setSetting('claude_permissions', next);
+    console.log('[claude-permissions] updated:', JSON.stringify(next));
+    res.json({ ok: true, enabled: next.enabled,
+      capabilities: CLAUDE_CAPABILITIES.map((c) => ({ id: c.id, label: c.label, enabled: !!next[c.id] })) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Diagnostic: live per-workspace mailbox count straight from Bison, paginated.
 // Lets us see exactly where the dashboard count diverges from Bison's real total
 // (e.g. 165 shown vs ~1000 expected) without waiting for the 30-min cache.
@@ -1911,6 +2012,79 @@ app.get('/api/admin/mailbox-emails', requireAdmin, (req, res) => {
 // Tells us definitively whether a "missing" mailbox is in Bison, in which
 // workspace, and its status. GET /api/admin/mailbox-find?q=gxifitouts
 // Optional ?statuses=1 includes a per-workspace status breakdown.
+// ── PlusVibe shutdown: warmup OFF + cold-email daily limit 0, ALL workspaces ──
+// PV is being wound down. This turns off warmup and sets daily sending to 0 for
+// every mailbox in every PV workspace, directly via the live PlusVibe API.
+// GET  ?dry=1            → preview (counts per workspace, no changes)
+// POST                   → execute
+// Optional ?key=<pvkey>  → override the (possibly stale) PLUSVIBE_KEY env.
+const PV_API_BASE = 'https://api.plusvibe.ai/api/v1';
+async function pvApi(path, { method = 'GET', body, key } = {}) {
+  const apiKey = key || PLUSVIBE_KEY;
+  const init = { method, headers: { 'x-api-key': apiKey, 'User-Agent': 'Mozilla/5.0' } };
+  if (body) { init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(body); }
+  const r = await fetch(PV_API_BASE + path, init);
+  const txt = await r.text();
+  let data; try { data = txt ? JSON.parse(txt) : {}; } catch { data = { raw: txt }; }
+  if (!r.ok) throw new Error(`PV ${path} → ${r.status}: ${txt.slice(0, 200)}`);
+  return data;
+}
+async function pvListAllAccountIds(workspaceId, key) {
+  const ids = [];
+  for (let skip = 0; skip < 5000; skip += 200) {
+    const resp = await pvApi(`/account/list?workspace_id=${workspaceId}&limit=200&skip=${skip}`, { key });
+    const list = Array.isArray(resp) ? resp : (resp?.accounts || resp?.email_accounts || resp?.data || []);
+    if (!list.length) break;
+    for (const a of list) { const id = a._id || a.id; if (id) ids.push(String(id)); }
+    if (list.length < 200) break;
+  }
+  return ids;
+}
+async function pvShutdownHandler(req, res) {
+  const key = (req.query.key || req.body?.key || '').toString().trim() || PLUSVIBE_KEY;
+  const dryRun = req.method === 'GET' || req.query.dry === '1';
+  try {
+    const wsRaw = await pvApi('/workspaces', { key });
+    const workspaces = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.workspaces || wsRaw?.data || []);
+    const report = [];
+    for (const ws of workspaces) {
+      const wsId = ws.id || ws._id;
+      const name = ws.name || wsId;
+      try {
+        const ids = await pvListAllAccountIds(wsId, key);
+        const entry = { workspace_id: wsId, name, mailboxes: ids.length, warmup_off: 0, daily_zeroed: 0 };
+        if (!dryRun && ids.length) {
+          // PV bulk endpoints cap batch size; chunk to be safe.
+          for (let i = 0; i < ids.length; i += 100) {
+            const chunk = ids.slice(i, i + 100);
+            await pvApi('/account/bulk-update-warmup', { method: 'PATCH', key,
+              body: { workspace_id: wsId, ids: chunk, warmup_status: 'INACTIVE' } });
+            entry.warmup_off += chunk.length;
+            await pvApi('/account/bulk-update', { method: 'PUT', key,
+              body: { workspace_id: wsId, ids: chunk, daily_limit: 0 } });
+            entry.daily_zeroed += chunk.length;
+          }
+        }
+        report.push(entry);
+      } catch (e) {
+        report.push({ workspace_id: wsId, name, error: e.message });
+      }
+    }
+    const totals = report.reduce((t, r) => ({
+      workspaces: t.workspaces + 1,
+      mailboxes: t.mailboxes + (r.mailboxes || 0),
+      warmup_off: t.warmup_off + (r.warmup_off || 0),
+      daily_zeroed: t.daily_zeroed + (r.daily_zeroed || 0),
+      errors: t.errors + (r.error ? 1 : 0),
+    }), { workspaces: 0, mailboxes: 0, warmup_off: 0, daily_zeroed: 0, errors: 0 });
+    res.json({ dry_run: dryRun, totals, workspaces: report });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+}
+app.get('/api/admin/pv-shutdown',  requireAdmin, pvShutdownHandler);
+app.post('/api/admin/pv-shutdown', requireAdmin, pvShutdownHandler);
+
 app.get('/api/admin/mailbox-find', requireAdmin, async (req, res) => {
   if (!getBisonKey()) return res.status(400).json({ error: 'No Bison key configured' });
   const q = String(req.query.q || '').trim().toLowerCase();
@@ -11494,6 +11668,25 @@ app.get('/api/bison/campaigns', requireSession, async (req, res) => {
     res.json({ campaigns: list.map(c => ({ id: String(c.id), name: c.name, status: c.status })) });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/bison/create-campaign  — create a new Draft campaign in a workspace.
+// body: { ws_id, name }
+//  - ws_id: Bison workspace id (switch-workspace target)
+//  - name:  campaign name (auto-generated from filters on the client, editable)
+// New campaigns are status "Draft" by default — we do NOT launch/activate them.
+app.post('/api/bison/create-campaign', requireSession, async (req, res) => {
+  const wsId = String(req.body.ws_id || '');
+  const name = String(req.body.name || '').trim();
+  if (!wsId || !name) return res.status(400).json({ error: 'ws_id and a non-empty name are required' });
+  if (!getBisonKey()) return res.status(500).json({ error: 'Bison API key not configured — set it in admin settings' });
+  try {
+    const resp = await bisonReq('/api/campaigns', { wsId, method: 'POST', body: { name, type: 'outbound' } });
+    const c = resp?.data || {};
+    res.json({ ok: true, campaign: { id: String(c.id), name: c.name, status: c.status } });
+  } catch (err) {
+    res.status(502).json({ error: err.message || 'Failed to create Bison campaign' });
   }
 });
 

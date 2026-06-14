@@ -10,7 +10,10 @@
  *   OTTALY_BASE_URL   e.g. https://app.yourdomain.com   (default http://localhost:3000)
  *   OTTALY_ADMIN_KEY  the production ADMIN_KEY           (default "ottaly-admin")
  *
- * Read-only by design: only HTTP GETs are issued. Add write tools deliberately.
+ * Reads use HTTP GET. Writes (POST/PUT/PATCH/DELETE) go through dashboard_post /
+ * dashboard_delete, which are deliberately gated: a hard blocklist of destructive
+ * routes, and DELETE requires an explicit confirm:true. Everything inherits the
+ * x-admin-key auth.
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -48,6 +51,64 @@ async function apiGet(path, query) {
   } catch {
     return body; // non-JSON response, return raw
   }
+}
+
+async function apiSend(method, path, body, query) {
+  const url = new URL(BASE + path);
+  for (const [k, v] of Object.entries(query || {})) {
+    if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
+  }
+  const hasBody = body !== undefined && body !== null;
+  const res = await fetch(url, {
+    method,
+    headers: {
+      "x-admin-key": KEY,
+      "x-claude-write": "1", // marks this as a Claude write so the server checks the Claude Access toggles
+      accept: "application/json",
+      ...(hasBody ? { "content-type": "application/json" } : {}),
+    },
+    ...(hasBody ? { body: JSON.stringify(body) } : {}),
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`${method} ${path} -> HTTP ${res.status}: ${text.slice(0, 400)}`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+// What Claude may write is decided SERVER-SIDE by the "Claude Access" toggles in
+// the admin dashboard (app_settings.claude_permissions), enforced on every write
+// via the x-claude-write header. The MCP server keeps only two local guards:
+// a path sanity check, and a confirm gate on deletes. If a write is refused, the
+// server returns a 403 explaining which capability is off — surfaced verbatim.
+function assertWriteAllowed(path) {
+  if (!path.startsWith("/api/")) throw new Error("path must start with /api/");
+}
+
+// Discover write endpoints (POST/PUT/PATCH/DELETE) the same way as reads, so Claude
+// can see what mutations exist. Whether each is *permitted* is governed live by the
+// Claude Access panel — check get_claude_permissions.
+function loadWriteCatalog() {
+  const src = readFileSync(join(HERE, "..", "server.js"), "utf8");
+  const re = /app\.(post|put|patch|delete)\(\s*['"](\/api\/[^'"]+)['"]\s*(?:,\s*(require[A-Za-z]+))?/g;
+  const seen = new Set();
+  const out = [];
+  let m;
+  while ((m = re.exec(src))) {
+    const method = m[1].toUpperCase();
+    const path = m[2];
+    const auth = m[3] || "public";
+    if (auth === "requireAuth") continue; // per-client portal, not admin-key accessible
+    const key = method + " " + path;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ method, path, auth, needsPathParam: path.includes("/:") });
+  }
+  return out.sort((a, b) => a.path.localeCompare(b.path));
 }
 
 // Discover every GET endpoint by parsing ../server.js. Auto-updates whenever the
@@ -157,6 +218,57 @@ tool(
   ({ path, query }) => {
     if (!path.startsWith("/api/")) throw new Error("path must start with /api/");
     return apiGet(path, query);
+  }
+);
+
+tool(
+  "get_claude_permissions",
+  "Show what Claude is currently allowed to write, per the admin 'Claude Access' panel. Returns the master enabled flag and each capability (campaign_filters, mailbox_tagging, blocklist, campaigns, revenue) with its on/off state. A write to a capability that is off is refused server-side. Check this first if a write fails with claudeBlocked.",
+  {},
+  () => apiGet("/api/admin/claude-permissions")
+);
+
+tool(
+  "list_write_endpoints",
+  "Discover every WRITE endpoint (POST/PUT/PATCH/DELETE) on the dashboard, auto-discovered from the server source. Each row has method, path, required auth, and whether it has an :id placeholder. Whether a write actually goes through is decided live by the Claude Access toggles (see get_claude_permissions) — a disabled capability returns 403. Common one: POST /api/campaign-filters to save a campaign filter.",
+  {},
+  () => {
+    const endpoints = loadWriteCatalog();
+    return {
+      count: endpoints.length,
+      note: "POST/PUT/PATCH via dashboard_post, DELETE via dashboard_delete. Permission is governed by the Claude Access panel — call get_claude_permissions to see what's enabled.",
+      endpoints,
+    };
+  }
+);
+
+tool(
+  "dashboard_post",
+  "Write to a dashboard endpoint via POST/PUT/PATCH — the universal mutator (create campaign filters, tag mailboxes, etc.). Call list_write_endpoints first to find the path. `path` must start with /api/ and have any :placeholder substituted. Writes are gated by the Claude Access panel: a disabled capability returns HTTP 403 with claudeBlocked — relay that message, don't retry. Example: path=/api/campaign-filters, method=POST, body={workspace_id, campaign_id, workspace_name, campaign_name, filters:{...}}.",
+  {
+    path: z.string().describe("API path starting with /api/, e.g. /api/campaign-filters"),
+    method: z.enum(["POST", "PUT", "PATCH"]).optional().describe("HTTP method (default POST)"),
+    body: z.record(z.any()).optional().describe("JSON request body"),
+    query: z.record(z.string()).optional().describe("Optional query params as a string map"),
+  },
+  ({ path, method, body, query }) => {
+    assertWriteAllowed(path);
+    return apiSend(method || "POST", path, body, query);
+  }
+);
+
+tool(
+  "dashboard_delete",
+  "DELETE a resource on the dashboard. Requires confirm:true so it can't fire on a loose interpretation. Call list_write_endpoints first. `path` must start with /api/ with any :placeholder substituted. Example: path=/api/campaign-filters/<workspace_id>/<campaign_id>, confirm=true.",
+  {
+    path: z.string().describe("API path starting with /api/, with placeholders filled in"),
+    confirm: z.boolean().describe("Must be true to actually delete — a safety gate"),
+    query: z.record(z.string()).optional().describe("Optional query params as a string map"),
+  },
+  ({ path, confirm, query }) => {
+    assertWriteAllowed(path);
+    if (confirm !== true) throw new Error("refused: pass confirm:true to delete");
+    return apiSend("DELETE", path, undefined, query);
   }
 );
 
