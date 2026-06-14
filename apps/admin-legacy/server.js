@@ -1816,6 +1816,52 @@ app.post('/api/admin/bison-key/test', requireAdmin, async (req, res) => {
   }
 });
 
+// ── Fresh start / Show historical (admin only) ───────────
+// Status of the cutover + toggle.
+app.get('/api/admin/fresh-start', requireAdmin, (req, res) => {
+  res.json({ fresh_start_date: _freshStartDate, show_historical: _showHistorical });
+});
+
+// Enable fresh start "from now": record today's date as the cutover, so the
+// dashboard defaults to showing only data from this point forward.
+app.post('/api/admin/fresh-start', requireAdmin, async (req, res) => {
+  const pgdb = req.app.locals.pgDb;
+  if (!pgdb) return res.status(503).json({ error: 'Database unavailable' });
+  try {
+    const date = serverDateString(new Date());
+    await pgdb.setSetting('fresh_start_date', date);
+    await pgdb.setSetting('show_historical', false);
+    _freshStartDate = date;
+    _showHistorical = false;
+    res.json({ ok: true, fresh_start_date: date, show_historical: false });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Flip the global "show historical" toggle (reveal/hide pre-cutover data).
+app.post('/api/admin/show-historical', requireAdmin, async (req, res) => {
+  const pgdb = req.app.locals.pgDb;
+  if (!pgdb) return res.status(503).json({ error: 'Database unavailable' });
+  try {
+    const on = req.body && req.body.show === true;
+    await pgdb.setSetting('show_historical', on);
+    _showHistorical = on;
+    res.json({ ok: true, show_historical: on });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Clear fresh start entirely (back to showing all data, no cutover).
+app.delete('/api/admin/fresh-start', requireAdmin, async (req, res) => {
+  const pgdb = req.app.locals.pgDb;
+  if (!pgdb) return res.status(503).json({ error: 'Database unavailable' });
+  try {
+    await pgdb.setSetting('fresh_start_date', '');
+    await pgdb.setSetting('show_historical', false);
+    _freshStartDate = null;
+    _showHistorical = false;
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ── Manager management (admin only) ──────────────────────
 app.get('/api/admin/managers', requireAdmin, (req, res) => {
   res.json(db.prepare('SELECT id, name, commission_rate, base_salary, created_at FROM managers ORDER BY name').all());
@@ -2961,6 +3007,28 @@ function serverDateString(date) {
     String(date.getDate()).padStart(2, '0');
 }
 
+// ── "Fresh start" (Bison-era) date floor ─────────────────────────────────
+// When the dashboard is switched to a fresh start, we record the cutover date
+// and, by default, clamp every stats date range so nothing before it shows —
+// giving a clean Bison-era view without deleting any PlusVibe-era data. A global
+// "Show historical" toggle removes the clamp to reveal the full history again.
+// Both live in app_settings, cached here and refreshed on change (read on every
+// stats request, so we avoid a DB hit per call).
+let _freshStartDate = null;   // 'YYYY-MM-DD' cutover, or null = never enabled
+let _showHistorical = false;  // true = ignore the clamp, show everything
+async function hydrateFreshStart(pgdb) {
+  try {
+    _freshStartDate = (await pgdb.getSetting('fresh_start_date', null)) || null;
+    _showHistorical = (await pgdb.getSetting('show_historical', false)) === true;
+  } catch (e) { console.warn('[fresh-start] hydrate failed:', e.message); }
+}
+// Clamp a requested start date up to the fresh-start floor (unless historical
+// is on or no floor is set). Always returns a 'YYYY-MM-DD' string.
+function clampStartDate(startStr) {
+  if (_showHistorical || !_freshStartDate || !startStr) return startStr;
+  return startStr < _freshStartDate ? _freshStartDate : startStr;
+}
+
 function serverDateList(startStr, endStr) {
   const out = [];
   const cur = new Date(`${startStr}T00:00:00`);
@@ -3254,7 +3322,7 @@ async function ensureInitialPerformanceVersion(wsIds, dates) {
 
 app.get('/api/performance/agency-cache', requireSession, async (req, res) => {
   const wsIds = String(req.query.workspace_ids || '').split(',').map(s => s.trim()).filter(Boolean);
-  const start = String(req.query.start || '');
+  const start = clampStartDate(String(req.query.start || ''));
   const end = String(req.query.end || '');
   if (!wsIds.length || !start || !end) return res.status(400).json({ error: 'Missing workspace_ids, start, or end' });
   try {
@@ -3346,7 +3414,7 @@ function computeWorkspaceStatsForRange(wsIds, start, end) {
 }
 
 app.get('/api/stats/summary', requireSession, async (req, res) => {
-  const start = String(req.query.start || '');
+  const start = clampStartDate(String(req.query.start || ''));
   const end   = String(req.query.end   || '');
   if (!start || !end) return res.status(400).json({ error: 'start and end required (YYYY-MM-DD)' });
   try {
@@ -3431,7 +3499,7 @@ app.get('/api/stats/summary', requireSession, async (req, res) => {
 
 // ── Verification-split analytics (safe vs catch-all performance) ──────────────
 app.get('/api/verify-split', requireSession, async (req, res) => {
-  const start = String(req.query.start || '');
+  const start = clampStartDate(String(req.query.start || ''));
   const end   = String(req.query.end   || '');
   if (!start || !end) return res.status(400).json({ error: 'start and end required (YYYY-MM-DD)' });
   try {
@@ -3693,7 +3761,7 @@ app.get('/api/combo-analysis/event-shape', requireSession, async (req, res) => {
 // to show from any date.
 
 app.get('/api/combo-analysis', requireSession, async (req, res) => {
-  const start = String(req.query.start || '');
+  const start = clampStartDate(String(req.query.start || ''));
   const end   = String(req.query.end   || '');
   if (!start || !end) return res.status(400).json({ error: 'start and end required' });
   try {
@@ -6708,16 +6776,21 @@ async function listSendingMailboxes() {
   // listing its sender emails. Uses the module-scope bisonReq helper.
   const mailboxes = [];
   const seenEmails = new Set();
+  const PER_PAGE = 200;
   for (const team of BISON_TEAMS) {
     try {
-      const resp = await bisonReq('/api/sender-emails', { wsId: team.team_id, params: { per_page: 200 } });
-      const list = Array.isArray(resp) ? resp : (resp?.data ?? []);
       let found = 0;
-      for (const a of list) {
-        const email = (a.email || a.email_address || a.name || '').toString().trim().toLowerCase();
-        if (!email.includes('@') || seenEmails.has(email)) continue;
-        seenEmails.add(email);
-        mailboxes.push({
+      // Bison /api/sender-emails is paginated. Page through until a page comes
+      // back short (fewer than PER_PAGE) — otherwise workspaces with >200
+      // mailboxes silently lose everything past the first page.
+      for (let page = 1; page <= 50; page++) {
+        const resp = await bisonReq('/api/sender-emails', { wsId: team.team_id, params: { per_page: PER_PAGE, page } });
+        const list = Array.isArray(resp) ? resp : (resp?.data ?? []);
+        for (const a of list) {
+          const email = (a.email || a.email_address || a.name || '').toString().trim().toLowerCase();
+          if (!email.includes('@') || seenEmails.has(email)) continue;
+          seenEmails.add(email);
+          mailboxes.push({
           email,
           account_id: a.id != null ? String(a.id) : null,
           domain: email.split('@')[1],
@@ -6737,8 +6810,11 @@ async function listSendingMailboxes() {
           campaign_ids: [],
           created_at: a.created_at || null,
           updated_at: a.updated_at || null,
-        });
-        found++;
+          });
+          found++;
+        }
+        // Short page → no more results for this workspace.
+        if (list.length < PER_PAGE) break;
       }
       if (found) console.log(`[mailboxes] ${team.name}: ${found} mailbox(es)`);
       await new Promise(r => setTimeout(r, 250)); // pace between workspaces
@@ -6746,6 +6822,7 @@ async function listSendingMailboxes() {
       console.warn(`[mailboxes] sender-emails failed for ${team.name} (team ${team.team_id}):`, err.message);
     }
   }
+  console.log(`[mailboxes] total ${mailboxes.length} across ${BISON_TEAMS.length} workspaces`);
   return mailboxes;
 }
 
@@ -14935,6 +15012,11 @@ function scheduleAudienceScoring(pgdb) {
         console.log('[bison] using dashboard-set API key (…' + _bisonKeyOverride.slice(-4) + ')');
       }
     }).catch((e) => console.warn('[bison] key hydrate failed:', e.message));
+
+    // Hydrate the "fresh start" cutover date + show-historical toggle.
+    hydrateFreshStart(pgdb).then(() => {
+      if (_freshStartDate) console.log(`[fresh-start] cutover ${_freshStartDate}, historical ${_showHistorical ? 'ON' : 'OFF'}`);
+    });
 
     // One-time backfill: copy existing SQLite client notes into Postgres.
     // ON CONFLICT DO NOTHING means this never overwrites a note that was
