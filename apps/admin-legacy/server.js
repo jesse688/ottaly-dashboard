@@ -2108,6 +2108,59 @@ app.get('/api/nav-settings', requireSession, async (req, res) => {
 // Wipes vertical snoozes and reply-intelligence notes set by the old
 // over-active parser. Deliberately leaves do_not_contact intact —
 // 'remove me' replies that legitimately set DNC should stand.
+// Diagnostic: what's actually in revenue_leads — grouped by client + insert
+// timestamp, so we can spot bad batches (e.g. 15 leads inserted at the same
+// second = a misattributed/test batch, not real leads).
+app.get('/api/admin/revenue-leads-debug', requireAdmin, async (req, res) => {
+  const dbPg = app.locals.pgDb;
+  if (!dbPg) return res.status(503).json({ error: 'DB unavailable' });
+  try {
+    const byClient = await dbPg.query(`
+      SELECT workspace_id, client_name,
+             COUNT(*)::int AS leads,
+             COUNT(*) FILTER (WHERE pv_nonlead) ::int AS nonleads,
+             MIN(date) AS first_date, MAX(date) AS last_date,
+             MIN(updated_at) AS first_seen, MAX(updated_at) AS last_seen
+      FROM revenue_leads
+      GROUP BY workspace_id, client_name
+      ORDER BY leads DESC
+    `);
+    // Suspicious batches: many leads sharing the exact same updated_at second.
+    const batches = await dbPg.query(`
+      SELECT client_name, date_trunc('second', updated_at) AS inserted_at, COUNT(*)::int AS n
+      FROM revenue_leads
+      GROUP BY client_name, date_trunc('second', updated_at)
+      HAVING COUNT(*) >= 5
+      ORDER BY n DESC
+      LIMIT 50
+    `);
+    const total = await dbPg.query(`SELECT COUNT(*)::int AS n FROM revenue_leads`);
+    res.json({ total: total.rows[0].n, by_client: byClient.rows, suspicious_batches: batches.rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete a bad batch: all revenue_leads for a client inserted within the same
+// second (updated_at). Use after inspecting /revenue-leads-debug. Returns count.
+app.post('/api/admin/revenue-leads-purge-batch', requireAdmin, async (req, res) => {
+  const dbPg = app.locals.pgDb;
+  if (!dbPg) return res.status(503).json({ error: 'DB unavailable' });
+  const { client_name, inserted_at } = req.body || {};
+  if (!client_name || !inserted_at) return res.status(400).json({ error: 'client_name and inserted_at (a second timestamp) required' });
+  try {
+    const r = await dbPg.query(
+      `DELETE FROM revenue_leads
+        WHERE client_name = $1 AND date_trunc('second', updated_at) = $2::timestamp`,
+      [client_name, inserted_at]
+    );
+    refreshRevenueCache().catch(() => {});
+    res.json({ ok: true, deleted: r.rowCount || 0 });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/admin/sync-leads-to-portal — RETIRED.
 // Historical PV leads are backfilled directly via SQL from the revenue_leads
 // table (the authoritative source the admin counts) into esp_leads. The earlier
