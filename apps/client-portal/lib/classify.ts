@@ -24,19 +24,32 @@ const CATEGORIES: ReplyCategory[] = [
 
 // Warm-up emails are sent automatically between inboxes to build sending
 // reputation. They are NOT real prospect replies — they must never reach the
-// inbox or cost a Gemini call. Warm-up tools tag each message with a random
-// token so the receiving inbox can recognise + auto-reply to it; the classic
-// signature is two repeated words ("apple apple", "Pizza-Pizza"). We detect by
-// those markers, and treat the absence of any real lead enrichment (no LinkedIn,
-// company, title, phone — i.e. no campaign behind it) as a strong corroborating
-// signal, since a genuine prospect reply has a lead record.
+// inbox or cost a Gemini call. The tell-tale signature in OUR data is a RANDOM
+// HYPHENATED WORD-PAIR injected into otherwise-normal prose — two unrelated words
+// joined by a hyphen, e.g. "rapid-provision survived", "genuine-bright awesome",
+// "skill-champ pumped", "climate-sufficient week". (Also the literal "warmup"
+// markers + common tool names.) We allowlist genuine compounds so real replies
+// ("award-winning", "eco-friendly", "next-gen") are never mis-flagged.
 const WARMUP_PATTERNS: RegExp[] = [
-  /\b([a-z]{3,})[\s_-]+\1\b/i,                                   // repeated word token: apple apple / apple-apple
-  /\bwarm[\s_-]?up\b/i,                                          // the literal word "warmup"/"warm up"
-  /\b(mailwarm|warmupinbox|lemwarm|warmbox|warmy)\b/i,          // common warm-up tool names
+  /\bwarm[\s_-]?up\b/i,                                          // literal "warmup"/"warm up"
+  /\b(mailwarm|warmupinbox|lemwarm|warmbox|warmy)\b/i,          // warm-up tool names
   /\bwarm-?up\s*(id|token|ref|code)\b[:#]?\s*[a-z0-9]{3,}/i,    // explicit warm-up token markers
   /\[\s*warm-?up\s*\]/i,                                         // [warmup] tag
+  /\b([a-z]{3,})[\s_]+\1\b/i,                                    // repeated word token: "apple apple"
 ]
+
+// Common real hyphenated compounds — never treated as warm-up pairs.
+const HYPHEN_ALLOW = new Set([
+  'award-winning', 'easy-to', 'eco-friendly', 'next-gen', 'real-time', 'long-term',
+  'high-quality', 'well-being', 'cost-effective', 'up-to', 'state-of', 'one-on',
+  'day-to', 'follow-up', 'check-in', 'in-person', 'full-time', 'part-time', 'end-to',
+  'go-to', 'must-have', 'data-driven', 'world-class', 'top-notch', 'on-the', 'face-to',
+  'win-win', 'co-founder', 'e-commerce', 'sign-up', 'opt-in', 'opt-out', 'time-saving',
+  'game-changer', 'game-changing', 'decision-makers', 'decision-maker', 'mid-sized',
+  'so-called', 'well-known', 'hands-on', 're-engage', 'self-service', 'all-in',
+])
+// A random injected word-pair: lowercase word-word, 4+ letters each, not allowlisted.
+const HYPHEN_PAIR = /\b([a-z]{4,})-([a-z]{4,})\b/g
 
 export interface WarmupSignals {
   subject?: string
@@ -47,18 +60,31 @@ export interface WarmupSignals {
   hasLeadFields?: boolean
 }
 
-// Cheap, deterministic warm-up detector. A warm-up MARKER is required; missing
-// lead fields only raise confidence (so we never mis-flag a real forwarded reply
-// that happens to have no enrichment).
+// Cheap, deterministic warm-up detector.
+//   • An EXPLICIT marker ("warmup", tool names, repeated-word token) → warm-up on its own.
+//   • A random injected hyphen-pair ("rapid-provision") → warm-up ONLY when the
+//     reply also has NO lead enrichment. Per Jesse: a warm-up has the odd word-pair
+//     AND no real data; a genuine prospect reply carries LinkedIn/company/title
+//     from the campaign, so an odd hyphenate alone never flags it — that goes to Gemini.
 export function detectWarmup(s: WarmupSignals): { isWarmup: boolean; reason: string } {
   const hay = `${s.subject ?? ''}\n${s.bodyText ?? ''}`
-  const hit = WARMUP_PATTERNS.find(re => re.test(hay))
-  if (!hit) return { isWarmup: false, reason: '' }
   const noFields = s.hasLeadFields === false
-  return {
-    isWarmup: true,
-    reason: `warm-up marker ${String(hit)}${noFields ? ' + no lead enrichment' : ''}`,
+
+  const marker = WARMUP_PATTERNS.find(re => re.test(hay))
+  if (marker) {
+    return { isWarmup: true, reason: `warm-up marker ${String(marker)}` }
   }
+
+  // Random hyphenated word-pair(s) injected into prose — REQUIRES no lead data.
+  const pairs: string[] = []
+  for (const m of hay.toLowerCase().matchAll(HYPHEN_PAIR)) {
+    if (!HYPHEN_ALLOW.has(m[0])) pairs.push(m[0])
+  }
+  if (pairs.length > 0 && noFields) {
+    return { isWarmup: true, reason: `warm-up word-pair(s) ${pairs.slice(0, 3).join(', ')} + no lead enrichment` }
+  }
+
+  return { isWarmup: false, reason: '' }
 }
 
 export interface Classification {
