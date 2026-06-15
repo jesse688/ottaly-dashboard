@@ -13,6 +13,7 @@ import { bisonTeamForWorkspace, getCampaigns } from '@/lib/bison'
 
 interface Row {
   id: string
+  bison_team_id: string | null
   workspace_id: string | null
   campaign_id: string | null
   lead_email: string | null
@@ -20,16 +21,20 @@ interface Row {
 
 async function loadReply(id: string): Promise<Row | null> {
   const r = await pool.query(
-    `SELECT id, workspace_id, campaign_id, lead_email FROM unibox_replies WHERE id = $1`,
+    `SELECT id, bison_team_id, workspace_id, campaign_id, lead_email FROM unibox_replies WHERE id = $1`,
     [id]
   )
   return (r.rows[0] as Row) ?? null
 }
 
-// Resolve the team id from the reply's workspace, else the client owning it.
-async function teamFor(workspaceId: string | null): Promise<string | null> {
-  if (!workspaceId) return null
-  return bisonTeamForWorkspace(workspaceId)
+// Resolve the Bison team for listing campaigns. The unibox row ALWAYS stores
+// bison_team_id (the team that delivered the reply) — use it directly, since
+// it's present even for "unmapped" replies (workspace_id null). Fall back to the
+// workspace→team map only if bison_team_id is somehow missing.
+function teamFor(reply: Row): string | null {
+  if (reply.bison_team_id) return String(reply.bison_team_id)
+  if (reply.workspace_id) return bisonTeamForWorkspace(reply.workspace_id)
+  return null
 }
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -40,9 +45,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const reply = await loadReply(id)
   if (!reply) return NextResponse.json({ error: 'Reply not found' }, { status: 404 })
 
-  const teamId = await teamFor(reply.workspace_id)
+  const teamId = teamFor(reply)
   if (!teamId) {
-    return NextResponse.json({ error: 'Reply has no client workspace — cannot list campaigns', campaigns: [] }, { status: 409 })
+    return NextResponse.json({ error: 'Reply has no Bison team — cannot list campaigns', campaigns: [] }, { status: 409 })
   }
 
   let campaigns: { id: number; name: string; status?: string | null }[] = []
@@ -58,12 +63,14 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   let suggestedReason = ''
 
   const known = reply.campaign_id
-    ?? (await pool.query(
-        `SELECT campaign_id FROM esp_leads
-          WHERE workspace_id = $1 AND lower(email) = lower($2) AND campaign_id IS NOT NULL
-          ORDER BY (source = 'bison') DESC, updated_at DESC LIMIT 1`,
-        [reply.workspace_id, reply.lead_email ?? '']
-      )).rows[0]?.campaign_id as string | undefined
+    ?? (reply.workspace_id
+        ? (await pool.query(
+            `SELECT campaign_id FROM esp_leads
+              WHERE workspace_id = $1 AND lower(email) = lower($2) AND campaign_id IS NOT NULL
+              ORDER BY (source = 'bison') DESC, updated_at DESC LIMIT 1`,
+            [reply.workspace_id, reply.lead_email ?? '']
+          )).rows[0]?.campaign_id as string | undefined
+        : undefined)
 
   if (known) {
     const hit = campaigns.find(c => String(c.id) === String(known))
