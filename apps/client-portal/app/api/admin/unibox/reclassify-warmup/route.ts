@@ -13,8 +13,17 @@ import { getAdminSession } from '@/lib/auth'
 // Re-pended rows get re-run by the classify cron under the new rule. Never flips a
 // label directly; never touches a human decision or a billed lead.
 //
-// POST ?secret=CRON_SECRET (or admin session). Returns how many were re-queued.
+// GET or POST ?secret=CRON_SECRET (or admin session). Idempotent + safe to re-run,
+// so GET is allowed too — you can trigger it straight from the browser address bar.
+// Returns how many were re-queued.
+export async function GET(req: NextRequest) {
+  return handle(req)
+}
 export async function POST(req: NextRequest) {
+  return handle(req)
+}
+
+async function handle(req: NextRequest) {
   const secret = new URL(req.url).searchParams.get('secret')
   const authed = (secret && secret === process.env.CRON_SECRET) || (await getAdminSession())
   if (!authed) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
