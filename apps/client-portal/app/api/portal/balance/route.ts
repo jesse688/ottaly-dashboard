@@ -56,13 +56,20 @@ export async function GET() {
     // the newest row's balance_after is the TRUE current balance (getBalance),
     // which also makes this correct even when the list is capped at 500 rows
     // (we anchor at the top and walk down, subtracting each row's delta).
+    // Manual admin adjustments (type 'adjustment'/'set') must NOT be visible to
+    // the client — but they DO affect the balance. So we walk EVERY row to keep
+    // the running balance correct, then only EXPOSE topup / lead_charge /
+    // dispute_refund rows (adding leads, lead delivered, non-lead credited).
+    const HIDDEN_TYPES = new Set(['adjustment', 'set'])
     let running = balance
-    const ledger = ledgerAll.map(l => {
+    const ledger: Array<{ id: string; type: string; amount: number; description: string | null; created_at: string; balance_after: number }> = []
+    for (const l of ledgerAll) {
       const amount = Number(l.amount)
       const balance_after = running
       running -= amount
-      return { id: l.id, type: l.type, amount, description: l.description, created_at: l.created_at, balance_after }
-    })
+      if (HIDDEN_TYPES.has(l.type)) continue
+      ledger.push({ id: l.id, type: l.type, amount, description: l.description, created_at: l.created_at, balance_after })
+    }
 
     return NextResponse.json({
       balance,                 // leads left (always)

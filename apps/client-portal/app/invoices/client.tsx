@@ -43,8 +43,7 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
   const [minTopup, setMinTopup] = useState(10)
   const [buckets, setBuckets] = useState<{ leads: number; pricePerLead: number }[]>([])
   const [topupErr, setTopupErr] = useState('')
-  const [payInfo, setPayInfo] = useState<{ instructions: string; link: string } | null>(null)
-  const [payInvoice, setPayInvoice] = useState<Invoice | null>(null)
+  const [paidBusy, setPaidBusy] = useState<string | null>(null)
   const [msg, setMsg] = useState('')
   const [bannerDismissed, setBannerDismissed] = useState(false)
   const router = useRouter()
@@ -56,7 +55,6 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
     fetch('/api/portal/invoices').then(r => r.json()).then((d) => { if (Array.isArray(d?.invoices)) setInvoices(d.invoices) }).catch(() => {})
     fetch('/api/portal/balance').then(r => r.json()).then((d) => !d.error && setBal(d)).catch(() => {})
     fetch('/api/portal/topup').then(r => r.json()).then((d) => { if (Array.isArray(d.requests)) setTopups(d.requests); if (d.minTopup) setMinTopup(d.minTopup); if (Array.isArray(d.buckets)) setBuckets(d.buckets) }).catch(() => {})
-    fetch('/api/portal/payment-info').then(r => r.json()).then((d) => !d.error && setPayInfo(d)).catch(() => {})
   }
 
   useEffect(() => { load() }, [])
@@ -99,10 +97,12 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
     load()
   }
   async function markPaid(id: string) {
-    await fetch(`/api/portal/invoices/${id}/paid`, { method: 'POST' })
+    setPaidBusy(id)
+    await fetch(`/api/portal/invoices/${id}/paid`, { method: 'POST' }).catch(() => {})
     setMsg('Thanks — we\'ll confirm your payment shortly.')
     setTimeout(() => setMsg(''), 6000)
-    load()
+    await load()
+    setPaidBusy(null)
   }
 
   return (
@@ -123,7 +123,7 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
         {unpaidInvoice && !bannerDismissed && (
           <div className="mb-4 flex items-center gap-3 px-4 py-2.5 bg-red-50 border border-red-200 text-red-800 text-sm rounded-lg">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="shrink-0"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-            <span className="flex-1">You have an unpaid invoice — <button onClick={() => setPayInvoice(unpaidInvoice)} className="font-semibold underline hover:no-underline">view</button></span>
+            <span className="flex-1">You have an unpaid invoice{unpaidInvoice.has_file ? <> — <a href={`/api/portal/invoices/${unpaidInvoice.id}/file`} target="_blank" rel="noopener noreferrer" className="font-semibold underline hover:no-underline">show invoice</a></> : null} · <button onClick={() => markPaid(unpaidInvoice.id)} className="font-semibold underline hover:no-underline">I&apos;ve paid</button></span>
             <button onClick={() => setBannerDismissed(true)} aria-label="Dismiss" className="text-red-400 hover:text-red-700 shrink-0">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
@@ -180,14 +180,22 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
                         <p className="text-sm font-medium text-gray-800 truncate">{inv.description}</p>
                         <p className="text-xs text-gray-400">{inv.invoice_number ? `${inv.invoice_number} · ` : ''}{fmt(parseFloat(inv.amount))}{inv.due_date ? ` · due ${fmtDate(inv.due_date)}` : ''}</p>
                       </div>
-                      {inv.has_file && <a href={`/api/portal/invoices/${inv.id}/file`} target="_blank" rel="noopener noreferrer" className="text-xs text-brand-600 hover:text-brand-800 font-medium shrink-0">PDF</a>}
+                      {inv.has_file && (
+                        <a href={`/api/portal/invoices/${inv.id}/file`} target="_blank" rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold border border-gray-200 text-gray-700 hover:bg-gray-50 shrink-0">
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                          Show invoice
+                        </a>
+                      )}
                       {paid ? (
                         <span className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-green-100 text-green-700 shrink-0">
                           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>Paid
                         </span>
                       ) : (
-                        <button onClick={() => setPayInvoice(inv)} className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-500 text-white hover:bg-red-600 shrink-0">
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>Unpaid — Pay
+                        <button onClick={() => markPaid(inv.id)} disabled={paidBusy === inv.id}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-green-600 text-white hover:bg-green-700 disabled:opacity-60 shrink-0">
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+                          {paidBusy === inv.id ? 'Saving…' : "I've paid"}
                         </button>
                       )}
                     </div>
@@ -216,30 +224,6 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
           </div>
         </div>
       </div>
-
-      {/* Pay invoice modal — shows bank details / pay link set in admin */}
-      {payInvoice && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setPayInvoice(null)}>
-          <div className="bg-white rounded-2xl p-5 w-full max-w-md" onClick={e => e.stopPropagation()}>
-            <h3 className="text-base font-semibold text-[#050c29] mb-1">Pay invoice</h3>
-            <p className="text-sm text-gray-500 mb-4">{payInvoice.description} — <strong className="text-[#050c29]">{fmt(parseFloat(payInvoice.amount))}</strong></p>
-            {payInfo?.link && (
-              <a href={payInfo.link} target="_blank" rel="noopener noreferrer" className="block w-full text-center py-2.5 mb-3 bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold rounded-lg">Pay online</a>
-            )}
-            {payInfo?.instructions && (
-              <div className="bg-gray-50 border border-gray-100 rounded-lg p-3 mb-4">
-                <p className="text-xs font-semibold text-gray-500 mb-1">Bank transfer details</p>
-                <pre className="text-sm text-gray-700 whitespace-pre-wrap font-sans">{payInfo.instructions}</pre>
-              </div>
-            )}
-            {payInvoice.has_file && <a href={`/api/portal/invoices/${payInvoice.id}/file`} target="_blank" rel="noopener noreferrer" className="block text-sm text-brand-600 hover:text-brand-800 mb-4">Download invoice PDF</a>}
-            <div className="flex gap-2 justify-end">
-              <button onClick={() => setPayInvoice(null)} className="px-4 py-2 text-sm text-gray-600">Close</button>
-              <button onClick={() => { markPaid(payInvoice.id); setPayInvoice(null) }} className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg">I&apos;ve paid</button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {showTopup && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setShowTopup(false)}>
