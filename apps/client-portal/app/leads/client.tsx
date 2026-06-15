@@ -557,6 +557,7 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
           </div>
           <div className="px-3 flex items-center justify-between">
             <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Deal stages</span>
+            <button onClick={() => setShowNewLabel(true)} title="Add a deal stage" className="text-gray-400 hover:text-brand-600 text-lg leading-none px-1 -my-1">+</button>
           </div>
           <div className="px-3 mt-1 flex-1 overflow-y-auto">
             {clientStages.map(cl => (
