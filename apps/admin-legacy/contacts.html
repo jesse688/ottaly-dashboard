@@ -1587,6 +1587,33 @@
           <div id="pushNewCampWrap" style="display:none;">
             <input type="text" id="pushNewCampaignName" style="width:100%;padding:10px 12px;" placeholder="New campaign name">
             <p style="font-size:11px;color:#9ca3af;margin:4px 0 0;">Auto-named from your filters (editable). Created as a Draft in Bison — launch it there when ready.</p>
+
+            <!-- New-campaign settings (applied to the Draft via PATCH /update) -->
+            <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:14px;margin-top:10px;">
+              <p style="font-size:13px;font-weight:600;color:#374151;margin:0 0 10px;">⚙️ Campaign settings</p>
+              <div style="display:flex;gap:12px;flex-wrap:wrap;">
+                <div style="flex:1;min-width:140px;">
+                  <label style="font-size:12px;color:#374151;">Max emails / day</label>
+                  <input type="number" id="pushMaxEmails" min="0" value="1000" style="width:100%;padding:8px 10px;">
+                </div>
+                <div style="flex:1;min-width:140px;">
+                  <label style="font-size:12px;color:#374151;">Max new leads / day</label>
+                  <input type="number" id="pushMaxNewLeads" min="0" value="1000" style="width:100%;padding:8px 10px;">
+                </div>
+              </div>
+              <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:12px;">
+                <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;color:#374151;">
+                  <input type="checkbox" id="pushOpenTracking" style="accent-color:#8b5cf6;width:15px;height:15px;"> Open tracking
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;color:#374151;">
+                  <input type="checkbox" id="pushPlainText" checked style="accent-color:#8b5cf6;width:15px;height:15px;"> Plain text
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;color:#374151;">
+                  <input type="checkbox" id="pushCanUnsub" style="accent-color:#8b5cf6;width:15px;height:15px;"> One-click unsubscribe
+                </label>
+              </div>
+              <p style="font-size:11px;color:#9ca3af;margin:10px 0 0;">Schedule auto-set to Mon–Fri, 07:30–17:00 (Europe/London).</p>
+            </div>
           </div>
         </div>
 
@@ -3434,13 +3461,27 @@
         const btn = document.getElementById('pushConfirmBtn');
         btn.disabled = true; const orig = btn.textContent; btn.textContent = 'Creating campaign…';
         try {
+          // Gather campaign settings from the panel. Blank max-emails => omit
+          // (Bison default); booleans always sent.
+          const maxEmailsRaw = (document.getElementById('pushMaxEmails').value || '').trim();
+          const maxNewRaw = (document.getElementById('pushMaxNewLeads').value || '').trim();
+          const settings = {
+            open_tracking: document.getElementById('pushOpenTracking').checked,
+            plain_text: document.getElementById('pushPlainText').checked,
+            can_unsubscribe: document.getElementById('pushCanUnsub').checked,
+          };
+          if (maxEmailsRaw !== '') settings.max_emails_per_day = Number(maxEmailsRaw);
+          if (maxNewRaw !== '') settings.max_new_leads_per_day = Number(maxNewRaw);
           const cr = await fetch('/api/bison/create-campaign', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ws_id: wsId, name: campName }),
+            body: JSON.stringify({ ws_id: wsId, name: campName, settings }),
           });
           const cd = await cr.json();
           if (!cr.ok || !cd.campaign) throw new Error(cd.error || 'Failed to create campaign');
           campId = cd.campaign.id;
+          if (Array.isArray(cd.warnings) && cd.warnings.length) {
+            showMessage('⚠️ Campaign created, but: ' + cd.warnings.join('; '), 'error');
+          }
         } catch (e) {
           errEl.textContent = 'Create campaign failed: ' + e.message; errEl.style.display = '';
           btn.disabled = false; btn.textContent = orig; return;
