@@ -1,8 +1,9 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import pool, { ready } from '@/lib/db'
 import { getAdminSession } from '@/lib/auth'
+import { CATEGORIES } from '@/lib/classify'
 
-const FOLDERS = ['inbox', 'review', 'done', 'unmapped', 'rejected'] as const
+const FOLDERS = ['inbox', 'review', 'done', 'unmapped', 'rejected', 'warmup'] as const
 type Folder = (typeof FOLDERS)[number]
 
 // Admin-only list of Master Unibox replies, one folder at a time, newest-first,
@@ -20,7 +21,6 @@ export async function GET(req: NextRequest) {
   const before = url.searchParams.get('before') // received_at cursor (ISO)
   const q = (url.searchParams.get('q') ?? '').trim()
   // Filter by EFFECTIVE category (admin override if set, else the AI category).
-  const CATEGORIES = ['interested', 'not_interested', 'ooo_auto_reply', 'unsubscribe', 'warmup', 'other'] as const
   const catParam = url.searchParams.get('category') ?? ''
   const category = (CATEGORIES as readonly string[]).includes(catParam) ? catParam : ''
 

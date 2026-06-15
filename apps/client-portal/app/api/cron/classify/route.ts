@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import pool, { ready } from '@/lib/db'
-import { classifyReply, CLASSIFIER_MODEL, detectWarmup } from '@/lib/classify'
+import { classifyReply, CLASSIFIER_MODEL, CLASSIFIER_VERSION, detectWarmup } from '@/lib/classify'
 import { addToBlocklist, unsubscribeLead, bisonTeamForWorkspace } from '@/lib/bison'
 import { sendEmail } from '@/lib/email'
 
@@ -37,6 +37,7 @@ export async function GET(req: NextRequest) {
     // Join the lead record (esp_leads + its raw) for the alert's contact details.
     const claimed = await client.query(
       `SELECT u.id, u.subject, u.body_preview, u.raw, u.workspace_id, u.lead_email, u.bison_team_id,
+              u.is_forwarded,
               c.company_name,
               l.first_name, l.last_name, l.company_name AS lead_company,
               l.raw->>'job_title'           AS job_title,
@@ -92,14 +93,19 @@ export async function GET(req: NextRequest) {
         subject: (row.subject as string) ?? '',
         bodyText: (row.body_preview as string) ?? '',
         hasLeadFields,
+        // A forwarded reply legitimately lacks lead fields — don't auto-warmup it.
+        isForwarded: Boolean(row.is_forwarded),
       })
       if (warmup.isWarmup) {
+        // Warmup goes to its OWN visible folder (not hidden 'rejected'), so a
+        // genuine reply mis-flagged as warm-up stays findable for correction.
         await client.query(
           `UPDATE unibox_replies
-              SET category = 'warmup', classify_state = 'done', folder = 'rejected',
-                  ai_model = 'prefilter', ai_reasoning = $2, updated_at = NOW()
+              SET category = 'warmup', classify_state = 'done', folder = 'warmup',
+                  ai_model = 'prefilter', ai_reasoning = $2,
+                  classifier_version = $3, updated_at = NOW()
             WHERE id = $1`,
-          [id, warmup.reason]
+          [id, warmup.reason, CLASSIFIER_VERSION]
         )
         summary.processed++
         continue
@@ -110,25 +116,25 @@ export async function GET(req: NextRequest) {
           subject: (row.subject as string) ?? '',
           bodyText: (row.body_preview as string) ?? '',
         })
-        // interested → Review for manual decision; unsubscribe → auto-actioned
-        // and filed under 'rejected' (no human step needed).
-        const folder = result.category === 'interested' ? 'review'
+        // interested + question → Review for manual decision (a pricing/clarifying
+        // question is a hot lead). unsubscribe → auto-actioned, filed 'rejected'.
+        const folder = (result.category === 'interested' || result.category === 'question') ? 'review'
                      : result.category === 'unsubscribe' ? 'rejected'
                      : undefined
         await client.query(
           `UPDATE unibox_replies
               SET category = $2, confidence = $3, ai_model = $4, ai_reasoning = $5,
-                  classify_state = 'done',
+                  classify_state = 'done', classifier_version = $7,
                   folder = CASE WHEN $6::text IS NOT NULL AND folder IN ('inbox','review') THEN $6 ELSE folder END,
                   updated_at = NOW()
             WHERE id = $1`,
           [id, result.category, result.confidence, CLASSIFIER_MODEL,
-           result.reasoning, folder ?? null]
+           result.reasoning, folder ?? null, CLASSIFIER_VERSION]
         )
         summary.processed++
-        if (result.category === 'interested') {
+        if (result.category === 'interested' || result.category === 'question') {
           summary.interested++
-          // Alert internally that a new interested reply landed in Review.
+          // Alert internally that a new interested/question reply landed in Review.
           const rawObj = (row.raw ?? {}) as Record<string, unknown>
           const fullBody = (rawObj.text_body as string) || (row.body_preview as string) || null
           const leadName = [row.first_name, row.last_name].filter(Boolean).join(' ').trim() || null

@@ -323,6 +323,55 @@ async function runMigration() {
       `ALTER TABLE unibox_replies ADD COLUMN IF NOT EXISTS client_id UUID`,
       `CREATE INDEX IF NOT EXISTS idx_unibox_client_received ON unibox_replies (client_id, received_at DESC)`,
 
+      // ── Phase 2: classifier feedback log (training corpus + accuracy ledger) ──
+      // Append-only. One row per admin label action on a unibox reply. A frozen
+      // snapshot of the reply (full body, not the 200-char preview) + both the AI
+      // and human verdict, so it survives reply edits/deletes and can seed few-shot
+      // examples + an eval set later. signal_type separates a genuine sentiment
+      // CORRECTION from a workflow lead-action (mark-as-lead asserts billable, not
+      // that the category was right) — only label_correction feeds training.
+      `CREATE TABLE IF NOT EXISTS classifier_feedback (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        reply_id UUID REFERENCES unibox_replies(id) ON DELETE SET NULL,
+        subject TEXT,
+        body_text TEXT,
+        had_lead_fields BOOLEAN,
+        ai_category TEXT,
+        ai_confidence NUMERIC(3,2),
+        human_category TEXT NOT NULL,
+        is_correction BOOLEAN NOT NULL,
+        signal_type TEXT NOT NULL DEFAULT 'label_correction',
+        classifier_version TEXT,
+        corrected_by TEXT NOT NULL DEFAULT 'admin',
+        source TEXT NOT NULL DEFAULT 'admin_override',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (reply_id, human_category)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_clf_feedback_recent ON classifier_feedback (created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_clf_feedback_pair ON classifier_feedback (ai_category, human_category)`,
+      // Phase 2: dedicated key/value store for the curated few-shot example blob
+      // and config. SEPARATE from portal_meta (which is the migration sentinel —
+      // overloading it risks wiping few-shot on a migration re-run).
+      `CREATE TABLE IF NOT EXISTS classifier_config (
+        key TEXT PRIMARY KEY,
+        value JSONB NOT NULL DEFAULT '{}',
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+      // Phase 2: frozen baseline eval set, captured BEFORE few-shot is enabled so
+      // "self-improving" is measurable/falsifiable. Held immutable once seeded.
+      `CREATE TABLE IF NOT EXISTS classifier_eval (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        bison_team_id TEXT,
+        bison_reply_id TEXT,
+        subject TEXT,
+        body_text TEXT,
+        had_lead_fields BOOLEAN,
+        expected_category TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (bison_team_id, bison_reply_id)
+      )`,
+      `ALTER TABLE unibox_replies ADD COLUMN IF NOT EXISTS classifier_version TEXT`,
+
       // ── One-time migrations marker table ───────────────────────────
       `CREATE TABLE IF NOT EXISTS portal_meta (key TEXT PRIMARY KEY, created_at TIMESTAMPTZ DEFAULT NOW())`,
       // The ledger switched from money units to LEAD-COUNT units. Wipe any
