@@ -113,32 +113,38 @@ function withBisonLock(fn) {
 // the if(db) block and aren't reachable from the /api/bison/* routes, so these
 // routes use this self-contained version. Always switches workspace when wsId
 // is given (POST /api/workspaces/v1.1/switch-workspace { workspace_id }).
+// Low-level switch+request WITHOUT taking _bisonGate. Callers that need several
+// requests to run atomically against ONE active workspace (e.g. a GET-then-POST
+// sequence that must not have another workspace switch interleave) wrap multiple
+// _bisonRaw calls in a single withBisonLock. Most callers should use bisonReq.
+async function _bisonRaw(path, opts = {}) {
+  if (opts.wsId && _bisonWsId !== String(opts.wsId)) {
+    await fetch(BISON_BASE + '/api/workspaces/v1.1/switch-workspace', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + getBisonKey(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ team_id: Number(opts.wsId) }),
+      signal: AbortSignal.timeout(10000),
+    });
+    _bisonWsId = String(opts.wsId);
+  }
+  const url = new URL(BISON_BASE + path);
+  if (opts.params) for (const [k, v] of Object.entries(opts.params)) { if (v != null) url.searchParams.set(k, String(v)); }
+  const init = {
+    method: opts.method || 'GET',
+    headers: { Authorization: 'Bearer ' + getBisonKey(), 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(20000),
+  };
+  if (opts.body) init.body = JSON.stringify(opts.body);
+  const r = await fetch(url.toString(), init);
+  const txt = await r.text();
+  let data; try { data = txt ? JSON.parse(txt) : {}; } catch { data = { raw: txt }; }
+  if (!r.ok) throw new Error('Bison ' + path + ' -> ' + r.status + ': ' + txt.slice(0, 200));
+  return data;
+}
+
 async function bisonReq(path, opts = {}) {
   // Serialize the whole switch+fetch sequence on the shared token (see _bisonGate).
-  return withBisonLock(async () => {
-    if (opts.wsId && _bisonWsId !== String(opts.wsId)) {
-      await fetch(BISON_BASE + '/api/workspaces/v1.1/switch-workspace', {
-        method: 'POST',
-        headers: { Authorization: 'Bearer ' + getBisonKey(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ team_id: Number(opts.wsId) }),
-        signal: AbortSignal.timeout(10000),
-      });
-      _bisonWsId = String(opts.wsId);
-    }
-    const url = new URL(BISON_BASE + path);
-    if (opts.params) for (const [k, v] of Object.entries(opts.params)) { if (v != null) url.searchParams.set(k, String(v)); }
-    const init = {
-      method: opts.method || 'GET',
-      headers: { Authorization: 'Bearer ' + getBisonKey(), 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(20000),
-    };
-    if (opts.body) init.body = JSON.stringify(opts.body);
-    const r = await fetch(url.toString(), init);
-    const txt = await r.text();
-    let data; try { data = txt ? JSON.parse(txt) : {}; } catch { data = { raw: txt }; }
-    if (!r.ok) throw new Error('Bison ' + path + ' -> ' + r.status + ': ' + txt.slice(0, 200));
-    return data;
-  });
+  return withBisonLock(() => _bisonRaw(path, opts));
 }
 
 // Bison replacement for the old PlusVibe `/lead/workspace-leads` endpoint.
@@ -195,22 +201,54 @@ async function bisonListSenderEmails(wsId) {
 // leads — Bison 422s ("You do not have a custom variable named X") if a lead
 // references one that doesn't exist. Best-effort: a create failure is logged, not
 // thrown. Used by every push path (incl. verify-and-push). wsId = Bison team id.
+// Standard custom vars every Bison lead payload may reference. Seeding ALL of
+// them (not just the ones present in the current batch) means a workspace is
+// fully prepared once, so a later batch that happens to include e.g. `city`
+// when an earlier one didn't can't 422. Keep in sync with the cv.push() names
+// in the push payload builders.
+const BISON_STANDARD_CUSTOM_VARS = [
+  'phone_number', 'city', 'state', 'country', 'industry',
+  'linkedin_person_url', 'linkedin_company_url', 'company_website',
+  'department', 'address_line',
+];
+
+// Ensure a Bison workspace has every custom variable in `names` BEFORE pushing
+// leads — Bison 422s ("You do not have a custom variable named X") if a lead
+// references one that doesn't exist.
+//
+// CRITICAL: the whole GET-then-create sequence runs inside a SINGLE withBisonLock
+// via _bisonRaw, so no other workspace switch can interleave between listing and
+// creating (which previously created the var in the wrong workspace and left the
+// 422 to surface on the lead push). Creation is verified by re-listing; a var
+// that still isn't present THROWS so the caller can react rather than push blind.
 async function ensureBisonCustomVars(wsId, names) {
-  const needed = [...new Set([...names].filter(Boolean))];
+  const needed = [...new Set([...BISON_STANDARD_CUSTOM_VARS, ...[...names].filter(Boolean)])];
   if (!needed.length) return;
-  try {
-    const existingResp = await bisonReq('/api/custom-variables', { wsId });
-    const existingList = Array.isArray(existingResp) ? existingResp : (existingResp?.data ?? []);
-    const existing = new Set(existingList.map(v => (v.name || v.slug || '').toLowerCase()));
-    for (const name of needed) {
-      if (!existing.has(String(name).toLowerCase())) {
-        await bisonReq('/api/custom-variables', { wsId, method: 'POST', body: { name } })
-          .catch(e => console.warn(`[bison] create custom var "${name}" failed:`, e.message));
+  return withBisonLock(async () => {
+    const listResp = await _bisonRaw('/api/custom-variables', { wsId });
+    const listArr = Array.isArray(listResp) ? listResp : (listResp?.data ?? []);
+    let existing = new Set(listArr.map(v => (v.name || v.slug || '').toLowerCase()));
+    const toCreate = needed.filter(n => !existing.has(String(n).toLowerCase()));
+    if (!toCreate.length) return;
+    for (const name of toCreate) {
+      try {
+        await _bisonRaw('/api/custom-variables', { wsId, method: 'POST', body: { name } });
+      } catch (e) {
+        // "already been taken" means a concurrent run created it — that's fine.
+        if (!/already been taken/i.test(e.message)) {
+          console.warn(`[bison] create custom var "${name}" failed:`, e.message);
+        }
       }
     }
-  } catch (e) {
-    console.warn('[bison] ensure custom-vars failed (continuing):', e.message);
-  }
+    // Verify: re-list and confirm everything we needed now exists.
+    const verifyResp = await _bisonRaw('/api/custom-variables', { wsId });
+    const verifyArr = Array.isArray(verifyResp) ? verifyResp : (verifyResp?.data ?? []);
+    existing = new Set(verifyArr.map(v => (v.name || v.slug || '').toLowerCase()));
+    const stillMissing = needed.filter(n => !existing.has(String(n).toLowerCase()));
+    if (stillMissing.length) {
+      throw new Error('Bison custom vars could not be created in ws ' + wsId + ': ' + stillMissing.join(', '));
+    }
+  });
 }
 
 // Known PlusVibe workspace_id → Bison team_id map (Bison's /api/workspaces only
