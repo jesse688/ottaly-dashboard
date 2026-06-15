@@ -71,7 +71,16 @@ export async function GET(req: NextRequest) {
         const tags = Array.isArray(tagsJson) ? tagsJson : (tagsJson.data ?? [])
         out.tagsInWorkspace = (tags || []).map((t: { id: number; name: string }) => `${t.id}:${t.name}`).slice(0, 30)
       } catch (e) { out.tagsError = String(e) }
+      // Show the webhook URL(s) Bison ACTUALLY has registered for this workspace
+      // + which events — so we can confirm replies are pointed at the right place.
+      try {
+        const whRes = await fetch(`${BASE}/api/webhook-url`, { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(10000) })
+        const whJson = await whRes.json().catch(() => ({}))
+        const hooks = Array.isArray(whJson) ? whJson : (whJson.data ?? [])
+        out.registeredWebhooks = (hooks || []).map((h: { url?: string; events?: string[] }) => ({ url: h.url, events: h.events }))
+      } catch (e) { out.webhookError = String(e) }
     })
+    out.portalExpectsWebhookUrl = process.env.BISON_WEBHOOK_TARGET_URL || 'https://login.ottaly.co.uk/api/webhooks/plusvibe'
   } catch (e) { out.leadsError = String(e) }
 
   void switchWorkspace
