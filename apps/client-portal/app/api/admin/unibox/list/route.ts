@@ -24,11 +24,11 @@ export async function GET(req: NextRequest) {
   const catParam = url.searchParams.get('category') ?? ''
   const category = (CATEGORIES as readonly string[]).includes(catParam) ? catParam : ''
 
-  // When searching OR filtering by category, look ACROSS all folders (you want to
-  // find a reply wherever it landed). Otherwise scope to the selected folder.
+  // Firehose: folder=all (or searching / category-filtering) looks ACROSS all
+  // folders. Otherwise scope to the selected folder.
   const params: unknown[] = []
   let folderFilter: string
-  if (q || category) {
+  if (q || category || folderParam === 'all') {
     folderFilter = 'TRUE'
   } else {
     params.push(folder)
@@ -39,6 +39,15 @@ export async function GET(req: NextRequest) {
   if (category) {
     params.push(category)
     categoryFilter = `AND COALESCE(u.admin_label, u.category) = $${params.length}`
+  }
+
+  // Per-client zoom (the firehose). Scopes on the resolved per-reply client_id —
+  // NOT workspace_id — so a workspace shared by >1 client zooms to the right one.
+  let clientFilter = ''
+  const clientParam = (url.searchParams.get('client') ?? '').trim()
+  if (clientParam) {
+    params.push(clientParam)
+    clientFilter = `AND u.client_id = $${params.length}`
   }
 
   let search = ''
@@ -106,7 +115,7 @@ export async function GET(req: NextRequest) {
            LIMIT 1
          ) l ON TRUE
          LEFT JOIN portal_emails pe ON pe.id = u.portal_email_id
-        WHERE ${folderFilter} ${categoryFilter} ${search} ${cursor}
+        WHERE ${folderFilter} ${clientFilter} ${categoryFilter} ${search} ${cursor}
         ORDER BY u.received_at DESC
         LIMIT $${params.length}`,
       params
@@ -116,9 +125,15 @@ export async function GET(req: NextRequest) {
     const rows = hasMore ? r.rows.slice(0, limit) : r.rows
     const nextCursor = hasMore ? rows[rows.length - 1].received_at : null
 
+    // Counts respect the active client zoom so badges don't show cross-client
+    // totals when scoped to one client (critique: scoped list must = scoped counts).
+    const countScope = clientParam ? 'WHERE client_id = $1' : ''
+    const countParams = clientParam ? [clientParam] : []
+
     // Folder counts for the tab badges.
     const counts = await pool.query(
-      `SELECT folder, COUNT(*)::int AS n FROM unibox_replies GROUP BY folder`
+      `SELECT folder, COUNT(*)::int AS n FROM unibox_replies ${countScope} GROUP BY folder`,
+      countParams
     )
     const countsByFolder: Record<string, number> = {}
     for (const row of counts.rows) countsByFolder[row.folder as string] = row.n as number
@@ -127,8 +142,9 @@ export async function GET(req: NextRequest) {
     const catCounts = await pool.query(
       `SELECT COALESCE(admin_label, category) AS cat, COUNT(*)::int AS n
          FROM unibox_replies
-        WHERE COALESCE(admin_label, category) IS NOT NULL
-        GROUP BY COALESCE(admin_label, category)`
+        ${clientParam ? 'WHERE client_id = $1 AND' : 'WHERE'} COALESCE(admin_label, category) IS NOT NULL
+        GROUP BY COALESCE(admin_label, category)`,
+      countParams
     )
     const countsByCategory: Record<string, number> = {}
     for (const row of catCounts.rows) countsByCategory[row.cat as string] = row.n as number

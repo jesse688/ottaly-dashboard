@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Logo } from '@/app/components/Logo'
 
-type Folder = 'review' | 'inbox' | 'done' | 'unmapped' | 'rejected'
+type Folder = 'review' | 'inbox' | 'done' | 'unmapped' | 'rejected' | 'warmup' | 'all'
 
 interface Reply {
   id: string
@@ -55,8 +55,10 @@ interface PortalClientLite { id: string; company_name: string; workspace_id: str
 
 const FOLDERS: { key: Folder; label: string }[] = [
   { key: 'review', label: 'Review' },
+  { key: 'all', label: 'All replies' },
   { key: 'inbox', label: 'Inbox' },
   { key: 'done', label: 'Done' },
+  { key: 'warmup', label: 'Warm-up' },
   { key: 'unmapped', label: 'Unmapped' },
   { key: 'rejected', label: 'Rejected' },
 ]
@@ -73,9 +75,10 @@ const CAT_STYLE: Record<string, string> = {
   other: 'bg-slate-100 text-slate-600',
 }
 
-// Label filter chips (no Question tab per request). key = effective category value.
+// Label filter chips — all 7 categories reachable. key = effective category value.
 const LABEL_FILTERS: { key: string; label: string }[] = [
   { key: 'interested', label: 'Leads' },
+  { key: 'question', label: 'Questions' },
   { key: 'not_interested', label: 'Not interested' },
   { key: 'ooo_auto_reply', label: 'OOO' },
   { key: 'unsubscribe', label: 'Unsubscribe' },
@@ -112,6 +115,7 @@ export function AdminUniboxClient() {
   const [selected, setSelected] = useState<Reply | null>(null)
   const [clients, setClients] = useState<PortalClientLite[]>([])
   const [pickClientId, setPickClientId] = useState('')
+  const [zoomClient, setZoomClient] = useState('')   // firehose per-client zoom ('' = all clients)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   // Associate-to-campaign panel state.
@@ -121,7 +125,7 @@ export function AdminUniboxClient() {
   const [assocPick, setAssocPick] = useState<string>('')
   const [assocSuggest, setAssocSuggest] = useState<{ id: number | null; reason: string }>({ id: null, reason: '' })
 
-  const load = useCallback(async (f: Folder, cursor?: string, q?: string, cat?: string) => {
+  const load = useCallback(async (f: Folder, cursor?: string, q?: string, cat?: string, clientZoom?: string) => {
     setLoading(true)
     try {
       const u = new URL('/api/admin/unibox/list', window.location.origin)
@@ -130,6 +134,7 @@ export function AdminUniboxClient() {
       if (cursor) u.searchParams.set('before', cursor)
       if (q && q.trim()) u.searchParams.set('q', q.trim())
       if (cat) u.searchParams.set('category', cat)
+      if (clientZoom) u.searchParams.set('client', clientZoom)
       const r = await fetch(u.toString())
       if (r.status === 401) { router.push('/admin/login'); return }
       const d = await r.json() as { rows: Reply[]; nextCursor: string | null; counts: Record<string, number>; categoryCounts?: Record<string, number> }
@@ -142,8 +147,8 @@ export function AdminUniboxClient() {
     }
   }, [router])
 
-  // Reload when folder, search, or label filter changes.
-  useEffect(() => { load(folder, undefined, activeQuery, category) }, [folder, activeQuery, category, load])
+  // Reload when folder, search, label filter, or client zoom changes.
+  useEffect(() => { load(folder, undefined, activeQuery, category, zoomClient) }, [folder, activeQuery, category, zoomClient, load])
 
   function runSearch() {
     setSelected(null)
@@ -185,7 +190,7 @@ export function AdminUniboxClient() {
       const d = await r.json() as { ok?: boolean; already?: boolean; error?: string; bison_tag_state?: string }
       if (!r.ok || !d.ok) { setMsg(d.error ?? 'Failed to mark as lead'); return }
       setMsg(d.already ? 'Already marked as a lead.' : `Marked as lead${d.bison_tag_state ? ` (tag: ${d.bison_tag_state})` : ''}.`)
-      await load(folder)
+      await load(folder, undefined, activeQuery, category, zoomClient)
       setSelected(null)
     } finally {
       setBusy(false)
@@ -241,7 +246,7 @@ export function AdminUniboxClient() {
       const r = await fetch(`/api/admin/unibox/${selected.id}/reject`, { method: 'POST' })
       const d = await r.json() as { ok?: boolean; error?: string }
       if (!r.ok || !d.ok) { setMsg(d.error ?? 'Failed to reject'); return }
-      await load(folder)
+      await load(folder, undefined, activeQuery, category, zoomClient)
       setSelected(null)
     } finally {
       setBusy(false)
@@ -322,6 +327,20 @@ export function AdminUniboxClient() {
             })}
           </div>
 
+          {/* Per-client zoom (firehose) — scope every view to one client */}
+          <div className="px-3 py-2 border-b border-gray-200">
+            <select
+              value={zoomClient}
+              onChange={e => { setSelected(null); setZoomClient(e.target.value) }}
+              className="w-full text-xs border border-gray-200 rounded-md px-2 py-1.5 text-gray-700 bg-white"
+            >
+              <option value="">All clients</option>
+              {clients.map(c => (
+                <option key={c.id} value={c.id}>{c.company_name}</option>
+              ))}
+            </select>
+          </div>
+
           {/* Search across all folders */}
           <div className="px-3 py-2 border-b border-gray-200 bg-gray-50/60">
             <div className="relative flex items-center">
@@ -371,7 +390,7 @@ export function AdminUniboxClient() {
             ))}
             {nextCursor && (
               <button
-                onClick={() => load(folder, nextCursor, activeQuery, category)}
+                onClick={() => load(folder, nextCursor, activeQuery, category, zoomClient)}
                 disabled={loading}
                 className="w-full py-3 text-xs text-indigo-600 hover:text-indigo-800 disabled:opacity-50"
               >
