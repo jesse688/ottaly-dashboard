@@ -311,6 +311,35 @@ export async function getCampaigns(teamId?: string | number | null): Promise<Bis
   })
 }
 
+// Fetch a campaign's replies — these are TRACKED replies by definition (a reply
+// matched to an email the campaign sent). status filters Bison's own
+// automated/interested axis; folder filters inbox/spam/all. Used by the unibox
+// reconciler to re-pull replies the real-time webhook may have missed.
+//
+// Bison IGNORES per_page (returns ~15/page), so we page until a repeated-page
+// signature (same set of ids as the previous page) rather than trusting page
+// size. The caller wraps this in withTeam() so it runs on the team's scoped token.
+const MAX_REPLY_PAGES = 200 // safety cap (~3k replies/campaign)
+export async function getCampaignReplies(
+  campaignId: number | string,
+  opts: { status?: 'interested' | 'not_automated_reply' | 'automated_reply'; folder?: 'inbox' | 'spam' | 'all' } = {},
+): Promise<BisonReply[]> {
+  const out: BisonReply[] = []
+  let lastSig = ''
+  for (let p = 1; p <= MAX_REPLY_PAGES; p++) {
+    const data = await bison<{ data?: BisonReply[] }>('GET', `/api/campaigns/${campaignId}/replies`, {
+      page: p, status: opts.status, folder: opts.folder ?? 'inbox',
+    })
+    const batch = Array.isArray(data) ? (data as unknown as BisonReply[]) : data.data ?? []
+    if (!batch.length) break
+    const sig = batch.map((r) => r.id).join(',')
+    if (sig === lastSig) break // same page repeated → end of data (per_page ignored)
+    lastSig = sig
+    out.push(...batch)
+  }
+  return out
+}
+
 // Fetch a single lead by ID or email.
 export async function getLead(idOrEmail: string | number): Promise<BisonLead | null> {
   try {

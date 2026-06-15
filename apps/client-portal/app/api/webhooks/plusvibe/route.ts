@@ -242,20 +242,43 @@ async function handleBison(raw: Record<string, unknown>) {
         }
       }
       const folder = mappedWorkspaceId ? 'inbox' : 'unmapped'
+      // Bison's own classification of this reply (advisory — distinct from our AI
+      // `category` and the human `admin_label`). Coerce to a tri-state boolean so
+      // an absent field stays NULL rather than becoming a false negative.
+      const bisonInterested = typeof reply.interested === 'boolean' ? reply.interested : null
+      const bisonAutomated = typeof reply.automated_reply === 'boolean' ? reply.automated_reply : null
       await pool.query(
+        // Idempotent on (bison_team_id, bison_reply_id). On a retry or a later,
+        // richer delivery (e.g. an event that carries Bison's interested/automated
+        // flags the first one lacked) we COALESCE-merge to backfill NULLs and
+        // refresh Bison-owned facts — but NEVER touch category / admin_label /
+        // folder / marked_as_lead, so a human or AI decision is never clobbered.
         `INSERT INTO unibox_replies
            (bison_team_id, bison_reply_id, workspace_id, portal_email_id, lead_email, lead_bison_id,
             subject, body_preview, classify_state, folder, raw, received_at,
-            is_forwarded, sender_email, matched_lead_email, matched_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9,$10,$11,$12,$13,$14,$15)
-         ON CONFLICT (bison_team_id, bison_reply_id) DO NOTHING`,
-        [rawTeamId || 'unknown', replyId, mappedWorkspaceId, portalEmailId,
+            is_forwarded, sender_email, matched_lead_email, matched_by,
+            ingest_source, bison_interested, bison_automated_reply, last_seen_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9,$10,$11,$12,$13,$14,$15,$16,'webhook',$17,$18,NOW())
+         ON CONFLICT (bison_team_id, bison_reply_id) DO UPDATE SET
+           bison_interested      = EXCLUDED.bison_interested,
+           bison_automated_reply = EXCLUDED.bison_automated_reply,
+           workspace_id          = COALESCE(unibox_replies.workspace_id, EXCLUDED.workspace_id),
+           portal_email_id       = COALESCE(unibox_replies.portal_email_id, EXCLUDED.portal_email_id),
+           received_at           = COALESCE(unibox_replies.received_at, EXCLUDED.received_at),
+           raw                   = COALESCE(unibox_replies.raw, EXCLUDED.raw),
+           last_seen_at          = NOW(),
+           updated_at            = NOW()`,
+        // rawTeamId is ALWAYS stored verbatim — never collapsed to a shared
+        // 'unknown' constant, which made two distinct unmapped teams with the same
+        // reply.id collide on ('unknown', id) and silently drop the second.
+        [rawTeamId, replyId, mappedWorkspaceId, portalEmailId,
          // Primary email = the matched original lead if forwarded, else the row email.
          matchedLeadEmail || rowEmail, leadBisonId,
          replySubject, reply.text_body?.slice(0, 500) ?? null,
          folder, JSON.stringify(reply),
          reply.date_received ?? new Date().toISOString(),
-         isForwarded, senderEmail || null, matchedLeadEmail, matchedBy]
+         isForwarded, senderEmail || null, matchedLeadEmail, matchedBy,
+         bisonInterested, bisonAutomated]
       ).catch(err => console.error('[webhook/bison] unibox_replies insert failed:', err))
 
       // Alert admins once about a team we can't map to a client workspace.

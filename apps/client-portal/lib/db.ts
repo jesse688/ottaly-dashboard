@@ -302,6 +302,19 @@ async function runMigration() {
       `ALTER TABLE unibox_replies ADD COLUMN IF NOT EXISTS matched_lead_email TEXT`,
       `ALTER TABLE unibox_replies ADD COLUMN IF NOT EXISTS matched_by TEXT`,
 
+      // ── Phase 0 unibox redesign: capture metadata the old path dropped ──
+      // How the row arrived. The webhook is the real-time path; the reconciler
+      // re-pulls from Bison to catch webhook misses and heal stale labels.
+      `ALTER TABLE unibox_replies ADD COLUMN IF NOT EXISTS ingest_source TEXT DEFAULT 'webhook'`, // webhook | reconcile | backfill
+      // Bison's OWN classification of the reply, kept SEPARATE from our AI
+      // `category` and the human `admin_label`. These are advisory inputs to the
+      // classifier/reconciler — display precedence is always COALESCE(admin_label, category).
+      `ALTER TABLE unibox_replies ADD COLUMN IF NOT EXISTS bison_interested BOOLEAN`,
+      `ALTER TABLE unibox_replies ADD COLUMN IF NOT EXISTS bison_automated_reply BOOLEAN`,
+      // Reconciler bookkeeping — last time Bison confirmed this reply still exists.
+      `ALTER TABLE unibox_replies ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ`,
+      `CREATE INDEX IF NOT EXISTS idx_unibox_team_received ON unibox_replies (bison_team_id, received_at DESC)`,
+
       // ── One-time migrations marker table ───────────────────────────
       `CREATE TABLE IF NOT EXISTS portal_meta (key TEXT PRIMARY KEY, created_at TIMESTAMPTZ DEFAULT NOW())`,
       // The ledger switched from money units to LEAD-COUNT units. Wipe any
