@@ -25,8 +25,8 @@ export default function InvitePage() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
-    if (code.trim().length < 3) { setError('Choose a code with at least 3 characters.'); return }
-    if (code.trim() !== confirm.trim()) { setError('The codes don’t match.'); return }
+    if (code.trim().length < 3) { setError('Choose a password with at least 3 characters.'); return }
+    if (code.trim() !== confirm.trim()) { setError('The passwords don’t match.'); return }
     setLoading(true); setError('')
     const res = await fetch(`/api/invite/${token}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -48,7 +48,7 @@ export default function InvitePage() {
           <p className="text-sm text-center text-gray-500">This invite link is invalid or has already been used. Please contact your account manager.</p>
         ) : (
           <>
-            <h1 className="text-xl font-semibold text-[#050c29] text-center mb-1">Set your access code</h1>
+            <h1 className="text-xl font-semibold text-[#050c29] text-center mb-1">Set your password</h1>
             <p className="text-sm text-gray-500 text-center mb-6">{company ? `for ${company}` : 'Loading…'}</p>
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
@@ -56,15 +56,15 @@ export default function InvitePage() {
                 <input value={email} readOnly className="w-full px-3 py-2 rounded-lg border border-gray-200 bg-gray-50 text-sm text-gray-600 outline-none" />
               </div>
               <div>
-                <label className="block text-sm text-gray-700 mb-1">Create an access code</label>
-                <input value={code} onChange={e => setCode(e.target.value)} placeholder="something memorable" autoFocus
+                <label className="block text-sm text-gray-700 mb-1">Create a password</label>
+                <input type="password" value={code} onChange={e => setCode(e.target.value)} placeholder="something memorable" autoFocus
                   className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-brand-400 focus:ring-1 focus:ring-brand-200" />
               </div>
               <div>
-                <label className="block text-sm text-gray-700 mb-1">Confirm access code</label>
-                <input value={confirm} onChange={e => setConfirm(e.target.value)} placeholder="re-enter your code"
+                <label className="block text-sm text-gray-700 mb-1">Confirm password</label>
+                <input type="password" value={confirm} onChange={e => setConfirm(e.target.value)} placeholder="re-enter your password"
                   className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-brand-400 focus:ring-1 focus:ring-brand-200" />
-                <p className="text-xs text-gray-400 mt-1">You&apos;ll log in with your email + this code.</p>
+                <p className="text-xs text-gray-400 mt-1">You&apos;ll log in with your email + this password.</p>
               </div>
               {error && <p className="text-sm text-red-600">{error}</p>}
               <button type="submit" disabled={loading || !code.trim() || !confirm.trim()}
