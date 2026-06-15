@@ -115,6 +115,10 @@ export function AdminClientsClient() {
   const [bisonKeyInput, setBisonKeyInput]     = useState('')
   const [bisonTest, setBisonTest]             = useState('')
   const [bisonBusy, setBisonBusy]             = useState(false)
+  // Per-workspace (user) Bison tokens
+  const [wsTokens, setWsTokens]               = useState<{ total: number; minted: number; teams: { teamId: string; hasToken: boolean; masked: string | null }[] } | null>(null)
+  const [wsTokBusy, setWsTokBusy]             = useState(false)
+  const [wsTokMsg, setWsTokMsg]               = useState('')
   const [tplSaved, setTplSaved]               = useState(false)
 
   // Import-from-admin candidates
@@ -150,6 +154,22 @@ export function AdminClientsClient() {
     const r = await fetch('/api/admin/settings').then(r => r.json()).catch(() => null)
     if (r && !r.error) setTpl(r)
     fetch('/api/admin/bison-key').then(r => r.json()).then(d => !d.error && setBisonKey(d)).catch(() => {})
+    fetch('/api/admin/bison-tokens').then(r => r.json()).then(d => !d.error && setWsTokens(d)).catch(() => {})
+  }
+  async function mintWsTokens() {
+    if (!confirm('Mint a per-workspace Bison token for every client missing one? Uses the super-admin key.')) return
+    setWsTokBusy(true); setWsTokMsg('Minting…')
+    const r = await fetch('/api/admin/bison-tokens', { method: 'POST' })
+    const d = await r.json()
+    setWsTokBusy(false)
+    setWsTokMsg(r.ok ? `✓ Minted ${d.minted}, skipped ${d.skipped}${d.failed?.length ? `, failed ${d.failed.length}` : ''}` : `❌ ${d.error ?? 'Mint failed'}`)
+    fetch('/api/admin/bison-tokens').then(r => r.json()).then(d => !d.error && setWsTokens(d)).catch(() => {})
+  }
+  async function clearWsTokens() {
+    if (!confirm('Clear ALL per-workspace tokens? The portal will fall back to switching the super-admin key (the collision-prone path).')) return
+    await fetch('/api/admin/bison-tokens', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
+    setWsTokMsg('Cleared all per-workspace tokens.')
+    fetch('/api/admin/bison-tokens').then(r => r.json()).then(d => !d.error && setWsTokens(d)).catch(() => {})
   }
   async function saveBisonKey() {
     if (!bisonKeyInput.trim()) return
@@ -732,6 +752,33 @@ export function AdminClientsClient() {
                       </div>
                       {bisonTest && <p className="text-xs mt-2 text-gray-600">{bisonTest}</p>}
                     </div>
+
+                    {/* Per-workspace (user) Bison tokens */}
+                    <div className="border-t border-gray-100 pt-4">
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="text-xs font-semibold text-gray-700">Per-workspace Bison tokens</p>
+                        {wsTokens && <span className="text-xs text-gray-400">{wsTokens.minted}/{wsTokens.total} minted</span>}
+                      </div>
+                      <p className="text-xs text-gray-400 mb-2">Each workspace gets its OWN user token so the portal never switches the shared session — no more being logged out of the Bison UI. Mint uses the super-admin key above.</p>
+                      <div className="flex gap-2 mb-2">
+                        <button onClick={mintWsTokens} disabled={wsTokBusy} className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg disabled:opacity-60">{wsTokBusy ? 'Minting…' : 'Mint missing tokens'}</button>
+                        {wsTokens && wsTokens.minted > 0 && <button onClick={clearWsTokens} className="px-3 py-2 text-sm text-gray-500 hover:text-red-600">Clear all</button>}
+                      </div>
+                      {wsTokMsg && <p className="text-xs mb-2 text-gray-600">{wsTokMsg}</p>}
+                      {wsTokens && (
+                        <div className="max-h-40 overflow-y-auto border border-gray-100 rounded-lg divide-y divide-gray-50">
+                          {wsTokens.teams.map(t => (
+                            <div key={t.teamId} className="flex items-center justify-between px-3 py-1.5 text-xs">
+                              <span className="text-gray-600">Team {t.teamId}</span>
+                              {t.hasToken
+                                ? <span className="text-green-600 font-medium">● token {t.masked}</span>
+                                : <span className="text-gray-400">no token (uses super-admin switch)</span>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
                     <div className="flex justify-end gap-2">
                       <button onClick={applySettingsToAll} className="px-4 py-2 border border-indigo-200 text-indigo-700 hover:bg-indigo-50 text-sm font-medium rounded-lg">Apply to all clients</button>
                       <button onClick={saveTemplates} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg">Save settings</button>
