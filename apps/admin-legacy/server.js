@@ -345,6 +345,12 @@ async function ensureBisonCustomVars(wsId, names) {
 // team_id = the Bison workspace this client maps to. Verified 2026-06-15 by
 // cross-referencing the live clients table against Bison /api/workspaces.
 const BISON_TEAMS = [
+  // Bison-only workspace with no client record — keyed by its own team_id (the
+  // resolver accepts a bare team_id as its own pv). Needed so mailbox/stats listing
+  // (now sourced from this map, not a super-admin API call) includes it. ByboDigital
+  // holds ~50 SMTP (Winnr) mailboxes that were dropping from the count.
+  // (Team 2 "Jesse's Team" is personal/test — deliberately NOT included.)
+  { team_id: '6',  name: 'ByboDigital',         pv: '6' },
   { team_id: '3',  name: 'Ottaly',              pv: '690ee665bcb253de4fb44538' },
   { team_id: '4',  name: 'AccrueAccounting',    pv: '6912ddfef9582848982b9a62' },
   { team_id: '5',  name: 'ButterflyEco',        pv: '69a9db307af7ef2854f57637' },
