@@ -35,7 +35,7 @@ export function invalidateBisonKeyCache() { _keyCache = null; _activeTeam = null
 // PV id; Bison needs the team_id to switch workspace. Requires a SUPER-ADMIN
 // BISON_API_KEY (one that can switch into every client team). Update when a
 // client is added/migrated to Bison.
-const PV_TO_BISON_TEAM: Record<string, string> = {
+export const PV_TO_BISON_TEAM: Record<string, string> = {
   '690ee665bcb253de4fb44538': '3',   // Ottaly
   '6912ddfef9582848982b9a62': '4',   // AccrueAccounting
   '69a9db307af7ef2854f57637': '5',   // ButterflyEco
