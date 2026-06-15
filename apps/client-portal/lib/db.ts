@@ -401,13 +401,16 @@ async function runMigration() {
       // exists. Guarded so it runs once; safe/no-op if already applied.
       `DO $$ BEGIN
          IF NOT EXISTS (SELECT 1 FROM portal_meta WHERE key = 'unibox_client_id_backfill_v1') THEN
+           -- Correlated subquery, NOT "UPDATE ... FROM LATERAL (... u.workspace_id)":
+           -- in UPDATE...FROM the LATERAL cannot reference the target alias, which
+           -- threw "invalid reference to FROM-clause entry for table u" and ABORTED
+           -- the whole migration (so every later statement + marker never ran).
            UPDATE unibox_replies u
-              SET client_id = c.id
-             FROM LATERAL (
-               SELECT id FROM portal_clients
-                WHERE workspace_id = u.workspace_id
-                ORDER BY active DESC, created_at ASC LIMIT 1
-             ) c
+              SET client_id = (
+                SELECT pc.id FROM portal_clients pc
+                 WHERE pc.workspace_id = u.workspace_id
+                 ORDER BY pc.active DESC, pc.created_at ASC LIMIT 1
+              )
             WHERE u.client_id IS NULL AND u.workspace_id IS NOT NULL;
            INSERT INTO portal_meta(key) VALUES ('unibox_client_id_backfill_v1');
          END IF;
