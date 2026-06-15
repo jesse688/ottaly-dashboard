@@ -24,16 +24,34 @@ export async function GET(req: NextRequest) {
   // Unsubscribe actions to run AFTER commit (network + stateful Bison switch).
   const unsubQueue: { workspaceId: string; email: string }[] = []
   // Interested-reply alert emails to send AFTER commit.
-  const alertQueue: { email: string; subject: string | null; company: string | null }[] = []
+  interface AlertItem {
+    email: string; subject: string | null; company: string | null; body: string | null
+    leadName: string | null; title: string | null; phone: string | null
+    linkedin: string | null; website: string | null; location: string | null
+  }
+  const alertQueue: AlertItem[] = []
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
     // Claim up to 50 due pending rows; SKIP LOCKED lets parallel runs not collide.
+    // Join the lead record (esp_leads + its raw) for the alert's contact details.
     const claimed = await client.query(
       `SELECT u.id, u.subject, u.body_preview, u.raw, u.workspace_id, u.lead_email, u.bison_team_id,
-              c.company_name
+              c.company_name,
+              l.first_name, l.last_name, l.company_name AS lead_company,
+              l.raw->>'job_title'           AS job_title,
+              l.raw->>'phone_number'        AS phone_number,
+              l.raw->>'linkedin_person_url' AS linkedin_url,
+              l.raw->>'company_website'     AS company_website,
+              l.raw->>'city'                AS city,
+              l.raw->>'country'             AS country
          FROM unibox_replies u
          LEFT JOIN portal_clients c ON c.workspace_id = u.workspace_id
+         LEFT JOIN LATERAL (
+           SELECT first_name, last_name, company_name, raw FROM esp_leads e
+           WHERE e.workspace_id = u.workspace_id AND lower(e.email) = lower(u.lead_email)
+           ORDER BY (e.source = 'bison') DESC, e.updated_at DESC LIMIT 1
+         ) l ON TRUE
         WHERE u.classify_state = 'pending'
           AND (u.classify_next_at IS NULL OR u.classify_next_at <= NOW())
         ORDER BY u.received_at ASC
@@ -87,10 +105,20 @@ export async function GET(req: NextRequest) {
         if (result.category === 'interested') {
           summary.interested++
           // Alert internally that a new interested reply landed in Review.
+          const rawObj = (row.raw ?? {}) as Record<string, unknown>
+          const fullBody = (rawObj.text_body as string) || (row.body_preview as string) || null
+          const leadName = [row.first_name, row.last_name].filter(Boolean).join(' ').trim() || null
           alertQueue.push({
             email: String(row.lead_email ?? ''),
             subject: (row.subject as string) ?? null,
-            company: (row.company_name as string) ?? null,
+            company: (row.company_name as string) ?? (row.lead_company as string) ?? null,
+            body: fullBody,
+            leadName,
+            title: (row.job_title as string) ?? null,
+            phone: (row.phone_number as string) ?? null,
+            linkedin: (row.linkedin_url as string) ?? null,
+            website: (row.company_website as string) ?? null,
+            location: [row.city, row.country].filter(Boolean).join(', ') || null,
           })
         }
         // Queue auto-unsubscribe: AI says they want out → honour it. Only when
@@ -140,13 +168,31 @@ export async function GET(req: NextRequest) {
 
   // After commit: alert internally about each new interested reply. Best-effort.
   for (const a of alertQueue) {
-    const who = [a.company, a.email].filter(Boolean).join(' · ') || 'a lead'
-    const subj = a.subject ? `\n\nSubject: ${a.subject}` : ''
+    const lines = [
+      'A new interested reply just landed in the Unibox review folder.',
+      '',
+      '— LEAD —',
+      `Name:     ${a.leadName || '—'}`,
+      `Email:    ${a.email || '—'}`,
+      `Company:  ${a.company || '—'}`,
+      `Title:    ${a.title || '—'}`,
+      `Phone:    ${a.phone || '—'}`,
+      `LinkedIn: ${a.linkedin || '—'}`,
+      `Website:  ${a.website || '—'}`,
+      `Location: ${a.location || '—'}`,
+      '',
+      '— THEIR REPLY —',
+      `Subject:  ${a.subject || '(no subject)'}`,
+      '',
+      (a.body || '(no message body captured)'),
+      '',
+      'Review / reply: https://login.ottaly.co.uk/admin/unibox',
+    ]
     try {
       await sendEmail(
         INTERESTED_ALERT_TO,
-        `🔥 New interested reply — ${a.company || a.email || 'lead'}`,
-        `A new interested reply just landed in the Unibox review folder.\n\nFrom: ${who}${subj}\n\nReview it: https://login.ottaly.co.uk/admin/unibox`,
+        `🔥 New interested reply — ${a.leadName || a.company || a.email || 'lead'}`,
+        lines.join('\n'),
         `interested/${a.email}/${a.subject ?? ''}`,
       )
     } catch (err) {
