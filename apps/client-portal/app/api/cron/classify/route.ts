@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import pool, { ready } from '@/lib/db'
-import { classifyReply } from '@/lib/claude'
+import { classifyReply, CLASSIFIER_MODEL } from '@/lib/classify'
 
 // Triage worker for the Master Unibox. Claims a batch of pending replies with
 // FOR UPDATE SKIP LOCKED (safe to run concurrently / overlapping), pre-filters
@@ -65,7 +65,7 @@ export async function GET(req: NextRequest) {
                   folder = CASE WHEN $6::text IS NOT NULL AND folder = 'inbox' THEN $6 ELSE folder END,
                   updated_at = NOW()
             WHERE id = $1`,
-          [id, result.category, result.confidence, process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001',
+          [id, result.category, result.confidence, CLASSIFIER_MODEL,
            result.reasoning, folder ?? null]
         )
         summary.processed++
