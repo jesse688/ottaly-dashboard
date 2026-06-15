@@ -266,21 +266,32 @@ async function ensureBisonCustomVars(wsId, names) {
 // Known PlusVibe workspace_id → Bison team_id map (Bison's /api/workspaces only
 // returns the token user's OWN teams, not all client teams, so we map clients
 // explicitly). Update here when a client is added/migrated to Bison.
+// pv = the client's workspace_id key in the SQLite `clients` table (a legacy
+// PlusVibe-style id; we are Bison-only now, it's just the internal client key).
+// team_id = the Bison workspace this client maps to. Verified 2026-06-15 by
+// cross-referencing the live clients table against Bison /api/workspaces.
 const BISON_TEAMS = [
   { team_id: '3',  name: 'Ottaly',              pv: '690ee665bcb253de4fb44538' },
   { team_id: '4',  name: 'AccrueAccounting',    pv: '6912ddfef9582848982b9a62' },
   { team_id: '5',  name: 'ButterflyEco',        pv: '69a9db307af7ef2854f57637' },
+  { team_id: '7',  name: 'Shire',               pv: '6a15cdb4e4f1d4a2e6d6062a' }, // ShireRecoveries
+  { team_id: '8',  name: 'MDH',                 pv: '6a15cda912293dbfe5eab6c3' },
+  { team_id: '9',  name: 'Meades',              pv: '6a108e72b20829cbce44fa6c' }, // Meades Group
+  { team_id: '10', name: 'Lending Team',        pv: '6a108e69cfbd57f86dbea524' },
+  { team_id: '11', name: 'Bubble',              pv: '6a0e29d0d004be93be3f33f2' },
   { team_id: '12', name: 'MagnaMoney',          pv: '6a0cc49a4a80688441614dfb' },
   { team_id: '13', name: 'Bruud',               pv: '69ffaf6904ca7138af16013a' },
-  { team_id: '14', name: 'GXI-Furniture',       pv: '69c43d1e07bf312ff0026643' },
+  { team_id: '14', name: 'GXI Furniture',       pv: '69c43d1e07bf312ff0026643' }, // clients row = AuraaDesign (rename to GXI Furniture)
   { team_id: '15', name: 'GXI',                 pv: '69c43d1407bf312ff0026642' },
+  { team_id: '16', name: 'LVM',                 pv: '6a19a054d42a3f59aac110d6' },
   { team_id: '17', name: 'Indigo',              pv: '695259c3d6154e27d164bcf7' },
   { team_id: '18', name: 'Enviro',              pv: '699714b02f0830a7148fcf3e' },
   { team_id: '19', name: 'PPC',                 pv: '695259dc8de377db7577dc45' },
-  { team_id: '20', name: 'Jumping Spider (JSM)',pv: '697e20f02db8460f8ba68792' },
+  { team_id: '20', name: 'Jumping Spider',      pv: '697e20f02db8460f8ba68792' },
   { team_id: '21', name: 'HydrationCompany',    pv: '69525a0eceae00718efdaeaa' },
   { team_id: '22', name: 'Animo',               pv: '69a686632f5aaca7d9602c1f' },
-  { team_id: '23', name: 'ButterflyEco SOP',    pv: '6a1d40b3bb80380c1be750c6' },
+  { team_id: '23', name: 'ButterflyEco SOP',    pv: '6a1d40b3bb80380c1be750c6' }, // also labelled "ButterflyEco 2" in clients
+  { team_id: '24', name: 'Josh - Commercial Flooring', pv: '6989ac90bb085fcd05167fc9' },
 ];
 
 // Resolve an incoming workspace identifier to a Bison team_id. The dashboard
@@ -459,6 +470,14 @@ for (const sql of [
   `ALTER TABLE leads ADD COLUMN status TEXT DEFAULT 'active'`,
   `ALTER TABLE leads ADD COLUMN received_at TEXT`,
 ]) { try { db.exec(sql); } catch {} }
+
+// One-time data fix: the client at workspace_id 69c43d1e... is GXI Furniture
+// (Bison team 14), historically labelled "AuraaDesign". Rename everywhere so the
+// dropdown and reports show the correct name. Idempotent.
+try {
+  db.prepare(`UPDATE clients SET workspace_name = 'GXI Furniture'
+              WHERE workspace_id = '69c43d1e07bf312ff0026643' AND workspace_name = 'AuraaDesign'`).run();
+} catch (e) { console.warn('[migrate] AuraaDesign→GXI Furniture rename failed:', e.message); }
 
 // CM workload — junction table for client↔manager assignments with per-assignment commission rate
 db.exec(`CREATE TABLE IF NOT EXISTS client_managers (
