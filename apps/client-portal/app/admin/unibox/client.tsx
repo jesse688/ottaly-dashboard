@@ -30,6 +30,21 @@ interface Reply {
   received_at: string
   client_id: string | null
   company_name: string | null
+  // Lead enrichment (from esp_leads + its raw), for the contact panel.
+  first_name: string | null
+  last_name: string | null
+  lead_company: string | null
+  job_title: string | null
+  industry: string | null
+  city: string | null
+  state: string | null
+  country: string | null
+  company_website: string | null
+  linkedin_url: string | null
+  linkedin_company_url: string | null
+  phone_number: string | null
+  body_html: string | null
+  body_text: string | null
 }
 
 interface PortalClientLite { id: string; company_name: string; workspace_id: string }
@@ -238,11 +253,12 @@ export function AdminUniboxClient() {
           {!selected ? (
             <div className="h-full flex items-center justify-center text-gray-400 text-sm">Select a reply to view it.</div>
           ) : (
-            <div className="max-w-2xl mx-auto p-6">
+            <div className="flex gap-6 p-6 max-w-5xl mx-auto">
+             <div className="flex-1 min-w-0">
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <h1 className="text-lg font-semibold text-gray-900">{selected.subject || '(no subject)'}</h1>
-                  <p className="text-sm text-gray-500 mt-0.5">From <span className="font-medium text-gray-700">{selected.lead_email}</span></p>
+                  <p className="text-sm text-gray-500 mt-0.5">From <span className="font-medium text-gray-700">{leadName(selected)}</span> &lt;{selected.lead_email}&gt;</p>
                   <p className="text-xs text-gray-400 mt-0.5">
                     {selected.company_name ? `Client: ${selected.company_name}` : `Unmapped — Bison team ${selected.bison_team_id}`}
                     {' · '}{fmtDate(selected.received_at)}
@@ -253,13 +269,13 @@ export function AdminUniboxClient() {
 
               {selected.ai_reasoning && (
                 <div className="mt-4 text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg p-3">
-                  <span className="font-medium text-gray-600">Claude:</span> {selected.ai_reasoning}
+                  <span className="font-medium text-gray-600">AI:</span> {selected.ai_reasoning}
                   {selected.ai_model ? <span className="text-gray-400"> ({selected.ai_model})</span> : null}
                 </div>
               )}
 
-              <div className="mt-4 whitespace-pre-wrap text-sm text-gray-800 bg-white border border-gray-200 rounded-xl p-4">
-                {selected.body_preview || '(no preview captured)'}
+              <div className="mt-4 whitespace-pre-wrap break-words text-sm leading-[1.55] text-gray-800 bg-white border border-gray-200 rounded-xl p-4 max-w-[68ch]">
+                {replyBody(selected)}
               </div>
 
               {/* Override category */}
@@ -319,10 +335,62 @@ export function AdminUniboxClient() {
                 )}
                 {msg && <p className="text-xs text-gray-600 mt-3">{msg}</p>}
               </div>
+             </div>
+
+             {/* Lead contact panel */}
+             <aside className="w-64 shrink-0 hidden lg:block">
+               <div className="rounded-xl border border-gray-200 bg-white p-4 sticky top-4">
+                 <div className="flex items-center gap-3 mb-3">
+                   <div className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-sm font-semibold">{leadInitials(selected)}</div>
+                   <div className="min-w-0">
+                     <p className="text-sm font-semibold text-gray-900 truncate">{leadName(selected)}</p>
+                     {selected.job_title && <p className="text-xs text-gray-500 truncate">{selected.job_title}</p>}
+                   </div>
+                 </div>
+                 <dl className="space-y-2 text-xs">
+                   <ContactRow label="Email" value={selected.lead_email} href={`mailto:${selected.lead_email}`} />
+                   {selected.phone_number && <ContactRow label="Phone" value={selected.phone_number} href={`tel:${selected.phone_number}`} />}
+                   {(selected.lead_company || selected.company_website) && <ContactRow label="Company" value={selected.lead_company ?? selected.company_website ?? ''} href={selected.company_website ? ensureUrl(selected.company_website) : undefined} />}
+                   {selected.linkedin_url && <ContactRow label="LinkedIn" value="View profile" href={ensureUrl(selected.linkedin_url)} />}
+                   {selected.linkedin_company_url && <ContactRow label="Company LinkedIn" value="View page" href={ensureUrl(selected.linkedin_company_url)} />}
+                   {selected.industry && <ContactRow label="Industry" value={selected.industry} />}
+                   {(selected.city || selected.state || selected.country) && <ContactRow label="Location" value={[selected.city, selected.state, selected.country].filter(Boolean).join(', ')} />}
+                 </dl>
+               </div>
+             </aside>
             </div>
           )}
         </main>
       </div>
+    </div>
+  )
+}
+
+function leadName(r: Reply): string {
+  const n = [r.first_name, r.last_name].filter(Boolean).join(' ').trim()
+  return n || r.lead_email
+}
+function leadInitials(r: Reply): string {
+  const a = (r.first_name?.[0] ?? '') + (r.last_name?.[0] ?? '')
+  return (a || r.lead_email[0] || '?').toUpperCase()
+}
+function ensureUrl(u: string): string {
+  return /^https?:\/\//i.test(u) ? u : `https://${u}`
+}
+function replyBody(r: Reply): string {
+  const text = (r.body_text && r.body_text.trim())
+    || (r.body_html ? r.body_html.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+\n/g, '\n').replace(/[ \t]{2,}/g, ' ').trim() : '')
+    || r.body_preview
+    || '(no message body captured)'
+  return text.replace(/\n{3,}/g, '\n\n').trim()
+}
+function ContactRow({ label, value, href }: { label: string; value: string; href?: string }) {
+  return (
+    <div className="flex flex-col">
+      <dt className="text-[10px] uppercase tracking-wide text-gray-400">{label}</dt>
+      <dd className="text-gray-700 break-words">
+        {href ? <a href={href} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:text-indigo-800">{value}</a> : value}
+      </dd>
     </div>
   )
 }

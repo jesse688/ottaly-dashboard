@@ -35,9 +35,29 @@ export async function GET(req: NextRequest) {
               u.ai_model, u.ai_reasoning, u.admin_label, u.folder,
               u.marked_as_lead, u.marked_by, u.marked_at, u.bison_tag_state,
               u.received_at, u.created_at,
-              c.id AS client_id, c.company_name
+              c.id AS client_id, c.company_name,
+              l.first_name, l.last_name, l.company_name AS lead_company,
+              l.raw->>'job_title'            AS job_title,
+              l.raw->>'industry'             AS industry,
+              l.raw->>'city'                 AS city,
+              l.raw->>'state'                AS state,
+              l.raw->>'country'              AS country,
+              l.raw->>'company_website'      AS company_website,
+              l.raw->>'linkedin_person_url'  AS linkedin_url,
+              l.raw->>'linkedin_company_url' AS linkedin_company_url,
+              l.raw->>'phone_number'         AS phone_number,
+              pe.body_html, pe.body_text
          FROM unibox_replies u
          LEFT JOIN portal_clients c ON c.workspace_id = u.workspace_id
+         LEFT JOIN LATERAL (
+           SELECT first_name, last_name, company_name, raw
+           FROM esp_leads e
+           WHERE e.workspace_id = u.workspace_id
+             AND lower(e.email) = lower(u.lead_email)
+           ORDER BY (e.source = 'bison') DESC, e.updated_at DESC
+           LIMIT 1
+         ) l ON TRUE
+         LEFT JOIN portal_emails pe ON pe.id = u.portal_email_id
         WHERE u.folder = $1 ${cursor}
         ORDER BY u.received_at DESC
         LIMIT $${params.length}`,
