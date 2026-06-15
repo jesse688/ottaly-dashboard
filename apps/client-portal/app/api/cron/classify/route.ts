@@ -83,11 +83,14 @@ export async function GET(req: NextRequest) {
       }
 
       // Free pre-filter: warm-up emails (apple-apple etc.) are inbox-reputation
-      // traffic, not real replies. Detected by marker + lack of lead enrichment;
-      // filed under 'rejected' so they never clutter the inbox or hit Gemini.
+      // traffic, not real replies. The tell is a random hyphenated word-pair
+      // injected into the prose. Warm-up tools now fake weak fields (a job_title,
+      // a company name), so per Jesse: only STRONG enrichment — a LinkedIn URL or
+      // a real company website — exempts a hyphen-pair reply from warm-up. A bare
+      // email / job_title is not enough (that's how "interest-advance / journey-
+      // region" warm-ups were slipping through to Gemini and coming back interested).
       const hasLeadFields = Boolean(
-        row.linkedin_url || row.job_title || row.phone_number ||
-        row.company_website || row.lead_company
+        row.linkedin_url || row.company_website
       )
       const warmup = detectWarmup({
         subject: (row.subject as string) ?? '',
