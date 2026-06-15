@@ -82,6 +82,37 @@ function getBisonWsToken(teamId) {
   return (t && typeof t === 'string' && t.trim()) ? t.trim() : null;
 }
 
+// Mint a per-workspace API token for one team using the SUPER-ADMIN key (the ONLY
+// thing super-admin is used for, per policy). Persists into _bisonWsTokens +
+// app_settings so it works without a restart and every later request to that
+// workspace uses the per-workspace token (no super-admin, no switch-workspace).
+// In-flight mints are de-duped so concurrent requests don't double-mint. Returns
+// the token, or throws (e.g. no super-admin key configured).
+let _bisonMintInFlight = {}; // team_id -> Promise<token>
+async function mintBisonWsToken(teamId) {
+  const tid = String(teamId);
+  const existing = getBisonWsToken(tid);
+  if (existing) return existing;
+  if (_bisonMintInFlight[tid]) return _bisonMintInFlight[tid];
+  _bisonMintInFlight[tid] = (async () => {
+    if (!getBisonKey()) throw new Error('Cannot mint Bison token: super-admin key not configured');
+    const team = BISON_TEAMS.find((t) => t.team_id === tid);
+    const label = `ottaly-admin-${team ? team.name : tid}`.slice(0, 60);
+    // NO wsId -> _bisonRaw does not switch; the api-tokens endpoint is team-scoped
+    // in the path and authorized by the super-admin bearer.
+    const data = await _bisonRaw(`/api/workspaces/v1.1/${tid}/api-tokens`, { method: 'POST', body: { name: label } });
+    const token = data?.data?.plain_text_token;
+    if (!token) throw new Error('mint: no plain_text_token in response for team ' + tid);
+    _bisonWsTokens[tid] = token;
+    try { const pg = app && app.locals && app.locals.pgDb; if (pg) await pg.setSetting('bison_ws_tokens', _bisonWsTokens); }
+    catch (e) { console.warn('[bison] minted token but persist failed for team ' + tid + ':', e.message); }
+    console.log('[bison] minted per-workspace token for team ' + tid + (team ? ' (' + team.name + ')' : ''));
+    return token;
+  })();
+  try { return await _bisonMintInFlight[tid]; }
+  finally { delete _bisonMintInFlight[tid]; }
+}
+
 // ── "Fresh start" (Bison-era) date floor ─────────────────────────────────
 // When the dashboard is switched to a fresh start, we record the cutover date
 // and, by default, clamp every stats date range so nothing before it shows —
@@ -152,15 +183,26 @@ async function _bisonRaw(path, opts = {}) {
     if (!teamId || !/^\d+$/.test(String(teamId))) {
       throw new Error('Bison switch refused: workspace "' + opts.wsId + '" does not resolve to a Bison team_id (add it to BISON_TEAMS).');
     }
-    const wsToken = getBisonWsToken(teamId);
+    let wsToken = getBisonWsToken(teamId);
+    if (!wsToken) {
+      // POLICY: per-workspace work uses the workspace's OWN token; the super-admin
+      // key is for minting only. If this team has no token yet, MINT one on demand
+      // (super-admin, allowed) and use it — instead of switching the super-admin
+      // token to this workspace for the data call. Self-heals into the per-workspace
+      // model. If minting fails (e.g. no super-admin key), fall back to the stateful
+      // switch so the request can still complete rather than hard-failing the page.
+      try {
+        wsToken = await mintBisonWsToken(teamId);
+      } catch (e) {
+        console.warn('[bison] on-demand mint for team ' + teamId + ' failed, falling back to switch:', e.message);
+      }
+    }
     if (wsToken) {
       // Per-workspace token: scoped to this team, so NO switch needed. We don't
-      // touch _bisonWsId — the super-admin token's active workspace is unaffected,
-      // so a concurrent super-admin fallback request stays correct.
+      // touch _bisonWsId — the super-admin token's active workspace is unaffected.
       bearer = wsToken;
     } else if (_bisonWsId !== String(teamId)) {
-      // Fallback: no per-workspace token for this team — switch the super-admin
-      // token the old way. (Serialized by withBisonLock via bisonReq/bisonFetch.)
+      // Last-resort fallback (no token + mint failed): switch the super-admin token.
       const sw = await fetch(BISON_BASE + '/api/workspaces/v1.1/switch-workspace', {
         method: 'POST',
         headers: { Authorization: 'Bearer ' + getBisonKey(), 'Content-Type': 'application/json' },
@@ -344,6 +386,15 @@ function resolveBisonTeamId(wsId) {
   if (BISON_TEAMS.some(t => t.team_id === s)) return s;
   if (/^\d+$/.test(s)) return s; // bare integer team_id not in the map
   return null;                   // PV id with no mapping — unresolvable
+}
+
+// List the Bison workspaces WITHOUT calling the API. Per policy, the super-admin
+// key is reserved for token minting only — it must NOT be used for routine
+// listing. We already hold every workspace in BISON_TEAMS, so return that in the
+// Bison /api/workspaces shape ({ data: [{ id, name }] }) so existing callers
+// work unchanged. Add new clients to BISON_TEAMS, not via a super-admin fetch.
+function listBisonWorkspaces() {
+  return { data: BISON_TEAMS.map(t => ({ id: t.team_id, name: t.name, pv_workspace_id: t.pv })) };
 }
 
 const ANTHROPIC_API_KEY      = process.env.ANTHROPIC_API_KEY      || '';
@@ -2389,7 +2440,7 @@ app.get('/api/admin/mailbox-find', requireAdmin, async (req, res) => {
   const q = String(req.query.q || '').trim().toLowerCase();
   if (!q) return res.status(400).json({ error: 'q (search term) required' });
   try {
-    const wsRaw = await bisonReq('/api/workspaces/v1.1');
+    const wsRaw = listBisonWorkspaces();
     const workspaces = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.data || []);
     const hits = [];
     const scanned = [];
@@ -2437,7 +2488,7 @@ app.post('/api/admin/mailbox-diff', requireAdmin, (req, res) => {
 app.get('/api/admin/mailbox-debug', requireAdmin, async (req, res) => {
   if (!getBisonKey()) return res.status(400).json({ error: 'No Bison key configured' });
   try {
-    const wsRaw = await bisonReq('/api/workspaces/v1.1');
+    const wsRaw = listBisonWorkspaces();
     const workspaces = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.data || []);
     const PER_PAGE = 200;
     const perWorkspace = [];
@@ -3294,7 +3345,7 @@ pvFetch = async function pvFetch(path, retries = 5, opts = {}) {
     // BISON_TEAMS[].pv). Map each Bison team back to its PV id so client-status
     // filtering and revenue/campaign joins keep matching. Bison teams with no PV
     // mapping (BISON_TEAMS) are skipped — they aren't tracked as clients.
-    const wsRaw = await bisonReq('/api/workspaces/v1.1');
+    const wsRaw = listBisonWorkspaces();
     const list = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.data || []);
     const byTeamId = new Map(BISON_TEAMS.map(t => [String(t.team_id), t]));
     const workspaces = list
@@ -3381,6 +3432,13 @@ async function bisonFetch(path, opts) {
     if (opts.wsId) {
       var teamId = resolveBisonTeamId(opts.wsId);
       var wsToken = teamId ? getBisonWsToken(teamId) : null;
+      // POLICY: per-workspace work uses the workspace's own token; super-admin is
+      // for minting only. No token yet? Mint one on demand (super-admin, allowed),
+      // then use it. Only if minting fails do we fall back to the stateful switch.
+      if (!wsToken && teamId) {
+        try { wsToken = await mintBisonWsToken(teamId); }
+        catch (e) { console.warn('[bison] on-demand mint (bisonFetch) team ' + teamId + ' failed:', e.message); }
+      }
       if (wsToken) bearer = wsToken;
       else await _bisonSwitchUnlocked(opts.wsId);
     }
@@ -7462,7 +7520,7 @@ async function listSendingMailboxes() {
   const pvByTeamId = new Map(BISON_TEAMS.map(t => [String(t.team_id), t]));
   let teams = [];
   try {
-    const wsRaw = await bisonReq('/api/workspaces/v1.1');
+    const wsRaw = listBisonWorkspaces();
     const list = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.data || []);
     teams = list.map(w => {
       const mapped = pvByTeamId.get(String(w.id));
@@ -8871,7 +8929,7 @@ async function gatherWarmupData() {
   const start = serverDateString(new Date(Date.now() - 10 * 86400000));
   const end   = today;
   const pvByTeamId = new Map(BISON_TEAMS.map(t => [String(t.team_id), t]));
-  const wsRaw = await bisonReq('/api/workspaces/v1.1');
+  const wsRaw = listBisonWorkspaces();
   const wsList = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.data || []);
   const inactive = inactiveWorkspaceIds();
 
@@ -10549,7 +10607,7 @@ app.get('/api/admin/workspaces', requireAdmin, async (req, res) => {
   try {
     // Bison workspaces: /api/workspaces/v1.1 → { data: [{id,name,...}] }.
     // admin.html expects a bare array of {id,name}, so unwrap + normalise.
-    const raw = await bisonReq('/api/workspaces/v1.1');
+    const raw = listBisonWorkspaces();
     const list = Array.isArray(raw) ? raw : (raw?.data || []);
     res.json(list.map(w => ({ id: String(w.id), name: w.name })));
   } catch (err) { res.status(502).json({ error: err.message }); }
@@ -11637,7 +11695,7 @@ app.get('/api/pv/workspaces', requireSession, async (req, res) => {
       }
     }
     // Fallback: Bison workspaces if the clients table is empty.
-    const data = await bisonReq('/api/workspaces/v1.1');
+    const data = listBisonWorkspaces();
     const workspaces = Array.isArray(data) ? data : (data?.data || []);
     res.json({ workspaces: workspaces.map(w => ({ _id: String(w.id), name: w.name })) });
   } catch (err) { res.status(500).json({ error: err.message }); }
