@@ -315,6 +315,14 @@ async function runMigration() {
       `ALTER TABLE unibox_replies ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ`,
       `CREATE INDEX IF NOT EXISTS idx_unibox_team_received ON unibox_replies (bison_team_id, received_at DESC)`,
 
+      // ── Phase 1: per-reply client identity (anti-leak scoping) ──
+      // workspace_id alone is NOT a safe scope key: >1 client can map to one
+      // workspace (mark-as-lead resolves with ORDER BY active DESC LIMIT 1), so a
+      // workspace-keyed join fans out rows and the firehose zoom shows the wrong
+      // client. We resolve the owning client ONCE at intake and scope/zoom on it.
+      `ALTER TABLE unibox_replies ADD COLUMN IF NOT EXISTS client_id UUID`,
+      `CREATE INDEX IF NOT EXISTS idx_unibox_client_received ON unibox_replies (client_id, received_at DESC)`,
+
       // ── One-time migrations marker table ───────────────────────────
       `CREATE TABLE IF NOT EXISTS portal_meta (key TEXT PRIMARY KEY, created_at TIMESTAMPTZ DEFAULT NOW())`,
       // The ledger switched from money units to LEAD-COUNT units. Wipe any
@@ -324,6 +332,22 @@ async function runMigration() {
          IF NOT EXISTS (SELECT 1 FROM portal_meta WHERE key = 'ledger_lead_units_v1') THEN
            DELETE FROM portal_ledger;
            INSERT INTO portal_meta(key) VALUES ('ledger_lead_units_v1');
+         END IF;
+       END $$;`,
+      // Phase 1: one-time backfill of unibox_replies.client_id for existing rows,
+      // using the SAME precedence mark-as-lead uses. Placed AFTER portal_meta
+      // exists. Guarded so it runs once; safe/no-op if already applied.
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM portal_meta WHERE key = 'unibox_client_id_backfill_v1') THEN
+           UPDATE unibox_replies u
+              SET client_id = c.id
+             FROM LATERAL (
+               SELECT id FROM portal_clients
+                WHERE workspace_id = u.workspace_id
+                ORDER BY active DESC, created_at ASC LIMIT 1
+             ) c
+            WHERE u.client_id IS NULL AND u.workspace_id IS NOT NULL;
+           INSERT INTO portal_meta(key) VALUES ('unibox_client_id_backfill_v1');
          END IF;
        END $$;`,
     ]

@@ -8,6 +8,7 @@ import {
   registerWebhookAllWorkspaces,
   type BisonReply,
 } from '@/lib/bison'
+import { resolveClientId } from '@/lib/clients'
 
 // ── Unibox reconciler ────────────────────────────────────────────────────────
 // The real-time webhook (handleBison) is the primary path, but a single missed
@@ -69,6 +70,8 @@ export async function GET(req: NextRequest) {
 
   for (const [workspaceId, teamId] of Object.entries(PV_TO_BISON_TEAM)) {
     summary.teams++
+    // Resolve the owning client once per team (same precedence as mark-as-lead).
+    const clientId = await resolveClientId(workspaceId)
     let campaigns: { id: number; name: string }[] = []
     try {
       campaigns = await getCampaigns(teamId)
@@ -101,7 +104,7 @@ export async function GET(req: NextRequest) {
         if (!Number.isNaN(received) && received < sinceMs) continue
         summary.seen++
 
-        const res = await upsertReconciledReply(workspaceId, teamId, r)
+        const res = await upsertReconciledReply(workspaceId, teamId, r, clientId)
         if (res === 'inserted') summary.inserted++
         else if (res === 'healed') summary.healed++
         if (res === 'repended') summary.repended++
@@ -125,7 +128,8 @@ export async function GET(req: NextRequest) {
 async function upsertReconciledReply(
   workspaceId: string,
   teamId: string,
-  r: BisonReply
+  r: BisonReply,
+  clientId: string | null,
 ): Promise<'inserted' | 'healed' | 'repended' | 'noop'> {
   const replyId = String(r.id)
   const folder = r.folder?.toLowerCase() === 'sent' ? 'OUT' : 'IN'
@@ -143,20 +147,21 @@ async function upsertReconciledReply(
   // EVERY row (including human-frozen ones — only advisory columns are touched).
   const ins = await pool.query(
     `INSERT INTO unibox_replies
-       (bison_team_id, bison_reply_id, workspace_id, lead_email, sender_email,
+       (bison_team_id, bison_reply_id, workspace_id, client_id, lead_email, sender_email,
         subject, body_preview, classify_state, folder, raw, received_at,
         ingest_source, bison_interested, bison_automated_reply, last_seen_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,'pending','inbox',$8,$9,'reconcile',$10,$11,NOW())
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending','inbox',$9,$10,$11,'reconcile',$12,$13,NOW())
      ON CONFLICT (bison_team_id, bison_reply_id) DO UPDATE SET
        bison_interested      = EXCLUDED.bison_interested,
        bison_automated_reply = EXCLUDED.bison_automated_reply,
        workspace_id          = COALESCE(unibox_replies.workspace_id, EXCLUDED.workspace_id),
+       client_id             = COALESCE(unibox_replies.client_id, EXCLUDED.client_id),
        received_at           = COALESCE(unibox_replies.received_at, EXCLUDED.received_at),
        last_seen_at          = NOW(),
        updated_at            = NOW()
      RETURNING (xmax = 0) AS inserted`,
     [
-      teamId, replyId, workspaceId, leadEmail, senderEmail || null,
+      teamId, replyId, workspaceId, clientId, leadEmail, senderEmail || null,
       subject, r.text_body?.slice(0, 500) ?? null,
       JSON.stringify(r), receivedAt,
       bisonInterested, bisonAutomated,

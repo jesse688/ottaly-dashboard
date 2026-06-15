@@ -85,7 +85,18 @@ export async function GET(req: NextRequest) {
               l.raw->>'phone_number'         AS phone_number,
               pe.body_html, pe.body_text
          FROM unibox_replies u
-         LEFT JOIN portal_clients c ON c.workspace_id = u.workspace_id
+         -- Resolve the owning client WITHOUT fan-out: prefer the row's resolved
+         -- client_id (unique), else fall back to the same active-most precedence
+         -- for legacy rows whose client_id wasn't backfilled. A plain join on
+         -- workspace_id would duplicate every reply when >1 client shares a ws.
+         LEFT JOIN LATERAL (
+           SELECT pc.id, pc.company_name
+           FROM portal_clients pc
+           WHERE pc.id = u.client_id
+              OR (u.client_id IS NULL AND pc.workspace_id = u.workspace_id)
+           ORDER BY (pc.id = u.client_id) DESC, pc.active DESC, pc.created_at ASC
+           LIMIT 1
+         ) c ON TRUE
          LEFT JOIN LATERAL (
            SELECT first_name, last_name, company_name, raw
            FROM esp_leads e

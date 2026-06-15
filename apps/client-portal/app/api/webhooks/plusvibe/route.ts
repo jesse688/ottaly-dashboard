@@ -6,6 +6,7 @@ import { enrichLead } from '@/lib/sync'
 import { ready } from '@/lib/db'
 import { bisonTeamToWorkspace } from '@/lib/bison'
 import { notifyAdmin } from '@/lib/notify'
+import { resolveClientId } from '@/lib/clients'
 
 // Verify HMAC-SHA256 against any of the provided secrets (tries each until one matches).
 function verifySignature(payload: string, signature: string, ...secrets: (string | undefined)[]): boolean {
@@ -247,6 +248,10 @@ async function handleBison(raw: Record<string, unknown>) {
       // an absent field stays NULL rather than becoming a false negative.
       const bisonInterested = typeof reply.interested === 'boolean' ? reply.interested : null
       const bisonAutomated = typeof reply.automated_reply === 'boolean' ? reply.automated_reply : null
+      // Resolve the owning client ONCE at intake (same precedence as mark-as-lead)
+      // so the firehose can scope/zoom on a stable client_id even when a workspace
+      // maps to more than one client.
+      const clientId = await resolveClientId(mappedWorkspaceId)
       await pool.query(
         // Idempotent on (bison_team_id, bison_reply_id). On a retry or a later,
         // richer delivery (e.g. an event that carries Bison's interested/automated
@@ -254,15 +259,16 @@ async function handleBison(raw: Record<string, unknown>) {
         // refresh Bison-owned facts — but NEVER touch category / admin_label /
         // folder / marked_as_lead, so a human or AI decision is never clobbered.
         `INSERT INTO unibox_replies
-           (bison_team_id, bison_reply_id, workspace_id, portal_email_id, lead_email, lead_bison_id,
+           (bison_team_id, bison_reply_id, workspace_id, client_id, portal_email_id, lead_email, lead_bison_id,
             subject, body_preview, classify_state, folder, raw, received_at,
             is_forwarded, sender_email, matched_lead_email, matched_by,
             ingest_source, bison_interested, bison_automated_reply, last_seen_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9,$10,$11,$12,$13,$14,$15,$16,'webhook',$17,$18,NOW())
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10,$11,$12,$13,$14,$15,$16,$17,'webhook',$18,$19,NOW())
          ON CONFLICT (bison_team_id, bison_reply_id) DO UPDATE SET
            bison_interested      = EXCLUDED.bison_interested,
            bison_automated_reply = EXCLUDED.bison_automated_reply,
            workspace_id          = COALESCE(unibox_replies.workspace_id, EXCLUDED.workspace_id),
+           client_id             = COALESCE(unibox_replies.client_id, EXCLUDED.client_id),
            portal_email_id       = COALESCE(unibox_replies.portal_email_id, EXCLUDED.portal_email_id),
            received_at           = COALESCE(unibox_replies.received_at, EXCLUDED.received_at),
            raw                   = COALESCE(unibox_replies.raw, EXCLUDED.raw),
@@ -271,7 +277,7 @@ async function handleBison(raw: Record<string, unknown>) {
         // rawTeamId is ALWAYS stored verbatim — never collapsed to a shared
         // 'unknown' constant, which made two distinct unmapped teams with the same
         // reply.id collide on ('unknown', id) and silently drop the second.
-        [rawTeamId, replyId, mappedWorkspaceId, portalEmailId,
+        [rawTeamId, replyId, mappedWorkspaceId, clientId, portalEmailId,
          // Primary email = the matched original lead if forwarded, else the row email.
          matchedLeadEmail || rowEmail, leadBisonId,
          replySubject, reply.text_body?.slice(0, 500) ?? null,
