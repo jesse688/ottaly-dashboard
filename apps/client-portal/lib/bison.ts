@@ -50,6 +50,16 @@ export const PV_TO_BISON_TEAM: Record<string, string> = {
   '69525a0eceae00718efdaeaa': '21',  // HydrationCompany
   '69a686632f5aaca7d9602c1f': '22',  // Animo
   '6a1d40b3bb80380c1be750c6': '23',  // ButterflyEco SOP
+  // Added 2026-06-15 from the Bison workspace lister (matched by team name).
+  '6a0e29d0d004be93be3f33f2': '11',  // Bubble
+  '6a15cda912293dbfe5eab6c3': '8',   // MDH
+  '6a108e69cfbd57f86dbea524': '10',  // Lending Team
+  '6a19a054d42a3f59aac110d6': '16',  // LVM
+  '6a108e72b20829cbce44fa6c': '9',   // Meades Group (Bison team "Meades")
+  '6a15cdb4e4f1d4a2e6d6062a': '7',   // ShireRecoveries (Bison team "Shire")
+  // Still UNMAPPED: Josh - Commercial Flooring (6989ac90bb085fcd05167fc9) — no
+  // matching Bison team found in the lister; map when its team is identified.
+  // Bison teams with no portal client: 2 (Jesse's Team), 6 (ByboDigital).
 }
 export function bisonTeamForWorkspace(workspaceId: string): string | null {
   return PV_TO_BISON_TEAM[workspaceId] ?? null
