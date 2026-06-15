@@ -280,6 +280,13 @@ async function runMigration() {
       `CREATE INDEX IF NOT EXISTS idx_unibox_folder_state ON unibox_replies (folder, classify_state, received_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_unibox_pending ON unibox_replies (classify_state, classify_next_at) WHERE classify_state = 'pending'`,
       `CREATE INDEX IF NOT EXISTS idx_unibox_ws_email ON unibox_replies (workspace_id, lower(lead_email))`,
+      // #2 forwarded/unlinked replies: when a reply isn't tied to a known lead,
+      // we match it by email domain to an existing lead and flag it forwarded,
+      // keeping BOTH the actual sender and the matched original lead.
+      `ALTER TABLE unibox_replies ADD COLUMN IF NOT EXISTS is_forwarded BOOLEAN NOT NULL DEFAULT FALSE`,
+      `ALTER TABLE unibox_replies ADD COLUMN IF NOT EXISTS sender_email TEXT`,
+      `ALTER TABLE unibox_replies ADD COLUMN IF NOT EXISTS matched_lead_email TEXT`,
+      `ALTER TABLE unibox_replies ADD COLUMN IF NOT EXISTS matched_by TEXT`,
 
       // ── One-time migrations marker table ───────────────────────────
       `CREATE TABLE IF NOT EXISTS portal_meta (key TEXT PRIMARY KEY, created_at TIMESTAMPTZ DEFAULT NOW())`,

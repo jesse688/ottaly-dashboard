@@ -199,21 +199,56 @@ async function handleBison(raw: Record<string, unknown>) {
       if (ins) portalEmailId = replyId
     }
 
+    // The address that actually SENT this reply (may differ from the campaign
+    // lead, e.g. forwarded to a colleague who replies from their own address).
+    const senderEmail = (reply.from_email_address ?? '').toLowerCase()
+    // The unibox row's primary email = the campaign lead if known, else the sender.
+    const rowEmail = leadEmail || senderEmail
+
     // Master Unibox row — only inbound replies are worth triaging. Idempotent on
     // (bison_team_id, bison_reply_id) so webhook retries never duplicate.
-    if (direction === 'IN' && leadEmail) {
+    if (direction === 'IN' && rowEmail) {
+      // #2 FORWARDED / UNLINKED: if the reply isn't tied to a known lead (no
+      // lead.email, or the sender differs from the lead), try to match the
+      // sender's DOMAIN to an existing lead in this client's workspace → that's
+      // almost certainly the same company. Flag it forwarded and keep BOTH the
+      // original matched lead and the actual sender.
+      let isForwarded = false
+      let matchedLeadEmail: string | null = null
+      let matchedBy: string | null = null
+      if (mappedWorkspaceId && senderEmail) {
+        const senderDomain = senderEmail.split('@')[1] ?? ''
+        const noLinkedLead = !leadEmail
+        const senderDiffersFromLead = !!leadEmail && senderEmail !== leadEmail
+        if ((noLinkedLead || senderDiffersFromLead) && senderDomain) {
+          const m = await pool.query(
+            `SELECT email FROM esp_leads
+              WHERE workspace_id = $1 AND lower(split_part(email,'@',2)) = $2
+              ORDER BY (lower(email) = $3) DESC, updated_at DESC LIMIT 1`,
+            [mappedWorkspaceId, senderDomain, leadEmail || senderEmail]
+          ).catch(() => ({ rows: [] as { email: string }[] }))
+          if (m.rows[0]?.email) {
+            isForwarded = true
+            matchedLeadEmail = String(m.rows[0].email).toLowerCase()
+            matchedBy = 'domain'
+          }
+        }
+      }
       const folder = mappedWorkspaceId ? 'inbox' : 'unmapped'
       await pool.query(
         `INSERT INTO unibox_replies
            (bison_team_id, bison_reply_id, workspace_id, portal_email_id, lead_email, lead_bison_id,
-            subject, body_preview, classify_state, folder, raw, received_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9,$10,$11)
+            subject, body_preview, classify_state, folder, raw, received_at,
+            is_forwarded, sender_email, matched_lead_email, matched_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9,$10,$11,$12,$13,$14,$15)
          ON CONFLICT (bison_team_id, bison_reply_id) DO NOTHING`,
         [rawTeamId || 'unknown', replyId, mappedWorkspaceId, portalEmailId,
-         leadEmail, leadBisonId,
+         // Primary email = the matched original lead if forwarded, else the row email.
+         matchedLeadEmail || rowEmail, leadBisonId,
          reply.subject ?? null, reply.text_body?.slice(0, 500) ?? null,
          folder, JSON.stringify(reply),
-         reply.date_received ?? new Date().toISOString()]
+         reply.date_received ?? new Date().toISOString(),
+         isForwarded, senderEmail || null, matchedLeadEmail, matchedBy]
       ).catch(err => console.error('[webhook/bison] unibox_replies insert failed:', err))
 
       // Alert admins once about a team we can't map to a client workspace.

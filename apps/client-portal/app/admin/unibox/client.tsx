@@ -43,6 +43,10 @@ interface Reply {
   linkedin_url: string | null
   linkedin_company_url: string | null
   phone_number: string | null
+  is_forwarded: boolean
+  sender_email: string | null
+  matched_lead_email: string | null
+  matched_by: string | null
   body_html: string | null
   body_text: string | null
 }
@@ -236,6 +240,7 @@ export function AdminUniboxClient() {
                 <p className="text-xs text-gray-600 truncate mt-0.5">{r.subject || '(no subject)'}</p>
                 <div className="flex items-center gap-1.5 mt-1.5">
                   <CategoryBadge category={r.admin_label ?? r.category} confidence={r.confidence} />
+                  {r.is_forwarded && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-700">Fwd</span>}
                   {r.company_name
                     ? <span className="text-[11px] text-gray-400 truncate">{r.company_name}</span>
                     : <span className="text-[11px] text-amber-600">team {r.bison_team_id}</span>}
@@ -264,7 +269,21 @@ export function AdminUniboxClient() {
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <h1 className="text-lg font-semibold text-gray-900">{selected.subject || '(no subject)'}</h1>
-                  <p className="text-sm text-gray-500 mt-0.5">From <span className="font-medium text-gray-700">{leadName(selected)}</span> &lt;{selected.lead_email}&gt;</p>
+                  {selected.is_forwarded && (
+                    <span className="inline-flex items-center gap-1 mt-1 mb-0.5 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-violet-100 text-violet-700">
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="15 17 20 12 15 7"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/></svg>
+                      Forwarded reply
+                    </span>
+                  )}
+                  <p className="text-sm text-gray-500 mt-0.5">
+                    From <span className="font-medium text-gray-700">{leadName(selected)}</span> &lt;{selected.lead_email}&gt;
+                  </p>
+                  {selected.is_forwarded && selected.sender_email && (
+                    <p className="text-xs text-violet-600 mt-0.5">
+                      Replied by <span className="font-medium">{selected.sender_email}</span>
+                      {selected.matched_lead_email ? <> · matched to original lead <span className="font-medium">{selected.matched_lead_email}</span> (by {selected.matched_by})</> : null}
+                    </p>
+                  )}
                   <p className="text-xs text-gray-400 mt-0.5">
                     {selected.company_name ? `Client: ${selected.company_name}` : `Unmapped — Bison team ${selected.bison_team_id}`}
                     {' · '}{fmtDate(selected.received_at)}
