@@ -3828,8 +3828,10 @@ async function ensurePerformanceDailyStats(wsIds, dates, dailyStats = performanc
   for (let i = 0; i < needed.length; i += CONC) {
     await Promise.allSettled(needed.slice(i, i + CONC).map(async ({ wsId, date, key }) => {
       try {
-        /* switch via bisonReq wsId */ true;
-        var bStats = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { params: { start_date: date, end_date: date } });
+        // MUST pass wsId so bisonFetch uses this workspace's per-workspace token
+        // (or switches to it). Without it the call hit whatever workspace was
+        // active -> stats for the wrong/no workspace -> "0 sent" on the Stats page.
+        var bStats = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { wsId: wsId, params: { start_date: date, end_date: date } });
         var raw = Object.values(pivotBisonStats((bStats.data || bStats) || []));
         dailyStats.set(key, { savedAt: Date.now(), data: aggPvEmailStats(raw) });
       } catch {
@@ -6724,8 +6726,10 @@ app.post('/api/intelligence/deep-backfill', requireAdmin, async (req, res) => {
     for (let i = 0; i < wsIds.length; i += CONC) {
       await Promise.allSettled(wsIds.slice(i, i + CONC).map(async wsId => {
         try {
-          /* switch via bisonReq wsId */ true;
-          var bStats = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { params: { start_date: start, end_date: end } });
+          // Pass wsId so the per-workspace token (or switch) targets THIS workspace
+          // — without it the call hit whatever workspace was active and returned
+          // wrong/zero stats.
+          var bStats = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { wsId: wsId, params: { start_date: start, end_date: end } });
           var raw = Object.values(pivotBisonStats((bStats.data || bStats) || []));
           const chart = Array.isArray(raw) ? raw : (raw?.chart || []);
           for (const row of chart) {
