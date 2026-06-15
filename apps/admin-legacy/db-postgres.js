@@ -1540,6 +1540,32 @@ class PostgresDatabase {
       clauses.push(`(${orClauses.join(' OR ')})`);
     });
 
+    // Gateway filter — by the TRUE inbound gateway (Mimecast/Proofpoint/Barracuda/
+    // Microsoft 365/Google/…) resolved into gateway_mx_cache, joined on the email
+    // domain. `gatewayExclude` drops contacts on the named gateways (the common
+    // case: "don't push to Mimecast"); `gateway` keeps only the named ones.
+    // Comma-separated gateway names exactly as stored in gateway_mx_cache.gateway.
+    // Contacts whose domain isn't cached are NOT excluded (we can't prove their
+    // gateway) — so excluding never silently drops unknown-gateway contacts.
+    safe('gatewayExclude', () => {
+      if (!filters.gatewayExclude) return;
+      const gws = filters.gatewayExclude.split(',').map(g => g.trim()).filter(Boolean);
+      if (!gws.length) return;
+      clauses.push(`lower(split_part(email,'@',2)) NOT IN (
+        SELECT domain FROM gateway_mx_cache WHERE gateway = ANY($${p}))`);
+      params.push(gws);
+      p += 1;
+    });
+    safe('gateway', () => {
+      if (!filters.gateway) return;
+      const gws = filters.gateway.split(',').map(g => g.trim()).filter(Boolean);
+      if (!gws.length) return;
+      clauses.push(`lower(split_part(email,'@',2)) IN (
+        SELECT domain FROM gateway_mx_cache WHERE gateway = ANY($${p}))`);
+      params.push(gws);
+      p += 1;
+    });
+
     safe('numEmployeesRanges', () => {
       if (!filters.numEmployeesRanges) return;
       const buckets = filters.numEmployeesRanges.split(',').map(s => s.trim()).filter(Boolean);

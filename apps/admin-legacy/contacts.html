@@ -1158,6 +1158,21 @@
           </div>
         </div>
 
+        <div class="filter-section" data-clear="gateway-exclude">
+          <div class="filter-label">Exclude Gateways</div>
+          <div class="filter-control" style="gap:12px;">
+            <div style="display:flex;flex-direction:column;gap:8px;">
+              <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;"><input type="checkbox" class="gwExcl" value="Mimecast"> Mimecast</label>
+              <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;"><input type="checkbox" class="gwExcl" value="Barracuda"> Barracuda</label>
+              <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;"><input type="checkbox" class="gwExcl" value="Microsoft 365"> Microsoft 365</label>
+              <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;"><input type="checkbox" class="gwExcl" value="Proofpoint"> Proofpoint</label>
+              <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;"><input type="checkbox" class="gwExcl" value="Cisco Ironport"> Cisco Ironport</label>
+              <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;" title="No MX / dead domains — already suppressed, listed for completeness"><input type="checkbox" class="gwExcl" value="NO MX / unresolved"> Dead / no MX</label>
+            </div>
+            <p style="font-size:11px;color:#9ca3af;margin:2px 0 0;line-height:1.4;">Ticked gateways are removed from results (and any push). Based on the true inbound gateway (MX). Contacts whose domain isn't classified yet are kept. See the <a href="/gateway-analysis.html" style="color:#224388;">Gateways</a> page for performance.</p>
+          </div>
+        </div>
+
         <div class="filter-section" data-clear="intelligence">
           <div class="filter-label">Intelligence</div>
           <div class="filter-control" style="gap:8px;">
@@ -2377,6 +2392,8 @@
       if (document.getElementById('emailOther').checked) emailProviders.push('email_other');
       if (document.getElementById('emailUnknown')?.checked) emailProviders.push('unknown');
 
+      const gatewayExclude = Array.from(document.querySelectorAll('.gwExcl:checked')).map(el => el.value);
+
       const emailStatuses = ['vfSafe','vfSafeCatchall','vfRisky','vfInvalid','vfUnknown','vfNotVerified']
         .filter(id => document.getElementById(id)?.checked)
         .map(id => document.getElementById(id).value);
@@ -2395,6 +2412,7 @@
         technologies: sel('technologies'),
         technologiesExclude: excl('technologies'),
         emailProviders: emailProviders.length > 0 ? emailProviders.join(',') : '',
+        gatewayExclude: gatewayExclude.length > 0 ? gatewayExclude.join(',') : '',
         emailStatus: emailStatuses.length > 0 ? emailStatuses.join(',') : '',
         city: sel('city'),
         state: sel('state'),
@@ -2509,6 +2527,7 @@
         const el = document.getElementById(id);
         if (el) el.checked = false;
       });
+      document.querySelectorAll('.gwExcl').forEach(cb => { cb.checked = false; });
       Object.keys(filterDefs).forEach(key => {
         filterDefs[key].selected = [];
         filterDefs[key].excluded = [];
@@ -4953,6 +4972,8 @@
     fetch('/api/pv/workspaces').then(r => r.json()).then(d => {
       if (d?.workspaces) pvWorkspaces = d.workspaces;
     }).catch(() => {});
+    // Re-run the search whenever a gateway-exclude box is toggled.
+    document.querySelectorAll('.gwExcl').forEach(cb => cb.addEventListener('change', () => search()));
     search();
 
     // Resume any in-progress import jobs from before the page was refreshed.
