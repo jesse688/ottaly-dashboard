@@ -3505,6 +3505,7 @@
           if (sk.alreadyInCampaign) parts.push(`${sk.alreadyInCampaign} already in campaign`);
           if (sk.cooldownWorkspace) parts.push(`${sk.cooldownWorkspace} in cooldown`);
           if (sk.missingEnrichment) parts.push(`${sk.missingEnrichment} missing keywords/company size`);
+          if (sk.missingName)       parts.push(`${sk.missingName} missing first/last name`);
           if (sk.wrongProvider)     parts.push(`${sk.wrongProvider} wrong email provider`);
           const skipNote = parts.length ? ` · skipped ${parts.join(', ')}` : '';
           const tone = (data.pushed === 0 && parts.length) ? 'error' : 'success';
@@ -3608,7 +3609,7 @@
           // ── Skip breakdown (only shown after completion) ─────
           let skipBlock = '';
           const sk = j.skipped || {};
-          const totalSkipped = (sk.unsafe||0) + (sk.dnc||0) + (sk.cooldownWorkspace||0) + (sk.alreadyInCampaign||0) + (sk.snoozed||0);
+          const totalSkipped = (sk.unsafe||0) + (sk.dnc||0) + (sk.cooldownWorkspace||0) + (sk.alreadyInCampaign||0) + (sk.snoozed||0) + (sk.missingEnrichment||0) + (sk.missingName||0) + (sk.wrongProvider||0);
           if (j.status === 'completed' && totalSkipped > 0) {
             const skipParts = [];
             if (sk.unsafe)            skipParts.push(`${sk.unsafe} unsafe`);
@@ -3616,6 +3617,9 @@
             if (sk.cooldownWorkspace) skipParts.push(`${sk.cooldownWorkspace} in 90-day cooldown`);
             if (sk.alreadyInCampaign) skipParts.push(`${sk.alreadyInCampaign} already in campaign`);
             if (sk.snoozed)           skipParts.push(`${sk.snoozed} vertical snoozed`);
+            if (sk.missingEnrichment) skipParts.push(`${sk.missingEnrichment} missing keywords/size`);
+            if (sk.missingName)       skipParts.push(`${sk.missingName} missing first/last name`);
+            if (sk.wrongProvider)     skipParts.push(`${sk.wrongProvider} wrong provider`);
             skipBlock = `<div style="font-size:11px;color:#fbbf24;margin-top:4px;">⏭ Skipped: ${skipParts.join(' · ')}</div>`;
           }
 

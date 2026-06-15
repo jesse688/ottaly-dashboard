@@ -11566,7 +11566,7 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
     // job on this path (this endpoint is 'push without verify').
     const cooloffDate = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const campaignNameLc = (req.body.campaign_name || '').toString().trim().toLowerCase();
-    const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, missingEnrichment: 0 };
+    const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, missingEnrichment: 0, missingName: 0 };
     // Hard status gate — only verified-deliverable contacts may reach PlusVibe,
     // even on this "push without verify" path. Anything unknown/risky/invalid/
     // NULL is rejected so unsafe contacts can never leak into a campaign.
@@ -11574,6 +11574,11 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
     const contacts = allContacts.filter(c => {
       if (!PUSHABLE_STATUSES.has((c.email_status || '').toLowerCase())) { skipped.unsafe++; return false; }
       if (c.do_not_contact) { skipped.dnc++; return false; }
+      // Bison requires non-empty first_name AND last_name (422s otherwise), and a
+      // nameless contact shouldn't be cold-emailed anyway — skip and report.
+      if (!(c.first_name && c.first_name.trim()) || !(c.last_name && c.last_name.trim())) {
+        skipped.missingName++; return false;
+      }
       if ((!c.keywords || c.keywords.trim() === '') || (!c.industry || c.industry.trim() === '')) {
         skipped.missingEnrichment++; return false;
       }
@@ -13658,7 +13663,7 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
       const CONCURRENCY = Math.max(1, parseInt(process.env.PUSH_VERIFY_CONCURRENCY || '5', 10));
       const VERIFY_THEN_PUSH = Math.max(20, parseInt(process.env.VERIFY_THEN_PUSH || '100', 10));
       let doneCount = 0;
-      const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, snoozed: 0, missingEnrichment: 0, wrongProvider: 0 };
+      const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, snoozed: 0, missingEnrichment: 0, wrongProvider: 0, missingName: 0 };
       const allowedProviders = Array.isArray(job.allowedProviders) ? job.allowedProviders : [];
 
       // ── Shared filter constants ────────────────────────────────
@@ -13670,6 +13675,11 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
       const passesFilter = (c) => {
         if (verifyResults[c.id] !== 'safe' && verifyResults[c.id] !== 'safe_catchall') { skipped.unsafe++; return false; }
         if (c.do_not_contact)               { skipped.dnc++; return false; }
+        // Bison requires non-empty first_name AND last_name (422s otherwise), and a
+        // nameless contact shouldn't be cold-emailed anyway — skip and report.
+        if (!(c.first_name && c.first_name.trim()) || !(c.last_name && c.last_name.trim())) {
+          skipped.missingName++; return false;
+        }
         // True-MX provider gate. By the time a contact reaches here it has been
         // verified, so c.mx_provider is its real provider (set by verifyOne /
         // the domain cache). Enforce the user's provider filter against that
