@@ -57,8 +57,22 @@ async function postOnce(subject: string, bodyText: string, apiKey: string): Prom
       contents: [{ role: 'user', parts: [{ text: userContent }] }],
       generationConfig: {
         temperature: 0,
-        maxOutputTokens: 150,
+        // gemini-2.5-flash is a thinking model — give it room so reasoning
+        // tokens don't truncate the JSON, and force a strict schema so it can't
+        // wrap the object in prose like "Here is the JSON".
+        maxOutputTokens: 800,
         responseMimeType: 'application/json',
+        responseSchema: {
+          type: 'OBJECT',
+          properties: {
+            category: { type: 'STRING', enum: CATEGORIES },
+            confidence: { type: 'NUMBER' },
+            reasoning: { type: 'STRING' },
+          },
+          required: ['category', 'confidence', 'reasoning'],
+        },
+        // Disable extended thinking for this cheap classification task.
+        thinkingConfig: { thinkingBudget: 0 },
       },
     }),
     signal: AbortSignal.timeout(15000),
