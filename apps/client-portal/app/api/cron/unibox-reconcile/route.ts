@@ -5,6 +5,7 @@ import {
   withTeam,
   getCampaigns,
   getCampaignReplies,
+  registerWebhookAllWorkspaces,
   type BisonReply,
 } from '@/lib/bison'
 
@@ -51,7 +52,19 @@ export async function GET(req: NextRequest) {
     inserted: 0,
     healed: 0,
     repended: 0,
+    webhooksRegistered: false,
     errors: [] as string[],
+  }
+
+  // Self-heal webhook registration first (idempotent — skips teams already
+  // registered to this portal's URL). Best-effort: a registration hiccup must
+  // not block reply reconciliation. This keeps every workspace's real-time
+  // reply webhook alive even if one was lost or a new client was added.
+  try {
+    const reg = await registerWebhookAllWorkspaces()
+    summary.webhooksRegistered = reg.ok
+  } catch (err) {
+    summary.errors.push(`webhook register: ${String(err).slice(0, 120)}`)
   }
 
   for (const [workspaceId, teamId] of Object.entries(PV_TO_BISON_TEAM)) {
