@@ -37,7 +37,12 @@ export async function middleware(req: NextRequest) {
     pathname.startsWith('/api/auth') ||
     pathname.startsWith('/api/invite') ||
     pathname.startsWith('/api/forgot') ||
-    pathname.startsWith('/api/admin')
+    pathname.startsWith('/api/admin') ||
+    // Crons + inbound webhooks authenticate themselves (?secret=CRON_SECRET /
+    // HMAC). Let them through — otherwise middleware 307-redirects them to /login
+    // and external schedulers (cron-job.org) that don't follow redirects fail.
+    pathname.startsWith('/api/cron') ||
+    pathname.startsWith('/api/webhooks')
   ) {
     return NextResponse.next()
   }
