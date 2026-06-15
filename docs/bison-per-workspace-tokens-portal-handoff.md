@@ -1,6 +1,14 @@
 # Handoff: per-workspace Bison tokens for the client portal (login.ottaly)
 
-**Status:** admin.ottaly side is DONE (branch `feat/bison-per-workspace-tokens` → PR into `stable`). This doc is the matching change for the **client portal**, whose source is in a **separate repo** (not in ottaly-dashboard — `apps/client-portal/` here is just built `.next/` output).
+**Status:** admin.ottaly side DONE. **Client-portal side now DONE too** — implemented in THIS repo (`apps/client-portal/` IS the live deployed source, not just build output — that earlier claim was wrong; all portal work ships from here). Branch `feat/portal-bison-ws-tokens`, merged to `main` 2026-06-15 (commit 8d9b7c1).
+
+What was built (matches the spec below):
+- `lib/bison.ts`: `getBisonWsTokens()` / `getBisonWsToken(teamId)` read `portal_settings.bison_ws_tokens` (`{team_id: plain_text_token}`, ~10s cache). `withTeam()` uses the per-workspace token as the bearer and **SKIPS `switch-workspace`** when one exists; only falls back to switching the super-admin key for teams without a token. `mintBisonWsToken()` + `saveBisonWsTokens()` added.
+- `app/api/admin/bison-tokens` — GET (masked status), POST (mint for one `{teamId}` or all mapped teams lacking a token, via the super-admin key), DELETE (clear). Admin-only.
+
+**To activate:** set the super-admin Bison key in portal Settings, then once:
+`fetch('/api/admin/bison-tokens',{method:'POST'}).then(r=>r.json()).then(console.log)`
+After that the portal serves every per-client read on its own per-workspace token and never calls switch-workspace.
 
 ## Why
 Bison's API is stateful: `POST /api/workspaces/v1.1/switch-workspace {team_id}` changes the active workspace for the **whole token**, and Bison treats a token's active workspace as one logged-in session. Anything that switches a shared token kicks every other session on it ("only one login at a time"). Jesse gets logged out of the **Bison web UI** because his human login shares the cron's account/token.
