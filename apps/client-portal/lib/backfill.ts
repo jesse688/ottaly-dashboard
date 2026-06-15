@@ -12,6 +12,34 @@ import { getLeadRepliesByEmail, bisonTeamForWorkspace } from './bison'
 // (one thread per lead) so the cron passes a `limit` to bound each run.
 export interface BackfillResult { checked: number; marked: number; errors: number; remaining: number }
 
+// One-off cleanup for HISTORIC PlusVibe leads. These live only in PlusVibe (not
+// Bison) and have no outbound stored anywhere, so the Bison-thread check can
+// never clear them — they're stuck in "Needs reply" forever. This stamps
+// first_responded_at for every still-stuck PlusVibe lead directly, in a single
+// statement. Scoped to source='plusvibe' so it can NEVER touch a live Bison lead
+// that genuinely needs a reply. Returns how many rows were marked.
+export async function forceMarkPlusvibeResponded(workspaceId?: string): Promise<{ marked: number }> {
+  const params: string[] = []
+  let wsClause = ''
+  if (workspaceId) { params.push(workspaceId); wsClause = ` AND l.workspace_id = $${params.length}` }
+  const res = await pool.query(
+    `INSERT INTO portal_lead_data (lead_id, client_id, first_responded_at)
+     SELECT l.id, c.id, NOW()
+       FROM esp_leads l
+       JOIN portal_clients c ON c.workspace_id = l.workspace_id
+      WHERE l.label = 'INTERESTED'
+        AND l.source = 'plusvibe'
+        AND l.email IS NOT NULL AND l.email <> ''${wsClause}
+        AND NOT EXISTS (
+          SELECT 1 FROM portal_lead_data d
+          WHERE d.lead_id = l.id AND d.client_id = c.id AND d.first_responded_at IS NOT NULL)
+     ON CONFLICT (lead_id, client_id) DO UPDATE
+       SET first_responded_at = COALESCE(portal_lead_data.first_responded_at, NOW())`,
+    params
+  )
+  return { marked: res.rowCount ?? 0 }
+}
+
 export async function backfillReplied(opts: { workspaceId?: string; limit?: number } = {}): Promise<BackfillResult> {
   const { workspaceId, limit } = opts
 
