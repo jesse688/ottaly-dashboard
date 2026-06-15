@@ -33,7 +33,12 @@ const LEDGER_LABEL: Record<string, string> = {
   topup: 'Leads added', lead_charge: 'Lead delivered', dispute_refund: 'Non-lead credited', adjustment: 'Adjustment',
 }
 
-export function InvoicesClient({ companyName }: { companyName: string }) {
+// Pay-per-lead workspaces: hide all billing UI, show only total leads paid for.
+// Hardcoded to Bubble for now.
+const PAY_PER_LEAD_WORKSPACES = new Set(['6a0e29d0d004be93be3f33f2']) // Bubble
+
+export function InvoicesClient({ companyName, workspaceId }: { companyName: string; workspaceId?: string }) {
+  const payPerLead = !!workspaceId && PAY_PER_LEAD_WORKSPACES.has(workspaceId)
   const [invoices, setInvoices] = useState<Invoice[] | null>(null)
   const [bal, setBal] = useState<Balance | null>(null)
   const [showTopup, setShowTopup] = useState(false)
@@ -103,6 +108,32 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
     setTimeout(() => setMsg(''), 6000)
     await load()
     setPaidBusy(null)
+  }
+
+  // Pay-per-lead view: no billing, just the total leads they've paid for.
+  if (payPerLead) {
+    return (
+      <div className="min-h-screen bg-[#f7f8fc]" style={{ fontFamily: 'var(--font-inter), system-ui, sans-serif' }}>
+        <header className="h-14 bg-[#224388] flex items-center px-5 gap-3 sticky top-0 z-10">
+          <span className="flex items-center [&_img]:brightness-0 [&_img]:invert"><Logo onDark /></span>
+          <span className="text-white/30">|</span>
+          <span className="text-white/90 text-sm font-medium">{companyName}</span>
+          <nav className="flex items-center gap-1 ml-4">
+            <a href="/leads" className="px-3 py-1.5 text-white/70 hover:text-white text-sm rounded-lg">Leads</a>
+            <span className="px-3 py-1.5 text-white bg-white/15 text-sm font-medium rounded-lg">Billing</span>
+            <a href="/account" className="px-3 py-1.5 text-white/70 hover:text-white text-sm rounded-lg">Account</a>
+          </nav>
+          <button onClick={handleLogout} className="ml-auto text-white/70 hover:text-white text-sm">Sign out</button>
+        </header>
+        <div className="max-w-md mx-auto p-6 mt-10">
+          <div className="bg-white rounded-2xl border border-gray-100 p-8 text-center shadow-sm">
+            <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">Leads delivered</p>
+            <p className="text-6xl font-bold text-[#050c29] mt-3">{bal ? bal.leadsDelivered.toLocaleString() : '—'}</p>
+            <p className="text-sm text-gray-400 mt-3">Total leads delivered to you to date. You&apos;re billed per lead — no top-ups or invoices to manage.</p>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   return (

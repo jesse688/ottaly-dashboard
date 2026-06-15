@@ -5,5 +5,5 @@ import { InvoicesClient } from './client'
 export default async function InvoicesPage() {
   const session = await getSession()
   if (!session) redirect('/login')
-  return <InvoicesClient companyName={session.companyName} />
+  return <InvoicesClient companyName={session.companyName} workspaceId={session.workspaceId} />
 }
