@@ -294,12 +294,12 @@ export function AdminUniboxClient() {
         {/* Left: folder tabs + reply list. Full-width on mobile; hidden once a reply
             is open (the detail takes over), restored via the in-detail Back button. */}
         <aside className={`${selected ? 'hidden md:flex' : 'flex'} w-full md:w-[420px] border-r border-gray-200 bg-white flex-col`}>
-          <div className="flex border-b border-gray-200 px-2">
+          <div className="flex border-b border-gray-200 px-1 overflow-x-auto">
             {FOLDERS.map(f => (
               <button
                 key={f.key}
                 onClick={() => { setSelected(null); setFolder(f.key) }}
-                className={`flex items-center gap-1.5 px-3 py-3 text-xs font-medium border-b-2 transition-colors ${folder === f.key ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+                className={`flex items-center gap-1 px-2.5 py-3 text-xs font-medium border-b-2 transition-colors whitespace-nowrap shrink-0 ${folder === f.key ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
               >
                 {f.label}
                 {counts[f.key] ? (

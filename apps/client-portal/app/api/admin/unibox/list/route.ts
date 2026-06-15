@@ -41,13 +41,21 @@ export async function GET(req: NextRequest) {
     categoryFilter = `AND COALESCE(u.admin_label, u.category) = $${params.length}`
   }
 
-  // Per-client zoom (the firehose). Scopes on the resolved per-reply client_id —
-  // NOT workspace_id — so a workspace shared by >1 client zooms to the right one.
+  // Per-client zoom (the firehose). Prefer the row's resolved client_id, but FALL
+  // BACK to the workspace→client mapping for rows whose client_id wasn't backfilled
+  // (most pre-Phase-1 rows are still NULL). Without this fallback, zooming to a
+  // client showed nothing because almost every row had a NULL client_id.
   let clientFilter = ''
   const clientParam = (url.searchParams.get('client') ?? '').trim()
   if (clientParam) {
     params.push(clientParam)
-    clientFilter = `AND u.client_id = $${params.length}`
+    const cp = `$${params.length}`
+    clientFilter = `AND (
+      u.client_id = ${cp}::uuid
+      OR (u.client_id IS NULL AND u.workspace_id IN (
+            SELECT workspace_id FROM portal_clients WHERE id = ${cp}::uuid
+      ))
+    )`
   }
 
   let search = ''
@@ -125,14 +133,20 @@ export async function GET(req: NextRequest) {
     const rows = hasMore ? r.rows.slice(0, limit) : r.rows
     const nextCursor = hasMore ? rows[rows.length - 1].received_at : null
 
-    // Counts respect the active client zoom so badges don't show cross-client
-    // totals when scoped to one client (critique: scoped list must = scoped counts).
-    const countScope = clientParam ? 'WHERE client_id = $1' : ''
+    // Counts respect the active client zoom (same resilient client match as the
+    // list) so badges match the scoped list even when client_id isn't backfilled.
+    const clientScopeSql = `(
+      client_id = $1::uuid
+      OR (client_id IS NULL AND workspace_id IN (
+            SELECT workspace_id FROM portal_clients WHERE id = $1::uuid
+      ))
+    )`
     const countParams = clientParam ? [clientParam] : []
 
     // Folder counts for the tab badges.
     const counts = await pool.query(
-      `SELECT folder, COUNT(*)::int AS n FROM unibox_replies ${countScope} GROUP BY folder`,
+      `SELECT folder, COUNT(*)::int AS n FROM unibox_replies
+        ${clientParam ? `WHERE ${clientScopeSql}` : ''} GROUP BY folder`,
       countParams
     )
     const countsByFolder: Record<string, number> = {}
@@ -142,7 +156,7 @@ export async function GET(req: NextRequest) {
     const catCounts = await pool.query(
       `SELECT COALESCE(admin_label, category) AS cat, COUNT(*)::int AS n
          FROM unibox_replies
-        ${clientParam ? 'WHERE client_id = $1 AND' : 'WHERE'} COALESCE(admin_label, category) IS NOT NULL
+        WHERE ${clientParam ? `${clientScopeSql} AND ` : ''}COALESCE(admin_label, category) IS NOT NULL
         GROUP BY COALESCE(admin_label, category)`,
       countParams
     )
