@@ -63,6 +63,25 @@ const BISON_ENV_KEY = process.env.BISON_API_KEY || process.env.PLUSVIBE_KEY || '
 let _bisonKeyOverride = null; // set from app_settings on boot + on save
 function getBisonKey() { return _bisonKeyOverride || BISON_ENV_KEY; }
 
+// ── Per-workspace Bison tokens (the logout fix) ──────────────────────────────
+// Bison's API is STATEFUL: the super-admin token has ONE active workspace, and
+// switch-workspace mutates it for the whole token — which Bison treats as one
+// logged-in session. Our crons loop every workspace switching this shared token,
+// so a human logged into the Bison WEB UI on the same account keeps getting
+// kicked ("only one login at a time"). The fix: give each workspace its OWN
+// scoped API token (minted via POST /api/workspaces/v1.1/{team_id}/api-tokens
+// with the super-admin key). When a per-workspace token exists, _bisonRaw uses
+// it as the bearer and SKIPS switch-workspace entirely — so nothing the cron
+// does can ever touch a human's session. The super-admin key is retained only
+// to mint these tokens and as a fallback for any workspace without one.
+// Stored in app_settings `bison_ws_tokens` as { [team_id]: plain_text_token },
+// hydrated into this map on boot + on mint, so it works without a restart.
+let _bisonWsTokens = {}; // { [team_id:string]: token } — empty until minted/hydrated
+function getBisonWsToken(teamId) {
+  const t = _bisonWsTokens[String(teamId)];
+  return (t && typeof t === 'string' && t.trim()) ? t.trim() : null;
+}
+
 // ── "Fresh start" (Bison-era) date floor ─────────────────────────────────
 // When the dashboard is switched to a fresh start, we record the cutover date
 // and, by default, clamp every stats date range so nothing before it shows —
@@ -118,6 +137,11 @@ function withBisonLock(fn) {
 // sequence that must not have another workspace switch interleave) wrap multiple
 // _bisonRaw calls in a single withBisonLock. Most callers should use bisonReq.
 async function _bisonRaw(path, opts = {}) {
+  // The bearer for THIS request. Defaults to the super-admin key; if the target
+  // workspace has its own per-workspace token, we use that instead and skip the
+  // stateful switch-workspace call entirely (see _bisonWsTokens above) — that is
+  // what stops cron traffic from kicking a human's Bison web-UI session.
+  let bearer = getBisonKey();
   if (opts.wsId) {
     // Resolve PV workspace_id -> Bison team_id, and REFUSE to switch on anything
     // that isn't a clean integer team_id. Passing a raw PV Mongo-string here did
@@ -128,7 +152,15 @@ async function _bisonRaw(path, opts = {}) {
     if (!teamId || !/^\d+$/.test(String(teamId))) {
       throw new Error('Bison switch refused: workspace "' + opts.wsId + '" does not resolve to a Bison team_id (add it to BISON_TEAMS).');
     }
-    if (_bisonWsId !== String(teamId)) {
+    const wsToken = getBisonWsToken(teamId);
+    if (wsToken) {
+      // Per-workspace token: scoped to this team, so NO switch needed. We don't
+      // touch _bisonWsId — the super-admin token's active workspace is unaffected,
+      // so a concurrent super-admin fallback request stays correct.
+      bearer = wsToken;
+    } else if (_bisonWsId !== String(teamId)) {
+      // Fallback: no per-workspace token for this team — switch the super-admin
+      // token the old way. (Serialized by withBisonLock via bisonReq/bisonFetch.)
       const sw = await fetch(BISON_BASE + '/api/workspaces/v1.1/switch-workspace', {
         method: 'POST',
         headers: { Authorization: 'Bearer ' + getBisonKey(), 'Content-Type': 'application/json' },
@@ -143,7 +175,7 @@ async function _bisonRaw(path, opts = {}) {
   if (opts.params) for (const [k, v] of Object.entries(opts.params)) { if (v != null) url.searchParams.set(k, String(v)); }
   const init = {
     method: opts.method || 'GET',
-    headers: { Authorization: 'Bearer ' + getBisonKey(), 'Content-Type': 'application/json' },
+    headers: { Authorization: 'Bearer ' + bearer, 'Content-Type': 'application/json' },
     signal: AbortSignal.timeout(20000),
   };
   if (opts.body) init.body = JSON.stringify(opts.body);
@@ -2141,6 +2173,86 @@ app.post('/api/admin/bison-key/test', requireAdmin, async (req, res) => {
   }
 });
 
+// ── Per-workspace Bison tokens (admin only) ──────────────
+// These eliminate the "only one login at a time" logouts: each workspace gets
+// its own scoped API token so the crons never call switch-workspace. See the
+// _bisonWsTokens block near getBisonKey(). The super-admin key must still be
+// configured (it's what mints these). We never return token plaintext to the
+// browser — only which teams have one.
+//
+// Status: which BISON_TEAMS have a per-workspace token.
+app.get('/api/admin/bison-tokens', requireAdmin, (req, res) => {
+  res.json({
+    superAdminConfigured: !!getBisonKey(),
+    teams: BISON_TEAMS.map((t) => ({
+      team_id: t.team_id, name: t.name,
+      hasToken: !!getBisonWsToken(t.team_id),
+    })),
+    count: BISON_TEAMS.filter((t) => getBisonWsToken(t.team_id)).length,
+    total: BISON_TEAMS.length,
+  });
+});
+
+// Mint per-workspace tokens via POST /api/workspaces/v1.1/{team_id}/api-tokens
+// (requires the super-admin key). Body { team_id? } mints one team; omit to mint
+// for every team missing a token. Existing tokens are kept unless force=true.
+// Minting does NOT switch the active workspace (the api-tokens endpoint is
+// team-scoped in the path), so it's safe to run while the dashboard is live.
+app.post('/api/admin/bison-tokens/mint', requireAdmin, async (req, res) => {
+  const pgdb = req.app.locals.pgDb;
+  if (!pgdb) return res.status(503).json({ error: 'Database unavailable' });
+  if (!getBisonKey()) return res.status(400).json({ error: 'Configure the super-admin Bison key first' });
+  const body = req.body || {};
+  const force = body.force === true;
+  // Which teams to mint for: a specific one, or all that lack a token.
+  let targets;
+  if (body.team_id != null) {
+    const tid = String(body.team_id).trim();
+    const team = BISON_TEAMS.find((t) => t.team_id === tid);
+    if (!team) return res.status(400).json({ error: `Unknown team_id ${tid} (not in BISON_TEAMS)` });
+    targets = [team];
+  } else {
+    targets = BISON_TEAMS.filter((t) => force || !getBisonWsToken(t.team_id));
+  }
+  const results = [];
+  for (const team of targets) {
+    if (!force && getBisonWsToken(team.team_id)) { results.push({ team_id: team.team_id, name: team.name, status: 'skipped (exists)' }); continue; }
+    try {
+      // The super-admin key authorizes; team_id in the PATH scopes the token. We
+      // call _bisonRaw with NO wsId so it does not switch any workspace.
+      const data = await bisonReq(`/api/workspaces/v1.1/${team.team_id}/api-tokens`, {
+        method: 'POST',
+        body: { name: `ottaly-admin-${team.name}`.slice(0, 60) },
+      });
+      const token = data?.data?.plain_text_token;
+      if (!token) throw new Error('no plain_text_token in response');
+      _bisonWsTokens[String(team.team_id)] = token;
+      results.push({ team_id: team.team_id, name: team.name, status: 'minted' });
+    } catch (err) {
+      results.push({ team_id: team.team_id, name: team.name, status: 'error', error: err.message });
+    }
+    await new Promise((r) => setTimeout(r, 600)); // gentle on Bison
+  }
+  // Persist the whole map (only successful mints changed it).
+  try { await pgdb.setSetting('bison_ws_tokens', _bisonWsTokens); }
+  catch (err) { return res.status(500).json({ error: 'Minted but failed to persist: ' + err.message, results }); }
+  const minted = results.filter((r) => r.status === 'minted').length;
+  res.json({ ok: true, minted, results, count: BISON_TEAMS.filter((t) => getBisonWsToken(t.team_id)).length, total: BISON_TEAMS.length });
+});
+
+// Clear all per-workspace tokens (falls back to super-admin + switch-workspace).
+app.delete('/api/admin/bison-tokens', requireAdmin, async (req, res) => {
+  const pgdb = req.app.locals.pgDb;
+  if (!pgdb) return res.status(503).json({ error: 'Database unavailable' });
+  try {
+    _bisonWsTokens = {};
+    await pgdb.setSetting('bison_ws_tokens', {});
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Claude Access (admin only) ───────────────────────────
 // Read the capability catalog + current toggles for the "Claude Access" panel.
 app.get('/api/admin/claude-permissions', requireAdmin, async (req, res) => {
@@ -3262,7 +3374,16 @@ async function bisonFetch(path, opts) {
   opts = opts || {};
   // Serialize switch+fetch as one atomic unit on the shared token (see _bisonGate).
   return withBisonLock(async () => {
-    if (opts.wsId) await _bisonSwitchUnlocked(opts.wsId);
+    // Per-workspace token path (the logout fix, mirrors _bisonRaw): if the target
+    // workspace has its own scoped token, use it as the bearer and DON'T switch —
+    // so this cron call can't kick a human's Bison web-UI session.
+    var bearer = getBisonKey();
+    if (opts.wsId) {
+      var teamId = resolveBisonTeamId(opts.wsId);
+      var wsToken = teamId ? getBisonWsToken(teamId) : null;
+      if (wsToken) bearer = wsToken;
+      else await _bisonSwitchUnlocked(opts.wsId);
+    }
     var url = new URL(BISON_BASE + path);
     if (opts.params) {
       Object.keys(opts.params).forEach(function(k) {
@@ -3271,7 +3392,7 @@ async function bisonFetch(path, opts) {
     }
     var init = {
       method: opts.method || 'GET',
-      headers: { 'Authorization': 'Bearer ' + getBisonKey(), 'Content-Type': 'application/json' },
+      headers: { 'Authorization': 'Bearer ' + bearer, 'Content-Type': 'application/json' },
       signal: AbortSignal.timeout(15000),
     };
     if (opts.body) init.body = JSON.stringify(opts.body);
@@ -15871,6 +15992,16 @@ function scheduleAudienceScoring(pgdb) {
         console.log('[bison] using dashboard-set API key (…' + _bisonKeyOverride.slice(-4) + ')');
       }
     }).catch((e) => console.warn('[bison] key hydrate failed:', e.message));
+
+    // Hydrate per-workspace Bison tokens (the logout fix). When present, _bisonRaw
+    // and bisonFetch use these instead of switching the shared super-admin token.
+    pgdb.getSetting('bison_ws_tokens', null).then((saved) => {
+      if (saved && typeof saved === 'object') {
+        _bisonWsTokens = saved;
+        const n = Object.values(saved).filter((v) => v && String(v).trim()).length;
+        if (n) console.log(`[bison] using ${n} per-workspace token(s) — crons will not switch-workspace for those`);
+      }
+    }).catch((e) => console.warn('[bison] ws-token hydrate failed:', e.message));
 
     // Hydrate the "fresh start" cutover date + show-historical toggle.
     hydrateFreshStart(pgdb).then(() => {
