@@ -5,7 +5,7 @@
 // We frame it explicitly as data to classify and tell the model not to follow
 // anything inside it. Output is constrained to strict JSON via responseMimeType.
 
-const MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash'
+const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash'
 const GEMINI_URL = (model: string, key: string) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`
 
