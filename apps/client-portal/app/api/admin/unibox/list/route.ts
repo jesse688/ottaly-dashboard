@@ -1,0 +1,63 @@
+import { NextResponse, type NextRequest } from 'next/server'
+import pool, { ready } from '@/lib/db'
+import { getAdminSession } from '@/lib/auth'
+
+const FOLDERS = ['inbox', 'review', 'done', 'unmapped', 'rejected'] as const
+type Folder = (typeof FOLDERS)[number]
+
+// Admin-only list of Master Unibox replies, one folder at a time, newest-first,
+// with cursor pagination on received_at. Joins client company_name by workspace.
+export async function GET(req: NextRequest) {
+  if (!await getAdminSession()) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+  await ready()
+
+  const url = new URL(req.url)
+  const folderParam = url.searchParams.get('folder') ?? 'inbox'
+  const folder: Folder = (FOLDERS as readonly string[]).includes(folderParam) ? (folderParam as Folder) : 'inbox'
+  const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 50, 1), 100)
+  const before = url.searchParams.get('before') // received_at cursor (ISO)
+
+  const params: unknown[] = [folder]
+  let cursor = ''
+  if (before) {
+    params.push(before)
+    cursor = `AND u.received_at < $${params.length}`
+  }
+  params.push(limit + 1) // fetch one extra to compute hasMore
+
+  try {
+    const r = await pool.query(
+      `SELECT u.id, u.bison_team_id, u.bison_reply_id, u.workspace_id, u.portal_email_id,
+              u.lead_email, u.lead_bison_id, u.subject, u.body_preview,
+              u.classify_state, u.classify_attempts, u.category, u.confidence,
+              u.ai_model, u.ai_reasoning, u.admin_label, u.folder,
+              u.marked_as_lead, u.marked_by, u.marked_at, u.bison_tag_state,
+              u.received_at, u.created_at,
+              c.id AS client_id, c.company_name
+         FROM unibox_replies u
+         LEFT JOIN portal_clients c ON c.workspace_id = u.workspace_id
+        WHERE u.folder = $1 ${cursor}
+        ORDER BY u.received_at DESC
+        LIMIT $${params.length}`,
+      params
+    )
+
+    const hasMore = r.rows.length > limit
+    const rows = hasMore ? r.rows.slice(0, limit) : r.rows
+    const nextCursor = hasMore ? rows[rows.length - 1].received_at : null
+
+    // Folder counts for the tab badges.
+    const counts = await pool.query(
+      `SELECT folder, COUNT(*)::int AS n FROM unibox_replies GROUP BY folder`
+    )
+    const countsByFolder: Record<string, number> = {}
+    for (const row of counts.rows) countsByFolder[row.folder as string] = row.n as number
+
+    return NextResponse.json({ rows, nextCursor, counts: countsByFolder })
+  } catch (err) {
+    console.error('[admin/unibox/list] error:', err)
+    return NextResponse.json({ error: String(err) }, { status: 500 })
+  }
+}

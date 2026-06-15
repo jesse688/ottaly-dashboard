@@ -4,6 +4,8 @@ import crypto from 'crypto'
 import { notifyClientOfLead } from '@/lib/email'
 import { enrichLead } from '@/lib/sync'
 import { ready } from '@/lib/db'
+import { bisonTeamToWorkspace } from '@/lib/bison'
+import { notifyAdmin } from '@/lib/notify'
 
 // Verify HMAC-SHA256 against any of the provided secrets (tries each until one matches).
 function verifySignature(payload: string, signature: string, ...secrets: (string | undefined)[]): boolean {
@@ -139,59 +141,112 @@ interface BisonPayload {
 async function handleBison(raw: Record<string, unknown>) {
   const ev = raw as unknown as BisonPayload
   const eventType = ev.event?.type ?? ''
-  const workspaceId = ev.event?.workspace_id ? String(ev.event.workspace_id) : 'bison-default'
+  // The payload carries the raw Bison team id. Reverse-map it to the PV
+  // workspace_id the rest of the portal keys off (portal_clients.workspace_id).
+  const rawTeamId = ev.event?.workspace_id != null ? String(ev.event.workspace_id) : ''
+  const mappedWorkspaceId = rawTeamId ? bisonTeamToWorkspace(rawTeamId) : null
+  // Use the mapped PV workspace_id everywhere downstream; only fall back to the
+  // raw team id for log breadcrumbs when unmapped.
   const lead = ev.data?.lead
   const reply = ev.data?.reply
 
-  console.log(`[webhook/bison] ${eventType} workspace=${workspaceId}`)
+  console.log(`[webhook/bison] ${eventType} team=${rawTeamId} workspace=${mappedWorkspaceId ?? 'UNMAPPED'}`)
 
+  // Ingest the lead record. Decoupled from billing: label stays NULL on ingest
+  // (PRESERVED on conflict) — only the admin "Mark as lead" action sets
+  // label='INTERESTED'. status is updated as-is. A reply ≠ a billable lead.
   if (lead?.email && (eventType === 'lead_interested' || eventType === 'lead_replied')) {
     const leadId = lead.id ? String(lead.id) : null
-    if (leadId) {
+    if (leadId && mappedWorkspaceId) {
       await pool.query(
         `INSERT INTO esp_leads (id, workspace_id, campaign_id, source, email, first_name, last_name, company_name, status, label, first_replied_at, created_at, updated_at)
-         VALUES ($1,$2,$3,'bison',$4,$5,$6,$7,$8,'INTERESTED',$9,NOW(),NOW())
+         VALUES ($1,$2,$3,'bison',$4,$5,$6,$7,$8,NULL,$9,NOW(),NOW())
          ON CONFLICT (id) DO UPDATE SET
            status = COALESCE(EXCLUDED.status, esp_leads.status),
-           label = COALESCE(EXCLUDED.label, esp_leads.label),
            first_replied_at = COALESCE(esp_leads.first_replied_at, EXCLUDED.first_replied_at),
            updated_at = NOW()`,
-        [leadId, workspaceId, lead.campaign_id ? String(lead.campaign_id) : null,
+        [leadId, mappedWorkspaceId, lead.campaign_id ? String(lead.campaign_id) : null,
          lead.email, lead.first_name ?? null, lead.last_name ?? null,
          lead.company_name ?? null, lead.status ?? null,
          eventType === 'lead_replied' ? new Date().toISOString() : null]
       )
     }
-
-    if (eventType === 'lead_interested') {
-      try {
-        await enrichLead(workspaceId, lead.email)
-        if (leadId) await notifyClientOfLead(workspaceId, leadId)
-      } catch (e) { console.error('[webhook/bison] enrich/notify failed:', e) }
-    }
   }
 
+  // Store + queue the reply. Return fast — NO Claude, NO Bison reads here; the
+  // classify cron handles triage. We still cache the reply into portal_emails
+  // (only under the CORRECT PV workspace_id) so existing thread views work.
   if (reply?.id && eventType !== 'lead_interested') {
-    const leadEmail = lead?.email ?? ''
+    const leadEmail = (lead?.email ?? '').toLowerCase()
     const direction = reply.folder?.toLowerCase() === 'sent' ? 'OUT' : 'IN'
-    if (leadEmail) {
-      await pool.query(
+    const replyId = String(reply.id)
+    const leadBisonId = lead?.id ? String(lead.id) : (reply.lead_id ? String(reply.lead_id) : null)
+
+    let portalEmailId: string | null = null
+    if (leadEmail && mappedWorkspaceId) {
+      const ins = await pool.query(
         `INSERT INTO portal_emails (id, workspace_id, lead_pv_id, lead_email, direction, subject, body_html, body_text, content_preview, from_email, to_email, is_unread, message_id, timestamp_created, raw)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
          ON CONFLICT (id) DO NOTHING`,
-        [String(reply.id), workspaceId, lead?.id ? String(lead.id) : null,
-         leadEmail.toLowerCase(), direction,
+        [replyId, mappedWorkspaceId, leadBisonId,
+         leadEmail, direction,
          reply.subject ?? null, reply.html_body ?? null, reply.text_body ?? null,
          reply.text_body?.slice(0, 200) ?? null,
          reply.from_email_address ?? null, reply.primary_to_email_address ?? null,
          direction === 'IN' ? 1 : 0, reply.raw_message_id ?? null,
          reply.date_received ?? null, JSON.stringify(reply)]
-      ).catch(err => console.error('[webhook/bison] portal_emails insert failed:', err))
+      ).catch(err => { console.error('[webhook/bison] portal_emails insert failed:', err); return null })
+      if (ins) portalEmailId = replyId
+    }
+
+    // Master Unibox row — only inbound replies are worth triaging. Idempotent on
+    // (bison_team_id, bison_reply_id) so webhook retries never duplicate.
+    if (direction === 'IN' && leadEmail) {
+      const folder = mappedWorkspaceId ? 'inbox' : 'unmapped'
+      await pool.query(
+        `INSERT INTO unibox_replies
+           (bison_team_id, bison_reply_id, workspace_id, portal_email_id, lead_email, lead_bison_id,
+            subject, body_preview, classify_state, folder, raw, received_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9,$10,$11)
+         ON CONFLICT (bison_team_id, bison_reply_id) DO NOTHING`,
+        [rawTeamId || 'unknown', replyId, mappedWorkspaceId, portalEmailId,
+         leadEmail, leadBisonId,
+         reply.subject ?? null, reply.text_body?.slice(0, 500) ?? null,
+         folder, JSON.stringify(reply),
+         reply.date_received ?? new Date().toISOString()]
+      ).catch(err => console.error('[webhook/bison] unibox_replies insert failed:', err))
+
+      // Alert admins once about a team we can't map to a client workspace.
+      if (!mappedWorkspaceId) {
+        await maybeNotifyUnmappedTeam(rawTeamId)
+      }
     }
   }
 
   await pool.query(
     `INSERT INTO esp_sync_log (source, workspace_id, status, leads_synced, finished_at) VALUES ($1,$2,$3,$4,NOW())`,
-    ['bison-webhook', workspaceId, 'success', 1]
+    ['bison-webhook', mappedWorkspaceId ?? `team:${rawTeamId}`, 'success', 1]
   ).catch(() => {})
+}
+
+// Notify admins at most once per unmapped Bison team (avoids a Slack storm when a
+// new workspace starts replying before its portal_clients row exists). Dedup via
+// a portal_meta marker keyed by team id.
+async function maybeNotifyUnmappedTeam(teamId: string) {
+  if (!teamId) return
+  try {
+    const key = `unibox_unmapped_team_${teamId}`
+    const r = await pool.query(
+      `INSERT INTO portal_meta (key) VALUES ($1) ON CONFLICT (key) DO NOTHING RETURNING key`,
+      [key]
+    )
+    if (!r.rows.length) return // already notified
+    await notifyAdmin({
+      kind: 'dispute',
+      title: `Unmapped Bison team ${teamId}`,
+      body: `A reply arrived from Bison team ${teamId}, which isn't mapped to any client workspace (PV_TO_BISON_TEAM). It's parked in the Unibox "Unmapped" folder. Add the mapping to start routing this team's replies.`,
+    })
+  } catch (err) {
+    console.error('[webhook/bison] unmapped-team notify failed:', err)
+  }
 }

@@ -1,0 +1,328 @@
+'use client'
+
+import { useCallback, useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { Logo } from '@/app/components/Logo'
+
+type Folder = 'review' | 'inbox' | 'done' | 'unmapped' | 'rejected'
+
+interface Reply {
+  id: string
+  bison_team_id: string
+  bison_reply_id: string
+  workspace_id: string | null
+  lead_email: string
+  lead_bison_id: string | null
+  subject: string | null
+  body_preview: string | null
+  classify_state: string
+  classify_attempts: number
+  category: string | null
+  confidence: string | number | null
+  ai_model: string | null
+  ai_reasoning: string | null
+  admin_label: string | null
+  folder: string
+  marked_as_lead: boolean
+  marked_by: string | null
+  marked_at: string | null
+  bison_tag_state: string | null
+  received_at: string
+  client_id: string | null
+  company_name: string | null
+}
+
+interface PortalClientLite { id: string; company_name: string; workspace_id: string }
+
+const FOLDERS: { key: Folder; label: string }[] = [
+  { key: 'review', label: 'Review' },
+  { key: 'inbox', label: 'Inbox' },
+  { key: 'done', label: 'Done' },
+  { key: 'unmapped', label: 'Unmapped' },
+  { key: 'rejected', label: 'Rejected' },
+]
+
+const CATEGORIES = ['interested', 'not_interested', 'ooo_auto_reply', 'question', 'unsubscribe', 'other']
+
+const CAT_STYLE: Record<string, string> = {
+  interested: 'bg-green-100 text-green-700',
+  not_interested: 'bg-gray-100 text-gray-600',
+  ooo_auto_reply: 'bg-blue-100 text-blue-700',
+  question: 'bg-amber-100 text-amber-700',
+  unsubscribe: 'bg-red-100 text-red-700',
+  other: 'bg-slate-100 text-slate-600',
+}
+
+function fmtDate(d: string | null) {
+  if (!d) return '—'
+  return new Date(d).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+}
+
+function CategoryBadge({ category, confidence }: { category: string | null; confidence: string | number | null }) {
+  if (!category) return <span className="px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-400">unclassified</span>
+  const conf = confidence == null ? null : Math.round(Number(confidence) * 100)
+  return (
+    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${CAT_STYLE[category] ?? CAT_STYLE.other}`}>
+      {category.replace(/_/g, ' ')}{conf != null ? ` · ${conf}%` : ''}
+    </span>
+  )
+}
+
+export function AdminUniboxClient() {
+  const router = useRouter()
+  const [folder, setFolder] = useState<Folder>('review')
+  const [rows, setRows] = useState<Reply[]>([])
+  const [counts, setCounts] = useState<Record<string, number>>({})
+  const [nextCursor, setNextCursor] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [selected, setSelected] = useState<Reply | null>(null)
+  const [clients, setClients] = useState<PortalClientLite[]>([])
+  const [pickClientId, setPickClientId] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState('')
+
+  const load = useCallback(async (f: Folder, cursor?: string) => {
+    setLoading(true)
+    try {
+      const u = new URL('/api/admin/unibox/list', window.location.origin)
+      u.searchParams.set('folder', f)
+      u.searchParams.set('limit', '50')
+      if (cursor) u.searchParams.set('before', cursor)
+      const r = await fetch(u.toString())
+      if (r.status === 401) { router.push('/admin/login'); return }
+      const d = await r.json() as { rows: Reply[]; nextCursor: string | null; counts: Record<string, number> }
+      setRows(prev => cursor ? [...prev, ...d.rows] : d.rows)
+      setNextCursor(d.nextCursor)
+      setCounts(d.counts ?? {})
+    } finally {
+      setLoading(false)
+    }
+  }, [router])
+
+  useEffect(() => { load(folder) }, [folder, load])
+
+  useEffect(() => {
+    fetch('/api/admin/clients')
+      .then(r => r.ok ? r.json() : [])
+      .then((d: PortalClientLite[]) => setClients(Array.isArray(d) ? d : []))
+      .catch(() => {})
+  }, [])
+
+  function selectReply(r: Reply) {
+    setSelected(r)
+    setMsg('')
+    // Prefill the picker from the reply's mapped client.
+    setPickClientId(r.client_id ?? '')
+  }
+
+  async function markAsLead() {
+    if (!selected) return
+    setBusy(true); setMsg('')
+    try {
+      const r = await fetch(`/api/admin/unibox/${selected.id}/mark-as-lead`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(pickClientId ? { clientId: pickClientId } : {}),
+      })
+      const d = await r.json() as { ok?: boolean; already?: boolean; error?: string; bison_tag_state?: string }
+      if (!r.ok || !d.ok) { setMsg(d.error ?? 'Failed to mark as lead'); return }
+      setMsg(d.already ? 'Already marked as a lead.' : `Marked as lead${d.bison_tag_state ? ` (tag: ${d.bison_tag_state})` : ''}.`)
+      await load(folder)
+      setSelected(null)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function reject() {
+    if (!selected) return
+    setBusy(true); setMsg('')
+    try {
+      const r = await fetch(`/api/admin/unibox/${selected.id}/reject`, { method: 'POST' })
+      const d = await r.json() as { ok?: boolean; error?: string }
+      if (!r.ok || !d.ok) { setMsg(d.error ?? 'Failed to reject'); return }
+      await load(folder)
+      setSelected(null)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function setAdminLabel(label: string) {
+    if (!selected) return
+    setBusy(true); setMsg('')
+    try {
+      const r = await fetch(`/api/admin/unibox/${selected.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ admin_label: label }),
+      })
+      const d = await r.json() as { ok?: boolean; error?: string; admin_label?: string }
+      if (!r.ok || !d.ok) { setMsg(d.error ?? 'Failed to set label'); return }
+      setSelected({ ...selected, admin_label: d.admin_label ?? label })
+      setRows(rows.map(x => x.id === selected.id ? { ...x, admin_label: d.admin_label ?? label } : x))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50" style={{ fontFamily: 'system-ui,-apple-system,sans-serif' }}>
+      {/* Top bar — matches the admin clients header */}
+      <header className="h-12 bg-[#1a2332] flex items-center px-6 gap-3">
+        <Logo size="sm" onDark />
+        <span className="text-slate-500 text-xs">|</span>
+        <span className="text-slate-300 text-sm">Master Unibox</span>
+        <div className="ml-auto flex items-center gap-4">
+          <a href="/admin/clients" className="text-slate-400 hover:text-white text-xs">Clients</a>
+          <a href="/admin/unibox" className="text-white text-xs font-medium">Unibox</a>
+        </div>
+      </header>
+
+      <div className="flex" style={{ height: 'calc(100vh - 3rem)' }}>
+        {/* Left: folder tabs + reply list */}
+        <aside className="w-[420px] border-r border-gray-200 bg-white flex flex-col">
+          <div className="flex border-b border-gray-200 px-2">
+            {FOLDERS.map(f => (
+              <button
+                key={f.key}
+                onClick={() => { setSelected(null); setFolder(f.key) }}
+                className={`flex items-center gap-1.5 px-3 py-3 text-xs font-medium border-b-2 transition-colors ${folder === f.key ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+              >
+                {f.label}
+                {counts[f.key] ? (
+                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-gray-100 text-gray-600">{counts[f.key]}</span>
+                ) : null}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex-1 overflow-y-auto">
+            {loading && rows.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-10">Loading…</p>
+            ) : rows.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-10">No replies in this folder.</p>
+            ) : rows.map(r => (
+              <button
+                key={r.id}
+                onClick={() => selectReply(r)}
+                className={`w-full text-left px-4 py-3 border-b border-gray-50 hover:bg-gray-50 ${selected?.id === r.id ? 'bg-indigo-50/60' : ''}`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-medium text-gray-900 truncate">{r.lead_email}</span>
+                  <span className="text-[11px] text-gray-400 whitespace-nowrap">{fmtDate(r.received_at)}</span>
+                </div>
+                <p className="text-xs text-gray-600 truncate mt-0.5">{r.subject || '(no subject)'}</p>
+                <div className="flex items-center gap-1.5 mt-1.5">
+                  <CategoryBadge category={r.admin_label ?? r.category} confidence={r.confidence} />
+                  {r.company_name
+                    ? <span className="text-[11px] text-gray-400 truncate">{r.company_name}</span>
+                    : <span className="text-[11px] text-amber-600">team {r.bison_team_id}</span>}
+                </div>
+              </button>
+            ))}
+            {nextCursor && (
+              <button
+                onClick={() => load(folder, nextCursor)}
+                disabled={loading}
+                className="w-full py-3 text-xs text-indigo-600 hover:text-indigo-800 disabled:opacity-50"
+              >
+                {loading ? 'Loading…' : 'Load more'}
+              </button>
+            )}
+          </div>
+        </aside>
+
+        {/* Right: selected reply detail */}
+        <main className="flex-1 overflow-y-auto">
+          {!selected ? (
+            <div className="h-full flex items-center justify-center text-gray-400 text-sm">Select a reply to view it.</div>
+          ) : (
+            <div className="max-w-2xl mx-auto p-6">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h1 className="text-lg font-semibold text-gray-900">{selected.subject || '(no subject)'}</h1>
+                  <p className="text-sm text-gray-500 mt-0.5">From <span className="font-medium text-gray-700">{selected.lead_email}</span></p>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    {selected.company_name ? `Client: ${selected.company_name}` : `Unmapped — Bison team ${selected.bison_team_id}`}
+                    {' · '}{fmtDate(selected.received_at)}
+                  </p>
+                </div>
+                <CategoryBadge category={selected.admin_label ?? selected.category} confidence={selected.confidence} />
+              </div>
+
+              {selected.ai_reasoning && (
+                <div className="mt-4 text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg p-3">
+                  <span className="font-medium text-gray-600">Claude:</span> {selected.ai_reasoning}
+                  {selected.ai_model ? <span className="text-gray-400"> ({selected.ai_model})</span> : null}
+                </div>
+              )}
+
+              <div className="mt-4 whitespace-pre-wrap text-sm text-gray-800 bg-white border border-gray-200 rounded-xl p-4">
+                {selected.body_preview || '(no preview captured)'}
+              </div>
+
+              {/* Override category */}
+              <div className="mt-5">
+                <label className="text-xs font-medium text-gray-500">Override category</label>
+                <div className="flex flex-wrap gap-1.5 mt-1.5">
+                  {CATEGORIES.map(c => (
+                    <button
+                      key={c}
+                      onClick={() => setAdminLabel(c)}
+                      disabled={busy}
+                      className={`px-2.5 py-1 rounded-full text-xs border transition-colors disabled:opacity-50 ${(selected.admin_label ?? selected.category) === c ? 'border-indigo-400 bg-indigo-50 text-indigo-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+                    >
+                      {c.replace(/_/g, ' ')}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="mt-6 border-t border-gray-100 pt-5">
+                {selected.marked_as_lead ? (
+                  <div className="text-sm text-green-700 bg-green-50 border border-green-100 rounded-lg p-3">
+                    ✓ Marked as lead{selected.marked_at ? ` on ${fmtDate(selected.marked_at)}` : ''}
+                    {selected.bison_tag_state ? ` · Bison tag: ${selected.bison_tag_state}` : ''}
+                  </div>
+                ) : (
+                  <>
+                    <label className="text-xs font-medium text-gray-500">Bill to client</label>
+                    <select
+                      value={pickClientId}
+                      onChange={e => setPickClientId(e.target.value)}
+                      className="block w-full mt-1.5 border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                    >
+                      <option value="">{selected.company_name ? `${selected.company_name} (mapped)` : 'Select a client…'}</option>
+                      {clients.map(c => (
+                        <option key={c.id} value={c.id}>{c.company_name}</option>
+                      ))}
+                    </select>
+                    <div className="flex items-center gap-2 mt-4">
+                      <button
+                        onClick={markAsLead}
+                        disabled={busy}
+                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg disabled:opacity-50"
+                      >
+                        {busy ? 'Working…' : 'Mark as lead'}
+                      </button>
+                      <button
+                        onClick={reject}
+                        disabled={busy}
+                        className="px-4 py-2 border border-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 disabled:opacity-50"
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  </>
+                )}
+                {msg && <p className="text-xs text-gray-600 mt-3">{msg}</p>}
+              </div>
+            </div>
+          )}
+        </main>
+      </div>
+    </div>
+  )
+}

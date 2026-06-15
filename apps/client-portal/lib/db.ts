@@ -242,6 +242,45 @@ async function runMigration() {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       )`,
 
+      // ── Master Unibox: aggregated Bison replies across all client workspaces ──
+      // One row per Bison reply. classify_state drives the Claude triage worker;
+      // folder drives the admin UI (review/inbox/done/unmapped/rejected). A reply
+      // arriving is NOT billable — only the admin "Mark as lead" action sets
+      // esp_leads.label='INTERESTED' (which reconcileLeadCharges keys on).
+      `CREATE TABLE IF NOT EXISTS unibox_replies (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        bison_team_id TEXT NOT NULL,
+        bison_reply_id TEXT NOT NULL,
+        workspace_id TEXT,                         -- PV workspace_id (null if unmapped)
+        portal_email_id TEXT,                      -- portal_emails.id, when stored
+        lead_email TEXT NOT NULL,
+        lead_bison_id TEXT,
+        subject TEXT,
+        body_preview TEXT,
+        classify_state TEXT NOT NULL DEFAULT 'pending',   -- pending | done | failed
+        classify_attempts INT NOT NULL DEFAULT 0,
+        classify_next_at TIMESTAMPTZ,
+        category TEXT,                             -- interested | not_interested | ooo_auto_reply | question | unsubscribe | other
+        confidence NUMERIC(3,2),
+        ai_model TEXT,
+        ai_reasoning TEXT,
+        admin_label TEXT,                          -- admin override of category
+        admin_label_by TEXT,
+        folder TEXT NOT NULL DEFAULT 'inbox',      -- inbox | review | done | unmapped | rejected
+        marked_as_lead BOOLEAN NOT NULL DEFAULT FALSE,
+        marked_by TEXT,
+        marked_at TIMESTAMPTZ,
+        bison_tag_state TEXT,                      -- null | pending | done | failed
+        raw JSONB DEFAULT '{}',
+        received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (bison_team_id, bison_reply_id)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_unibox_folder_state ON unibox_replies (folder, classify_state, received_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_unibox_pending ON unibox_replies (classify_state, classify_next_at) WHERE classify_state = 'pending'`,
+      `CREATE INDEX IF NOT EXISTS idx_unibox_ws_email ON unibox_replies (workspace_id, lower(lead_email))`,
+
       // ── One-time migrations marker table ───────────────────────────
       `CREATE TABLE IF NOT EXISTS portal_meta (key TEXT PRIMARY KEY, created_at TIMESTAMPTZ DEFAULT NOW())`,
       // The ledger switched from money units to LEAD-COUNT units. Wipe any

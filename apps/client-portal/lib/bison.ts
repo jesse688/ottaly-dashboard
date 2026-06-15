@@ -55,6 +55,17 @@ export function bisonTeamForWorkspace(workspaceId: string): string | null {
   return PV_TO_BISON_TEAM[workspaceId] ?? null
 }
 
+// Inverse of PV_TO_BISON_TEAM, computed once at module load. Bison webhooks
+// carry the raw team_id; the portal keys everything off the PV workspace_id, so
+// every inbound team_id must be reverse-mapped. Returns null for an unmapped
+// team (a Bison workspace with no portal_clients row yet).
+const BISON_TEAM_TO_PV: Record<string, string> = Object.fromEntries(
+  Object.entries(PV_TO_BISON_TEAM).map(([pv, team]) => [team, pv])
+)
+export function bisonTeamToWorkspace(teamId: string | number): string | null {
+  return BISON_TEAM_TO_PV[String(teamId)] ?? null
+}
+
 let _activeTeam: string | null = null
 
 // Bison's API is STATEFUL: switch-workspace changes the active workspace for the
@@ -292,6 +303,44 @@ export async function updateLeadStatus(
   try {
     await bison('PATCH', `/api/leads/${leadIdOrEmail}/update-status`, undefined, { status })
     return { ok: true }
+  } catch (err) {
+    return { ok: false, reason: String(err) }
+  }
+}
+
+// ── Tags ──────────────────────────────────────────────────────────────────────
+
+interface BisonTag { id: number; name: string }
+
+// Tag a lead as "lead" within a client's Bison team. Best-effort: switches into
+// the team, ensures a "lead" tag exists (creating it if absent), then attaches
+// it to the lead. Never throws — returns {ok:false, reason} so the caller (the
+// mark-as-lead flow) can record bison_tag_state without rolling back billing.
+export async function tagInBison(
+  teamId: string | number,
+  leadId: string | number,
+): Promise<{ ok: boolean; reason?: string }> {
+  if (teamId == null || teamId === '' || leadId == null || leadId === '') {
+    return { ok: false, reason: 'missing-team-or-lead' }
+  }
+  try {
+    return await withTeam(teamId, async () => {
+      // 1) Find or create the "lead" tag.
+      const list = await bison<{ data?: BisonTag[] }>('GET', '/api/tags')
+      const existing = (Array.isArray(list) ? (list as unknown as BisonTag[]) : list.data ?? [])
+        .find(t => (t.name ?? '').toLowerCase() === 'lead')
+      let tagId = existing?.id
+      if (!tagId) {
+        const created = await bison<{ data?: BisonTag }>('POST', '/api/tags', undefined, { name: 'lead' })
+        tagId = (created as { data?: BisonTag; id?: number }).data?.id
+          ?? (created as { id?: number }).id
+      }
+      if (!tagId) return { ok: false, reason: 'tag-create-failed' }
+
+      // 2) Attach the tag to the lead.
+      await bison('POST', `/api/leads/${leadId}/tags`, undefined, { tag_ids: [tagId] })
+      return { ok: true }
+    })
   } catch (err) {
     return { ok: false, reason: String(err) }
   }

@@ -561,6 +561,7 @@ export function AdminClientsClient() {
           }} className="text-slate-400 hover:text-white text-xs border border-slate-600 px-2 py-1 rounded">
             Backfill Leads
           </button>
+          <a href="/admin/unibox" className="text-slate-400 hover:text-white text-xs">Unibox</a>
           <button onClick={handleLogout} className="text-slate-400 hover:text-white text-xs">Sign out</button>
         </div>
       </header>

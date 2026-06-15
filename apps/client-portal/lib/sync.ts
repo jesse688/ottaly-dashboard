@@ -11,11 +11,14 @@ export async function enrichLead(workspaceId: string, leadEmail: string): Promis
       if (!leads.length) break
       const lead = leads.find(l => (l.email ?? '').toLowerCase() === leadEmail.toLowerCase())
       if (lead) {
+        // Ingest does NOT mark the lead billable. label stays NULL on insert and
+        // is PRESERVED on conflict — only the explicit mark-as-lead action sets
+        // label='INTERESTED' (which is what reconcileLeadCharges keys on).
         await pool.query(
           `INSERT INTO esp_leads (id, workspace_id, campaign_id, source, email, first_name, last_name, company_name, status, label, raw, created_at, updated_at)
-           VALUES ($1,$2,$3,'bison',$4,$5,$6,$7,$8,'INTERESTED',$9,$10,NOW())
+           VALUES ($1,$2,$3,'bison',$4,$5,$6,$7,$8,NULL,$9,$10,NOW())
            ON CONFLICT (id) DO UPDATE SET
-             email=$4, first_name=$5, last_name=$6, company_name=$7, status=$8, label='INTERESTED', raw=$9, updated_at=NOW()`,
+             email=$4, first_name=$5, last_name=$6, company_name=$7, status=$8, raw=$9, updated_at=NOW()`,
           [String(lead.id), workspaceId, null,
            lead.email, lead.first_name ?? null, lead.last_name ?? null,
            lead.company ?? null, lead.status ?? null,
@@ -43,14 +46,17 @@ export async function backfillWorkspace(
     const leads = await getLeads(page, 100, bisonTeamForWorkspace(workspaceId))
     if (!leads.length) break
     for (const lead of leads) {
+      // Backfill ingests leads + threads but does NOT mark them billable. label
+      // stays NULL on insert and is PRESERVED on conflict — only mark-as-lead
+      // sets label='INTERESTED'.
       await pool.query(
         `INSERT INTO esp_leads (
            id, workspace_id, campaign_id, source,
            email, first_name, last_name, company_name, status, label, raw, created_at, updated_at
-         ) VALUES ($1,$2,$3,'bison',$4,$5,$6,$7,$8,'INTERESTED',$9,$10,NOW())
+         ) VALUES ($1,$2,$3,'bison',$4,$5,$6,$7,$8,NULL,$9,$10,NOW())
          ON CONFLICT (id) DO UPDATE SET
            email=$4, first_name=$5, last_name=$6, company_name=$7,
-           status=$8, label='INTERESTED', raw=$9, updated_at=NOW()`,
+           status=$8, raw=$9, updated_at=NOW()`,
         [
           String(lead.id), workspaceId,
           null, // campaign_id not exposed on BisonLead
