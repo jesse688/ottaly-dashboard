@@ -457,10 +457,14 @@ export async function unsubscribeLead(
 
 // ── Webhooks ──────────────────────────────────────────────────────────────────
 
+// MUST point at THIS portal's webhook route: /api/webhooks/plusvibe (handles
+// Bison payloads via handleBison). The old default was a stale admin-legacy URL
+// + wrong path, so Bison replies never reached the unibox. Override with
+// BISON_WEBHOOK_TARGET_URL if the portal lives on a different host.
 const WEBHOOK_TARGET =
   process.env.BISON_WEBHOOK_TARGET_URL ||
   process.env.PLUSVIBE_WEBHOOK_TARGET_URL ||
-  'https://ottaly-git.oix3xv.easypanel.host/webhook/plusvibe-reply'
+  'https://login.ottaly.co.uk/api/webhooks/plusvibe'
 
 const WEBHOOK_EVENTS = ['lead_interested', 'lead_replied', 'untracked_reply_received']
 
@@ -470,13 +474,10 @@ export async function registerWebhook(): Promise<{ ok: boolean; reason?: string 
   if (!await getBisonKey()) return { ok: false, reason: 'no-api-key' }
   try {
     const list = await bison<{ data?: BisonHook[] }>('GET', '/api/webhook-url').catch(() => ({ data: [] as BisonHook[] }))
-    const covered = (list.data ?? []).some(h =>
-      h.url === WEBHOOK_TARGET ||
-      h.url.includes('/webhook/bison') ||
-      h.url.includes('/webhook/plusvibe') ||
-      h.events.includes('lead_interested')
-    )
-    if (covered) return { ok: true, reason: 'already-exists' }
+    // Require the EXACT correct URL — a stale wrong-URL hook must NOT count as
+    // covered, or we'd never create the right one and replies never arrive.
+    const exact = (list.data ?? []).some(h => h.url === WEBHOOK_TARGET)
+    if (exact) return { ok: true, reason: 'already-exists' }
 
     await bison('POST', '/api/webhook-url', undefined, {
       name: 'Ottaly Portal',
