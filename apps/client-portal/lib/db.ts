@@ -324,11 +324,11 @@ export function ready(): Promise<void> {
 
 // Kick off migration immediately; auto-register Bison webhook once DB is ready.
 ready().then(() => {
-  import('./bison').then(({ registerWebhook }) => {
-    registerWebhook().then(r => {
-      if (r.ok) console.log('[bison] webhook', r.reason)
-      else console.warn('[bison] webhook register failed:', r.reason)
-    })
+  import('./bison').then(({ registerWebhookAllWorkspaces }) => {
+    // Register in EVERY workspace (Bison webhooks are per-workspace).
+    registerWebhookAllWorkspaces().then(r => {
+      console.log('[bison] webhooks registered:', JSON.stringify(r.results))
+    }).catch(() => {})
   }).catch(() => {})
 })
 

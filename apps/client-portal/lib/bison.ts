@@ -470,24 +470,44 @@ const WEBHOOK_EVENTS = ['lead_interested', 'lead_replied', 'untracked_reply_rece
 
 interface BisonHook { id: number; name: string; url: string; events: string[] }
 
-export async function registerWebhook(): Promise<{ ok: boolean; reason?: string }> {
-  if (!await getBisonKey()) return { ok: false, reason: 'no-api-key' }
+// Register the webhook in the CURRENT workspace context (the active token's
+// workspace). Idempotent — skips if the exact URL is already registered.
+async function registerWebhookHere(): Promise<{ ok: boolean; reason?: string }> {
   try {
     const list = await bison<{ data?: BisonHook[] }>('GET', '/api/webhook-url').catch(() => ({ data: [] as BisonHook[] }))
-    // Require the EXACT correct URL — a stale wrong-URL hook must NOT count as
-    // covered, or we'd never create the right one and replies never arrive.
     const exact = (list.data ?? []).some(h => h.url === WEBHOOK_TARGET)
     if (exact) return { ok: true, reason: 'already-exists' }
-
     await bison('POST', '/api/webhook-url', undefined, {
-      name: 'Ottaly Portal',
-      url: WEBHOOK_TARGET,
-      events: WEBHOOK_EVENTS,
+      name: 'Ottaly Portal', url: WEBHOOK_TARGET, events: WEBHOOK_EVENTS,
     })
     return { ok: true, reason: 'created' }
   } catch (err) {
     return { ok: false, reason: String(err) }
   }
+}
+
+export async function registerWebhook(): Promise<{ ok: boolean; reason?: string }> {
+  if (!await getBisonKey()) return { ok: false, reason: 'no-api-key' }
+  return registerWebhookHere()
+}
+
+// Register the webhook in EVERY mapped workspace. Bison webhooks are
+// PER-WORKSPACE, so a single boot-time register only covers one team and every
+// other client's replies never fire. This loops all teams (each via withTeam so
+// the per-workspace token / switch is used) and registers in each.
+export async function registerWebhookAllWorkspaces(): Promise<{ ok: boolean; results: Record<string, string> }> {
+  if (!await getBisonKey()) return { ok: false, results: {} }
+  const teamIds = Array.from(new Set(Object.values(PV_TO_BISON_TEAM)))
+  const results: Record<string, string> = {}
+  for (const teamId of teamIds) {
+    try {
+      const r = await withTeam(teamId, () => registerWebhookHere())
+      results[teamId] = r.reason ?? (r.ok ? 'ok' : 'failed')
+    } catch (err) {
+      results[teamId] = `error: ${String(err).slice(0, 80)}`
+    }
+  }
+  return { ok: true, results }
 }
 
 // Best-effort sync flag (env presence). The real key may also come from the
