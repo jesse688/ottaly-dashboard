@@ -136,7 +136,7 @@ export function AdminClientsClient() {
 
   // Logins (multi-workspace access) modal
   const [loginsClient, setLoginsClient]       = useState<PortalClient | null>(null)
-  const [logins, setLogins]                   = useState<{ identifier: string; display_name: string | null; has_code: boolean; workspaces: { clientId: string; company: string; workspaceId: string }[] }[] | null>(null)
+  const [logins, setLogins]                   = useState<{ identifier: string; display_name: string | null; notify: boolean; has_code: boolean; workspaces: { clientId: string; company: string; workspaceId: string }[] }[] | null>(null)
   const [newLoginEmail, setNewLoginEmail]     = useState('')
   const [newLoginName, setNewLoginName]       = useState('')
   const [newLoginWs, setNewLoginWs]           = useState<string[]>([])
@@ -328,6 +328,14 @@ export function AdminClientsClient() {
       body: JSON.stringify({ identifier, clientId }),
     })
     openLogins(loginsClient)
+  }
+  async function toggleNotify(identifier: string, notify: boolean) {
+    setLogins(prev => prev?.map(l => l.identifier === identifier ? { ...l, notify } : l) ?? null)
+    if (!loginsClient) return
+    await fetch(`/api/admin/clients/${loginsClient.id}/logins`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier, notify }),
+    }).catch(() => {})
   }
   async function reinviteLogin(identifier: string) {
     if (!loginsClient) return
@@ -1125,7 +1133,11 @@ export function AdminClientsClient() {
                                 : <span className="text-amber-600">● Invite pending</span>}
                             </div>
                           </div>
-                          <div className="flex items-center gap-2 shrink-0">
+                          <div className="flex items-center gap-3 shrink-0">
+                            <label className="flex items-center gap-1 text-xs text-gray-600 cursor-pointer" title="Email this user when a new lead arrives">
+                              <input type="checkbox" checked={l.notify !== false} onChange={e => toggleNotify(l.identifier, e.target.checked)} />
+                              Notify
+                            </label>
                             {!l.has_code && <button onClick={() => reinviteLogin(l.identifier)} className="text-xs text-indigo-600 hover:text-indigo-800">Invite link</button>}
                           </div>
                         </div>

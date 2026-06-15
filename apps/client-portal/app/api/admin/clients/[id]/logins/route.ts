@@ -22,6 +22,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const r = await pool.query(
     `SELECT ua.identifier,
             MAX(ua.display_name) AS display_name,
+            bool_or(ua.notify) AS notify,
             bool_or(ua.password_hash IS NOT NULL AND ua.password_hash <> '') AS has_code,
             json_agg(json_build_object(
               'clientId', c.id, 'company', c.company_name, 'workspaceId', c.workspace_id
@@ -93,6 +94,20 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
   await pool.query(
     `DELETE FROM portal_user_access WHERE lower(identifier) = lower($1) AND client_id = $2`,
     [identifier, clientId]
+  )
+  return NextResponse.json({ ok: true })
+}
+
+// PATCH { identifier, notify } — toggle whether this user gets lead-notification
+// emails (applies across all their workspace rows).
+export async function PATCH(req: NextRequest) {
+  if (!await getAdminSession()) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const body = await req.json().catch(() => ({})) as { identifier?: string; notify?: boolean }
+  const identifier = (body.identifier ?? '').trim()
+  if (!identifier) return NextResponse.json({ error: 'identifier required' }, { status: 400 })
+  await pool.query(
+    `UPDATE portal_user_access SET notify = $1 WHERE lower(identifier) = lower($2)`,
+    [body.notify !== false, identifier]
   )
   return NextResponse.json({ ok: true })
 }

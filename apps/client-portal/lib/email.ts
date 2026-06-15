@@ -186,6 +186,42 @@ export async function notifyClientOfLead(workspaceId: string, leadId: string): P
       await pool.query(`UPDATE portal_lead_notifications SET status = 'failed' WHERE client_id = $1 AND lead_id = $2`, [c.id, leadId]).catch(() => {})
     }
   }
+
+  // Also email each per-user login that opted in (notify=true) for this
+  // workspace. Deduped per (identifier, lead). Uses the first client's context
+  // (balance/locked) since they share the workspace.
+  const baseClient = clients.rows[0]
+  if (baseClient) {
+    const users = await pool.query(
+      `SELECT DISTINCT lower(ua.identifier) AS email, ua.display_name
+         FROM portal_user_access ua
+         JOIN portal_clients c ON c.id = ua.client_id AND c.active = true
+        WHERE c.workspace_id = $1 AND ua.notify = TRUE
+          AND ua.identifier IS NOT NULL AND ua.identifier <> ''`,
+      [workspaceId]
+    )
+    if (users.rows.length) {
+      const balance = await getBalance(baseClient.id)
+      const locked = (await getLockedLeadIds(baseClient.id)).has(leadId)
+      const leadMessage = locked ? '' : await getLeadMessage(workspaceId, lead.rows[0].email)
+      for (const u of users.rows) {
+        // Don't double-send to an address already emailed as the client row.
+        if (baseClient.email && u.email === String(baseClient.email).toLowerCase()) continue
+        const claim = await pool.query(
+          `INSERT INTO portal_user_lead_notifications (identifier, lead_id, workspace_id)
+           VALUES ($1, $2, $3) ON CONFLICT (identifier, lead_id) DO NOTHING RETURNING identifier`,
+          [u.email, leadId, workspaceId]
+        )
+        if (!claim.rows.length) continue // already sent to this user
+        const recipient = { contact_name: u.display_name, company_name: baseClient.company_name }
+        const { subject, body } = await buildLeadEmail(recipient, lead.rows[0], balance, locked, leadMessage)
+        const res = await sendEmail(u.email, subject, body, `lead/u/${u.email}/${leadId}`)
+        if (res.ok) anySent = true
+        else await pool.query(`DELETE FROM portal_user_lead_notifications WHERE identifier = $1 AND lead_id = $2`, [u.email, leadId]).catch(() => {})
+      }
+    }
+  }
+
   return { sent: anySent }
 }
 

@@ -61,6 +61,17 @@ async function runMigration() {
       // The person's name for this login — used for the welcome greeting + shown
       // in the admin Users list (so multiple users per client aren't just emails).
       `ALTER TABLE portal_user_access ADD COLUMN IF NOT EXISTS display_name TEXT`,
+      // Per-user lead-notification opt-in. Default TRUE so new users get alerts
+      // unless unticked. Admin toggles it in the Users modal.
+      `ALTER TABLE portal_user_access ADD COLUMN IF NOT EXISTS notify BOOLEAN NOT NULL DEFAULT TRUE`,
+      // Dedup for per-user lead emails (separate from the client-row dedup).
+      `CREATE TABLE IF NOT EXISTS portal_user_lead_notifications (
+        identifier TEXT NOT NULL,
+        lead_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (identifier, lead_id)
+      )`,
       `CREATE TABLE IF NOT EXISTS portal_client_labels (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         client_id UUID NOT NULL REFERENCES portal_clients(id) ON DELETE CASCADE,
