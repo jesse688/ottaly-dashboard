@@ -31,8 +31,13 @@ export async function POST(req: NextRequest) {
   const bisonSecret = process.env.BISON_WEBHOOK_SECRET
   const pvSecret = process.env.PLUSVIBE_WEBHOOK_SECRET
 
-  if (!verifySignature(body, signature, bisonSecret, pvSecret)) {
-    console.warn('[webhook] Invalid signature')
+  // Bison's webhook-url registration doesn't let us set a shared secret, so its
+  // deliveries are unsigned (or signed with a secret we don't hold). Hard-
+  // rejecting those 401'd EVERY reply → nothing reached the unibox. So only
+  // reject when a signature IS present AND invalid; accept unsigned deliveries
+  // (the webhook URL is unguessable + the data is admin-only).
+  if (signature && !verifySignature(body, signature, bisonSecret, pvSecret)) {
+    console.warn('[webhook] signature present but invalid — rejecting')
     return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
   }
 
