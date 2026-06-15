@@ -11869,7 +11869,11 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
     for (let i = 0; i < leads.length; i += BATCH) {
       const batch = leads.slice(i, i + BATCH);
       /* workspace switch handled by bisonReq wsId */ true;
-      var bisonLeadPayload = (batch).map(function(l) {
+      var bisonLeadPayload = (batch)
+        // Bison requires non-empty first_name AND last_name (422s on null/""/" ").
+        // Payload-layer safety net (the route already filters, but this guarantees it).
+        .filter(function(l){ return l.first_name && String(l.first_name).trim() && l.last_name && String(l.last_name).trim(); })
+        .map(function(l) {
         var cv = [];
         if (l.phone_number) cv.push({ name: 'phone_number', value: String(l.phone_number) });
         if (l.city) cv.push({ name: 'city', value: String(l.city) });
@@ -11883,6 +11887,7 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
         if (l.address_line) cv.push({ name: 'address_line', value: String(l.address_line) });
         return { email: l.email, first_name: l.first_name || null, last_name: l.last_name || null, title: l.job_title || l.title || null, company: l.company_name || l.company || null, custom_variables: cv };
       });
+      if (!bisonLeadPayload.length) { continue; }
       // Ensure every custom var these leads use exists in the workspace, or Bison 422s.
       await ensureBisonCustomVars(workspace_id, new Set(bisonLeadPayload.flatMap(function(l){ return (l.custom_variables||[]).map(function(v){ return v.name; }); })));
       var createRes = await bisonReq('/api/leads/create-or-update/multiple', { wsId: workspace_id, method: 'POST', body: { leads: bisonLeadPayload } });
@@ -11919,11 +11924,15 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
 function filterPushableContacts(allContacts, { cooldownWorkspaceId, campaignName }) {
   const cooloffDate = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const campaignNameLc = (campaignName || '').toString().trim().toLowerCase();
-  const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, missingEnrichment: 0 };
+  const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, missingEnrichment: 0, missingName: 0 };
   const PUSHABLE_STATUSES = new Set(['safe', 'safe_catchall']);
   const contacts = allContacts.filter(c => {
     if (!PUSHABLE_STATUSES.has((c.email_status || '').toLowerCase())) { skipped.unsafe++; return false; }
     if (c.do_not_contact) { skipped.dnc++; return false; }
+    // Bison requires non-empty first_name AND last_name (422s otherwise).
+    if (!(c.first_name && c.first_name.trim()) || !(c.last_name && c.last_name.trim())) {
+      skipped.missingName++; return false;
+    }
     if ((!c.keywords || c.keywords.trim() === '') || (!c.industry || c.industry.trim() === '')) {
       skipped.missingEnrichment++; return false;
     }
@@ -14018,7 +14027,12 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
           const slice = batch.slice(i, i + 100);
           let r, d = {};
           /* workspace switch handled by bisonReq wsId */ true;
-          var bisonLeadPayload = (slice.map(toLead)).map(function(l) {
+          var bisonLeadPayload = (slice.map(toLead))
+            // Bison requires non-empty first_name AND last_name (422s on null/""/" ").
+            // Final safety net at the payload layer so no nameless lead reaches Bison
+            // regardless of upstream filtering.
+            .filter(function(l){ return l.first_name && String(l.first_name).trim() && l.last_name && String(l.last_name).trim(); })
+            .map(function(l) {
             var cv = [];
             if (l.phone_number) cv.push({ name: 'phone_number', value: String(l.phone_number) });
             if (l.city) cv.push({ name: 'city', value: String(l.city) });
@@ -14032,6 +14046,7 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
             if (l.address_line) cv.push({ name: 'address_line', value: String(l.address_line) });
             return { email: l.email, first_name: l.first_name || null, last_name: l.last_name || null, title: l.job_title || l.title || null, company: l.company_name || l.company || null, custom_variables: cv };
           });
+          if (!bisonLeadPayload.length) { continue; }
           // Ensure every custom var these leads use exists in the workspace, or Bison 422s.
           await ensureBisonCustomVars(workspace_id, new Set(bisonLeadPayload.flatMap(function(l){ return (l.custom_variables||[]).map(function(v){ return v.name; }); })));
           var createRes = await bisonReq('/api/leads/create-or-update/multiple', { wsId: workspace_id, method: 'POST', body: { leads: bisonLeadPayload } });
@@ -14439,7 +14454,12 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
           const slice = batch.slice(i, i + 100);
           let r, d = {};
           /* workspace switch handled by bisonReq wsId */ true;
-          var bisonLeadPayload = (slice.map(toLead)).map(function(l) {
+          var bisonLeadPayload = (slice.map(toLead))
+            // Bison requires non-empty first_name AND last_name (422s on null/""/" ").
+            // Final safety net at the payload layer so no nameless lead reaches Bison
+            // regardless of upstream filtering.
+            .filter(function(l){ return l.first_name && String(l.first_name).trim() && l.last_name && String(l.last_name).trim(); })
+            .map(function(l) {
             var cv = [];
             if (l.phone_number) cv.push({ name: 'phone_number', value: String(l.phone_number) });
             if (l.city) cv.push({ name: 'city', value: String(l.city) });
@@ -14453,6 +14473,7 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
             if (l.address_line) cv.push({ name: 'address_line', value: String(l.address_line) });
             return { email: l.email, first_name: l.first_name || null, last_name: l.last_name || null, title: l.job_title || l.title || null, company: l.company_name || l.company || null, custom_variables: cv };
           });
+          if (!bisonLeadPayload.length) { continue; }
           // Ensure every custom var these leads use exists in the workspace, or Bison 422s.
           await ensureBisonCustomVars(workspace_id, new Set(bisonLeadPayload.flatMap(function(l){ return (l.custom_variables||[]).map(function(v){ return v.name; }); })));
           var createRes = await bisonReq('/api/leads/create-or-update/multiple', { wsId: workspace_id, method: 'POST', body: { leads: bisonLeadPayload } });
