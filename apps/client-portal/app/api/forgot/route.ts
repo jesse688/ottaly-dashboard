@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import pool from '@/lib/db'
 import { generateInviteToken, portalBaseUrl } from '@/lib/auth'
-import { sendEmail } from '@/lib/email'
+import { sendEmail, renderTemplatePair } from '@/lib/email'
 import { notifyAdmin } from '@/lib/notify'
 
 // POST — client forgot their code. Self-service: if the account exists, mint a
@@ -27,11 +27,8 @@ export async function POST(req: NextRequest) {
       `UPDATE portal_user_access SET invite_token = $1 WHERE lower(identifier) = lower($2)`,
       [token, ua.rows[0].identifier]
     )
-    await sendEmail(
-      ua.rows[0].identifier,
-      'Reset your Ottaly access code',
-      `You asked to reset your Ottaly login code.\n\nChoose a new code here (link expires after use):\n${baseUrl}/invite/u/${token}\n\nIf you didn't request this, you can ignore this email.`,
-    ).catch(() => {})
+    const { subject, body } = await renderTemplatePair('reset_subject', 'reset_body', { reset_url: `${baseUrl}/invite/u/${token}` })
+    await sendEmail(ua.rows[0].identifier, subject, body).catch(() => {})
     return NextResponse.json({ ok: true })
   }
 
@@ -46,11 +43,10 @@ export async function POST(req: NextRequest) {
     const token = generateInviteToken()
     await pool.query(`UPDATE portal_clients SET invite_token = $1 WHERE id = $2`, [token, c.id])
     const sent = c.email
-      ? await sendEmail(
-          c.email,
-          'Reset your Ottaly access code',
-          `You asked to reset your Ottaly login code.\n\nChoose a new code here (link expires after use):\n${baseUrl}/invite/${token}\n\nIf you didn't request this, you can ignore this email.`,
-        ).catch(() => ({ ok: false }))
+      ? await (async () => {
+          const { subject, body } = await renderTemplatePair('reset_subject', 'reset_body', { reset_url: `${baseUrl}/invite/${token}` })
+          return sendEmail(c.email, subject, body)
+        })().catch(() => ({ ok: false }))
       : { ok: false }
     // Belt-and-braces: if we couldn't email them, fall back to alerting the team.
     if (!sent.ok) {

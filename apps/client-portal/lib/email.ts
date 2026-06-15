@@ -18,6 +18,11 @@ export const DEFAULT_TEMPLATES = {
   invoice_subject: 'Ottaly — New Invoice',
   invoice_body:
     'Hi {first_name},\n\nYou have a new invoice: {description} — {amount}.\n\nLog in to view and pay it:\n{login_url}/invoices\n\nBest,\nThe Ottaly Team',
+  // 4th client email: access-code reset (sent from /api/forgot). {reset_url} is
+  // the invite link they click to choose a new code.
+  reset_subject: 'Reset your Ottaly access code',
+  reset_body:
+    "Hi,\n\nYou asked to reset your Ottaly login code.\n\nChoose a new code here (link expires after use):\n{reset_url}\n\nIf you didn't request this, you can ignore this email.\n\nBest,\nThe Ottaly Team",
 }
 export type TemplateKey = keyof typeof DEFAULT_TEMPLATES
 
@@ -42,6 +47,15 @@ function esc(v: string): string {
 // Fill {merge_tags} in a template string (values HTML-escaped).
 function render(tpl: string, vars: Record<string, string>): string {
   return tpl.replace(/\{(\w+)\}/g, (_, k) => esc(vars[k] ?? ''))
+}
+
+// Render a single subject+body template pair (admin-editable, merged over
+// defaults). Used by the forgot-code flow for the reset email.
+export async function renderTemplatePair(
+  subjectKey: TemplateKey, bodyKey: TemplateKey, vars: Record<string, string>,
+): Promise<{ subject: string; body: string }> {
+  const tpl = await getTemplates()
+  return { subject: render(tpl[subjectKey], vars), body: render(tpl[bodyKey], vars) }
 }
 
 // Low-level send via Resend. No-ops (logs) if RESEND_API_KEY isn't configured.

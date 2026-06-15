@@ -701,10 +701,19 @@ export function AdminClientsClient() {
                         <textarea rows={6} value={tpl.notif_locked_body} onChange={e => setTpl({ ...tpl, notif_locked_body: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm font-mono" />
                       </div>
                     </div>
-                    <div className="border-t border-gray-100 pt-4">
-                      <p className="text-xs font-semibold text-gray-700 mb-1">Payment details (shown when a client pays an invoice)</p>
-                      <textarea rows={4} value={tpl.payment_instructions ?? ''} onChange={e => setTpl({ ...tpl, payment_instructions: e.target.value })} placeholder="Bank name, account, sort code, reference…" className="w-full px-3 py-2 mb-2 rounded-lg border border-gray-200 text-sm" />
-                      <input value={tpl.payment_link ?? ''} onChange={e => setTpl({ ...tpl, payment_link: e.target.value })} placeholder="Optional pay-online link (e.g. Stripe URL)" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm" />
+                    <div className="grid md:grid-cols-2 gap-4 border-t border-gray-100 pt-4">
+                      <div>
+                        <p className="text-xs font-semibold text-gray-700 mb-1">New invoice email</p>
+                        <p className="text-[11px] text-gray-400 mb-1.5">Tags: <code className="bg-gray-100 px-1 rounded">{'{first_name}'}</code> <code className="bg-gray-100 px-1 rounded">{'{description}'}</code> <code className="bg-gray-100 px-1 rounded">{'{amount}'}</code> <code className="bg-gray-100 px-1 rounded">{'{login_url}'}</code></p>
+                        <input value={tpl.invoice_subject ?? ''} onChange={e => setTpl({ ...tpl, invoice_subject: e.target.value })} className="w-full px-3 py-2 mb-2 rounded-lg border border-gray-200 text-sm" placeholder="Subject" />
+                        <textarea rows={6} value={tpl.invoice_body ?? ''} onChange={e => setTpl({ ...tpl, invoice_body: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm font-mono" />
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold text-gray-700 mb-1">Reset access code email</p>
+                        <p className="text-[11px] text-gray-400 mb-1.5">Tag: <code className="bg-gray-100 px-1 rounded">{'{reset_url}'}</code> (the link they click to set a new code)</p>
+                        <input value={tpl.reset_subject ?? ''} onChange={e => setTpl({ ...tpl, reset_subject: e.target.value })} className="w-full px-3 py-2 mb-2 rounded-lg border border-gray-200 text-sm" placeholder="Subject" />
+                        <textarea rows={6} value={tpl.reset_body ?? ''} onChange={e => setTpl({ ...tpl, reset_body: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm font-mono" />
+                      </div>
                     </div>
                     <div className="border-t border-gray-100 pt-4">
                       <p className="text-xs font-semibold text-gray-700 mb-1">Extract from email signature</p>
@@ -841,7 +850,8 @@ export function AdminClientsClient() {
                         <td className="px-4 py-2.5">
                           <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${client.active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>{client.active ? 'Active' : 'Disabled'}</span>
                         </td>
-                        <td className="px-4 py-2.5 text-right">
+                        <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                          <button onClick={() => openLogins(client)} className="text-xs font-medium text-indigo-600 hover:text-indigo-800 px-2 py-1 rounded hover:bg-indigo-50 mr-1" title="Manage users for this client">Users</button>
                           <div className="relative inline-block text-left">
                             <button onClick={() => setMenuId(menuId === client.id ? null : client.id)} className="text-xs font-medium text-indigo-600 hover:text-indigo-800 px-2 py-1 rounded hover:bg-indigo-50 whitespace-nowrap" aria-label="Actions">Actions ▾</button>
                             {menuId === client.id && (
@@ -851,7 +861,7 @@ export function AdminClientsClient() {
                                   {[
                                     { label: 'View as', fn: () => viewAsClient(client), cls: 'text-emerald-700 font-medium' },
                                     { label: 'Settings', fn: () => openSettings(client), cls: 'text-gray-700' },
-                                    { label: 'Logins', fn: () => openLogins(client), cls: 'text-gray-700' },
+                                    { label: 'Users', fn: () => openLogins(client), cls: 'text-gray-700' },
                                     { label: 'Invite link', fn: () => makeInvite(client), cls: 'text-gray-700' },
                                     { label: 'Test email', fn: () => sendTest(client), cls: 'text-gray-700' },
                                     { label: '➕ Create test lead', fn: () => createTestLead(client), cls: 'text-gray-700' },
@@ -1088,7 +1098,7 @@ export function AdminClientsClient() {
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setLoginsClient(null)}>
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-gray-100">
-              <h2 className="text-sm font-semibold text-gray-900">Logins — {loginsClient.company_name}</h2>
+              <h2 className="text-sm font-semibold text-gray-900">Users — {loginsClient.company_name}</h2>
               <button onClick={() => setLoginsClient(null)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
             </div>
             <div className="p-5 space-y-5">
