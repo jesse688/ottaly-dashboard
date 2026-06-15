@@ -139,7 +139,7 @@ interface BisonPayload {
   event: { type: string; workspace_id?: string | number; workspace_name?: string }
   data: {
     lead?: { id?: string | number; email?: string; first_name?: string; last_name?: string; company_name?: string; status?: string; campaign_id?: string | number; [key: string]: unknown }
-    reply?: { id?: string | number; lead_id?: string | number; folder?: string; html_body?: string; text_body?: string; subject?: string; from_email_address?: string; primary_to_email_address?: string; date_received?: string; raw_message_id?: string; [key: string]: unknown }
+    reply?: { id?: string | number; lead_id?: string | number; folder?: string; html_body?: string; text_body?: string; subject?: string; email_subject?: string; from_email_address?: string; primary_to_email_address?: string; date_received?: string; raw_message_id?: string; [key: string]: unknown }
   }
 }
 
@@ -186,6 +186,8 @@ async function handleBison(raw: Record<string, unknown>) {
     const direction = reply.folder?.toLowerCase() === 'sent' ? 'OUT' : 'IN'
     const replyId = String(reply.id)
     const leadBisonId = lead?.id ? String(lead.id) : (reply.lead_id ? String(reply.lead_id) : null)
+    // Bison's reply payload puts the subject in `email_subject` (not `subject`).
+    const replySubject = reply.email_subject ?? reply.subject ?? null
 
     let portalEmailId: string | null = null
     if (leadEmail && mappedWorkspaceId) {
@@ -195,7 +197,7 @@ async function handleBison(raw: Record<string, unknown>) {
          ON CONFLICT (id) DO NOTHING`,
         [replyId, mappedWorkspaceId, leadBisonId,
          leadEmail, direction,
-         reply.subject ?? null, reply.html_body ?? null, reply.text_body ?? null,
+         replySubject, reply.html_body ?? null, reply.text_body ?? null,
          reply.text_body?.slice(0, 200) ?? null,
          reply.from_email_address ?? null, reply.primary_to_email_address ?? null,
          direction === 'IN' ? 1 : 0, reply.raw_message_id ?? null,
@@ -250,7 +252,7 @@ async function handleBison(raw: Record<string, unknown>) {
         [rawTeamId || 'unknown', replyId, mappedWorkspaceId, portalEmailId,
          // Primary email = the matched original lead if forwarded, else the row email.
          matchedLeadEmail || rowEmail, leadBisonId,
-         reply.subject ?? null, reply.text_body?.slice(0, 500) ?? null,
+         replySubject, reply.text_body?.slice(0, 500) ?? null,
          folder, JSON.stringify(reply),
          reply.date_received ?? new Date().toISOString(),
          isForwarded, senderEmail || null, matchedLeadEmail, matchedBy]
