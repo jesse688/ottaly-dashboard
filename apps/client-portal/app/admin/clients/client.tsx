@@ -136,8 +136,9 @@ export function AdminClientsClient() {
 
   // Logins (multi-workspace access) modal
   const [loginsClient, setLoginsClient]       = useState<PortalClient | null>(null)
-  const [logins, setLogins]                   = useState<{ identifier: string; has_code: boolean; workspaces: { clientId: string; company: string; workspaceId: string }[] }[] | null>(null)
+  const [logins, setLogins]                   = useState<{ identifier: string; display_name: string | null; has_code: boolean; workspaces: { clientId: string; company: string; workspaceId: string }[] }[] | null>(null)
   const [newLoginEmail, setNewLoginEmail]     = useState('')
+  const [newLoginName, setNewLoginName]       = useState('')
   const [newLoginWs, setNewLoginWs]           = useState<string[]>([])
   const [loginsBusy, setLoginsBusy]           = useState(false)
 
@@ -300,7 +301,7 @@ export function AdminClientsClient() {
 
   // ── Logins (multi-workspace access) ──
   function openLogins(c: PortalClient) {
-    setLoginsClient(c); setLogins(null); setNewLoginEmail(''); setNewLoginWs([c.id])
+    setLoginsClient(c); setLogins(null); setNewLoginEmail(''); setNewLoginName(''); setNewLoginWs([c.id])
     fetch(`/api/admin/clients/${c.id}/logins`).then(r => r.json())
       .then(d => setLogins(d.logins ?? [])).catch(() => setLogins([]))
   }
@@ -309,14 +310,14 @@ export function AdminClientsClient() {
     setLoginsBusy(true)
     const res = await fetch(`/api/admin/clients/${loginsClient.id}/logins`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier: newLoginEmail.trim(), workspaceIds: newLoginWs.length ? newLoginWs : [loginsClient.id] }),
+      body: JSON.stringify({ identifier: newLoginEmail.trim(), name: newLoginName.trim(), workspaceIds: newLoginWs.length ? newLoginWs : [loginsClient.id] }),
     })
     const d = await res.json() as { ok?: boolean; hasCode?: boolean; inviteUrl?: string; error?: string }
     setLoginsBusy(false)
     if (!res.ok) { alert(d.error ?? 'Could not add login'); return }
     if (d.inviteUrl) prompt(`Login added. Send ${newLoginEmail.trim()} this link to set their access code (unlocks every workspace granted):`, d.inviteUrl)
     else alert('Login added — it reuses this person’s existing access code.')
-    setNewLoginEmail('')
+    setNewLoginEmail(''); setNewLoginName('')
     openLogins(loginsClient)
   }
   async function removeLogin(identifier: string, clientId: string) {
@@ -1117,7 +1118,8 @@ export function AdminClientsClient() {
                       <div key={l.identifier} className="border border-gray-100 rounded-lg p-3">
                         <div className="flex items-center justify-between gap-2">
                           <div className="min-w-0">
-                            <div className="text-sm font-mono text-gray-800 truncate">{l.identifier}</div>
+                            {l.display_name && <div className="text-sm font-semibold text-gray-900 truncate">{l.display_name}</div>}
+                            <div className="text-xs font-mono text-gray-600 truncate">{l.identifier}</div>
                             <div className="text-xs mt-0.5">
                               {l.has_code
                                 ? <span className="text-green-600">● Code set</span>
@@ -1144,7 +1146,10 @@ export function AdminClientsClient() {
 
               {/* Add a login */}
               <div className="border-t border-gray-100 pt-4">
-                <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Add a login</h3>
+                <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Add a user</h3>
+                <label className="block text-xs text-gray-500 mb-1">Name <span className="text-gray-400">(shown on their welcome screen)</span></label>
+                <input value={newLoginName} onChange={e => setNewLoginName(e.target.value)} placeholder="e.g. Sarah"
+                  className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 mb-3" />
                 <label className="block text-xs text-gray-500 mb-1">Email (their login identifier)</label>
                 <input type="email" value={newLoginEmail} onChange={e => setNewLoginEmail(e.target.value)} placeholder="person@company.com" autoCapitalize="none"
                   className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 mb-3" />

@@ -21,6 +21,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
   const r = await pool.query(
     `SELECT ua.identifier,
+            MAX(ua.display_name) AS display_name,
             bool_or(ua.password_hash IS NOT NULL AND ua.password_hash <> '') AS has_code,
             json_agg(json_build_object(
               'clientId', c.id, 'company', c.company_name, 'workspaceId', c.workspace_id
@@ -42,8 +43,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   if (!await getAdminSession()) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   const { id } = await params
-  const body = await req.json().catch(() => ({})) as { identifier?: string; workspaceIds?: string[] }
+  const body = await req.json().catch(() => ({})) as { identifier?: string; name?: string; workspaceIds?: string[] }
   const identifier = (body.identifier ?? '').trim()
+  const displayName = (body.name ?? '').trim() || null
   if (!identifier) return NextResponse.json({ error: 'Email/identifier is required.' }, { status: 400 })
 
   const targets = (body.workspaceIds && body.workspaceIds.length ? body.workspaceIds : [id])
@@ -64,12 +66,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   for (const clientId of targets) {
     await pool.query(
-      `INSERT INTO portal_user_access (identifier, password_hash, invite_token, client_id)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO portal_user_access (identifier, display_name, password_hash, invite_token, client_id)
+       VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (identifier, client_id) DO UPDATE
-         SET password_hash = COALESCE(portal_user_access.password_hash, EXCLUDED.password_hash),
+         SET display_name  = COALESCE(EXCLUDED.display_name, portal_user_access.display_name),
+             password_hash = COALESCE(portal_user_access.password_hash, EXCLUDED.password_hash),
              invite_token  = COALESCE(portal_user_access.invite_token,  EXCLUDED.invite_token)`,
-      [identifier, hash, token, clientId]
+      [identifier, displayName, hash, token, clientId]
     )
   }
 

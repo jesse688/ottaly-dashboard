@@ -58,6 +58,9 @@ async function runMigration() {
       `ALTER TABLE portal_user_access ALTER COLUMN password_hash DROP NOT NULL`,
       `ALTER TABLE portal_user_access ADD COLUMN IF NOT EXISTS invite_token TEXT`,
       `CREATE INDEX IF NOT EXISTS idx_portal_user_access_invite ON portal_user_access (invite_token) WHERE invite_token IS NOT NULL`,
+      // The person's name for this login — used for the welcome greeting + shown
+      // in the admin Users list (so multiple users per client aren't just emails).
+      `ALTER TABLE portal_user_access ADD COLUMN IF NOT EXISTS display_name TEXT`,
       `CREATE TABLE IF NOT EXISTS portal_client_labels (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         client_id UUID NOT NULL REFERENCES portal_clients(id) ON DELETE CASCADE,

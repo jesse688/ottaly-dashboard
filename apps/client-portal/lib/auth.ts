@@ -77,7 +77,7 @@ export async function validateClientCredentials(
   // 1) Multi-workspace logins: portal_user_access maps one identifier to one or
   //    more client workspaces. Accept the normalised OR exact-case hash.
   const access = await pool.query(
-    `SELECT ua.password_hash, c.id AS client_id, c.workspace_id, c.company_name, c.contact_name, c.email
+    `SELECT ua.password_hash, ua.display_name, c.id AS client_id, c.workspace_id, c.company_name, c.contact_name, c.email
      FROM portal_user_access ua
      JOIN portal_clients c ON c.id = ua.client_id AND c.active = true
      WHERE lower(ua.identifier) = lower($1)
@@ -95,7 +95,8 @@ export async function validateClientCredentials(
       clientId: first.client_id,
       workspaceId: first.workspace_id,
       companyName: first.company_name,
-      contactName: first.contact_name ?? '',
+      // Greet the actual USER by their own name; fall back to the client contact.
+      contactName: first.display_name || first.contact_name || '',
       email: first.email ?? '',
       workspaces,
     }
