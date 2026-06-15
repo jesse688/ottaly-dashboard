@@ -45,7 +45,7 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-h
 .clients-grid{display:flex;flex-direction:column;gap:.75rem}
 .client-card{background:var(--card);border-radius:10px;border:1px solid var(--border);overflow:hidden;transition:box-shadow .15s}
 .client-card:hover{box-shadow:0 2px 12px rgba(0,0,0,.07)}
-.client-row{display:grid;grid-template-columns:220px repeat(6,1fr) 48px;align-items:center;gap:0;cursor:pointer;padding:.75rem 1rem}
+.client-row{display:grid;grid-template-columns:220px repeat(7,1fr) 48px;align-items:center;gap:0;cursor:pointer;padding:.75rem 1rem}
 .client-name{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .client-sub{font-size:11px;color:var(--muted);margin-top:1px}
 .stat-cell{text-align:right;padding:0 .5rem}
@@ -66,7 +66,7 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-h
 .chart-wrap{position:relative;height:220px}
 
 /* Header row labels */
-.stats-header{display:grid;grid-template-columns:220px repeat(6,1fr) 48px;align-items:center;gap:0;padding:.5rem 1rem;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)}
+.stats-header{display:grid;grid-template-columns:220px repeat(7,1fr) 48px;align-items:center;gap:0;padding:.5rem 1rem;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)}
 .stats-header>div:not(:first-child){text-align:right;padding:0 .5rem}
 
 /* All Workspaces aggregate row — distinguished from individual clients */
@@ -142,6 +142,7 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-h
     <div class="stats-header">
       <div>Client</div>
       <div>Reply Rate</div>
+      <div>Human RR</div>
       <div>Bounce Rate</div>
       <div>RTL</div>
       <div>Leads</div>
@@ -301,15 +302,20 @@ function renderProviderCards() {
             : buildAllWorkspaces(_data?.workspaces || []);
   if (!all) { wrap.innerHTML = '<div style="grid-column:1/-1;font-size:12px;color:var(--muted)">Loading…</div>'; return; }
   const t = effectiveTotals(all);
-  const rrClass = t.replyRate >= 0.025 ? 'good' : t.replyRate >= 0.01 ? 'med' : t.replyRate > 0 ? 'bad' : '';
+  // Reply Rate = human + OOO (someone's mailbox responded); Human RR = genuine
+  // human replies only. Both sourced from the portal's classified replies.
+  const allRR = t.sent > 0 ? (t.replies + (t.oooReplies || 0)) / t.sent : 0;
+  const rrClass = allRR >= 0.025 ? 'good' : allRR >= 0.01 ? 'med' : allRR > 0 ? 'bad' : '';
+  const hrrClass = t.replyRate >= 0.02 ? 'good' : t.replyRate >= 0.008 ? 'med' : t.replyRate > 0 ? 'bad' : '';
   const brClass = t.bounceRate >= 0.05 ? 'bad' : t.bounceRate >= 0.02 ? 'med' : 'good';
   const rtlClass = t.rtl >= 0.1 ? 'good' : t.rtl >= 0.05 ? 'med' : '';
   const cards = [
-    ['Sent',        fmtNum(t.sent),    ''],
-    ['Reply Rate',  pct(t.replyRate),  rrClass],
-    ['Bounce Rate', pct(t.bounceRate), brClass],
-    ['Leads',       fmtNum(t.leads),   t.leads>0?'good':''],
-    ['RTL',         pct(t.rtl),        rtlClass],
+    ['Sent',          fmtNum(t.sent),    ''],
+    ['Reply Rate',    pct(allRR),        rrClass],
+    ['Human RR',      pct(t.replyRate),  hrrClass],
+    ['Bounce Rate',   pct(t.bounceRate), brClass],
+    ['Leads',         fmtNum(t.leads),   t.leads>0?'good':''],
+    ['RTL',           pct(t.rtl),        rtlClass],
   ];
   wrap.innerHTML = cards.map(([lbl,val,cls]) =>
     `<div class="prov-metric ${cls}"><div class="pm-val">${val}</div><div class="pm-lbl">${lbl}</div></div>`
@@ -488,7 +494,9 @@ function renderClients() {
           <div class="stat-cell" style="grid-column:2/-1;text-align:right;color:var(--muted);font-size:12px">⏳ provider data loading</div>
         </div></div>`;
     }
-    const rrClass = t.replyRate >= 0.025 ? 'good' : t.replyRate >= 0.01 ? 'med' : t.replyRate > 0 ? 'bad' : '';
+    const allRR = t.sent > 0 ? (t.replies + (t.oooReplies || 0)) / t.sent : 0;
+    const rrClass = allRR >= 0.025 ? 'good' : allRR >= 0.01 ? 'med' : allRR > 0 ? 'bad' : '';
+    const hrrClass = t.replyRate >= 0.02 ? 'good' : t.replyRate >= 0.008 ? 'med' : t.replyRate > 0 ? 'bad' : '';
     const brClass = t.bounceRate >= 0.05 ? 'bad' : t.bounceRate >= 0.02 ? 'med' : 'good';
     const rtlClass = t.rtl >= 0.1 ? 'good' : t.rtl >= 0.05 ? 'med' : t.rtl > 0 ? '' : '';
     const isOpen = _expanded.has(w.workspace_id);
@@ -501,8 +509,12 @@ function renderClients() {
             <div class="client-sub">${fmtNum(t.sent)} sent · ${fmtNum(t.replies)} replies · ${fmtNum(t.leads)} leads</div>
           </div>
           <div class="stat-cell ${rrClass}">
-            <div class="stat-val">${pct(t.replyRate)}</div>
+            <div class="stat-val">${pct(allRR)}</div>
             <div class="stat-lbl">Reply Rate</div>
+          </div>
+          <div class="stat-cell ${hrrClass}">
+            <div class="stat-val">${pct(t.replyRate)}</div>
+            <div class="stat-lbl">Human RR</div>
           </div>
           <div class="stat-cell ${brClass}">
             <div class="stat-val">${pct(t.bounceRate)}</div>

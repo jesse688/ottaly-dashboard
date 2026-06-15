@@ -3811,6 +3811,54 @@ async function activePerformanceWorkspaces() {
   return workspaces.filter(ws => !inactiveIds.has(ws.id));
 }
 
+// Reply data is sourced from the client-portal's CLASSIFIED unibox_replies table
+// (reviewed, so warm-up/auto noise is excluded) instead of Bison's raw
+// total_reply_count. We override the reply fields on the daily-stats aggregate for
+// dates ON/AFTER the fresh-start cutover; before the cutover we keep the frozen
+// historic (PlusVibe-era) numbers. sent/bounce/contacted always stay from Bison —
+// the portal doesn't track sends. Leads are unchanged (revenueCache/esp_leads).
+//
+//   replies    = HUMAN replies  (interested + not_interested + question + unsubscribe)
+//   oooReplies = ooo_auto_reply
+//   posReplies = interested  (the "positive reply" the RTL view keys on)
+//   warmup is EXCLUDED entirely.
+//
+// One batched query for all needed (wsId,date) pairs (keyed off received_at::date),
+// so there's no per-day N+1. Returns Map "wsId|date" -> {replies,oooReplies,posReplies}.
+async function fetchPortalReplyCounts(wsIds, dates) {
+  const out = new Map();
+  const pgdb = app.locals.pgDb;
+  if (!pgdb || !wsIds.length || !dates.length) return out;
+  // Only override dates at/after the cutover; before it, historic numbers stand.
+  const cutover = _freshStartDate; // 'YYYY-MM-DD' or null
+  const targetDates = cutover ? dates.filter(d => d >= cutover) : dates;
+  if (!targetDates.length) return out;
+  const minDate = targetDates.reduce((m, d) => (d < m ? d : m), targetDates[0]);
+  const maxDate = targetDates.reduce((m, d) => (d > m ? d : m), targetDates[0]);
+  try {
+    const { rows } = await pgdb.query(
+      `SELECT workspace_id AS ws,
+              to_char(received_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS date,
+              COUNT(*) FILTER (WHERE COALESCE(admin_label, category)
+                       IN ('interested','not_interested','question','unsubscribe'))::int AS replies,
+              COUNT(*) FILTER (WHERE COALESCE(admin_label, category) = 'ooo_auto_reply')::int AS ooo,
+              COUNT(*) FILTER (WHERE COALESCE(admin_label, category) = 'interested')::int AS pos
+         FROM unibox_replies
+        WHERE workspace_id = ANY($1)
+          AND received_at >= $2::date
+          AND received_at <  ($3::date + interval '1 day')
+        GROUP BY workspace_id, 2`,
+      [wsIds, minDate, maxDate]
+    );
+    for (const r of rows) {
+      out.set(`${r.ws}|${r.date}`, { replies: r.replies, oooReplies: r.ooo, posReplies: r.pos });
+    }
+  } catch (e) {
+    console.warn('[performance cache] portal reply override query failed:', e.message);
+  }
+  return out;
+}
+
 async function ensurePerformanceDailyStats(wsIds, dates, dailyStats = performanceCache.dailyStats, forceDates = new Set()) {
   const today = serverDateString(new Date());
   // Build list of (wsId, date) pairs that actually need a fetch.
@@ -3845,6 +3893,24 @@ async function ensurePerformanceDailyStats(wsIds, dates, dailyStats = performanc
         }
       }
     }));
+  }
+  // Override reply fields with the portal's classified counts (post-cutover dates
+  // only). sent/bounce/contacted stay from Bison. A missing portal entry for a
+  // post-cutover (wsId,date) means zero real replies that day → set 0, don't keep
+  // the raw Bison reply number (which would include warm-up/auto noise).
+  try {
+    const portal = await fetchPortalReplyCounts(wsIds, dates);
+    const cutover = _freshStartDate;
+    for (const wsId of wsIds) for (const date of dates) {
+      if (cutover && date < cutover) continue; // historic: leave frozen
+      const key = `${wsId}|${date}`;
+      const entry = dailyStats.get(key);
+      if (!entry || !entry.data) continue;
+      const p = portal.get(key) || { replies: 0, oooReplies: 0, posReplies: 0 };
+      entry.data = { ...entry.data, replies: p.replies, oooReplies: p.oooReplies, posReplies: p.posReplies };
+    }
+  } catch (e) {
+    console.warn('[performance cache] portal reply override failed:', e.message);
   }
   const out = {};
   for (const wsId of wsIds) for (const date of dates) {
@@ -8391,6 +8457,31 @@ function buildCampaignIndex(dbBounceByCampaign) {
 // Query email_events for actual per-mailbox sent/reply/bounce counts.
 // Returns Map<sender_email, {sent, replies, bounces}>.
 // Query email_events for per-mailbox sent and bounce counts.
+// Real per-mailbox HUMAN reply counts from the client-portal's classified
+// unibox_replies. mailbox_email = the address that received the reply (our sending
+// mailbox, from Bison's primary_to_email_address). This gives a TRUE per-mailbox
+// reply count instead of the old campaign-rate × mailbox-sent estimate. Human =
+// interested/not_interested/question/unsubscribe (excludes warm-up + OOO). Returns
+// Map(lower(mailbox_email) -> count). Best-effort: returns empty Map on any error
+// (e.g. column not present yet) so the mailbox page never breaks.
+async function buildPortalRepliesByMailbox(pgdb) {
+  if (!pgdb) return new Map();
+  try {
+    const { rows } = await pgdb.query(`
+      SELECT lower(mailbox_email) AS mbx, COUNT(*)::int AS replies
+      FROM unibox_replies
+      WHERE mailbox_email IS NOT NULL
+        AND COALESCE(admin_label, category)
+            IN ('interested','not_interested','question','unsubscribe')
+      GROUP BY lower(mailbox_email)
+    `);
+    return new Map(rows.map(r => [r.mbx, parseInt(r.replies, 10) || 0]));
+  } catch (e) {
+    console.warn('[mailboxes] portal reply count query failed:', e.message);
+    return new Map();
+  }
+}
+
 // PlusVibe reply webhooks never include sender_email so replies are excluded —
 // reply rates are computed by scaling the campaign reply rate to the mailbox's
 // actual send volume instead.
@@ -8420,7 +8511,7 @@ async function buildMailboxStatsFromEvents(pgdb) {
 // Reply rate is computed as (campaign reply rate × mailbox sent count) because
 // PlusVibe reply webhooks don't include the sending mailbox.
 // Falls back to even-split for mailboxes with no webhook history.
-function attachMailboxStats(mailboxes, campIndex, eventsByMailbox = new Map()) {
+function attachMailboxStats(mailboxes, campIndex, eventsByMailbox = new Map(), portalRepliesByMailbox = new Map()) {
   // First pass: count mailboxes per campaign (for even-split fallback) and
   // accumulate campaign-level totals needed for reply-rate scaling.
   for (const m of mailboxes) {
@@ -8431,23 +8522,31 @@ function attachMailboxStats(mailboxes, campIndex, eventsByMailbox = new Map()) {
   }
 
   // Second pass: assign sent/bounce from email_events where available,
-  // then derive replies by applying the campaign reply rate to real sent count.
+  // then derive replies — preferring the portal's REAL per-mailbox reply count,
+  // falling back to the campaign-rate × sent estimate only when the portal has none.
   for (const m of mailboxes) {
     const ev = eventsByMailbox.get(m.email);
+    // Real human replies for THIS mailbox from the classified portal data.
+    const portalReplies = portalRepliesByMailbox.get((m.email || '').toLowerCase());
     if (ev && ev.sent > 0) {
       // Real sent + bounce counts from webhooks.
       m.attributed_sent    = ev.sent;
       m.attributed_bounces = ev.bounces;
-      // Scale campaign reply rate to this mailbox's actual send volume.
-      let campSent = 0, campReplies = 0;
-      for (const cid of (m.campaign_ids || [])) {
-        const c = campIndex.get(cid);
-        if (!c) continue;
-        campSent    += c.sent;
-        campReplies += c.replies;
+      if (portalReplies != null) {
+        // TRUE per-mailbox reply count from the portal (best source).
+        m.attributed_replies = portalReplies;
+      } else {
+        // Fallback: scale campaign reply rate to this mailbox's actual send volume.
+        let campSent = 0, campReplies = 0;
+        for (const cid of (m.campaign_ids || [])) {
+          const c = campIndex.get(cid);
+          if (!c) continue;
+          campSent    += c.sent;
+          campReplies += c.replies;
+        }
+        const campReplyRate = campSent > 0 ? campReplies / campSent : 0;
+        m.attributed_replies = Math.round(ev.sent * campReplyRate);
       }
-      const campReplyRate = campSent > 0 ? campReplies / campSent : 0;
-      m.attributed_replies = Math.round(ev.sent * campReplyRate);
     } else {
       // No webhook data — fall back to even-split across campaign mailboxes.
       let sent = 0, replies = 0, bounces = 0;
@@ -8598,7 +8697,7 @@ app.get('/api/mailboxes', requireSession, async (req, res) => {
 
     // Query per-mailbox stats from webhook events and per-campaign bounce
     // corrections in parallel — both queries are independent.
-    const [eventsByMailbox, dbBounceByCampaign] = await Promise.all([
+    const [eventsByMailbox, dbBounceByCampaign, portalRepliesByMailbox] = await Promise.all([
       buildMailboxStatsFromEvents(pgdb),
       pgdb ? pgdb.query(`
         SELECT campaign_id, COUNT(*)::int AS bounces
@@ -8609,11 +8708,12 @@ app.get('/api/mailboxes', requireSession, async (req, res) => {
       `).then(r => new Map(r.rows.map(row => [row.campaign_id, row.bounces])))
         .catch(() => new Map())
         : Promise.resolve(new Map()),
+      buildPortalRepliesByMailbox(pgdb),
     ]);
 
-    // Attribute per-mailbox sent/replies/bounces — prefers real webhook counts,
-    // falls back to even-split across campaign mailboxes when none exist.
-    attachMailboxStats(merged, buildCampaignIndex(dbBounceByCampaign), eventsByMailbox);
+    // Attribute per-mailbox sent/replies/bounces — prefers the portal's REAL
+    // per-mailbox reply count, then real webhook sent/bounce, then even-split.
+    attachMailboxStats(merged, buildCampaignIndex(dbBounceByCampaign), eventsByMailbox, portalRepliesByMailbox);
 
     // Inherit SPF/DKIM/DMARC + blacklist status from the domain_health table.
     await attachDomainHealth(pgdb, merged);
