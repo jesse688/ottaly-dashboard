@@ -262,8 +262,9 @@ async function handleBison(raw: Record<string, unknown>) {
            (bison_team_id, bison_reply_id, workspace_id, client_id, portal_email_id, lead_email, lead_bison_id,
             subject, body_preview, classify_state, folder, raw, received_at,
             is_forwarded, sender_email, matched_lead_email, matched_by,
-            ingest_source, bison_interested, bison_automated_reply, last_seen_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10,$11,$12,$13,$14,$15,$16,$17,'webhook',$18,$19,NOW())
+            ingest_source, bison_interested, bison_automated_reply,
+            campaign_id, sender_email_id, mailbox_email, last_seen_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10,$11,$12,$13,$14,$15,$16,$17,'webhook',$18,$19,$20,$21,$22,NOW())
          ON CONFLICT (bison_team_id, bison_reply_id) DO UPDATE SET
            bison_interested      = EXCLUDED.bison_interested,
            bison_automated_reply = EXCLUDED.bison_automated_reply,
@@ -272,6 +273,9 @@ async function handleBison(raw: Record<string, unknown>) {
            portal_email_id       = COALESCE(unibox_replies.portal_email_id, EXCLUDED.portal_email_id),
            received_at           = COALESCE(unibox_replies.received_at, EXCLUDED.received_at),
            raw                   = COALESCE(unibox_replies.raw, EXCLUDED.raw),
+           campaign_id           = COALESCE(unibox_replies.campaign_id, EXCLUDED.campaign_id),
+           sender_email_id       = COALESCE(unibox_replies.sender_email_id, EXCLUDED.sender_email_id),
+           mailbox_email         = COALESCE(unibox_replies.mailbox_email, EXCLUDED.mailbox_email),
            last_seen_at          = NOW(),
            updated_at            = NOW()`,
         // rawTeamId is ALWAYS stored verbatim — never collapsed to a shared
@@ -284,7 +288,11 @@ async function handleBison(raw: Record<string, unknown>) {
          folder, JSON.stringify(reply),
          reply.date_received ?? new Date().toISOString(),
          isForwarded, senderEmail || null, matchedLeadEmail, matchedBy,
-         bisonInterested, bisonAutomated]
+         bisonInterested, bisonAutomated,
+         reply.campaign_id != null ? String(reply.campaign_id) : null,
+         reply.sender_email_id != null ? String(reply.sender_email_id) : null,
+         // For an INBOUND reply, primary_to_email_address is our sending mailbox.
+         (reply.primary_to_email_address ?? '').toLowerCase() || null]
       ).catch(err => console.error('[webhook/bison] unibox_replies insert failed:', err))
 
       // Alert admins once about a team we can't map to a client workspace.

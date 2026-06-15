@@ -149,14 +149,18 @@ async function upsertReconciledReply(
     `INSERT INTO unibox_replies
        (bison_team_id, bison_reply_id, workspace_id, client_id, lead_email, sender_email,
         subject, body_preview, classify_state, folder, raw, received_at,
-        ingest_source, bison_interested, bison_automated_reply, last_seen_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending','inbox',$9,$10,$11,'reconcile',$12,$13,NOW())
+        ingest_source, bison_interested, bison_automated_reply,
+        campaign_id, sender_email_id, mailbox_email, last_seen_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending','inbox',$9,$10,$11,'reconcile',$12,$13,$14,$15,$16,NOW())
      ON CONFLICT (bison_team_id, bison_reply_id) DO UPDATE SET
        bison_interested      = EXCLUDED.bison_interested,
        bison_automated_reply = EXCLUDED.bison_automated_reply,
        workspace_id          = COALESCE(unibox_replies.workspace_id, EXCLUDED.workspace_id),
        client_id             = COALESCE(unibox_replies.client_id, EXCLUDED.client_id),
        received_at           = COALESCE(unibox_replies.received_at, EXCLUDED.received_at),
+       campaign_id           = COALESCE(unibox_replies.campaign_id, EXCLUDED.campaign_id),
+       sender_email_id       = COALESCE(unibox_replies.sender_email_id, EXCLUDED.sender_email_id),
+       mailbox_email         = COALESCE(unibox_replies.mailbox_email, EXCLUDED.mailbox_email),
        last_seen_at          = NOW(),
        updated_at            = NOW()
      RETURNING (xmax = 0) AS inserted`,
@@ -165,6 +169,9 @@ async function upsertReconciledReply(
       subject, r.text_body?.slice(0, 500) ?? null,
       JSON.stringify(r), receivedAt,
       bisonInterested, bisonAutomated,
+      r.campaign_id != null ? String(r.campaign_id) : null,
+      r.sender_email_id != null ? String(r.sender_email_id) : null,
+      (r.primary_to_email_address ?? '').toLowerCase() || null,
     ]
   ).catch((err) => {
     console.error(`[reconcile] upsert failed team=${teamId} reply=${replyId}:`, err)

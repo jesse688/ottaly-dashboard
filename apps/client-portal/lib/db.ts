@@ -315,6 +315,19 @@ async function runMigration() {
       `ALTER TABLE unibox_replies ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ`,
       `CREATE INDEX IF NOT EXISTS idx_unibox_team_received ON unibox_replies (bison_team_id, received_at DESC)`,
 
+      // ── Attribution for admin-legacy stats (per-campaign + per-mailbox) ──
+      // Bison's reply payload carries which campaign the reply belongs to and the
+      // mailbox that received it. admin-legacy now sources reply rates from here, so
+      // it needs both: campaign_id for per-campaign rates (Stats), and the mailbox
+      // EMAIL for per-mailbox rates (Mailboxes joins on the address). For an INBOUND
+      // reply, primary_to_email_address IS our sending mailbox. (MX/recipient-provider
+      // stays admin-legacy's job — it joins contacts.mx_provider per recipient.)
+      `ALTER TABLE unibox_replies ADD COLUMN IF NOT EXISTS campaign_id TEXT`,
+      `ALTER TABLE unibox_replies ADD COLUMN IF NOT EXISTS sender_email_id TEXT`,
+      `ALTER TABLE unibox_replies ADD COLUMN IF NOT EXISTS mailbox_email TEXT`,
+      `CREATE INDEX IF NOT EXISTS idx_unibox_campaign ON unibox_replies (campaign_id) WHERE campaign_id IS NOT NULL`,
+      `CREATE INDEX IF NOT EXISTS idx_unibox_mailbox ON unibox_replies (lower(mailbox_email)) WHERE mailbox_email IS NOT NULL`,
+
       // ── Phase 1: per-reply client identity (anti-leak scoping) ──
       // workspace_id alone is NOT a safe scope key: >1 client can map to one
       // workspace (mark-as-lead resolves with ORDER BY active DESC LIMIT 1), so a
@@ -397,6 +410,17 @@ async function runMigration() {
              ) c
             WHERE u.client_id IS NULL AND u.workspace_id IS NOT NULL;
            INSERT INTO portal_meta(key) VALUES ('unibox_client_id_backfill_v1');
+         END IF;
+       END $$;`,
+      // One-time backfill of the attribution columns from raw for existing rows.
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM portal_meta WHERE key = 'unibox_attribution_backfill_v1') THEN
+           UPDATE unibox_replies SET
+             campaign_id     = COALESCE(campaign_id,     NULLIF(raw->>'campaign_id','')),
+             sender_email_id = COALESCE(sender_email_id, NULLIF(raw->>'sender_email_id','')),
+             mailbox_email   = COALESCE(mailbox_email,   NULLIF(raw->>'primary_to_email_address',''))
+            WHERE raw IS NOT NULL;
+           INSERT INTO portal_meta(key) VALUES ('unibox_attribution_backfill_v1');
          END IF;
        END $$;`,
     ]
