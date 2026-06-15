@@ -94,6 +94,8 @@ export function AdminUniboxClient() {
   const [rows, setRows] = useState<Reply[]>([])
   const [counts, setCounts] = useState<Record<string, number>>({})
   const [nextCursor, setNextCursor] = useState<string | null>(null)
+  const [query, setQuery] = useState('')          // search box text
+  const [activeQuery, setActiveQuery] = useState('') // the query actually applied
   const [loading, setLoading] = useState(false)
   const [selected, setSelected] = useState<Reply | null>(null)
   const [clients, setClients] = useState<PortalClientLite[]>([])
@@ -107,13 +109,14 @@ export function AdminUniboxClient() {
   const [assocPick, setAssocPick] = useState<string>('')
   const [assocSuggest, setAssocSuggest] = useState<{ id: number | null; reason: string }>({ id: null, reason: '' })
 
-  const load = useCallback(async (f: Folder, cursor?: string) => {
+  const load = useCallback(async (f: Folder, cursor?: string, q?: string) => {
     setLoading(true)
     try {
       const u = new URL('/api/admin/unibox/list', window.location.origin)
       u.searchParams.set('folder', f)
       u.searchParams.set('limit', '50')
       if (cursor) u.searchParams.set('before', cursor)
+      if (q && q.trim()) u.searchParams.set('q', q.trim())
       const r = await fetch(u.toString())
       if (r.status === 401) { router.push('/admin/login'); return }
       const d = await r.json() as { rows: Reply[]; nextCursor: string | null; counts: Record<string, number> }
@@ -125,7 +128,17 @@ export function AdminUniboxClient() {
     }
   }, [router])
 
-  useEffect(() => { load(folder) }, [folder, load])
+  // Reload when folder changes (clearing any active search) or when a search runs.
+  useEffect(() => { load(folder, undefined, activeQuery) }, [folder, activeQuery, load])
+
+  function runSearch() {
+    setSelected(null)
+    setActiveQuery(query.trim())
+  }
+  function clearSearch() {
+    setQuery('')
+    setActiveQuery('')
+  }
 
   useEffect(() => {
     fetch('/api/admin/clients')
@@ -271,11 +284,33 @@ export function AdminUniboxClient() {
             ))}
           </div>
 
+          {/* Search across all folders */}
+          <div className="px-3 py-2 border-b border-gray-200 bg-gray-50/60">
+            <div className="relative flex items-center">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="absolute left-2.5 text-gray-400"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+              <input
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') runSearch(); if (e.key === 'Escape') clearSearch() }}
+                placeholder="Search replies — name, email, subject, company…"
+                className="w-full pl-8 pr-16 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              />
+              {activeQuery ? (
+                <button onClick={clearSearch} className="absolute right-2 text-xs font-medium text-gray-400 hover:text-gray-700">Clear</button>
+              ) : (
+                <button onClick={runSearch} disabled={!query.trim()} className="absolute right-2 text-xs font-medium text-indigo-600 hover:text-indigo-800 disabled:opacity-40">Search</button>
+              )}
+            </div>
+            {activeQuery && (
+              <p className="text-[11px] text-gray-500 mt-1.5">Searching all folders for “{activeQuery}” — {rows.length}{nextCursor ? '+' : ''} result{rows.length === 1 ? '' : 's'}</p>
+            )}
+          </div>
+
           <div className="flex-1 overflow-y-auto">
             {loading && rows.length === 0 ? (
               <p className="text-sm text-gray-400 text-center py-10">Loading…</p>
             ) : rows.length === 0 ? (
-              <p className="text-sm text-gray-400 text-center py-10">No replies in this folder.</p>
+              <p className="text-sm text-gray-400 text-center py-10">{activeQuery ? 'No replies match your search.' : 'No replies in this folder.'}</p>
             ) : rows.map(r => (
               <button
                 key={r.id}
@@ -298,7 +333,7 @@ export function AdminUniboxClient() {
             ))}
             {nextCursor && (
               <button
-                onClick={() => load(folder, nextCursor)}
+                onClick={() => load(folder, nextCursor, activeQuery)}
                 disabled={loading}
                 className="w-full py-3 text-xs text-indigo-600 hover:text-indigo-800 disabled:opacity-50"
               >

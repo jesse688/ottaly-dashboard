@@ -18,8 +18,34 @@ export async function GET(req: NextRequest) {
   const folder: Folder = (FOLDERS as readonly string[]).includes(folderParam) ? (folderParam as Folder) : 'inbox'
   const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 50, 1), 100)
   const before = url.searchParams.get('before') // received_at cursor (ISO)
+  const q = (url.searchParams.get('q') ?? '').trim()
 
-  const params: unknown[] = [folder]
+  // When searching, look ACROSS all folders (you want to find a reply wherever it
+  // landed). Otherwise scope to the selected folder.
+  const params: unknown[] = []
+  let folderFilter: string
+  if (q) {
+    folderFilter = 'TRUE'
+  } else {
+    params.push(folder)
+    folderFilter = `u.folder = $${params.length}`
+  }
+
+  let search = ''
+  if (q) {
+    params.push(`%${q}%`)
+    const p = `$${params.length}`
+    // Match subject, the lead/sender/matched emails, the lead's name + company.
+    search = `AND (
+      u.subject ILIKE ${p} OR u.body_preview ILIKE ${p}
+      OR u.lead_email ILIKE ${p} OR u.sender_email ILIKE ${p}
+      OR u.matched_lead_email ILIKE ${p}
+      OR c.company_name ILIKE ${p}
+      OR l.company_name ILIKE ${p}
+      OR (COALESCE(l.first_name,'') || ' ' || COALESCE(l.last_name,'')) ILIKE ${p}
+    )`
+  }
+
   let cursor = ''
   if (before) {
     params.push(before)
@@ -59,7 +85,7 @@ export async function GET(req: NextRequest) {
            LIMIT 1
          ) l ON TRUE
          LEFT JOIN portal_emails pe ON pe.id = u.portal_email_id
-        WHERE u.folder = $1 ${cursor}
+        WHERE ${folderFilter} ${search} ${cursor}
         ORDER BY u.received_at DESC
         LIMIT $${params.length}`,
       params
