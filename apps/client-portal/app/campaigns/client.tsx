@@ -42,11 +42,11 @@ export function CampaignsClient() {
   if (error) return <div className="p-6 text-red-600 text-sm">{error}</div>
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <h1 className="text-xl font-semibold text-gray-900 mb-6">Campaigns</h1>
 
-      <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="bg-white rounded-xl border border-gray-100 overflow-x-auto">
+        <table className="w-full text-sm min-w-[640px]">
           <thead>
             <tr className="border-b border-gray-100 text-left">
               <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Campaign</th>

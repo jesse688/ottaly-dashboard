@@ -119,14 +119,14 @@ export function InvoicesClient({ companyName, workspaceId }: { companyName: stri
   if (payPerLead) {
     return (
       <div className="min-h-screen bg-[#f7f8fc]" style={{ fontFamily: 'var(--font-inter), system-ui, sans-serif' }}>
-        <header className="h-14 bg-[#224388] flex items-center px-5 gap-3 sticky top-0 z-10">
-          <span className="flex items-center [&_img]:brightness-0 [&_img]:invert"><Logo onDark /></span>
-          <span className="text-white/30">|</span>
-          <span className="text-white/90 text-sm font-medium">{companyName}</span>
-          <nav className="flex items-center gap-1 ml-4">
-            <a href="/leads" className="px-3 py-1.5 text-white/70 hover:text-white text-sm rounded-lg">Leads</a>
-            <span className="px-3 py-1.5 text-white bg-white/15 text-sm font-medium rounded-lg">Billing</span>
-            <a href="/account" className="px-3 py-1.5 text-white/70 hover:text-white text-sm rounded-lg">Account</a>
+        <header className="h-14 bg-[#224388] flex items-center px-3 sm:px-5 gap-2 sm:gap-3 sticky top-0 z-10">
+          <span className="flex items-center shrink-0 [&_img]:brightness-0 [&_img]:invert"><Logo onDark /></span>
+          <span className="hidden sm:inline text-white/30">|</span>
+          <span className="hidden sm:inline text-white/90 text-sm font-medium truncate max-w-[140px]">{companyName}</span>
+          <nav className="flex items-center gap-0.5 sm:gap-1 sm:ml-4">
+            <a href="/leads" className="px-2.5 sm:px-3 py-1.5 text-white/70 hover:text-white text-sm rounded-lg">Leads</a>
+            <span className="px-2.5 sm:px-3 py-1.5 text-white bg-white/15 text-sm font-medium rounded-lg">Billing</span>
+            <a href="/account" className="px-2.5 sm:px-3 py-1.5 text-white/70 hover:text-white text-sm rounded-lg">Account</a>
           </nav>
           <button onClick={handleLogout} className="ml-auto text-white/70 hover:text-white text-sm">Sign out</button>
         </header>
@@ -143,14 +143,14 @@ export function InvoicesClient({ companyName, workspaceId }: { companyName: stri
 
   return (
     <div className="min-h-screen bg-[#f7f8fc]" style={{ fontFamily: 'var(--font-inter), system-ui, sans-serif' }}>
-      <header className="h-14 bg-[#224388] flex items-center px-5 gap-3 sticky top-0 z-10">
-        <span className="flex items-center [&_img]:brightness-0 [&_img]:invert"><Logo onDark /></span>
-        <span className="text-white/30">|</span>
-        <span className="text-white/90 text-sm font-medium">{companyName}</span>
-        <nav className="flex items-center gap-1 ml-4">
-          <a href="/leads" className="px-3 py-1.5 text-white/70 hover:text-white text-sm rounded-lg">Leads</a>
-          <span className="px-3 py-1.5 text-white bg-white/15 text-sm font-medium rounded-lg">Billing</span>
-          <a href="/account" className="px-3 py-1.5 text-white/70 hover:text-white text-sm rounded-lg">Account</a>
+      <header className="h-14 bg-[#224388] flex items-center px-3 sm:px-5 gap-2 sm:gap-3 sticky top-0 z-10">
+        <span className="flex items-center shrink-0 [&_img]:brightness-0 [&_img]:invert"><Logo onDark /></span>
+        <span className="hidden sm:inline text-white/30">|</span>
+        <span className="hidden sm:inline text-white/90 text-sm font-medium truncate max-w-[140px]">{companyName}</span>
+        <nav className="flex items-center gap-0.5 sm:gap-1 sm:ml-4">
+          <a href="/leads" className="px-2.5 sm:px-3 py-1.5 text-white/70 hover:text-white text-sm rounded-lg">Leads</a>
+          <span className="px-2.5 sm:px-3 py-1.5 text-white bg-white/15 text-sm font-medium rounded-lg">Billing</span>
+          <a href="/account" className="px-2.5 sm:px-3 py-1.5 text-white/70 hover:text-white text-sm rounded-lg">Account</a>
         </nav>
         <button onClick={handleLogout} className="ml-auto text-white/70 hover:text-white text-sm">Sign out</button>
       </header>
@@ -211,8 +211,8 @@ export function InvoicesClient({ companyName, workspaceId }: { companyName: stri
                 : invoices.map(inv => {
                   const paid = inv.status === 'paid'
                   return (
-                    <div key={inv.id} className="flex items-center gap-3 px-5 py-3 hover:bg-gray-50">
-                      <div className="flex-1 min-w-0">
+                    <div key={inv.id} className="flex items-center flex-wrap gap-x-3 gap-y-2 px-5 py-3 hover:bg-gray-50">
+                      <div className="flex-1 min-w-[55%]">
                         <p className="text-sm font-medium text-gray-800 truncate">{inv.description}</p>
                         <p className="text-xs text-gray-400">{inv.invoice_number ? `${inv.invoice_number} · ` : ''}{fmt(parseFloat(inv.amount))}{inv.due_date ? ` · due ${fmtDate(inv.due_date)}` : ''}</p>
                       </div>

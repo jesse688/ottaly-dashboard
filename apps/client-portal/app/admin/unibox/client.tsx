@@ -286,8 +286,9 @@ export function AdminUniboxClient() {
       </header>
 
       <div className="flex" style={{ height: 'calc(100vh - 3rem)' }}>
-        {/* Left: folder tabs + reply list */}
-        <aside className="w-[420px] border-r border-gray-200 bg-white flex flex-col">
+        {/* Left: folder tabs + reply list. Full-width on mobile; hidden once a reply
+            is open (the detail takes over), restored via the in-detail Back button. */}
+        <aside className={`${selected ? 'hidden md:flex' : 'flex'} w-full md:w-[420px] border-r border-gray-200 bg-white flex-col`}>
           <div className="flex border-b border-gray-200 px-2">
             {FOLDERS.map(f => (
               <button
@@ -381,11 +382,16 @@ export function AdminUniboxClient() {
         </aside>
 
         {/* Right: selected reply detail */}
-        <main className="flex-1 overflow-y-auto">
+        <main className={`${selected ? 'flex' : 'hidden md:flex'} flex-1 flex-col overflow-y-auto`}>
           {!selected ? (
             <div className="h-full flex items-center justify-center text-gray-400 text-sm">Select a reply to view it.</div>
           ) : (
-            <div className="flex gap-6 p-6 max-w-5xl mx-auto">
+            <div className="flex flex-col lg:flex-row gap-6 p-4 sm:p-6 max-w-5xl mx-auto w-full">
+             {/* Mobile back button to return to the reply list */}
+             <button onClick={() => setSelected(null)} className="md:hidden inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-800 -mt-1 mb-1">
+               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+               Back to replies
+             </button>
              <div className="flex-1 min-w-0">
               <div className="flex items-start justify-between gap-4">
                 <div>
@@ -559,9 +565,10 @@ export function AdminUniboxClient() {
               </div>
              </div>
 
-             {/* Lead contact panel */}
-             <aside className="w-64 shrink-0 hidden lg:block">
-               <div className="rounded-xl border border-gray-200 bg-white p-4 sticky top-4">
+             {/* Lead contact panel — full-width below the conversation on mobile,
+                 inline on the right at lg+. */}
+             <aside className="w-full lg:w-64 shrink-0 order-first lg:order-none">
+               <div className="rounded-xl border border-gray-200 bg-white p-4 lg:sticky lg:top-4">
                  <div className="flex items-center gap-3 mb-3">
                    <div className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-sm font-semibold">{leadInitials(selected)}</div>
                    <div className="min-w-0">

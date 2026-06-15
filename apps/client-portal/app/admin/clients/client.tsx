@@ -516,7 +516,7 @@ export function AdminClientsClient() {
   return (
     <div className="min-h-screen bg-gray-50" style={{ fontFamily: 'system-ui,-apple-system,sans-serif' }}>
       {/* Top bar */}
-      <header className="h-12 bg-[#1a2332] flex items-center px-6 gap-3">
+      <header className="min-h-12 bg-[#1a2332] flex items-center flex-wrap px-3 sm:px-6 gap-x-3 gap-y-1 py-1.5 sm:py-0">
         <Logo size="sm" onDark />
         <span className="text-slate-500 text-xs">|</span>
         <span className="text-slate-300 text-sm">Portal Admin</span>
@@ -528,7 +528,7 @@ export function AdminClientsClient() {
             : s === 'stale' ? 'bg-yellow-400'
             : 'bg-red-400'
           return (
-            <div className="flex items-center gap-2 text-xs ml-4">
+            <div className="hidden lg:flex items-center gap-2 text-xs ml-4">
               <span className={`w-2 h-2 rounded-full ${dot(syncStatus.status.webhook)}`}></span>
               <span className="text-slate-400">Webhook: {syncStatus.status.webhook}</span>
               <span className="text-slate-500">·</span>
@@ -537,7 +537,7 @@ export function AdminClientsClient() {
             </div>
           )
         })()}
-        <div className="ml-auto flex items-center gap-4">
+        <div className="ml-auto flex items-center flex-wrap gap-2 sm:gap-4">
           <div className="relative">
             <button onClick={() => setShowNotifs(v => !v)} className="relative text-slate-400 hover:text-white text-base px-1" aria-label="Notifications">
               <span>🔔</span>
@@ -548,7 +548,7 @@ export function AdminClientsClient() {
             {showNotifs && (
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setShowNotifs(false)} />
-                <div className="absolute right-0 mt-2 w-80 bg-white rounded-xl shadow-xl border border-gray-100 z-50 overflow-hidden">
+                <div className="absolute right-0 mt-2 w-80 max-w-[calc(100vw-1.5rem)] bg-white rounded-xl shadow-xl border border-gray-100 z-50 overflow-hidden">
                   <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100">
                     <span className="text-sm font-semibold text-gray-900">Notifications</span>
                     <button onClick={markAllNotifsRead} className="text-xs text-indigo-600 hover:text-indigo-800">Mark all read</button>
@@ -621,7 +621,7 @@ export function AdminClientsClient() {
         </nav>
       </div>
 
-      <div className="max-w-5xl mx-auto p-6">
+      <div className="max-w-5xl mx-auto p-3 sm:p-6">
 
         {/* ── CLIENTS TAB ── */}
         {tab === 'clients' && (
@@ -810,7 +810,7 @@ export function AdminClientsClient() {
               <div className="bg-white rounded-xl border border-gray-100 p-5 mb-5">
                 <h2 className="text-sm font-semibold text-gray-800 mb-1">New client (workspace)</h2>
                 <p className="text-xs text-gray-500 mb-4">A client is a workspace. Add the people who log in afterwards with the <span className="font-medium">Users</span> button.</p>
-                <form onSubmit={handleCreate} className="grid grid-cols-2 gap-3">
+                <form onSubmit={handleCreate} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div><label className="block text-xs text-gray-500 mb-1">Workspace</label>
                     <select required value={form.workspaceId} onChange={e => { const ws=workspaces.find(w=>w.id===e.target.value); setForm(f=>({...f,workspaceId:e.target.value,companyName:f.companyName||(ws?.name??'')})) }} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 bg-white">
                       <option value="">Select workspace…</option>
@@ -829,8 +829,8 @@ export function AdminClientsClient() {
               </div>
             )}
 
-            <div className="bg-white rounded-xl border border-gray-100">
-              <table className="w-full text-sm table-fixed">
+            <div className="bg-white rounded-xl border border-gray-100 overflow-x-auto">
+              <table className="w-full text-sm table-fixed min-w-[680px]">
                 <thead>
                   <tr className="border-b border-gray-100 bg-gray-50">
                     {[
@@ -916,8 +916,8 @@ export function AdminClientsClient() {
                 <p className="text-sm text-gray-500 mt-0.5">Clients have flagged these leads as invalid</p>
               </div>
             </div>
-            <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-              <table className="w-full text-sm">
+            <div className="bg-white rounded-xl border border-gray-100 overflow-x-auto">
+              <table className="w-full text-sm min-w-[640px]">
                 <thead>
                   <tr className="border-b border-gray-100 bg-gray-50">
                     {['Lead','Client','Reason','Submitted','Status','Actions'].map(h => <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}
@@ -978,7 +978,7 @@ export function AdminClientsClient() {
             {showInvForm && (
               <div className="bg-white rounded-xl border border-gray-100 p-5 mb-5">
                 <h2 className="text-sm font-semibold text-gray-800 mb-4">New Invoice</h2>
-                <form onSubmit={handleCreateInvoice} className="grid grid-cols-3 gap-3">
+                <form onSubmit={handleCreateInvoice} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   <div>
                     <label className="block text-xs text-gray-500 mb-1">Client</label>
                     <select required value={invForm.clientId} onChange={e => setInvForm(f=>({...f,clientId:e.target.value}))} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 bg-white">
@@ -1004,8 +1004,8 @@ export function AdminClientsClient() {
               </div>
             )}
 
-            <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-              <table className="w-full text-sm">
+            <div className="bg-white rounded-xl border border-gray-100 overflow-x-auto">
+              <table className="w-full text-sm min-w-[760px]">
                 <thead>
                   <tr className="border-b border-gray-100 bg-gray-50">
                     {['Client','Invoice #','Description','Amount','Status','File','Due','Actions'].map(h => <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}
@@ -1060,8 +1060,8 @@ export function AdminClientsClient() {
                 <p className="text-sm text-gray-500 mt-0.5">Clients have requested to add balance to their account</p>
               </div>
             </div>
-            <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-              <table className="w-full text-sm">
+            <div className="bg-white rounded-xl border border-gray-100 overflow-x-auto">
+              <table className="w-full text-sm min-w-[640px]">
                 <thead>
                   <tr className="border-b border-gray-100 bg-gray-50">
                     {['Client','Amount','Note','Requested','Status','Actions'].map(h => <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}
@@ -1103,7 +1103,7 @@ export function AdminClientsClient() {
 
       {/* ── Settings modal ── */}
       {loginsClient && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setLoginsClient(null)}>
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setLoginsClient(null)}>
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-gray-100">
               <h2 className="text-sm font-semibold text-gray-900">Users — {loginsClient.company_name}</h2>
@@ -1186,16 +1186,16 @@ export function AdminClientsClient() {
       )}
 
       {settingsClient && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setSettingsClient(null)}>
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setSettingsClient(null)}>
           <div className={`bg-white rounded-2xl shadow-xl w-full ${settingsTab === 'balance' ? 'max-w-lg' : 'max-w-md'} max-h-[90vh] overflow-y-auto`} onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 pt-5 pb-0">
               <h2 className="text-sm font-semibold text-gray-900">Settings — {settingsClient.company_name}</h2>
               <button onClick={() => setSettingsClient(null)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
             </div>
             {/* Modal tabs */}
-            <div className="flex px-5 mt-3 border-b border-gray-100">
+            <div className="flex px-5 mt-3 border-b border-gray-100 overflow-x-auto">
               {([{ key:'labels', label:'Label Visibility' },{ key:'fields', label:'Field Visibility' },{ key:'balance', label:'Balance' },{ key:'topups', label:'Top-up buckets' },{ key:'warmup', label:'Warmup' }] as { key:'labels'|'fields'|'balance'|'topups'|'warmup'; label:string }[]).map(t => (
-                <button key={t.key} onClick={() => { setSettingsTab(t.key); if (t.key === 'balance' && settingsClient) loadLedger(settingsClient.id) }} className={`mr-4 pb-2.5 text-sm font-medium border-b-2 transition-colors ${settingsTab === t.key ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+                <button key={t.key} onClick={() => { setSettingsTab(t.key); if (t.key === 'balance' && settingsClient) loadLedger(settingsClient.id) }} className={`mr-4 pb-2.5 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${settingsTab === t.key ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
                   {t.label}
                 </button>
               ))}
