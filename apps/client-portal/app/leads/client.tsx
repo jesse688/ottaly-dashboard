@@ -1033,6 +1033,52 @@ function RichReply({ toEmail, placeholderName, sending, statusMsg, seed, onSend 
     document.execCommand(cmd, false, value)
     syncState()
   }
+  // Insert a list reliably WITHOUT execCommand (the insertUnorderedList/
+  // insertOrderedList commands are deprecated and silently no-op in several
+  // browsers). We build the <ul>/<ol> ourselves at the caret: if the user has
+  // selected text, each line becomes an <li>; otherwise we drop an empty <li>
+  // and place the caret inside it so they can start typing.
+  function insertList(ordered: boolean) {
+    const el = ref.current
+    if (!el) return
+    el.focus()
+    const sel = window.getSelection()
+    let range: Range
+    if (sel && sel.rangeCount > 0 && el.contains(sel.anchorNode)) {
+      range = sel.getRangeAt(0)
+    } else {
+      range = document.createRange()
+      range.selectNodeContents(el)
+      range.collapse(false)
+    }
+    const list = document.createElement(ordered ? 'ol' : 'ul')
+    list.style.paddingLeft = '1.4em'
+    list.style.margin = '0.25em 0'
+    list.style.listStyleType = ordered ? 'decimal' : 'disc'
+
+    const selectedText = range.toString()
+    if (selectedText.trim()) {
+      for (const line of selectedText.split('\n')) {
+        const li = document.createElement('li')
+        li.textContent = line || '​'
+        list.appendChild(li)
+      }
+      range.deleteContents()
+      range.insertNode(list)
+    } else {
+      const li = document.createElement('li')
+      li.appendChild(document.createElement('br'))
+      list.appendChild(li)
+      range.insertNode(list)
+      // Caret into the empty <li>.
+      const caret = document.createRange()
+      caret.setStart(li, 0)
+      caret.collapse(true)
+      sel?.removeAllRanges()
+      sel?.addRange(caret)
+    }
+    syncState()
+  }
   function onInput() { syncState() }
   function addLink() {
     const url = prompt('Link URL (https://…)')
@@ -1122,8 +1168,8 @@ function RichReply({ toEmail, placeholderName, sending, statusMsg, seed, onSend 
         <Btn cmd="italic" title="Italic"><em>I</em></Btn>
         <Btn cmd="underline" title="Underline"><u>U</u></Btn>
         <span className="w-px h-5 bg-gray-200 mx-1" />
-        <Btn cmd="insertUnorderedList" title="Bulleted list">•</Btn>
-        <Btn cmd="insertOrderedList" title="Numbered list"><span className="text-xs font-semibold">1.</span></Btn>
+        <button type="button" title="Bulleted list" onMouseDown={e => { e.preventDefault(); insertList(false) }} className="w-8 h-8 flex items-center justify-center rounded-md hover:bg-gray-100 text-gray-600 text-[15px]">•</button>
+        <button type="button" title="Numbered list" onMouseDown={e => { e.preventDefault(); insertList(true) }} className="w-8 h-8 flex items-center justify-center rounded-md hover:bg-gray-100 text-gray-600"><span className="text-xs font-semibold">1.</span></button>
         <span className="w-px h-5 bg-gray-200 mx-1" />
         <button type="button" title="Add link" onMouseDown={e => { e.preventDefault(); addLink() }} className="w-8 h-8 flex items-center justify-center rounded-md hover:bg-gray-100 text-gray-600">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>

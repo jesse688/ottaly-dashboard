@@ -122,5 +122,29 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   // Refresh contact details from the latest inbound email signature.
   await applySignatureExtraction(id, session.workspaceId, rows, leadEmail)
 
+  // Auto-mark "responded" if the synced thread shows an OUTBOUND message after
+  // the prospect's first inbound (i.e. someone — client or agency — replied,
+  // whether in our portal OR in Bison). This moves the lead off "Needs reply"
+  // without the client clicking anything. Stamp first_responded_at once.
+  try {
+    const firstInbound = rows.find(r => r.direction === 'IN')?.timestamp_created
+    const respondedOut = rows.some(r =>
+      r.direction === 'OUT' &&
+      (r.sent_via_portal ||
+        (firstInbound && r.timestamp_created && new Date(r.timestamp_created) > new Date(firstInbound)))
+    )
+    if (respondedOut) {
+      await pool.query(
+        `INSERT INTO portal_lead_data (lead_id, client_id, first_responded_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (lead_id, client_id) DO UPDATE
+           SET first_responded_at = COALESCE(portal_lead_data.first_responded_at, NOW())`,
+        [id, session.clientId]
+      )
+    }
+  } catch (err) {
+    console.error('[thread] responded-stamp failed:', err)
+  }
+
   return NextResponse.json(rows)
 }
