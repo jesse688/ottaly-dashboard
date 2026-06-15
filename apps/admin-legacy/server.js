@@ -11771,19 +11771,75 @@ app.get('/api/bison/campaigns', requireSession, async (req, res) => {
 });
 
 // POST /api/bison/create-campaign  — create a new Draft campaign in a workspace.
-// body: { ws_id, name }
-//  - ws_id: Bison workspace id (switch-workspace target)
-//  - name:  campaign name (auto-generated from filters on the client, editable)
+// body: { ws_id, name, settings? }
+//  - ws_id:    Bison workspace id (switch-workspace target)
+//  - name:     campaign name (auto-generated from filters on the client, editable)
+//  - settings: optional { max_emails_per_day?, max_new_leads_per_day?,
+//              open_tracking?, plain_text?, can_unsubscribe? } applied via
+//              PATCH /api/campaigns/{id}/update right after create.
 // New campaigns are status "Draft" by default — we do NOT launch/activate them.
+// A fixed default sending schedule (Mon–Fri 07:30–17:00 Europe/London) is also
+// applied. Settings/schedule are best-effort: a failure there is reported in the
+// response but does NOT discard the created campaign (it still returns its id).
 app.post('/api/bison/create-campaign', requireSession, async (req, res) => {
   const wsId = String(req.body.ws_id || '');
   const name = String(req.body.name || '').trim();
+  const settings = (req.body.settings && typeof req.body.settings === 'object') ? req.body.settings : null;
   if (!wsId || !name) return res.status(400).json({ error: 'ws_id and a non-empty name are required' });
   if (!getBisonKey()) return res.status(500).json({ error: 'Bison API key not configured — set it in admin settings' });
   try {
     const resp = await bisonReq('/api/campaigns', { wsId, method: 'POST', body: { name, type: 'outbound' } });
     const c = resp?.data || {};
-    res.json({ ok: true, campaign: { id: String(c.id), name: c.name, status: c.status } });
+    const campId = c.id;
+    const warnings = [];
+
+    if (campId && settings) {
+      // Whitelist the fields Bison's updateCampaignSettings accepts; coerce types.
+      const body = {};
+      if (settings.max_emails_per_day != null && settings.max_emails_per_day !== '')
+        body.max_emails_per_day = Number(settings.max_emails_per_day);
+      if (settings.max_new_leads_per_day != null && settings.max_new_leads_per_day !== '')
+        body.max_new_leads_per_day = Number(settings.max_new_leads_per_day);
+      // Bison enforces max_new_leads_per_day <= max_emails_per_day (422 otherwise).
+      // If new-leads is set higher than emails (or emails was left blank), raise the
+      // emails cap to match so the PATCH is accepted. Actual send volume is still
+      // governed by each mailbox's daily limit, so a high campaign cap is harmless.
+      if (body.max_new_leads_per_day != null &&
+          (body.max_emails_per_day == null || body.max_emails_per_day < body.max_new_leads_per_day)) {
+        body.max_emails_per_day = body.max_new_leads_per_day;
+      }
+      if (typeof settings.open_tracking === 'boolean') body.open_tracking = settings.open_tracking;
+      if (typeof settings.plain_text === 'boolean') body.plain_text = settings.plain_text;
+      if (typeof settings.can_unsubscribe === 'boolean') body.can_unsubscribe = settings.can_unsubscribe;
+      if (Object.keys(body).length) {
+        try {
+          await bisonReq('/api/campaigns/' + campId + '/update', { wsId, method: 'PATCH', body });
+        } catch (e) {
+          console.warn('[bison] campaign settings PATCH failed:', e.message);
+          warnings.push('settings not fully applied: ' + e.message);
+        }
+      }
+    }
+
+    if (campId) {
+      // Fixed default schedule — Mon–Fri 07:30–17:00 Europe/London.
+      try {
+        await bisonReq('/api/campaigns/' + campId + '/schedule', {
+          wsId, method: 'POST',
+          body: {
+            monday: true, tuesday: true, wednesday: true, thursday: true, friday: true,
+            saturday: false, sunday: false,
+            start_time: '07:30', end_time: '17:00', timezone: 'Europe/London',
+            save_as_template: false,
+          },
+        });
+      } catch (e) {
+        console.warn('[bison] campaign schedule POST failed:', e.message);
+        warnings.push('schedule not applied: ' + e.message);
+      }
+    }
+
+    res.json({ ok: true, campaign: { id: String(c.id), name: c.name, status: c.status }, warnings });
   } catch (err) {
     res.status(502).json({ error: err.message || 'Failed to create Bison campaign' });
   }
