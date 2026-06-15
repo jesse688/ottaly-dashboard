@@ -32,13 +32,36 @@ export async function GET(req: NextRequest) {
       const json = await res.json().catch(() => ({}))
       const data = Array.isArray(json) ? json : (json.data ?? [])
       out.rawLeadCount = Array.isArray(data) ? data.length : 0
-      out.interestedCount = Array.isArray(data) ? data.filter((l: { interested?: boolean }) => l.interested === true).length : 0
+      out.interestedBooleanCount = Array.isArray(data) ? data.filter((l: { interested?: boolean }) => l.interested === true).length : 0
+      // Count leads carrying the Interested / Meeting Booked TAG (the real signal).
+      const leadTagNames = new Set(['interested', 'meeting booked'])
+      out.taggedLeadCount = Array.isArray(data)
+        ? data.filter((l: { tags?: Array<{ name?: string }> }) =>
+            (l.tags ?? []).some(t => leadTagNames.has((t.name ?? '').trim().toLowerCase()))).length
+        : 0
+      // Show every distinct tag NAME actually applied across the returned leads,
+      // with how many leads have it — so we see what marker (if any) is in use.
+      const tagFreq: Record<string, number> = {}
+      for (const l of (Array.isArray(data) ? data : [])) {
+        for (const t of ((l as { tags?: Array<{ name?: string }> }).tags ?? [])) {
+          const n = (t.name ?? '').trim() || '(unnamed)'
+          tagFreq[n] = (tagFreq[n] ?? 0) + 1
+        }
+      }
+      out.tagsAppliedToLeads = tagFreq
+      // Show status values in use too (in case lead-marking is via status).
+      const statusFreq: Record<string, number> = {}
+      for (const l of (Array.isArray(data) ? data : [])) {
+        const s = String((l as { status?: string }).status ?? '(none)')
+        statusFreq[s] = (statusFreq[s] ?? 0) + 1
+      }
+      out.statusesInUse = statusFreq
       if (data[0]) {
         out.firstLeadKeys = Object.keys(data[0])
         out.firstLeadSample = {
           id: data[0].id, email: data[0].email,
-          interested: data[0].interested, status: data[0].status,
-          tags: data[0].tags ?? data[0].tag_ids ?? null,
+          status: data[0].status,
+          tags: (data[0].tags ?? []).map((t: { name?: string }) => t.name),
         }
       }
       // Also probe whether a "lead" tag exists in this workspace.
