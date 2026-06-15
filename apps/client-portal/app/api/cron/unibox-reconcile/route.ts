@@ -151,7 +151,7 @@ async function upsertReconciledReply(
         subject, body_preview, classify_state, folder, raw, received_at,
         ingest_source, bison_interested, bison_automated_reply,
         campaign_id, sender_email_id, mailbox_email, last_seen_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending','inbox',$9,$10,$11,'reconcile',$12,$13,$14,$15,$16,NOW())
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending','inbox',$9,$10,'reconcile',$11,$12,$13,$14,$15,NOW())
      ON CONFLICT (bison_team_id, bison_reply_id) DO UPDATE SET
        bison_interested      = EXCLUDED.bison_interested,
        bison_automated_reply = EXCLUDED.bison_automated_reply,

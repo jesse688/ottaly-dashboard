@@ -264,7 +264,7 @@ async function handleBison(raw: Record<string, unknown>) {
             is_forwarded, sender_email, matched_lead_email, matched_by,
             ingest_source, bison_interested, bison_automated_reply,
             campaign_id, sender_email_id, mailbox_email, last_seen_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10,$11,$12,$13,$14,$15,$16,$17,'webhook',$18,$19,$20,$21,$22,NOW())
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10,$11,$12,$13,$14,$15,$16,'webhook',$17,$18,$19,$20,$21,NOW())
          ON CONFLICT (bison_team_id, bison_reply_id) DO UPDATE SET
            bison_interested      = EXCLUDED.bison_interested,
            bison_automated_reply = EXCLUDED.bison_automated_reply,
