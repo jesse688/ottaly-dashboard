@@ -118,14 +118,26 @@ function withBisonLock(fn) {
 // sequence that must not have another workspace switch interleave) wrap multiple
 // _bisonRaw calls in a single withBisonLock. Most callers should use bisonReq.
 async function _bisonRaw(path, opts = {}) {
-  if (opts.wsId && _bisonWsId !== String(opts.wsId)) {
-    await fetch(BISON_BASE + '/api/workspaces/v1.1/switch-workspace', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + getBisonKey(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ team_id: Number(opts.wsId) }),
-      signal: AbortSignal.timeout(10000),
-    });
-    _bisonWsId = String(opts.wsId);
+  if (opts.wsId) {
+    // Resolve PV workspace_id -> Bison team_id, and REFUSE to switch on anything
+    // that isn't a clean integer team_id. Passing a raw PV Mongo-string here did
+    // team_id: Number(...) = NaN, which Bison ignores — so the request ran against
+    // whatever workspace was last active. That is how a "Lending Team" push landed
+    // in Bruud. Failing loudly is the only safe behaviour for a workspace switch.
+    const teamId = resolveBisonTeamId(opts.wsId);
+    if (!teamId || !/^\d+$/.test(String(teamId))) {
+      throw new Error('Bison switch refused: workspace "' + opts.wsId + '" does not resolve to a Bison team_id (add it to BISON_TEAMS).');
+    }
+    if (_bisonWsId !== String(teamId)) {
+      const sw = await fetch(BISON_BASE + '/api/workspaces/v1.1/switch-workspace', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + getBisonKey(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team_id: Number(teamId) }),
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!sw.ok) throw new Error('Bison switch-workspace ' + teamId + ' -> ' + sw.status);
+      _bisonWsId = String(teamId);
+    }
   }
   const url = new URL(BISON_BASE + path);
   if (opts.params) for (const [k, v] of Object.entries(opts.params)) { if (v != null) url.searchParams.set(k, String(v)); }
@@ -3202,14 +3214,21 @@ pvFetch = async function pvFetch(path, retries = 5, opts = {}) {
 
 // Low-level switch (assumes caller already holds the Bison lock).
 async function _bisonSwitchUnlocked(wsId) {
-  if (_bisonWsId === String(wsId)) return;
-  await fetch(BISON_BASE + '/api/workspaces/v1.1/switch-workspace', {
+  // Resolve PV id -> team_id and refuse non-integer targets (see _bisonRaw): a
+  // raw PV string switched to team_id NaN and left Bison on the wrong workspace.
+  const teamId = resolveBisonTeamId(wsId);
+  if (!teamId || !/^\d+$/.test(String(teamId))) {
+    throw new Error('Bison switch refused: workspace "' + wsId + '" does not resolve to a Bison team_id (add it to BISON_TEAMS).');
+  }
+  if (_bisonWsId === String(teamId)) return;
+  const sw = await fetch(BISON_BASE + '/api/workspaces/v1.1/switch-workspace', {
     method: 'POST',
     headers: { 'Authorization': 'Bearer ' + getBisonKey(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ team_id: Number(wsId) }),
+    body: JSON.stringify({ team_id: Number(teamId) }),
     signal: AbortSignal.timeout(10000),
-  }).catch(() => {});
-  _bisonWsId = String(wsId);
+  });
+  if (!sw.ok) throw new Error('Bison switch-workspace ' + teamId + ' -> ' + sw.status);
+  _bisonWsId = String(teamId);
 }
 
 // Standalone switch — serialized through the gate. Most callers now pass wsId
