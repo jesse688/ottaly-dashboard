@@ -236,12 +236,12 @@ export function AdminClientsClient() {
   async function handleCreate(e: FormEvent) {
     e.preventDefault(); setSaving(true); setError('')
     try {
-      const res = await fetch('/api/admin/clients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: form.email, companyName: form.companyName, contactName: form.contactName, workspaceId: form.workspaceId, costPerLead: Number(form.costPerLead) || 0, lowLeadsThreshold: Number(form.lowLeadsThreshold) || 5 }) })
-      const data = await res.json() as { error?: string; email?: string; inviteUrl?: string }
+      const res = await fetch('/api/admin/clients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyName: form.companyName, workspaceId: form.workspaceId, costPerLead: Number(form.costPerLead) || 0, lowLeadsThreshold: Number(form.lowLeadsThreshold) || 5 }) })
+      const data = await res.json() as { error?: string }
       if (!res.ok) { setError(data.error ?? 'Error'); return }
       setForm({ username:'', code:'', email:'', workspaceId:'', companyName:'', contactName:'', costPerLead:'', lowLeadsThreshold:'5' }); setShowForm(false)
       fetch('/api/admin/clients').then(r => r.json()).then(d => { if (Array.isArray(d)) setClients(d) }).catch(() => {})
-      prompt(`Client created. Send ${data.email} this link to set their own access code:`, data.inviteUrl ?? '')
+      alert('Client created. Now add the people who log in using the “Users” button on that client’s row.')
     } finally { setSaving(false) }
   }
   async function toggleActive(c: PortalClient) {
@@ -800,23 +800,22 @@ export function AdminClientsClient() {
 
             {showForm && (
               <div className="bg-white rounded-xl border border-gray-100 p-5 mb-5">
-                <h2 className="text-sm font-semibold text-gray-800 mb-4">New client login</h2>
+                <h2 className="text-sm font-semibold text-gray-800 mb-1">New client (workspace)</h2>
+                <p className="text-xs text-gray-500 mb-4">A client is a workspace. Add the people who log in afterwards with the <span className="font-medium">Users</span> button.</p>
                 <form onSubmit={handleCreate} className="grid grid-cols-2 gap-3">
-                  <div><label className="block text-xs text-gray-500 mb-1">Company name</label><input required value={form.companyName} onChange={e => setForm(f => ({...f,companyName:e.target.value}))} placeholder="Acme Corp" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
-                  <div><label className="block text-xs text-gray-500 mb-1">Client name <span className="text-gray-400">(for greeting)</span></label><input value={form.contactName} onChange={e => setForm(f => ({...f,contactName:e.target.value}))} placeholder="Gareth" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
-                  <div><label className="block text-xs text-gray-500 mb-1">Low-leads warning at</label><input type="number" min="0" value={form.lowLeadsThreshold} onChange={e => setForm(f => ({...f,lowLeadsThreshold:e.target.value}))} placeholder="5" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
                   <div><label className="block text-xs text-gray-500 mb-1">Workspace</label>
                     <select required value={form.workspaceId} onChange={e => { const ws=workspaces.find(w=>w.id===e.target.value); setForm(f=>({...f,workspaceId:e.target.value,companyName:f.companyName||(ws?.name??'')})) }} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 bg-white">
                       <option value="">Select workspace…</option>
                       {workspaces.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
                     </select>
                   </div>
-                  <div className="col-span-2"><label className="block text-xs text-gray-500 mb-1">Client email <span className="text-gray-400">(this is their login — they&apos;ll set their own code)</span></label><input required type="email" value={form.email} onChange={e => setForm(f=>({...f,email:e.target.value}))} placeholder="client@company.com" autoCapitalize="none" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
+                  <div><label className="block text-xs text-gray-500 mb-1">Company name</label><input required value={form.companyName} onChange={e => setForm(f => ({...f,companyName:e.target.value}))} placeholder="Acme Corp" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
                   <div><label className="block text-xs text-gray-500 mb-1">Cost per lead (£)</label><input type="number" min="0" step="0.01" value={form.costPerLead} onChange={e => setForm(f=>({...f,costPerLead:e.target.value}))} placeholder="0" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
+                  <div><label className="block text-xs text-gray-500 mb-1">Low-leads warning at</label><input type="number" min="0" value={form.lowLeadsThreshold} onChange={e => setForm(f => ({...f,lowLeadsThreshold:e.target.value}))} placeholder="5" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
                   {error && <p className="col-span-2 text-sm text-red-600">{error}</p>}
                   <div className="col-span-2 flex gap-2 justify-end">
                     <button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
-                    <button type="submit" disabled={saving} className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg disabled:opacity-60">{saving ? 'Creating…' : 'Create login'}</button>
+                    <button type="submit" disabled={saving} className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg disabled:opacity-60">{saving ? 'Creating…' : 'Create client'}</button>
                   </div>
                 </form>
               </div>

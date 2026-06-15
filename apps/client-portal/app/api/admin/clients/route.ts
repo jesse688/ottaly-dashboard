@@ -30,21 +30,20 @@ export async function POST(req: NextRequest) {
     lowLeadsThreshold?: number
     costPerLead?: number
   }
-  const email = (b.email ?? '').trim().toLowerCase()
+  const email = (b.email ?? '').trim().toLowerCase() || null
   const workspaceId = b.workspaceId
   const companyName = b.companyName
   const contactName = (b.contactName ?? '').trim()
 
-  if (!email || !email.includes('@')) {
-    return NextResponse.json({ error: 'A valid client email is required' }, { status: 400 })
-  }
+  // A client = a WORKSPACE (company). People are added separately via Users, so
+  // email/name are NOT required — only workspace + company name.
   if (!workspaceId || !companyName) {
     return NextResponse.json({ error: 'Company and workspace are required' }, { status: 400 })
   }
 
-  // The email is the login identifier (username). No code is set — the client
-  // creates their own via the invite link.
-  const inviteToken = generateInviteToken()
+  // Login lives in portal_user_access (added via Users). Only keep a legacy
+  // single-login invite token if an email was actually given.
+  const inviteToken = email ? generateInviteToken() : null
 
   try {
     const res = await pool.query(
