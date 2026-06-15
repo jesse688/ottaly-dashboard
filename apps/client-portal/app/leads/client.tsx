@@ -211,6 +211,9 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
   // drag-and-drop of leads onto deal stages
   const [dragLeadId, setDragLeadId] = useState<string | null>(null)
   const [dragOver, setDragOver] = useState<string | null>(null)
+  // Separate drag state for REORDERING stages (distinct from dragging a lead).
+  const [dragStageId, setDragStageId] = useState<string | null>(null)
+  const [stageDropTarget, setStageDropTarget] = useState<string | null>(null)
 
   const [showNewLabel, setShowNewLabel] = useState(false)
   const [newLabelName, setNewLabelName] = useState('')
@@ -388,6 +391,32 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
     setNewLabelName(''); setNewLabelColor('purple'); setShowNewLabel(false)
   }
 
+  async function deleteStage(id: string, name: string) {
+    if (!confirm(`Delete the "${name}" stage? Leads in it will just lose this stage (they’re not deleted).`)) return
+    setCustomLabels(prev => prev.filter(c => c.id !== id))
+    if (activeLabel === name) setActiveLabel(null)
+    await fetch(`/api/portal/labels/${id}`, { method: 'DELETE' }).catch(() => {})
+  }
+
+  // Reorder: move the dragged stage to before the target stage, persist order.
+  async function reorderStages(draggedId: string, targetId: string) {
+    if (draggedId === targetId) return
+    const ids = clientStages.map(s => s.id)
+    const from = ids.indexOf(draggedId), to = ids.indexOf(targetId)
+    if (from < 0 || to < 0) return
+    ids.splice(to, 0, ids.splice(from, 1)[0])
+    // Reflect new order locally (stable: reorder customLabels by the new id order).
+    setCustomLabels(prev => {
+      const byId = new Map(prev.map(s => [s.id, s]))
+      const reordered = ids.map(i => byId.get(i)!).filter(Boolean)
+      const rest = prev.filter(s => !ids.includes(s.id))
+      return [...reordered, ...rest]
+    })
+    await fetch('/api/portal/labels/reorder', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order: ids }),
+    }).catch(() => {})
+  }
+
   async function handleLogout() {
     await fetch('/api/logout', { method: 'POST' }); router.push('/login')
   }
@@ -532,15 +561,33 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
           <div className="px-3 mt-1 flex-1 overflow-y-auto">
             {clientStages.map(cl => (
               <div key={cl.id}
+                // Whole row is draggable to REORDER stages. (Leads are dragged
+                // separately via dragLeadId; we branch on which drag is active.)
+                draggable
+                onDragStart={() => setDragStageId(cl.id)}
+                onDragEnd={() => { setDragStageId(null); setStageDropTarget(null) }}
                 onClick={() => setActiveLabel(activeLabel === cl.name ? null : cl.name)}
-                onDragOver={e => { if (dragLeadId) { e.preventDefault(); setDragOver(cl.id) } }}
-                onDragLeave={() => setDragOver(d => d === cl.id ? null : d)}
-                onDrop={e => { e.preventDefault(); dropOnStage(cl.name) }}
-                className={`group flex items-center justify-between px-3 py-1.5 rounded-lg text-sm cursor-pointer ${dragOver === cl.id ? 'ring-2 ring-brand-400 bg-brand-50' : activeLabel === cl.name ? 'bg-gray-100' : 'hover:bg-gray-50'}`}>
-                <span className="flex items-center gap-2 text-gray-700">
-                  <span className={`w-2.5 h-2.5 rounded-full ${COLOR_MAP[cl.color] ?? 'bg-purple-400'}`} />{cl.name}
+                onDragOver={e => {
+                  if (dragLeadId) { e.preventDefault(); setDragOver(cl.id) }
+                  else if (dragStageId && dragStageId !== cl.id) { e.preventDefault(); setStageDropTarget(cl.id) }
+                }}
+                onDragLeave={() => { setDragOver(d => d === cl.id ? null : d); setStageDropTarget(t => t === cl.id ? null : t) }}
+                onDrop={e => {
+                  e.preventDefault()
+                  if (dragLeadId) dropOnStage(cl.name)
+                  else if (dragStageId) { reorderStages(dragStageId, cl.id); setDragStageId(null); setStageDropTarget(null) }
+                }}
+                className={`group flex items-center justify-between px-3 py-1.5 rounded-lg text-sm cursor-pointer ${dragOver === cl.id ? 'ring-2 ring-brand-400 bg-brand-50' : stageDropTarget === cl.id ? 'ring-2 ring-brand-300 border-t-2 border-brand-400' : activeLabel === cl.name ? 'bg-gray-100' : 'hover:bg-gray-50'} ${dragStageId === cl.id ? 'opacity-40' : ''}`}>
+                <span className="flex items-center gap-2 text-gray-700 min-w-0">
+                  <span title="Drag to reorder" className="shrink-0 cursor-grab"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-gray-300"><circle cx="9" cy="6" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="18" r="1"/></svg></span>
+                  <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${COLOR_MAP[cl.color] ?? 'bg-purple-400'}`} /><span className="truncate">{cl.name}</span>
                 </span>
-                <span className="text-xs text-gray-400">{counts[cl.name] ?? 0}</span>
+                <span className="flex items-center gap-1.5 shrink-0">
+                  <span className="text-xs text-gray-400">{counts[cl.name] ?? 0}</span>
+                  <button onClick={e => { e.stopPropagation(); deleteStage(cl.id, cl.name) }} title="Delete stage" className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500 transition-opacity">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                  </button>
+                </span>
               </div>
             ))}
           </div>
