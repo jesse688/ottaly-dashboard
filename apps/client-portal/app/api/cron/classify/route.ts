@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import pool, { ready } from '@/lib/db'
-import { classifyReply, CLASSIFIER_MODEL } from '@/lib/classify'
+import { classifyReply, CLASSIFIER_MODEL, detectWarmup } from '@/lib/classify'
 import { addToBlocklist, unsubscribeLead, bisonTeamForWorkspace } from '@/lib/bison'
 import { sendEmail } from '@/lib/email'
 
@@ -76,6 +76,30 @@ export async function GET(req: NextRequest) {
                   updated_at = NOW()
             WHERE id = $1`,
           [id]
+        )
+        summary.processed++
+        continue
+      }
+
+      // Free pre-filter: warm-up emails (apple-apple etc.) are inbox-reputation
+      // traffic, not real replies. Detected by marker + lack of lead enrichment;
+      // filed under 'rejected' so they never clutter the inbox or hit Gemini.
+      const hasLeadFields = Boolean(
+        row.linkedin_url || row.job_title || row.phone_number ||
+        row.company_website || row.lead_company
+      )
+      const warmup = detectWarmup({
+        subject: (row.subject as string) ?? '',
+        bodyText: (row.body_preview as string) ?? '',
+        hasLeadFields,
+      })
+      if (warmup.isWarmup) {
+        await client.query(
+          `UPDATE unibox_replies
+              SET category = 'warmup', classify_state = 'done', folder = 'rejected',
+                  ai_model = 'prefilter', ai_reasoning = $2, updated_at = NOW()
+            WHERE id = $1`,
+          [id, warmup.reason]
         )
         summary.processed++
         continue

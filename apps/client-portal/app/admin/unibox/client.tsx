@@ -61,7 +61,7 @@ const FOLDERS: { key: Folder; label: string }[] = [
   { key: 'rejected', label: 'Rejected' },
 ]
 
-const CATEGORIES = ['interested', 'not_interested', 'ooo_auto_reply', 'question', 'unsubscribe', 'other']
+const CATEGORIES = ['interested', 'not_interested', 'ooo_auto_reply', 'question', 'unsubscribe', 'warmup', 'other']
 
 const CAT_STYLE: Record<string, string> = {
   interested: 'bg-green-100 text-green-700',
@@ -69,6 +69,7 @@ const CAT_STYLE: Record<string, string> = {
   ooo_auto_reply: 'bg-blue-100 text-blue-700',
   question: 'bg-amber-100 text-amber-700',
   unsubscribe: 'bg-red-100 text-red-700',
+  warmup: 'bg-purple-100 text-purple-700',
   other: 'bg-slate-100 text-slate-600',
 }
 
@@ -99,6 +100,12 @@ export function AdminUniboxClient() {
   const [pickClientId, setPickClientId] = useState('')
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
+  // Associate-to-campaign panel state.
+  const [assocOpen, setAssocOpen] = useState(false)
+  const [assocLoading, setAssocLoading] = useState(false)
+  const [campaigns, setCampaigns] = useState<{ id: number; name: string; status?: string | null }[]>([])
+  const [assocPick, setAssocPick] = useState<string>('')
+  const [assocSuggest, setAssocSuggest] = useState<{ id: number | null; reason: string }>({ id: null, reason: '' })
 
   const load = useCallback(async (f: Folder, cursor?: string) => {
     setLoading(true)
@@ -148,6 +155,48 @@ export function AdminUniboxClient() {
       setMsg(d.already ? 'Already marked as a lead.' : `Marked as lead${d.bison_tag_state ? ` (tag: ${d.bison_tag_state})` : ''}.`)
       await load(folder)
       setSelected(null)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // Open the associate-to-campaign panel: load the client's campaigns + suggestion.
+  async function openAssociate() {
+    if (!selected) return
+    setAssocOpen(true); setAssocLoading(true); setMsg('')
+    setCampaigns([]); setAssocPick(''); setAssocSuggest({ id: null, reason: '' })
+    try {
+      const r = await fetch(`/api/admin/unibox/${selected.id}/associate`)
+      const d = await r.json() as {
+        ok?: boolean; error?: string
+        campaigns?: { id: number; name: string; status?: string | null }[]
+        suggestedId?: number | null; suggestedReason?: string; currentId?: number | null
+      }
+      if (!r.ok || !d.ok) { setMsg(d.error ?? 'Could not load campaigns'); setAssocOpen(false); return }
+      setCampaigns(d.campaigns ?? [])
+      setAssocSuggest({ id: d.suggestedId ?? null, reason: d.suggestedReason ?? '' })
+      // Pre-select: current campaign if any, else the suggestion.
+      const pre = d.currentId ?? d.suggestedId ?? null
+      setAssocPick(pre != null ? String(pre) : '')
+    } finally {
+      setAssocLoading(false)
+    }
+  }
+
+  async function saveAssociate() {
+    if (!selected || !assocPick) return
+    setBusy(true); setMsg('')
+    try {
+      const r = await fetch(`/api/admin/unibox/${selected.id}/associate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ campaignId: assocPick }),
+      })
+      const d = await r.json() as { ok?: boolean; error?: string }
+      if (!r.ok || !d.ok) { setMsg(d.error ?? 'Could not associate'); return }
+      const name = campaigns.find(c => String(c.id) === assocPick)?.name ?? assocPick
+      setMsg(`Associated with campaign "${name}".`)
+      setAssocOpen(false)
     } finally {
       setBusy(false)
     }
@@ -371,7 +420,67 @@ export function AdminUniboxClient() {
                       >
                         Reject
                       </button>
+                      <button
+                        onClick={openAssociate}
+                        disabled={busy}
+                        title="Link this reply to the right campaign (for forwarded / no-campaign replies)"
+                        className="px-4 py-2 border border-indigo-200 text-indigo-700 text-sm font-medium rounded-lg hover:bg-indigo-50 disabled:opacity-50"
+                      >
+                        Associate to campaign
+                      </button>
                     </div>
+
+                    {/* Associate-to-campaign panel */}
+                    {assocOpen && (
+                      <div className="mt-4 rounded-xl border border-indigo-200 bg-indigo-50/40 p-4">
+                        <p className="text-sm font-semibold text-gray-900">Associate to campaign</p>
+                        <p className="text-xs text-gray-500 mt-0.5">
+                          Client: <span className="font-medium">{selected.company_name ?? `Bison team ${selected.bison_team_id}`}</span> · from the address it was sent to
+                        </p>
+                        {assocLoading ? (
+                          <p className="text-xs text-gray-500 mt-3">Loading campaigns…</p>
+                        ) : campaigns.length === 0 ? (
+                          <p className="text-xs text-gray-500 mt-3">No campaigns found for this client.</p>
+                        ) : (
+                          <>
+                            {assocSuggest.id != null && (
+                              <p className="text-xs text-indigo-700 mt-3">
+                                💡 Suggested: <span className="font-medium">{campaigns.find(c => c.id === assocSuggest.id)?.name}</span>
+                                {assocSuggest.reason ? ` — ${assocSuggest.reason}` : ''}
+                              </p>
+                            )}
+                            <select
+                              value={assocPick}
+                              onChange={e => setAssocPick(e.target.value)}
+                              className="block w-full mt-2 border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white"
+                            >
+                              <option value="">Choose a campaign…</option>
+                              {campaigns.map(c => (
+                                <option key={c.id} value={String(c.id)}>
+                                  {c.name}{c.id === assocSuggest.id ? '  (suggested)' : ''}
+                                </option>
+                              ))}
+                            </select>
+                            <div className="flex items-center gap-2 mt-3">
+                              <button
+                                onClick={saveAssociate}
+                                disabled={busy || !assocPick}
+                                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg disabled:opacity-50"
+                              >
+                                {busy ? 'Saving…' : 'Associate'}
+                              </button>
+                              <button
+                                onClick={() => setAssocOpen(false)}
+                                disabled={busy}
+                                className="px-4 py-2 border border-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 disabled:opacity-50"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )}
                   </>
                 )}
                 {msg && <p className="text-xs text-gray-600 mt-3">{msg}</p>}

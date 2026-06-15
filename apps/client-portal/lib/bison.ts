@@ -289,6 +289,28 @@ export async function getLeads(page = 1, perPage = 100, teamId?: string | number
   })
 }
 
+export interface BisonCampaign {
+  id: number
+  name: string
+  status?: string | null
+}
+
+// List a team's campaigns (serialized switch+fetch, like getLeads). Used to let
+// an admin associate an unmapped/forwarded reply with the right campaign.
+export async function getCampaigns(teamId?: string | number | null): Promise<BisonCampaign[]> {
+  return withTeam(teamId, async () => {
+    const out: BisonCampaign[] = []
+    for (let p = 1; p <= 20; p++) {
+      const data = await bison<{ data?: BisonCampaign[] }>('GET', '/api/campaigns', { page: p, per_page: 100 })
+      const batch = Array.isArray(data) ? (data as unknown as BisonCampaign[]) : data.data ?? []
+      if (!batch.length) break
+      for (const c of batch) out.push({ id: c.id, name: c.name, status: c.status ?? null })
+      if (batch.length < 100) break
+    }
+    return out
+  })
+}
+
 // Fetch a single lead by ID or email.
 export async function getLead(idOrEmail: string | number): Promise<BisonLead | null> {
   try {

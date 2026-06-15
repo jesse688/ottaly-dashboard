@@ -15,11 +15,51 @@ export type ReplyCategory =
   | 'ooo_auto_reply'
   | 'question'
   | 'unsubscribe'
+  | 'warmup'
   | 'other'
 
 const CATEGORIES: ReplyCategory[] = [
-  'interested', 'not_interested', 'ooo_auto_reply', 'question', 'unsubscribe', 'other',
+  'interested', 'not_interested', 'ooo_auto_reply', 'question', 'unsubscribe', 'warmup', 'other',
 ]
+
+// Warm-up emails are sent automatically between inboxes to build sending
+// reputation. They are NOT real prospect replies — they must never reach the
+// inbox or cost a Gemini call. Warm-up tools tag each message with a random
+// token so the receiving inbox can recognise + auto-reply to it; the classic
+// signature is two repeated words ("apple apple", "Pizza-Pizza"). We detect by
+// those markers, and treat the absence of any real lead enrichment (no LinkedIn,
+// company, title, phone — i.e. no campaign behind it) as a strong corroborating
+// signal, since a genuine prospect reply has a lead record.
+const WARMUP_PATTERNS: RegExp[] = [
+  /\b([a-z]{3,})[\s_-]+\1\b/i,                                   // repeated word token: apple apple / apple-apple
+  /\bwarm[\s_-]?up\b/i,                                          // the literal word "warmup"/"warm up"
+  /\b(mailwarm|warmupinbox|lemwarm|warmbox|warmy)\b/i,          // common warm-up tool names
+  /\bwarm-?up\s*(id|token|ref|code)\b[:#]?\s*[a-z0-9]{3,}/i,    // explicit warm-up token markers
+  /\[\s*warm-?up\s*\]/i,                                         // [warmup] tag
+]
+
+export interface WarmupSignals {
+  subject?: string
+  bodyText?: string
+  // false when the reply has NO real lead enrichment behind it (no LinkedIn,
+  // company, title, phone). A genuine forwarded reply can also lack fields, so
+  // this only corroborates a marker match — it never flags warm-up on its own.
+  hasLeadFields?: boolean
+}
+
+// Cheap, deterministic warm-up detector. A warm-up MARKER is required; missing
+// lead fields only raise confidence (so we never mis-flag a real forwarded reply
+// that happens to have no enrichment).
+export function detectWarmup(s: WarmupSignals): { isWarmup: boolean; reason: string } {
+  const hay = `${s.subject ?? ''}\n${s.bodyText ?? ''}`
+  const hit = WARMUP_PATTERNS.find(re => re.test(hay))
+  if (!hit) return { isWarmup: false, reason: '' }
+  const noFields = s.hasLeadFields === false
+  return {
+    isWarmup: true,
+    reason: `warm-up marker ${String(hit)}${noFields ? ' + no lead enrichment' : ''}`,
+  }
+}
 
 export interface Classification {
   category: ReplyCategory
