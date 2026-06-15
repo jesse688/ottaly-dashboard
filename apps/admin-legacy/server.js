@@ -7783,7 +7783,15 @@ app.get('/api/gateway-analysis', requireSession, async (req, res) => {
                        AND COALESCE(raw->>'label','') NOT IN ('OUT_OF_OFFICE','AUTOMATIC_REPLY')) AS replied_substantive,
                bool_or(event_type = 'lead'
                        OR raw->>'label' IN ('LEAD','INTERESTED_NONLEAD'))            AS is_lead,
-               bool_or(event_type = 'bounce')                                         AS bounced_ev
+               -- Bounce class from the SMTP reason in raw.msg (no stored type).
+               -- 3-way, NOT naive 5xx=hard: a 5xx can be a reputation/policy
+               -- BLOCK (gateway rejecting the sender), which must not count as a
+               -- dead address. Order: block > hard > soft.
+               bool_or(event_type = 'bounce' AND lower(raw->>'msg') ~ '5\.[01]\.[0-9]|55[04]|no such user|user unknown|does not exist|recipientnotfound|recipient not found|mailbox unavailable|address rejected|unknown recipient|invalid recipient|mailbox disabled|no mailbox|account.*disabled|unable to verify user|account or domain|no longer|not found'
+                       AND NOT lower(raw->>'msg') ~ 'spam|blacklist|black list|spamhaus|dbl|surbl|reputation|polic|open relay|rate|unsolicited|rejected by organization|denylist|rbl|access denied|not allowed to send|barracuda|blocked|block list|5\.7\.|not authorized|sender denied|sendernotauth|denied|mail loop|hop count') AS bounce_hard,
+               bool_or(event_type = 'bounce' AND lower(raw->>'msg') ~ 'spam|blacklist|black list|spamhaus|dbl|surbl|reputation|polic|open relay|rate|unsolicited|rejected by organization|denylist|rbl|access denied|not allowed to send|barracuda|blocked|block list|5\.7\.|not authorized|sender denied|sendernotauth|denied|mail loop|hop count') AS bounce_block,
+               bool_or(event_type = 'bounce' AND lower(raw->>'msg') ~ '4\.[0-9]\.[0-9]|45[0-9]|temporar|try again|greylist|grey list|deferred|quota|mailbox full|out of storage|over quota|too many|server.*busy|timeout|throttl|retry'
+                       AND NOT lower(raw->>'msg') ~ 'spam|blacklist|spamhaus|dbl|surbl|reputation|polic|open relay|unsolicited|rejected by organization|denylist|rbl|access denied|not allowed to send|barracuda|blocked|block list|5\.7\.|not authorized|sender denied|sendernotauth|denied|mail loop|hop count') AS bounce_soft
         FROM email_events
         GROUP BY 1
       ),
@@ -7793,7 +7801,9 @@ app.get('/api/gateway-analysis', requireSession, async (req, res) => {
                e.replied,
                e.replied_substantive,
                e.is_lead,
-               (e.bounced_ev OR s.bounced_at IS NOT NULL) AS bounced
+               e.bounce_hard,
+               (e.bounce_block AND NOT e.bounce_hard)                       AS bounce_block,
+               (e.bounce_soft AND NOT e.bounce_hard AND NOT e.bounce_block) AS bounce_soft
         FROM sent s
         JOIN gateway_mx_cache g ON g.domain = s.domain
         LEFT JOIN ev e ON e.email = s.email
@@ -7804,7 +7814,9 @@ app.get('/api/gateway-analysis', requireSession, async (req, res) => {
              count(*) FILTER (WHERE replied)          AS replied,
              count(*) FILTER (WHERE replied_substantive) AS replied_no_ooo,
              count(*) FILTER (WHERE is_lead)          AS leads,
-             count(*) FILTER (WHERE bounced)          AS bounced
+             count(*) FILTER (WHERE bounce_hard)      AS bounced_hard,
+             count(*) FILTER (WHERE bounce_block)     AS bounced_block,
+             count(*) FILTER (WHERE bounce_soft)      AS bounced_soft
       FROM per_contact
       GROUP BY gateway
       ORDER BY sent DESC`);
@@ -7814,7 +7826,9 @@ app.get('/api/gateway-analysis', requireSession, async (req, res) => {
       const replied = Number(r.replied);
       const repliedNoOoo = Number(r.replied_no_ooo);
       const leads = Number(r.leads);
-      const bounced = Number(r.bounced);
+      const hard = Number(r.bounced_hard);
+      const block = Number(r.bounced_block);
+      const soft = Number(r.bounced_soft);
       return {
         gateway: r.gateway,
         domains: Number(r.domains),
@@ -7823,18 +7837,27 @@ app.get('/api/gateway-analysis', requireSession, async (req, res) => {
         replyRateNoOoo: sent ? (100 * repliedNoOoo) / sent : 0,
         leadRate:       sent ? (100 * leads) / sent : 0,
         rtl:            sent ? (1000 * leads) / sent : 0,  // leads per 1,000 sent
-        bounceRate:     sent ? (100 * bounced) / sent : 0,
-        replied, leads, bounced,
+        // 3-way bounce split: hard=dead address, block=gateway rejected sender, soft=temporary
+        hardRate:       sent ? (100 * hard) / sent : 0,
+        blockRate:      sent ? (100 * block) / sent : 0,
+        softRate:       sent ? (100 * soft) / sent : 0,
+        replied, leads,
       };
     });
 
+    // Coverage = of the domains we've SENT to, how many are resolved. (The cache
+    // also holds never-emailed domains from the full-DB scan, so counting the
+    // whole cache would exceed 100%.)
     const cov = await pgdb.query(`
+      WITH sent_domains AS (
+        SELECT DISTINCT lower(split_part(email,'@',2)) AS domain
+        FROM contacts
+        WHERE COALESCE(emailed_workspaces,'{}'::jsonb) <> '{}'::jsonb
+          AND email LIKE '%@%'
+      )
       SELECT
-        (SELECT count(*) FROM gateway_mx_cache) AS resolved,
-        (SELECT count(DISTINCT lower(split_part(email,'@',2)))
-           FROM contacts
-          WHERE COALESCE(emailed_workspaces,'{}'::jsonb) <> '{}'::jsonb
-            AND email LIKE '%@%') AS total`);
+        (SELECT count(*) FROM sent_domains s JOIN gateway_mx_cache g ON g.domain = s.domain) AS resolved,
+        (SELECT count(*) FROM sent_domains) AS total`);
 
     res.json({
       gateways,

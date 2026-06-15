@@ -48,6 +48,7 @@
         { href: 'icp.html',          label: 'Audience' },
         { href: 'diagnostics.html',   label: 'Diagnostics' },
         { href: 'intelligence.html',  label: 'Intelligence' },
+        { href: 'gateway-analysis.html', label: 'Gateways' },
       ]
     },
     {
