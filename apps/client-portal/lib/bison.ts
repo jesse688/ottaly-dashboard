@@ -163,9 +163,18 @@ export interface BisonLead {
   notes?: string | null
   status?: string | null
   custom_variables?: Array<{ name: string; value: string }>
+  tags?: Array<{ id: number; name: string }>
   lead_campaign_data?: unknown[]
   created_at?: string
   updated_at?: string
+}
+
+// A Bison lead counts as a real "lead" for the portal when it carries the
+// "Interested" or "Meeting Booked" tag (Bison's actual signal — there is no
+// `interested` boolean on the lead object). Case-insensitive name match.
+const LEAD_TAG_NAMES = new Set(['interested', 'meeting booked'])
+export function isInterestedLead(l: BisonLead): boolean {
+  return (l.tags ?? []).some(t => LEAD_TAG_NAMES.has((t.name ?? '').trim().toLowerCase()))
 }
 
 export interface BisonReply {
@@ -228,7 +237,9 @@ export async function getLeads(page = 1, perPage = 100, teamId?: string | number
       const batch = Array.isArray(data) ? (data as unknown as BisonLead[]) : data.data ?? []
       if (!batch.length) break
       scanned += batch.length
-      for (const l of batch) if ((l as { interested?: boolean }).interested === true) interested.push(l)
+      // A real "lead" carries the Interested / Meeting Booked TAG (Bison has no
+      // `interested` boolean on the lead — the signal is its tags). Match by name.
+      for (const l of batch) if (isInterestedLead(l)) interested.push(l)
       if (batch.length < 100) break
     }
     console.log(`[bison.getLeads] team=${teamId ?? 'default'} scanned ${scanned} → ${interested.length} interested lead(s)`)
