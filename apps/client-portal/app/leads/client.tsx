@@ -47,6 +47,11 @@ interface Lead {
 // replied off-dashboard, OR the thread already contains any outbound message.
 const isReplied = (l: Lead) => l.has_sent || l.replied_off || l.has_outbound
 
+// Pay-per-lead clients are billed per lead and never top up. Matches the Billing
+// page + lib/balance.ts. Hardcoded to Bubble for now.
+const PAY_PER_LEAD_WORKSPACES = new Set(['6a0e29d0d004be93be3f33f2']) // Bubble
+const PAY_PER_LEAD_COMPANIES = new Set(['bubble'])
+
 interface ThreadMsg {
   id: string
   direction: 'IN' | 'OUT'
@@ -167,6 +172,11 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
   }
   // First name for the greeting; falls back to the company/account name.
   const greetingName = (clientName || companyName || '').trim().split(/\s+/)[0] || 'there'
+  // Pay-per-lead clients (e.g. Bubble) are billed per lead and never top up, so
+  // never show the "Top Up Now" button. Matches the Billing page logic.
+  const payPerLead =
+    PAY_PER_LEAD_WORKSPACES.has((activeWorkspaceId ?? '').trim().toLowerCase()) ||
+    PAY_PER_LEAD_COMPANIES.has((companyName ?? '').trim().toLowerCase())
   const [leads, setLeads] = useState<Lead[] | null>(null)
   const [selected, setSelected] = useState<Lead | null>(null)
   const [thread, setThread] = useState<ThreadMsg[] | null>(null)
@@ -491,7 +501,7 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
           <a href="/account" className="px-3 py-1.5 text-white/70 hover:text-white text-sm rounded-lg">Account</a>
         </nav>
         <div className="ml-auto flex items-center gap-2 md:gap-4">
-          {balance && (
+          {!payPerLead && balance && (
             balance.balance <= 0 ? (
               // Out of leads → red "Top Up Now"
               <a href="/invoices" className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500 text-white text-sm font-semibold hover:bg-red-600 shadow-sm animate-pulse">

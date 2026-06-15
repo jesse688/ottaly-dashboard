@@ -1,5 +1,23 @@
 import pool from './db'
 
+// Pay-per-lead clients are billed per delivered lead (card auto-charge) instead of
+// pre-paying a balance, so their leads NEVER lock and they never top up. Matched by
+// workspace id OR company name 'bubble' (mirrors the Billing page). Hardcoded for now.
+const PAY_PER_LEAD_WORKSPACES = new Set(['6a0e29d0d004be93be3f33f2']) // Bubble
+const PAY_PER_LEAD_COMPANIES = new Set(['bubble'])
+
+export async function isPayPerLead(clientId: string): Promise<boolean> {
+  const r = await pool.query(
+    `SELECT workspace_id, company_name FROM portal_clients WHERE id = $1`,
+    [clientId]
+  )
+  const row = r.rows[0]
+  if (!row) return false
+  const ws = String(row.workspace_id ?? '').trim().toLowerCase()
+  const co = String(row.company_name ?? '').trim().toLowerCase()
+  return PAY_PER_LEAD_WORKSPACES.has(ws) || PAY_PER_LEAD_COMPANIES.has(co)
+}
+
 // The lead balance is a COUNT OF LEADS (not money). Signed sum of ledger rows:
 //   topup (+N leads) · dispute_refund (+1) · adjustment (+/-) · lead_charge (-1)
 // cost_per_lead (£) is only used to value top-ups / show £ alongside — never the unit.
@@ -17,6 +35,8 @@ export async function getBalance(clientId: string): Promise<number> {
 // (delivered − creditsGranted) charged leads are locked, so a paid top-up
 // automatically unlocks the oldest locked leads, up to the amount paid.
 export async function getLockedLeadIds(clientId: string): Promise<Set<string>> {
+  // Pay-per-lead clients never run out of credit → nothing ever locks.
+  if (await isPayPerLead(clientId)) return new Set<string>()
   const r = await pool.query(
     `SELECT COALESCE(SUM(amount) FILTER (WHERE type <> 'lead_charge'), 0) AS credits,
             COUNT(*) FILTER (WHERE type = 'lead_charge')                  AS delivered
