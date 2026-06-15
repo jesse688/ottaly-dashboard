@@ -600,7 +600,7 @@ const CLIENT_SEED = [
   { workspace_id: '69a9db287af7ef2854f57636', workspace_name: 'GGRS',                       price_per_lead: 178,    campaign_manager: 'Joey', commission_rate: 15 },
   { workspace_id: '69a9db307af7ef2854f57637', workspace_name: 'ButterflyEco',               price_per_lead: 205,    campaign_manager: '',     commission_rate: 15 },
   { workspace_id: '69c43d1407bf312ff0026642', workspace_name: 'GXI',                        price_per_lead: 169,    campaign_manager: 'Joey', commission_rate: 15 },
-  { workspace_id: '69c43d1e07bf312ff0026643', workspace_name: 'AuraaDesign',                price_per_lead: 100,    campaign_manager: '',     commission_rate: 15 },
+  { workspace_id: '69c43d1e07bf312ff0026643', workspace_name: 'GXI Furniture',              price_per_lead: 100,    campaign_manager: '',     commission_rate: 15 },
   { workspace_id: '69ce40f616a9cc965746b1a6', workspace_name: 'Ottaly Test Account',        price_per_lead: 0,      campaign_manager: '',     commission_rate: 15 },
 ];
 
