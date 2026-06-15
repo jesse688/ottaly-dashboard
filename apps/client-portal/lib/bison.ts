@@ -29,7 +29,35 @@ export function bisonKeySource(): 'dashboard' | 'env' | 'none' {
   if (_keyCache?.val && _keyCache.val !== ENV_KEY) return 'dashboard'
   return ENV_KEY ? 'env' : 'none'
 }
-export function invalidateBisonKeyCache() { _keyCache = null; _activeTeam = null }
+export function invalidateBisonKeyCache() { _keyCache = null; _activeTeam = null; _wsTokenCache = null }
+
+// Per-workspace (user) Bison tokens: { [team_id]: plain_text_token }, stored in
+// portal_settings 'bison_ws_tokens'. When a team has its own token we use IT as
+// the bearer and SKIP switch-workspace entirely — so the portal never disturbs
+// the shared session (no "one login at a time" kicking Jesse out of Bison, no
+// cross-request collisions). The super-admin key stays as the fallback for teams
+// without a minted token and for minting itself. Cached ~10s like the key.
+let _wsTokenCache: { val: Record<string, string>; at: number } | null = null
+export async function getBisonWsTokens(): Promise<Record<string, string>> {
+  if (_wsTokenCache && Date.now() - _wsTokenCache.at < 10_000) return _wsTokenCache.val
+  let val: Record<string, string> = {}
+  try {
+    const r = await pool.query(`SELECT value FROM portal_settings WHERE key = 'bison_ws_tokens'`)
+    if (r.rows[0]?.value) val = JSON.parse(r.rows[0].value)
+  } catch { /* missing / bad json → no per-ws tokens */ }
+  _wsTokenCache = { val, at: Date.now() }
+  return val
+}
+export async function getBisonWsToken(teamId: string | number | null | undefined): Promise<string | null> {
+  if (teamId == null || teamId === '') return null
+  const tokens = await getBisonWsTokens()
+  return tokens[String(teamId)] ?? null
+}
+
+// The token the CURRENT serialized operation should use as its bearer. Set by
+// withTeam() inside the lock (so it's never raced), read by bison(). null = use
+// the super-admin key (getBisonKey).
+let _activeToken: string | null = null
 
 // PlusVibe workspace_id → Bison team_id. portal_clients.workspace_id holds the
 // PV id; Bison needs the team_id to switch workspace. Requires a SUPER-ADMIN
@@ -105,6 +133,18 @@ export async function switchWorkspace(teamId: string | number): Promise<void> {
 // guard. This is the correct entry point for any per-client Bison read.
 export async function withTeam<T>(teamId: string | number | null | undefined, fn: () => Promise<T>): Promise<T> {
   return withBisonLock(async () => {
+    const wsToken = await getBisonWsToken(teamId)
+    if (wsToken) {
+      // Per-workspace token: it's already scoped to this team — use it as the
+      // bearer and DON'T switch the shared session. This is the preferred path.
+      _activeToken = wsToken
+      try {
+        return await fn()
+      } finally {
+        _activeToken = null
+      }
+    }
+    // Fallback (no minted token for this team): switch the super-admin key.
     if (teamId != null && teamId !== '') {
       try { await switchWorkspace(teamId) } catch { /* fall through on its own workspace */ }
     }
@@ -113,7 +153,9 @@ export async function withTeam<T>(teamId: string | number | null | undefined, fn
 }
 
 async function headers(extra: Record<string, string> = {}): Promise<Record<string, string>> {
-  const key = await getBisonKey()
+  // Use the per-workspace token if the current operation set one; else the
+  // super-admin key.
+  const key = _activeToken ?? await getBisonKey()
   return { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...extra }
 }
 
@@ -450,3 +492,32 @@ export async function registerWebhook(): Promise<{ ok: boolean; reason?: string 
 // Best-effort sync flag (env presence). The real key may also come from the
 // Settings override — use getBisonKey() when correctness matters.
 export const BISON_CONFIGURED = ENV_KEY.length > 0
+
+// Mint a per-workspace (user) Bison token for one team, using the SUPER-ADMIN
+// key. POST /api/workspaces/v1.1/{team_id}/api-tokens → plain_text_token.
+// Returns the token, or null on failure. Goes through the lock with NO ws-token
+// active so it uses the super-admin key.
+export async function mintBisonWsToken(teamId: string | number, name: string): Promise<string | null> {
+  try {
+    return await withBisonLock(async () => {
+      _activeToken = null // ensure super-admin key is used for minting
+      const data = await bison<{ data?: { plain_text_token?: string } }>(
+        'POST', `/api/workspaces/v1.1/${teamId}/api-tokens`, undefined, { name }
+      )
+      return data?.data?.plain_text_token ?? null
+    })
+  } catch (err) {
+    console.error(`[bison] mint token for team ${teamId} failed:`, String(err))
+    return null
+  }
+}
+
+// Persist the per-workspace token map and bust the cache so it takes effect now.
+export async function saveBisonWsTokens(tokens: Record<string, string>): Promise<void> {
+  await pool.query(
+    `INSERT INTO portal_settings (key, value, updated_at) VALUES ('bison_ws_tokens', $1, NOW())
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+    [JSON.stringify(tokens)]
+  )
+  _wsTokenCache = null
+}
