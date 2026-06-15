@@ -181,6 +181,12 @@ export function AdminUniboxClient() {
     }
   }
 
+  // The category that's in effect = admin override if set, else the AI category.
+  // Drives both the highlighted "Correct category" chip and how strongly we push
+  // "Mark as lead" (de-emphasized when this isn't 'interested').
+  const effectiveCategory = (selected?.admin_label ?? selected?.category) ?? 'other'
+  const isInterested = effectiveCategory === 'interested'
+
   return (
     <div className="min-h-screen bg-gray-50" style={{ fontFamily: 'system-ui,-apple-system,sans-serif' }}>
       {/* Top bar — matches the admin clients header */}
@@ -278,25 +284,32 @@ export function AdminUniboxClient() {
                 {replyBody(selected)}
               </div>
 
-              {/* Override category */}
-              <div className="mt-5">
-                <label className="text-xs font-medium text-gray-500">Override category</label>
-                <div className="flex flex-wrap gap-1.5 mt-1.5">
+              {/* Classification — correct the AI's category (does NOT take an action) */}
+              <div className="mt-5 rounded-lg border border-gray-100 bg-gray-50/60 p-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-gray-600">Correct category</label>
+                  <span className="text-[11px] text-gray-400">Classification only — doesn&apos;t mark or reject</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5 mt-2">
                   {CATEGORIES.map(c => (
                     <button
                       key={c}
                       onClick={() => setAdminLabel(c)}
                       disabled={busy}
-                      className={`px-2.5 py-1 rounded-full text-xs border transition-colors disabled:opacity-50 ${(selected.admin_label ?? selected.category) === c ? 'border-indigo-400 bg-indigo-50 text-indigo-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+                      className={`px-2.5 py-1 rounded-full text-xs border transition-colors disabled:opacity-50 ${effectiveCategory === c ? 'border-indigo-400 bg-indigo-50 text-indigo-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
                     >
                       {c.replace(/_/g, ' ')}
                     </button>
                   ))}
                 </div>
+                {selected.admin_label && selected.admin_label !== selected.category && (
+                  <p className="text-[11px] text-gray-500 mt-2">Overridden from AI&apos;s &quot;{(selected.category ?? 'unclassified').replace(/_/g, ' ')}&quot;.</p>
+                )}
               </div>
 
-              {/* Actions */}
-              <div className="mt-6 border-t border-gray-100 pt-5">
+              {/* Actions — what to DO with this reply, distinct from classifying it */}
+              <div className="mt-5 border-t border-gray-100 pt-5">
+                <p className="text-xs font-semibold text-gray-600 mb-3">Action</p>
                 {selected.marked_as_lead ? (
                   <div className="text-sm text-green-700 bg-green-50 border border-green-100 rounded-lg p-3">
                     ✓ Marked as lead{selected.marked_at ? ` on ${fmtDate(selected.marked_at)}` : ''}
@@ -304,6 +317,12 @@ export function AdminUniboxClient() {
                   </div>
                 ) : (
                   <>
+                    {!isInterested && (
+                      <div className="mb-3 flex items-start gap-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0 mt-0.5"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                        <span>This is classified as <strong>{effectiveCategory.replace(/_/g, ' ')}</strong>, not interested. You can still mark it as a lead, but double-check first.</span>
+                      </div>
+                    )}
                     <label className="text-xs font-medium text-gray-500">Bill to client</label>
                     <select
                       value={pickClientId}
@@ -319,9 +338,12 @@ export function AdminUniboxClient() {
                       <button
                         onClick={markAsLead}
                         disabled={busy}
-                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg disabled:opacity-50"
+                        title={isInterested ? 'Mark this reply as a real lead' : 'AI thinks this is not interested — mark as lead anyway'}
+                        className={`px-4 py-2 text-sm font-medium rounded-lg disabled:opacity-50 ${isInterested
+                          ? 'bg-green-600 hover:bg-green-700 text-white'
+                          : 'border border-green-300 text-green-700 hover:bg-green-50'}`}
                       >
-                        {busy ? 'Working…' : 'Mark as lead'}
+                        {busy ? 'Working…' : isInterested ? 'Mark as lead' : 'Mark as lead anyway'}
                       </button>
                       <button
                         onClick={reject}

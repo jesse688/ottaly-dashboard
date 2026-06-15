@@ -15,6 +15,7 @@ interface InvoiceWithClient {
   due_date: string | null
   paid_date: string | null
   created_at: string
+  has_file: boolean
 }
 
 interface InvoiceRow {
@@ -37,9 +38,15 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const clientId = searchParams.get('clientId')
 
+  // Select explicit columns (never the file_data BYTEA) + a has_file flag so the
+  // admin list can show whether an invoice PDF has been uploaded.
+  const cols = `i.id, i.client_id, i.invoice_number, i.description, i.amount, i.currency,
+                i.status, i.due_date, i.paid_date, i.created_at,
+                (i.file_data IS NOT NULL) AS has_file, pc.company_name`
+
   if (clientId) {
     const res = await pool.query(
-      `SELECT i.*, pc.company_name
+      `SELECT ${cols}
        FROM portal_invoices i
        JOIN portal_clients pc ON pc.id = i.client_id
        WHERE i.client_id = $1
@@ -50,7 +57,7 @@ export async function GET(req: NextRequest) {
   }
 
   const res = await pool.query(
-    `SELECT i.*, pc.company_name
+    `SELECT ${cols}
      FROM portal_invoices i
      JOIN portal_clients pc ON pc.id = i.client_id
      ORDER BY i.created_at DESC`

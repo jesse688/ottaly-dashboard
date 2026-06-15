@@ -355,6 +355,30 @@ export async function tagInBison(
   }
 }
 
+// ── Blocklist ─────────────────────────────────────────────────────────────────
+
+// Add an email to a client's Bison blocklist so a confirmed lead stops getting
+// cold outreach. Best-effort: switches into the team and POSTs the email to the
+// blacklisted-emails endpoint. Never throws — returns {ok:false, reason} so the
+// caller (mark-as-lead) records the outcome without rolling back the lead.
+// (#10 auto-unsubscribe will reuse this helper.)
+export async function addToBlocklist(
+  teamId: string | number,
+  email: string,
+): Promise<{ ok: boolean; reason?: string }> {
+  if (teamId == null || teamId === '' || !email) {
+    return { ok: false, reason: 'missing-team-or-email' }
+  }
+  try {
+    return await withTeam(teamId, async () => {
+      await bison('POST', '/api/blacklisted-emails', undefined, { email })
+      return { ok: true }
+    })
+  } catch (err) {
+    return { ok: false, reason: String(err) }
+  }
+}
+
 // ── Webhooks ──────────────────────────────────────────────────────────────────
 
 const WEBHOOK_TARGET =

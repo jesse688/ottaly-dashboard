@@ -39,10 +39,13 @@ interface Lead {
   dispute_eligible: boolean
   archived: boolean
   has_sent: boolean
+  has_outbound: boolean
   replied_off: boolean
   locked: boolean
 }
-const isReplied = (l: Lead) => l.has_sent || l.replied_off
+// A lead has been responded to if we sent via the portal, the client marked it
+// replied off-dashboard, OR the thread already contains any outbound message.
+const isReplied = (l: Lead) => l.has_sent || l.replied_off || l.has_outbound
 
 interface ThreadMsg {
   id: string
@@ -172,6 +175,9 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
   const [view, setView] = useState<'inbox' | 'unread' | 'sent' | 'archived'>('unread')
   const [search, setSearch] = useState('')
   const [balance, setBalance] = useState<{ balance: number; currency: string; lowThreshold: number } | null>(null)
+  // Unpaid-invoice nudge shown under the header; dismissible per session.
+  const [hasUnpaidInvoice, setHasUnpaidInvoice] = useState(false)
+  const [invoiceBannerDismissed, setInvoiceBannerDismissed] = useState(false)
   const [speed, setSpeed] = useState<{ avgSeconds: number | null; goalMinutes: number; perLead: Record<string, number> } | null>(null)
   // Friendly greeting — shown ONCE per browser session (on login / first load),
   // not every time the user navigates back to Leads from Billing/Account.
@@ -187,6 +193,12 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
 
   const [replying, setReplying] = useState(false)
   const [replyMsg, setReplyMsg] = useState('')
+
+  // Client's private notes on the selected lead (persisted via PATCH …/data).
+  const [notes, setNotes] = useState('')
+  const [notesSavedAt, setNotesSavedAt] = useState<number | null>(null)
+  const [notesSaving, setNotesSaving] = useState(false)
+  const notesLoadedFor = useRef<string | null>(null)
 
   const [showDispute, setShowDispute] = useState(false)
   const [disputeType, setDisputeType] = useState<'non_lead' | 'icp_mismatch'>('non_lead')
@@ -211,6 +223,9 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
     fetch('/api/portal/labels').then(r => r.json()).then((d) => Array.isArray(d) && setCustomLabels(d)).catch(() => {})
     fetch('/api/portal/balance').then(r => r.json()).then((d) => !d.error && setBalance(d)).catch(() => {})
     fetch('/api/portal/speed').then(r => r.json()).then((d) => !d.error && setSpeed(d)).catch(() => {})
+    fetch('/api/portal/invoices').then(r => r.json()).then((d) => {
+      if (Array.isArray(d?.invoices)) setHasUnpaidInvoice(d.invoices.some((i: { status: string }) => i.status === 'unpaid'))
+    }).catch(() => {})
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -233,7 +248,7 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
 
   // Show the unread (not-yet-replied) count in the browser tab.
   useEffect(() => {
-    const n = (leads ?? []).filter(l => !l.archived && !l.locked && !(l.has_sent || l.replied_off)).length
+    const n = (leads ?? []).filter(l => !l.archived && !l.locked && !isReplied(l)).length
     document.title = n > 0 ? `(${n}) Unread · Ottaly` : 'Ottaly Portal'
   }, [leads])
 
@@ -251,6 +266,15 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
     setSelected(lead)
     setReplyMsg('')
     setShowDispute(false); setThread(null); setShowDetails(false)
+    // Load this lead's saved notes (current value from the server, not the list's
+    // possibly-suppressed copy). Reset saved-state for the new lead.
+    setNotes(''); setNotesSavedAt(null); notesLoadedFor.current = null
+    if (!lead.locked) {
+      fetch(`/api/portal/leads/${lead.id}/data`).then(r => r.json()).then((d: { notes?: string | null }) => {
+        notesLoadedFor.current = lead.id
+        setNotes(d?.notes ?? '')
+      }).catch(() => { notesLoadedFor.current = lead.id })
+    }
     // Locked leads never load their conversation.
     if (lead.locked) { setThread([]); return }
     setLeads(prev => prev?.map(l => l.id === lead.id ? { ...l, has_unread: false } : l) ?? null)
@@ -308,6 +332,21 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
     } else {
       setReplyMsg('Could not send. Please try again.')
     }
+  }
+
+  // Save the client's notes for the selected lead (on blur). Best-effort; shows
+  // a brief "Saved" state. Guards against firing before the lead's notes loaded.
+  async function saveNotes() {
+    if (!selected || notesLoadedFor.current !== selected.id) return
+    setNotesSaving(true)
+    try {
+      await fetch(`/api/portal/leads/${selected.id}/data`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes }),
+      })
+      setNotesSavedAt(Date.now())
+    } catch { /* leave unsaved; user can retry by editing again */ }
+    finally { setNotesSaving(false) }
   }
 
   async function toggleRepliedOff(lead: Lead) {
@@ -449,6 +488,16 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
 
       <WarmupBar />
 
+      {hasUnpaidInvoice && !invoiceBannerDismissed && (
+        <div className="flex items-center gap-3 px-4 md:px-5 py-2 bg-red-50 border-b border-red-200 text-red-800 text-sm shrink-0">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="shrink-0"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          <span className="flex-1">You have an unpaid invoice — <a href="/invoices" className="font-semibold underline hover:no-underline">view</a></span>
+          <button onClick={() => setInvoiceBannerDismissed(true)} aria-label="Dismiss" className="text-red-400 hover:text-red-700 shrink-0">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+      )}
+
       <div className="flex-1 flex overflow-hidden relative">
         {/* Mobile backdrop for the sidebar drawer */}
         {showSidebar && <div className="md:hidden fixed inset-0 top-14 bg-black/30 z-30" onClick={() => setShowSidebar(false)} />}
@@ -552,14 +601,15 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
                           <SpeedTimer
                             repliedAt={l.first_replied_at}
                             respondedAt={l.first_responded_at}
-                            done={l.has_sent || l.replied_off}
+                            done={isReplied(l)}
                             size="sm"
                           />
                         </div>
                       )}
-                      {(cl || l.dispute_status === 'pending') && !l.locked && (
+                      {(cl || l.dispute_status === 'pending' || isReplied(l)) && !l.locked && (
                         <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                         {cl && <span className={`inline-flex text-[10px] font-medium px-1.5 py-0.5 rounded ${COLOR_BADGE[cl.color] ?? 'bg-purple-100 text-purple-700'}`}>{cl.name}</span>}
+                        {isReplied(l) && <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-green-100 text-green-700 px-1.5 py-0.5 rounded"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>Replied</span>}
                         {l.dispute_status === 'pending' && <span className="inline-flex text-[10px] font-medium bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">Dispute</span>}
                       </div>
                       )}
@@ -605,7 +655,7 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
                       <SpeedTimer
                         repliedAt={selected.first_replied_at}
                         respondedAt={selected.first_responded_at}
-                        done={selected.has_sent || selected.replied_off}
+                        done={isReplied(selected)}
                         size="lg"
                       />
                     )}
@@ -613,7 +663,7 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
                   {selected.email && <p className="text-xs text-gray-500 truncate">{selected.email}</p>}
                 </div>
                 {/* Replied off-dashboard: moves a new lead out of Unread */}
-                {selected.has_sent ? (
+                {selected.has_sent || selected.has_outbound ? (
                   <span className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-green-600"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>Replied</span>
                 ) : selected.replied_off ? (
                   <button onClick={() => toggleRepliedOff(selected)} title="Mark as not replied" className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-green-600 hover:text-gray-500"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>Replied off-dashboard</button>
@@ -775,6 +825,21 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
               </Section>
             )}
 
+            {/* Your notes — private to the client, persisted on blur */}
+            <Section title="Your notes">
+              <textarea
+                value={notes}
+                onChange={e => { setNotes(e.target.value); setNotesSavedAt(null) }}
+                onBlur={saveNotes}
+                rows={4}
+                placeholder="Add private notes about this lead…"
+                className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-brand-400 resize-y leading-[1.5] text-gray-800"
+              />
+              <p className="text-[11px] text-gray-400 mt-1 h-4">
+                {notesSaving ? 'Saving…' : notesSavedAt ? 'Saved' : 'Notes save when you click away'}
+              </p>
+            </Section>
+
             {/* report a problem — understated, two paths */}
             <div className="p-4 mt-auto border-t border-gray-100">
               {selected.dispute_status ? (
@@ -934,20 +999,30 @@ function RichReply({ toEmail, placeholderName, sending, statusMsg, seed, onSend 
   }, [seed?.id])
 
   function syncState() {
-    const t = (ref.current?.innerText ?? '').trim()
+    // Drop zero-width spaces seeded for empty-editor list commands so they don't
+    // count as content or pad the character counter.
+    const t = (ref.current?.innerText ?? '').replace(/​/g, '').trim()
     setEmpty(t.length === 0)
     setChars(t.length)
   }
   function exec(cmd: string, value?: string) {
     const el = ref.current
     if (!el) return
-    // The command acts on the current selection INSIDE the editable, so focus
-    // first. If nothing in the editor is selected (e.g. user clicked a toolbar
-    // button before clicking into the box), drop the caret at the end so list /
-    // formatting commands have somewhere to apply — otherwise execCommand no-ops.
+    // List/format commands act on the current selection INSIDE the editable, so
+    // it must be focused with a real range that lives in the box. Focus first.
+    el.focus()
+    // An empty contentEditable has no block for insertUnorderedList /
+    // insertOrderedList to wrap, so they silently no-op. Seed a zero-width text
+    // node so there's a text node (and an implicit block) for the command to act
+    // on; the ZWSP is invisible and trimmed out of the sent text by syncState.
+    if (el.textContent === '') {
+      el.appendChild(document.createTextNode('​'))
+    }
+    // Ensure the selection is actually inside the editor before running the
+    // command — if the user clicked a toolbar button without clicking into the
+    // box first, drop the caret at the end of the content.
     const sel = window.getSelection()
     const inEditor = sel && sel.rangeCount > 0 && el.contains(sel.anchorNode)
-    el.focus()
     if (!inEditor) {
       const range = document.createRange()
       range.selectNodeContents(el)
@@ -974,7 +1049,7 @@ function RichReply({ toEmail, placeholderName, sending, statusMsg, seed, onSend 
   function send() {
     const el = ref.current
     if (!el) return
-    const text = el.innerText.trim()
+    const text = el.innerText.replace(/​/g, '').trim()
     if (!text || !to.length) return
     onSend(text, el.innerHTML, to.join(', '), cc.join(', '))
     el.innerHTML = ''

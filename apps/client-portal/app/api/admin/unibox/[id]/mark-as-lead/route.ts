@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import pool, { ready } from '@/lib/db'
 import { getAdminSession } from '@/lib/auth'
 import { reconcileLeadCharges } from '@/lib/balance'
-import { bisonTeamForWorkspace, tagInBison } from '@/lib/bison'
+import { addToBlocklist, bisonTeamForWorkspace, tagInBison } from '@/lib/bison'
 import { notifyClientOfLead } from '@/lib/email'
 
 // Admin marks a Unibox reply as a real lead. This is the ONLY path that sets
@@ -32,7 +32,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     await client.query('BEGIN')
 
     const sel = await client.query(
-      `SELECT id, workspace_id, lead_bison_id, marked_as_lead FROM unibox_replies WHERE id = $1 FOR UPDATE`,
+      `SELECT id, workspace_id, lead_bison_id, lead_email, marked_as_lead FROM unibox_replies WHERE id = $1 FOR UPDATE`,
       [id]
     )
     if (!sel.rows.length) {
@@ -40,7 +40,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ error: 'Reply not found' }, { status: 404 })
     }
     const reply = sel.rows[0] as {
-      id: string; workspace_id: string | null; lead_bison_id: string | null; marked_as_lead: boolean
+      id: string; workspace_id: string | null; lead_bison_id: string | null; lead_email: string | null; marked_as_lead: boolean
     }
 
     // Idempotent: already marked → no double charge, no double tag.
@@ -108,7 +108,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       console.error('[admin/unibox/mark-as-lead] reconcile failed:', err)
     }
 
-    // Best-effort Bison tag — never roll back the lead because the tag failed.
+    // Best-effort Bison tag + blocklist — never roll back the lead if either
+    // fails. Tag marks the lead in Bison; blocklisting the email stops a real
+    // lead from receiving further cold outreach.
     let tagState: 'done' | 'failed' = 'failed'
     if (reply.lead_bison_id && pvWorkspaceId) {
       const teamId = bisonTeamForWorkspace(pvWorkspaceId)
@@ -116,6 +118,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         const t = await tagInBison(teamId, reply.lead_bison_id)
         tagState = t.ok ? 'done' : 'failed'
         if (!t.ok) console.error('[admin/unibox/mark-as-lead] tag failed:', t.reason)
+
+        if (reply.lead_email) {
+          const b = await addToBlocklist(teamId, reply.lead_email)
+          if (!b.ok) console.error('[admin/unibox/mark-as-lead] blocklist failed:', b.reason)
+        }
       }
     }
     await pool.query(`UPDATE unibox_replies SET bison_tag_state = $2, updated_at = NOW() WHERE id = $1`, [id, tagState])

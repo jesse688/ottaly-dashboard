@@ -17,9 +17,14 @@ export async function GET() {
       getBalance(session.clientId),
       getLedger(session.clientId, 500),
       pool.query('SELECT cost_per_lead, spend_visibility, low_leads_threshold FROM portal_clients WHERE id = $1', [session.clientId]),
+      // "Deals won" = leads the client moved to a deal stage named "Won" (their
+      // client_label), NOT leads with a deal_value. deal_value is no longer shown
+      // to clients, so it can't be the signal. Match the 'Won' stage label
+      // case-insensitively. pipeline still sums deal_value (server-side only;
+      // only surfaced behind showSpend, never as a deal-value figure to the client).
       pool.query(
         `SELECT COALESCE(SUM(deal_value),0) AS pipeline,
-                COUNT(*) FILTER (WHERE deal_value IS NOT NULL AND deal_value > 0) AS deals_won
+                COUNT(*) FILTER (WHERE lower(trim(client_label)) = 'won') AS deals_won
            FROM portal_lead_data WHERE client_id = $1`,
         [session.clientId]
       ),
@@ -47,9 +52,17 @@ export async function GET() {
     const showSpend = mode === 'always' || (mode === 'auto' && roiRaw !== null && roiRaw > 0)
 
     // Ledger: always safe to show as lead-count activity. Never leak £ from it.
-    const ledger = ledgerAll.map(l => ({
-      id: l.id, type: l.type, amount: Number(l.amount), description: l.description, created_at: l.created_at,
-    }))
+    // Compute the running balance AFTER each row. getLedger returns newest→oldest;
+    // the newest row's balance_after is the TRUE current balance (getBalance),
+    // which also makes this correct even when the list is capped at 500 rows
+    // (we anchor at the top and walk down, subtracting each row's delta).
+    let running = balance
+    const ledger = ledgerAll.map(l => {
+      const amount = Number(l.amount)
+      const balance_after = running
+      running -= amount
+      return { id: l.id, type: l.type, amount, description: l.description, created_at: l.created_at, balance_after }
+    })
 
     return NextResponse.json({
       balance,                 // leads left (always)

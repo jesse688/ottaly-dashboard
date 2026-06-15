@@ -11,7 +11,7 @@ interface Invoice {
   has_file?: boolean
 }
 interface TopupReq { id: string; amount: number; status: string; note: string | null; created_at: string }
-interface LedgerRow { id: string; type: string; amount: number; description: string | null; created_at: string }
+interface LedgerRow { id: string; type: string; amount: number; description: string | null; created_at: string; balance_after?: number }
 interface Balance {
   balance: number
   added?: number
@@ -46,7 +46,11 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
   const [payInfo, setPayInfo] = useState<{ instructions: string; link: string } | null>(null)
   const [payInvoice, setPayInvoice] = useState<Invoice | null>(null)
   const [msg, setMsg] = useState('')
+  const [bannerDismissed, setBannerDismissed] = useState(false)
   const router = useRouter()
+
+  // First unpaid invoice (if any) — drives the "you have an unpaid invoice" banner.
+  const unpaidInvoice = (invoices ?? []).find(i => i.status === 'unpaid') ?? null
 
   function load() {
     fetch('/api/portal/invoices').then(r => r.json()).then((d) => { if (Array.isArray(d?.invoices)) setInvoices(d.invoices) }).catch(() => {})
@@ -55,9 +59,6 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
     fetch('/api/portal/payment-info').then(r => r.json()).then((d) => !d.error && setPayInfo(d)).catch(() => {})
   }
 
-  // Balance breakdown — server-computed totals (ledger list is capped at 500).
-  const added = bal?.added ?? 0
-  const used = bal?.used ?? 0
   useEffect(() => { load() }, [])
 
   async function handleLogout() { await fetch('/api/logout', { method: 'POST' }); router.push('/login') }
@@ -119,6 +120,15 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
       </header>
 
       <div className="max-w-6xl mx-auto p-4 md:p-6">
+        {unpaidInvoice && !bannerDismissed && (
+          <div className="mb-4 flex items-center gap-3 px-4 py-2.5 bg-red-50 border border-red-200 text-red-800 text-sm rounded-lg">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="shrink-0"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            <span className="flex-1">You have an unpaid invoice — <button onClick={() => setPayInvoice(unpaidInvoice)} className="font-semibold underline hover:no-underline">view</button></span>
+            <button onClick={() => setBannerDismissed(true)} aria-label="Dismiss" className="text-red-400 hover:text-red-700 shrink-0">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+        )}
         {msg && <div className="mb-4 px-4 py-2.5 bg-green-50 border border-green-200 text-green-800 text-sm rounded-lg">{msg}</div>}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-5 items-start">
@@ -127,16 +137,12 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
             <div className="bg-gradient-to-br from-brand-600 to-brand-700 rounded-2xl p-5 text-white">
               <p className="text-xs text-brand-200 uppercase tracking-wider">Leads left</p>
               <p className="text-5xl font-bold mt-1">{bal ? Math.max(0, bal.balance).toLocaleString() : '—'}</p>
-              <div className="flex gap-4 mt-3 text-xs">
-                <span className="text-brand-100">+{added.toLocaleString()} added</span>
-                <span className="text-brand-200">−{used.toLocaleString()} used</span>
-              </div>
               <button onClick={() => setShowTopup(true)} className="mt-4 w-full py-2.5 bg-white text-brand-700 text-sm font-semibold rounded-lg hover:bg-brand-50">Top up leads</button>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
               <Card label="Delivered" value={bal ? bal.leadsDelivered.toLocaleString() : '—'} sub="Interested replies" />
-              <Card label="Deals won" value={bal ? bal.dealsWon.toLocaleString() : '—'} sub="With a deal value" />
+              <Card label="Deals won" value={bal ? bal.dealsWon.toLocaleString() : '—'} sub="Marked Won" />
             </div>
 
             {topups.filter(t => t.status === 'pending').length > 0 && (
@@ -199,7 +205,10 @@ export function InvoicesClient({ companyName }: { companyName: string }) {
                   <div key={l.id} className="flex items-center gap-3 px-5 py-2.5">
                     <span className="text-xs text-gray-400 w-20 shrink-0">{fmtDate(l.created_at)}</span>
                     <span className="flex-1 text-sm text-gray-700 truncate">{l.description || LEDGER_LABEL[l.type] || l.type}</span>
-                    <span className={`text-sm font-semibold ${l.amount < 0 ? 'text-gray-400' : 'text-green-600'}`}>{l.amount < 0 ? '' : '+'}{l.amount}</span>
+                    <span className={`text-sm font-semibold w-12 text-right shrink-0 ${l.amount < 0 ? 'text-gray-400' : 'text-green-600'}`}>{l.amount > 0 ? '+' : ''}{l.amount}</span>
+                    {l.balance_after !== undefined && (
+                      <span className="text-xs text-gray-400 w-20 text-right shrink-0" title="Leads left after this">{l.balance_after.toLocaleString()} left</span>
+                    )}
                   </div>
                 ))}
               </div>

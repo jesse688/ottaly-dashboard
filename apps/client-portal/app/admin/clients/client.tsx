@@ -28,6 +28,7 @@ interface Invoice {
   id: string; client_id: string; invoice_number: string | null; description: string
   amount: string; currency: string; status: string
   due_date: string | null; paid_date: string | null; created_at: string; company_name: string
+  has_file?: boolean
 }
 interface Topup {
   id: string; client_id: string; amount: string; status: string; note: string | null
@@ -942,14 +943,14 @@ export function AdminClientsClient() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-100 bg-gray-50">
-                    {['Client','Invoice #','Description','Amount','Status','Due','Actions'].map(h => <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}
+                    {['Client','Invoice #','Description','Amount','Status','File','Due','Actions'].map(h => <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}
                   </tr>
                 </thead>
                 <tbody>
                   {invoices === null ? Array.from({length:4}).map((_,i) => (
-                    <tr key={i} className="border-b border-gray-50">{Array.from({length:7}).map((_,j) => <td key={j} className="px-4 py-3"><div className="h-4 bg-gray-100 rounded animate-pulse" /></td>)}</tr>
+                    <tr key={i} className="border-b border-gray-50">{Array.from({length:8}).map((_,j) => <td key={j} className="px-4 py-3"><div className="h-4 bg-gray-100 rounded animate-pulse" /></td>)}</tr>
                   )) : invoices.length === 0 ? (
-                    <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400 text-sm">No invoices yet</td></tr>
+                    <tr><td colSpan={8} className="px-4 py-10 text-center text-gray-400 text-sm">No invoices yet</td></tr>
                   ) : invoices.map(inv => (
                     <tr key={inv.id} className="border-b border-gray-50 hover:bg-gray-50">
                       <td className="px-4 py-3 font-medium text-gray-900 text-xs">{inv.company_name}</td>
@@ -958,6 +959,11 @@ export function AdminClientsClient() {
                       <td className="px-4 py-3 text-sm font-semibold text-gray-900">{fmt(inv.amount)}</td>
                       <td className="px-4 py-3">
                         <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${inv.status === 'paid' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>{inv.status === 'paid' ? 'Paid' : 'Unpaid'}</span>
+                      </td>
+                      <td className="px-4 py-3">
+                        {inv.has_file
+                          ? <a href={`/api/admin/invoices/${inv.id}/file`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs font-medium text-green-700 hover:text-green-900" title="View uploaded file"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>File</a>
+                          : <span className="text-xs text-gray-400">No file</span>}
                       </td>
                       <td className="px-4 py-3 text-xs text-gray-500">{fmtDate(inv.due_date)}</td>
                       <td className="px-4 py-3">

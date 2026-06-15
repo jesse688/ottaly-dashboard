@@ -77,7 +77,24 @@ export async function GET() {
                 WHERE e3.workspace_id = l.workspace_id
                   AND lower(e3.lead_email) = lower(l.email)
                   AND e3.sent_via_portal = TRUE
-              ) AS has_sent
+              ) AS has_sent,
+              -- Has the lead been RESPONDED TO since they replied? An OUT message
+              -- alone is NOT enough — the original cold outreach is also stored as
+              -- OUT (folder=sent). So count only: a reply composed in our portal
+              -- (sent_via_portal), OR an OUT message dated AFTER the prospect's
+              -- first reply (first_replied_at). That's a genuine response, so the
+              -- lead can leave "Needs reply" even if has_sent isn't set.
+              EXISTS (
+                SELECT 1 FROM portal_emails e4
+                WHERE e4.workspace_id = l.workspace_id
+                  AND lower(e4.lead_email) = lower(l.email)
+                  AND (
+                    e4.sent_via_portal = TRUE
+                    OR (e4.direction = 'OUT'
+                        AND l.first_replied_at IS NOT NULL
+                        AND e4.timestamp_created > l.first_replied_at)
+                  )
+              ) AS has_outbound
        FROM esp_leads l
        LEFT JOIN portal_lead_data ld     ON ld.lead_id = l.id AND ld.client_id = $3
        LEFT JOIN portal_lead_disputes pd ON pd.lead_id = l.id AND pd.client_id = $3
