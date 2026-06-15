@@ -73,6 +73,16 @@ const CAT_STYLE: Record<string, string> = {
   other: 'bg-slate-100 text-slate-600',
 }
 
+// Label filter chips (no Question tab per request). key = effective category value.
+const LABEL_FILTERS: { key: string; label: string }[] = [
+  { key: 'interested', label: 'Leads' },
+  { key: 'not_interested', label: 'Not interested' },
+  { key: 'ooo_auto_reply', label: 'OOO' },
+  { key: 'unsubscribe', label: 'Unsubscribe' },
+  { key: 'warmup', label: 'Warm-up' },
+  { key: 'other', label: 'Other' },
+]
+
 function fmtDate(d: string | null) {
   if (!d) return '—'
   return new Date(d).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
@@ -93,6 +103,8 @@ export function AdminUniboxClient() {
   const [folder, setFolder] = useState<Folder>('review')
   const [rows, setRows] = useState<Reply[]>([])
   const [counts, setCounts] = useState<Record<string, number>>({})
+  const [categoryCounts, setCategoryCounts] = useState<Record<string, number>>({})
+  const [category, setCategory] = useState('')    // active label filter ('' = none)
   const [nextCursor, setNextCursor] = useState<string | null>(null)
   const [query, setQuery] = useState('')          // search box text
   const [activeQuery, setActiveQuery] = useState('') // the query actually applied
@@ -109,7 +121,7 @@ export function AdminUniboxClient() {
   const [assocPick, setAssocPick] = useState<string>('')
   const [assocSuggest, setAssocSuggest] = useState<{ id: number | null; reason: string }>({ id: null, reason: '' })
 
-  const load = useCallback(async (f: Folder, cursor?: string, q?: string) => {
+  const load = useCallback(async (f: Folder, cursor?: string, q?: string, cat?: string) => {
     setLoading(true)
     try {
       const u = new URL('/api/admin/unibox/list', window.location.origin)
@@ -117,19 +129,21 @@ export function AdminUniboxClient() {
       u.searchParams.set('limit', '50')
       if (cursor) u.searchParams.set('before', cursor)
       if (q && q.trim()) u.searchParams.set('q', q.trim())
+      if (cat) u.searchParams.set('category', cat)
       const r = await fetch(u.toString())
       if (r.status === 401) { router.push('/admin/login'); return }
-      const d = await r.json() as { rows: Reply[]; nextCursor: string | null; counts: Record<string, number> }
+      const d = await r.json() as { rows: Reply[]; nextCursor: string | null; counts: Record<string, number>; categoryCounts?: Record<string, number> }
       setRows(prev => cursor ? [...prev, ...d.rows] : d.rows)
       setNextCursor(d.nextCursor)
       setCounts(d.counts ?? {})
+      if (d.categoryCounts) setCategoryCounts(d.categoryCounts)
     } finally {
       setLoading(false)
     }
   }, [router])
 
-  // Reload when folder changes (clearing any active search) or when a search runs.
-  useEffect(() => { load(folder, undefined, activeQuery) }, [folder, activeQuery, load])
+  // Reload when folder, search, or label filter changes.
+  useEffect(() => { load(folder, undefined, activeQuery, category) }, [folder, activeQuery, category, load])
 
   function runSearch() {
     setSelected(null)
@@ -138,6 +152,11 @@ export function AdminUniboxClient() {
   function clearSearch() {
     setQuery('')
     setActiveQuery('')
+  }
+  // Toggle a label filter; clicking the active one clears it.
+  function toggleCategory(c: string) {
+    setSelected(null)
+    setCategory(prev => prev === c ? '' : c)
   }
 
   useEffect(() => {
@@ -284,6 +303,24 @@ export function AdminUniboxClient() {
             ))}
           </div>
 
+          {/* Label filters (by category, across all folders) */}
+          <div className="flex flex-wrap gap-1.5 px-3 py-2 border-b border-gray-200">
+            {LABEL_FILTERS.map(c => {
+              const active = category === c.key
+              const n = categoryCounts[c.key] ?? 0
+              return (
+                <button
+                  key={c.key}
+                  onClick={() => toggleCategory(c.key)}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium border transition-colors ${active ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+                >
+                  {c.label}
+                  {n > 0 && <span className={`px-1 rounded-full text-[10px] font-semibold ${active ? 'bg-indigo-200 text-indigo-800' : 'bg-gray-100 text-gray-500'}`}>{n}</span>}
+                </button>
+              )
+            })}
+          </div>
+
           {/* Search across all folders */}
           <div className="px-3 py-2 border-b border-gray-200 bg-gray-50/60">
             <div className="relative flex items-center">
@@ -310,7 +347,7 @@ export function AdminUniboxClient() {
             {loading && rows.length === 0 ? (
               <p className="text-sm text-gray-400 text-center py-10">Loading…</p>
             ) : rows.length === 0 ? (
-              <p className="text-sm text-gray-400 text-center py-10">{activeQuery ? 'No replies match your search.' : 'No replies in this folder.'}</p>
+              <p className="text-sm text-gray-400 text-center py-10">{activeQuery ? 'No replies match your search.' : category ? 'No replies with this label.' : 'No replies in this folder.'}</p>
             ) : rows.map(r => (
               <button
                 key={r.id}
@@ -333,7 +370,7 @@ export function AdminUniboxClient() {
             ))}
             {nextCursor && (
               <button
-                onClick={() => load(folder, nextCursor, activeQuery)}
+                onClick={() => load(folder, nextCursor, activeQuery, category)}
                 disabled={loading}
                 className="w-full py-3 text-xs text-indigo-600 hover:text-indigo-800 disabled:opacity-50"
               >

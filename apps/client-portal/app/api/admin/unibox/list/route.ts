@@ -19,16 +19,26 @@ export async function GET(req: NextRequest) {
   const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 50, 1), 100)
   const before = url.searchParams.get('before') // received_at cursor (ISO)
   const q = (url.searchParams.get('q') ?? '').trim()
+  // Filter by EFFECTIVE category (admin override if set, else the AI category).
+  const CATEGORIES = ['interested', 'not_interested', 'ooo_auto_reply', 'unsubscribe', 'warmup', 'other'] as const
+  const catParam = url.searchParams.get('category') ?? ''
+  const category = (CATEGORIES as readonly string[]).includes(catParam) ? catParam : ''
 
-  // When searching, look ACROSS all folders (you want to find a reply wherever it
-  // landed). Otherwise scope to the selected folder.
+  // When searching OR filtering by category, look ACROSS all folders (you want to
+  // find a reply wherever it landed). Otherwise scope to the selected folder.
   const params: unknown[] = []
   let folderFilter: string
-  if (q) {
+  if (q || category) {
     folderFilter = 'TRUE'
   } else {
     params.push(folder)
     folderFilter = `u.folder = $${params.length}`
+  }
+
+  let categoryFilter = ''
+  if (category) {
+    params.push(category)
+    categoryFilter = `AND COALESCE(u.admin_label, u.category) = $${params.length}`
   }
 
   let search = ''
@@ -85,7 +95,7 @@ export async function GET(req: NextRequest) {
            LIMIT 1
          ) l ON TRUE
          LEFT JOIN portal_emails pe ON pe.id = u.portal_email_id
-        WHERE ${folderFilter} ${search} ${cursor}
+        WHERE ${folderFilter} ${categoryFilter} ${search} ${cursor}
         ORDER BY u.received_at DESC
         LIMIT $${params.length}`,
       params
@@ -102,7 +112,17 @@ export async function GET(req: NextRequest) {
     const countsByFolder: Record<string, number> = {}
     for (const row of counts.rows) countsByFolder[row.folder as string] = row.n as number
 
-    return NextResponse.json({ rows, nextCursor, counts: countsByFolder })
+    // Effective-category counts for the label filter chips.
+    const catCounts = await pool.query(
+      `SELECT COALESCE(admin_label, category) AS cat, COUNT(*)::int AS n
+         FROM unibox_replies
+        WHERE COALESCE(admin_label, category) IS NOT NULL
+        GROUP BY COALESCE(admin_label, category)`
+    )
+    const countsByCategory: Record<string, number> = {}
+    for (const row of catCounts.rows) countsByCategory[row.cat as string] = row.n as number
+
+    return NextResponse.json({ rows, nextCursor, counts: countsByFolder, categoryCounts: countsByCategory })
   } catch (err) {
     console.error('[admin/unibox/list] error:', err)
     return NextResponse.json({ error: String(err) }, { status: 500 })
