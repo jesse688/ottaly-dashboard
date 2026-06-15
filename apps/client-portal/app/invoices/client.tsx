@@ -33,12 +33,17 @@ const LEDGER_LABEL: Record<string, string> = {
   topup: 'Leads added', lead_charge: 'Lead delivered', dispute_refund: 'Non-lead credited', adjustment: 'Adjustment',
 }
 
-// Pay-per-lead workspaces: hide all billing UI, show only total leads paid for.
-// Hardcoded to Bubble for now.
+// Pay-per-lead clients: hide all billing UI, show only total leads paid for.
+// Matched by workspace id (normalized) OR company name so it fires regardless of
+// which exact id variant is stored. Hardcoded to Bubble for now.
 const PAY_PER_LEAD_WORKSPACES = new Set(['6a0e29d0d004be93be3f33f2']) // Bubble
+const PAY_PER_LEAD_COMPANIES = new Set(['bubble'])
 
 export function InvoicesClient({ companyName, workspaceId }: { companyName: string; workspaceId?: string }) {
-  const payPerLead = !!workspaceId && PAY_PER_LEAD_WORKSPACES.has(workspaceId)
+  const wsId = (workspaceId ?? '').trim().toLowerCase()
+  const company = (companyName ?? '').trim().toLowerCase()
+  const payPerLead =
+    PAY_PER_LEAD_WORKSPACES.has(wsId) || PAY_PER_LEAD_COMPANIES.has(company)
   const [invoices, setInvoices] = useState<Invoice[] | null>(null)
   const [bal, setBal] = useState<Balance | null>(null)
   const [showTopup, setShowTopup] = useState(false)
