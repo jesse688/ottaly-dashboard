@@ -96,6 +96,28 @@ export async function backfillWorkspace(
             )
             emailCount++
           }
+
+          // Auto-mark "responded": if the thread has a SENT reply after the
+          // prospect's first inbound, stamp first_responded_at so the lead drops
+          // off "Needs reply" — without anyone opening it. Fixes historic
+          // replied-in-Bison leads stuck in Needs reply. Idempotent.
+          const inbound = replies.filter(m => m.folder?.toLowerCase() !== 'sent')
+          const firstInAt = inbound
+            .map(m => m.date_received ? new Date(m.date_received).getTime() : 0)
+            .filter(Boolean).sort((a, b) => a - b)[0]
+          const hasReply = replies.some(m =>
+            m.folder?.toLowerCase() === 'sent' &&
+            (!firstInAt || (m.date_received ? new Date(m.date_received).getTime() > firstInAt : false))
+          )
+          if (hasReply) {
+            await pool.query(
+              `INSERT INTO portal_lead_data (lead_id, client_id, first_responded_at)
+               SELECT $1, c.id, NOW() FROM portal_clients c WHERE c.workspace_id = $2
+               ON CONFLICT (lead_id, client_id) DO UPDATE
+                 SET first_responded_at = COALESCE(portal_lead_data.first_responded_at, NOW())`,
+              [String(lead.id), workspaceId]
+            ).catch(() => {})
+          }
         } catch { /* best-effort */ }
       }
     }
