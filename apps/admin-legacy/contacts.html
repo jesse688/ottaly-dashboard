@@ -3410,11 +3410,12 @@
 
       campEl.innerHTML = '<option value="">Loading campaigns...</option>';
       try {
-        const r = await fetch(`/api/pv/campaigns?workspace_id=${wsId}`);
+        const r = await fetch(`/api/pv/campaigns?workspace_id=${encodeURIComponent(wsId)}`);
         if (!r.ok) {
-          const errData = await r.json();
+          const errData = await r.json().catch(() => ({}));
           console.error('Campaigns API error:', errData);
-          campEl.innerHTML = '<option value="">Error loading campaigns</option>';
+          const msg = errData.error || 'Error loading campaigns';
+          campEl.innerHTML = `<option value="">${msg}</option>`;
           return;
         }
         const data = await r.json();

@@ -270,6 +270,27 @@ const BISON_TEAMS = [
   { team_id: '22', name: 'Animo',               pv: '69a686632f5aaca7d9602c1f' },
   { team_id: '23', name: 'ButterflyEco SOP',    pv: '6a1d40b3bb80380c1be750c6' },
 ];
+
+// Resolve an incoming workspace identifier to a Bison team_id. The dashboard
+// passes the client's PlusVibe workspace_id (a Mongo-style string), but some
+// callers already have the integer team_id. Accept EITHER:
+//   - matches a BISON_TEAMS.pv  -> return that team_id
+//   - already a BISON_TEAMS.team_id -> return as-is
+//   - looks like a plain integer (a team_id we don't have mapped) -> return as-is
+// Returns null when it can't be resolved, so callers can fail loudly instead of
+// switching to team_id NaN (which silently leaves Bison on the wrong workspace —
+// the cause of "create works but existing campaigns don't load" and pushes
+// landing in the wrong client).
+function resolveBisonTeamId(wsId) {
+  const s = String(wsId || '').trim();
+  if (!s) return null;
+  const byPv = BISON_TEAMS.find(t => t.pv === s);
+  if (byPv) return byPv.team_id;
+  if (BISON_TEAMS.some(t => t.team_id === s)) return s;
+  if (/^\d+$/.test(s)) return s; // bare integer team_id not in the map
+  return null;                   // PV id with no mapping — unresolvable
+}
+
 const ANTHROPIC_API_KEY      = process.env.ANTHROPIC_API_KEY      || '';
 const SLACK_SIGNING_SECRET   = process.env.SLACK_SIGNING_SECRET   || '';
 const ANTHROPIC_MODEL        = process.env.ANTHROPIC_MODEL        || 'claude-haiku-4-5-20251001';
@@ -11570,10 +11591,11 @@ app.get('/api/pv/campaigns', requireSession, async (req, res) => {
   if (!workspace_id) return res.status(400).json({ error: 'Missing workspace_id' });
   try {
     // Bison is stateful: bisonReq wsId switches the workspace, then /api/campaigns
-    // returns { data: [{id,name,status,...}] }. The workspace_id here is the
-    // canonical PV id, so map it to the Bison team_id first.
-    const team = BISON_TEAMS.find(t => t.pv === String(workspace_id));
-    const wsId = team ? team.team_id : workspace_id;
+    // returns { data: [{id,name,status,...}] }. Resolve the incoming PV id (or
+    // team_id) to a Bison team_id; a mapping miss is a clear error, not an empty
+    // list that looks like "no campaigns".
+    const wsId = resolveBisonTeamId(workspace_id);
+    if (!wsId) return res.status(404).json({ error: 'This client is not mapped to a Bison workspace yet.' });
     const data = await bisonReq('/api/campaigns', { wsId });
     const list = (data?.data || []).map(c => ({
       id: c.id,
@@ -11825,10 +11847,13 @@ app.get('/api/bison/campaigns', requireSession, async (req, res) => {
 // applied. Settings/schedule are best-effort: a failure there is reported in the
 // response but does NOT discard the created campaign (it still returns its id).
 app.post('/api/bison/create-campaign', requireSession, async (req, res) => {
-  const wsId = String(req.body.ws_id || '');
   const name = String(req.body.name || '').trim();
   const settings = (req.body.settings && typeof req.body.settings === 'object') ? req.body.settings : null;
-  if (!wsId || !name) return res.status(400).json({ error: 'ws_id and a non-empty name are required' });
+  // Map the incoming PV workspace_id (or team_id) to the Bison team_id. Passing
+  // the raw PV string switched to team_id NaN and created the campaign in the
+  // wrong/last-active workspace.
+  const wsId = resolveBisonTeamId(req.body.ws_id);
+  if (!wsId || !name) return res.status(400).json({ error: 'ws_id (resolvable to a Bison workspace) and a non-empty name are required' });
   if (!getBisonKey()) return res.status(500).json({ error: 'Bison API key not configured — set it in admin settings' });
   try {
     const resp = await bisonReq('/api/campaigns', { wsId, method: 'POST', body: { name, type: 'outbound' } });
