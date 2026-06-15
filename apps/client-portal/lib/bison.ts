@@ -379,6 +379,29 @@ export async function addToBlocklist(
   }
 }
 
+// Unsubscribe a lead in Bison by email (stops the campaign sequence for them).
+// Best-effort: resolves the Bison lead by email then calls unsubscribe. Pairs
+// with addToBlocklist for #10 auto-unsubscribe. Never throws.
+export async function unsubscribeLead(
+  teamId: string | number,
+  email: string,
+): Promise<{ ok: boolean; reason?: string }> {
+  if (teamId == null || teamId === '' || !email) {
+    return { ok: false, reason: 'missing-team-or-email' }
+  }
+  try {
+    return await withTeam(teamId, async () => {
+      const lead = await getLead(email)
+      if (!lead?.id) return { ok: false, reason: 'lead-not-found' }
+      // Bison: POST /api/leads/{id}/unsubscribe (unsubscribeLead).
+      await bison('POST', `/api/leads/${lead.id}/unsubscribe`, undefined, {})
+      return { ok: true }
+    })
+  } catch (err) {
+    return { ok: false, reason: String(err) }
+  }
+}
+
 // ── Webhooks ──────────────────────────────────────────────────────────────────
 
 const WEBHOOK_TARGET =

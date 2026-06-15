@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import pool, { ready } from '@/lib/db'
 import { classifyReply, CLASSIFIER_MODEL } from '@/lib/classify'
+import { addToBlocklist, unsubscribeLead, bisonTeamForWorkspace } from '@/lib/bison'
 
 // Triage worker for the Master Unibox. Claims a batch of pending replies with
 // FOR UPDATE SKIP LOCKED (safe to run concurrently / overlapping), pre-filters
@@ -15,13 +16,15 @@ export async function GET(req: NextRequest) {
 
   await ready()
 
-  const summary = { processed: 0, interested: 0, failed: 0 }
+  const summary = { processed: 0, interested: 0, failed: 0, unsubscribed: 0 }
+  // Unsubscribe actions to run AFTER commit (network + stateful Bison switch).
+  const unsubQueue: { workspaceId: string; email: string }[] = []
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
     // Claim up to 50 due pending rows; SKIP LOCKED lets parallel runs not collide.
     const claimed = await client.query(
-      `SELECT id, subject, body_preview, raw
+      `SELECT id, subject, body_preview, raw, workspace_id, lead_email, bison_team_id
          FROM unibox_replies
         WHERE classify_state = 'pending'
           AND (classify_next_at IS NULL OR classify_next_at <= NOW())
@@ -57,12 +60,16 @@ export async function GET(req: NextRequest) {
           subject: (row.subject as string) ?? '',
           bodyText: (row.body_preview as string) ?? '',
         })
-        const folder = result.category === 'interested' ? 'review' : undefined
+        // interested → Review for manual decision; unsubscribe → auto-actioned
+        // and filed under 'rejected' (no human step needed).
+        const folder = result.category === 'interested' ? 'review'
+                     : result.category === 'unsubscribe' ? 'rejected'
+                     : undefined
         await client.query(
           `UPDATE unibox_replies
               SET category = $2, confidence = $3, ai_model = $4, ai_reasoning = $5,
                   classify_state = 'done',
-                  folder = CASE WHEN $6::text IS NOT NULL AND folder = 'inbox' THEN $6 ELSE folder END,
+                  folder = CASE WHEN $6::text IS NOT NULL AND folder IN ('inbox','review') THEN $6 ELSE folder END,
                   updated_at = NOW()
             WHERE id = $1`,
           [id, result.category, result.confidence, CLASSIFIER_MODEL,
@@ -70,6 +77,11 @@ export async function GET(req: NextRequest) {
         )
         summary.processed++
         if (result.category === 'interested') summary.interested++
+        // Queue auto-unsubscribe: AI says they want out → honour it. Only when
+        // we know the client's workspace (mapped) so we hit the right Bison team.
+        if (result.category === 'unsubscribe' && row.workspace_id && row.lead_email) {
+          unsubQueue.push({ workspaceId: String(row.workspace_id), email: String(row.lead_email) })
+        }
       } catch (err) {
         // Backoff; give up after 3 attempts.
         await client.query(
@@ -93,6 +105,21 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: String(err) }, { status: 500 })
   } finally {
     client.release()
+  }
+
+  // After commit: honour unsubscribe requests in Bison (unsubscribe + blocklist).
+  // Best-effort; serialized per Bison team inside the helpers. Failures are logged
+  // but don't fail the cron — the row is already filed as 'rejected'/unsubscribe.
+  for (const { workspaceId, email } of unsubQueue) {
+    const teamId = bisonTeamForWorkspace(workspaceId)
+    if (!teamId) continue
+    try {
+      await unsubscribeLead(teamId, email)
+      await addToBlocklist(teamId, email)
+      summary.unsubscribed++
+    } catch (err) {
+      console.error('[cron/classify] auto-unsub failed:', email, String(err))
+    }
   }
 
   return NextResponse.json(summary)
