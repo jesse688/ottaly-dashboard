@@ -7477,6 +7477,18 @@ async function listSendingMailboxes() {
     teams = BISON_TEAMS;
   }
 
+  // Prior cache, keyed by team, so a workspace that FAILS to fetch this run keeps
+  // its last-known mailboxes instead of silently vanishing from the view. A
+  // transient auth blip (e.g. an expired Bison key) must never shrink the count
+  // without warning — that is how Winnr's 655 quietly became 605.
+  const prevByTeam = new Map();
+  for (const m of (_mailboxCache.mailboxes || [])) {
+    const k = String(m.bison_team_id ?? m.workspace_id);
+    if (!prevByTeam.has(k)) prevByTeam.set(k, []);
+    prevByTeam.get(k).push(m);
+  }
+  const failedTeams = [];
+
   for (const team of teams) {
     try {
       let found = 0;
@@ -7526,9 +7538,28 @@ async function listSendingMailboxes() {
       await new Promise(r => setTimeout(r, 250)); // pace between workspaces
     } catch (err) {
       console.warn(`[mailboxes] sender-emails failed for ${team.name} (team ${team.team_id}):`, err.message);
+      // Fail-safe: keep this workspace's previously-cached mailboxes so a transient
+      // fetch failure doesn't drop them from the count. Dedup against what we have.
+      const prev = prevByTeam.get(String(team.team_id)) || [];
+      let kept = 0;
+      for (const m of prev) {
+        const email = (m.email || '').toString().trim().toLowerCase();
+        if (!email.includes('@') || seenEmails.has(email)) continue;
+        seenEmails.add(email);
+        mailboxes.push(m);
+        kept++;
+      }
+      failedTeams.push({ name: team.name, team_id: team.team_id, kept, error: err.message });
+      if (kept) console.warn(`[mailboxes] ${team.name}: retained ${kept} prior-cached mailbox(es) after fetch failure`);
     }
   }
-  console.log(`[mailboxes] total ${mailboxes.length} across ${teams.length} workspaces`);
+  if (failedTeams.length) {
+    console.warn(`[mailboxes] ${failedTeams.length} workspace(s) failed this refresh (kept prior data): ` +
+      failedTeams.map(f => `${f.name}(${f.kept})`).join(', '));
+  }
+  _mailboxCache.failedTeams = failedTeams; // surfaced via /api/mailboxes/refresh status
+  console.log(`[mailboxes] total ${mailboxes.length} across ${teams.length} workspaces` +
+    (failedTeams.length ? ` (${failedTeams.length} ws failed, prior data retained)` : ''));
   return mailboxes;
 }
 
@@ -8533,6 +8564,24 @@ app.post('/api/mailboxes/refresh', requireSession, (req, res) => {
   if (_mailboxCache.running) return res.json({ ok: true, message: 'Already refreshing' });
   refreshMailboxCache().catch(() => {});
   res.json({ ok: true, message: 'Mailbox refresh started' });
+});
+
+// Diagnostic: per-workspace mailbox counts from the last cache refresh + which
+// workspaces FAILED to fetch (e.g. auth/401) so the total is short. Answers
+// "Bison shows N but admin shows fewer — which workspaces are missing?".
+app.get('/api/mailboxes/refresh-status', requireSession, (req, res) => {
+  const byTeam = {};
+  for (const m of (_mailboxCache.mailboxes || [])) {
+    const k = (m.workspace_name || m.bison_team_id || m.workspace_id || '?');
+    byTeam[k] = (byTeam[k] || 0) + 1;
+  }
+  res.json({
+    total: (_mailboxCache.mailboxes || []).length,
+    lastRun: _mailboxCache.lastRun,
+    running: _mailboxCache.running,
+    perWorkspace: byTeam,
+    failedTeams: _mailboxCache.failedTeams || [],
+  });
 });
 
 // Assign supplier / type to a single mailbox.
