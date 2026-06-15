@@ -57,8 +57,7 @@ export const PV_TO_BISON_TEAM: Record<string, string> = {
   '6a19a054d42a3f59aac110d6': '16',  // LVM
   '6a108e72b20829cbce44fa6c': '9',   // Meades Group (Bison team "Meades")
   '6a15cdb4e4f1d4a2e6d6062a': '7',   // ShireRecoveries (Bison team "Shire")
-  // Still UNMAPPED: Josh - Commercial Flooring (6989ac90bb085fcd05167fc9) — no
-  // matching Bison team found in the lister; map when its team is identified.
+  '6989ac90bb085fcd05167fc9': '24',  // Josh - Commercial Flooring (Bison team "Josh Flooring")
   // Bison teams with no portal client: 2 (Jesse's Team), 6 (ByboDigital).
 }
 export function bisonTeamForWorkspace(workspaceId: string): string | null {
