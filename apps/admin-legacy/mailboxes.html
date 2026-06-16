@@ -161,9 +161,9 @@ tr:hover td{background:#FAFBFF}
   <div class="section-h">By supplier — who performs best</div>
   <div class="gridN" id="bySupplier"></div>
 
-  <!-- Supplier performance graphs -->
+  <!-- Period-aware provider/supplier performance (real: events + portal replies) -->
   <div class="section-h" style="display:flex;align-items:center;justify-content:space-between;margin-top:1rem">
-    Supplier performance trends · 3-day rolling avg
+    Sending performance by provider &amp; supplier
     <div style="display:flex;gap:.4rem">
       <button id="mbPeriodToday" onclick="setMbPeriod('today')" style="padding:3px 10px;border:1px solid var(--border);background:#fff;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;color:var(--muted)">Today</button>
       <button id="mbPeriod7d" onclick="setMbPeriod('7d')" style="padding:3px 10px;border:1px solid var(--navy-dark);background:var(--navy-dark);color:#fff;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer">7d</button>
@@ -172,11 +172,10 @@ tr:hover td{background:#FAFBFF}
       <button id="mbPeriod60d" onclick="setMbPeriod('60d')" style="padding:3px 10px;border:1px solid var(--border);background:#fff;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;color:var(--muted)">60d</button>
     </div>
   </div>
-  <div id="supplierCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:1rem;margin-bottom:1rem"></div>
-
-  <!-- Provider type performance graphs -->
-  <div class="section-h" style="margin-top:1rem">Provider type performance trends · 3-day rolling avg</div>
-  <div id="providerCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:1rem;margin-bottom:1rem"></div>
+  <div style="font-size:11px;color:var(--muted);margin:-2px 0 8px">By provider type (Google / Microsoft / SMTP):</div>
+  <div id="providerCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1rem;margin-bottom:.75rem"></div>
+  <div style="font-size:11px;color:var(--muted);margin:0 0 8px">By supplier (Winnr / Maildoso / Mithun):</div>
+  <div id="supplierCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1rem;margin-bottom:1rem"></div>
 
   <!-- Stats: per type -->
   <div class="section-h">By type — Google vs Microsoft vs SMTP</div>
@@ -1396,7 +1395,7 @@ function _provCard(label, color, b) {
       + `<span style="color:#6B7280">${num(b.bounces_soft)} soft</span></div>`
     : '';
   return `<div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:14px 16px;border-top:3px solid ${color}">
-    <div style="font-size:13px;font-weight:700;margin-bottom:8px">${label} <span style="font-weight:400;color:var(--muted);font-size:11px">· ${num(b.mailboxes)} mailbox${b.mailboxes===1?'':'es'}</span></div>
+    <div style="font-size:13px;font-weight:700;margin-bottom:8px">${label} <span style="font-weight:400;color:var(--muted);font-size:11px">· ${num(b.mailboxes)} active in period</span></div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
       <div><div style="font-size:18px;font-weight:700">${num(b.sent)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Sent</div></div>
       <div><div style="font-size:18px;font-weight:700;color:#059669">${pct(b.replies, b.sent)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Reply rate</div></div>

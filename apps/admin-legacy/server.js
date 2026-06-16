@@ -8471,12 +8471,21 @@ app.get('/api/gateway-analysis', requireSession, async (req, res) => {
         (SELECT count(*) FROM sent_domains s JOIN gateway_mx_cache g ON g.domain = s.domain) AS resolved,
         (SELECT count(*) FROM sent_domains) AS total`);
 
+    // Diagnostic: how the cache is classified overall (so we can tell "empty
+    // page" = nothing resolved vs = read-join mismatch). Cheap GROUP BY.
+    let cacheBreakdown = [];
+    try {
+      const cb = await pgdb.query(`SELECT gateway, count(*)::int AS n FROM gateway_mx_cache GROUP BY gateway ORDER BY n DESC LIMIT 20`);
+      cacheBreakdown = cb.rows;
+    } catch {}
+
     res.json({
       gateways,
       coverage: {
         resolved: Number(cov.rows[0] && cov.rows[0].resolved || 0),
         total:    Number(cov.rows[0] && cov.rows[0].total || 0),
       },
+      cacheBreakdown,
     });
   } catch (err) {
     console.error('[gateway-analysis]', err.message);
