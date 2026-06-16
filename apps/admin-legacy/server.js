@@ -2576,6 +2576,21 @@ app.get('/api/admin/stats-debug', requireAdmin, async (req, res) => {
       } catch (e) { out.range = { ok: false, error: e.message }; }
       return res.json(out);
     }
+    // ?uniboxSchema=1 — column list + a sample interested row, so the revenue-lead
+    // reconciler can be built against the portal's real unibox_replies shape.
+    if (req.query.uniboxSchema) {
+      if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
+      const cols = await pgdb.query(
+        `SELECT column_name, data_type FROM information_schema.columns WHERE table_name='unibox_replies' ORDER BY ordinal_position`
+      );
+      const sample = await pgdb.query(
+        `SELECT * FROM unibox_replies WHERE COALESCE(admin_label, category) = 'interested' ORDER BY received_at DESC LIMIT 1`
+      );
+      const labelCounts = await pgdb.query(
+        `SELECT COALESCE(admin_label, category) AS label, COUNT(*)::int n FROM unibox_replies GROUP BY 1 ORDER BY n DESC`
+      );
+      return res.json({ columns: cols.rows, label_counts: labelCounts.rows, sample_interested: sample.rows[0] || null });
+    }
     // ?probeAll=1&from=&to= — live-fetch Bison chart-stats for EVERY active client and
     // compare to what the perf cache currently holds, so we can confirm in one shot that
     // all clients show correct live data (or pinpoint which don't). Serialized via the
