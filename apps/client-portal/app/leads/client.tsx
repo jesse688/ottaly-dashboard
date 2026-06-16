@@ -830,13 +830,14 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
               </Section>
             )}
 
-            {(selected.company_name || selected.industry || selected.city || selected.company_website || selected.department) && (
+            {(selected.company_name || selected.industry || selected.city || selected.company_website || selected.department || selected.address_line || selected.job_title) && (
               <Section title="Company & role">
                 {selected.company_name && <Row icon="building" label={selected.company_name} />}
                 {selected.company_website && <Row icon="globe" label={selected.company_website.replace(/^https?:\/\//,'')} href={selected.company_website} />}
                 {selected.job_title && <Row icon="badge" label={selected.job_title} />}
                 {selected.department && <Row icon="badge" label={selected.department} />}
                 {selected.industry && <Row icon="tag" label={selected.industry} />}
+                {selected.address_line && <Row icon="pin" label={selected.address_line} />}
                 {(selected.city || selected.state || selected.country) && <Row icon="pin" label={[selected.city, selected.state, selected.country].filter(Boolean).join(', ')} />}
                 {selected.linkedin_company_url && <Row icon="link" label="Company LinkedIn" href={selected.linkedin_company_url} />}
               </Section>

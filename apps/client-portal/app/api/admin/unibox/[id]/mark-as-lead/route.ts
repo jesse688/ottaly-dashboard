@@ -4,6 +4,7 @@ import { getAdminSession } from '@/lib/auth'
 import { reconcileLeadCharges } from '@/lib/balance'
 import { addToBlocklist, bisonTeamForWorkspace, tagInBison } from '@/lib/bison'
 import { notifyClientOfLead } from '@/lib/email'
+import { enrichLeadFromContacts } from '@/lib/enrich'
 
 // Admin marks a Unibox reply as a real lead. This is the ONLY path that sets
 // esp_leads.label='INTERESTED' (which reconcileLeadCharges keys on to bill the
@@ -106,6 +107,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         await seedThread(reply.workspace_id)
       }
       await client.query('COMMIT')
+      // Enrich from our contacts DB (linkedin/industry/location/etc. we never sent to
+      // Bison) now that it's a lead. Best-effort, after commit.
+      if (reply.workspace_id && reply.lead_email) {
+        await enrichLeadFromContacts(reply.lead_bison_id || `manual_${reply.id}`, reply.workspace_id, reply.lead_email).catch(() => {})
+      }
       // Re-bill in case the original mark predated cost_per_lead / the lead row.
       const c = await pool.query(
         `SELECT id FROM portal_clients WHERE workspace_id = $1 ORDER BY active DESC, created_at ASC LIMIT 1`,
@@ -184,6 +190,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     )
 
     await client.query('COMMIT')
+
+    // Enrich from our contacts DB — pull the full record (linkedin, industry, city,
+    // address, seniority, phone) we have on this email but never pushed to Bison, now
+    // that it's an interested lead. Best-effort, after commit.
+    if (leadRowId && pvWorkspaceId && reply.lead_email) {
+      await enrichLeadFromContacts(leadRowId, pvWorkspaceId, reply.lead_email).catch(() => {})
+    }
 
     // reconcileLeadCharges is idempotent (uq_ledger_lead_charge). Run ONCE, after
     // commit so it sees the committed INTERESTED label.
