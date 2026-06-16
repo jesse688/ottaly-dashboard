@@ -9582,6 +9582,20 @@ function eventSeriesByLabel(body, label) {
   return out;
 }
 
+// Largest-remainder apportionment: split an integer `total` across `weights`
+// so the parts are integers that sum EXACTLY to total. Returns int array aligned
+// to weights. (Same technique Stats uses for the provider split.)
+function apportionInt(total, weights) {
+  const sum = weights.reduce((a, b) => a + b, 0);
+  if (!sum || !total) return weights.map(() => 0);
+  const raw = weights.map(w => (total * w) / sum);
+  const floor = raw.map(Math.floor);
+  let remainder = total - floor.reduce((a, b) => a + b, 0);
+  const order = raw.map((v, i) => [i, v - floor[i]]).sort((a, b) => b[1] - a[1]);
+  for (let k = 0; k < remainder; k++) floor[order[k % order.length][0]]++;
+  return floor;
+}
+
 async function syncMailboxDailyStats({ days = 35 } = {}) {
   if (_dailySyncState.running) return _dailySyncState;
   const pgdb = app.locals.pgDb;
@@ -9604,45 +9618,61 @@ async function syncMailboxDailyStats({ days = 35 } = {}) {
     const meta = await pgdb.listMailboxMeta().catch(() => []);
     const supplierByEmail = new Map((meta || []).map(m => [(m.email || '').toLowerCase(), m.supplier || '']));
 
-    // Group senders into buckets keyed by team_id|provider|supplier|workspace_id.
-    // Each bucket → one Bison call with all its sender ids.
-    const buckets = new Map();
+    // Group mailboxes by WORKSPACE (Bison team_id). For each workspace we make
+    // ONE line-area-chart-stats call (the proven endpoint that returns real
+    // per-day Sent/Reply/Bounce — campaign-events/stats returns zeros). Each
+    // day's workspace total is then apportioned across the workspace's
+    // (provider, supplier) buckets by mailbox-count share, so the cards can
+    // still split Google/Microsoft/SMTP and Winnr/Mithun/… per period.
+    const byWorkspace = new Map(); // team_id -> { workspaceId, buckets: Map(provider|supplier -> {provider,supplier,count}) }
     for (const m of (_mailboxCache.mailboxes || [])) {
-      const senderId = Number(m.account_id);
-      if (!Number.isFinite(senderId) || !m.bison_team_id) continue;
+      if (!m.bison_team_id) continue;
       const email = (m.email || '').toLowerCase();
       const provider = detectMailboxType(m.provider) || 'smtp';
       const supplier = supplierByEmail.get(email) || '';
-      const key = `${m.bison_team_id}|${provider}|${supplier}|${m.workspace_id || ''}`;
-      if (!buckets.has(key)) buckets.set(key, { teamId: m.bison_team_id, provider, supplier, workspaceId: m.workspace_id || '', ids: [] });
-      buckets.get(key).ids.push(senderId);
+      if (!byWorkspace.has(m.bison_team_id)) byWorkspace.set(m.bison_team_id, { workspaceId: m.workspace_id || '', buckets: new Map() });
+      const ws = byWorkspace.get(m.bison_team_id);
+      const bk = `${provider}|${supplier}`;
+      if (!ws.buckets.has(bk)) ws.buckets.set(bk, { provider, supplier, count: 0 });
+      ws.buckets.get(bk).count++;
     }
 
-    for (const b of buckets.values()) {
+    for (const [teamId, ws] of byWorkspace.entries()) {
       let body;
       try {
-        body = await bisonReq('/api/campaign-events/stats', {
-          wsId: b.teamId,
-          params: { start_date: start, end_date: end, sender_email_ids: b.ids },
+        body = await bisonReq('/api/workspaces/v1.1/line-area-chart-stats', {
+          wsId: teamId, params: { start_date: start, end_date: end },
         });
       } catch (e) {
-        continue; // skip this bucket; transient Bison errors shouldn't abort the sweep
+        continue; // skip this workspace; transient Bison errors shouldn't abort the sweep
       }
       const sent    = eventSeriesByLabel(body, 'Sent');
       const replied = eventSeriesByLabel(body, 'Replied');
       const bounced = eventSeriesByLabel(body, 'Bounced');
       const allDates = new Set([...sent.keys(), ...replied.keys(), ...bounced.keys()]);
+
+      const bucketList = [...ws.buckets.values()];
+      const weights = bucketList.map(b => b.count);
+
       for (const d of allDates) {
         const s = sent.get(d) || 0, r = replied.get(d) || 0, bo = bounced.get(d) || 0;
         if (!s && !r && !bo) continue; // don't store empty days
-        await pgdb.query(
-          `INSERT INTO mailbox_daily_stats (workspace_id, provider, supplier, date, sent, replied, bounced, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-           ON CONFLICT (workspace_id, provider, supplier, date) DO UPDATE
-             SET sent = EXCLUDED.sent, replied = EXCLUDED.replied, bounced = EXCLUDED.bounced, updated_at = NOW()`,
-          [b.workspaceId, b.provider, b.supplier, d, s, r, bo]
-        );
-        rowCount++;
+        // apportion each metric across the workspace's buckets by mailbox share.
+        const sShare = apportionInt(s, weights);
+        const rShare = apportionInt(r, weights);
+        const boShare = apportionInt(bo, weights);
+        for (let i = 0; i < bucketList.length; i++) {
+          const b = bucketList[i];
+          if (!sShare[i] && !rShare[i] && !boShare[i]) continue;
+          await pgdb.query(
+            `INSERT INTO mailbox_daily_stats (workspace_id, provider, supplier, date, sent, replied, bounced, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+             ON CONFLICT (workspace_id, provider, supplier, date) DO UPDATE
+               SET sent = EXCLUDED.sent, replied = EXCLUDED.replied, bounced = EXCLUDED.bounced, updated_at = NOW()`,
+            [ws.workspaceId, b.provider, b.supplier, d, sShare[i], rShare[i], boShare[i]]
+          );
+          rowCount++;
+        }
       }
       bucketCount++;
       _dailySyncState.buckets = bucketCount;
@@ -9651,7 +9681,7 @@ async function syncMailboxDailyStats({ days = 35 } = {}) {
     _dailySyncState.lastRun = new Date().toISOString();
     _dailySyncState.buckets = bucketCount;
     _dailySyncState.rows = rowCount;
-    console.log(`[mailbox-daily] synced ${bucketCount} bucket(s), ${rowCount} day-rows (${start}…${end})`);
+    console.log(`[mailbox-daily] synced ${bucketCount} workspace(s), ${rowCount} day-rows (${start}…${end})`);
   } catch (err) {
     _dailySyncState.lastError = err.message;
     console.error('[mailbox-daily] sync failed:', err.message);
@@ -9670,51 +9700,6 @@ app.post('/api/mailboxes/sync-daily', requireSession, async (req, res) => {
 });
 app.get('/api/mailboxes/sync-daily/status', requireSession, (req, res) => res.json(_dailySyncState));
 
-// DEBUG: make ONE real breakdownOfEventsByDate call against the first mailbox
-// with sender ids, and return the RAW Bison response + the parsed series, so we
-// can see exactly what Bison gives back (empty? wrong shape? error?).
-app.get('/api/mailboxes/sync-daily/debug', requireSession, async (req, res) => {
-  try {
-    const end = serverDateString(new Date());
-    const start = serverDateString(new Date(Date.now() - 35 * 86400000));
-    const mbs = (_mailboxCache.mailboxes || []).filter(m => m.account_id && m.bison_team_id);
-    if (!mbs.length) return res.json({ error: 'no mailboxes in cache', cacheLen: (_mailboxCache.mailboxes||[]).length });
-    // Pick the mailbox with the HIGHEST lifetime api_sent — a sender we KNOW sent,
-    // so a zero result means the endpoint, not an idle mailbox.
-    const topSender = [...mbs].sort((a,b) => (Number(b.api_sent)||0) - (Number(a.api_sent)||0))[0];
-    const m = topSender;
-    // all of THIS mailbox's workspace senders that have lifetime sends, top 5.
-    const ids = mbs.filter(x => x.bison_team_id === m.bison_team_id && (Number(x.api_sent)||0) > 0)
-                   .sort((a,b)=>(Number(b.api_sent)||0)-(Number(a.api_sent)||0))
-                   .slice(0, 5).map(x => Number(x.account_id));
-    let raw, err = null;
-    try {
-      raw = await bisonReq('/api/campaign-events/stats', { wsId: m.bison_team_id, params: { start_date: start, end_date: end, sender_email_ids: ids } });
-    } catch (e) { err = e.message; }
-    // also try WITHOUT sender filter (workspace-wide) to isolate the variable
-    let rawNoFilter, err2 = null;
-    try {
-      rawNoFilter = await bisonReq('/api/campaign-events/stats', { wsId: m.bison_team_id, params: { start_date: start, end_date: end } });
-    } catch (e) { err2 = e.message; }
-    // and the PROVEN endpoint Stats uses (workspace-wide, no sender filter) as a
-    // control — if THIS returns Sent data and campaign-events doesn't, we switch.
-    let rawLineArea, err3 = null;
-    try {
-      rawLineArea = await bisonReq('/api/workspaces/v1.1/line-area-chart-stats', { wsId: m.bison_team_id, params: { start_date: start, end_date: end } });
-    } catch (e) { err3 = e.message; }
-    const sumSeries = (body) => { const mp = eventSeriesByLabel(body || {}, 'Sent'); return mp instanceof Map ? Array.from(mp.values()).reduce((a,b)=>a+b,0) : 0; };
-    const sentEntries = (body) => { const mp = eventSeriesByLabel(body || {}, 'Sent'); return mp instanceof Map ? Array.from(mp.entries()).filter(([,v])=>v>0) : null; };
-    res.json({
-      start, end,
-      team_id: m.bison_team_id, sampleEmail: m.email, sampleApiSentLifetime: Number(m.api_sent)||0, sender_email_ids: ids,
-      campaignEvents_withFilter: { error: err,  labels: (raw?.data||[]).map(s => s.label),         sentTotal: sumSeries(raw),        sentNonZero: sentEntries(raw) },
-      campaignEvents_noFilter:   { error: err2, labels: (rawNoFilter?.data||[]).map(s => s.label), sentTotal: sumSeries(rawNoFilter), sentNonZero: sentEntries(rawNoFilter) },
-      lineAreaChart_control:     { error: err3, labels: (rawLineArea?.data||[]).map(s => s.label), sentTotal: sumSeries(rawLineArea), sentNonZero: sentEntries(rawLineArea) },
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
 
 // First run a few minutes after boot (give the mailbox cache time to populate),
 // then every 3h. The sweep is ~1 call/mailbox so it's paced, not instant.
