@@ -3,6 +3,8 @@ import { getBalance, getLockedLeadIds, reconcileLeadCharges } from './balance'
 import { getEmails } from './plusvibe'
 
 const FROM = process.env.EMAIL_FROM || 'Ottaly <info@ottaly.co.uk>'
+// CC'd on every lead notification so the agency has a copy. Overridable via env.
+const LEAD_NOTIFY_CC = process.env.LEAD_NOTIFY_CC || 'info@ottaly.co.uk'
 const BASE_URL = (process.env.PORTAL_BASE_URL || 'https://login.ottaly.co.uk').replace(/\/$/, '')
 
 // Default notification templates (editable in admin → portal_settings).
@@ -59,17 +61,19 @@ export async function renderTemplatePair(
 }
 
 // Low-level send via Resend. No-ops (logs) if RESEND_API_KEY isn't configured.
-export async function sendEmail(to: string, subject: string, text: string, idempotencyKey?: string): Promise<{ ok: boolean; reason?: string }> {
+export async function sendEmail(to: string, subject: string, text: string, idempotencyKey?: string, cc?: string): Promise<{ ok: boolean; reason?: string }> {
   const key = process.env.RESEND_API_KEY
   if (!key) { console.warn('[email] RESEND_API_KEY not set — skipping send'); return { ok: false, reason: 'no_api_key' } }
   if (!to) return { ok: false, reason: 'no_recipient' }
   try {
     const headers: Record<string, string> = { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }
     if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey
+    // Don't CC the same address we're already sending To (Resend would error / dupe).
+    const ccTo = cc && cc.toLowerCase() !== to.toLowerCase() ? cc : undefined
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ from: FROM, to, subject, html: text.replace(/\n/g, '<br>') }),
+      body: JSON.stringify({ from: FROM, to, ...(ccTo ? { cc: ccTo } : {}), subject, html: text.replace(/\n/g, '<br>') }),
       signal: AbortSignal.timeout(15000),
     })
     if (!res.ok) { const body = await res.text(); console.error('[email] resend error:', res.status, body); return { ok: false, reason: `resend_${res.status}` } }
@@ -178,7 +182,9 @@ export async function notifyClientOfLead(workspaceId: string, leadId: string): P
     const { subject, body } = await buildLeadEmail(c, lead.rows[0], balance, locked, leadMessage)
     // Idempotency-Key means even an ambiguous failure (timeout after Resend
     // accepted) can be retried without a duplicate landing in the inbox.
-    const res = await sendEmail(c.email, subject, body, `lead/${c.id}/${leadId}`)
+    // CC the agency (info@ottaly) on the client's copy so we keep a record of
+    // every lead notification. Per-user copies below are NOT CC'd to avoid N dupes.
+    const res = await sendEmail(c.email, subject, body, `lead/${c.id}/${leadId}`, LEAD_NOTIFY_CC)
     if (res.ok) {
       anySent = true
       await pool.query(`UPDATE portal_lead_notifications SET status = 'sent', sent_at = NOW() WHERE client_id = $1 AND lead_id = $2`, [c.id, leadId]).catch(() => {})
