@@ -8405,7 +8405,7 @@ app.get('/api/bounce-analysis', requireSession, async (req, res) => {
     });
   } catch (err) {
     console.error('[bounce-analysis]', err.message);
-    res.status(500).json({ error: 'Database error', detail: err.message });
+    res.status(500).json({ error: 'Database error' });
   }
 });
 
@@ -8564,8 +8564,7 @@ app.get('/api/cron/bounce-alert', async (req, res) => {
     res.json({ window: { recent, baseline }, thresholds: { minHard, floorRate, risePct }, flagged, posted, dry });
   } catch (err) {
     console.error('[bounce-alert]', err.message);
-    // TEMP: surface the real Postgres error to the caller for diagnosis.
-    res.status(500).json({ error: 'Database error', detail: err.message });
+    res.status(500).json({ error: 'Database error' });
   }
 });
 
