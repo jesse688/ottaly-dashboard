@@ -161,12 +161,14 @@ tr:hover td{background:#FAFBFF}
   <div class="section-h">By supplier — who performs best</div>
   <div class="gridN" id="bySupplier"></div>
 
-  <!-- Provider/supplier performance — LIFETIME (sends from Bison sender-emails
-       API, replies from the client portal; independent of any webhook). -->
-  <div class="section-h" style="display:flex;align-items:center;justify-content:space-between;margin-top:1rem">
-    Sending performance by provider &amp; supplier
-    <span style="font-size:10px;font-weight:700;color:#475569;background:#e2e8f0;padding:2px 8px;border-radius:99px">LIFETIME</span>
+  <!-- Provider/supplier performance. Lifetime = Bison sender-emails API totals.
+       Period (Today/7d/30d) = mailbox_daily_stats (synced from Bison's
+       breakdownOfEventsByDate). Replies always come from the client portal. -->
+  <div class="section-h" style="display:flex;align-items:center;justify-content:space-between;margin-top:1rem;flex-wrap:wrap;gap:8px">
+    <span>Sending performance by provider &amp; supplier</span>
+    <span id="mbPeriodBar" style="display:inline-flex;gap:4px;font-size:12px;font-weight:600"></span>
   </div>
+  <div id="mbPeriodNote" style="font-size:11px;color:var(--muted);margin:-4px 0 8px"></div>
   <div style="font-size:11px;color:var(--muted);margin:-2px 0 8px">By provider type (Google / Microsoft / SMTP):</div>
   <div id="providerCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1rem;margin-bottom:.75rem"></div>
   <div style="font-size:11px;color:var(--muted);margin:0 0 8px">By supplier (Winnr / Maildoso / Mithun):</div>
@@ -1347,42 +1349,59 @@ async function enableAllWarmup() {
 }
 
 // ── Supplier performance charts ──────────────────────────────
-let _mbPeriod = '7d';
-const _mbCharts = {};
+// Period model:
+//   lifetime → days=0 → Bison sender-emails API totals (all-time).
+//   today/7d/30d/… → days=N → mailbox_daily_stats (synced from Bison's
+//   breakdownOfEventsByDate). Replies always come from the client portal.
+const MB_PERIODS = [
+  { key:'lifetime', label:'Lifetime' },
+  { key:'today',    label:'Today'    },
+  { key:'7d',       label:'7 days'   },
+  { key:'14d',      label:'14 days'  },
+  { key:'30d',      label:'30 days'  },
+  { key:'60d',      label:'60 days'  },
+];
+let _mbPeriod = 'lifetime';
+let _mbLastData = null;
+
+function renderMbPeriodBar() {
+  const bar = document.getElementById('mbPeriodBar');
+  if (!bar) return;
+  bar.innerHTML = MB_PERIODS.map(p => {
+    const active = p.key === _mbPeriod;
+    return `<button onclick="setMbPeriod('${p.key}')" style="font-family:inherit;font-size:12px;font-weight:600;padding:4px 10px;border-radius:7px;cursor:pointer;`
+      + `background:${active?'var(--navy-dark)':'#fff'};color:${active?'#fff':'var(--muted)'};border:1px solid ${active?'var(--navy-dark)':'var(--border)'}">${p.label}</button>`;
+  }).join('');
+}
 
 function setMbPeriod(p) {
   _mbPeriod = p;
-  ['Today','7d','14d','30d','60d'].forEach(x => {
-    const btn = document.getElementById(`mbPeriod${x}`);
-    if (!btn) return;
-    const active = x.toLowerCase() === p || (x === 'Today' && p === 'today');
-    btn.style.background = active ? 'var(--navy-dark)' : '#fff';
-    btn.style.color = active ? '#fff' : 'var(--muted)';
-    btn.style.borderColor = active ? 'var(--navy-dark)' : 'var(--border)';
-  });
+  renderMbPeriodBar();
   loadSupplierCharts(p);
   loadProviderCharts(p);
 }
 
-function mbDateRange(p) {
-  const today = new Date().toISOString().slice(0,10);
-  const nAgo = n => { const d=new Date(); d.setDate(d.getDate()-n); return d.toISOString().slice(0,10); };
-  if (p === 'today') return { start: today, end: today };
-  if (p === '7d')  return { start: nAgo(6), end: today };
-  if (p === '14d') return { start: nAgo(13), end: today };
-  if (p === '30d') return { start: nAgo(29), end: today };
-  if (p === '60d') return { start: nAgo(59), end: today };
-  return { start: nAgo(6), end: today };
+function _mbPeriodDays(p) {
+  return p === 'lifetime' ? 0 : p === 'today' ? 1 : p === '7d' ? 7 : p === '14d' ? 14 : p === '30d' ? 30 : p === '60d' ? 60 : 0;
 }
 
-
-// Accurate per-provider + per-supplier performance, from /api/mailboxes/provider-stats.
-// Replaces the old workspace-name-matching (broke in the Bison cutover). Every
-// sent/reply/bounce is attributed to the ACTUAL sending mailbox → its provider
-// and supplier. Sent+bounce ← email_events.sender_email; replies ← the portal's
-// unibox_replies.mailbox_email (so reply rate by provider is REAL, not estimated).
-function _mbPeriodDays(p) {
-  return p === 'today' ? 1 : p === '7d' ? 7 : p === '14d' ? 14 : p === '30d' ? 30 : p === '60d' ? 60 : 7;
+// Single fetch shared by both provider + supplier renderers (avoids two calls).
+async function _fetchProviderStats(p) {
+  const r = await fetch(`/api/mailboxes/provider-stats?days=${_mbPeriodDays(p)}`);
+  if (!r.ok) throw new Error(r.status);
+  const d = await r.json();
+  _mbLastData = d;
+  // freshness note
+  const note = document.getElementById('mbPeriodNote');
+  if (note) {
+    if (d.lifetime) {
+      note.textContent = 'Lifetime totals from Bison (all-time). Replies are human replies from the client portal.';
+    } else {
+      const synced = d.syncedAt ? new Date(d.syncedAt).toLocaleString() : 'not yet — run the daily sync';
+      note.textContent = `Last ${d.days} day(s), per-day stats synced from Bison. Last sync: ${synced}. Replies from the client portal.`;
+    }
+  }
+  return d;
 }
 function _provCard(label, color, b) {
   const pct = (n, d) => d > 0 ? (100 * n / d).toFixed(2) + '%' : '—';
@@ -1402,27 +1421,29 @@ function _provCard(label, color, b) {
     </div>${hbs}
   </div>`;
 }
+function _mbEmptyMsg(d, kind) {
+  if (d && !d.lifetime) {
+    return `No ${kind} activity in this period yet. If you just deployed, the per-day sync runs ~5 min after boot (or trigger it: <code>POST /api/mailboxes/sync-daily</code>). Try <b>Lifetime</b> meanwhile.`;
+  }
+  return kind === 'supplier'
+    ? 'No supplier-tagged sending activity yet — assign suppliers to mailboxes, or click Refresh.'
+    : 'No sending activity yet — mailbox cache may still be loading. Click Refresh.';
+}
+
 async function loadProviderCharts(p) {
   const wrap = document.getElementById('providerCharts');
   if (!wrap) return;
   wrap.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:.5rem 0">Loading provider performance…</div>';
   let d;
-  try {
-    const r = await fetch(`/api/mailboxes/provider-stats?days=${_mbPeriodDays(p)}`);
-    if (!r.ok) throw new Error(r.status);
-    d = await r.json();
-  } catch (err) {
-    wrap.innerHTML = `<div style="color:var(--muted);font-size:12px">Provider stats unavailable: ${err.message}</div>`;
-    return;
-  }
+  try { d = await _fetchProviderStats(p); }
+  catch (err) { wrap.innerHTML = `<div style="color:var(--muted);font-size:12px">Provider stats unavailable: ${err.message}</div>`; return; }
   const COL = { google:'#EA4335', microsoft:'#0078D4', smtp:'#475569' };
   const LBL = { google:'Google', microsoft:'Microsoft', smtp:'SMTP / Other' };
   const order = ['google','microsoft','smtp'];
   const keys = Object.keys(d.byProvider || {}).sort((a,b)=> (order.indexOf(a)+99*(order.indexOf(a)<0)) - (order.indexOf(b)+99*(order.indexOf(b)<0)));
   const totalSent = keys.reduce((s,k)=> s + (d.byProvider[k].sent||0), 0);
   if (!keys.length || totalSent === 0) {
-    const msg = 'No sending activity yet — mailbox cache may still be loading. Click Refresh.';
-    wrap.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:.5rem 0">'+msg+'</div>'; return;
+    wrap.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:.5rem 0">'+_mbEmptyMsg(d,'provider')+'</div>'; return;
   }
   wrap.innerHTML = keys.map(k => _provCard(LBL[k]||k, COL[k]||'#475569', d.byProvider[k])).join('');
 }
@@ -1432,23 +1453,17 @@ async function loadSupplierCharts(p) {
   if (!wrap) return;
   wrap.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:.5rem 0">Loading supplier performance…</div>';
   let d;
-  try {
-    const r = await fetch(`/api/mailboxes/provider-stats?days=${_mbPeriodDays(p)}`);
-    if (!r.ok) throw new Error(r.status);
-    d = await r.json();
-  } catch (err) {
-    wrap.innerHTML = `<div style="color:var(--muted);font-size:12px">Supplier stats unavailable: ${err.message}</div>`;
-    return;
-  }
+  try { d = await _fetchProviderStats(p); }
+  catch (err) { wrap.innerHTML = `<div style="color:var(--muted);font-size:12px">Supplier stats unavailable: ${err.message}</div>`; return; }
   const PAL = ['#6366F1','#0EA5E9','#10B981','#F59E0B','#EC4899','#8B5CF6','#475569'];
   const keys = Object.keys(d.bySupplier || {}).sort((a,b)=>(d.bySupplier[b].sent||0)-(d.bySupplier[a].sent||0));
   const totalSent = keys.reduce((s,k)=> s + (d.bySupplier[k].sent||0), 0);
   if (!keys.length || totalSent === 0) {
-    const msg = 'No supplier-tagged sending activity yet — assign suppliers to mailboxes, or click Refresh.';
-    wrap.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:.5rem 0">'+msg+'</div>'; return;
+    wrap.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:.5rem 0">'+_mbEmptyMsg(d,'supplier')+'</div>'; return;
   }
   wrap.innerHTML = keys.map((k,i) => _provCard(k, PAL[i%PAL.length], d.bySupplier[k])).join('');
 }
+renderMbPeriodBar();
 </script>
 </body>
 </html>

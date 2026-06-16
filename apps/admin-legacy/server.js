@@ -225,7 +225,11 @@ async function _bisonRaw(path, opts = {}) {
     }
   }
   const url = new URL(BISON_BASE + path);
-  if (opts.params) for (const [k, v] of Object.entries(opts.params)) { if (v != null) url.searchParams.set(k, String(v)); }
+  if (opts.params) for (const [k, v] of Object.entries(opts.params)) {
+    if (v == null) continue;
+    if (Array.isArray(v)) { for (const item of v) if (item != null) url.searchParams.append(k + '[]', String(item)); }
+    else url.searchParams.set(k, String(v));
+  }
   const init = {
     method: opts.method || 'GET',
     headers: { Authorization: 'Bearer ' + bearer, 'Content-Type': 'application/json' },
@@ -9555,6 +9559,96 @@ async function refreshMailboxCache() {
 setTimeout(refreshMailboxCache, 20000); // after revenue cache (5s), before performance (60s)
 setInterval(refreshMailboxCache, 30 * 60 * 1000);
 
+// ── Per-mailbox daily stats sync (central data layer, phase 1) ───────────────
+// Bison's GET /api/campaign-events/stats (breakdownOfEventsByDate) returns
+// Sent/Replied/Bounced BY DATE, filtered by sender_email_ids. The response is
+// AGGREGATE over the ids passed, so to get per-mailbox grain we call it once per
+// mailbox with a single sender id. Runs as a background job (never inline on a
+// page) so the Mailboxes page can filter by any date range against a local table
+// instead of hitting Bison's stateful token live.
+let _dailySyncState = { running: false, lastRun: null, lastError: null, mailboxes: 0, rows: 0 };
+
+// Pull a single label's date→count map out of the breakdownOfEventsByDate body.
+// Body shape: { data: [ { label:'Sent', dates:[['2025-05-03', 4], ...] }, ... ] }
+function eventSeriesByLabel(body, label) {
+  const data = body?.data || [];
+  const series = data.find(s => String(s.label || '').toLowerCase() === label.toLowerCase());
+  const out = new Map();
+  for (const pair of (series?.dates || [])) {
+    if (Array.isArray(pair) && pair.length >= 2) out.set(String(pair[0]), Number(pair[1]) || 0);
+  }
+  return out;
+}
+
+async function syncMailboxDailyStats({ days = 35 } = {}) {
+  if (_dailySyncState.running) return _dailySyncState;
+  const pgdb = app.locals.pgDb;
+  if (!pgdb) return _dailySyncState;
+  _dailySyncState.running = true;
+  _dailySyncState.lastError = null;
+  const end = serverDateString(new Date());
+  const start = serverDateString(new Date(Date.now() - days * 86400000));
+  let mbCount = 0, rowCount = 0;
+  try {
+    const mailboxes = (_mailboxCache.mailboxes || []).filter(m => m.account_id && m.bison_team_id);
+    for (const m of mailboxes) {
+      const senderId = Number(m.account_id);
+      if (!Number.isFinite(senderId)) continue;
+      let body;
+      try {
+        body = await bisonReq('/api/campaign-events/stats', {
+          wsId: m.bison_team_id,
+          params: { start_date: start, end_date: end, sender_email_ids: [senderId] },
+        });
+      } catch (e) {
+        continue; // skip this mailbox; transient Bison errors shouldn't abort the sweep
+      }
+      const sent     = eventSeriesByLabel(body, 'Sent');
+      const replied  = eventSeriesByLabel(body, 'Replied');
+      const bounced  = eventSeriesByLabel(body, 'Bounced');
+      const allDates = new Set([...sent.keys(), ...replied.keys(), ...bounced.keys()]);
+      for (const d of allDates) {
+        const s = sent.get(d) || 0, r = replied.get(d) || 0, b = bounced.get(d) || 0;
+        if (!s && !r && !b) continue; // don't store empty days
+        await pgdb.query(
+          `INSERT INTO mailbox_daily_stats (mailbox_email, date, workspace_id, sent, replied, bounced, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, NOW())
+           ON CONFLICT (mailbox_email, date) DO UPDATE
+             SET sent = EXCLUDED.sent, replied = EXCLUDED.replied, bounced = EXCLUDED.bounced,
+                 workspace_id = EXCLUDED.workspace_id, updated_at = NOW()`,
+          [m.email, d, m.workspace_id || null, s, r, b]
+        );
+        rowCount++;
+      }
+      mbCount++;
+    }
+    _dailySyncState.lastRun = new Date().toISOString();
+    _dailySyncState.mailboxes = mbCount;
+    _dailySyncState.rows = rowCount;
+    console.log(`[mailbox-daily] synced ${mbCount} mailbox(es), ${rowCount} day-rows (${start}…${end})`);
+  } catch (err) {
+    _dailySyncState.lastError = err.message;
+    console.error('[mailbox-daily] sync failed:', err.message);
+  } finally {
+    _dailySyncState.running = false;
+  }
+  return _dailySyncState;
+}
+
+// On-demand sync (admin can force a refresh). ?days=N to widen the window.
+app.post('/api/mailboxes/sync-daily', requireSession, async (req, res) => {
+  const days = Math.min(120, Math.max(1, Number(req.query.days) || 35));
+  if (_dailySyncState.running) return res.json({ ok: true, alreadyRunning: true, state: _dailySyncState });
+  syncMailboxDailyStats({ days }).catch(() => {}); // fire-and-forget (slow)
+  res.json({ ok: true, started: true, days });
+});
+app.get('/api/mailboxes/sync-daily/status', requireSession, (req, res) => res.json(_dailySyncState));
+
+// First run a few minutes after boot (give the mailbox cache time to populate),
+// then every 3h. The sweep is ~1 call/mailbox so it's paced, not instant.
+setTimeout(() => syncMailboxDailyStats().catch(() => {}), 5 * 60 * 1000);
+setInterval(() => syncMailboxDailyStats().catch(() => {}), 3 * 60 * 60 * 1000);
+
 function mergeMailboxesWithMeta(mailboxes, metaByEmail) {
   return mailboxes.map(m => {
     const meta = metaByEmail.get(m.email) || {};
@@ -9641,12 +9735,16 @@ async function buildPortalRepliesByMailbox(pgdb, days = 0) {
 // provider by name and summed the WHOLE workspace under it. Here every sent/
 // reply/bounce is tied to the mailbox that actually sent it, then rolled up by
 // that mailbox's provider (google/microsoft/smtp) AND supplier (Winnr/…).
-//   ?days=7  (default 7; 0 = all-time)
+//   ?days=0  → lifetime (Bison sender-emails api_* totals)
+//   ?days=N  → last N days, read from mailbox_daily_stats (Bison breakdownOf-
+//              EventsByDate, synced into a local table). Replies ALWAYS come
+//              from the client portal (unibox_replies), windowed to match.
 app.get('/api/mailboxes/provider-stats', requireSession, async (req, res) => {
   try {
     const pgdb = app.locals.pgDb;
     if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
-    const days = Math.max(0, Math.min(365, parseInt(req.query.days, 10) || 7));
+    const days = Math.max(0, Math.min(365, parseInt(req.query.days, 10) || 0));
+    const lifetime = days === 0;
 
     // sender_email → { provider, supplier } from the live mailbox roster + meta.
     const meta = await pgdb.listMailboxMeta().catch(() => []);
@@ -9661,31 +9759,55 @@ app.get('/api/mailboxes/provider-stats', requireSession, async (req, res) => {
       });
     }
 
-    // SENT + BOUNCE per mailbox = Bison's authoritative LIFETIME counts from the
-    // sender-emails API (api_sent/api_bounced on each _mailboxCache row). NOT
-    // email_events — Bison stopped firing email_sent on 2026-06-15, so the event
-    // feed is dead. These counts are lifetime, so the period buttons no longer
-    // window this section (the page shows it as "lifetime").
-    // sentByMailbox: email -> { sent, bounces } from the API.
+    // SENT + BOUNCE per mailbox.
+    //  • lifetime: Bison's authoritative api_sent/api_bounced (sender-emails API).
+    //  • period:   summed from mailbox_daily_stats over the window (per-day rows
+    //              synced from Bison's breakdownOfEventsByDate). Bounces here are
+    //              the period bounce count; the hard/block/soft split below scales
+    //              to it.
+    // sentByMailbox: email -> { sent, bounces, apiReplied }.
     const sentByMailbox = new Map();
-    for (const m of (_mailboxCache.mailboxes || [])) {
-      const email = (m.email || '').toLowerCase();
-      if (!email) continue;
-      sentByMailbox.set(email, { sent: Number(m.api_sent) || 0, bounces: Number(m.api_bounced) || 0, apiReplied: Number(m.api_replied) || 0 });
+    if (lifetime) {
+      for (const m of (_mailboxCache.mailboxes || [])) {
+        const email = (m.email || '').toLowerCase();
+        if (!email) continue;
+        sentByMailbox.set(email, { sent: Number(m.api_sent) || 0, bounces: Number(m.api_bounced) || 0, apiReplied: Number(m.api_replied) || 0 });
+      }
+    } else {
+      try {
+        const ds = await pgdb.query(`
+          SELECT lower(mailbox_email) AS sender,
+                 SUM(sent)::int    AS sent,
+                 SUM(bounced)::int AS bounces,
+                 SUM(replied)::int AS bison_replied
+          FROM mailbox_daily_stats
+          WHERE date >= (CURRENT_DATE - ($1::int - 1))
+          GROUP BY lower(mailbox_email)
+        `, [days]);
+        for (const r of ds.rows) {
+          sentByMailbox.set(r.sender, { sent: r.sent || 0, bounces: r.bounces || 0, apiReplied: r.bison_replied || 0 });
+        }
+      } catch (e) {
+        console.warn('[mailbox provider-stats] daily-stats query failed (non-fatal):', e.message);
+      }
     }
 
     // REPLIES per mailbox = client portal (unibox_replies.mailbox_email) — the
-    // canonical reply source. Lifetime, human replies only. Falls back to the
-    // API's total_replied_count when the portal has none for a mailbox.
+    // canonical reply source (human replies only). Windowed to match the period;
+    // falls back to the Bison reply count when the portal has none for a mailbox.
     let replyRows = [];
     try {
+      const rparams = [];
+      let rwin = '';
+      if (!lifetime) { rparams.push(days); rwin = `AND received_at >= (CURRENT_DATE - ($1::int - 1))`; }
       const rr = await pgdb.query(`
         SELECT lower(mailbox_email) AS sender, COUNT(*)::int AS replies
         FROM unibox_replies
         WHERE mailbox_email IS NOT NULL AND mailbox_email <> ''
           AND COALESCE(admin_label, category) IN ('interested','not_interested','question','unsubscribe')
+          ${rwin}
         GROUP BY lower(mailbox_email)
-      `);
+      `, rparams);
       replyRows = rr.rows;
     } catch (e) {
       console.warn('[mailbox provider-stats] reply query failed (non-fatal):', e.message);
@@ -9698,6 +9820,9 @@ app.get('/api/mailboxes/provider-stats', requireSession, async (req, res) => {
     const { isHard, isBlock } = bounceClassExprs("raw->>'msg'");
     let bounceClassRows = [];
     try {
+      const bparams = [];
+      let bwin = '';
+      if (!lifetime) { bparams.push(days); bwin = `AND event_at >= (CURRENT_DATE - ($1::int - 1))`; }
       const bc = await pgdb.query(`
         SELECT lower(sender_email) AS sender,
                COUNT(*)::int AS n,
@@ -9705,8 +9830,9 @@ app.get('/api/mailboxes/provider-stats', requireSession, async (req, res) => {
                COUNT(*) FILTER (WHERE ${isBlock})::int AS block
         FROM email_events
         WHERE event_type='bounce' AND sender_email IS NOT NULL AND sender_email <> ''
+          ${bwin}
         GROUP BY lower(sender_email)
-      `);
+      `, bparams);
       bounceClassRows = bc.rows;
     } catch (e) {
       console.warn('[mailbox provider-stats] bounce-class query failed (non-fatal):', e.message);
@@ -9745,7 +9871,7 @@ app.get('/api/mailboxes/provider-stats', requireSession, async (req, res) => {
       bounce_rate: b.sent > 0 ? b.bounces / b.sent : 0,
     }]));
 
-    res.json({ days: 0, lifetime: true, byProvider: withRates(byProvider), bySupplier: withRates(bySupplier), unmatched: { ...unmatched, reply_rate: unmatched.sent>0?unmatched.replies/unmatched.sent:0, bounce_rate: unmatched.sent>0?unmatched.bounces/unmatched.sent:0 } });
+    res.json({ days, lifetime, syncedAt: _dailySyncState.lastRun, byProvider: withRates(byProvider), bySupplier: withRates(bySupplier), unmatched: { ...unmatched, reply_rate: unmatched.sent>0?unmatched.replies/unmatched.sent:0, bounce_rate: unmatched.sent>0?unmatched.bounces/unmatched.sent:0 } });
   } catch (err) {
     console.error('[mailbox provider-stats]', err.message);
     res.status(500).json({ error: err.message });

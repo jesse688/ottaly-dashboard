@@ -346,6 +346,24 @@ class PostgresDatabase {
         data       JSONB NOT NULL,
         saved_at   BIGINT NOT NULL
       )`,
+      // ── Per-mailbox daily stats (the start of the central data layer) ──
+      // One row per mailbox per day: sent/replied/bounced pulled from Bison's
+      // breakdownOfEventsByDate (GET /api/campaign-events/stats), filtered by
+      // sender_email_ids per workspace. Lets the Mailboxes page filter by any
+      // date range instantly without hitting Bison live. Replies here are
+      // Bison-side; the page overlays portal replies (unibox_replies) on top.
+      `CREATE TABLE IF NOT EXISTS mailbox_daily_stats (
+        mailbox_email TEXT NOT NULL,
+        date          DATE NOT NULL,
+        workspace_id  TEXT,
+        sent          INT  NOT NULL DEFAULT 0,
+        replied       INT  NOT NULL DEFAULT 0,
+        bounced       INT  NOT NULL DEFAULT 0,
+        updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (mailbox_email, date)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_mbds_date ON mailbox_daily_stats (date)`,
+      `CREATE INDEX IF NOT EXISTS idx_mbds_ws   ON mailbox_daily_stats (workspace_id)`,
       `CREATE TABLE IF NOT EXISTS monthly_expenses (
         id            SERIAL PRIMARY KEY,
         label         TEXT NOT NULL,
