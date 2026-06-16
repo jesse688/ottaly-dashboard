@@ -8208,6 +8208,13 @@ async function listSendingMailboxes() {
           campaign_ids: [],
           created_at: a.created_at || null,
           updated_at: a.updated_at || null,
+          // Authoritative LIFETIME counts straight from Bison's sender-emails API
+          // — independent of the email_sent webhook (which Bison stopped firing
+          // ~2026-06-15). This is what the Mailboxes page should trust for
+          // sent/replied/bounced, not the dried-up event feed.
+          api_sent:     Number(a.emails_sent_count    ?? a.sent_count    ?? 0) || 0,
+          api_replied:  Number(a.total_replied_count  ?? a.replied_count ?? 0) || 0,
+          api_bounced:  Number(a.bounced_count        ?? 0) || 0,
           });
           found++;
         }
@@ -9782,6 +9789,23 @@ function attachMailboxStats(mailboxes, campIndex, eventsByMailbox = new Map(), p
     const ev = eventsByMailbox.get(m.email);
     // Real human replies for THIS mailbox from the classified portal data.
     const portalReplies = portalRepliesByMailbox.get((m.email || '').toLowerCase());
+
+    // PRIMARY source = Bison's sender-emails API counts (lifetime, authoritative,
+    // independent of the email_sent webhook that Bison stopped firing ~2026-06-15).
+    // Use these whenever present; webhook events only fill the 3-way bounce split.
+    if ((m.api_sent || 0) > 0 || (m.api_replied || 0) > 0 || (m.api_bounced || 0) > 0) {
+      m.attributed_sent    = m.api_sent || 0;
+      m.attributed_replies = (portalReplies != null && portalReplies > 0) ? portalReplies : (m.api_replied || 0);
+      m.attributed_bounces = m.api_bounced || 0;
+      // Borrow the hard/block/soft split from webhook events if we have it.
+      if (ev) { m.bounces_hard = ev.bounces_hard; m.bounces_block = ev.bounces_block; m.bounces_soft = ev.bounces_soft; }
+      m.stats_source = 'bison_api';
+      const s0 = m.attributed_sent;
+      m.reply_rate  = s0 > 0 ? m.attributed_replies / s0 : 0;
+      m.bounce_rate = s0 > 0 ? m.attributed_bounces / s0 : 0;
+      continue;
+    }
+
     if (ev && ev.sent > 0) {
       // Real sent + bounce counts from webhooks.
       m.attributed_sent    = ev.sent;
