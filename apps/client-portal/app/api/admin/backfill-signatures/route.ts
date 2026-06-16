@@ -20,10 +20,14 @@ export async function GET(req: NextRequest) { return run(req) }
 export async function POST(req: NextRequest) { return run(req) }
 
 async function run(req: NextRequest) {
-  if (!await getAdminSession()) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const url = new URL(req.url)
+  const secret = url.searchParams.get('secret')
+  const okSecret = !!secret && !!process.env.CRON_SECRET && secret === process.env.CRON_SECRET
+  if (!okSecret && !await getAdminSession()) {
+    return NextResponse.json({ error: 'Unauthorized — log into /admin, or append ?secret=CRON_SECRET' }, { status: 401 })
+  }
   await ready()
 
-  const url = new URL(req.url)
   const ws = (url.searchParams.get('workspace') ?? '').trim()
 
   // DEBUG: ?probe=<email> dumps how ONE lead is stored in unibox_replies + esp_leads,

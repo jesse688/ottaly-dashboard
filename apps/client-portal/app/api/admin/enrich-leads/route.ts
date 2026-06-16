@@ -14,10 +14,15 @@ export async function GET(req: NextRequest) { return run(req) }
 export async function POST(req: NextRequest) { return run(req) }
 
 async function run(req: NextRequest) {
-  if (!await getAdminSession()) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  await ready()
-
   const url = new URL(req.url)
+  // Auth: admin session cookie OR ?secret=CRON_SECRET (so it can be triggered from any
+  // browser/tab without being logged into the admin dashboard).
+  const secret = url.searchParams.get('secret')
+  const okSecret = !!secret && !!process.env.CRON_SECRET && secret === process.env.CRON_SECRET
+  if (!okSecret && !await getAdminSession()) {
+    return NextResponse.json({ error: 'Unauthorized — log into /admin in this browser, or append ?secret=CRON_SECRET' }, { status: 401 })
+  }
+  await ready()
   const ws = (url.searchParams.get('workspace') ?? '').trim()
   const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '5000', 10) || 5000, 1), 20000)
 
