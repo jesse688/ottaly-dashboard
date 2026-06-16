@@ -465,13 +465,11 @@ function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t
 
 async function load() {
   try {
-    // Pass the selected period so the per-mailbox table's Sent/Reply/Bounce
-    // match it (reply + sent counts share the same window server-side). Wrapped
-    // because _mbPeriod is a `let` defined later — referencing it on the very
-    // first load() (before its declaration) would hit the temporal dead zone.
-    let days = 7;
-    try { days = _mbPeriodDays(_mbPeriod); } catch (_) { days = 7; }
-    const r = await fetch('/api/mailboxes?days=' + days);
+    // The roster + supplier/type tables are LIFETIME (they answer "which
+    // mailboxes exist and their all-time performance"). The period buttons drive
+    // ONLY the dedicated provider/supplier cards (loadProviderCharts/Supplier
+    // Charts), not this whole table — windowing it zeroed everything on Today.
+    const r = await fetch('/api/mailboxes');
     data = await r.json();
     if (data.lastRun) document.getElementById('lastRun').textContent = `Last refresh: ${new Date(data.lastRun).toLocaleString()}`;
     if (data.running) document.getElementById('refreshBtn').innerHTML = '<span class="spin"></span>Refreshing…';
@@ -1369,7 +1367,6 @@ function setMbPeriod(p) {
   });
   loadSupplierCharts(p);
   loadProviderCharts(p);
-  load(); // reload the per-mailbox table for the new period (sent/reply/bounce)
 }
 
 function mbDateRange(p) {
@@ -1427,7 +1424,11 @@ async function loadProviderCharts(p) {
   const LBL = { google:'Google', microsoft:'Microsoft', smtp:'SMTP / Other' };
   const order = ['google','microsoft','smtp'];
   const keys = Object.keys(d.byProvider || {}).sort((a,b)=> (order.indexOf(a)+99*(order.indexOf(a)<0)) - (order.indexOf(b)+99*(order.indexOf(b)<0)));
-  if (!keys.length) { wrap.innerHTML = '<div style="color:var(--muted);font-size:12px">No sending activity for this period.</div>'; return; }
+  const totalSent = keys.reduce((s,k)=> s + (d.byProvider[k].sent||0), 0);
+  if (!keys.length || totalSent === 0) {
+    const msg = (p === 'today') ? 'No sends yet today — try 7d or 30d for performance.' : 'No sending activity for this period.';
+    wrap.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:.5rem 0">'+msg+'</div>'; return;
+  }
   wrap.innerHTML = keys.map(k => _provCard(LBL[k]||k, COL[k]||'#475569', d.byProvider[k])).join('');
 }
 // Accurate per-SUPPLIER performance (Winnr / Maildoso / …) — same real source.
@@ -1446,7 +1447,11 @@ async function loadSupplierCharts(p) {
   }
   const PAL = ['#6366F1','#0EA5E9','#10B981','#F59E0B','#EC4899','#8B5CF6','#475569'];
   const keys = Object.keys(d.bySupplier || {}).sort((a,b)=>(d.bySupplier[b].sent||0)-(d.bySupplier[a].sent||0));
-  if (!keys.length) { wrap.innerHTML = '<div style="color:var(--muted);font-size:12px">No supplier-tagged sending activity for this period.</div>'; return; }
+  const totalSent = keys.reduce((s,k)=> s + (d.bySupplier[k].sent||0), 0);
+  if (!keys.length || totalSent === 0) {
+    const msg = (p === 'today') ? 'No sends yet today — try 7d or 30d.' : 'No supplier-tagged sending activity for this period.';
+    wrap.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:.5rem 0">'+msg+'</div>'; return;
+  }
   wrap.innerHTML = keys.map((k,i) => _provCard(k, PAL[i%PAL.length], d.bySupplier[k])).join('');
 }
 </script>
