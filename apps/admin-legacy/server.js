@@ -2551,6 +2551,27 @@ app.get('/api/admin/mailbox-debug', requireAdmin, async (req, res) => {
 app.get('/api/admin/stats-debug', requireAdmin, async (req, res) => {
   try {
     const pgdb = app.locals.pgDb;
+    // ?probe=<workspace_id> — run the EXACT chart-stats fetch the warm loop does and
+    // return the raw Bison response + any error, so a swallowed failure becomes visible.
+    if (req.query.probe) {
+      const wsId = String(req.query.probe);
+      const today = serverDateString(new Date());
+      const y = new Date(today + 'T00:00:00'); y.setDate(y.getDate() - 1);
+      const out = { workspace_id: wsId, team_id: resolveBisonTeamId(wsId), has_ws_token: null };
+      try { out.has_ws_token = !!getBisonWsToken(out.team_id); } catch {}
+      // Single-day (today) — the old behaviour
+      try {
+        const single = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { wsId, params: { start_date: today, end_date: today } });
+        out.single_day = { ok: true, labels: ((single.data || single) || []).map(s => ({ label: s.label, points: (s.dates || []).length })) };
+      } catch (e) { out.single_day = { ok: false, error: e.message }; }
+      // 7-day range — what every working caller uses
+      try {
+        const range = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { wsId, params: { start_date: serverDateString(y), end_date: today } });
+        const pivot = pivotBisonStats((range.data || range) || []);
+        out.range = { ok: true, dates: Object.keys(pivot), today_bucket: pivot[today] || null, agg: aggPvEmailStats(Object.values(pivot)) };
+      } catch (e) { out.range = { ok: false, error: e.message }; }
+      return res.json(out);
+    }
     const clientRows = db.prepare(
       `SELECT workspace_id, workspace_name, client_status FROM clients WHERE workspace_id IS NOT NULL AND workspace_id != ''`
     ).all().filter(c => c.client_status !== 'inactive');
