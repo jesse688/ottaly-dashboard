@@ -165,11 +165,18 @@ const _chartInstances = {};
 
 // Which series are toggled on per client (defaults all on)
 const _toggles = {};
-const ALL_SERIES = ['humanRR','oooRR','bounceRate','rtl','sent','leads'];
+// hardRate/blockRate/softRate are OFF by default (opt-in detail) and sourced
+// from the bounce-breakdown overlay (email_events classification), not the
+// Bison total. bounceRate stays the authoritative Bison-derived line.
+const ALL_SERIES = ['humanRR','oooRR','bounceRate','hardRate','blockRate','softRate','rtl','sent','leads'];
+const DEFAULT_OFF = new Set(['hardRate','blockRate','softRate']);
 const SERIES_LABEL = {
   humanRR:    'Human RR',
   oooRR:      'OOO RR',
   bounceRate: 'Bounce Rate',
+  hardRate:   'Hard %',
+  blockRate:  'Block %',
+  softRate:   'Soft %',
   rtl:        'RTL',
   sent:       'Sent',
   leads:      'Leads',
@@ -178,6 +185,9 @@ const SERIES_COLOR = {
   humanRR:    '#059669',
   oooRR:      '#f59e0b',
   bounceRate: '#DC2626',
+  hardRate:   '#B91C1C',
+  blockRate:  '#D97706',
+  softRate:   '#9CA3AF',
   rtl:        '#7C89CD',
   sent:       '#2563EB',
   leads:      '#D97706',
@@ -195,13 +205,19 @@ function seriesValue(s, d) {
   if (s === 'humanRR')    return sent > 0 ? +(replies / sent * 100).toFixed(2) : null;
   if (s === 'oooRR')      return sent > 0 ? +(ooo / sent * 100).toFixed(2) : null;
   if (s === 'bounceRate') return sent > 0 ? +((d.bounces || 0) / sent * 100).toFixed(2) : null;
+  // hard/block/soft rates use the classified email_events overlay merged into d.
+  // (bounceHard etc.). Denominator is the same Bison sent, so they're directly
+  // comparable to the authoritative Bounce Rate line above.
+  if (s === 'hardRate')   return sent > 0 ? +((d.bounceHard  || 0) / sent * 100).toFixed(2) : null;
+  if (s === 'blockRate')  return sent > 0 ? +((d.bounceBlock || 0) / sent * 100).toFixed(2) : null;
+  if (s === 'softRate')   return sent > 0 ? +((d.bounceSoft  || 0) / sent * 100).toFixed(2) : null;
   if (s === 'rtl')        return replies > 0 ? +((d.leads || 0) / replies * 100).toFixed(2) : null;
   if (s === 'sent')       return sent;
   if (s === 'leads')      return d.leads || 0;
   return null;
 }
 // Is this series a % axis?
-function isPercent(s) { return s === 'humanRR' || s === 'oooRR' || s === 'bounceRate' || s === 'rtl'; }
+function isPercent(s) { return s === 'humanRR' || s === 'oooRR' || s === 'bounceRate' || s === 'hardRate' || s === 'blockRate' || s === 'softRate' || s === 'rtl'; }
 // Apply 3-day rolling average to a value array (nulls skipped, result rounded to 2dp)
 function rolling3(arr) {
   return arr.map((_, i) => {
@@ -342,6 +358,10 @@ async function loadStats(start, end, silent = false) {
     const r = await fetch(`/api/stats/summary?start=${start}&end=${end}${wsParam}`);
     if (!r.ok) throw new Error(`${r.status}`);
     _data = await r.json();
+    // ADDITIVE overlay: merge the email_events hard/block/soft split into each
+    // day point. Best-effort — if it fails, the chart just shows the existing
+    // Bison Bounce Rate with no split (never blocks the page).
+    await mergeBounceBreakdown(start, end);
     if (_data.updatedAt) {
       const ts = new Date(_data.updatedAt).toLocaleTimeString();
       document.getElementById('updatedAt').textContent = _data.partial ? `⏳ Caching… ${ts}` : `Updated ${ts}`;
@@ -366,6 +386,28 @@ async function loadStats(start, end, silent = false) {
     document.getElementById('emptyMsg').textContent = 'Error loading stats: ' + e.message;
     document.getElementById('emptyMsg').style.display = '';
   }
+}
+
+// Fetch the classified bounce split and merge it into every workspace's day
+// series as d.bounceHard / d.bounceBlock / d.bounceSoft. Keyed by the SAME
+// workspace_id the stats summary uses; an unmatched workspace simply gets no
+// overlay. Never throws to the caller.
+async function mergeBounceBreakdown(start, end) {
+  try {
+    const r = await fetch(`/api/stats/bounce-breakdown?start=${start}&end=${end}`);
+    if (!r.ok) return;
+    const bd = await r.json();
+    const by = bd.byWorkspace || {};
+    for (const w of (_data?.workspaces || [])) {
+      const map = by[w.workspace_id];
+      for (const d of (w.series || [])) {
+        const cell = map && map[d.date];
+        d.bounceHard  = cell ? cell.hard  : 0;
+        d.bounceBlock = cell ? cell.block : 0;
+        d.bounceSoft  = cell ? cell.soft  : 0;
+      }
+    }
+  } catch (_) { /* overlay is best-effort */ }
 }
 
 async function forceRefreshCache() {
@@ -405,13 +447,16 @@ function buildAllWorkspaces(list) {
     totals.leads      += w.totals.leads      || 0;
     nDays = Math.max(nDays, (w.series || []).length);
     (w.series || []).forEach(d => {
-      const e = byDate[d.date] || (byDate[d.date] = { date: d.date, sent:0, replies:0, posReplies:0, oooReplies:0, bounces:0, leads:0 });
-      e.sent       += d.sent       || 0;
-      e.replies    += d.replies    || 0;
-      e.posReplies += d.posReplies || 0;
-      e.oooReplies += d.oooReplies || 0;
-      e.bounces    += d.bounces    || 0;
-      e.leads      += d.leads      || 0;
+      const e = byDate[d.date] || (byDate[d.date] = { date: d.date, sent:0, replies:0, posReplies:0, oooReplies:0, bounces:0, leads:0, bounceHard:0, bounceBlock:0, bounceSoft:0 });
+      e.sent        += d.sent        || 0;
+      e.replies     += d.replies     || 0;
+      e.posReplies  += d.posReplies  || 0;
+      e.oooReplies  += d.oooReplies  || 0;
+      e.bounces     += d.bounces     || 0;
+      e.leads       += d.leads       || 0;
+      e.bounceHard  += d.bounceHard  || 0;
+      e.bounceBlock += d.bounceBlock || 0;
+      e.bounceSoft  += d.bounceSoft  || 0;
     });
   });
   const series = Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date));
@@ -541,7 +586,8 @@ function renderClients() {
         <div class="client-detail ${isOpen ? 'visible' : ''}" id="detail-${w.workspace_id}">
           <div class="chart-controls" id="toggles-${w.workspace_id}">
             ${ALL_SERIES.map(s => {
-              const on = (_toggles[w.workspace_id]?.[s] !== false);
+              const tg = _toggles[w.workspace_id] || defaultToggles();
+              const on = (tg[s] !== false);
               return `<button class="toggle-btn ${on?'on':''}" onclick="toggleSeries('${w.workspace_id}','${s}')" style="border-color:${SERIES_COLOR[s]};${on?'background:'+SERIES_COLOR[s]+';border-color:'+SERIES_COLOR[s]:'color:'+SERIES_COLOR[s]}">${SERIES_LABEL[s]}</button>`;
             }).join('')}
             <span style="margin-left:auto;font-size:11px;color:var(--muted);font-weight:500" title="Each point is the average of that day and the previous two — totals in the header row are not smoothed.">3-day rolling avg</span>
@@ -584,8 +630,11 @@ function toggleClient(wsId) {
   if (chevron) chevron.classList.toggle('open', _expanded.has(wsId));
 }
 
+// Default toggle state: all series on EXCEPT the bounce-split detail (DEFAULT_OFF).
+function defaultToggles() { return Object.fromEntries(ALL_SERIES.map(s => [s, !DEFAULT_OFF.has(s)])); }
+
 function toggleSeries(wsId, series) {
-  if (!_toggles[wsId]) _toggles[wsId] = Object.fromEntries(ALL_SERIES.map(s => [s, true]));
+  if (!_toggles[wsId]) _toggles[wsId] = defaultToggles();
   _toggles[wsId][series] = !_toggles[wsId][series];
   const btn = document.querySelector(`#toggles-${wsId} .toggle-btn[onclick*="'${series}'"]`);
   if (btn) {
@@ -607,7 +656,7 @@ function renderChart(w) {
     _chartInstances[w.workspace_id].destroy();
     delete _chartInstances[w.workspace_id];
   }
-  const toggles = _toggles[w.workspace_id] || Object.fromEntries(ALL_SERIES.map(s => [s, true]));
+  const toggles = _toggles[w.workspace_id] || defaultToggles();
   const labels = w.series.map(d => d.date.slice(5)); // MM-DD
   const ptR = w.series.length <= 14 ? 3 : 1;
   const datasets = ALL_SERIES.filter(s => toggles[s] !== false).map(s => ({

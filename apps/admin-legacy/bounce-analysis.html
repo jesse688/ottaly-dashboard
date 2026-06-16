@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/favicon.svg">
+<meta name="theme-color" content="#050C29">
+<meta name="description" content="Ottaly Bounce Analyzer — hard/block/soft bounce breakdown, list-quality triage, sender reputation">
+<title>Ottaly — Bounce Analyzer</title>
+<script>document.write('<script src="/splash.js?v=' + Date.now() + '"><\/script>');</script>
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--purple:#7C89CD;
+  --yellow:#FFB700;--white:#fff;--bg:#F0F2F8;--card:#fff;
+  --border:#E2E6F0;--text:#050C29;--muted:#6B7280;
+  --green:#16A34A;--red:#DC2626;--amber:#D97706;
+  --hard:#DC2626;--block:#D97706;--soft:#6B7280;
+}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text)}
+.page{max-width:1500px;margin:0 auto;padding:2rem}
+.page-header{display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;margin-bottom:1.5rem;flex-wrap:wrap}
+.page-title{font-size:1.4rem;font-weight:700}
+.page-sub{font-size:13px;color:var(--muted);margin-top:4px;max-width:980px}
+.cov-warn{color:var(--amber);font-weight:600}
+select{font-family:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--text)}
+
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:1.5rem}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px 18px}
+.card .label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+.card .val{font-size:1.9rem;font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums}
+.card .sub{font-size:12px;color:var(--muted);margin-top:2px}
+.card.hard{border-top:3px solid var(--hard)} .card.hard .val{color:var(--hard)}
+.card.block{border-top:3px solid var(--block)} .card.block .val{color:var(--block)}
+.card.soft{border-top:3px solid var(--soft)} .card.soft .val{color:var(--soft)}
+.delta{font-weight:600;font-size:12px} .delta.up{color:var(--red)} .delta.down{color:var(--green)} .delta.flat{color:var(--muted)}
+
+.section{margin-bottom:1.8rem}
+.section h2{font-size:1.05rem;font-weight:700;margin-bottom:.4rem}
+.section .hint{font-size:12px;color:var(--muted);margin-bottom:.7rem;max-width:980px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media(max-width:900px){.grid2{grid-template-columns:1fr}}
+
+.table-wrap{background:var(--card);border-radius:12px;border:1px solid var(--border);overflow:hidden}
+table{width:100%;border-collapse:collapse}
+thead{background:#F8F9FC}
+th{padding:9px 13px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);border-bottom:1px solid var(--border)}
+th.num{text-align:right}
+td{padding:10px 13px;font-size:13px;border-bottom:1px solid var(--border);vertical-align:middle}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#FAFBFF}
+.muted{color:var(--muted)} .dim{color:#9AA1AD} .mono{font-family:ui-monospace,Menlo,monospace;font-size:12px}
+.bad{color:var(--red);font-weight:600} .mid{color:var(--amber)} .good{color:var(--green);font-weight:600}
+.pill{display:inline-block;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600}
+.pill.hard{background:#FEE2E2;color:#991B1B} .pill.block{background:#FEF3C7;color:#92400E}
+.pill.soft{background:#F3F4F6;color:#374151} .pill.unclassified{background:#EDE9FE;color:#5B21B6}
+.empty{padding:2.5rem;text-align:center;color:var(--muted)}
+.skel{height:14px;background:#EEF1F8;border-radius:4px;animation:pulse 1.2s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.foot{font-size:12px;color:var(--muted);margin-top:0.9rem;max-width:1100px;line-height:1.6}
+.chart{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px}
+.legend{display:flex;gap:16px;font-size:12px;color:var(--muted);margin-top:8px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:middle}
+.controls{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:.7rem}
+.controls input{font-family:inherit;font-size:13px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;min-width:220px}
+.pager{display:flex;gap:8px;align-items:center;justify-content:flex-end;padding:10px 13px;font-size:13px;color:var(--muted)}
+.pager button{font-family:inherit;font-size:13px;padding:5px 12px;border:1px solid var(--border);border-radius:7px;background:#fff;cursor:pointer}
+.pager button:disabled{opacity:.4;cursor:default}
+@media(max-width:768px){.page{padding:1rem}.table-wrap{overflow-x:auto}table{min-width:640px}}
+</style>
+<script src="/nav.js" defer></script>
+</head>
+<body>
+
+<div class="page">
+  <div class="page-header">
+    <div>
+      <div class="page-title">Bounce Analyzer</div>
+      <div class="page-sub" id="sub">Hard / block / soft bounce breakdown across all clients — surface list-quality and sender-reputation problems early.</div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button onclick="testAlert()" id="alertBtn" style="font-family:inherit;font-size:13px;padding:7px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;cursor:pointer" title="Dry-run the early-warning check — shows which clients would be flagged, without posting to Slack">⚠︎ Check alerts</button>
+      <select id="days" onchange="reload()">
+        <option value="7">Last 7 days</option>
+        <option value="30" selected>Last 30 days</option>
+        <option value="90">Last 90 days</option>
+        <option value="180">Last 180 days</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Summary cards -->
+  <div class="cards" id="cards"></div>
+
+  <!-- Trend chart -->
+  <div class="section">
+    <h2>Trend</h2>
+    <div class="hint">Daily bounce volume by class. A rising <b style="color:var(--hard)">hard</b> line means list quality is degrading — the earliest signal to clean a list before deliverability drops.</div>
+    <div class="chart"><div id="chart"></div>
+      <div class="legend"><span><i style="background:var(--hard)"></i>Hard</span><span><i style="background:var(--block)"></i>Block</span><span><i style="background:var(--soft)"></i>Soft</span></div>
+    </div>
+  </div>
+
+  <!-- Per-client + per-campaign -->
+  <div class="section grid2">
+    <div>
+      <h2>By client</h2>
+      <div class="hint">Who has a problem. High <b>hard</b> = bad list; high <b>block</b> = sender/reputation.</div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Client</th><th class="num">Total</th><th class="num">Hard</th><th class="num">Block</th><th class="num">Soft</th></tr></thead>
+        <tbody id="byClient"></tbody>
+      </table></div>
+    </div>
+    <div>
+      <h2>By campaign <span class="muted" style="font-size:12px;font-weight:400">(top 100 by hard)</span></h2>
+      <div class="hint">Campaign-level list-quality view — a single bad import shows up here first.</div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Campaign</th><th>Client</th><th class="num">Hard</th><th class="num">Block</th><th class="num">Total</th></tr></thead>
+        <tbody id="byCampaign"></tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <!-- Triage + sender health -->
+  <div class="section grid2">
+    <div>
+      <h2>List-quality triage <span class="muted" style="font-size:12px;font-weight:400">— top hard-bounce domains</span></h2>
+      <div class="hint">Dead-address domains driving hard bounces. Suppression / list-cleaning candidates.</div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Domain</th><th class="num">Hard bounces</th></tr></thead>
+        <tbody id="hardDomains"></tbody>
+      </table></div>
+    </div>
+    <div>
+      <h2>Sender health <span class="muted" style="font-size:12px;font-weight:400">— mailboxes being blocked</span></h2>
+      <div class="hint">Our sending mailboxes getting <b>block</b> bounces (gateway filtering us). Fix with warmup/auth — not list cleaning.</div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Sender mailbox</th><th class="num">Block</th><th class="num">Hard</th><th>Sample reason</th></tr></thead>
+        <tbody id="senderHealth"></tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <!-- Raw explorer -->
+  <div class="section">
+    <h2>Raw bounce explorer</h2>
+    <div class="hint">Every bounce event with its raw SMTP reason and classification. Search by address, sender, or message text.</div>
+    <div class="controls">
+      <input id="q" type="text" placeholder="Search email / sender / message…" oninput="debouncedExplore()">
+      <select id="klass" onchange="explore(1)">
+        <option value="">All classes</option>
+        <option value="hard">Hard only</option>
+        <option value="block">Block only</option>
+        <option value="soft">Soft only</option>
+        <option value="unclassified">Unclassified only</option>
+      </select>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>When</th><th>Recipient</th><th>Sender</th><th>Campaign</th><th>Class</th><th>SMTP reason</th></tr></thead>
+      <tbody id="explorer"></tbody>
+    </table>
+    <div class="pager"><span id="pageInfo"></span><button id="prev" onclick="explore(curPage-1)">Prev</button><button id="next" onclick="explore(curPage+1)">Next</button></div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <b>Hard</b> = dead address (invalid recipient / no such user) — real list-quality damage; suppress these.
+    <b>Block</b> = the recipient gateway rejected <i>us</i> (spam/policy/reputation, e.g. Mimecast/Barracuda/Spamhaus) — a sender signal, NOT a bad address; fix with warmup, auth, and volume control, not suppression.
+    <b>Soft</b> = temporary (mailbox full, greylist, rate) — retries handle it.
+    Classification parses the SMTP reason in each bounce event (no stored type), validated at ~98% coverage. Bounce events are webhook-partial, so absolute counts are directional — the <i>ratio</i> of hard:block:soft is the reliable signal.
+  </div>
+</div>
+
+<script>
+var DATA = null, curPage = 1, debTimer = null;
+
+function fmt(n){ return Number(n||0).toLocaleString(); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+
+function deltaTag(pct){
+  if(pct === null) return '<span class="delta up">new</span>';
+  if(pct > 2)  return '<span class="delta up">▲ '+pct.toFixed(0)+'%</span>';
+  if(pct < -2) return '<span class="delta down">▼ '+Math.abs(pct).toFixed(0)+'%</span>';
+  return '<span class="delta flat">~ flat</span>';
+}
+
+function renderCards(s){
+  var rate = s.total ? '' : '';
+  document.getElementById('cards').innerHTML =
+      card('Total bounces', fmt(s.total), fmt(s.addresses)+' addresses · '+fmt(s.domains)+' domains', '')
+    + card('Hard '+deltaTag(s.wowHard), fmt(s.hard), 'dead addresses · '+pctOf(s.hard,s.total), 'hard')
+    + card('Block', fmt(s.block), 'gateway rejected us · '+pctOf(s.block,s.total), 'block')
+    + card('Soft', fmt(s.soft), 'temporary · '+pctOf(s.soft,s.total), 'soft')
+    + card('Last 7 days '+deltaTag(s.wowTotal), fmt(s.last7.total), 'vs '+fmt(s.prev7.total)+' prior 7d', '');
+}
+function pctOf(n,d){ return d ? (100*n/d).toFixed(0)+'% of total' : '—'; }
+function card(label,val,sub,cls){
+  return '<div class="card '+cls+'"><div class="label">'+label+'</div><div class="val">'+val+'</div><div class="sub">'+sub+'</div></div>';
+}
+
+// Lightweight inline-SVG stacked area trend (no chart lib).
+function renderChart(series){
+  var el = document.getElementById('chart');
+  if(!series || !series.length){ el.innerHTML = '<div class="empty">No bounces in window.</div>'; return; }
+  var W=1100,H=200,pad=24;
+  var max = Math.max.apply(null, series.map(function(d){return d.total;})) || 1;
+  var n = series.length;
+  var x = function(i){ return pad + (W-2*pad) * (n===1?0.5:i/(n-1)); };
+  var y = function(v){ return H-pad - (H-2*pad) * (v/max); };
+  // stacked: soft (bottom), block, hard (top)
+  function band(keyLo, keyHi){
+    var up='', dn='';
+    for(var i=0;i<n;i++){ up += (i?'L':'M')+x(i).toFixed(1)+','+y(keyHi(series[i])).toFixed(1)+' '; }
+    for(var j=n-1;j>=0;j--){ dn += 'L'+x(j).toFixed(1)+','+y(keyLo(series[j])).toFixed(1)+' '; }
+    return up+dn+'Z';
+  }
+  var lo0=function(){return 0;};
+  var loSoft=function(d){return d.soft;};
+  var loSoftBlock=function(d){return d.soft+d.block;};
+  var hiSoft=function(d){return d.soft;};
+  var hiBlock=function(d){return d.soft+d.block;};
+  var hiHard=function(d){return d.soft+d.block+d.hard;};
+  var svg='<svg viewBox="0 0 '+W+' '+H+'" width="100%" height="200" preserveAspectRatio="none">';
+  svg+='<path d="'+band(lo0,hiSoft)+'" fill="#6B7280" opacity="0.35"/>';
+  svg+='<path d="'+band(loSoft,hiBlock)+'" fill="#D97706" opacity="0.45"/>';
+  svg+='<path d="'+band(loSoftBlock,hiHard)+'" fill="#DC2626" opacity="0.55"/>';
+  // hard top line emphasised
+  var hl='';
+  for(var i=0;i<n;i++){ hl += (i?'L':'M')+x(i).toFixed(1)+','+y(hiHard(series[i])).toFixed(1)+' '; }
+  svg+='<path d="'+hl+'" fill="none" stroke="#DC2626" stroke-width="1.5"/>';
+  svg+='<text x="'+pad+'" y="14" font-size="11" fill="#9AA1AD">'+series[0].date+'</text>';
+  svg+='<text x="'+(W-pad)+'" y="14" font-size="11" fill="#9AA1AD" text-anchor="end">'+series[n-1].date+' · peak '+max+'/day</text>';
+  svg+='</svg>';
+  el.innerHTML = svg;
+}
+
+function heatHard(hard, total){ if(!total) return ''; var r=hard/total; return r>=0.4?'bad':r>=0.15?'mid':''; }
+
+function renderTables(d){
+  document.getElementById('byClient').innerHTML = (d.byClient||[]).map(function(r){
+    return '<tr><td>'+esc(r.client)+'</td><td class="num">'+fmt(r.total)+'</td>'
+      +'<td class="num '+heatHard(r.hard,r.total)+'">'+fmt(r.hard)+'</td>'
+      +'<td class="num mid">'+fmt(r.block)+'</td><td class="num dim">'+fmt(r.soft)+'</td></tr>';
+  }).join('') || emptyRow(5);
+
+  document.getElementById('byCampaign').innerHTML = (d.byCampaign||[]).map(function(r){
+    return '<tr><td>'+esc(r.campaign)+'</td><td class="muted">'+esc(r.client)+'</td>'
+      +'<td class="num '+heatHard(r.hard,r.total)+'">'+fmt(r.hard)+'</td>'
+      +'<td class="num mid">'+fmt(r.block)+'</td><td class="num">'+fmt(r.total)+'</td></tr>';
+  }).join('') || emptyRow(5);
+
+  document.getElementById('hardDomains').innerHTML = (d.hardDomains||[]).map(function(r){
+    return '<tr><td class="mono">'+esc(r.domain)+'</td><td class="num bad">'+fmt(r.hard)+'</td></tr>';
+  }).join('') || emptyRow(2,'No hard bounces in window.');
+
+  document.getElementById('senderHealth').innerHTML = (d.senderHealth||[]).map(function(r){
+    return '<tr><td class="mono">'+esc(r.sender)+'</td><td class="num mid">'+fmt(r.block)+'</td>'
+      +'<td class="num">'+fmt(r.hard)+'</td><td class="muted" style="max-width:280px">'+esc((r.sample_msg||'').slice(0,90))+'</td></tr>';
+  }).join('') || emptyRow(4,'No block bounces in window.');
+}
+function emptyRow(cols,msg){ return '<tr><td colspan="'+cols+'" class="empty">'+(msg||'No data.')+'</td></tr>'; }
+
+function reload(){
+  var days = document.getElementById('days').value;
+  document.getElementById('cards').innerHTML = '<div class="card"><div class="skel" style="height:50px"></div></div>';
+  fetch('/api/bounce-analysis?days='+days).then(function(r){return r.json();}).then(function(d){
+    DATA = d;
+    renderCards(d.summary); renderChart(d.series); renderTables(d);
+  }).catch(function(){ document.getElementById('cards').innerHTML='<div class="empty">Failed to load bounce data.</div>'; });
+  explore(1);
+}
+
+function debouncedExplore(){ clearTimeout(debTimer); debTimer = setTimeout(function(){ explore(1); }, 350); }
+
+function explore(page){
+  if(page < 1) return;
+  curPage = page;
+  var days = document.getElementById('days').value;
+  var q = encodeURIComponent(document.getElementById('q').value.trim());
+  var klass = document.getElementById('klass').value;
+  var url = '/api/bounce-analysis/explorer?days='+days+'&page='+page+(q?'&q='+q:'')+(klass?'&klass='+klass:'');
+  document.getElementById('explorer').innerHTML = '<tr><td colspan="6"><div class="skel"></div></td></tr>';
+  fetch(url).then(function(r){return r.json();}).then(function(d){
+    document.getElementById('explorer').innerHTML = (d.rows||[]).map(function(r){
+      return '<tr><td class="muted mono">'+esc(r.at)+'</td><td class="mono">'+esc(r.email)+'</td>'
+        +'<td class="mono muted">'+esc(r.sender||'')+'</td><td class="muted">'+esc((r.campaign||'').slice(0,28))+'</td>'
+        +'<td><span class="pill '+esc(r.klass)+'">'+esc(r.klass)+'</span></td>'
+        +'<td class="muted" style="max-width:360px">'+esc((r.msg||'').slice(0,140))+'</td></tr>';
+    }).join('') || emptyRow(6,'No matching bounces.');
+    var pages = Math.max(1, Math.ceil(d.total / d.limit));
+    document.getElementById('pageInfo').textContent = fmt(d.total)+' bounces · page '+d.page+' / '+pages;
+    document.getElementById('prev').disabled = d.page <= 1;
+    document.getElementById('next').disabled = d.page >= pages;
+  }).catch(function(){ document.getElementById('explorer').innerHTML = emptyRow(6,'Failed to load.'); });
+}
+
+// Dry-run the early-warning alert and report which clients would be flagged.
+function testAlert(){
+  var btn = document.getElementById('alertBtn');
+  btn.disabled = true; btn.textContent = '⏳ Checking…';
+  fetch('/api/cron/bounce-alert?dry=1').then(function(r){return r.json();}).then(function(d){
+    btn.disabled = false; btn.textContent = '⚠︎ Check alerts';
+    if(d.error){ alert('Alert check failed: '+d.error); return; }
+    var f = d.flagged || [];
+    if(!f.length){ alert('No clients flagged — all hard-bounce rates within thresholds (recent '+d.window.recent+'d vs '+d.window.baseline+'d baseline).'); return; }
+    alert(f.length+' client(s) would be flagged:\n\n' + f.map(function(x){
+      return '• '+x.client+' — '+x.recentHard+' hard ('+x.recentRate+'% of bounces, was '+x.baseRate+'%)';
+    }).join('\n') + '\n\nLive runs post this to Slack.');
+  }).catch(function(){ btn.disabled=false; btn.textContent='⚠︎ Check alerts'; alert('Alert check failed.'); });
+}
+
+reload();
+</script>
+</body>
+</html>

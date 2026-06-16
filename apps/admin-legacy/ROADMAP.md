@@ -398,6 +398,34 @@ Safe to pick up without further discussion. Ranked by impact.
 
 ---
 
+## Bounce Analyzer — earlier detection of list + sender problems
+
+**Goal:** Stop treating "bounces" as one number. Split every bounce into **hard** (dead address → bad list), **block** (gateway rejecting *us* → reputation/policy), and **soft** (temporary), surface that split everywhere bounces appear, and alert when a client's hard-bounce rate starts rising — so list/sender issues are caught before deliverability drops.
+
+### How it works
+- One shared classifier (`bounce-classify.js`) parses the SMTP reason in `email_events.raw->>'msg'` (no stored type). Same validated regexes the gateway report used (~98% coverage; block ≈70%, hard ≈24%, soft ≈5%). Order: block > hard > soft.
+- All four surfaces (analyzer page, Stats, Mailboxes, alert) derive from that single source — tune the regex once, everything updates.
+- Bounce events are webhook-partial, so absolute counts are directional; the **ratio** hard:block:soft is the reliable signal. Stats keeps the Bison total as authoritative and only overlays the split.
+
+### Shipped ✅ (branch `feat/bounce-analyzer`, off `stable`)
+| Phase | What |
+|-------|------|
+| 0 | `bounce-classify.js` — single source of truth (regexes + `bounceClassCase`/`bounceClassExprs`/`classifyBounce`); refactored `/api/gateway-analysis` to use it (behavior-preserving; resolves an accidental regex drift in the old soft exclusion) |
+| 1 | New `bounce-analysis.html` + `/api/bounce-analysis` (+`/explorer`): summary cards w/ WoW deltas, hard/block/soft trend chart, by-client + by-campaign split, hard-domain & hard-address triage, sender-health (block-by-mailbox), paginated raw explorer. Nav: Stats → Bounces |
+| 2 | Stats page: 3 new opt-in series (Hard %, Block %, Soft %) via `/api/stats/bounce-breakdown`, merged additively into each day point. Bison Bounce Rate untouched & still authoritative |
+| 3 | Mailboxes page: per-mailbox `NH NB NS` micro-split under the bounce rate, from `buildMailboxStatsFromEvents` (real classification, webhook path only) |
+| 4 | `/api/cron/bounce-alert` — flags clients whose hard-bounce share is above a floor AND rising vs baseline; posts to Slack (CRON_SECRET-guarded, cron-job.org). Dashboard "Check alerts" does a dry run |
+
+### Decisions resolved
+- **3-way split (hard/block/soft), not 2-way** — Jesse, 2026-06-16. Block is the majority and means something different (sender reputation, not bad list); collapsing it into hard is the exact mistake to avoid.
+
+### Follow-ups / not yet done
+- **Bison reconciliation** — pull `status=bounced` leads per workspace to show "classified X of Y Bison-reported bounces (Z% coverage)". Planned for the page's coverage strip; needs the paginated Bison fetch (ignores `per_page`).
+- **Wire the cron** — add `/api/cron/bounce-alert?secret=…` to cron-job.org once `CRON_SECRET` is set in Easypanel, and pick the alert channel (`SLACK_ALERT_CHANNEL_ID`, falls back to `SLACK_CHANNEL_ID`).
+- **Tune thresholds** after seeing real flagged volume (`minHard`/`floorRate`/`risePct` are query-overridable).
+
+---
+
 ## How this doc gets updated
 
 - Claude reads ROADMAP.md at the **start** of any dashboard session.

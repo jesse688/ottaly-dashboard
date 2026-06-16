@@ -35,6 +35,17 @@ try {
 const contactsAPI = require('./api-contacts');
 const { cleanCompanyName, normalizeJobTitle } = require('./csv-importer');
 const { locationCustomVars } = require('./location-normalizer');
+// Single source of truth for the 3-way bounce classification (hard/block/soft).
+// BOUNCE_*_RE are the raw regex bodies, interpolated into SQL via template
+// strings; bounceClassCase/Exprs/classifyBounce are the higher-level helpers.
+const {
+  HARD_RE:  BOUNCE_HARD_RE,
+  BLOCK_RE: BOUNCE_BLOCK_RE,
+  SOFT_RE:  BOUNCE_SOFT_RE,
+  bounceClassCase,
+  bounceClassExprs,
+  classifyBounce,
+} = require('./bounce-classify');
 const { google } = require('googleapis');
 const Sentry = require('@sentry/node');
 const compression = require('compression');
@@ -8143,12 +8154,14 @@ app.get('/api/gateway-analysis', requireSession, async (req, res) => {
                -- Bounce class from the SMTP reason in raw.msg (no stored type).
                -- 3-way, NOT naive 5xx=hard: a 5xx can be a reputation/policy
                -- BLOCK (gateway rejecting the sender), which must not count as a
-               -- dead address. Order: block > hard > soft.
-               bool_or(event_type = 'bounce' AND lower(raw->>'msg') ~ '5\.[01]\.[0-9]|55[04]|no such user|user unknown|does not exist|recipientnotfound|recipient not found|mailbox unavailable|address rejected|unknown recipient|invalid recipient|mailbox disabled|no mailbox|account.*disabled|unable to verify user|account or domain|no longer|not found'
-                       AND NOT lower(raw->>'msg') ~ 'spam|blacklist|black list|spamhaus|dbl|surbl|reputation|polic|open relay|rate|unsolicited|rejected by organization|denylist|rbl|access denied|not allowed to send|barracuda|blocked|block list|5\.7\.|not authorized|sender denied|sendernotauth|denied|mail loop|hop count') AS bounce_hard,
-               bool_or(event_type = 'bounce' AND lower(raw->>'msg') ~ 'spam|blacklist|black list|spamhaus|dbl|surbl|reputation|polic|open relay|rate|unsolicited|rejected by organization|denylist|rbl|access denied|not allowed to send|barracuda|blocked|block list|5\.7\.|not authorized|sender denied|sendernotauth|denied|mail loop|hop count') AS bounce_block,
-               bool_or(event_type = 'bounce' AND lower(raw->>'msg') ~ '4\.[0-9]\.[0-9]|45[0-9]|temporar|try again|greylist|grey list|deferred|quota|mailbox full|out of storage|over quota|too many|server.*busy|timeout|throttl|retry'
-                       AND NOT lower(raw->>'msg') ~ 'spam|blacklist|spamhaus|dbl|surbl|reputation|polic|open relay|unsolicited|rejected by organization|denylist|rbl|access denied|not allowed to send|barracuda|blocked|block list|5\.7\.|not authorized|sender denied|sendernotauth|denied|mail loop|hop count') AS bounce_soft
+               -- dead address. Regexes come from bounce-classify.js (the single
+               -- source of truth); the per-contact dedup below resolves a
+               -- contact that has BOTH a hard and a block event to hard.
+               bool_or(event_type = 'bounce' AND lower(raw->>'msg') ~ '${BOUNCE_HARD_RE}'
+                       AND NOT lower(raw->>'msg') ~ '${BOUNCE_BLOCK_RE}') AS bounce_hard,
+               bool_or(event_type = 'bounce' AND lower(raw->>'msg') ~ '${BOUNCE_BLOCK_RE}') AS bounce_block,
+               bool_or(event_type = 'bounce' AND lower(raw->>'msg') ~ '${BOUNCE_SOFT_RE}'
+                       AND NOT lower(raw->>'msg') ~ '${BOUNCE_BLOCK_RE}') AS bounce_soft
         FROM email_events
         GROUP BY 1
       ),
@@ -8231,6 +8244,351 @@ app.get('/api/gateway-analysis', requireSession, async (req, res) => {
 
 app.get('/gateway-analysis',      (req, res) => res.sendFile(path.join(__dirname, 'gateway-analysis.html')));
 app.get('/gateway-analysis.html', (req, res) => res.sendFile(path.join(__dirname, 'gateway-analysis.html')));
+
+// ─────────────────────────────────────────────────────────────────────
+// Bounce Analyzer — detect list-quality + sender-reputation issues sooner
+// ─────────────────────────────────────────────────────────────────────
+// Every bounce in email_events is classified 3-way (hard / block / soft) via
+// the shared bounce-classify.js helper — the SAME regexes /api/gateway-analysis
+// uses. This endpoint slices those bounces the ways the analyzer page needs:
+//   - summary    : 3-way totals + this-week-vs-last-week deltas (early warning)
+//   - byClient   : bounce rate + 3-way split per workspace (who has a problem)
+//   - byCampaign : same, per campaign
+//   - hardDomains/hardAddresses : list-quality triage (suppression candidates)
+//   - senderHealth : BLOCK bounces grouped by sender_email (which of OUR
+//                    mailboxes are being filtered) + the rejecting pattern
+//   - series     : daily hard/block/soft for the trend chart
+//   - explorer   : paginated raw bounce rows (recipient/sender/campaign/msg)
+//
+// COVERAGE CAVEAT: email_events bounce rows are webhook-partial, so absolute
+// counts under-represent reality. The classification (the *ratio* of hard:block:
+// soft) is the reliable signal — treat totals as directional. The page also
+// pulls Bison's bounced totals separately (see /api/bounce-analysis/reconcile)
+// to show how much we're missing.
+//
+// `days` query param (default 30, max 180) bounds the window via event_at.
+app.get('/api/bounce-analysis', requireSession, async (req, res) => {
+  try {
+    const days = Math.min(180, Math.max(1, parseInt(req.query.days, 10) || 30));
+    const { isHard, isBlock, isSoft } = bounceClassExprs("be.raw->>'msg'");
+    const classCase = bounceClassCase("be.raw->>'msg'");
+
+    // Base CTE: every bounce event in the window, pre-classified once.
+    // recipient_domain falls back to the email's domain if the column is null.
+    const base = `
+      WITH be AS (
+        SELECT workspace_id, campaign_id, campaign_name, sender_email,
+               lower(lead_email) AS lead_email,
+               COALESCE(NULLIF(recipient_domain,''), lower(split_part(lead_email,'@',2))) AS domain,
+               event_at, raw,
+               ${classCase} AS klass
+        FROM email_events
+        WHERE event_type = 'bounce'
+          AND event_at >= NOW() - ($1 || ' days')::interval
+      )`;
+
+    // Helper SELECT pieces for the 3-way FILTER counts (reused across queries).
+    const counts = `
+      count(*)::int                                  AS total,
+      count(*) FILTER (WHERE ${isHard})::int         AS hard,
+      count(*) FILTER (WHERE ${isBlock})::int        AS block,
+      count(*) FILTER (WHERE ${isSoft})::int         AS soft,
+      count(*) FILTER (WHERE be.raw->>'msg' IS NULL OR (NOT ${isHard} AND NOT ${isBlock} AND NOT ${isSoft}))::int AS unclassified`;
+
+    const param = [String(days)];
+
+    // ── Summary: window totals + this-week vs last-week deltas ──
+    const summaryQ = pgdb.query(`${base}
+      SELECT ${counts},
+             count(DISTINCT lead_email)::int AS addresses,
+             count(DISTINCT domain)::int     AS domains,
+             count(*) FILTER (WHERE event_at >= NOW() - interval '7 days')::int                                AS last7_total,
+             count(*) FILTER (WHERE event_at >= NOW() - interval '7 days' AND ${isHard})::int                  AS last7_hard,
+             count(*) FILTER (WHERE event_at <  NOW() - interval '7 days' AND event_at >= NOW() - interval '14 days')::int                AS prev7_total,
+             count(*) FILTER (WHERE event_at <  NOW() - interval '7 days' AND event_at >= NOW() - interval '14 days' AND ${isHard})::int  AS prev7_hard
+      FROM be`, param);
+
+    // ── Daily series (for the trend chart) ──
+    const seriesQ = pgdb.query(`${base}
+      SELECT to_char(event_at::date,'YYYY-MM-DD') AS date,
+             ${counts}
+      FROM be GROUP BY 1 ORDER BY 1`, param);
+
+    // ── Per-client split (resolve name from clients table) ──
+    const byClientQ = pgdb.query(`${base}
+      SELECT be.workspace_id,
+             COALESCE(cl.workspace_name, be.workspace_id) AS client,
+             ${counts}
+      FROM be
+      LEFT JOIN clients cl ON cl.workspace_id = be.workspace_id
+      GROUP BY be.workspace_id, cl.workspace_name
+      ORDER BY total DESC`, param);
+
+    // ── Per-campaign split ──
+    const byCampaignQ = pgdb.query(`${base}
+      SELECT be.workspace_id,
+             COALESCE(cl.workspace_name, be.workspace_id) AS client,
+             COALESCE(NULLIF(be.campaign_name,''), be.campaign_id, '(unknown)') AS campaign,
+             ${counts}
+      FROM be
+      LEFT JOIN clients cl ON cl.workspace_id = be.workspace_id
+      GROUP BY be.workspace_id, cl.workspace_name, be.campaign_name, be.campaign_id
+      ORDER BY hard DESC, total DESC
+      LIMIT 100`, param);
+
+    // ── List-quality triage: top HARD-bounce domains + addresses ──
+    const hardDomainsQ = pgdb.query(`${base}
+      SELECT domain, count(*)::int AS hard
+      FROM be WHERE ${isHard} AND domain <> ''
+      GROUP BY domain ORDER BY hard DESC LIMIT 25`, param);
+
+    const hardAddressesQ = pgdb.query(`${base}
+      SELECT lead_email AS email,
+             max(be.campaign_name) AS campaign,
+             max(be.raw->>'msg')   AS msg
+      FROM be WHERE ${isHard} AND lead_email <> ''
+      GROUP BY lead_email ORDER BY max(event_at) DESC LIMIT 100`, param);
+
+    // ── Sender/infra health: BLOCK bounces per sending mailbox ──
+    const senderHealthQ = pgdb.query(`${base}
+      SELECT COALESCE(NULLIF(sender_email,''),'(unknown sender)') AS sender,
+             count(*) FILTER (WHERE ${isBlock})::int AS block,
+             count(*) FILTER (WHERE ${isHard})::int  AS hard,
+             count(*)::int                            AS total,
+             max(be.raw->>'msg') FILTER (WHERE ${isBlock}) AS sample_msg
+      FROM be
+      GROUP BY sender
+      HAVING count(*) FILTER (WHERE ${isBlock}) > 0
+      ORDER BY block DESC LIMIT 50`, param);
+
+    const [summary, series, byClient, byCampaign, hardDomains, hardAddresses, senderHealth] =
+      await Promise.all([summaryQ, seriesQ, byClientQ, byCampaignQ, hardDomainsQ, hardAddressesQ, senderHealthQ]);
+
+    const s = summary.rows[0] || {};
+    const wow = (cur, prev) => prev > 0 ? (100 * (cur - prev) / prev) : (cur > 0 ? null : 0); // null = "new, no baseline"
+
+    res.json({
+      days,
+      summary: {
+        total: s.total||0, hard: s.hard||0, block: s.block||0, soft: s.soft||0, unclassified: s.unclassified||0,
+        addresses: s.addresses||0, domains: s.domains||0,
+        last7:  { total: s.last7_total||0, hard: s.last7_hard||0 },
+        prev7:  { total: s.prev7_total||0, hard: s.prev7_hard||0 },
+        wowTotal: wow(s.last7_total||0, s.prev7_total||0),
+        wowHard:  wow(s.last7_hard||0,  s.prev7_hard||0),
+      },
+      series:        series.rows,
+      byClient:      byClient.rows,
+      byCampaign:    byCampaign.rows,
+      hardDomains:   hardDomains.rows,
+      hardAddresses: hardAddresses.rows,
+      senderHealth:  senderHealth.rows,
+    });
+  } catch (err) {
+    console.error('[bounce-analysis]', err.message);
+    res.status(500).json({ error: 'Database error' });
+  }
+});
+
+// Raw bounce explorer — paginated, searchable. Separate endpoint so the table
+// can page/filter without re-running the whole analyzer aggregation.
+//   ?days=30&q=<substring on email/sender/msg>&klass=hard|block|soft&page=1
+app.get('/api/bounce-analysis/explorer', requireSession, async (req, res) => {
+  try {
+    const days  = Math.min(180, Math.max(1, parseInt(req.query.days, 10) || 30));
+    const page  = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = 50;
+    const q     = (req.query.q || '').toString().trim().toLowerCase();
+    const klass = ['hard','block','soft','unclassified'].includes(req.query.klass) ? req.query.klass : null;
+    const classCase = bounceClassCase("raw->>'msg'");
+
+    const where = [`event_type = 'bounce'`, `event_at >= NOW() - ($1 || ' days')::interval`];
+    const params = [String(days)];
+    if (q) {
+      params.push('%' + q + '%');
+      where.push(`(lower(lead_email) LIKE $${params.length} OR lower(COALESCE(sender_email,'')) LIKE $${params.length} OR lower(COALESCE(raw->>'msg','')) LIKE $${params.length})`);
+    }
+    if (klass) {
+      params.push(klass);
+      where.push(`(${classCase}) = $${params.length}`);
+    }
+    const whereSql = where.join(' AND ');
+
+    const total = await pgdb.query(`SELECT count(*)::int AS n FROM email_events WHERE ${whereSql}`, params);
+    const rows = await pgdb.query(`
+      SELECT to_char(event_at,'YYYY-MM-DD HH24:MI') AS at,
+             lower(lead_email) AS email,
+             sender_email AS sender,
+             COALESCE(NULLIF(campaign_name,''), campaign_id) AS campaign,
+             (${classCase}) AS klass,
+             raw->>'msg' AS msg
+      FROM email_events
+      WHERE ${whereSql}
+      ORDER BY event_at DESC
+      LIMIT ${limit} OFFSET ${(page-1)*limit}`, params);
+
+    res.json({ page, limit, total: total.rows[0]?.n || 0, rows: rows.rows });
+  } catch (err) {
+    console.error('[bounce-explorer]', err.message);
+    res.status(500).json({ error: 'Database error' });
+  }
+});
+
+app.get('/bounce-analysis',      (req, res) => res.sendFile(path.join(__dirname, 'bounce-analysis.html')));
+app.get('/bounce-analysis.html', (req, res) => res.sendFile(path.join(__dirname, 'bounce-analysis.html')));
+
+// Post a plain-text message to the ops Slack channel via the bot token.
+// Best-effort: resolves with {ok} and never throws to the caller.
+function postBounceAlertToSlack(text) {
+  return new Promise((resolve) => {
+    const token = process.env.SLACK_BOT_TOKEN;
+    const channel = process.env.SLACK_ALERT_CHANNEL_ID || process.env.SLACK_CHANNEL_ID;
+    if (!token || !channel) return resolve({ ok: false, skipped: 'no SLACK_BOT_TOKEN/CHANNEL' });
+    const https = require('https');
+    const data = JSON.stringify({ channel, text, unfurl_links: false });
+    const req = https.request({
+      hostname: 'slack.com', path: '/api/chat.postMessage', method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
+    }, r => { let b=''; r.on('data',d=>b+=d); r.on('end',()=>{ try { resolve(JSON.parse(b)); } catch { resolve({ ok:false }); } }); });
+    req.on('error', () => resolve({ ok: false }));
+    req.write(data); req.end();
+  });
+}
+
+// Early-warning bounce alert — the "detect issues sooner" payoff. Computes each
+// client's HARD-bounce rate (dead-address signal) over a recent window and flags
+// clients that are BOTH above an absolute floor AND rising vs their prior
+// baseline, so a degrading list is caught before deliverability tanks.
+//
+// Designed to run from cron (cron-job.org) like the needs-reply backfill:
+//   GET /api/cron/bounce-alert?secret=$CRON_SECRET
+// Guarded by CRON_SECRET when set; also callable by an admin session for manual
+// runs / dashboard "test alert". Params (all optional):
+//   recent=3   baseline=14   minHard=10   floorRate=0.02   risePct=50   dry=1
+// dry=1 computes + returns flagged clients WITHOUT posting to Slack.
+app.get('/api/cron/bounce-alert', async (req, res) => {
+  // Auth: CRON_SECRET (if configured) OR an admin/manager session (manual run).
+  const secret = process.env.CRON_SECRET;
+  const s = decodeSession(req);
+  const okSession = s?.role === 'admin' || s?.role === 'manager' || req.headers['x-admin-key'] === ADMIN_KEY;
+  const okSecret = secret && req.query.secret === secret;
+  if (!okSecret && !okSession) return res.status(403).json({ error: 'forbidden (CRON_SECRET or sign in)' });
+
+  try {
+    const recent    = Math.min(30, Math.max(1, parseInt(req.query.recent, 10)   || 3));
+    const baseline  = Math.min(90, Math.max(recent + 1, parseInt(req.query.baseline, 10) || 14));
+    const minHard   = Math.max(1, parseInt(req.query.minHard, 10) || 10);
+    const floorRate = Math.max(0, parseFloat(req.query.floorRate) || 0.02);
+    const risePct   = Math.max(0, parseFloat(req.query.risePct)   || 50);
+    const dry       = req.query.dry === '1' || req.query.dry === 'true';
+    const { isHard } = bounceClassExprs("raw->>'msg'");
+
+    // Per-workspace hard counts + total bounces in the recent window and the
+    // prior baseline window. We don't have reliable per-day SENT in email_events
+    // for every client, so the "rate" here is hard / total-bounces (the share of
+    // bounces that are dead addresses) — a clean, sent-independent list-quality
+    // signal. Combined with an absolute hard-count floor (minHard) it avoids
+    // firing on tiny samples.
+    const { rows } = await pgdb.query(`
+      WITH b AS (
+        SELECT workspace_id,
+               (event_at >= NOW() - ($1 || ' days')::interval) AS is_recent,
+               (event_at <  NOW() - ($1 || ' days')::interval
+                AND event_at >= NOW() - ($2 || ' days')::interval) AS is_base,
+               (${isHard}) AS hard
+        FROM email_events
+        WHERE event_type = 'bounce'
+          AND event_at >= NOW() - ($2 || ' days')::interval
+      )
+      SELECT workspace_id,
+             count(*) FILTER (WHERE is_recent)              ::int AS recent_total,
+             count(*) FILTER (WHERE is_recent AND hard)     ::int AS recent_hard,
+             count(*) FILTER (WHERE is_base)                ::int AS base_total,
+             count(*) FILTER (WHERE is_base AND hard)       ::int AS base_hard
+      FROM b GROUP BY workspace_id`, [String(recent), String(baseline)]);
+
+    // Resolve names.
+    const nameRows = await pgdb.query(`SELECT workspace_id, workspace_name FROM clients`);
+    const nameOf = Object.fromEntries(nameRows.rows.map(r => [r.workspace_id, r.workspace_name]));
+
+    const flagged = [];
+    for (const r of rows) {
+      const recentRate = r.recent_total ? r.recent_hard / r.recent_total : 0;
+      const baseRate   = r.base_total   ? r.base_hard   / r.base_total   : 0;
+      const rise = baseRate > 0 ? (100 * (recentRate - baseRate) / baseRate) : (recentRate > 0 ? Infinity : 0);
+      if (r.recent_hard >= minHard && recentRate >= floorRate && rise >= risePct) {
+        flagged.push({
+          workspace_id: r.workspace_id,
+          client: nameOf[r.workspace_id] || r.workspace_id,
+          recentHard: r.recent_hard, recentTotal: r.recent_total,
+          recentRate: +(recentRate * 100).toFixed(1),
+          baseRate: +(baseRate * 100).toFixed(1),
+          risePct: rise === Infinity ? null : Math.round(rise),
+        });
+      }
+    }
+    flagged.sort((a, b) => b.recentHard - a.recentHard);
+
+    let posted = null;
+    if (flagged.length && !dry) {
+      const lines = flagged.slice(0, 15).map(f =>
+        `• *${f.client}* — ${f.recentHard} hard bounces (${f.recentRate}% of bounces, was ${f.baseRate}%${f.risePct!=null?`, +${f.risePct}%`:', new'}) in last ${recent}d`);
+      const text = `:warning: *Bounce early-warning* — ${flagged.length} client(s) with rising hard-bounce (dead-address) rates:\n${lines.join('\n')}\n_Hard bounces signal a degrading list. Review in the Bounce Analyzer._`;
+      posted = await postBounceAlertToSlack(text);
+    }
+
+    res.json({ window: { recent, baseline }, thresholds: { minHard, floorRate, risePct }, flagged, posted, dry });
+  } catch (err) {
+    console.error('[bounce-alert]', err.message);
+    res.status(500).json({ error: 'Database error' });
+  }
+});
+
+// Daily hard/block/soft bounce breakdown per workspace, for the Stats + Mailboxes
+// overlays. ADDITIVE: the authoritative total bounce count on Stats still comes
+// from Bison (performanceCache.dailyStats); this only adds the *split* from our
+// email_events classification, which the page layers on top. A missing entry
+// just means no overlay for that day/workspace — it never alters existing stats.
+//   ?start=YYYY-MM-DD&end=YYYY-MM-DD  (defaults to last 30 days)
+// Returns { byWorkspace: { wsId: { 'YYYY-MM-DD': {hard,block,soft,total} } },
+//           all: { 'YYYY-MM-DD': {...} } }
+app.get('/api/stats/bounce-breakdown', requireSession, async (req, res) => {
+  try {
+    const start = /^\d{4}-\d{2}-\d{2}$/.test(req.query.start || '') ? req.query.start : null;
+    const end   = /^\d{4}-\d{2}-\d{2}$/.test(req.query.end || '')   ? req.query.end   : null;
+    const { isHard, isBlock, isSoft } = bounceClassExprs("raw->>'msg'");
+
+    const where = [`event_type = 'bounce'`];
+    const params = [];
+    if (start) { params.push(start); where.push(`event_at::date >= $${params.length}`); }
+    if (end)   { params.push(end);   where.push(`event_at::date <= $${params.length}`); }
+    if (!start && !end) where.push(`event_at >= NOW() - interval '30 days'`);
+
+    const { rows } = await pgdb.query(`
+      SELECT workspace_id,
+             to_char(event_at::date,'YYYY-MM-DD') AS date,
+             count(*) FILTER (WHERE ${isHard})::int  AS hard,
+             count(*) FILTER (WHERE ${isBlock})::int AS block,
+             count(*) FILTER (WHERE ${isSoft})::int  AS soft,
+             count(*)::int                            AS total
+      FROM email_events
+      WHERE ${where.join(' AND ')}
+      GROUP BY workspace_id, event_at::date
+      ORDER BY date`, params);
+
+    const byWorkspace = {}, all = {};
+    for (const r of rows) {
+      const cell = { hard: r.hard, block: r.block, soft: r.soft, total: r.total };
+      (byWorkspace[r.workspace_id] = byWorkspace[r.workspace_id] || {})[r.date] = cell;
+      const a = all[r.date] = all[r.date] || { hard: 0, block: 0, soft: 0, total: 0 };
+      a.hard += r.hard; a.block += r.block; a.soft += r.soft; a.total += r.total;
+    }
+    res.json({ byWorkspace, all });
+  } catch (err) {
+    console.error('[stats-bounce-breakdown]', err.message);
+    res.status(500).json({ error: 'Database error' });
+  }
+});
 
 // ─────────────────────────────────────────────────────────────────────
 // Google Postmaster Tools — daily domain + IP reputation, spam rate
@@ -8778,19 +9136,29 @@ async function buildPortalRepliesByMailbox(pgdb) {
 // actual send volume instead.
 async function buildMailboxStatsFromEvents(pgdb) {
   if (!pgdb) return new Map();
+  // 3-way bounce split per mailbox from the shared classifier — so the
+  // Mailboxes page can tell a mailbox sending to a bad list (high hard) from
+  // one whose reputation is getting it filtered (high block).
+  const { isHard, isBlock, isSoft } = bounceClassExprs("raw->>'msg'");
   try {
     const { rows } = await pgdb.query(`
       SELECT
         sender_email,
         COUNT(*) FILTER (WHERE event_type = 'sent')    AS sent,
-        COUNT(*) FILTER (WHERE event_type = 'bounce')  AS bounces
+        COUNT(*) FILTER (WHERE event_type = 'bounce')  AS bounces,
+        COUNT(*) FILTER (WHERE event_type = 'bounce' AND ${isHard})  AS bounces_hard,
+        COUNT(*) FILTER (WHERE event_type = 'bounce' AND ${isBlock}) AS bounces_block,
+        COUNT(*) FILTER (WHERE event_type = 'bounce' AND ${isSoft})  AS bounces_soft
       FROM email_events
       WHERE sender_email IS NOT NULL
       GROUP BY sender_email
     `);
     return new Map(rows.map(r => [r.sender_email, {
-      sent:    parseInt(r.sent,    10) || 0,
-      bounces: parseInt(r.bounces, 10) || 0,
+      sent:          parseInt(r.sent,          10) || 0,
+      bounces:       parseInt(r.bounces,       10) || 0,
+      bounces_hard:  parseInt(r.bounces_hard,  10) || 0,
+      bounces_block: parseInt(r.bounces_block, 10) || 0,
+      bounces_soft:  parseInt(r.bounces_soft,  10) || 0,
     }]));
   } catch {
     return new Map();
@@ -8823,6 +9191,11 @@ function attachMailboxStats(mailboxes, campIndex, eventsByMailbox = new Map(), p
       // Real sent + bounce counts from webhooks.
       m.attributed_sent    = ev.sent;
       m.attributed_bounces = ev.bounces;
+      // 3-way split from the classifier (real, not estimated). Only set on the
+      // webhook path — the even-split fallback has no per-event reason to classify.
+      m.bounces_hard  = ev.bounces_hard;
+      m.bounces_block = ev.bounces_block;
+      m.bounces_soft  = ev.bounces_soft;
       if (portalReplies != null) {
         // TRUE per-mailbox reply count from the portal (best source).
         m.attributed_replies = portalReplies;
