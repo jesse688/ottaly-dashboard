@@ -394,6 +394,25 @@ function resolveBisonTeamId(wsId) {
   return null;                   // PV id with no mapping — unresolvable
 }
 
+// Resolve a client to the CANONICAL workspace_id that the performance cache is
+// keyed by (BISON_TEAMS[].pv — the id the warm loop uses). A client's stored
+// clients.workspace_id usually already equals its pv, but some rows were created
+// manually/by webhook with an id that doesn't match byte-for-byte (e.g. Bubble),
+// so the Stats page read missed the cache and the client showed 0 sent/replies →
+// got filtered out entirely. Map via id (pv or team_id) first, then by NAME, so a
+// mismatched id still lands on the right cache bucket. Falls back to the raw id.
+function canonicalWorkspaceId(wsId, name) {
+  const s = String(wsId || '').trim();
+  const byId = BISON_TEAMS.find(t => t.pv === s || t.team_id === s);
+  if (byId) return byId.pv;
+  const n = String(name || '').trim().toLowerCase();
+  if (n) {
+    const byName = BISON_TEAMS.find(t => t.name.toLowerCase() === n);
+    if (byName) return byName.pv;
+  }
+  return s;
+}
+
 // List the Bison workspaces WITHOUT calling the API. Per policy, the super-admin
 // key is reserved for token minting only — it must NOT be used for routine
 // listing. We already hold every workspace in BISON_TEAMS, so return that in the
@@ -2524,6 +2543,54 @@ app.get('/api/admin/mailbox-debug', requireAdmin, async (req, res) => {
   }
 });
 
+// ── Stats id-mismatch diagnostic (admin only) ───────────
+// For each active client: stored workspace_id, the canonical id the perf cache is
+// keyed by, whether the cache actually has any data under each, frozen-leads count,
+// and unibox_replies count under each id. Pinpoints clients (e.g. Bubble) whose
+// stored id doesn't match the cache/portal so they read empty and drop off Stats.
+app.get('/api/admin/stats-debug', requireAdmin, async (req, res) => {
+  try {
+    const pgdb = app.locals.pgDb;
+    const clientRows = db.prepare(
+      `SELECT workspace_id, workspace_name, client_status FROM clients WHERE workspace_id IS NOT NULL AND workspace_id != ''`
+    ).all().filter(c => c.client_status !== 'inactive');
+    const cacheHas = (id) => {
+      for (const k of performanceCache.dailyStats.keys()) if (k.startsWith(id + '|')) return true;
+      return false;
+    };
+    const out = [];
+    for (const c of clientRows) {
+      const canon = canonicalWorkspaceId(c.workspace_id, c.workspace_name);
+      const leadsStored = (revenueCache.leads || []).filter(l => l.workspace_id === c.workspace_id).length;
+      const leadsCanon  = (revenueCache.leads || []).filter(l => l.workspace_id === canon).length;
+      let uniboxStored = null, uniboxCanon = null;
+      if (pgdb) {
+        try {
+          const a = await pgdb.query(`SELECT COUNT(*)::int n FROM unibox_replies WHERE workspace_id = $1`, [c.workspace_id]);
+          const b = await pgdb.query(`SELECT COUNT(*)::int n FROM unibox_replies WHERE workspace_id = $1`, [canon]);
+          uniboxStored = a.rows[0].n; uniboxCanon = b.rows[0].n;
+        } catch (e) { uniboxStored = 'err: ' + e.message; }
+      }
+      out.push({
+        name: c.workspace_name,
+        stored_id: c.workspace_id,
+        canonical_id: canon,
+        id_mismatch: canon !== c.workspace_id,
+        cache_has_stored: cacheHas(c.workspace_id),
+        cache_has_canonical: cacheHas(canon),
+        leads_stored: leadsStored,
+        leads_canonical: leadsCanon,
+        unibox_stored: uniboxStored,
+        unibox_canonical: uniboxCanon,
+      });
+    }
+    out.sort((a, b) => (b.id_mismatch === a.id_mismatch ? 0 : b.id_mismatch ? 1 : -1));
+    res.json({ count: out.length, cache_keys: performanceCache.dailyStats.size, clients: out });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Fresh start / Show historical (admin only) ───────────
 // Status of the cutover + toggle.
 app.get('/api/admin/fresh-start', requireAdmin, (req, res) => {
@@ -4222,7 +4289,10 @@ function computeWorkspaceStatsForRange(wsIds, start, end) {
   const out = {};
   for (const wsId of wsIds) {
     const wsLeads = (revenueCache.leads || []).filter(l => {
-      if (l.workspace_id !== wsId) return false;
+      // Match on the canonical id so leads stored under a mismatched workspace_id
+      // (e.g. Bubble's webhook id) still attach to the right client. Cheap: most
+      // leads already equal wsId and short-circuit on the first check.
+      if (l.workspace_id !== wsId && canonicalWorkspaceId(l.workspace_id, l.workspace_name || l.client_name) !== wsId) return false;
       if (isRevenueExcludedWorkspace(l)) return false;
       if (nonleadEmails.has((l.lead_email || '').toLowerCase())) return false;
       if (l.pv_nonlead || isPvNonLeadLabel(l.label)) return false;
@@ -4265,8 +4335,12 @@ app.get('/api/stats/summary', requireSession, async (req, res) => {
       if (filterIds) return filterIds.includes(c.workspace_id);
       return true;
     });
-    const wsIds   = activeClients.map(c => c.workspace_id);
-    const wsNames = Object.fromEntries(activeClients.map(c => [c.workspace_id, c.workspace_name]));
+    // Key everything by the CANONICAL workspace_id (the id the perf cache is keyed
+    // by). For most clients this equals clients.workspace_id; for rows whose stored
+    // id doesn't match the cache (e.g. Bubble) it resolves via BISON_TEAMS so their
+    // data is found instead of reading an empty bucket and being filtered out.
+    const wsIds   = [...new Set(activeClients.map(c => canonicalWorkspaceId(c.workspace_id, c.workspace_name)))];
+    const wsNames = Object.fromEntries(activeClients.map(c => [canonicalWorkspaceId(c.workspace_id, c.workspace_name), c.workspace_name]));
     const dates   = serverDateList(start, end);
 
     // Read whatever daily stats are already in the performance cache — no blocking PlusVibe fetch.
