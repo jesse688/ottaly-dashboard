@@ -9938,6 +9938,56 @@ app.get('/api/mailboxes/provider-stats', requireSession, async (req, res) => {
   }
 });
 
+// Per-DAY trend over the window — so the page can chart whether sends/replies/
+// bounces are trending up or down. Four series per day:
+//   sent, bounces ← mailbox_daily_stats (synced from Bison)
+//   replies (human), repliesOoo (human + OOO) ← client portal unibox_replies
+// Only meaningful for a period (days>0); lifetime has no per-day store.
+//   ?days=N  (default 7)
+app.get('/api/mailboxes/daily-trend', requireSession, async (req, res) => {
+  try {
+    const pgdb = app.locals.pgDb;
+    if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
+    const days = Math.max(1, Math.min(365, parseInt(req.query.days, 10) || 7));
+
+    // sent + bounces per day from the synced table.
+    const sb = await pgdb.query(`
+      SELECT date::text AS date, SUM(sent)::int AS sent, SUM(bounced)::int AS bounces
+      FROM mailbox_daily_stats
+      WHERE date >= (CURRENT_DATE - ($1::int - 1))
+      GROUP BY date ORDER BY date
+    `, [days]);
+
+    // human replies + OOO per day from the client portal (the canonical source).
+    const rp = await pgdb.query(`
+      SELECT (received_at AT TIME ZONE 'UTC')::date::text AS date,
+             COUNT(*) FILTER (WHERE COALESCE(admin_label, category) IN ('interested','not_interested','question','unsubscribe'))::int AS replies,
+             COUNT(*) FILTER (WHERE COALESCE(admin_label, category) = 'ooo_auto_reply')::int AS ooo
+      FROM unibox_replies
+      WHERE mailbox_email IS NOT NULL AND mailbox_email <> ''
+        AND received_at >= (CURRENT_DATE - ($1::int - 1))
+      GROUP BY 1 ORDER BY 1
+    `, [days]);
+
+    const sbBy = new Map(sb.rows.map(r => [r.date, r]));
+    const rpBy = new Map(rp.rows.map(r => [r.date, r]));
+
+    // build a continuous date axis so flat/zero days still show on the chart.
+    const series = [];
+    for (let i = days - 1; i >= 0; i--) {
+      const d = serverDateString(new Date(Date.now() - i * 86400000));
+      const s = sbBy.get(d) || {}; const r = rpBy.get(d) || {};
+      const sent = s.sent || 0, bounces = s.bounces || 0;
+      const replies = r.replies || 0, ooo = r.ooo || 0;
+      series.push({ date: d, sent, bounces, replies, repliesOoo: replies + ooo });
+    }
+    res.json({ days, syncedAt: _dailySyncState.lastRun, series });
+  } catch (err) {
+    console.error('[mailbox daily-trend]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 async function buildMailboxStatsFromEvents(pgdb, days = 0) {
   if (!pgdb) return new Map();
   // 3-way bounce split per mailbox from the shared classifier — so the

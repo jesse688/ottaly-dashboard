@@ -169,6 +169,8 @@ tr:hover td{background:#FAFBFF}
     <span id="mbPeriodBar" style="display:inline-flex;gap:4px;font-size:12px;font-weight:600"></span>
   </div>
   <div id="mbPeriodNote" style="font-size:11px;color:var(--muted);margin:-4px 0 8px"></div>
+  <!-- Daily trend (per-day line charts: sent / human replies / replies+OOO / bounces) -->
+  <div id="mbTrend" style="margin:4px 0 14px"></div>
   <!-- Visual comparison bar chart (dependency-free CSS bars) -->
   <div id="mbBarChart" style="margin:4px 0 14px"></div>
   <div style="font-size:11px;color:var(--muted);margin:-2px 0 8px">By provider type (Google / Microsoft / SMTP):</div>
@@ -1435,7 +1437,84 @@ async function _fetchProviderStats(p) {
     }
   }
   renderMbBarChart(d);
+  loadMbTrend(d);
   return d;
+}
+
+// Daily trend: per-day line charts so you can see direction over the window.
+// Lifetime has no per-day store, so it's only shown for a period.
+async function loadMbTrend(provData) {
+  const wrap = document.getElementById('mbTrend');
+  if (!wrap) return;
+  if (provData && provData.lifetime) {
+    wrap.innerHTML = '<div style="font-size:11px;color:var(--muted)">Pick a period (Today / 7d / 30d…) to see the day-by-day trend.</div>';
+    return;
+  }
+  wrap.innerHTML = '<div style="font-size:12px;color:var(--muted);padding:.4rem 0">Loading daily trend…</div>';
+  let d;
+  try {
+    const r = await fetch(`/api/mailboxes/daily-trend?days=${_mbPeriodDays(_mbPeriod)}`);
+    if (!r.ok) throw new Error(r.status);
+    d = await r.json();
+  } catch (e) { wrap.innerHTML = `<div style="font-size:11px;color:var(--muted)">Trend unavailable: ${e.message}</div>`; return; }
+  renderMbTrend(d);
+}
+
+// Dependency-free SVG sparkline. pts = numbers. Returns an <svg> string.
+function _sparkline(pts, color, w, h) {
+  if (!pts.length) return '';
+  const max = Math.max(...pts, 1), min = Math.min(...pts, 0);
+  const span = (max - min) || 1;
+  const pad = 4;
+  const X = i => pad + (pts.length === 1 ? 0 : i * (w - 2*pad) / (pts.length - 1));
+  const Y = v => (h - pad) - ((v - min) / span) * (h - 2*pad);
+  const line = pts.map((v,i) => `${i?'L':'M'}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(' ');
+  const area = `${line} L${X(pts.length-1).toFixed(1)},${h-pad} L${X(0).toFixed(1)},${h-pad} Z`;
+  const lastX = X(pts.length-1), lastY = Y(pts[pts.length-1]);
+  return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="none" style="display:block">
+    <path d="${area}" fill="${color}1a"/>
+    <path d="${line}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${lastX.toFixed(1)}" cy="${lastY.toFixed(1)}" r="2.6" fill="${color}"/>
+  </svg>`;
+}
+
+function renderMbTrend(d) {
+  const wrap = document.getElementById('mbTrend');
+  if (!wrap) return;
+  const series = (d && d.series) || [];
+  if (!series.length) { wrap.innerHTML = '<div style="font-size:11px;color:var(--muted)">No daily data yet — click ⟳ Sync now.</div>'; return; }
+  const num = n => (n||0).toLocaleString();
+  // first vs last (and total) per metric so we can show direction.
+  const metrics = [
+    { key:'sent',       label:'Sent',            color:'#224388' },
+    { key:'replies',    label:'Human replies',   color:'#059669' },
+    { key:'repliesOoo', label:'Replies + OOO',   color:'#0EA5E9' },
+    { key:'bounces',    label:'Bounces',         color:'#DC2626' },
+  ];
+  const dates = series.map(s => s.date);
+  const fmtD = iso => { const p = iso.split('-'); return p[2]+'/'+p[1]; };
+  const cards = metrics.map(m => {
+    const pts = series.map(s => s[m.key]||0);
+    const total = pts.reduce((a,b)=>a+b,0);
+    // trend arrow: compare first half avg vs second half avg
+    const half = Math.floor(pts.length/2) || 1;
+    const firstAvg = pts.slice(0,half).reduce((a,b)=>a+b,0)/half;
+    const lastAvg  = pts.slice(-half).reduce((a,b)=>a+b,0)/half;
+    let arrow = '→', acol = '#6B7280';
+    if (lastAvg > firstAvg*1.05) { arrow='▲'; acol = m.key==='bounces'?'#DC2626':'#059669'; }
+    else if (lastAvg < firstAvg*0.95) { arrow='▼'; acol = m.key==='bounces'?'#059669':'#DC2626'; }
+    return `<div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:12px 14px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+        <span style="font-size:12px;font-weight:700;color:#1f2937">${m.label}</span>
+        <span style="font-size:11px;color:var(--muted)">${num(total)} <span style="color:${acol};font-weight:700">${arrow}</span></span>
+      </div>
+      ${_sparkline(pts, m.color, 240, 56)}
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:#9AA1AD;margin-top:3px">
+        <span>${fmtD(dates[0])}</span><span>${fmtD(dates[dates.length-1])}</span>
+      </div>
+    </div>`;
+  }).join('');
+  wrap.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem">${cards}</div>`;
 }
 
 // Dependency-free comparison bar chart. Bar length = sent volume (so you can
