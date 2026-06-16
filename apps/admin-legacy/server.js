@@ -8376,6 +8376,8 @@ app.get('/domains.html', (req, res) => res.sendFile(path.join(__dirname, 'domain
 //   - OOO   = email_events.raw->>'label' OUT_OF_OFFICE/AUTOMATIC_REPLY
 app.get('/api/gateway-analysis', requireSession, async (req, res) => {
   try {
+    const pgdb = req.app.locals.pgDb;
+    if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
     const { rows } = await pgdb.query(`
       WITH sent AS (
         SELECT c.id,
@@ -8497,7 +8499,7 @@ app.get('/api/gateway-analysis', requireSession, async (req, res) => {
     });
   } catch (err) {
     console.error('[gateway-analysis]', err.message);
-    res.status(500).json({ error: 'Database error', detail: err.message });
+    res.status(500).json({ error: 'Database error' });
   }
 });
 
