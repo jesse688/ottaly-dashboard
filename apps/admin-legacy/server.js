@@ -9509,12 +9509,85 @@ async function buildPortalRepliesByMailbox(pgdb) {
 // PlusVibe reply webhooks never include sender_email so replies are excluded —
 // reply rates are computed by scaling the campaign reply rate to the mailbox's
 // actual send volume instead.
-async function buildMailboxStatsFromEvents(pgdb) {
+// Accurate per-PROVIDER and per-SUPPLIER sending performance, attributed by the
+// ACTUAL sending mailbox (email_events.sender_email → mailbox → provider/supplier).
+// This replaces the old workspace-name-matching approach (loadProviderCharts),
+// which broke in the PlusVibe→Bison cutover because it guessed a workspace's
+// provider by name and summed the WHOLE workspace under it. Here every sent/
+// reply/bounce is tied to the mailbox that actually sent it, then rolled up by
+// that mailbox's provider (google/microsoft/smtp) AND supplier (Winnr/…).
+//   ?days=7  (default 7; 0 = all-time)
+app.get('/api/mailboxes/provider-stats', requireSession, async (req, res) => {
+  try {
+    const pgdb = app.locals.pgDb;
+    if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
+    const days = Math.max(0, Math.min(365, parseInt(req.query.days, 10) || 7));
+
+    // sender_email → { provider, supplier } from the live mailbox roster + meta.
+    const meta = await pgdb.listMailboxMeta().catch(() => []);
+    const supplierByEmail = new Map((meta || []).map(m => [(m.email || '').toLowerCase(), m.supplier || null]));
+    const senderInfo = new Map();
+    for (const m of (_mailboxCache.mailboxes || [])) {
+      const email = (m.email || '').toLowerCase();
+      if (!email) continue;
+      senderInfo.set(email, {
+        provider: detectMailboxType(m.provider) || 'smtp',
+        supplier: supplierByEmail.get(email) || null,
+      });
+    }
+
+    const { isHard, isBlock, isSoft } = bounceClassExprs("raw->>'msg'");
+    const params = [];
+    let windowSql = '';
+    if (days > 0) { params.push(String(days)); windowSql = `AND event_at >= NOW() - ($1 || ' days')::interval`; }
+    const { rows } = await pgdb.query(`
+      SELECT lower(sender_email) AS sender,
+             COUNT(*) FILTER (WHERE event_type='sent')                         ::int AS sent,
+             COUNT(*) FILTER (WHERE event_type IN ('reply','positive_reply'))  ::int AS replies,
+             COUNT(*) FILTER (WHERE event_type='bounce')                       ::int AS bounces,
+             COUNT(*) FILTER (WHERE event_type='bounce' AND ${isHard})         ::int AS bounces_hard,
+             COUNT(*) FILTER (WHERE event_type='bounce' AND ${isBlock})        ::int AS bounces_block,
+             COUNT(*) FILTER (WHERE event_type='bounce' AND ${isSoft})         ::int AS bounces_soft
+      FROM email_events
+      WHERE sender_email IS NOT NULL AND sender_email <> '' ${windowSql}
+      GROUP BY lower(sender_email)
+    `, params);
+
+    const blank = () => ({ mailboxes: 0, sent: 0, replies: 0, bounces: 0, bounces_hard: 0, bounces_block: 0, bounces_soft: 0 });
+    const byProvider = {}, bySupplier = {};
+    let unmatched = blank(); // events whose sender isn't in the mailbox roster
+    for (const r of rows) {
+      const info = senderInfo.get(r.sender);
+      const bucket = (map, key) => { const b = (map[key] = map[key] || blank()); b.mailboxes++; b.sent += r.sent; b.replies += r.replies; b.bounces += r.bounces; b.bounces_hard += r.bounces_hard; b.bounces_block += r.bounces_block; b.bounces_soft += r.bounces_soft; };
+      if (!info) { unmatched.mailboxes++; unmatched.sent += r.sent; unmatched.replies += r.replies; unmatched.bounces += r.bounces; continue; }
+      bucket(byProvider, info.provider || 'smtp');
+      bucket(bySupplier, info.supplier || '(unassigned)');
+    }
+    // Rates per bucket.
+    const withRates = (map) => Object.fromEntries(Object.entries(map).map(([k, b]) => [k, {
+      ...b,
+      reply_rate:  b.sent > 0 ? b.replies / b.sent : 0,
+      bounce_rate: b.sent > 0 ? b.bounces / b.sent : 0,
+    }]));
+
+    res.json({ days, byProvider: withRates(byProvider), bySupplier: withRates(bySupplier), unmatched });
+  } catch (err) {
+    console.error('[mailbox provider-stats]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+async function buildMailboxStatsFromEvents(pgdb, days = 0) {
   if (!pgdb) return new Map();
   // 3-way bounce split per mailbox from the shared classifier — so the
   // Mailboxes page can tell a mailbox sending to a bad list (high hard) from
   // one whose reputation is getting it filtered (high block).
+  // `days` bounds the window so the per-mailbox Sent/Reply/Bounce match the
+  // period the user picked on the page (0 = all-time).
   const { isHard, isBlock, isSoft } = bounceClassExprs("raw->>'msg'");
+  const params = [];
+  let windowSql = '';
+  if (days > 0) { params.push(String(days)); windowSql = `AND event_at >= NOW() - ($1 || ' days')::interval`; }
   try {
     const { rows } = await pgdb.query(`
       SELECT
@@ -9525,9 +9598,9 @@ async function buildMailboxStatsFromEvents(pgdb) {
         COUNT(*) FILTER (WHERE event_type = 'bounce' AND ${isBlock}) AS bounces_block,
         COUNT(*) FILTER (WHERE event_type = 'bounce' AND ${isSoft})  AS bounces_soft
       FROM email_events
-      WHERE sender_email IS NOT NULL
+      WHERE sender_email IS NOT NULL ${windowSql}
       GROUP BY sender_email
-    `);
+    `, params);
     return new Map(rows.map(r => [r.sender_email, {
       sent:          parseInt(r.sent,          10) || 0,
       bounces:       parseInt(r.bounces,       10) || 0,
@@ -9722,6 +9795,10 @@ function groupMailboxStats(mailboxes, keyFn) {
 app.get('/api/mailboxes', requireSession, async (req, res) => {
   try {
     const pgdb = app.locals.pgDb;
+    // Period window for the per-mailbox stats (matches the page's Today/7d/…/60d
+    // buttons). 0/absent = all-time. Previously the table was ALWAYS all-time
+    // regardless of the selected period — an accuracy bug this fixes.
+    const days = Math.max(0, Math.min(365, parseInt(req.query.days, 10) || 0));
     const meta = pgdb ? await pgdb.listMailboxMeta() : [];
     const metaByEmail = new Map(meta.map(m => [m.email, m]));
     const merged = mergeMailboxesWithMeta(_mailboxCache.mailboxes, metaByEmail)
@@ -9737,7 +9814,7 @@ app.get('/api/mailboxes', requireSession, async (req, res) => {
     // Query per-mailbox stats from webhook events and per-campaign bounce
     // corrections in parallel — both queries are independent.
     const [eventsByMailbox, dbBounceByCampaign, portalRepliesByMailbox] = await Promise.all([
-      buildMailboxStatsFromEvents(pgdb),
+      buildMailboxStatsFromEvents(pgdb, days),
       pgdb ? pgdb.query(`
         SELECT campaign_id, COUNT(*)::int AS bounces
         FROM email_events
