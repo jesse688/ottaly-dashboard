@@ -52,9 +52,15 @@ tr:hover td{background:#FAFBFF}
 <body>
 
 <div class="page">
-  <div class="page-header">
-    <div class="page-title">Gateway Deliverability</div>
-    <div class="page-sub" id="sub">Reply / lead / bounce performance by inbound email gateway (Mimecast, Proofpoint, Google, …).</div>
+  <div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap">
+    <div>
+      <div class="page-title">Gateway Deliverability</div>
+      <div class="page-sub" id="sub">Reply / lead / bounce performance by inbound email gateway (Mimecast, Proofpoint, Google, …).</div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button id="resolveBlocksBtn" onclick="resolveGateways(true)" title="Resolve the gateway (Mimecast/Barracuda/…) for every domain that has BLOCK-bounced us — the fastest way to see who's rejecting us." style="font-family:inherit;font-size:13px;padding:7px 12px;border:1px solid var(--amber);border-radius:8px;background:#fff;color:#b45309;cursor:pointer;font-weight:600">⚡ Resolve blockers</button>
+      <button id="resolveAllBtn" onclick="resolveGateways(false)" title="Resolve gateways for all sent-to domains (slower; fills the whole table)." style="font-family:inherit;font-size:13px;padding:7px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;cursor:pointer">Resolve all</button>
+    </div>
   </div>
 
   <div class="table-wrap">
@@ -75,7 +81,7 @@ tr:hover td{background:#FAFBFF}
       </thead>
       <tbody id="rows"></tbody>
     </table>
-    <div id="empty" class="empty" style="display:none">No gateway data yet — run the MX resolution sweep (scripts/gateway-analysis.js --full).</div>
+    <div id="empty" class="empty" style="display:none">No gateway data yet — click <b>⚡ Resolve blockers</b> above to find which gateways are rejecting us.</div>
   </div>
 
   <div class="foot">
@@ -159,15 +165,38 @@ function render(data){
   }
 }
 
-skeleton();
-fetch('/api/gateway-analysis')
-  .then(function(r){ return r.json(); })
-  .then(function(d){ render(d); })
-  .catch(function(){
-    document.getElementById('rows').innerHTML = '';
-    document.getElementById('empty').textContent = 'Failed to load gateway data.';
-    document.getElementById('empty').style.display = 'block';
-  });
+function loadGateways(){
+  skeleton();
+  fetch('/api/gateway-analysis')
+    .then(function(r){ return r.json(); })
+    .then(function(d){ render(d); })
+    .catch(function(){
+      document.getElementById('rows').innerHTML = '';
+      document.getElementById('empty').textContent = 'Failed to load gateway data.';
+      document.getElementById('empty').style.display = 'block';
+    });
+}
+
+// Resolve each sending-domain's gateway (Mimecast/Barracuda/…) into the cache,
+// then reload. blocksOnly = just the domains that have block-bounced us.
+function resolveGateways(blocksOnly){
+  var bId = blocksOnly ? 'resolveBlocksBtn' : 'resolveAllBtn';
+  var btn = document.getElementById(bId); var orig = btn.textContent;
+  btn.disabled = true; btn.textContent = '⏳ Resolving…';
+  fetch('/api/gateway-analysis/resolve?max=8000' + (blocksOnly?'&blocksOnly=1':''), { method:'POST' })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      btn.disabled = false; btn.textContent = orig;
+      if(d.error){ alert('Resolve failed: '+d.error); return; }
+      var top = Object.entries(d.byGateway||{}).sort(function(a,b){return b[1]-a[1];}).slice(0,8)
+        .map(function(x){return x[0]+': '+x[1];}).join('\n');
+      alert('Resolved '+d.resolved+' / '+d.attempted+' domains.\n\nTop gateways found:\n'+top+'\n\nReloading…');
+      loadGateways();
+    })
+    .catch(function(){ btn.disabled=false; btn.textContent=orig; alert('Resolve failed.'); });
+}
+
+loadGateways();
 </script>
 </body>
 </html>

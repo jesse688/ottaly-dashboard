@@ -8487,6 +8487,96 @@ app.get('/api/gateway-analysis', requireSession, async (req, res) => {
 app.get('/gateway-analysis',      (req, res) => res.sendFile(path.join(__dirname, 'gateway-analysis.html')));
 app.get('/gateway-analysis.html', (req, res) => res.sendFile(path.join(__dirname, 'gateway-analysis.html')));
 
+// Classify an MX host list into a gateway name (Mimecast/Proofpoint/Barracuda/…)
+// — same patterns as scripts/gateway-analysis.js, kept here so the API can
+// populate gateway_mx_cache without the CLI (which needs `dig`, absent in prod).
+const GATEWAY_PATTERNS = [
+  ['Mimecast',           [/\.mimecast\./, /mimecast\.com$/, /mimecast\.co\.za/]],
+  ['Proofpoint',         [/pphosted\.com$/, /ppe-hosted\.com$/, /\.pphosted\./]],
+  ['Barracuda',          [/barracudanetworks\.com$/, /barracuda\.com$/, /\.ess\.barracuda/]],
+  ['Cisco Ironport',     [/iphmx\.com$/, /\.cisco\.com$/, /ironport/]],
+  ['Forcepoint/Mailcontrol', [/mailcontrol\.com$/, /forcepoint/]],
+  ['Sophos',             [/sophos\.com$/, /\.hydra\.sophos/]],
+  ['Trend Micro',        [/trendmicro\.com$/, /\.tmes\.trendmicro/]],
+  ['FortiMail',          [/fortimail/, /fortinet\.com$/]],
+  ['Microsoft 365',      [/\.mail\.protection\.outlook\.com$/, /\.olc\.protection\.outlook\.com$/, /outlook\.com$/, /\.protection\.outlook/]],
+  ['Google Workspace',   [/\.google\.com$/, /googlemail\.com$/, /aspmx\.l\.google/, /\.googlemail\./, /psmtp\.com$/]],
+  ['Zoho',               [/zoho\.com$/, /zohomail/]],
+  ['Fastmail',           [/messagingengine\.com$/, /fastmail/]],
+];
+function classifyGatewayHosts(mxHosts) {
+  if (!mxHosts || !mxHosts.length) return 'NO MX / unresolved';
+  const lower = mxHosts.map(h => String(h).toLowerCase());
+  const joined = lower.join(' ');
+  for (const [name, patterns] of GATEWAY_PATTERNS) {
+    if (patterns.some(p => lower.some(h => p.test(h)) || p.test(joined))) return name;
+  }
+  return 'Other / self-hosted';
+}
+
+// Populate gateway_mx_cache by resolving MX (via Node DNS, no `dig`) for the
+// domains we actually send to. ?blocksOnly=1 prioritises domains that have
+// BLOCK-bounced us (the "who's rejecting us" view). ?max=N caps the run.
+// Idempotent — re-run to fill in more. This is what the Gateway page needs to
+// stop showing "No gateway data yet".
+app.post('/api/gateway-analysis/resolve', requireAdmin, async (req, res) => {
+  const pgdb = app.locals.pgDb;
+  if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
+  const max        = Math.max(1, Math.min(20000, parseInt(req.query.max, 10) || 5000));
+  const blocksOnly = req.query.blocksOnly === '1';
+  const { isBlock } = bounceClassExprs("raw->>'msg'");
+  try {
+    await pgdb.query(`CREATE TABLE IF NOT EXISTS gateway_mx_cache (
+      domain TEXT PRIMARY KEY, mx_hosts TEXT[], gateway TEXT, resolved_at TIMESTAMP DEFAULT NOW())`);
+
+    // Domains to resolve: sent-to domains not yet in the cache. When blocksOnly,
+    // restrict to domains that have block-bounced us (fastest path to the answer).
+    const domQ = blocksOnly
+      ? `SELECT DISTINCT lower(split_part(lead_email,'@',2)) AS domain
+           FROM email_events
+          WHERE event_type='bounce' AND lead_email LIKE '%@%' AND (${isBlock})
+            AND lower(split_part(lead_email,'@',2)) NOT IN (SELECT domain FROM gateway_mx_cache)
+          LIMIT $1`
+      : `SELECT DISTINCT lower(split_part(email,'@',2)) AS domain
+           FROM contacts
+          WHERE COALESCE(emailed_workspaces,'{}'::jsonb) <> '{}'::jsonb AND email LIKE '%@%'
+            AND lower(split_part(email,'@',2)) NOT IN (SELECT domain FROM gateway_mx_cache)
+          LIMIT $1`;
+    const { rows } = await pgdb.query(domQ, [max]);
+    const domains = rows.map(r => r.domain).filter(Boolean);
+
+    const dnsP = require('dns').promises;
+    let resolved = 0, failed = 0;
+    const byGateway = {};
+    const CONC = 20;
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < domains.length) {
+        const domain = domains[cursor++];
+        let hosts = [];
+        try { const recs = await dnsP.resolveMx(domain); hosts = recs.sort((a,b)=>a.priority-b.priority).map(r=>r.exchange).filter(Boolean); }
+        catch { hosts = []; }
+        const gw = classifyGatewayHosts(hosts);
+        if (hosts.length) resolved++; else failed++;
+        byGateway[gw] = (byGateway[gw] || 0) + 1;
+        try {
+          await pgdb.query(
+            `INSERT INTO gateway_mx_cache (domain, mx_hosts, gateway, resolved_at)
+             VALUES ($1,$2,$3,NOW())
+             ON CONFLICT (domain) DO UPDATE SET mx_hosts=EXCLUDED.mx_hosts, gateway=EXCLUDED.gateway, resolved_at=NOW()`,
+            [domain, hosts, gw]
+          );
+        } catch { /* per-row, non-fatal */ }
+      }
+    };
+    await Promise.all(Array.from({ length: CONC }, worker));
+    res.json({ ok: true, attempted: domains.length, resolved, failed, byGateway, blocksOnly });
+  } catch (err) {
+    console.error('[gateway-resolve]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // workspace_id -> display name. There is no `clients` table in Postgres; the
 // only pg source that carries workspace_name is domain_health (1 row/domain).
 // Pick the most recent non-empty name per workspace. Returns {} on any error
