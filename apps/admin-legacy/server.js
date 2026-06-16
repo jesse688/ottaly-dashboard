@@ -4742,23 +4742,34 @@ app.get('/api/stats/summary', requireSession, async (req, res) => {
       const mix = providerMix[wsId];
       let byProvider;
       if (mix) {
-        // Apportion the Bison totals by the provider ratio. For SENT, fall back
-        // to the raw email_events per-provider count when the Bison total is 0
-        // (cache miss / no Bison send count) — otherwise every provider bucket
-        // would be 0 and the tabs would look empty even though we have the split.
-        const bisonSent = t.sent || 0;
-        const ap = (share, rawSent) => ({
-          sent:    bisonSent > 0 ? Math.round(bisonSent * share) : (rawSent || 0),
-          replies: Math.round((t.replies || 0) * share),
-          bounces: Math.round((t.bounces || 0) * share),
-          leads:   Math.round((t.leads   || 0) * share),
-        });
-        byProvider = {
-          google:  ap(mix.google,  mix.gSent),
-          outlook: ap(mix.outlook, mix.oSent),
-          other:   ap(mix.other,   mix.othSent),
-          coverage: mix.coverage,
+        // Split each integer total across [google, outlook, other] by the mix
+        // ratio using LARGEST-REMAINDER rounding, so the three parts ALWAYS sum
+        // back to the workspace total exactly (independent Math.round made the
+        // parts add up to more/less than the whole — e.g. 2 leads showing as
+        // 1/1/1). shares are normalised first in case they don't sum to 1.
+        const shares = [mix.google || 0, mix.outlook || 0, mix.other || 0];
+        const sSum = shares[0] + shares[1] + shares[2];
+        const norm = sSum > 0 ? shares.map(s => s / sSum) : [0, 0, 0];
+        const apportion = (totalN) => {
+          const T = Math.max(0, Math.round(totalN || 0));
+          if (T === 0 || sSum === 0) return [0, 0, 0];
+          const raw = norm.map(s => s * T);
+          const floor = raw.map(Math.floor);
+          let rem = T - floor.reduce((a, b) => a + b, 0);
+          // Hand out the remaining units to the largest fractional remainders.
+          const order = raw.map((v, i) => [v - floor[i], i]).sort((a, b) => b[0] - a[0]);
+          for (let k = 0; k < order.length && rem > 0; k++, rem--) floor[order[k][1]]++;
+          return floor;
         };
+        // SENT: use Bison total when present; else the raw email_events counts.
+        const sentParts = (t.sent || 0) > 0
+          ? apportion(t.sent)
+          : [mix.gSent || 0, mix.oSent || 0, mix.othSent || 0];
+        const replyParts  = apportion(t.replies);
+        const bounceParts = apportion(t.bounces);
+        const leadParts   = apportion(t.leads);
+        const pack = i => ({ sent: sentParts[i], replies: replyParts[i], bounces: bounceParts[i], leads: leadParts[i] });
+        byProvider = { google: pack(0), outlook: pack(1), other: pack(2), coverage: mix.coverage };
       }
       return {
         workspace_id: wsId,
