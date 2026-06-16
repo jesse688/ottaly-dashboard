@@ -4541,40 +4541,29 @@ async function buildProviderMixForRange(pgdb, wsIds, start, end) {
   // workspace with ANY sends gets a non-empty mix (no "loading forever").
   // workspace_id may be the pv id OR the Bison team_id depending on era; we fold
   // each stored id back to its CANONICAL id below so they merge per client.
-  // CLIENT attribution MUST come from the EVENT's workspace_id (per-client,
-  // matches the Stats page + BISON_TEAMS). The PROVIDER comes from the contact's
-  // mx_provider. We deliberately do NOT use contacts.workspace_id for grouping —
-  // ~half of contacts live under the shared 'ottaly-global' pool, so grouping by
-  // it would lump clients together and leave per-client rows empty. That id
-  // mismatch is what broke this for so long.
+  // SOURCE = contacts.emailed_workspaces (NOT email_events). email_events only
+  // has 'sent' rows for ~8 of 22 clients (Bison doesn't emit per-message sent
+  // webhooks for most), so an event-based mix left 14 clients blank forever.
+  // emailed_workspaces is a JSONB on every contact recording which workspaces
+  // emailed it (it's how the cooldown works) — populated for ALL clients. We
+  // explode it to (workspace_id, mx_provider) per contact, so every workspace
+  // that has emailed anyone gets a real Google/Microsoft/Other split. This is a
+  // per-recipient ratio (not per-send), which is exactly what a provider SPLIT
+  // needs. The `start`/`end` args are unused here (the field has no per-day
+  // granularity); the ratio is applied to whatever totals the page holds.
   const { rows } = await pgdb.query(`
-    WITH s AS (
-      SELECT ee.workspace_id AS ws,
-             COALESCE(
-               c.mx_provider,
-               CASE ee.provider_bucket
-                 WHEN 'google'      THEN 'email_google'
-                 WHEN 'gmail'       THEN 'email_google'
-                 WHEN 'outlook'     THEN 'email_outlook'
-                 WHEN 'email_other' THEN 'email_other'
-                 ELSE NULL
-               END
-             ) AS prov
-      FROM email_events ee
-      LEFT JOIN contacts c ON lower(c.email) = lower(ee.lead_email)
-      WHERE ee.event_type = 'sent'
-        AND ee.event_at::date >= $1 AND ee.event_at::date <= $2
-    )
     SELECT ws AS workspace_id,
-           COUNT(*) FILTER (WHERE prov = 'email_google')  ::int AS google,
-           COUNT(*) FILTER (WHERE prov = 'email_outlook') ::int AS outlook,
-           COUNT(*) FILTER (WHERE prov = 'email_other')   ::int AS other,
-           COUNT(*) FILTER (WHERE prov IS NULL)           ::int AS unclassified,
-           COUNT(*)                                        ::int AS total
-    FROM s
+           COUNT(*) FILTER (WHERE mx_provider = 'email_google')  ::int AS google,
+           COUNT(*) FILTER (WHERE mx_provider = 'email_outlook') ::int AS outlook,
+           COUNT(*) FILTER (WHERE mx_provider = 'email_other')   ::int AS other,
+           COUNT(*) FILTER (WHERE mx_provider IS NULL)           ::int AS unclassified,
+           COUNT(*)                                               ::int AS total
+    FROM contacts c,
+         LATERAL jsonb_object_keys(COALESCE(c.emailed_workspaces, '{}'::jsonb)) AS ws
+    WHERE c.emailed_workspaces IS NOT NULL
+      AND c.emailed_workspaces <> '{}'::jsonb
     GROUP BY ws
-  `, [start, end]);
-
+  `, []);
   // Key by canonical id AND raw id (dual-key) so the page's lookup hits whatever
   // form it holds. With the contact-keyed query above, most rows now already use
   // the page's id directly.
@@ -4607,10 +4596,23 @@ async function buildProviderMixForRange(pgdb, wsIds, start, end) {
       coverage: a.total ? (a.google + a.outlook + a.other) / a.total : 0,
     };
   }
-  // Dual-key: also expose each mix under every RAW stored id that folded to it,
-  // so the page hits whether it looks up by canonical id or the raw workspace_id.
+  // Expose each mix under EVERY id variant a caller might hold: the canonical id,
+  // every raw stored id that folded to it, AND — for any BISON_TEAMS match — both
+  // the pv id and the team_id. The page's client rows are keyed by
+  // canonicalWorkspaceId(clients.workspace_id,…), which can differ from the
+  // email_events workspace_id (pv vs team_id), so we alias all of them to the
+  // same mix. This is what finally makes every sending client resolve.
   for (const [raw, canon] of Object.entries(rawToCanon)) {
-    if (out[canon] && !out[raw]) out[raw] = out[canon];
+    const mix = out[canon];
+    if (!mix) continue;
+    out[raw] = mix;
+    // Map across the pv <-> team_id pair from BISON_TEAMS.
+    const team = BISON_TEAMS.find(t => t.pv === raw || String(t.team_id) === raw
+                                     || t.pv === canon || String(t.team_id) === canon);
+    if (team) {
+      if (team.pv) out[team.pv] = mix;
+      if (team.team_id != null) out[String(team.team_id)] = mix;
+    }
   }
   return out;
 }
