@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import pool, { ready } from '@/lib/db'
 import { getAdminSession } from '@/lib/auth'
+import { extractSignatureFields, ALL_SIGNATURE_FIELDS } from '@/lib/signature'
 
 // One-off / repeatable backfill: copy the FULL reply body (html + text, with the
 // lead's signature/photos) from unibox_replies.raw into portal_emails for inbound
@@ -39,21 +40,49 @@ export async function POST(req: NextRequest) {
   )
 
   let inserted = 0
+  let reExtracted = 0
   for (const r of cand.rows as Array<Record<string, string | null>>) {
     const email = (r.email ?? '').toLowerCase()
     if (!email) continue
+
+    // 1) Cache the full reply body so the client thread renders the signature.
     const res = await pool.query(
       `INSERT INTO portal_emails
          (id, workspace_id, lead_pv_id, lead_email, direction, subject,
           body_html, body_text, content_preview, from_email, is_unread, timestamp_created, raw)
        VALUES ($1,$2,$3,$4,'IN',$5,$6,$7,$8,$9,1,$10,'{}'::jsonb)
-       ON CONFLICT (id) DO NOTHING`,
+       ON CONFLICT (id) DO UPDATE SET
+         body_html = COALESCE(EXCLUDED.body_html, portal_emails.body_html),
+         body_text = COALESCE(EXCLUDED.body_text, portal_emails.body_text)`,
       [r.bison_reply_id, r.workspace_id, r.lead_bison_id, email, r.subject,
        r.html_body, r.text_body, (r.text_body ?? '').slice(0, 200) || null,
        r.from_email, r.received_at]
     ).catch((err) => { console.error('[backfill-signatures] insert failed:', err); return null })
     if (res && (res.rowCount ?? 0) > 0) inserted++
+
+    // 2) Re-extract signature fields from the FULL reply body (lead-only, quoted
+    //    history stripped) and CORRECT esp_leads — fixes leads whose company/website/
+    //    title were mis-attributed from the quoted outbound (the agency's signature).
+    const found = extractSignatureFields(String(r.html_body || r.text_body || ''), ALL_SIGNATURE_FIELDS, email)
+    const { company_name, ...rawFields } = found as Record<string, string>
+    if (!r.lead_bison_id && Object.keys(found).length === 0) continue
+    // Update the lead row (match by email within the workspace, like the dashboard).
+    if (Object.keys(rawFields).length) {
+      await pool.query(
+        `UPDATE esp_leads SET raw = COALESCE(raw, '{}'::jsonb) || $1::jsonb, updated_at = NOW()
+          WHERE workspace_id = $2 AND lower(email) = $3`,
+        [JSON.stringify(rawFields), r.workspace_id, email]
+      ).catch(() => {})
+    }
+    if (company_name) {
+      await pool.query(
+        `UPDATE esp_leads SET company_name = $1, updated_at = NOW()
+          WHERE workspace_id = $2 AND lower(email) = $3`,
+        [company_name, r.workspace_id, email]
+      ).catch(() => {})
+    }
+    if (Object.keys(found).length) reExtracted++
   }
 
-  return NextResponse.json({ ok: true, candidates: cand.rows.length, inserted, workspace: ws || 'all' })
+  return NextResponse.json({ ok: true, candidates: cand.rows.length, inserted, reExtracted, workspace: ws || 'all' })
 }

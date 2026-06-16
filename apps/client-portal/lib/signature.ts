@@ -9,7 +9,7 @@
 // key the sidebar already reads, so a successful extraction shows up with no
 // extra display wiring.
 
-export type SignatureField = 'phone_number' | 'company_website' | 'linkedin_person_url' | 'linkedin_company_url' | 'job_title'
+export type SignatureField = 'phone_number' | 'company_website' | 'linkedin_person_url' | 'linkedin_company_url' | 'job_title' | 'company_name'
 
 export const SIGNATURE_FIELD_LABELS: Record<SignatureField, string> = {
   phone_number: 'Phone / mobile',
@@ -17,10 +17,11 @@ export const SIGNATURE_FIELD_LABELS: Record<SignatureField, string> = {
   linkedin_person_url: 'LinkedIn (person)',
   linkedin_company_url: 'LinkedIn (company)',
   job_title: 'Job title',
+  company_name: 'Company',
 }
 
 export const ALL_SIGNATURE_FIELDS: SignatureField[] = [
-  'phone_number', 'company_website', 'linkedin_person_url', 'linkedin_company_url', 'job_title',
+  'phone_number', 'company_website', 'linkedin_person_url', 'linkedin_company_url', 'job_title', 'company_name',
 ]
 
 // Common job titles — used to spot a title line in a signature. Kept broad but
@@ -135,6 +136,35 @@ function extractTitle(text: string): string | null {
   return null
 }
 
+// --- Company name ------------------------------------------------------------
+// Find the lead's company in their signature. Prefer a line containing a legal
+// suffix (Ltd/Limited/LLC/Inc/GmbH/PLC/Co); else the line right AFTER a title line
+// (sigs read: Name / Title / Company). Conservative — returns null rather than guess.
+function extractCompany(text: string): string | null {
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
+  const suffix = /\b(?:Ltd\.?|Limited|LLC|L\.L\.C\.|Inc\.?|Incorporated|PLC|GmbH|Pty|Co\.|Corp\.?|Corporation|Group|Holdings)\b/i
+  for (const line of lines) {
+    if (line.length > 70) continue
+    if (suffix.test(line) && /[A-Za-z]/.test(line)) {
+      // Drop trailing legal/address noise after the suffix isn't needed — keep line.
+      return line.replace(/\s{2,}/g, ' ')
+    }
+  }
+  // Fallback: the line immediately after a title line (Name / Title / Company).
+  const titleRe = new RegExp(`\\b(?:${TITLE_WORDS.map(w => w.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')).join('|')})\\b`, 'i')
+  for (let i = 0; i < lines.length - 1; i++) {
+    if (lines[i].length <= 60 && titleRe.test(lines[i])) {
+      const next = lines[i + 1]
+      // Next line is a plausible company: short, has letters, not an email/url/phone.
+      if (next && next.length <= 60 && /[A-Za-z]/.test(next)
+          && !/@|https?:|www\.|\d{5,}/.test(next) && !titleRe.test(next)) {
+        return next.replace(/\s{2,}/g, ' ')
+      }
+    }
+  }
+  return null
+}
+
 // Extract the requested fields from one email body. Returns only the fields it
 // actually found, mapped to their esp_leads.raw key.
 export function extractSignatureFields(
@@ -155,6 +185,7 @@ export function extractSignatureFields(
     else if (f === 'linkedin_company_url') v = extractCompanyLinkedIn(text)
     else if (f === 'company_website') v = extractWebsite(text, leadEmail)
     else if (f === 'job_title') v = extractTitle(text)
+    else if (f === 'company_name') v = extractCompany(text)
     if (v) out[f] = v
   }
   return out

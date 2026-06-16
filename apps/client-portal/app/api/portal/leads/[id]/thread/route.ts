@@ -26,12 +26,25 @@ async function applySignatureExtraction(leadId: string, workspaceId: string, row
     const found = extractSignatureFields(body, fields, leadEmail)
     if (!Object.keys(found).length) return
 
-    // Merge into raw, overriding the configured keys with the fresh values.
-    await pool.query(
-      `UPDATE esp_leads SET raw = COALESCE(raw, '{}'::jsonb) || $1::jsonb, updated_at = NOW()
-        WHERE id = $2 AND workspace_id = $3`,
-      [JSON.stringify(found), leadId, workspaceId]
-    )
+    // company_name is a TOP-LEVEL esp_leads column (the others live in raw). Split it
+    // out and write it to the column — overriding the stored value, which is often the
+    // AGENCY's name from import rather than the lead's real company. The rest merge
+    // into raw (right-wins, so fresh signature values override stale ones).
+    const { company_name, ...rawFields } = found as Record<string, string>
+    if (Object.keys(rawFields).length) {
+      await pool.query(
+        `UPDATE esp_leads SET raw = COALESCE(raw, '{}'::jsonb) || $1::jsonb, updated_at = NOW()
+          WHERE id = $2 AND workspace_id = $3`,
+        [JSON.stringify(rawFields), leadId, workspaceId]
+      )
+    }
+    if (company_name) {
+      await pool.query(
+        `UPDATE esp_leads SET company_name = $1, updated_at = NOW()
+          WHERE id = $2 AND workspace_id = $3`,
+        [company_name, leadId, workspaceId]
+      )
+    }
   } catch (err) {
     console.error('[thread] signature extraction failed:', err)
   }
