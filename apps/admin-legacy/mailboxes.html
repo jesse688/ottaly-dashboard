@@ -1377,312 +1377,71 @@ function mbDateRange(p) {
   return { start: nAgo(6), end: today };
 }
 
-async function loadSupplierCharts(p) {
-  const wrap = document.getElementById('supplierCharts');
-  if (!wrap) return;
-  const suppliers = [...new Set((data.mailboxes || []).map(m => m.supplier).filter(Boolean))].sort();
-  if (!suppliers.length) { wrap.innerHTML = '<div style="color:var(--muted);font-size:12px">No supplier-tagged mailboxes yet.</div>'; return; }
 
-  const { start, end } = mbDateRange(p);
-  // Get all workspaces
-  wrap.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:.5rem 0">Loading performance data…</div>';
-  let wsData;
-  try {
-    const r = await fetch(`/api/stats/summary?start=${start}&end=${end}`);
-    if (!r.ok) throw new Error(r.status);
-    wsData = await r.json();
-    // If cache is warming and partial, retry once after 8s
-    if (wsData.partial || !wsData.workspaces?.length) {
-      wrap.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:.5rem 0">Cache warming… retrying in 8s</div>';
-      await new Promise(r => setTimeout(r, 8000));
-      const r2 = await fetch(`/api/stats/summary?start=${start}&end=${end}`);
-      wsData = await r2.json();
-    }
-  } catch (err) {
-    wrap.innerHTML = `<div style="color:var(--muted);font-size:12px">Stats unavailable: ${err.message}</div>`;
-    return;
-  }
-
-  // Build per-supplier aggregation by matching workspace names to mailbox suppliers
-  const dates = wsData.dates || [];
-  // Map supplier → set of workspace names that have at least one mailbox from that supplier
-  const supWsNames = {};
-  for (const sup of suppliers) {
-    supWsNames[sup] = new Set(
-      (data.mailboxes || []).filter(m => m.supplier === sup).map(m => m.workspace_name).filter(Boolean)
-    );
-  }
-  // Build per-supplier per-day aggregates from the workspace series data
-  const supByDate = {};
-  for (const sup of suppliers) {
-    supByDate[sup] = {};
-    for (const date of dates) supByDate[sup][date] = { sent:0, replies:0, bounces:0 };
-  }
-  for (const ws of (wsData.workspaces || [])) {
-    for (const sup of suppliers) {
-      if (!supWsNames[sup].has(ws.name)) continue;
-      for (const pt of (ws.series || [])) {
-        if (!supByDate[sup][pt.date]) continue;
-        supByDate[sup][pt.date].sent    += pt.sent || 0;
-        supByDate[sup][pt.date].replies += pt.replies || 0;
-        supByDate[sup][pt.date].bounces += pt.bounces || 0;
-      }
-    }
-  }
-
-  // Destroy old charts
-  Object.values(_mbCharts).forEach(c => { try { c.destroy(); } catch {} });
-  Object.keys(_mbCharts).forEach(k => delete _mbCharts[k]);
-
-  wrap.innerHTML = suppliers.map(sup =>
-    `<div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:1rem">
-       <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:.5rem">${sup}</div>
-       <div style="position:relative;height:160px"><canvas id="mbChart-${sup.replace(/\s+/g,'-')}"></canvas></div>
-     </div>`
-  ).join('');
-
-  for (const sup of suppliers) {
-    const labels = dates.map(d => d.slice(5));
-    const canvas = document.getElementById(`mbChart-${sup.replace(/\s+/g,'-')}`);
-    if (!canvas) continue;
-
-    const agg = supByDate[sup] || {};
-    const roll3 = arr => arr.map((_, i) => {
-      const sl = arr.slice(Math.max(0, i - 2), i + 1).filter(v => v != null);
-      return sl.length ? +(sl.reduce((a,b)=>a+b,0)/sl.length).toFixed(2) : null;
-    });
-    const sentCounts  = roll3(dates.map(d => agg[d]?.sent || 0));
-    const replyRates  = roll3(dates.map(d => {
-      const sent = agg[d]?.sent || 0;
-      return sent > 0 ? +((agg[d].replies / sent) * 100).toFixed(2) : null;
-    }));
-    const bounceRates = roll3(dates.map(d => {
-      const sent = agg[d]?.sent || 0;
-      return sent > 0 ? +((agg[d].bounces / sent) * 100).toFixed(2) : null;
-    }));
-    const ptR = dates.length <= 7 ? 3 : 1;
-
-    _mbCharts[sup] = new Chart(canvas, {
-      type: 'line',
-      data: {
-        labels,
-        datasets: [
-          {
-            label: 'Sent',
-            data: sentCounts,
-            borderColor: '#2563EB', backgroundColor: '#2563EB22',
-            borderWidth: 2, tension: .3, fill: false,
-            pointRadius: ptR, spanGaps: true,
-            yAxisID: 'ySent',
-          },
-          {
-            label: 'Reply Rate %',
-            data: replyRates,
-            borderColor: '#059669', backgroundColor: '#05966922',
-            borderWidth: 2, tension: .3, fill: false,
-            pointRadius: ptR, spanGaps: true,
-            yAxisID: 'yPct',
-          },
-          {
-            label: 'Bounce Rate %',
-            data: bounceRates,
-            borderColor: '#DC2626', backgroundColor: '#DC262622',
-            borderWidth: 2, tension: .3, fill: false,
-            pointRadius: ptR, spanGaps: true,
-            yAxisID: 'yPct',
-          },
-        ],
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        interaction: { mode: 'index', intersect: false },
-        plugins: {
-          legend: { position: 'top', labels: { boxWidth: 10, font: { size: 10 } } },
-          tooltip: {
-            callbacks: {
-              title: items => `${sup} — ${items[0].label}`,
-              label: item => {
-                const v = item.parsed.y;
-                if (v == null) return `${item.dataset.label}: —`;
-                return item.dataset.label === 'Sent'
-                  ? `Sent: ${v.toLocaleString()}`
-                  : `${item.dataset.label}: ${v.toFixed(2)}%`;
-              },
-            },
-          },
-        },
-        scales: {
-          x: { grid: { display: false }, ticks: { font: { size: 10 } } },
-          ySent: {
-            position: 'right',
-            beginAtZero: true,
-            grid: { drawOnChartArea: false },
-            ticks: { font: { size: 10 } },
-          },
-          yPct: {
-            position: 'left',
-            beginAtZero: true,
-            ticks: { font: { size: 10 }, callback: v => v + '%' },
-          },
-        },
-      },
-    });
-  }
+// Accurate per-provider + per-supplier performance, from /api/mailboxes/provider-stats.
+// Replaces the old workspace-name-matching (broke in the Bison cutover). Every
+// sent/reply/bounce is attributed to the ACTUAL sending mailbox → its provider
+// and supplier. Sent+bounce ← email_events.sender_email; replies ← the portal's
+// unibox_replies.mailbox_email (so reply rate by provider is REAL, not estimated).
+function _mbPeriodDays(p) {
+  return p === 'today' ? 1 : p === '7d' ? 7 : p === '14d' ? 14 : p === '30d' ? 30 : p === '60d' ? 60 : 7;
 }
-
-// ── Provider type performance charts (Google / Microsoft / SMTP) ─
-const _providerCharts = {};
-const PROVIDER_LABEL = { google: 'Google', microsoft: 'Microsoft', smtp: 'SMTP' };
-const PROVIDER_COLOR = { google: '#EA4335', microsoft: '#0078D4', smtp: '#475569' };
-
+function _provCard(label, color, b) {
+  const pct = (n, d) => d > 0 ? (100 * n / d).toFixed(2) + '%' : '—';
+  const num = n => (n || 0).toLocaleString();
+  const hbs = (b.bounces_hard || b.bounces_block || b.bounces_soft)
+    ? `<div style="font-size:11px;color:var(--muted);margin-top:6px">`
+      + `<span style="color:#DC2626">${num(b.bounces_hard)} hard</span> · `
+      + `<span style="color:#D97706">${num(b.bounces_block)} block</span> · `
+      + `<span style="color:#6B7280">${num(b.bounces_soft)} soft</span></div>`
+    : '';
+  return `<div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:14px 16px;border-top:3px solid ${color}">
+    <div style="font-size:13px;font-weight:700;margin-bottom:8px">${label} <span style="font-weight:400;color:var(--muted);font-size:11px">· ${num(b.mailboxes)} mailbox${b.mailboxes===1?'':'es'}</span></div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
+      <div><div style="font-size:18px;font-weight:700">${num(b.sent)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Sent</div></div>
+      <div><div style="font-size:18px;font-weight:700;color:#059669">${pct(b.replies, b.sent)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Reply rate</div></div>
+      <div><div style="font-size:18px;font-weight:700;color:${(b.bounce_rate||0)>=0.05?'#DC2626':'var(--text)'}">${pct(b.bounces, b.sent)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Bounce rate</div></div>
+    </div>${hbs}
+  </div>`;
+}
 async function loadProviderCharts(p) {
   const wrap = document.getElementById('providerCharts');
   if (!wrap) return;
-  const providers = [...new Set((data.mailboxes || []).map(m => (m.type || '').toLowerCase()).filter(Boolean))].sort();
-  if (!providers.length) { wrap.innerHTML = '<div style="color:var(--muted);font-size:12px">No provider-typed mailboxes yet.</div>'; return; }
-
-  const { start, end } = mbDateRange(p);
   wrap.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:.5rem 0">Loading provider performance…</div>';
-  let wsData;
+  let d;
   try {
-    const r = await fetch(`/api/stats/summary?start=${start}&end=${end}`);
+    const r = await fetch(`/api/mailboxes/provider-stats?days=${_mbPeriodDays(p)}`);
     if (!r.ok) throw new Error(r.status);
-    wsData = await r.json();
-    if (wsData.partial || !wsData.workspaces?.length) {
-      wrap.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:.5rem 0">Cache warming… retrying in 8s</div>';
-      await new Promise(r => setTimeout(r, 8000));
-      const r2 = await fetch(`/api/stats/summary?start=${start}&end=${end}`);
-      wsData = await r2.json();
-    }
+    d = await r.json();
   } catch (err) {
-    wrap.innerHTML = `<div style="color:var(--muted);font-size:12px">Stats unavailable: ${err.message}</div>`;
+    wrap.innerHTML = `<div style="color:var(--muted);font-size:12px">Provider stats unavailable: ${err.message}</div>`;
     return;
   }
-
-  const dates = wsData.dates || [];
-  // Per provider → set of workspace names with at least one mailbox of that type
-  const provWsNames = {};
-  for (const prov of providers) {
-    provWsNames[prov] = new Set(
-      (data.mailboxes || []).filter(m => (m.type || '').toLowerCase() === prov).map(m => m.workspace_name).filter(Boolean)
-    );
+  const COL = { google:'#EA4335', microsoft:'#0078D4', smtp:'#475569' };
+  const LBL = { google:'Google', microsoft:'Microsoft', smtp:'SMTP / Other' };
+  const order = ['google','microsoft','smtp'];
+  const keys = Object.keys(d.byProvider || {}).sort((a,b)=> (order.indexOf(a)+99*(order.indexOf(a)<0)) - (order.indexOf(b)+99*(order.indexOf(b)<0)));
+  if (!keys.length) { wrap.innerHTML = '<div style="color:var(--muted);font-size:12px">No sending activity for this period.</div>'; return; }
+  wrap.innerHTML = keys.map(k => _provCard(LBL[k]||k, COL[k]||'#475569', d.byProvider[k])).join('');
+}
+// Accurate per-SUPPLIER performance (Winnr / Maildoso / …) — same real source.
+async function loadSupplierCharts(p) {
+  const wrap = document.getElementById('supplierCharts');
+  if (!wrap) return;
+  wrap.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:.5rem 0">Loading supplier performance…</div>';
+  let d;
+  try {
+    const r = await fetch(`/api/mailboxes/provider-stats?days=${_mbPeriodDays(p)}`);
+    if (!r.ok) throw new Error(r.status);
+    d = await r.json();
+  } catch (err) {
+    wrap.innerHTML = `<div style="color:var(--muted);font-size:12px">Supplier stats unavailable: ${err.message}</div>`;
+    return;
   }
-  const provByDate = {};
-  for (const prov of providers) {
-    provByDate[prov] = {};
-    for (const date of dates) provByDate[prov][date] = { sent:0, replies:0, bounces:0 };
-  }
-  for (const ws of (wsData.workspaces || [])) {
-    for (const prov of providers) {
-      if (!provWsNames[prov].has(ws.name)) continue;
-      for (const pt of (ws.series || [])) {
-        if (!provByDate[prov][pt.date]) continue;
-        provByDate[prov][pt.date].sent    += pt.sent || 0;
-        provByDate[prov][pt.date].replies += pt.replies || 0;
-        provByDate[prov][pt.date].bounces += pt.bounces || 0;
-      }
-    }
-  }
-
-  Object.values(_providerCharts).forEach(c => { try { c.destroy(); } catch {} });
-  Object.keys(_providerCharts).forEach(k => delete _providerCharts[k]);
-
-  wrap.innerHTML = providers.map(prov =>
-    `<div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:1rem;border-top:3px solid ${PROVIDER_COLOR[prov] || '#475569'}">
-       <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:.5rem">${PROVIDER_LABEL[prov] || prov}</div>
-       <div style="position:relative;height:160px"><canvas id="provChart-${prov}"></canvas></div>
-     </div>`
-  ).join('');
-
-  for (const prov of providers) {
-    const labels = dates.map(d => d.slice(5));
-    const canvas = document.getElementById(`provChart-${prov}`);
-    if (!canvas) continue;
-
-    const agg = provByDate[prov] || {};
-    // 3-day rolling average — matches supplier-trends behaviour
-    const roll3 = arr => arr.map((_, i) => {
-      const sl = arr.slice(Math.max(0, i - 2), i + 1).filter(v => v != null);
-      return sl.length ? +(sl.reduce((a,b)=>a+b,0)/sl.length).toFixed(2) : null;
-    });
-    const sentCounts  = roll3(dates.map(d => agg[d]?.sent || 0));
-    const replyRates  = roll3(dates.map(d => {
-      const sent = agg[d]?.sent || 0;
-      return sent > 0 ? +((agg[d].replies / sent) * 100).toFixed(2) : null;
-    }));
-    const bounceRates = roll3(dates.map(d => {
-      const sent = agg[d]?.sent || 0;
-      return sent > 0 ? +((agg[d].bounces / sent) * 100).toFixed(2) : null;
-    }));
-    const ptR = dates.length <= 7 ? 3 : 1;
-    const provLabel = PROVIDER_LABEL[prov] || prov;
-
-    _providerCharts[prov] = new Chart(canvas, {
-      type: 'line',
-      data: {
-        labels,
-        datasets: [
-          {
-            label: 'Sent',
-            data: sentCounts,
-            borderColor: '#2563EB', backgroundColor: '#2563EB22',
-            borderWidth: 2, tension: .3, fill: false,
-            pointRadius: ptR, spanGaps: true,
-            yAxisID: 'ySent',
-          },
-          {
-            label: 'Reply Rate %',
-            data: replyRates,
-            borderColor: '#059669', backgroundColor: '#05966922',
-            borderWidth: 2, tension: .3, fill: false,
-            pointRadius: ptR, spanGaps: true,
-            yAxisID: 'yPct',
-          },
-          {
-            label: 'Bounce Rate %',
-            data: bounceRates,
-            borderColor: '#DC2626', backgroundColor: '#DC262622',
-            borderWidth: 2, tension: .3, fill: false,
-            pointRadius: ptR, spanGaps: true,
-            yAxisID: 'yPct',
-          },
-        ],
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        interaction: { mode: 'index', intersect: false },
-        plugins: {
-          legend: { position: 'top', labels: { boxWidth: 10, font: { size: 10 } } },
-          tooltip: {
-            callbacks: {
-              title: items => `${provLabel} — ${items[0].label} (3d avg)`,
-              label: item => {
-                const v = item.parsed.y;
-                if (v == null) return `${item.dataset.label}: —`;
-                return item.dataset.label === 'Sent'
-                  ? `Sent: ${v.toLocaleString()}`
-                  : `${item.dataset.label}: ${v.toFixed(2)}%`;
-              },
-            },
-          },
-        },
-        scales: {
-          x: { grid: { display: false }, ticks: { font: { size: 10 } } },
-          ySent: {
-            position: 'right',
-            beginAtZero: true,
-            grid: { drawOnChartArea: false },
-            ticks: { font: { size: 10 } },
-          },
-          yPct: {
-            position: 'left',
-            beginAtZero: true,
-            ticks: { font: { size: 10 }, callback: v => v + '%' },
-          },
-        },
-      },
-    });
-  }
+  const PAL = ['#6366F1','#0EA5E9','#10B981','#F59E0B','#EC4899','#8B5CF6','#475569'];
+  const keys = Object.keys(d.bySupplier || {}).sort((a,b)=>(d.bySupplier[b].sent||0)-(d.bySupplier[a].sent||0));
+  if (!keys.length) { wrap.innerHTML = '<div style="color:var(--muted);font-size:12px">No supplier-tagged sending activity for this period.</div>'; return; }
+  wrap.innerHTML = keys.map((k,i) => _provCard(k, PAL[i%PAL.length], d.bySupplier[k])).join('');
 }
 </script>
 </body>
