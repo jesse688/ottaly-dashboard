@@ -8245,6 +8245,25 @@ app.get('/api/gateway-analysis', requireSession, async (req, res) => {
 app.get('/gateway-analysis',      (req, res) => res.sendFile(path.join(__dirname, 'gateway-analysis.html')));
 app.get('/gateway-analysis.html', (req, res) => res.sendFile(path.join(__dirname, 'gateway-analysis.html')));
 
+// workspace_id -> display name. There is no `clients` table in Postgres; the
+// only pg source that carries workspace_name is domain_health (1 row/domain).
+// Pick the most recent non-empty name per workspace. Returns {} on any error
+// (callers fall back to the raw workspace_id), so a name miss never 500s.
+async function workspaceNameMap() {
+  try {
+    const { rows } = await pgdb.query(`
+      SELECT DISTINCT ON (workspace_id) workspace_id, workspace_name
+      FROM domain_health
+      WHERE workspace_id IS NOT NULL AND workspace_id <> ''
+        AND COALESCE(workspace_name,'') <> ''
+      ORDER BY workspace_id, last_checked DESC NULLS LAST`);
+    return Object.fromEntries(rows.map(r => [r.workspace_id, r.workspace_name]));
+  } catch (e) {
+    console.warn('[workspaceNameMap]', e.message);
+    return {};
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Bounce Analyzer — detect list-quality + sender-reputation issues sooner
 // ─────────────────────────────────────────────────────────────────────
@@ -8314,25 +8333,21 @@ app.get('/api/bounce-analysis', requireSession, async (req, res) => {
              ${counts}
       FROM be GROUP BY 1 ORDER BY 1`, param);
 
-    // ── Per-client split (resolve name from clients table) ──
+    // ── Per-client split (names resolved in JS — no `clients` table in pg) ──
     const byClientQ = pgdb.query(`${base}
       SELECT be.workspace_id,
-             COALESCE(cl.workspace_name, be.workspace_id) AS client,
              ${counts}
       FROM be
-      LEFT JOIN clients cl ON cl.workspace_id = be.workspace_id
-      GROUP BY be.workspace_id, cl.workspace_name
+      GROUP BY be.workspace_id
       ORDER BY total DESC`, param);
 
     // ── Per-campaign split ──
     const byCampaignQ = pgdb.query(`${base}
       SELECT be.workspace_id,
-             COALESCE(cl.workspace_name, be.workspace_id) AS client,
              COALESCE(NULLIF(be.campaign_name,''), be.campaign_id, '(unknown)') AS campaign,
              ${counts}
       FROM be
-      LEFT JOIN clients cl ON cl.workspace_id = be.workspace_id
-      GROUP BY be.workspace_id, cl.workspace_name, be.campaign_name, be.campaign_id
+      GROUP BY be.workspace_id, be.campaign_name, be.campaign_id
       ORDER BY hard DESC, total DESC
       LIMIT 100`, param);
 
@@ -8361,9 +8376,10 @@ app.get('/api/bounce-analysis', requireSession, async (req, res) => {
       HAVING count(*) FILTER (WHERE ${isBlock}) > 0
       ORDER BY block DESC LIMIT 50`, param);
 
-    const [summary, series, byClient, byCampaign, hardDomains, hardAddresses, senderHealth] =
-      await Promise.all([summaryQ, seriesQ, byClientQ, byCampaignQ, hardDomainsQ, hardAddressesQ, senderHealthQ]);
+    const [summary, series, byClient, byCampaign, hardDomains, hardAddresses, senderHealth, nameOf] =
+      await Promise.all([summaryQ, seriesQ, byClientQ, byCampaignQ, hardDomainsQ, hardAddressesQ, senderHealthQ, workspaceNameMap()]);
 
+    const named = (r) => ({ ...r, client: nameOf[r.workspace_id] || r.workspace_id });
     const s = summary.rows[0] || {};
     const wow = (cur, prev) => prev > 0 ? (100 * (cur - prev) / prev) : (cur > 0 ? null : 0); // null = "new, no baseline"
 
@@ -8378,8 +8394,8 @@ app.get('/api/bounce-analysis', requireSession, async (req, res) => {
         wowHard:  wow(s.last7_hard||0,  s.prev7_hard||0),
       },
       series:        series.rows,
-      byClient:      byClient.rows,
-      byCampaign:    byCampaign.rows,
+      byClient:      byClient.rows.map(named),
+      byCampaign:    byCampaign.rows.map(named),
       hardDomains:   hardDomains.rows,
       hardAddresses: hardAddresses.rows,
       senderHealth:  senderHealth.rows,
@@ -8507,9 +8523,10 @@ app.get('/api/cron/bounce-alert', async (req, res) => {
              count(*) FILTER (WHERE is_base AND hard)       ::int AS base_hard
       FROM b GROUP BY workspace_id`, [String(recent), String(baseline)]);
 
-    // Resolve names.
-    const nameRows = await pgdb.query(`SELECT workspace_id, workspace_name FROM clients`);
-    const nameOf = Object.fromEntries(nameRows.rows.map(r => [r.workspace_id, r.workspace_name]));
+    // Resolve names. There is no `clients` table in Postgres — names live in
+    // domain_health (one row per domain, carries workspace_name). Pick the most
+    // recent non-empty name per workspace; fall back to the id where unknown.
+    const nameOf = await workspaceNameMap();
 
     const flagged = [];
     for (const r of rows) {
