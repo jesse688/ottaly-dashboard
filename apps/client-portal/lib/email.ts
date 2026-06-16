@@ -7,7 +7,7 @@ const FROM = process.env.EMAIL_FROM || 'Ottaly <info@ottaly.co.uk>'
 // seeing it. Overridable via env. IMPORTANT: this must NOT equal the From sender address
 // (info@ottaly.co.uk) — providers suppress a self-addressed copy, which is why info@
 // never received it. Default to a distinct monitoring alias; set LEAD_NOTIFY_BCC in env.
-const LEAD_NOTIFY_BCC = process.env.LEAD_NOTIFY_BCC || process.env.LEAD_NOTIFY_CC || 'info@ottaly.co.uk'
+const LEAD_NOTIFY_BCC = process.env.LEAD_NOTIFY_BCC || 'jamie@ottaly.co.uk'
 const BASE_URL = (process.env.PORTAL_BASE_URL || 'https://login.ottaly.co.uk').replace(/\/$/, '')
 
 // Default notification templates (editable in admin → portal_settings).
