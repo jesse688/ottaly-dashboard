@@ -9690,11 +9690,19 @@ app.get('/api/mailboxes/sync-daily/debug', requireSession, async (req, res) => {
     try {
       rawNoFilter = await bisonReq('/api/campaign-events/stats', { wsId: m.bison_team_id, params: { start_date: start, end_date: end } });
     } catch (e) { err2 = e.message; }
+    // and the PROVEN endpoint Stats uses (workspace-wide, no sender filter) as a
+    // control — if THIS returns Sent data and campaign-events doesn't, we switch.
+    let rawLineArea, err3 = null;
+    try {
+      rawLineArea = await bisonReq('/api/workspaces/v1.1/line-area-chart-stats', { wsId: m.bison_team_id, params: { start_date: start, end_date: end } });
+    } catch (e) { err3 = e.message; }
+    const sentEntries = (body) => { const mp = eventSeriesByLabel(body || {}, 'Sent'); return mp instanceof Map ? Array.from(mp.entries()).filter(([,v])=>v>0) : null; };
     res.json({
       start, end,
       team_id: m.bison_team_id, sampleEmail: m.email, sender_email_ids: ids,
-      withFilter: { error: err, labels: (raw?.data||[]).map(s => s.label), sample: raw },
-      noFilter:   { error: err2, labels: (rawNoFilter?.data||[]).map(s => s.label), sentSeries: eventSeriesByLabel(rawNoFilter || {}, 'Sent') instanceof Map ? Array.from(eventSeriesByLabel(rawNoFilter || {}, 'Sent').entries()) : null },
+      campaignEvents_withFilter: { error: err,  labels: (raw?.data||[]).map(s => s.label),         sentNonZero: sentEntries(raw) },
+      campaignEvents_noFilter:   { error: err2, labels: (rawNoFilter?.data||[]).map(s => s.label), sentNonZero: sentEntries(rawNoFilter) },
+      lineAreaChart_control:     { error: err3, labels: (rawLineArea?.data||[]).map(s => s.label), sentNonZero: sentEntries(rawLineArea) },
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
