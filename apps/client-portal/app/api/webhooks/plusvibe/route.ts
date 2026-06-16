@@ -190,14 +190,25 @@ async function handleBison(raw: Record<string, unknown>) {
     // Bison's reply payload puts the subject in `email_subject` (not `subject`).
     const replySubject = reply.email_subject ?? reply.subject ?? null
 
+    // The address that actually SENT this reply (may differ from the campaign
+    // lead, e.g. forwarded to a colleague who replies from their own address).
+    const senderEmail = (reply.from_email_address ?? '').toLowerCase()
+    // The unibox row's primary email = the campaign lead if known, else the sender.
+    const rowEmail = leadEmail || senderEmail
+
+    // Cache the FULL reply (html + text body, with the lead's signature/photos) into
+    // portal_emails so the client inbox can render it. Key on rowEmail (sender when
+    // there's no attached lead) — previously this only ran when lead.email existed,
+    // so UNATTACHED replies never got a portal_emails row and their signature was
+    // lost. The thread route reads portal_emails by (workspace_id, lower(lead_email)).
     let portalEmailId: string | null = null
-    if (leadEmail && mappedWorkspaceId) {
+    if (rowEmail && mappedWorkspaceId) {
       const ins = await pool.query(
         `INSERT INTO portal_emails (id, workspace_id, lead_pv_id, lead_email, direction, subject, body_html, body_text, content_preview, from_email, to_email, is_unread, message_id, timestamp_created, raw)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
          ON CONFLICT (id) DO NOTHING`,
         [replyId, mappedWorkspaceId, leadBisonId,
-         leadEmail, direction,
+         rowEmail, direction,
          replySubject, reply.html_body ?? null, reply.text_body ?? null,
          reply.text_body?.slice(0, 200) ?? null,
          reply.from_email_address ?? null, reply.primary_to_email_address ?? null,
@@ -206,12 +217,6 @@ async function handleBison(raw: Record<string, unknown>) {
       ).catch(err => { console.error('[webhook/bison] portal_emails insert failed:', err); return null })
       if (ins) portalEmailId = replyId
     }
-
-    // The address that actually SENT this reply (may differ from the campaign
-    // lead, e.g. forwarded to a colleague who replies from their own address).
-    const senderEmail = (reply.from_email_address ?? '').toLowerCase()
-    // The unibox row's primary email = the campaign lead if known, else the sender.
-    const rowEmail = leadEmail || senderEmail
 
     // Master Unibox row — only inbound replies are worth triaging. Idempotent on
     // (bison_team_id, bison_reply_id) so webhook retries never duplicate.

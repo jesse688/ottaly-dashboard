@@ -48,6 +48,7 @@ interface Reply {
   matched_lead_email: string | null
   matched_by: string | null
   body_html: string | null
+  body_html_safe: string | null   // server-sanitized HTML, safe to render
   body_text: string | null
 }
 
@@ -516,9 +517,18 @@ export function AdminUniboxClient() {
                 </div>
               )}
 
-              <div className="mt-4 whitespace-pre-wrap break-words text-sm leading-[1.55] text-gray-800 bg-white border border-gray-200 rounded-xl p-4 max-w-[68ch]">
-                {replyBody(selected)}
-              </div>
+              {selected.body_html_safe ? (
+                // Full sanitized HTML — shows the lead's signature, logos, photos,
+                // and contact table exactly as it arrived (scripts/trackers removed).
+                <div
+                  className="mt-4 break-words text-sm leading-[1.55] text-gray-800 bg-white border border-gray-200 rounded-xl p-4 max-w-[68ch] [&_p]:my-2 [&_a]:text-indigo-600 [&_a]:underline [&_img]:max-w-full [&_img]:rounded [&_table]:border-collapse [&_td]:align-top"
+                  dangerouslySetInnerHTML={{ __html: selected.body_html_safe }}
+                />
+              ) : (
+                <div className="mt-4 whitespace-pre-wrap break-words text-sm leading-[1.55] text-gray-800 bg-white border border-gray-200 rounded-xl p-4 max-w-[68ch]">
+                  {replyBody(selected)}
+                </div>
+              )}
 
               {/* Classification — correct the AI's category (does NOT take an action) */}
               <div className="mt-5 rounded-lg border border-gray-100 bg-gray-50/60 p-3">

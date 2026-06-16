@@ -31,14 +31,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   try {
     await client.query('BEGIN')
 
+    // NOTE: unibox_replies.raw is JSON.stringify(reply) — the Bison REPLY object at
+    // the TOP LEVEL (NOT nested under a 'reply' key, and it does NOT carry the
+    // separate lead object). So the full HTML body (with the lead's signature) lives
+    // at raw->>'html_body'. An earlier version read raw->'reply'->>'html_body' which
+    // was always null, so only the truncated body_preview seeded the thread — that's
+    // why the full email + signature never pulled through.
     const sel = await client.query(
       `SELECT id, bison_reply_id, workspace_id, lead_bison_id, lead_email, subject,
               body_preview, received_at, marked_as_lead,
-              raw->'reply'->>'html_body'   AS reply_html,
-              raw->'reply'->>'text_body'   AS reply_text,
-              raw->'lead'->>'first_name'  AS first_name,
-              raw->'lead'->>'last_name'   AS last_name,
-              raw->'lead'->>'company_name' AS company_name
+              raw->>'html_body'   AS reply_html,
+              raw->>'text_body'   AS reply_text
          FROM unibox_replies WHERE id = $1 FOR UPDATE`,
       [id]
     )
@@ -51,7 +54,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       lead_bison_id: string | null; lead_email: string | null
       subject: string | null; body_preview: string | null; received_at: string | null; marked_as_lead: boolean
       reply_html: string | null; reply_text: string | null
-      first_name: string | null; last_name: string | null; company_name: string | null
     }
 
     // Seed the client-facing thread (portal_emails) from the unibox reply so the
@@ -68,9 +70,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
             body_html, body_text, content_preview, from_email, is_unread, timestamp_created, raw)
          VALUES ($1,$2,$3,$4,'IN',$5,$6,$7,$8,$9,1,$10,'{}'::jsonb)
          ON CONFLICT (id) DO NOTHING`,
+        // Store the FULL html + text body from raw (with the lead's signature,
+        // images, etc.) — NOT the truncated body_preview, which dropped the sig.
         [msgId, ws, reply.lead_bison_id, email, reply.subject,
          reply.reply_html, reply.reply_text ?? reply.body_preview,
-         reply.body_preview, email, reply.received_at]
+         (reply.reply_text ?? reply.body_preview)?.slice(0, 200) ?? null, email, reply.received_at]
       ).catch((err) => { console.error('[mark-as-lead] seedThread failed:', err); return null })
     }
 
@@ -84,13 +88,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         const healId = reply.lead_bison_id || `manual_${reply.id}`
         await client.query(
           `INSERT INTO esp_leads
-             (id, workspace_id, campaign_id, source, email, first_name, last_name, company_name,
+             (id, workspace_id, campaign_id, source, email,
               status, label, first_replied_at, created_at, updated_at)
-           VALUES ($1,$2,NULL,'bison',$3,$4,$5,$6,'INTERESTED','INTERESTED',NOW(),NOW(),NOW())
+           VALUES ($1,$2,NULL,'bison',$3,'INTERESTED','INTERESTED',NOW(),NOW(),NOW())
            ON CONFLICT (id, source) DO UPDATE SET
              label = 'INTERESTED', status = 'INTERESTED', updated_at = NOW()`,
-          [healId, reply.workspace_id, (reply.lead_email ?? '').toLowerCase() || null,
-           reply.first_name, reply.last_name, reply.company_name]
+          [healId, reply.workspace_id, (reply.lead_email ?? '').toLowerCase() || null]
         )
         await seedThread(reply.workspace_id)
       }
@@ -150,15 +153,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       if (!leadRowId) leadRowId = `manual_${reply.id}`
       await client.query(
         `INSERT INTO esp_leads
-           (id, workspace_id, campaign_id, source, email, first_name, last_name, company_name,
+           (id, workspace_id, campaign_id, source, email,
             status, label, first_replied_at, created_at, updated_at)
-         VALUES ($1,$2,NULL,'bison',$3,$4,$5,$6,'INTERESTED','INTERESTED',NOW(),NOW(),NOW())
+         VALUES ($1,$2,NULL,'bison',$3,'INTERESTED','INTERESTED',NOW(),NOW(),NOW())
          ON CONFLICT (id, source) DO UPDATE SET
            label = 'INTERESTED', status = 'INTERESTED',
            first_replied_at = COALESCE(esp_leads.first_replied_at, EXCLUDED.first_replied_at),
            updated_at = NOW()`,
-        [leadRowId, pvWorkspaceId, (reply.lead_email ?? '').toLowerCase() || null,
-         reply.first_name, reply.last_name, reply.company_name]
+        [leadRowId, pvWorkspaceId, (reply.lead_email ?? '').toLowerCase() || null]
       )
       await seedThread(pvWorkspaceId)
     }

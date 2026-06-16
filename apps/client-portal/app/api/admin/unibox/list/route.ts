@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import pool, { ready } from '@/lib/db'
 import { getAdminSession } from '@/lib/auth'
 import { CATEGORIES } from '@/lib/classify'
+import { sanitizeEmailHtml } from '@/lib/sanitize-html'
 
 const FOLDERS = ['inbox', 'review', 'done', 'unmapped', 'rejected', 'warmup'] as const
 type Folder = (typeof FOLDERS)[number]
@@ -100,7 +101,11 @@ export async function GET(req: NextRequest) {
               l.raw->>'linkedin_person_url'  AS linkedin_url,
               l.raw->>'linkedin_company_url' AS linkedin_company_url,
               l.raw->>'phone_number'         AS phone_number,
-              pe.body_html, pe.body_text
+              -- Full HTML body (with the lead's signature/photos): prefer the cached
+              -- portal_emails row, else read it straight from the reply's raw payload
+              -- (unattached replies have no portal_emails row but DO have raw.html_body).
+              COALESCE(pe.body_html, u.raw->>'html_body') AS body_html,
+              COALESCE(pe.body_text, u.raw->>'text_body') AS body_text
          FROM unibox_replies u
          -- Resolve the owning client WITHOUT fan-out: prefer the row's resolved
          -- client_id (unique), else fall back to the same active-most precedence
@@ -130,7 +135,12 @@ export async function GET(req: NextRequest) {
     )
 
     const hasMore = r.rows.length > limit
-    const rows = hasMore ? r.rows.slice(0, limit) : r.rows
+    const rows = (hasMore ? r.rows.slice(0, limit) : r.rows).map(row => ({
+      ...row,
+      // Sanitize the inbound HTML body so the admin Unibox can render the lead's full
+      // signature (logos/photos/contact table) safely. Admin view loads remote images.
+      body_html_safe: row.body_html ? sanitizeEmailHtml(String(row.body_html), { blockRemoteImages: false }) : null,
+    }))
     const nextCursor = hasMore ? rows[rows.length - 1].received_at : null
 
     // Counts respect the active client zoom (same resilient client match as the

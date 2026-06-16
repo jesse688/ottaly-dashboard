@@ -4,6 +4,7 @@ import pool from '@/lib/db'
 import { getLeadRepliesByEmail, bisonTeamForWorkspace } from '@/lib/bison'
 import { getLockedLeadIds } from '@/lib/balance'
 import { extractSignatureFields, ALL_SIGNATURE_FIELDS, type SignatureField } from '@/lib/signature'
+import { sanitizeEmailHtml } from '@/lib/sanitize-html'
 
 // Pull contact details out of the lead's latest inbound email and OVERRIDE the
 // stored values in esp_leads.raw (their own email is the freshest source). Which
@@ -146,5 +147,18 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     console.error('[thread] responded-stamp failed:', err)
   }
 
-  return NextResponse.json(rows)
+  // Sanitize body_html for rendering. Messages WE composed in the portal are
+  // already trusted; INBOUND mail is untrusted, so scrub it (strip scripts, neutralise
+  // remote tracking images — the client can opt to load them). The full signature
+  // (logos/photos/contact table) survives sanitization.
+  const safeRows = rows.map(r => ({
+    ...r,
+    body_html_safe: r.body_html
+      ? (r.sent_via_portal
+          ? sanitizeEmailHtml(String(r.body_html), { blockRemoteImages: false })
+          : sanitizeEmailHtml(String(r.body_html)))
+      : null,
+  }))
+
+  return NextResponse.json(safeRows)
 }

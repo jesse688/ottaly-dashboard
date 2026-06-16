@@ -56,6 +56,7 @@ interface ThreadMsg {
   direction: 'IN' | 'OUT'
   subject: string | null
   body_html: string | null
+  body_html_safe: string | null   // server-sanitized HTML, safe to render
   body_text: string | null
   content_preview: string | null
   from_email: string | null
@@ -759,15 +760,18 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
                       {/* body */}
                       <div className={`px-5 py-4 ${out ? 'bg-brand-50/40' : 'bg-white'}`}>
                         {m.subject && <p className="text-xs font-medium text-gray-500 mb-3">{m.subject}</p>}
-                        {m.sent_via_portal && m.body_html ? (
-                          // We composed this HTML ourselves in the portal — safe to render.
-                          <div className="text-sm text-gray-800 break-words leading-[1.55] max-w-[68ch] [&_p]:my-2 [&_a]:text-brand-600 [&_a]:underline [&_img]:max-w-full [&_img]:rounded" dangerouslySetInnerHTML={{ __html: m.body_html }} />
+                        {m.body_html_safe ? (
+                          // Server-sanitized HTML — renders the lead's full signature
+                          // (logos, photos, contact table) for inbound mail and our own
+                          // composed HTML for outbound. Remote images in inbound mail are
+                          // neutralized server-side (data-blocked-src) to stop trackers.
+                          <div className="text-sm text-gray-800 break-words leading-[1.55] max-w-[68ch] [&_p]:my-2 [&_a]:text-brand-600 [&_a]:underline [&_img]:max-w-full [&_img]:rounded [&_table]:border-collapse [&_td]:align-top" dangerouslySetInnerHTML={{ __html: m.body_html_safe }} />
                         ) : (
-                          // Plain/derived text: collapse runs of blank lines so HTML→text
-                          // bodies don't show huge gaps; readable column + calm line-height.
+                          // No HTML body — plain/derived text. Collapse runs of blank
+                          // lines so it doesn't show huge gaps; readable column.
                           <div className="text-sm text-[#1a2332] whitespace-pre-wrap break-words leading-[1.55] max-w-[68ch]">{(main || '(no content)').replace(/\n{3,}/g, '\n\n').trim()}</div>
                         )}
-                        {quoted && !m.sent_via_portal && (
+                        {quoted && !m.sent_via_portal && !m.body_html_safe && (
                           <details className="mt-3 border-t border-dashed border-gray-200 pt-2">
                             <summary className="cursor-pointer text-xs text-gray-400 hover:text-gray-600 select-none flex items-center gap-1.5 w-fit">
                               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
