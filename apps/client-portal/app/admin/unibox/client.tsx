@@ -53,6 +53,36 @@ interface Reply {
 
 interface PortalClientLite { id: string; company_name: string; workspace_id: string }
 
+// Editable lead-details form (fill in domain/title/etc. for sparse leads). Keys
+// match the lead-details API body; blank values are left unchanged on save.
+interface LeadForm {
+  first_name: string
+  last_name: string
+  company_name: string
+  job_title: string
+  company_website: string
+  phone_number: string
+  linkedin_person_url: string
+  linkedin_company_url: string
+}
+const BLANK_LEAD_FORM: LeadForm = {
+  first_name: '', last_name: '', company_name: '', job_title: '',
+  company_website: '', phone_number: '', linkedin_person_url: '', linkedin_company_url: '',
+}
+// Prefill the form from a selected reply's existing enrichment.
+function leadFormFromReply(r: Reply): LeadForm {
+  return {
+    first_name: r.first_name ?? '',
+    last_name: r.last_name ?? '',
+    company_name: r.lead_company ?? '',
+    job_title: r.job_title ?? '',
+    company_website: r.company_website ?? '',
+    phone_number: r.phone_number ?? '',
+    linkedin_person_url: r.linkedin_url ?? '',
+    linkedin_company_url: r.linkedin_company_url ?? '',
+  }
+}
+
 const FOLDERS: { key: Folder; label: string }[] = [
   { key: 'review', label: 'Review' },
   { key: 'all', label: 'All replies' },
@@ -118,6 +148,9 @@ export function AdminUniboxClient() {
   const [zoomClient, setZoomClient] = useState('')   // firehose per-client zoom ('' = all clients)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
+  // Editable lead-details panel (fill in domain/title/etc. for sparse leads).
+  const [editLead, setEditLead] = useState(false)
+  const [leadForm, setLeadForm] = useState<LeadForm>(BLANK_LEAD_FORM)
   // Associate-to-campaign panel state.
   const [assocOpen, setAssocOpen] = useState(false)
   const [assocLoading, setAssocLoading] = useState(false)
@@ -176,6 +209,42 @@ export function AdminUniboxClient() {
     setMsg('')
     // Prefill the picker from the reply's mapped client.
     setPickClientId(r.client_id ?? '')
+    // Reset the lead-details editor to this reply's current values.
+    setEditLead(false)
+    setLeadForm(leadFormFromReply(r))
+  }
+
+  // Save filled-in lead details (domain/title/etc.) to esp_leads so the client
+  // dashboard shows them. Works before OR after the reply is marked as a lead.
+  async function saveLeadDetails() {
+    if (!selected) return
+    setBusy(true); setMsg('')
+    try {
+      const r = await fetch(`/api/admin/unibox/${selected.id}/lead-details`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(leadForm),
+      })
+      const d = await r.json() as { ok?: boolean; error?: string }
+      if (!r.ok || !d.ok) { setMsg(d.error ?? 'Failed to save lead details'); return }
+      setMsg('Lead details saved.')
+      setEditLead(false)
+      // Reflect the saved values back onto the selected reply + the list row.
+      const patch: Partial<Reply> = {
+        first_name: leadForm.first_name || selected.first_name,
+        last_name: leadForm.last_name || selected.last_name,
+        lead_company: leadForm.company_name || selected.lead_company,
+        job_title: leadForm.job_title || selected.job_title,
+        company_website: leadForm.company_website || selected.company_website,
+        phone_number: leadForm.phone_number || selected.phone_number,
+        linkedin_url: leadForm.linkedin_person_url || selected.linkedin_url,
+        linkedin_company_url: leadForm.linkedin_company_url || selected.linkedin_company_url,
+      }
+      setSelected(prev => prev ? { ...prev, ...patch } : prev)
+      setRows(prev => prev.map(row => row.id === selected.id ? { ...row, ...patch } : row))
+    } finally {
+      setBusy(false)
+    }
   }
 
   async function markAsLead() {
@@ -618,6 +687,42 @@ export function AdminUniboxClient() {
                    {selected.industry && <ContactRow label="Industry" value={selected.industry} />}
                    {(selected.city || selected.state || selected.country) && <ContactRow label="Location" value={[selected.city, selected.state, selected.country].filter(Boolean).join(', ')} />}
                  </dl>
+
+                 {/* Fill in lead details — for sparse leads (question/forwarded/
+                     outside-Bison) where the webhook captured no name/company/etc.
+                     Saves to esp_leads so the client dashboard shows them. */}
+                 <div className="mt-4 pt-4 border-t border-gray-100">
+                   {!editLead ? (
+                     <button
+                       onClick={() => { setLeadForm(leadFormFromReply(selected)); setEditLead(true); setMsg('') }}
+                       className="text-xs font-medium text-indigo-600 hover:text-indigo-800"
+                     >
+                       ✏️ Edit lead details
+                     </button>
+                   ) : (
+                     <div className="space-y-2.5">
+                       <p className="text-xs font-semibold text-gray-600">Lead details</p>
+                       <div className="grid grid-cols-2 gap-2">
+                         <LeadField label="First name" value={leadForm.first_name} onChange={v => setLeadForm(f => ({ ...f, first_name: v }))} />
+                         <LeadField label="Last name" value={leadForm.last_name} onChange={v => setLeadForm(f => ({ ...f, last_name: v }))} />
+                       </div>
+                       <LeadField label="Company" value={leadForm.company_name} onChange={v => setLeadForm(f => ({ ...f, company_name: v }))} />
+                       <LeadField label="Job title" value={leadForm.job_title} onChange={v => setLeadForm(f => ({ ...f, job_title: v }))} />
+                       <LeadField label="Website / domain" value={leadForm.company_website} onChange={v => setLeadForm(f => ({ ...f, company_website: v }))} placeholder="company.com" />
+                       <LeadField label="Phone" value={leadForm.phone_number} onChange={v => setLeadForm(f => ({ ...f, phone_number: v }))} />
+                       <LeadField label="LinkedIn (person)" value={leadForm.linkedin_person_url} onChange={v => setLeadForm(f => ({ ...f, linkedin_person_url: v }))} />
+                       <LeadField label="LinkedIn (company)" value={leadForm.linkedin_company_url} onChange={v => setLeadForm(f => ({ ...f, linkedin_company_url: v }))} />
+                       <div className="flex items-center gap-2 pt-1">
+                         <button onClick={saveLeadDetails} disabled={busy} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium rounded-lg disabled:opacity-50">
+                           {busy ? 'Saving…' : 'Save details'}
+                         </button>
+                         <button onClick={() => { setEditLead(false); setMsg('') }} disabled={busy} className="px-3 py-1.5 border border-gray-200 text-gray-700 text-xs font-medium rounded-lg hover:bg-gray-50 disabled:opacity-50">
+                           Cancel
+                         </button>
+                       </div>
+                     </div>
+                   )}
+                 </div>
                </div>
              </aside>
             </div>
@@ -654,5 +759,23 @@ function ContactRow({ label, value, href }: { label: string; value: string; href
         {href ? <a href={href} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:text-indigo-800">{value}</a> : value}
       </dd>
     </div>
+  )
+}
+
+// Labelled text input for the editable lead-details form.
+function LeadField({ label, value, onChange, placeholder }: {
+  label: string; value: string; onChange: (v: string) => void; placeholder?: string
+}) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-[10px] uppercase tracking-wide text-gray-400">{label}</span>
+      <input
+        type="text"
+        value={value}
+        placeholder={placeholder}
+        onChange={e => onChange(e.target.value)}
+        className="w-full border border-gray-200 rounded-md px-2 py-1 text-xs text-gray-800 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+      />
+    </label>
   )
 }
