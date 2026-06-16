@@ -478,6 +478,42 @@ function listBisonWorkspaces() {
   return { data: BISON_TEAMS.map(t => ({ id: t.team_id, name: t.name, pv_workspace_id: t.pv })) };
 }
 
+// Workspaces we never want auto-imported (personal / test). team 2 = Jesse's Team.
+const BISON_TEAMS_DENY = new Set(['2']);
+
+// Auto-discover Bison workspaces created directly in Bison (post-PlusVibe) and
+// append them to BISON_TEAMS so they show in the admin grid AND get data
+// everywhere (mailboxes/stats/daily-sync all iterate BISON_TEAMS). Bison-only
+// workspaces have no PlusVibe id, so pv = team_id (same convention as ByboDigital
+// team 6). Mutates the BISON_TEAMS array in place (const array, push is fine);
+// safe because it runs at boot/refresh before request handlers read it. A new
+// workspace's per-workspace token is minted on demand by bisonReq, so no manual
+// onboarding step is needed.
+async function syncBisonTeamsFromLive() {
+  try {
+    const data = await bisonReq('/api/workspaces/v1.1');
+    const list = Array.isArray(data) ? data : (data?.data || []);
+    const have = new Set(BISON_TEAMS.map(t => String(t.team_id)));
+    let added = 0;
+    for (const w of list) {
+      const id = String(w.id);
+      if (!/^\d+$/.test(id) || have.has(id) || BISON_TEAMS_DENY.has(id)) continue;
+      BISON_TEAMS.push({ team_id: id, name: w.name || `Workspace ${id}`, pv: id });
+      have.add(id);
+      added++;
+      console.log(`[bison-teams] auto-added workspace ${id} (${w.name || 'unnamed'})`);
+    }
+    if (added) console.log(`[bison-teams] discovered ${added} new workspace(s) from Bison — total ${BISON_TEAMS.length}`);
+    return { added, total: BISON_TEAMS.length };
+  } catch (e) {
+    console.warn('[bison-teams] live sync failed:', e.message);
+    return { added: 0, error: e.message };
+  }
+}
+// Discover shortly after boot (once the Bison key is hydrated), then every 6h.
+setTimeout(() => syncBisonTeamsFromLive().catch(() => {}), 12000);
+setInterval(() => syncBisonTeamsFromLive().catch(() => {}), 6 * 60 * 60 * 1000);
+
 const ANTHROPIC_API_KEY      = process.env.ANTHROPIC_API_KEY      || '';
 const SLACK_SIGNING_SECRET   = process.env.SLACK_SIGNING_SECRET   || '';
 const ANTHROPIC_MODEL        = process.env.ANTHROPIC_MODEL        || 'claude-haiku-4-5-20251001';
@@ -12282,7 +12318,9 @@ app.get('/api/pv/workspace-leads', requireSession, async (req, res) => {
 // ── Admin — workspaces ─────────────────────────────────────
 app.get('/api/admin/workspaces', requireAdmin, async (req, res) => {
   try {
-    // Bison workspaces: /api/workspaces/v1.1 → { data: [{id,name,...}] }.
+    // Pull in any workspaces created directly in Bison before listing, so the
+    // grid always reflects reality (new workspaces appear without a code change).
+    await syncBisonTeamsFromLive();
     // admin.html expects a bare array of {id,name}, so unwrap + normalise.
     const raw = listBisonWorkspaces();
     const list = Array.isArray(raw) ? raw : (raw?.data || []);
