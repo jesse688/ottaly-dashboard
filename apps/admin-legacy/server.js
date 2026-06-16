@@ -2683,6 +2683,37 @@ app.get('/api/admin/stats-debug', requireAdmin, async (req, res) => {
   }
 });
 
+// Browser-openable maintenance trigger (GET, admin) — no curl needed.
+//   ?leads=1  → reconcile portal-marked leads into revenue_leads + refresh revenue cache
+//   ?cache=1  → flush + rebuild the (possibly stale) performance/stats cache
+//   default   → both
+app.get('/api/admin/stats-fix', requireAdmin, async (req, res) => {
+  const doLeads = req.query.cache ? !!req.query.leads : true;
+  const doCache = req.query.leads ? !!req.query.cache : true;
+  const out = {};
+  try {
+    if (doLeads) {
+      const n = await reconcilePortalMarkedLeads();
+      await refreshRevenueCache();
+      out.leads_reconciled = n;
+      out.revenue_total = (revenueCache.leads || []).length;
+    }
+    if (doCache) {
+      const pgdb = app.locals.pgDb;
+      if (pgdb) await pgdb.clearPerfCache();
+      performanceCache.dailyStats.clear();
+      performanceCache.labeledLeads.clear();
+      performanceCache.version = 0;
+      performanceWarmPromise = null;
+      warmPerformanceCache().catch(() => {});
+      out.cache = 'flushed — rebuilding from Bison (give it ~1–2 min)';
+    }
+    res.json({ ok: true, ...out });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Fresh start / Show historical (admin only) ───────────
 // Status of the cutover + toggle.
 app.get('/api/admin/fresh-start', requireAdmin, (req, res) => {
@@ -3723,9 +3754,76 @@ function resetStaleFirstSeenOnce() {
   }
 }
 
+// Turn portal-marked leads into revenue_leads rows. The client portal records a
+// "mark as lead" by setting unibox_replies.marked_as_lead=true (with marked_at/
+// marked_by). admin-legacy is the billing source of truth (revenue_leads), but had
+// NO path to write new leads — so leads marked in the portal never appeared on the
+// dashboard after the one-time 06-12 backfill. This reconciler upserts one
+// revenue_leads row per marked reply, idempotently (lead_key = portal:<reply id>),
+// priced at the client's CURRENT price_per_lead. Runs just before each revenue
+// cache refresh so new leads show within the 3-min cycle. Returns count upserted.
+async function reconcilePortalMarkedLeads() {
+  const pgdb = app.locals?.pgDb;
+  if (!pgdb) return 0;
+  try {
+    const { rows } = await pgdb.query(
+      `SELECT id, workspace_id, bison_team_id, lead_email, matched_lead_email, subject,
+              campaign_id, marked_at, received_at
+         FROM unibox_replies
+        WHERE marked_as_lead = true`
+    );
+    if (!rows.length) return 0;
+    // Current per-client prices + names, keyed by canonical workspace_id.
+    const clientRows = db.prepare(
+      'SELECT workspace_id, workspace_name, price_per_lead, client_status FROM clients'
+    ).all();
+    const priceByCanon = {}, nameByCanon = {}, statusByCanon = {};
+    for (const c of clientRows) {
+      const canon = canonicalWorkspaceId(c.workspace_id, c.workspace_name);
+      priceByCanon[canon]  = c.price_per_lead || 0;
+      nameByCanon[canon]   = c.workspace_name || '';
+      statusByCanon[canon] = c.client_status || 'active';
+    }
+    const leads = [];
+    for (const r of rows) {
+      // Resolve to canonical id (reply may store the Bison team_id or a mismatched id).
+      const canon = canonicalWorkspaceId(r.workspace_id || r.bison_team_id, null);
+      if (statusByCanon[canon] === 'inactive') continue;
+      const email = (r.matched_lead_email || r.lead_email || '').toLowerCase();
+      if (!email || email.includes('demo.example')) continue; // skip test rows
+      const when = (r.marked_at || r.received_at);
+      const dateStr = when ? new Date(when).toISOString().slice(0, 10) : '';
+      leads.push({
+        lead_key:       `portal:${r.id}`,           // stable & unique per marked reply
+        workspace_id:   canon,
+        workspace_name: nameByCanon[canon] || '',
+        client_name:    nameByCanon[canon] || '',
+        lead_email:     email,
+        first_name:     '',
+        last_name:      '',
+        campaign:       r.campaign_id || '',
+        lead_price:     priceByCanon[canon] || 0,
+        date:           dateStr,
+        label:          'LEAD',
+        pv_nonlead:     false,
+      });
+    }
+    if (!leads.length) return 0;
+    const n = await pgdb.upsertRevenueLeads(leads);
+    return n;
+  } catch (e) {
+    console.warn('[revenue] portal lead reconcile failed:', e.message);
+    return 0;
+  }
+}
+
 async function refreshRevenueCache() {
   resetStaleFirstSeenOnce();
   try {
+    // Pull any portal-marked leads into revenue_leads BEFORE reading the table,
+    // so leads marked in the portal show up on this same refresh.
+    const reconciled = await reconcilePortalMarkedLeads();
+    if (reconciled) console.log(`[revenue] reconciled ${reconciled} portal-marked lead(s) into revenue_leads`);
     // REVENUE = FROZEN STORAGE ONLY. The historical lead/revenue data lives in
     // the revenue_leads table (Postgres). We do NOT live-fetch leads from Bison
     // here: Bison leads have different IDs than the stored PlusVibe-era leads, so
