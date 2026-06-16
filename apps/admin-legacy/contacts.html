@@ -1144,7 +1144,7 @@
                  and any push unless explicitly allowed. This is the fix for
                  Microsoft-hosted contacts leaking into Bison. -->
             <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:600;color:#b45309;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 8px;" title="Recommended. Removes Microsoft-hosted AND not-yet-verified contacts from results and any push. Verify first to reveal hidden Microsoft, then push the safe Google/Other remainder.">
-              <input type="checkbox" id="excludeMicrosoft" checked onchange="applyFilters()"> Exclude Microsoft &amp; unverified <span style="font-weight:400;color:#92400e;">(default)</span>
+              <input type="checkbox" id="excludeMicrosoft" checked onchange="onToggleExcludeMicrosoft(this)"> Exclude Microsoft &amp; unverified <span style="font-weight:400;color:#92400e;">(default)</span>
             </label>
             <div style="display:flex;flex-direction:column;gap:8px;">
               <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;">
@@ -1716,8 +1716,19 @@
         </div>
         <div class="form-group" id="bisonNewWrap" style="display:none;">
           <label>New campaign name (Draft)</label>
-          <input type="text" id="bisonNewCampaignName" style="width:100%;padding:10px 12px;" placeholder="New campaign name">
-          <p style="font-size:11px;color:#6b7280;margin:6px 0 0;">Auto-named from your active filters. Created as a Draft — edit/launch it in Bison when ready.</p>
+          <div style="display:flex;gap:16px;margin:2px 0 8px;">
+            <label style="display:flex;align-items:center;gap:6px;font-weight:normal;cursor:pointer;font-size:13px;">
+              <input type="radio" name="bisonNameMode" value="auto" checked onchange="onBisonNameModeChange()"> Auto-generate
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;font-weight:normal;cursor:pointer;font-size:13px;">
+              <input type="radio" name="bisonNameMode" value="manual" onchange="onBisonNameModeChange()"> Enter my own
+            </label>
+          </div>
+          <div style="display:flex;gap:8px;">
+            <input type="text" id="bisonNewCampaignName" style="flex:1;padding:10px 12px;" placeholder="New campaign name">
+            <button type="button" id="bisonRegenName" onclick="regenBisonName()" title="Regenerate from current filters" style="padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;">↻</button>
+          </div>
+          <p style="font-size:11px;color:#6b7280;margin:6px 0 0;" id="bisonNameHint">Auto-named from your active filters. Created as a Draft — edit/launch it in Bison when ready.</p>
 
           <!-- Campaign settings (applied to the new Draft via PATCH /update) -->
           <div style="border:1px solid #e5e7eb;border-radius:8px;padding:14px;margin-top:12px;background:#fafafa;">
@@ -3038,6 +3049,21 @@
       }
     });
 
+    // Unticking "Exclude Microsoft & unverified" lets Microsoft-hosted (and
+    // unverified) contacts back into results/pushes — the exact thing that
+    // leaked MS into Bison. Confirm before allowing it; re-tick on cancel.
+    function onToggleExcludeMicrosoft(cb) {
+      if (!cb.checked) {
+        const ok = confirm(
+          'Allow Microsoft & unverified contacts?\n\n' +
+          'These are excluded by default because Microsoft-hosted recipients hurt deliverability and unverified ones may be Microsoft hiding behind a gateway.\n\n' +
+          'Only enable this if you specifically intend to target Microsoft. Click Search to apply.'
+        );
+        if (!ok) { cb.checked = true; return; }   // user backed out → keep excluded
+      }
+      // Applied on the next Search (consistent with the other provider filters).
+    }
+
     async function search() {
       currentPage = 0;
       serializeFiltersToHash();
@@ -3795,9 +3821,14 @@
       if (industry) parts.push(industry);
       else { const kw = one(sel('keywords')); if (kw) parts.push(kw); }
 
-      // 2) company size (employee ranges) — important, label with "emp"
-      const empRanges = (typeof _employeeSelected !== 'undefined') ? [..._employeeSelected] : [];
-      if (empRanges.length) parts.push(empRanges[0] + ' emp');
+      // 2) company size (employee ranges) — only when ACTUALLY selected, and
+      // show the real selection (joined) rather than an arbitrary first bucket
+      // that made every name look like "0-50". Skip entirely if nothing's set.
+      const empRanges = (typeof _employeeSelected !== 'undefined') ? [..._employeeSelected].filter(Boolean) : [];
+      if (empRanges.length) {
+        const label = empRanges.length === 1 ? empRanges[0] : `${empRanges.length} sizes`;
+        parts.push(label + ' emp');
+      }
 
       // 3) seniority
       const seniority = one(sel('seniority')); if (seniority) parts.push(seniority);
@@ -3815,6 +3846,31 @@
       const mode = (document.querySelector('input[name="bisonPushMode"]:checked') || {}).value || 'existing';
       document.getElementById('bisonExistingWrap').style.display = mode === 'new' ? 'none' : '';
       document.getElementById('bisonNewWrap').style.display = mode === 'new' ? '' : 'none';
+      if (mode === 'new') onBisonNameModeChange();
+    }
+
+    // Auto vs manual campaign-name entry.
+    function onBisonNameModeChange() {
+      const mode = (document.querySelector('input[name="bisonNameMode"]:checked') || {}).value || 'auto';
+      const input = document.getElementById('bisonNewCampaignName');
+      const regen = document.getElementById('bisonRegenName');
+      const hint  = document.getElementById('bisonNameHint');
+      if (mode === 'auto') {
+        input.value = buildCampaignName();
+        input.readOnly = true;
+        input.style.background = '#f9fafb';
+        if (regen) regen.style.display = '';
+        if (hint) hint.textContent = 'Auto-named from your active filters. Created as a Draft — edit/launch in Bison when ready.';
+      } else {
+        input.readOnly = false;
+        input.style.background = '#fff';
+        input.focus();
+        if (regen) regen.style.display = 'none';
+        if (hint) hint.textContent = 'Type any name. Created as a Draft — edit/launch in Bison when ready.';
+      }
+    }
+    function regenBisonName() {
+      document.getElementById('bisonNewCampaignName').value = buildCampaignName();
     }
 
     async function openBisonPushModal() {
@@ -3826,6 +3882,9 @@
       // Reset to "existing" mode and regenerate the auto-name from current filters.
       const modeExisting = document.querySelector('input[name="bisonPushMode"][value="existing"]');
       if (modeExisting) modeExisting.checked = true;
+      // Default the name mode back to auto each open.
+      const autoMode = document.querySelector('input[name="bisonNameMode"][value="auto"]');
+      if (autoMode) autoMode.checked = true;
       document.getElementById('bisonNewCampaignName').value = buildCampaignName();
       onBisonModeChange();
 

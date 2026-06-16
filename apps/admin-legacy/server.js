@@ -14727,6 +14727,9 @@ function initPausedJobsTable(sq) {
     verified_count INTEGER DEFAULT 0,
     pushed_count INTEGER DEFAULT 0
   )`);
+  // resume_on_boot: 1 only for jobs interrupted by a deploy (set by the SIGTERM
+  // handler). Manually-paused jobs are 0 and must NOT auto-resume on next boot.
+  try { sq.exec(`ALTER TABLE paused_push_jobs ADD COLUMN resume_on_boot INTEGER DEFAULT 0`); } catch {}
 }
 
 // On boot, restore paused jobs into the in-memory map so the UI shows them.
@@ -14747,6 +14750,7 @@ function restorePausedJobs(sq) {
         total: contactIds.length,
         verified: row.verified_count || 0,
         pushed: row.pushed_count || 0,
+        resumeOnBoot: row.resume_on_boot === 1, // only deploy-interrupted jobs auto-resume
         skipped: 0, safe: 0, risky: 0, invalid: 0, unknown: 0, safe_catchall: 0,
         progress: 0,
         created_at: Date.now(),
@@ -14770,7 +14774,11 @@ function restorePausedJobs(sq) {
 // disable. Staggered so N restored jobs don't all hammer Reacher at once.
 function autoResumePushJobs() {
   if (process.env.PUSH_AUTORESUME === '0') { console.log('[push] auto-resume disabled (PUSH_AUTORESUME=0)'); return; }
-  const paused = [...pushJobs.values()].filter(j => j.status === 'paused');
+  // ONLY resume jobs that were actively running when the deploy stopped us
+  // (flagged resume_on_boot=1 by the SIGTERM handler). Jobs the user paused
+  // manually, or that were already idle, must stay paused — auto-resuming those
+  // is what caused "it started all of them".
+  const paused = [...pushJobs.values()].filter(j => j.status === 'paused' && j.resumeOnBoot);
   if (!paused.length) return;
   console.log(`[push] auto-resuming ${paused.length} job(s) after restart…`);
   paused.forEach((job, i) => {
@@ -14800,12 +14808,14 @@ function pausePushJobsForShutdown(sq) {
   for (const job of live) {
     job.paused = true;
     job.status = 'paused';
+    job.resumeOnBoot = true; // deploy-interrupted → eligible for auto-resume
     if (sq) {
       try {
         initPausedJobsTable(sq);
-        // The row already exists (written at job start); just stamp its progress
-        // + a paused marker. If somehow missing, the resume route will report it.
-        sq.prepare(`UPDATE paused_push_jobs SET verified_count = ?, pushed_count = ?, paused_at = datetime('now') WHERE id = ?`)
+        // The row already exists (written at job start); stamp progress + the
+        // resume_on_boot flag so the next boot knows this was deploy-interrupted
+        // (vs a manual pause, which stays resume_on_boot=0).
+        sq.prepare(`UPDATE paused_push_jobs SET verified_count = ?, pushed_count = ?, paused_at = datetime('now'), resume_on_boot = 1 WHERE id = ?`)
           .run(job.verified || 0, job.pushed || 0, job.id);
       } catch (e) { console.warn('[push] shutdown persist failed for', job.id, e.message); }
     }
@@ -14860,7 +14870,18 @@ app.get('/api/contacts/verified-today', requireSession, async (req, res) => {
 });
 
 app.get('/api/contacts/push-jobs', requireSession, (req, res) => {
+  // Queue shows in-flight + paused + FAILED jobs only. A job that completed
+  // successfully or was cancelled is removed from view — only unsuccessful ones
+  // stick around so they can be seen/retried. (verify-only CSV jobs are kept
+  // while their download is still available so the ⬇ CSV button works.)
+  const KEEP = new Set(['verifying','pushing','n2b_verifying','pausing','paused','failed','error']);
   const jobs = [...pushJobs.values()]
+    .filter(j => {
+      if (KEEP.has(j.status)) return true;
+      // A verify-only job that finished but still has a CSV to grab stays.
+      if (j.status === 'completed' && j.verifyOnly && (j.safe_ids?.length || 0) > 0) return true;
+      return false; // completed-success + cancelled → hidden
+    })
     .sort((a, b) => b.created_at - a.created_at)
     .slice(0, 20);
   res.json({ jobs });
@@ -15408,9 +15429,15 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
 app.post('/api/contacts/push-jobs/:id/cancel', requireSession, (req, res) => {
   const job = pushJobs.get(req.params.id);
   if (!job) return res.status(404).json({ error: 'Not found' });
+  // Signal any running worker to stop, then REMOVE the job entirely — a
+  // cancelled job should disappear from the queue, not linger as a tombstone.
   job.cancelled = true;
+  job.status = 'cancelled';
   const sq = req.app.locals.sqliteDb;
   if (sq) { try { sq.prepare(`DELETE FROM paused_push_jobs WHERE id = ?`).run(job.id); } catch {} }
+  // Defer the in-memory delete one tick so an in-flight worker checking
+  // job.cancelled still sees it; the list endpoint already filters it out.
+  setTimeout(() => pushJobs.delete(job.id), 1500);
   res.json({ ok: true });
 });
 
@@ -15444,7 +15471,11 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
 
   job.paused = false;
   job.cancelled = false;
+  job.resumeOnBoot = false;
   job.status = 'verifying';
+  // Clear the deploy-resume flag now it's running again — a later manual pause
+  // must not be auto-resumed by the next deploy.
+  try { sq && sq.prepare(`UPDATE paused_push_jobs SET resume_on_boot = 0 WHERE id = ?`).run(job.id); } catch {}
 
   res.json({ ok: true });
 
