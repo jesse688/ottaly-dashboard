@@ -9670,6 +9670,37 @@ app.post('/api/mailboxes/sync-daily', requireSession, async (req, res) => {
 });
 app.get('/api/mailboxes/sync-daily/status', requireSession, (req, res) => res.json(_dailySyncState));
 
+// DEBUG: make ONE real breakdownOfEventsByDate call against the first mailbox
+// with sender ids, and return the RAW Bison response + the parsed series, so we
+// can see exactly what Bison gives back (empty? wrong shape? error?).
+app.get('/api/mailboxes/sync-daily/debug', requireSession, async (req, res) => {
+  try {
+    const end = serverDateString(new Date());
+    const start = serverDateString(new Date(Date.now() - 35 * 86400000));
+    const mbs = (_mailboxCache.mailboxes || []).filter(m => m.account_id && m.bison_team_id);
+    if (!mbs.length) return res.json({ error: 'no mailboxes in cache', cacheLen: (_mailboxCache.mailboxes||[]).length });
+    const m = mbs[0];
+    const ids = mbs.filter(x => x.bison_team_id === m.bison_team_id).slice(0, 5).map(x => Number(x.account_id));
+    let raw, err = null;
+    try {
+      raw = await bisonReq('/api/campaign-events/stats', { wsId: m.bison_team_id, params: { start_date: start, end_date: end, sender_email_ids: ids } });
+    } catch (e) { err = e.message; }
+    // also try WITHOUT sender filter (workspace-wide) to isolate the variable
+    let rawNoFilter, err2 = null;
+    try {
+      rawNoFilter = await bisonReq('/api/campaign-events/stats', { wsId: m.bison_team_id, params: { start_date: start, end_date: end } });
+    } catch (e) { err2 = e.message; }
+    res.json({
+      start, end,
+      team_id: m.bison_team_id, sampleEmail: m.email, sender_email_ids: ids,
+      withFilter: { error: err, labels: (raw?.data||[]).map(s => s.label), sample: raw },
+      noFilter:   { error: err2, labels: (rawNoFilter?.data||[]).map(s => s.label), sentSeries: eventSeriesByLabel(rawNoFilter || {}, 'Sent') instanceof Map ? Array.from(eventSeriesByLabel(rawNoFilter || {}, 'Sent').entries()) : null },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // First run a few minutes after boot (give the mailbox cache time to populate),
 // then every 3h. The sweep is ~1 call/mailbox so it's paced, not instant.
 setTimeout(() => syncMailboxDailyStats().catch(() => {}), 5 * 60 * 1000);
