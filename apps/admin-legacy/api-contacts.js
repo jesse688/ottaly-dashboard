@@ -165,6 +165,7 @@ module.exports = (db) => {
       locationNeedsReview: q.locationNeedsReview,
       email: q.email, phone: q.phone, linkedinUrl: q.linkedinUrl,
       emailProviders: q.emailProviders,
+      excludeMicrosoft: q.excludeMicrosoft,
       gatewayExclude: q.gatewayExclude,
       gateway: q.gateway,
       ownsBuilding: q.ownsBuilding,
@@ -217,6 +218,67 @@ module.exports = (db) => {
     try {
       const result = await db.backfillEmailProviders();
       res.json({ message: 'Backfill completed', processed: result.processed, updated: result.updated });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── MX provider verification (live DNS, authoritative) ───────────────────
+  // Re-resolves each contact's TRUE email provider (Google / Microsoft / Other)
+  // from the domain's actual MX records — the most accurate signal, since the
+  // MX is where mail physically routes. Gateway-fronted Microsoft (Mimecast/
+  // Proofpoint/…) is unmasked via SPF so it isn't mislabelled 'Other'.
+  //
+  //   POST /api/contacts/mx-scan   — start the background scan (409 if running)
+  //                                  body { reverify:true } re-resolves ALL
+  //                                  contacts (not just NULL) to catch provider
+  //                                  migrations; otherwise only the unknowns.
+  //   GET  /api/contacts/mx-scan   — { running, stats } poll for progress
+  //   GET  /api/contacts/mx-coverage — { google, outlook, other, unknown }
+  //   POST /api/contacts/mx-reseed — instant: fan known domain→provider from
+  //                                  domain_mx_cache across NULL contacts (no DNS)
+  if (!global.__mxScanJob) global.__mxScanJob = { running: false, stats: null, startedAt: 0, error: null };
+  const mxJob = global.__mxScanJob;
+
+  router.post('/contacts/mx-scan', async (req, res) => {
+    if (mxJob.running) return res.status(409).json({ error: 'A provider scan is already running', running: true, stats: mxJob.stats });
+    const reverify = req.body && (req.body.reverify === true || req.body.reverify === 'true');
+    mxJob.running = true; mxJob.stats = null; mxJob.error = null; mxJob.startedAt = Date.now();
+    // Fire-and-forget; the GET endpoint reports progress.
+    (async () => {
+      try {
+        if (reverify && db.reverifyAllMxProvider) {
+          mxJob.stats = await db.reverifyAllMxProvider({ onProgress: s => { mxJob.stats = s; } });
+        } else {
+          mxJob.stats = await db.scanContactsMxProvider({ onProgress: s => { mxJob.stats = s; } });
+        }
+      } catch (err) {
+        mxJob.error = err.message;
+        console.error('[mx-scan] failed:', err.message);
+      } finally {
+        mxJob.running = false;
+      }
+    })();
+    res.json({ started: true, reverify });
+  });
+
+  router.get('/contacts/mx-scan', (req, res) => {
+    res.json({ running: mxJob.running, stats: mxJob.stats, error: mxJob.error, startedAt: mxJob.startedAt });
+  });
+
+  router.get('/contacts/mx-coverage', async (req, res) => {
+    try {
+      const stats = await db.getEmailProviderStats();
+      res.json(stats);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/contacts/mx-reseed', async (req, res) => {
+    try {
+      const result = db.reseedMxFromDomainCache ? await db.reseedMxFromDomainCache() : { updated: 0 };
+      res.json(result);
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
