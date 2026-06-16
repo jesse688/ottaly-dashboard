@@ -3,8 +3,11 @@ import { getBalance, getLockedLeadIds, reconcileLeadCharges } from './balance'
 import { getEmails } from './plusvibe'
 
 const FROM = process.env.EMAIL_FROM || 'Ottaly <info@ottaly.co.uk>'
-// CC'd on every lead notification so the agency has a copy. Overridable via env.
-const LEAD_NOTIFY_CC = process.env.LEAD_NOTIFY_CC || 'info@ottaly.co.uk'
+// BCC'd on every client lead notification so the agency keeps a copy WITHOUT the client
+// seeing it. Overridable via env. IMPORTANT: this must NOT equal the From sender address
+// (info@ottaly.co.uk) — providers suppress a self-addressed copy, which is why info@
+// never received it. Default to a distinct monitoring alias; set LEAD_NOTIFY_BCC in env.
+const LEAD_NOTIFY_BCC = process.env.LEAD_NOTIFY_BCC || process.env.LEAD_NOTIFY_CC || 'info@ottaly.co.uk'
 const BASE_URL = (process.env.PORTAL_BASE_URL || 'https://login.ottaly.co.uk').replace(/\/$/, '')
 
 // Default notification templates (editable in admin → portal_settings).
@@ -61,19 +64,22 @@ export async function renderTemplatePair(
 }
 
 // Low-level send via Resend. No-ops (logs) if RESEND_API_KEY isn't configured.
-export async function sendEmail(to: string, subject: string, text: string, idempotencyKey?: string, cc?: string): Promise<{ ok: boolean; reason?: string }> {
+export async function sendEmail(to: string, subject: string, text: string, idempotencyKey?: string, bcc?: string): Promise<{ ok: boolean; reason?: string }> {
   const key = process.env.RESEND_API_KEY
   if (!key) { console.warn('[email] RESEND_API_KEY not set — skipping send'); return { ok: false, reason: 'no_api_key' } }
   if (!to) return { ok: false, reason: 'no_recipient' }
   try {
     const headers: Record<string, string> = { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }
     if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey
-    // Don't CC the same address we're already sending To (Resend would error / dupe).
-    const ccTo = cc && cc.toLowerCase() !== to.toLowerCase() ? cc : undefined
+    // BCC (not CC) so the agency gets a copy WITHOUT the client seeing it. Skip if it
+    // equals the To. NOTE: a BCC that equals the From sender address is suppressed by
+    // most providers (you don't inbox your own mail) — so the From address and the
+    // monitoring inbox must DIFFER (e.g. From=info@, BCC=leads@ or an alias).
+    const bccTo = bcc && bcc.toLowerCase() !== to.toLowerCase() ? bcc : undefined
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ from: FROM, to, ...(ccTo ? { cc: ccTo } : {}), subject, html: text.replace(/\n/g, '<br>') }),
+      body: JSON.stringify({ from: FROM, to, ...(bccTo ? { bcc: bccTo } : {}), subject, html: text.replace(/\n/g, '<br>') }),
       signal: AbortSignal.timeout(15000),
     })
     if (!res.ok) { const body = await res.text(); console.error('[email] resend error:', res.status, body); return { ok: false, reason: `resend_${res.status}` } }
@@ -182,9 +188,10 @@ export async function notifyClientOfLead(workspaceId: string, leadId: string): P
     const { subject, body } = await buildLeadEmail(c, lead.rows[0], balance, locked, leadMessage)
     // Idempotency-Key means even an ambiguous failure (timeout after Resend
     // accepted) can be retried without a duplicate landing in the inbox.
-    // CC the agency (info@ottaly) on the client's copy so we keep a record of
-    // every lead notification. Per-user copies below are NOT CC'd to avoid N dupes.
-    const res = await sendEmail(c.email, subject, body, `lead/${c.id}/${leadId}`, LEAD_NOTIFY_CC)
+    // BCC the agency on the client's copy so we keep a record of every lead
+    // notification WITHOUT the client seeing it. Per-user copies below are NOT BCC'd
+    // (would send N dupes to the monitoring inbox).
+    const res = await sendEmail(c.email, subject, body, `lead/${c.id}/${leadId}`, LEAD_NOTIFY_BCC)
     if (res.ok) {
       anySent = true
       await pool.query(`UPDATE portal_lead_notifications SET status = 'sent', sent_at = NOW() WHERE client_id = $1 AND lead_id = $2`, [c.id, leadId]).catch(() => {})
