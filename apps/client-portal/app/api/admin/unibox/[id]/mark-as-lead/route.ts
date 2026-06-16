@@ -32,7 +32,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     await client.query('BEGIN')
 
     const sel = await client.query(
-      `SELECT id, workspace_id, lead_bison_id, lead_email, subject, marked_as_lead,
+      `SELECT id, bison_reply_id, workspace_id, lead_bison_id, lead_email, subject,
+              body_preview, received_at, marked_as_lead,
+              raw->'reply'->>'html_body'   AS reply_html,
+              raw->'reply'->>'text_body'   AS reply_text,
               raw->'lead'->>'first_name'  AS first_name,
               raw->'lead'->>'last_name'   AS last_name,
               raw->'lead'->>'company_name' AS company_name
@@ -44,9 +47,31 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ error: 'Reply not found' }, { status: 404 })
     }
     const reply = sel.rows[0] as {
-      id: string; workspace_id: string | null; lead_bison_id: string | null; lead_email: string | null
-      subject: string | null; marked_as_lead: boolean
+      id: string; bison_reply_id: string | null; workspace_id: string | null
+      lead_bison_id: string | null; lead_email: string | null
+      subject: string | null; body_preview: string | null; received_at: string | null; marked_as_lead: boolean
+      reply_html: string | null; reply_text: string | null
       first_name: string | null; last_name: string | null; company_name: string | null
+    }
+
+    // Seed the client-facing thread (portal_emails) from the unibox reply so the
+    // client can read what the lead actually wrote. The thread route keys on
+    // (workspace_id, lower(lead_email)); for outside-Bison leads its live Bison
+    // fetch finds nothing, leaving "No messages synced yet". Idempotent on id.
+    async function seedThread(ws: string) {
+      const email = (reply.lead_email ?? '').toLowerCase()
+      if (!email) return
+      const msgId = `unibox_${reply.bison_reply_id || reply.id}`
+      await client.query(
+        `INSERT INTO portal_emails
+           (id, workspace_id, lead_pv_id, lead_email, direction, subject,
+            body_html, body_text, content_preview, from_email, is_unread, timestamp_created, raw)
+         VALUES ($1,$2,$3,$4,'IN',$5,$6,$7,$8,$9,1,$10,'{}'::jsonb)
+         ON CONFLICT (id) DO NOTHING`,
+        [msgId, ws, reply.lead_bison_id, email, reply.subject,
+         reply.reply_html, reply.reply_text ?? reply.body_preview,
+         reply.body_preview, email, reply.received_at]
+      ).catch((err) => { console.error('[mark-as-lead] seedThread failed:', err); return null })
     }
 
     // Idempotent: already marked → no double charge, no double tag. But HEAL the
@@ -67,6 +92,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           [healId, reply.workspace_id, (reply.lead_email ?? '').toLowerCase() || null,
            reply.first_name, reply.last_name, reply.company_name]
         )
+        await seedThread(reply.workspace_id)
       }
       await client.query('COMMIT')
       // Re-bill in case the original mark predated cost_per_lead / the lead row.
@@ -134,6 +160,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         [leadRowId, pvWorkspaceId, (reply.lead_email ?? '').toLowerCase() || null,
          reply.first_name, reply.last_name, reply.company_name]
       )
+      await seedThread(pvWorkspaceId)
     }
 
     // Mark the reply done before charging so the row reflects the decision even
