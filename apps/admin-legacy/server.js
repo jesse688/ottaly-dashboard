@@ -8405,6 +8405,10 @@ app.get('/api/gateway-analysis', requireSession, async (req, res) => {
                bool_or(event_type = 'bounce' AND lower(raw->>'msg') ~ '${BOUNCE_SOFT_RE}'
                        AND NOT lower(raw->>'msg') ~ '${BOUNCE_BLOCK_RE}') AS bounce_soft
         FROM email_events
+        -- Only reply/lead/bounce matter here; excluding 'sent' (the bulk of the
+        -- table) keeps this CTE under the statement_timeout. Scanning ALL events
+        -- with regex is what left the page blank (query timed out → 500).
+        WHERE event_type <> 'sent'
         GROUP BY 1
       ),
       per_contact AS (
