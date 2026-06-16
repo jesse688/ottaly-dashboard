@@ -48,6 +48,8 @@ async function run(req: NextRequest) {
 
   let inserted = 0
   let reExtracted = 0
+  let companyUpdated = 0
+  const samples: Array<{ email: string; company_name: string; matchedRow: boolean }> = []
   for (const r of cand.rows as Array<Record<string, string | null>>) {
     const email = (r.email ?? '').toLowerCase()
     if (!email) continue
@@ -82,14 +84,23 @@ async function run(req: NextRequest) {
       ).catch(() => {})
     }
     if (company_name) {
-      await pool.query(
+      const up = await pool.query(
         `UPDATE esp_leads SET company_name = $1, updated_at = NOW()
           WHERE workspace_id = $2 AND lower(email) = $3`,
         [company_name, r.workspace_id, email]
-      ).catch(() => {})
+      ).catch(() => null)
+      const hit = (up?.rowCount ?? 0) > 0
+      if (hit) companyUpdated++
+      // Capture a few examples so we can SEE whether the UPDATE matched a row and what
+      // value was written — turns "still wrong" into a definitive diagnosis.
+      if (samples.length < 8) samples.push({ email, company_name, matchedRow: hit })
     }
     if (Object.keys(found).length) reExtracted++
   }
 
-  return NextResponse.json({ ok: true, candidates: cand.rows.length, inserted, reExtracted, workspace: ws || 'all' })
+  // companyUpdated = how many company_name UPDATEs actually HIT an esp_leads row.
+  // If reExtracted > 0 but companyUpdated == 0, the WHERE (workspace_id + lower(email))
+  // isn't matching — i.e. the reply's email differs from esp_leads.email (e.g. lead
+  // emailed under a different address). samples shows the mismatch concretely.
+  return NextResponse.json({ ok: true, candidates: cand.rows.length, inserted, reExtracted, companyUpdated, samples, workspace: ws || 'all' })
 }
