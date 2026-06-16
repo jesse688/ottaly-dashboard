@@ -187,9 +187,11 @@ export function AdminUniboxClient() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(pickClientId ? { clientId: pickClientId } : {}),
       })
-      const d = await r.json() as { ok?: boolean; already?: boolean; error?: string; bison_tag_state?: string }
+      const d = await r.json() as { ok?: boolean; already?: boolean; healed?: boolean; error?: string; bison_tag_state?: string }
       if (!r.ok || !d.ok) { setMsg(d.error ?? 'Failed to mark as lead'); return }
-      setMsg(d.already ? 'Already marked as a lead.' : `Marked as lead${d.bison_tag_state ? ` (tag: ${d.bison_tag_state})` : ''}.`)
+      setMsg(d.healed ? 'Re-synced — lead is now on the client dashboard.'
+        : d.already ? 'Already marked as a lead.'
+        : `Marked as lead${d.bison_tag_state ? ` (tag: ${d.bison_tag_state})` : ''}.`)
       await load(folder, undefined, activeQuery, category, zoomClient)
       setSelected(null)
     } finally {
@@ -477,8 +479,20 @@ export function AdminUniboxClient() {
                 <p className="text-xs font-semibold text-gray-600 mb-3">Action</p>
                 {selected.marked_as_lead ? (
                   <div className="text-sm text-green-700 bg-green-50 border border-green-100 rounded-lg p-3">
-                    ✓ Marked as lead{selected.marked_at ? ` on ${fmtDate(selected.marked_at)}` : ''}
-                    {selected.bison_tag_state ? ` · Bison tag: ${selected.bison_tag_state}` : ''}
+                    <div>
+                      ✓ Marked as lead{selected.marked_at ? ` on ${fmtDate(selected.marked_at)}` : ''}
+                      {selected.bison_tag_state && selected.bison_tag_state !== 'na' ? ` · Bison tag: ${selected.bison_tag_state}` : ''}
+                    </div>
+                    {/* Re-run mark-as-lead (heal path) — recreates the dashboard lead
+                        row for leads marked before the upsert fix, or any that didn't
+                        reach the client dashboard. Safe: label-only flip, no double charge. */}
+                    <button
+                      onClick={markAsLead}
+                      disabled={busy}
+                      className="mt-2 text-xs font-medium text-green-800 underline underline-offset-2 hover:text-green-900 disabled:opacity-50"
+                    >
+                      {busy ? 'Re-syncing…' : 'Re-sync to client dashboard'}
+                    </button>
                   </div>
                 ) : (
                   <>
