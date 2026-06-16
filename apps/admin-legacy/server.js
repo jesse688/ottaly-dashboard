@@ -8391,12 +8391,15 @@ app.get('/api/bounce-analysis', requireSession, async (req, res) => {
     const classCase = bounceClassCase("be.raw->>'msg'");
 
     // Base CTE: every bounce event in the window, pre-classified once.
-    // recipient_domain falls back to the email's domain if the column is null.
+    // Domain is derived straight from lead_email — we deliberately do NOT read
+    // the recipient_domain column (it's an ALTER-added column that isn't
+    // guaranteed to exist on every deployed DB; referencing it 500'd the whole
+    // endpoint while the explorer, which never touches it, kept working).
     const base = `
       WITH be AS (
         SELECT workspace_id, campaign_id, campaign_name, sender_email,
                lower(lead_email) AS lead_email,
-               COALESCE(NULLIF(recipient_domain,''), lower(split_part(lead_email,'@',2))) AS domain,
+               lower(split_part(lead_email,'@',2)) AS domain,
                event_at, raw,
                ${classCase} AS klass
         FROM email_events
