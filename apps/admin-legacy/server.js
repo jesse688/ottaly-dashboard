@@ -9599,8 +9599,14 @@ function buildCampaignIndex(dbBounceByCampaign) {
 // interested/not_interested/question/unsubscribe (excludes warm-up + OOO). Returns
 // Map(lower(mailbox_email) -> count). Best-effort: returns empty Map on any error
 // (e.g. column not present yet) so the mailbox page never breaks.
-async function buildPortalRepliesByMailbox(pgdb) {
+async function buildPortalRepliesByMailbox(pgdb, days = 0) {
   if (!pgdb) return new Map();
+  // MUST share the SAME window as the sent/bounce counts (buildMailboxStats
+  // FromEvents) — otherwise reply_rate = all-time-replies / windowed-sent, which
+  // is garbage (and zero on Today when a mailbox has no sends but old replies).
+  const params = [];
+  let windowSql = '';
+  if (days > 0) { params.push(String(days)); windowSql = `AND received_at >= NOW() - ($1 || ' days')::interval`; }
   try {
     const { rows } = await pgdb.query(`
       SELECT lower(mailbox_email) AS mbx, COUNT(*)::int AS replies
@@ -9608,8 +9614,9 @@ async function buildPortalRepliesByMailbox(pgdb) {
       WHERE mailbox_email IS NOT NULL
         AND COALESCE(admin_label, category)
             IN ('interested','not_interested','question','unsubscribe')
+        ${windowSql}
       GROUP BY lower(mailbox_email)
-    `);
+    `, params);
     return new Map(rows.map(r => [r.mbx, parseInt(r.replies, 10) || 0]));
   } catch (e) {
     console.warn('[mailboxes] portal reply count query failed:', e.message);
@@ -9964,7 +9971,7 @@ app.get('/api/mailboxes', requireSession, async (req, res) => {
       `).then(r => new Map(r.rows.map(row => [row.campaign_id, row.bounces])))
         .catch(() => new Map())
         : Promise.resolve(new Map()),
-      buildPortalRepliesByMailbox(pgdb),
+      buildPortalRepliesByMailbox(pgdb, days),
     ]);
 
     // Attribute per-mailbox sent/replies/bounces — prefers the portal's REAL

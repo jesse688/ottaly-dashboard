@@ -465,7 +465,13 @@ function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t
 
 async function load() {
   try {
-    const r = await fetch('/api/mailboxes');
+    // Pass the selected period so the per-mailbox table's Sent/Reply/Bounce
+    // match it (reply + sent counts share the same window server-side). Wrapped
+    // because _mbPeriod is a `let` defined later — referencing it on the very
+    // first load() (before its declaration) would hit the temporal dead zone.
+    let days = 7;
+    try { days = _mbPeriodDays(_mbPeriod); } catch (_) { days = 7; }
+    const r = await fetch('/api/mailboxes?days=' + days);
     data = await r.json();
     if (data.lastRun) document.getElementById('lastRun').textContent = `Last refresh: ${new Date(data.lastRun).toLocaleString()}`;
     if (data.running) document.getElementById('refreshBtn').innerHTML = '<span class="spin"></span>Refreshing…';
@@ -1363,6 +1369,7 @@ function setMbPeriod(p) {
   });
   loadSupplierCharts(p);
   loadProviderCharts(p);
+  load(); // reload the per-mailbox table for the new period (sent/reply/bounce)
 }
 
 function mbDateRange(p) {
