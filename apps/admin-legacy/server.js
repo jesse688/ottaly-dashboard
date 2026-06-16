@@ -8249,7 +8249,8 @@ app.get('/gateway-analysis.html', (req, res) => res.sendFile(path.join(__dirname
 // only pg source that carries workspace_name is domain_health (1 row/domain).
 // Pick the most recent non-empty name per workspace. Returns {} on any error
 // (callers fall back to the raw workspace_id), so a name miss never 500s.
-async function workspaceNameMap() {
+async function workspaceNameMap(pgdb) {
+  if (!pgdb) return {};
   try {
     const { rows } = await pgdb.query(`
       SELECT DISTINCT ON (workspace_id) workspace_id, workspace_name
@@ -8288,6 +8289,8 @@ async function workspaceNameMap() {
 // `days` query param (default 30, max 180) bounds the window via event_at.
 app.get('/api/bounce-analysis', requireSession, async (req, res) => {
   try {
+    const pgdb = req.app.locals.pgDb;
+    if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
     const days = Math.min(180, Math.max(1, parseInt(req.query.days, 10) || 30));
     const { isHard, isBlock, isSoft } = bounceClassExprs("be.raw->>'msg'");
     const classCase = bounceClassCase("be.raw->>'msg'");
@@ -8377,7 +8380,7 @@ app.get('/api/bounce-analysis', requireSession, async (req, res) => {
       ORDER BY block DESC LIMIT 50`, param);
 
     const [summary, series, byClient, byCampaign, hardDomains, hardAddresses, senderHealth, nameOf] =
-      await Promise.all([summaryQ, seriesQ, byClientQ, byCampaignQ, hardDomainsQ, hardAddressesQ, senderHealthQ, workspaceNameMap()]);
+      await Promise.all([summaryQ, seriesQ, byClientQ, byCampaignQ, hardDomainsQ, hardAddressesQ, senderHealthQ, workspaceNameMap(pgdb)]);
 
     const named = (r) => ({ ...r, client: nameOf[r.workspace_id] || r.workspace_id });
     const s = summary.rows[0] || {};
@@ -8411,6 +8414,8 @@ app.get('/api/bounce-analysis', requireSession, async (req, res) => {
 //   ?days=30&q=<substring on email/sender/msg>&klass=hard|block|soft&page=1
 app.get('/api/bounce-analysis/explorer', requireSession, async (req, res) => {
   try {
+    const pgdb = req.app.locals.pgDb;
+    if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
     const days  = Math.min(180, Math.max(1, parseInt(req.query.days, 10) || 30));
     const page  = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = 50;
@@ -8491,6 +8496,8 @@ app.get('/api/cron/bounce-alert', async (req, res) => {
   if (!okSecret && !okSession) return res.status(403).json({ error: 'forbidden (CRON_SECRET or sign in)' });
 
   try {
+    const pgdb = req.app.locals.pgDb;
+    if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
     const recent    = Math.min(30, Math.max(1, parseInt(req.query.recent, 10)   || 3));
     const baseline  = Math.min(90, Math.max(recent + 1, parseInt(req.query.baseline, 10) || 14));
     const minHard   = Math.max(1, parseInt(req.query.minHard, 10) || 10);
@@ -8526,7 +8533,7 @@ app.get('/api/cron/bounce-alert', async (req, res) => {
     // Resolve names. There is no `clients` table in Postgres — names live in
     // domain_health (one row per domain, carries workspace_name). Pick the most
     // recent non-empty name per workspace; fall back to the id where unknown.
-    const nameOf = await workspaceNameMap();
+    const nameOf = await workspaceNameMap(pgdb);
 
     const flagged = [];
     for (const r of rows) {
@@ -8572,6 +8579,8 @@ app.get('/api/cron/bounce-alert', async (req, res) => {
 //           all: { 'YYYY-MM-DD': {...} } }
 app.get('/api/stats/bounce-breakdown', requireSession, async (req, res) => {
   try {
+    const pgdb = req.app.locals.pgDb;
+    if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
     const start = /^\d{4}-\d{2}-\d{2}$/.test(req.query.start || '') ? req.query.start : null;
     const end   = /^\d{4}-\d{2}-\d{2}$/.test(req.query.end || '')   ? req.query.end   : null;
     const { isHard, isBlock, isSoft } = bounceClassExprs("raw->>'msg'");
