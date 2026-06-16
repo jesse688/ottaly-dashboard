@@ -4795,6 +4795,8 @@ app.get('/api/stats/summary', requireSession, async (req, res) => {
           ? apportion(t.sent)
           : [mix.gSent || 0, mix.oSent || 0, mix.othSent || 0];
         const replyParts  = apportion(t.replies);
+        const oooParts    = apportion(t.oooReplies);   // needed so Reply Rate ≠ Human RR per provider
+        const posParts    = apportion(t.posReplies);
         const bounceParts = apportion(t.bounces);
         // LEADS: use the EXACT per-provider counts (each lead's real mx_provider),
         // not an estimate — leads are few and we know each one's true provider.
@@ -4806,7 +4808,7 @@ app.get('/api/stats/summary', requireSession, async (req, res) => {
           const extra = apportion(lbp.unknown);
           for (let i = 0; i < 3; i++) leadParts[i] += extra[i];
         }
-        const pack = i => ({ sent: sentParts[i], replies: replyParts[i], bounces: bounceParts[i], leads: leadParts[i] });
+        const pack = i => ({ sent: sentParts[i], replies: replyParts[i], oooReplies: oooParts[i], posReplies: posParts[i], bounces: bounceParts[i], leads: leadParts[i] });
         byProvider = { google: pack(0), outlook: pack(1), other: pack(2), coverage: mix.coverage };
       }
       return {
