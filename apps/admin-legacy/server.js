@@ -9679,8 +9679,14 @@ app.get('/api/mailboxes/sync-daily/debug', requireSession, async (req, res) => {
     const start = serverDateString(new Date(Date.now() - 35 * 86400000));
     const mbs = (_mailboxCache.mailboxes || []).filter(m => m.account_id && m.bison_team_id);
     if (!mbs.length) return res.json({ error: 'no mailboxes in cache', cacheLen: (_mailboxCache.mailboxes||[]).length });
-    const m = mbs[0];
-    const ids = mbs.filter(x => x.bison_team_id === m.bison_team_id).slice(0, 5).map(x => Number(x.account_id));
+    // Pick the mailbox with the HIGHEST lifetime api_sent — a sender we KNOW sent,
+    // so a zero result means the endpoint, not an idle mailbox.
+    const topSender = [...mbs].sort((a,b) => (Number(b.api_sent)||0) - (Number(a.api_sent)||0))[0];
+    const m = topSender;
+    // all of THIS mailbox's workspace senders that have lifetime sends, top 5.
+    const ids = mbs.filter(x => x.bison_team_id === m.bison_team_id && (Number(x.api_sent)||0) > 0)
+                   .sort((a,b)=>(Number(b.api_sent)||0)-(Number(a.api_sent)||0))
+                   .slice(0, 5).map(x => Number(x.account_id));
     let raw, err = null;
     try {
       raw = await bisonReq('/api/campaign-events/stats', { wsId: m.bison_team_id, params: { start_date: start, end_date: end, sender_email_ids: ids } });
@@ -9696,13 +9702,14 @@ app.get('/api/mailboxes/sync-daily/debug', requireSession, async (req, res) => {
     try {
       rawLineArea = await bisonReq('/api/workspaces/v1.1/line-area-chart-stats', { wsId: m.bison_team_id, params: { start_date: start, end_date: end } });
     } catch (e) { err3 = e.message; }
+    const sumSeries = (body) => { const mp = eventSeriesByLabel(body || {}, 'Sent'); return mp instanceof Map ? Array.from(mp.values()).reduce((a,b)=>a+b,0) : 0; };
     const sentEntries = (body) => { const mp = eventSeriesByLabel(body || {}, 'Sent'); return mp instanceof Map ? Array.from(mp.entries()).filter(([,v])=>v>0) : null; };
     res.json({
       start, end,
-      team_id: m.bison_team_id, sampleEmail: m.email, sender_email_ids: ids,
-      campaignEvents_withFilter: { error: err,  labels: (raw?.data||[]).map(s => s.label),         sentNonZero: sentEntries(raw) },
-      campaignEvents_noFilter:   { error: err2, labels: (rawNoFilter?.data||[]).map(s => s.label), sentNonZero: sentEntries(rawNoFilter) },
-      lineAreaChart_control:     { error: err3, labels: (rawLineArea?.data||[]).map(s => s.label), sentNonZero: sentEntries(rawLineArea) },
+      team_id: m.bison_team_id, sampleEmail: m.email, sampleApiSentLifetime: Number(m.api_sent)||0, sender_email_ids: ids,
+      campaignEvents_withFilter: { error: err,  labels: (raw?.data||[]).map(s => s.label),         sentTotal: sumSeries(raw),        sentNonZero: sentEntries(raw) },
+      campaignEvents_noFilter:   { error: err2, labels: (rawNoFilter?.data||[]).map(s => s.label), sentTotal: sumSeries(rawNoFilter), sentNonZero: sentEntries(rawNoFilter) },
+      lineAreaChart_control:     { error: err3, labels: (rawLineArea?.data||[]).map(s => s.label), sentTotal: sumSeries(rawLineArea), sentNonZero: sentEntries(rawLineArea) },
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
