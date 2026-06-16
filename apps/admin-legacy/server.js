@@ -14120,6 +14120,46 @@ app.post('/api/admin/client-verticals', requireAdmin, (req, res) => {
 
 // ── Webhook Events API ────────────────────────────────────────────────────
 
+// Re-sync the admin webhook (incl. email_sent) across ALL Bison workspaces ON
+// DEMAND — so you don't have to restart to fix a missing-event subscription.
+// This is why email_events.sent dried up: webhooks created before email_sent
+// was in the list silently never subscribed to it. Returns a per-team report.
+app.post('/api/admin/sync-bison-webhooks', requireAdmin, async (req, res) => {
+  const adminUrl = process.env.BISON_WEBHOOK_ADMIN_URL || 'https://ottaly-git.oix3xv.easypanel.host/webhook/plusvibe-reply';
+  const REQUIRED_EVENTS = ['lead_interested','lead_replied','email_sent','email_bounced','untracked_reply_received'];
+  const report = [];
+  for (const team of BISON_TEAMS) {
+    try {
+      const existing = await bisonReq('/api/webhook-url', { wsId: team.team_id }).catch(() => ({ data: [] }));
+      const hook = (existing.data || []).find(h => h.url === adminUrl);
+      if (!hook) {
+        await bisonReq('/api/webhook-url', { wsId: team.team_id, method: 'POST', body: { name: 'Ottaly Admin', url: adminUrl, events: REQUIRED_EVENTS } });
+        report.push({ team: team.name, action: 'created' });
+      } else {
+        const have = new Set(Array.isArray(hook.events) ? hook.events : []);
+        const missing = REQUIRED_EVENTS.filter(e => !have.has(e));
+        if (!missing.length) { report.push({ team: team.name, action: 'ok' }); }
+        else {
+          const id = hook.id || hook.uuid;
+          try {
+            await bisonReq(`/api/webhook-url/${id}`, { wsId: team.team_id, method: 'PUT', body: { name: hook.name || 'Ottaly Admin', url: adminUrl, events: REQUIRED_EVENTS } });
+            report.push({ team: team.name, action: 'updated', added: missing });
+          } catch {
+            if (id) await bisonReq(`/api/webhook-url/${id}`, { wsId: team.team_id, method: 'DELETE' }).catch(()=>{});
+            await bisonReq('/api/webhook-url', { wsId: team.team_id, method: 'POST', body: { name: 'Ottaly Admin', url: adminUrl, events: REQUIRED_EVENTS } });
+            report.push({ team: team.name, action: 'recreated', added: missing });
+          }
+        }
+      }
+    } catch (e) {
+      report.push({ team: team.name, action: 'error', error: e.message });
+    }
+    await new Promise(r => setTimeout(r, 250));
+  }
+  const summary = report.reduce((a,r)=>{ a[r.action]=(a[r.action]||0)+1; return a; }, {});
+  res.json({ ok: true, summary, report });
+});
+
 app.get('/api/admin/webhook-events', requireAdmin, (req, res) => {
   const limit = Math.min(parseInt(req.query.limit || '50'), 200);
   const rows = db.prepare('SELECT * FROM webhook_events ORDER BY received_at DESC LIMIT ?').all(limit);
@@ -17800,15 +17840,39 @@ function scheduleAudienceScoring(pgdb) {
     // so we iterate the known BISON_TEAMS map instead — otherwise lead events
     // for most clients never fire and never reach the client dashboard.
     const adminUrl = process.env.BISON_WEBHOOK_ADMIN_URL || 'https://ottaly-git.oix3xv.easypanel.host/webhook/plusvibe-reply';
+    const REQUIRED_EVENTS = ['lead_interested', 'lead_replied', 'email_sent', 'email_bounced', 'untracked_reply_received'];
     for (const team of BISON_TEAMS) {
       try {
         const existing = await bisonReq('/api/webhook-url', { wsId: team.team_id }).catch(() => ({ data: [] }));
-        const already = (existing.data || []).some(function(h) { return h.url === adminUrl; });
-        if (!already) {
-          await bisonReq('/api/webhook-url', { wsId: team.team_id, method: 'POST', body: { name: 'Ottaly Admin', url: adminUrl, events: ['lead_interested', 'lead_replied', 'email_sent', 'email_bounced', 'untracked_reply_received'] } });
+        const hook = (existing.data || []).find(function(h) { return h.url === adminUrl; });
+        if (!hook) {
+          await bisonReq('/api/webhook-url', { wsId: team.team_id, method: 'POST', body: { name: 'Ottaly Admin', url: adminUrl, events: REQUIRED_EVENTS } });
           console.log(`[bison] webhook registered for ${team.name} (team ${team.team_id})`);
         } else {
-          console.log(`[bison] webhook already exists for ${team.name} (team ${team.team_id})`);
+          // Webhook exists — but it may have been created BEFORE email_sent was
+          // added to the list, so it silently never subscribed to sends (that's
+          // why email_events.sent dried up). If any required event is missing,
+          // UPDATE it to the full set instead of skipping.
+          const have = new Set(Array.isArray(hook.events) ? hook.events : []);
+          const missing = REQUIRED_EVENTS.filter(function(e){ return !have.has(e); });
+          if (missing.length) {
+            const id = hook.id || hook.uuid;
+            try {
+              await bisonReq(`/api/webhook-url/${id}`, { wsId: team.team_id, method: 'PUT', body: { name: hook.name || 'Ottaly Admin', url: adminUrl, events: REQUIRED_EVENTS } });
+              console.log(`[bison] webhook UPDATED for ${team.name} (added: ${missing.join(',')})`);
+            } catch (e2) {
+              // PUT failed (some Bison versions) → delete + recreate.
+              try {
+                if (id) await bisonReq(`/api/webhook-url/${id}`, { wsId: team.team_id, method: 'DELETE' });
+                await bisonReq('/api/webhook-url', { wsId: team.team_id, method: 'POST', body: { name: 'Ottaly Admin', url: adminUrl, events: REQUIRED_EVENTS } });
+                console.log(`[bison] webhook RECREATED for ${team.name} (added: ${missing.join(',')})`);
+              } catch (e3) {
+                console.warn(`[bison] webhook update failed for ${team.name}:`, e3.message);
+              }
+            }
+          } else {
+            console.log(`[bison] webhook ok for ${team.name} (all events present)`);
+          }
         }
         await new Promise(r => setTimeout(r, 300)); // gentle pacing between workspaces
       } catch (e) {
