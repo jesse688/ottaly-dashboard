@@ -718,6 +718,14 @@ function render() {
     const sent = m.attributed_sent || 0;
     const reply = m.reply_rate || 0;
     const bounce = m.bounce_rate || 0;
+    // 3-way bounce split (classified from email_events). Shown as a micro-line
+    // under the rate so a hard-driven (bad list) mailbox reads differently from
+    // a block-driven (reputation) one. Only when we have classified bounces.
+    const bHard = m.bounces_hard || 0, bBlock = m.bounces_block || 0, bSoft = m.bounces_soft || 0;
+    const bSplit = (bHard + bBlock + bSoft) > 0
+      ? `<div style="font-size:10px;margin-top:2px" title="Hard ${bHard} (dead address) · Block ${bBlock} (gateway rejected us) · Soft ${bSoft} (temporary)">`
+        + `<span style="color:var(--red)">${bHard}H</span> <span style="color:var(--amber)">${bBlock}B</span> <span style="color:var(--muted)">${bSoft}S</span></div>`
+      : '';
     const att = m.attention || [];
     const attDot = att.length
       ? `<span style="color:${att.some(a=>a.level==='critical')?'var(--red)':'var(--amber)'};font-weight:600" title="${att.map(a=>a.msg).join(' · ').replace(/"/g,'&quot;')}">●</span> <span style="font-size:11px;color:var(--muted)">${att.length}</span>`
@@ -788,7 +796,7 @@ function render() {
         <td style="text-align:right">${scoreBadge}</td>
         <td style="text-align:right">${sent ? fmtNum(sent) : '—'}</td>
         <td style="text-align:right">${sent ? pct(reply) : '—'}</td>
-        <td style="text-align:right">${sent ? (bounce > 0.05 ? `<span style="color:var(--red);font-weight:600">${pct(bounce)}</span>` : pct(bounce)) : '—'}</td>
+        <td style="text-align:right">${sent ? (bounce > 0.05 ? `<span style="color:var(--red);font-weight:600">${pct(bounce)}</span>` : pct(bounce)) : '—'}${bSplit}</td>
         <td style="text-align:right">${m.daily_limit != null ? m.daily_limit : '—'}</td>
         <td style="text-align:right;color:var(--muted)">${m.sending_gap != null ? m.sending_gap + 's' : '—'}</td>
         <td style="text-align:right;color:var(--muted)">${m.warmup_limit != null ? m.warmup_limit : '—'}</td>
