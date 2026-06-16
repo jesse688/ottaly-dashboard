@@ -4541,9 +4541,15 @@ async function buildProviderMixForRange(pgdb, wsIds, start, end) {
   // workspace with ANY sends gets a non-empty mix (no "loading forever").
   // workspace_id may be the pv id OR the Bison team_id depending on era; we fold
   // each stored id back to its CANONICAL id below so they merge per client.
+  // CLIENT attribution MUST come from the EVENT's workspace_id (per-client,
+  // matches the Stats page + BISON_TEAMS). The PROVIDER comes from the contact's
+  // mx_provider. We deliberately do NOT use contacts.workspace_id for grouping —
+  // ~half of contacts live under the shared 'ottaly-global' pool, so grouping by
+  // it would lump clients together and leave per-client rows empty. That id
+  // mismatch is what broke this for so long.
   const { rows } = await pgdb.query(`
     WITH s AS (
-      SELECT ee.workspace_id,
+      SELECT ee.workspace_id AS ws,
              COALESCE(
                c.mx_provider,
                CASE ee.provider_bucket
@@ -4559,24 +4565,23 @@ async function buildProviderMixForRange(pgdb, wsIds, start, end) {
       WHERE ee.event_type = 'sent'
         AND ee.event_at::date >= $1 AND ee.event_at::date <= $2
     )
-    SELECT workspace_id,
+    SELECT ws AS workspace_id,
            COUNT(*) FILTER (WHERE prov = 'email_google')  ::int AS google,
            COUNT(*) FILTER (WHERE prov = 'email_outlook') ::int AS outlook,
            COUNT(*) FILTER (WHERE prov = 'email_other')   ::int AS other,
            COUNT(*) FILTER (WHERE prov IS NULL)           ::int AS unclassified,
            COUNT(*)                                        ::int AS total
     FROM s
-    GROUP BY workspace_id
+    GROUP BY ws
   `, [start, end]);
 
-  // Accumulate by canonical id, but DON'T filter to wsIds — a workspace whose
-  // stored id doesn't fold to a page wsId would otherwise be silently dropped
-  // (that was the "syncing 0/N forever" bug). We key the output by BOTH the
-  // canonical id AND the raw stored id below, so the page's lookup hits
-  // regardless of which form it holds.
+  // Key by canonical id AND raw id (dual-key) so the page's lookup hits whatever
+  // form it holds. With the contact-keyed query above, most rows now already use
+  // the page's id directly.
   const acc = {};       // canonical id -> counts
   const rawToCanon = {}; // raw stored id -> canonical id (for dual-keying)
   for (const r of rows) {
+    if (!r.workspace_id) continue;
     const canon = canonicalWorkspaceId(r.workspace_id, null);
     rawToCanon[r.workspace_id] = canon;
     const a = acc[canon] || (acc[canon] = { google: 0, outlook: 0, other: 0, unclassified: 0, total: 0 });
@@ -14697,21 +14702,35 @@ async function n2bVerify(emails, jobRef) {
   if (!emails.length) return {};
   if (!NO2BOUNCE_KEY) {
     console.warn('[No2Bounce] NO2BOUNCE_KEY not set — skipping catch-all verification');
+    if (jobRef) jobRef.n2bWarning = 'No2Bounce not configured — catch-all contacts left unverified and skipped.';
     return {};
   }
 
   // Submit batch. The spec only documents emailList, but the docs UI also
   // shows `catchall:true` as an option — harmless if ignored, useful if
   // it triggers the deeper validation we want.
-  const submitResp = await fetch(N2B_BULK_URL, {
-    method: 'POST',
-    headers: { apitoken: NO2BOUNCE_KEY, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ emailList: emails, catchall: true }),
-    signal: AbortSignal.timeout(30000)
-  });
-  const submitData = await submitResp.json();
+  let submitResp, submitData;
+  try {
+    submitResp = await fetch(N2B_BULK_URL, {
+      method: 'POST',
+      headers: { apitoken: NO2BOUNCE_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ emailList: emails, catchall: true }),
+      signal: AbortSignal.timeout(30000)
+    });
+    submitData = await submitResp.json();
+  } catch (e) {
+    console.error('[No2Bounce] Submit error:', e.message);
+    if (jobRef) jobRef.n2bWarning = `No2Bounce unreachable — ${emails.length} catch-all contacts left unverified and skipped.`;
+    return {};
+  }
   if (!submitResp.ok || !submitData?.data?.trackingId) {
     console.error('[No2Bounce] Submit failed:', JSON.stringify(submitData).slice(0, 200));
+    // Most common real cause: credits exhausted. Flag it so the push job shows
+    // WHY catch-all contacts are being skipped (top up to recover that volume).
+    const credits = /credit|quota|balance|insufficient/i.test(JSON.stringify(submitData || ''));
+    if (jobRef) jobRef.n2bWarning = credits
+      ? `No2Bounce credits exhausted — ${emails.length} catch-all contacts left unverified and skipped. Top up to recover them.`
+      : `No2Bounce error — ${emails.length} catch-all contacts left unverified and skipped.`;
     return {};
   }
   const trackingId = submitData.data.trackingId;
