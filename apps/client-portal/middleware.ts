@@ -63,5 +63,9 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
+  // Exclude Next internals AND static public assets (logo SVGs, images, fonts).
+  // Without the file-extension exclusion, a logged-out request for /ottaly-logo.svg
+  // matched the client-route guard and 307-redirected to /login, so the login page's
+  // own logo loaded an HTML page instead of the SVG and rendered as a broken image.
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff2?|ttf)$).*)'],
 }
