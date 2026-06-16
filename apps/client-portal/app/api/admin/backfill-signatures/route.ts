@@ -25,8 +25,11 @@ async function run(req: NextRequest) {
 
   const ws = (new URL(req.url).searchParams.get('workspace') ?? '').trim()
 
-  // Candidate inbound replies with a body in raw, a mapped workspace, an email, and
-  // NO existing portal_emails row under the webhook's id convention.
+  // ALL inbound replies with a body + mapped workspace + email. We deliberately do
+  // NOT gate on "portal_emails row missing" — the re-extraction step below must run on
+  // EVERY reply to correct mis-attributed company/website/title, even ones whose body
+  // was already cached by a prior run (the portal_emails insert is idempotent via
+  // ON CONFLICT DO UPDATE, so re-processing is safe).
   const cand = await pool.query(
     `SELECT u.bison_reply_id, u.workspace_id, u.lead_bison_id,
             COALESCE(NULLIF(u.lead_email,''), u.sender_email) AS email,
@@ -39,8 +42,7 @@ async function run(req: NextRequest) {
       WHERE u.workspace_id IS NOT NULL
         ${ws ? 'AND u.workspace_id = $1' : ''}
         AND COALESCE(NULLIF(u.lead_email,''), u.sender_email) IS NOT NULL
-        AND (u.raw->>'html_body' IS NOT NULL OR u.raw->>'text_body' IS NOT NULL)
-        AND NOT EXISTS (SELECT 1 FROM portal_emails pe WHERE pe.id = u.bison_reply_id)`,
+        AND (u.raw->>'html_body' IS NOT NULL OR u.raw->>'text_body' IS NOT NULL)`,
     ws ? [ws] : []
   )
 
