@@ -244,6 +244,47 @@ async function bisonReq(path, opts = {}) {
   return withBisonLock(() => _bisonRaw(path, opts));
 }
 
+// Background global blocklist: add an email to EVERY Bison workspace's blocklist
+// (a hard-bounced address is dead for every client). Runs off the hot path via a
+// simple serial queue so concurrent bounces don't stampede the stateful Bison
+// token. De-dups (email|wsId) within the process. BOUNCE_BLOCK_GLOBAL=0 → only
+// block the workspace it bounced in. Never throws to the caller.
+const _blocklistQueue = [];
+let _blocklistDraining = false;
+const _blocklistDone = new Set(); // 'email|wsId' already pushed this process
+async function _drainBlocklistQueue() {
+  if (_blocklistDraining) return;
+  _blocklistDraining = true;
+  try {
+    while (_blocklistQueue.length) {
+      const { email, wsId } = _blocklistQueue.shift();
+      const key = email + '|' + wsId;
+      if (_blocklistDone.has(key)) continue;
+      try {
+        await bisonReq('/api/blacklisted-emails', { wsId, method: 'POST', body: { email } });
+        _blocklistDone.add(key);
+      } catch (e) {
+        // best-effort; a failed push just isn't marked done (may retry next bounce)
+      }
+    }
+  } finally {
+    _blocklistDraining = false;
+  }
+}
+function blocklistEmailEverywhere(email, bouncedWsId) {
+  if (!email) return;
+  const global = process.env.BOUNCE_BLOCK_GLOBAL !== '0';
+  const wsIds = global
+    ? BISON_TEAMS.map(t => t.team_id).filter(v => v != null).map(String)
+    : (bouncedWsId ? [String(bouncedWsId)] : []);
+  for (const wsId of wsIds) {
+    const key = email + '|' + wsId;
+    if (_blocklistDone.has(key)) continue;
+    _blocklistQueue.push({ email, wsId });
+  }
+  _drainBlocklistQueue(); // fire-and-forget; returns immediately
+}
+
 // Bison replacement for the old PlusVibe `/lead/workspace-leads` endpoint.
 // PlusVibe filtered leads by a `label` string; Bison filters by
 // filters[lead_campaign_status] (e.g. 'replied'/'interested') on /api/leads and
@@ -14245,15 +14286,13 @@ async function recordEmailEvent(body, rawEventType, email) {
              WHERE LOWER(email) = $1`,
             [(email || '').toLowerCase()]
           );
-          // Door 2 — Bison's own blocklist: stops the ALREADY-RUNNING campaign
-          // from sending to this dead address again (our DB flag alone doesn't
-          // reach into a live Bison campaign). Best-effort, non-fatal.
-          if (meta.workspace_id) {
-            bisonReq('/api/blacklisted-emails', {
-              wsId: meta.workspace_id, method: 'POST', body: { email: (email || '').toLowerCase() },
-            }).catch(e => console.warn('[suppress] Bison blocklist push failed (non-fatal):', e.message));
-          }
-          console.log(`[suppress] hard bounce → retired ${email} (contacts + Bison blocklist)`);
+          // Door 2 — Bison blocklist, GLOBALLY. A dead address is dead for every
+          // client, so block it in EVERY workspace, not just the one it bounced
+          // in. Fire-and-forget IN THE BACKGROUND so the webhook returns instantly
+          // — the ~14 per-workspace calls serialize through the stateful Bison
+          // gate off the hot path (BOUNCE_BLOCK_GLOBAL=0 → only the bouncing ws).
+          blocklistEmailEverywhere((email || '').toLowerCase(), meta.workspace_id);
+          console.log(`[suppress] hard bounce → retired ${email} (contacts + global Bison blocklist queued)`);
         }
       } catch (e) {
         console.warn('[suppress] bounce writeback failed (non-fatal):', e.message);
