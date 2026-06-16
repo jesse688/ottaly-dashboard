@@ -57,8 +57,9 @@ function safeStyle(v: string): string {
 }
 
 interface Options {
-  // When true (default), remote images are NOT loaded — their src is blanked and a
-  // data-blocked-src is kept so a UI can offer "load images". Prevents tracking pixels.
+  // Images load by default so signatures (logos, social icons) render properly.
+  // Set true to block remote <img> instead — src is moved to data-blocked-src so a
+  // UI could offer "load images" (prevents tracking pixels). Off by default.
   blockRemoteImages?: boolean
 }
 
@@ -76,7 +77,7 @@ function cleanAttrs(tag: string, attrStr: string, opts: Options): string {
     if (name === 'href' || name === 'src') {
       const u = safeUrl(raw)
       if (!u) continue
-      if (name === 'src' && tag === 'img' && opts.blockRemoteImages !== false && /^https?:/i.test(u)) {
+      if (name === 'src' && tag === 'img' && opts.blockRemoteImages === true && /^https?:/i.test(u)) {
         out.push(`data-blocked-src="${u.replace(/"/g, '&quot;')}"`)
         continue
       }
