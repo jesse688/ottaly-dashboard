@@ -4521,6 +4521,58 @@ function computeWorkspaceStatsForRange(wsIds, start, end) {
   return out;
 }
 
+// Per-workspace recipient-provider SEND SHARE from captured email_events.
+// Returns { wsId: { google, outlook, other, coverage } } where the three
+// shares sum to 1 (unclassified 'workspace' folded into other), and coverage
+// is the fraction of captured sent-events that were classifiable. Workspaces
+// with no captured 'sent' events in range are omitted (→ page shows 'syncing').
+async function buildProviderMixForRange(pgdb, wsIds, start, end) {
+  if (!pgdb || !wsIds.length) return {};
+  // email_events.workspace_id may be stored as the pv id OR the Bison team_id
+  // depending on era; we group by whatever's stored and fold each row back to
+  // its CANONICAL id (the same id the Stats page keys on) so PV-era and
+  // Bison-era events for one client merge into a single mix.
+  const { rows } = await pgdb.query(`
+    SELECT workspace_id,
+           COUNT(*) FILTER (WHERE provider_bucket = 'google')                          ::int AS google,
+           COUNT(*) FILTER (WHERE provider_bucket = 'outlook')                         ::int AS outlook,
+           COUNT(*) FILTER (WHERE provider_bucket = 'email_other')                     ::int AS other,
+           COUNT(*) FILTER (WHERE provider_bucket IS NULL OR provider_bucket = 'workspace') ::int AS unclassified,
+           COUNT(*)                                                                    ::int AS total
+    FROM email_events
+    WHERE event_type = 'sent'
+      AND event_at::date >= $1 AND event_at::date <= $2
+    GROUP BY workspace_id
+  `, [start, end]);
+
+  const wsSet = new Set(wsIds);
+  // Accumulate raw counts by canonical id (multiple stored ids can map to one).
+  const acc = {};
+  for (const r of rows) {
+    const canon = canonicalWorkspaceId(r.workspace_id, null);
+    if (!wsSet.has(canon)) continue;
+    const a = acc[canon] || (acc[canon] = { google: 0, outlook: 0, other: 0, unclassified: 0, total: 0 });
+    a.google += r.google; a.outlook += r.outlook; a.other += r.other;
+    a.unclassified += r.unclassified; a.total += r.total;
+  }
+
+  const out = {};
+  for (const [canon, a] of Object.entries(acc)) {
+    // Classified sends only drive the ratio; unclassified is folded into 'other'
+    // so the three shares always cover 100% of captured sends.
+    const g = a.google, o = a.outlook, oth = a.other + a.unclassified;
+    const denom = g + o + oth;
+    if (denom <= 0) continue;
+    out[canon] = {
+      google:   g   / denom,
+      outlook:  o   / denom,
+      other:    oth / denom,
+      coverage: a.total ? (a.google + a.outlook + a.other) / a.total : 0,
+    };
+  }
+  return out;
+}
+
 app.get('/api/stats/summary', requireSession, async (req, res) => {
   const start = clampStartDate(String(req.query.start || ''));
   const end   = String(req.query.end   || '');
@@ -4587,12 +4639,37 @@ app.get('/api/stats/summary', requireSession, async (req, res) => {
     // Build per-workspace aggregated stats + per-day series from the shared
     // helper so Stats and CM Performance always agree.
     const wsStats = computeWorkspaceStatsForRange(wsIds, start, end);
-    const workspaces = wsIds.map(wsId => ({
-      workspace_id: wsId,
-      name: wsNames[wsId] || wsId,
-      totals: wsStats[wsId].totals,
-      series: wsStats[wsId].series,
-    })).filter(w => w.totals.sent > 0 || w.totals.leads > 0);
+
+    // Recipient-provider split per workspace. Bison gives no provider dimension,
+    // so we derive the Google/Microsoft/Other RATIO from the email_events we
+    // captured in the window (provider_bucket), then apportion each workspace's
+    // authoritative Bison totals (sent/replies/bounces/leads) by that ratio.
+    // 'workspace' = bucket not yet classified → folded into 'other' for display.
+    // Returns {} on error so the page still renders 'All' (byProvider just stays
+    // absent for that ws, same as before).
+    const providerMix = await buildProviderMixForRange(app.locals.pgDb, wsIds, start, end).catch(() => ({}));
+
+    const workspaces = wsIds.map(wsId => {
+      const t = wsStats[wsId].totals;
+      const mix = providerMix[wsId]; // { google, outlook, other } send-share 0..1, or undefined
+      let byProvider;
+      if (mix) {
+        const ap = share => ({
+          sent:    Math.round((t.sent    || 0) * share),
+          replies: Math.round((t.replies || 0) * share),
+          bounces: Math.round((t.bounces || 0) * share),
+          leads:   Math.round((t.leads   || 0) * share),
+        });
+        byProvider = { google: ap(mix.google), outlook: ap(mix.outlook), other: ap(mix.other), coverage: mix.coverage };
+      }
+      return {
+        workspace_id: wsId,
+        name: wsNames[wsId] || wsId,
+        totals: t,
+        series: wsStats[wsId].series,
+        byProvider, // undefined if no captured events → page shows it as syncing
+      };
+    }).filter(w => w.totals.sent > 0 || w.totals.leads > 0);
 
     workspaces.sort((a, b) => b.totals.replies - a.totals.replies);
 
@@ -13712,18 +13789,30 @@ async function lookupMxProvider(domain) {
   if (!domain) return 'email_other';
   const hit = _mxProviderCache.get(domain);
   if (hit && Date.now() - hit.at < MX_PROVIDER_TTL) return hit.provider;
+  // Delegate to the authoritative resolver on the DB layer — same accurate
+  // classification used by the contact MX scan (native Google/MS patterns +
+  // gateway-behind-SPF detection + NULL on transient DNS failure). Keeping one
+  // implementation means MS detection can't drift between the two code paths.
+  const pgdb = app.locals.pgDb;
+  let provider = null;
   try {
-    const records = await dnsPromises.resolveMx(domain);
-    const top = (records.sort((a, b) => a.priority - b.priority)[0]?.exchange || '').toLowerCase();
-    const provider = /google|gmail/.test(top)   ? 'email_google'
-      : /outlook|microsoft|protection\.outlook/.test(top) ? 'email_outlook'
-      : 'email_other';
-    _mxProviderCache.set(domain, { provider, at: Date.now() });
-    return provider;
+    if (pgdb && pgdb.resolveDomainMxProvider) {
+      provider = await pgdb.resolveDomainMxProvider(domain);
+    } else {
+      // Fallback (no DB handle): minimal native-pattern classify, NULL on error.
+      const records = await dnsPromises.resolveMx(domain);
+      const joined = records.map(r => (r.exchange || '').toLowerCase()).join(' ');
+      provider = /google|gmail|googlemail/.test(joined) ? 'email_google'
+        : /protection\.outlook|outlook\.com|office365|hotmail|microsoft/.test(joined) ? 'email_outlook'
+        : 'email_other';
+    }
   } catch {
-    _mxProviderCache.set(domain, { provider: 'email_other', at: Date.now() });
-    return 'email_other';
+    provider = null; // transient — don't poison the cache with a wrong 'other'
   }
+  // Only cache a real answer; NULL (transient) is returned as 'email_other' to
+  // callers expecting a string but NOT cached, so the next call retries.
+  if (provider) _mxProviderCache.set(domain, { provider, at: Date.now() });
+  return provider || 'email_other';
 }
 
 // Background job: classify/enrich email_events rows that lack a useful provider_bucket.
@@ -14653,6 +14742,58 @@ function restorePausedJobs(sq) {
   }
 }
 
+// Auto-resume restored jobs after a deploy. A deploy stops the process mid-push;
+// on the next boot restorePausedJobs() loads the jobs as 'paused', and this
+// kicks each one back off so the push CONTINUES from where it stopped — no
+// manual click. Resume is idempotent: isFreshVerdict skips already-verified
+// contacts and per-campaign dedup skips already-pushed ones, so nothing is
+// re-sent. Fires the existing resume route internally (x-admin-key auth) so we
+// reuse the proven worker rather than duplicating it. Set PUSH_AUTORESUME=0 to
+// disable. Staggered so N restored jobs don't all hammer Reacher at once.
+function autoResumePushJobs() {
+  if (process.env.PUSH_AUTORESUME === '0') { console.log('[push] auto-resume disabled (PUSH_AUTORESUME=0)'); return; }
+  const paused = [...pushJobs.values()].filter(j => j.status === 'paused');
+  if (!paused.length) return;
+  console.log(`[push] auto-resuming ${paused.length} job(s) after restart…`);
+  paused.forEach((job, i) => {
+    setTimeout(async () => {
+      try {
+        const r = await fetch(`http://127.0.0.1:${PORT}/api/contacts/push-jobs/${job.id}/resume`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-admin-key': ADMIN_KEY },
+        });
+        if (r.ok) console.log(`[push] auto-resumed job ${job.id} (${job.workspace_name} → ${job.campaign_name})`);
+        else console.warn(`[push] auto-resume failed for ${job.id}: HTTP ${r.status}`);
+      } catch (e) {
+        console.warn(`[push] auto-resume error for ${job.id}:`, e.message);
+      }
+    }, 3000 + i * 5000); // 3s after boot, then 5s apart
+  });
+}
+
+// Graceful shutdown: a deploy sends SIGTERM. Flip any in-flight push jobs to
+// 'paused' and persist their progress so the next boot can auto-resume them
+// exactly where they stopped (verified_count/pushed_count are already written
+// periodically; this guarantees the row + status are paused before we exit).
+function pausePushJobsForShutdown(sq) {
+  const live = [...pushJobs.values()].filter(j => j.status === 'verifying' || j.status === 'pushing' || j.status === 'running');
+  if (!live.length) return;
+  console.log(`[push] SIGTERM — pausing ${live.length} in-flight job(s) for resume after deploy`);
+  for (const job of live) {
+    job.paused = true;
+    job.status = 'paused';
+    if (sq) {
+      try {
+        initPausedJobsTable(sq);
+        // The row already exists (written at job start); just stamp its progress
+        // + a paused marker. If somehow missing, the resume route will report it.
+        sq.prepare(`UPDATE paused_push_jobs SET verified_count = ?, pushed_count = ?, paused_at = datetime('now') WHERE id = ?`)
+          .run(job.verified || 0, job.pushed || 0, job.id);
+      } catch (e) { console.warn('[push] shutdown persist failed for', job.id, e.message); }
+    }
+  }
+}
+
 app.get('/api/reacher-pool', requireSession, async (req, res) => {
   try {
     const finderPort = process.env.EMAIL_FINDER_INTERNAL_PORT || '5055';
@@ -14715,7 +14856,7 @@ app.get('/api/contacts/push-jobs/:id', requireSession, (req, res) => {
 
 // POST starts job immediately, returns job ID — processing runs in background
 app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
-  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 90, emailProviders } = req.body;
+  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 90, emailProviders, excludeMicrosoft } = req.body;
   if (!workspace_id || !campaign_id || !Array.isArray(contact_ids) || !contact_ids.length) {
     return res.status(400).json({ error: 'workspace_id, campaign_id and contact_ids required' });
   }
@@ -14739,6 +14880,7 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
     campaign_name: campaign_name || campaign_id,
     workspace_id, campaign_id,
     allowedProviders,
+    excludeMicrosoft: excludeMicrosoft === 'true' || excludeMicrosoft === true,
     total: contact_ids.length,
     skipped: 0, verified: 0, safe: 0, risky: 0, invalid: 0, unknown: 0,
     pushed: 0, progress: 0,
@@ -14849,6 +14991,14 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
         // couldn't resolve MX; exclude it rather than guess (safer than leaking
         // a possibly-wrong provider into the campaign).
         if (allowedProviders.length && !allowedProviders.includes(c.mx_provider)) {
+          skipped.wrongProvider++; return false;
+        }
+        // Default-ON Microsoft guard (authoritative, server-side). Even if the
+        // caller's allowedProviders is empty, when excludeMicrosoft is set we
+        // drop any contact whose resolved provider is Microsoft, or whose MX is
+        // still unresolved (could be MS behind a gateway). This is the final gate
+        // that stops Microsoft leaking into Bison regardless of UI state.
+        if (job.excludeMicrosoft && (c.mx_provider === 'email_outlook' || !c.mx_provider)) {
           skipped.wrongProvider++; return false;
         }
         if ((!c.keywords || c.keywords.trim() === '') || (!c.industry || c.industry.trim() === '')) {
@@ -17096,7 +17246,26 @@ function scheduleAudienceScoring(pgdb) {
     res.status(500).json({ error: 'Internal server error' });
   });
 
-  const server = app.listen(PORT, () => console.log(`Ottaly running on http://localhost:${PORT}`));
+  const server = app.listen(PORT, () => {
+    console.log(`Ottaly running on http://localhost:${PORT}`);
+    // Continue any push interrupted by the previous deploy, once we're serving.
+    try { autoResumePushJobs(); } catch (e) { console.warn('[push] auto-resume bootstrap failed:', e.message); }
+  });
+
+  // Deploy / restart sends SIGTERM (and SIGINT for Ctrl-C). Pause in-flight
+  // pushes + persist progress so the next boot resumes them where they stopped.
+  let _shuttingDown = false;
+  const gracefulShutdown = (sig) => {
+    if (_shuttingDown) return;
+    _shuttingDown = true;
+    console.log(`[shutdown] ${sig} received — preparing push jobs for resume`);
+    try { pausePushJobsForShutdown(app.locals.sqliteDb); } catch (e) { console.warn('[shutdown] pause failed:', e.message); }
+    // Give the SQLite writes a beat, then exit so the platform can swap us out.
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 4000).unref();
+  };
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
 
   server.on('upgrade', (req, socket, head) => {
   if (!req.url || !req.url.startsWith('/automation-browser')) {

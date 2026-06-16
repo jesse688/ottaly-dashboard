@@ -1540,6 +1540,17 @@ class PostgresDatabase {
       clauses.push(`(${orClauses.join(' OR ')})`);
     });
 
+    // Default-ON Microsoft guard. Drops Microsoft-hosted contacts AND not-yet-
+    // verified ones (mx_provider IS NULL — could be Microsoft hiding behind a
+    // gateway). This is the fix for MS leaking into Bison: an unverified domain
+    // that turns out to be Microsoft can no longer slip through. Verify first
+    // (mx-scan) to reveal the true provider, then the Google/Other remainder is
+    // safe to push. Untick "Exclude Microsoft & unverified" to override.
+    safe('excludeMicrosoft', () => {
+      if (filters.excludeMicrosoft !== 'true' && filters.excludeMicrosoft !== true) return;
+      clauses.push(`mx_provider IS NOT NULL AND mx_provider <> 'email_outlook'`);
+    });
+
     // Gateway filter — by the TRUE inbound gateway (Mimecast/Proofpoint/Barracuda/
     // Microsoft 365/Google/…) resolved into gateway_mx_cache, joined on the email
     // domain. `gatewayExclude` drops contacts on the named gateways (the common
@@ -2602,11 +2613,49 @@ class PostgresDatabase {
       return null;
     }
     if (!records || !records.length) return 'email_other';
-    const top = records.sort((a, b) => a.priority - b.priority)[0]?.exchange?.toLowerCase() || '';
-    if (!top) return 'email_other';
-    if (/google|gmail|googlemail/.test(top)) return 'email_google';
-    if (/outlook|microsoft|protection\.outlook|office365|hotmail/.test(top)) return 'email_outlook';
+    // Look at ALL MX hosts, not just the top — some setups list the gateway and
+    // the real provider together; we want the strongest signal across them.
+    const hosts = records
+      .sort((a, b) => a.priority - b.priority)
+      .map(r => (r.exchange || '').toLowerCase())
+      .filter(Boolean);
+    const joined = hosts.join(' ');
+    if (!joined) return 'email_other';
+
+    // Native Google / Microsoft MX patterns (authoritative — the mail lands here).
+    if (/google|gmail|googlemail|aspmx\.l\.google/.test(joined)) return 'email_google';
+    if (/protection\.outlook\.com|mail\.protection\.outlook|olc\.protection\.outlook|outlook\.com|office365|hotmail|microsoft/.test(joined)) {
+      return 'email_outlook';
+    }
+
+    // Gateway in front — Mimecast/Proofpoint/Barracuda/Cisco/Sophos/etc. The MX
+    // says the gateway, but the mailbox BEHIND it is usually Google or (more
+    // often) Microsoft. MX alone would mislabel these 'Other' and leak real
+    // Microsoft past an MS-exclude filter. Unmask via the domain's SPF record,
+    // which a tenant almost always still publishes for its true mailbox host.
+    if (/mimecast|pphosted|ppe-hosted|proofpoint|barracuda|cisco|iphmx|sophos|messagelabs|symantec|forcepoint|trendmicro|fortimail|mailcontrol|securence|emailsrvr/.test(joined)) {
+      const behind = await this._providerFromSpf(domain);
+      if (behind) return behind;            // resolved the masked provider
+      return 'email_other';                  // unknown behind the gateway
+    }
+
     return 'email_other';
+  }
+
+  // Inspect a domain's SPF (TXT) record to infer the true mailbox provider when
+  // the MX is a security gateway. Microsoft 365 tenants include
+  // 'spf.protection.outlook.com'; Google Workspace includes '_spf.google.com'.
+  // Returns 'email_outlook' | 'email_google' | null (couldn't tell).
+  async _providerFromSpf(domain) {
+    try {
+      const txt = await dnsPromises.resolveTxt(domain);
+      const spf = txt.map(parts => parts.join('')).join(' ').toLowerCase();
+      if (/spf\.protection\.outlook\.com|outlook\.com|sharepointonline|protection\.outlook/.test(spf)) return 'email_outlook';
+      if (/_spf\.google\.com|google\.com|googlemail/.test(spf)) return 'email_google';
+      return null;
+    } catch {
+      return null;
+    }
   }
 
   // Bulk scanner: live-MX-classify every contact that still has a NULL
@@ -2680,6 +2729,85 @@ class PostgresDatabase {
       if (opts.onProgress) opts.onProgress({ ...stats });
     }
 
+    return stats;
+  }
+
+  // Instant reseed (no DNS): for every contact with a NULL mx_provider whose
+  // domain is already resolved in domain_mx_cache, copy that provider across.
+  // MX is a domain property, so one cached resolution classifies every contact
+  // on the domain. Cheap pre-step before the live scan.
+  async reseedMxFromDomainCache() {
+    const r = await this.query(`
+      UPDATE contacts c
+      SET mx_provider = dmc.mx_provider
+      FROM domain_mx_cache dmc
+      WHERE c.mx_provider IS NULL
+        AND dmc.mx_provider IS NOT NULL
+        AND LOWER(SPLIT_PART(c.email, '@', 2)) = dmc.domain
+    `);
+    return { updated: r.rowCount || 0 };
+  }
+
+  // Full re-verification: re-resolve MX for EVERY distinct domain we hold (not
+  // just NULL ones), so contacts whose provider migrated since the last scan
+  // (e.g. Google → Microsoft) get corrected. Heavier than scanContactsMxProvider
+  // — use when accuracy matters more than speed. Reuses the same accurate
+  // resolver + per-domain fan-out; a transient DNS failure leaves the existing
+  // value untouched (never downgraded to a wrong answer).
+  async reverifyAllMxProvider(opts = {}) {
+    const concurrency = Math.min(opts.concurrency || 20, 50);
+    const BATCH = 500;
+    const stats = {
+      domainsScanned: 0, domainsResolved: 0, domainsFailed: 0,
+      contactsUpdated: 0, changed: 0,
+      byProvider: { email_google: 0, email_outlook: 0, email_other: 0 },
+      exhausted: false, mode: 'reverify',
+    };
+    let lastDomain = '';
+    while (true) {
+      // Keyset-paginate over DISTINCT domains so we cover the whole table once.
+      const { rows } = await this.query(`
+        SELECT DISTINCT LOWER(SPLIT_PART(email, '@', 2)) AS domain
+        FROM contacts
+        WHERE email IS NOT NULL AND POSITION('@' IN email) > 0
+          AND LOWER(SPLIT_PART(email, '@', 2)) > $1
+        ORDER BY domain
+        LIMIT $2
+      `, [lastDomain, BATCH]);
+      if (!rows.length) { stats.exhausted = true; break; }
+      lastDomain = rows[rows.length - 1].domain;
+
+      let cursor = 0;
+      const worker = async () => {
+        while (cursor < rows.length) {
+          const domain = rows[cursor++]?.domain;
+          if (!domain) continue;
+          stats.domainsScanned++;
+          let provider = null;
+          try { provider = await this.resolveDomainMxProvider(domain); }
+          catch { provider = null; }
+          if (!provider) { stats.domainsFailed++; continue; }
+          try {
+            // Update every contact on this domain whose provider DIFFERS, so we
+            // can count real corrections (changed) vs total touched.
+            const u = await this.query(
+              `UPDATE contacts SET mx_provider = $2
+               WHERE LOWER(SPLIT_PART(email, '@', 2)) = $1
+                 AND (mx_provider IS DISTINCT FROM $2)`,
+              [domain, provider]
+            );
+            await this.setDomainMxProvider(domain, provider).catch(() => {});
+            const n = u.rowCount || 0;
+            stats.domainsResolved++;
+            stats.contactsUpdated += n;
+            stats.changed += n;
+            stats.byProvider[provider] = (stats.byProvider[provider] || 0) + n;
+          } catch { stats.domainsFailed++; }
+        }
+      };
+      await Promise.all(Array.from({ length: concurrency }, worker));
+      if (opts.onProgress) opts.onProgress({ ...stats });
+    }
     return stats;
   }
 

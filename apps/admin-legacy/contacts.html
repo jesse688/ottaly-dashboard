@@ -1140,6 +1140,12 @@
         <div class="filter-section" data-clear="email-provider">
           <div class="filter-label">Email Provider</div>
           <div class="filter-control" style="gap:12px;">
+            <!-- Default-ON guard: keep Microsoft (and unverified) OUT of results
+                 and any push unless explicitly allowed. This is the fix for
+                 Microsoft-hosted contacts leaking into Bison. -->
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:600;color:#b45309;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 8px;" title="Recommended. Removes Microsoft-hosted AND not-yet-verified contacts from results and any push. Verify first to reveal hidden Microsoft, then push the safe Google/Other remainder.">
+              <input type="checkbox" id="excludeMicrosoft" checked onchange="applyFilters()"> Exclude Microsoft &amp; unverified <span style="font-weight:400;color:#92400e;">(default)</span>
+            </label>
             <div style="display:flex;flex-direction:column;gap:8px;">
               <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;">
                 <input type="checkbox" id="emailGoogle" value="google"> Google <span id="googleCount" style="font-size:11px;color:#6b7280;margin-left:auto;">(0)</span>
@@ -1356,10 +1362,12 @@
           <button class="btn" onclick="switchToImportTab(); setTimeout(() => document.getElementById('deleteCsvDropZone').scrollIntoView({behavior:'smooth'}), 100)" style="background:#dc2626;color:white;">Delete from CSV</button>
           <button class="btn btn-secondary" id="exportBtn" onclick="startApolloExport()">⬇ Apollo Export</button>
           <button class="btn btn-secondary" id="resetExportBtn" onclick="resetApolloExports()" title="Clear all 'exported to Apollo' stamps so every contact shows as not-exported again">↺ Reset Exports</button>
-          <button class="btn btn-secondary" id="mxScanBtn" onclick="classifyUnknownProviders(this)" title="Resolve each contact's email provider (Google/Outlook/Other) via a live DNS MX lookup — fills the 'Unknown' bucket on the Stats page. Runs in the background; safe to re-run.">🔍 Classify Providers</button>
+          <button class="btn btn-secondary" id="mxScanBtn" onclick="classifyUnknownProviders(this)" title="Verify each contact's TRUE email provider (Google / Microsoft / Other) via a live DNS MX lookup — the most accurate method. Detects Microsoft hidden behind security gateways (Mimecast/Proofpoint) via SPF. Runs in the background; safe to re-run.">🔍 Verify Providers</button>
+          <label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#6b7280;cursor:pointer;" title="Re-resolve EVERY contact (not just unverified ones) — catches domains that migrated provider, e.g. Google→Microsoft. Slower."><input type="checkbox" id="mxReverify"> re-verify all</label>
           <button class="btn btn-secondary" onclick="openCreateContactModal()">+ Add</button>
         </div>
       </div>
+      <div id="mxResultPanel" style="display:none;margin:8px 0 0;padding:10px 14px;border:1px solid #e5e7eb;border-radius:8px;background:#fafafa;font-size:13px;"></div>
 
       <!-- Selection Action Bar -->
       <div class="selection-bar" id="selectionBar">
@@ -2412,6 +2420,7 @@
         technologies: sel('technologies'),
         technologiesExclude: excl('technologies'),
         emailProviders: emailProviders.length > 0 ? emailProviders.join(',') : '',
+        excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '',
         gatewayExclude: gatewayExclude.length > 0 ? gatewayExclude.join(',') : '',
         emailStatus: emailStatuses.length > 0 ? emailStatuses.join(',') : '',
         city: sel('city'),
@@ -2528,6 +2537,8 @@
         if (el) el.checked = false;
       });
       document.querySelectorAll('.gwExcl').forEach(cb => { cb.checked = false; });
+      // Microsoft guard stays ON through a clear — it's a safety default, not a filter.
+      { const em = document.getElementById('excludeMicrosoft'); if (em) em.checked = true; }
       Object.keys(filterDefs).forEach(key => {
         filterDefs[key].selected = [];
         filterDefs[key].excluded = [];
@@ -2792,6 +2803,8 @@
         const el = document.getElementById(id);
         if (el && el.checked) params.append(id, '1');
       });
+      // Persist the MS guard state explicitly (default ON, so record when OFF).
+      { const em = document.getElementById('excludeMicrosoft'); if (em && !em.checked) params.append('msGuardOff', '1'); }
       _employeeSelected.forEach(v => params.append('emp', v));
       const hash = params.toString();
       // Replace, not assign — avoids polluting browser history on every search.
@@ -2865,6 +2878,7 @@
       Object.keys(filterDefs).forEach(k => { filterDefs[k].selected = []; filterDefs[k].excluded = []; });
       ['globalSearch','company','status','ownsBuilding'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
       ['emailGoogle','emailOutlook','emailOther','emailUnknown','filterRemote','filterExcludeRemote','filterExcludeDNC','filterNotExported','filterExportedOnly','filterSentToPV','filterNotSentToPV','filterSentToPV','filterNotSentToPV'].forEach(id => { const el = document.getElementById(id); if (el) el.checked = false; });
+      { const em = document.getElementById('excludeMicrosoft'); if (em) em.checked = true; }
       window.location.hash = v.filters || '';
       restoreFiltersFromHash();
       search();
@@ -2904,6 +2918,8 @@
         const el = document.getElementById(id);
         if (el && params.get(id) === '1') { el.checked = true; any = true; }
       });
+      // MS guard defaults ON; only a saved 'msGuardOff' flag turns it off.
+      { const em = document.getElementById('excludeMicrosoft'); if (em) em.checked = params.get('msGuardOff') !== '1'; }
       const emp = params.getAll('emp');
       if (emp.length) { _employeeSelected = new Set(emp); any = true; }
       renderEmployeeBuckets();
@@ -3524,8 +3540,8 @@
       try {
         const endpoint = verifyFirst ? '/api/contacts/verify-and-push' : '/api/pv/push-contacts';
         const body = verifyFirst
-          ? { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, workspace_name: wsName, campaign_name: campName, include_risky: false, max_age_days: 90, emailProviders: pushProviders.join(','), use_n2b: useN2b }
-          : { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, campaign_name: campName };
+          ? { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, workspace_name: wsName, campaign_name: campName, include_risky: false, max_age_days: 90, emailProviders: pushProviders.join(','), excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '', use_n2b: useN2b }
+          : { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, campaign_name: campName, excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '' };
 
         const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         const data = await r.json();
@@ -3955,6 +3971,7 @@
             contact_ids: contactIds, workspace_name: wsName, campaign_name: campName,
             include_risky: false, max_age_days: 90,
             emailProviders: pushProviders.join(','),
+            excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '',
             use_n2b: useN2b,
             verify_only: true,
           })
@@ -4899,32 +4916,49 @@
     // the cheap domain-cache reseed first, then kicks off the background DNS
     // scan and polls coverage so the user watches Unknown fall.
     let _mxScanPoll = null;
+    function renderMxPanel(cov, status) {
+      const panel = document.getElementById('mxResultPanel');
+      if (!panel) return;
+      panel.style.display = 'block';
+      const g = cov.google ?? 0, ms = cov.outlook ?? 0, o = cov.other ?? 0, u = cov.unknown ?? 0;
+      const total = g + ms + o + u;
+      const pct = n => total ? Math.round(100 * n / total) : 0;
+      panel.innerHTML =
+        `<div style="font-weight:600;margin-bottom:6px;">${status}</div>`
+        + `<div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;">`
+        + `<span style="color:#4285f4;font-weight:600;">Google ${g.toLocaleString()} <span style="color:#9ca3af;font-weight:400;">(${pct(g)}%)</span></span>`
+        + `<span style="color:#b91c1c;font-weight:700;background:#fee2e2;padding:2px 8px;border-radius:6px;">Microsoft ${ms.toLocaleString()} (${pct(ms)}%) — excluded by default</span>`
+        + `<span style="color:#6b7280;font-weight:600;">Other ${o.toLocaleString()} <span style="color:#9ca3af;font-weight:400;">(${pct(o)}%)</span></span>`
+        + `<span style="color:#9ca3af;">Unverified ${u.toLocaleString()} (${pct(u)}%)</span>`
+        + `</div>`;
+    }
     async function classifyUnknownProviders(btn) {
       btn.disabled = true;
       const orig = btn.textContent;
       btn.textContent = '🔍 Starting…';
+      const reverify = document.getElementById('mxReverify')?.checked === true;
       try {
-        // 1) Instant: fan known providers across domains from verified contacts.
+        // 1) Instant: fan known providers across domains from cached resolutions.
         await fetch('/api/contacts/mx-reseed', { method: 'POST' }).catch(() => {});
 
-        // 2) Kick off the background live-DNS scan.
+        // 2) Kick off the background live-DNS verify (reverify = all, else unknowns).
         const r = await fetch('/api/contacts/mx-scan', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: '{}',
+          body: JSON.stringify({ reverify }),
         });
         if (r.status === 409) {
-          showMessage('A provider scan is already running — watching progress.', 'info');
+          showMessage('A provider verify is already running — watching progress.', 'info');
         } else if (!r.ok) {
           const t = await r.text().catch(() => '');
-          showMessage(`Couldn’t start scan (${r.status}): ${t.slice(0, 200)}`, 'error');
+          showMessage(`Couldn’t start verify (${r.status}): ${t.slice(0, 200)}`, 'error');
           btn.disabled = false; btn.textContent = orig;
           return;
         } else {
-          showMessage('Classifying providers in the background — this runs for a few minutes.', 'success');
+          showMessage(reverify ? 'Re-verifying ALL contacts via live DNS — this runs in the background.' : 'Verifying providers in the background — this runs for a few minutes.', 'success');
         }
 
-        // 3) Poll coverage so the button shows the unknown count dropping.
+        // 3) Poll coverage + job, render the live results panel (incl. MS count).
         if (_mxScanPoll) clearInterval(_mxScanPoll);
         const poll = async () => {
           try {
@@ -4933,20 +4967,25 @@
               fetch('/api/contacts/mx-scan').then(x => x.json()),
             ]);
             const unknown = (cov.unknown ?? 0).toLocaleString();
-            if (job && job.running === false && job.stats) {
+            if (job && job.running === false) {
               clearInterval(_mxScanPoll); _mxScanPoll = null;
               btn.disabled = false; btn.textContent = orig;
-              const s = job.stats;
-              showMessage(`Provider scan done — classified ${s.contactsUpdated.toLocaleString()} contacts (${s.domainsResolved.toLocaleString()} domains). ${unknown} still unknown.`, 'success');
+              const s = job.stats || {};
+              const done = `Verify complete — ${(s.contactsUpdated||0).toLocaleString()} contacts classified across ${(s.domainsResolved||0).toLocaleString()} domains. ${(cov.outlook||0).toLocaleString()} are Microsoft (excluded by default).`;
+              renderMxPanel(cov, done);
+              showMessage(done, 'success');
+              // Refresh the provider-count chips next to the filter checkboxes.
+              if (typeof updateEmailProviderCounts === 'function') updateEmailProviderCounts(cov);
             } else {
-              btn.textContent = `🔍 ${unknown} unknown…`;
+              btn.textContent = `🔍 verifying… ${unknown} left`;
+              renderMxPanel(cov, reverify ? 'Re-verifying all contacts via live DNS…' : 'Verifying providers via live DNS…');
             }
           } catch { /* transient; keep polling */ }
         };
         _mxScanPoll = setInterval(poll, 4000);
         poll();
       } catch (err) {
-        showMessage('Provider scan error: ' + err.message, 'error');
+        showMessage('Provider verify error: ' + err.message, 'error');
         btn.disabled = false; btn.textContent = orig;
       }
     }
