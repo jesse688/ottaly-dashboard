@@ -1740,6 +1740,16 @@ class PostgresDatabase {
   // Lightweight export query — only the 6 columns Apollo needs.
   // Bypasses searchContacts to avoid ORDER BY + raw_data overhead on large
   // filtered sets (company_region filter on 267k rows was timing out).
+  // Unconditional cleanliness guard applied to EVERY CSV export + its count, so
+  // no dead / risky / suppressed address can ever leave in a downloadable file.
+  // Only verifier-clean (safe / safe_catchall), not opted-out, not hard-bounced.
+  // This is non-negotiable — there is no flag to turn it off.
+  static EXPORT_CLEAN_SQL = `
+    AND LOWER(COALESCE(email_status,'')) IN ('safe','safe_catchall')
+    AND COALESCE(do_not_contact, false) = false
+    AND COALESCE(LOWER(bounce_type),'') <> 'hard'
+    AND email LIKE '%@%'`;
+
   async exportContacts(workspaceId, filters = {}, limit = 1000, offset = 0) {
     const { clauses, params } = this._buildFilterClauses(filters);
     const where = clauses.length ? ' AND ' + clauses.join(' AND ') : '';
@@ -1747,7 +1757,7 @@ class PostgresDatabase {
     const sql = `
       SELECT id, first_name, last_name, email, company_name, company_domain, apollo_id, raw_data
       FROM contacts
-      WHERE workspace_id = $1${where}
+      WHERE workspace_id = $1${where}${PostgresDatabase.EXPORT_CLEAN_SQL}
       ORDER BY id
       LIMIT $${p} OFFSET $${p + 1}`;
     const result = await this.query(sql, [workspaceId, ...params, limit, offset]);

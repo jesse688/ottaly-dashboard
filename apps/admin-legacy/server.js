@@ -1209,9 +1209,15 @@ app.get('/api/contacts/export', requireSession, async (req, res) => {
 
   if (!regions.length) return res.status(400).json({ error: 'companyRegion required' });
 
+  // Same non-negotiable cleanliness guard as db.exportContacts — only verified-
+  // clean, not-opted-out, non-hard-bounced addresses ever leave in a CSV.
+  const CLEAN = `
+    AND LOWER(COALESCE(email_status,'')) IN ('safe','safe_catchall')
+    AND COALESCE(do_not_contact, false) = false
+    AND COALESCE(LOWER(bounce_type),'') <> 'hard'`;
   const placeholders = regions.map((_, i) => `$${i + 1}`).join(',');
   const countRes = await pgdb.query(
-    `SELECT COUNT(*) AS n FROM contacts WHERE company_region = ANY(ARRAY[${placeholders}]::text[]) AND email IS NOT NULL`,
+    `SELECT COUNT(*) AS n FROM contacts WHERE company_region = ANY(ARRAY[${placeholders}]::text[]) AND email IS NOT NULL${CLEAN}`,
     regions
   );
   const total = parseInt(countRes.rows[0].n, 10);
@@ -1220,7 +1226,7 @@ app.get('/api/contacts/export', requireSession, async (req, res) => {
   const { rows } = await pgdb.query(
     `SELECT email, first_name, last_name, company_name, company_domain, apollo_id
      FROM contacts
-     WHERE company_region = ANY(ARRAY[${placeholders}]::text[]) AND email IS NOT NULL
+     WHERE company_region = ANY(ARRAY[${placeholders}]::text[]) AND email IS NOT NULL${CLEAN}
      ORDER BY company_domain, email
      LIMIT $${regions.length + 1} OFFSET $${regions.length + 2}`,
     params
@@ -14109,6 +14115,45 @@ async function recordEmailEvent(body, rawEventType, email) {
         eventType, contentHash, senderEmail, JSON.stringify(body || {}),
       ]
     );
+
+    // ── Auto-suppress on bounce (the feedback loop that was missing) ──
+    // When a recipient HARD-bounces (dead address), permanently retire it:
+    // mark the contact invalid + do_not_contact so it can never be pushed or
+    // exported again — no matter how it originally got into a campaign. This is
+    // what keeps the contacts DB self-cleaning. Soft/block bounces are NOT
+    // suppressed (soft = temporary; block = our reputation, not a dead address).
+    if (eventType === 'bounce' && email) {
+      try {
+        const msg = body?.msg || body?.message || body?.reason || body?.bounce?.message
+                  || body?.smtp_response || body?.diagnostic_code || '';
+        const klass = classifyBounce(msg); // 'hard' | 'block' | 'soft' | 'unclassified'
+        if (klass === 'hard') {
+          // Door 1 — our contacts DB: stops future pushes/exports from the
+          // dashboard (the clean-data gate reads do_not_contact + email_status).
+          await pgdb.query(
+            `UPDATE contacts
+               SET email_status = 'invalid',
+                   bounce_type  = 'hard',
+                   bounced_at   = COALESCE(bounced_at, CURRENT_TIMESTAMP),
+                   do_not_contact = true,
+                   updated_at   = CURRENT_TIMESTAMP
+             WHERE LOWER(email) = $1`,
+            [(email || '').toLowerCase()]
+          );
+          // Door 2 — Bison's own blocklist: stops the ALREADY-RUNNING campaign
+          // from sending to this dead address again (our DB flag alone doesn't
+          // reach into a live Bison campaign). Best-effort, non-fatal.
+          if (meta.workspace_id) {
+            bisonReq('/api/blacklisted-emails', {
+              wsId: meta.workspace_id, method: 'POST', body: { email: (email || '').toLowerCase() },
+            }).catch(e => console.warn('[suppress] Bison blocklist push failed (non-fatal):', e.message));
+          }
+          console.log(`[suppress] hard bounce → retired ${email} (contacts + Bison blocklist)`);
+        }
+      } catch (e) {
+        console.warn('[suppress] bounce writeback failed (non-fatal):', e.message);
+      }
+    }
   } catch (err) {
     // Don't blow up the webhook on analytics misses — log and move on.
     console.warn('[email_events] insert failed (non-fatal):', err.message);
