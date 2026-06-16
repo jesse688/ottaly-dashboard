@@ -169,6 +169,8 @@ tr:hover td{background:#FAFBFF}
     <span id="mbPeriodBar" style="display:inline-flex;gap:4px;font-size:12px;font-weight:600"></span>
   </div>
   <div id="mbPeriodNote" style="font-size:11px;color:var(--muted);margin:-4px 0 8px"></div>
+  <!-- Visual comparison bar chart (dependency-free CSS bars) -->
+  <div id="mbBarChart" style="margin:4px 0 14px"></div>
   <div style="font-size:11px;color:var(--muted);margin:-2px 0 8px">By provider type (Google / Microsoft / SMTP):</div>
   <div id="providerCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1rem;margin-bottom:.75rem"></div>
   <div style="font-size:11px;color:var(--muted);margin:0 0 8px">By supplier (Winnr / Maildoso / Mithun):</div>
@@ -1432,7 +1434,54 @@ async function _fetchProviderStats(p) {
       note.textContent = `Last ${d.days} day(s), per-day stats synced from Bison. Last sync: ${synced}. Replies from the client portal.`;
     }
   }
+  renderMbBarChart(d);
   return d;
+}
+
+// Dependency-free comparison bar chart. Bar length = sent volume (so you can
+// rank who sends most at a glance), with reply% and bounce% annotated on the
+// right. Two groups: by provider, then by supplier. Respects the period.
+function renderMbBarChart(d) {
+  const wrap = document.getElementById('mbBarChart');
+  if (!wrap) return;
+  const PCOL = { google:'#EA4335', microsoft:'#0078D4', smtp:'#475569' };
+  const PLBL = { google:'Google', microsoft:'Microsoft', smtp:'SMTP / Other' };
+  const SPAL = ['#6366F1','#0EA5E9','#10B981','#F59E0B','#EC4899','#8B5CF6','#475569'];
+  const num = n => (n||0).toLocaleString();
+  const pct = (n,dn) => dn>0 ? (100*n/dn).toFixed(2)+'%' : '—';
+
+  function rows(map, colorFor, labelFor) {
+    const keys = Object.keys(map||{}).sort((a,b)=>(map[b].sent||0)-(map[a].sent||0));
+    const max = keys.reduce((m,k)=>Math.max(m, map[k].sent||0), 0) || 1;
+    if (!keys.length) return '';
+    return keys.map((k,i) => {
+      const b = map[k]; const w = Math.max(2, 100*(b.sent||0)/max);
+      const col = colorFor(k,i);
+      const br = (b.bounce_rate||0);
+      const brCol = br>=0.05?'#DC2626':br>=0.02?'#D97706':'#6B7280';
+      return `<div style="display:grid;grid-template-columns:130px 1fr 200px;align-items:center;gap:10px;margin:5px 0">
+        <div style="font-size:12px;font-weight:600;text-align:right;color:#1f2937;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${labelFor(k)}</div>
+        <div style="background:#F1F3F9;border-radius:6px;height:22px;position:relative;overflow:hidden">
+          <div style="background:${col};height:100%;width:${w}%;border-radius:6px;min-width:2px;transition:width .3s"></div>
+          <div style="position:absolute;left:8px;top:0;height:100%;display:flex;align-items:center;font-size:11px;font-weight:700;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.3)">${num(b.sent)}</div>
+        </div>
+        <div style="font-size:11px;color:var(--muted);white-space:nowrap">
+          <span style="color:#059669;font-weight:600">${pct(b.replies,b.sent)}</span> reply ·
+          <span style="color:${brCol};font-weight:600">${pct(b.bounces,b.sent)}</span> bounce
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  const provRows = rows(d.byProvider, k=>PCOL[k]||'#475569', k=>PLBL[k]||k);
+  const suppRows = rows(d.bySupplier, (k,i)=>SPAL[i%SPAL.length], k=>k);
+  if (!provRows && !suppRows) { wrap.innerHTML = ''; return; }
+  wrap.innerHTML = `<div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:14px 16px">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:6px">Sent volume by provider</div>
+      ${provRows || '<div style="font-size:12px;color:var(--muted)">No data</div>'}
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin:14px 0 6px">Sent volume by supplier</div>
+      ${suppRows || '<div style="font-size:12px;color:var(--muted)">No data</div>'}
+    </div>`;
 }
 function _provCard(label, color, b) {
   const pct = (n, d) => d > 0 ? (100 * n / d).toFixed(2) + '%' : '—';
