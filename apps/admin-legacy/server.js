@@ -4563,12 +4563,16 @@ async function buildProviderMixForRange(pgdb, wsIds, start, end) {
     GROUP BY workspace_id
   `, [start, end]);
 
-  const wsSet = new Set(wsIds);
-  // Accumulate raw counts by canonical id (multiple stored ids can map to one).
-  const acc = {};
+  // Accumulate by canonical id, but DON'T filter to wsIds — a workspace whose
+  // stored id doesn't fold to a page wsId would otherwise be silently dropped
+  // (that was the "syncing 0/N forever" bug). We key the output by BOTH the
+  // canonical id AND the raw stored id below, so the page's lookup hits
+  // regardless of which form it holds.
+  const acc = {};       // canonical id -> counts
+  const rawToCanon = {}; // raw stored id -> canonical id (for dual-keying)
   for (const r of rows) {
     const canon = canonicalWorkspaceId(r.workspace_id, null);
-    if (!wsSet.has(canon)) continue;
+    rawToCanon[r.workspace_id] = canon;
     const a = acc[canon] || (acc[canon] = { google: 0, outlook: 0, other: 0, unclassified: 0, total: 0 });
     a.google += r.google; a.outlook += r.outlook; a.other += r.other;
     a.unclassified += r.unclassified; a.total += r.total;
@@ -4587,6 +4591,11 @@ async function buildProviderMixForRange(pgdb, wsIds, start, end) {
       other:    oth / denom,
       coverage: a.total ? (a.google + a.outlook + a.other) / a.total : 0,
     };
+  }
+  // Dual-key: also expose each mix under every RAW stored id that folded to it,
+  // so the page hits whether it looks up by canonical id or the raw workspace_id.
+  for (const [raw, canon] of Object.entries(rawToCanon)) {
+    if (out[canon] && !out[raw]) out[raw] = out[canon];
   }
   return out;
 }
