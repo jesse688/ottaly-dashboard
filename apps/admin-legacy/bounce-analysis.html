@@ -268,9 +268,10 @@ function reload(){
   var days = document.getElementById('days').value;
   document.getElementById('cards').innerHTML = '<div class="card"><div class="skel" style="height:50px"></div></div>';
   fetch('/api/bounce-analysis?days='+days).then(function(r){return r.json();}).then(function(d){
+    if(d && d.error){ document.getElementById('cards').innerHTML='<div class="empty">Failed to load bounce data.<br><small style="color:#9ca3af">'+(d.detail||d.error)+'</small></div>'; return; }
     DATA = d;
     renderCards(d.summary); renderChart(d.series); renderTables(d);
-  }).catch(function(){ document.getElementById('cards').innerHTML='<div class="empty">Failed to load bounce data.</div>'; });
+  }).catch(function(e){ document.getElementById('cards').innerHTML='<div class="empty">Failed to load bounce data.<br><small style="color:#9ca3af">'+(e&&e.message||'')+'</small></div>'; });
   explore(1);
 }
 

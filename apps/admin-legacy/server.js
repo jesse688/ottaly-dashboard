@@ -8500,7 +8500,7 @@ app.get('/api/bounce-analysis', requireSession, async (req, res) => {
     });
   } catch (err) {
     console.error('[bounce-analysis]', err.message);
-    res.status(500).json({ error: 'Database error' });
+    res.status(500).json({ error: 'Database error', detail: err.message });
   }
 });
 
