@@ -8393,36 +8393,40 @@ app.get('/api/gateway-analysis', requireSession, async (req, res) => {
                        AND COALESCE(raw->>'label','') NOT IN ('OUT_OF_OFFICE','AUTOMATIC_REPLY')) AS replied_substantive,
                bool_or(event_type = 'lead'
                        OR raw->>'label' IN ('LEAD','INTERESTED_NONLEAD'))            AS is_lead,
-               -- Bounce class from the SMTP reason in raw.msg (no stored type).
-               -- 3-way, NOT naive 5xx=hard: a 5xx can be a reputation/policy
-               -- BLOCK (gateway rejecting the sender), which must not count as a
-               -- dead address. Regexes come from bounce-classify.js (the single
-               -- source of truth); the per-contact dedup below resolves a
-               -- contact that has BOTH a hard and a block event to hard.
-               bool_or(event_type = 'bounce' AND lower(raw->>'msg') ~ '${BOUNCE_HARD_RE}'
+               -- Bounce class — regex runs ONLY on bounce rows (the inner guard
+               -- short-circuits for replies/leads, so the costly regex isn't run
+               -- on the 49k+ reply rows). block > hard precedence handled below.
+               bool_or(event_type = 'bounce' AND raw->>'msg' IS NOT NULL
+                       AND lower(raw->>'msg') ~ '${BOUNCE_HARD_RE}'
                        AND NOT lower(raw->>'msg') ~ '${BOUNCE_BLOCK_RE}') AS bounce_hard,
-               bool_or(event_type = 'bounce' AND lower(raw->>'msg') ~ '${BOUNCE_BLOCK_RE}') AS bounce_block,
-               bool_or(event_type = 'bounce' AND lower(raw->>'msg') ~ '${BOUNCE_SOFT_RE}'
+               bool_or(event_type = 'bounce' AND raw->>'msg' IS NOT NULL
+                       AND lower(raw->>'msg') ~ '${BOUNCE_BLOCK_RE}') AS bounce_block,
+               bool_or(event_type = 'bounce' AND raw->>'msg' IS NOT NULL
+                       AND lower(raw->>'msg') ~ '${BOUNCE_SOFT_RE}'
                        AND NOT lower(raw->>'msg') ~ '${BOUNCE_BLOCK_RE}') AS bounce_soft
         FROM email_events
-        -- Only reply/lead/bounce matter here; excluding 'sent' (the bulk of the
-        -- table) keeps this CTE under the statement_timeout. Scanning ALL events
-        -- with regex is what left the page blank (query timed out → 500).
         WHERE event_type <> 'sent'
         GROUP BY 1
       ),
+      -- Pre-resolve each emailed contact to a gateway FIRST (cheap index join),
+      -- so the heavy ev LEFT JOIN only runs against gateway-matched contacts —
+      -- not the full ~1M emailed set. This is what keeps it under the timeout.
+      sent_gw AS (
+        SELECT s.email, s.domain, g.gateway
+        FROM sent s
+        JOIN gateway_mx_cache g ON g.domain = s.domain
+      ),
       per_contact AS (
-        SELECT COALESCE(g.gateway,'NO MX / unresolved') AS gateway,
-               s.domain,
+        SELECT COALESCE(sg.gateway,'NO MX / unresolved') AS gateway,
+               sg.domain,
                e.replied,
                e.replied_substantive,
                e.is_lead,
                e.bounce_hard,
                (e.bounce_block AND NOT e.bounce_hard)                       AS bounce_block,
                (e.bounce_soft AND NOT e.bounce_hard AND NOT e.bounce_block) AS bounce_soft
-        FROM sent s
-        JOIN gateway_mx_cache g ON g.domain = s.domain
-        LEFT JOIN ev e ON e.email = s.email
+        FROM sent_gw sg
+        LEFT JOIN ev e ON e.email = sg.email
       )
       SELECT gateway,
              count(DISTINCT domain)                  AS domains,
@@ -8493,7 +8497,7 @@ app.get('/api/gateway-analysis', requireSession, async (req, res) => {
     });
   } catch (err) {
     console.error('[gateway-analysis]', err.message);
-    res.status(500).json({ error: 'Database error' });
+    res.status(500).json({ error: 'Database error', detail: err.message });
   }
 });
 
