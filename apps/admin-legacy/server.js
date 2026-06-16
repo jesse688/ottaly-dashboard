@@ -2564,11 +2564,15 @@ app.get('/api/admin/stats-debug', requireAdmin, async (req, res) => {
         const single = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { wsId, params: { start_date: today, end_date: today } });
         out.single_day = { ok: true, labels: ((single.data || single) || []).map(s => ({ label: s.label, points: (s.dates || []).length })) };
       } catch (e) { out.single_day = { ok: false, error: e.message }; }
-      // 7-day range — what every working caller uses
+      // Range — defaults to yesterday..today; override with ?from=&to= to look back
+      // further and confirm whether the workspace has ANY sends in a wider window.
+      const rFrom = String(req.query.from || serverDateString(y));
+      const rTo   = String(req.query.to   || today);
       try {
-        const range = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { wsId, params: { start_date: serverDateString(y), end_date: today } });
+        const range = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { wsId, params: { start_date: rFrom, end_date: rTo } });
         const pivot = pivotBisonStats((range.data || range) || []);
-        out.range = { ok: true, dates: Object.keys(pivot), today_bucket: pivot[today] || null, agg: aggPvEmailStats(Object.values(pivot)) };
+        const nonZero = Object.values(pivot).filter(d => d.total_sent_count > 0).map(d => ({ date: d.date, sent: d.total_sent_count, replies: d.total_reply_count }));
+        out.range = { from: rFrom, to: rTo, ok: true, dates: Object.keys(pivot), days_with_sends: nonZero, agg: aggPvEmailStats(Object.values(pivot)) };
       } catch (e) { out.range = { ok: false, error: e.message }; }
       return res.json(out);
     }
