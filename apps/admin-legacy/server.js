@@ -8529,18 +8529,20 @@ app.post('/api/gateway-analysis/resolve', requireAdmin, async (req, res) => {
     await pgdb.query(`CREATE TABLE IF NOT EXISTS gateway_mx_cache (
       domain TEXT PRIMARY KEY, mx_hosts TEXT[], gateway TEXT, resolved_at TIMESTAMP DEFAULT NOW())`);
 
-    // Domains to resolve: sent-to domains not yet in the cache. When blocksOnly,
-    // restrict to domains that have block-bounced us (fastest path to the answer).
+    // Domains to resolve. Skip ones ALREADY classified (gateway known), but DO
+    // re-resolve ones missing or stuck on 'NO MX / unresolved' (an old CLI run
+    // may have inserted them unclassified — excluding those gave "0 domains").
+    const resolvedSet = `(SELECT domain FROM gateway_mx_cache WHERE gateway IS NOT NULL AND gateway NOT IN ('NO MX / unresolved',''))`;
     const domQ = blocksOnly
       ? `SELECT DISTINCT lower(split_part(lead_email,'@',2)) AS domain
            FROM email_events
           WHERE event_type='bounce' AND lead_email LIKE '%@%' AND (${isBlock})
-            AND lower(split_part(lead_email,'@',2)) NOT IN (SELECT domain FROM gateway_mx_cache)
+            AND lower(split_part(lead_email,'@',2)) NOT IN ${resolvedSet}
           LIMIT $1`
       : `SELECT DISTINCT lower(split_part(email,'@',2)) AS domain
            FROM contacts
           WHERE COALESCE(emailed_workspaces,'{}'::jsonb) <> '{}'::jsonb AND email LIKE '%@%'
-            AND lower(split_part(email,'@',2)) NOT IN (SELECT domain FROM gateway_mx_cache)
+            AND lower(split_part(email,'@',2)) NOT IN ${resolvedSet}
           LIMIT $1`;
     const { rows } = await pgdb.query(domQ, [max]);
     const domains = rows.map(r => r.domain).filter(Boolean);
