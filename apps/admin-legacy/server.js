@@ -9661,32 +9661,22 @@ app.get('/api/mailboxes/provider-stats', requireSession, async (req, res) => {
       });
     }
 
-    // SENT + BOUNCE per mailbox: email_events.sender_email (Bison populates it on
-    // these — confirmed 100% coverage).
-    const { isHard, isBlock, isSoft } = bounceClassExprs("raw->>'msg'");
-    const params = [];
-    let windowSql = '';
-    if (days > 0) { params.push(String(days)); windowSql = `AND event_at >= NOW() - ($1 || ' days')::interval`; }
-    const { rows } = await pgdb.query(`
-      SELECT lower(sender_email) AS sender,
-             COUNT(*) FILTER (WHERE event_type='sent')                  ::int AS sent,
-             COUNT(*) FILTER (WHERE event_type='bounce')                ::int AS bounces,
-             COUNT(*) FILTER (WHERE event_type='bounce' AND ${isHard})  ::int AS bounces_hard,
-             COUNT(*) FILTER (WHERE event_type='bounce' AND ${isBlock}) ::int AS bounces_block,
-             COUNT(*) FILTER (WHERE event_type='bounce' AND ${isSoft})  ::int AS bounces_soft
-      FROM email_events
-      WHERE sender_email IS NOT NULL AND sender_email <> ''
-        AND event_type IN ('sent','bounce') ${windowSql}
-      GROUP BY lower(sender_email)
-    `, params);
+    // SENT + BOUNCE per mailbox = Bison's authoritative LIFETIME counts from the
+    // sender-emails API (api_sent/api_bounced on each _mailboxCache row). NOT
+    // email_events — Bison stopped firing email_sent on 2026-06-15, so the event
+    // feed is dead. These counts are lifetime, so the period buttons no longer
+    // window this section (the page shows it as "lifetime").
+    // sentByMailbox: email -> { sent, bounces } from the API.
+    const sentByMailbox = new Map();
+    for (const m of (_mailboxCache.mailboxes || [])) {
+      const email = (m.email || '').toLowerCase();
+      if (!email) continue;
+      sentByMailbox.set(email, { sent: Number(m.api_sent) || 0, bounces: Number(m.api_bounced) || 0, apiReplied: Number(m.api_replied) || 0 });
+    }
 
-    // REPLIES per mailbox: Bison omits sender_email on replies, but the client
-    // portal captures the receiving mailbox in unibox_replies.mailbox_email
-    // (= Bison primary_to_email_address). So replies ARE attributable — via the
-    // portal, exactly as intended. Human replies only (excludes warmup/OOO).
-    const rParams = [];
-    let rWindow = '';
-    if (days > 0) { rParams.push(String(days)); rWindow = `AND received_at >= NOW() - ($1 || ' days')::interval`; }
+    // REPLIES per mailbox = client portal (unibox_replies.mailbox_email) — the
+    // canonical reply source. Lifetime, human replies only. Falls back to the
+    // API's total_replied_count when the portal has none for a mailbox.
     let replyRows = [];
     try {
       const rr = await pgdb.query(`
@@ -9694,26 +9684,57 @@ app.get('/api/mailboxes/provider-stats', requireSession, async (req, res) => {
         FROM unibox_replies
         WHERE mailbox_email IS NOT NULL AND mailbox_email <> ''
           AND COALESCE(admin_label, category) IN ('interested','not_interested','question','unsubscribe')
-          ${rWindow}
         GROUP BY lower(mailbox_email)
-      `, rParams);
+      `);
       replyRows = rr.rows;
     } catch (e) {
       console.warn('[mailbox provider-stats] reply query failed (non-fatal):', e.message);
     }
     const repliesBySender = new Map(replyRows.map(r => [r.sender, r.replies]));
 
+    // Hard/block/soft proportions per mailbox from still-alive bounce events
+    // (bounce webhooks DO still fire). Scaled up to each mailbox's api_bounced
+    // total so the split reflects the authoritative bounce count.
+    const { isHard, isBlock } = bounceClassExprs("raw->>'msg'");
+    let bounceClassRows = [];
+    try {
+      const bc = await pgdb.query(`
+        SELECT lower(sender_email) AS sender,
+               COUNT(*)::int AS n,
+               COUNT(*) FILTER (WHERE ${isHard})::int  AS hard,
+               COUNT(*) FILTER (WHERE ${isBlock})::int AS block
+        FROM email_events
+        WHERE event_type='bounce' AND sender_email IS NOT NULL AND sender_email <> ''
+        GROUP BY lower(sender_email)
+      `);
+      bounceClassRows = bc.rows;
+    } catch (e) {
+      console.warn('[mailbox provider-stats] bounce-class query failed (non-fatal):', e.message);
+    }
+    const bClassBySender = new Map(bounceClassRows.map(r => [r.sender, r]));
+
     const blank = () => ({ mailboxes: 0, sent: 0, replies: 0, bounces: 0, bounces_hard: 0, bounces_block: 0, bounces_soft: 0 });
     const byProvider = {}, bySupplier = {};
     let unmatched = blank();
-    // Union of senders seen in sends and in replies.
-    const allSenders = new Set([...rows.map(r => r.sender), ...repliesBySender.keys()]);
-    const sentBySender = new Map(rows.map(r => [r.sender, r]));
+    // Every mailbox that has sent/replied/bounced anything.
+    const allSenders = new Set([...sentByMailbox.keys(), ...repliesBySender.keys()]);
     for (const sender of allSenders) {
-      const s = sentBySender.get(sender) || { sent: 0, bounces: 0, bounces_hard: 0, bounces_block: 0, bounces_soft: 0 };
-      const replies = repliesBySender.get(sender) || 0;
+      const sm = sentByMailbox.get(sender) || { sent: 0, bounces: 0, apiReplied: 0 };
+      const sent = sm.sent;
+      const bounces = sm.bounces;
+      const portalReplies = repliesBySender.get(sender);
+      const replies = (portalReplies != null && portalReplies > 0) ? portalReplies : (sm.apiReplied || 0);
+      // Split api_bounced into hard/block/soft using the event-derived proportions
+      // (default everything to 'block' if no event detail — most bounces are blocks).
+      let h = 0, bl = bounces, sf = 0;
+      const bc = bClassBySender.get(sender);
+      if (bc && bc.n > 0 && bounces > 0) {
+        const hp = bc.hard / bc.n, bp = bc.block / bc.n;
+        h = Math.round(bounces * hp); bl = Math.round(bounces * bp); sf = Math.max(0, bounces - h - bl);
+      }
+      if (sent === 0 && replies === 0 && bounces === 0) continue;
       const info = senderInfo.get(sender);
-      const add = (b) => { b.mailboxes++; b.sent += s.sent; b.replies += replies; b.bounces += s.bounces; b.bounces_hard += s.bounces_hard; b.bounces_block += s.bounces_block; b.bounces_soft += s.bounces_soft; };
+      const add = (b) => { b.mailboxes++; b.sent += sent; b.replies += replies; b.bounces += bounces; b.bounces_hard += h; b.bounces_block += bl; b.bounces_soft += sf; };
       if (!info) { add(unmatched); continue; }
       add(byProvider[info.provider || 'smtp'] = byProvider[info.provider || 'smtp'] || blank());
       add(bySupplier[info.supplier || '(unassigned)'] = bySupplier[info.supplier || '(unassigned)'] || blank());
@@ -9724,7 +9745,7 @@ app.get('/api/mailboxes/provider-stats', requireSession, async (req, res) => {
       bounce_rate: b.sent > 0 ? b.bounces / b.sent : 0,
     }]));
 
-    res.json({ days, byProvider: withRates(byProvider), bySupplier: withRates(bySupplier), unmatched: { ...unmatched, reply_rate: unmatched.sent>0?unmatched.replies/unmatched.sent:0, bounce_rate: unmatched.sent>0?unmatched.bounces/unmatched.sent:0 } });
+    res.json({ days: 0, lifetime: true, byProvider: withRates(byProvider), bySupplier: withRates(bySupplier), unmatched: { ...unmatched, reply_rate: unmatched.sent>0?unmatched.replies/unmatched.sent:0, bounce_rate: unmatched.sent>0?unmatched.bounces/unmatched.sent:0 } });
   } catch (err) {
     console.error('[mailbox provider-stats]', err.message);
     res.status(500).json({ error: err.message });

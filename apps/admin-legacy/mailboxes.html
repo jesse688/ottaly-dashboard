@@ -161,16 +161,11 @@ tr:hover td{background:#FAFBFF}
   <div class="section-h">By supplier — who performs best</div>
   <div class="gridN" id="bySupplier"></div>
 
-  <!-- Period-aware provider/supplier performance (real: events + portal replies) -->
+  <!-- Provider/supplier performance — LIFETIME (sends from Bison sender-emails
+       API, replies from the client portal; independent of any webhook). -->
   <div class="section-h" style="display:flex;align-items:center;justify-content:space-between;margin-top:1rem">
     Sending performance by provider &amp; supplier
-    <div style="display:flex;gap:.4rem">
-      <button id="mbPeriodToday" onclick="setMbPeriod('today')" style="padding:3px 10px;border:1px solid var(--border);background:#fff;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;color:var(--muted)">Today</button>
-      <button id="mbPeriod7d" onclick="setMbPeriod('7d')" style="padding:3px 10px;border:1px solid var(--navy-dark);background:var(--navy-dark);color:#fff;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer">7d</button>
-      <button id="mbPeriod14d" onclick="setMbPeriod('14d')" style="padding:3px 10px;border:1px solid var(--border);background:#fff;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;color:var(--muted)">14d</button>
-      <button id="mbPeriod30d" onclick="setMbPeriod('30d')" style="padding:3px 10px;border:1px solid var(--border);background:#fff;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;color:var(--muted)">30d</button>
-      <button id="mbPeriod60d" onclick="setMbPeriod('60d')" style="padding:3px 10px;border:1px solid var(--border);background:#fff;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;color:var(--muted)">60d</button>
-    </div>
+    <span style="font-size:10px;font-weight:700;color:#475569;background:#e2e8f0;padding:2px 8px;border-radius:99px">LIFETIME</span>
   </div>
   <div style="font-size:11px;color:var(--muted);margin:-2px 0 8px">By provider type (Google / Microsoft / SMTP):</div>
   <div id="providerCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1rem;margin-bottom:.75rem"></div>
@@ -1399,7 +1394,7 @@ function _provCard(label, color, b) {
       + `<span style="color:#6B7280">${num(b.bounces_soft)} soft</span></div>`
     : '';
   return `<div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:14px 16px;border-top:3px solid ${color}">
-    <div style="font-size:13px;font-weight:700;margin-bottom:8px">${label} <span style="font-weight:400;color:var(--muted);font-size:11px">· ${num(b.mailboxes)} active in period</span></div>
+    <div style="font-size:13px;font-weight:700;margin-bottom:8px">${label} <span style="font-weight:400;color:var(--muted);font-size:11px">· ${num(b.mailboxes)} mailboxes</span></div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
       <div><div style="font-size:18px;font-weight:700">${num(b.sent)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Sent</div></div>
       <div><div style="font-size:18px;font-weight:700;color:#059669">${pct(b.replies, b.sent)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Reply rate</div></div>
@@ -1426,7 +1421,7 @@ async function loadProviderCharts(p) {
   const keys = Object.keys(d.byProvider || {}).sort((a,b)=> (order.indexOf(a)+99*(order.indexOf(a)<0)) - (order.indexOf(b)+99*(order.indexOf(b)<0)));
   const totalSent = keys.reduce((s,k)=> s + (d.byProvider[k].sent||0), 0);
   if (!keys.length || totalSent === 0) {
-    const msg = (p === 'today') ? 'No sends yet today — try 7d or 30d for performance.' : 'No sending activity for this period.';
+    const msg = 'No sending activity yet — mailbox cache may still be loading. Click Refresh.';
     wrap.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:.5rem 0">'+msg+'</div>'; return;
   }
   wrap.innerHTML = keys.map(k => _provCard(LBL[k]||k, COL[k]||'#475569', d.byProvider[k])).join('');
@@ -1449,7 +1444,7 @@ async function loadSupplierCharts(p) {
   const keys = Object.keys(d.bySupplier || {}).sort((a,b)=>(d.bySupplier[b].sent||0)-(d.bySupplier[a].sent||0));
   const totalSent = keys.reduce((s,k)=> s + (d.bySupplier[k].sent||0), 0);
   if (!keys.length || totalSent === 0) {
-    const msg = (p === 'today') ? 'No sends yet today — try 7d or 30d.' : 'No supplier-tagged sending activity for this period.';
+    const msg = 'No supplier-tagged sending activity yet — assign suppliers to mailboxes, or click Refresh.';
     wrap.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:.5rem 0">'+msg+'</div>'; return;
   }
   wrap.innerHTML = keys.map((k,i) => _provCard(k, PAL[i%PAL.length], d.bySupplier[k])).join('');
