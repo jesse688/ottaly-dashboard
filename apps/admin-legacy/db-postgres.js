@@ -346,24 +346,32 @@ class PostgresDatabase {
         data       JSONB NOT NULL,
         saved_at   BIGINT NOT NULL
       )`,
-      // ── Per-mailbox daily stats (the start of the central data layer) ──
-      // One row per mailbox per day: sent/replied/bounced pulled from Bison's
-      // breakdownOfEventsByDate (GET /api/campaign-events/stats), filtered by
-      // sender_email_ids per workspace. Lets the Mailboxes page filter by any
-      // date range instantly without hitting Bison live. Replies here are
-      // Bison-side; the page overlays portal replies (unibox_replies) on top.
+      // The first cut of this table was per-mailbox (PK mailbox_email,date).
+      // It never held real data (the sync recorded 0 rows), so drop it and
+      // recreate at the cheaper provider/supplier grain. Safe: no data lost.
+      `DROP TABLE IF EXISTS mailbox_daily_stats`,
+      // ── Provider/supplier daily stats (the start of the central data layer) ──
+      // One row per (workspace, provider, supplier, day): sent/bounced pulled
+      // from Bison's breakdownOfEventsByDate (GET /api/campaign-events/stats),
+      // filtered by ALL of that bucket's sender_email_ids in ONE call (the API
+      // aggregates over the ids passed). ~80 calls/sync instead of one-per-
+      // mailbox. Lets the Mailboxes page filter by any date range instantly.
+      // Replies are NOT trusted from here — the page overlays portal replies
+      // (unibox_replies) on top — but we store the Bison count as a fallback.
       `CREATE TABLE IF NOT EXISTS mailbox_daily_stats (
-        mailbox_email TEXT NOT NULL,
+        workspace_id  TEXT NOT NULL DEFAULT '',
+        provider      TEXT NOT NULL DEFAULT 'smtp',
+        supplier      TEXT NOT NULL DEFAULT '',
         date          DATE NOT NULL,
-        workspace_id  TEXT,
         sent          INT  NOT NULL DEFAULT 0,
         replied       INT  NOT NULL DEFAULT 0,
         bounced       INT  NOT NULL DEFAULT 0,
         updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        PRIMARY KEY (mailbox_email, date)
+        PRIMARY KEY (workspace_id, provider, supplier, date)
       )`,
-      `CREATE INDEX IF NOT EXISTS idx_mbds_date ON mailbox_daily_stats (date)`,
-      `CREATE INDEX IF NOT EXISTS idx_mbds_ws   ON mailbox_daily_stats (workspace_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_mbds_date     ON mailbox_daily_stats (date)`,
+      `CREATE INDEX IF NOT EXISTS idx_mbds_provider ON mailbox_daily_stats (provider)`,
+      `CREATE INDEX IF NOT EXISTS idx_mbds_supplier ON mailbox_daily_stats (supplier)`,
       `CREATE TABLE IF NOT EXISTS monthly_expenses (
         id            SERIAL PRIMARY KEY,
         label         TEXT NOT NULL,

@@ -9559,14 +9559,16 @@ async function refreshMailboxCache() {
 setTimeout(refreshMailboxCache, 20000); // after revenue cache (5s), before performance (60s)
 setInterval(refreshMailboxCache, 30 * 60 * 1000);
 
-// ── Per-mailbox daily stats sync (central data layer, phase 1) ───────────────
+// ── Provider/supplier daily stats sync (central data layer, phase 1) ─────────
 // Bison's GET /api/campaign-events/stats (breakdownOfEventsByDate) returns
 // Sent/Replied/Bounced BY DATE, filtered by sender_email_ids. The response is
-// AGGREGATE over the ids passed, so to get per-mailbox grain we call it once per
-// mailbox with a single sender id. Runs as a background job (never inline on a
-// page) so the Mailboxes page can filter by any date range against a local table
-// instead of hitting Bison's stateful token live.
-let _dailySyncState = { running: false, lastRun: null, lastError: null, mailboxes: 0, rows: 0 };
+// AGGREGATE over the ids passed — so we group each workspace's mailboxes by
+// (provider, supplier) and make ONE call per bucket passing all that bucket's
+// sender ids. ~80 calls/sync (vs 1129 one-per-mailbox), light on the stateful
+// token. Runs in the background so the Mailboxes page can filter any date range
+// against the local table instead of hitting Bison live. Replies are taken from
+// the client portal at read time, not from here.
+let _dailySyncState = { running: false, lastRun: null, lastError: null, buckets: 0, rows: 0 };
 
 // Pull a single label's date→count map out of the breakdownOfEventsByDate body.
 // Body shape: { data: [ { label:'Sent', dates:[['2025-05-03', 4], ...] }, ... ] }
@@ -9588,51 +9590,68 @@ async function syncMailboxDailyStats({ days = 35 } = {}) {
   _dailySyncState.lastError = null;
   const end = serverDateString(new Date());
   const start = serverDateString(new Date(Date.now() - days * 86400000));
-  let mbCount = 0, rowCount = 0;
+  let bucketCount = 0, rowCount = 0;
   try {
     // The mailbox cache populates ~20s after boot; if it's empty (fresh deploy,
     // or sync triggered too early) load it first so the sweep has something to
-    // walk instead of silently recording 0 mailboxes / 0 rows.
+    // walk instead of silently recording 0 buckets / 0 rows.
     if (!(_mailboxCache.mailboxes || []).length) {
       console.log('[mailbox-daily] mailbox cache empty — refreshing it first');
       await refreshMailboxCache();
     }
-    const mailboxes = (_mailboxCache.mailboxes || []).filter(m => m.account_id && m.bison_team_id);
-    for (const m of mailboxes) {
+
+    // supplier per mailbox from meta.
+    const meta = await pgdb.listMailboxMeta().catch(() => []);
+    const supplierByEmail = new Map((meta || []).map(m => [(m.email || '').toLowerCase(), m.supplier || '']));
+
+    // Group senders into buckets keyed by team_id|provider|supplier|workspace_id.
+    // Each bucket → one Bison call with all its sender ids.
+    const buckets = new Map();
+    for (const m of (_mailboxCache.mailboxes || [])) {
       const senderId = Number(m.account_id);
-      if (!Number.isFinite(senderId)) continue;
+      if (!Number.isFinite(senderId) || !m.bison_team_id) continue;
+      const email = (m.email || '').toLowerCase();
+      const provider = detectMailboxType(m.provider) || 'smtp';
+      const supplier = supplierByEmail.get(email) || '';
+      const key = `${m.bison_team_id}|${provider}|${supplier}|${m.workspace_id || ''}`;
+      if (!buckets.has(key)) buckets.set(key, { teamId: m.bison_team_id, provider, supplier, workspaceId: m.workspace_id || '', ids: [] });
+      buckets.get(key).ids.push(senderId);
+    }
+
+    for (const b of buckets.values()) {
       let body;
       try {
         body = await bisonReq('/api/campaign-events/stats', {
-          wsId: m.bison_team_id,
-          params: { start_date: start, end_date: end, sender_email_ids: [senderId] },
+          wsId: b.teamId,
+          params: { start_date: start, end_date: end, sender_email_ids: b.ids },
         });
       } catch (e) {
-        continue; // skip this mailbox; transient Bison errors shouldn't abort the sweep
+        continue; // skip this bucket; transient Bison errors shouldn't abort the sweep
       }
-      const sent     = eventSeriesByLabel(body, 'Sent');
-      const replied  = eventSeriesByLabel(body, 'Replied');
-      const bounced  = eventSeriesByLabel(body, 'Bounced');
+      const sent    = eventSeriesByLabel(body, 'Sent');
+      const replied = eventSeriesByLabel(body, 'Replied');
+      const bounced = eventSeriesByLabel(body, 'Bounced');
       const allDates = new Set([...sent.keys(), ...replied.keys(), ...bounced.keys()]);
       for (const d of allDates) {
-        const s = sent.get(d) || 0, r = replied.get(d) || 0, b = bounced.get(d) || 0;
-        if (!s && !r && !b) continue; // don't store empty days
+        const s = sent.get(d) || 0, r = replied.get(d) || 0, bo = bounced.get(d) || 0;
+        if (!s && !r && !bo) continue; // don't store empty days
         await pgdb.query(
-          `INSERT INTO mailbox_daily_stats (mailbox_email, date, workspace_id, sent, replied, bounced, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, NOW())
-           ON CONFLICT (mailbox_email, date) DO UPDATE
-             SET sent = EXCLUDED.sent, replied = EXCLUDED.replied, bounced = EXCLUDED.bounced,
-                 workspace_id = EXCLUDED.workspace_id, updated_at = NOW()`,
-          [m.email, d, m.workspace_id || null, s, r, b]
+          `INSERT INTO mailbox_daily_stats (workspace_id, provider, supplier, date, sent, replied, bounced, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+           ON CONFLICT (workspace_id, provider, supplier, date) DO UPDATE
+             SET sent = EXCLUDED.sent, replied = EXCLUDED.replied, bounced = EXCLUDED.bounced, updated_at = NOW()`,
+          [b.workspaceId, b.provider, b.supplier, d, s, r, bo]
         );
         rowCount++;
       }
-      mbCount++;
+      bucketCount++;
+      _dailySyncState.buckets = bucketCount;
+      _dailySyncState.rows = rowCount;
     }
     _dailySyncState.lastRun = new Date().toISOString();
-    _dailySyncState.mailboxes = mbCount;
+    _dailySyncState.buckets = bucketCount;
     _dailySyncState.rows = rowCount;
-    console.log(`[mailbox-daily] synced ${mbCount} mailbox(es), ${rowCount} day-rows (${start}…${end})`);
+    console.log(`[mailbox-daily] synced ${bucketCount} bucket(s), ${rowCount} day-rows (${start}…${end})`);
   } catch (err) {
     _dailySyncState.lastError = err.message;
     console.error('[mailbox-daily] sync failed:', err.message);
@@ -9766,66 +9785,24 @@ app.get('/api/mailboxes/provider-stats', requireSession, async (req, res) => {
       });
     }
 
-    // SENT + BOUNCE per mailbox.
-    //  • lifetime: Bison's authoritative api_sent/api_bounced (sender-emails API).
-    //  • period:   summed from mailbox_daily_stats over the window (per-day rows
-    //              synced from Bison's breakdownOfEventsByDate). Bounces here are
-    //              the period bounce count; the hard/block/soft split below scales
-    //              to it.
-    // sentByMailbox: email -> { sent, bounces, apiReplied }.
-    const sentByMailbox = new Map();
-    if (lifetime) {
-      for (const m of (_mailboxCache.mailboxes || [])) {
-        const email = (m.email || '').toLowerCase();
-        if (!email) continue;
-        sentByMailbox.set(email, { sent: Number(m.api_sent) || 0, bounces: Number(m.api_bounced) || 0, apiReplied: Number(m.api_replied) || 0 });
-      }
-    } else {
-      try {
-        const ds = await pgdb.query(`
-          SELECT lower(mailbox_email) AS sender,
-                 SUM(sent)::int    AS sent,
-                 SUM(bounced)::int AS bounces,
-                 SUM(replied)::int AS bison_replied
-          FROM mailbox_daily_stats
-          WHERE date >= (CURRENT_DATE - ($1::int - 1))
-          GROUP BY lower(mailbox_email)
-        `, [days]);
-        for (const r of ds.rows) {
-          sentByMailbox.set(r.sender, { sent: r.sent || 0, bounces: r.bounces || 0, apiReplied: r.bison_replied || 0 });
-        }
-      } catch (e) {
-        console.warn('[mailbox provider-stats] daily-stats query failed (non-fatal):', e.message);
-      }
+    const blank = () => ({ mailboxes: 0, sent: 0, replies: 0, bounces: 0, bounces_hard: 0, bounces_block: 0, bounces_soft: 0 });
+    const byProvider = {}, bySupplier = {};
+    let unmatched = blank();
+    const provKey = p => p || 'smtp';
+    const suppKey = s => s || '(unassigned)';
+
+    // Mailbox COUNTS per provider/supplier come from the live roster either way
+    // (so a card shows "· N mailboxes" even if some sent nothing this period).
+    const mbxByProvider = {}, mbxBySupplier = {};
+    for (const info of senderInfo.values()) {
+      mbxByProvider[provKey(info.provider)] = (mbxByProvider[provKey(info.provider)] || 0) + 1;
+      mbxBySupplier[suppKey(info.supplier)] = (mbxBySupplier[suppKey(info.supplier)] || 0) + 1;
     }
 
-    // REPLIES per mailbox = client portal (unibox_replies.mailbox_email) — the
-    // canonical reply source (human replies only). Windowed to match the period;
-    // falls back to the Bison reply count when the portal has none for a mailbox.
-    let replyRows = [];
-    try {
-      const rparams = [];
-      let rwin = '';
-      if (!lifetime) { rparams.push(days); rwin = `AND received_at >= (CURRENT_DATE - ($1::int - 1))`; }
-      const rr = await pgdb.query(`
-        SELECT lower(mailbox_email) AS sender, COUNT(*)::int AS replies
-        FROM unibox_replies
-        WHERE mailbox_email IS NOT NULL AND mailbox_email <> ''
-          AND COALESCE(admin_label, category) IN ('interested','not_interested','question','unsubscribe')
-          ${rwin}
-        GROUP BY lower(mailbox_email)
-      `, rparams);
-      replyRows = rr.rows;
-    } catch (e) {
-      console.warn('[mailbox provider-stats] reply query failed (non-fatal):', e.message);
-    }
-    const repliesBySender = new Map(replyRows.map(r => [r.sender, r.replies]));
-
-    // Hard/block/soft proportions per mailbox from still-alive bounce events
-    // (bounce webhooks DO still fire). Scaled up to each mailbox's api_bounced
-    // total so the split reflects the authoritative bounce count.
+    // ── Bounce hard/block/soft proportions per provider+supplier from still-alive
+    //    bounce events (bounce webhooks DO still fire). Scaled to the bounce total.
     const { isHard, isBlock } = bounceClassExprs("raw->>'msg'");
-    let bounceClassRows = [];
+    let bClassByProvider = new Map(), bClassBySupplier = new Map();
     try {
       const bparams = [];
       let bwin = '';
@@ -9840,38 +9817,83 @@ app.get('/api/mailboxes/provider-stats', requireSession, async (req, res) => {
           ${bwin}
         GROUP BY lower(sender_email)
       `, bparams);
-      bounceClassRows = bc.rows;
+      for (const r of bc.rows) {
+        const info = senderInfo.get(r.sender); if (!info) continue;
+        const pk = provKey(info.provider), sk = suppKey(info.supplier);
+        const accP = bClassByProvider.get(pk) || { n:0, hard:0, block:0 }; accP.n+=r.n; accP.hard+=r.hard; accP.block+=r.block; bClassByProvider.set(pk, accP);
+        const accS = bClassBySupplier.get(sk) || { n:0, hard:0, block:0 }; accS.n+=r.n; accS.hard+=r.hard; accS.block+=r.block; bClassBySupplier.set(sk, accS);
+      }
     } catch (e) {
       console.warn('[mailbox provider-stats] bounce-class query failed (non-fatal):', e.message);
     }
-    const bClassBySender = new Map(bounceClassRows.map(r => [r.sender, r]));
+    const splitBounces = (bucket, total) => {
+      if (!bucket || !bucket.n || !total) return { h:0, bl: total, sf:0 };
+      const hp = bucket.hard/bucket.n, bp = bucket.block/bucket.n;
+      const h = Math.round(total*hp), bl = Math.round(total*bp);
+      return { h, bl, sf: Math.max(0, total - h - bl) };
+    };
 
-    const blank = () => ({ mailboxes: 0, sent: 0, replies: 0, bounces: 0, bounces_hard: 0, bounces_block: 0, bounces_soft: 0 });
-    const byProvider = {}, bySupplier = {};
-    let unmatched = blank();
-    // Every mailbox that has sent/replied/bounced anything.
-    const allSenders = new Set([...sentByMailbox.keys(), ...repliesBySender.keys()]);
-    for (const sender of allSenders) {
-      const sm = sentByMailbox.get(sender) || { sent: 0, bounces: 0, apiReplied: 0 };
-      const sent = sm.sent;
-      const bounces = sm.bounces;
-      const portalReplies = repliesBySender.get(sender);
-      const replies = (portalReplies != null && portalReplies > 0) ? portalReplies : (sm.apiReplied || 0);
-      // Split api_bounced into hard/block/soft using the event-derived proportions
-      // (default everything to 'block' if no event detail — most bounces are blocks).
-      let h = 0, bl = bounces, sf = 0;
-      const bc = bClassBySender.get(sender);
-      if (bc && bc.n > 0 && bounces > 0) {
-        const hp = bc.hard / bc.n, bp = bc.block / bc.n;
-        h = Math.round(bounces * hp); bl = Math.round(bounces * bp); sf = Math.max(0, bounces - h - bl);
+    // ── SENT + BOUNCE: lifetime ← cache api_*, grouped here; period ← the synced
+    //    mailbox_daily_stats table (already at provider/supplier grain).
+    if (lifetime) {
+      for (const m of (_mailboxCache.mailboxes || [])) {
+        const email = (m.email || '').toLowerCase(); if (!email) continue;
+        const info = senderInfo.get(email) || { provider:'smtp', supplier:null };
+        const sent = Number(m.api_sent)||0, bounces = Number(m.api_bounced)||0;
+        if (!sent && !bounces) continue;
+        const p = byProvider[provKey(info.provider)] = byProvider[provKey(info.provider)] || blank();
+        const s = bySupplier[suppKey(info.supplier)] = bySupplier[suppKey(info.supplier)] || blank();
+        p.sent += sent; p.bounces += bounces;
+        s.sent += sent; s.bounces += bounces;
       }
-      if (sent === 0 && replies === 0 && bounces === 0) continue;
-      const info = senderInfo.get(sender);
-      const add = (b) => { b.mailboxes++; b.sent += sent; b.replies += replies; b.bounces += bounces; b.bounces_hard += h; b.bounces_block += bl; b.bounces_soft += sf; };
-      if (!info) { add(unmatched); continue; }
-      add(byProvider[info.provider || 'smtp'] = byProvider[info.provider || 'smtp'] || blank());
-      add(bySupplier[info.supplier || '(unassigned)'] = bySupplier[info.supplier || '(unassigned)'] || blank());
+    } else {
+      try {
+        const ds = await pgdb.query(`
+          SELECT provider, supplier, SUM(sent)::int AS sent, SUM(bounced)::int AS bounces
+          FROM mailbox_daily_stats
+          WHERE date >= (CURRENT_DATE - ($1::int - 1))
+          GROUP BY provider, supplier
+        `, [days]);
+        for (const r of ds.rows) {
+          const p = byProvider[provKey(r.provider)] = byProvider[provKey(r.provider)] || blank();
+          const s = bySupplier[suppKey(r.supplier)] = bySupplier[suppKey(r.supplier)] || blank();
+          p.sent += r.sent||0; p.bounces += r.bounces||0;
+          s.sent += r.sent||0; s.bounces += r.bounces||0;
+        }
+      } catch (e) {
+        console.warn('[mailbox provider-stats] daily-stats query failed (non-fatal):', e.message);
+      }
     }
+
+    // ── REPLIES from the client portal (unibox_replies) — the canonical source.
+    //    Aggregated to provider/supplier via senderInfo. Windowed to match.
+    try {
+      const rparams = [];
+      let rwin = '';
+      if (!lifetime) { rparams.push(days); rwin = `AND received_at >= (CURRENT_DATE - ($1::int - 1))`; }
+      const rr = await pgdb.query(`
+        SELECT lower(mailbox_email) AS sender, COUNT(*)::int AS replies
+        FROM unibox_replies
+        WHERE mailbox_email IS NOT NULL AND mailbox_email <> ''
+          AND COALESCE(admin_label, category) IN ('interested','not_interested','question','unsubscribe')
+          ${rwin}
+        GROUP BY lower(mailbox_email)
+      `, rparams);
+      for (const r of rr.rows) {
+        const info = senderInfo.get(r.sender);
+        if (!info) { unmatched.replies += r.replies; continue; }
+        const p = byProvider[provKey(info.provider)] = byProvider[provKey(info.provider)] || blank();
+        const s = bySupplier[suppKey(info.supplier)] = bySupplier[suppKey(info.supplier)] || blank();
+        p.replies += r.replies; s.replies += r.replies;
+      }
+    } catch (e) {
+      console.warn('[mailbox provider-stats] reply query failed (non-fatal):', e.message);
+    }
+
+    // Apply mailbox counts + bounce splits to each bucket.
+    for (const [k, b] of Object.entries(byProvider)) { b.mailboxes = mbxByProvider[k] || 0; const x = splitBounces(bClassByProvider.get(k), b.bounces); b.bounces_hard=x.h; b.bounces_block=x.bl; b.bounces_soft=x.sf; }
+    for (const [k, b] of Object.entries(bySupplier)) { b.mailboxes = mbxBySupplier[k] || 0; const x = splitBounces(bClassBySupplier.get(k), b.bounces); b.bounces_hard=x.h; b.bounces_block=x.bl; b.bounces_soft=x.sf; }
+
     const withRates = (map) => Object.fromEntries(Object.entries(map).map(([k, b]) => [k, {
       ...b,
       reply_rate:  b.sent > 0 ? b.replies / b.sent : 0,

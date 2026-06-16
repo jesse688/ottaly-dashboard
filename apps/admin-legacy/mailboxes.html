@@ -1395,7 +1395,7 @@ async function syncDailyNow() {
     let s; ticks++;
     try { s = await (await fetch('/api/mailboxes/sync-daily/status')).json(); } catch { return; }
     if (s.running) sawStart = true;
-    if (btn) btn.textContent = s.running ? `⏳ ${s.mailboxes||0} mbx…` : '⟳ Sync now';
+    if (btn) btn.textContent = s.running ? `⏳ ${s.rows||0} rows…` : '⟳ Sync now';
     const done = (sawStart && !s.running) || ticks > 90; // ~6 min hard cap
     if (done) {
       clearInterval(poll);
