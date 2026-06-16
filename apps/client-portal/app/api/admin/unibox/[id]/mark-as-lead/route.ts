@@ -32,7 +32,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     await client.query('BEGIN')
 
     const sel = await client.query(
-      `SELECT id, workspace_id, lead_bison_id, lead_email, marked_as_lead FROM unibox_replies WHERE id = $1 FOR UPDATE`,
+      `SELECT id, workspace_id, lead_bison_id, lead_email, subject, marked_as_lead,
+              raw->'lead'->>'first_name'  AS first_name,
+              raw->'lead'->>'last_name'   AS last_name,
+              raw->'lead'->>'company_name' AS company_name
+         FROM unibox_replies WHERE id = $1 FOR UPDATE`,
       [id]
     )
     if (!sel.rows.length) {
@@ -40,13 +44,38 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ error: 'Reply not found' }, { status: 404 })
     }
     const reply = sel.rows[0] as {
-      id: string; workspace_id: string | null; lead_bison_id: string | null; lead_email: string | null; marked_as_lead: boolean
+      id: string; workspace_id: string | null; lead_bison_id: string | null; lead_email: string | null
+      subject: string | null; marked_as_lead: boolean
+      first_name: string | null; last_name: string | null; company_name: string | null
     }
 
-    // Idempotent: already marked → no double charge, no double tag.
+    // Idempotent: already marked → no double charge, no double tag. But HEAL the
+    // esp_leads row first: rows marked before the upsert fix have marked_as_lead=TRUE
+    // yet no INTERESTED lead (so they never reached the dashboard). Re-marking now
+    // backfills them. The flip is label-only; charges are reconciled separately and
+    // are idempotent, so this can't double-charge.
     if (reply.marked_as_lead) {
+      if (reply.workspace_id && (reply.lead_bison_id || reply.lead_email)) {
+        const healId = reply.lead_bison_id || `manual_${reply.id}`
+        await client.query(
+          `INSERT INTO esp_leads
+             (id, workspace_id, campaign_id, source, email, first_name, last_name, company_name,
+              status, label, first_replied_at, created_at, updated_at)
+           VALUES ($1,$2,NULL,'bison',$3,$4,$5,$6,'INTERESTED','INTERESTED',NOW(),NOW(),NOW())
+           ON CONFLICT (id, source) DO UPDATE SET
+             label = 'INTERESTED', status = 'INTERESTED', updated_at = NOW()`,
+          [healId, reply.workspace_id, (reply.lead_email ?? '').toLowerCase() || null,
+           reply.first_name, reply.last_name, reply.company_name]
+        )
+      }
       await client.query('COMMIT')
-      return NextResponse.json({ ok: true, already: true })
+      // Re-bill in case the original mark predated cost_per_lead / the lead row.
+      const c = await pool.query(
+        `SELECT id FROM portal_clients WHERE workspace_id = $1 ORDER BY active DESC, created_at ASC LIMIT 1`,
+        [reply.workspace_id]
+      ).catch(() => ({ rows: [] as { id: string }[] }))
+      if (c.rows[0]?.id) await reconcileLeadCharges(c.rows[0].id).catch(() => {})
+      return NextResponse.json({ ok: true, already: true, healed: true })
     }
 
     // Resolve the client. Prefer a valid override, else the workspace owner.
@@ -78,12 +107,32 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       clientId = c.rows[0].id as string
     }
 
-    // Flip the lead to INTERESTED so reconcileLeadCharges bills it.
-    if (reply.lead_bison_id && pvWorkspaceId) {
+    // Flip the lead to INTERESTED so reconcileLeadCharges bills it AND the client
+    // dashboard (which reads esp_leads WHERE label='INTERESTED') shows it.
+    //
+    // The lead row may not exist yet: the Bison webhook only creates an esp_leads
+    // row on lead_interested/lead_replied events, so a reply classified as
+    // question/other — or one forwarded in from OUTSIDE Bison (no lead_bison_id) —
+    // has a unibox row but NO lead to flip. An UPDATE there is a silent no-op and
+    // the lead never reaches the dashboard. So we UPSERT: build the lead from the
+    // unibox row, keyed on lead_bison_id when present, else a synthetic id derived
+    // from the unibox row id. source='bison' so it passes the dashboard's
+    // source IN ('plusvibe','bison') filter. We resolved the lead id earlier into
+    // pvWorkspaceId; persist it back so charges/notify reference a stable id.
+    let leadRowId = reply.lead_bison_id
+    if (pvWorkspaceId && (reply.lead_bison_id || reply.lead_email)) {
+      if (!leadRowId) leadRowId = `manual_${reply.id}`
       await client.query(
-        `UPDATE esp_leads SET label = 'INTERESTED', status = 'INTERESTED', updated_at = NOW()
-          WHERE id = $1 AND workspace_id = $2`,
-        [reply.lead_bison_id, pvWorkspaceId]
+        `INSERT INTO esp_leads
+           (id, workspace_id, campaign_id, source, email, first_name, last_name, company_name,
+            status, label, first_replied_at, created_at, updated_at)
+         VALUES ($1,$2,NULL,'bison',$3,$4,$5,$6,'INTERESTED','INTERESTED',NOW(),NOW(),NOW())
+         ON CONFLICT (id, source) DO UPDATE SET
+           label = 'INTERESTED', status = 'INTERESTED',
+           first_replied_at = COALESCE(esp_leads.first_replied_at, EXCLUDED.first_replied_at),
+           updated_at = NOW()`,
+        [leadRowId, pvWorkspaceId, (reply.lead_email ?? '').toLowerCase() || null,
+         reply.first_name, reply.last_name, reply.company_name]
       )
     }
 
@@ -111,7 +160,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // Best-effort Bison tag + blocklist — never roll back the lead if either
     // fails. Tag marks the lead in Bison; blocklisting the email stops a real
     // lead from receiving further cold outreach.
-    let tagState: 'done' | 'failed' = 'failed'
+    // 'na' = nothing to tag (lead never came from Bison, so no lead_bison_id) —
+    // distinct from 'failed' (a real Bison lead whose tag call errored) so the UI
+    // doesn't show a scary "failed" on outside-Bison leads.
+    let tagState: 'done' | 'failed' | 'na' = reply.lead_bison_id ? 'failed' : 'na'
     if (reply.lead_bison_id && pvWorkspaceId) {
       const teamId = bisonTeamForWorkspace(pvWorkspaceId)
       if (teamId) {
@@ -128,10 +180,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     await pool.query(`UPDATE unibox_replies SET bison_tag_state = $2, updated_at = NOW() WHERE id = $1`, [id, tagState])
       .catch(() => {})
 
-    // Notify the client of the new lead (idempotent on its own).
-    if (pvWorkspaceId && reply.lead_bison_id) {
+    // Notify the client of the new lead (idempotent on its own). Fire for any lead
+    // we successfully flipped — including outside-Bison leads (synthetic id).
+    if (pvWorkspaceId && leadRowId) {
       try {
-        await notifyClientOfLead(pvWorkspaceId, reply.lead_bison_id)
+        await notifyClientOfLead(pvWorkspaceId, leadRowId)
       } catch (err) {
         console.error('[admin/unibox/mark-as-lead] notify failed:', err)
       }
