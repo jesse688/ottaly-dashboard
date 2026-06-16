@@ -2576,6 +2576,43 @@ app.get('/api/admin/stats-debug', requireAdmin, async (req, res) => {
       } catch (e) { out.range = { ok: false, error: e.message }; }
       return res.json(out);
     }
+    // ?probeAll=1&from=&to= — live-fetch Bison chart-stats for EVERY active client and
+    // compare to what the perf cache currently holds, so we can confirm in one shot that
+    // all clients show correct live data (or pinpoint which don't). Serialized via the
+    // bison lock; ~22 calls, takes a few seconds.
+    if (req.query.probeAll) {
+      const today = serverDateString(new Date());
+      const aFrom = String(req.query.from || lastNDates(7)[0]);
+      const aTo   = String(req.query.to   || today);
+      const aDates = serverDateList(aFrom, aTo);
+      const rows = db.prepare(
+        `SELECT workspace_id, workspace_name, client_status FROM clients WHERE workspace_id IS NOT NULL AND workspace_id != ''`
+      ).all().filter(c => c.client_status !== 'inactive');
+      const results = [];
+      for (const c of rows) {
+        const wsId = canonicalWorkspaceId(c.workspace_id, c.workspace_name);
+        const teamId = resolveBisonTeamId(wsId);
+        const r = { name: c.workspace_name, workspace_id: wsId, team_id: teamId, mapped: !!teamId };
+        if (!teamId) { r.note = 'not in BISON_TEAMS — no data'; results.push(r); continue; }
+        // Live Bison
+        try {
+          const live = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { wsId, params: { start_date: aFrom, end_date: aTo } });
+          r.live = aggPvEmailStats(Object.values(pivotBisonStats((live.data || live) || [])));
+        } catch (e) { r.live = { error: e.message }; }
+        // What the cache holds for the same window
+        const cAgg = { sent: 0, replies: 0, bounces: 0 };
+        let cachedDays = 0;
+        for (const d of aDates) {
+          const e = performanceCache.dailyStats.get(`${wsId}|${d}`);
+          if (e?.data) { cachedDays++; cAgg.sent += e.data.sent||0; cAgg.replies += e.data.replies||0; cAgg.bounces += e.data.bounces||0; }
+        }
+        r.cached = { ...cAgg, days_in_cache: cachedDays, of_days: aDates.length };
+        r.sent_matches = r.live && r.live.sent != null ? (r.live.sent === cAgg.sent) : null;
+        results.push(r);
+      }
+      results.sort((a, b) => (b.live?.sent || 0) - (a.live?.sent || 0));
+      return res.json({ from: aFrom, to: aTo, count: results.length, clients: results });
+    }
     const clientRows = db.prepare(
       `SELECT workspace_id, workspace_name, client_status FROM clients WHERE workspace_id IS NOT NULL AND workspace_id != ''`
     ).all().filter(c => c.client_status !== 'inactive');
