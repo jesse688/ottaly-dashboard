@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState, type ReactNode, type ChangeEvent, type KeyboardEvent } from 'react'
 import { Logo } from '@/app/components/Logo'
 import { WarmupBar } from '@/app/components/WarmupBar'
-import { SpeedTimer } from '@/app/components/SpeedTimer'
 import { useRouter } from 'next/navigation'
 
 interface Lead {
@@ -105,16 +104,6 @@ function fmtFull(d: string | null) {
   if (!d) return ''
   return new Date(d).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
-// Human duration for Speed to Lead, e.g. 45s · 12m · 3h 5m · 2d.
-function fmtDuration(secs: number): string {
-  if (secs < 60) return `${secs}s`
-  const m = Math.round(secs / 60)
-  if (m < 60) return `${m}m`
-  const h = Math.floor(m / 60), rm = m % 60
-  if (h < 24) return rm ? `${h}h ${rm}m` : `${h}h`
-  const days = Math.floor(h / 24)
-  return `${days}d`
-}
 // Split an email body into the new reply vs the quoted history below it, so the
 // client reads the actual reply and our earlier email tucks into a fold.
 // Some messages (esp. received mail) arrive with ONLY an HTML body and no
@@ -188,7 +177,6 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
   // Unpaid-invoice nudge shown under the header; dismissible per session.
   const [hasUnpaidInvoice, setHasUnpaidInvoice] = useState(false)
   const [invoiceBannerDismissed, setInvoiceBannerDismissed] = useState(false)
-  const [speed, setSpeed] = useState<{ avgSeconds: number | null; goalMinutes: number; perLead: Record<string, number> } | null>(null)
   // Friendly greeting — shown ONCE per browser session (on login / first load),
   // not every time the user navigates back to Leads from Billing/Account.
   const [showWelcome, setShowWelcome] = useState(false)
@@ -235,7 +223,6 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
     loadLeads()
     fetch('/api/portal/labels').then(r => r.json()).then((d) => Array.isArray(d) && setCustomLabels(d)).catch(() => {})
     fetch('/api/portal/balance').then(r => r.json()).then((d) => !d.error && setBalance(d)).catch(() => {})
-    fetch('/api/portal/speed').then(r => r.json()).then((d) => !d.error && setSpeed(d)).catch(() => {})
     fetch('/api/portal/invoices').then(r => r.json()).then((d) => {
       if (Array.isArray(d?.invoices)) setHasUnpaidInvoice(d.invoices.some((i: { status: string }) => i.status === 'unpaid'))
     }).catch(() => {})
@@ -616,14 +603,6 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
             <div className="flex items-center justify-between mb-2">
               <h2 className="text-sm font-semibold text-[#050c29]">Your Leads <span className="text-gray-400 font-normal">({filtered.length})</span></h2>
             </div>
-            {/* Speed to Lead — average response time vs the 5-minute goal */}
-            {speed && speed.avgSeconds !== null && (
-              <div className={`flex items-center gap-1.5 mb-2 text-xs ${speed.avgSeconds <= speed.goalMinutes * 60 ? 'text-green-600' : 'text-[#b8860b]'}`}>
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-                <span className="font-semibold">Avg speed to lead: {fmtDuration(speed.avgSeconds)}</span>
-                <span className="text-gray-400">· goal 5m</span>
-              </div>
-            )}
             <div className="relative">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="absolute left-2.5 top-2.5 text-gray-400"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
               <input placeholder="Search leads" value={search} onChange={e => setSearch(e.target.value)} className="w-full pl-8 pr-3 py-1.5 rounded-lg border border-gray-200 text-sm outline-none focus:border-brand-300 bg-gray-50" />
@@ -654,16 +633,6 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
                       {l.locked
                         ? <p className="text-xs text-[#b8860b] font-medium truncate">🔒 Top up to unlock</p>
                         : <p className="text-xs text-gray-500 truncate">{l.company_name ?? l.email}</p>}
-                      {!l.locked && l.first_replied_at && (
-                        <div className="mt-1.5">
-                          <SpeedTimer
-                            repliedAt={l.first_replied_at}
-                            respondedAt={l.first_responded_at}
-                            done={isReplied(l)}
-                            size="sm"
-                          />
-                        </div>
-                      )}
                       {(cl || l.dispute_status === 'pending' || isReplied(l)) && !l.locked && (
                         <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                         {cl && <span className={`inline-flex text-[10px] font-medium px-1.5 py-0.5 rounded ${COLOR_BADGE[cl.color] ?? 'bg-purple-100 text-purple-700'}`}>{cl.name}</span>}
@@ -709,14 +678,6 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <p className="font-heading text-base font-semibold text-[#050c29] truncate tracking-tight">{fullName(selected)}</p>
-                    {selected.first_replied_at && (
-                      <SpeedTimer
-                        repliedAt={selected.first_replied_at}
-                        respondedAt={selected.first_responded_at}
-                        done={isReplied(selected)}
-                        size="lg"
-                      />
-                    )}
                   </div>
                   {selected.email && <p className="text-xs text-gray-500 truncate">{selected.email}</p>}
                 </div>
@@ -850,12 +811,6 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
               <p className="text-sm font-semibold text-[#050c29]">{fullName(selected)}</p>
               {selected.job_title && <p className="text-xs text-gray-500 mt-0.5">{selected.job_title}</p>}
               {selected.company_name && <p className="text-xs text-brand-600 mt-0.5">{selected.company_name}</p>}
-              {speed && speed.perLead[selected.id] !== undefined && (
-                <p className={`inline-flex items-center gap-1 mt-2 text-xs font-medium ${speed.perLead[selected.id] <= speed.goalMinutes * 60 ? 'text-green-600' : 'text-[#b8860b]'}`}>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-                  Responded in {fmtDuration(speed.perLead[selected.id])}
-                </p>
-              )}
             </div>
 
 
