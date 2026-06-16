@@ -49,7 +49,7 @@ async function run(req: NextRequest) {
   let inserted = 0
   let reExtracted = 0
   let companyUpdated = 0
-  const samples: Array<{ email: string; company_name: string; matchedRow: boolean }> = []
+  const samples: Array<Record<string, unknown>> = []
   for (const r of cand.rows as Array<Record<string, string | null>>) {
     const email = (r.email ?? '').toLowerCase()
     if (!email) continue
@@ -97,7 +97,26 @@ async function run(req: NextRequest) {
       ).catch(() => null)
       const hit = (up?.rowCount ?? 0) > 0
       if (hit) companyUpdated++
-      if (samples.length < 8) samples.push({ email, company_name, matchedRow: hit })
+      // DIAGNOSE the match: for the first few, probe esp_leads three ways (by our
+      // computed id, by email, by lead_bison_id) and report the REAL row id + email so
+      // we can see what key esp_leads actually uses for these leads.
+      if (samples.length < 6) {
+        const probe = await pool.query(
+          `SELECT
+             (SELECT json_build_object('id', id, 'email', email, 'company_name', company_name)
+                FROM esp_leads WHERE id = $1 AND workspace_id = $4) AS by_id,
+             (SELECT json_build_object('id', id, 'email', email)
+                FROM esp_leads WHERE workspace_id = $4 AND lower(email) = $2 LIMIT 1) AS by_email,
+             (SELECT json_build_object('id', id, 'email', email)
+                FROM esp_leads WHERE workspace_id = $4 AND id = $3 LIMIT 1) AS by_bison`,
+          [leadId, email, r.lead_bison_id, r.workspace_id]
+        ).catch(() => null)
+        samples.push({
+          email, company_name, matchedRow: hit,
+          computedLeadId: leadId, leadBisonId: r.lead_bison_id,
+          probe: probe?.rows[0] ?? null,
+        } as Record<string, unknown>)
+      }
     }
     if (Object.keys(found).length) reExtracted++
   }
