@@ -23,7 +23,31 @@ async function run(req: NextRequest) {
   if (!await getAdminSession()) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   await ready()
 
-  const ws = (new URL(req.url).searchParams.get('workspace') ?? '').trim()
+  const url = new URL(req.url)
+  const ws = (url.searchParams.get('workspace') ?? '').trim()
+
+  // DEBUG: ?probe=<email> dumps how ONE lead is stored in unibox_replies + esp_leads,
+  // so we can see EXACTLY what links a reply to its dashboard lead row (or that there
+  // is no esp_leads row). Use the lead's email shown in the portal (e.g. Emma's).
+  const probeEmail = (url.searchParams.get('probe') ?? '').trim().toLowerCase()
+  if (probeEmail) {
+    const ur = await pool.query(
+      `SELECT id, bison_team_id, bison_reply_id, workspace_id, lead_bison_id, lead_email,
+              sender_email, marked_as_lead, folder
+         FROM unibox_replies
+        WHERE lower(lead_email) = $1 OR lower(sender_email) = $1
+        ORDER BY received_at DESC LIMIT 5`,
+      [probeEmail]
+    ).catch((e) => ({ rows: [{ error: String(e) }] }))
+    const el = await pool.query(
+      `SELECT id, workspace_id, source, email, company_name, label, status
+         FROM esp_leads
+        WHERE lower(email) = $1
+        ORDER BY updated_at DESC LIMIT 5`,
+      [probeEmail]
+    ).catch((e) => ({ rows: [{ error: String(e) }] }))
+    return NextResponse.json({ probe: probeEmail, unibox_replies: ur.rows, esp_leads: el.rows })
+  }
 
   // ALL inbound replies with a body + mapped workspace + email. We deliberately do
   // NOT gate on "portal_emails row missing" — the re-extraction step below must run on
