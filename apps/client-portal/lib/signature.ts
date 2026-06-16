@@ -33,6 +33,38 @@ const TITLE_WORDS = [
   'Coordinator', 'Administrator', 'Executive', 'Officer',
 ]
 
+// Cut the QUOTED reply history off an email body, keeping ONLY what the lead just
+// wrote (their new message + their own signature). Without this, signature
+// extraction reads the quoted OUTBOUND email below and mis-attributes the AGENCY's
+// company/website/title to the lead. Handles both HTML (blockquote / gmail_quote /
+// Outlook divider) and plain-text ("On <date> … wrote:", "From:/Sent:", "> " quotes).
+export function stripQuotedHistory(input: string): string {
+  if (!input) return ''
+  let s = input
+  // HTML quote containers: everything from the first one onward is history.
+  const htmlCuts = [
+    /<blockquote[\s>]/i,
+    /<div[^>]*class\s*=\s*["'][^"']*gmail_quote/i,
+    /<div[^>]*id\s*=\s*["']?(?:divRplyFwdMsg|appendonsend)/i,   // Outlook reply divider
+    /<hr[^>]*id\s*=\s*["']?stopSpelling/i,
+  ]
+  // Text-style quote markers (also present inside HTML before tag-stripping).
+  const textCuts = [
+    /\n?\s*-{2,}\s*Original Message\s*-{2,}/i,
+    /(?:^|\n)\s*>?\s*On\b[\s\S]{0,200}?\bwrote:/i,    // "On <date> <name> wrote:"
+    /(?:^|\n)\s*From:\s.+(?:\n|<br).{0,40}?(?:Sent|Date):\s/i,
+    /\n\s*>/,                                          // first Gmail-style quoted line
+    /\n_{5,}/,
+  ]
+  let idx = -1
+  for (const re of [...htmlCuts, ...textCuts]) {
+    const m = s.match(re)
+    if (m && m.index !== undefined && (idx === -1 || m.index < idx)) idx = m.index
+  }
+  if (idx !== -1) s = s.slice(0, idx)
+  return s
+}
+
 // Strip HTML to text so regex works on either body_text or body_html.
 function toText(input: string): string {
   return input
@@ -77,9 +109,17 @@ function extractWebsite(text: string, leadEmail?: string): string | null {
   for (const u of urls) {
     if (!bad.test(u)) return u.replace(/[.,);]+$/, '')
   }
-  // Bare domain (e.g. www.foo.co.uk) — prefer one matching the sender's domain.
-  const domains = text.match(/\b(?:www\.)[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b/gi) ?? []
-  if (domains[0]) return 'https://' + domains[0].replace(/^https?:\/\//, '')
+  // Bare domain — with OR without www. (signatures often show "NewlyBornUK.com").
+  // First REMOVE all email addresses from the text so we never mistake an email's
+  // domain (or a fragment of it) for the website. Then match a domain on a common
+  // public TLD and skip social/noise domains.
+  const noEmails = text.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, ' ')
+  const domainRe = /\b((?:www\.)?[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9-]+)*\.(?:com|co\.uk|org|net|io|ai|dev|app|biz|info|uk|us|ca|de|fr|es|it|nl|eu|me|store|shop))\b/gi
+  const cands = noEmails.match(domainRe) ?? []
+  for (const d of cands) {
+    if (bad.test(d)) continue
+    return 'https://' + d.replace(/^https?:\/\//, '')
+  }
   void leadEmail
   return null
 }
@@ -102,7 +142,9 @@ export function extractSignatureFields(
   fields: SignatureField[],
   leadEmail?: string,
 ): Partial<Record<SignatureField, string>> {
-  const text = toText(body || '')
+  // Scan ONLY the lead's own message + signature — never the quoted outbound thread
+  // below it (that carries OUR client's signature, which would be mis-attributed).
+  const text = toText(stripQuotedHistory(body || ''))
   const out: Partial<Record<SignatureField, string>> = {}
   if (!text.trim()) return out
 
