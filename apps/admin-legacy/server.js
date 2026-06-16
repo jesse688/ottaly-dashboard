@@ -8615,6 +8615,90 @@ app.get('/api/bounce-analysis/explorer', requireSession, async (req, res) => {
 app.get('/bounce-analysis',      (req, res) => res.sendFile(path.join(__dirname, 'bounce-analysis.html')));
 app.get('/bounce-analysis.html', (req, res) => res.sendFile(path.join(__dirname, 'bounce-analysis.html')));
 
+// One-time (re-runnable) sweep: retire every address that has ALREADY hard-
+// bounced. The live webhook now auto-suppresses NEW hard bounces, but legacy
+// dead contacts already sitting in active campaigns keep sending until swept.
+// This finds them in email_events (validated classifier), marks the contact
+// invalid + do_not_contact, and pushes each to BISON's blocklist so the live
+// campaign stops too. Idempotent — safe to run repeatedly.
+//   ?dry=1            → count only, change nothing
+//   ?days=365         → window (default all-time)
+//   ?skipBison=1      → DB suppression only, don't touch Bison blocklist
+app.post('/api/admin/suppress-bounced', requireAdmin, async (req, res) => {
+  const pgdb = req.app.locals.pgDb;
+  if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
+  const dry      = req.query.dry === '1' || req.query.dry === 'true';
+  const skipBison= req.query.skipBison === '1';
+  const days     = parseInt(req.query.days, 10) || 0; // 0 = all-time
+  const { isHard } = bounceClassExprs("raw->>'msg'");
+
+  try {
+    const windowSql = days > 0 ? `AND event_at >= NOW() - (${days} || ' days')::interval` : '';
+    // Distinct hard-bounced (email, workspace_id) pairs. Keep workspace so we can
+    // blocklist on the right Bison team.
+    const { rows } = await pgdb.query(`
+      SELECT DISTINCT lower(lead_email) AS email, workspace_id
+      FROM email_events
+      WHERE event_type = 'bounce' AND lead_email <> '' ${windowSql}
+        AND (${isHard})
+    `);
+    const emails = [...new Set(rows.map(r => r.email))];
+
+    if (dry) {
+      // How many of these are not yet suppressed?
+      let notYet = 0;
+      if (emails.length) {
+        const r = await pgdb.query(
+          `SELECT count(*)::int AS n FROM contacts
+           WHERE lower(email) = ANY($1) AND COALESCE(do_not_contact,false) = false`,
+          [emails]
+        );
+        notYet = r.rows[0]?.n || 0;
+      }
+      return res.json({ dry: true, hardBouncedAddresses: emails.length, notYetSuppressed: notYet, wouldBlocklistOnBison: !skipBison });
+    }
+
+    // 1) Suppress in our DB (batched ANY()).
+    let suppressed = 0;
+    if (emails.length) {
+      const r = await pgdb.query(
+        `UPDATE contacts
+           SET email_status='invalid', bounce_type='hard',
+               bounced_at = COALESCE(bounced_at, CURRENT_TIMESTAMP),
+               do_not_contact = true, updated_at = CURRENT_TIMESTAMP
+         WHERE lower(email) = ANY($1) AND COALESCE(do_not_contact,false) = false`,
+        [emails]
+      );
+      suppressed = r.rowCount || 0;
+    }
+
+    // 2) Push to Bison blocklist per workspace (best-effort, bounded concurrency).
+    let blocklisted = 0, bisonErrors = 0;
+    if (!skipBison) {
+      // De-dup (email, workspace) to avoid redundant calls.
+      const seen = new Set();
+      const tasks = rows.filter(r => {
+        const k = r.email + '|' + r.workspace_id;
+        if (seen.has(k) || !r.workspace_id) return false;
+        seen.add(k); return true;
+      });
+      // Serialize lightly to respect Bison's stateful token (the gate already
+      // serializes, but cap our fan-out so we don't queue thousands at once).
+      for (const t of tasks) {
+        try {
+          await bisonReq('/api/blacklisted-emails', { wsId: t.workspace_id, method: 'POST', body: { email: t.email } });
+          blocklisted++;
+        } catch { bisonErrors++; }
+      }
+    }
+
+    res.json({ ok: true, hardBouncedAddresses: emails.length, suppressed, blocklisted, bisonErrors, skipBison });
+  } catch (err) {
+    console.error('[suppress-bounced]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Post a plain-text message to the ops Slack channel via the bot token.
 // Best-effort: resolves with {ok} and never throws to the caller.
 function postBounceAlertToSlack(text) {

@@ -84,6 +84,7 @@ tr:hover td{background:#FAFBFF}
     </div>
     <div style="display:flex;gap:8px;align-items:center">
       <button onclick="testAlert()" id="alertBtn" style="font-family:inherit;font-size:13px;padding:7px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;cursor:pointer" title="Dry-run the early-warning check — shows which clients would be flagged, without posting to Slack">⚠︎ Check alerts</button>
+      <button onclick="suppressBounced()" id="suppressBtn" style="font-family:inherit;font-size:13px;padding:7px 12px;border:1px solid #fecaca;border-radius:8px;background:#fff;color:#b91c1c;cursor:pointer" title="Retire every address that has already hard-bounced: mark invalid + do-not-contact, and add to Bison's blocklist so live campaigns stop sending to them. Shows a preview first.">🧹 Suppress bounced</button>
       <select id="days" onchange="reload()">
         <option value="7">Last 7 days</option>
         <option value="30" selected>Last 30 days</option>
@@ -392,6 +393,25 @@ function testAlert(){
       return '• '+x.client+' — '+x.recentHard+' hard ('+x.recentRate+'% of bounces, was '+x.baseRate+'%)';
     }).join('\n') + '\n\nLive runs post this to Slack.');
   }).catch(function(){ btn.disabled=false; btn.textContent='⚠︎ Check alerts'; alert('Alert check failed.'); });
+}
+
+// Retire every already-hard-bounced address: preview first, confirm, then run.
+function suppressBounced(){
+  var btn = document.getElementById('suppressBtn');
+  btn.disabled = true; btn.textContent = '⏳ Checking…';
+  fetch('/api/admin/suppress-bounced?dry=1', { method:'POST' }).then(function(r){return r.json();}).then(function(d){
+    btn.disabled = false; btn.textContent = '🧹 Suppress bounced';
+    if(d.error){ alert('Preview failed: '+d.error); return; }
+    if(!d.notYetSuppressed){ alert('Nothing to do — all '+d.hardBouncedAddresses.toLocaleString()+' hard-bounced addresses are already suppressed.'); return; }
+    var ok = confirm('Found '+d.hardBouncedAddresses.toLocaleString()+' hard-bounced addresses, '+d.notYetSuppressed.toLocaleString()+' not yet retired.\n\nThis will mark them invalid + do-not-contact AND add them to Bison’s blocklist so live campaigns stop sending to them.\n\nProceed?');
+    if(!ok) return;
+    btn.disabled = true; btn.textContent = '⏳ Suppressing…';
+    fetch('/api/admin/suppress-bounced', { method:'POST' }).then(function(r){return r.json();}).then(function(res){
+      btn.disabled = false; btn.textContent = '🧹 Suppress bounced';
+      if(res.error){ alert('Suppress failed: '+res.error); return; }
+      alert('Done.\n\nSuppressed in DB: '+(res.suppressed||0).toLocaleString()+'\nAdded to Bison blocklist: '+(res.blocklisted||0).toLocaleString()+(res.bisonErrors?('\nBison errors: '+res.bisonErrors):'')+'\n\nReload to see the updated numbers.');
+    }).catch(function(){ btn.disabled=false; btn.textContent='🧹 Suppress bounced'; alert('Suppress failed.'); });
+  }).catch(function(){ btn.disabled=false; btn.textContent='🧹 Suppress bounced'; alert('Preview failed.'); });
 }
 
 reload();
