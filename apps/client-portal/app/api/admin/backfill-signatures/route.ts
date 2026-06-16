@@ -49,6 +49,19 @@ async function run(req: NextRequest) {
     return NextResponse.json({ probe: probeEmail, unibox_replies: ur.rows, esp_leads: el.rows })
   }
 
+  // DEBUG: ?rawdump=<email> returns the FULL esp_leads.raw JSON for a lead, so we can
+  // see every enrichment field PlusVibe/Bison already stored (job_title, industry,
+  // city, linkedin, phone, address, etc.) vs what the contact panel actually renders.
+  const rawDump = (url.searchParams.get('rawdump') ?? '').trim().toLowerCase()
+  if (rawDump) {
+    const d = await pool.query(
+      `SELECT id, source, email, company_name, raw
+         FROM esp_leads WHERE lower(email) = $1 ORDER BY updated_at DESC LIMIT 3`,
+      [rawDump]
+    ).catch((e) => ({ rows: [{ error: String(e) }] }))
+    return NextResponse.json({ rawdump: rawDump, rows: d.rows })
+  }
+
   // ALL inbound replies with a body + mapped workspace + email. We deliberately do
   // NOT gate on "portal_emails row missing" — the re-extraction step below must run on
   // EVERY reply to correct mis-attributed company/website/title, even ones whose body
