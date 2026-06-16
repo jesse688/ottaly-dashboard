@@ -2583,13 +2583,28 @@ app.get('/api/admin/stats-debug', requireAdmin, async (req, res) => {
       const cols = await pgdb.query(
         `SELECT column_name, data_type FROM information_schema.columns WHERE table_name='unibox_replies' ORDER BY ordinal_position`
       );
-      const sample = await pgdb.query(
-        `SELECT * FROM unibox_replies WHERE COALESCE(admin_label, category) = 'interested' ORDER BY received_at DESC LIMIT 1`
-      );
       const labelCounts = await pgdb.query(
         `SELECT COALESCE(admin_label, category) AS label, COUNT(*)::int n FROM unibox_replies GROUP BY 1 ORDER BY n DESC`
       );
-      return res.json({ columns: cols.rows, label_counts: labelCounts.rows, sample_interested: sample.rows[0] || null });
+      // The portal's "mark as lead" sets marked_as_lead=true — this is the real
+      // lead signal (not admin_label). Count them and show a sample + per-client breakdown.
+      const markedTotal = await pgdb.query(`SELECT COUNT(*)::int n FROM unibox_replies WHERE marked_as_lead = true`);
+      const markedByWs = await pgdb.query(
+        `SELECT workspace_id, COUNT(*)::int n, MIN(marked_at) first_marked, MAX(marked_at) last_marked
+           FROM unibox_replies WHERE marked_as_lead = true GROUP BY workspace_id ORDER BY n DESC`
+      );
+      const sampleMarked = await pgdb.query(
+        `SELECT id, workspace_id, bison_team_id, lead_email, matched_lead_email, subject,
+                admin_label, category, marked_as_lead, marked_by, marked_at, received_at, raw->'lead' AS raw_lead
+           FROM unibox_replies WHERE marked_as_lead = true ORDER BY marked_at DESC NULLS LAST LIMIT 3`
+      );
+      return res.json({
+        columns: cols.rows,
+        label_counts: labelCounts.rows,
+        marked_as_lead_total: markedTotal.rows[0].n,
+        marked_as_lead_by_workspace: markedByWs.rows,
+        sample_marked: sampleMarked.rows,
+      });
     }
     // ?probeAll=1&from=&to= — live-fetch Bison chart-stats for EVERY active client and
     // compare to what the perf cache currently holds, so we can confirm in one shot that
