@@ -4586,9 +4586,13 @@ async function buildProviderMixForRange(pgdb, wsIds, start, end) {
     const denom = g + o + oth;
     if (denom <= 0) continue;
     out[canon] = {
+      // Ratios (for apportioning replies/bounces/leads, which aren't per-provider).
       google:   g   / denom,
       outlook:  o   / denom,
       other:    oth / denom,
+      // RAW captured send counts per provider — used directly as the sent split
+      // so the provider tabs aren't zero when the Bison daily total is missing.
+      gSent: g, oSent: o, othSent: oth,
       coverage: a.total ? (a.google + a.outlook + a.other) / a.total : 0,
     };
   }
@@ -4678,16 +4682,29 @@ app.get('/api/stats/summary', requireSession, async (req, res) => {
 
     const workspaces = wsIds.map(wsId => {
       const t = wsStats[wsId].totals;
-      const mix = providerMix[wsId]; // { google, outlook, other } send-share 0..1, or undefined
+      // Look up the mix by the wsId directly; the mix is dual-keyed (canonical +
+      // raw event ids) in buildProviderMixForRange, so this hits regardless of
+      // which id form this client uses.
+      const mix = providerMix[wsId];
       let byProvider;
       if (mix) {
-        const ap = share => ({
-          sent:    Math.round((t.sent    || 0) * share),
+        // Apportion the Bison totals by the provider ratio. For SENT, fall back
+        // to the raw email_events per-provider count when the Bison total is 0
+        // (cache miss / no Bison send count) — otherwise every provider bucket
+        // would be 0 and the tabs would look empty even though we have the split.
+        const bisonSent = t.sent || 0;
+        const ap = (share, rawSent) => ({
+          sent:    bisonSent > 0 ? Math.round(bisonSent * share) : (rawSent || 0),
           replies: Math.round((t.replies || 0) * share),
           bounces: Math.round((t.bounces || 0) * share),
           leads:   Math.round((t.leads   || 0) * share),
         });
-        byProvider = { google: ap(mix.google), outlook: ap(mix.outlook), other: ap(mix.other), coverage: mix.coverage };
+        byProvider = {
+          google:  ap(mix.google,  mix.gSent),
+          outlook: ap(mix.outlook, mix.oSent),
+          other:   ap(mix.other,   mix.othSent),
+          coverage: mix.coverage,
+        };
       }
       return {
         workspace_id: wsId,
@@ -4700,14 +4717,30 @@ app.get('/api/stats/summary', requireSession, async (req, res) => {
 
     workspaces.sort((a, b) => b.totals.replies - a.totals.replies);
 
-    res.json({
+    const payload = {
       workspaces,
       dates,
       start,
       end,
       partial,
       updatedAt: performanceCache.updatedAt,
-    });
+    };
+    // ?debug=1 — surface why the provider split may be empty: how many wsIds got
+    // a mix, and a sample of mix keys vs wsIds, so we can see id mismatches.
+    if (req.query.debug === '1') {
+      const mixKeys = Object.keys(providerMix);
+      const matched = wsIds.filter(id => providerMix[id]);
+      payload._providerDebug = {
+        wsIdCount: wsIds.length,
+        mixKeyCount: mixKeys.length,
+        matchedCount: matched.length,
+        sampleWsIds: wsIds.slice(0, 5),
+        sampleMixKeys: mixKeys.slice(0, 5),
+        sampleMatched: matched.slice(0, 5).map(id => ({ id, mix: providerMix[id] })),
+        unmatchedWsIds: wsIds.filter(id => !providerMix[id]).slice(0, 10),
+      };
+    }
+    res.json(payload);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
