@@ -8387,14 +8387,15 @@ app.get('/api/bounce-analysis', requireSession, async (req, res) => {
     const pgdb = req.app.locals.pgDb;
     if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
     const days = Math.min(180, Math.max(1, parseInt(req.query.days, 10) || 30));
-    const { isHard, isBlock, isSoft } = bounceClassExprs("be.raw->>'msg'");
-    const classCase = bounceClassCase("be.raw->>'msg'");
+    // Classify ONCE inside the CTE (selecting from email_events, so bare `raw`,
+    // NOT be.raw — be doesn't exist yet while it's being defined). Every outer
+    // query then filters on the resulting `klass` column instead of re-running
+    // regexes with a be.-prefix that would fail "missing FROM-clause entry".
+    const classCase = bounceClassCase("raw->>'msg'");
 
     // Base CTE: every bounce event in the window, pre-classified once.
-    // Domain is derived straight from lead_email — we deliberately do NOT read
-    // the recipient_domain column (it's an ALTER-added column that isn't
-    // guaranteed to exist on every deployed DB; referencing it 500'd the whole
-    // endpoint while the explorer, which never touches it, kept working).
+    // Domain is derived straight from lead_email (recipient_domain is an
+    // ALTER-added column we avoid relying on here).
     const base = `
       WITH be AS (
         SELECT workspace_id, campaign_id, campaign_name, sender_email,
@@ -8407,13 +8408,18 @@ app.get('/api/bounce-analysis', requireSession, async (req, res) => {
           AND event_at >= NOW() - ($1 || ' days')::interval
       )`;
 
+    // Outer queries filter on the pre-computed klass (hard|block|soft|unclassified).
+    const isHard  = `klass = 'hard'`;
+    const isBlock = `klass = 'block'`;
+    const isSoft  = `klass = 'soft'`;
+
     // Helper SELECT pieces for the 3-way FILTER counts (reused across queries).
     const counts = `
       count(*)::int                                  AS total,
       count(*) FILTER (WHERE ${isHard})::int         AS hard,
       count(*) FILTER (WHERE ${isBlock})::int        AS block,
       count(*) FILTER (WHERE ${isSoft})::int         AS soft,
-      count(*) FILTER (WHERE be.raw->>'msg' IS NULL OR (NOT ${isHard} AND NOT ${isBlock} AND NOT ${isSoft}))::int AS unclassified`;
+      count(*) FILTER (WHERE klass = 'unclassified')::int AS unclassified`;
 
     const param = [String(days)];
 
@@ -8503,7 +8509,7 @@ app.get('/api/bounce-analysis', requireSession, async (req, res) => {
     });
   } catch (err) {
     console.error('[bounce-analysis]', err.message);
-    res.status(500).json({ error: 'Database error', detail: err.message });
+    res.status(500).json({ error: 'Database error' });
   }
 });
 
