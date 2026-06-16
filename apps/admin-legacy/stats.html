@@ -530,13 +530,14 @@ function renderClients() {
   grid.innerHTML = ws.map(w => {
     const t = effectiveTotals(w);
     if (!t) {
-      // Provider tab selected but this client's mix hasn't synced yet — keep the
-      // client VISIBLE (never drop an active client) with a syncing placeholder.
+      // Provider tab selected but this client has no provider split (its sends
+      // aren't captured in email_events under a matching id). Show it muted with
+      // an honest "no split" — NOT a fake perpetual "loading" spinner.
       return `<div class="client-card" id="card-${w.workspace_id}">
-        <div class="client-row" style="opacity:.55">
+        <div class="client-row" style="opacity:.5">
           <div><div class="client-name">${w.name}</div>
-          <div class="client-sub">syncing provider split…</div></div>
-          <div class="stat-cell" style="grid-column:2/-1;text-align:right;color:var(--muted);font-size:12px">⏳ provider data loading</div>
+          <div class="client-sub">no provider breakdown for this client</div></div>
+          <div class="stat-cell" style="grid-column:2/-1;text-align:right;color:var(--muted);font-size:12px">—</div>
         </div></div>`;
     }
     const allRR = t.sent > 0 ? (t.replies + (t.oooReplies || 0)) / t.sent : 0;
@@ -609,10 +610,11 @@ function renderClients() {
   if (note) {
     const total = wsRaw.length;
     const ready = wsRaw.filter(w => w.byProvider).length;
-    const syncing = ready < total ? ` · syncing ${ready}/${total} clients…` : '';
-    const label = _provider === 'all' ? 'by recipient provider'
+    // Honest coverage note — not "syncing" (it won't change without a re-scan).
+    const cov = ready < total ? ` · provider split available for ${ready}/${total} clients` : '';
+    const label = _provider === 'all' ? 'by recipient MX provider'
       : `${_provider === 'outlook' ? 'Microsoft' : _provider[0].toUpperCase()+_provider.slice(1)} recipients`;
-    note.textContent = `${label} · from Bison lead data${syncing}`;
+    note.textContent = `${label}${cov}`;
   }
 }
 
