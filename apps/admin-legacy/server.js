@@ -9590,6 +9590,13 @@ async function syncMailboxDailyStats({ days = 35 } = {}) {
   const start = serverDateString(new Date(Date.now() - days * 86400000));
   let mbCount = 0, rowCount = 0;
   try {
+    // The mailbox cache populates ~20s after boot; if it's empty (fresh deploy,
+    // or sync triggered too early) load it first so the sweep has something to
+    // walk instead of silently recording 0 mailboxes / 0 rows.
+    if (!(_mailboxCache.mailboxes || []).length) {
+      console.log('[mailbox-daily] mailbox cache empty — refreshing it first');
+      await refreshMailboxCache();
+    }
     const mailboxes = (_mailboxCache.mailboxes || []).filter(m => m.account_id && m.bison_team_id);
     for (const m of mailboxes) {
       const senderId = Number(m.account_id);

@@ -1367,11 +1367,42 @@ let _mbLastData = null;
 function renderMbPeriodBar() {
   const bar = document.getElementById('mbPeriodBar');
   if (!bar) return;
-  bar.innerHTML = MB_PERIODS.map(p => {
+  const btns = MB_PERIODS.map(p => {
     const active = p.key === _mbPeriod;
     return `<button onclick="setMbPeriod('${p.key}')" style="font-family:inherit;font-size:12px;font-weight:600;padding:4px 10px;border-radius:7px;cursor:pointer;`
       + `background:${active?'var(--navy-dark)':'#fff'};color:${active?'#fff':'var(--muted)'};border:1px solid ${active?'var(--navy-dark)':'var(--border)'}">${p.label}</button>`;
   }).join('');
+  bar.innerHTML = btns
+    + `<button id="mbSyncBtn" onclick="syncDailyNow()" title="Pull the latest per-day sent/reply/bounce from Bison into the local table. Takes a few minutes." style="font-family:inherit;font-size:12px;font-weight:600;padding:4px 10px;border-radius:7px;cursor:pointer;background:#fff;color:var(--navy);border:1px solid var(--navy);margin-left:8px">⟳ Sync now</button>`;
+}
+
+// Trigger the per-mailbox daily-stats sync, then poll status until it finishes
+// and refresh whatever period is showing.
+async function syncDailyNow() {
+  const btn = document.getElementById('mbSyncBtn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Syncing…'; }
+  try {
+    await fetch('/api/mailboxes/sync-daily', { method: 'POST' });
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = '⟳ Sync now'; }
+    return;
+  }
+  // Wait until we've actually seen the sweep start (running:true) before we
+  // treat running:false as "done" — otherwise the first poll can fire before
+  // the fire-and-forget job has flipped the flag and we'd stop immediately.
+  let sawStart = false, ticks = 0;
+  const poll = setInterval(async () => {
+    let s; ticks++;
+    try { s = await (await fetch('/api/mailboxes/sync-daily/status')).json(); } catch { return; }
+    if (s.running) sawStart = true;
+    if (btn) btn.textContent = s.running ? `⏳ ${s.mailboxes||0} mbx…` : '⟳ Sync now';
+    const done = (sawStart && !s.running) || ticks > 90; // ~6 min hard cap
+    if (done) {
+      clearInterval(poll);
+      if (btn) { btn.disabled = false; btn.textContent = '⟳ Sync now'; }
+      if (_mbPeriod !== 'lifetime') { loadProviderCharts(_mbPeriod); loadSupplierCharts(_mbPeriod); }
+    }
+  }, 4000);
 }
 
 function setMbPeriod(p) {
