@@ -1831,7 +1831,7 @@
       { key: 'technologies',    label: 'Technologies',      sortKey: null,           defaultOn: false },
       { key: 'keywords',        label: 'Keywords',          sortKey: null,           defaultOn: false },
       { key: 'num_employees',   label: 'Employees',         sortKey: null,           defaultOn: false },
-      { key: 'email_provider',  label: 'Email Provider',    sortKey: null,           defaultOn: false },
+      { key: 'email_provider',  label: 'Email Provider',    sortKey: null,           defaultOn: true },
       { key: 'apollo_id',       label: 'Apollo ID',         sortKey: null,           defaultOn: false },
       { key: 'owns_building',    label: 'Owns Building',     sortKey: null,           defaultOn: false },
       { key: 'works_remote',    label: 'Remote',            sortKey: null,           defaultOn: false },
@@ -1939,10 +1939,15 @@
         case 'num_employees':
           return `<td style="font-size:12px">${c.num_employees || '—'}</td>`;
         case 'email_provider': {
-          const tags = Array.isArray(c.tags) ? c.tags : JSON.parse(c.tags || '[]');
-          const ep = tags.find(t => t && t.startsWith('email_'));
+          // TRUE MX provider from the verifier (c.mx_provider), NOT Apollo's old
+          // tags. Fall back to a legacy email_* tag only if mx_provider is unset.
+          let ep = c.mx_provider;
+          if (!ep) {
+            const tags = Array.isArray(c.tags) ? c.tags : JSON.parse(c.tags || '[]');
+            ep = (tags.find(t => t && t.startsWith('email_')) || '');
+          }
           const epLabel = ep === 'email_google' ? 'Google' : ep === 'email_outlook' ? 'Microsoft' : ep === 'email_other' ? 'Other' : '—';
-          const epColor = ep === 'email_google' ? '#4285f4' : ep === 'email_outlook' ? '#0078d4' : '#6b7280';
+          const epColor = ep === 'email_google' ? '#4285f4' : ep === 'email_outlook' ? '#0078d4' : ep === 'email_other' ? '#6b7280' : '#9ca3af';
           return `<td style="font-size:12px;color:${epColor}">${epLabel}</td>`;
         }
         case 'apollo_id':
@@ -4474,6 +4479,22 @@
               <div class="panel-field"><label>Last Name</label><input id="pe_last_name" value="${esc(c.last_name||'')}"></div>
             </div>
             <div class="panel-field"><label>Email</label><div class="pval">${esc(c.email)}</div></div>
+            <div class="panel-grid">
+              <div class="panel-field"><label>Email Provider <span style="color:#9ca3af;font-weight:400">(true MX)</span></label>
+                <div class="pval">${(function(){
+                  var ep = c.mx_provider;
+                  var lbl = ep==='email_google'?'Google':ep==='email_outlook'?'Microsoft':ep==='email_other'?'Other':'— not verified';
+                  var col = ep==='email_google'?'#4285f4':ep==='email_outlook'?'#0078d4':ep==='email_other'?'#374151':'#9ca3af';
+                  return '<span style="color:'+col+';font-weight:600">'+lbl+'</span>';
+                })()}</div></div>
+              <div class="panel-field"><label>Verification</label>
+                <div class="pval">${(function(){
+                  var s=(c.email_status||'').toLowerCase();
+                  var m={safe:['Safe','#16a34a'],safe_catchall:['Safe (catch-all)','#65a30d'],risky:['Risky','#d97706'],invalid:['Invalid','#dc2626'],unknown:['Unknown','#9ca3af']};
+                  var v=m[s]||['Not verified','#9ca3af'];
+                  return '<span style="color:'+v[1]+';font-weight:600">'+v[0]+'</span>'+(c.do_not_contact?' <span style="color:#dc2626">· DNC</span>':'');
+                })()}</div></div>
+            </div>
             <div class="panel-grid">
               <div class="panel-field"><label>Phone</label><input id="pe_phone" value="${esc(c.phone||'')}"></div>
               <div class="panel-field"><label>LinkedIn</label><input id="pe_linkedin" value="${esc(c.linkedin_url||raw['Person Linkedin Url']||'')}"></div>

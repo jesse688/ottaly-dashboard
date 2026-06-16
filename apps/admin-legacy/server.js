@@ -8674,27 +8674,41 @@ app.post('/api/admin/suppress-bounced', requireAdmin, async (req, res) => {
       suppressed = r.rowCount || 0;
     }
 
-    // 2) Push to Bison blocklist per workspace (best-effort, bounded concurrency).
+    // 2) Push to Bison blocklist. A dead address is dead for EVERY client, so by
+    // default we blocklist each bounced email in EVERY workspace (?allWorkspaces=0
+    // to only block the workspace it bounced in). Bison's token is stateful +
+    // serialized, so this runs as one controlled off-line pass (not on the live
+    // webhook path) — that's why the sweep is the right place for the fan-out.
     let blocklisted = 0, bisonErrors = 0;
     if (!skipBison) {
-      // De-dup (email, workspace) to avoid redundant calls.
-      const seen = new Set();
-      const tasks = rows.filter(r => {
-        const k = r.email + '|' + r.workspace_id;
-        if (seen.has(k) || !r.workspace_id) return false;
-        seen.add(k); return true;
-      });
-      // Serialize lightly to respect Bison's stateful token (the gate already
-      // serializes, but cap our fan-out so we don't queue thousands at once).
-      for (const t of tasks) {
-        try {
-          await bisonReq('/api/blacklisted-emails', { wsId: t.workspace_id, method: 'POST', body: { email: t.email } });
-          blocklisted++;
-        } catch { bisonErrors++; }
+      const allWorkspaces = req.query.allWorkspaces !== '0'; // default ON
+      const targets = allWorkspaces
+        ? BISON_TEAMS.map(t => t.team_id).filter(v => v != null).map(String)
+        : null;
+      if (allWorkspaces) {
+        // email × every workspace (dedup by pair).
+        const seen = new Set();
+        for (const email of emails) {
+          for (const wsId of targets) {
+            const k = email + '|' + wsId;
+            if (seen.has(k)) continue; seen.add(k);
+            try { await bisonReq('/api/blacklisted-emails', { wsId, method: 'POST', body: { email } }); blocklisted++; }
+            catch { bisonErrors++; }
+          }
+        }
+      } else {
+        // Only the workspace each address bounced in.
+        const seen = new Set();
+        for (const r of rows) {
+          const k = r.email + '|' + r.workspace_id;
+          if (seen.has(k) || !r.workspace_id) continue; seen.add(k);
+          try { await bisonReq('/api/blacklisted-emails', { wsId: r.workspace_id, method: 'POST', body: { email: r.email } }); blocklisted++; }
+          catch { bisonErrors++; }
+        }
       }
     }
 
-    res.json({ ok: true, hardBouncedAddresses: emails.length, suppressed, blocklisted, bisonErrors, skipBison });
+    res.json({ ok: true, hardBouncedAddresses: emails.length, suppressed, blocklisted, bisonErrors, skipBison, allWorkspaces: req.query.allWorkspaces !== '0' });
   } catch (err) {
     console.error('[suppress-bounced]', err.message);
     res.status(500).json({ error: err.message });
@@ -13670,7 +13684,7 @@ app.get('/api/admin/database/contacts', requireAdmin, async (req, res) => {
 
   params.push(safeLimit, offset);
   const [{ rows: contacts }, { rows: [{ count }] }] = await Promise.all([
-    pgdb.query(`SELECT id,workspace_id,email,first_name,last_name,company_name,company_domain,job_title,industry,num_employees,keywords,technologies,company_status,city,country,email_status,source,imported_at,enriched_at,ch_company_number,ch_company_type,ch_founded_year,ch_postcode,ch_sic_codes,ch_jurisdiction,ch_has_insolvency,ch_has_charges,ch_accounts_overdue,ch_active_officers,ch_resigned_officers,ch_address,ch_date_of_cessation,ch_last_accounts_date,ch_year_end_month FROM contacts ${whereClause} ORDER BY ${safeSortBy} ${safeSortDir} LIMIT $${params.length - 1} OFFSET $${params.length}`, params),
+    pgdb.query(`SELECT id,workspace_id,email,first_name,last_name,company_name,company_domain,job_title,industry,num_employees,keywords,technologies,company_status,city,country,email_status,mx_provider,source,imported_at,enriched_at,ch_company_number,ch_company_type,ch_founded_year,ch_postcode,ch_sic_codes,ch_jurisdiction,ch_has_insolvency,ch_has_charges,ch_accounts_overdue,ch_active_officers,ch_resigned_officers,ch_address,ch_date_of_cessation,ch_last_accounts_date,ch_year_end_month FROM contacts ${whereClause} ORDER BY ${safeSortBy} ${safeSortDir} LIMIT $${params.length - 1} OFFSET $${params.length}`, params),
     pgdb.query(`SELECT COUNT(*) AS count FROM contacts ${whereClause}`, params.slice(0, -2)),
   ]);
 
