@@ -9536,41 +9536,70 @@ app.get('/api/mailboxes/provider-stats', requireSession, async (req, res) => {
       });
     }
 
+    // SENT + BOUNCE per mailbox: email_events.sender_email (Bison populates it on
+    // these — confirmed 100% coverage).
     const { isHard, isBlock, isSoft } = bounceClassExprs("raw->>'msg'");
     const params = [];
     let windowSql = '';
     if (days > 0) { params.push(String(days)); windowSql = `AND event_at >= NOW() - ($1 || ' days')::interval`; }
     const { rows } = await pgdb.query(`
       SELECT lower(sender_email) AS sender,
-             COUNT(*) FILTER (WHERE event_type='sent')                         ::int AS sent,
-             COUNT(*) FILTER (WHERE event_type IN ('reply','positive_reply'))  ::int AS replies,
-             COUNT(*) FILTER (WHERE event_type='bounce')                       ::int AS bounces,
-             COUNT(*) FILTER (WHERE event_type='bounce' AND ${isHard})         ::int AS bounces_hard,
-             COUNT(*) FILTER (WHERE event_type='bounce' AND ${isBlock})        ::int AS bounces_block,
-             COUNT(*) FILTER (WHERE event_type='bounce' AND ${isSoft})         ::int AS bounces_soft
+             COUNT(*) FILTER (WHERE event_type='sent')                  ::int AS sent,
+             COUNT(*) FILTER (WHERE event_type='bounce')                ::int AS bounces,
+             COUNT(*) FILTER (WHERE event_type='bounce' AND ${isHard})  ::int AS bounces_hard,
+             COUNT(*) FILTER (WHERE event_type='bounce' AND ${isBlock}) ::int AS bounces_block,
+             COUNT(*) FILTER (WHERE event_type='bounce' AND ${isSoft})  ::int AS bounces_soft
       FROM email_events
-      WHERE sender_email IS NOT NULL AND sender_email <> '' ${windowSql}
+      WHERE sender_email IS NOT NULL AND sender_email <> ''
+        AND event_type IN ('sent','bounce') ${windowSql}
       GROUP BY lower(sender_email)
     `, params);
 
+    // REPLIES per mailbox: Bison omits sender_email on replies, but the client
+    // portal captures the receiving mailbox in unibox_replies.mailbox_email
+    // (= Bison primary_to_email_address). So replies ARE attributable — via the
+    // portal, exactly as intended. Human replies only (excludes warmup/OOO).
+    const rParams = [];
+    let rWindow = '';
+    if (days > 0) { rParams.push(String(days)); rWindow = `AND received_at >= NOW() - ($1 || ' days')::interval`; }
+    let replyRows = [];
+    try {
+      const rr = await pgdb.query(`
+        SELECT lower(mailbox_email) AS sender, COUNT(*)::int AS replies
+        FROM unibox_replies
+        WHERE mailbox_email IS NOT NULL AND mailbox_email <> ''
+          AND COALESCE(admin_label, category) IN ('interested','not_interested','question','unsubscribe')
+          ${rWindow}
+        GROUP BY lower(mailbox_email)
+      `, rParams);
+      replyRows = rr.rows;
+    } catch (e) {
+      console.warn('[mailbox provider-stats] reply query failed (non-fatal):', e.message);
+    }
+    const repliesBySender = new Map(replyRows.map(r => [r.sender, r.replies]));
+
     const blank = () => ({ mailboxes: 0, sent: 0, replies: 0, bounces: 0, bounces_hard: 0, bounces_block: 0, bounces_soft: 0 });
     const byProvider = {}, bySupplier = {};
-    let unmatched = blank(); // events whose sender isn't in the mailbox roster
-    for (const r of rows) {
-      const info = senderInfo.get(r.sender);
-      const bucket = (map, key) => { const b = (map[key] = map[key] || blank()); b.mailboxes++; b.sent += r.sent; b.replies += r.replies; b.bounces += r.bounces; b.bounces_hard += r.bounces_hard; b.bounces_block += r.bounces_block; b.bounces_soft += r.bounces_soft; };
-      if (!info) { unmatched.mailboxes++; unmatched.sent += r.sent; unmatched.replies += r.replies; unmatched.bounces += r.bounces; continue; }
-      bucket(byProvider, info.provider || 'smtp');
-      bucket(bySupplier, info.supplier || '(unassigned)');
+    let unmatched = blank();
+    // Union of senders seen in sends and in replies.
+    const allSenders = new Set([...rows.map(r => r.sender), ...repliesBySender.keys()]);
+    const sentBySender = new Map(rows.map(r => [r.sender, r]));
+    for (const sender of allSenders) {
+      const s = sentBySender.get(sender) || { sent: 0, bounces: 0, bounces_hard: 0, bounces_block: 0, bounces_soft: 0 };
+      const replies = repliesBySender.get(sender) || 0;
+      const info = senderInfo.get(sender);
+      const add = (b) => { b.mailboxes++; b.sent += s.sent; b.replies += replies; b.bounces += s.bounces; b.bounces_hard += s.bounces_hard; b.bounces_block += s.bounces_block; b.bounces_soft += s.bounces_soft; };
+      if (!info) { add(unmatched); continue; }
+      add(byProvider[info.provider || 'smtp'] = byProvider[info.provider || 'smtp'] || blank());
+      add(bySupplier[info.supplier || '(unassigned)'] = bySupplier[info.supplier || '(unassigned)'] || blank());
     }
-    // Rates per bucket.
     const withRates = (map) => Object.fromEntries(Object.entries(map).map(([k, b]) => [k, {
       ...b,
       reply_rate:  b.sent > 0 ? b.replies / b.sent : 0,
       bounce_rate: b.sent > 0 ? b.bounces / b.sent : 0,
     }]));
 
-    res.json({ days, byProvider: withRates(byProvider), bySupplier: withRates(bySupplier), unmatched });
+    res.json({ days, byProvider: withRates(byProvider), bySupplier: withRates(bySupplier), unmatched: { ...unmatched, reply_rate: unmatched.sent>0?unmatched.replies/unmatched.sent:0, bounce_rate: unmatched.sent>0?unmatched.bounces/unmatched.sent:0 } });
   } catch (err) {
     console.error('[mailbox provider-stats]', err.message);
     res.status(500).json({ error: err.message });
