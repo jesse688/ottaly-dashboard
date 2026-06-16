@@ -3928,6 +3928,27 @@ async function refreshRevenueCache() {
       }
     }
 
+    // Attach each lead's TRUE recipient provider (contacts.mx_provider) so the
+    // Stats provider tabs count leads by their ACTUAL provider, not an estimate
+    // apportioned from the send ratio. One batched lookup, keyed by lower(email).
+    if (pgdb && leads.length) {
+      try {
+        const emails = [...new Set(leads.map(l => (l.lead_email || '').toLowerCase()).filter(Boolean))];
+        if (emails.length) {
+          const r = await pgdb.query(
+            `SELECT DISTINCT ON (lower(email)) lower(email) AS email, mx_provider
+             FROM contacts WHERE lower(email) = ANY($1) AND mx_provider IS NOT NULL
+             ORDER BY lower(email)`,
+            [emails]
+          );
+          const provByEmail = Object.fromEntries(r.rows.map(x => [x.email, x.mx_provider]));
+          for (const l of leads) l.mx_provider = provByEmail[(l.lead_email || '').toLowerCase()] || null;
+        }
+      } catch (err) {
+        console.warn('[revenue cache] provider attach failed:', err.message);
+      }
+    }
+
     revenueCache = { leads, updatedAt: new Date().toISOString() };
     console.log(`[revenue cache] refreshed — ${leads.length} total leads (from storage)`);
 
@@ -4563,7 +4584,15 @@ function computeWorkspaceStatsForRange(wsIds, start, end) {
     const rtl        = totals.replies > 0 ? totals.leads   / totals.replies : 0;
     const sendsPerDay   = dates.length > 0 ? totals.sent    / dates.length : 0;
     const repliesPerDay = dates.length > 0 ? totals.replies / dates.length : 0;
-    out[wsId] = { totals: { ...totals, replyRate, bounceRate, rtl, sendsPerDay, repliesPerDay }, series };
+    // EXACT leads per provider (from each lead's real mx_provider), so the
+    // provider tabs show the true lead count, not a send-ratio estimate.
+    const leadsByProvider = { email_google: 0, email_outlook: 0, email_other: 0, unknown: 0 };
+    for (const l of wsLeads) {
+      const p = l.mx_provider;
+      if (p === 'email_google' || p === 'email_outlook' || p === 'email_other') leadsByProvider[p]++;
+      else leadsByProvider.unknown++;
+    }
+    out[wsId] = { totals: { ...totals, replyRate, bounceRate, rtl, sendsPerDay, repliesPerDay }, series, leadsByProvider };
   }
   return out;
 }
@@ -4767,7 +4796,16 @@ app.get('/api/stats/summary', requireSession, async (req, res) => {
           : [mix.gSent || 0, mix.oSent || 0, mix.othSent || 0];
         const replyParts  = apportion(t.replies);
         const bounceParts = apportion(t.bounces);
-        const leadParts   = apportion(t.leads);
+        // LEADS: use the EXACT per-provider counts (each lead's real mx_provider),
+        // not an estimate — leads are few and we know each one's true provider.
+        // Leads whose provider is unknown are apportioned by the send ratio so the
+        // parts still sum to the lead total.
+        const lbp = wsStats[wsId].leadsByProvider || { email_google:0, email_outlook:0, email_other:0, unknown:0 };
+        const leadParts = [lbp.email_google || 0, lbp.email_outlook || 0, lbp.email_other || 0];
+        if (lbp.unknown > 0) {
+          const extra = apportion(lbp.unknown);
+          for (let i = 0; i < 3; i++) leadParts[i] += extra[i];
+        }
         const pack = i => ({ sent: sentParts[i], replies: replyParts[i], bounces: bounceParts[i], leads: leadParts[i] });
         byProvider = { google: pack(0), outlook: pack(1), other: pack(2), coverage: mix.coverage };
       }
