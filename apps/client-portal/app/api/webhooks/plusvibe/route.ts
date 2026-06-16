@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import pool from '@/lib/db'
 import crypto from 'crypto'
 import { notifyClientOfLead } from '@/lib/email'
-import { enrichLead } from '@/lib/sync'
+import { enrichLead, leadCompanyOrNull } from '@/lib/sync'
 import { ready } from '@/lib/db'
 import { bisonTeamToWorkspace } from '@/lib/bison'
 import { notifyAdmin } from '@/lib/notify'
@@ -173,7 +173,7 @@ async function handleBison(raw: Record<string, unknown>) {
            updated_at = NOW()`,
         [leadId, mappedWorkspaceId, lead.campaign_id ? String(lead.campaign_id) : null,
          lead.email, lead.first_name ?? null, lead.last_name ?? null,
-         lead.company_name ?? null, lead.status ?? null,
+         await leadCompanyOrNull(mappedWorkspaceId, lead.company_name), lead.status ?? null,
          eventType === 'lead_replied' ? new Date().toISOString() : null]
       )
     }

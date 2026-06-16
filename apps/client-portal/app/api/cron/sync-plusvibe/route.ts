@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import pool from '@/lib/db'
 import { getLeads, BISON_CONFIGURED } from '@/lib/bison'
 import { ready } from '@/lib/db'
+import { leadCompanyOrNull } from '@/lib/sync'
 
 export async function GET(req: NextRequest) {
   const secret = new URL(req.url).searchParams.get('secret')
@@ -46,7 +47,7 @@ export async function GET(req: NextRequest) {
             null, // campaign_id not exposed on BisonLead
             'bison',
             lead.email, lead.first_name ?? null, lead.last_name ?? null,
-            lead.company ?? null, lead.status ?? null,
+            await leadCompanyOrNull(workspaceId, lead.company), lead.status ?? null,
             'INTERESTED',
             JSON.stringify(lead),
             lead.created_at ?? new Date().toISOString(),

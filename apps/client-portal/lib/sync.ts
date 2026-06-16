@@ -2,6 +2,29 @@ import pool from './db'
 import { getLeads, getLeadReplies, bisonTeamForWorkspace } from './bison'
 import { reconcileLeadCharges } from './balance'
 
+// The Bison/PV lead feed carries the AGENCY's own company on every lead, so importing
+// `lead.company` blindly stamps the client's company (e.g. "Jumping Spider") onto every
+// lead. Null it out when it equals the workspace's own client company so the lead's
+// REAL company (filled from their reply signature) isn't masked. Cached per process.
+const _agencyCache = new Map<string, string | null>()
+export async function agencyCompanyFor(workspaceId: string): Promise<string | null> {
+  if (_agencyCache.has(workspaceId)) return _agencyCache.get(workspaceId) ?? null
+  const r = await pool.query(
+    `SELECT company_name FROM portal_clients WHERE workspace_id = $1 ORDER BY active DESC LIMIT 1`,
+    [workspaceId]
+  ).catch(() => ({ rows: [] as { company_name: string | null }[] }))
+  const v = (r.rows[0]?.company_name ?? '').trim().toLowerCase() || null
+  _agencyCache.set(workspaceId, v)
+  return v
+}
+// Returns the lead's company UNLESS it's the agency's own (then null).
+export async function leadCompanyOrNull(workspaceId: string, leadCompany: string | null | undefined): Promise<string | null> {
+  const c = (leadCompany ?? '').trim()
+  if (!c) return null
+  const agency = await agencyCompanyFor(workspaceId)
+  return agency && c.toLowerCase() === agency ? null : c
+}
+
 // Enrich a newly-arrived lead with its full Bison record. Best-effort.
 export async function enrichLead(workspaceId: string, leadEmail: string): Promise<boolean> {
   if (!leadEmail) return false
@@ -21,7 +44,7 @@ export async function enrichLead(workspaceId: string, leadEmail: string): Promis
              email=$4, first_name=$5, last_name=$6, company_name=$7, status=$8, raw=$9, updated_at=NOW()`,
           [String(lead.id), workspaceId, null,
            lead.email, lead.first_name ?? null, lead.last_name ?? null,
-           lead.company ?? null, lead.status ?? null,
+           await leadCompanyOrNull(workspaceId, lead.company), lead.status ?? null,
            JSON.stringify(lead), lead.created_at ?? new Date().toISOString()]
         )
         return true
@@ -61,7 +84,7 @@ export async function backfillWorkspace(
           String(lead.id), workspaceId,
           null, // campaign_id not exposed on BisonLead
           lead.email, lead.first_name ?? null, lead.last_name ?? null,
-          lead.company ?? null, lead.status ?? null,
+          await leadCompanyOrNull(workspaceId, lead.company), lead.status ?? null,
           JSON.stringify(lead), lead.created_at ?? new Date().toISOString(),
         ]
       )
