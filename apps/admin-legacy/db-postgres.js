@@ -2672,11 +2672,25 @@ class PostgresDatabase {
     const concurrency = Math.min(opts.concurrency || 20, 50);
     const BATCH       = 500; // domains pulled from the DB per round
 
+    // Upfront total so the UI can show a real progress bar + ETA. Distinct
+    // domains that still need classifying (NULL mx_provider).
+    let totalDomains = 0;
+    try {
+      const tc = await this.query(`
+        SELECT COUNT(*)::int AS n FROM (
+          SELECT DISTINCT LOWER(SPLIT_PART(email,'@',2)) AS d
+          FROM contacts
+          WHERE mx_provider IS NULL AND email IS NOT NULL AND POSITION('@' IN email) > 0
+        ) q`);
+      totalDomains = tc.rows[0]?.n || 0;
+    } catch {}
+
     const stats = {
+      totalDomains,
       domainsScanned: 0, domainsResolved: 0, domainsFailed: 0,
       contactsUpdated: 0,
       byProvider: { email_google: 0, email_outlook: 0, email_other: 0 },
-      exhausted: false,
+      exhausted: false, mode: 'unknowns', startedAt: Date.now(),
     };
     // Domains we've already attempted this run. Failed (transient) domains stay
     // NULL in the DB, so the next SELECT would return them again — without this
@@ -2757,11 +2771,22 @@ class PostgresDatabase {
   async reverifyAllMxProvider(opts = {}) {
     const concurrency = Math.min(opts.concurrency || 20, 50);
     const BATCH = 500;
+    // Upfront total (ALL distinct domains) for the progress bar + ETA.
+    let totalDomains = 0;
+    try {
+      const tc = await this.query(`
+        SELECT COUNT(*)::int AS n FROM (
+          SELECT DISTINCT LOWER(SPLIT_PART(email,'@',2)) AS d
+          FROM contacts WHERE email IS NOT NULL AND POSITION('@' IN email) > 0
+        ) q`);
+      totalDomains = tc.rows[0]?.n || 0;
+    } catch {}
     const stats = {
+      totalDomains,
       domainsScanned: 0, domainsResolved: 0, domainsFailed: 0,
       contactsUpdated: 0, changed: 0,
       byProvider: { email_google: 0, email_outlook: 0, email_other: 0 },
-      exhausted: false, mode: 'reverify',
+      exhausted: false, mode: 'reverify', startedAt: Date.now(),
     };
     let lastDomain = '';
     while (true) {

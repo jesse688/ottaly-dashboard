@@ -4528,20 +4528,38 @@ function computeWorkspaceStatsForRange(wsIds, start, end) {
 // with no captured 'sent' events in range are omitted (→ page shows 'syncing').
 async function buildProviderMixForRange(pgdb, wsIds, start, end) {
   if (!pgdb || !wsIds.length) return {};
-  // email_events.workspace_id may be stored as the pv id OR the Bison team_id
-  // depending on era; we group by whatever's stored and fold each row back to
-  // its CANONICAL id (the same id the Stats page keys on) so PV-era and
-  // Bison-era events for one client merge into a single mix.
+  // Provider per send = TRUE MX from contacts.mx_provider (dense — populated by
+  // the verify scan) joined on lead_email; fall back to the sparser
+  // email_events.provider_bucket only when the contact isn't classified. This
+  // is the same source the combo-analysis 'to_type' uses, and it means a
+  // workspace with ANY sends gets a non-empty mix (no "loading forever").
+  // workspace_id may be the pv id OR the Bison team_id depending on era; we fold
+  // each stored id back to its CANONICAL id below so they merge per client.
   const { rows } = await pgdb.query(`
+    WITH s AS (
+      SELECT ee.workspace_id,
+             COALESCE(
+               c.mx_provider,
+               CASE ee.provider_bucket
+                 WHEN 'google'      THEN 'email_google'
+                 WHEN 'gmail'       THEN 'email_google'
+                 WHEN 'outlook'     THEN 'email_outlook'
+                 WHEN 'email_other' THEN 'email_other'
+                 ELSE NULL
+               END
+             ) AS prov
+      FROM email_events ee
+      LEFT JOIN contacts c ON lower(c.email) = lower(ee.lead_email)
+      WHERE ee.event_type = 'sent'
+        AND ee.event_at::date >= $1 AND ee.event_at::date <= $2
+    )
     SELECT workspace_id,
-           COUNT(*) FILTER (WHERE provider_bucket = 'google')                          ::int AS google,
-           COUNT(*) FILTER (WHERE provider_bucket = 'outlook')                         ::int AS outlook,
-           COUNT(*) FILTER (WHERE provider_bucket = 'email_other')                     ::int AS other,
-           COUNT(*) FILTER (WHERE provider_bucket IS NULL OR provider_bucket = 'workspace') ::int AS unclassified,
-           COUNT(*)                                                                    ::int AS total
-    FROM email_events
-    WHERE event_type = 'sent'
-      AND event_at::date >= $1 AND event_at::date <= $2
+           COUNT(*) FILTER (WHERE prov = 'email_google')  ::int AS google,
+           COUNT(*) FILTER (WHERE prov = 'email_outlook') ::int AS outlook,
+           COUNT(*) FILTER (WHERE prov = 'email_other')   ::int AS other,
+           COUNT(*) FILTER (WHERE prov IS NULL)           ::int AS unclassified,
+           COUNT(*)                                        ::int AS total
+    FROM s
     GROUP BY workspace_id
   `, [start, end]);
 

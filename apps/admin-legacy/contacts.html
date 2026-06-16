@@ -1151,7 +1151,7 @@
                 <input type="checkbox" id="emailGoogle" value="google"> Google <span id="googleCount" style="font-size:11px;color:#6b7280;margin-left:auto;">(0)</span>
               </label>
               <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;">
-                <input type="checkbox" id="emailOutlook" value="outlook"> Outlook <span id="outlookCount" style="font-size:11px;color:#6b7280;margin-left:auto;">(0)</span>
+                <input type="checkbox" id="emailOutlook" value="outlook"> Microsoft <span id="outlookCount" style="font-size:11px;color:#6b7280;margin-left:auto;">(0)</span>
               </label>
               <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;">
                 <input type="checkbox" id="emailOther" value="other"> Other <span id="otherCount" style="font-size:11px;color:#6b7280;margin-left:auto;">(0)</span>
@@ -1930,7 +1930,7 @@
         case 'email_provider': {
           const tags = Array.isArray(c.tags) ? c.tags : JSON.parse(c.tags || '[]');
           const ep = tags.find(t => t && t.startsWith('email_'));
-          const epLabel = ep === 'email_google' ? 'Google' : ep === 'email_outlook' ? 'Outlook' : ep === 'email_other' ? 'Other' : '—';
+          const epLabel = ep === 'email_google' ? 'Google' : ep === 'email_outlook' ? 'Microsoft' : ep === 'email_other' ? 'Other' : '—';
           const epColor = ep === 'email_google' ? '#4285f4' : ep === 'email_outlook' ? '#0078d4' : '#6b7280';
           return `<td style="font-size:12px;color:${epColor}">${epLabel}</td>`;
         }
@@ -4916,15 +4916,46 @@
     // the cheap domain-cache reseed first, then kicks off the background DNS
     // scan and polls coverage so the user watches Unknown fall.
     let _mxScanPoll = null;
-    function renderMxPanel(cov, status) {
+    function fmtEta(secs) {
+      if (!isFinite(secs) || secs <= 0) return '';
+      const m = Math.floor(secs / 60), s = Math.round(secs % 60);
+      if (m >= 60) { const h = Math.floor(m/60); return `~${h}h ${m%60}m left`; }
+      if (m > 0)   return `~${m}m ${s}s left`;
+      return `~${s}s left`;
+    }
+    // status = headline text. job = the scan stats object (totalDomains,
+    // domainsScanned, startedAt) for the progress bar + ETA, or null when done.
+    function renderMxPanel(cov, status, job) {
       const panel = document.getElementById('mxResultPanel');
       if (!panel) return;
       panel.style.display = 'block';
       const g = cov.google ?? 0, ms = cov.outlook ?? 0, o = cov.other ?? 0, u = cov.unknown ?? 0;
       const total = g + ms + o + u;
       const pct = n => total ? Math.round(100 * n / total) : 0;
+
+      // Progress bar + ETA from the live scan stats (domains, not contacts).
+      let bar = '';
+      if (job && job.totalDomains > 0) {
+        const done = job.domainsScanned || 0;
+        const tot  = job.totalDomains;
+        const p    = Math.min(100, Math.round(100 * done / tot));
+        const elapsed = job.startedAt ? (Date.now() - job.startedAt) / 1000 : 0;
+        const rate = elapsed > 2 ? done / elapsed : 0;      // domains/sec
+        const eta  = rate > 0 ? (tot - done) / rate : Infinity;
+        bar =
+          `<div style="margin:8px 0 10px;">`
+          + `<div style="display:flex;justify-content:space-between;font-size:12px;color:#6b7280;margin-bottom:3px;">`
+          + `<span>${done.toLocaleString()} / ${tot.toLocaleString()} domains · ${p}%</span>`
+          + `<span>${rate > 0 ? Math.round(rate) + '/s · ' : ''}${fmtEta(eta)}</span>`
+          + `</div>`
+          + `<div style="height:8px;background:#e5e7eb;border-radius:99px;overflow:hidden;">`
+          + `<div style="height:100%;width:${p}%;background:#224388;transition:width .4s;"></div>`
+          + `</div></div>`;
+      }
+
       panel.innerHTML =
         `<div style="font-weight:600;margin-bottom:6px;">${status}</div>`
+        + bar
         + `<div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;">`
         + `<span style="color:#4285f4;font-weight:600;">Google ${g.toLocaleString()} <span style="color:#9ca3af;font-weight:400;">(${pct(g)}%)</span></span>`
         + `<span style="color:#b91c1c;font-weight:700;background:#fee2e2;padding:2px 8px;border-radius:6px;">Microsoft ${ms.toLocaleString()} (${pct(ms)}%) — excluded by default</span>`
@@ -4966,19 +4997,20 @@
               fetch('/api/contacts/mx-coverage').then(x => x.json()),
               fetch('/api/contacts/mx-scan').then(x => x.json()),
             ]);
-            const unknown = (cov.unknown ?? 0).toLocaleString();
+            const s = (job && job.stats) || {};
             if (job && job.running === false) {
               clearInterval(_mxScanPoll); _mxScanPoll = null;
               btn.disabled = false; btn.textContent = orig;
-              const s = job.stats || {};
               const done = `Verify complete — ${(s.contactsUpdated||0).toLocaleString()} contacts classified across ${(s.domainsResolved||0).toLocaleString()} domains. ${(cov.outlook||0).toLocaleString()} are Microsoft (excluded by default).`;
-              renderMxPanel(cov, done);
+              renderMxPanel(cov, done, null);
               showMessage(done, 'success');
               // Refresh the provider-count chips next to the filter checkboxes.
               if (typeof updateEmailProviderCounts === 'function') updateEmailProviderCounts(cov);
             } else {
-              btn.textContent = `🔍 verifying… ${unknown} left`;
-              renderMxPanel(cov, reverify ? 'Re-verifying all contacts via live DNS…' : 'Verifying providers via live DNS…');
+              // Button shows live % so progress is visible even with the panel scrolled off.
+              const p = (s.totalDomains > 0) ? Math.min(100, Math.round(100 * (s.domainsScanned||0) / s.totalDomains)) : null;
+              btn.textContent = p != null ? `🔍 verifying… ${p}%` : '🔍 verifying…';
+              renderMxPanel(cov, reverify ? 'Re-verifying all contacts via live DNS…' : 'Verifying providers via live DNS…', s);
             }
           } catch { /* transient; keep polling */ }
         };
