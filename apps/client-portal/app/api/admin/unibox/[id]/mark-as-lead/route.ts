@@ -69,7 +69,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
            (id, workspace_id, lead_pv_id, lead_email, direction, subject,
             body_html, body_text, content_preview, from_email, is_unread, timestamp_created, raw)
          VALUES ($1,$2,$3,$4,'IN',$5,$6,$7,$8,$9,1,$10,'{}'::jsonb)
-         ON CONFLICT (id) DO NOTHING`,
+         ON CONFLICT (id) DO UPDATE SET
+           -- UPGRADE an existing row to the full body. An earlier re-sync (before the
+           -- raw-path fix) may have seeded only the truncated body_preview; DO NOTHING
+           -- would freeze that stub forever, so the client never sees the signature.
+           -- Only overwrite when we actually have something to add (don't blank a row).
+           body_html       = COALESCE(EXCLUDED.body_html, portal_emails.body_html),
+           body_text       = COALESCE(EXCLUDED.body_text, portal_emails.body_text),
+           content_preview = COALESCE(EXCLUDED.content_preview, portal_emails.content_preview),
+           subject         = COALESCE(portal_emails.subject, EXCLUDED.subject)`,
         // Store the FULL html + text body from raw (with the lead's signature,
         // images, etc.) — NOT the truncated body_preview, which dropped the sig.
         [msgId, ws, reply.lead_bison_id, email, reply.subject,
