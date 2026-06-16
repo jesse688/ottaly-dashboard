@@ -35,6 +35,12 @@ td{padding:12px 14px;font-size:13px;border-bottom:1px solid var(--border);vertic
 td.num{text-align:right;font-variant-numeric:tabular-nums}
 tr:last-child td{border-bottom:none}
 tr:hover td{background:#FAFBFF}
+tr.bad-row td{background:#FEF2F2}
+tr.bad-row:hover td{background:#FEE2E2}
+tr.bad-row td:first-child{box-shadow:inset 3px 0 0 #DC2626}
+tr.watch-row td{background:#FFFBEB}
+tr.watch-row:hover td{background:#FEF3C7}
+tr.watch-row td:first-child{box-shadow:inset 3px 0 0 #D97706}
 .gw-name{font-weight:600}
 .muted{color:var(--muted)}
 .dim{color:#9AA1AD}
@@ -143,9 +149,19 @@ function render(data){
   var rRtl   = range(function(g){return g.rtl;});
   var rHard  = range(function(g){return g.hardRate;});
 
+  // Security gateways that block cold email — isolate/avoid these (per Bison
+  // guidance). Flag a row red if it's one of these OR its block rate is high.
+  var BAD_GW = ['Mimecast','Barracuda','Proofpoint','Cisco Ironport','Sophos','Forcepoint/Mailcontrol','Trend Micro','FortiMail'];
+  function gwVerdict(g){
+    var isSecGw = BAD_GW.indexOf(g.gateway) !== -1;
+    if (isSecGw && g.blockRate >= 1) return {cls:'bad-row', tag:'AVOID / ISOLATE', col:'#DC2626'};
+    if (isSecGw || g.blockRate >= 0.5) return {cls:'watch-row', tag:'WATCH', col:'#D97706'};
+    return {cls:'', tag:'', col:''};
+  }
   var html = rows.map(function(g){
-    return '<tr>'
-      + '<td class="gw-name">'+g.gateway+'</td>'
+    var v = gwVerdict(g);
+    return '<tr class="'+v.cls+'">'
+      + '<td class="gw-name">'+g.gateway+(v.tag?' <span style="font-size:10px;font-weight:700;color:'+v.col+';background:'+v.col+'18;padding:1px 6px;border-radius:99px;margin-left:6px;vertical-align:middle">'+v.tag+'</span>':'')+'</td>'
       + '<td class="num muted">'+g.domains.toLocaleString()+'</td>'
       + '<td class="num">'+g.sent.toLocaleString()+'</td>'
       + '<td class="num muted">'+fmt(g.replyRate,2)+'</td>'
@@ -153,7 +169,7 @@ function render(data){
       + '<td class="num muted">'+fmt(g.leadRate,2)+'</td>'
       + '<td class="num '+heat(g.rtl,rRtl.min,rRtl.max,false)+'">'+fmt(g.rtl,1)+'</td>'
       + '<td class="num '+heat(g.hardRate,rHard.min,rHard.max,true)+'">'+fmt(g.hardRate,2)+'</td>'
-      + '<td class="num muted">'+fmt(g.blockRate,2)+'</td>'
+      + '<td class="num '+(g.blockRate>=1?'bad':g.blockRate>=0.5?'mid':'muted')+'" style="font-weight:'+(g.blockRate>=0.5?'700':'400')+'">'+fmt(g.blockRate,2)+'</td>'
       + '<td class="num dim">'+fmt(g.softRate,2)+'</td>'
       + '</tr>';
   }).join('');

@@ -284,6 +284,37 @@ module.exports = (db) => {
     }
   });
 
+  // Admin-configurable filter defaults (persisted in app_settings, so they apply
+  // for everyone, not per-browser). Controls which provider/gateway exclusions
+  // are pre-applied when the Contacts page loads.
+  //   { excludeMicrosoft: bool, excludeGateways: [gatewayName, …] }
+  const FILTER_DEFAULTS_KEY = 'contact_filter_defaults';
+  const FILTER_DEFAULTS_FALLBACK = {
+    excludeMicrosoft: false,                              // MS converts (Bruud) — off by default now
+    excludeGateways: ['Mimecast','Barracuda','Proofpoint'], // the cold-email blockers — off by default
+  };
+  router.get('/contacts/filter-defaults', async (req, res) => {
+    try {
+      const v = await db.getSetting(FILTER_DEFAULTS_KEY, null);
+      res.json(v && typeof v === 'object' ? { ...FILTER_DEFAULTS_FALLBACK, ...v } : FILTER_DEFAULTS_FALLBACK);
+    } catch (err) {
+      res.json(FILTER_DEFAULTS_FALLBACK);
+    }
+  });
+  router.post('/contacts/filter-defaults', async (req, res) => {
+    try {
+      const body = req.body || {};
+      const next = {
+        excludeMicrosoft: !!body.excludeMicrosoft,
+        excludeGateways: Array.isArray(body.excludeGateways) ? body.excludeGateways.filter(Boolean) : [],
+      };
+      await db.setSetting(FILTER_DEFAULTS_KEY, next);
+      res.json({ ok: true, defaults: next });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // POST /api/contacts/reset-apollo-exports — clear all exported_to_apollo_at stamps
   // Done in 5k-row chunks so live exports/webhooks don't deadlock with us
   // on the 200k-row update. Each chunk takes its own lock, releases it,
