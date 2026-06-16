@@ -42,9 +42,13 @@ interface Lead {
   replied_off: boolean
   locked: boolean
 }
-// A lead has been responded to if we sent via the portal, the client marked it
-// replied off-dashboard, OR the thread already contains any outbound message.
-const isReplied = (l: Lead) => l.has_sent || l.replied_off || l.has_outbound
+// A lead "needs reply" until our most recent response is NEWER than the prospect's
+// most recent inbound. has_outbound is that time-aware signal (computed server-side:
+// latest genuine OUT >= latest IN). We deliberately do NOT OR-in the sticky has_sent /
+// replied_off flags here: those stay true forever once set, so a SECOND prospect reply
+// after we'd answered would never re-surface the lead. has_outbound already counts a
+// portal-sent reply, so a real response still clears "Needs reply".
+const isReplied = (l: Lead) => l.has_outbound
 
 // Pay-per-lead clients are billed per lead and never top up. Matches the Billing
 // page + lib/balance.ts. Hardcoded to Bubble for now.
@@ -326,9 +330,11 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
     if (d.ok) {
       setReplyMsg(d.sentLive ? 'Reply sent.' : 'Reply received — our team will send it shortly.')
       // Replying on the dashboard moves the lead out of Unread.
-      setLeads(prev => prev?.map(l => l.id === selected.id ? { ...l, has_sent: true } : l) ?? null)
-      setSelected(prev => prev ? { ...prev, has_sent: true } : prev)
-      openLead({ ...selected, has_sent: true })
+      // Set has_outbound too (that's what isReplied reads now) so the lead leaves
+      // "Needs reply" immediately; has_sent kept for the Sent view filter.
+      setLeads(prev => prev?.map(l => l.id === selected.id ? { ...l, has_sent: true, has_outbound: true } : l) ?? null)
+      setSelected(prev => prev ? { ...prev, has_sent: true, has_outbound: true } : prev)
+      openLead({ ...selected, has_sent: true, has_outbound: true })
       setTimeout(() => setReplyMsg(''), 4000)
     } else {
       setReplyMsg('Could not send. Please try again.')
@@ -352,8 +358,10 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
 
   async function toggleRepliedOff(lead: Lead) {
     const replied_off = !lead.replied_off
-    setLeads(prev => prev?.map(l => l.id === lead.id ? { ...l, replied_off } : l) ?? null)
-    setSelected(prev => prev?.id === lead.id ? { ...prev, replied_off } : prev)
+    // replied_off stamps first_responded_at server-side; mirror into has_outbound so it
+    // leaves "Needs reply" now (and a later prospect reply re-surfaces it on reload).
+    setLeads(prev => prev?.map(l => l.id === lead.id ? { ...l, replied_off, has_outbound: replied_off } : l) ?? null)
+    setSelected(prev => prev?.id === lead.id ? { ...prev, replied_off, has_outbound: replied_off } : prev)
     await fetch(`/api/portal/leads/${lead.id}/data`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ replied_off }) })
   }
 

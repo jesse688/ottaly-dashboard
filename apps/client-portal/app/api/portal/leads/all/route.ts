@@ -78,24 +78,34 @@ export async function GET() {
                   AND lower(e3.lead_email) = lower(l.email)
                   AND e3.sent_via_portal = TRUE
               ) AS has_sent,
-              -- Has the lead been RESPONDED TO since they replied? An OUT message
-              -- alone is NOT enough — the original cold outreach is also stored as
-              -- OUT (folder=sent). So count only: a reply composed in our portal
-              -- (sent_via_portal), OR an OUT message dated AFTER the prospect's
-              -- first reply (first_replied_at). That's a genuine response, so the
-              -- lead can leave "Needs reply" even if has_sent isn't set.
+              -- Has the lead been RESPONDED TO since their LATEST reply? Compares the
+              -- most-recent genuine OUT (a reply composed in our portal OR an OUT dated
+              -- after the prospect's first reply — NOT the original cold outreach) to
+              -- the most-recent INBOUND. If the prospect's latest inbound is newer than
+              -- our latest reply, the lead is back in "Needs reply" — so a SECOND
+              -- prospect reply after we already answered re-surfaces it (the bug fix).
               (
-                ld.first_responded_at IS NOT NULL
-                OR EXISTS (
-                  SELECT 1 FROM portal_emails e4
-                  WHERE e4.workspace_id = l.workspace_id
-                    AND lower(e4.lead_email) = lower(l.email)
-                    AND (
-                      e4.sent_via_portal = TRUE
-                      OR (e4.direction = 'OUT'
-                          AND l.first_replied_at IS NOT NULL
-                          AND e4.timestamp_created > l.first_replied_at)
-                    )
+                GREATEST(
+                  ld.first_responded_at,
+                  (
+                    SELECT max(e4.timestamp_created) FROM portal_emails e4
+                     WHERE e4.workspace_id = l.workspace_id
+                       AND lower(e4.lead_email) = lower(l.email)
+                       AND (
+                         e4.sent_via_portal = TRUE
+                         OR (e4.direction = 'OUT'
+                             AND l.first_replied_at IS NOT NULL
+                             AND e4.timestamp_created > l.first_replied_at)
+                       )
+                  )
+                ) >= COALESCE(
+                  (
+                    SELECT max(e5.timestamp_created) FROM portal_emails e5
+                     WHERE e5.workspace_id = l.workspace_id
+                       AND lower(e5.lead_email) = lower(l.email)
+                       AND e5.direction = 'IN'
+                  ),
+                  l.first_replied_at
                 )
               ) AS has_outbound
        FROM esp_leads l
