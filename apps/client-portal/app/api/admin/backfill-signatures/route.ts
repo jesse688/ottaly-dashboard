@@ -12,9 +12,14 @@ import { extractSignatureFields, ALL_SIGNATURE_FIELDS } from '@/lib/signature'
 // Idempotent: only inserts rows whose id isn't already present (ON CONFLICT DO NOTHING),
 // and only for mapped replies with a usable email. Admin-only.
 //
-// POST                  → backfill across all workspaces
-// POST ?workspace=<pvId> → just that workspace
-export async function POST(req: NextRequest) {
+// Accepts GET *and* POST so it can be triggered by simply pasting the URL into the
+// browser while logged into the admin dashboard (the admin session cookie rides along).
+//   /api/admin/backfill-signatures                  → all workspaces
+//   /api/admin/backfill-signatures?workspace=<pvId> → just that workspace
+export async function GET(req: NextRequest) { return run(req) }
+export async function POST(req: NextRequest) { return run(req) }
+
+async function run(req: NextRequest) {
   if (!await getAdminSession()) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   await ready()
 
