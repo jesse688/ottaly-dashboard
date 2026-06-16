@@ -63,10 +63,12 @@ interface Options {
   blockRemoteImages?: boolean
 }
 
-// Sanitize one tag's attributes, returning a safe attribute string.
-function cleanAttrs(tag: string, attrStr: string, opts: Options): string {
+// Sanitize one tag's attributes. Returns the safe attribute string, or null to
+// signal the whole tag should be dropped (e.g. an <img> with no usable src).
+function cleanAttrs(tag: string, attrStr: string, opts: Options): string | null {
   const allowed = ALLOWED_ATTRS[tag] ?? DEFAULT_ATTRS
   const out: string[] = []
+  let imgHasSrc = false
   const attrRe = /([a-zA-Z_:][\w:.-]*)\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'>]+))/g
   let m: RegExpExecArray | null
   while ((m = attrRe.exec(attrStr))) {
@@ -81,6 +83,7 @@ function cleanAttrs(tag: string, attrStr: string, opts: Options): string {
         out.push(`data-blocked-src="${u.replace(/"/g, '&quot;')}"`)
         continue
       }
+      if (name === 'src' && tag === 'img') imgHasSrc = true
       out.push(`${name}="${u.replace(/"/g, '&quot;')}"`)
       continue
     }
@@ -91,8 +94,17 @@ function cleanAttrs(tag: string, attrStr: string, opts: Options): string {
     }
     out.push(`${name}="${raw.replace(/"/g, '&quot;')}"`)
   }
+  // An <img> we couldn't give a usable src (e.g. cid: inline attachment whose bytes
+  // we never received) would render as a broken-image icon + alt text — drop it
+  // entirely so the signature stays clean. (Unless it was deliberately blocked,
+  // which keeps data-blocked-src for a future "load images" toggle.)
+  if (tag === 'img' && !imgHasSrc && opts.blockRemoteImages !== true) return null
   // Force safe link behaviour: external links open in a new tab without referrer.
   if (tag === 'a') out.push('target="_blank"', 'rel="noopener noreferrer nofollow"')
+  // Hide any image that DOES have a src but fails to load (dead/auth-walled URL) so
+  // it doesn't leave a broken-image icon. This onerror is the ONLY inline handler we
+  // allow — it's our own fixed string, never sourced from the inbound HTML.
+  if (tag === 'img') out.push(`onerror="this.style.display='none'"`)
   return out.length ? ' ' + out.join(' ') : ''
 }
 
@@ -109,8 +121,10 @@ export function sanitizeEmailHtml(html: string | null | undefined, opts: Options
     const tag = tagRaw.toLowerCase()
     if (!ALLOWED_TAGS.has(tag)) return ''        // unwrap: drop tag, keep inner text
     if (slash) return `</${tag}>`
+    const cleaned = cleanAttrs(tag, attrs, opts)
+    if (cleaned === null) return ''              // tag dropped entirely (e.g. srcless img)
     const selfClose = /\/\s*$/.test(attrs) || tag === 'br' || tag === 'img' || tag === 'hr' || tag === 'col'
-    return `<${tag}${cleanAttrs(tag, attrs, opts)}${selfClose ? ' /' : ''}>`
+    return `<${tag}${cleaned}${selfClose ? ' /' : ''}>`
   })
   return s
 }
