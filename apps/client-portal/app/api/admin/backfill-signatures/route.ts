@@ -74,25 +74,29 @@ async function run(req: NextRequest) {
     //    title were mis-attributed from the quoted outbound (the agency's signature).
     const found = extractSignatureFields(String(r.html_body || r.text_body || ''), ALL_SIGNATURE_FIELDS, email)
     const { company_name, ...rawFields } = found as Record<string, string>
-    if (!r.lead_bison_id && Object.keys(found).length === 0) continue
-    // Update the lead row (match by email within the workspace, like the dashboard).
+    if (Object.keys(found).length === 0) continue
+
+    // Match the lead row by esp_leads.id — the SAME key the thread route + mark-as-lead
+    // use (lead_bison_id, else synthetic manual_<reply_id>). Matching by email FAILED
+    // because the lead replied from a different address than we emailed them at, so
+    // esp_leads.email != the reply's sender email.
+    const leadId = r.lead_bison_id || `manual_${r.bison_reply_id}`
+
     if (Object.keys(rawFields).length) {
       await pool.query(
         `UPDATE esp_leads SET raw = COALESCE(raw, '{}'::jsonb) || $1::jsonb, updated_at = NOW()
-          WHERE workspace_id = $2 AND lower(email) = $3`,
-        [JSON.stringify(rawFields), r.workspace_id, email]
+          WHERE id = $2 AND workspace_id = $3`,
+        [JSON.stringify(rawFields), leadId, r.workspace_id]
       ).catch(() => {})
     }
     if (company_name) {
       const up = await pool.query(
         `UPDATE esp_leads SET company_name = $1, updated_at = NOW()
-          WHERE workspace_id = $2 AND lower(email) = $3`,
-        [company_name, r.workspace_id, email]
+          WHERE id = $2 AND workspace_id = $3`,
+        [company_name, leadId, r.workspace_id]
       ).catch(() => null)
       const hit = (up?.rowCount ?? 0) > 0
       if (hit) companyUpdated++
-      // Capture a few examples so we can SEE whether the UPDATE matched a row and what
-      // value was written — turns "still wrong" into a definitive diagnosis.
       if (samples.length < 8) samples.push({ email, company_name, matchedRow: hit })
     }
     if (Object.keys(found).length) reExtracted++

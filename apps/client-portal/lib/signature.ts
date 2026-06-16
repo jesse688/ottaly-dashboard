@@ -156,26 +156,36 @@ function companyFromDomain(website: string | null): string | null {
 
 function extractCompany(text: string, website?: string | null): string | null {
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
-  const suffix = /\b(?:Ltd\.?|Limited|LLC|L\.L\.C\.|Inc\.?|Incorporated|PLC|GmbH|Pty|Co\.|Corp\.?|Corporation|Group|Holdings)\b/i
-  for (const line of lines) {
-    if (line.length > 70) continue
-    if (suffix.test(line) && /[A-Za-z]/.test(line)) {
-      return line.replace(/\s{2,}/g, ' ')
-    }
+  const suffix = /\b(?:Ltd\.?|Limited|LLC|L\.L\.C\.|Inc\.?|Incorporated|PLC|GmbH|Pty|Corp\.?|Corporation|Holdings)\b/i
+
+  // Reject lines that clearly aren't a company name: sentences, headers, URLs, etc.
+  // This kills the false positives seen in the wild (subject-like sentences, SMTP/
+  // DMARC strings, "Support", taglines with | or punctuation).
+  const looksLikeCompany = (line: string): boolean => {
+    if (!line || line.length < 2 || line.length > 60) return false
+    if (!/[A-Za-z]/.test(line)) return false
+    if (/[@=;:!?]|https?:|www\.|\bdmarc\b|\bspf\b|\bdkim\b|mailfrom|\.com\/|\d{4,}/i.test(line)) return false
+    if (/[.!?]$/.test(line)) return false                 // ends like a sentence
+    if (line.split(/\s+/).length > 6) return false        // too many words to be a name
+    if (/^(re|fwd|hi|hello|hey|thanks|regards|best|cheers|sent from|support|team|the)\b/i.test(line)) return false
+    if (/\|/.test(line)) return false                     // "Whale Song | WhaleSongProduct.com"
+    return true
   }
-  // Fallback 1: the line immediately after a title line (Name / Title / Company).
+
+  // 1) Strongest signal: a line with a legal suffix (and it must read like a name).
+  for (const line of lines) {
+    if (suffix.test(line) && looksLikeCompany(line)) return line.replace(/\s{2,}/g, ' ')
+  }
+  // 2) The line right after a title line (Name / Title / Company) — only if clean.
   const titleRe = new RegExp(`\\b(?:${TITLE_WORDS.map(w => w.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')).join('|')})\\b`, 'i')
   for (let i = 0; i < lines.length - 1; i++) {
     if (lines[i].length <= 60 && titleRe.test(lines[i])) {
       const next = lines[i + 1]
-      if (next && next.length <= 60 && /[A-Za-z]/.test(next)
-          && !/@|https?:|www\.|\d{5,}/.test(next) && !titleRe.test(next)) {
-        return next.replace(/\s{2,}/g, ' ')
-      }
+      if (next && looksLikeCompany(next) && !titleRe.test(next)) return next.replace(/\s{2,}/g, ' ')
     }
   }
-  // Fallback 2: derive from the website domain (e.g. myvintage.uk → "Myvintage").
-  // Always better than the wrong imported company_name (the agency's own name).
+  // 3) Most reliable fallback: derive from the website domain (myvintage.uk →
+  // "Myvintage"). Always better than the wrong imported company_name.
   return companyFromDomain(website ?? null)
 }
 
