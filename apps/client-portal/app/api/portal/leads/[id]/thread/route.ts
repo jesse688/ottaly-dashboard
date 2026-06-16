@@ -18,6 +18,10 @@ async function applySignatureExtraction(leadId: string, workspaceId: string, row
       ? ALL_SIGNATURE_FIELDS
       : String(raw).split(',').map(s => s.trim()).filter(Boolean) as SignatureField[]
     if (!fields.length) return
+    // company_name was added to the extractor AFTER this setting was first saved, so a
+    // pre-existing setting string lists only the original 5 fields and would never
+    // extract company_name (→ the panel keeps the wrong agency name). Always include it.
+    if (!fields.includes('company_name')) fields.push('company_name')
 
     const inbound = rows.filter(r => r.direction === 'IN')
     const latest = inbound[inbound.length - 1]

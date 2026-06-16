@@ -33,6 +33,7 @@ async function run(req: NextRequest) {
   const cand = await pool.query(
     `SELECT u.bison_reply_id, u.workspace_id, u.lead_bison_id,
             COALESCE(NULLIF(u.lead_email,''), u.sender_email) AS email,
+            NULLIF(u.lead_email,'') AS lead_email,
             u.subject,
             u.raw->>'html_body' AS html_body,
             u.raw->>'text_body' AS text_body,
@@ -76,46 +77,42 @@ async function run(req: NextRequest) {
     const { company_name, ...rawFields } = found as Record<string, string>
     if (Object.keys(found).length === 0) continue
 
-    // Match the lead row by esp_leads.id — the SAME key the thread route + mark-as-lead
-    // use (lead_bison_id, else synthetic manual_<reply_id>). Matching by email FAILED
-    // because the lead replied from a different address than we emailed them at, so
-    // esp_leads.email != the reply's sender email.
-    const leadId = r.lead_bison_id || `manual_${r.bison_reply_id}`
+    // Resolve the REAL esp_leads row id for this reply. Try every key the data uses:
+    //  - id = lead_bison_id (Bison-ingested leads)
+    //  - id = manual_<reply_id> (leads created by mark-as-lead from a reply)
+    //  - email = lead_email (the address we EMAILED them at = esp_leads.email; the
+    //    dashboard joins this way). NOT the sender email — leads reply from elsewhere.
+    const leadEmail = (r.lead_email ?? '').toLowerCase()
+    const idCandidates = [r.lead_bison_id, `manual_${r.bison_reply_id}`].filter(Boolean) as string[]
+    const resolved = await pool.query(
+      `SELECT id FROM esp_leads
+        WHERE workspace_id = $1
+          AND (id = ANY($2::text[]) OR ($3 <> '' AND lower(email) = $3))
+        ORDER BY (id = ANY($2::text[])) DESC LIMIT 1`,
+      [r.workspace_id, idCandidates, leadEmail]
+    ).catch(() => null)
+    const realId: string | null = resolved?.rows[0]?.id ?? null
 
-    if (Object.keys(rawFields).length) {
+    if (realId && Object.keys(rawFields).length) {
       await pool.query(
         `UPDATE esp_leads SET raw = COALESCE(raw, '{}'::jsonb) || $1::jsonb, updated_at = NOW()
           WHERE id = $2 AND workspace_id = $3`,
-        [JSON.stringify(rawFields), leadId, r.workspace_id]
+        [JSON.stringify(rawFields), realId, r.workspace_id]
       ).catch(() => {})
     }
     if (company_name) {
-      const up = await pool.query(
-        `UPDATE esp_leads SET company_name = $1, updated_at = NOW()
-          WHERE id = $2 AND workspace_id = $3`,
-        [company_name, leadId, r.workspace_id]
-      ).catch(() => null)
-      const hit = (up?.rowCount ?? 0) > 0
-      if (hit) companyUpdated++
-      // DIAGNOSE the match: for the first few, probe esp_leads three ways (by our
-      // computed id, by email, by lead_bison_id) and report the REAL row id + email so
-      // we can see what key esp_leads actually uses for these leads.
-      if (samples.length < 6) {
-        const probe = await pool.query(
-          `SELECT
-             (SELECT json_build_object('id', id, 'email', email, 'company_name', company_name)
-                FROM esp_leads WHERE id = $1 AND workspace_id = $4) AS by_id,
-             (SELECT json_build_object('id', id, 'email', email)
-                FROM esp_leads WHERE workspace_id = $4 AND lower(email) = $2 LIMIT 1) AS by_email,
-             (SELECT json_build_object('id', id, 'email', email)
-                FROM esp_leads WHERE workspace_id = $4 AND id = $3 LIMIT 1) AS by_bison`,
-          [leadId, email, r.lead_bison_id, r.workspace_id]
+      let hit = false
+      if (realId) {
+        const up = await pool.query(
+          `UPDATE esp_leads SET company_name = $1, updated_at = NOW()
+            WHERE id = $2 AND workspace_id = $3`,
+          [company_name, realId, r.workspace_id]
         ).catch(() => null)
-        samples.push({
-          email, company_name, matchedRow: hit,
-          computedLeadId: leadId, leadBisonId: r.lead_bison_id,
-          probe: probe?.rows[0] ?? null,
-        } as Record<string, unknown>)
+        hit = (up?.rowCount ?? 0) > 0
+      }
+      if (hit) companyUpdated++
+      if (samples.length < 6) {
+        samples.push({ email, leadEmail, company_name, realId, matchedRow: hit } as Record<string, unknown>)
       }
     }
     if (Object.keys(found).length) reExtracted++
