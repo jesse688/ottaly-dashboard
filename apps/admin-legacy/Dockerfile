@@ -1,6 +1,12 @@
 FROM node:20-alpine
 
-RUN apk add --no-cache python3 make g++
+RUN apk add --no-cache python3 make g++ tzdata
+
+# Run in Europe/London so the server's calendar "today" matches Bison's day
+# boundary (Bison stats/charts bucket by London time). Without this the UTC
+# container treated 00:00–01:00 BST as the previous/next day and today's stats
+# could come back empty.
+ENV TZ=Europe/London
 
 WORKDIR /app
 

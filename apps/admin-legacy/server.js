@@ -3758,7 +3758,7 @@ const performanceCache = {
   version: 0,
   lastStartedAt: null,
 };
-const PERF_TODAY_TTL_MS = 10 * 60 * 1000;
+const PERF_TODAY_TTL_MS = 2 * 60 * 1000;   // today refreshes every ~2 min (live Bison)
 const PERF_OLD_TTL_MS = 12 * 60 * 60 * 1000;
 const PERF_LEADS_TTL_MS = 15 * 60 * 1000;
 const PERF_WARM_INTERVAL_MS = 2 * 60 * 1000;
@@ -3879,9 +3879,36 @@ async function ensurePerformanceDailyStats(wsIds, dates, dailyStats = performanc
         // MUST pass wsId so bisonFetch uses this workspace's per-workspace token
         // (or switches to it). Without it the call hit whatever workspace was
         // active -> stats for the wrong/no workspace -> "0 sent" on the Stats page.
-        var bStats = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { wsId: wsId, params: { start_date: date, end_date: date } });
-        var raw = Object.values(pivotBisonStats((bStats.data || bStats) || []));
-        dailyStats.set(key, { savedAt: Date.now(), data: aggPvEmailStats(raw) });
+        //
+        // TODAY is special: Bison's line-area-chart-stats does NOT return a bucket
+        // for the current (incomplete) day on a single-day start==end query, so the
+        // per-day warm fetch came back empty and today showed 0/frozen while older
+        // days were fine. Every other caller of this endpoint queries a RANGE, which
+        // does include today. So for today we fetch a 2-day range (yesterday..today)
+        // and pull today's bucket out of the pivot by its date key.
+        var fetchStart = date, fetchEnd = date;
+        if (date === today) {
+          var y = new Date(date + 'T00:00:00'); y.setDate(y.getDate() - 1);
+          fetchStart = serverDateString(y);
+        }
+        var bStats = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { wsId: wsId, params: { start_date: fetchStart, end_date: fetchEnd } });
+        var pivot = pivotBisonStats((bStats.data || bStats) || []);
+        // Single-day query -> all rows are that day; range query (today) -> keep only
+        // today's bucket so we don't sum yesterday into today's totals.
+        var rows = (fetchStart === fetchEnd) ? Object.values(pivot) : (pivot[date] ? [pivot[date]] : []);
+        var agg = aggPvEmailStats(rows);
+        // Today can legitimately be 0 early in the day, but an empty range response
+        // (Bison hiccup) also yields 0 and would freeze a previously-good number for
+        // a full TTL. If today comes back with no sends AND we already have a good
+        // non-zero value, keep it and mark stale so the next 2-min pass retries.
+        if (date === today && agg.sent === 0) {
+          var prev = dailyStats.get(key);
+          if (prev && prev.data && prev.data.sent > 0) {
+            dailyStats.set(key, { savedAt: 0, data: prev.data });
+            return;
+          }
+        }
+        dailyStats.set(key, { savedAt: Date.now(), data: agg });
       } catch {
         // Fetch FAILED (429 exhausted / network / bad response). Do NOT cache a
         // zero — a poisoned 0 is indistinguishable from a real "0 sends" day and
