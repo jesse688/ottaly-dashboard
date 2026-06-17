@@ -523,31 +523,56 @@ function effectiveTotals(w) {
 // CMs want, per client, which inbox provider is performing best right now
 // (combination of reply rate + leads) — with a live transition arrow + toast
 // when the winner flips (e.g. Google → Microsoft).
+//
+// Reliability rules:
+//  1. Min 100 sends per provider bucket — eliminates low-volume noise.
+//  2. Winner must beat runner-up by ≥20% score margin — no crowning by 0.01.
+//  3. Store is period-independent — switching Today↔7d doesn't wipe history.
+//  4. Flips are debounced 2h — new winner must be consistently ahead before committing.
+//  5. Store is only updated on stable periods (7d+); Today shows the last stable badge.
 const PROV_META = {
   google:  { label: 'Google',    color: '#EA4335' },
   outlook: { label: 'Microsoft', color: '#0078D4' },
   other:   { label: 'Other',     color: '#6B7280' },
 };
-// Score a provider bucket: reply rate + leads-per-1k (leads weighted ~3×).
-// Needs ≥20 sends so a 1-reply fluke on tiny volume can't crown a winner.
+const _WIN_MIN_SENDS   = 100;
+const _WIN_MARGIN      = 1.20;  // winner must score ≥20% above runner-up
+const _WIN_DEBOUNCE_MS = 2 * 60 * 60 * 1000;  // 2h consistent lead before flip commits
+const _WIN_RECENT_MS   = 24 * 60 * 60 * 1000; // show → arrow for 24h after flip
+const _WIN_STABLE_PERIODS = new Set(['7d', '14d', '30d', 'custom']);
+
 function providerScore(bp) {
   const sent = bp?.sent || 0;
-  if (sent < 20) return null;
+  if (sent < _WIN_MIN_SENDS) return null;
+  const rr = (bp.replies || 0) / sent * 100;
+  const leadRate = (bp.leads || 0) / sent * 1000;
+  return { score: rr + leadRate * 3, rr, leadRate, sent, leads: bp.leads || 0 };
+}
+// Return score fields for a specific provider key (for badge tooltip on any period).
+function _provScoreByKey(w, key) {
+  const bp = w.byProvider?.[key];
+  if (!bp || !bp.sent) return { rr: 0, leadRate: 0, sent: 0, leads: 0, score: 0 };
+  const sent = bp.sent;
   const rr = (bp.replies || 0) / sent * 100;
   const leadRate = (bp.leads || 0) / sent * 1000;
   return { score: rr + leadRate * 3, rr, leadRate, sent, leads: bp.leads || 0 };
 }
 function pickWinner(w) {
-  let bestKey = null, best = null;
+  const scored = [];
   for (const p of ['google', 'outlook', 'other']) {
     const s = providerScore(w.byProvider?.[p]);
-    if (s && (!best || s.score > best.score)) { best = s; bestKey = p; }
+    if (s) scored.push({ key: p, ...s });
   }
-  return bestKey ? { key: bestKey, ...best } : null;
+  if (!scored.length) return null;
+  scored.sort((a, b) => b.score - a.score);
+  const [first, second] = scored;
+  // Must beat runner-up by margin; if too close to call, return null.
+  if (second && first.score < second.score * _WIN_MARGIN) return null;
+  return first;
 }
-function _winnerStoreKey() { return 'ottaly_stats_winners_' + (_periodKey || '7d'); }
-function loadWinnerStore() { try { return JSON.parse(localStorage.getItem(_winnerStoreKey()) || '{}'); } catch { return {}; } }
-function saveWinnerStore(m) { try { localStorage.setItem(_winnerStoreKey(), JSON.stringify(m)); } catch {} }
+// Single period-independent key — switching periods never resets winner history.
+function loadWinnerStore() { try { return JSON.parse(localStorage.getItem('ottaly_stats_winners') || '{}'); } catch { return {}; } }
+function saveWinnerStore(m) { try { localStorage.setItem('ottaly_stats_winners', JSON.stringify(m)); } catch {} }
 
 // Compute winner + change info for every client; persist + return a map keyed by
 // workspace_id → { winner, prevWinner, changed }. Fires a toast on fresh flips.
@@ -555,27 +580,52 @@ let _winnerInfo = {};
 function computeWinners(rows) {
   const store = loadWinnerStore();
   const now = Date.now();
-  const RECENT_MS = 24 * 60 * 60 * 1000; // show the → arrow for 24h after a flip
+  const isStable = _WIN_STABLE_PERIODS.has(_periodKey);
   const info = {};
   const freshChanges = [];
+
   for (const w of rows) {
-    const winner = pickWinner(w);
     const id = w.workspace_id;
+    if (id === '__all__') { info[id] = { winner: null }; continue; }
+
+    const candidate = isStable ? pickWinner(w) : null;
     const rec = store[id] || {};
-    let prevWinner = rec.p || null, changedAt = rec.t || 0;
-    if (winner) {
-      if (rec.w && rec.w !== winner.key) {
-        // genuine flip since last known winner
-        prevWinner = rec.w; changedAt = now;
-        if (_winnersInitialised) freshChanges.push({ name: w.name, from: rec.w, to: winner.key });
-      } else if (!rec.w) {
-        prevWinner = null; changedAt = 0; // first time we've crowned this client
+
+    if (isStable && candidate) {
+      if (!rec.w) {
+        // First stable winner for this client — record quietly, no flip toast.
+        store[id] = { w: candidate.key, p: null, t: 0, pending: null };
+      } else if (candidate.key === rec.w) {
+        // Same winner — clear any pending challenger.
+        if (rec.pending) store[id] = { ...rec, pending: null };
+      } else {
+        // Different from committed winner — debounce before committing.
+        const pend = rec.pending;
+        if (pend && pend.key === candidate.key) {
+          if (now - pend.since >= _WIN_DEBOUNCE_MS) {
+            // Debounce elapsed — commit the flip.
+            const from = rec.w;
+            store[id] = { w: candidate.key, p: from, t: now, pending: null };
+            if (_winnersInitialised) freshChanges.push({ name: w.name, from, to: candidate.key });
+          }
+          // else: still within debounce window, hold.
+        } else {
+          // New challenger (or changed challenger) — start / restart debounce clock.
+          store[id] = { ...rec, pending: { key: candidate.key, since: now } };
+        }
       }
-      store[id] = { w: winner.key, p: prevWinner, t: changedAt };
     }
-    const changed = !!(winner && prevWinner && (now - changedAt) < RECENT_MS && prevWinner !== winner.key);
+
+    // Always read the committed winner from the store for display, regardless of period.
+    const committed = store[id];
+    const committedKey = committed?.w || null;
+    const winner = committedKey ? { key: committedKey, ..._provScoreByKey(w, committedKey) } : null;
+    const prevWinner = committed?.p || null;
+    const changedAt = committed?.t || 0;
+    const changed = !!(winner && prevWinner && (now - changedAt) < _WIN_RECENT_MS && prevWinner !== winner.key);
     info[id] = { winner, prevWinner, changed };
   }
+
   saveWinnerStore(store);
   if (freshChanges.length) notifyWinnerChanges(freshChanges);
   _winnersInitialised = true;
