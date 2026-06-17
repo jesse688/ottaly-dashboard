@@ -4717,7 +4717,7 @@
           </div>
 
           ${raw.Technologies ? `<div class="panel-section"><div class="panel-section-title">Technologies</div><div class="pval" style="font-size:12px;">${esc(raw.Technologies)}</div></div>` : ''}
-          ${(c.keywords || raw.Keywords) ? `<div class="panel-section"><div class="panel-section-title">Keywords</div><div class="pval" style="font-size:12px;">${esc((c.keywords || raw.Keywords || '').split(',').slice(0,20).join(', '))}</div>${c.keywords && raw.Keywords && c.keywords !== raw.Keywords ? `<div style="font-size:10px;color:#9ca3af;margin-top:3px;">Apollo: ${esc(raw.Keywords.split(',').slice(0,5).join(', '))}${raw.Keywords.split(',').length > 5 ? '…' : ''}</div>` : ''}</div>` : ''}
+          ${(c.keywords || raw.Keywords) ? renderKeywordsSection(c.keywords || raw.Keywords) : ''}
         `;
       } catch (err) {
         document.getElementById('panelBody').innerHTML = `<p style="color:red;padding:20px">${err.message}</p>`;
@@ -4761,6 +4761,27 @@
     }
 
     function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+    // Render ALL keywords (no truncation) and bold any that match the active
+    // keyword filter — so the contact's match is always visible and obvious.
+    // Truncating to the first 20 hid keywords like "care homes" that the filter
+    // matched on but sat past position 20, making contacts look like false hits.
+    function renderKeywordsSection(keywordsStr) {
+      const all = String(keywordsStr || '').split(',').map(k => k.trim()).filter(Boolean);
+      if (!all.length) return '';
+      const active = (filterDefs.keywords?.selected || []).map(k => k.toLowerCase());
+      // A keyword "matches" if any active filter term appears as a whole word in it
+      // (mirrors the backend's \y word-boundary regex).
+      const matches = (kw) => active.some(term => {
+        const re = new RegExp('\\b' + term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i');
+        return re.test(kw);
+      });
+      const html = all.map(kw => matches(kw)
+        ? `<mark style="background:#fef08a;font-weight:600;padding:0 2px;border-radius:2px;">${esc(kw)}</mark>`
+        : esc(kw)
+      ).join(', ');
+      return `<div class="panel-section"><div class="panel-section-title">Keywords <span style="font-weight:400;color:#9ca3af;">(${all.length})</span></div><div class="pval" style="font-size:12px;line-height:1.6;">${html}</div></div>`;
+    }
 
     // ── Client Filter ────────────────────────────────────────────
     window._activeVertical = '';
