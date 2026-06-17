@@ -1493,6 +1493,19 @@ class PostgresDatabase {
       clauses.push(`(COALESCE(NULLIF(technologies,''), raw_data->>'Technologies') IS NULL OR COALESCE(NULLIF(technologies,''), raw_data->>'Technologies') !~* $${p})`);
       params.push(wordRegex(values)); p++;
     });
+    // Companies House SIC codes — the precise "what does this company legally do"
+    // signal. Apollo keywords tag any company *adjacent* to a sector (brokers,
+    // suppliers, recruiters), so SIC is how you isolate e.g. real care homes
+    // (87100/87300/87900) from companies that merely mention them.
+    // ch_sic_codes is a comma-joined string like "87300,88100"; we match each
+    // requested code as a whole token so "8730" can't match "87300".
+    safe('sicCodes', () => {
+      if (!filters.sicCodes) return;
+      const codes = filters.sicCodes.split(',').map(c => c.trim()).filter(Boolean);
+      if (!codes.length) return;
+      clauses.push(`ch_sic_codes ~* $${p}`);
+      params.push(`(^|,)(${codes.map(c => c.replace(/[^0-9]/g,'')).join('|')})(,|$)`); p++;
+    });
     safe('website',             () => { if (filters.website)             like('company_domain', filters.website); });
     safe('companyLinkedin',     () => { if (filters.companyLinkedin)     like('company_linkedin_url', filters.companyLinkedin); });
     // Location filters are multi-select — comma-separated values must OR
