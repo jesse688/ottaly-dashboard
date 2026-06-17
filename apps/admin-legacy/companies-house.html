@@ -226,6 +226,8 @@
         <button class="btn btn-secondary btn-sm" onclick="selectTopN(25)">25</button>
         <button class="btn btn-secondary btn-sm" onclick="selectTopN(50)">50</button>
         <button class="btn btn-secondary btn-sm" onclick="selectTopN(100)">100</button>
+        <input type="number" id="customSelectN" placeholder="N" min="1" style="width:60px;padding:4px 6px;font-size:12px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;">
+        <button class="btn btn-secondary btn-sm" onclick="selectTopN(parseInt(document.getElementById('customSelectN').value)||0)">Go</button>
         <button class="btn btn-secondary btn-sm" onclick="selectTopN(0)">None</button>
         <span style="font-size:12px;color:#4b5563;margin:0 4px;">|</span>
         <span id="selectedCompanyCount" style="font-size:12px;color:#8b949e;"></span>
