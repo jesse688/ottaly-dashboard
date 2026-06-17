@@ -18615,6 +18615,14 @@ function scheduleAudienceScoring(pgdb) {
       params.push(req.query.country);
       conditions.push(`country_of_origin ILIKE $${params.length}`);
     }
+    if (req.query.inc_after) {
+      params.push(req.query.inc_after);
+      conditions.push(`incorporated_on >= $${params.length}`);
+    }
+    if (req.query.inc_before) {
+      params.push(req.query.inc_before);
+      conditions.push(`incorporated_on <= $${params.length}`);
+    }
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
     try {
       const [rows, count] = await Promise.all([

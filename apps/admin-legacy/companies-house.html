@@ -93,28 +93,92 @@
 
     <div class="panel">
       <div class="panel-title">Filter Companies</div>
-      <div class="filter-row">
+      <div class="filter-row" style="margin-bottom:12px;">
         <div class="filter-group">
-          <label>SIC Code</label>
+          <label>Sector (quick pick)</label>
+          <select id="sectorSelect" onchange="applySector(this.value)" style="min-width:200px;">
+            <option value="">— Browse by sector —</option>
+            <optgroup label="Care &amp; Health">
+              <option value="87100,87200,87300,87900">Residential Care Homes</option>
+              <option value="88100,88990">Domiciliary / Home Care</option>
+              <option value="86100,86210,86220,86230,86900">Healthcare / Medical</option>
+              <option value="85310,85320">Special Education / SEN</option>
+            </optgroup>
+            <optgroup label="Construction &amp; Trades">
+              <option value="41100,41201,41202">House Building / Development</option>
+              <option value="43110,43120,43130,43210,43220,43290,43310,43320,43330,43341,43342,43390,43910,43999">Specialist Trades</option>
+              <option value="42110,42120,42130,42210,42220,42910,42990">Civil Engineering</option>
+              <option value="71111,71112">Architects</option>
+            </optgroup>
+            <optgroup label="Professional Services">
+              <option value="69101,69102,69109">Legal Services</option>
+              <option value="69201,69202,69203">Accountancy</option>
+              <option value="70221,70229">Business Consultancy</option>
+              <option value="73110,73120">Advertising &amp; PR</option>
+              <option value="62010,62012,62020,62090">IT / Software</option>
+            </optgroup>
+            <optgroup label="Property">
+              <option value="68100,68201,68202,68209,68310,68320">Estate Agents / Property</option>
+              <option value="64301,64302,64303,64304,64305,64306">REITs / Property Funds</option>
+            </optgroup>
+            <optgroup label="Hospitality &amp; Leisure">
+              <option value="55100,55201,55202,55209,55300,55900">Hotels &amp; Accommodation</option>
+              <option value="56101,56102,56103,56210,56290,56301,56302">Restaurants &amp; Bars</option>
+              <option value="93110,93120,93130,93191,93199">Sports &amp; Fitness</option>
+            </optgroup>
+            <optgroup label="Retail &amp; Wholesale">
+              <option value="47110,47190,47210,47220,47230,47240,47250,47260,47290">Food Retail</option>
+              <option value="47510,47520,47530,47540,47590,47610,47620,47630,47640,47650,47710,47720,47730,47740,47750,47760,47770,47781,47782,47789,47791,47799">Specialist Retail</option>
+              <option value="46100,46110,46120,46130,46140,46150,46160,46170,46180,46190">Wholesale</option>
+            </optgroup>
+            <optgroup label="Manufacturing">
+              <option value="10110,10120,10130,10200,10310,10320,10390,10410,10420,10511,10512,10519,10520,10611,10612,10620,10710,10720,10730,10810,10821,10822,10831,10832,10840,10850,10860,10890,10910,10920">Food Manufacturing</option>
+              <option value="25110,25120,25210,25290,25300,25400,25500,25610,25620,25710,25720,25730,25910,25920,25930,25940,25990">Metal Products</option>
+            </optgroup>
+            <optgroup label="Transport &amp; Logistics">
+              <option value="49100,49200,49310,49320,49390,49410,49420,49500">Road &amp; Rail Transport</option>
+              <option value="52101,52102,52103,52211,52212,52213,52219,52220,52230,52241,52242,52243,52244,52290">Warehousing &amp; Logistics</option>
+            </optgroup>
+            <optgroup label="Education">
+              <option value="85100,85200,85310,85320,85410,85420,85510,85520,85590,85600">All Education</option>
+              <option value="85590">Private Tutoring / Training</option>
+            </optgroup>
+            <optgroup label="Finance &amp; Insurance">
+              <option value="64110,64191,64192,64201,64202,64203,64204,64205,64206,64209,64301,64302,64303,64304,64305,64306,64910,64920,64991,64992,64999">Banking &amp; Finance</option>
+              <option value="65110,65120,65201,65202,65210,65300">Insurance</option>
+              <option value="66110,66120,66190,66210,66220,66290,66300">Financial Services</option>
+            </optgroup>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label>SIC Code (manual)</label>
           <div class="sic-wrap">
-            <input type="search" id="sicInput" placeholder="Search SIC codes…" autocomplete="off">
+            <input type="search" id="sicInput" placeholder="Type to search…" autocomplete="off">
             <div id="sic-suggestions" class="hidden"></div>
           </div>
           <div class="selected-sics" id="selectedSics"></div>
         </div>
         <div class="filter-group">
           <label>Postcode prefix</label>
-          <input type="text" id="postcodeInput" placeholder="e.g. SW1, M1">
+          <input type="text" id="postcodeInput" placeholder="e.g. SW1, M1, B">
         </div>
         <div class="filter-group">
           <label>Company type</label>
           <select id="typeSelect">
             <option value="">Any</option>
-            <option value="Private Limited Company">Limited</option>
+            <option value="Private Limited Company">Ltd (Private)</option>
+            <option value="Public Limited Company">PLC (Public)</option>
             <option value="Limited Liability Partnership">LLP</option>
-            <option value="Public Limited Company">PLC</option>
-            <option value="Other">Other</option>
+            <option value="Private Unlimited Company">Private Unlimited</option>
+            <option value="Royal Charter Company">Royal Charter</option>
+            <option value="Community Interest Company">CIC</option>
+            <option value="Charitable Incorporated Organisation">Charity (CIO)</option>
+            <option value="Scottish Charitable Incorporated Organisation">Scottish Charity</option>
           </select>
+        </div>
+        <div class="filter-group">
+          <label>Incorporated after</label>
+          <input type="text" id="incAfter" placeholder="e.g. 01/01/2015" style="min-width:130px;">
         </div>
         <div class="filter-group">
           <label>Name search</label>
@@ -122,6 +186,7 @@
         </div>
         <div class="filter-group" style="justify-content: flex-end;">
           <button class="btn btn-primary" onclick="searchCompanies(1)">Search</button>
+          <button class="btn btn-secondary" style="margin-top:4px;" onclick="clearFilters()">Clear</button>
         </div>
       </div>
     </div>
@@ -265,6 +330,28 @@
     renderSicTags();
   }
 
+  function applySector(val) {
+    if (!val) return;
+    val.split(',').forEach(function(code) {
+      if (!_selectedSics.find(function(s){ return s.code === code; })) {
+        _selectedSics.push({ code: code, label: code });
+      }
+    });
+    renderSicTags();
+    document.getElementById('sectorSelect').value = '';
+  }
+
+  function clearFilters() {
+    _selectedSics = [];
+    renderSicTags();
+    document.getElementById('sectorSelect').value = '';
+    document.getElementById('sicInput').value = '';
+    document.getElementById('postcodeInput').value = '';
+    document.getElementById('typeSelect').value = '';
+    document.getElementById('incAfter').value = '';
+    document.getElementById('nameSearch').value = '';
+  }
+
   function searchCompanies(page) {
     _currentPage = page || 1;
     var params = new URLSearchParams({ page: _currentPage, per_page: _perPage });
@@ -275,6 +362,8 @@
     if (t) params.set('company_type', t);
     var n = document.getElementById('nameSearch').value.trim();
     if (n) params.set('search', n);
+    var ia = document.getElementById('incAfter').value.trim();
+    if (ia) params.set('inc_after', ia);
     showStatus('Searching…', 'info');
     fetch('/api/ch/companies?' + params).then(r => r.json()).then(function(d) {
       if (d.error) { showStatus(d.error, 'error'); return; }
