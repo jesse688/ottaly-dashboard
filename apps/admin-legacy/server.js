@@ -1388,13 +1388,20 @@ function _chSlot() {
   return slot;
 }
 async function chFetch(url, opts) {
+  // Wait for our throttle slot FIRST (this can be a long queue wait under
+  // concurrency), THEN time only the actual network call — so a deep queue
+  // doesn't trip the per-fetch timeout.
   await _chSlot();
-  let r = await fetch(url, opts);
+  const once = () => Promise.race([
+    fetch(url, opts),
+    new Promise((_, rej) => setTimeout(() => rej(new Error('CH fetch timeout')), 12000)),
+  ]);
+  let r = await once();
   if (r.status === 429) {
     const ra = parseInt(r.headers.get('retry-after') || '5', 10);
     await new Promise(res => setTimeout(res, Math.min(Math.max(ra, 1), 30) * 1000));
     await _chSlot();
-    r = await fetch(url, opts);
+    r = await once();
   }
   return r;
 }
@@ -1403,24 +1410,19 @@ async function fetchCompaniesHouse(companyName) {
   const key = process.env.COMPANIES_HOUSE_API_KEY;
   if (!key || !companyName) return null;
   const auth = { 'Authorization': 'Basic ' + Buffer.from(key + ':').toString('base64') };
-  const deadline = ms => new Promise((_, rej) => setTimeout(() => rej(new Error('CH timeout')), ms));
   try {
+    // chFetch handles throttle + per-call timeout, so no extra deadline race here
+    // (which previously fired on the QUEUE wait, not the fetch, → false "no response").
     // Step 1: search for company number
     const q = encodeURIComponent(companyName.slice(0, 60));
-    const sr = await Promise.race([
-      chFetch(`https://api.company-information.service.gov.uk/search/companies?q=${q}&items_per_page=1`, { headers: auth }),
-      deadline(15000),
-    ]);
+    const sr = await chFetch(`https://api.company-information.service.gov.uk/search/companies?q=${q}&items_per_page=1`, { headers: auth });
     if (!sr.ok) return null;
     const sj = await sr.json();
     const item = sj?.items?.[0];
     if (!item?.company_number) return null;
 
     // Step 2: fetch full company profile
-    const pr = await Promise.race([
-      chFetch(`https://api.company-information.service.gov.uk/company/${item.company_number}`, { headers: auth }),
-      deadline(15000),
-    ]);
+    const pr = await chFetch(`https://api.company-information.service.gov.uk/company/${item.company_number}`, { headers: auth });
     if (!pr.ok) return null;
     const p = await pr.json();
 
@@ -1434,11 +1436,9 @@ async function fetchCompaniesHouse(companyName) {
     const rawStatus = p?.company_status || null;
     const company_status = rawStatus ? (rawStatus === 'active' ? 'active' : 'not active') : null;
 
-    // Fetch officer count in parallel
-    const or = await Promise.race([
-      chFetch(`https://api.company-information.service.gov.uk/company/${item.company_number}/officers?items_per_page=1`, { headers: auth }).then(r => r.json()),
-      deadline(15000),
-    ]).catch(() => null);
+    // Fetch officer count (best-effort — failure here must not lose the SIC data)
+    const or = await chFetch(`https://api.company-information.service.gov.uk/company/${item.company_number}/officers?items_per_page=1`, { headers: auth })
+      .then(r => r.json()).catch(() => null);
 
     // Build full address string
     const addrParts = [addr?.premises, addr?.address_line_1, addr?.address_line_2, addr?.locality, addr?.region, addr?.postal_code, addr?.country].filter(Boolean);
@@ -1653,9 +1653,15 @@ async function fetchWebsiteLocationData(domain) {
 async function processDomain(pgdb, job, domain, name) {
   const t0 = Date.now();
   try {
+    // CH calls are globally throttled (~2.5/sec) so under concurrency a domain
+    // can sit in the queue a while before its CH lookups run. A tight 15s cap
+    // was killing those waits → "no response". Give CH-involving jobs a generous
+    // window; AI-only jobs keep a shorter one.
+    const usesCH = (job.fields || []).some(f => f === 'ch_sic' || f === 'company_status');
+    const DOMAIN_DEADLINE = usesCH ? 90000 : 20000;
     const result = await Promise.race([
       enrichDomainFromWeb(domain, name, job.fields),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('domain timeout')), 15000)),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('domain timeout')), DOMAIN_DEADLINE)),
     ]);
     const ms = Date.now() - t0;
     job.domain_ms.push(ms);
@@ -1977,6 +1983,49 @@ app.get('/api/admin/enrich/test', requireAdmin, async (req, res) => {
     trace.steps.push(`fatal: ${e.message}`);
     res.json({ ok: false, trace });
   }
+});
+
+// Diagnose the Companies House path for the actual SIC-less rows the backfill
+// would process — shows company_name used, CH HTTP status, and whether a match
+// + SIC came back. This is how we tell "no response" apart from "no CH match".
+app.get('/api/admin/enrich/ch-diagnose', requireAdmin, async (req, res) => {
+  const pgdb = req.app.locals.pgDb;
+  if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
+  const key = process.env.COMPANIES_HOUSE_API_KEY;
+  if (!key) return res.json({ ok: false, error: 'COMPANIES_HOUSE_API_KEY not set' });
+  const auth = { 'Authorization': 'Basic ' + Buffer.from(key + ':').toString('base64') };
+
+  // Sample real SIC-less domains (same population the backfill targets).
+  const { rows } = await pgdb.query(`
+    SELECT DISTINCT ON (company_domain) company_domain, company_name
+    FROM contacts
+    WHERE company_domain IS NOT NULL AND company_domain != ''
+      AND (ch_sic_codes IS NULL OR ch_sic_codes = '')
+    ORDER BY company_domain
+    LIMIT $1
+  `, [Math.min(parseInt(req.query.n || '8', 10), 25)]);
+
+  const out = [];
+  for (const { company_domain, company_name } of rows) {
+    const rec = { domain: company_domain, company_name: company_name || null };
+    if (!company_name) { rec.result = 'SKIP — no company_name on row'; out.push(rec); continue; }
+    try {
+      const q = encodeURIComponent(company_name.slice(0, 60));
+      const sr = await chFetch(`https://api.company-information.service.gov.uk/search/companies?q=${q}&items_per_page=1`, { headers: auth });
+      rec.searchStatus = sr.status;
+      if (!sr.ok) { rec.result = `CH search HTTP ${sr.status}`; out.push(rec); continue; }
+      const sj = await sr.json();
+      const item = sj?.items?.[0];
+      if (!item?.company_number) { rec.result = 'no CH name match'; rec.totalResults = sj?.total_results ?? 0; out.push(rec); continue; }
+      rec.matched = { number: item.company_number, title: item.title };
+      const pr = await chFetch(`https://api.company-information.service.gov.uk/company/${item.company_number}`, { headers: auth });
+      rec.profileStatus = pr.status;
+      if (pr.ok) { const p = await pr.json(); rec.sic_codes = p?.sic_codes || []; rec.result = (p?.sic_codes?.length ? 'OK — SIC found' : 'matched but no SIC on profile'); }
+      else rec.result = `profile HTTP ${pr.status}`;
+    } catch (e) { rec.result = 'error: ' + e.message; }
+    out.push(rec);
+  }
+  res.json({ ok: true, sampled: out.length, results: out });
 });
 
 app.get('/api/admin/enrich/sample-csv', requireAdmin, async (req, res) => {
