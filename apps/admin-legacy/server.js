@@ -18803,7 +18803,7 @@ function scheduleAudienceScoring(pgdb) {
     }
 
     const finderPort = process.env.EMAIL_FINDER_INTERNAL_PORT || '5055';
-    let processed = 0, found = 0, skipped_dedup = 0;
+    let processed = 0, found = 0, skipped_dedup = 0, no_domain = 0;
     const dirMap = {};
     for (const row of dirRows.rows) dirMap[row.id] = row;
 
@@ -18815,7 +18815,7 @@ function scheduleAudienceScoring(pgdb) {
         if (!dr.rows.length) continue;
         const dir = dr.rows[0];
         const effectiveDomain = companyDomains[dir.company_number];
-        if (!effectiveDomain) { processed++; continue; }
+        if (!effectiveDomain) { processed++; no_domain++; continue; }
         const parts = dir.name.split(/[\s,]+/).filter(Boolean);
         const first = (parts[0] || '').toLowerCase().replace(/[^a-z]/g, '');
         const last = (parts[parts.length - 1] || '').toLowerCase().replace(/[^a-z]/g, '');
@@ -18853,7 +18853,7 @@ function scheduleAudienceScoring(pgdb) {
         console.warn('[ch-find-emails] error for director', id, e.message);
       }
     }
-    res.json({ processed, found, skipped_dedup });
+    res.json({ processed, found, skipped_dedup, no_domain });
   });
 
   app.post('/api/ch/enrich-companies', requireSession, async (req, res) => {

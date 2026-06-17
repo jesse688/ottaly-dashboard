@@ -247,6 +247,16 @@
     </div>
 
     <div id="statusArea"></div>
+    <div id="progressWrap" class="hidden" style="margin-top:12px;background:#161b22;border:1px solid #30363d;border-radius:8px;padding:14px 16px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <span id="progressLabel" style="font-size:13px;color:#e6edf3;font-weight:600;">Finding emails…</span>
+        <span id="progressCount" style="font-size:12px;color:#8b949e;">0 / 0</span>
+      </div>
+      <div style="background:#0d1117;border-radius:6px;height:8px;overflow:hidden;">
+        <div id="progressBar" style="background:#22d3ee;height:100%;width:0%;transition:width .3s;"></div>
+      </div>
+      <div id="progressStats" style="font-size:12px;color:#8b949e;margin-top:8px;"></div>
+    </div>
   </div>
 </div>
 
@@ -293,6 +303,7 @@
   var _selectedSics = [];
   var _allCompanies = [];
   var _allDirectors = [];
+  var _lastCompanyNumbers = [];
   var _sicLabelMap = {};
 
   // Pre-load all 1265 SIC codes into a lookup map so chips show names not raw codes
@@ -513,6 +524,7 @@
     var nums = getSelectedCompanyNumbers();
     if (!nums.length) return;
     if (nums.length > 50) { showStatus('Select max 50 companies at once', 'error'); return; }
+    _lastCompanyNumbers = nums;
     document.getElementById('directorsPanel').classList.remove('hidden');
     // Check our imported PSC/director data first — no API call needed if we have it.
     showStatus('Loading owners from database…', 'info');
@@ -607,21 +619,78 @@
     document.getElementById(id).classList.add('hidden');
   }
 
+  function setProgress(label, done, totalN, stats) {
+    document.getElementById('progressWrap').classList.remove('hidden');
+    document.getElementById('progressLabel').textContent = label;
+    document.getElementById('progressCount').textContent = done + ' / ' + totalN;
+    document.getElementById('progressBar').style.width = totalN ? Math.round(done / totalN * 100) + '%' : '0%';
+    if (stats != null) document.getElementById('progressStats').textContent = stats;
+  }
+
   function findEmails() {
     var domain = document.getElementById('emailDomain').value.trim();
     var ids = getSelectedDirIds();
+    if (!ids.length) return;
     closeModal('emailModal');
-    showStatus('Finding emails for ' + ids.length + ' directors (auto-discovering domains via Gemini)…', 'info');
-    var body = { director_ids: ids };
-    if (domain) body.domain = domain;
-    fetch('/api/ch/find-emails', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    }).then(r => r.json()).then(function(d) {
-      if (d.error) { showStatus(d.error, 'error'); return; }
-      showStatus('Processed ' + d.processed + ', found ' + d.found + ' emails, skipped ' + d.skipped_dedup + ' (already in contacts).', 'success');
-      loadStats();
-    }).catch(function(e){ showStatus(e.message, 'error'); });
+    document.getElementById('statusArea').innerHTML = '';
+
+    var CHUNK = 5;
+    var totalN = ids.length;
+    var done = 0, found = 0, skipped = 0, noDomain = 0;
+    var startedAt = Date.now();
+
+    setProgress('Finding emails (auto-discovering domains via Gemini)…', 0, totalN, '');
+
+    function runChunk(i) {
+      if (i >= ids.length) {
+        var secs = Math.round((Date.now() - startedAt) / 1000);
+        setProgress('Done.', totalN, totalN,
+          found + ' emails found · ' + skipped + ' already in contacts · ' + noDomain + ' no domain · ' + secs + 's');
+        showStatus('Email finding complete: ' + found + ' found, ' + skipped + ' skipped, ' + noDomain + ' no domain.', 'success');
+        loadStats();
+        return;
+      }
+      var slice = ids.slice(i, i + CHUNK);
+      var body = { director_ids: slice };
+      if (domain) body.domain = domain;
+      fetch('/api/ch/find-emails', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }).then(r => r.json()).then(function(d) {
+        if (!d.error) {
+          done += (d.processed || slice.length);
+          found += (d.found || 0);
+          skipped += (d.skipped_dedup || 0);
+          noDomain += (d.no_domain || 0);
+        } else {
+          done += slice.length;
+        }
+        setProgress('Finding emails (auto-discovering domains via Gemini)…', Math.min(done, totalN), totalN,
+          found + ' found · ' + skipped + ' in contacts · ' + noDomain + ' no domain');
+        refreshSelectedDirectors(slice);
+        runChunk(i + CHUNK);
+      }).catch(function() {
+        done += slice.length;
+        setProgress('Finding emails…', Math.min(done, totalN), totalN, found + ' found (a chunk errored, continuing)');
+        runChunk(i + CHUNK);
+      });
+    }
+    runChunk(0);
+  }
+
+  // Re-pull the companies of the just-processed directors so found emails show live.
+  function refreshSelectedDirectors(dirIds) {
+    var cns = {};
+    _allDirectors.forEach(function(d){ if (dirIds.indexOf(d.id) !== -1) cns[d.company_number] = true; });
+    var list = Object.keys(cns);
+    if (!list.length) return;
+    loadDirectorsFromDb(_lastCompanyNumbers || list, function(dirs) {
+      var sel = getSelectedDirIds();
+      renderDirectors(dirs);
+      // restore checkbox selection
+      document.querySelectorAll('.dir-cb').forEach(function(cb){ if (sel.indexOf(Number(cb.dataset.id)) !== -1) cb.checked = true; });
+      updateDirSelection();
+    });
   }
 
   function loadBisonWorkspaces() {
