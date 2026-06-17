@@ -1421,25 +1421,39 @@ function cleanCompanyNameForCH(name) {
   s = s.replace(/[©®™%*]/g, ' ').replace(/\s+/g, ' ').trim();
   return s;
 }
-// Normalise a name for match comparison: lowercase, drop company suffixes and
-// all non-alphanumerics. Used to reject CH's fuzzy false matches (e.g. search
-// "10 ticks" must NOT accept "ALL TICKS LTD").
-function normCompanyForMatch(s) {
+// Tokenise a company name for match comparison: lowercase, drop company
+// suffixes, split into alphanumeric tokens. Keeps word structure so prefix
+// checks can align on token boundaries (not mid-number).
+function tokeniseCompany(s) {
   return String(s || '').toLowerCase()
     .replace(/&/g, ' and ')
-    .replace(/\b(limited|ltd|llp|plc|inc|llc|holdings|group|company|the)\b/g, '')
-    .replace(/[^a-z0-9]/g, '');
+    .replace(/\b(limited|ltd|llp|plc|inc|llc|holdings|group|company|the)\b/g, ' ')
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
 }
-// Is the CH-matched title a confident match for our search term? Accept exact
-// normalised equality, or a full prefix either direction when the shorter side
-// is long enough to be meaningful (guards against short-string false positives).
+// Is the CH-matched title a confident match? The names are compared as their
+// full concatenations, but a prefix only counts when it ends on a TOKEN
+// boundary of the other side. This accepts glommed domain-names
+// ("108properties" ⇿ "108 PROPERTIES LIMITED") and genuine prefixes
+// ("12sides" → "12SIDES CONSULTANCY") while rejecting mid-token coincidences
+// ("100and10" must NOT match "100 AND 102 REPLINGHAM ROAD" — "10" ⊂ "102").
 function isConfidentCHMatch(searchTerm, matchedTitle) {
-  const a = normCompanyForMatch(searchTerm);
-  const b = normCompanyForMatch(matchedTitle);
-  if (!a || !b) return false;
-  if (a === b) return true;
-  const [shortS, longS] = a.length <= b.length ? [a, b] : [b, a];
-  return longS.startsWith(shortS) && shortS.length >= 5;
+  const aTok = tokeniseCompany(searchTerm);
+  const bTok = tokeniseCompany(matchedTitle);
+  const aFull = aTok.join(''), bFull = bTok.join('');
+  if (!aFull || !bFull) return false;
+  if (aFull === bFull) return true;
+  // full string of one side must equal a token-aligned prefix of the other
+  const prefixAligned = (full, toks) => {
+    let acc = '';
+    for (const t of toks) {
+      acc += t;
+      if (acc === full) return true;
+      if (acc.length >= full.length) return false; // overshot a boundary
+    }
+    return false;
+  };
+  return prefixAligned(aFull, bTok) || prefixAligned(bFull, aTok);
 }
 
 async function fetchCompaniesHouse(companyName) {

@@ -621,6 +621,7 @@ async function scanEnrichment() {
     document.getElementById('enrichScanResult').style.display = '';
     document.getElementById('enrichScanBtn').style.display = 'none';
     document.getElementById('enrichConfirmBtn').style.display = '';
+    document.getElementById('enrichConfirmBtn').disabled = false; // re-enable; a prior run may have left it disabled
     document.getElementById('enrichCancelBtn').style.display = '';
     document.getElementById('enrichStatus').textContent = '';
   } catch (err) {
