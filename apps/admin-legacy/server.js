@@ -1368,6 +1368,37 @@ const CH_SIZE_MAP = {
   'dormant': 1,
 };
 
+// ── Companies House rate limiter ───────────────────────────────────────────
+// CH allows ~600 requests / 5 min (2/sec) and 429s hard above that. The enrich
+// job runs at high concurrency and each domain makes 2-3 CH calls, so without a
+// GLOBAL throttle every request 429s ("no response", 0 updated). This gates ALL
+// CH fetches through one shared promise-chain at a safe minimum interval,
+// independent of job concurrency, and retries once on a 429 honouring Retry-After.
+const CH_MIN_INTERVAL_MS = 400; // ~2.5 req/s — under CH's 2/s sustained limit with headroom
+let _chChain = Promise.resolve();
+let _chLastAt = 0;
+// Reserve the next time-slot atomically by advancing a single shared chain.
+function _chSlot() {
+  const wait = () => {
+    const gap = Math.max(0, CH_MIN_INTERVAL_MS - (Date.now() - _chLastAt));
+    return new Promise(res => setTimeout(() => { _chLastAt = Date.now(); res(); }, gap));
+  };
+  const slot = _chChain.then(wait);
+  _chChain = slot.catch(() => {}); // keep the chain alive even if a slot rejects
+  return slot;
+}
+async function chFetch(url, opts) {
+  await _chSlot();
+  let r = await fetch(url, opts);
+  if (r.status === 429) {
+    const ra = parseInt(r.headers.get('retry-after') || '5', 10);
+    await new Promise(res => setTimeout(res, Math.min(Math.max(ra, 1), 30) * 1000));
+    await _chSlot();
+    r = await fetch(url, opts);
+  }
+  return r;
+}
+
 async function fetchCompaniesHouse(companyName) {
   const key = process.env.COMPANIES_HOUSE_API_KEY;
   if (!key || !companyName) return null;
@@ -1377,8 +1408,8 @@ async function fetchCompaniesHouse(companyName) {
     // Step 1: search for company number
     const q = encodeURIComponent(companyName.slice(0, 60));
     const sr = await Promise.race([
-      fetch(`https://api.company-information.service.gov.uk/search/companies?q=${q}&items_per_page=1`, { headers: auth }),
-      deadline(4000),
+      chFetch(`https://api.company-information.service.gov.uk/search/companies?q=${q}&items_per_page=1`, { headers: auth }),
+      deadline(15000),
     ]);
     if (!sr.ok) return null;
     const sj = await sr.json();
@@ -1387,8 +1418,8 @@ async function fetchCompaniesHouse(companyName) {
 
     // Step 2: fetch full company profile
     const pr = await Promise.race([
-      fetch(`https://api.company-information.service.gov.uk/company/${item.company_number}`, { headers: auth }),
-      deadline(4000),
+      chFetch(`https://api.company-information.service.gov.uk/company/${item.company_number}`, { headers: auth }),
+      deadline(15000),
     ]);
     if (!pr.ok) return null;
     const p = await pr.json();
@@ -1405,8 +1436,8 @@ async function fetchCompaniesHouse(companyName) {
 
     // Fetch officer count in parallel
     const or = await Promise.race([
-      fetch(`https://api.company-information.service.gov.uk/company/${item.company_number}/officers?items_per_page=1`, { headers: auth }).then(r => r.json()),
-      deadline(4000),
+      chFetch(`https://api.company-information.service.gov.uk/company/${item.company_number}/officers?items_per_page=1`, { headers: auth }).then(r => r.json()),
+      deadline(15000),
     ]).catch(() => null);
 
     // Build full address string
