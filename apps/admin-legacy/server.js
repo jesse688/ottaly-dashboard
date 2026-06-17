@@ -18673,7 +18673,8 @@ function scheduleAudienceScoring(pgdb) {
       };
       if (type === 'county') {
         const cc = countryClause(country);
-        const where = cc ? `WHERE county IS NOT NULL AND county != '' AND ${cc}` : `WHERE county IS NOT NULL AND county != ''`;
+        const base = `county IS NOT NULL AND county != '' AND county ~ '^[A-Za-z][A-Za-z \\-\\']{2,}$'`;
+        const where = cc ? `WHERE ${base} AND ${cc}` : `WHERE ${base}`;
         const result = await db.query(`SELECT DISTINCT INITCAP(county) AS val FROM ch_companies ${where} ORDER BY val LIMIT 500`);
         rows = result.rows.map(r => r.val);
       } else if (type === 'town') {
