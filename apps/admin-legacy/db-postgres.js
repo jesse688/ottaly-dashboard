@@ -792,6 +792,48 @@ class PostgresDatabase {
         mx_provider  TEXT NOT NULL,
         resolved_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )`,
+
+      // ── Companies House bulk-data tables ──────────────────────────
+      `CREATE TABLE IF NOT EXISTS ch_companies (
+        company_number TEXT PRIMARY KEY,
+        company_name TEXT NOT NULL,
+        company_status TEXT,
+        company_type TEXT,
+        sic_codes TEXT,
+        postcode TEXT,
+        address_line1 TEXT,
+        address_line2 TEXT,
+        post_town TEXT,
+        county TEXT,
+        country TEXT,
+        country_of_origin TEXT,
+        incorporated_on TEXT,
+        website TEXT,
+        linkedin TEXT,
+        employees TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_ch_companies_sic ON ch_companies USING gin(string_to_array(sic_codes, ','))`,
+      `CREATE INDEX IF NOT EXISTS idx_ch_companies_postcode ON ch_companies(postcode)`,
+      `CREATE INDEX IF NOT EXISTS idx_ch_companies_status ON ch_companies(company_status)`,
+      `CREATE TABLE IF NOT EXISTS ch_directors (
+        id SERIAL PRIMARY KEY,
+        company_number TEXT NOT NULL REFERENCES ch_companies(company_number) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        role TEXT,
+        appointed_on TEXT,
+        resigned_on TEXT,
+        address JSONB,
+        email TEXT,
+        email_status TEXT,
+        email_verified_at TIMESTAMPTZ,
+        pushed_to_bison_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(company_number, name, role)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_ch_directors_company ON ch_directors(company_number)`,
+      `CREATE INDEX IF NOT EXISTS idx_ch_directors_email ON ch_directors(email)`,
     ];
 
     // Migrations run with lock_timeout so a stuck previous-deploy query

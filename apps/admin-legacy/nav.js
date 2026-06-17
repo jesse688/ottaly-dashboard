@@ -30,8 +30,9 @@
       color: '#22D3EE',
       icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>',
       pages: [
-        { href: 'contacts.html',       label: 'Contacts' },
-        { href: 'database.html',       label: 'Database' },
+        { href: 'contacts.html',        label: 'Contacts' },
+        { href: 'companies-house.html', label: 'CH Pipeline' },
+        { href: 'database.html',        label: 'Database' },
         { href: 'apollo-prep.html',    label: 'Apollo Prep' },
         { href: 'verify-split.html',   label: 'Verify Split' },
         { href: 'combo-analysis.html', label: 'Combo Analysis' },
