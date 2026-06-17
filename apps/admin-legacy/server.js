@@ -1537,6 +1537,17 @@ const _GEMINI_CANDIDATES = [
   'gemini-2.5-flash', 'gemini-flash-latest', 'gemini-2.0-flash-001',
   'gemini-2.5-flash-lite', 'gemini-1.5-flash',
 ];
+// Pull the first JSON object out of an LLM response, tolerating preamble like
+// "Here is the JSON requested:" or markdown fences. Returns null on failure.
+function extractJson(text) {
+  if (!text) return null;
+  try { return JSON.parse(text); } catch {}
+  const cleaned = text.replace(/```(?:json)?/gi, '');
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  if (start === -1 || end === -1 || end < start) return null;
+  try { return JSON.parse(cleaned.slice(start, end + 1)); } catch { return null; }
+}
 async function geminiGenerate(key, systemPrompt, userPrompt) {
   const body = JSON.stringify({
     systemInstruction: { parts: [{ text: systemPrompt }] },
@@ -18764,7 +18775,7 @@ function scheduleAudienceScoring(pgdb) {
         `UK company: "${name}". What is their website domain?`
       );
       let parsed = null, parseErr = null;
-      if (r && r.text) { try { parsed = JSON.parse(r.text); } catch (e) { parseErr = e.message; } }
+      if (r && r.text) { parsed = extractJson(r.text); if (!parsed) parseErr = 'extractJson returned null'; }
       res.json({ hasKey: true, rawResult: r, rawText: r ? r.text : null, parsed, parseErr });
     } catch (e) {
       res.json({ hasKey: true, error: e.message });
@@ -18806,12 +18817,12 @@ function scheduleAudienceScoring(pgdb) {
       } else if (geminiKey) {
         try {
           const r = await geminiGenerate(geminiKey,
-            'Return only valid JSON with key: website (the company website domain, no protocol, no www, e.g. "example.co.uk", or null if unknown). No markdown.',
-            `UK company: "${row.company_name}". What is their website domain?`
+            'You output ONLY a JSON object, nothing else. No preamble, no explanation, no markdown. Schema: {"website": string|null}. The website is the company domain without protocol or www (e.g. "example.co.uk"), or null if unknown.',
+            `What is the website domain for the UK company "${row.company_name}"? Respond with JSON only.`
           );
           if (r && r.text) {
-            const parsed = JSON.parse(r.text);
-            const raw = (parsed.website || '').replace(/^https?:\/\//i,'').replace(/\/.*/,'').replace(/^www\./i,'').trim();
+            const parsed = extractJson(r.text);
+            const raw = ((parsed && parsed.website) || '').replace(/^https?:\/\//i,'').replace(/\/.*/,'').replace(/^www\./i,'').trim();
             companyDomains[cn] = raw || null;
             if (raw) await db.query('UPDATE ch_companies SET website=$1, updated_at=NOW() WHERE company_number=$2', [raw, cn]);
             else console.log(`[ch-find-emails] no domain for "${row.company_name}" (Gemini returned null)`);
@@ -18898,8 +18909,8 @@ function scheduleAudienceScoring(pgdb) {
           `Company: ${co.company_name}\nType: ${co.company_type || ''}\nSIC: ${co.sic_codes || ''}`
         );
         if (!r) continue;
-        let data;
-        try { data = JSON.parse(r.text); } catch { continue; }
+        const data = extractJson(r.text);
+        if (!data) continue;
         await db.query(
           'UPDATE ch_companies SET website=$1, linkedin=$2, employees=$3, updated_at=NOW() WHERE company_number=$4',
           [data.website || null, data.linkedin || null, data.employees || null, num]
