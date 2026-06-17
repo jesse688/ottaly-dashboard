@@ -1548,6 +1548,39 @@ function extractJson(text) {
   if (start === -1 || end === -1 || end < start) return null;
   try { return JSON.parse(cleaned.slice(start, end + 1)); } catch { return null; }
 }
+// Look up a company's website domain via Gemini using a strict responseSchema
+// (so the model returns a typed object, not free text + preamble) and a token
+// budget high enough to survive 2.5-flash's thinking tokens. Returns a bare
+// domain string or null. Separate from geminiGenerate so the shared enrichment
+// path keeps its tuned 250-token cap.
+async function geminiLookupDomain(key, companyName) {
+  const body = JSON.stringify({
+    contents: [{ role: 'user', parts: [{ text: `What is the website domain (no protocol, no www) for the UK company "${companyName}"? Return null if you don't know it.` }] }],
+    generationConfig: {
+      maxOutputTokens: 2048,
+      temperature: 0,
+      responseMimeType: 'application/json',
+      responseSchema: { type: 'OBJECT', properties: { website: { type: 'STRING', nullable: true } }, required: ['website'] },
+    },
+  });
+  const candidates = [process.env.GEMINI_MODEL, _geminiModel, ..._GEMINI_CANDIDATES].filter(Boolean);
+  const tried = new Set();
+  for (const model of candidates) {
+    if (tried.has(model)) continue; tried.add(model);
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+      const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+      if (!r.ok) { if (r.status === 404) continue; return null; }
+      const j = await r.json();
+      const text = j?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      const parsed = extractJson(text);
+      if (!parsed) return null;
+      const raw = (parsed.website || '').replace(/^https?:\/\//i, '').replace(/\/.*/, '').replace(/^www\./i, '').trim().toLowerCase();
+      return raw || null;
+    } catch { continue; }
+  }
+  return null;
+}
 async function geminiGenerate(key, systemPrompt, userPrompt) {
   const body = JSON.stringify({
     systemInstruction: { parts: [{ text: systemPrompt }] },
@@ -18770,13 +18803,8 @@ function scheduleAudienceScoring(pgdb) {
     const geminiKey = process.env.GEMINI_API_KEY;
     if (!geminiKey) return res.json({ error: 'GEMINI_API_KEY not set on server', hasKey: false });
     try {
-      const r = await geminiGenerate(geminiKey,
-        'Return only valid JSON with key: website (the company website domain, no protocol, no www, e.g. "example.co.uk", or null if unknown). No markdown.',
-        `UK company: "${name}". What is their website domain?`
-      );
-      let parsed = null, parseErr = null;
-      if (r && r.text) { parsed = extractJson(r.text); if (!parsed) parseErr = 'extractJson returned null'; }
-      res.json({ hasKey: true, rawResult: r, rawText: r ? r.text : null, parsed, parseErr });
+      const domain = await geminiLookupDomain(geminiKey, name);
+      res.json({ hasKey: true, domain });
     } catch (e) {
       res.json({ hasKey: true, error: e.message });
     }
@@ -18816,20 +18844,10 @@ function scheduleAudienceScoring(pgdb) {
         companyDomains[cn] = row.website.replace(/^https?:\/\//i, '').replace(/\/.*/,'').replace(/^www\./i,'').trim();
       } else if (geminiKey) {
         try {
-          const r = await geminiGenerate(geminiKey,
-            'You output ONLY a JSON object, nothing else. No preamble, no explanation, no markdown. Schema: {"website": string|null}. The website is the company domain without protocol or www (e.g. "example.co.uk"), or null if unknown.',
-            `What is the website domain for the UK company "${row.company_name}"? Respond with JSON only.`
-          );
-          if (r && r.text) {
-            const parsed = extractJson(r.text);
-            const raw = ((parsed && parsed.website) || '').replace(/^https?:\/\//i,'').replace(/\/.*/,'').replace(/^www\./i,'').trim();
-            companyDomains[cn] = raw || null;
-            if (raw) await db.query('UPDATE ch_companies SET website=$1, updated_at=NOW() WHERE company_number=$2', [raw, cn]);
-            else console.log(`[ch-find-emails] no domain for "${row.company_name}" (Gemini returned null)`);
-          } else {
-            companyDomains[cn] = null;
-            console.warn(`[ch-find-emails] Gemini gave no result for "${row.company_name}"`);
-          }
+          const raw = await geminiLookupDomain(geminiKey, row.company_name);
+          companyDomains[cn] = raw || null;
+          if (raw) await db.query('UPDATE ch_companies SET website=$1, updated_at=NOW() WHERE company_number=$2', [raw, cn]);
+          else console.log(`[ch-find-emails] no domain for "${row.company_name}" (Gemini returned null)`);
         } catch (e) { companyDomains[cn] = null; console.warn(`[ch-find-emails] domain lookup failed for "${row.company_name}": ${e.message}`); }
       } else {
         companyDomains[cn] = null;
