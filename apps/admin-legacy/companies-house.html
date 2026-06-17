@@ -282,6 +282,12 @@
   var _selectedSics = [];
   var _allCompanies = [];
   var _allDirectors = [];
+  var _sicLabelMap = {};
+
+  // Pre-load all 1265 SIC codes into a lookup map so chips show names not raw codes
+  fetch('/api/ch/sic-all').then(function(r){ return r.json(); }).then(function(d) {
+    (d.codes || []).forEach(function(it) { _sicLabelMap[it.code] = it.label; });
+  }).catch(function(){});
 
   function showStatus(msg, type) {
     var el = document.getElementById('statusArea');
@@ -340,7 +346,9 @@
   function renderSicTags() {
     var el = document.getElementById('selectedSics');
     el.innerHTML = _selectedSics.map(function(s) {
-      return '<span class="sic-tag" onclick="removeSic(\'' + esc(s.code) + '\')" title="Click to remove">' + esc(s.code) + ' ×</span>';
+      var label = _sicLabelMap[s.code] || s.label || s.code;
+      var display = label.length > 40 ? label.slice(0, 38) + '…' : label;
+      return '<span class="sic-tag" onclick="removeSic(\'' + esc(s.code) + '\')" title="' + esc(s.code + ' — ' + label) + '">' + esc(display) + ' ×</span>';
     }).join('');
   }
 
@@ -381,13 +389,15 @@
 
   function applySector(val) {
     if (!val) return;
+    var sel = document.getElementById('sectorSelect');
+    var sectorLabel = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '';
     val.split(',').forEach(function(code) {
       if (!_selectedSics.find(function(s){ return s.code === code; })) {
-        _selectedSics.push({ code: code, label: code });
+        _selectedSics.push({ code: code, label: _sicLabelMap[code] || sectorLabel || code });
       }
     });
     renderSicTags();
-    document.getElementById('sectorSelect').value = '';
+    sel.value = '';
   }
 
   function clearFilters() {

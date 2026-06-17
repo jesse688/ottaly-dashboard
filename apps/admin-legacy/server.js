@@ -18643,6 +18643,11 @@ function scheduleAudienceScoring(pgdb) {
     }
   });
 
+  app.get('/api/ch/sic-all', requireSession, (req, res) => {
+    const SIC_CODES = require('./sic-codes.js');
+    res.json({ codes: SIC_CODES.map(([code, label]) => ({ code, label })) });
+  });
+
   app.get('/api/ch/location-values', requireSession, async (req, res) => {
     const db = req.app.locals.pgDb;
     if (!db) return res.status(503).json({ error: 'Database unavailable' });
