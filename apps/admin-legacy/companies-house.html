@@ -219,6 +219,13 @@
         <button class="btn btn-secondary btn-sm" id="prevPageBtn" onclick="changePage(-1)">Prev</button>
         <button class="btn btn-secondary btn-sm" id="nextPageBtn" onclick="changePage(1)">Next</button>
       </div>
+      <div class="action-bar hidden" id="companySelectBar" style="margin-top:12px;">
+        <span style="font-size:13px;color:#8b949e;">Quick select:</span>
+        <button class="btn btn-secondary btn-sm" onclick="selectTopN(10)">Top 10</button>
+        <button class="btn btn-secondary btn-sm" onclick="selectTopN(25)">Top 25</button>
+        <button class="btn btn-secondary btn-sm" onclick="selectTopN(50)">Top 50</button>
+        <button class="btn btn-secondary btn-sm" onclick="selectTopN(0)">None</button>
+      </div>
       <div class="action-bar hidden" id="companyActions">
         <button class="btn btn-secondary" onclick="fetchDirectors()">Fetch Directors</button>
         <span id="selectedCompanyCount" style="font-size:13px;color:#8b949e;"></span>
@@ -457,6 +464,7 @@
       table += '</tbody></table>';
     }
     document.getElementById('companiesTable').innerHTML = table;
+    document.getElementById('companySelectBar').classList.toggle('hidden', !d.companies || !d.companies.length);
     var pg = document.getElementById('companyPagination');
     var totalPages = Math.ceil(_totalCompanies / _perPage);
     if (totalPages > 1) {
@@ -472,6 +480,12 @@
 
   function toggleAllCompanies(cb) {
     document.querySelectorAll('.company-cb').forEach(function(el){ el.checked = cb.checked; });
+    updateCompanySelection();
+  }
+
+  function selectTopN(n) {
+    var cbs = document.querySelectorAll('.company-cb');
+    cbs.forEach(function(el, i){ el.checked = n > 0 && i < n; });
     updateCompanySelection();
   }
 
