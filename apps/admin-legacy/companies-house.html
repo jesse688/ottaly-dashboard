@@ -220,17 +220,18 @@
         <button class="btn btn-secondary btn-sm" id="prevPageBtn" onclick="changePage(-1)">Prev</button>
         <button class="btn btn-secondary btn-sm" id="nextPageBtn" onclick="changePage(1)">Next</button>
       </div>
-      <div class="action-bar hidden" id="companySelectBar" style="margin-top:12px;">
-        <span style="font-size:13px;color:#8b949e;">Quick select:</span>
-        <button class="btn btn-secondary btn-sm" onclick="selectTopN(10)">Top 10</button>
-        <button class="btn btn-secondary btn-sm" onclick="selectTopN(25)">Top 25</button>
-        <button class="btn btn-secondary btn-sm" onclick="selectTopN(50)">Top 50</button>
+      <div class="action-bar hidden" id="companySelectBar" style="margin-bottom:10px;margin-top:4px;">
+        <span style="font-size:12px;color:#8b949e;">Select:</span>
+        <button class="btn btn-secondary btn-sm" onclick="selectTopN(10)">10</button>
+        <button class="btn btn-secondary btn-sm" onclick="selectTopN(25)">25</button>
+        <button class="btn btn-secondary btn-sm" onclick="selectTopN(50)">50</button>
+        <button class="btn btn-secondary btn-sm" onclick="selectTopN(100)">100</button>
         <button class="btn btn-secondary btn-sm" onclick="selectTopN(0)">None</button>
+        <span style="font-size:12px;color:#4b5563;margin:0 4px;">|</span>
+        <span id="selectedCompanyCount" style="font-size:12px;color:#8b949e;"></span>
+        <button class="btn btn-secondary btn-sm hidden" id="fetchDirectorsBtn" onclick="fetchDirectors()">Fetch Directors →</button>
       </div>
-      <div class="action-bar hidden" id="companyActions">
-        <button class="btn btn-secondary" onclick="fetchDirectors()">Fetch Directors</button>
-        <span id="selectedCompanyCount" style="font-size:13px;color:#8b949e;"></span>
-      </div>
+      <div id="companyActions" class="hidden"></div>
     </div>
 
     <div class="panel hidden" id="directorsPanel">
@@ -492,14 +493,10 @@
 
   function updateCompanySelection() {
     var sel = getSelectedCompanyNumbers();
-    var bar = document.getElementById('companyActions');
     var cnt = document.getElementById('selectedCompanyCount');
-    if (sel.length) {
-      bar.classList.remove('hidden');
-      cnt.textContent = sel.length + ' selected';
-    } else {
-      bar.classList.add('hidden');
-    }
+    var btn = document.getElementById('fetchDirectorsBtn');
+    cnt.textContent = sel.length ? sel.length + ' selected' : '';
+    btn.classList.toggle('hidden', sel.length === 0);
   }
 
   function getSelectedCompanyNumbers() {
