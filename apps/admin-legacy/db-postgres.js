@@ -18,14 +18,13 @@ class PostgresDatabase {
     // Pool sized for high concurrency — parallel index builds, webhook
     // bursts, dashboard fan-out (search + count + employee buckets +
     // email-provider counts), and CSV imports all share the pool.
-    // Lowered 60→40: during a rolling deploy BOTH old and new replicas are alive
-    // briefly (≈4 instances × pool), and 4×60=240 exceeded Postgres max_connections
-    // → "sorry, too many clients already" took the whole app down. 4×40=160 leaves
-    // headroom under a 200 limit while still plenty for normal 2-replica load.
+    // Lowered 60→40→25: during a rolling deploy BOTH old and new replicas are alive
+    // briefly. Enrichment job also holds connections. 2 replicas × 25 = 50 leaves
+    // comfortable headroom under Postgres max_connections (200 limit).
     const config = dbUrl ? {
       connectionString: dbUrl,
       ssl: sslDisabled ? false : { rejectUnauthorized: false },
-      max: 40,
+      max: 25,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 10000,
       // Kill runaway queries fast. 120s was pegging CPU because expensive
