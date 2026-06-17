@@ -31,6 +31,29 @@ async function run(req: NextRequest) {
          AND m.marked_as_lead = TRUE AND m.id <> u.id
     )`
 
+  // ?diag=1 — show what's actually in review + whether a marked sibling exists, so we
+  // can see WHY the match misses (email mismatch, wrong folder, marked elsewhere).
+  if (url.searchParams.get('diag') === '1') {
+    const rev = await pool.query(
+      `SELECT u.id, u.folder, u.lead_email, u.lead_bison_id, u.marked_as_lead,
+              COALESCE(u.admin_label, u.category) AS cat,
+              (SELECT count(*)::int FROM unibox_replies m
+                 WHERE m.workspace_id = u.workspace_id
+                   AND lower(m.lead_email) = lower(u.lead_email)
+                   AND m.marked_as_lead = TRUE AND m.id <> u.id) AS marked_siblings_by_email,
+              (SELECT count(*)::int FROM esp_leads e
+                 WHERE e.workspace_id = u.workspace_id
+                   AND lower(e.email) = lower(u.lead_email) AND e.label = 'INTERESTED') AS interested_lead_by_email
+         FROM unibox_replies u
+        WHERE u.folder = 'review'
+        ORDER BY u.received_at DESC LIMIT 15`
+    ).catch((e) => ({ rows: [{ error: String(e) }] }))
+    const folderCounts = await pool.query(
+      `SELECT folder, count(*)::int AS n FROM unibox_replies GROUP BY folder ORDER BY n DESC`
+    ).catch(() => ({ rows: [] }))
+    return NextResponse.json({ diag: true, review_sample: rev.rows, folder_counts: folderCounts.rows })
+  }
+
   const preview = await pool.query(`SELECT count(*)::int AS n FROM unibox_replies u WHERE ${where}`)
     .catch((e) => ({ rows: [{ n: -1, error: String(e) }] }))
 
