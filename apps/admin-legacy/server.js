@@ -18612,8 +18612,18 @@ function scheduleAudienceScoring(pgdb) {
       conditions.push(`company_name ILIKE $${params.length}`);
     }
     if (req.query.country) {
-      params.push(req.query.country);
-      conditions.push(`UPPER(country_of_origin) = $${params.length}`);
+      // CH bulk CountryOfOrigin values vary: "England", "United Kingdom", "EW", etc.
+      // Filter by postcode prefix pattern is more reliable for England/Wales/Scotland/NI
+      const ctry = req.query.country.toUpperCase();
+      if (ctry === 'SCOTLAND') {
+        conditions.push(`(postcode ILIKE 'AB%' OR postcode ILIKE 'DD%' OR postcode ILIKE 'DG%' OR postcode ILIKE 'EH%' OR postcode ILIKE 'FK%' OR postcode ILIKE 'G%' OR postcode ILIKE 'HS%' OR postcode ILIKE 'IV%' OR postcode ILIKE 'KA%' OR postcode ILIKE 'KW%' OR postcode ILIKE 'KY%' OR postcode ILIKE 'ML%' OR postcode ILIKE 'PA%' OR postcode ILIKE 'PH%' OR postcode ILIKE 'TD%' OR postcode ILIKE 'ZE%')`);
+      } else if (ctry === 'WALES') {
+        conditions.push(`(postcode ILIKE 'CF%' OR postcode ILIKE 'LD%' OR postcode ILIKE 'LL%' OR postcode ILIKE 'NP%' OR postcode ILIKE 'SA%' OR postcode ILIKE 'SY%')`);
+      } else if (ctry === 'NORTHERN IRELAND') {
+        conditions.push(`postcode ILIKE 'BT%'`);
+      } else if (ctry === 'ENGLAND') {
+        conditions.push(`(postcode NOT ILIKE 'AB%' AND postcode NOT ILIKE 'DD%' AND postcode NOT ILIKE 'DG%' AND postcode NOT ILIKE 'EH%' AND postcode NOT ILIKE 'FK%' AND postcode NOT ILIKE 'HS%' AND postcode NOT ILIKE 'IV%' AND postcode NOT ILIKE 'KW%' AND postcode NOT ILIKE 'KY%' AND postcode NOT ILIKE 'ML%' AND postcode NOT ILIKE 'PH%' AND postcode NOT ILIKE 'ZE%' AND postcode NOT ILIKE 'BT%' AND postcode NOT ILIKE 'CF%' AND postcode NOT ILIKE 'LD%' AND postcode NOT ILIKE 'LL%' AND postcode NOT ILIKE 'NP%' AND postcode IS NOT NULL)`);
+      }
     }
     if (req.query.county) {
       params.push(req.query.county);
@@ -18654,16 +18664,22 @@ function scheduleAudienceScoring(pgdb) {
     const { type, country, county } = req.query;
     try {
       let rows;
+      const countryClause = (ctry) => {
+        ctry = (ctry || '').toUpperCase();
+        if (ctry === 'SCOTLAND') return `(postcode ILIKE 'AB%' OR postcode ILIKE 'DD%' OR postcode ILIKE 'EH%' OR postcode ILIKE 'FK%' OR postcode ILIKE 'G%' OR postcode ILIKE 'HS%' OR postcode ILIKE 'IV%' OR postcode ILIKE 'KW%' OR postcode ILIKE 'KY%' OR postcode ILIKE 'ML%' OR postcode ILIKE 'PH%' OR postcode ILIKE 'ZE%')`;
+        if (ctry === 'WALES') return `(postcode ILIKE 'CF%' OR postcode ILIKE 'LD%' OR postcode ILIKE 'LL%' OR postcode ILIKE 'NP%' OR postcode ILIKE 'SA%' OR postcode ILIKE 'SY%')`;
+        if (ctry === 'NORTHERN IRELAND') return `postcode ILIKE 'BT%'`;
+        return null;
+      };
       if (type === 'county') {
-        const result = await db.query(
-          `SELECT DISTINCT INITCAP(county) AS val FROM ch_companies WHERE county IS NOT NULL AND county != '' AND UPPER(country_of_origin)=$1 ORDER BY val LIMIT 500`,
-          [country.toUpperCase()]
-        );
+        const cc = countryClause(country);
+        const where = cc ? `WHERE county IS NOT NULL AND county != '' AND ${cc}` : `WHERE county IS NOT NULL AND county != ''`;
+        const result = await db.query(`SELECT DISTINCT INITCAP(county) AS val FROM ch_companies ${where} ORDER BY val LIMIT 500`);
         rows = result.rows.map(r => r.val);
       } else if (type === 'town') {
         const conditions = ['post_town IS NOT NULL', "post_town != ''"];
         const params = [];
-        if (country) { params.push(country.toUpperCase()); conditions.push(`UPPER(country_of_origin)=$${params.length}`); }
+        if (country) { const cc = countryClause(country); if (cc) conditions.push(cc); }
         if (county) { params.push(county); conditions.push(`UPPER(county)=UPPER($${params.length})`); }
         const result = await db.query(
           `SELECT DISTINCT INITCAP(post_town) AS val FROM ch_companies WHERE ${conditions.join(' AND ')} ORDER BY val LIMIT 1000`,
