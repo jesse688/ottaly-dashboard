@@ -5386,7 +5386,10 @@ function generateOptimisations(workspaces) {
   return opts;
 }
 
+let _campaignCacheRefreshing = false;
 async function refreshCampaignCache() {
+  if (_campaignCacheRefreshing) return; // don't stampede — one refresh at a time
+  _campaignCacheRefreshing = true;
   try {
     const wsRaw = await pvFetch('/workspaces');
     const workspaces = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.workspaces || []);
@@ -5507,6 +5510,7 @@ async function refreshCampaignCache() {
     // older email_events that arrived before we knew about them.
     backfillEmailEventHashes().catch(() => {});
   } catch (err) { console.error('[campaign cache] refresh failed:', err.message); }
+  finally { _campaignCacheRefreshing = false; }
 }
 
 // On boot, hydrate campaignCache from the last persisted snapshot so Total Sent
@@ -5545,7 +5549,7 @@ async function ensureCampaignCache() {
 // away; then do the heavy PlusVibe refresh after the other caches settle.
 setTimeout(hydrateCampaignCacheFromDisk, 2000);
 setTimeout(refreshCampaignCache, 90000); // after mailbox (20s) + performance (60s) settle
-setInterval(refreshCampaignCache, 30 * 60 * 1000);
+setInterval(refreshCampaignCache, 15 * 60 * 1000); // 15 min — keeps out-of-data alerts current
 
 app.get('/api/campaigns/intelligence', (req, res) => res.json(campaignCache));
 
@@ -5559,6 +5563,12 @@ app.get('/api/campaigns/intelligence', (req, res) => res.json(campaignCache));
 app.get('/api/actions/out-of-data', requireSession, async (req, res) => {
   try {
     const pgdb = app.locals.pgDb;
+    // Self-freshen: if the campaign cache is stale (>10 min), kick a background
+    // refresh so alerts catch up after a CM adds leads / launches a campaign.
+    // Non-blocking — this response uses the current cache; the next scan is fresh.
+    // ?refresh=1 forces it (the Re-scan button passes this).
+    const ageMin = campaignCache.updatedAt ? (Date.now() - new Date(campaignCache.updatedAt).getTime()) / 60000 : 999;
+    if (req.query.refresh === '1' || ageMin > 10) refreshCampaignCache().catch(() => {});
     const wsList = campaignCache.workspaces || [];
 
     // recent sends per workspace (last 3 days) to confirm the stall is real.
@@ -5578,9 +5588,10 @@ app.get('/api/actions/out-of-data', requireSession, async (req, res) => {
     const isRunning = c => ['active', 'launching'].includes(String(c.status || '').toLowerCase());
     const clients = [];
     for (const ws of wsList) {
-      const camps   = ws.campaigns || [];
-      const running = camps.filter(isRunning);
-      const paused  = camps.filter(c => !isRunning(c)); // paused/stopped/completed/etc.
+      const camps     = ws.campaigns || [];
+      const running   = camps.filter(isRunning);
+      const completed = camps.filter(c => String(c.status || '').toLowerCase() === 'completed');
+      const paused    = camps.filter(c => !isRunning(c)); // paused/stopped/completed/draft/etc.
       // only campaigns where Bison gave us a real lead-pool size
       const withData = running.filter(c => (c.dataSize || 0) > 0);
       const total      = withData.reduce((s, c) => s + (c.dataSize || 0), 0);
@@ -5590,13 +5601,15 @@ app.get('/api/actions/out-of-data', requireSession, async (req, res) => {
       const pctLeft    = total > 0 ? Math.round((remaining / total) * 100) : null;
       const recentSent = recentByWs.get(String(ws.id)) || 0;
 
-      // Two alerts the CMs act on:
-      //  • all_paused  → client HAS campaigns but none are running → NOT SENDING.
-      //  • out_of_data → running but lead pool exhausted → add data NOW.
-      //  • low_data    → running but ≤20% leads left (≥80% used) → add data soon.
+      // Alerts the CMs act on:
+      //  • all_completed → none running, all finished → ran out of data, new campaign/data needed.
+      //  • all_paused    → none running, some paused/stopped → resume.
+      //  • out_of_data   → running but lead pool exhausted → add data NOW.
+      //  • low_data      → running but ≤20% leads left (≥80% used) → add data soon.
       let status;
       if (camps.length === 0)                            status = 'no_campaigns';  // none set up
-      else if (running.length === 0)                     status = 'all_paused';    // ⛔ NOT SENDING
+      else if (running.length === 0)
+        status = (completed.length === camps.length) ? 'all_completed' : 'all_paused'; // ⛔ NOT SENDING
       else if (withData.length === 0)                    status = 'unknown';       // running but no pool size from Bison
       else if (remaining <= 0 || exhaustion >= 0.98)     status = 'out_of_data';   // add data NOW
       else if (exhaustion >= 0.80 || remaining < 200)    status = 'low_data';      // ≤20% left — add data soon
@@ -5607,31 +5620,14 @@ app.get('/api/actions/out-of-data', requireSession, async (req, res) => {
         totalCampaigns: camps.length,
         runningCampaigns: running.length,
         pausedCampaigns: paused.length,
+        completedCampaigns: completed.length,
         totalLeads: total, contacted, remaining,
         exhaustion: Math.round(exhaustion * 100),
         pctLeft, recentSent, status,
       });
     }
-    const rank = { all_paused: 0, out_of_data: 1, low_data: 2, unknown: 3, no_campaigns: 4, ok: 5 };
-    clients.sort((a, b) => (rank[a.status] - rank[b.status]) || (a.remaining - b.remaining));
-
-    // DEBUG ?debug=<pv-or-team-id>: dump that workspace's raw Bison campaign
-    // fields (live) next to what the cache holds, so we can see the true meaning
-    // of total_leads vs total_leads_contacted and fix the "leads left" math.
-    if (req.query.debug) {
-      try {
-        const raw = await bisonReq('/api/campaigns', { wsId: String(req.query.debug) });
-        const live = (raw?.data || []).map(c => ({
-          name: c.name, status: c.status,
-          total_leads: c.total_leads, total_leads_contacted: c.total_leads_contacted,
-          emails_sent: c.emails_sent, completion_percentage: c.completion_percentage,
-          allKeys: Object.keys(c),
-        }));
-        const cached = (campaignCache.workspaces.find(w => String(w.id) === String(req.query.debug))?.campaigns || [])
-          .map(c => ({ name: c.name, status: c.status, dataSize: c.dataSize, leadContacted: c.leadContacted, sent: c.sent }));
-        return res.json({ debug: req.query.debug, live, cached });
-      } catch (e) { return res.json({ debug: req.query.debug, error: e.message }); }
-    }
+    const rank = { all_paused: 0, all_completed: 0, out_of_data: 1, low_data: 2, unknown: 3, no_campaigns: 4, ok: 5 };
+    clients.sort((a, b) => ((rank[a.status] ?? 9) - (rank[b.status] ?? 9)) || (a.remaining - b.remaining));
 
     const summary = clients.reduce((m, c) => { m[c.status] = (m[c.status] || 0) + 1; return m; }, {});
     res.json({ updatedAt: campaignCache.updatedAt, summary, clients });

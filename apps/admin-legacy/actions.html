@@ -1480,27 +1480,30 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
         //  • all campaigns paused → ⛔ NOT SENDING (resume / check).
         //  • running but 0 leads left → ⛽ ADD DATA NOW.
         //  • running but ≤20% leads left → ⚠ NEED MORE DATA (top up soon).
-        const dataStatus = dataInfo ? dataInfo.status : null;
-        const allPaused  = dataStatus === 'all_paused';
-        const outOfData  = dataStatus === 'out_of_data';
-        const lowData    = dataStatus === 'low_data';
-        const hasRunning = dataInfo ? (dataInfo.runningCampaigns || 0) > 0 : false;
+        const dataStatus   = dataInfo ? dataInfo.status : null;
+        const allPaused    = dataStatus === 'all_paused';
+        const allCompleted = dataStatus === 'all_completed';
+        const outOfData    = dataStatus === 'out_of_data';
+        const lowData      = dataStatus === 'low_data';
+        const hasRunning   = dataInfo ? (dataInfo.runningCampaigns || 0) > 0 : false;
         // "Silent" only counts when we KNOW campaigns are running but nothing went
         // out — never off a missing/failed data fetch (avoids false NOT SENDING).
         const silentRunning = hasRunning && (agg3d.sent || 0) === 0;
         const leftTxt    = dataInfo ? (dataInfo.pctLeft != null ? `${dataInfo.pctLeft}% left` : `${fmtN(dataInfo.remaining)} left`) : '';
 
         if (allPaused)
-            flags.push({ type: 'paused', label: '⛔ NOT SENDING · all campaigns paused',  color: 'red' });
+            flags.push({ type: 'paused',    label: '⛔ NOT SENDING · all campaigns paused',        color: 'red' });
+        else if (allCompleted)
+            flags.push({ type: 'completed', label: '⛔ NOT SENDING · campaign completed — add data', color: 'red' });
         else if (silentRunning)
-            flags.push({ type: 'nosend', label: '⛔ NOT SENDING · running but 0 emails 3d', color: 'red' });
+            flags.push({ type: 'nosend',    label: '⛔ NOT SENDING · running but 0 emails 3d',      color: 'red' });
 
         if (outOfData)
-            flags.push({ type: 'nodata',  label: '⛽ ADD DATA NOW · 0 leads left', color: 'red'   });
+            flags.push({ type: 'nodata',  label: `⛽ ADD DATA NOW · ${leftTxt}`,   color: 'red'   });
         else if (lowData)
             flags.push({ type: 'lowdata', label: `⚠ NEED MORE DATA · ${leftTxt}`,  color: 'amber' });
 
-        const notSending = allPaused || silentRunning;
+        const notSending = allPaused || allCompleted || silentRunning;
         const needData   = outOfData || lowData;
 
         if (!notSending && capPct !== null && nowH >= THR.capacityHour && capPct < THR.capacityMin)
@@ -1527,7 +1530,7 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
                  reply3d, reply3dEx, bounceToday, lastLeadDate, lastLeadDays, flags, color, sortKey };
     }
 
-    async function runHealthScan() {
+    async function runHealthScan(manual) {
         if (scanRunning) return;
         scanRunning = true;
 
@@ -1547,7 +1550,10 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
         // NEED MORE DATA alerts). One cheap call, keyed by workspace id.
         let dataStatusMap = {};
         try {
-            const dr = await fetch('/api/actions/out-of-data').then(r => r.json());
+            // Manual Re-scan forces a campaign-cache refresh so freshly-added
+            // leads / launched campaigns pull through (background; may take a
+            // few seconds — a second Re-scan shows the updated numbers).
+            const dr = await fetch('/api/actions/out-of-data' + (manual ? '?refresh=1' : '')).then(r => r.json());
             (dr.clients || []).forEach(c => { dataStatusMap[String(c.id)] = c; });
         } catch (e) { /* non-fatal — alerts just won't show */ }
 
@@ -1598,7 +1604,7 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
             <div style="background:#FEE2E2;border:1.5px solid #DC2626;border-radius:12px;padding:14px 18px;margin-bottom:1rem;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
                 <span style="font-size:22px">⛔</span>
                 <div style="flex:1;min-width:200px">
-                    <div style="font-weight:800;color:#991B1B;font-size:15px">${notSending.length} client${notSending.length>1?'s are':' is'} NOT SENDING — resume or check</div>
+                    <div style="font-weight:800;color:#991B1B;font-size:15px">${notSending.length} client${notSending.length>1?'s are':' is'} NOT SENDING — resume, add data, or check</div>
                     <div style="font-size:12px;color:#B91C1C;margin-top:2px">${notSending.map(r=>r.ws.name).join(' · ')}</div>
                 </div>
             </div>` : '';
@@ -1667,7 +1673,7 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
                         <div class="actions-title">Client Health Overview</div>
                         <div class="actions-meta">${results.length} active workspaces · Scanned at ${scannedAt}</div>
                     </div>
-                    <button class="rescan-btn" onclick="runHealthScan()">↻ Re-scan</button>
+                    <button class="rescan-btn" onclick="runHealthScan(true)">↻ Re-scan</button>
                 </div>
                 ${notSendingBanner}
                 ${needDataBanner}
@@ -1712,7 +1718,7 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
         return;
       }
       const clients = d.clients || [];
-      const paused = clients.filter(c => c.status === 'all_paused');   // NOT SENDING
+      const paused = clients.filter(c => c.status === 'all_paused' || c.status === 'all_completed'); // NOT SENDING
       const out    = clients.filter(c => c.status === 'out_of_data');  // 0 leads left
       const low    = clients.filter(c => c.status === 'low_data');     // ≤20% left
       if (meta) meta.textContent = (d.updatedAt ? 'Campaigns synced ' + new Date(d.updatedAt).toLocaleString() : '') +
@@ -1726,11 +1732,15 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
         return;
       }
       const card = (c) => {
-        const isPaused = c.status === 'all_paused';
-        const red = isPaused || c.status === 'out_of_data';
+        const isPaused    = c.status === 'all_paused';
+        const isCompleted = c.status === 'all_completed';
+        const isStopped   = isPaused || isCompleted;
+        const red = isStopped || c.status === 'out_of_data';
         const col = red ? '#DC2626' : '#D97706';
-        const tag = isPaused ? 'NOT SENDING · PAUSED' : c.status === 'out_of_data' ? 'OUT OF DATA' : 'NEED MORE DATA';
-        const foot = isPaused
+        const tag = isCompleted ? 'NOT SENDING · COMPLETED' : isPaused ? 'NOT SENDING · PAUSED' : c.status === 'out_of_data' ? 'OUT OF DATA' : 'NEED MORE DATA';
+        const foot = isCompleted
+          ? `All ${c.totalCampaigns} campaign(s) completed — ran out of data. Add a new campaign or fresh leads.`
+          : isPaused
           ? `All ${c.totalCampaigns} campaign(s) paused — none running. Resume or check.`
           : `${(c.contacted||0).toLocaleString()} of ${(c.totalLeads||0).toLocaleString()} leads contacted across running campaigns — ${red?'add fresh data now':'add data soon'}.`;
         return `<div class="card" style="border-top:3px solid ${col};padding:1.1rem 1.25rem">
@@ -1739,9 +1749,9 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
             <span style="font-size:10px;font-weight:700;color:${col};background:${col}18;padding:2px 8px;border-radius:99px">${tag}</span>
           </div>
           <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px">
-            <div><div style="font-size:18px;font-weight:700;color:${col}">${isPaused ? '—' : (c.remaining||0).toLocaleString()}</div><div style="font-size:10px;color:#6B7280;text-transform:uppercase">Leads left</div></div>
-            <div><div style="font-size:18px;font-weight:700">${isPaused ? '—' : c.exhaustion+'%'}</div><div style="font-size:10px;color:#6B7280;text-transform:uppercase">Contacted</div></div>
-            <div><div style="font-size:18px;font-weight:700;color:${isPaused?'#DC2626':'inherit'}">${c.runningCampaigns}/${c.totalCampaigns||0}</div><div style="font-size:10px;color:#6B7280;text-transform:uppercase">Running</div></div>
+            <div><div style="font-size:18px;font-weight:700;color:${col}">${isStopped ? '—' : (c.remaining||0).toLocaleString()}</div><div style="font-size:10px;color:#6B7280;text-transform:uppercase">Leads left</div></div>
+            <div><div style="font-size:18px;font-weight:700">${isStopped ? '—' : c.exhaustion+'%'}</div><div style="font-size:10px;color:#6B7280;text-transform:uppercase">Contacted</div></div>
+            <div><div style="font-size:18px;font-weight:700;color:${isStopped?'#DC2626':'inherit'}">${c.runningCampaigns}/${c.totalCampaigns||0}</div><div style="font-size:10px;color:#6B7280;text-transform:uppercase">Running</div></div>
             <div><div style="font-size:18px;font-weight:700">${(c.recentSent||0).toLocaleString()}</div><div style="font-size:10px;color:#6B7280;text-transform:uppercase">Sent 3d</div></div>
           </div>
           <div style="font-size:11px;color:#6B7280;margin-top:8px">${foot}</div>
