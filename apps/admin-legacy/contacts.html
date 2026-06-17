@@ -497,12 +497,17 @@
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      /* min-height:0 lets this flex child shrink below its content height so the
+         table area scrolls internally instead of overflowing the viewport
+         (which clipped the lower rows + pagination when job banners were shown). */
+      min-height: 0;
     }
 
     .content-area {
       flex: 1;
       overflow-y: auto;
       padding: 20px;
+      min-height: 0;
     }
 
     .table-wrapper {
@@ -1079,24 +1084,19 @@
           </div>
         </div>
 
-        <!-- Companies House SIC codes — the precise "is this legally a care home"
-             signal. Apollo keywords match brokers/suppliers/recruiters too; SIC
-             isolates real operators. Requires CH-enriched contacts. -->
+        <!-- Companies House SIC codes — the precise "what this company legally
+             does" signal for ANY sector. Apollo keywords match adjacent
+             businesses (brokers/suppliers/recruiters); SIC isolates real
+             operators. Searchable across the full SIC list. Requires CH-enriched
+             contacts. -->
         <div class="filter-section" data-clear="sic">
           <div class="filter-label">Industry (SIC code)</div>
           <div class="filter-control" style="gap:8px;">
-            <div style="font-size:11px;color:#6b7280;line-height:1.4;margin-bottom:2px;">Official Companies House classification — far more accurate than keywords for targeting a specific sector.</div>
-            <div style="font-weight:700;font-size:11px;color:#374151;text-transform:uppercase;letter-spacing:.3px;margin-top:2px;">Care homes</div>
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;"><input type="checkbox" class="sicCode" value="87100"> 87100 — Residential nursing care</label>
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;"><input type="checkbox" class="sicCode" value="87300"> 87300 — Residential care: elderly &amp; disabled</label>
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;"><input type="checkbox" class="sicCode" value="87900"> 87900 — Other residential care</label>
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;"><input type="checkbox" class="sicCode" value="87200"> 87200 — Residential care: learning difficulties / mental health</label>
-            <div style="font-weight:700;font-size:11px;color:#374151;text-transform:uppercase;letter-spacing:.3px;margin-top:6px;">Domiciliary / non-residential</div>
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;"><input type="checkbox" class="sicCode" value="88100"> 88100 — Social work: elderly &amp; disabled (no accommodation)</label>
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;"><input type="checkbox" class="sicCode" value="88990"> 88990 — Other social work (no accommodation)</label>
-            <div style="margin-top:6px;display:flex;flex-direction:column;gap:4px;">
-              <label style="font-size:11px;color:#6b7280;">Or enter SIC codes (comma-separated):</label>
-              <input type="text" id="sicCustom" placeholder="e.g. 87100, 87300" oninput="search()" style="font-size:12px;padding:5px 7px;border:1px solid #d1d5db;border-radius:6px;">
+            <div style="font-size:11px;color:#6b7280;line-height:1.4;margin-bottom:2px;">Official Companies House classification — far more accurate than keywords for targeting a specific sector. Search by industry name or code.</div>
+            <div id="sicSelected" style="display:flex;flex-wrap:wrap;gap:4px;"></div>
+            <div style="position:relative;">
+              <input type="text" id="sicSearch" placeholder="Search e.g. 'care home', 'plumbing', '87300'…" autocomplete="off" oninput="onSicSearch(this.value)" onfocus="onSicSearch(this.value)" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;box-sizing:border-box;">
+              <div id="sicResults" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;background:#fff;border:1px solid #d1d5db;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.1);max-height:240px;overflow-y:auto;margin-top:2px;"></div>
             </div>
             <p style="font-size:11px;color:#9ca3af;margin:4px 0 0;line-height:1.4;">Only matches contacts enriched from Companies House. Run CH enrichment on any rows missing SIC data first.</p>
           </div>
@@ -1444,9 +1444,10 @@
         </button>
       </div>
 
-      <!-- Push Queue Panel -->
-      <div id="pushQueuePanel" style="display:none;background:#1e293b;border-bottom:1px solid #334155;padding:0;">
-        <div style="max-height:240px;overflow-y:auto;" id="pushQueueList"></div>
+      <!-- Push Queue Panel — capped + scrollable so several paused jobs can't
+           push the contacts table off-screen. -->
+      <div id="pushQueuePanel" style="display:none;background:#1e293b;border-bottom:1px solid #334155;padding:0;flex-shrink:0;">
+        <div style="max-height:180px;overflow-y:auto;" id="pushQueueList"></div>
       </div>
 
       <!-- Import Progress Bar (background indicator) -->
