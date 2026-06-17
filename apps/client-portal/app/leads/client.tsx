@@ -1206,11 +1206,14 @@ function RichReply({ toEmail, placeholderName, sending, statusMsg, seed, onSend 
         <input ref={fileRef} type="file" accept="image/*" onChange={onPickImage} className="hidden" />
       </div>
 
-      {/* editable area — larger, roomier like PV */}
+      {/* editable area — larger, roomier like PV. Cap height to a fraction of the
+          viewport (not a fixed 380px) so on short windows the editor scrolls INTERNALLY
+          and the footer/Send button below is always visible (long emails were pushing
+          Send off-screen). */}
       <div className="relative">
         {empty && <span className="pointer-events-none absolute left-4 top-3 text-sm text-gray-400">Write your reply to {placeholderName}…</span>}
         <div ref={ref} contentEditable suppressContentEditableWarning onInput={onInput}
-          className="min-h-[160px] max-h-[380px] overflow-y-auto px-4 py-3 text-sm leading-[1.55] text-gray-800 outline-none [&_a]:text-brand-600 [&_a]:underline [&_img]:max-w-full [&_img]:rounded" />
+          className="min-h-[140px] max-h-[clamp(140px,32vh,380px)] overflow-y-auto px-4 py-3 text-sm leading-[1.55] text-gray-800 outline-none [&_a]:text-brand-600 [&_a]:underline [&_img]:max-w-full [&_img]:rounded" />
       </div>
 
       {/* footer */}
