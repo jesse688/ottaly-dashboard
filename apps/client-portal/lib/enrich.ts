@@ -75,11 +75,17 @@ export async function enrichLeadFromContacts(
       )
     }
     // Fill the company_name column only if it's currently empty (don't clobber a
-    // signature-derived value). The contact's company_name is the real prospect company.
+    // signature-derived value) — UNLESS the stored value is empty or junk (a signature
+    // field label like 'Phone'/'Fax'/'Web' that an old extractor mis-captured). The
+    // contact's company_name is the real prospect company.
     if (c.company_name && c.company_name.trim()) {
       await pool.query(
-        `UPDATE esp_leads SET company_name = COALESCE(NULLIF(btrim(company_name), ''), $1), updated_at = NOW()
-          WHERE id = $2 AND workspace_id = $3`,
+        `UPDATE esp_leads SET company_name = $1, updated_at = NOW()
+          WHERE id = $2 AND workspace_id = $3
+            AND (
+              btrim(coalesce(company_name,'')) = ''
+              OR company_name ~* '^(phone|tel|telephone|mobile|mob|fax|e-?mail|email|web|website|address|direct|ddi|office|cell|name|title|role)\\s*:?\\s*$'
+            )`,
         [c.company_name.trim(), leadId, workspaceId]
       )
     }

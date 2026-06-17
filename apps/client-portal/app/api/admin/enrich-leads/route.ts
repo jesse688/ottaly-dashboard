@@ -26,6 +26,17 @@ async function run(req: NextRequest) {
   const ws = (url.searchParams.get('workspace') ?? '').trim()
   const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '5000', 10) || 5000, 1), 20000)
 
+  // First NULL junk company names (signature field labels like 'Phone'/'Fax'/'Web' an
+  // old extractor mis-captured) so the enrichment below repopulates them correctly.
+  const junk = await pool.query(
+    `UPDATE esp_leads SET company_name = NULL, updated_at = NOW()
+      WHERE label = 'INTERESTED'
+        AND company_name ~* '^(phone|tel|telephone|mobile|mob|fax|e-?mail|email|web|website|address|direct|ddi|office|cell|name|title|role)\\s*:?\\s*$'
+        ${ws ? 'AND workspace_id = $1' : ''}`,
+    ws ? [ws] : []
+  ).catch(() => null)
+  const junkCleared = junk?.rowCount ?? 0
+
   const leads = await pool.query(
     `SELECT id, workspace_id, email
        FROM esp_leads
@@ -49,5 +60,5 @@ async function run(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ ok: true, workspace: ws || 'all', scanned, enriched, samples })
+  return NextResponse.json({ ok: true, workspace: ws || 'all', junkCleared, scanned, enriched, samples })
 }

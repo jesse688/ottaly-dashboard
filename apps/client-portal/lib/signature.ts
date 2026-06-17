@@ -169,6 +169,9 @@ function extractCompany(text: string, website?: string | null): string | null {
     if (line.split(/\s+/).length > 6) return false        // too many words to be a name
     if (/^(re|fwd|hi|hello|hey|thanks|regards|best|cheers|sent from|support|team|the)\b/i.test(line)) return false
     if (/\|/.test(line)) return false                     // "Whale Song | WhaleSongProduct.com"
+    // Reject signature contact-table LABELS that aren't companies (these landed as
+    // company_name='Phone' etc.) and other single generic words.
+    if (/^(phone|tel|telephone|mobile|mob|fax|e-?mail|email|web|website|address|direct|ddi|office|cell|skype|whatsapp|linkedin|twitter|facebook|instagram|name|title|role)\b\s*:?\s*$/i.test(line)) return false
     return true
   }
 
