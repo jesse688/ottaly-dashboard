@@ -159,8 +159,26 @@
           <div class="selected-sics" id="selectedSics"></div>
         </div>
         <div class="filter-group">
-          <label>Postcode prefix</label>
-          <input type="text" id="postcodeInput" placeholder="e.g. SW1, M1, B">
+          <label>Country</label>
+          <select id="countrySelect" onchange="loadCounties()">
+            <option value="">Any</option>
+            <option value="ENGLAND">England</option>
+            <option value="WALES">Wales</option>
+            <option value="SCOTLAND">Scotland</option>
+            <option value="NORTHERN IRELAND">Northern Ireland</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label>County</label>
+          <select id="countySelect" onchange="loadTowns()">
+            <option value="">Any</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label>Town / City</label>
+          <select id="townSelect">
+            <option value="">Any</option>
+          </select>
         </div>
         <div class="filter-group">
           <label>Company type</label>
@@ -225,9 +243,10 @@
 <div class="modal-overlay hidden" id="emailModal">
   <div class="modal">
     <h3>Find Emails</h3>
+    <p style="font-size:13px;color:#8b949e;margin-bottom:14px;">Domain will be auto-discovered via Gemini for each company. Optionally override with a specific domain below.</p>
     <div class="form-group">
-      <label>Domain to try</label>
-      <input type="text" id="emailDomain" placeholder="e.g. example.co.uk">
+      <label>Domain override (optional)</label>
+      <input type="text" id="emailDomain" placeholder="Leave blank to auto-discover">
     </div>
     <div class="modal-actions">
       <button class="btn btn-secondary" onclick="closeModal('emailModal')">Cancel</button>
@@ -330,6 +349,36 @@
     renderSicTags();
   }
 
+  function loadCounties() {
+    var country = document.getElementById('countrySelect').value;
+    document.getElementById('countySelect').innerHTML = '<option value="">Any</option>';
+    document.getElementById('townSelect').innerHTML = '<option value="">Any</option>';
+    if (!country) return;
+    fetch('/api/ch/location-values?type=county&country=' + encodeURIComponent(country))
+      .then(function(r){ return r.json(); }).then(function(d) {
+        var sel = document.getElementById('countySelect');
+        (d.values || []).forEach(function(v) {
+          var o = document.createElement('option'); o.value = v; o.textContent = v; sel.appendChild(o);
+        });
+      }).catch(function(){});
+  }
+
+  function loadTowns() {
+    var country = document.getElementById('countrySelect').value;
+    var county = document.getElementById('countySelect').value;
+    document.getElementById('townSelect').innerHTML = '<option value="">Any</option>';
+    var params = new URLSearchParams({ type: 'town' });
+    if (country) params.set('country', country);
+    if (county) params.set('county', county);
+    fetch('/api/ch/location-values?' + params)
+      .then(function(r){ return r.json(); }).then(function(d) {
+        var sel = document.getElementById('townSelect');
+        (d.values || []).forEach(function(v) {
+          var o = document.createElement('option'); o.value = v; o.textContent = v; sel.appendChild(o);
+        });
+      }).catch(function(){});
+  }
+
   function applySector(val) {
     if (!val) return;
     val.split(',').forEach(function(code) {
@@ -346,7 +395,9 @@
     renderSicTags();
     document.getElementById('sectorSelect').value = '';
     document.getElementById('sicInput').value = '';
-    document.getElementById('postcodeInput').value = '';
+    document.getElementById('countrySelect').value = '';
+    document.getElementById('countySelect').innerHTML = '<option value="">Any</option>';
+    document.getElementById('townSelect').innerHTML = '<option value="">Any</option>';
     document.getElementById('typeSelect').value = '';
     document.getElementById('incAfter').value = '';
     document.getElementById('nameSearch').value = '';
@@ -356,8 +407,12 @@
     _currentPage = page || 1;
     var params = new URLSearchParams({ page: _currentPage, per_page: _perPage });
     if (_selectedSics.length) params.set('sic', _selectedSics.map(function(s){ return s.code; }).join(','));
-    var pc = document.getElementById('postcodeInput').value.trim();
-    if (pc) params.set('postcode_prefix', pc);
+    var country = document.getElementById('countrySelect').value;
+    if (country) params.set('country', country);
+    var county = document.getElementById('countySelect').value;
+    if (county) params.set('county', county);
+    var town = document.getElementById('townSelect').value;
+    if (town) params.set('town', town);
     var t = document.getElementById('typeSelect').value;
     if (t) params.set('company_type', t);
     var n = document.getElementById('nameSearch').value.trim();
@@ -528,16 +583,17 @@
 
   function findEmails() {
     var domain = document.getElementById('emailDomain').value.trim();
-    if (!domain) { showStatus('Enter a domain', 'error'); return; }
     var ids = getSelectedDirIds();
     closeModal('emailModal');
-    showStatus('Finding emails for ' + ids.length + ' directors…', 'info');
+    showStatus('Finding emails for ' + ids.length + ' directors (auto-discovering domains via Gemini)…', 'info');
+    var body = { director_ids: ids };
+    if (domain) body.domain = domain;
     fetch('/api/ch/find-emails', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ director_ids: ids, domain: domain }),
+      body: JSON.stringify(body),
     }).then(r => r.json()).then(function(d) {
       if (d.error) { showStatus(d.error, 'error'); return; }
-      showStatus('Processed ' + d.processed + ', found ' + d.found + ' emails, skipped ' + d.skipped_dedup + ' (dedup).', 'success');
+      showStatus('Processed ' + d.processed + ', found ' + d.found + ' emails, skipped ' + d.skipped_dedup + ' (already in contacts).', 'success');
       loadStats();
     }).catch(function(e){ showStatus(e.message, 'error'); });
   }

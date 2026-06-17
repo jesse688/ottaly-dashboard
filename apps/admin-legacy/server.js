@@ -18613,7 +18613,15 @@ function scheduleAudienceScoring(pgdb) {
     }
     if (req.query.country) {
       params.push(req.query.country);
-      conditions.push(`country_of_origin ILIKE $${params.length}`);
+      conditions.push(`UPPER(country_of_origin) = $${params.length}`);
+    }
+    if (req.query.county) {
+      params.push(req.query.county);
+      conditions.push(`UPPER(county) = UPPER($${params.length})`);
+    }
+    if (req.query.town) {
+      params.push(req.query.town);
+      conditions.push(`UPPER(post_town) = UPPER($${params.length})`);
     }
     if (req.query.inc_after) {
       params.push(req.query.inc_after);
@@ -18630,6 +18638,37 @@ function scheduleAudienceScoring(pgdb) {
         db.query(`SELECT COUNT(*) as total FROM ch_companies ${where}`, params),
       ]);
       res.json({ companies: rows.rows, total: Number(count.rows[0].total), page, per_page });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/ch/location-values', requireSession, async (req, res) => {
+    const db = req.app.locals.pgDb;
+    if (!db) return res.status(503).json({ error: 'Database unavailable' });
+    const { type, country, county } = req.query;
+    try {
+      let rows;
+      if (type === 'county') {
+        const result = await db.query(
+          `SELECT DISTINCT INITCAP(county) AS val FROM ch_companies WHERE county IS NOT NULL AND county != '' AND UPPER(country_of_origin)=$1 ORDER BY val LIMIT 500`,
+          [country.toUpperCase()]
+        );
+        rows = result.rows.map(r => r.val);
+      } else if (type === 'town') {
+        const conditions = ['post_town IS NOT NULL', "post_town != ''"];
+        const params = [];
+        if (country) { params.push(country.toUpperCase()); conditions.push(`UPPER(country_of_origin)=$${params.length}`); }
+        if (county) { params.push(county); conditions.push(`UPPER(county)=UPPER($${params.length})`); }
+        const result = await db.query(
+          `SELECT DISTINCT INITCAP(post_town) AS val FROM ch_companies WHERE ${conditions.join(' AND ')} ORDER BY val LIMIT 1000`,
+          params
+        );
+        rows = result.rows.map(r => r.val);
+      } else {
+        return res.status(400).json({ error: 'type must be county or town' });
+      }
+      res.json({ values: rows });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
@@ -18694,8 +18733,8 @@ function scheduleAudienceScoring(pgdb) {
   app.post('/api/ch/find-emails', requireSession, async (req, res) => {
     const db = req.app.locals.pgDb;
     if (!db) return res.status(503).json({ error: 'Database unavailable' });
-    const { director_ids, company_number, domain } = req.body;
-    if (!domain) return res.status(400).json({ error: 'domain required' });
+    const { director_ids, company_number } = req.body;
+    let { domain } = req.body;
     let ids = director_ids;
     if (!Array.isArray(ids) || !ids.length) {
       if (company_number) {
@@ -18704,21 +18743,65 @@ function scheduleAudienceScoring(pgdb) {
       }
     }
     if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'director_ids or company_number required' });
+
+    // Group directors by company so we can auto-discover domain per company via Gemini
+    const dirRows = await db.query(
+      `SELECT d.id, d.name, d.company_number, c.company_name, c.website
+       FROM ch_directors d JOIN ch_companies c ON c.company_number=d.company_number
+       WHERE d.id = ANY($1::int[])`,
+      [ids]
+    );
+
+    // Build per-company domain map — use stored website, else ask Gemini
+    const companyDomains = {};
+    const geminiKey = process.env.GEMINI_API_KEY;
+    for (const row of dirRows.rows) {
+      const cn = row.company_number;
+      if (companyDomains[cn] !== undefined) continue;
+      if (domain) {
+        companyDomains[cn] = domain;
+      } else if (row.website) {
+        companyDomains[cn] = row.website.replace(/^https?:\/\//i, '').replace(/\/.*/,'').replace(/^www\./i,'').trim();
+      } else if (geminiKey) {
+        try {
+          const r = await geminiGenerate(geminiKey,
+            'Return only valid JSON with key: website (the company website domain, no protocol, no www, e.g. "example.co.uk", or null if unknown). No markdown.',
+            `UK company: "${row.company_name}". What is their website domain?`
+          );
+          if (r && r.text) {
+            const parsed = JSON.parse(r.text);
+            const raw = (parsed.website || '').replace(/^https?:\/\//i,'').replace(/\/.*/,'').replace(/^www\./i,'').trim();
+            companyDomains[cn] = raw || null;
+            if (raw) await db.query('UPDATE ch_companies SET website=$1, updated_at=NOW() WHERE company_number=$2', [raw, cn]);
+          } else { companyDomains[cn] = null; }
+        } catch { companyDomains[cn] = null; }
+      } else {
+        companyDomains[cn] = null;
+      }
+    }
+
     const finderPort = process.env.EMAIL_FINDER_INTERNAL_PORT || '5055';
     let processed = 0, found = 0, skipped_dedup = 0;
+    const dirMap = {};
+    for (const row of dirRows.rows) dirMap[row.id] = row;
+
     for (const id of ids) {
       try {
+        const dirInfo = dirMap[id];
+        if (!dirInfo) continue;
         const dr = await db.query('SELECT * FROM ch_directors WHERE id=$1', [id]);
         if (!dr.rows.length) continue;
         const dir = dr.rows[0];
+        const effectiveDomain = companyDomains[dir.company_number];
+        if (!effectiveDomain) { processed++; continue; }
         const parts = dir.name.split(/[\s,]+/).filter(Boolean);
         const first = (parts[0] || '').toLowerCase().replace(/[^a-z]/g, '');
         const last = (parts[parts.length - 1] || '').toLowerCase().replace(/[^a-z]/g, '');
         if (!first) continue;
         const candidates = [...new Set([
-          `${first}.${last}@${domain}`,
-          `${first}@${domain}`,
-          `${first}${last}@${domain}`,
+          `${first}.${last}@${effectiveDomain}`,
+          `${first}@${effectiveDomain}`,
+          `${first}${last}@${effectiveDomain}`,
         ])];
         let foundEmail = null, foundStatus = null;
         for (const email of candidates) {
