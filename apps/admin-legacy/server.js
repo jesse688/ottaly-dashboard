@@ -18859,28 +18859,29 @@ function scheduleAudienceScoring(pgdb) {
     const dirMap = {};
     for (const row of dirRows.rows) dirMap[row.id] = row;
 
-    for (const id of ids) {
+    // Process directors concurrently — Reacher applies its own concurrency cap
+    // internally, so firing the whole chunk at once is safe and far faster than
+    // the old one-at-a-time loop.
+    const counters = { processed: 0, found: 0, skipped_dedup: 0, no_domain: 0 };
+    await Promise.all(ids.map(async (id) => {
       try {
-        const dirInfo = dirMap[id];
-        if (!dirInfo) continue;
-        const dr = await db.query('SELECT * FROM ch_directors WHERE id=$1', [id]);
-        if (!dr.rows.length) continue;
-        const dir = dr.rows[0];
+        const dir = dirMap[id];
+        if (!dir) return;
         const effectiveDomain = companyDomains[dir.company_number];
-        if (!effectiveDomain) { processed++; no_domain++; continue; }
+        if (!effectiveDomain) { counters.processed++; counters.no_domain++; return; }
         const parts = dir.name.split(/[\s,]+/).filter(Boolean);
         const first = (parts[0] || '').toLowerCase().replace(/[^a-z]/g, '');
         const last = (parts[parts.length - 1] || '').toLowerCase().replace(/[^a-z]/g, '');
-        if (!first) continue;
+        if (!first) { counters.processed++; return; }
         const candidates = [...new Set([
           `${first}.${last}@${effectiveDomain}`,
           `${first}@${effectiveDomain}`,
           `${first}${last}@${effectiveDomain}`,
         ])];
-        let foundEmail = null, foundStatus = null;
+        let foundEmail = null, foundStatus = null, wasDup = false;
         for (const email of candidates) {
           const dup = await db.query('SELECT id FROM contacts WHERE LOWER(email)=LOWER($1) LIMIT 1', [email]);
-          if (dup.rows.length) { skipped_dedup++; break; }
+          if (dup.rows.length) { wasDup = true; break; }
           try {
             const r = await fetch(`http://127.0.0.1:${finderPort}/api/verify-email`, {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -18888,23 +18889,27 @@ function scheduleAudienceScoring(pgdb) {
               signal: AbortSignal.timeout(65000),
             });
             const d = await r.json();
-            const status = d.is_reachable || d.result || d.status || 'unknown';
-            if (status === 'safe' || status === 'safe_catchall') {
-              foundEmail = email; foundStatus = status; break;
-            }
+            // Reacher result is nested: { result: { is_reachable, smtp: { is_catch_all } } }
+            const reacher = d.result || {};
+            const reach = reacher.is_reachable || 'unknown';
+            const catchAll = reacher.smtp && reacher.smtp.is_catch_all === true;
+            if (reach === 'safe') { foundEmail = email; foundStatus = 'safe'; break; }
+            if (reach === 'risky' && catchAll) { foundEmail = email; foundStatus = 'safe_catchall'; break; }
           } catch (e2) {
             console.warn('[ch-find-emails] verify failed:', email, e2.message);
           }
         }
-        processed++;
+        counters.processed++;
+        if (wasDup) counters.skipped_dedup++;
         if (foundEmail) {
-          found++;
+          counters.found++;
           await db.query('UPDATE ch_directors SET email=$1, email_status=$2, email_verified_at=NOW() WHERE id=$3', [foundEmail, foundStatus, id]);
         }
       } catch (e) {
         console.warn('[ch-find-emails] error for director', id, e.message);
       }
-    }
+    }));
+    processed = counters.processed; found = counters.found; skipped_dedup = counters.skipped_dedup; no_domain = counters.no_domain;
     res.json({ processed, found, skipped_dedup, no_domain });
   });
 
