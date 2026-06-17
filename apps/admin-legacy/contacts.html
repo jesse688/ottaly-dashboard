@@ -4717,7 +4717,7 @@
           </div>
 
           ${raw.Technologies ? `<div class="panel-section"><div class="panel-section-title">Technologies</div><div class="pval" style="font-size:12px;">${esc(raw.Technologies)}</div></div>` : ''}
-          ${raw.Keywords ? `<div class="panel-section"><div class="panel-section-title">Keywords</div><div class="pval" style="font-size:12px;">${esc(raw.Keywords.split(',').slice(0,20).join(', '))}</div></div>` : ''}
+          ${(c.keywords || raw.Keywords) ? `<div class="panel-section"><div class="panel-section-title">Keywords</div><div class="pval" style="font-size:12px;">${esc((c.keywords || raw.Keywords || '').split(',').slice(0,20).join(', '))}</div>${c.keywords && raw.Keywords && c.keywords !== raw.Keywords ? `<div style="font-size:10px;color:#9ca3af;margin-top:3px;">Apollo: ${esc(raw.Keywords.split(',').slice(0,5).join(', '))}${raw.Keywords.split(',').length > 5 ? '…' : ''}</div>` : ''}</div>` : ''}
         `;
       } catch (err) {
         document.getElementById('panelBody').innerHTML = `<p style="color:red;padding:20px">${err.message}</p>`;
