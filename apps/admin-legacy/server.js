@@ -8859,9 +8859,8 @@ async function refreshDomainHealth() {
   }
 }
 
-// First run 60s after startup, then every 6 hours.
-setTimeout(refreshDomainHealth, 120000); // last to start — DNS checks are slow and shouldn't compete
-setInterval(refreshDomainHealth, 6 * 60 * 60 * 1000);
+// Automatic blacklist checks disabled — per Bison: frequent DNS lookups create bias with SURBL/Spamhaus.
+// Run manually via POST /api/domains/refresh only.
 
 app.get('/api/domains/health', requireSession, async (req, res) => {
   try {
