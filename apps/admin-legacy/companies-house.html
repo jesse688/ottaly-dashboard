@@ -231,7 +231,7 @@
         <button class="btn btn-secondary btn-sm" onclick="selectTopN(0)">None</button>
         <span style="font-size:12px;color:#4b5563;margin:0 4px;">|</span>
         <span id="selectedCompanyCount" style="font-size:12px;color:#8b949e;"></span>
-        <button class="btn btn-secondary btn-sm hidden" id="fetchDirectorsBtn" onclick="fetchDirectors()">Fetch Directors →</button>
+        <button class="btn btn-secondary btn-sm hidden" id="fetchDirectorsBtn" onclick="fetchDirectors()">Get Owners/Directors →</button>
       </div>
       <div id="companyActions" class="hidden"></div>
     </div>
@@ -513,38 +513,40 @@
     var nums = getSelectedCompanyNumbers();
     if (!nums.length) return;
     if (nums.length > 50) { showStatus('Select max 50 companies at once', 'error'); return; }
-    showStatus('Fetching directors from Companies House…', 'info');
-    fetch('/api/ch/fetch-directors', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ company_numbers: nums }),
-    }).then(r => r.json()).then(function(d) {
-      if (d.error) { showStatus(d.error, 'error'); return; }
-      showStatus('Fetched ' + d.fetched + ' officers, inserted/updated ' + d.inserted + '.', 'success');
-      loadDirectors(nums);
-      loadStats();
-    }).catch(function(e){ showStatus(e.message, 'error'); });
+    document.getElementById('directorsPanel').classList.remove('hidden');
+    // Check our imported PSC/director data first — no API call needed if we have it.
+    showStatus('Loading owners from database…', 'info');
+    loadDirectorsFromDb(nums, function(dirs) {
+      var covered = {};
+      dirs.forEach(function(d){ covered[d.company_number] = true; });
+      var missing = nums.filter(function(n){ return !covered[n]; });
+      renderDirectors(dirs);
+      if (!missing.length) {
+        showStatus('Loaded ' + dirs.length + ' owners from database (no API needed).', 'success');
+        return;
+      }
+      // Fall back to the live CH API only for companies with no stored data.
+      showStatus('Loaded ' + dirs.length + ' from DB; fetching ' + missing.length + ' more from Companies House…', 'info');
+      fetch('/api/ch/fetch-directors', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ company_numbers: missing }),
+      }).then(r => r.json()).then(function(d) {
+        if (d.error) { showStatus(d.error, 'error'); return; }
+        loadDirectorsFromDb(nums, function(all) {
+          renderDirectors(all);
+          showStatus('Loaded ' + all.length + ' owners (' + d.inserted + ' newly fetched from CH).', 'success');
+          loadStats();
+        });
+      }).catch(function(e){ showStatus(e.message, 'error'); });
+    });
   }
 
-  function loadDirectors(companyNumbers) {
-    fetch('/api/ch/companies?' + new URLSearchParams({ per_page: 200, page: 1 }))
-      .catch(function(){});
-    var panel = document.getElementById('directorsPanel');
-    panel.classList.remove('hidden');
-    var params = companyNumbers.map(function(n){ return 'cn=' + encodeURIComponent(n); }).join('&');
-    fetch('/api/ch/directors-by-companies?' + params)
-      .then(r => r.json()).then(renderDirectors)
-      .catch(function(){
-        fetchAndRenderDirectors(companyNumbers);
-      });
-  }
-
-  function fetchAndRenderDirectors(companyNumbers) {
-    var placeholders = companyNumbers.map(function(_,i){ return '$'+(i+1); }).join(',');
-    fetch('/api/ch/companies?' + new URLSearchParams({ per_page: 200 }))
-      .catch(function(){});
-    fetch('/api/ch/directors?' + companyNumbers.map(function(n){ return 'cn[]=' + encodeURIComponent(n); }).join('&'))
-      .then(r => r.json()).then(renderDirectors)
-      .catch(function(){ renderDirectors([]); });
+  function loadDirectorsFromDb(companyNumbers, cb) {
+    var qs = companyNumbers.map(function(n){ return 'cn[]=' + encodeURIComponent(n); }).join('&');
+    fetch('/api/ch/directors?' + qs)
+      .then(r => r.json())
+      .then(function(d){ cb(Array.isArray(d) ? d : (d.directors || [])); })
+      .catch(function(){ cb([]); });
   }
 
   function renderDirectors(dirs) {
