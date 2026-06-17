@@ -18563,6 +18563,277 @@ function scheduleAudienceScoring(pgdb) {
       await backfillIntelligenceLogs(pgdb);
     }, 20000);
   }
+  // ── Companies House pipeline routes ──────────────────────────────────────
+
+  app.get('/api/ch/stats', requireSession, async (req, res) => {
+    const db = req.app.locals.pgDb;
+    if (!db) return res.status(503).json({ error: 'Database unavailable' });
+    try {
+      const [comp, dir, last] = await Promise.all([
+        db.query('SELECT COUNT(*) as total FROM ch_companies'),
+        db.query('SELECT COUNT(*) as total FROM ch_directors'),
+        db.query('SELECT MAX(updated_at) as last_import FROM ch_companies'),
+      ]);
+      res.json({
+        total_companies: Number(comp.rows[0].total),
+        total_directors: Number(dir.rows[0].total),
+        last_import: last.rows[0].last_import,
+      });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/ch/companies', requireSession, async (req, res) => {
+    const db = req.app.locals.pgDb;
+    if (!db) return res.status(503).json({ error: 'Database unavailable' });
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const per_page = Math.min(200, Math.max(1, parseInt(req.query.per_page) || 50));
+    const offset = (page - 1) * per_page;
+    const conditions = [];
+    const params = [];
+    if (req.query.sic) {
+      const sicArr = req.query.sic.split(',').map(s => s.trim()).filter(Boolean);
+      if (sicArr.length) {
+        params.push(sicArr);
+        conditions.push(`string_to_array(sic_codes, ',') && $${params.length}::text[]`);
+      }
+    }
+    if (req.query.postcode_prefix) {
+      params.push(req.query.postcode_prefix.toUpperCase() + '%');
+      conditions.push(`postcode ILIKE $${params.length}`);
+    }
+    if (req.query.company_type) {
+      params.push(req.query.company_type);
+      conditions.push(`company_type ILIKE $${params.length}`);
+    }
+    if (req.query.search) {
+      params.push('%' + req.query.search + '%');
+      conditions.push(`company_name ILIKE $${params.length}`);
+    }
+    if (req.query.country) {
+      params.push(req.query.country);
+      conditions.push(`country_of_origin ILIKE $${params.length}`);
+    }
+    const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+    try {
+      const [rows, count] = await Promise.all([
+        db.query(`SELECT company_number,company_name,company_type,sic_codes,postcode,incorporated_on,website,linkedin,employees FROM ch_companies ${where} ORDER BY company_name LIMIT ${per_page} OFFSET ${offset}`, params),
+        db.query(`SELECT COUNT(*) as total FROM ch_companies ${where}`, params),
+      ]);
+      res.json({ companies: rows.rows, total: Number(count.rows[0].total), page, per_page });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/ch/directors', requireSession, async (req, res) => {
+    const db = req.app.locals.pgDb;
+    if (!db) return res.status(503).json({ error: 'Database unavailable' });
+    const cns = [].concat(req.query['cn[]'] || req.query.cn || []).filter(Boolean);
+    if (!cns.length) return res.status(400).json({ error: 'cn[] required' });
+    try {
+      const placeholders = cns.map((_, i) => `$${i + 1}`).join(',');
+      const rows = await db.query(
+        `SELECT d.*, c.company_name FROM ch_directors d JOIN ch_companies c ON c.company_number=d.company_number WHERE d.company_number IN (${placeholders}) AND d.resigned_on IS NULL ORDER BY c.company_name, d.name`,
+        cns
+      );
+      res.json({ directors: rows.rows });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/ch/fetch-directors', requireSession, async (req, res) => {
+    const db = req.app.locals.pgDb;
+    if (!db) return res.status(503).json({ error: 'Database unavailable' });
+    const { company_numbers } = req.body;
+    if (!Array.isArray(company_numbers) || !company_numbers.length) return res.status(400).json({ error: 'company_numbers required' });
+    if (company_numbers.length > 50) return res.status(400).json({ error: 'max 50 companies per request' });
+    const chKey = process.env.COMPANIES_HOUSE_API_KEY;
+    if (!chKey) return res.status(500).json({ error: 'COMPANIES_HOUSE_API_KEY not configured' });
+    const auth = { 'Authorization': 'Basic ' + Buffer.from(chKey + ':').toString('base64') };
+    const KEEP_ROLES = new Set(['director', 'llp-designated-member', 'llp-member', 'corporate-director', 'nominee-director']);
+    let fetched = 0, inserted = 0;
+    for (const num of company_numbers) {
+      try {
+        const r = await chFetch(`https://api.company-information.service.gov.uk/company/${encodeURIComponent(num)}/officers?items_per_page=100`, { headers: auth });
+        if (!r.ok) continue;
+        const j = await r.json();
+        const officers = (j.items || []).filter(o => !o.resigned_on && KEEP_ROLES.has((o.officer_role || '').toLowerCase()));
+        fetched += officers.length;
+        for (const o of officers) {
+          try {
+            const addr = o.address ? JSON.stringify(o.address) : null;
+            await db.query(
+              `INSERT INTO ch_directors (company_number, name, role, appointed_on, address)
+               VALUES ($1,$2,$3,$4,$5::jsonb)
+               ON CONFLICT (company_number, name, role) DO UPDATE SET appointed_on=EXCLUDED.appointed_on, address=EXCLUDED.address`,
+              [num, o.name, o.officer_role, o.appointed_on || null, addr]
+            );
+            inserted++;
+          } catch (e2) {
+            console.warn('[ch-directors] insert failed:', e2.message);
+          }
+        }
+      } catch (e) {
+        console.warn('[ch-directors] fetch failed for', num, e.message);
+      }
+    }
+    res.json({ fetched, inserted, companies_done: company_numbers.length });
+  });
+
+  app.post('/api/ch/find-emails', requireSession, async (req, res) => {
+    const db = req.app.locals.pgDb;
+    if (!db) return res.status(503).json({ error: 'Database unavailable' });
+    const { director_ids, company_number, domain } = req.body;
+    if (!domain) return res.status(400).json({ error: 'domain required' });
+    let ids = director_ids;
+    if (!Array.isArray(ids) || !ids.length) {
+      if (company_number) {
+        const r = await db.query('SELECT id FROM ch_directors WHERE company_number=$1 AND email IS NULL', [company_number]);
+        ids = r.rows.map(row => row.id);
+      }
+    }
+    if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'director_ids or company_number required' });
+    const finderPort = process.env.EMAIL_FINDER_INTERNAL_PORT || '5055';
+    let processed = 0, found = 0, skipped_dedup = 0;
+    for (const id of ids) {
+      try {
+        const dr = await db.query('SELECT * FROM ch_directors WHERE id=$1', [id]);
+        if (!dr.rows.length) continue;
+        const dir = dr.rows[0];
+        const parts = dir.name.split(/[\s,]+/).filter(Boolean);
+        const first = (parts[0] || '').toLowerCase().replace(/[^a-z]/g, '');
+        const last = (parts[parts.length - 1] || '').toLowerCase().replace(/[^a-z]/g, '');
+        if (!first) continue;
+        const candidates = [...new Set([
+          `${first}.${last}@${domain}`,
+          `${first}@${domain}`,
+          `${first}${last}@${domain}`,
+        ])];
+        let foundEmail = null, foundStatus = null;
+        for (const email of candidates) {
+          const dup = await db.query('SELECT id FROM contacts WHERE LOWER(email)=LOWER($1) LIMIT 1', [email]);
+          if (dup.rows.length) { skipped_dedup++; break; }
+          try {
+            const r = await fetch(`http://127.0.0.1:${finderPort}/api/verify-email`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email, verifier: 'reacher' }),
+              signal: AbortSignal.timeout(65000),
+            });
+            const d = await r.json();
+            const status = d.is_reachable || d.result || d.status || 'unknown';
+            if (status === 'safe' || status === 'safe_catchall') {
+              foundEmail = email; foundStatus = status; break;
+            }
+          } catch (e2) {
+            console.warn('[ch-find-emails] verify failed:', email, e2.message);
+          }
+        }
+        processed++;
+        if (foundEmail) {
+          found++;
+          await db.query('UPDATE ch_directors SET email=$1, email_status=$2, email_verified_at=NOW() WHERE id=$3', [foundEmail, foundStatus, id]);
+        }
+      } catch (e) {
+        console.warn('[ch-find-emails] error for director', id, e.message);
+      }
+    }
+    res.json({ processed, found, skipped_dedup });
+  });
+
+  app.post('/api/ch/enrich-companies', requireSession, async (req, res) => {
+    const db = req.app.locals.pgDb;
+    if (!db) return res.status(503).json({ error: 'Database unavailable' });
+    const { company_numbers } = req.body;
+    if (!Array.isArray(company_numbers) || !company_numbers.length) return res.status(400).json({ error: 'company_numbers required' });
+    if (company_numbers.length > 20) return res.status(400).json({ error: 'max 20 per request' });
+    const geminiKey = process.env.GEMINI_API_KEY;
+    if (!geminiKey) return res.status(500).json({ error: 'GEMINI_API_KEY not configured' });
+    let enriched = 0;
+    for (const num of company_numbers) {
+      try {
+        const cr = await db.query('SELECT company_name, company_type, sic_codes FROM ch_companies WHERE company_number=$1', [num]);
+        if (!cr.rows.length) continue;
+        const co = cr.rows[0];
+        const r = await geminiGenerate(geminiKey,
+          'You are a business researcher. Return only valid JSON with keys: website (string or null), linkedin (string or null), employees (string estimate like "10-50" or null). No markdown.',
+          `Company: ${co.company_name}\nType: ${co.company_type || ''}\nSIC: ${co.sic_codes || ''}`
+        );
+        if (!r) continue;
+        let data;
+        try { data = JSON.parse(r.text); } catch { continue; }
+        await db.query(
+          'UPDATE ch_companies SET website=$1, linkedin=$2, employees=$3, updated_at=NOW() WHERE company_number=$4',
+          [data.website || null, data.linkedin || null, data.employees || null, num]
+        );
+        enriched++;
+      } catch (e) {
+        console.warn('[ch-enrich] failed for', num, e.message);
+      }
+    }
+    res.json({ enriched });
+  });
+
+  app.post('/api/ch/push-to-bison', requireSession, async (req, res) => {
+    const db = req.app.locals.pgDb;
+    if (!db) return res.status(503).json({ error: 'Database unavailable' });
+    const { director_ids, workspace_id, campaign_id } = req.body;
+    if (!Array.isArray(director_ids) || !director_ids.length || !workspace_id || !campaign_id) {
+      return res.status(400).json({ error: 'director_ids, workspace_id and campaign_id required' });
+    }
+    if (!getBisonKey()) return res.status(500).json({ error: 'Bison API key not configured' });
+    const placeholders = director_ids.map((_, i) => `$${i + 1}`).join(',');
+    const rows = await db.query(
+      `SELECT d.id, d.name, d.email, d.email_status, d.company_number, c.company_name, c.sic_codes, c.postcode
+       FROM ch_directors d JOIN ch_companies c ON c.company_number=d.company_number
+       WHERE d.id IN (${placeholders}) AND d.email IS NOT NULL AND d.email_status IN ('safe','safe_catchall')`,
+      director_ids
+    );
+    if (!rows.rows.length) return res.json({ pushed: 0, skipped: director_ids.length });
+    const skipped = director_ids.length - rows.rows.length;
+    const leads = rows.rows.map(d => {
+      const parts = d.name.split(/[\s,]+/).filter(Boolean);
+      return {
+        first_name: parts[0] || d.name,
+        last_name: parts.slice(1).join(' ') || '',
+        email: d.email,
+        company: d.company_name,
+        custom_variables: [
+          { name: 'sic_codes', value: d.sic_codes || '' },
+          { name: 'postcode', value: d.postcode || '' },
+        ],
+      };
+    });
+    let pushed = 0;
+    for (let i = 0; i < leads.length; i += 500) {
+      const slice = leads.slice(i, i + 500);
+      try {
+        const resp = await bisonReq('/api/leads/create-or-update/multiple', {
+          wsId: workspace_id, method: 'POST',
+          body: { leads: slice },
+        });
+        const created = (resp && resp.data && (resp.data.leads || resp.data)) || [];
+        if (Array.isArray(created)) pushed += created.length; else pushed += slice.length;
+      } catch (e) {
+        console.warn('[ch-push] create leads failed:', e.message);
+      }
+    }
+    if (pushed > 0) {
+      try {
+        await bisonReq(`/api/campaigns/${campaign_id}/leads`, {
+          wsId: workspace_id, method: 'POST',
+          body: { lead_ids: rows.rows.map(d => d.email) },
+        });
+      } catch (e) {
+        console.warn('[ch-push] add to campaign failed:', e.message);
+      }
+      await db.query(`UPDATE ch_directors SET pushed_to_bison_at=NOW() WHERE id = ANY($1::int[])`, [rows.rows.map(d => d.id)]);
+    }
+    res.json({ pushed, skipped });
+  });
+
   scheduleEspSync();
   startSlackBot();
 

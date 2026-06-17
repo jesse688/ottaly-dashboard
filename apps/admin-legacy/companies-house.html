@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="apple-touch-icon" href="/favicon.svg">
+  <meta name="theme-color" content="#050C29">
+  <title>CH Pipeline — Ottaly</title>
+  <script>document.write('<script src="/splash.js?v=' + Date.now() + '"><\/script>');</script>
+  <link href="https://fonts.googleapis.com/css2?family=Genos:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/ottaly.css">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d1117; color: #e6edf3; }
+    .app { display: flex; height: 100vh; }
+    .main { flex: 1; overflow: auto; padding: 24px; }
+    h1 { font-size: 20px; font-weight: 700; color: #f0f6fc; margin-bottom: 4px; }
+    .subtitle { font-size: 13px; color: #8b949e; margin-bottom: 24px; }
+    .stats-bar { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+    .stat-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px 20px; min-width: 160px; }
+    .stat-card .val { font-size: 24px; font-weight: 700; color: #22d3ee; }
+    .stat-card .lbl { font-size: 12px; color: #8b949e; margin-top: 2px; }
+    .cli-note { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 12px 16px; margin-bottom: 24px; font-size: 13px; color: #8b949e; }
+    .cli-note code { background: #21262d; color: #22d3ee; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+    .panel { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; margin-bottom: 20px; }
+    .panel-title { font-size: 14px; font-weight: 600; color: #f0f6fc; margin-bottom: 12px; }
+    .filter-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+    .filter-group { display: flex; flex-direction: column; gap: 4px; }
+    .filter-group label { font-size: 12px; color: #8b949e; }
+    input[type=text], input[type=search], select {
+      background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #e6edf3;
+      padding: 7px 10px; font-size: 13px; outline: none; min-width: 140px;
+    }
+    input:focus, select:focus { border-color: #22d3ee; }
+    .btn { padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; border: none; transition: opacity .15s; }
+    .btn:hover { opacity: .85; }
+    .btn-primary { background: #22d3ee; color: #0d1117; }
+    .btn-secondary { background: #21262d; color: #e6edf3; border: 1px solid #30363d; }
+    .btn-danger { background: #f85149; color: #fff; }
+    .btn-sm { padding: 5px 10px; font-size: 12px; }
+    .btn:disabled { opacity: .4; cursor: not-allowed; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; padding: 8px 10px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #8b949e; border-bottom: 1px solid #21262d; font-weight: 600; white-space: nowrap; }
+    td { padding: 9px 10px; border-bottom: 1px solid #161b22; vertical-align: top; color: #e6edf3; }
+    tr:hover td { background: #1c2128; }
+    .badge { display: inline-block; padding: 2px 7px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+    .badge-safe { background: #0d3527; color: #3fb950; }
+    .badge-catchall { background: #2d2a0d; color: #e3b341; }
+    .badge-unknown { background: #21262d; color: #8b949e; }
+    .badge-pushed { background: #0c2a44; color: #58a6ff; }
+    .pagination { display: flex; gap: 8px; align-items: center; margin-top: 14px; font-size: 13px; color: #8b949e; }
+    .page-info { flex: 1; }
+    .action-bar { display: flex; gap: 8px; margin-top: 12px; align-items: center; flex-wrap: wrap; }
+    .status-msg { padding: 10px 14px; border-radius: 6px; font-size: 13px; margin-top: 12px; }
+    .status-msg.info { background: #0c2a44; color: #58a6ff; }
+    .status-msg.success { background: #0d3527; color: #3fb950; }
+    .status-msg.error { background: #3d1a1a; color: #f85149; }
+    .hidden { display: none !important; }
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 1000; display: flex; align-items: center; justify-content: center; }
+    .modal { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 24px; min-width: 380px; max-width: 480px; }
+    .modal h3 { font-size: 16px; font-weight: 700; margin-bottom: 16px; color: #f0f6fc; }
+    .form-group { margin-bottom: 14px; }
+    .form-group label { display: block; font-size: 12px; color: #8b949e; margin-bottom: 4px; }
+    .form-group input, .form-group select { width: 100%; }
+    .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+    #sic-suggestions { position: absolute; background: #161b22; border: 1px solid #30363d; border-radius: 6px; z-index: 100; max-height: 200px; overflow-y: auto; min-width: 260px; }
+    #sic-suggestions div { padding: 8px 12px; cursor: pointer; font-size: 13px; color: #e6edf3; }
+    #sic-suggestions div:hover { background: #21262d; }
+    .sic-wrap { position: relative; }
+    .selected-sics { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+    .sic-tag { background: #21262d; border: 1px solid #30363d; border-radius: 12px; padding: 2px 10px; font-size: 12px; color: #22d3ee; cursor: pointer; }
+    .sic-tag:hover { background: #2d333b; }
+  </style>
+</head>
+<body>
+<div class="app">
+  <div id="sidebar-root"></div>
+  <div class="main">
+    <h1>CH Pipeline</h1>
+    <p class="subtitle">Search Companies House — fetch directors, find emails, push to Bison</p>
+
+    <div class="stats-bar" id="statsBar">
+      <div class="stat-card"><div class="val" id="statCompanies">—</div><div class="lbl">Companies imported</div></div>
+      <div class="stat-card"><div class="val" id="statDirectors">—</div><div class="lbl">Directors fetched</div></div>
+      <div class="stat-card"><div class="val" id="statLastImport">—</div><div class="lbl">Last bulk import</div></div>
+    </div>
+
+    <div class="cli-note">
+      To import the CH bulk file: <code>node scripts/import-ch-bulk.js /path/to/BasicCompanyData.csv</code>
+      — streams ~6M rows directly into PostgreSQL without loading into memory.
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">Filter Companies</div>
+      <div class="filter-row">
+        <div class="filter-group">
+          <label>SIC Code</label>
+          <div class="sic-wrap">
+            <input type="search" id="sicInput" placeholder="Search SIC codes…" autocomplete="off">
+            <div id="sic-suggestions" class="hidden"></div>
+          </div>
+          <div class="selected-sics" id="selectedSics"></div>
+        </div>
+        <div class="filter-group">
+          <label>Postcode prefix</label>
+          <input type="text" id="postcodeInput" placeholder="e.g. SW1, M1">
+        </div>
+        <div class="filter-group">
+          <label>Company type</label>
+          <select id="typeSelect">
+            <option value="">Any</option>
+            <option value="Private Limited Company">Limited</option>
+            <option value="Limited Liability Partnership">LLP</option>
+            <option value="Public Limited Company">PLC</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label>Name search</label>
+          <input type="text" id="nameSearch" placeholder="Company name…">
+        </div>
+        <div class="filter-group" style="justify-content: flex-end;">
+          <button class="btn btn-primary" onclick="searchCompanies(1)">Search</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" id="companiesPanel">
+      <div class="panel-title">Companies <span id="companyCount" style="font-weight:400;color:#8b949e;font-size:13px;"></span></div>
+      <div id="companiesTable">
+        <p style="color:#8b949e;font-size:13px;">Run a search to see companies.</p>
+      </div>
+      <div class="pagination hidden" id="companyPagination">
+        <span class="page-info" id="companyPageInfo"></span>
+        <button class="btn btn-secondary btn-sm" id="prevPageBtn" onclick="changePage(-1)">Prev</button>
+        <button class="btn btn-secondary btn-sm" id="nextPageBtn" onclick="changePage(1)">Next</button>
+      </div>
+      <div class="action-bar hidden" id="companyActions">
+        <button class="btn btn-secondary" onclick="fetchDirectors()">Fetch Directors</button>
+        <span id="selectedCompanyCount" style="font-size:13px;color:#8b949e;"></span>
+      </div>
+    </div>
+
+    <div class="panel hidden" id="directorsPanel">
+      <div class="panel-title">Directors</div>
+      <div id="directorsTable"></div>
+      <div class="action-bar" id="directorActions">
+        <button class="btn btn-secondary" onclick="openFindEmailsModal()">Find Emails</button>
+        <button class="btn btn-secondary" onclick="openPushModal()">Push to Bison</button>
+        <span id="selectedDirCount" style="font-size:13px;color:#8b949e;"></span>
+      </div>
+    </div>
+
+    <div id="statusArea"></div>
+  </div>
+</div>
+
+<!-- Find Emails Modal -->
+<div class="modal-overlay hidden" id="emailModal">
+  <div class="modal">
+    <h3>Find Emails</h3>
+    <div class="form-group">
+      <label>Domain to try</label>
+      <input type="text" id="emailDomain" placeholder="e.g. example.co.uk">
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal('emailModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="findEmails()">Find Emails</button>
+    </div>
+  </div>
+</div>
+
+<!-- Push to Bison Modal -->
+<div class="modal-overlay hidden" id="pushModal">
+  <div class="modal">
+    <h3>Push to Bison</h3>
+    <div class="form-group">
+      <label>Workspace</label>
+      <select id="bisonWorkspace" onchange="loadCampaigns()"><option value="">Loading…</option></select>
+    </div>
+    <div class="form-group">
+      <label>Campaign</label>
+      <select id="bisonCampaign"><option value="">Select workspace first</option></select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal('pushModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="pushToBison()">Push</button>
+    </div>
+  </div>
+</div>
+
+<script src="/nav.js"></script>
+<script>
+  var _currentPage = 1;
+  var _totalCompanies = 0;
+  var _perPage = 50;
+  var _selectedSics = [];
+  var _allCompanies = [];
+  var _allDirectors = [];
+
+  function showStatus(msg, type) {
+    var el = document.getElementById('statusArea');
+    el.innerHTML = '<div class="status-msg ' + type + '">' + esc(msg) + '</div>';
+    if (type === 'success') setTimeout(function(){ el.innerHTML = ''; }, 4000);
+  }
+
+  function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  function fmt(n) { return Number(n).toLocaleString(); }
+
+  function loadStats() {
+    fetch('/api/ch/stats').then(r => r.json()).then(d => {
+      document.getElementById('statCompanies').textContent = fmt(d.total_companies || 0);
+      document.getElementById('statDirectors').textContent = fmt(d.total_directors || 0);
+      document.getElementById('statLastImport').textContent = d.last_import ? new Date(d.last_import).toLocaleDateString() : 'Never';
+    }).catch(function(){});
+  }
+
+  // SIC typeahead
+  var _sicDebounce = null;
+  document.getElementById('sicInput').addEventListener('input', function() {
+    clearTimeout(_sicDebounce);
+    var q = this.value.trim();
+    if (!q) { document.getElementById('sic-suggestions').classList.add('hidden'); return; }
+    _sicDebounce = setTimeout(function() {
+      fetch('/api/contacts/sic-search?q=' + encodeURIComponent(q))
+        .then(r => r.json()).then(function(data) {
+          var sug = document.getElementById('sic-suggestions');
+          var items = (data.results || data || []).slice(0, 10);
+          if (!items.length) { sug.classList.add('hidden'); return; }
+          sug.innerHTML = items.map(function(it) {
+            var code = it.code || it;
+            var label = it.label || it.description || code;
+            return '<div onclick="addSic(\'' + esc(code) + '\',\'' + esc(label) + '\')">' + esc(code) + ' — ' + esc(label) + '</div>';
+          }).join('');
+          sug.classList.remove('hidden');
+        }).catch(function(){});
+    }, 250);
+  });
+
+  document.addEventListener('click', function(e) {
+    if (!e.target.closest('.sic-wrap')) {
+      document.getElementById('sic-suggestions').classList.add('hidden');
+    }
+  });
+
+  function addSic(code, label) {
+    if (_selectedSics.find(function(s){ return s.code === code; })) return;
+    _selectedSics.push({ code: code, label: label });
+    renderSicTags();
+    document.getElementById('sicInput').value = '';
+    document.getElementById('sic-suggestions').classList.add('hidden');
+  }
+
+  function renderSicTags() {
+    var el = document.getElementById('selectedSics');
+    el.innerHTML = _selectedSics.map(function(s) {
+      return '<span class="sic-tag" onclick="removeSic(\'' + esc(s.code) + '\')" title="Click to remove">' + esc(s.code) + ' ×</span>';
+    }).join('');
+  }
+
+  function removeSic(code) {
+    _selectedSics = _selectedSics.filter(function(s){ return s.code !== code; });
+    renderSicTags();
+  }
+
+  function searchCompanies(page) {
+    _currentPage = page || 1;
+    var params = new URLSearchParams({ page: _currentPage, per_page: _perPage });
+    if (_selectedSics.length) params.set('sic', _selectedSics.map(function(s){ return s.code; }).join(','));
+    var pc = document.getElementById('postcodeInput').value.trim();
+    if (pc) params.set('postcode_prefix', pc);
+    var t = document.getElementById('typeSelect').value;
+    if (t) params.set('company_type', t);
+    var n = document.getElementById('nameSearch').value.trim();
+    if (n) params.set('search', n);
+    showStatus('Searching…', 'info');
+    fetch('/api/ch/companies?' + params).then(r => r.json()).then(function(d) {
+      if (d.error) { showStatus(d.error, 'error'); return; }
+      _allCompanies = d.companies || [];
+      _totalCompanies = d.total;
+      document.getElementById('statusArea').innerHTML = '';
+      renderCompanies(d);
+    }).catch(function(e){ showStatus(e.message, 'error'); });
+  }
+
+  function renderCompanies(d) {
+    document.getElementById('companyCount').textContent = '(' + fmt(d.total) + ' total)';
+    var table = '<table><thead><tr><th><input type="checkbox" id="selectAllCompanies" onchange="toggleAllCompanies(this)"></th><th>Name</th><th>Number</th><th>Type</th><th>SIC Codes</th><th>Postcode</th><th>Incorporated</th></tr></thead><tbody>';
+    if (!d.companies.length) {
+      table = '<p style="color:#8b949e;font-size:13px;padding:12px 0">No companies found.</p>';
+    } else {
+      d.companies.forEach(function(c) {
+        table += '<tr><td><input type="checkbox" class="company-cb" data-id="' + esc(c.company_number) + '" onchange="updateCompanySelection()"></td>' +
+          '<td>' + esc(c.company_name) + (c.website ? ' <a href="' + esc(c.website) + '" target="_blank" style="color:#22d3ee;font-size:11px;margin-left:4px;">↗</a>' : '') + '</td>' +
+          '<td style="font-family:monospace;font-size:12px;">' + esc(c.company_number) + '</td>' +
+          '<td style="color:#8b949e;">' + esc(c.company_type || '') + '</td>' +
+          '<td style="font-size:12px;color:#8b949e;">' + esc(c.sic_codes || '') + '</td>' +
+          '<td>' + esc(c.postcode || '') + '</td>' +
+          '<td style="color:#8b949e;">' + esc(c.incorporated_on || '') + '</td></tr>';
+      });
+      table += '</tbody></table>';
+    }
+    document.getElementById('companiesTable').innerHTML = table;
+    var pg = document.getElementById('companyPagination');
+    var totalPages = Math.ceil(_totalCompanies / _perPage);
+    if (totalPages > 1) {
+      pg.classList.remove('hidden');
+      document.getElementById('companyPageInfo').textContent = 'Page ' + _currentPage + ' of ' + totalPages + ' (' + fmt(_totalCompanies) + ' companies)';
+      document.getElementById('prevPageBtn').disabled = _currentPage <= 1;
+      document.getElementById('nextPageBtn').disabled = _currentPage >= totalPages;
+    } else {
+      pg.classList.add('hidden');
+    }
+    updateCompanySelection();
+  }
+
+  function toggleAllCompanies(cb) {
+    document.querySelectorAll('.company-cb').forEach(function(el){ el.checked = cb.checked; });
+    updateCompanySelection();
+  }
+
+  function updateCompanySelection() {
+    var sel = getSelectedCompanyNumbers();
+    var bar = document.getElementById('companyActions');
+    var cnt = document.getElementById('selectedCompanyCount');
+    if (sel.length) {
+      bar.classList.remove('hidden');
+      cnt.textContent = sel.length + ' selected';
+    } else {
+      bar.classList.add('hidden');
+    }
+  }
+
+  function getSelectedCompanyNumbers() {
+    return Array.from(document.querySelectorAll('.company-cb:checked')).map(function(el){ return el.dataset.id; });
+  }
+
+  function changePage(delta) {
+    searchCompanies(_currentPage + delta);
+  }
+
+  function fetchDirectors() {
+    var nums = getSelectedCompanyNumbers();
+    if (!nums.length) return;
+    if (nums.length > 50) { showStatus('Select max 50 companies at once', 'error'); return; }
+    showStatus('Fetching directors from Companies House…', 'info');
+    fetch('/api/ch/fetch-directors', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ company_numbers: nums }),
+    }).then(r => r.json()).then(function(d) {
+      if (d.error) { showStatus(d.error, 'error'); return; }
+      showStatus('Fetched ' + d.fetched + ' officers, inserted/updated ' + d.inserted + '.', 'success');
+      loadDirectors(nums);
+      loadStats();
+    }).catch(function(e){ showStatus(e.message, 'error'); });
+  }
+
+  function loadDirectors(companyNumbers) {
+    fetch('/api/ch/companies?' + new URLSearchParams({ per_page: 200, page: 1 }))
+      .catch(function(){});
+    var panel = document.getElementById('directorsPanel');
+    panel.classList.remove('hidden');
+    var params = companyNumbers.map(function(n){ return 'cn=' + encodeURIComponent(n); }).join('&');
+    fetch('/api/ch/directors-by-companies?' + params)
+      .then(r => r.json()).then(renderDirectors)
+      .catch(function(){
+        fetchAndRenderDirectors(companyNumbers);
+      });
+  }
+
+  function fetchAndRenderDirectors(companyNumbers) {
+    var placeholders = companyNumbers.map(function(_,i){ return '$'+(i+1); }).join(',');
+    fetch('/api/ch/companies?' + new URLSearchParams({ per_page: 200 }))
+      .catch(function(){});
+    fetch('/api/ch/directors?' + companyNumbers.map(function(n){ return 'cn[]=' + encodeURIComponent(n); }).join('&'))
+      .then(r => r.json()).then(renderDirectors)
+      .catch(function(){ renderDirectors([]); });
+  }
+
+  function renderDirectors(dirs) {
+    _allDirectors = Array.isArray(dirs) ? dirs : (dirs.directors || []);
+    var panel = document.getElementById('directorsPanel');
+    panel.classList.remove('hidden');
+    if (!_allDirectors.length) {
+      document.getElementById('directorsTable').innerHTML = '<p style="color:#8b949e;font-size:13px;">No directors found. Fetch directors first.</p>';
+      return;
+    }
+    var html = '<table><thead><tr><th><input type="checkbox" id="selectAllDirs" onchange="toggleAllDirs(this)"></th><th>Name</th><th>Role</th><th>Company</th><th>Email</th><th>Status</th><th>Pushed</th></tr></thead><tbody>';
+    _allDirectors.forEach(function(d) {
+      var badge = '';
+      if (d.email_status === 'safe') badge = '<span class="badge badge-safe">safe</span>';
+      else if (d.email_status === 'safe_catchall') badge = '<span class="badge badge-catchall">catchall</span>';
+      else if (d.email) badge = '<span class="badge badge-unknown">unverified</span>';
+      html += '<tr><td><input type="checkbox" class="dir-cb" data-id="' + d.id + '" onchange="updateDirSelection()"></td>' +
+        '<td>' + esc(d.name) + '</td>' +
+        '<td style="color:#8b949e;font-size:12px;">' + esc(d.role || '') + '</td>' +
+        '<td style="font-size:12px;">' + esc(d.company_name || d.company_number || '') + '</td>' +
+        '<td style="font-family:monospace;font-size:12px;">' + esc(d.email || '—') + '</td>' +
+        '<td>' + badge + '</td>' +
+        '<td>' + (d.pushed_to_bison_at ? '<span class="badge badge-pushed">pushed</span>' : '') + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    document.getElementById('directorsTable').innerHTML = html;
+    updateDirSelection();
+  }
+
+  function toggleAllDirs(cb) {
+    document.querySelectorAll('.dir-cb').forEach(function(el){ el.checked = cb.checked; });
+    updateDirSelection();
+  }
+
+  function updateDirSelection() {
+    var sel = getSelectedDirIds();
+    document.getElementById('selectedDirCount').textContent = sel.length ? sel.length + ' selected' : '';
+  }
+
+  function getSelectedDirIds() {
+    return Array.from(document.querySelectorAll('.dir-cb:checked')).map(function(el){ return Number(el.dataset.id); });
+  }
+
+  function openFindEmailsModal() {
+    var sel = getSelectedDirIds();
+    if (!sel.length) { showStatus('Select at least one director', 'error'); return; }
+    document.getElementById('emailModal').classList.remove('hidden');
+  }
+
+  function openPushModal() {
+    var sel = getSelectedDirIds();
+    if (!sel.length) { showStatus('Select at least one director', 'error'); return; }
+    document.getElementById('pushModal').classList.remove('hidden');
+    loadBisonWorkspaces();
+  }
+
+  function closeModal(id) {
+    document.getElementById(id).classList.add('hidden');
+  }
+
+  function findEmails() {
+    var domain = document.getElementById('emailDomain').value.trim();
+    if (!domain) { showStatus('Enter a domain', 'error'); return; }
+    var ids = getSelectedDirIds();
+    closeModal('emailModal');
+    showStatus('Finding emails for ' + ids.length + ' directors…', 'info');
+    fetch('/api/ch/find-emails', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ director_ids: ids, domain: domain }),
+    }).then(r => r.json()).then(function(d) {
+      if (d.error) { showStatus(d.error, 'error'); return; }
+      showStatus('Processed ' + d.processed + ', found ' + d.found + ' emails, skipped ' + d.skipped_dedup + ' (dedup).', 'success');
+      loadStats();
+    }).catch(function(e){ showStatus(e.message, 'error'); });
+  }
+
+  function loadBisonWorkspaces() {
+    fetch('/api/bison/workspaces').then(r => r.json()).then(function(d) {
+      var ws = d.workspaces || d.data || d || [];
+      var sel = document.getElementById('bisonWorkspace');
+      sel.innerHTML = '<option value="">Select workspace</option>' + ws.map(function(w) {
+        return '<option value="' + esc(w.id || w.team_id) + '">' + esc(w.name || w.team_name) + '</option>';
+      }).join('');
+    }).catch(function(){});
+  }
+
+  function loadCampaigns() {
+    var wsId = document.getElementById('bisonWorkspace').value;
+    if (!wsId) return;
+    fetch('/api/bison/campaigns?ws_id=' + encodeURIComponent(wsId)).then(r => r.json()).then(function(d) {
+      var campaigns = d.campaigns || d.data || d || [];
+      var sel = document.getElementById('bisonCampaign');
+      sel.innerHTML = '<option value="">Select campaign</option>' + campaigns.map(function(c) {
+        return '<option value="' + esc(c.id) + '">' + esc(c.name) + '</option>';
+      }).join('');
+    }).catch(function(){});
+  }
+
+  function pushToBison() {
+    var wsId = document.getElementById('bisonWorkspace').value;
+    var campId = document.getElementById('bisonCampaign').value;
+    if (!wsId || !campId) { showStatus('Select workspace and campaign', 'error'); return; }
+    var ids = getSelectedDirIds();
+    closeModal('pushModal');
+    showStatus('Pushing ' + ids.length + ' directors to Bison…', 'info');
+    fetch('/api/ch/push-to-bison', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ director_ids: ids, workspace_id: wsId, campaign_id: campId }),
+    }).then(r => r.json()).then(function(d) {
+      if (d.error) { showStatus(d.error, 'error'); return; }
+      showStatus('Pushed ' + d.pushed + ', skipped ' + d.skipped + ' (no verified email).', 'success');
+    }).catch(function(e){ showStatus(e.message, 'error'); });
+  }
+
+  loadStats();
+</script>
+</body>
+</html>
