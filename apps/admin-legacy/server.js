@@ -1555,6 +1555,32 @@ async function domainResolves(domain) {
   return false;
 }
 
+// Stronger gate than DNS: does the website actually serve a page? Catches
+// parked/suspended/expired domains that still have DNS but no live site. We
+// only spend a (rate-limited) email verification when the site genuinely
+// responds. Tries HTTPS then HTTP; a 2xx/3xx/401/403 counts as "alive" (the
+// server is up even if it gates access). Cached per-process to avoid re-hitting
+// the same domain within a run.
+const _siteLiveCache = new Map();
+async function websiteIsLive(domain) {
+  if (!domain) return false;
+  if (_siteLiveCache.has(domain)) return _siteLiveCache.get(domain);
+  const tryUrl = async (url) => {
+    try {
+      const r = await Promise.race([
+        fetch(url, { method: 'HEAD', redirect: 'follow' }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 6000)),
+      ]);
+      // HEAD sometimes 405s on servers that are clearly up — treat <500 as alive.
+      return r.status < 500;
+    } catch { return false; }
+  };
+  let live = await tryUrl(`https://${domain}`);
+  if (!live) live = await tryUrl(`http://${domain}`);
+  _siteLiveCache.set(domain, live);
+  return live;
+}
+
 // Pull the first JSON object out of an LLM response, tolerating preamble like
 // "Here is the JSON requested:" or markdown fences. Returns null on failure.
 function extractJson(text) {
@@ -18912,24 +18938,32 @@ function scheduleAudienceScoring(pgdb) {
       [ids]
     );
 
-    // Build per-company domain map — use stored website, else ask Gemini
+    // Build per-company domain map — use stored website, else ask Gemini.
+    // CRITICAL: we have a LIMITED daily email-verification quota, so we only
+    // keep a domain if its website is actually LIVE (websiteIsLive). A domain
+    // that's parked/suspended/dead is dropped to null → no Reacher call wasted.
     const companyDomains = {};
     const geminiKey = process.env.GEMINI_API_KEY;
+    let dead_site = 0;
     for (const row of dirRows.rows) {
       const cn = row.company_number;
       if (companyDomains[cn] !== undefined) continue;
+      let candidate = null;
       if (domain) {
-        companyDomains[cn] = domain;
+        candidate = domain; // manual override — still liveness-checked below
       } else if (row.website) {
-        companyDomains[cn] = row.website.replace(/^https?:\/\//i, '').replace(/\/.*/,'').replace(/^www\./i,'').trim();
+        candidate = row.website.replace(/^https?:\/\//i, '').replace(/\/.*/, '').replace(/^www\./i, '').trim();
       } else if (geminiKey) {
         try {
-          const raw = await geminiLookupDomain(geminiKey, row.company_name);
-          companyDomains[cn] = raw || null;
-          if (raw) await db.query('UPDATE ch_companies SET website=$1, updated_at=NOW() WHERE company_number=$2', [raw, cn]);
+          candidate = await geminiLookupDomain(geminiKey, row.company_name);
+          if (candidate) await db.query('UPDATE ch_companies SET website=$1, updated_at=NOW() WHERE company_number=$2', [candidate, cn]);
           else console.log(`[ch-find-emails] no domain for "${row.company_name}" (Gemini returned null)`);
-        } catch (e) { companyDomains[cn] = null; console.warn(`[ch-find-emails] domain lookup failed for "${row.company_name}": ${e.message}`); }
+        } catch (e) { console.warn(`[ch-find-emails] domain lookup failed for "${row.company_name}": ${e.message}`); }
+      }
+      if (candidate && await websiteIsLive(candidate)) {
+        companyDomains[cn] = candidate;
       } else {
+        if (candidate) { dead_site++; console.log(`[ch-find-emails] skipping "${candidate}" for "${row.company_name}" — website not live`); }
         companyDomains[cn] = null;
       }
     }
@@ -18991,7 +19025,7 @@ function scheduleAudienceScoring(pgdb) {
       }
     }));
     processed = counters.processed; found = counters.found; skipped_dedup = counters.skipped_dedup; no_domain = counters.no_domain;
-    res.json({ processed, found, skipped_dedup, no_domain });
+    res.json({ processed, found, skipped_dedup, no_domain, dead_site });
   });
 
   app.post('/api/ch/enrich-companies', requireSession, async (req, res) => {
@@ -19013,9 +19047,12 @@ function scheduleAudienceScoring(pgdb) {
         const data = await geminiEnrichCompany(geminiKey, co);
         if (!data) return;
         let website = normDomain(data.website);
-        // Drop hallucinated/dead domains — only keep ones that resolve DNS.
-        if (website && !(await domainResolves(website))) {
-          console.log(`[ch-enrich] discarded unresolvable domain "${website}" for "${co.company_name}"`);
+        // Drop hallucinated/dead/parked domains — only keep ones whose website
+        // actually serves a page. This is what makes the later email-finding
+        // step trust the stored website without re-checking, protecting the
+        // limited verification quota.
+        if (website && !(await websiteIsLive(website))) {
+          console.log(`[ch-enrich] discarded non-live domain "${website}" for "${co.company_name}"`);
           website = null;
         }
         await db.query(

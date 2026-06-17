@@ -11,252 +11,445 @@
   <link href="https://fonts.googleapis.com/css2?family=Genos:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/ottaly.css">
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d1117; color: #e6edf3; }
-    .app { display: flex; height: 100vh; }
-    .main { flex: 1; overflow: auto; padding: 24px; }
-    h1 { font-size: 20px; font-weight: 700; color: #f0f6fc; margin-bottom: 4px; }
-    .subtitle { font-size: 13px; color: #8b949e; margin-bottom: 24px; }
-    .stats-bar { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
-    .stat-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px 20px; min-width: 160px; }
-    .stat-card .val { font-size: 24px; font-weight: 700; color: #22d3ee; }
-    .stat-card .lbl { font-size: 12px; color: #8b949e; margin-top: 2px; }
-    .cli-note { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 12px 16px; margin-bottom: 24px; font-size: 13px; color: #8b949e; }
-    .cli-note code { background: #21262d; color: #22d3ee; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
-    .panel { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; margin-bottom: 20px; }
-    .panel-title { font-size: 14px; font-weight: 600; color: #f0f6fc; margin-bottom: 12px; }
-    .filter-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
-    .filter-group { display: flex; flex-direction: column; gap: 4px; }
-    .filter-group label { font-size: 12px; color: #8b949e; }
-    input[type=text], input[type=search], select {
-      background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #e6edf3;
-      padding: 7px 10px; font-size: 13px; outline: none; min-width: 140px;
+    :root {
+      --bg: #0d1117;
+      --bg-inset: #010409;
+      --panel: #161b22;
+      --panel-2: #1c2128;
+      --border: #30363d;
+      --border-soft: #21262d;
+      --accent: #22d3ee;
+      --accent-dim: #0e7490;
+      --text: #e6edf3;
+      --text-hi: #f0f6fc;
+      --muted: #8b949e;
+      --faint: #6e7681;
+      --radius: 10px;
+      --radius-sm: 7px;
     }
-    input:focus, select:focus { border-color: #22d3ee; }
-    .btn { padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; border: none; transition: opacity .15s; }
-    .btn:hover { opacity: .85; }
-    .btn-primary { background: #22d3ee; color: #0d1117; }
-    .btn-secondary { background: #21262d; color: #e6edf3; border: 1px solid #30363d; }
-    .btn-danger { background: #f85149; color: #fff; }
-    .btn-sm { padding: 5px 10px; font-size: 12px; }
-    .btn:disabled { opacity: .4; cursor: not-allowed; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg); color: var(--text);
+      -webkit-font-smoothing: antialiased;
+    }
+    .app { display: flex; min-height: 100vh; }
+    .main { flex: 1; overflow: auto; padding: 28px 32px 64px; max-width: 1500px; }
+
+    /* ---- Header ---- */
+    .page-head { margin-bottom: 24px; }
+    h1 { font-size: 22px; font-weight: 700; color: var(--text-hi); letter-spacing: -0.01em; }
+    .subtitle { font-size: 13.5px; color: var(--muted); margin-top: 5px; }
+
+    /* ---- Metric cards ---- */
+    .stats-bar { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; margin-bottom: 22px; }
+    .stat-card {
+      position: relative; background: linear-gradient(180deg, var(--panel) 0%, #13181f 100%);
+      border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; overflow: hidden;
+    }
+    .stat-card::before {
+      content: ''; position: absolute; top: 0; left: 0; width: 3px; height: 100%;
+      background: var(--accent); opacity: .8;
+    }
+    .stat-card .lbl { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+    .stat-card .val { font-size: 26px; font-weight: 700; color: var(--text-hi); margin-top: 6px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+    .stat-card .val.accent { color: var(--accent); }
+
+    /* ---- CLI note ---- */
+    .cli-note {
+      background: var(--bg-inset); border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+      padding: 12px 16px; margin-bottom: 22px; font-size: 12.5px; color: var(--muted); line-height: 1.7;
+    }
+    .cli-note strong { color: var(--text); font-weight: 600; }
+    .cli-note code {
+      background: #161b22; color: var(--accent); padding: 2px 7px; border-radius: 5px;
+      font-size: 12px; font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    }
+
+    /* ---- Panels ---- */
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 18px; }
+    .panel-head { display: flex; align-items: center; justify-content: space-between; padding: 15px 18px; border-bottom: 1px solid var(--border-soft); }
+    .panel-body { padding: 18px; }
+    .panel-title { font-size: 14px; font-weight: 600; color: var(--text-hi); display: flex; align-items: center; gap: 8px; }
+    .panel-title .count { font-weight: 400; color: var(--muted); font-size: 13px; }
+
+    /* ---- Filter panel ---- */
+    .filter-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px 16px; }
+    .filter-grid.span-actions { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-soft); display: flex; gap: 10px; align-items: center; }
+    .filter-group { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+    .filter-group.wide { grid-column: span 2; }
+    .filter-group > label { font-size: 11.5px; font-weight: 500; color: var(--muted); letter-spacing: .01em; }
+
+    label { user-select: none; }
+    input[type=text], input[type=search], input[type=number], select {
+      background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--radius-sm);
+      color: var(--text); padding: 0 11px; height: 36px; font-size: 13px; outline: none; width: 100%;
+      font-family: inherit; transition: border-color .12s, box-shadow .12s;
+    }
+    select { cursor: pointer; appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238b949e' d='M2 4l4 4 4-4z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 11px center; padding-right: 30px;
+    }
+    input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(34,211,238,.12); }
+    input::placeholder { color: var(--faint); }
+
+    /* ---- Buttons ---- */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      padding: 0 16px; height: 36px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 600;
+      cursor: pointer; border: 1px solid transparent; font-family: inherit; white-space: nowrap;
+      transition: background .12s, border-color .12s, transform .05s, box-shadow .12s;
+    }
+    .btn:active { transform: translateY(1px); }
+    .btn-primary { background: var(--accent); color: #062b33; }
+    .btn-primary:hover { background: #4fdef0; box-shadow: 0 2px 10px rgba(34,211,238,.25); }
+    .btn-hero {
+      background: linear-gradient(135deg, #22d3ee, #06b6d4); color: #042b33; font-weight: 700;
+      box-shadow: 0 2px 14px rgba(34,211,238,.28); height: 36px; padding: 0 18px;
+    }
+    .btn-hero:hover { box-shadow: 0 4px 20px rgba(34,211,238,.4); }
+    .btn-secondary { background: var(--panel-2); color: var(--text); border-color: var(--border); }
+    .btn-secondary:hover { background: #262c36; border-color: #444c56; }
+    .btn-ghost { background: transparent; color: var(--muted); border-color: var(--border); }
+    .btn-ghost:hover { color: var(--text); border-color: #444c56; }
+    .btn-sm { padding: 0 11px; height: 30px; font-size: 12px; }
+    .btn:disabled { opacity: .4; cursor: not-allowed; transform: none; box-shadow: none; }
+
+    /* ---- Tables ---- */
+    .table-wrap { overflow-x: auto; border-radius: var(--radius-sm); }
+    .table-scroll { max-height: 560px; overflow-y: auto; border-radius: var(--radius-sm); }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th { text-align: left; padding: 8px 10px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #8b949e; border-bottom: 1px solid #21262d; font-weight: 600; white-space: nowrap; }
-    td { padding: 9px 10px; border-bottom: 1px solid #161b22; vertical-align: top; color: #e6edf3; }
-    tr:hover td { background: #1c2128; }
-    .badge { display: inline-block; padding: 2px 7px; border-radius: 12px; font-size: 11px; font-weight: 600; }
-    .badge-safe { background: #0d3527; color: #3fb950; }
-    .badge-catchall { background: #2d2a0d; color: #e3b341; }
-    .badge-unknown { background: #21262d; color: #8b949e; }
-    .badge-pushed { background: #0c2a44; color: #58a6ff; }
-    .pagination { display: flex; gap: 8px; align-items: center; margin-top: 14px; font-size: 13px; color: #8b949e; }
+    thead th {
+      position: sticky; top: 0; z-index: 2; background: #12171e; text-align: left;
+      padding: 10px 12px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em;
+      color: var(--muted); border-bottom: 1px solid var(--border); font-weight: 600; white-space: nowrap;
+    }
+    tbody td { padding: 11px 12px; border-bottom: 1px solid var(--border-soft); vertical-align: middle; color: var(--text); }
+    tbody tr:last-child td { border-bottom: none; }
+    tbody tr { transition: background .1s; }
+    tbody tr:hover td { background: var(--panel-2); }
+    td.mono { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 12px; }
+    .cell-sub { color: var(--faint); font-size: 11px; font-family: ui-monospace, 'SF Mono', Menlo, monospace; margin-top: 2px; }
+    .cell-muted { color: var(--muted); font-size: 12px; }
+    .cell-name { font-weight: 500; color: var(--text-hi); }
+    .col-check { width: 36px; }
+    .col-check input, td .row-check { cursor: pointer; }
+    a.link { color: var(--accent); text-decoration: none; font-size: 12.5px; }
+    a.link:hover { text-decoration: underline; }
+    .dash { color: var(--faint); }
+
+    input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; vertical-align: middle; }
+
+    /* ---- SIC pills (in table) ---- */
+    .sic-pills { display: flex; flex-wrap: wrap; gap: 4px; max-width: 240px; }
+    .sic-pill {
+      background: var(--border-soft); border: 1px solid var(--border); color: #a5d8e6;
+      border-radius: 6px; padding: 1px 7px; font-size: 11px; white-space: nowrap;
+    }
+
+    /* ---- Badges ---- */
+    .badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 9px; border-radius: 20px; font-size: 11px; font-weight: 600; line-height: 1.5; }
+    .badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+    .badge-safe { background: rgba(63,185,80,.12); color: #3fb950; }
+    .badge-catchall { background: rgba(227,179,65,.12); color: #e3b341; }
+    .badge-unknown { background: rgba(139,148,158,.12); color: var(--muted); }
+    .badge-pushed { background: rgba(88,166,255,.12); color: #58a6ff; }
+
+    /* ---- Pagination ---- */
+    .pagination { display: flex; gap: 10px; align-items: center; margin-top: 14px; font-size: 13px; color: var(--muted); }
     .page-info { flex: 1; }
-    .action-bar { display: flex; gap: 8px; margin-top: 12px; align-items: center; flex-wrap: wrap; }
-    .status-msg { padding: 10px 14px; border-radius: 6px; font-size: 13px; margin-top: 12px; }
-    .status-msg.info { background: #0c2a44; color: #58a6ff; }
-    .status-msg.success { background: #0d3527; color: #3fb950; }
-    .status-msg.error { background: #3d1a1a; color: #f85149; }
+
+    /* ---- Select / action bar ---- */
+    .select-bar {
+      display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+      margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border-soft);
+    }
+    .select-bar .label { font-size: 12px; color: var(--muted); font-weight: 500; }
+    .select-bar .sep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
+    .select-bar .selected-count { font-size: 12px; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+    .spacer { flex: 1; }
+    #customSelectN { width: 56px; text-align: center; height: 30px; padding: 0 6px; }
+
+    .action-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 14px 18px; border-top: 1px solid var(--border-soft); }
+    .action-bar .selected-count { font-size: 13px; color: var(--accent); font-weight: 600; }
+
+    /* ---- Empty states ---- */
+    .empty-state { text-align: center; padding: 40px 20px; color: var(--muted); }
+    .empty-state .icon { font-size: 26px; opacity: .5; margin-bottom: 8px; }
+    .empty-state .title { font-size: 14px; color: var(--text); font-weight: 600; margin-bottom: 4px; }
+    .empty-state .desc { font-size: 12.5px; color: var(--muted); }
+
+    /* ---- Status / toast ---- */
+    .status-msg {
+      display: flex; align-items: center; gap: 10px; padding: 11px 15px; border-radius: var(--radius-sm);
+      font-size: 13px; margin-top: 14px; border: 1px solid transparent; animation: fadein .2s ease;
+    }
+    @keyframes fadein { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+    .status-msg::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+    .status-msg.info { background: rgba(88,166,255,.08); color: #58a6ff; border-color: rgba(88,166,255,.25); }
+    .status-msg.success { background: rgba(63,185,80,.08); color: #3fb950; border-color: rgba(63,185,80,.25); }
+    .status-msg.error { background: rgba(248,81,73,.08); color: #f85149; border-color: rgba(248,81,73,.3); }
+
+    /* ---- Progress ---- */
+    .progress-wrap { margin-top: 16px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; }
+    .progress-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+    .progress-label { font-size: 13.5px; color: var(--text-hi); font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    .progress-spin { width: 13px; height: 13px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
+    .progress-spin.done { border: 2px solid #3fb950; animation: none; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .progress-count { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .progress-track { background: var(--bg-inset); border-radius: 6px; height: 9px; overflow: hidden; }
+    .progress-fill { background: linear-gradient(90deg, #06b6d4, #22d3ee); height: 100%; width: 0%; border-radius: 6px; transition: width .35s ease; }
+    .progress-stats { font-size: 12px; color: var(--muted); margin-top: 10px; min-height: 15px; }
+
     .hidden { display: none !important; }
-    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 1000; display: flex; align-items: center; justify-content: center; }
-    .modal { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 24px; min-width: 380px; max-width: 480px; }
-    .modal h3 { font-size: 16px; font-weight: 700; margin-bottom: 16px; color: #f0f6fc; }
-    .form-group { margin-bottom: 14px; }
-    .form-group label { display: block; font-size: 12px; color: #8b949e; margin-bottom: 4px; }
-    .form-group input, .form-group select { width: 100%; }
-    .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
-    #sic-suggestions { position: absolute; background: #161b22; border: 1px solid #30363d; border-radius: 6px; z-index: 100; max-height: 200px; overflow-y: auto; min-width: 260px; }
-    #sic-suggestions div { padding: 8px 12px; cursor: pointer; font-size: 13px; color: #e6edf3; }
-    #sic-suggestions div:hover { background: #21262d; }
+
+    /* ---- SIC typeahead ---- */
     .sic-wrap { position: relative; }
-    .selected-sics { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
-    .sic-tag { background: #21262d; border: 1px solid #30363d; border-radius: 12px; padding: 2px 10px; font-size: 12px; color: #22d3ee; cursor: pointer; }
-    .sic-tag:hover { background: #2d333b; }
+    #sic-suggestions {
+      position: absolute; top: calc(100% + 4px); left: 0; background: var(--panel);
+      border: 1px solid var(--border); border-radius: var(--radius-sm); z-index: 100;
+      max-height: 240px; overflow-y: auto; min-width: 300px; box-shadow: 0 8px 28px rgba(0,0,0,.5);
+    }
+    #sic-suggestions div { padding: 9px 13px; cursor: pointer; font-size: 12.5px; color: var(--text); border-bottom: 1px solid var(--border-soft); }
+    #sic-suggestions div:last-child { border-bottom: none; }
+    #sic-suggestions div:hover { background: var(--panel-2); }
+    .selected-sics { display: flex; gap: 6px; flex-wrap: wrap; }
+    .selected-sics:empty { display: none; }
+    .sic-tag {
+      display: inline-flex; align-items: center; gap: 5px; background: rgba(34,211,238,.1);
+      border: 1px solid rgba(34,211,238,.3); border-radius: 16px; padding: 3px 10px; font-size: 12px;
+      color: var(--accent); cursor: pointer; transition: background .12s;
+    }
+    .sic-tag:hover { background: rgba(34,211,238,.18); }
+    .sic-tag .x { font-size: 13px; opacity: .7; }
+
+    /* ---- Modals ---- */
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(1,4,9,.72); backdrop-filter: blur(2px);
+      z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 20px;
+      animation: fadein .15s ease;
+    }
+    .modal {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 24px;
+      width: 100%; max-width: 440px; box-shadow: 0 20px 60px rgba(0,0,0,.6);
+    }
+    .modal h3 { font-size: 16px; font-weight: 700; margin-bottom: 6px; color: var(--text-hi); }
+    .modal .modal-sub { font-size: 12.5px; color: var(--muted); margin-bottom: 18px; line-height: 1.6; }
+    .form-group { margin-bottom: 16px; }
+    .form-group label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; font-weight: 500; }
+    .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 8px; }
+
+    @media (max-width: 900px) {
+      .main { padding: 20px 16px 48px; }
+      .filter-group.wide { grid-column: span 1; }
+      .filter-grid.span-actions { flex-wrap: wrap; }
+    }
   </style>
 </head>
 <body>
 <div class="app">
   <div id="sidebar-root"></div>
   <div class="main">
-    <h1>CH Pipeline</h1>
-    <p class="subtitle">Search Companies House — fetch directors, find emails, push to Bison</p>
+    <div class="page-head">
+      <h1>CH Pipeline</h1>
+      <p class="subtitle">Search Companies House — enrich domains, fetch owners, find &amp; verify emails, push to Bison.</p>
+    </div>
 
     <div class="stats-bar" id="statsBar">
-      <div class="stat-card"><div class="val" id="statCompanies">—</div><div class="lbl">Companies imported</div></div>
-      <div class="stat-card"><div class="val" id="statDirectors">—</div><div class="lbl">Directors fetched</div></div>
-      <div class="stat-card"><div class="val" id="statLastImport">—</div><div class="lbl">Last bulk import</div></div>
+      <div class="stat-card"><div class="lbl">Companies imported</div><div class="val accent" id="statCompanies">—</div></div>
+      <div class="stat-card"><div class="lbl">Owners / directors</div><div class="val accent" id="statDirectors">—</div></div>
+      <div class="stat-card"><div class="lbl">Last bulk import</div><div class="val" id="statLastImport">—</div></div>
     </div>
 
     <div class="cli-note">
-      <strong>Companies:</strong> <code>node scripts/import-ch-bulk.js /path/to/BasicCompanyData.csv</code><br>
-      <strong>PSC owners:</strong> <code>node scripts/import-psc-bulk.js /path/to/persons-with-significant-control-snapshot.json</code>
+      <strong>Import companies:</strong> <code>node scripts/import-ch-bulk.js /path/to/BasicCompanyData.csv</code><br>
+      <strong>Import PSC owners:</strong> <code>node scripts/import-psc-bulk.js /path/to/persons-with-significant-control-snapshot.json</code>
       — PSC import links owners to their company automatically via company number.
     </div>
 
     <div class="panel">
-      <div class="panel-title">Filter Companies</div>
-      <div class="filter-row" style="margin-bottom:12px;">
-        <div class="filter-group">
-          <label>Sector (quick pick)</label>
-          <select id="sectorSelect" onchange="applySector(this.value)" style="min-width:200px;">
-            <option value="">— Browse by sector —</option>
-            <optgroup label="Care &amp; Health">
-              <option value="87100,87200,87300,87900">Residential Care Homes</option>
-              <option value="88100,88990">Domiciliary / Home Care</option>
-              <option value="86100,86210,86220,86230,86900">Healthcare / Medical</option>
-              <option value="85310,85320">Special Education / SEN</option>
-            </optgroup>
-            <optgroup label="Construction &amp; Trades">
-              <option value="41100,41201,41202">House Building / Development</option>
-              <option value="43110,43120,43130,43210,43220,43290,43310,43320,43330,43341,43342,43390,43910,43999">Specialist Trades</option>
-              <option value="42110,42120,42130,42210,42220,42910,42990">Civil Engineering</option>
-              <option value="71111,71112">Architects</option>
-            </optgroup>
-            <optgroup label="Professional Services">
-              <option value="69101,69102,69109">Legal Services</option>
-              <option value="69201,69202,69203">Accountancy</option>
-              <option value="70221,70229">Business Consultancy</option>
-              <option value="73110,73120">Advertising &amp; PR</option>
-              <option value="62010,62012,62020,62090">IT / Software</option>
-            </optgroup>
-            <optgroup label="Property">
-              <option value="68100,68201,68202,68209,68310,68320">Estate Agents / Property</option>
-              <option value="64301,64302,64303,64304,64305,64306">REITs / Property Funds</option>
-            </optgroup>
-            <optgroup label="Hospitality &amp; Leisure">
-              <option value="55100,55201,55202,55209,55300,55900">Hotels &amp; Accommodation</option>
-              <option value="56101,56102,56103,56210,56290,56301,56302">Restaurants &amp; Bars</option>
-              <option value="93110,93120,93130,93191,93199">Sports &amp; Fitness</option>
-            </optgroup>
-            <optgroup label="Retail &amp; Wholesale">
-              <option value="47110,47190,47210,47220,47230,47240,47250,47260,47290">Food Retail</option>
-              <option value="47510,47520,47530,47540,47590,47610,47620,47630,47640,47650,47710,47720,47730,47740,47750,47760,47770,47781,47782,47789,47791,47799">Specialist Retail</option>
-              <option value="46100,46110,46120,46130,46140,46150,46160,46170,46180,46190">Wholesale</option>
-            </optgroup>
-            <optgroup label="Manufacturing">
-              <option value="10110,10120,10130,10200,10310,10320,10390,10410,10420,10511,10512,10519,10520,10611,10612,10620,10710,10720,10730,10810,10821,10822,10831,10832,10840,10850,10860,10890,10910,10920">Food Manufacturing</option>
-              <option value="25110,25120,25210,25290,25300,25400,25500,25610,25620,25710,25720,25730,25910,25920,25930,25940,25990">Metal Products</option>
-            </optgroup>
-            <optgroup label="Transport &amp; Logistics">
-              <option value="49100,49200,49310,49320,49390,49410,49420,49500">Road &amp; Rail Transport</option>
-              <option value="52101,52102,52103,52211,52212,52213,52219,52220,52230,52241,52242,52243,52244,52290">Warehousing &amp; Logistics</option>
-            </optgroup>
-            <optgroup label="Education">
-              <option value="85100,85200,85310,85320,85410,85420,85510,85520,85590,85600">All Education</option>
-              <option value="85590">Private Tutoring / Training</option>
-            </optgroup>
-            <optgroup label="Finance &amp; Insurance">
-              <option value="64110,64191,64192,64201,64202,64203,64204,64205,64206,64209,64301,64302,64303,64304,64305,64306,64910,64920,64991,64992,64999">Banking &amp; Finance</option>
-              <option value="65110,65120,65201,65202,65210,65300">Insurance</option>
-              <option value="66110,66120,66190,66210,66220,66290,66300">Financial Services</option>
-            </optgroup>
-          </select>
-        </div>
-        <div class="filter-group">
-          <label>SIC Code (manual)</label>
-          <div class="sic-wrap">
-            <input type="search" id="sicInput" placeholder="Type to search…" autocomplete="off">
-            <div id="sic-suggestions" class="hidden"></div>
+      <div class="panel-head"><div class="panel-title">Filter companies</div></div>
+      <div class="panel-body">
+        <div class="filter-grid">
+          <div class="filter-group">
+            <label>Sector (quick pick)</label>
+            <select id="sectorSelect" onchange="applySector(this.value)">
+              <option value="">— Browse by sector —</option>
+              <optgroup label="Care &amp; Health">
+                <option value="87100,87200,87300,87900">Residential Care Homes</option>
+                <option value="88100,88990">Domiciliary / Home Care</option>
+                <option value="86100,86210,86220,86230,86900">Healthcare / Medical</option>
+                <option value="85310,85320">Special Education / SEN</option>
+              </optgroup>
+              <optgroup label="Construction &amp; Trades">
+                <option value="41100,41201,41202">House Building / Development</option>
+                <option value="43110,43120,43130,43210,43220,43290,43310,43320,43330,43341,43342,43390,43910,43999">Specialist Trades</option>
+                <option value="42110,42120,42130,42210,42220,42910,42990">Civil Engineering</option>
+                <option value="71111,71112">Architects</option>
+              </optgroup>
+              <optgroup label="Professional Services">
+                <option value="69101,69102,69109">Legal Services</option>
+                <option value="69201,69202,69203">Accountancy</option>
+                <option value="70221,70229">Business Consultancy</option>
+                <option value="73110,73120">Advertising &amp; PR</option>
+                <option value="62010,62012,62020,62090">IT / Software</option>
+              </optgroup>
+              <optgroup label="Property">
+                <option value="68100,68201,68202,68209,68310,68320">Estate Agents / Property</option>
+                <option value="64301,64302,64303,64304,64305,64306">REITs / Property Funds</option>
+              </optgroup>
+              <optgroup label="Hospitality &amp; Leisure">
+                <option value="55100,55201,55202,55209,55300,55900">Hotels &amp; Accommodation</option>
+                <option value="56101,56102,56103,56210,56290,56301,56302">Restaurants &amp; Bars</option>
+                <option value="93110,93120,93130,93191,93199">Sports &amp; Fitness</option>
+              </optgroup>
+              <optgroup label="Retail &amp; Wholesale">
+                <option value="47110,47190,47210,47220,47230,47240,47250,47260,47290">Food Retail</option>
+                <option value="47510,47520,47530,47540,47590,47610,47620,47630,47640,47650,47710,47720,47730,47740,47750,47760,47770,47781,47782,47789,47791,47799">Specialist Retail</option>
+                <option value="46100,46110,46120,46130,46140,46150,46160,46170,46180,46190">Wholesale</option>
+              </optgroup>
+              <optgroup label="Manufacturing">
+                <option value="10110,10120,10130,10200,10310,10320,10390,10410,10420,10511,10512,10519,10520,10611,10612,10620,10710,10720,10730,10810,10821,10822,10831,10832,10840,10850,10860,10890,10910,10920">Food Manufacturing</option>
+                <option value="25110,25120,25210,25290,25300,25400,25500,25610,25620,25710,25720,25730,25910,25920,25930,25940,25990">Metal Products</option>
+              </optgroup>
+              <optgroup label="Transport &amp; Logistics">
+                <option value="49100,49200,49310,49320,49390,49410,49420,49500">Road &amp; Rail Transport</option>
+                <option value="52101,52102,52103,52211,52212,52213,52219,52220,52230,52241,52242,52243,52244,52290">Warehousing &amp; Logistics</option>
+              </optgroup>
+              <optgroup label="Education">
+                <option value="85100,85200,85310,85320,85410,85420,85510,85520,85590,85600">All Education</option>
+                <option value="85590">Private Tutoring / Training</option>
+              </optgroup>
+              <optgroup label="Finance &amp; Insurance">
+                <option value="64110,64191,64192,64201,64202,64203,64204,64205,64206,64209,64301,64302,64303,64304,64305,64306,64910,64920,64991,64992,64999">Banking &amp; Finance</option>
+                <option value="65110,65120,65201,65202,65210,65300">Insurance</option>
+                <option value="66110,66120,66190,66210,66220,66290,66300">Financial Services</option>
+              </optgroup>
+            </select>
           </div>
-          <div class="selected-sics" id="selectedSics"></div>
+          <div class="filter-group wide">
+            <label>SIC code (search &amp; add)</label>
+            <div class="sic-wrap">
+              <input type="search" id="sicInput" placeholder="Type a sector or SIC code…" autocomplete="off">
+              <div id="sic-suggestions" class="hidden"></div>
+            </div>
+            <div class="selected-sics" id="selectedSics"></div>
+          </div>
+          <div class="filter-group">
+            <label>Country</label>
+            <select id="countrySelect" onchange="loadCounties()">
+              <option value="">Any</option>
+              <option value="ENGLAND">England</option>
+              <option value="WALES">Wales</option>
+              <option value="SCOTLAND">Scotland</option>
+              <option value="NORTHERN IRELAND">Northern Ireland</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label>County</label>
+            <select id="countySelect" onchange="loadTowns()">
+              <option value="">Any</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label>Town / City</label>
+            <select id="townSelect">
+              <option value="">Any</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label>Company type</label>
+            <select id="typeSelect">
+              <option value="">Any</option>
+              <option value="Private Limited Company">Ltd (Private)</option>
+              <option value="Public Limited Company">PLC (Public)</option>
+              <option value="Limited Liability Partnership">LLP</option>
+              <option value="Private Unlimited Company">Private Unlimited</option>
+              <option value="Royal Charter Company">Royal Charter</option>
+              <option value="Community Interest Company">CIC</option>
+              <option value="Charitable Incorporated Organisation">Charity (CIO)</option>
+              <option value="Scottish Charitable Incorporated Organisation">Scottish Charity</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label>Incorporated after</label>
+            <input type="text" id="incAfter" placeholder="e.g. 01/01/2015">
+          </div>
+          <div class="filter-group">
+            <label>Name search</label>
+            <input type="text" id="nameSearch" placeholder="Company name…">
+          </div>
         </div>
-        <div class="filter-group">
-          <label>Country</label>
-          <select id="countrySelect" onchange="loadCounties()">
-            <option value="">Any</option>
-            <option value="ENGLAND">England</option>
-            <option value="WALES">Wales</option>
-            <option value="SCOTLAND">Scotland</option>
-            <option value="NORTHERN IRELAND">Northern Ireland</option>
-          </select>
-        </div>
-        <div class="filter-group">
-          <label>County</label>
-          <select id="countySelect" onchange="loadTowns()">
-            <option value="">Any</option>
-          </select>
-        </div>
-        <div class="filter-group">
-          <label>Town / City</label>
-          <select id="townSelect">
-            <option value="">Any</option>
-          </select>
-        </div>
-        <div class="filter-group">
-          <label>Company type</label>
-          <select id="typeSelect">
-            <option value="">Any</option>
-            <option value="Private Limited Company">Ltd (Private)</option>
-            <option value="Public Limited Company">PLC (Public)</option>
-            <option value="Limited Liability Partnership">LLP</option>
-            <option value="Private Unlimited Company">Private Unlimited</option>
-            <option value="Royal Charter Company">Royal Charter</option>
-            <option value="Community Interest Company">CIC</option>
-            <option value="Charitable Incorporated Organisation">Charity (CIO)</option>
-            <option value="Scottish Charitable Incorporated Organisation">Scottish Charity</option>
-          </select>
-        </div>
-        <div class="filter-group">
-          <label>Incorporated after</label>
-          <input type="text" id="incAfter" placeholder="e.g. 01/01/2015" style="min-width:130px;">
-        </div>
-        <div class="filter-group">
-          <label>Name search</label>
-          <input type="text" id="nameSearch" placeholder="Company name…">
-        </div>
-        <div class="filter-group" style="justify-content: flex-end;">
-          <button class="btn btn-primary" onclick="searchCompanies(1)">Search</button>
-          <button class="btn btn-secondary" style="margin-top:4px;" onclick="clearFilters()">Clear</button>
+        <div class="filter-grid span-actions">
+          <button class="btn btn-primary" onclick="searchCompanies(1)">Search companies</button>
+          <button class="btn btn-ghost" onclick="clearFilters()">Clear filters</button>
         </div>
       </div>
     </div>
 
     <div class="panel" id="companiesPanel">
-      <div class="panel-title">Companies <span id="companyCount" style="font-weight:400;color:#8b949e;font-size:13px;"></span></div>
-      <div id="companiesTable">
-        <p style="color:#8b949e;font-size:13px;">Run a search to see companies.</p>
+      <div class="panel-head">
+        <div class="panel-title">Companies <span class="count" id="companyCount"></span></div>
       </div>
-      <div class="pagination hidden" id="companyPagination">
-        <span class="page-info" id="companyPageInfo"></span>
-        <button class="btn btn-secondary btn-sm" id="prevPageBtn" onclick="changePage(-1)">Prev</button>
-        <button class="btn btn-secondary btn-sm" id="nextPageBtn" onclick="changePage(1)">Next</button>
+      <div class="panel-body">
+        <div id="companiesTable">
+          <div class="empty-state">
+            <div class="icon">🔍</div>
+            <div class="title">No search yet</div>
+            <div class="desc">Set your filters above and hit <strong>Search companies</strong> to begin.</div>
+          </div>
+        </div>
+        <div class="select-bar hidden" id="companySelectBar">
+          <span class="label">Select top:</span>
+          <button class="btn btn-secondary btn-sm" onclick="selectTopN(10)">10</button>
+          <button class="btn btn-secondary btn-sm" onclick="selectTopN(25)">25</button>
+          <button class="btn btn-secondary btn-sm" onclick="selectTopN(50)">50</button>
+          <button class="btn btn-secondary btn-sm" onclick="selectTopN(100)">100</button>
+          <input type="number" id="customSelectN" placeholder="N" min="1">
+          <button class="btn btn-secondary btn-sm" onclick="selectTopN(parseInt(document.getElementById('customSelectN').value)||0)">Go</button>
+          <button class="btn btn-ghost btn-sm" onclick="selectTopN(0)">None</button>
+          <span class="sep"></span>
+          <span class="selected-count" id="selectedCompanyCount"></span>
+          <span class="spacer"></span>
+          <button class="btn btn-secondary btn-sm hidden" id="fetchDirectorsBtn" onclick="fetchDirectors(false)">Just get owners</button>
+          <button class="btn btn-hero hidden" id="enrichBtn" onclick="enrichCompanies()">▶ Run pipeline</button>
+        </div>
+        <div class="pagination hidden" id="companyPagination">
+          <span class="page-info" id="companyPageInfo"></span>
+          <button class="btn btn-secondary btn-sm" id="prevPageBtn" onclick="changePage(-1)">‹ Prev</button>
+          <button class="btn btn-secondary btn-sm" id="nextPageBtn" onclick="changePage(1)">Next ›</button>
+        </div>
+        <div id="companyActions" class="hidden"></div>
       </div>
-      <div class="action-bar hidden" id="companySelectBar" style="margin-bottom:10px;margin-top:4px;">
-        <span style="font-size:12px;color:#8b949e;">Select:</span>
-        <button class="btn btn-secondary btn-sm" onclick="selectTopN(10)">10</button>
-        <button class="btn btn-secondary btn-sm" onclick="selectTopN(25)">25</button>
-        <button class="btn btn-secondary btn-sm" onclick="selectTopN(50)">50</button>
-        <button class="btn btn-secondary btn-sm" onclick="selectTopN(100)">100</button>
-        <input type="number" id="customSelectN" placeholder="N" min="1" style="width:60px;padding:4px 6px;font-size:12px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;">
-        <button class="btn btn-secondary btn-sm" onclick="selectTopN(parseInt(document.getElementById('customSelectN').value)||0)">Go</button>
-        <button class="btn btn-secondary btn-sm" onclick="selectTopN(0)">None</button>
-        <span style="font-size:12px;color:#4b5563;margin:0 4px;">|</span>
-        <span id="selectedCompanyCount" style="font-size:12px;color:#8b949e;"></span>
-        <button class="btn btn-primary btn-sm hidden" id="enrichBtn" onclick="enrichCompanies()">▶ Run pipeline (domains → owners → emails)</button>
-        <button class="btn btn-secondary btn-sm hidden" id="fetchDirectorsBtn" onclick="fetchDirectors(false)">Just get owners</button>
-      </div>
-      <div id="companyActions" class="hidden"></div>
     </div>
 
     <div class="panel hidden" id="directorsPanel">
-      <div class="panel-title">Directors</div>
-      <div id="directorsTable"></div>
+      <div class="panel-head">
+        <div class="panel-title">Owners &amp; directors</div>
+      </div>
+      <div class="panel-body">
+        <div id="directorsTable"></div>
+      </div>
       <div class="action-bar" id="directorActions">
-        <button class="btn btn-secondary" onclick="openFindEmailsModal()">Find Emails</button>
-        <button class="btn btn-secondary" onclick="openPushModal()">Push to Bison</button>
-        <span id="selectedDirCount" style="font-size:13px;color:#8b949e;"></span>
+        <button class="btn btn-secondary" onclick="openFindEmailsModal()">Find emails</button>
+        <button class="btn btn-primary" onclick="openPushModal()">Push to Bison</button>
+        <span class="spacer"></span>
+        <span class="selected-count" id="selectedDirCount"></span>
       </div>
     </div>
 
     <div id="statusArea"></div>
-    <div id="progressWrap" class="hidden" style="margin-top:12px;background:#161b22;border:1px solid #30363d;border-radius:8px;padding:14px 16px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-        <span id="progressLabel" style="font-size:13px;color:#e6edf3;font-weight:600;">Finding emails…</span>
-        <span id="progressCount" style="font-size:12px;color:#8b949e;">0 / 0</span>
+
+    <div id="progressWrap" class="progress-wrap hidden">
+      <div class="progress-top">
+        <span class="progress-label"><span class="progress-spin" id="progressSpin"></span><span id="progressLabel">Working…</span></span>
+        <span class="progress-count" id="progressCount">0 / 0</span>
       </div>
-      <div style="background:#0d1117;border-radius:6px;height:8px;overflow:hidden;">
-        <div id="progressBar" style="background:#22d3ee;height:100%;width:0%;transition:width .3s;"></div>
+      <div class="progress-track">
+        <div class="progress-fill" id="progressBar"></div>
       </div>
-      <div id="progressStats" style="font-size:12px;color:#8b949e;margin-top:8px;"></div>
+      <div class="progress-stats" id="progressStats"></div>
     </div>
   </div>
 </div>
@@ -264,15 +457,15 @@
 <!-- Find Emails Modal -->
 <div class="modal-overlay hidden" id="emailModal">
   <div class="modal">
-    <h3>Find Emails</h3>
-    <p style="font-size:13px;color:#8b949e;margin-bottom:14px;">Domain will be auto-discovered via Gemini for each company. Optionally override with a specific domain below.</p>
+    <h3>Find emails</h3>
+    <p class="modal-sub">A domain is found for each company and checked that its website is actually live — only then are emails verified with Reacher (protecting the daily verification quota). Dead/parked sites are skipped. Optionally force a single domain below.</p>
     <div class="form-group">
       <label>Domain override (optional)</label>
       <input type="text" id="emailDomain" placeholder="Leave blank to auto-discover">
     </div>
     <div class="modal-actions">
-      <button class="btn btn-secondary" onclick="closeModal('emailModal')">Cancel</button>
-      <button class="btn btn-primary" onclick="findEmails()">Find Emails</button>
+      <button class="btn btn-ghost" onclick="closeModal('emailModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="findEmails()">Find emails</button>
     </div>
   </div>
 </div>
@@ -281,6 +474,7 @@
 <div class="modal-overlay hidden" id="pushModal">
   <div class="modal">
     <h3>Push to Bison</h3>
+    <p class="modal-sub">Only directors with a verified email are pushed. Pick a workspace, then a campaign.</p>
     <div class="form-group">
       <label>Workspace</label>
       <select id="bisonWorkspace" onchange="loadCampaigns()"><option value="">Loading…</option></select>
@@ -290,7 +484,7 @@
       <select id="bisonCampaign"><option value="">Select workspace first</option></select>
     </div>
     <div class="modal-actions">
-      <button class="btn btn-secondary" onclick="closeModal('pushModal')">Cancel</button>
+      <button class="btn btn-ghost" onclick="closeModal('pushModal')">Cancel</button>
       <button class="btn btn-primary" onclick="pushToBison()">Push</button>
     </div>
   </div>
@@ -306,8 +500,9 @@
   var _allDirectors = [];
   var _lastCompanyNumbers = [];
   var _sicLabelMap = {};
+  var _progressMax = 0; // guards the bar against jumping backwards
 
-  // Pre-load all 1265 SIC codes into a lookup map so chips show names not raw codes
+  // Pre-load all 1265 SIC codes into a lookup map so chips/pills show names not raw codes
   fetch('/api/ch/sic-all').then(function(r){ return r.json(); }).then(function(d) {
     (d.codes || []).forEach(function(it) { _sicLabelMap[it.code] = it.label; });
   }).catch(function(){});
@@ -318,7 +513,7 @@
     if (type === 'success') setTimeout(function(){ el.innerHTML = ''; }, 4000);
   }
 
-  function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  function esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
   function fmt(n) { return Number(n).toLocaleString(); }
 
@@ -328,6 +523,19 @@
       document.getElementById('statDirectors').textContent = fmt(d.total_directors || 0);
       document.getElementById('statLastImport').textContent = d.last_import ? new Date(d.last_import).toLocaleDateString() : 'Never';
     }).catch(function(){});
+  }
+
+  // Turn a comma/space separated SIC string into human-labelled pills.
+  function renderSicCell(raw) {
+    if (!raw) return '<span class="dash">—</span>';
+    var codes = String(raw).split(/[,\s]+/).filter(Boolean);
+    if (!codes.length) return '<span class="dash">—</span>';
+    return '<div class="sic-pills">' + codes.slice(0, 4).map(function(code) {
+      var label = _sicLabelMap[code];
+      var text = label ? label : code;
+      if (text.length > 28) text = text.slice(0, 26) + '…';
+      return '<span class="sic-pill" title="' + esc(code + (label ? ' — ' + label : '')) + '">' + esc(text) + '</span>';
+    }).join('') + (codes.length > 4 ? '<span class="sic-pill">+' + (codes.length - 4) + '</span>' : '') + '</div>';
   }
 
   // SIC typeahead
@@ -345,7 +553,7 @@
           sug.innerHTML = items.map(function(it) {
             var code = it.code || it;
             var label = it.label || it.description || code;
-            return '<div onclick="addSic(\'' + esc(code) + '\',\'' + esc(label) + '\')">' + esc(code) + ' — ' + esc(label) + '</div>';
+            return '<div onclick="addSic(\'' + esc(code) + '\',\'' + esc(label) + '\')"><strong style="color:var(--accent)">' + esc(code) + '</strong> &nbsp;' + esc(label) + '</div>';
           }).join('');
           sug.classList.remove('hidden');
         }).catch(function(){});
@@ -371,7 +579,7 @@
     el.innerHTML = _selectedSics.map(function(s) {
       var label = _sicLabelMap[s.code] || s.label || s.code;
       var display = label.length > 40 ? label.slice(0, 38) + '…' : label;
-      return '<span class="sic-tag" onclick="removeSic(\'' + esc(s.code) + '\')" title="' + esc(s.code + ' — ' + label) + '">' + esc(display) + ' ×</span>';
+      return '<span class="sic-tag" onclick="removeSic(\'' + esc(s.code) + '\')" title="' + esc(s.code + ' — ' + label) + '">' + esc(display) + '<span class="x">×</span></span>';
     }).join('');
   }
 
@@ -466,32 +674,40 @@
   }
 
   function renderCompanies(d) {
-    document.getElementById('companyCount').textContent = '(' + fmt(d.total) + ' total)';
-    var table = '<table><thead><tr><th><input type="checkbox" id="selectAllCompanies" onchange="toggleAllCompanies(this)"></th><th>Name</th><th>Website</th><th>Industry</th><th>Type</th><th>SIC Codes</th><th>Postcode</th></tr></thead><tbody>';
-    if (!d.companies.length) {
-      table = '<p style="color:#8b949e;font-size:13px;padding:12px 0">No companies found.</p>';
-    } else {
-      d.companies.forEach(function(c) {
-        var web = c.website
-          ? '<a href="https://' + esc(c.website) + '" target="_blank" style="color:#22d3ee;font-size:12px;">' + esc(c.website) + '</a>'
-          : '<span style="color:#4b5563;font-size:12px;">—</span>';
-        table += '<tr><td><input type="checkbox" class="company-cb" data-id="' + esc(c.company_number) + '" onchange="updateCompanySelection()"></td>' +
-          '<td>' + esc(c.company_name) + '<div style="color:#4b5563;font-size:11px;font-family:monospace;">' + esc(c.company_number) + '</div></td>' +
-          '<td>' + web + '</td>' +
-          '<td style="font-size:12px;color:#8b949e;">' + esc(c.industry || '') + '</td>' +
-          '<td style="color:#8b949e;font-size:12px;">' + esc(c.company_type || '') + '</td>' +
-          '<td style="font-size:12px;color:#8b949e;">' + esc(c.sic_codes || '') + '</td>' +
-          '<td>' + esc(c.postcode || '') + '</td></tr>';
-      });
-      table += '</tbody></table>';
+    document.getElementById('companyCount').textContent = d.total != null ? '· ' + fmt(d.total) + ' total' : '';
+    var html;
+    if (!d.companies || !d.companies.length) {
+      html = '<div class="empty-state"><div class="icon">📭</div><div class="title">No companies match</div><div class="desc">Try widening your filters or removing a SIC code.</div></div>';
+      document.getElementById('companiesTable').innerHTML = html;
+      document.getElementById('companySelectBar').classList.add('hidden');
+      document.getElementById('companyPagination').classList.add('hidden');
+      updateCompanySelection();
+      return;
     }
-    document.getElementById('companiesTable').innerHTML = table;
-    document.getElementById('companySelectBar').classList.toggle('hidden', !d.companies || !d.companies.length);
+    html = '<div class="table-wrap"><div class="table-scroll"><table><thead><tr>' +
+      '<th class="col-check"><input type="checkbox" id="selectAllCompanies" onchange="toggleAllCompanies(this)"></th>' +
+      '<th>Company</th><th>Website</th><th>Industry</th><th>Type</th><th>SIC codes</th><th>Postcode</th>' +
+      '</tr></thead><tbody>';
+    d.companies.forEach(function(c) {
+      var web = c.website
+        ? '<a class="link" href="https://' + esc(c.website) + '" target="_blank" rel="noopener">' + esc(c.website) + '</a>'
+        : '<span class="dash">—</span>';
+      html += '<tr><td class="col-check"><input type="checkbox" class="company-cb row-check" data-id="' + esc(c.company_number) + '" onchange="updateCompanySelection()"></td>' +
+        '<td><div class="cell-name">' + esc(c.company_name) + '</div><div class="cell-sub">' + esc(c.company_number) + '</div></td>' +
+        '<td>' + web + '</td>' +
+        '<td class="cell-muted">' + (c.industry ? esc(c.industry) : '<span class="dash">—</span>') + '</td>' +
+        '<td class="cell-muted">' + (c.company_type ? esc(c.company_type) : '<span class="dash">—</span>') + '</td>' +
+        '<td>' + renderSicCell(c.sic_codes) + '</td>' +
+        '<td class="mono">' + (c.postcode ? esc(c.postcode) : '<span class="dash">—</span>') + '</td></tr>';
+    });
+    html += '</tbody></table></div></div>';
+    document.getElementById('companiesTable').innerHTML = html;
+    document.getElementById('companySelectBar').classList.remove('hidden');
     var pg = document.getElementById('companyPagination');
     var totalPages = Math.ceil(_totalCompanies / _perPage);
     if (totalPages > 1) {
       pg.classList.remove('hidden');
-      document.getElementById('companyPageInfo').textContent = 'Page ' + _currentPage + ' of ' + totalPages + ' (' + fmt(_totalCompanies) + ' companies)';
+      document.getElementById('companyPageInfo').textContent = 'Page ' + _currentPage + ' of ' + fmt(totalPages) + ' · ' + fmt(_totalCompanies) + ' companies';
       document.getElementById('prevPageBtn').disabled = _currentPage <= 1;
       document.getElementById('nextPageBtn').disabled = _currentPage >= totalPages;
     } else {
@@ -508,6 +724,8 @@
   function selectTopN(n) {
     var cbs = document.querySelectorAll('.company-cb');
     cbs.forEach(function(el, i){ el.checked = n > 0 && i < n; });
+    var all = document.getElementById('selectAllCompanies');
+    if (all) all.checked = n > 0 && n >= cbs.length;
     updateCompanySelection();
   }
 
@@ -527,11 +745,12 @@
     document.getElementById('statusArea').innerHTML = '';
     var CHUNK = 10, totalN = nums.length, done = 0, enriched = 0, withDomain = 0, noDomain = 0;
     var startedAt = Date.now();
+    resetProgress();
     setProgress('Enriching companies (Gemini: domain + data)…', 0, totalN, '');
     function runChunk(i) {
       if (i >= nums.length) {
         var secs = Math.round((Date.now() - startedAt) / 1000);
-        setProgress('Enrichment done.', totalN, totalN, withDomain + ' got a domain · ' + noDomain + ' no domain · ' + secs + 's');
+        setProgress('Enrichment done — loading owners…', totalN, totalN, withDomain + ' got a domain · ' + noDomain + ' no domain · ' + secs + 's');
         showStatus('Enriched ' + enriched + ' companies — ' + withDomain + ' have a domain. Now loading owners…', 'success');
         // Refresh table to show new website/industry, then re-tick the same
         // companies and auto-advance to Get Owners so the flow is uninterrupted.
@@ -623,24 +842,28 @@
     var panel = document.getElementById('directorsPanel');
     panel.classList.remove('hidden');
     if (!_allDirectors.length) {
-      document.getElementById('directorsTable').innerHTML = '<p style="color:#8b949e;font-size:13px;">No directors found. Fetch directors first.</p>';
+      document.getElementById('directorsTable').innerHTML = '<div class="empty-state"><div class="icon">👤</div><div class="title">No owners found</div><div class="desc">No directors are stored for these companies yet.</div></div>';
+      updateDirSelection();
       return;
     }
-    var html = '<table><thead><tr><th><input type="checkbox" id="selectAllDirs" onchange="toggleAllDirs(this)"></th><th>Name</th><th>Role</th><th>Company</th><th>Email</th><th>Status</th><th>Pushed</th></tr></thead><tbody>';
+    var html = '<div class="table-wrap"><div class="table-scroll"><table><thead><tr>' +
+      '<th class="col-check"><input type="checkbox" id="selectAllDirs" onchange="toggleAllDirs(this)"></th>' +
+      '<th>Name</th><th>Role</th><th>Company</th><th>Email</th><th>Status</th><th>Pushed</th>' +
+      '</tr></thead><tbody>';
     _allDirectors.forEach(function(d) {
       var badge = '';
       if (d.email_status === 'safe') badge = '<span class="badge badge-safe">safe</span>';
-      else if (d.email_status === 'safe_catchall') badge = '<span class="badge badge-catchall">catchall</span>';
+      else if (d.email_status === 'safe_catchall') badge = '<span class="badge badge-catchall">catch-all</span>';
       else if (d.email) badge = '<span class="badge badge-unknown">unverified</span>';
-      html += '<tr><td><input type="checkbox" class="dir-cb" data-id="' + d.id + '" onchange="updateDirSelection()"></td>' +
-        '<td>' + esc(d.name) + '</td>' +
-        '<td style="color:#8b949e;font-size:12px;">' + esc(d.role || '') + '</td>' +
-        '<td style="font-size:12px;">' + esc(d.company_name || d.company_number || '') + '</td>' +
-        '<td style="font-family:monospace;font-size:12px;">' + esc(d.email || '—') + '</td>' +
+      html += '<tr><td class="col-check"><input type="checkbox" class="dir-cb row-check" data-id="' + esc(d.id) + '" onchange="updateDirSelection()"></td>' +
+        '<td class="cell-name">' + esc(d.name) + '</td>' +
+        '<td class="cell-muted">' + (d.role ? esc(d.role) : '<span class="dash">—</span>') + '</td>' +
+        '<td class="cell-muted">' + esc(d.company_name || d.company_number || '') + '</td>' +
+        '<td class="mono">' + (d.email ? esc(d.email) : '<span class="dash">—</span>') + '</td>' +
         '<td>' + badge + '</td>' +
-        '<td>' + (d.pushed_to_bison_at ? '<span class="badge badge-pushed">pushed</span>' : '') + '</td></tr>';
+        '<td>' + (d.pushed_to_bison_at ? '<span class="badge badge-pushed">pushed</span>' : '<span class="dash">—</span>') + '</td></tr>';
     });
-    html += '</tbody></table>';
+    html += '</tbody></table></div></div>';
     document.getElementById('directorsTable').innerHTML = html;
     updateDirSelection();
   }
@@ -676,12 +899,23 @@
     document.getElementById(id).classList.add('hidden');
   }
 
+  // Reset the bar/guard at the start of a fresh phase or full run.
+  function resetProgress() {
+    _progressMax = 0;
+    document.getElementById('progressSpin').classList.remove('done');
+  }
+
   function setProgress(label, done, totalN, stats) {
     document.getElementById('progressWrap').classList.remove('hidden');
     document.getElementById('progressLabel').textContent = label;
-    document.getElementById('progressCount').textContent = done + ' / ' + totalN;
-    document.getElementById('progressBar').style.width = totalN ? Math.round(done / totalN * 100) + '%' : '0%';
+    // Never let the displayed counter/percentage go backwards within a phase.
+    if (done > _progressMax) _progressMax = done;
+    var shown = Math.min(_progressMax, totalN);
+    document.getElementById('progressCount').textContent = shown + ' / ' + totalN;
+    document.getElementById('progressBar').style.width = totalN ? Math.round(shown / totalN * 100) + '%' : '0%';
     if (stats != null) document.getElementById('progressStats').textContent = stats;
+    var spin = document.getElementById('progressSpin');
+    if (totalN && shown >= totalN) spin.classList.add('done'); else spin.classList.remove('done');
   }
 
   function findEmails() {
@@ -693,17 +927,21 @@
 
     var CHUNK = 10;
     var totalN = ids.length;
-    var done = 0, found = 0, skipped = 0, noDomain = 0;
+    var done = 0, found = 0, skipped = 0, noDomain = 0, deadSite = 0;
     var startedAt = Date.now();
 
-    setProgress('Finding emails (auto-discovering domains via Gemini)…', 0, totalN, '');
+    resetProgress();
+    setProgress('Finding emails (verifying live sites only)…', 0, totalN, '');
+
+    function subStats() {
+      return found + ' found · ' + skipped + ' in contacts · ' + noDomain + ' no domain · ' + deadSite + ' dead site (skipped)';
+    }
 
     function runChunk(i) {
       if (i >= ids.length) {
         var secs = Math.round((Date.now() - startedAt) / 1000);
-        setProgress('Done.', totalN, totalN,
-          found + ' emails found · ' + skipped + ' already in contacts · ' + noDomain + ' no domain · ' + secs + 's');
-        showStatus('Email finding complete: ' + found + ' found, ' + skipped + ' skipped, ' + noDomain + ' no domain.', 'success');
+        setProgress('Done.', totalN, totalN, subStats() + ' · ' + secs + 's');
+        showStatus('Email finding complete — ' + found + ' verified email' + (found === 1 ? '' : 's') + ' found. Only live websites were checked to protect the daily verification quota.', 'success');
         loadStats();
         // Refresh the directors table once at the end so found emails appear.
         loadDirectorsFromDb(_lastCompanyNumbers, function(dirs){ renderDirectors(dirs); });
@@ -721,11 +959,11 @@
           found += (d.found || 0);
           skipped += (d.skipped_dedup || 0);
           noDomain += (d.no_domain || 0);
+          deadSite += (d.dead_site || 0);
         } else {
           done += slice.length;
         }
-        setProgress('Finding emails (verifying via Reacher)…', Math.min(done, totalN), totalN,
-          found + ' found · ' + skipped + ' in contacts · ' + noDomain + ' no domain');
+        setProgress('Finding emails (verifying live sites only)…', Math.min(done, totalN), totalN, subStats());
         runChunk(i + CHUNK);
       }).catch(function() {
         done += slice.length;
@@ -764,6 +1002,7 @@
   function loadCampaigns() {
     var wsId = document.getElementById('bisonWorkspace').value;
     if (!wsId) return;
+    document.getElementById('bisonCampaign').innerHTML = '<option value="">Loading…</option>';
     fetch('/api/bison/campaigns?ws_id=' + encodeURIComponent(wsId)).then(r => r.json()).then(function(d) {
       var campaigns = d.campaigns || d.data || d || [];
       var sel = document.getElementById('bisonCampaign');
@@ -786,6 +1025,8 @@
     }).then(r => r.json()).then(function(d) {
       if (d.error) { showStatus(d.error, 'error'); return; }
       showStatus('Pushed ' + d.pushed + ', skipped ' + d.skipped + ' (no verified email).', 'success');
+      // Reflect newly-pushed state in the table.
+      loadDirectorsFromDb(_lastCompanyNumbers, function(dirs){ renderDirectors(dirs); });
     }).catch(function(e){ showStatus(e.message, 'error'); });
   }
 
