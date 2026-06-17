@@ -18849,6 +18849,25 @@ function scheduleAudienceScoring(pgdb) {
     }
   });
 
+  // Debug: verify one email via the finder and return the RAW response so we
+  // can see the exact shape (is_reachable / smtp.is_catch_all live).
+  app.get('/api/ch/verify-debug', requireSession, async (req, res) => {
+    const email = req.query.email;
+    if (!email) return res.status(400).json({ error: 'email required' });
+    const finderPort = process.env.EMAIL_FINDER_INTERNAL_PORT || '5055';
+    try {
+      const r = await fetch(`http://127.0.0.1:${finderPort}/api/verify-email`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, verifier: 'reacher' }),
+        signal: AbortSignal.timeout(65000),
+      });
+      const d = await r.json();
+      res.json({ httpStatus: r.status, raw: d });
+    } catch (e) {
+      res.json({ error: e.message });
+    }
+  });
+
   app.post('/api/ch/find-emails', requireSession, async (req, res) => {
     const db = req.app.locals.pgDb;
     if (!db) return res.status(503).json({ error: 'Database unavailable' });

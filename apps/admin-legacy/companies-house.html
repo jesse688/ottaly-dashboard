@@ -705,6 +705,8 @@
           found + ' emails found · ' + skipped + ' already in contacts · ' + noDomain + ' no domain · ' + secs + 's');
         showStatus('Email finding complete: ' + found + ' found, ' + skipped + ' skipped, ' + noDomain + ' no domain.', 'success');
         loadStats();
+        // Refresh the directors table once at the end so found emails appear.
+        loadDirectorsFromDb(_lastCompanyNumbers, function(dirs){ renderDirectors(dirs); });
         return;
       }
       var slice = ids.slice(i, i + CHUNK);
@@ -722,9 +724,8 @@
         } else {
           done += slice.length;
         }
-        setProgress('Finding emails (auto-discovering domains via Gemini)…', Math.min(done, totalN), totalN,
+        setProgress('Finding emails (verifying via Reacher)…', Math.min(done, totalN), totalN,
           found + ' found · ' + skipped + ' in contacts · ' + noDomain + ' no domain');
-        refreshSelectedDirectors(slice);
         runChunk(i + CHUNK);
       }).catch(function() {
         done += slice.length;
