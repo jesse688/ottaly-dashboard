@@ -1537,6 +1537,24 @@ const _GEMINI_CANDIDATES = [
   'gemini-2.5-flash', 'gemini-flash-latest', 'gemini-2.0-flash-001',
   'gemini-2.5-flash-lite', 'gemini-1.5-flash',
 ];
+// Verify a domain actually exists before trusting an LLM-suggested one — Gemini
+// hallucinates plausible-but-dead domains from company names. A real business
+// domain resolves MX (or at least A) records; a made-up one usually resolves
+// nothing. Cheap DNS lookup, ~no cost, kills fake domains before Reacher.
+const _dnsp = require('dns').promises;
+async function domainResolves(domain) {
+  if (!domain) return false;
+  try {
+    const mx = await _dnsp.resolveMx(domain).catch(() => []);
+    if (mx && mx.length) return true;
+  } catch {}
+  try {
+    const a = await _dnsp.resolve4(domain).catch(() => []);
+    if (a && a.length) return true;
+  } catch {}
+  return false;
+}
+
 // Pull the first JSON object out of an LLM response, tolerating preamble like
 // "Here is the JSON requested:" or markdown fences. Returns null on failure.
 function extractJson(text) {
@@ -1576,7 +1594,11 @@ async function geminiLookupDomain(key, companyName) {
       const parsed = extractJson(text);
       if (!parsed) return null;
       const raw = (parsed.website || '').replace(/^https?:\/\//i, '').replace(/\/.*/, '').replace(/^www\./i, '').trim().toLowerCase();
-      return raw || null;
+      if (!raw) return null;
+      // Reject hallucinated domains — only trust ones with real DNS (MX/A).
+      const ok = await domainResolves(raw);
+      if (!ok) { console.log(`[ch] discarded unresolvable domain "${raw}" for "${companyName}"`); return null; }
+      return raw;
     } catch { continue; }
   }
   return null;
@@ -18990,7 +19012,12 @@ function scheduleAudienceScoring(pgdb) {
       try {
         const data = await geminiEnrichCompany(geminiKey, co);
         if (!data) return;
-        const website = normDomain(data.website);
+        let website = normDomain(data.website);
+        // Drop hallucinated/dead domains — only keep ones that resolve DNS.
+        if (website && !(await domainResolves(website))) {
+          console.log(`[ch-enrich] discarded unresolvable domain "${website}" for "${co.company_name}"`);
+          website = null;
+        }
         await db.query(
           `UPDATE ch_companies SET website=$1, linkedin=$2, employees=$3, industry=$4, keywords=$5, description=$6, enriched_at=NOW(), updated_at=NOW() WHERE company_number=$7`,
           [website, data.linkedin || null, data.employees || null, data.industry || null, data.keywords || null, data.description || null, co.company_number]
