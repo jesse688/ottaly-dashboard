@@ -1581,6 +1581,45 @@ async function geminiLookupDomain(key, companyName) {
   }
   return null;
 }
+// Full company enrichment via Gemini with a strict responseSchema — returns
+// website + richer firmographics in one call. Null fields where unknown.
+async function geminiEnrichCompany(key, company) {
+  const body = JSON.stringify({
+    contents: [{ role: 'user', parts: [{ text:
+      `Research the UK company "${company.company_name}" (type: ${company.company_type || 'unknown'}, SIC codes: ${company.sic_codes || 'unknown'}, postcode area: ${company.postcode || 'unknown'}). Provide what you can find; use null for anything you don't know. Do NOT guess a website if you're not confident it's real.` }] }],
+    generationConfig: {
+      maxOutputTokens: 2048,
+      temperature: 0,
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: 'OBJECT',
+        properties: {
+          website: { type: 'STRING', nullable: true },
+          linkedin: { type: 'STRING', nullable: true },
+          industry: { type: 'STRING', nullable: true },
+          keywords: { type: 'STRING', nullable: true },
+          description: { type: 'STRING', nullable: true },
+          employees: { type: 'STRING', nullable: true },
+        },
+        required: ['website'],
+      },
+    },
+  });
+  const candidates = [process.env.GEMINI_MODEL, _geminiModel, ..._GEMINI_CANDIDATES].filter(Boolean);
+  const tried = new Set();
+  for (const model of candidates) {
+    if (tried.has(model)) continue; tried.add(model);
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+      const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+      if (!r.ok) { if (r.status === 404) continue; return null; }
+      const j = await r.json();
+      const text = j?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      return extractJson(text);
+    } catch { continue; }
+  }
+  return null;
+}
 async function geminiGenerate(key, systemPrompt, userPrompt) {
   const body = JSON.stringify({
     systemInstruction: { parts: [{ text: systemPrompt }] },
@@ -18688,7 +18727,7 @@ function scheduleAudienceScoring(pgdb) {
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
     try {
       const [rows, count] = await Promise.all([
-        db.query(`SELECT company_number,company_name,company_type,sic_codes,postcode,incorporated_on,website,linkedin,employees FROM ch_companies ${where} ORDER BY company_name LIMIT ${per_page} OFFSET ${offset}`, params),
+        db.query(`SELECT company_number,company_name,company_type,sic_codes,postcode,incorporated_on,website,linkedin,employees,industry,keywords,description FROM ch_companies ${where} ORDER BY company_name LIMIT ${per_page} OFFSET ${offset}`, params),
         db.query(`SELECT COUNT(*) as total FROM ch_companies ${where}`, params),
       ]);
       res.json({ companies: rows.rows, total: Number(count.rows[0].total), page, per_page });
@@ -18918,32 +18957,31 @@ function scheduleAudienceScoring(pgdb) {
     if (!db) return res.status(503).json({ error: 'Database unavailable' });
     const { company_numbers } = req.body;
     if (!Array.isArray(company_numbers) || !company_numbers.length) return res.status(400).json({ error: 'company_numbers required' });
-    if (company_numbers.length > 20) return res.status(400).json({ error: 'max 20 per request' });
+    if (company_numbers.length > 25) return res.status(400).json({ error: 'max 25 per request' });
     const geminiKey = process.env.GEMINI_API_KEY;
     if (!geminiKey) return res.status(500).json({ error: 'GEMINI_API_KEY not configured' });
-    let enriched = 0;
-    for (const num of company_numbers) {
+    const cr = await db.query(
+      `SELECT company_number, company_name, company_type, sic_codes, postcode FROM ch_companies WHERE company_number = ANY($1::text[])`,
+      [company_numbers]
+    );
+    const counters = { enriched: 0, with_domain: 0, no_domain: 0 };
+    const normDomain = (w) => (w || '').replace(/^https?:\/\//i, '').replace(/\/.*/, '').replace(/^www\./i, '').trim().toLowerCase() || null;
+    await Promise.all(cr.rows.map(async (co) => {
       try {
-        const cr = await db.query('SELECT company_name, company_type, sic_codes FROM ch_companies WHERE company_number=$1', [num]);
-        if (!cr.rows.length) continue;
-        const co = cr.rows[0];
-        const r = await geminiGenerate(geminiKey,
-          'You are a business researcher. Return only valid JSON with keys: website (string or null), linkedin (string or null), employees (string estimate like "10-50" or null). No markdown.',
-          `Company: ${co.company_name}\nType: ${co.company_type || ''}\nSIC: ${co.sic_codes || ''}`
-        );
-        if (!r) continue;
-        const data = extractJson(r.text);
-        if (!data) continue;
+        const data = await geminiEnrichCompany(geminiKey, co);
+        if (!data) return;
+        const website = normDomain(data.website);
         await db.query(
-          'UPDATE ch_companies SET website=$1, linkedin=$2, employees=$3, updated_at=NOW() WHERE company_number=$4',
-          [data.website || null, data.linkedin || null, data.employees || null, num]
+          `UPDATE ch_companies SET website=$1, linkedin=$2, employees=$3, industry=$4, keywords=$5, description=$6, enriched_at=NOW(), updated_at=NOW() WHERE company_number=$7`,
+          [website, data.linkedin || null, data.employees || null, data.industry || null, data.keywords || null, data.description || null, co.company_number]
         );
-        enriched++;
+        counters.enriched++;
+        if (website) counters.with_domain++; else counters.no_domain++;
       } catch (e) {
-        console.warn('[ch-enrich] failed for', num, e.message);
+        console.warn('[ch-enrich] failed for', co.company_number, e.message);
       }
-    }
-    res.json({ enriched });
+    }));
+    res.json(counters);
   });
 
   app.post('/api/ch/push-to-bison', requireSession, async (req, res) => {

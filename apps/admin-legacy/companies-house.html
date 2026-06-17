@@ -231,7 +231,8 @@
         <button class="btn btn-secondary btn-sm" onclick="selectTopN(0)">None</button>
         <span style="font-size:12px;color:#4b5563;margin:0 4px;">|</span>
         <span id="selectedCompanyCount" style="font-size:12px;color:#8b949e;"></span>
-        <button class="btn btn-secondary btn-sm hidden" id="fetchDirectorsBtn" onclick="fetchDirectors()">Get Owners/Directors →</button>
+        <button class="btn btn-secondary btn-sm hidden" id="enrichBtn" onclick="enrichCompanies()">1. Enrich (domains + data)</button>
+        <button class="btn btn-secondary btn-sm hidden" id="fetchDirectorsBtn" onclick="fetchDirectors()">2. Get Owners →</button>
       </div>
       <div id="companyActions" class="hidden"></div>
     </div>
@@ -463,18 +464,21 @@
 
   function renderCompanies(d) {
     document.getElementById('companyCount').textContent = '(' + fmt(d.total) + ' total)';
-    var table = '<table><thead><tr><th><input type="checkbox" id="selectAllCompanies" onchange="toggleAllCompanies(this)"></th><th>Name</th><th>Number</th><th>Type</th><th>SIC Codes</th><th>Postcode</th><th>Incorporated</th></tr></thead><tbody>';
+    var table = '<table><thead><tr><th><input type="checkbox" id="selectAllCompanies" onchange="toggleAllCompanies(this)"></th><th>Name</th><th>Website</th><th>Industry</th><th>Type</th><th>SIC Codes</th><th>Postcode</th></tr></thead><tbody>';
     if (!d.companies.length) {
       table = '<p style="color:#8b949e;font-size:13px;padding:12px 0">No companies found.</p>';
     } else {
       d.companies.forEach(function(c) {
+        var web = c.website
+          ? '<a href="https://' + esc(c.website) + '" target="_blank" style="color:#22d3ee;font-size:12px;">' + esc(c.website) + '</a>'
+          : '<span style="color:#4b5563;font-size:12px;">—</span>';
         table += '<tr><td><input type="checkbox" class="company-cb" data-id="' + esc(c.company_number) + '" onchange="updateCompanySelection()"></td>' +
-          '<td>' + esc(c.company_name) + (c.website ? ' <a href="' + esc(c.website) + '" target="_blank" style="color:#22d3ee;font-size:11px;margin-left:4px;">↗</a>' : '') + '</td>' +
-          '<td style="font-family:monospace;font-size:12px;">' + esc(c.company_number) + '</td>' +
-          '<td style="color:#8b949e;">' + esc(c.company_type || '') + '</td>' +
+          '<td>' + esc(c.company_name) + '<div style="color:#4b5563;font-size:11px;font-family:monospace;">' + esc(c.company_number) + '</div></td>' +
+          '<td>' + web + '</td>' +
+          '<td style="font-size:12px;color:#8b949e;">' + esc(c.industry || '') + '</td>' +
+          '<td style="color:#8b949e;font-size:12px;">' + esc(c.company_type || '') + '</td>' +
           '<td style="font-size:12px;color:#8b949e;">' + esc(c.sic_codes || '') + '</td>' +
-          '<td>' + esc(c.postcode || '') + '</td>' +
-          '<td style="color:#8b949e;">' + esc(c.incorporated_on || '') + '</td></tr>';
+          '<td>' + esc(c.postcode || '') + '</td></tr>';
       });
       table += '</tbody></table>';
     }
@@ -507,9 +511,40 @@
   function updateCompanySelection() {
     var sel = getSelectedCompanyNumbers();
     var cnt = document.getElementById('selectedCompanyCount');
-    var btn = document.getElementById('fetchDirectorsBtn');
     cnt.textContent = sel.length ? sel.length + ' selected' : '';
-    btn.classList.toggle('hidden', sel.length === 0);
+    document.getElementById('fetchDirectorsBtn').classList.toggle('hidden', sel.length === 0);
+    document.getElementById('enrichBtn').classList.toggle('hidden', sel.length === 0);
+  }
+
+  // Phase 1: enrich selected companies (domain + industry/keywords/description)
+  // in chunks of 10 with a progress bar. Caches to ch_companies so it's one-time.
+  function enrichCompanies() {
+    var nums = getSelectedCompanyNumbers();
+    if (!nums.length) return;
+    document.getElementById('statusArea').innerHTML = '';
+    var CHUNK = 10, totalN = nums.length, done = 0, enriched = 0, withDomain = 0, noDomain = 0;
+    var startedAt = Date.now();
+    setProgress('Enriching companies (Gemini: domain + data)…', 0, totalN, '');
+    function runChunk(i) {
+      if (i >= nums.length) {
+        var secs = Math.round((Date.now() - startedAt) / 1000);
+        setProgress('Enrichment done.', totalN, totalN, withDomain + ' got a domain · ' + noDomain + ' no domain · ' + secs + 's');
+        showStatus('Enriched ' + enriched + ' companies — ' + withDomain + ' have a domain. Now click "Get Owners".', 'success');
+        searchCompanies(_currentPage); // refresh table to show new website/industry
+        return;
+      }
+      var slice = nums.slice(i, i + CHUNK);
+      fetch('/api/ch/enrich-companies', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ company_numbers: slice }),
+      }).then(r => r.json()).then(function(d) {
+        if (!d.error) { enriched += (d.enriched || 0); withDomain += (d.with_domain || 0); noDomain += (d.no_domain || 0); }
+        done += slice.length;
+        setProgress('Enriching companies (Gemini: domain + data)…', Math.min(done, totalN), totalN, withDomain + ' domains found · ' + noDomain + ' none');
+        runChunk(i + CHUNK);
+      }).catch(function() { done += slice.length; runChunk(i + CHUNK); });
+    }
+    runChunk(0);
   }
 
   function getSelectedCompanyNumbers() {
