@@ -13515,11 +13515,24 @@ app.get('/api/perfshim/account/email-stats', requireSession, async (req, res) =>
   try {
     const wsId = perfshimTeamId(workspace_id);
     if (!wsId) return res.json(empty);
+    // Bison's line-area-chart-stats OMITS the current incomplete day on a
+    // single-day (start==end) query — so "today" reads 0 even when sends
+    // happened (this is why the health scan showed 0 sent for clients that
+    // sent today). Fetch one day wider and slice back to the requested window
+    // so today is accurate. Same workaround the Stats page uses.
+    let fetchStart = start_date;
+    if (start_date && start_date === end_date) {
+      const d = new Date(start_date + 'T00:00:00Z');
+      d.setUTCDate(d.getUTCDate() - 1);
+      fetchStart = d.toISOString().slice(0, 10);
+    }
     const bStats = await bisonReq('/api/workspaces/v1.1/line-area-chart-stats', {
       wsId,
-      params: { start_date, end_date },
+      params: { start_date: fetchStart, end_date },
     });
-    const rows = Object.values(pivotBisonStats((bStats.data || bStats) || []));
+    const pivoted = pivotBisonStats((bStats.data || bStats) || []);
+    // keep only rows inside the REQUESTED window (drop the extra padding day).
+    const rows = Object.values(pivoted).filter(r => r.date >= start_date && r.date <= end_date);
     const agg = aggPvEmailStats(rows); // { sent, replies, oooReplies, posReplies, bounces, contacted }
     res.json({ header: {
       total_sent_count:      agg.sent,
