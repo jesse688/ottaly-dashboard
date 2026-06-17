@@ -1140,12 +1140,6 @@
         <div class="filter-section" data-clear="email-provider">
           <div class="filter-label">Email Provider</div>
           <div class="filter-control" style="gap:12px;">
-            <!-- Default-ON guard: keep Microsoft (and unverified) OUT of results
-                 and any push unless explicitly allowed. This is the fix for
-                 Microsoft-hosted contacts leaking into Bison. -->
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:600;color:#b45309;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 8px;" title="Recommended. Removes Microsoft-hosted AND not-yet-verified contacts from results and any push. Verify first to reveal hidden Microsoft, then push the safe Google/Other remainder.">
-              <input type="checkbox" id="excludeMicrosoft" onchange="onToggleExcludeMicrosoft(this)"> Exclude Microsoft &amp; unverified <span style="font-weight:400;color:#92400e;" id="msDefaultTag"></span>
-            </label>
             <div style="display:flex;flex-direction:column;gap:8px;">
               <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;">
                 <input type="checkbox" id="emailGoogle" value="google"> Google <span id="googleCount" style="font-size:11px;color:#6b7280;margin-left:auto;">(0)</span>
@@ -1548,9 +1542,6 @@
     <div style="background:#fff;border-radius:12px;max-width:460px;width:90%;padding:22px;box-shadow:0 10px 40px rgba(0,0,0,.2)">
       <div style="font-size:16px;font-weight:700;margin-bottom:4px">Default exclusions</div>
       <div style="font-size:12px;color:#6b7280;margin-bottom:16px">Applied automatically when the Contacts page loads — for everyone. You can still override per search.</div>
-      <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;font-weight:600;margin-bottom:12px;padding:8px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px">
-        <input type="checkbox" id="fdMicrosoft"> Exclude Microsoft &amp; unverified by default
-      </label>
       <div style="font-size:12px;font-weight:700;color:#374151;margin:6px 0 4px">Exclude these gateways by default:</div>
       <div id="fdGateways" style="max-height:240px;overflow:auto;border:1px solid #e5e7eb;border-radius:8px;padding:8px 12px"></div>
       <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px">
@@ -2849,8 +2840,6 @@
         const el = document.getElementById(id);
         if (el && el.checked) params.append(id, '1');
       });
-      // Persist the MS guard state explicitly (default ON, so record when OFF).
-      { const em = document.getElementById('excludeMicrosoft'); if (em && !em.checked) params.append('msGuardOff', '1'); }
       _employeeSelected.forEach(v => params.append('emp', v));
       const hash = params.toString();
       // Replace, not assign — avoids polluting browser history on every search.
@@ -2985,8 +2974,6 @@
         const el = document.getElementById(id);
         if (el && params.get(id) === '1') { el.checked = true; any = true; }
       });
-      // MS guard defaults ON; only a saved 'msGuardOff' flag turns it off.
-      { const em = document.getElementById('excludeMicrosoft'); if (em) em.checked = params.get('msGuardOff') !== '1'; }
       const emp = params.getAll('emp');
       if (emp.length) { _employeeSelected = new Set(emp); any = true; }
       renderEmployeeBuckets();
@@ -3105,19 +3092,6 @@
       }
     });
 
-    // Unticking "Exclude Microsoft & unverified" lets Microsoft-hosted (and
-    // unverified) contacts back into results/pushes — the exact thing that
-    // leaked MS into Bison. Confirm before allowing it; re-tick on cancel.
-    function onToggleExcludeMicrosoft(cb) {
-      if (!cb.checked) {
-        const ok = confirm(
-          'Allow Microsoft & unverified contacts?\n\n' +
-          'Unverified ones may be Microsoft hiding behind a gateway. Only enable if you intend to target Microsoft. Click Search to apply.'
-        );
-        if (!ok) { cb.checked = true; return; }
-      }
-    }
-
     // Toggle gateway filter mode label/hint between Exclude and Only.
     function onGatewayModeChange() {
       const mode = (document.querySelector('input[name="gwMode"]:checked') || {}).value || 'exclude';
@@ -3138,22 +3112,17 @@
     }
     // Apply the configured defaults to the live filter controls.
     function applyFilterDefaults() {
-      const em = document.getElementById('excludeMicrosoft');
-      if (em) em.checked = !!_filterDefaults.excludeMicrosoft;
       // Default-exclude the configured bad gateways (Exclude mode).
       const excludeRadio = document.querySelector('input[name="gwMode"][value="exclude"]');
       if (excludeRadio) excludeRadio.checked = true;
       const want = new Set(_filterDefaults.excludeGateways || []);
       document.querySelectorAll('.gwExcl').forEach(cb => { cb.checked = want.has(cb.value); });
-      const tag = document.getElementById('msDefaultTag');
-      if (tag) tag.textContent = _filterDefaults.excludeMicrosoft ? '(default on)' : '';
       if (typeof onGatewayModeChange === 'function') onGatewayModeChange();
     }
     // Settings modal: edit which exclusions are applied by default (admin-wide).
     const _ALL_GATEWAYS = ['Mimecast','Barracuda','Proofpoint','Cisco Ironport','Sophos','Trend Micro','FortiMail','Forcepoint/Mailcontrol','Microsoft 365','Google Workspace','NO MX / unresolved'];
     function openFilterDefaults() {
       const m = document.getElementById('filterDefaultsModal');
-      document.getElementById('fdMicrosoft').checked = !!_filterDefaults.excludeMicrosoft;
       const set = new Set(_filterDefaults.excludeGateways || []);
       document.getElementById('fdGateways').innerHTML = _ALL_GATEWAYS.map(g =>
         `<label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;padding:3px 0"><input type="checkbox" class="fdGw" value="${g}" ${set.has(g)?'checked':''}> ${g}</label>`
@@ -3163,9 +3132,8 @@
     function closeFilterDefaults(){ document.getElementById('filterDefaultsModal').style.display='none'; }
     async function saveFilterDefaults() {
       const excludeGateways = Array.from(document.querySelectorAll('.fdGw:checked')).map(c => c.value);
-      const excludeMicrosoft = document.getElementById('fdMicrosoft').checked;
       try {
-        const r = await fetch('/api/contacts/filter-defaults', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ excludeMicrosoft, excludeGateways }) });
+        const r = await fetch('/api/contacts/filter-defaults', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ excludeGateways }) });
         const d = await r.json();
         if (d.error) { alert('Save failed: '+d.error); return; }
         _filterDefaults = d.defaults;
