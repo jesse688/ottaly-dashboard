@@ -1500,7 +1500,11 @@ async function enrichDomainFromWeb(domain, companyName, fields) {
         await new Promise(res => setTimeout(res, 2000));
         r = await geminiReq();
       }
-      if (!r.ok) return null;
+      if (!r.ok) {
+        const body = await r.text().catch(() => '');
+        console.error(`[enrich] Gemini ${r.status} for ${cleanDomain}: ${body.slice(0, 200)}`);
+        return null;
+      }
       const j = await r.json();
       const u = j?.usageMetadata || {};
       // Gemini Flash pricing (per 1M tokens): ~$0.10 in / $0.40 out.
@@ -1772,6 +1776,7 @@ async function runEnrichment(pgdb, job) {
   if ((job.fields||[]).includes('industry'))      conditions.push(`(industry IS NULL OR industry = '')`);
   if ((job.fields||[]).includes('num_employees')) conditions.push(`num_employees IS NULL`);
   if ((job.fields||[]).includes('company_status')) conditions.push(`company_status IS NULL`);
+  if ((job.fields||[]).includes('ch_sic'))        conditions.push(`(ch_sic_codes IS NULL OR ch_sic_codes = '')`);
   const whereConditions = conditions.join(' OR ');
 
   const { rows: allDomains } = await pgdb.query(`
@@ -1834,6 +1839,12 @@ app.post('/api/admin/enrich/start', requireAdmin, async (req, res) => {
   const { fields = ['keywords', 'industry', 'num_employees'], limit = 0, concurrency = 5 } = req.body;
   const pgdb = req.app.locals.pgDb;
   if (!pgdb) return res.status(503).json({ error: 'Database not available' });
+
+  // CH-derived fields (incl. SIC backfill) are useless without a CH key — fail
+  // loudly rather than churn through the whole DB returning "no response".
+  if ((fields.includes('ch_sic') || fields.includes('company_status')) && !process.env.COMPANIES_HOUSE_API_KEY) {
+    return res.status(400).json({ error: 'COMPANIES_HOUSE_API_KEY is not set — SIC / Companies House backfill cannot run. Add it to the server env first.' });
+  }
 
   await enrichDbState(pgdb);
   // Kill any in-memory running job before starting fresh
