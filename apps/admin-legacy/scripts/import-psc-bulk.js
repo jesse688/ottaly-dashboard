@@ -19,6 +19,10 @@ function formatName(ne) {
   return [ne.forename, ne.middle_name, ne.surname].filter(Boolean).join(' ').trim() || null;
 }
 
+// --skip-existing: skip companies that already have a PSC in ch_directors.
+// Massively faster on a resume — no upsert churn on already-imported rows.
+const skipExisting = process.argv.includes('--skip-existing');
+
 async function main() {
   const client = new Client({ connectionString: process.env.DATABASE_URL });
   await client.connect();
@@ -26,6 +30,14 @@ async function main() {
   const { rows } = await client.query('SELECT company_number FROM ch_companies');
   const known = new Set(rows.map(r => r.company_number));
   console.log(`[psc-import] ${known.size.toLocaleString()} companies in DB`);
+
+  let already = new Set();
+  if (skipExisting) {
+    console.log('[psc-import] --skip-existing: loading companies that already have a PSC…');
+    const { rows: er } = await client.query('SELECT DISTINCT company_number FROM ch_directors');
+    already = new Set(er.map(r => r.company_number));
+    console.log(`[psc-import] ${already.size.toLocaleString()} companies already have an owner — will skip`);
+  }
 
   const rl = readline.createInterface({ input: fs.createReadStream(file), crlfDelay: Infinity });
   let batch = [], total = 0, imported = 0, skipped_kind = 0, skipped_co = 0, skipped_name = 0;
@@ -55,6 +67,7 @@ async function main() {
     const rec = outer.data || outer;
     if (rec.kind !== 'individual-person-with-significant-control') { skipped_kind++; continue; }
     if (!cn || !known.has(cn)) { skipped_co++; continue; }
+    if (skipExisting && already.has(cn)) { skipped_co++; continue; }
     const name = formatName(rec.name_elements) || rec.name;
     if (!name) { skipped_name++; continue; }
     const dob = rec.date_of_birth ? `${rec.date_of_birth.year}-${String(rec.date_of_birth.month).padStart(2, '0')}` : null;
