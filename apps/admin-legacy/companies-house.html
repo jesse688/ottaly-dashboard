@@ -87,8 +87,9 @@
     </div>
 
     <div class="cli-note">
-      To import the CH bulk file: <code>node scripts/import-ch-bulk.js /path/to/BasicCompanyData.csv</code>
-      — streams ~6M rows directly into PostgreSQL without loading into memory.
+      <strong>Companies:</strong> <code>node scripts/import-ch-bulk.js /path/to/BasicCompanyData.csv</code><br>
+      <strong>PSC owners:</strong> <code>node scripts/import-psc-bulk.js /path/to/persons-with-significant-control-snapshot.json</code>
+      — PSC import links owners to their company automatically via company number.
     </div>
 
     <div class="panel">

@@ -834,6 +834,7 @@ class PostgresDatabase {
       )`,
       `CREATE INDEX IF NOT EXISTS idx_ch_directors_company ON ch_directors(company_number)`,
       `CREATE INDEX IF NOT EXISTS idx_ch_directors_email ON ch_directors(email)`,
+      `ALTER TABLE ch_directors ADD COLUMN IF NOT EXISTS dob_year_month TEXT`,
     ];
 
     // Migrations run with lock_timeout so a stuck previous-deploy query
