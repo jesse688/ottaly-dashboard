@@ -18947,12 +18947,13 @@ function scheduleAudienceScoring(pgdb) {
               signal: AbortSignal.timeout(65000),
             });
             const d = await r.json();
-            // Reacher result is nested: { result: { is_reachable, smtp: { is_catch_all } } }
-            const reacher = d.result || {};
-            const reach = reacher.is_reachable || 'unknown';
-            const catchAll = reacher.smtp && reacher.smtp.is_catch_all === true;
+            // Shape: d.result.status (summary) + d.result.raw.{is_reachable, smtp:{is_catch_all,is_deliverable}}
+            const inner = (d.result && d.result.raw) || {};
+            const reach = inner.is_reachable || (d.result && d.result.status) || 'unknown';
+            const smtp = inner.smtp || {};
             if (reach === 'safe') { foundEmail = email; foundStatus = 'safe'; break; }
-            if (reach === 'risky' && catchAll) { foundEmail = email; foundStatus = 'safe_catchall'; break; }
+            // catch-all domain: accept first candidate as risky-but-usable
+            if (smtp.is_catch_all === true) { foundEmail = email; foundStatus = 'safe_catchall'; break; }
           } catch (e2) {
             console.warn('[ch-find-emails] verify failed:', email, e2.message);
           }
