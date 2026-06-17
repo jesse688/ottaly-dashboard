@@ -17,11 +17,13 @@ export default function InvitePage() {
 
   useEffect(() => {
     fetch(`/api/invite/${token}`).then(async r => {
-      if (!r.ok) { setInvalid(true); return }
+      // Invite already claimed (single-use) or invalid → send them to the login page
+      // instead of a dead end, since they've most likely already set their password.
+      if (!r.ok) { setInvalid(true); setTimeout(() => router.push('/login'), 2500); return }
       const d = await r.json() as { companyName: string; email: string }
       setCompany(d.companyName); setEmail(d.email)
-    }).catch(() => setInvalid(true))
-  }, [token])
+    }).catch(() => { setInvalid(true); setTimeout(() => router.push('/login'), 2500) })
+  }, [token, router])
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -45,7 +47,11 @@ export default function InvitePage() {
         </div>
 
         {invalid ? (
-          <p className="text-sm text-center text-gray-500">This invite link is invalid or has already been used. Please contact your account manager.</p>
+          <div className="text-center">
+            <p className="text-sm text-gray-600">This link has already been used to set up your login.</p>
+            <p className="text-sm text-gray-400 mt-1">Taking you to the login page…</p>
+            <a href="/login" className="inline-block mt-4 px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold">Go to login</a>
+          </div>
         ) : (
           <>
             <h1 className="text-xl font-semibold text-[#050c29] text-center mb-1">Set your password</h1>
