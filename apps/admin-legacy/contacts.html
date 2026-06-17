@@ -2875,20 +2875,41 @@
     function renderSavedViews(views) {
       const el = document.getElementById('savedViewsList');
       if (!el) return;
+      // Stash for applySavedView/delete to look up filter blobs without a refetch
+      window._savedViews = Object.fromEntries(views.map(v => [v.id, v]));
       if (!views.length) {
         el.innerHTML = '<div style="color:#9ca3af;font-style:italic;padding:4px 0;">No saved views yet</div>';
         return;
       }
-      el.innerHTML = views.map(v => {
-        const safeName = (v.name || '').replace(/"/g, '&quot;');
-        const escName  = (v.name || '').replace(/'/g, "\\'");
-        return `<div style="display:flex;align-items:center;gap:6px;padding:5px 8px;border-radius:5px;background:#f9fafb;border:1px solid #f3f4f6;">
-          <button onclick="applySavedView('${v.id}')" title="Load this view" style="flex:1;text-align:left;background:none;border:none;cursor:pointer;font-size:12px;color:#1f2937;padding:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${safeName}</button>
-          <button onclick="deleteSavedView('${v.id}','${escName}')" title="Delete view" style="background:none;border:none;cursor:pointer;font-size:14px;color:#9ca3af;padding:0 2px;line-height:1;">×</button>
-        </div>`;
+      // Compact dropdown (was a long vertical list eating the sidebar). Select to
+      // load; the × deletes whichever view is currently selected.
+      const opts = views.map(v => {
+        const safeName = (v.name || '').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+        return `<option value="${v.id}">${safeName}</option>`;
       }).join('');
-      // Stash for applySavedView to look up filter blobs without a second fetch
-      window._savedViews = Object.fromEntries(views.map(v => [v.id, v]));
+      el.innerHTML = `<div style="display:flex;align-items:center;gap:6px;">
+        <select id="savedViewSelect" onchange="onSavedViewSelect(this.value)" title="Load a saved view"
+          style="flex:1;min-width:0;font-size:12px;padding:6px 8px;border:1px solid #d1d5db;border-radius:5px;background:white;color:#1f2937;cursor:pointer;">
+          <option value="">— Load a saved view (${views.length}) —</option>
+          ${opts}
+        </select>
+        <button onclick="deleteSelectedView()" title="Delete the selected view"
+          style="background:white;border:1px solid #e5e7eb;border-radius:5px;cursor:pointer;font-size:15px;color:#9ca3af;padding:4px 8px;line-height:1;">×</button>
+      </div>`;
+    }
+
+    // Dropdown change → load that view. (applySavedView leaves the select on the
+    // chosen option so you can see which view is active.)
+    function onSavedViewSelect(id) { if (id) applySavedView(id); }
+
+    function deleteSelectedView() {
+      const sel = document.getElementById('savedViewSelect');
+      if (!sel || !sel.value) {
+        if (typeof showMessage === 'function') showMessage('Pick a view from the list first', 'error');
+        return;
+      }
+      const v = (window._savedViews || {})[sel.value];
+      if (v) deleteSavedView(v.id, v.name || '');
     }
 
     async function saveCurrentView() {
