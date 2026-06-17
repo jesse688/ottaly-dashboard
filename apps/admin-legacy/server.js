@@ -18752,6 +18752,25 @@ function scheduleAudienceScoring(pgdb) {
     res.json({ fetched, inserted, companies_done: company_numbers.length });
   });
 
+  // Debug: test domain discovery for one company — returns raw Gemini output.
+  app.get('/api/ch/domain-debug', requireSession, async (req, res) => {
+    const name = req.query.name;
+    if (!name) return res.status(400).json({ error: 'name required' });
+    const geminiKey = process.env.GEMINI_API_KEY;
+    if (!geminiKey) return res.json({ error: 'GEMINI_API_KEY not set on server', hasKey: false });
+    try {
+      const r = await geminiGenerate(geminiKey,
+        'Return only valid JSON with key: website (the company website domain, no protocol, no www, e.g. "example.co.uk", or null if unknown). No markdown.',
+        `UK company: "${name}". What is their website domain?`
+      );
+      let parsed = null, parseErr = null;
+      if (r && r.text) { try { parsed = JSON.parse(r.text); } catch (e) { parseErr = e.message; } }
+      res.json({ hasKey: true, rawResult: r, rawText: r ? r.text : null, parsed, parseErr });
+    } catch (e) {
+      res.json({ hasKey: true, error: e.message });
+    }
+  });
+
   app.post('/api/ch/find-emails', requireSession, async (req, res) => {
     const db = req.app.locals.pgDb;
     if (!db) return res.status(503).json({ error: 'Database unavailable' });
@@ -18795,8 +18814,12 @@ function scheduleAudienceScoring(pgdb) {
             const raw = (parsed.website || '').replace(/^https?:\/\//i,'').replace(/\/.*/,'').replace(/^www\./i,'').trim();
             companyDomains[cn] = raw || null;
             if (raw) await db.query('UPDATE ch_companies SET website=$1, updated_at=NOW() WHERE company_number=$2', [raw, cn]);
-          } else { companyDomains[cn] = null; }
-        } catch { companyDomains[cn] = null; }
+            else console.log(`[ch-find-emails] no domain for "${row.company_name}" (Gemini returned null)`);
+          } else {
+            companyDomains[cn] = null;
+            console.warn(`[ch-find-emails] Gemini gave no result for "${row.company_name}"`);
+          }
+        } catch (e) { companyDomains[cn] = null; console.warn(`[ch-find-emails] domain lookup failed for "${row.company_name}": ${e.message}`); }
       } else {
         companyDomains[cn] = null;
       }
