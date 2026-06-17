@@ -5578,32 +5578,41 @@ app.get('/api/actions/out-of-data', requireSession, async (req, res) => {
     const isRunning = c => ['active', 'launching'].includes(String(c.status || '').toLowerCase());
     const clients = [];
     for (const ws of wsList) {
-      const camps = ws.campaigns || [];
+      const camps   = ws.campaigns || [];
       const running = camps.filter(isRunning);
+      const paused  = camps.filter(c => !isRunning(c)); // paused/stopped/completed/etc.
       // only campaigns where Bison gave us a real lead-pool size
       const withData = running.filter(c => (c.dataSize || 0) > 0);
       const total      = withData.reduce((s, c) => s + (c.dataSize || 0), 0);
       const contacted  = withData.reduce((s, c) => s + (c.leadContacted || 0), 0);
       const remaining  = withData.reduce((s, c) => s + Math.max(0, (c.dataSize || 0) - (c.leadContacted || 0)), 0);
       const exhaustion = total > 0 ? contacted / total : 0;
+      const pctLeft    = total > 0 ? Math.round((remaining / total) * 100) : null;
       const recentSent = recentByWs.get(String(ws.id)) || 0;
 
+      // Two alerts the CMs act on:
+      //  • all_paused  → client HAS campaigns but none are running → NOT SENDING.
+      //  • out_of_data → running but lead pool exhausted → add data NOW.
+      //  • low_data    → running but ≤20% leads left (≥80% used) → add data soon.
       let status;
-      if (running.length === 0)                          status = 'not_running';   // paused / none — different problem
+      if (camps.length === 0)                            status = 'no_campaigns';  // none set up
+      else if (running.length === 0)                     status = 'all_paused';    // ⛔ NOT SENDING
       else if (withData.length === 0)                    status = 'unknown';       // running but no pool size from Bison
-      else if (remaining <= 0 || exhaustion >= 0.98)     status = 'out_of_data';   // dried up
-      else if (exhaustion >= 0.85 || remaining < 200)    status = 'low_data';      // running low
+      else if (remaining <= 0 || exhaustion >= 0.98)     status = 'out_of_data';   // add data NOW
+      else if (exhaustion >= 0.80 || remaining < 200)    status = 'low_data';      // ≤20% left — add data soon
       else                                               status = 'ok';
 
       clients.push({
         id: ws.id, name: ws.name || ws.id,
+        totalCampaigns: camps.length,
         runningCampaigns: running.length,
+        pausedCampaigns: paused.length,
         totalLeads: total, contacted, remaining,
         exhaustion: Math.round(exhaustion * 100),
-        recentSent, status,
+        pctLeft, recentSent, status,
       });
     }
-    const rank = { out_of_data: 0, low_data: 1, unknown: 2, not_running: 3, ok: 4 };
+    const rank = { all_paused: 0, out_of_data: 1, low_data: 2, unknown: 3, no_campaigns: 4, ok: 5 };
     clients.sort((a, b) => (rank[a.status] - rank[b.status]) || (a.remaining - b.remaining));
 
     const summary = clients.reduce((m, c) => { m[c.status] = (m[c.status] || 0) + 1; return m; }, {});
