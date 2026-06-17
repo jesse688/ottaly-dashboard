@@ -677,7 +677,7 @@ function renderClients() {
       <div class="client-card${isAll ? ' all-card' : ''}" id="card-${w.workspace_id}">
         <div class="client-row" onclick="toggleClient('${w.workspace_id}')">
           <div>
-            <div class="client-name">${w.name}${winnerBadgeHtml(w.workspace_id)}</div>
+            <div class="client-name">${w.name}${isAll ? '' : winnerBadgeHtml(w.workspace_id)}</div>
             <div class="client-sub">${fmtNum(t.sent)} sent · ${fmtNum(t.replies)} replies · ${fmtNum(t.leads)} leads</div>
           </div>
           <div class="stat-cell ${rrClass}">
