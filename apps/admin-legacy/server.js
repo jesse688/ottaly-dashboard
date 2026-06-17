@@ -18700,15 +18700,19 @@ function scheduleAudienceScoring(pgdb) {
     const db = req.app.locals.pgDb;
     if (!db) return res.status(503).json({ error: 'Database unavailable' });
     try {
-      const [comp, dir, last] = await Promise.all([
+      const [comp, dir, last, emails, pushed] = await Promise.all([
         db.query('SELECT COUNT(*) as total FROM ch_companies'),
         db.query('SELECT COUNT(*) as total FROM ch_directors'),
         db.query('SELECT MAX(updated_at) as last_import FROM ch_companies'),
+        db.query("SELECT COUNT(*) as total FROM ch_directors WHERE email IS NOT NULL AND email_status IN ('safe','safe_catchall')"),
+        db.query('SELECT COUNT(*) as total FROM ch_directors WHERE pushed_to_bison_at IS NOT NULL'),
       ]);
       res.json({
         total_companies: Number(comp.rows[0].total),
         total_directors: Number(dir.rows[0].total),
         last_import: last.rows[0].last_import,
+        emails_verified: Number(emails.rows[0].total),
+        pushed_to_bison: Number(pushed.rows[0].total),
       });
     } catch (e) {
       res.status(500).json({ error: e.message });
@@ -18719,7 +18723,7 @@ function scheduleAudienceScoring(pgdb) {
     const db = req.app.locals.pgDb;
     if (!db) return res.status(503).json({ error: 'Database unavailable' });
     const page = Math.max(1, parseInt(req.query.page) || 1);
-    const per_page = Math.min(200, Math.max(1, parseInt(req.query.per_page) || 50));
+    const per_page = Math.min(10000, Math.max(1, parseInt(req.query.per_page) || 50));
     const offset = (page - 1) * per_page;
     const conditions = [];
     const params = [];
@@ -18772,10 +18776,22 @@ function scheduleAudienceScoring(pgdb) {
       params.push(req.query.inc_before);
       conditions.push(`incorporated_on <= $${params.length}`);
     }
+    if (req.query.has_email === 'true') {
+      conditions.push(`EXISTS (SELECT 1 FROM ch_directors d WHERE d.company_number=ch_companies.company_number AND d.email IS NOT NULL AND d.email_status IN ('safe','safe_catchall'))`);
+    }
+    if (req.query.has_domain === 'true') {
+      conditions.push(`ch_companies.website IS NOT NULL`);
+    }
+    if (req.query.needs_enrichment === 'true') {
+      conditions.push(`(ch_companies.enriched_at IS NULL OR (ch_companies.website IS NULL AND ch_companies.domain_checked_at IS NULL))`);
+    }
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
     try {
       const [rows, count] = await Promise.all([
-        db.query(`SELECT company_number,company_name,company_type,sic_codes,postcode,incorporated_on,website,linkedin,employees,industry,keywords,description FROM ch_companies ${where} ORDER BY company_name LIMIT ${per_page} OFFSET ${offset}`, params),
+        db.query(`SELECT c.company_number,c.company_name,c.company_type,c.sic_codes,c.postcode,c.incorporated_on,c.website,c.linkedin,c.employees,c.industry,c.keywords,c.description,c.enriched_at,c.domain_checked_at,
+          COUNT(d.id) FILTER (WHERE d.resigned_on IS NULL) AS director_count,
+          COUNT(d.id) FILTER (WHERE d.email IS NOT NULL AND d.email_status IN ('safe','safe_catchall')) AS email_count
+          FROM ch_companies c LEFT JOIN ch_directors d ON d.company_number=c.company_number ${where} GROUP BY c.company_number ORDER BY c.company_name LIMIT ${per_page} OFFSET ${offset}`, params),
         db.query(`SELECT COUNT(*) as total FROM ch_companies ${where}`, params),
       ]);
       res.json({ companies: rows.rows, total: Number(count.rows[0].total), page, per_page });
@@ -18849,7 +18865,7 @@ function scheduleAudienceScoring(pgdb) {
     if (!db) return res.status(503).json({ error: 'Database unavailable' });
     const { company_numbers } = req.body;
     if (!Array.isArray(company_numbers) || !company_numbers.length) return res.status(400).json({ error: 'company_numbers required' });
-    if (company_numbers.length > 50) return res.status(400).json({ error: 'max 50 companies per request' });
+    if (company_numbers.length > 200) return res.status(400).json({ error: 'max 200 companies per request' });
     const chKey = process.env.COMPANIES_HOUSE_API_KEY;
     if (!chKey) return res.status(500).json({ error: 'COMPANIES_HOUSE_API_KEY not configured' });
     const auth = { 'Authorization': 'Basic ' + Buffer.from(chKey + ':').toString('base64') };
@@ -18932,7 +18948,7 @@ function scheduleAudienceScoring(pgdb) {
 
     // Group directors by company so we can auto-discover domain per company via Gemini
     const dirRows = await db.query(
-      `SELECT d.id, d.name, d.company_number, c.company_name, c.website
+      `SELECT d.id, d.name, d.company_number, d.email AS existing_email, c.company_name, c.website, c.domain_checked_at
        FROM ch_directors d JOIN ch_companies c ON c.company_number=d.company_number
        WHERE d.id = ANY($1::int[])`,
       [ids]
@@ -18965,6 +18981,10 @@ function scheduleAudienceScoring(pgdb) {
       } else {
         if (candidate) { dead_site++; console.log(`[ch-find-emails] skipping "${candidate}" for "${row.company_name}" — website not live`); }
         companyDomains[cn] = null;
+        // Stamp domain_checked_at so future runs skip Gemini for confirmed-empty companies
+        if (!row.domain_checked_at) {
+          await db.query('UPDATE ch_companies SET domain_checked_at=NOW() WHERE company_number=$1', [cn]);
+        }
       }
     }
 
@@ -18976,11 +18996,13 @@ function scheduleAudienceScoring(pgdb) {
     // Process directors concurrently — Reacher applies its own concurrency cap
     // internally, so firing the whole chunk at once is safe and far faster than
     // the old one-at-a-time loop.
-    const counters = { processed: 0, found: 0, skipped_dedup: 0, no_domain: 0 };
+    const counters = { processed: 0, found: 0, skipped_dedup: 0, no_domain: 0, already_has_email: 0 };
     await Promise.all(ids.map(async (id) => {
       try {
         const dir = dirMap[id];
         if (!dir) return;
+        // Skip directors who already have a verified email from a previous run
+        if (dir.existing_email) { counters.processed++; counters.already_has_email++; counters.found++; return; }
         const effectiveDomain = companyDomains[dir.company_number];
         if (!effectiveDomain) { counters.processed++; counters.no_domain++; return; }
         const parts = dir.name.split(/[\s,]+/).filter(Boolean);
@@ -19025,7 +19047,7 @@ function scheduleAudienceScoring(pgdb) {
       }
     }));
     processed = counters.processed; found = counters.found; skipped_dedup = counters.skipped_dedup; no_domain = counters.no_domain;
-    res.json({ processed, found, skipped_dedup, no_domain, dead_site });
+    res.json({ processed, found, skipped_dedup, no_domain, dead_site, already_has_email: counters.already_has_email });
   });
 
   app.post('/api/ch/enrich-companies', requireSession, async (req, res) => {
@@ -19037,13 +19059,19 @@ function scheduleAudienceScoring(pgdb) {
     const geminiKey = process.env.GEMINI_API_KEY;
     if (!geminiKey) return res.status(500).json({ error: 'GEMINI_API_KEY not configured' });
     const cr = await db.query(
-      `SELECT company_number, company_name, company_type, sic_codes, postcode FROM ch_companies WHERE company_number = ANY($1::text[])`,
+      `SELECT company_number, company_name, company_type, sic_codes, postcode, website, enriched_at, domain_checked_at FROM ch_companies WHERE company_number = ANY($1::text[])`,
       [company_numbers]
     );
-    const counters = { enriched: 0, with_domain: 0, no_domain: 0 };
+    const counters = { enriched: 0, with_domain: 0, no_domain: 0, already_done: 0 };
     const normDomain = (w) => (w || '').replace(/^https?:\/\//i, '').replace(/\/.*/, '').replace(/^www\./i, '').trim().toLowerCase() || null;
     await Promise.all(cr.rows.map(async (co) => {
       try {
+        // Skip if already enriched AND (has a live domain OR was confirmed domain-less)
+        if (co.enriched_at && (co.website || co.domain_checked_at)) {
+          counters.already_done++;
+          if (co.website) counters.with_domain++; else counters.no_domain++;
+          return;
+        }
         const data = await geminiEnrichCompany(geminiKey, co);
         if (!data) return;
         let website = normDomain(data.website);
@@ -19056,7 +19084,7 @@ function scheduleAudienceScoring(pgdb) {
           website = null;
         }
         await db.query(
-          `UPDATE ch_companies SET website=$1, linkedin=$2, employees=$3, industry=$4, keywords=$5, description=$6, enriched_at=NOW(), updated_at=NOW() WHERE company_number=$7`,
+          `UPDATE ch_companies SET website=$1, linkedin=$2, employees=$3, industry=$4, keywords=$5, description=$6, enriched_at=NOW(), domain_checked_at=NOW(), updated_at=NOW() WHERE company_number=$7`,
           [website, data.linkedin || null, data.employees || null, data.industry || null, data.keywords || null, data.description || null, co.company_number]
         );
         counters.enriched++;
@@ -19099,6 +19127,7 @@ function scheduleAudienceScoring(pgdb) {
       };
     });
     let pushed = 0;
+    const allLeadIds = [];
     for (let i = 0; i < leads.length; i += 500) {
       const slice = leads.slice(i, i + 500);
       try {
@@ -19107,19 +19136,29 @@ function scheduleAudienceScoring(pgdb) {
           body: { leads: slice },
         });
         const created = (resp && resp.data && (resp.data.leads || resp.data)) || [];
-        if (Array.isArray(created)) pushed += created.length; else pushed += slice.length;
+        if (Array.isArray(created)) {
+          pushed += created.length;
+          created.forEach(l => { if (l && l.id) allLeadIds.push(l.id); });
+        } else {
+          pushed += slice.length;
+        }
       } catch (e) {
         console.warn('[ch-push] create leads failed:', e.message);
       }
     }
     if (pushed > 0) {
-      try {
-        await bisonReq(`/api/campaigns/${campaign_id}/leads`, {
-          wsId: workspace_id, method: 'POST',
-          body: { lead_ids: rows.rows.map(d => d.email) },
-        });
-      } catch (e) {
-        console.warn('[ch-push] add to campaign failed:', e.message);
+      if (allLeadIds.length) {
+        // Use the actual Bison lead IDs returned from create-or-update
+        for (let i = 0; i < allLeadIds.length; i += 500) {
+          try {
+            await bisonReq(`/api/campaigns/${campaign_id}/leads`, {
+              wsId: workspace_id, method: 'POST',
+              body: { lead_ids: allLeadIds.slice(i, i + 500) },
+            });
+          } catch (e) {
+            console.warn('[ch-push] add to campaign failed:', e.message);
+          }
+        }
       }
       await db.query(`UPDATE ch_directors SET pushed_to_bison_at=NOW() WHERE id = ANY($1::int[])`, [rows.rows.map(d => d.id)]);
     }

@@ -139,6 +139,8 @@
     .dash { color: var(--faint); }
 
     input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; vertical-align: middle; }
+    input[type=date] { cursor: pointer; color-scheme: dark; }
+    input[type=date]::-webkit-calendar-picker-indicator { filter: invert(0.6); cursor: pointer; }
 
     /* ---- SIC pills (in table) ---- */
     .sic-pills { display: flex; flex-wrap: wrap; gap: 4px; max-width: 240px; }
@@ -259,6 +261,8 @@
     <div class="stats-bar" id="statsBar">
       <div class="stat-card"><div class="lbl">Companies imported</div><div class="val accent" id="statCompanies">—</div></div>
       <div class="stat-card"><div class="lbl">Owners / directors</div><div class="val accent" id="statDirectors">—</div></div>
+      <div class="stat-card"><div class="lbl">Emails verified</div><div class="val accent" id="statEmails">—</div></div>
+      <div class="stat-card"><div class="lbl">Pushed to Bison</div><div class="val accent" id="statPushed">—</div></div>
       <div class="stat-card"><div class="lbl">Last bulk import</div><div class="val" id="statLastImport">—</div></div>
     </div>
 
@@ -374,11 +378,24 @@
           </div>
           <div class="filter-group">
             <label>Incorporated after</label>
-            <input type="text" id="incAfter" placeholder="e.g. 01/01/2015">
+            <input type="date" id="incAfter" max="2030-12-31">
+          </div>
+          <div class="filter-group">
+            <label>Incorporated before</label>
+            <input type="date" id="incBefore" max="2030-12-31">
           </div>
           <div class="filter-group">
             <label>Name search</label>
             <input type="text" id="nameSearch" placeholder="Company name…">
+          </div>
+          <div class="filter-group">
+            <label>Quick filters</label>
+            <select id="quickFilter">
+              <option value="">— Any —</option>
+              <option value="needs_enrichment">Needs enrichment</option>
+              <option value="has_domain">Has a domain</option>
+              <option value="has_email">Has verified email</option>
+            </select>
           </div>
         </div>
         <div class="filter-grid span-actions">
@@ -427,6 +444,13 @@
     <div class="panel hidden" id="directorsPanel">
       <div class="panel-head">
         <div class="panel-title">Owners &amp; directors</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <select id="dirEmailFilter" onchange="filterDirectors()" style="height:30px;font-size:12px;width:160px">
+            <option value="">All owners</option>
+            <option value="verified">Verified email only</option>
+            <option value="no_email">No email yet</option>
+          </select>
+        </div>
       </div>
       <div class="panel-body">
         <div id="directorsTable"></div>
@@ -521,6 +545,8 @@
     fetch('/api/ch/stats').then(r => r.json()).then(d => {
       document.getElementById('statCompanies').textContent = fmt(d.total_companies || 0);
       document.getElementById('statDirectors').textContent = fmt(d.total_directors || 0);
+      document.getElementById('statEmails').textContent = fmt(d.emails_verified || 0);
+      document.getElementById('statPushed').textContent = fmt(d.pushed_to_bison || 0);
       document.getElementById('statLastImport').textContent = d.last_import ? new Date(d.last_import).toLocaleDateString() : 'Never';
     }).catch(function(){});
   }
@@ -641,7 +667,10 @@
     document.getElementById('townSelect').innerHTML = '<option value="">Any</option>';
     document.getElementById('typeSelect').value = '';
     document.getElementById('incAfter').value = '';
+    document.getElementById('incBefore').value = '';
     document.getElementById('nameSearch').value = '';
+    document.getElementById('quickFilter').value = '';
+    _perPage = 50;
   }
 
   function searchCompanies(page) { searchCompaniesThen(page, null); }
@@ -660,8 +689,14 @@
     if (t) params.set('company_type', t);
     var n = document.getElementById('nameSearch').value.trim();
     if (n) params.set('search', n);
-    var ia = document.getElementById('incAfter').value.trim();
+    var ia = document.getElementById('incAfter').value;
     if (ia) params.set('inc_after', ia);
+    var ib = document.getElementById('incBefore').value;
+    if (ib) params.set('inc_before', ib);
+    var qf = document.getElementById('quickFilter').value;
+    if (qf === 'needs_enrichment') params.set('needs_enrichment', 'true');
+    else if (qf === 'has_domain') params.set('has_domain', 'true');
+    else if (qf === 'has_email') params.set('has_email', 'true');
     showStatus('Searching…', 'info');
     fetch('/api/ch/companies?' + params).then(r => r.json()).then(function(d) {
       if (d.error) { showStatus(d.error, 'error'); return; }
@@ -686,17 +721,23 @@
     }
     html = '<div class="table-wrap"><div class="table-scroll"><table><thead><tr>' +
       '<th class="col-check"><input type="checkbox" id="selectAllCompanies" onchange="toggleAllCompanies(this)"></th>' +
-      '<th>Company</th><th>Website</th><th>Industry</th><th>Type</th><th>SIC codes</th><th>Postcode</th>' +
+      '<th>Company</th><th>Website</th><th>Industry</th><th>Owners</th><th>SIC codes</th><th>Postcode</th>' +
       '</tr></thead><tbody>';
     d.companies.forEach(function(c) {
       var web = c.website
         ? '<a class="link" href="https://' + esc(c.website) + '" target="_blank" rel="noopener">' + esc(c.website) + '</a>'
+        : (c.domain_checked_at ? '<span class="cell-muted" style="font-size:11px">no domain</span>' : '<span class="dash">—</span>');
+      var dirCount = Number(c.director_count) || 0;
+      var emailCount = Number(c.email_count) || 0;
+      var ownersCell = dirCount
+        ? dirCount + (emailCount ? ' <span style="color:#3fb950;font-size:11px">(' + emailCount + ' ✉)</span>' : '')
         : '<span class="dash">—</span>';
+      var enriched = c.enriched_at ? '' : '<span style="color:var(--faint);font-size:10px;margin-left:4px">·</span>';
       html += '<tr><td class="col-check"><input type="checkbox" class="company-cb row-check" data-id="' + esc(c.company_number) + '" onchange="updateCompanySelection()"></td>' +
-        '<td><div class="cell-name">' + esc(c.company_name) + '</div><div class="cell-sub">' + esc(c.company_number) + '</div></td>' +
+        '<td><div class="cell-name">' + esc(c.company_name) + enriched + '</div><div class="cell-sub">' + esc(c.company_number) + '</div></td>' +
         '<td>' + web + '</td>' +
         '<td class="cell-muted">' + (c.industry ? esc(c.industry) : '<span class="dash">—</span>') + '</td>' +
-        '<td class="cell-muted">' + (c.company_type ? esc(c.company_type) : '<span class="dash">—</span>') + '</td>' +
+        '<td class="cell-muted">' + ownersCell + '</td>' +
         '<td>' + renderSicCell(c.sic_codes) + '</td>' +
         '<td class="mono">' + (c.postcode ? esc(c.postcode) : '<span class="dash">—</span>') + '</td></tr>';
     });
@@ -722,6 +763,11 @@
   }
 
   function selectTopN(n) {
+    if (n > 0 && n > _perPage) {
+      _perPage = n;
+      searchCompaniesThen(_currentPage, function() { selectTopN(n); });
+      return;
+    }
     var cbs = document.querySelectorAll('.company-cb');
     cbs.forEach(function(el, i){ el.checked = n > 0 && i < n; });
     var all = document.getElementById('selectAllCompanies');
@@ -790,7 +836,7 @@
   function fetchDirectors(autoEmail) {
     var nums = getSelectedCompanyNumbers();
     if (!nums.length) return;
-    if (nums.length > 50) { showStatus('Select max 50 companies at once', 'error'); return; }
+    if (nums.length > 500) { showStatus('Select max 500 companies at once for owner loading', 'error'); return; }
     _lastCompanyNumbers = nums;
     document.getElementById('directorsPanel').classList.remove('hidden');
     // Check our imported PSC/director data first — no API call needed if we have it.
@@ -868,6 +914,17 @@
     updateDirSelection();
   }
 
+  function filterDirectors() {
+    var mode = document.getElementById('dirEmailFilter').value;
+    document.querySelectorAll('#directorsTable tbody tr').forEach(function(row) {
+      if (!mode) { row.style.display = ''; return; }
+      var badge = row.querySelector('.badge');
+      var hasVerified = badge && (badge.classList.contains('badge-safe') || badge.classList.contains('badge-catchall'));
+      if (mode === 'verified') row.style.display = hasVerified ? '' : 'none';
+      else if (mode === 'no_email') row.style.display = hasVerified ? 'none' : '';
+    });
+  }
+
   function toggleAllDirs(cb) {
     document.querySelectorAll('.dir-cb').forEach(function(el){ el.checked = cb.checked; });
     updateDirSelection();
@@ -927,14 +984,19 @@
 
     var CHUNK = 10;
     var totalN = ids.length;
-    var done = 0, found = 0, skipped = 0, noDomain = 0, deadSite = 0;
+    var done = 0, found = 0, skipped = 0, noDomain = 0, deadSite = 0, alreadyDone = 0;
     var startedAt = Date.now();
 
     resetProgress();
     setProgress('Finding emails (verifying live sites only)…', 0, totalN, '');
 
     function subStats() {
-      return found + ' found · ' + skipped + ' in contacts · ' + noDomain + ' no domain · ' + deadSite + ' dead site (skipped)';
+      var parts = [found + ' found'];
+      if (alreadyDone) parts.push(alreadyDone + ' already had email');
+      if (skipped) parts.push(skipped + ' in contacts');
+      if (noDomain) parts.push(noDomain + ' no domain');
+      if (deadSite) parts.push(deadSite + ' dead site');
+      return parts.join(' · ');
     }
 
     function runChunk(i) {
@@ -960,6 +1022,7 @@
           skipped += (d.skipped_dedup || 0);
           noDomain += (d.no_domain || 0);
           deadSite += (d.dead_site || 0);
+          alreadyDone += (d.already_has_email || 0);
         } else {
           done += slice.length;
         }

@@ -839,6 +839,7 @@ class PostgresDatabase {
       `ALTER TABLE ch_companies ADD COLUMN IF NOT EXISTS keywords TEXT`,
       `ALTER TABLE ch_companies ADD COLUMN IF NOT EXISTS description TEXT`,
       `ALTER TABLE ch_companies ADD COLUMN IF NOT EXISTS enriched_at TIMESTAMPTZ`,
+      `ALTER TABLE ch_companies ADD COLUMN IF NOT EXISTS domain_checked_at TIMESTAMPTZ`,
     ];
 
     // Migrations run with lock_timeout so a stuck previous-deploy query
