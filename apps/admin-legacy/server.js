@@ -1522,6 +1522,54 @@ async function fetchCompaniesHouse(companyName) {
   } catch { return null; }
 }
 
+// ── Gemini with self-healing model resolution ──────────────────────────────
+// Google retires model names (gemini-2.0-flash → 404), which silently broke
+// enrichment. Instead of hardcoding one name, try a candidate list and cache the
+// first that works for the session. GEMINI_MODEL overrides the whole list.
+let _geminiModel = null; // cached working model id for this process
+let _geminiErrLogged = false; // log AI failures once per run, not per domain (avoids log spam)
+const _GEMINI_CANDIDATES = [
+  'gemini-2.5-flash', 'gemini-flash-latest', 'gemini-2.0-flash-001',
+  'gemini-2.5-flash-lite', 'gemini-1.5-flash',
+];
+async function geminiGenerate(key, systemPrompt, userPrompt) {
+  const body = JSON.stringify({
+    systemInstruction: { parts: [{ text: systemPrompt }] },
+    contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+    generationConfig: { maxOutputTokens: 250, temperature: 0, responseMimeType: 'application/json' },
+  });
+  const call = async (model) => {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+    let r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+    if (!r.ok && (r.status === 429 || r.status >= 500)) { await new Promise(s => setTimeout(s, 2000)); r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body }); }
+    return r;
+  };
+  // Candidate order: explicit override → cached working model → fallback list.
+  const tried = new Set();
+  const candidates = [process.env.GEMINI_MODEL, _geminiModel, ..._GEMINI_CANDIDATES].filter(Boolean);
+  for (const model of candidates) {
+    if (tried.has(model)) continue; tried.add(model);
+    let r;
+    try { r = await call(model); } catch { continue; }
+    if (r.ok) {
+      if (_geminiModel !== model) { _geminiModel = model; console.log(`[enrich] Gemini using model: ${model}`); }
+      const j = await r.json();
+      const u = j?.usageMetadata || {};
+      const cost = ((u.promptTokenCount || 0) * 0.10 + (u.candidatesTokenCount || 0) * 0.40) / 1_000_000;
+      const tokens = (u.promptTokenCount || 0) + (u.candidatesTokenCount || 0);
+      const text = (j?.candidates?.[0]?.content?.parts?.[0]?.text || '').replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+      return { text, cost, tokens };
+    }
+    // 404 = wrong/retired model name → try the next candidate. Other 4xx (bad key,
+    // quota) won't be fixed by another model, so stop.
+    if (r.status !== 404) {
+      if (!_geminiErrLogged) { const b = await r.text().catch(() => ''); console.error(`[enrich] Gemini ${r.status} (model ${model}): ${b.slice(0, 160)}`); }
+      return null;
+    }
+  }
+  return null; // every candidate 404'd
+}
+
 async function enrichDomainFromWeb(domain, companyName, fields) {
   const cleanDomain = domain.replace(/^https?:\/\//i, '').replace(/\/.*$/, '').trim();
   const wantFields = [];
@@ -1566,60 +1614,52 @@ async function enrichDomainFromWeb(domain, companyName, fields) {
 
     const userPrompt = `Company: ${companyName || cleanDomain}\nDomain: ${cleanDomain}${ch?.sic ? `\nCompanies House SIC: ${ch.sic}` : ''}${ch?.accounts_type ? `\nAccounts type: ${ch.accounts_type}` : ''}\nExtract: ${wantFields.join('; ')}.\n\nReturn JSON only: {"industry":null,"keywords":null,"num_employees":null}`;
 
+    // The AI call is BEST-EFFORT: if it fails (model retired, rate limit, outage),
+    // we must NOT discard the Companies House data — SIC backfill has to survive an
+    // AI outage. A failed AI call just leaves the AI fields empty.
     let text = '', cost = 0, tokens = 0;
-    if (useGemini) {
-      const model = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`;
-      const geminiReq = () => fetch(url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: systemPrompt }] },
-          contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-          generationConfig: { maxOutputTokens: 250, temperature: 0, responseMimeType: 'application/json' },
-        }),
-      });
-      let r = await geminiReq();
-      if (!r.ok && (r.status === 429 || r.status >= 500)) {
-        await new Promise(res => setTimeout(res, 2000));
-        r = await geminiReq();
+    try {
+      if (useGemini) {
+        const r = await geminiGenerate(geminiKey, systemPrompt, userPrompt);
+        if (r) {
+          cost = r.cost; tokens = r.tokens; text = r.text;
+        } else if (!_geminiErrLogged) {
+          console.error('[enrich] Gemini unavailable (all candidate models failed) — continuing with Companies House data only'); _geminiErrLogged = true;
+        }
+      } else {
+        const model = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
+        const claudeReq = () => fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'prompt-caching-2024-07-31' },
+          body: JSON.stringify({ model, max_tokens: 250, system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }], messages: [{ role: 'user', content: userPrompt }] }),
+        });
+        let r = await claudeReq();
+        if (!r.ok && (r.status === 429 || r.status >= 500)) {
+          await new Promise(res => setTimeout(res, 2000));
+          r = await claudeReq();
+        }
+        if (r.ok) {
+          const j = await r.json();
+          const u = j?.usage || {};
+          cost = (
+            ((u.input_tokens || 0) * HAIKU_PRICE.input +
+             (u.output_tokens || 0) * HAIKU_PRICE.output +
+             (u.cache_creation_input_tokens || 0) * HAIKU_PRICE.cache_write +
+             (u.cache_read_input_tokens || 0) * HAIKU_PRICE.cache_read) / 1_000_000
+          );
+          tokens = (u.input_tokens || 0) + (u.output_tokens || 0) + (u.cache_read_input_tokens || 0);
+          text = (j?.content?.[0]?.text || '').replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+        }
       }
-      if (!r.ok) {
-        const body = await r.text().catch(() => '');
-        console.error(`[enrich] Gemini ${r.status} for ${cleanDomain}: ${body.slice(0, 200)}`);
-        return null;
-      }
-      const j = await r.json();
-      const u = j?.usageMetadata || {};
-      // Gemini Flash pricing (per 1M tokens): ~$0.10 in / $0.40 out.
-      cost = ((u.promptTokenCount || 0) * 0.10 + (u.candidatesTokenCount || 0) * 0.40) / 1_000_000;
-      tokens = (u.promptTokenCount || 0) + (u.candidatesTokenCount || 0);
-      text = (j?.candidates?.[0]?.content?.parts?.[0]?.text || '').replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
-    } else {
-      const model = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
-      const claudeReq = () => fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'prompt-caching-2024-07-31' },
-        body: JSON.stringify({ model, max_tokens: 250, system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }], messages: [{ role: 'user', content: userPrompt }] }),
-      });
-      let r = await claudeReq();
-      if (!r.ok && (r.status === 429 || r.status >= 500)) {
-        await new Promise(res => setTimeout(res, 2000));
-        r = await claudeReq();
-      }
-      if (!r.ok) return null;
-      const j = await r.json();
-      const u = j?.usage || {};
-      cost = (
-        ((u.input_tokens || 0) * HAIKU_PRICE.input +
-         (u.output_tokens || 0) * HAIKU_PRICE.output +
-         (u.cache_creation_input_tokens || 0) * HAIKU_PRICE.cache_write +
-         (u.cache_read_input_tokens || 0) * HAIKU_PRICE.cache_read) / 1_000_000
-      );
-      tokens = (u.input_tokens || 0) + (u.output_tokens || 0) + (u.cache_read_input_tokens || 0);
-      text = (j?.content?.[0]?.text || '').replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+    } catch (e) {
+      if (!_geminiErrLogged) { console.error(`[enrich] AI call failed: ${e.message} — continuing with Companies House data only`); _geminiErrLogged = true; }
     }
-    const data = JSON.parse(text);
+    // Parse AI JSON if we got any; tolerate failure (CH data still returned below).
+    let data = {};
+    if (text) { try { data = JSON.parse(text) || {}; } catch {} }
+
+    // If neither AI nor CH produced anything, there's nothing to write.
+    if (!ch && !Object.keys(data).length) return null;
 
     // Fill gaps with Companies House data directly
     if (ch) {
@@ -1939,6 +1979,7 @@ app.post('/api/admin/enrich/start', requireAdmin, async (req, res) => {
   await enrichDbState(pgdb);
   // Kill any in-memory running job before starting fresh
   _enrichGeneration++;
+  _geminiErrLogged = false; // fresh run → allow one AI-error log again
   if (_activeEnrichJob) {
     _activeEnrichJob.paused = true;
     _activeEnrichJob.status = 'stopped';
