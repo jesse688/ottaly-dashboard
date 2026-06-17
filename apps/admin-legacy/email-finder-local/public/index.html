@@ -12,7 +12,12 @@
 <header class="topbar">
   <div class="topbar-inner">
     <div class="brand">Email Finder Local</div>
-    <div class="ip"><span class="ip-dot"></span><span id="ipText">Checking IP...</span></div>
+    <div style="display:flex;align-items:center;gap:16px">
+      <div class="ip" id="usageBox" title="Reacher verifications used today (shared with the contacts page). Daily proxy limit 20,000.">
+        <span class="ip-dot" id="usageDot"></span><span id="usageText">Verifications: —</span>
+      </div>
+      <div class="ip"><span class="ip-dot"></span><span id="ipText">Checking IP...</span></div>
+    </div>
   </div>
 </header>
 
@@ -469,6 +474,28 @@ async function loadIp() {
     document.getElementById('ipText').textContent = 'Current IP unavailable';
   }
 }
+
+// Daily Reacher verification counter — same /api/reacher-pool source the contacts
+// page reads, so the numbers always match. Daily proxy limit is 20,000.
+const DAILY_VERIFY_LIMIT = 20000;
+async function loadUsage() {
+  try {
+    const r = await fetch(`${apiBase}/reacher-pool`);
+    const d = await r.json();
+    const used = (d.pool || []).reduce((sum, m) => sum + (m.usageToday || 0), 0);
+    const txt = document.getElementById('usageText');
+    const dot = document.getElementById('usageDot');
+    txt.textContent = `Verifications: ${used.toLocaleString()} / ${DAILY_VERIFY_LIMIT.toLocaleString()} today`;
+    const pct = used / DAILY_VERIFY_LIMIT;
+    // green < 80%, amber 80-100%, red at/over limit
+    dot.style.background = pct >= 1 ? '#ef4444' : pct >= 0.8 ? '#f59e0b' : '#22c55e';
+    txt.style.color = pct >= 1 ? '#fca5a5' : pct >= 0.8 ? '#fcd34d' : '#cbd5e1';
+  } catch {
+    document.getElementById('usageText').textContent = 'Verifications: —';
+  }
+}
+loadUsage();
+setInterval(loadUsage, 5000);
 
 async function runSmtpDiagnostic() {
   const box = document.getElementById('diagnosticBox');

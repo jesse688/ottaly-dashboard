@@ -376,11 +376,21 @@ function buildEmailCandidates(firstName, lastName, domain) {
     if (local) locals.push(local);
   }
 
-  add(first);
-  add(last);
-  add(`${fi}${li}`);
-  add(`${li}${fi}`);
+  // Most common UK/US B2B patterns FIRST so early-stop fires on the likely match
+  // before wasting checks on rare ones (order matters: each verify costs budget):
+  //   first.last → first → flast → first.l → f.last → firstlast → last.first
+  add(`${first}.${last}`);   // john.smith       (most common)
+  add(first);                // john
+  add(`${fi}${last}`);       // jsmith
+  add(`${first}.${li}`);     // john.s
+  add(`${fi}.${last}`);      // j.smith
+  add(`${first}${last}`);    // johnsmith
+  add(`${last}.${first}`);   // smith.john
+  add(`${last}`);            // smith
+  add(`${fi}${li}`);         // js
+  add(`${li}${fi}`);         // sj
 
+  // Remaining separator combinations (less common) fill out the rest.
   for (const sep of separators) {
     add(`${first}${sep}${last}`);
     add(`${last}${sep}${first}`);
@@ -1047,6 +1057,14 @@ async function verifyContactWithReacher(contact, log = () => {}, job = null) {
     }));
     results.push(...batchResults);
     if (results.some(result => result.status === 'valid')) break;
+    // Catch-all domain: every further permutation will also come back catch-all/
+    // risky and can NEVER be proven, so testing the rest is pure waste — and it's
+    // what burns the daily verification budget on care-home lists. Stop as soon as
+    // we know, keeping the first generated pattern as the best guess.
+    if (batchResults.some(result => isCatchAllResult(result))) {
+      log(`${domain} is catch-all — no permutation can be proven; stopping to save verifications`);
+      break;
+    }
     if (REACHER_STOP_ON_TIMEOUT && batchResults.some(result => /^Reacher timed out/.test(result.reason || ''))) {
       log('Reacher timed out; stopping this contact so the queue does not overload the verifier');
       break;

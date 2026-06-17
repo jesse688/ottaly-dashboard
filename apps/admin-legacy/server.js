@@ -874,9 +874,14 @@ function startEmailFinderApp() {
       SMTP_TIMEOUT_MS: process.env.SMTP_TIMEOUT_MS || '10000',
       CHECK_DELAY_MS: process.env.CHECK_DELAY_MS || '0',
       MAX_CANDIDATES: process.env.MAX_CANDIDATES || '12',
-      VERIFY_CANDIDATES: process.env.VERIFY_CANDIDATES || '12',
-      ROW_CONCURRENCY: process.env.ROW_CONCURRENCY || '3',
+      // 8 (not 12) common patterns max; with the priority ordering + catch-all
+      // short-circuit the tail rarely runs, so this just caps worst-case waste.
+      VERIFY_CANDIDATES: process.env.VERIFY_CANDIDATES || '8',
+      ROW_CONCURRENCY: process.env.ROW_CONCURRENCY || '5',
       CANDIDATE_CONCURRENCY: process.env.CANDIDATE_CONCURRENCY || '2',
+      // Raise the per-minute throttle (was a conservative 50). Proxy allows 5
+      // concurrent; catch-all short-circuit slashes total checks, so this is safe.
+      REACHER_PER_MIN: process.env.REACHER_PER_MIN || '150',
       SMTP_RETRIES: process.env.SMTP_RETRIES || '1',
       CHECK_CATCH_ALL: process.env.CHECK_CATCH_ALL || 'false',
       DEFAULT_VERIFIER: process.env.DEFAULT_VERIFIER || 'reacher',
