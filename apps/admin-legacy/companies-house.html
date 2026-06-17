@@ -436,7 +436,9 @@
     document.getElementById('nameSearch').value = '';
   }
 
-  function searchCompanies(page) {
+  function searchCompanies(page) { searchCompaniesThen(page, null); }
+
+  function searchCompaniesThen(page, cb) {
     _currentPage = page || 1;
     var params = new URLSearchParams({ page: _currentPage, per_page: _perPage });
     if (_selectedSics.length) params.set('sic', _selectedSics.map(function(s){ return s.code; }).join(','));
@@ -459,6 +461,7 @@
       _totalCompanies = d.total;
       document.getElementById('statusArea').innerHTML = '';
       renderCompanies(d);
+      if (cb) cb();
     }).catch(function(e){ showStatus(e.message, 'error'); });
   }
 
@@ -529,8 +532,18 @@
       if (i >= nums.length) {
         var secs = Math.round((Date.now() - startedAt) / 1000);
         setProgress('Enrichment done.', totalN, totalN, withDomain + ' got a domain · ' + noDomain + ' no domain · ' + secs + 's');
-        showStatus('Enriched ' + enriched + ' companies — ' + withDomain + ' have a domain. Now click "Get Owners".', 'success');
-        searchCompanies(_currentPage); // refresh table to show new website/industry
+        showStatus('Enriched ' + enriched + ' companies — ' + withDomain + ' have a domain. Now loading owners…', 'success');
+        // Refresh table to show new website/industry, then re-tick the same
+        // companies and auto-advance to Get Owners so the flow is uninterrupted.
+        var keep = nums.slice();
+        searchCompaniesThen(_currentPage, function() {
+          keep.forEach(function(n) {
+            var cb = document.querySelector('.company-cb[data-id="' + n + '"]');
+            if (cb) cb.checked = true;
+          });
+          updateCompanySelection();
+          fetchDirectors();
+        });
         return;
       }
       var slice = nums.slice(i, i + CHUNK);
