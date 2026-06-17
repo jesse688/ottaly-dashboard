@@ -121,7 +121,20 @@ export async function GET(req: NextRequest) {
         })
         // interested + question → Review for manual decision (a pricing/clarifying
         // question is a hot lead). unsubscribe → auto-actioned, filed 'rejected'.
-        const folder = (result.category === 'interested' || result.category === 'question') ? 'review'
+        // BUT if this lead was ALREADY marked as a lead (an earlier reply), this is a
+        // follow-up to the CLIENT — it must NOT clutter Review. Route to 'replies'.
+        let alreadyLead = false
+        if (result.category === 'interested' || result.category === 'question') {
+          const m = await client.query(
+            `SELECT 1 FROM unibox_replies
+              WHERE workspace_id = $1 AND lower(lead_email) = lower($2)
+                AND marked_as_lead = TRUE AND id <> $3 LIMIT 1`,
+            [row.workspace_id, row.lead_email, id]
+          ).catch(() => ({ rows: [] as unknown[] }))
+          alreadyLead = m.rows.length > 0
+        }
+        const folder = alreadyLead ? 'replies'
+                     : (result.category === 'interested' || result.category === 'question') ? 'review'
                      : result.category === 'unsubscribe' ? 'rejected'
                      : undefined
         await client.query(

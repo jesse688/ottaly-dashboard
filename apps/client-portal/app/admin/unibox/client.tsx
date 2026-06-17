@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Logo } from '@/app/components/Logo'
 
-type Folder = 'review' | 'inbox' | 'done' | 'unmapped' | 'rejected' | 'warmup' | 'all'
+type Folder = 'review' | 'replies' | 'inbox' | 'done' | 'unmapped' | 'rejected' | 'warmup' | 'all'
 
 interface Reply {
   id: string
@@ -86,6 +86,7 @@ function leadFormFromReply(r: Reply): LeadForm {
 
 const FOLDERS: { key: Folder; label: string }[] = [
   { key: 'review', label: 'Review' },
+  { key: 'replies', label: 'Replies' },
   { key: 'all', label: 'All replies' },
   { key: 'inbox', label: 'Inbox' },
   { key: 'done', label: 'Done' },

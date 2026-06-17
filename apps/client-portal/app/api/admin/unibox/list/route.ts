@@ -4,7 +4,7 @@ import { getAdminSession } from '@/lib/auth'
 import { CATEGORIES } from '@/lib/classify'
 import { sanitizeEmailHtml } from '@/lib/sanitize-html'
 
-const FOLDERS = ['inbox', 'review', 'done', 'unmapped', 'rejected', 'warmup'] as const
+const FOLDERS = ['inbox', 'review', 'replies', 'done', 'unmapped', 'rejected', 'warmup'] as const
 type Folder = (typeof FOLDERS)[number]
 
 // Admin-only list of Master Unibox replies, one folder at a time, newest-first,
