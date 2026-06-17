@@ -646,6 +646,13 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
 <div id="clientView">
 <div class="container">
 
+    <!-- Out-of-data: clients whose lead pool is exhausted (sending will stall) -->
+    <div class="section-title" style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap">
+      <span>⛽ Out of Data — clients with no leads left to send</span>
+      <span id="dataStatusMeta" style="font-size:11px;font-weight:400;color:#9CA3AF"></span>
+    </div>
+    <div id="dataStatusPanel" style="margin-bottom:1.75rem"><p class="loading">Loading data status…</p></div>
+
     <div id="alerts" class="alerts"></div>
 
     <!-- Today's overview -->
@@ -1626,6 +1633,56 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
             </div>`;
     }
 
+    // ── Out-of-data panel ────────────────────────────────────
+    async function loadDataStatus() {
+      const panel = document.getElementById('dataStatusPanel');
+      const meta  = document.getElementById('dataStatusMeta');
+      if (!panel) return;
+      let d;
+      try {
+        const r = await fetch('/api/actions/out-of-data');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        d = await r.json();
+      } catch (e) {
+        panel.innerHTML = `<div class="card" style="color:#DC2626">Couldn't load data status: ${e.message}</div>`;
+        return;
+      }
+      const clients = d.clients || [];
+      const out = clients.filter(c => c.status === 'out_of_data');
+      const low = clients.filter(c => c.status === 'low_data');
+      if (meta) meta.textContent = (d.updatedAt ? 'Campaigns synced ' + new Date(d.updatedAt).toLocaleString() : '') +
+        (d.summary ? ` · ${out.length} out, ${low.length} low` : '');
+
+      if (!out.length && !low.length) {
+        panel.innerHTML = `<div class="card" style="border-top:3px solid #16A34A">
+          <div style="font-weight:700;color:#16A34A">✓ All running clients have leads to send</div>
+          <div style="font-size:12px;color:#6B7280;margin-top:4px">No active campaign has run dry. ${clients.length} client(s) checked.</div>
+        </div>`;
+        return;
+      }
+      const card = (c) => {
+        const red = c.status === 'out_of_data';
+        const col = red ? '#DC2626' : '#D97706';
+        const tag = red ? 'OUT OF DATA' : 'LOW DATA';
+        return `<div class="card" style="border-top:3px solid ${col};padding:1.1rem 1.25rem">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;gap:.5rem">
+            <span style="font-weight:700;font-size:15px">${c.name}</span>
+            <span style="font-size:10px;font-weight:700;color:${col};background:${col}18;padding:2px 8px;border-radius:99px">${tag}</span>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px">
+            <div><div style="font-size:18px;font-weight:700;color:${col}">${(c.remaining||0).toLocaleString()}</div><div style="font-size:10px;color:#6B7280;text-transform:uppercase">Leads left</div></div>
+            <div><div style="font-size:18px;font-weight:700">${c.exhaustion}%</div><div style="font-size:10px;color:#6B7280;text-transform:uppercase">Contacted</div></div>
+            <div><div style="font-size:18px;font-weight:700">${c.runningCampaigns}</div><div style="font-size:10px;color:#6B7280;text-transform:uppercase">Running</div></div>
+            <div><div style="font-size:18px;font-weight:700">${(c.recentSent||0).toLocaleString()}</div><div style="font-size:10px;color:#6B7280;text-transform:uppercase">Sent 3d</div></div>
+          </div>
+          <div style="font-size:11px;color:#6B7280;margin-top:8px">${(c.contacted||0).toLocaleString()} of ${(c.totalLeads||0).toLocaleString()} leads contacted across running campaigns${red?' — needs fresh data':''}.</div>
+        </div>`;
+      };
+      panel.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:1rem">
+        ${out.map(card).join('')}${low.map(card).join('')}
+      </div>`;
+    }
+
     async function init() {
         try {
             // Load workspaces + client status in parallel
@@ -1648,6 +1705,8 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
         setInterval(refresh, CFG.REFRESH_MS);
         runHealthScan();
         setInterval(runHealthScan, CFG.REFRESH_MS);
+        loadDataStatus();
+        setInterval(loadDataStatus, CFG.REFRESH_MS);
     }
 
     init();

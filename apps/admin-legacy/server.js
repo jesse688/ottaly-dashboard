@@ -5549,6 +5549,71 @@ setInterval(refreshCampaignCache, 30 * 60 * 1000);
 
 app.get('/api/campaigns/intelligence', (req, res) => res.json(campaignCache));
 
+// ── "Out of data" — clients not sending because their lead pool is exhausted ──
+// Reads the campaign cache (refreshed every 30 min) so it's instant — no live
+// Bison calls. For each client we look at their RUNNING campaigns (status Active
+// /Launching) and sum the leads left to contact (total_leads − contacted). A
+// client whose running campaigns have ~no leads left is "out of data": sending
+// will stall even though nothing is paused. Cross-references recent sends from
+// mailbox_daily_stats so you can tell "genuinely dried up" from "just launched".
+app.get('/api/actions/out-of-data', requireSession, async (req, res) => {
+  try {
+    const pgdb = app.locals.pgDb;
+    const wsList = campaignCache.workspaces || [];
+
+    // recent sends per workspace (last 3 days) to confirm the stall is real.
+    const recentByWs = new Map();
+    if (pgdb) {
+      try {
+        const rs = await pgdb.query(`
+          SELECT workspace_id, SUM(sent)::int AS sent
+          FROM mailbox_daily_stats
+          WHERE date >= (CURRENT_DATE - 2)
+          GROUP BY workspace_id
+        `);
+        for (const r of rs.rows) recentByWs.set(String(r.workspace_id), r.sent || 0);
+      } catch (e) { /* table may be empty; recent stays 0 */ }
+    }
+
+    const isRunning = c => ['active', 'launching'].includes(String(c.status || '').toLowerCase());
+    const clients = [];
+    for (const ws of wsList) {
+      const camps = ws.campaigns || [];
+      const running = camps.filter(isRunning);
+      // only campaigns where Bison gave us a real lead-pool size
+      const withData = running.filter(c => (c.dataSize || 0) > 0);
+      const total      = withData.reduce((s, c) => s + (c.dataSize || 0), 0);
+      const contacted  = withData.reduce((s, c) => s + (c.leadContacted || 0), 0);
+      const remaining  = withData.reduce((s, c) => s + Math.max(0, (c.dataSize || 0) - (c.leadContacted || 0)), 0);
+      const exhaustion = total > 0 ? contacted / total : 0;
+      const recentSent = recentByWs.get(String(ws.id)) || 0;
+
+      let status;
+      if (running.length === 0)                          status = 'not_running';   // paused / none — different problem
+      else if (withData.length === 0)                    status = 'unknown';       // running but no pool size from Bison
+      else if (remaining <= 0 || exhaustion >= 0.98)     status = 'out_of_data';   // dried up
+      else if (exhaustion >= 0.85 || remaining < 200)    status = 'low_data';      // running low
+      else                                               status = 'ok';
+
+      clients.push({
+        id: ws.id, name: ws.name || ws.id,
+        runningCampaigns: running.length,
+        totalLeads: total, contacted, remaining,
+        exhaustion: Math.round(exhaustion * 100),
+        recentSent, status,
+      });
+    }
+    const rank = { out_of_data: 0, low_data: 1, unknown: 2, not_running: 3, ok: 4 };
+    clients.sort((a, b) => (rank[a.status] - rank[b.status]) || (a.remaining - b.remaining));
+
+    const summary = clients.reduce((m, c) => { m[c.status] = (m[c.status] || 0) + 1; return m; }, {});
+    res.json({ updatedAt: campaignCache.updatedAt, summary, clients });
+  } catch (err) {
+    console.error('[out-of-data]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─────────────────────────────────────────────────────────────────────
 // CENTRAL WORKSPACE STATS — single source of truth for every page
 // ─────────────────────────────────────────────────────────────────────
