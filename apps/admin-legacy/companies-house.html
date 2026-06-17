@@ -4,7 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-  <link rel="apple-touch-icon" href="/favicon.svg">
   <meta name="theme-color" content="#050C29">
   <title>CH Pipeline — Ottaly</title>
   <script>document.write('<script src="/splash.js?v=' + Date.now() + '"><\/script>');</script>
@@ -20,232 +19,237 @@
       --border-soft: #21262d;
       --accent: #22d3ee;
       --accent-dim: #0e7490;
+      --accent-glow: rgba(34,211,238,.15);
+      --green: #3fb950;
+      --amber: #e3b341;
+      --blue: #58a6ff;
+      --red: #f85149;
       --text: #e6edf3;
       --text-hi: #f0f6fc;
       --muted: #8b949e;
       --faint: #6e7681;
       --radius: 10px;
       --radius-sm: 7px;
+      --radius-xs: 5px;
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: var(--bg); color: var(--text);
-      -webkit-font-smoothing: antialiased;
-    }
+    body { font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
     .app { display: flex; min-height: 100vh; }
-    .main { flex: 1; overflow: auto; padding: 28px 32px 64px; max-width: 1500px; }
+    .main { flex: 1; overflow: auto; padding: 24px 28px 120px; max-width: 1600px; }
 
-    /* ---- Header ---- */
-    .page-head { margin-bottom: 24px; }
-    h1 { font-size: 22px; font-weight: 700; color: var(--text-hi); letter-spacing: -0.01em; }
-    .subtitle { font-size: 13.5px; color: var(--muted); margin-top: 5px; }
+    /* ── Page header ── */
+    .page-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 20px; gap: 16px; flex-wrap: wrap; }
+    .page-head-left h1 { font-size: 21px; font-weight: 700; color: var(--text-hi); letter-spacing: -.01em; }
+    .page-head-left p { font-size: 13px; color: var(--muted); margin-top: 3px; }
 
-    /* ---- Metric cards ---- */
-    .stats-bar { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; margin-bottom: 22px; }
-    .stat-card {
-      position: relative; background: linear-gradient(180deg, var(--panel) 0%, #13181f 100%);
-      border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; overflow: hidden;
-    }
-    .stat-card::before {
-      content: ''; position: absolute; top: 0; left: 0; width: 3px; height: 100%;
-      background: var(--accent); opacity: .8;
-    }
-    .stat-card .lbl { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
-    .stat-card .val { font-size: 26px; font-weight: 700; color: var(--text-hi); margin-top: 6px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+    /* ── Stats bar ── */
+    .stats-bar { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; margin-bottom: 20px; }
+    .stat-card { position: relative; background: linear-gradient(180deg, var(--panel) 0%, #13181f 100%); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; overflow: hidden; }
+    .stat-card::before { content: ''; position: absolute; top: 0; left: 0; width: 3px; height: 100%; background: var(--accent); opacity: .7; }
+    .stat-card .lbl { font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+    .stat-card .val { font-size: 24px; font-weight: 700; color: var(--text-hi); margin-top: 5px; line-height: 1.1; font-variant-numeric: tabular-nums; }
     .stat-card .val.accent { color: var(--accent); }
 
-    /* ---- CLI note ---- */
-    .cli-note {
-      background: var(--bg-inset); border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
-      padding: 12px 16px; margin-bottom: 22px; font-size: 12.5px; color: var(--muted); line-height: 1.7;
-    }
-    .cli-note strong { color: var(--text); font-weight: 600; }
-    .cli-note code {
-      background: #161b22; color: var(--accent); padding: 2px 7px; border-radius: 5px;
-      font-size: 12px; font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-    }
+    /* ── Pipeline steps ── */
+    .pipeline-steps { display: flex; align-items: center; gap: 0; margin-bottom: 20px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 0 4px; overflow-x: auto; }
+    .step { display: flex; align-items: center; gap: 8px; padding: 12px 16px; font-size: 12px; font-weight: 600; color: var(--faint); white-space: nowrap; cursor: default; position: relative; flex-shrink: 0; }
+    .step .step-num { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0; transition: all .2s; }
+    .step.active { color: var(--accent); }
+    .step.active .step-num { border-color: var(--accent); background: var(--accent-glow); color: var(--accent); }
+    .step.done { color: var(--green); }
+    .step.done .step-num { border-color: var(--green); background: rgba(63,185,80,.12); color: var(--green); }
+    .step-arrow { color: var(--border); font-size: 14px; flex-shrink: 0; }
 
-    /* ---- Panels ---- */
-    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 18px; }
-    .panel-head { display: flex; align-items: center; justify-content: space-between; padding: 15px 18px; border-bottom: 1px solid var(--border-soft); }
-    .panel-body { padding: 18px; }
-    .panel-title { font-size: 14px; font-weight: 600; color: var(--text-hi); display: flex; align-items: center; gap: 8px; }
-    .panel-title .count { font-weight: 400; color: var(--muted); font-size: 13px; }
+    /* ── CLI note ── */
+    .cli-note { background: var(--bg-inset); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); padding: 10px 14px; margin-bottom: 18px; font-size: 12px; color: var(--muted); line-height: 1.7; }
+    .cli-note strong { color: var(--text); }
+    .cli-note code { background: var(--panel); color: var(--accent); padding: 1px 6px; border-radius: 4px; font-size: 11.5px; font-family: ui-monospace, monospace; }
 
-    /* ---- Filter panel ---- */
-    .filter-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px 16px; }
-    .filter-grid.span-actions { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-soft); display: flex; gap: 10px; align-items: center; }
-    .filter-group { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+    /* ── Panels ── */
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 16px; }
+    .panel-head { display: flex; align-items: center; justify-content: space-between; padding: 13px 16px; border-bottom: 1px solid var(--border-soft); gap: 12px; }
+    .panel-body { padding: 16px; }
+    .panel-title { font-size: 13.5px; font-weight: 600; color: var(--text-hi); display: flex; align-items: center; gap: 8px; }
+    .panel-title .count { font-weight: 400; color: var(--muted); font-size: 12.5px; }
+
+    /* ── Filter panel ── */
+    .filter-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px 14px; }
+    .filter-group { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
     .filter-group.wide { grid-column: span 2; }
-    .filter-group > label { font-size: 11.5px; font-weight: 500; color: var(--muted); letter-spacing: .01em; }
+    .filter-group > label { font-size: 11px; font-weight: 600; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
 
     label { user-select: none; }
-    input[type=text], input[type=search], input[type=number], select {
+    input[type=text], input[type=search], input[type=number], input[type=date], select, textarea {
       background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--radius-sm);
-      color: var(--text); padding: 0 11px; height: 36px; font-size: 13px; outline: none; width: 100%;
+      color: var(--text); padding: 0 11px; height: 34px; font-size: 13px; outline: none; width: 100%;
       font-family: inherit; transition: border-color .12s, box-shadow .12s;
     }
     select { cursor: pointer; appearance: none;
       background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238b949e' d='M2 4l4 4 4-4z'/%3E%3C/svg%3E");
-      background-repeat: no-repeat; background-position: right 11px center; padding-right: 30px;
+      background-repeat: no-repeat; background-position: right 10px center; padding-right: 28px;
     }
-    input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(34,211,238,.12); }
+    input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(34,211,238,.1); }
     input::placeholder { color: var(--faint); }
+    input[type=date] { cursor: pointer; color-scheme: dark; }
+    input[type=date]::-webkit-calendar-picker-indicator { filter: invert(0.5); cursor: pointer; }
+    input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; vertical-align: middle; }
 
-    /* ---- Buttons ---- */
-    .btn {
-      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-      padding: 0 16px; height: 36px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 600;
-      cursor: pointer; border: 1px solid transparent; font-family: inherit; white-space: nowrap;
-      transition: background .12s, border-color .12s, transform .05s, box-shadow .12s;
-    }
+    /* ── Saved presets ── */
+    .presets-bar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+    .presets-label { font-size: 11px; color: var(--faint); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+    .preset-chip { display: inline-flex; align-items: center; gap: 5px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 20px; padding: 3px 10px; font-size: 12px; color: var(--text); cursor: pointer; transition: all .12s; white-space: nowrap; }
+    .preset-chip:hover { border-color: var(--accent); color: var(--accent); }
+    .preset-chip .del { color: var(--faint); font-size: 13px; line-height: 1; margin-left: 2px; }
+    .preset-chip .del:hover { color: var(--red); }
+    .preset-save { display: inline-flex; align-items: center; gap: 4px; background: transparent; border: 1px dashed var(--border); border-radius: 20px; padding: 3px 10px; font-size: 12px; color: var(--faint); cursor: pointer; transition: all .12s; }
+    .preset-save:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* ── Buttons ── */
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 14px; height: 34px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 600; cursor: pointer; border: 1px solid transparent; font-family: inherit; white-space: nowrap; transition: background .12s, border-color .12s, transform .05s, box-shadow .12s; }
     .btn:active { transform: translateY(1px); }
     .btn-primary { background: var(--accent); color: #062b33; }
     .btn-primary:hover { background: #4fdef0; box-shadow: 0 2px 10px rgba(34,211,238,.25); }
-    .btn-hero {
-      background: linear-gradient(135deg, #22d3ee, #06b6d4); color: #042b33; font-weight: 700;
-      box-shadow: 0 2px 14px rgba(34,211,238,.28); height: 36px; padding: 0 18px;
-    }
+    .btn-hero { background: linear-gradient(135deg, #22d3ee, #06b6d4); color: #042b33; font-weight: 700; box-shadow: 0 2px 14px rgba(34,211,238,.25); }
     .btn-hero:hover { box-shadow: 0 4px 20px rgba(34,211,238,.4); }
     .btn-secondary { background: var(--panel-2); color: var(--text); border-color: var(--border); }
     .btn-secondary:hover { background: #262c36; border-color: #444c56; }
     .btn-ghost { background: transparent; color: var(--muted); border-color: var(--border); }
     .btn-ghost:hover { color: var(--text); border-color: #444c56; }
-    .btn-sm { padding: 0 11px; height: 30px; font-size: 12px; }
+    .btn-danger { background: rgba(248,81,73,.1); color: var(--red); border-color: rgba(248,81,73,.3); }
+    .btn-sm { padding: 0 10px; height: 28px; font-size: 12px; }
     .btn:disabled { opacity: .4; cursor: not-allowed; transform: none; box-shadow: none; }
 
-    /* ---- Tables ---- */
+    /* ── Tables ── */
     .table-wrap { overflow-x: auto; border-radius: var(--radius-sm); }
-    .table-scroll { max-height: 560px; overflow-y: auto; border-radius: var(--radius-sm); }
+    .table-scroll { max-height: 520px; overflow-y: auto; border-radius: var(--radius-sm); }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    thead th {
-      position: sticky; top: 0; z-index: 2; background: #12171e; text-align: left;
-      padding: 10px 12px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em;
-      color: var(--muted); border-bottom: 1px solid var(--border); font-weight: 600; white-space: nowrap;
-    }
-    tbody td { padding: 11px 12px; border-bottom: 1px solid var(--border-soft); vertical-align: middle; color: var(--text); }
+    thead th { position: sticky; top: 0; z-index: 2; background: #12171e; text-align: left; padding: 9px 12px; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); border-bottom: 1px solid var(--border); font-weight: 600; white-space: nowrap; }
+    thead th.sortable { cursor: pointer; user-select: none; }
+    thead th.sortable:hover { color: var(--text); }
+    thead th.sort-asc::after { content: ' ↑'; color: var(--accent); }
+    thead th.sort-desc::after { content: ' ↓'; color: var(--accent); }
+    tbody td { padding: 10px 12px; border-bottom: 1px solid var(--border-soft); vertical-align: middle; color: var(--text); }
     tbody tr:last-child td { border-bottom: none; }
     tbody tr { transition: background .1s; }
     tbody tr:hover td { background: var(--panel-2); }
-    td.mono { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 12px; }
-    .cell-sub { color: var(--faint); font-size: 11px; font-family: ui-monospace, 'SF Mono', Menlo, monospace; margin-top: 2px; }
+    tbody tr.selected td { background: rgba(34,211,238,.05); }
+    td.mono { font-family: ui-monospace, monospace; font-size: 12px; }
+    .cell-sub { color: var(--faint); font-size: 11px; font-family: ui-monospace, monospace; margin-top: 2px; }
     .cell-muted { color: var(--muted); font-size: 12px; }
     .cell-name { font-weight: 500; color: var(--text-hi); }
     .col-check { width: 36px; }
-    .col-check input, td .row-check { cursor: pointer; }
-    a.link { color: var(--accent); text-decoration: none; font-size: 12.5px; }
+    a.link { color: var(--accent); text-decoration: none; font-size: 12px; }
     a.link:hover { text-decoration: underline; }
     .dash { color: var(--faint); }
 
-    input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; vertical-align: middle; }
-    input[type=date] { cursor: pointer; color-scheme: dark; }
-    input[type=date]::-webkit-calendar-picker-indicator { filter: invert(0.6); cursor: pointer; }
+    /* ── Status chips ── */
+    .status-chips { display: flex; gap: 3px; flex-wrap: nowrap; }
+    .chip { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 4px; font-size: 11px; line-height: 1; opacity: .35; }
+    .chip.on { opacity: 1; }
+    .chip-enriched.on { background: rgba(34,211,238,.12); color: var(--accent); }
+    .chip-domain.on { background: rgba(88,166,255,.12); color: var(--blue); }
+    .chip-email.on { background: rgba(63,185,80,.12); color: var(--green); }
+    .chip-pushed.on { background: rgba(227,179,65,.12); color: var(--amber); }
 
-    /* ---- SIC pills (in table) ---- */
-    .sic-pills { display: flex; flex-wrap: wrap; gap: 4px; max-width: 240px; }
-    .sic-pill {
-      background: var(--border-soft); border: 1px solid var(--border); color: #a5d8e6;
-      border-radius: 6px; padding: 1px 7px; font-size: 11px; white-space: nowrap;
-    }
+    /* ── SIC pills ── */
+    .sic-pills { display: flex; flex-wrap: wrap; gap: 3px; max-width: 220px; }
+    .sic-pill { background: var(--border-soft); border: 1px solid var(--border); color: #a5d8e6; border-radius: 5px; padding: 1px 6px; font-size: 10.5px; white-space: nowrap; }
 
-    /* ---- Badges ---- */
-    .badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 9px; border-radius: 20px; font-size: 11px; font-weight: 600; line-height: 1.5; }
-    .badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-    .badge-safe { background: rgba(63,185,80,.12); color: #3fb950; }
-    .badge-catchall { background: rgba(227,179,65,.12); color: #e3b341; }
+    /* ── Badges ── */
+    .badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; line-height: 1.5; }
+    .badge::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+    .badge-safe { background: rgba(63,185,80,.12); color: var(--green); }
+    .badge-catchall { background: rgba(227,179,65,.12); color: var(--amber); }
     .badge-unknown { background: rgba(139,148,158,.12); color: var(--muted); }
-    .badge-pushed { background: rgba(88,166,255,.12); color: #58a6ff; }
+    .badge-pushed { background: rgba(88,166,255,.12); color: var(--blue); }
 
-    /* ---- Pagination ---- */
-    .pagination { display: flex; gap: 10px; align-items: center; margin-top: 14px; font-size: 13px; color: var(--muted); }
-    .page-info { flex: 1; }
+    /* ── Pagination ── */
+    .pagination { display: flex; gap: 8px; align-items: center; margin-top: 12px; font-size: 13px; color: var(--muted); }
+    .page-info { flex: 1; font-size: 12.5px; }
 
-    /* ---- Select / action bar ---- */
-    .select-bar {
-      display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
-      margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border-soft);
-    }
+    /* ── Select bar ── */
+    .select-bar { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-soft); }
     .select-bar .label { font-size: 12px; color: var(--muted); font-weight: 500; }
-    .select-bar .sep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
-    .select-bar .selected-count { font-size: 12px; color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
-    .spacer { flex: 1; }
-    #customSelectN { width: 56px; text-align: center; height: 30px; padding: 0 6px; }
+    .select-bar .sep { width: 1px; height: 18px; background: var(--border); margin: 0 2px; }
+    #customSelectN { width: 52px; text-align: center; height: 28px; padding: 0 6px; }
 
-    .action-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 14px 18px; border-top: 1px solid var(--border-soft); }
-    .action-bar .selected-count { font-size: 13px; color: var(--accent); font-weight: 600; }
-
-    /* ---- Empty states ---- */
-    .empty-state { text-align: center; padding: 40px 20px; color: var(--muted); }
-    .empty-state .icon { font-size: 26px; opacity: .5; margin-bottom: 8px; }
-    .empty-state .title { font-size: 14px; color: var(--text); font-weight: 600; margin-bottom: 4px; }
-    .empty-state .desc { font-size: 12.5px; color: var(--muted); }
-
-    /* ---- Status / toast ---- */
-    .status-msg {
-      display: flex; align-items: center; gap: 10px; padding: 11px 15px; border-radius: var(--radius-sm);
-      font-size: 13px; margin-top: 14px; border: 1px solid transparent; animation: fadein .2s ease;
+    /* ── Floating action bar ── */
+    .float-bar {
+      position: fixed; bottom: 0; left: 0; right: 0; z-index: 200;
+      background: rgba(13,17,23,.92); backdrop-filter: blur(16px);
+      border-top: 1px solid var(--border); padding: 12px 28px;
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+      transform: translateY(100%); transition: transform .2s ease;
     }
-    @keyframes fadein { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
-    .status-msg::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
-    .status-msg.info { background: rgba(88,166,255,.08); color: #58a6ff; border-color: rgba(88,166,255,.25); }
-    .status-msg.success { background: rgba(63,185,80,.08); color: #3fb950; border-color: rgba(63,185,80,.25); }
-    .status-msg.error { background: rgba(248,81,73,.08); color: #f85149; border-color: rgba(248,81,73,.3); }
+    .float-bar.visible { transform: translateY(0); }
+    .float-bar .sel-info { font-size: 14px; font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; }
+    .float-bar .sel-sub { font-size: 12px; color: var(--muted); }
+    .float-bar-spacer { flex: 1; }
 
-    /* ---- Progress ---- */
-    .progress-wrap { margin-top: 16px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; }
-    .progress-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-    .progress-label { font-size: 13.5px; color: var(--text-hi); font-weight: 600; display: flex; align-items: center; gap: 8px; }
-    .progress-spin { width: 13px; height: 13px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
-    .progress-spin.done { border: 2px solid #3fb950; animation: none; }
+    /* ── Empty states ── */
+    .empty-state { text-align: center; padding: 36px 20px; color: var(--muted); }
+    .empty-state .icon { font-size: 24px; opacity: .4; margin-bottom: 8px; }
+    .empty-state .title { font-size: 14px; color: var(--text); font-weight: 600; margin-bottom: 4px; }
+    .empty-state .desc { font-size: 12.5px; color: var(--muted); margin-bottom: 12px; }
+
+    /* ── Status messages ── */
+    .status-msg { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: var(--radius-sm); font-size: 13px; margin-top: 12px; border: 1px solid transparent; animation: fadein .2s ease; }
+    @keyframes fadein { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+    .status-msg.info { background: rgba(88,166,255,.08); color: var(--blue); border-color: rgba(88,166,255,.2); }
+    .status-msg.success { background: rgba(63,185,80,.08); color: var(--green); border-color: rgba(63,185,80,.2); }
+    .status-msg.error { background: rgba(248,81,73,.08); color: var(--red); border-color: rgba(248,81,73,.25); }
+
+    /* ── Progress ── */
+    .progress-wrap { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-top: 14px; }
+    .progress-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; gap: 12px; }
+    .progress-label { font-size: 13px; color: var(--text-hi); font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    .progress-phase { font-size: 11px; color: var(--muted); background: var(--panel-2); border: 1px solid var(--border); border-radius: 20px; padding: 2px 9px; }
+    .progress-spin { width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; flex-shrink: 0; }
+    .progress-spin.done { border: 2px solid var(--green); animation: none; }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .progress-count { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
-    .progress-track { background: var(--bg-inset); border-radius: 6px; height: 9px; overflow: hidden; }
+    .progress-count { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .progress-track { background: var(--bg-inset); border-radius: 6px; height: 8px; overflow: hidden; }
     .progress-fill { background: linear-gradient(90deg, #06b6d4, #22d3ee); height: 100%; width: 0%; border-radius: 6px; transition: width .35s ease; }
-    .progress-stats { font-size: 12px; color: var(--muted); margin-top: 10px; min-height: 15px; }
+    .progress-stats { font-size: 11.5px; color: var(--muted); margin-top: 8px; display: flex; gap: 12px; flex-wrap: wrap; }
+    .progress-stat { display: flex; align-items: center; gap: 4px; }
+    .progress-stat .dot { width: 6px; height: 6px; border-radius: 50%; }
 
     .hidden { display: none !important; }
 
-    /* ---- SIC typeahead ---- */
+    /* ── SIC typeahead ── */
     .sic-wrap { position: relative; }
-    #sic-suggestions {
-      position: absolute; top: calc(100% + 4px); left: 0; background: var(--panel);
-      border: 1px solid var(--border); border-radius: var(--radius-sm); z-index: 100;
-      max-height: 240px; overflow-y: auto; min-width: 300px; box-shadow: 0 8px 28px rgba(0,0,0,.5);
-    }
-    #sic-suggestions div { padding: 9px 13px; cursor: pointer; font-size: 12.5px; color: var(--text); border-bottom: 1px solid var(--border-soft); }
+    #sic-suggestions { position: absolute; top: calc(100% + 4px); left: 0; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-sm); z-index: 100; max-height: 220px; overflow-y: auto; min-width: 300px; box-shadow: 0 8px 28px rgba(0,0,0,.5); }
+    #sic-suggestions div { padding: 8px 12px; cursor: pointer; font-size: 12.5px; color: var(--text); border-bottom: 1px solid var(--border-soft); }
     #sic-suggestions div:last-child { border-bottom: none; }
     #sic-suggestions div:hover { background: var(--panel-2); }
-    .selected-sics { display: flex; gap: 6px; flex-wrap: wrap; }
+    .selected-sics { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 4px; }
     .selected-sics:empty { display: none; }
-    .sic-tag {
-      display: inline-flex; align-items: center; gap: 5px; background: rgba(34,211,238,.1);
-      border: 1px solid rgba(34,211,238,.3); border-radius: 16px; padding: 3px 10px; font-size: 12px;
-      color: var(--accent); cursor: pointer; transition: background .12s;
-    }
+    .sic-tag { display: inline-flex; align-items: center; gap: 5px; background: rgba(34,211,238,.1); border: 1px solid rgba(34,211,238,.25); border-radius: 14px; padding: 2px 9px; font-size: 12px; color: var(--accent); cursor: pointer; transition: background .12s; }
     .sic-tag:hover { background: rgba(34,211,238,.18); }
     .sic-tag .x { font-size: 13px; opacity: .7; }
 
-    /* ---- Modals ---- */
-    .modal-overlay {
-      position: fixed; inset: 0; background: rgba(1,4,9,.72); backdrop-filter: blur(2px);
-      z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 20px;
-      animation: fadein .15s ease;
-    }
-    .modal {
-      background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 24px;
-      width: 100%; max-width: 440px; box-shadow: 0 20px 60px rgba(0,0,0,.6);
-    }
-    .modal h3 { font-size: 16px; font-weight: 700; margin-bottom: 6px; color: var(--text-hi); }
-    .modal .modal-sub { font-size: 12.5px; color: var(--muted); margin-bottom: 18px; line-height: 1.6; }
-    .form-group { margin-bottom: 16px; }
-    .form-group label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; font-weight: 500; }
-    .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 8px; }
+    /* ── Modals ── */
+    .modal-overlay { position: fixed; inset: 0; background: rgba(1,4,9,.75); backdrop-filter: blur(3px); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 20px; animation: fadein .15s ease; }
+    .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 22px; width: 100%; max-width: 420px; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
+    .modal h3 { font-size: 15px; font-weight: 700; margin-bottom: 5px; color: var(--text-hi); }
+    .modal .modal-sub { font-size: 12px; color: var(--muted); margin-bottom: 16px; line-height: 1.6; }
+    .form-group { margin-bottom: 14px; }
+    .form-group label { display: block; font-size: 11.5px; color: var(--muted); margin-bottom: 5px; font-weight: 500; }
+    .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 6px; }
+
+    /* ── Filter actions row ── */
+    .filter-actions { display: flex; gap: 8px; align-items: center; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border-soft); flex-wrap: wrap; }
+    .filter-spacer { flex: 1; }
+
+    /* ── Director action bar ── */
+    .dir-action-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 12px 16px; border-top: 1px solid var(--border-soft); }
+    .dir-action-bar .spacer { flex: 1; }
+    .dir-sel-count { font-size: 13px; color: var(--accent); font-weight: 600; }
 
     @media (max-width: 900px) {
-      .main { padding: 20px 16px 48px; }
+      .main { padding: 16px 14px 100px; }
       .filter-group.wide { grid-column: span 1; }
-      .filter-grid.span-actions { flex-wrap: wrap; }
+      .pipeline-steps { display: none; }
     }
   </style>
 </head>
@@ -253,28 +257,56 @@
 <div class="app">
   <div id="sidebar-root"></div>
   <div class="main">
+
+    <!-- Page header -->
     <div class="page-head">
-      <h1>CH Pipeline</h1>
-      <p class="subtitle">Search Companies House — enrich domains, fetch owners, find &amp; verify emails, push to Bison.</p>
+      <div class="page-head-left">
+        <h1>CH Pipeline</h1>
+        <p>Search 5M+ Companies House records — enrich, find owners, verify emails, push to Bison.</p>
+      </div>
     </div>
 
-    <div class="stats-bar" id="statsBar">
-      <div class="stat-card"><div class="lbl">Companies imported</div><div class="val accent" id="statCompanies">—</div></div>
-      <div class="stat-card"><div class="lbl">Owners / directors</div><div class="val accent" id="statDirectors">—</div></div>
+    <!-- Stats -->
+    <div class="stats-bar">
+      <div class="stat-card"><div class="lbl">Companies</div><div class="val accent" id="statCompanies">—</div></div>
+      <div class="stat-card"><div class="lbl">Directors</div><div class="val accent" id="statDirectors">—</div></div>
       <div class="stat-card"><div class="lbl">Emails verified</div><div class="val accent" id="statEmails">—</div></div>
       <div class="stat-card"><div class="lbl">Pushed to Bison</div><div class="val accent" id="statPushed">—</div></div>
-      <div class="stat-card"><div class="lbl">Last bulk import</div><div class="val" id="statLastImport">—</div></div>
+      <div class="stat-card"><div class="lbl">Last import</div><div class="val" id="statLastImport" style="font-size:14px;margin-top:8px">—</div></div>
     </div>
 
+    <!-- Pipeline step indicator -->
+    <div class="pipeline-steps" id="pipelineSteps">
+      <div class="step active" id="step1"><span class="step-num">1</span> Filter &amp; Select</div>
+      <span class="step-arrow">›</span>
+      <div class="step" id="step2"><span class="step-num">2</span> Enrich</div>
+      <span class="step-arrow">›</span>
+      <div class="step" id="step3"><span class="step-num">3</span> Get Owners</div>
+      <span class="step-arrow">›</span>
+      <div class="step" id="step4"><span class="step-num">4</span> Find Emails</div>
+      <span class="step-arrow">›</span>
+      <div class="step" id="step5"><span class="step-num">5</span> Push to Bison</div>
+    </div>
+
+    <!-- CLI note -->
     <div class="cli-note">
-      <strong>Import companies:</strong> <code>node scripts/import-ch-bulk.js /path/to/BasicCompanyData.csv</code><br>
-      <strong>Import PSC owners:</strong> <code>node scripts/import-psc-bulk.js /path/to/persons-with-significant-control-snapshot.json</code>
-      — PSC import links owners to their company automatically via company number.
+      <strong>Import companies:</strong> <code>node scripts/import-ch-bulk.js /path/to/BasicCompanyData.csv</code> &nbsp;·&nbsp;
+      <strong>Import PSC owners:</strong> <code>node scripts/import-psc-bulk.js /path/to/persons-with-significant-control-snapshot.txt</code>
     </div>
 
+    <!-- Filter panel -->
     <div class="panel">
-      <div class="panel-head"><div class="panel-title">Filter companies</div></div>
+      <div class="panel-head">
+        <div class="panel-title">Filter companies</div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-ghost btn-sm" onclick="clearFilters()">Clear</button>
+          <button class="btn btn-ghost btn-sm" onclick="savePreset()">+ Save preset</button>
+        </div>
+      </div>
       <div class="panel-body">
+        <!-- Saved presets -->
+        <div class="presets-bar" id="presetsBar"></div>
+
         <div class="filter-grid">
           <div class="filter-group">
             <label>Sector (quick pick)</label>
@@ -283,13 +315,12 @@
               <optgroup label="Care &amp; Health">
                 <option value="87100,87200,87300,87900">Residential Care Homes</option>
                 <option value="88100,88990">Domiciliary / Home Care</option>
-                <option value="86100,86210,86220,86230,86900">Healthcare / Medical</option>
+                <option value="86100,86210,86220,86900">Healthcare / Medical</option>
                 <option value="85310,85320">Special Education / SEN</option>
               </optgroup>
               <optgroup label="Construction &amp; Trades">
-                <option value="41100,41201,41202">House Building / Development</option>
-                <option value="43110,43120,43130,43210,43220,43290,43310,43320,43330,43341,43342,43390,43910,43999">Specialist Trades</option>
-                <option value="42110,42120,42130,42210,42220,42910,42990">Civil Engineering</option>
+                <option value="41100,41201,41202">House Building</option>
+                <option value="43110,43120,43210,43220,43290,43310,43320,43330,43341,43342,43390,43910,43999">Specialist Trades</option>
                 <option value="71111,71112">Architects</option>
               </optgroup>
               <optgroup label="Professional Services">
@@ -301,34 +332,22 @@
               </optgroup>
               <optgroup label="Property">
                 <option value="68100,68201,68202,68209,68310,68320">Estate Agents / Property</option>
-                <option value="64301,64302,64303,64304,64305,64306">REITs / Property Funds</option>
               </optgroup>
-              <optgroup label="Hospitality &amp; Leisure">
-                <option value="55100,55201,55202,55209,55300,55900">Hotels &amp; Accommodation</option>
+              <optgroup label="Hospitality">
+                <option value="55100,55201,55202,55209,55300">Hotels &amp; Accommodation</option>
                 <option value="56101,56102,56103,56210,56290,56301,56302">Restaurants &amp; Bars</option>
                 <option value="93110,93120,93130,93191,93199">Sports &amp; Fitness</option>
               </optgroup>
-              <optgroup label="Retail &amp; Wholesale">
-                <option value="47110,47190,47210,47220,47230,47240,47250,47260,47290">Food Retail</option>
-                <option value="47510,47520,47530,47540,47590,47610,47620,47630,47640,47650,47710,47720,47730,47740,47750,47760,47770,47781,47782,47789,47791,47799">Specialist Retail</option>
-                <option value="46100,46110,46120,46130,46140,46150,46160,46170,46180,46190">Wholesale</option>
-              </optgroup>
-              <optgroup label="Manufacturing">
-                <option value="10110,10120,10130,10200,10310,10320,10390,10410,10420,10511,10512,10519,10520,10611,10612,10620,10710,10720,10730,10810,10821,10822,10831,10832,10840,10850,10860,10890,10910,10920">Food Manufacturing</option>
-                <option value="25110,25120,25210,25290,25300,25400,25500,25610,25620,25710,25720,25730,25910,25920,25930,25940,25990">Metal Products</option>
-              </optgroup>
-              <optgroup label="Transport &amp; Logistics">
-                <option value="49100,49200,49310,49320,49390,49410,49420,49500">Road &amp; Rail Transport</option>
-                <option value="52101,52102,52103,52211,52212,52213,52219,52220,52230,52241,52242,52243,52244,52290">Warehousing &amp; Logistics</option>
+              <optgroup label="Transport">
+                <option value="49100,49200,49310,49320,49390,49410,49420,49500">Road &amp; Rail</option>
+                <option value="52101,52102,52103,52211,52212,52219,52220,52290">Warehousing &amp; Logistics</option>
               </optgroup>
               <optgroup label="Education">
                 <option value="85100,85200,85310,85320,85410,85420,85510,85520,85590,85600">All Education</option>
-                <option value="85590">Private Tutoring / Training</option>
               </optgroup>
-              <optgroup label="Finance &amp; Insurance">
-                <option value="64110,64191,64192,64201,64202,64203,64204,64205,64206,64209,64301,64302,64303,64304,64305,64306,64910,64920,64991,64992,64999">Banking &amp; Finance</option>
+              <optgroup label="Finance">
+                <option value="64110,64191,64192,64201,64202,64209,64910,64920,64991,64999">Banking &amp; Finance</option>
                 <option value="65110,65120,65201,65202,65210,65300">Insurance</option>
-                <option value="66110,66120,66190,66210,66220,66290,66300">Financial Services</option>
               </optgroup>
             </select>
           </div>
@@ -369,11 +388,8 @@
               <option value="Private Limited Company">Ltd (Private)</option>
               <option value="Public Limited Company">PLC (Public)</option>
               <option value="Limited Liability Partnership">LLP</option>
-              <option value="Private Unlimited Company">Private Unlimited</option>
-              <option value="Royal Charter Company">Royal Charter</option>
               <option value="Community Interest Company">CIC</option>
               <option value="Charitable Incorporated Organisation">Charity (CIO)</option>
-              <option value="Scottish Charitable Incorporated Organisation">Scottish Charity</option>
             </select>
           </div>
           <div class="filter-group">
@@ -389,32 +405,44 @@
             <input type="text" id="nameSearch" placeholder="Company name…">
           </div>
           <div class="filter-group">
-            <label>Quick filters</label>
+            <label>Status filter</label>
             <select id="quickFilter">
-              <option value="">— Any —</option>
+              <option value="">Any</option>
               <option value="needs_enrichment">Needs enrichment</option>
               <option value="has_domain">Has a domain</option>
               <option value="has_email">Has verified email</option>
             </select>
           </div>
         </div>
-        <div class="filter-grid span-actions">
-          <button class="btn btn-primary" onclick="searchCompanies(1)">Search companies</button>
+        <div class="filter-actions">
+          <button class="btn btn-primary" onclick="searchCompanies(1)">Search</button>
           <button class="btn btn-ghost" onclick="clearFilters()">Clear filters</button>
+          <span class="filter-spacer"></span>
+          <span id="filterResultCount" style="font-size:12px;color:var(--muted)"></span>
         </div>
       </div>
     </div>
 
+    <!-- Companies table -->
     <div class="panel" id="companiesPanel">
       <div class="panel-head">
         <div class="panel-title">Companies <span class="count" id="companyCount"></span></div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span style="font-size:12px;color:var(--muted)">Rows per page:</span>
+          <select id="perPageSelect" onchange="changePerPage()" style="width:70px;height:28px;font-size:12px">
+            <option value="50">50</option>
+            <option value="100">100</option>
+            <option value="250">250</option>
+            <option value="500">500</option>
+          </select>
+        </div>
       </div>
       <div class="panel-body">
         <div id="companiesTable">
           <div class="empty-state">
             <div class="icon">🔍</div>
             <div class="title">No search yet</div>
-            <div class="desc">Set your filters above and hit <strong>Search companies</strong> to begin.</div>
+            <div class="desc">Set filters above and hit <strong>Search</strong> to begin. Try a sector quick-pick to get started fast.</div>
           </div>
         </div>
         <div class="select-bar hidden" id="companySelectBar">
@@ -427,25 +455,22 @@
           <button class="btn btn-secondary btn-sm" onclick="selectTopN(parseInt(document.getElementById('customSelectN').value)||0)">Go</button>
           <button class="btn btn-ghost btn-sm" onclick="selectTopN(0)">None</button>
           <span class="sep"></span>
-          <span class="selected-count" id="selectedCompanyCount"></span>
-          <span class="spacer"></span>
-          <button class="btn btn-secondary btn-sm hidden" id="fetchDirectorsBtn" onclick="fetchDirectors(false)">Just get owners</button>
-          <button class="btn btn-hero hidden" id="enrichBtn" onclick="enrichCompanies()">▶ Run pipeline</button>
+          <span style="font-size:12px;color:var(--accent);font-weight:600" id="selectedCompanyCount"></span>
         </div>
         <div class="pagination hidden" id="companyPagination">
           <span class="page-info" id="companyPageInfo"></span>
           <button class="btn btn-secondary btn-sm" id="prevPageBtn" onclick="changePage(-1)">‹ Prev</button>
           <button class="btn btn-secondary btn-sm" id="nextPageBtn" onclick="changePage(1)">Next ›</button>
         </div>
-        <div id="companyActions" class="hidden"></div>
       </div>
     </div>
 
+    <!-- Owners panel -->
     <div class="panel hidden" id="directorsPanel">
       <div class="panel-head">
-        <div class="panel-title">Owners &amp; directors</div>
+        <div class="panel-title">Owners &amp; directors <span class="count" id="directorCount"></span></div>
         <div style="display:flex;gap:8px;align-items:center">
-          <select id="dirEmailFilter" onchange="filterDirectors()" style="height:30px;font-size:12px;width:160px">
+          <select id="dirEmailFilter" onchange="filterDirectors()" style="height:28px;font-size:12px;width:160px">
             <option value="">All owners</option>
             <option value="verified">Verified email only</option>
             <option value="no_email">No email yet</option>
@@ -455,37 +480,53 @@
       <div class="panel-body">
         <div id="directorsTable"></div>
       </div>
-      <div class="action-bar" id="directorActions">
+      <div class="dir-action-bar">
         <button class="btn btn-secondary" onclick="openFindEmailsModal()">Find emails</button>
         <button class="btn btn-primary" onclick="openPushModal()">Push to Bison</button>
         <span class="spacer"></span>
-        <span class="selected-count" id="selectedDirCount"></span>
+        <span class="dir-sel-count" id="selectedDirCount"></span>
       </div>
     </div>
 
+    <!-- Status + progress -->
     <div id="statusArea"></div>
-
     <div id="progressWrap" class="progress-wrap hidden">
-      <div class="progress-top">
-        <span class="progress-label"><span class="progress-spin" id="progressSpin"></span><span id="progressLabel">Working…</span></span>
-        <span class="progress-count" id="progressCount">0 / 0</span>
+      <div class="progress-header">
+        <span class="progress-label">
+          <span class="progress-spin" id="progressSpin"></span>
+          <span id="progressLabel">Working…</span>
+        </span>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span class="progress-phase" id="progressPhase"></span>
+          <span class="progress-count" id="progressCount">0 / 0</span>
+        </div>
       </div>
-      <div class="progress-track">
-        <div class="progress-fill" id="progressBar"></div>
-      </div>
+      <div class="progress-track"><div class="progress-fill" id="progressBar"></div></div>
       <div class="progress-stats" id="progressStats"></div>
     </div>
+
   </div>
+</div>
+
+<!-- Floating action bar -->
+<div class="float-bar" id="floatBar">
+  <div>
+    <div class="sel-info" id="floatSelCount">0 selected</div>
+    <div class="sel-sub">companies ready for pipeline</div>
+  </div>
+  <div class="float-bar-spacer"></div>
+  <button class="btn btn-secondary" id="floatJustOwners" onclick="fetchDirectors(false)">Just get owners</button>
+  <button class="btn btn-hero" id="floatRunPipeline" onclick="enrichCompanies()">▶ Run pipeline</button>
 </div>
 
 <!-- Find Emails Modal -->
 <div class="modal-overlay hidden" id="emailModal">
   <div class="modal">
     <h3>Find emails</h3>
-    <p class="modal-sub">A domain is found for each company and checked that its website is actually live — only then are emails verified with Reacher (protecting the daily verification quota). Dead/parked sites are skipped. Optionally force a single domain below.</p>
+    <p class="modal-sub">Domains are auto-discovered via Gemini, then liveness-checked before any Reacher call — protecting your daily verification quota. Only live websites are attempted.</p>
     <div class="form-group">
-      <label>Domain override (optional)</label>
-      <input type="text" id="emailDomain" placeholder="Leave blank to auto-discover">
+      <label>Domain override (optional — leave blank to auto-discover)</label>
+      <input type="text" id="emailDomain" placeholder="e.g. acme.co.uk">
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeModal('emailModal')">Cancel</button>
@@ -498,7 +539,7 @@
 <div class="modal-overlay hidden" id="pushModal">
   <div class="modal">
     <h3>Push to Bison</h3>
-    <p class="modal-sub">Only directors with a verified email are pushed. Pick a workspace, then a campaign.</p>
+    <p class="modal-sub">Only directors with a verified or catch-all email are pushed. Duplicates are skipped automatically.</p>
     <div class="form-group">
       <label>Workspace</label>
       <select id="bisonWorkspace" onchange="loadCampaigns()"><option value="">Loading…</option></select>
@@ -509,13 +550,30 @@
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeModal('pushModal')">Cancel</button>
-      <button class="btn btn-primary" onclick="pushToBison()">Push</button>
+      <button class="btn btn-primary" onclick="pushToBison()">Push leads</button>
+    </div>
+  </div>
+</div>
+
+<!-- Save preset modal -->
+<div class="modal-overlay hidden" id="presetModal">
+  <div class="modal">
+    <h3>Save filter preset</h3>
+    <p class="modal-sub">Give this filter combination a name so you or your team can reuse it.</p>
+    <div class="form-group">
+      <label>Preset name</label>
+      <input type="text" id="presetName" placeholder="e.g. Care Homes London">
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('presetModal')">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmSavePreset()">Save</button>
     </div>
   </div>
 </div>
 
 <script src="/nav.js"></script>
 <script>
+  // ── State ────────────────────────────────────────────────────────────────
   var _currentPage = 1;
   var _totalCompanies = 0;
   var _perPage = 50;
@@ -524,47 +582,144 @@
   var _allDirectors = [];
   var _lastCompanyNumbers = [];
   var _sicLabelMap = {};
-  var _progressMax = 0; // guards the bar against jumping backwards
+  var _progressMax = 0;
+  var _sortCol = 'company_name';
+  var _sortDir = 'asc';
+  var _nameSearchTimer = null;
 
-  // Pre-load all 1265 SIC codes into a lookup map so chips/pills show names not raw codes
+  // Built-in presets
+  var BUILTIN_PRESETS = [
+    { name: 'Care Homes', sics: '87100,87200,87300,87900' },
+    { name: 'Accountancy', sics: '69201,69202,69203' },
+    { name: 'IT / Software', sics: '62010,62012,62020,62090' },
+  ];
+
+  // ── Init ─────────────────────────────────────────────────────────────────
   fetch('/api/ch/sic-all').then(function(r){ return r.json(); }).then(function(d) {
     (d.codes || []).forEach(function(it) { _sicLabelMap[it.code] = it.label; });
   }).catch(function(){});
 
-  function showStatus(msg, type) {
-    var el = document.getElementById('statusArea');
-    el.innerHTML = '<div class="status-msg ' + type + '">' + esc(msg) + '</div>';
-    if (type === 'success') setTimeout(function(){ el.innerHTML = ''; }, 4000);
-  }
+  loadStats();
+  renderPresets();
 
-  function esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  // Keyboard shortcuts
+  document.addEventListener('keydown', function(e) {
+    if (e.key === '/' && !['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)) {
+      e.preventDefault();
+      document.getElementById('nameSearch').focus();
+    }
+    if (e.key === 'Escape') {
+      document.querySelectorAll('.modal-overlay').forEach(function(m){ m.classList.add('hidden'); });
+      if (getSelectedCompanyNumbers().length) { selectTopN(0); }
+    }
+    if (e.key === 'Enter' && document.activeElement === document.getElementById('nameSearch')) {
+      searchCompanies(1);
+    }
+  });
 
-  function fmt(n) { return Number(n).toLocaleString(); }
+  // Live name search
+  document.getElementById('nameSearch').addEventListener('input', function() {
+    clearTimeout(_nameSearchTimer);
+    _nameSearchTimer = setTimeout(function(){ searchCompanies(1); }, 400);
+  });
 
+  // ── Stats ─────────────────────────────────────────────────────────────────
   function loadStats() {
-    fetch('/api/ch/stats').then(r => r.json()).then(d => {
+    fetch('/api/ch/stats').then(function(r){ return r.json(); }).then(function(d) {
       document.getElementById('statCompanies').textContent = fmt(d.total_companies || 0);
       document.getElementById('statDirectors').textContent = fmt(d.total_directors || 0);
       document.getElementById('statEmails').textContent = fmt(d.emails_verified || 0);
       document.getElementById('statPushed').textContent = fmt(d.pushed_to_bison || 0);
-      document.getElementById('statLastImport').textContent = d.last_import ? new Date(d.last_import).toLocaleDateString() : 'Never';
+      document.getElementById('statLastImport').textContent = d.last_import ? new Date(d.last_import).toLocaleDateString('en-GB') : 'Never';
     }).catch(function(){});
   }
 
-  // Turn a comma/space separated SIC string into human-labelled pills.
-  function renderSicCell(raw) {
-    if (!raw) return '<span class="dash">—</span>';
-    var codes = String(raw).split(/[,\s]+/).filter(Boolean);
-    if (!codes.length) return '<span class="dash">—</span>';
-    return '<div class="sic-pills">' + codes.slice(0, 4).map(function(code) {
-      var label = _sicLabelMap[code];
-      var text = label ? label : code;
-      if (text.length > 28) text = text.slice(0, 26) + '…';
-      return '<span class="sic-pill" title="' + esc(code + (label ? ' — ' + label : '')) + '">' + esc(text) + '</span>';
-    }).join('') + (codes.length > 4 ? '<span class="sic-pill">+' + (codes.length - 4) + '</span>' : '') + '</div>';
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  function esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function fmt(n) { return Number(n).toLocaleString(); }
+
+  function showStatus(msg, type) {
+    var el = document.getElementById('statusArea');
+    el.innerHTML = '<div class="status-msg ' + type + '">' + esc(msg) + '</div>';
+    if (type === 'success') setTimeout(function(){ el.innerHTML = ''; }, 5000);
   }
 
-  // SIC typeahead
+  function setStep(n) {
+    for (var i = 1; i <= 5; i++) {
+      var el = document.getElementById('step' + i);
+      if (!el) continue;
+      el.className = 'step' + (i < n ? ' done' : i === n ? ' active' : '');
+    }
+  }
+
+  // ── Presets ───────────────────────────────────────────────────────────────
+  function getCustomPresets() {
+    try { return JSON.parse(localStorage.getItem('ch_presets') || '[]'); } catch(e) { return []; }
+  }
+  function saveCustomPresets(arr) {
+    localStorage.setItem('ch_presets', JSON.stringify(arr));
+  }
+
+  function renderPresets() {
+    var bar = document.getElementById('presetsBar');
+    var html = '<span class="presets-label">Presets:</span>';
+    BUILTIN_PRESETS.forEach(function(p) {
+      html += '<span class="preset-chip" onclick="applyPreset(' + JSON.stringify(p) + ')">' + esc(p.name) + '</span>';
+    });
+    getCustomPresets().forEach(function(p, i) {
+      html += '<span class="preset-chip">' +
+        '<span onclick="applyPreset(' + JSON.stringify(p) + ')">' + esc(p.name) + '</span>' +
+        '<span class="del" onclick="deletePreset(' + i + ')">×</span></span>';
+    });
+    bar.innerHTML = html;
+  }
+
+  function applyPreset(p) {
+    clearFilters();
+    if (p.sics) {
+      p.sics.split(',').forEach(function(code) {
+        code = code.trim();
+        if (code && !_selectedSics.find(function(s){ return s.code === code; })) {
+          _selectedSics.push({ code: code, label: _sicLabelMap[code] || code });
+        }
+      });
+      renderSicTags();
+    }
+    if (p.country) document.getElementById('countrySelect').value = p.country;
+    if (p.type) document.getElementById('typeSelect').value = p.type;
+    searchCompanies(1);
+  }
+
+  function savePreset() {
+    document.getElementById('presetName').value = '';
+    document.getElementById('presetModal').classList.remove('hidden');
+    setTimeout(function(){ document.getElementById('presetName').focus(); }, 100);
+  }
+
+  function confirmSavePreset() {
+    var name = document.getElementById('presetName').value.trim();
+    if (!name) return;
+    var preset = {
+      name: name,
+      sics: _selectedSics.map(function(s){ return s.code; }).join(','),
+      country: document.getElementById('countrySelect').value,
+      type: document.getElementById('typeSelect').value,
+    };
+    var arr = getCustomPresets();
+    arr.push(preset);
+    saveCustomPresets(arr);
+    renderPresets();
+    closeModal('presetModal');
+  }
+
+  function deletePreset(i) {
+    var arr = getCustomPresets();
+    arr.splice(i, 1);
+    saveCustomPresets(arr);
+    renderPresets();
+  }
+
+  // ── SIC typeahead ─────────────────────────────────────────────────────────
   var _sicDebounce = null;
   document.getElementById('sicInput').addEventListener('input', function() {
     clearTimeout(_sicDebounce);
@@ -572,7 +727,7 @@
     if (!q) { document.getElementById('sic-suggestions').classList.add('hidden'); return; }
     _sicDebounce = setTimeout(function() {
       fetch('/api/contacts/sic-search?q=' + encodeURIComponent(q))
-        .then(r => r.json()).then(function(data) {
+        .then(function(r){ return r.json(); }).then(function(data) {
           var sug = document.getElementById('sic-suggestions');
           var items = (data.results || data || []).slice(0, 10);
           if (!items.length) { sug.classList.add('hidden'); return; }
@@ -587,9 +742,7 @@
   });
 
   document.addEventListener('click', function(e) {
-    if (!e.target.closest('.sic-wrap')) {
-      document.getElementById('sic-suggestions').classList.add('hidden');
-    }
+    if (!e.target.closest('.sic-wrap')) document.getElementById('sic-suggestions').classList.add('hidden');
   });
 
   function addSic(code, label) {
@@ -614,6 +767,19 @@
     renderSicTags();
   }
 
+  function renderSicCell(raw) {
+    if (!raw) return '<span class="dash">—</span>';
+    var codes = String(raw).split(/[,\s]+/).filter(Boolean);
+    if (!codes.length) return '<span class="dash">—</span>';
+    return '<div class="sic-pills">' + codes.slice(0, 3).map(function(code) {
+      var label = _sicLabelMap[code];
+      var text = label ? label : code;
+      if (text.length > 26) text = text.slice(0, 24) + '…';
+      return '<span class="sic-pill" title="' + esc(code + (label ? ' — ' + label : '')) + '">' + esc(text) + '</span>';
+    }).join('') + (codes.length > 3 ? '<span class="sic-pill">+' + (codes.length - 3) + '</span>' : '') + '</div>';
+  }
+
+  // ── Location dropdowns ────────────────────────────────────────────────────
   function loadCounties() {
     var country = document.getElementById('countrySelect').value;
     document.getElementById('countySelect').innerHTML = '<option value="">Any</option>';
@@ -649,6 +815,7 @@
     var sel = document.getElementById('sectorSelect');
     var sectorLabel = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '';
     val.split(',').forEach(function(code) {
+      code = code.trim();
       if (!_selectedSics.find(function(s){ return s.code === code; })) {
         _selectedSics.push({ code: code, label: _sicLabelMap[code] || sectorLabel || code });
       }
@@ -671,8 +838,16 @@
     document.getElementById('nameSearch').value = '';
     document.getElementById('quickFilter').value = '';
     _perPage = 50;
+    document.getElementById('perPageSelect').value = '50';
   }
 
+  // ── Per page ──────────────────────────────────────────────────────────────
+  function changePerPage() {
+    _perPage = parseInt(document.getElementById('perPageSelect').value) || 50;
+    if (_totalCompanies > 0) searchCompanies(1);
+  }
+
+  // ── Search ────────────────────────────────────────────────────────────────
   function searchCompanies(page) { searchCompaniesThen(page, null); }
 
   function searchCompaniesThen(page, cb) {
@@ -697,53 +872,84 @@
     if (qf === 'needs_enrichment') params.set('needs_enrichment', 'true');
     else if (qf === 'has_domain') params.set('has_domain', 'true');
     else if (qf === 'has_email') params.set('has_email', 'true');
-    showStatus('Searching…', 'info');
-    fetch('/api/ch/companies?' + params).then(r => r.json()).then(function(d) {
+    if (_sortCol !== 'company_name') params.set('sort', _sortCol);
+    if (_sortDir !== 'asc') params.set('sort_dir', _sortDir);
+
+    fetch('/api/ch/companies?' + params).then(function(r){ return r.json(); }).then(function(d) {
       if (d.error) { showStatus(d.error, 'error'); return; }
       _allCompanies = d.companies || [];
       _totalCompanies = d.total;
       document.getElementById('statusArea').innerHTML = '';
+      document.getElementById('filterResultCount').textContent = fmt(d.total) + ' companies match';
       renderCompanies(d);
+      setStep(1);
       if (cb) cb();
     }).catch(function(e){ showStatus(e.message, 'error'); });
   }
 
   function renderCompanies(d) {
-    document.getElementById('companyCount').textContent = d.total != null ? '· ' + fmt(d.total) + ' total' : '';
-    var html;
+    document.getElementById('companyCount').textContent = d.total != null ? '· ' + fmt(d.total) : '';
     if (!d.companies || !d.companies.length) {
-      html = '<div class="empty-state"><div class="icon">📭</div><div class="title">No companies match</div><div class="desc">Try widening your filters or removing a SIC code.</div></div>';
-      document.getElementById('companiesTable').innerHTML = html;
+      document.getElementById('companiesTable').innerHTML =
+        '<div class="empty-state"><div class="icon">📭</div><div class="title">No companies match</div>' +
+        '<div class="desc">Try widening your filters or removing a SIC code.</div>' +
+        '<button class="btn btn-ghost btn-sm" onclick="clearFilters()">Clear all filters</button></div>';
       document.getElementById('companySelectBar').classList.add('hidden');
       document.getElementById('companyPagination').classList.add('hidden');
       updateCompanySelection();
       return;
     }
-    html = '<div class="table-wrap"><div class="table-scroll"><table><thead><tr>' +
+
+    var html = '<div class="table-wrap"><div class="table-scroll"><table><thead><tr>' +
       '<th class="col-check"><input type="checkbox" id="selectAllCompanies" onchange="toggleAllCompanies(this)"></th>' +
-      '<th>Company</th><th>Website</th><th>Industry</th><th>Owners</th><th>SIC codes</th><th>Postcode</th>' +
+      '<th class="sortable" onclick="sortBy(\'company_name\')">Company' + sortIcon('company_name') + '</th>' +
+      '<th>Status</th>' +
+      '<th>Website</th>' +
+      '<th>Industry</th>' +
+      '<th>Owners</th>' +
+      '<th>SIC</th>' +
+      '<th class="sortable" onclick="sortBy(\'postcode\')">Postcode' + sortIcon('postcode') + '</th>' +
+      '<th class="sortable" onclick="sortBy(\'incorporated_on\')">Incorporated' + sortIcon('incorporated_on') + '</th>' +
       '</tr></thead><tbody>';
+
     d.companies.forEach(function(c) {
       var web = c.website
         ? '<a class="link" href="https://' + esc(c.website) + '" target="_blank" rel="noopener">' + esc(c.website) + '</a>'
-        : (c.domain_checked_at ? '<span class="cell-muted" style="font-size:11px">no domain</span>' : '<span class="dash">—</span>');
+        : (c.domain_checked_at ? '<span style="font-size:11px;color:var(--faint)">none confirmed</span>' : '<span class="dash">—</span>');
+
+      var enriched = !!c.enriched_at;
+      var hasDomain = !!c.website;
+      var hasEmail = Number(c.email_count) > 0;
+      var statusHtml = '<div class="status-chips">' +
+        '<span class="chip chip-enriched' + (enriched ? ' on' : '') + '" title="' + (enriched ? 'Enriched' : 'Not enriched') + '">✦</span>' +
+        '<span class="chip chip-domain' + (hasDomain ? ' on' : '') + '" title="' + (hasDomain ? 'Has domain' : 'No domain') + '">🌐</span>' +
+        '<span class="chip chip-email' + (hasEmail ? ' on' : '') + '" title="' + (hasEmail ? Number(c.email_count) + ' verified email(s)' : 'No verified emails') + '">✉</span>' +
+        '</div>';
+
       var dirCount = Number(c.director_count) || 0;
       var emailCount = Number(c.email_count) || 0;
       var ownersCell = dirCount
-        ? dirCount + (emailCount ? ' <span style="color:#3fb950;font-size:11px">(' + emailCount + ' ✉)</span>' : '')
+        ? '<span>' + dirCount + '</span>' + (emailCount ? ' <span style="color:var(--green);font-size:11px">(' + emailCount + ' ✉)</span>' : '')
         : '<span class="dash">—</span>';
-      var enriched = c.enriched_at ? '' : '<span style="color:var(--faint);font-size:10px;margin-left:4px">·</span>';
-      html += '<tr><td class="col-check"><input type="checkbox" class="company-cb row-check" data-id="' + esc(c.company_number) + '" onchange="updateCompanySelection()"></td>' +
-        '<td><div class="cell-name">' + esc(c.company_name) + enriched + '</div><div class="cell-sub">' + esc(c.company_number) + '</div></td>' +
+
+      var incDate = c.incorporated_on ? c.incorporated_on.slice(0, 10) : '';
+
+      html += '<tr>' +
+        '<td class="col-check"><input type="checkbox" class="company-cb" data-id="' + esc(c.company_number) + '" onchange="updateCompanySelection()"></td>' +
+        '<td><div class="cell-name">' + esc(c.company_name) + '</div><div class="cell-sub">' + esc(c.company_number) + '</div></td>' +
+        '<td>' + statusHtml + '</td>' +
         '<td>' + web + '</td>' +
-        '<td class="cell-muted">' + (c.industry ? esc(c.industry) : '<span class="dash">—</span>') + '</td>' +
+        '<td class="cell-muted" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(c.industry || '') + '">' + (c.industry ? esc(c.industry) : '<span class="dash">—</span>') + '</td>' +
         '<td class="cell-muted">' + ownersCell + '</td>' +
         '<td>' + renderSicCell(c.sic_codes) + '</td>' +
-        '<td class="mono">' + (c.postcode ? esc(c.postcode) : '<span class="dash">—</span>') + '</td></tr>';
+        '<td class="mono">' + (c.postcode ? esc(c.postcode) : '<span class="dash">—</span>') + '</td>' +
+        '<td class="cell-muted">' + (incDate || '<span class="dash">—</span>') + '</td>' +
+        '</tr>';
     });
     html += '</tbody></table></div></div>';
     document.getElementById('companiesTable').innerHTML = html;
     document.getElementById('companySelectBar').classList.remove('hidden');
+
     var pg = document.getElementById('companyPagination');
     var totalPages = Math.ceil(_totalCompanies / _perPage);
     if (totalPages > 1) {
@@ -757,6 +963,19 @@
     updateCompanySelection();
   }
 
+  function sortIcon(col) {
+    if (_sortCol !== col) return '';
+    return _sortDir === 'asc' ? ' ↑' : ' ↓';
+  }
+
+  function sortBy(col) {
+    if (_sortCol === col) { _sortDir = _sortDir === 'asc' ? 'desc' : 'asc'; }
+    else { _sortCol = col; _sortDir = 'asc'; }
+    searchCompanies(_currentPage);
+  }
+
+  function changePage(delta) { searchCompanies(_currentPage + delta); }
+
   function toggleAllCompanies(cb) {
     document.querySelectorAll('.company-cb').forEach(function(el){ el.checked = cb.checked; });
     updateCompanySelection();
@@ -765,7 +984,8 @@
   function selectTopN(n) {
     if (n > 0 && n > _perPage) {
       _perPage = n;
-      searchCompaniesThen(_currentPage, function() { selectTopN(n); });
+      document.getElementById('perPageSelect').value = Math.min(n, 500) <= 500 ? String(Math.min(n, 500)) : '500';
+      searchCompaniesThen(_currentPage, function(){ selectTopN(n); });
       return;
     }
     var cbs = document.querySelectorAll('.company-cb');
@@ -779,27 +999,44 @@
     var sel = getSelectedCompanyNumbers();
     var cnt = document.getElementById('selectedCompanyCount');
     cnt.textContent = sel.length ? sel.length + ' selected' : '';
-    document.getElementById('fetchDirectorsBtn').classList.toggle('hidden', sel.length === 0);
-    document.getElementById('enrichBtn').classList.toggle('hidden', sel.length === 0);
+
+    // Floating bar
+    var fb = document.getElementById('floatBar');
+    if (sel.length > 0) {
+      fb.classList.add('visible');
+      document.getElementById('floatSelCount').textContent = sel.length + ' selected';
+    } else {
+      fb.classList.remove('visible');
+    }
+
+    // Selected row highlight
+    document.querySelectorAll('.company-cb').forEach(function(cb) {
+      var row = cb.closest('tr');
+      if (row) row.classList.toggle('selected', cb.checked);
+    });
   }
 
-  // Phase 1: enrich selected companies (domain + industry/keywords/description)
-  // in chunks of 10 with a progress bar. Caches to ch_companies so it's one-time.
+  function getSelectedCompanyNumbers() {
+    return Array.from(document.querySelectorAll('.company-cb:checked')).map(function(el){ return el.dataset.id; });
+  }
+
+  // ── Pipeline ──────────────────────────────────────────────────────────────
   function enrichCompanies() {
     var nums = getSelectedCompanyNumbers();
     if (!nums.length) return;
     document.getElementById('statusArea').innerHTML = '';
-    var CHUNK = 10, totalN = nums.length, done = 0, enriched = 0, withDomain = 0, noDomain = 0;
+    setStep(2);
+    var CHUNK = 10, totalN = nums.length, done = 0, enriched = 0, withDomain = 0, noDomain = 0, alreadyDone = 0;
     var startedAt = Date.now();
     resetProgress();
-    setProgress('Enriching companies (Gemini: domain + data)…', 0, totalN, '');
+    setProgress('Enriching companies…', 0, totalN, '', 'Phase 1 of 3');
+
     function runChunk(i) {
       if (i >= nums.length) {
         var secs = Math.round((Date.now() - startedAt) / 1000);
-        setProgress('Enrichment done — loading owners…', totalN, totalN, withDomain + ' got a domain · ' + noDomain + ' no domain · ' + secs + 's');
-        showStatus('Enriched ' + enriched + ' companies — ' + withDomain + ' have a domain. Now loading owners…', 'success');
-        // Refresh table to show new website/industry, then re-tick the same
-        // companies and auto-advance to Get Owners so the flow is uninterrupted.
+        setProgress('Enrichment done — loading owners…', totalN, totalN,
+          withDomain + ' domains · ' + noDomain + ' no domain · ' + alreadyDone + ' skipped (cached) · ' + secs + 's', 'Phase 1 of 3');
+        showStatus('Enriched ' + enriched + ' companies — ' + withDomain + ' have a domain. Loading owners…', 'success');
         var keep = nums.slice();
         searchCompaniesThen(_currentPage, function() {
           keep.forEach(function(n) {
@@ -807,7 +1044,7 @@
             if (cb) cb.checked = true;
           });
           updateCompanySelection();
-          fetchDirectors(true); // auto-continue → load owners → find emails
+          fetchDirectors(true);
         });
         return;
       }
@@ -815,31 +1052,29 @@
       fetch('/api/ch/enrich-companies', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ company_numbers: slice }),
-      }).then(r => r.json()).then(function(d) {
-        if (!d.error) { enriched += (d.enriched || 0); withDomain += (d.with_domain || 0); noDomain += (d.no_domain || 0); }
+      }).then(function(r){ return r.json(); }).then(function(d) {
+        if (!d.error) {
+          enriched += (d.enriched || 0);
+          withDomain += (d.with_domain || 0);
+          noDomain += (d.no_domain || 0);
+          alreadyDone += (d.already_done || 0);
+        }
         done += slice.length;
-        setProgress('Enriching companies (Gemini: domain + data)…', Math.min(done, totalN), totalN, withDomain + ' domains found · ' + noDomain + ' none');
+        setProgress('Enriching companies…', Math.min(done, totalN), totalN,
+          withDomain + ' domains · ' + noDomain + ' no domain · ' + alreadyDone + ' cached', 'Phase 1 of 3');
         runChunk(i + CHUNK);
-      }).catch(function() { done += slice.length; runChunk(i + CHUNK); });
+      }).catch(function(){ done += slice.length; runChunk(i + CHUNK); });
     }
     runChunk(0);
-  }
-
-  function getSelectedCompanyNumbers() {
-    return Array.from(document.querySelectorAll('.company-cb:checked')).map(function(el){ return el.dataset.id; });
-  }
-
-  function changePage(delta) {
-    searchCompanies(_currentPage + delta);
   }
 
   function fetchDirectors(autoEmail) {
     var nums = getSelectedCompanyNumbers();
     if (!nums.length) return;
-    if (nums.length > 500) { showStatus('Select max 500 companies at once for owner loading', 'error'); return; }
+    if (nums.length > 500) { showStatus('Select max 500 companies at once', 'error'); return; }
     _lastCompanyNumbers = nums;
+    setStep(3);
     document.getElementById('directorsPanel').classList.remove('hidden');
-    // Check our imported PSC/director data first — no API call needed if we have it.
     showStatus('Loading owners from database…', 'info');
     loadDirectorsFromDb(nums, function(dirs) {
       var covered = {};
@@ -851,12 +1086,11 @@
         if (autoEmail) autoFindEmailsAll();
         return;
       }
-      // Fall back to the live CH API only for companies with no stored data.
       showStatus('Loaded ' + dirs.length + ' from DB; fetching ' + missing.length + ' more from Companies House…', 'info');
       fetch('/api/ch/fetch-directors', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ company_numbers: missing }),
-      }).then(r => r.json()).then(function(d) {
+      }).then(function(r){ return r.json(); }).then(function(d) {
         if (d.error) { showStatus(d.error, 'error'); return; }
         loadDirectorsFromDb(nums, function(all) {
           renderDirectors(all);
@@ -868,8 +1102,8 @@
     });
   }
 
-  // Select every loaded director and kick off Find Emails automatically.
   function autoFindEmailsAll() {
+    setStep(4);
     document.querySelectorAll('.dir-cb').forEach(function(cb){ cb.checked = true; });
     updateDirSelection();
     if (getSelectedDirIds().length) { document.getElementById('emailDomain').value = ''; findEmails(); }
@@ -878,36 +1112,44 @@
   function loadDirectorsFromDb(companyNumbers, cb) {
     var qs = companyNumbers.map(function(n){ return 'cn[]=' + encodeURIComponent(n); }).join('&');
     fetch('/api/ch/directors?' + qs)
-      .then(r => r.json())
+      .then(function(r){ return r.json(); })
       .then(function(d){ cb(Array.isArray(d) ? d : (d.directors || [])); })
       .catch(function(){ cb([]); });
   }
 
   function renderDirectors(dirs) {
     _allDirectors = Array.isArray(dirs) ? dirs : (dirs.directors || []);
-    var panel = document.getElementById('directorsPanel');
-    panel.classList.remove('hidden');
+    document.getElementById('directorsPanel').classList.remove('hidden');
+    document.getElementById('directorCount').textContent = '· ' + _allDirectors.length;
+
     if (!_allDirectors.length) {
-      document.getElementById('directorsTable').innerHTML = '<div class="empty-state"><div class="icon">👤</div><div class="title">No owners found</div><div class="desc">No directors are stored for these companies yet.</div></div>';
+      document.getElementById('directorsTable').innerHTML =
+        '<div class="empty-state"><div class="icon">👤</div><div class="title">No owners found</div>' +
+        '<div class="desc">No PSC data stored for these companies. Try "Just get owners" to fetch live from CH.</div></div>';
       updateDirSelection();
       return;
     }
+
     var html = '<div class="table-wrap"><div class="table-scroll"><table><thead><tr>' +
       '<th class="col-check"><input type="checkbox" id="selectAllDirs" onchange="toggleAllDirs(this)"></th>' +
       '<th>Name</th><th>Role</th><th>Company</th><th>Email</th><th>Status</th><th>Pushed</th>' +
       '</tr></thead><tbody>';
+
     _allDirectors.forEach(function(d) {
       var badge = '';
-      if (d.email_status === 'safe') badge = '<span class="badge badge-safe">safe</span>';
+      if (d.email_status === 'safe') badge = '<span class="badge badge-safe">verified</span>';
       else if (d.email_status === 'safe_catchall') badge = '<span class="badge badge-catchall">catch-all</span>';
       else if (d.email) badge = '<span class="badge badge-unknown">unverified</span>';
-      html += '<tr><td class="col-check"><input type="checkbox" class="dir-cb row-check" data-id="' + esc(d.id) + '" onchange="updateDirSelection()"></td>' +
+
+      html += '<tr>' +
+        '<td class="col-check"><input type="checkbox" class="dir-cb" data-id="' + esc(d.id) + '" onchange="updateDirSelection()"></td>' +
         '<td class="cell-name">' + esc(d.name) + '</td>' +
         '<td class="cell-muted">' + (d.role ? esc(d.role) : '<span class="dash">—</span>') + '</td>' +
         '<td class="cell-muted">' + esc(d.company_name || d.company_number || '') + '</td>' +
         '<td class="mono">' + (d.email ? esc(d.email) : '<span class="dash">—</span>') + '</td>' +
         '<td>' + badge + '</td>' +
-        '<td>' + (d.pushed_to_bison_at ? '<span class="badge badge-pushed">pushed</span>' : '<span class="dash">—</span>') + '</td></tr>';
+        '<td>' + (d.pushed_to_bison_at ? '<span class="badge badge-pushed">pushed</span>' : '<span class="dash">—</span>') + '</td>' +
+        '</tr>';
     });
     html += '</tbody></table></div></div>';
     document.getElementById('directorsTable').innerHTML = html;
@@ -921,7 +1163,7 @@
       var badge = row.querySelector('.badge');
       var hasVerified = badge && (badge.classList.contains('badge-safe') || badge.classList.contains('badge-catchall'));
       if (mode === 'verified') row.style.display = hasVerified ? '' : 'none';
-      else if (mode === 'no_email') row.style.display = hasVerified ? 'none' : '';
+      else row.style.display = hasVerified ? 'none' : '';
     });
   }
 
@@ -939,40 +1181,11 @@
     return Array.from(document.querySelectorAll('.dir-cb:checked')).map(function(el){ return Number(el.dataset.id); });
   }
 
+  // ── Email finding ─────────────────────────────────────────────────────────
   function openFindEmailsModal() {
     var sel = getSelectedDirIds();
     if (!sel.length) { showStatus('Select at least one director', 'error'); return; }
     document.getElementById('emailModal').classList.remove('hidden');
-  }
-
-  function openPushModal() {
-    var sel = getSelectedDirIds();
-    if (!sel.length) { showStatus('Select at least one director', 'error'); return; }
-    document.getElementById('pushModal').classList.remove('hidden');
-    loadBisonWorkspaces();
-  }
-
-  function closeModal(id) {
-    document.getElementById(id).classList.add('hidden');
-  }
-
-  // Reset the bar/guard at the start of a fresh phase or full run.
-  function resetProgress() {
-    _progressMax = 0;
-    document.getElementById('progressSpin').classList.remove('done');
-  }
-
-  function setProgress(label, done, totalN, stats) {
-    document.getElementById('progressWrap').classList.remove('hidden');
-    document.getElementById('progressLabel').textContent = label;
-    // Never let the displayed counter/percentage go backwards within a phase.
-    if (done > _progressMax) _progressMax = done;
-    var shown = Math.min(_progressMax, totalN);
-    document.getElementById('progressCount').textContent = shown + ' / ' + totalN;
-    document.getElementById('progressBar').style.width = totalN ? Math.round(shown / totalN * 100) + '%' : '0%';
-    if (stats != null) document.getElementById('progressStats').textContent = stats;
-    var spin = document.getElementById('progressSpin');
-    if (totalN && shown >= totalN) spin.classList.add('done'); else spin.classList.remove('done');
   }
 
   function findEmails() {
@@ -980,32 +1193,31 @@
     var ids = getSelectedDirIds();
     if (!ids.length) return;
     closeModal('emailModal');
+    setStep(4);
     document.getElementById('statusArea').innerHTML = '';
 
     var CHUNK = 10;
     var totalN = ids.length;
-    var done = 0, found = 0, skipped = 0, noDomain = 0, deadSite = 0, alreadyDone = 0;
+    var done = 0, found = 0, skipped = 0, noDomain = 0, deadSite = 0, alreadyHas = 0;
     var startedAt = Date.now();
-
     resetProgress();
-    setProgress('Finding emails (verifying live sites only)…', 0, totalN, '');
+    setProgress('Finding emails…', 0, totalN, '', 'Phase 2 of 3 (email verification)');
 
     function subStats() {
       var parts = [found + ' found'];
-      if (alreadyDone) parts.push(alreadyDone + ' already had email');
+      if (alreadyHas) parts.push(alreadyHas + ' already had email');
       if (skipped) parts.push(skipped + ' in contacts');
       if (noDomain) parts.push(noDomain + ' no domain');
-      if (deadSite) parts.push(deadSite + ' dead site');
+      if (deadSite) parts.push(deadSite + ' dead site (skipped)');
       return parts.join(' · ');
     }
 
     function runChunk(i) {
       if (i >= ids.length) {
         var secs = Math.round((Date.now() - startedAt) / 1000);
-        setProgress('Done.', totalN, totalN, subStats() + ' · ' + secs + 's');
-        showStatus('Email finding complete — ' + found + ' verified email' + (found === 1 ? '' : 's') + ' found. Only live websites were checked to protect the daily verification quota.', 'success');
+        setProgress('Email finding done.', totalN, totalN, subStats() + ' · ' + secs + 's', 'Phase 2 of 3');
+        showStatus(found + ' verified email' + (found === 1 ? '' : 's') + ' found. Dead/parked sites were skipped to protect the daily quota.', 'success');
         loadStats();
-        // Refresh the directors table once at the end so found emails appear.
         loadDirectorsFromDb(_lastCompanyNumbers, function(dirs){ renderDirectors(dirs); });
         return;
       }
@@ -1015,45 +1227,35 @@
       fetch('/api/ch/find-emails', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-      }).then(r => r.json()).then(function(d) {
+      }).then(function(r){ return r.json(); }).then(function(d) {
         if (!d.error) {
           done += (d.processed || slice.length);
           found += (d.found || 0);
           skipped += (d.skipped_dedup || 0);
           noDomain += (d.no_domain || 0);
           deadSite += (d.dead_site || 0);
-          alreadyDone += (d.already_has_email || 0);
-        } else {
-          done += slice.length;
-        }
-        setProgress('Finding emails (verifying live sites only)…', Math.min(done, totalN), totalN, subStats());
+          alreadyHas += (d.already_has_email || 0);
+        } else { done += slice.length; }
+        setProgress('Finding emails…', Math.min(done, totalN), totalN, subStats(), 'Phase 2 of 3');
         runChunk(i + CHUNK);
-      }).catch(function() {
+      }).catch(function(){
         done += slice.length;
-        setProgress('Finding emails…', Math.min(done, totalN), totalN, found + ' found (a chunk errored, continuing)');
         runChunk(i + CHUNK);
       });
     }
     runChunk(0);
   }
 
-  // Re-pull the companies of the just-processed directors so found emails show live.
-  function refreshSelectedDirectors(dirIds) {
-    var cns = {};
-    _allDirectors.forEach(function(d){ if (dirIds.indexOf(d.id) !== -1) cns[d.company_number] = true; });
-    var list = Object.keys(cns);
-    if (!list.length) return;
-    loadDirectorsFromDb(_lastCompanyNumbers || list, function(dirs) {
-      var sel = getSelectedDirIds();
-      renderDirectors(dirs);
-      // restore checkbox selection
-      document.querySelectorAll('.dir-cb').forEach(function(cb){ if (sel.indexOf(Number(cb.dataset.id)) !== -1) cb.checked = true; });
-      updateDirSelection();
-    });
+  // ── Push to Bison ─────────────────────────────────────────────────────────
+  function openPushModal() {
+    var sel = getSelectedDirIds();
+    if (!sel.length) { showStatus('Select at least one director', 'error'); return; }
+    document.getElementById('pushModal').classList.remove('hidden');
+    loadBisonWorkspaces();
   }
 
   function loadBisonWorkspaces() {
-    fetch('/api/bison/workspaces').then(r => r.json()).then(function(d) {
+    fetch('/api/bison/workspaces').then(function(r){ return r.json(); }).then(function(d) {
       var ws = d.workspaces || d.data || d || [];
       var sel = document.getElementById('bisonWorkspace');
       sel.innerHTML = '<option value="">Select workspace</option>' + ws.map(function(w) {
@@ -1066,7 +1268,7 @@
     var wsId = document.getElementById('bisonWorkspace').value;
     if (!wsId) return;
     document.getElementById('bisonCampaign').innerHTML = '<option value="">Loading…</option>';
-    fetch('/api/bison/campaigns?ws_id=' + encodeURIComponent(wsId)).then(r => r.json()).then(function(d) {
+    fetch('/api/bison/campaigns?ws_id=' + encodeURIComponent(wsId)).then(function(r){ return r.json(); }).then(function(d) {
       var campaigns = d.campaigns || d.data || d || [];
       var sel = document.getElementById('bisonCampaign');
       sel.innerHTML = '<option value="">Select campaign</option>' + campaigns.map(function(c) {
@@ -1081,19 +1283,45 @@
     if (!wsId || !campId) { showStatus('Select workspace and campaign', 'error'); return; }
     var ids = getSelectedDirIds();
     closeModal('pushModal');
+    setStep(5);
     showStatus('Pushing ' + ids.length + ' directors to Bison…', 'info');
     fetch('/api/ch/push-to-bison', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ director_ids: ids, workspace_id: wsId, campaign_id: campId }),
-    }).then(r => r.json()).then(function(d) {
+    }).then(function(r){ return r.json(); }).then(function(d) {
       if (d.error) { showStatus(d.error, 'error'); return; }
-      showStatus('Pushed ' + d.pushed + ', skipped ' + d.skipped + ' (no verified email).', 'success');
-      // Reflect newly-pushed state in the table.
+      showStatus('Pushed ' + d.pushed + ' leads, skipped ' + d.skipped + ' (no verified email).', 'success');
+      loadStats();
       loadDirectorsFromDb(_lastCompanyNumbers, function(dirs){ renderDirectors(dirs); });
     }).catch(function(e){ showStatus(e.message, 'error'); });
   }
 
-  loadStats();
+  // ── Modals ────────────────────────────────────────────────────────────────
+  function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+
+  // ── Progress ──────────────────────────────────────────────────────────────
+  function resetProgress() {
+    _progressMax = 0;
+    document.getElementById('progressSpin').classList.remove('done');
+  }
+
+  function setProgress(label, done, totalN, stats, phase) {
+    document.getElementById('progressWrap').classList.remove('hidden');
+    document.getElementById('progressLabel').textContent = label;
+    if (phase) document.getElementById('progressPhase').textContent = phase;
+    if (done > _progressMax) _progressMax = done;
+    var shown = Math.min(_progressMax, totalN);
+    document.getElementById('progressCount').textContent = shown + ' / ' + totalN;
+    document.getElementById('progressBar').style.width = totalN ? Math.round(shown / totalN * 100) + '%' : '0%';
+    if (stats != null) {
+      var parts = String(stats).split(' · ');
+      document.getElementById('progressStats').innerHTML = parts.map(function(p) {
+        return '<span class="progress-stat">' + esc(p) + '</span>';
+      }).join('');
+    }
+    var spin = document.getElementById('progressSpin');
+    if (totalN && shown >= totalN) spin.classList.add('done'); else spin.classList.remove('done');
+  }
 </script>
 </body>
 </html>
