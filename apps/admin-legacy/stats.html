@@ -139,6 +139,12 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-h
 
   <div id="loading" class="spinner">Loading stats…</div>
   <div id="content" style="display:none">
+    <div style="font-size:11px;color:var(--muted);margin:0 0 8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+      <span style="font-size:10px;font-weight:700;color:#fff;background:#EA4335;padding:1px 7px;border-radius:99px">Google</span>
+      <span style="font-size:10px;font-weight:700;color:#fff;background:#0078D4;padding:1px 7px;border-radius:99px">Microsoft</span>
+      <span style="font-size:10px;font-weight:700;color:#fff;background:#6B7280;padding:1px 7px;border-radius:99px">Other</span>
+      <span>= winning recipient provider per client (best reply rate + leads). A <b style="color:#16A34A">→</b> shows when it flips; you'll get a toast when it changes.</span>
+    </div>
     <div class="stats-header">
       <div>Client</div>
       <div>Reply Rate</div>
@@ -159,6 +165,8 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-h
 let _data = null;
 let _start = '';
 let _end = '';
+let _periodKey = '7d';            // for scoping winning-provider change detection
+let _winnersInitialised = false;  // suppress the change toast on the very first render
 let _rows = [];   // rendered rows incl. the synthetic "All Workspaces" aggregate
 const _expanded = new Set();
 const _chartInstances = {};
@@ -281,6 +289,7 @@ function setPeriod(p) {
   else if (p==='this_year')  { s=startOfYear();  e=today; }
   else return;
 
+  _periodKey = p; _winnersInitialised = false; // new period → re-baseline winners
   loadStats(s, e);
 }
 
@@ -289,6 +298,7 @@ function applyCustom() {
   const e = document.getElementById('customEnd').value;
   if (!s || !e) return;
   document.querySelectorAll('.period-bar button').forEach(b=>b.classList.remove('active'));
+  _periodKey = 'custom'; _winnersInitialised = false;
   loadStats(s, e);
 }
 
@@ -411,6 +421,10 @@ async function mergeBounceBreakdown(start, end) {
 }
 
 async function forceRefreshCache() {
+  // Opportunistically ask for desktop-notification permission on this user
+  // gesture so winning-provider flips can also surface as OS notifications
+  // (the in-page toast always fires regardless).
+  try { if (window.Notification && Notification.permission === 'default') Notification.requestPermission(); } catch {}
   const btn = document.getElementById('refreshCacheBtn');
   btn.textContent = '⏳ Clearing…';
   btn.disabled = true;
@@ -505,6 +519,113 @@ function effectiveTotals(w) {
   };
 }
 
+// ── Winning recipient provider per client ──────────────────────────────────
+// CMs want, per client, which inbox provider is performing best right now
+// (combination of reply rate + leads) — with a live transition arrow + toast
+// when the winner flips (e.g. Google → Microsoft).
+const PROV_META = {
+  google:  { label: 'Google',    color: '#EA4335' },
+  outlook: { label: 'Microsoft', color: '#0078D4' },
+  other:   { label: 'Other',     color: '#6B7280' },
+};
+// Score a provider bucket: reply rate + leads-per-1k (leads weighted ~3×).
+// Needs ≥20 sends so a 1-reply fluke on tiny volume can't crown a winner.
+function providerScore(bp) {
+  const sent = bp?.sent || 0;
+  if (sent < 20) return null;
+  const rr = (bp.replies || 0) / sent * 100;
+  const leadRate = (bp.leads || 0) / sent * 1000;
+  return { score: rr + leadRate * 3, rr, leadRate, sent, leads: bp.leads || 0 };
+}
+function pickWinner(w) {
+  let bestKey = null, best = null;
+  for (const p of ['google', 'outlook', 'other']) {
+    const s = providerScore(w.byProvider?.[p]);
+    if (s && (!best || s.score > best.score)) { best = s; bestKey = p; }
+  }
+  return bestKey ? { key: bestKey, ...best } : null;
+}
+function _winnerStoreKey() { return 'ottaly_stats_winners_' + (_periodKey || '7d'); }
+function loadWinnerStore() { try { return JSON.parse(localStorage.getItem(_winnerStoreKey()) || '{}'); } catch { return {}; } }
+function saveWinnerStore(m) { try { localStorage.setItem(_winnerStoreKey(), JSON.stringify(m)); } catch {} }
+
+// Compute winner + change info for every client; persist + return a map keyed by
+// workspace_id → { winner, prevWinner, changed }. Fires a toast on fresh flips.
+let _winnerInfo = {};
+function computeWinners(rows) {
+  const store = loadWinnerStore();
+  const now = Date.now();
+  const RECENT_MS = 24 * 60 * 60 * 1000; // show the → arrow for 24h after a flip
+  const info = {};
+  const freshChanges = [];
+  for (const w of rows) {
+    const winner = pickWinner(w);
+    const id = w.workspace_id;
+    const rec = store[id] || {};
+    let prevWinner = rec.p || null, changedAt = rec.t || 0;
+    if (winner) {
+      if (rec.w && rec.w !== winner.key) {
+        // genuine flip since last known winner
+        prevWinner = rec.w; changedAt = now;
+        if (_winnersInitialised) freshChanges.push({ name: w.name, from: rec.w, to: winner.key });
+      } else if (!rec.w) {
+        prevWinner = null; changedAt = 0; // first time we've crowned this client
+      }
+      store[id] = { w: winner.key, p: prevWinner, t: changedAt };
+    }
+    const changed = !!(winner && prevWinner && (now - changedAt) < RECENT_MS && prevWinner !== winner.key);
+    info[id] = { winner, prevWinner, changed };
+  }
+  saveWinnerStore(store);
+  if (freshChanges.length) notifyWinnerChanges(freshChanges);
+  _winnersInitialised = true;
+  return info;
+}
+
+function winnerBadgeHtml(id) {
+  const i = _winnerInfo[id];
+  if (!i || !i.winner) return '';
+  const m = PROV_META[i.winner.key];
+  const tip = `Best provider by reply rate + leads · ${i.winner.rr.toFixed(1)}% RR, ${i.winner.leads} lead(s) / ${fmtNum(i.winner.sent)} sent`;
+  const pill = (mm) => `<span style="display:inline-flex;align-items:center;font-size:10px;font-weight:700;color:#fff;background:${mm.color};padding:1px 7px;border-radius:99px">${mm.label}</span>`;
+  if (i.changed && i.prevWinner) {
+    const pm = PROV_META[i.prevWinner];
+    return `<span title="${tip}" style="display:inline-flex;align-items:center;gap:4px;margin-left:8px;vertical-align:middle">
+      <span style="font-size:10px;font-weight:600;color:${pm.color};text-decoration:line-through;opacity:.65">${pm.label}</span>
+      <span style="color:#16A34A;font-weight:800;font-size:12px">→</span>
+      ${pill(m)}
+      <span style="font-size:8px;font-weight:800;color:#16A34A;letter-spacing:.05em">NEW</span>
+    </span>`;
+  }
+  return `<span title="${tip}" style="margin-left:8px;vertical-align:middle">${pill(m)}</span>`;
+}
+
+function notifyWinnerChanges(changes) {
+  const txt = changes.map(c => `${c.name}: ${PROV_META[c.from].label} → ${PROV_META[c.to].label}`).join('  ·  ');
+  showStatsToast(`🏆 Winning provider changed — ${txt}`);
+  // Optional desktop notification if the CM granted permission.
+  try {
+    if (window.Notification && Notification.permission === 'granted') {
+      new Notification('Ottaly — winning provider changed', { body: changes.map(c => `${c.name}: ${PROV_META[c.from].label} → ${PROV_META[c.to].label}`).join('\n') });
+    }
+  } catch {}
+}
+
+let _statsToastTimer = null;
+function showStatsToast(msg) {
+  let el = document.getElementById('statsToast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'statsToast';
+    el.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#050C29;color:#fff;padding:12px 18px;border-radius:10px;font-size:13px;font-weight:600;box-shadow:0 6px 24px rgba(0,0,0,.25);z-index:99999;max-width:90vw;text-align:center;opacity:0;transition:opacity .25s';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.opacity = '1';
+  clearTimeout(_statsToastTimer);
+  _statsToastTimer = setTimeout(() => { el.style.opacity = '0'; }, 8000);
+}
+
 function renderClients() {
   document.getElementById('loading').style.display = 'none';
   document.getElementById('content').style.display = '';
@@ -525,6 +646,9 @@ function renderClients() {
   const allRow = buildAllWorkspaces(wsRaw);
   const ws = allRow ? [allRow, ...wsRaw] : wsRaw;
   _rows = ws;   // includes the synthetic row, so toggles can find it
+
+  // Winning provider per client (+ change detection / toast).
+  _winnerInfo = computeWinners(ws);
 
   const grid = document.getElementById('clientsGrid');
   grid.innerHTML = ws.map(w => {
@@ -553,7 +677,7 @@ function renderClients() {
       <div class="client-card${isAll ? ' all-card' : ''}" id="card-${w.workspace_id}">
         <div class="client-row" onclick="toggleClient('${w.workspace_id}')">
           <div>
-            <div class="client-name">${w.name}</div>
+            <div class="client-name">${w.name}${winnerBadgeHtml(w.workspace_id)}</div>
             <div class="client-sub">${fmtNum(t.sent)} sent · ${fmtNum(t.replies)} replies · ${fmtNum(t.leads)} leads</div>
           </div>
           <div class="stat-cell ${rrClass}">
