@@ -1608,9 +1608,13 @@ async function enrichDomainFromWeb(domain, companyName, fields) {
     const useGemini = !!geminiKey;
     if (!geminiKey && !anthropicKey) return null;
 
-    // Run Companies House and the AI in parallel — CH result used if it finishes first
-    const chPromise = fetchCompaniesHouse(companyName);
-    const ch = await Promise.race([chPromise, new Promise(res => setTimeout(() => res(null), 3000))]);
+    // Only hit Companies House when this domain actually needs CH data. A domain
+    // selected purely for missing keywords (SIC already present) must NOT burn a
+    // CH call — CH is throttled to 2.5/sec and is the whole job's bottleneck.
+    const needsCH = fields.includes('ch_sic') || fields.includes('company_status');
+    const ch = needsCH
+      ? await Promise.race([fetchCompaniesHouse(companyName), new Promise(res => setTimeout(() => res(null), 12000))])
+      : null;
 
     const userPrompt = `Company: ${companyName || cleanDomain}\nDomain: ${cleanDomain}${ch?.sic ? `\nCompanies House SIC: ${ch.sic}` : ''}${ch?.accounts_type ? `\nAccounts type: ${ch.accounts_type}` : ''}\nExtract: ${wantFields.join('; ')}.\n\nReturn JSON only: {"industry":null,"keywords":null,"num_employees":null}`;
 
@@ -1743,17 +1747,22 @@ async function fetchWebsiteLocationData(domain) {
   return { postcodes: [], addressCandidates: [] };
 }
 
-async function processDomain(pgdb, job, domain, name) {
+async function processDomain(pgdb, job, domain, name, effectiveFields) {
   const t0 = Date.now();
+  // Per-domain fields = only what THIS domain still needs (missing mode), or all
+  // ticked fields (update-all mode). Falls back to job.fields for safety.
+  const fields = (effectiveFields && effectiveFields.length) ? effectiveFields : (job.fields || []);
+  // 'all' mode overwrites existing values; 'missing' (default) only fills blanks.
+  const overwrite = job.mode === 'all';
   try {
     // CH calls are globally throttled (~2.5/sec) so under concurrency a domain
     // can sit in the queue a while before its CH lookups run. A tight 15s cap
     // was killing those waits → "no response". Give CH-involving jobs a generous
     // window; AI-only jobs keep a shorter one.
-    const usesCH = (job.fields || []).some(f => f === 'ch_sic' || f === 'company_status');
+    const usesCH = fields.some(f => f === 'ch_sic' || f === 'company_status');
     const DOMAIN_DEADLINE = usesCH ? 90000 : 20000;
     const result = await Promise.race([
-      enrichDomainFromWeb(domain, name, job.fields),
+      enrichDomainFromWeb(domain, name, fields),
       new Promise((_, rej) => setTimeout(() => rej(new Error('domain timeout')), DOMAIN_DEADLINE)),
     ]);
     const ms = Date.now() - t0;
@@ -1767,19 +1776,23 @@ async function processDomain(pgdb, job, domain, name) {
     if (data) {
       let updatedCount = 0;
 
-      // ── Query 1: Claude fields — COALESCE, only fills blanks ──────────────
+      // ── Query 1: AI fields. 'missing' → COALESCE + only-blank rows.
+      //    'all' → overwrite every contact on the domain. ────────────────────
       const claudeSet = [], claudeVals = [], missingConditions = [];
-      if (job.fields.includes('keywords') && data.keywords)
-        { claudeSet.push(`keywords = COALESCE(NULLIF(keywords,''), $${claudeVals.push(String(data.keywords))})`); missingConditions.push(`(keywords IS NULL OR keywords = '')`); }
-      if (job.fields.includes('industry') && data.industry)
-        { claudeSet.push(`industry = COALESCE(NULLIF(industry,''), $${claudeVals.push(String(data.industry))})`); missingConditions.push(`(industry IS NULL OR industry = '')`); }
-      if (job.fields.includes('num_employees') && data.num_employees)
-        { const n = parseInt(data.num_employees, 10); if (Number.isFinite(n)) { claudeSet.push(`num_employees = COALESCE(num_employees, $${claudeVals.push(n)})`); missingConditions.push(`num_employees IS NULL`); } }
+      const col = (name, expr, missCond) => { claudeSet.push(`${name} = ${expr}`); if (missCond) missingConditions.push(missCond); };
+      if (fields.includes('keywords') && data.keywords)
+        col('keywords', overwrite ? `$${claudeVals.push(String(data.keywords))}` : `COALESCE(NULLIF(keywords,''), $${claudeVals.push(String(data.keywords))})`, `(keywords IS NULL OR keywords = '')`);
+      if (fields.includes('industry') && data.industry)
+        col('industry', overwrite ? `$${claudeVals.push(String(data.industry))}` : `COALESCE(NULLIF(industry,''), $${claudeVals.push(String(data.industry))})`, `(industry IS NULL OR industry = '')`);
+      if (fields.includes('num_employees') && data.num_employees)
+        { const n = parseInt(data.num_employees, 10); if (Number.isFinite(n)) col('num_employees', overwrite ? `$${claudeVals.push(n)}` : `COALESCE(num_employees, $${claudeVals.push(n)})`, `num_employees IS NULL`); }
       if (data.city)    claudeSet.push(`city = COALESCE(NULLIF(city,''), $${claudeVals.push(String(data.city))})`);
       if (data.country) claudeSet.push(`country = COALESCE(NULLIF(country,''), $${claudeVals.push(String(data.country))})`);
-      if (claudeSet.length && missingConditions.length) {
+      if (claudeSet.length) {
         claudeVals.push(domain);
-        const r1 = await pgdb.query(`UPDATE contacts SET ${claudeSet.join(', ')}, updated_at = NOW() WHERE company_domain = $${claudeVals.length} AND (${missingConditions.join(' OR ')})`, claudeVals);
+        // In overwrite mode, update all rows on the domain; else only blank ones.
+        const whereExtra = (!overwrite && missingConditions.length) ? ` AND (${missingConditions.join(' OR ')})` : '';
+        const r1 = await pgdb.query(`UPDATE contacts SET ${claudeSet.join(', ')}, updated_at = NOW() WHERE company_domain = $${claudeVals.length}${whereExtra}`, claudeVals);
         updatedCount += r1.rowCount || 0;
       }
 
@@ -1802,11 +1815,15 @@ async function processDomain(pgdb, job, domain, name) {
       if (data.ch_last_accounts_date!=null) chSet.push(`ch_last_accounts_date = $${chVals.push(String(data.ch_last_accounts_date))}`);
       if (data.ch_year_end_month   != null) chSet.push(`ch_year_end_month = $${chVals.push(parseInt(data.ch_year_end_month))}`);
       if (data.ch_data             != null) chSet.push(`ch_data = $${chVals.push(JSON.stringify(data.ch_data))}`);
-      // Always stamp enriched_at so the domain is skipped on future scans
-      chSet.push(`enriched_at = NOW()`);
-      chVals.push(domain);
-      const r2 = await pgdb.query(`UPDATE contacts SET ${chSet.join(', ')}, updated_at = NOW() WHERE company_domain = $${chVals.length}`, chVals);
-      updatedCount = Math.max(updatedCount, r2.rowCount || 0);
+      // Only write the CH update when CH actually returned data (chSet non-empty).
+      // A keywords-only domain that skipped the CH call must NOT stamp enriched_at
+      // or overwrite CH columns it never fetched.
+      if (chSet.length) {
+        chSet.push(`enriched_at = NOW()`);
+        chVals.push(domain);
+        const r2 = await pgdb.query(`UPDATE contacts SET ${chSet.join(', ')}, updated_at = NOW() WHERE company_domain = $${chVals.length}`, chVals);
+        updatedCount = Math.max(updatedCount, r2.rowCount || 0);
+      }
 
       // ── Query 3: Website address fallback — fills company_region for contacts
       // with no region. Fetches homepage, extracts full UK postcodes, maps via
@@ -1900,25 +1917,46 @@ async function runEnrichment(pgdb, job) {
   job.domain_ms    = job.domain_ms    || [];
   const CONCURRENCY = job.concurrency || 5;
 
-  // Build WHERE from fields — re-query from DB so we survive server restarts
+  // Build WHERE from fields — re-query from DB so we survive server restarts.
+  // 'all' mode re-processes EVERY domain; 'missing' (default) only domains that
+  // lack at least one ticked field. We also SELECT per-field missing flags so a
+  // domain only does the work it actually needs (e.g. skip the CH call when SIC
+  // is already present) — critical because CH is throttled to 2.5/sec.
+  const jf = job.fields || [];
+  const allMode = job.mode === 'all';
   const conditions = [];
-  if ((job.fields||[]).includes('keywords'))      conditions.push(`(keywords IS NULL OR keywords = '')`);
-  if ((job.fields||[]).includes('industry'))      conditions.push(`(industry IS NULL OR industry = '')`);
-  if ((job.fields||[]).includes('num_employees')) conditions.push(`num_employees IS NULL`);
-  if ((job.fields||[]).includes('company_status')) conditions.push(`company_status IS NULL`);
-  if ((job.fields||[]).includes('ch_sic'))        conditions.push(`(ch_sic_codes IS NULL OR ch_sic_codes = '')`);
-  const whereConditions = conditions.join(' OR ');
+  if (jf.includes('keywords'))       conditions.push(`(keywords IS NULL OR keywords = '')`);
+  if (jf.includes('industry'))       conditions.push(`(industry IS NULL OR industry = '')`);
+  if (jf.includes('num_employees'))  conditions.push(`num_employees IS NULL`);
+  if (jf.includes('company_status')) conditions.push(`company_status IS NULL`);
+  if (jf.includes('ch_sic'))         conditions.push(`(ch_sic_codes IS NULL OR ch_sic_codes = '')`);
+  const whereConditions = allMode ? 'TRUE' : (conditions.join(' OR ') || 'TRUE');
 
   const { rows: allDomains } = await pgdb.query(`
-    SELECT DISTINCT ON (company_domain) company_domain, company_name
+    SELECT DISTINCT ON (company_domain) company_domain, company_name,
+      (keywords IS NULL OR keywords = '')         AS need_keywords,
+      (industry IS NULL OR industry = '')         AS need_industry,
+      (num_employees IS NULL)                     AS need_employees,
+      (ch_sic_codes IS NULL OR ch_sic_codes = '') AS need_ch
     FROM contacts
     WHERE company_domain IS NOT NULL AND company_domain != ''
       AND (${whereConditions})
     ORDER BY company_domain
   `);
 
-  const todo = allDomains.slice(job.processed).map(r => ({ domain: r.company_domain, name: r.company_name }));
-  console.log(`[enrich] pid=${process.pid} resuming at ${job.processed}/${allDomains.length} domains (concurrency=${CONCURRENCY})`);
+  // Per-domain effective fields: in 'all' mode every ticked field; in 'missing'
+  // mode only the ones this domain still lacks.
+  const effFor = (r) => {
+    if (allMode) return jf.slice();
+    const f = [];
+    if (jf.includes('keywords')      && r.need_keywords)  f.push('keywords');
+    if (jf.includes('industry')      && r.need_industry)  f.push('industry');
+    if (jf.includes('num_employees') && r.need_employees) f.push('num_employees');
+    if (jf.includes('ch_sic')        && r.need_ch)        f.push('ch_sic');
+    return f;
+  };
+  const todo = allDomains.slice(job.processed).map(r => ({ domain: r.company_domain, name: r.company_name, fields: effFor(r) }));
+  console.log(`[enrich] pid=${process.pid} resuming at ${job.processed}/${allDomains.length} domains (concurrency=${CONCURRENCY}, mode=${allMode ? 'all' : 'missing'})`);
 
   for (let i = 0; i < todo.length; i += CONCURRENCY) {
     if (job.paused) break;
@@ -1933,9 +1971,9 @@ async function runEnrichment(pgdb, job) {
     await saveEnrichJob(pgdb, job).catch(() => {});
 
     // Process batch with slight stagger to avoid Claude rate limits
-    await Promise.all(batch.map(({ domain, name }, i) =>
+    await Promise.all(batch.map(({ domain, name, fields }, i) =>
       new Promise(res => setTimeout(res, i * 200))
-        .then(() => { if (job.paused) return; return processDomain(pgdb, job, domain, name); })
+        .then(() => { if (job.paused) return; return processDomain(pgdb, job, domain, name, fields); })
         .then(async () => {
           job.processed++;
           if (job.log.length > 300)     job.log     = job.log.slice(-300);
@@ -1966,7 +2004,7 @@ async function enrichDbState(pgdb) {
 }
 
 app.post('/api/admin/enrich/start', requireAdmin, async (req, res) => {
-  const { fields = ['keywords', 'industry', 'num_employees'], limit = 0, concurrency = 5 } = req.body;
+  const { fields = ['keywords', 'industry', 'num_employees'], limit = 0, concurrency = 5, mode = 'missing' } = req.body;
   const pgdb = req.app.locals.pgDb;
   if (!pgdb) return res.status(503).json({ error: 'Database not available' });
 
@@ -1986,6 +2024,7 @@ app.post('/api/admin/enrich/start', requireAdmin, async (req, res) => {
     _activeEnrichJob = null;
   }
 
+  const allMode = mode === 'all';
   const conditions = [];
   if (fields.includes('keywords'))      conditions.push(`(keywords IS NULL OR keywords = '')`);
   if (fields.includes('industry'))      conditions.push(`(industry IS NULL OR industry = '')`);
@@ -1995,19 +2034,22 @@ app.post('/api/admin/enrich/start', requireAdmin, async (req, res) => {
   // as a side-effect, so requesting this field re-runs CH on SIC-less rows.
   if (fields.includes('ch_sic'))        conditions.push(`(ch_sic_codes IS NULL OR ch_sic_codes = '')`);
   if (conditions.length === 0) return res.status(400).json({ error: 'No fields selected' });
+  // 'all' mode re-processes every domain regardless of current state.
+  const whereConditions = allMode ? 'TRUE' : conditions.join(' OR ');
 
   const limitClause = limit > 0 ? `LIMIT ${parseInt(limit, 10)}` : '';
   const { rows } = await pgdb.query(`
     SELECT DISTINCT ON (company_domain) company_domain, company_name
     FROM contacts
     WHERE company_domain IS NOT NULL AND company_domain != ''
-      AND (${conditions.join(' OR ')})
+      AND (${whereConditions})
     ORDER BY company_domain
     ${limitClause}
   `);
 
   const job = {
-    status: 'running', fields, concurrency: Math.min(Math.max(parseInt(concurrency)||5, 1), 10),
+    status: 'running', fields, mode: allMode ? 'all' : 'missing',
+    concurrency: Math.min(Math.max(parseInt(concurrency)||5, 1), 10),
     total: rows.length, processed: 0, updated: 0, failed: 0, skipped: 0,
     current_domain: null, log: [], results: [], started_at: new Date().toISOString(),
     paused: false,
@@ -2023,12 +2065,15 @@ app.get('/api/admin/enrich/scan', requireAdmin, async (req, res) => {
   if (!pgdb) return res.status(503).json({ error: 'Database not available' });
 
   const fields = (req.query.fields || 'keywords,industry,num_employees').split(',').map(f => f.trim());
+  const allMode = req.query.mode === 'all';
   const conditions = [];
   if (fields.includes('keywords'))      conditions.push(`(keywords IS NULL OR keywords = '')`);
   if (fields.includes('industry'))      conditions.push(`(industry IS NULL OR industry = '')`);
   if (fields.includes('num_employees')) conditions.push(`num_employees IS NULL`);
   if (fields.includes('company_status')) conditions.push(`company_status IS NULL`);
   if (fields.includes('ch_sic'))        conditions.push(`(ch_sic_codes IS NULL OR ch_sic_codes = '')`);
+  // 'all' mode counts every domain (re-process regardless of current data).
+  const whereConditions = allMode ? 'TRUE' : (conditions.join(' OR ') || 'TRUE');
 
   const { rows } = await pgdb.query(`
     SELECT
@@ -2036,7 +2081,7 @@ app.get('/api/admin/enrich/scan', requireAdmin, async (req, res) => {
       COUNT(*) AS contacts
     FROM contacts
     WHERE company_domain IS NOT NULL AND company_domain != ''
-      AND (${conditions.join(' OR ')})
+      AND (${whereConditions})
   `);
 
   const domains = parseInt(rows[0].domains, 10);
@@ -18430,20 +18475,22 @@ function scheduleAudienceScoring(pgdb) {
       }
     }, 3000);
 
-    // Auto-resume any enrichment job that was running before a server restart
+    // Auto-resume any enrichment job that was running before a server restart.
+    // A full-DB backfill takes many hours; a deploy/restart must NOT silently kill
+    // it. The job persists its `processed` count, so runEnrichment continues from
+    // where it left off. Safe now that AI is best-effort (no 404 crash-loop) and
+    // the pool is sized for deploy overlap. Manually-paused/stopped jobs stay put.
     setTimeout(async () => {
       try {
         await enrichDbState(pgdb);
         const job = await loadEnrichJob(pgdb);
         if (job && job.status === 'running' && !job.paused) {
-          // Mark as stopped — require manual restart to avoid resuming stale jobs after deploy
-          job.status = 'stopped';
-          job.paused = true;
-          await saveEnrichJob(pgdb, job).catch(() => {});
-          console.log(`[enrich] Stale running job found on startup — marked stopped. Use UI to restart.`);
+          _geminiErrLogged = false;
+          console.log(`[enrich] Resuming interrupted job at ${job.processed||0}/${job.total||0} domains after restart`);
+          runEnrichment(pgdb, job).catch(err => console.error('[enrich] resume failed:', err.message));
         }
       } catch (e) { console.warn('[enrich] auto-resume check failed:', e.message); }
-    }, 5000);
+    }, 8000);
     app.use('/api', contactsAPI(pgdb));
     app.get('/contacts', (req, res) => {
       res.sendFile(path.join(__dirname, 'contacts.html'));

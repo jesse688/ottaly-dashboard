@@ -199,6 +199,19 @@ h1{font-size:1.4rem;font-weight:700;margin-bottom:4px}
       </div>
     </div>
 
+    <!-- Mode: fill blanks vs re-process everything -->
+    <div style="margin-bottom:1rem">
+      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:.5rem">Mode</div>
+      <div style="display:flex;gap:1.25rem;flex-wrap:wrap">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500;cursor:pointer" title="Only touch contacts/domains that are missing a ticked field. Existing values are kept. Skips the slow Companies House call for domains that already have SIC.">
+          <input type="radio" name="enrichMode" value="missing" checked style="accent-color:var(--teal)"> Fill missing only <span style="font-weight:400;color:var(--muted)">(recommended)</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500;cursor:pointer" title="Re-process EVERY domain and OVERWRITE existing values with fresh data. Slower — every domain hits the AI and (if SIC ticked) Companies House again.">
+          <input type="radio" name="enrichMode" value="all" style="accent-color:var(--teal)"> Update all <span style="font-weight:400;color:var(--muted)">(overwrite existing)</span>
+        </label>
+      </div>
+    </div>
+
     <!-- Batch size + concurrency -->
     <div style="margin-bottom:1.25rem;display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap">
       <div style="display:flex;align-items:center;gap:.75rem">
@@ -585,6 +598,7 @@ let enrichPollTimer = null;
 let _enrichFields = [];
 let _enrichLimit = 0;
 let _enrichConcurrency = 5;
+let _enrichMode = 'missing';
 
 function cancelScan() {
   document.getElementById('enrichScanResult').style.display = 'none';
@@ -605,17 +619,19 @@ async function scanEnrichment() {
   _enrichFields      = fields;
   _enrichLimit       = parseInt(document.getElementById('enrichLimit').value, 10);
   _enrichConcurrency = parseInt(document.getElementById('enrichConcurrency').value, 10);
+  _enrichMode        = (document.querySelector('input[name="enrichMode"]:checked') || {}).value || 'missing';
 
   document.getElementById('enrichScanBtn').disabled = true;
   document.getElementById('enrichStatus').textContent = 'Scanning database…';
 
   try {
-    const r = await fetch(`/api/admin/enrich/scan?fields=${fields.join(',')}`);
+    const r = await fetch(`/api/admin/enrich/scan?fields=${fields.join(',')}&mode=${_enrichMode}`);
     const d = await r.json();
     if (!r.ok) { alert(d.error || 'Scan failed'); document.getElementById('enrichScanBtn').disabled = false; return; }
 
+    const verb = _enrichMode === 'all' ? 'to re-process (overwrite)' : 'need enrichment';
     document.getElementById('enrichScanSummary').innerHTML =
-      `<strong>${d.domains.toLocaleString()} domains</strong> need enrichment &nbsp;·&nbsp; ` +
+      `<strong>${d.domains.toLocaleString()} domains</strong> ${verb} &nbsp;·&nbsp; ` +
       `${d.contacts.toLocaleString()} contacts affected &nbsp;·&nbsp; ` +
       `Est. cost: <strong>$${d.cost_usd.toFixed(4)}</strong>`;
     document.getElementById('enrichScanResult').style.display = '';
@@ -641,7 +657,7 @@ async function startEnrichment() {
     const r = await fetch('/api/admin/enrich/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fields: _enrichFields, limit: _enrichLimit, concurrency: _enrichConcurrency }),
+      body: JSON.stringify({ fields: _enrichFields, limit: _enrichLimit, concurrency: _enrichConcurrency, mode: _enrichMode }),
     });
     const d = await r.json();
     if (!r.ok) {
