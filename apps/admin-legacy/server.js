@@ -1406,19 +1406,58 @@ async function chFetch(url, opts) {
   return r;
 }
 
+// Clean an Apollo company_name into a CH-searchable term. These names are often
+// the bare domain ("108properties.co.uk") or carry junk (©, %, ™). CH search
+// returns 0 for those, but matches once the TLD/junk is stripped
+// ("108properties" → "108 PROPERTIES LIMITED").
+function cleanCompanyNameForCH(name) {
+  if (!name) return '';
+  let s = String(name).trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/^www\./i, '');
+  // Strip a trailing domain TLD if the name is really a domain.
+  s = s.replace(/\.(co\.uk|org\.uk|ac\.uk|ltd\.uk|plc\.uk|com|co|net|org|io|uk|biz|info|me|app|dev|shop|store|agency|digital|group|tech|online|site)$/i, '');
+  // Drop junk symbols but keep & and alphanumerics/spaces.
+  s = s.replace(/[©®™%*]/g, ' ').replace(/\s+/g, ' ').trim();
+  return s;
+}
+// Normalise a name for match comparison: lowercase, drop company suffixes and
+// all non-alphanumerics. Used to reject CH's fuzzy false matches (e.g. search
+// "10 ticks" must NOT accept "ALL TICKS LTD").
+function normCompanyForMatch(s) {
+  return String(s || '').toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/\b(limited|ltd|llp|plc|inc|llc|holdings|group|company|the)\b/g, '')
+    .replace(/[^a-z0-9]/g, '');
+}
+// Is the CH-matched title a confident match for our search term? Accept exact
+// normalised equality, or a full prefix either direction when the shorter side
+// is long enough to be meaningful (guards against short-string false positives).
+function isConfidentCHMatch(searchTerm, matchedTitle) {
+  const a = normCompanyForMatch(searchTerm);
+  const b = normCompanyForMatch(matchedTitle);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const [shortS, longS] = a.length <= b.length ? [a, b] : [b, a];
+  return longS.startsWith(shortS) && shortS.length >= 5;
+}
+
 async function fetchCompaniesHouse(companyName) {
   const key = process.env.COMPANIES_HOUSE_API_KEY;
-  if (!key || !companyName) return null;
+  if (!key) return null;
+  const cleaned = cleanCompanyNameForCH(companyName);
+  if (!cleaned) return null;
   const auth = { 'Authorization': 'Basic ' + Buffer.from(key + ':').toString('base64') };
   try {
     // chFetch handles throttle + per-call timeout, so no extra deadline race here
     // (which previously fired on the QUEUE wait, not the fetch, → false "no response").
-    // Step 1: search for company number
-    const q = encodeURIComponent(companyName.slice(0, 60));
-    const sr = await chFetch(`https://api.company-information.service.gov.uk/search/companies?q=${q}&items_per_page=1`, { headers: auth });
+    // Step 1: search — pull top 5 candidates and pick the first CONFIDENT match,
+    // so CH's fuzzy ranking can't hand us an unrelated company's SIC codes.
+    const q = encodeURIComponent(cleaned.slice(0, 60));
+    const sr = await chFetch(`https://api.company-information.service.gov.uk/search/companies?q=${q}&items_per_page=5`, { headers: auth });
     if (!sr.ok) return null;
     const sj = await sr.json();
-    const item = sj?.items?.[0];
+    const item = (sj?.items || []).find(it => it?.company_number && isConfidentCHMatch(cleaned, it.title));
     if (!item?.company_number) return null;
 
     // Step 2: fetch full company profile
@@ -2007,16 +2046,22 @@ app.get('/api/admin/enrich/ch-diagnose', requireAdmin, async (req, res) => {
 
   const out = [];
   for (const { company_domain, company_name } of rows) {
-    const rec = { domain: company_domain, company_name: company_name || null };
-    if (!company_name) { rec.result = 'SKIP — no company_name on row'; out.push(rec); continue; }
+    const cleaned = cleanCompanyNameForCH(company_name);
+    const rec = { domain: company_domain, company_name: company_name || null, cleaned };
+    if (!cleaned) { rec.result = 'SKIP — no usable company_name'; out.push(rec); continue; }
     try {
-      const q = encodeURIComponent(company_name.slice(0, 60));
-      const sr = await chFetch(`https://api.company-information.service.gov.uk/search/companies?q=${q}&items_per_page=1`, { headers: auth });
+      const q = encodeURIComponent(cleaned.slice(0, 60));
+      const sr = await chFetch(`https://api.company-information.service.gov.uk/search/companies?q=${q}&items_per_page=5`, { headers: auth });
       rec.searchStatus = sr.status;
       if (!sr.ok) { rec.result = `CH search HTTP ${sr.status}`; out.push(rec); continue; }
       const sj = await sr.json();
-      const item = sj?.items?.[0];
-      if (!item?.company_number) { rec.result = 'no CH name match'; rec.totalResults = sj?.total_results ?? 0; out.push(rec); continue; }
+      const cand = sj?.items?.[0];
+      const item = (sj?.items || []).find(it => it?.company_number && isConfidentCHMatch(cleaned, it.title));
+      if (!item?.company_number) {
+        rec.result = cand ? 'rejected — top match not confident' : 'no CH name match';
+        rec.topCandidate = cand?.title || null;
+        out.push(rec); continue;
+      }
       rec.matched = { number: item.company_number, title: item.title };
       const pr = await chFetch(`https://api.company-information.service.gov.uk/company/${item.company_number}`, { headers: auth });
       rec.profileStatus = pr.status;
