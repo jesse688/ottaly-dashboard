@@ -5615,6 +5615,24 @@ app.get('/api/actions/out-of-data', requireSession, async (req, res) => {
     const rank = { all_paused: 0, out_of_data: 1, low_data: 2, unknown: 3, no_campaigns: 4, ok: 5 };
     clients.sort((a, b) => (rank[a.status] - rank[b.status]) || (a.remaining - b.remaining));
 
+    // DEBUG ?debug=<pv-or-team-id>: dump that workspace's raw Bison campaign
+    // fields (live) next to what the cache holds, so we can see the true meaning
+    // of total_leads vs total_leads_contacted and fix the "leads left" math.
+    if (req.query.debug) {
+      try {
+        const raw = await bisonReq('/api/campaigns', { wsId: String(req.query.debug) });
+        const live = (raw?.data || []).map(c => ({
+          name: c.name, status: c.status,
+          total_leads: c.total_leads, total_leads_contacted: c.total_leads_contacted,
+          emails_sent: c.emails_sent, completion_percentage: c.completion_percentage,
+          allKeys: Object.keys(c),
+        }));
+        const cached = (campaignCache.workspaces.find(w => String(w.id) === String(req.query.debug))?.campaigns || [])
+          .map(c => ({ name: c.name, status: c.status, dataSize: c.dataSize, leadContacted: c.leadContacted, sent: c.sent }));
+        return res.json({ debug: req.query.debug, live, cached });
+      } catch (e) { return res.json({ debug: req.query.debug, error: e.message }); }
+    }
+
     const summary = clients.reduce((m, c) => { m[c.status] = (m[c.status] || 0) + 1; return m; }, {});
     res.json({ updatedAt: campaignCache.updatedAt, summary, clients });
   } catch (err) {
