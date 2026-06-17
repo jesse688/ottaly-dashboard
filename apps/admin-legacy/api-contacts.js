@@ -2,6 +2,7 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const ApolloCSVImporter = require('./csv-importer');
+const SIC_CODES = require('./sic-codes'); // [ [code, description], ... ]
 
 module.exports = (db) => {
   const router = express.Router();
@@ -138,6 +139,70 @@ module.exports = (db) => {
       console.error('[API] Distinct values error:', err);
       res.status(500).json({ error: err.message });
     }
+  });
+
+  // Common-term → SIC aliases. Official SIC wording often doesn't match how
+  // people search ("care home" vs "Residential care activities…", "solar" which
+  // has no dedicated code). Each alias term promotes a set of codes to the top.
+  const SIC_ALIASES = {
+    'care home':      ['87100','87200','87300','87900'],
+    'care homes':     ['87100','87200','87300','87900'],
+    'nursing home':   ['87100','86102'],
+    'residential care':['87100','87200','87300','87900'],
+    'domiciliary':    ['88100','88990'],
+    'home care':      ['88100','88990'],
+    'solar':          ['43210','35110','27900'],
+    'renewable':      ['35110','35140'],
+    'plumber':        ['43220'],
+    'electrician':    ['43210'],
+    'roofing':        ['43910'],
+    'dentist':        ['86230'],
+    'dental':         ['86230'],
+    'gp':             ['86210'],
+    'doctor':         ['86210'],
+    'vet':            ['75000'],
+    'restaurant':     ['56101','56102'],
+    'cafe':           ['56103'],
+    'pub':            ['56302'],
+    'hotel':          ['55100'],
+    'recruitment':    ['78109','78200','78300'],
+    'estate agent':   ['68310'],
+    'accountant':     ['69201','69202','69203'],
+    'solicitor':      ['69101','69102','69109'],
+    'law firm':       ['69101','69102','69109'],
+    'construction':   ['41201','41202','43999'],
+    'builder':        ['41201','41202'],
+    'manufacturing':  [],
+    'logistics':      ['49410','52103','52290'],
+    'haulage':        ['49410'],
+    'gym':            ['93130'],
+    'fitness':        ['93130'],
+  };
+
+  // GET /api/contacts/sic-search?q=… — typeahead over the full UK SIC 2007 list
+  // (by code, description, or common-term alias) for the Industry (SIC) filter.
+  router.get('/contacts/sic-search', (req, res) => {
+    const q = String(req.query.q || '').trim().toLowerCase();
+    if (!q) return res.json({ results: SIC_CODES.slice(0, 40).map(([code, label]) => ({ code, label })) });
+    const digits = q.replace(/[^0-9]/g, '');
+    // Alias boost: any alias term containing (or contained by) the query promotes its codes.
+    const aliasCodes = new Set();
+    for (const [term, codes] of Object.entries(SIC_ALIASES)) {
+      if (term.includes(q) || q.includes(term)) codes.forEach(c => aliasCodes.add(c));
+    }
+    const scored = [];
+    for (const [code, label] of SIC_CODES) {
+      const ll = label.toLowerCase();
+      let score = 0;
+      if (aliasCodes.has(code)) score = 110;                       // common-term alias — top
+      if (digits && code.startsWith(digits)) score = Math.max(score, 100);
+      else if (digits && code.includes(digits)) score = Math.max(score, 60);
+      if (ll.startsWith(q)) score = Math.max(score, 90);
+      else if (ll.includes(q)) score = Math.max(score, 50);
+      if (score) scored.push({ code, label, score });
+    }
+    scored.sort((a, b) => b.score - a.score || a.code.localeCompare(b.code));
+    res.json({ results: scored.slice(0, 40).map(({ code, label }) => ({ code, label })) });
   });
 
   // GET /api/contacts/email-providers

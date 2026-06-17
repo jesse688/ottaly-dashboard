@@ -1447,36 +1447,90 @@ async function enrichDomainFromWeb(domain, companyName, fields) {
   const systemPrompt = 'You are a company data extractor. Use your knowledge to identify company data from the domain and name. Return only valid JSON, no explanation or markdown.';
 
   try {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    const model  = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
-    if (!apiKey) return null;
+    // CH-only fast path: a SIC/Companies-House-only backfill needs no AI at all.
+    // Skip the model call entirely and just return CH data (free + faster).
+    if (wantFields.length === 0) {
+      const ch = await fetchCompaniesHouse(companyName);
+      if (!ch) return null;
+      const data = {};
+      if (ch.company_status) data.company_status = ch.company_status;
+      data.ch_company_number   = ch.ch_company_number;
+      data.ch_company_type     = ch.ch_company_type;
+      data.ch_founded_year     = ch.ch_founded_year;
+      data.ch_postcode         = ch.ch_postcode;
+      data.ch_sic_codes        = ch.ch_sic_codes;
+      data.ch_jurisdiction     = ch.ch_jurisdiction;
+      data.ch_has_insolvency   = ch.ch_has_insolvency;
+      data.ch_has_charges      = ch.ch_has_charges;
+      data.ch_accounts_overdue = ch.ch_accounts_overdue;
+      data.ch_active_officers  = ch.ch_active_officers;
+      data.ch_data             = ch.ch_data;
+      return { data, cost: 0, tokens: 0 };
+    }
 
-    // Run Companies House and Claude in parallel — CH result used if it finishes first
+    // Provider selection: prefer Gemini when GEMINI_API_KEY is set (cheaper for
+    // this bulk task), else fall back to Claude. Either works; the prompt and
+    // JSON-shape are identical so downstream parsing is unchanged.
+    const geminiKey = process.env.GEMINI_API_KEY;
+    const anthropicKey = process.env.ANTHROPIC_API_KEY;
+    const useGemini = !!geminiKey;
+    if (!geminiKey && !anthropicKey) return null;
+
+    // Run Companies House and the AI in parallel — CH result used if it finishes first
     const chPromise = fetchCompaniesHouse(companyName);
     const ch = await Promise.race([chPromise, new Promise(res => setTimeout(() => res(null), 3000))]);
 
     const userPrompt = `Company: ${companyName || cleanDomain}\nDomain: ${cleanDomain}${ch?.sic ? `\nCompanies House SIC: ${ch.sic}` : ''}${ch?.accounts_type ? `\nAccounts type: ${ch.accounts_type}` : ''}\nExtract: ${wantFields.join('; ')}.\n\nReturn JSON only: {"industry":null,"keywords":null,"num_employees":null}`;
 
-    const claudeReq = () => fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'prompt-caching-2024-07-31' },
-      body: JSON.stringify({ model, max_tokens: 250, system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }], messages: [{ role: 'user', content: userPrompt }] }),
-    });
-    let r = await claudeReq();
-    if (!r.ok && (r.status === 429 || r.status >= 500)) {
-      await new Promise(res => setTimeout(res, 2000));
-      r = await claudeReq();
+    let text = '', cost = 0, tokens = 0;
+    if (useGemini) {
+      const model = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`;
+      const geminiReq = () => fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: systemPrompt }] },
+          contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+          generationConfig: { maxOutputTokens: 250, temperature: 0, responseMimeType: 'application/json' },
+        }),
+      });
+      let r = await geminiReq();
+      if (!r.ok && (r.status === 429 || r.status >= 500)) {
+        await new Promise(res => setTimeout(res, 2000));
+        r = await geminiReq();
+      }
+      if (!r.ok) return null;
+      const j = await r.json();
+      const u = j?.usageMetadata || {};
+      // Gemini Flash pricing (per 1M tokens): ~$0.10 in / $0.40 out.
+      cost = ((u.promptTokenCount || 0) * 0.10 + (u.candidatesTokenCount || 0) * 0.40) / 1_000_000;
+      tokens = (u.promptTokenCount || 0) + (u.candidatesTokenCount || 0);
+      text = (j?.candidates?.[0]?.content?.parts?.[0]?.text || '').replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+    } else {
+      const model = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
+      const claudeReq = () => fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'prompt-caching-2024-07-31' },
+        body: JSON.stringify({ model, max_tokens: 250, system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }], messages: [{ role: 'user', content: userPrompt }] }),
+      });
+      let r = await claudeReq();
+      if (!r.ok && (r.status === 429 || r.status >= 500)) {
+        await new Promise(res => setTimeout(res, 2000));
+        r = await claudeReq();
+      }
+      if (!r.ok) return null;
+      const j = await r.json();
+      const u = j?.usage || {};
+      cost = (
+        ((u.input_tokens || 0) * HAIKU_PRICE.input +
+         (u.output_tokens || 0) * HAIKU_PRICE.output +
+         (u.cache_creation_input_tokens || 0) * HAIKU_PRICE.cache_write +
+         (u.cache_read_input_tokens || 0) * HAIKU_PRICE.cache_read) / 1_000_000
+      );
+      tokens = (u.input_tokens || 0) + (u.output_tokens || 0) + (u.cache_read_input_tokens || 0);
+      text = (j?.content?.[0]?.text || '').replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
     }
-    if (!r.ok) return null;
-    const j = await r.json();
-    const u = j?.usage || {};
-    const cost = (
-      ((u.input_tokens || 0) * HAIKU_PRICE.input +
-       (u.output_tokens || 0) * HAIKU_PRICE.output +
-       (u.cache_creation_input_tokens || 0) * HAIKU_PRICE.cache_write +
-       (u.cache_read_input_tokens || 0) * HAIKU_PRICE.cache_read) / 1_000_000
-    );
-    const text = (j?.content?.[0]?.text || '').replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
     const data = JSON.parse(text);
 
     // Fill gaps with Companies House data directly
@@ -1499,7 +1553,7 @@ async function enrichDomainFromWeb(domain, companyName, fields) {
       data.ch_data             = ch.ch_data;
     }
 
-    return { data, cost, tokens: (u.input_tokens||0) + (u.output_tokens||0) + (u.cache_read_input_tokens||0) };
+    return { data, cost, tokens };
   } catch { return null; }
 }
 
@@ -1794,6 +1848,10 @@ app.post('/api/admin/enrich/start', requireAdmin, async (req, res) => {
   if (fields.includes('keywords'))      conditions.push(`(keywords IS NULL OR keywords = '')`);
   if (fields.includes('industry'))      conditions.push(`(industry IS NULL OR industry = '')`);
   if (fields.includes('num_employees')) conditions.push(`num_employees IS NULL`);
+  // SIC/Companies House backfill — finds rows that never got CH data (e.g. they
+  // already had keywords so the keyword scan skipped them). CH fills ch_sic_codes
+  // as a side-effect, so requesting this field re-runs CH on SIC-less rows.
+  if (fields.includes('ch_sic'))        conditions.push(`(ch_sic_codes IS NULL OR ch_sic_codes = '')`);
   if (conditions.length === 0) return res.status(400).json({ error: 'No fields selected' });
 
   const limitClause = limit > 0 ? `LIMIT ${parseInt(limit, 10)}` : '';
@@ -1828,6 +1886,7 @@ app.get('/api/admin/enrich/scan', requireAdmin, async (req, res) => {
   if (fields.includes('industry'))      conditions.push(`(industry IS NULL OR industry = '')`);
   if (fields.includes('num_employees')) conditions.push(`num_employees IS NULL`);
   if (fields.includes('company_status')) conditions.push(`company_status IS NULL`);
+  if (fields.includes('ch_sic'))        conditions.push(`(ch_sic_codes IS NULL OR ch_sic_codes = '')`);
 
   const { rows } = await pgdb.query(`
     SELECT

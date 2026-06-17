@@ -2466,10 +2466,8 @@
         .filter(id => document.getElementById(id)?.checked)
         .map(id => document.getElementById(id).value);
 
-      // SIC codes: ticked presets + any custom-typed codes, de-duped.
-      const sicTicked = Array.from(document.querySelectorAll('.sicCode:checked')).map(el => el.value);
-      const sicCustom = (document.getElementById('sicCustom')?.value || '').split(',').map(s => s.replace(/[^0-9]/g,'').trim()).filter(Boolean);
-      const sicCodes = [...new Set([...sicTicked, ...sicCustom])];
+      // SIC codes: the chips selected via the searchable picker.
+      const sicCodes = _sicSelected.map(s => s.code);
 
       const f = {
         q: get('globalSearch'),
@@ -2567,8 +2565,8 @@
         case 'keywords':
           clearMulti(['keywords']); break;
         case 'sic':
-          document.querySelectorAll('.sicCode').forEach(cb => { cb.checked = false; });
-          { const sc = document.getElementById('sicCustom'); if (sc) sc.value = ''; } break;
+          _sicSelected = []; renderSicChips();
+          { const ss = document.getElementById('sicSearch'); if (ss) ss.value = ''; } break;
         case 'technologies':
           clearMulti(['technologies']); break;
         case 'employees':
@@ -2607,8 +2605,8 @@
         if (el) el.checked = false;
       });
       document.querySelectorAll('.gwExcl').forEach(cb => { cb.checked = false; });
-      document.querySelectorAll('.sicCode').forEach(cb => { cb.checked = false; });
-      { const sc = document.getElementById('sicCustom'); if (sc) sc.value = ''; }
+      _sicSelected = []; renderSicChips();
+      { const ss = document.getElementById('sicSearch'); if (ss) ss.value = ''; }
       // Microsoft guard stays ON through a clear — it's a safety default, not a filter.
       if (typeof applyFilterDefaults === 'function') applyFilterDefaults();
       Object.keys(filterDefs).forEach(key => {
@@ -2876,6 +2874,8 @@
         if (el && el.checked) params.append(id, '1');
       });
       _employeeSelected.forEach(v => params.append('emp', v));
+      // SIC chips: code|label so the chip can be rebuilt with its description.
+      _sicSelected.forEach(s => params.append('sic', s.code + '|' + s.label));
       const hash = params.toString();
       // Replace, not assign — avoids polluting browser history on every search.
       const url = window.location.pathname + window.location.search + (hash ? '#' + hash : '');
@@ -3012,6 +3012,12 @@
       const emp = params.getAll('emp');
       if (emp.length) { _employeeSelected = new Set(emp); any = true; }
       renderEmployeeBuckets();
+      const sics = params.getAll('sic');
+      if (sics.length) {
+        _sicSelected = sics.map(v => { const [code, ...rest] = v.split('|'); return { code, label: rest.join('|') || code }; });
+        renderSicChips();
+        any = true;
+      }
       Object.keys(filterDefs).forEach(renderFilterTags);
       return any;
     }
@@ -3097,6 +3103,8 @@
         section.querySelectorAll('input[type="checkbox"]:checked').forEach(() => count++);
         // Custom employee ranges live in _employeeSelected, not DOM checkboxes
         if (section.dataset.clear === 'employees') count += _employeeSelected.size;
+        // SIC codes live in _sicSelected chips, not DOM inputs
+        if (section.dataset.clear === 'sic') count += _sicSelected.length;
         // Remove old badge then add new one if count > 0
         const oldBadge = label.querySelector('.active-count');
         if (oldBadge) oldBadge.remove();
@@ -4797,6 +4805,57 @@
 
     function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
+    // ── Industry (SIC code) searchable picker ──────────────────────────────
+    // General-purpose for ANY sector, not just care homes. Type an industry name
+    // or a code; results come from /api/contacts/sic-search (full UK SIC list).
+    // Selected codes become removable chips and drive the sicCodes filter.
+    let _sicSelected = [];           // [{code,label}]
+    let _sicSearchTimer = null;
+    function onSicSearch(q) {
+      clearTimeout(_sicSearchTimer);
+      _sicSearchTimer = setTimeout(() => runSicSearch(q), 180);
+    }
+    async function runSicSearch(q) {
+      const box = document.getElementById('sicResults');
+      if (!box) return;
+      try {
+        const r = await fetch('/api/contacts/sic-search?q=' + encodeURIComponent(q || ''));
+        const d = await r.json();
+        const chosen = new Set(_sicSelected.map(s => s.code));
+        const rows = (d.results || []).filter(x => !chosen.has(x.code));
+        if (!rows.length) { box.innerHTML = '<div style="padding:8px 10px;font-size:12px;color:#9ca3af;">No matching SIC codes</div>'; box.style.display = 'block'; return; }
+        box.innerHTML = rows.map(x =>
+          `<div onmousedown="event.preventDefault()" onclick="addSic('${x.code}', ${JSON.stringify(x.label).replace(/"/g,'&quot;')})" style="padding:7px 10px;font-size:12px;cursor:pointer;border-bottom:1px solid #f3f4f6;display:flex;gap:8px;align-items:baseline;" onmouseover="this.style.background='#f9fafb'" onmouseout="this.style.background='#fff'"><span style="font-weight:700;color:#374151;font-variant-numeric:tabular-nums;">${esc(x.code)}</span><span style="color:#4b5563;">${esc(x.label)}</span></div>`
+        ).join('');
+        box.style.display = 'block';
+      } catch { box.style.display = 'none'; }
+    }
+    function addSic(code, label) {
+      if (!_sicSelected.some(s => s.code === code)) _sicSelected.push({ code, label });
+      const inp = document.getElementById('sicSearch'); if (inp) inp.value = '';
+      const box = document.getElementById('sicResults'); if (box) box.style.display = 'none';
+      renderSicChips();
+      search();
+    }
+    function removeSic(code) {
+      _sicSelected = _sicSelected.filter(s => s.code !== code);
+      renderSicChips();
+      search();
+    }
+    function renderSicChips() {
+      const wrap = document.getElementById('sicSelected');
+      if (!wrap) return;
+      wrap.innerHTML = _sicSelected.map(s =>
+        `<span style="display:inline-flex;align-items:center;gap:5px;background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;border-radius:6px;padding:2px 6px;font-size:11px;font-weight:600;" title="${esc(s.label)}">${esc(s.code)} <span style="color:#6366f1;cursor:pointer;font-weight:700;" onclick="removeSic('${s.code}')">×</span></span>`
+      ).join('');
+    }
+    // Hide the results dropdown when clicking elsewhere.
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('#sicSearch') && !e.target.closest('#sicResults')) {
+        const box = document.getElementById('sicResults'); if (box) box.style.display = 'none';
+      }
+    });
+
     // Render ALL keywords (no truncation) and bold any that match the active
     // keyword filter — so the contact's match is always visible and obvious.
     // Truncating to the first 20 hid keywords like "care homes" that the filter
@@ -5261,8 +5320,6 @@
     }).catch(() => {});
     // Re-run the search whenever a gateway-exclude box is toggled.
     document.querySelectorAll('.gwExcl').forEach(cb => cb.addEventListener('change', () => search()));
-    // Same for SIC-code preset checkboxes.
-    document.querySelectorAll('.sicCode').forEach(cb => cb.addEventListener('change', () => search()));
     search();
 
     // Resume any in-progress import jobs from before the page was refreshed.
