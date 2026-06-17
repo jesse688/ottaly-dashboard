@@ -231,8 +231,8 @@
         <button class="btn btn-secondary btn-sm" onclick="selectTopN(0)">None</button>
         <span style="font-size:12px;color:#4b5563;margin:0 4px;">|</span>
         <span id="selectedCompanyCount" style="font-size:12px;color:#8b949e;"></span>
-        <button class="btn btn-secondary btn-sm hidden" id="enrichBtn" onclick="enrichCompanies()">1. Enrich (domains + data)</button>
-        <button class="btn btn-secondary btn-sm hidden" id="fetchDirectorsBtn" onclick="fetchDirectors()">2. Get Owners →</button>
+        <button class="btn btn-primary btn-sm hidden" id="enrichBtn" onclick="enrichCompanies()">▶ Run pipeline (domains → owners → emails)</button>
+        <button class="btn btn-secondary btn-sm hidden" id="fetchDirectorsBtn" onclick="fetchDirectors(false)">Just get owners</button>
       </div>
       <div id="companyActions" class="hidden"></div>
     </div>
@@ -542,7 +542,7 @@
             if (cb) cb.checked = true;
           });
           updateCompanySelection();
-          fetchDirectors();
+          fetchDirectors(true); // auto-continue → load owners → find emails
         });
         return;
       }
@@ -568,7 +568,7 @@
     searchCompanies(_currentPage + delta);
   }
 
-  function fetchDirectors() {
+  function fetchDirectors(autoEmail) {
     var nums = getSelectedCompanyNumbers();
     if (!nums.length) return;
     if (nums.length > 50) { showStatus('Select max 50 companies at once', 'error'); return; }
@@ -582,7 +582,8 @@
       var missing = nums.filter(function(n){ return !covered[n]; });
       renderDirectors(dirs);
       if (!missing.length) {
-        showStatus('Loaded ' + dirs.length + ' owners from database (no API needed).', 'success');
+        showStatus('Loaded ' + dirs.length + ' owners from database.', 'success');
+        if (autoEmail) autoFindEmailsAll();
         return;
       }
       // Fall back to the live CH API only for companies with no stored data.
@@ -596,9 +597,17 @@
           renderDirectors(all);
           showStatus('Loaded ' + all.length + ' owners (' + d.inserted + ' newly fetched from CH).', 'success');
           loadStats();
+          if (autoEmail) autoFindEmailsAll();
         });
       }).catch(function(e){ showStatus(e.message, 'error'); });
     });
+  }
+
+  // Select every loaded director and kick off Find Emails automatically.
+  function autoFindEmailsAll() {
+    document.querySelectorAll('.dir-cb').forEach(function(cb){ cb.checked = true; });
+    updateDirSelection();
+    if (getSelectedDirIds().length) { document.getElementById('emailDomain').value = ''; findEmails(); }
   }
 
   function loadDirectorsFromDb(companyNumbers, cb) {
