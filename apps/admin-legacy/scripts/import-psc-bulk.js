@@ -70,13 +70,16 @@ async function main() {
     const jsonStr = trimmed.replace(/,$/, '');
     total++;
 
-    let rec;
-    try { rec = JSON.parse(jsonStr); } catch { continue; }
+    let outer;
+    try { outer = JSON.parse(jsonStr); } catch { continue; }
+
+    // Format: { company_number, data: { kind, name, name_elements, ... } }
+    const companyNumber = outer.company_number;
+    const rec = outer.data || outer;
 
     // Only import individual PSCs (not corporate entities)
     if (rec.kind !== 'individual-person-with-significant-control') { skipped_kind++; continue; }
 
-    const companyNumber = extractCompanyNumber(rec);
     if (!companyNumber || !knownCompanies.has(companyNumber)) { skipped_no_company++; continue; }
 
     const name = formatName(rec.name_elements) || rec.name;
