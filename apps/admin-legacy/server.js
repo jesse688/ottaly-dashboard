@@ -13429,6 +13429,17 @@ function perfshimTeamId(workspace_id) {
   return team ? team.team_id : null;
 }
 
+// 0. GET /workspaces — the list actions.html / performance.html load on init.
+// Returns a bare array of { id, name } keyed by PV workspace_id (t.pv), which is
+// the id the page then passes back as ?workspace_id= to every other perfshim
+// route (mapped to a Bison team via perfshimTeamId) and matches /api/client-status.
+// Without this the page 404s on init and shows "Failed to load clients".
+app.get('/api/perfshim/workspaces', requireSession, (req, res) => {
+  try {
+    res.json(BISON_TEAMS.map(t => ({ id: t.pv, name: t.name })));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // 1. GET /account/email-stats — summed totals for a workspace + date range.
 // Source: Bison line-area-chart-stats (stateful: bisonReq wsId switches the
 // workspace first), pivoted via pivotBisonStats and summed via aggPvEmailStats.
