@@ -58,10 +58,17 @@ export async function GET(req: NextRequest) {
         replyObj.automated_reply === true || replyObj.automated_reply === 'true'
 
       if (automated) {
+        // Bison already identified this as automated (warm-up / OOO / auto-ack).
+        // File it to the hidden 'warmup' folder so it leaves the working queues —
+        // but never move a row already with the client or human-reviewed.
         await client.query(
           `UPDATE unibox_replies
               SET category = 'ooo_auto_reply', classify_state = 'done',
                   ai_model = 'prefilter', ai_reasoning = 'Bison automated_reply flag',
+                  folder = CASE
+                    WHEN folder IN ('inbox','review','unmapped')
+                         AND marked_as_lead = FALSE AND admin_label IS NULL
+                    THEN 'warmup' ELSE folder END,
                   updated_at = NOW()
             WHERE id = $1`,
           [id]
