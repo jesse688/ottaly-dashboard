@@ -11407,6 +11407,68 @@ app.get('/api/mailboxes/winnr-tagged', requireSession, async (req, res) => {
   }
 });
 
+// Read-only diagnostic: given a list of emails (e.g. the Winnr CSV), report for
+// each whether it exists in Bison, in which workspace, and what tags it carries.
+// Used to find why N CSV mailboxes aren't showing under a tag.
+//   POST /api/mailboxes/tag-audit  { emails: ["a@x.com", ...] }
+app.post('/api/mailboxes/tag-audit', requireSession, async (req, res) => {
+  try {
+    const emails = (req.body?.emails || []).map(e => String(e).trim().toLowerCase()).filter(Boolean);
+    if (!emails.length) return res.status(400).json({ error: 'No emails provided' });
+    const wanted = new Set(emails);
+
+    // Build email -> { workspace, tags[] } by scanning every workspace's full roster.
+    const found = new Map();
+    const scanErrors = [];
+    for (const team of BISON_TEAMS) {
+      try {
+        let prevSig = '';
+        for (let page = 1; page <= 300; page++) {
+          const resp = await bisonReq('/api/sender-emails', { wsId: team.team_id, params: { per_page: 100, page } });
+          const list = Array.isArray(resp) ? resp : (resp?.data ?? []);
+          if (!list.length) break;
+          const sig = list.map(a => a.id ?? a.email ?? '').join(',');
+          if (sig === prevSig) break;
+          prevSig = sig;
+          for (const a of list) {
+            const email = (a.email || a.email_address || '').toLowerCase();
+            if (!wanted.has(email)) continue;
+            const tags = Array.isArray(a.tags) ? a.tags.map(t => t.name).filter(Boolean) : [];
+            found.set(email, { workspace: team.name, team_id: team.team_id, id: a.id, tags });
+          }
+        }
+      } catch (e) {
+        scanErrors.push({ workspace: team.name, team_id: team.team_id, error: e.message });
+      }
+    }
+
+    // Classify each requested email
+    const inBisonUntaggedGeneric = [], inBisonWithGeneric = [], notInBison = [];
+    for (const email of emails) {
+      const hit = found.get(email);
+      if (!hit) { notInBison.push(email); continue; }
+      const hasGeneric = hit.tags.some(t => (t || '').trim().toLowerCase() === 'winnr generic');
+      if (hasGeneric) inBisonWithGeneric.push({ email, ...hit });
+      else inBisonUntaggedGeneric.push({ email, workspace: hit.workspace, tags: hit.tags });
+    }
+
+    res.json({
+      requested: emails.length,
+      in_bison_with_generic_tag: inBisonWithGeneric.length,
+      in_bison_missing_generic_tag: inBisonUntaggedGeneric.length,
+      not_in_bison: notInBison.length,
+      detail: {
+        missing_generic_tag: inBisonUntaggedGeneric,
+        not_in_bison: notInBison,
+      },
+      scan_errors: scanErrors,
+    });
+  } catch (err) {
+    console.error('[tag-audit]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/mailboxes/bulk-tag', requireSession, async (req, res) => {
   try {
     const { emails, field, value } = req.body || {};
