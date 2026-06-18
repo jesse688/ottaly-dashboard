@@ -72,17 +72,21 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   // Bison stores integer reply IDs; portal_emails.id holds the stringified integer.
   const latestReplyId = ctx.rows[0]?.id ? parseInt(ctx.rows[0].id, 10) : null
 
-  // 1. Persist outgoing message (synthetic id so it's stable + idempotent-ish)
+  // 1. Persist outgoing message (synthetic id so it's stable + idempotent-ish).
+  // Record attachment filenames in raw so the thread can show them on the sent message.
   const outId = `portal-${id}-${Date.now()}`
+  const rawMeta = attachments.length
+    ? JSON.stringify({ attachments: attachments.map(a => ({ filename: a.filename, size: a.content.length })) })
+    : '{}'
   await pool.query(
     `INSERT INTO portal_emails (
        id, workspace_id, lead_email, direction, subject, body_text, body_html,
-       content_preview, from_email, to_email, eaccount, sent_via_portal, timestamp_created
-     ) VALUES ($1,$2,$3,'OUT',$4,$5,$6,$7,$8,$9,$10,TRUE,NOW())`,
+       content_preview, from_email, to_email, eaccount, sent_via_portal, timestamp_created, raw
+     ) VALUES ($1,$2,$3,'OUT',$4,$5,$6,$7,$8,$9,$10,TRUE,NOW(),$11::jsonb)`,
     [
       outId, session.workspaceId, lead.email.toLowerCase(), subject, body,
       html, body.slice(0, 200),
-      eaccount ?? session.email, toList, eaccount ?? null,
+      eaccount ?? session.email, toList, eaccount ?? null, rawMeta,
     ]
   ).catch(err => console.error('[reply] persist failed:', err))
 

@@ -78,7 +78,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     const r = await pool.query(
       `SELECT id, direction, subject, body_html, body_text, content_preview,
               from_email, to_email, eaccount, pv_label, message_id, sent_via_portal,
-              timestamp_created
+              timestamp_created, raw->'attachments' AS attachments
          FROM portal_emails
         WHERE workspace_id = $1 AND lower(lead_email) = lower($2)
         ORDER BY timestamp_created ASC NULLS FIRST`,

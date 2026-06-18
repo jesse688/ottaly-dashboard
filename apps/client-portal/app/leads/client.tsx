@@ -69,6 +69,7 @@ interface ThreadMsg {
   pv_label: string | null
   sent_via_portal: boolean
   timestamp_created: string | null
+  attachments?: { filename: string; size?: number }[] | null
 }
 
 interface CustomLabel { id: string; name: string; color: string; prompts_value?: boolean }
@@ -797,6 +798,17 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
                           // No HTML body — plain/derived text. Collapse runs of blank
                           // lines so it doesn't show huge gaps; readable column.
                           <div className="text-sm text-[#1a2332] whitespace-pre-wrap break-words leading-[1.55] max-w-[68ch]">{(main || '(no content)').replace(/\n{3,}/g, '\n\n').trim()}</div>
+                        )}
+                        {m.attachments && m.attachments.length > 0 && (
+                          <div className="flex flex-wrap gap-1.5 mt-3">
+                            {m.attachments.map((a, i) => (
+                              <span key={`${a.filename}-${i}`} className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-white border border-gray-200 rounded-lg text-xs text-gray-700">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-gray-400"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                                <span className="max-w-[200px] truncate">{a.filename}</span>
+                                {a.size != null && <span className="text-gray-400">{a.size > 1024 * 1024 ? `${(a.size / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(a.size / 1024))} KB`}</span>}
+                              </span>
+                            ))}
+                          </div>
                         )}
                         {quoted && !m.sent_via_portal && !m.body_html_safe && (
                           <details className="mt-3 border-t border-dashed border-gray-200 pt-2">
