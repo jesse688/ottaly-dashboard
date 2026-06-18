@@ -10707,41 +10707,101 @@ app.get('/api/mailboxes/winnr-generic-stats', requireSession, async (req, res) =
     const days = parseInt(req.query.days, 10) || 0;
     const lifetime = days === 0;
 
-    // Collect all Winnr Generic mailbox emails + their workspace_ids from cache
+    // Supplier per mailbox, so we can size each workspace's full Winnr cohort for
+    // the apportionment fallback below.
+    const meta = await pgdb.listMailboxMeta().catch(() => []);
+    const supplierByEmail = new Map((meta || []).map(m => [(m.email || '').toLowerCase(), (m.supplier || '').toLowerCase()]));
+
+    // Walk the cache once: collect the Winnr Generic mailboxes grouped by Bison
+    // workspace (with their sender_email_ids = account_id), and the total count of
+    // Winnr-supplier mailboxes per workspace (for the fallback share).
     const genericEmails = new Set();
     const genericWsIds  = new Set();
+    const genericByTeam = new Map(); // team_id -> { ids:[], emails:[] }
+    const winnrCountByTeam   = new Map(); // team_id -> total Winnr-supplier mailboxes
+    const genericCountByTeam = new Map(); // team_id -> generic mailboxes
     for (const m of (_mailboxCache.mailboxes || [])) {
-      const host = m.domain || (m.email || '').split('@')[1] || '';
-      if (!WINNR_GENERIC_ROOTS.has(winnrRootOf(host))) continue;
       const email = (m.email || '').toLowerCase();
       if (!email) continue;
+      const team = String(m.bison_team_id || '');
+      const host = m.domain || email.split('@')[1] || '';
+      const isGeneric = WINNR_GENERIC_ROOTS.has(winnrRootOf(host));
+      // The generic domains belong to Winnr; count them toward the Winnr cohort
+      // even when meta has no explicit supplier row yet.
+      const isWinnr = isGeneric || supplierByEmail.get(email) === 'winnr';
+      if (team && isWinnr) winnrCountByTeam.set(team, (winnrCountByTeam.get(team) || 0) + 1);
+      if (!isGeneric) continue;
       genericEmails.add(email);
       if (m.workspace_id) genericWsIds.add(String(m.workspace_id));
+      if (!team) continue;
+      genericCountByTeam.set(team, (genericCountByTeam.get(team) || 0) + 1);
+      if (!genericByTeam.has(team)) genericByTeam.set(team, { ids: [], emails: [] });
+      const g = genericByTeam.get(team);
+      if (m.account_id != null) g.ids.push(Number(m.account_id));
+      g.emails.push(email);
     }
     const emailArr = [...genericEmails];
     const wsArr    = [...genericWsIds];
     const mailboxCount = emailArr.length;
 
-    // Sent + bounced: use mailbox_daily_stats (synced from Bison breakdownOfEventsByDate)
-    // filtered to the Winnr Generic workspace IDs + supplier='Winnr'. Bison's per-mailbox
-    // emails_sent_count is 0 for these mailboxes and email_events webhooks stopped ~06-15,
-    // so mailbox_daily_stats is the only reliable source. Winnr Generic domains map to
-    // dedicated Bison workspaces, so workspace+supplier filter is accurate.
+    // ── SENT + BOUNCED ────────────────────────────────────────────────────────
+    // Ground truth: Bison breakdownOfEventsByDate filtered to EXACTLY the generic
+    // sender_email_ids, per workspace (Bison is stateful). This isolates the 773
+    // generic mailboxes from the other Winnr mailboxes that share their workspaces
+    // — which mailbox_daily_stats (workspace+supplier grain) cannot do.
+    const end = serverDateString(new Date());
+    const winDays = lifetime ? 400 : days;
+    const start = serverDateString(new Date(Date.now() - (winDays - 1) * 86400000));
+
     let sent = 0, bounced = 0;
-    let dailySeries = [];
-    if (wsArr.length) {
+    const sentByDate = new Map();
+    for (const [teamId, g] of genericByTeam.entries()) {
+      if (!g.ids.length) continue;
+      let body;
+      try {
+        body = await bisonReq('/api/campaign-events/stats', {
+          wsId: teamId,
+          params: { start_date: start, end_date: end, sender_email_ids: g.ids },
+        });
+      } catch (e) { continue; } // skip a flaky workspace, don't abort the card
+      const s  = eventSeriesByLabel(body, 'Sent');
+      const bo = eventSeriesByLabel(body, 'Bounced');
+      for (const [d, n] of s)  { sent    += n; sentByDate.set(d, (sentByDate.get(d) || 0) + n); }
+      for (const [, n] of bo)  { bounced += n; }
+    }
+
+    // Fallback: if Bison's per-mailbox breakdown returns nothing (it has been
+    // known to return zeros for some workspaces), apportion each workspace's
+    // Winnr-supplier total from mailbox_daily_stats by the generic mailbox share.
+    let source = 'bison-sender-ids';
+    if (sent === 0 && wsArr.length) {
+      source = 'apportioned-daily-stats';
       const win = lifetime ? '' : `AND date >= (CURRENT_DATE - ($2::int - 1))`;
       const params = lifetime ? [wsArr] : [wsArr, days];
       const ds = await pgdb.query(`
-        SELECT date::text, SUM(sent)::int AS sent, SUM(bounced)::int AS bounced
+        SELECT workspace_id, date::text AS date, SUM(sent)::int AS sent, SUM(bounced)::int AS bounced
         FROM mailbox_daily_stats
         WHERE workspace_id = ANY($1) AND LOWER(supplier) = 'winnr' ${win}
-        GROUP BY date ORDER BY date
+        GROUP BY workspace_id, date ORDER BY date
       `, params);
-      sent    = ds.rows.reduce((a,r)=>a+(r.sent||0), 0);
-      bounced = ds.rows.reduce((a,r)=>a+(r.bounced||0), 0);
-      if (!lifetime) dailySeries = ds.rows;
+      // workspace_id in the table is the canonical PV id; map to Bison team for shares.
+      const teamByWsId = new Map();
+      for (const m of (_mailboxCache.mailboxes || [])) {
+        if (m.workspace_id && m.bison_team_id) teamByWsId.set(String(m.workspace_id), String(m.bison_team_id));
+      }
+      for (const r of ds.rows) {
+        const team = teamByWsId.get(String(r.workspace_id));
+        const gc = team ? (genericCountByTeam.get(team) || 0) : 0;
+        const wc = team ? (winnrCountByTeam.get(team)   || 0) : 0;
+        const share = wc > 0 ? gc / wc : 0;
+        const s = Math.round((r.sent || 0) * share);
+        sent    += s;
+        bounced += Math.round((r.bounced || 0) * share);
+        sentByDate.set(r.date, (sentByDate.get(r.date) || 0) + s);
+      }
     }
+
+    const dailySeries = [...sentByDate.entries()].map(([date, sent]) => ({ date, sent }));
 
     // Human replies + OOO from unibox_replies, windowed to period
     let humanReplies = 0, oooReplies = 0;
@@ -10821,6 +10881,7 @@ app.get('/api/mailboxes/winnr-generic-stats', requireSession, async (req, res) =
       replies_with_ooo: humanReplies + oooReplies,
       series,
       dates: chartDates,
+      _source: source,
     });
   } catch (err) {
     console.error('[winnr-generic-stats]', err.message);
