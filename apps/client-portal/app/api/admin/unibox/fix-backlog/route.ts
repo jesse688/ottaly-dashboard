@@ -4,17 +4,26 @@ import { getAdminSession } from '@/lib/auth'
 
 // Reconcile the Master Unibox to Bison's automated-reply truth, ONE time.
 //
-// GOAL: anything Bison tagged as automated (warm-up / OOO / auto-ack) must not
-// sit in the working queues (inbox / review / unmapped). Genuine human replies
-// stay for AI triage → interested/question → review.
+// The rule, end to end: rely on BISON's automated flag to hide replies. Our own
+// warm-up tagging must never permanently bury a reply — anything we (not Bison)
+// called warm-up gets handed back to the AI to judge for interest.
 //
-// A row is "Bison-automated" if ANY of:
-//   • bison_automated_reply = TRUE   (captured at webhook intake)
-//   • category = 'ooo_auto_reply' AND ai_model = 'prefilter'  (cron's Bison flag)
-//   • category = 'warmup'            (our warm-up detection / AI)
+// TWO disjoint sets:
 //
-// Such rows are moved to the hidden 'warmup' folder — UNLESS they're already with
-// the client (folder='replies'), marked as a lead, or human-reviewed (admin_label).
+//   HIDE (→ 'warmup' folder, no AI) — Bison CONFIRMED it's automated:
+//     • bison_automated_reply = TRUE          (captured at webhook intake)
+//     • category='ooo_auto_reply' AND ai_model='prefilter'  (cron's Bison flag)
+//
+//   REQUEUE (→ pending, AI re-classifies) — WE tagged it warm-up, Bison did not:
+//     • category='warmup' AND bison_automated_reply IS NOT TRUE
+//       (old PlusVibe-era / heuristic warm-ups — may be genuine leads)
+//
+// When requeued, the classify cron's remaining repeated-word-token check
+// re-buries true Bison token warm-ups, while old PV/hyphen ones (which no longer
+// match any detector) flow to the AI → interested/question → review.
+//
+// Both sets skip rows already with the client (folder='replies'), marked as a
+// lead, or human-reviewed (admin_label).
 //
 // GET  ?secret=CRON_SECRET → diagnostic only (no writes)
 // POST ?secret=CRON_SECRET → apply
@@ -25,16 +34,28 @@ export async function POST(req: NextRequest) {
   return handle(req, true)
 }
 
-// The set of rows that are Bison-automated AND safe to move out of the queues.
-const AUTOMATED_IN_QUEUE = `
+const SAFE = `
+  marked_as_lead = FALSE
+  AND admin_label IS NULL
+  AND folder <> 'replies'
+`
+
+// Bison-confirmed automated, sitting in a working queue → hide.
+const HIDE = `
   (
     bison_automated_reply = TRUE
     OR (category = 'ooo_auto_reply' AND ai_model = 'prefilter')
-    OR category = 'warmup'
   )
   AND folder IN ('inbox', 'review', 'unmapped')
-  AND marked_as_lead = FALSE
-  AND admin_label IS NULL
+  AND ${SAFE}
+`
+
+// Warm-up WE tagged that Bison did not confirm → hand back to the AI.
+const REQUEUE = `
+  category = 'warmup'
+  AND bison_automated_reply IS NOT TRUE
+  AND folder IN ('inbox', 'review', 'unmapped', 'warmup')
+  AND ${SAFE}
 `
 
 async function handle(req: NextRequest, apply: boolean) {
@@ -44,37 +65,51 @@ async function handle(req: NextRequest, apply: boolean) {
   await ready()
 
   if (!apply) {
-    // Show the real state so we know exactly what POST will do before running it.
-    const [byFolder, automatedByFolder, toMove, queueState] = await Promise.all([
+    const [byFolder, toHide, toRequeue, warmupComposition] = await Promise.all([
       pool.query(`SELECT folder, COUNT(*)::int n FROM unibox_replies GROUP BY folder ORDER BY n DESC`),
+      pool.query(`SELECT COUNT(*)::int n FROM unibox_replies WHERE ${HIDE}`),
+      pool.query(`SELECT COUNT(*)::int n FROM unibox_replies WHERE ${REQUEUE}`),
+      // What's actually in the warm-up category, split by Bison confirmation +
+      // the reasoning that tagged it — so we can SEE the PV-vs-Bison breakdown.
       pool.query(
-        `SELECT folder, COALESCE(bison_automated_reply::text,'null') AS bison_automated, COUNT(*)::int n
+        `SELECT COALESCE(bison_automated_reply::text,'null') AS bison_confirmed,
+                COALESCE(ai_model,'?') AS tagged_by,
+                COALESCE(LEFT(ai_reasoning,40),'?') AS reason,
+                COUNT(*)::int n
            FROM unibox_replies
-          WHERE folder IN ('inbox','review','unmapped')
-          GROUP BY folder, bison_automated_reply ORDER BY folder`
-      ),
-      pool.query(`SELECT COUNT(*)::int n FROM unibox_replies WHERE ${AUTOMATED_IN_QUEUE}`),
-      pool.query(
-        `SELECT classify_state, COUNT(*)::int n FROM unibox_replies
-          WHERE folder = 'inbox' GROUP BY classify_state ORDER BY n DESC`
+          WHERE category = 'warmup'
+          GROUP BY 1,2,3 ORDER BY n DESC LIMIT 25`
       ),
     ])
     return NextResponse.json({
       ok: true,
       mode: 'preview',
-      automated_to_move: toMove.rows[0].n,
+      automated_to_hide: toHide.rows[0].n,
+      warmups_to_requeue_for_ai: toRequeue.rows[0].n,
       folder_distribution: byFolder.rows,
-      active_folder_automated_split: automatedByFolder.rows,
-      inbox_classify_state: queueState.rows,
+      warmup_category_composition: warmupComposition.rows,
     })
   }
 
-  const moved = await pool.query(
-    `UPDATE unibox_replies
-        SET folder = 'warmup', updated_at = NOW()
-      WHERE ${AUTOMATED_IN_QUEUE}
-      RETURNING id`
+  // 1) Hide Bison-confirmed automated.
+  const hidden = await pool.query(
+    `UPDATE unibox_replies SET folder = 'warmup', updated_at = NOW()
+      WHERE ${HIDE} RETURNING id`
   )
 
-  return NextResponse.json({ ok: true, mode: 'apply', automated_moved: moved.rowCount ?? 0 })
+  // 2) Re-queue our-tagged warm-ups for AI re-classification.
+  const requeued = await pool.query(
+    `UPDATE unibox_replies
+        SET classify_state = 'pending', classify_next_at = NULL, classify_attempts = 0,
+            folder = 'inbox', category = NULL, ai_model = NULL, ai_reasoning = NULL,
+            updated_at = NOW()
+      WHERE ${REQUEUE} RETURNING id`
+  )
+
+  return NextResponse.json({
+    ok: true,
+    mode: 'apply',
+    automated_hidden: hidden.rowCount ?? 0,
+    warmups_requeued_for_ai: requeued.rowCount ?? 0,
+  })
 }
