@@ -450,8 +450,8 @@ export async function tagInBison(
       }
       if (!tagId) return { ok: false, reason: 'tag-create-failed' }
 
-      // 2) Attach the tag to the lead.
-      await bison('POST', `/api/leads/${leadId}/tags`, undefined, { tag_ids: [tagId] })
+      // 2) Attach the tag to the lead via the bulk attach endpoint.
+      await bison('POST', '/api/tags/attach-to-leads', undefined, { tag_ids: [tagId], lead_ids: [Number(leadId)] })
       return { ok: true }
     })
   } catch (err) {
