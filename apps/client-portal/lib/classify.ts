@@ -35,35 +35,26 @@ export const CATEGORIES: ReplyCategory[] = [
 // "skill-champ pumped", "climate-sufficient week". (Also the literal "warmup"
 // markers + common tool names.) We allowlist genuine compounds so real replies
 // ("award-winning", "eco-friendly", "next-gen") are never mis-flagged.
-const WARMUP_PATTERNS: RegExp[] = [
-  /\bwarm[\s_-]?up\b/i,                                          // literal "warmup"/"warm up"
-  /\b(mailwarm|warmupinbox|lemwarm|warmbox|warmy)\b/i,          // warm-up tool names
-  /\bwarm-?up\s*(id|token|ref|code)\b[:#]?\s*[a-z0-9]{3,}/i,    // explicit warm-up token markers
-  /\[\s*warm-?up\s*\]/i,                                         // [warmup] tag
-  /\b([a-z]{3,})[\s_]+\1\b/i,                                    // repeated word token: "apple apple"
-]
+// Bison's warmup tell: a repeated word token injected into prose ("apple apple").
+// We rely on Bison to filter its own warmup emails — this is the only pattern
+// we keep so we don't mis-classify genuine replies.
+const BISON_WARMUP = /\b([a-z]{3,})[\s_]+\1\b/i
 
 export interface WarmupSignals {
   subject?: string
   bodyText?: string
-  // Kept for API compatibility — no longer used in detection logic.
-  // Bison filters its own warmup emails; we rely on explicit markers only.
+  // Kept for API compatibility — unused.
   hasLeadFields?: boolean
   isForwarded?: boolean
 }
 
-// Cheap, deterministic warm-up detector — explicit markers ONLY.
-// Bison already filters its own warmup emails before they reach our webhook,
-// so we don't need the hyphen-pair heuristic that caused false positives on
-// genuine replies containing normal hyphenated words like "government-funded".
+// Trust Bison's warmup filtering. Only catch the repeated-word token Bison
+// injects ("apple apple") as a safety net — everything else goes to Gemini.
 export function detectWarmup(s: WarmupSignals): { isWarmup: boolean; reason: string } {
   const hay = `${s.subject ?? ''}\n${s.bodyText ?? ''}`
-
-  const marker = WARMUP_PATTERNS.find(re => re.test(hay))
-  if (marker) {
-    return { isWarmup: true, reason: `warm-up marker ${String(marker)}` }
+  if (BISON_WARMUP.test(hay)) {
+    return { isWarmup: true, reason: 'bison repeated-word token' }
   }
-
   return { isWarmup: false, reason: '' }
 }
 
