@@ -10440,6 +10440,108 @@ async function syncNdrBounces() {
 setTimeout(() => syncNdrBounces().catch(() => {}), 3 * 60 * 1000);
 setInterval(() => syncNdrBounces().catch(() => {}), 30 * 60 * 1000);
 
+// ── Bison reply reconciler ────────────────────────────────────────────────────
+// Polls GET /api/replies per workspace (newest-first, stops at window cutoff)
+// and INSERTs any rows missing from unibox_replies. Catches replies that the
+// Bison webhook missed. Runs every 15 min; first run 2 min after boot.
+const RECONCILE_DAYS = 1; // look back 1 day each run
+let _reconcileState = { running: false, lastRun: null, lastError: null, inserted: 0 };
+
+const BISON_CAT_MAP = {
+  interested:          'interested',
+  automated_reply:     'auto_reply',
+  not_automated_reply: 'not_interested',
+};
+
+async function reconcileBisonReplies() {
+  if (_reconcileState.running) return;
+  const pgdb = app.locals.pgDb;
+  if (!pgdb) return;
+  _reconcileState.running = true;
+  _reconcileState.lastError = null;
+  const since = new Date(Date.now() - RECONCILE_DAYS * 86400000).toISOString();
+  let inserted = 0;
+
+  try {
+    // Bulk-fetch existing rows in window — dedup in memory, no per-row queries
+    const existing = await pgdb.query(`
+      SELECT lower(sender_email) AS e,
+             round(extract(epoch FROM received_at) / 300)::bigint AS t
+      FROM unibox_replies WHERE received_at >= $1
+    `, [since]);
+    const seen = new Set(existing.rows.map(r => `${r.e}|${r.t}`));
+
+    const wsRaw = listBisonWorkspaces();
+    const workspaces = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.data || []);
+
+    for (const ws of workspaces) {
+      const teamId = String(ws.id);
+      const pvEntry = BISON_TEAMS.find(t => String(t.team_id) === teamId);
+      const workspaceId = pvEntry?.pv || teamId;
+
+      try {
+        // Switch workspace then page replies, stopping when we hit old data
+        await bisonReq('/api/workspaces/v1.1/switch-workspace', { wsId: teamId, method: 'POST', body: { team_id: teamId } }).catch(() => {});
+
+        let prevSig = '';
+        for (let page = 1; page <= 50; page++) {
+          const d = await bisonReq('/api/replies', { wsId: teamId, params: { folder: 'all', page, per_page: 100 } });
+          const batch = d?.data ?? [];
+          if (!batch.length) break;
+          const sig = batch.map(r => r.id).join(',');
+          if (sig === prevSig) break;
+          prevSig = sig;
+
+          let hitCutoff = false;
+          for (const reply of batch) {
+            if ((reply.created_at || '') < since) { hitCutoff = true; continue; }
+            const senderEmail = (reply.from_email || reply.reply_email || '').toLowerCase().trim();
+            const mailboxEmail = (reply.to_email || reply.sender_email_address || '').toLowerCase().trim();
+            if (!senderEmail || !reply.created_at) continue;
+
+            const t5 = Math.round(new Date(reply.created_at).getTime() / 1000 / 300);
+            const key = `${senderEmail}|${t5}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+
+            const category = BISON_CAT_MAP[reply.status || ''] || 'other';
+            await pgdb.query(`
+              INSERT INTO unibox_replies
+                (workspace_id, sender_email, mailbox_email, subject, category, folder, received_at, raw)
+              VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+              ON CONFLICT DO NOTHING
+            `, [workspaceId, senderEmail, mailboxEmail, reply.subject || '', category,
+                reply.folder || 'inbox', reply.created_at, JSON.stringify(reply)]);
+            inserted++;
+          }
+          if (hitCutoff) break;
+        }
+      } catch (e) {
+        console.warn(`[reconcile] ${ws.name}: ${e.message}`);
+      }
+    }
+
+    _reconcileState.lastRun = new Date().toISOString();
+    _reconcileState.inserted = inserted;
+    if (inserted) console.log(`[reconcile] inserted ${inserted} missing reply row(s)`);
+  } catch (err) {
+    _reconcileState.lastError = err.message;
+    console.error('[reconcile] failed:', err.message);
+  } finally {
+    _reconcileState.running = false;
+  }
+}
+
+setTimeout(() => reconcileBisonReplies().catch(() => {}), 2 * 60 * 1000);
+setInterval(() => reconcileBisonReplies().catch(() => {}), 15 * 60 * 1000);
+
+app.post('/api/admin/reconcile-replies', requireAdmin, async (req, res) => {
+  if (_reconcileState.running) return res.json({ ok: true, alreadyRunning: true, state: _reconcileState });
+  reconcileBisonReplies().catch(() => {});
+  res.json({ ok: true, started: true, state: _reconcileState });
+});
+app.get('/api/admin/reconcile-replies/status', requireAdmin, (req, res) => res.json(_reconcileState));
+
 app.post('/api/mailboxes/sync-ndr', requireSession, async (req, res) => {
   if (_ndrSyncState.running) return res.json({ ok: true, alreadyRunning: true });
   syncNdrBounces().catch(() => {});
