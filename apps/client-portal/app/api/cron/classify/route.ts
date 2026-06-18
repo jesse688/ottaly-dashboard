@@ -2,11 +2,6 @@ import { NextResponse, type NextRequest } from 'next/server'
 import pool, { ready } from '@/lib/db'
 import { classifyReply, CLASSIFIER_MODEL, CLASSIFIER_VERSION, detectWarmup } from '@/lib/classify'
 import { addToBlocklist, unsubscribeLead, bisonTeamForWorkspace } from '@/lib/bison'
-import { sendEmail } from '@/lib/email'
-
-// Who gets the internal "new interested reply" alert when one lands in Review.
-const INTERESTED_ALERT_TO = process.env.INTERESTED_ALERT_EMAIL || 'jamie@ottaly.co.uk'
-
 // Triage worker for the Master Unibox. Claims a batch of pending replies with
 // FOR UPDATE SKIP LOCKED (safe to run concurrently / overlapping), pre-filters
 // automated replies for free, and calls Claude on the rest. Authed by
@@ -23,13 +18,6 @@ export async function GET(req: NextRequest) {
   const summary = { processed: 0, interested: 0, failed: 0, unsubscribed: 0 }
   // Unsubscribe actions to run AFTER commit (network + stateful Bison switch).
   const unsubQueue: { workspaceId: string; email: string }[] = []
-  // Interested-reply alert emails to send AFTER commit.
-  interface AlertItem {
-    email: string; subject: string | null; company: string | null; body: string | null
-    leadName: string | null; title: string | null; phone: string | null
-    linkedin: string | null; website: string | null; location: string | null
-  }
-  const alertQueue: AlertItem[] = []
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
@@ -150,22 +138,6 @@ export async function GET(req: NextRequest) {
         summary.processed++
         if (result.category === 'interested' || result.category === 'question') {
           summary.interested++
-          // Alert internally that a new interested/question reply landed in Review.
-          const rawObj = (row.raw ?? {}) as Record<string, unknown>
-          const fullBody = (rawObj.text_body as string) || (row.body_preview as string) || null
-          const leadName = [row.first_name, row.last_name].filter(Boolean).join(' ').trim() || null
-          alertQueue.push({
-            email: String(row.lead_email ?? ''),
-            subject: (row.subject as string) ?? null,
-            company: (row.company_name as string) ?? (row.lead_company as string) ?? null,
-            body: fullBody,
-            leadName,
-            title: (row.job_title as string) ?? null,
-            phone: (row.phone_number as string) ?? null,
-            linkedin: (row.linkedin_url as string) ?? null,
-            website: (row.company_website as string) ?? null,
-            location: [row.city, row.country].filter(Boolean).join(', ') || null,
-          })
         }
         // Queue auto-unsubscribe: AI says they want out → honour it. Only when
         // we know the client's workspace (mapped) so we hit the right Bison team.
@@ -209,40 +181,6 @@ export async function GET(req: NextRequest) {
       summary.unsubscribed++
     } catch (err) {
       console.error('[cron/classify] auto-unsub failed:', email, String(err))
-    }
-  }
-
-  // After commit: alert internally about each new interested reply. Best-effort.
-  for (const a of alertQueue) {
-    const lines = [
-      'A new interested reply just landed in the Unibox review folder.',
-      '',
-      '— LEAD —',
-      `Name:     ${a.leadName || '—'}`,
-      `Email:    ${a.email || '—'}`,
-      `Company:  ${a.company || '—'}`,
-      `Title:    ${a.title || '—'}`,
-      `Phone:    ${a.phone || '—'}`,
-      `LinkedIn: ${a.linkedin || '—'}`,
-      `Website:  ${a.website || '—'}`,
-      `Location: ${a.location || '—'}`,
-      '',
-      '— THEIR REPLY —',
-      `Subject:  ${a.subject || '(no subject)'}`,
-      '',
-      (a.body || '(no message body captured)'),
-      '',
-      'Review / reply: https://login.ottaly.co.uk/admin/unibox',
-    ]
-    try {
-      await sendEmail(
-        INTERESTED_ALERT_TO,
-        `🔥 New interested reply — ${a.leadName || a.company || a.email || 'lead'}`,
-        lines.join('\n'),
-        `interested/${a.email}/${a.subject ?? ''}`,
-      )
-    } catch (err) {
-      console.error('[cron/classify] interested alert failed:', a.email, String(err))
     }
   }
 
