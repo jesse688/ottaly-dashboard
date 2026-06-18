@@ -438,13 +438,13 @@ export async function tagInBison(
   }
   try {
     return await withTeam(teamId, async () => {
-      // 1) Find or create the "lead" tag.
+      // 1) Find or create the "Interested" tag (Bison's own signal for interested leads).
       const list = await bison<{ data?: BisonTag[] }>('GET', '/api/tags')
       const existing = (Array.isArray(list) ? (list as unknown as BisonTag[]) : list.data ?? [])
-        .find(t => (t.name ?? '').toLowerCase() === 'lead')
+        .find(t => (t.name ?? '').toLowerCase() === 'interested')
       let tagId = existing?.id
       if (!tagId) {
-        const created = await bison<{ data?: BisonTag }>('POST', '/api/tags', undefined, { name: 'lead' })
+        const created = await bison<{ data?: BisonTag }>('POST', '/api/tags', undefined, { name: 'Interested' })
         tagId = (created as { data?: BisonTag; id?: number }).data?.id
           ?? (created as { id?: number }).id
       }
