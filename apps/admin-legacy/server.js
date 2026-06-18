@@ -10712,33 +10712,28 @@ app.get('/api/mailboxes/winnr-generic-stats', requireSession, async (req, res) =
     const meta = await pgdb.listMailboxMeta().catch(() => []);
     const supplierByEmail = new Map((meta || []).map(m => [(m.email || '').toLowerCase(), (m.supplier || '').toLowerCase()]));
 
-    // Walk the cache once: collect the Winnr Generic mailboxes grouped by Bison
-    // workspace (with their sender_email_ids = account_id), and the total count of
-    // Winnr-supplier mailboxes per workspace (for the fallback share).
+    // Walk the cache once: collect the Winnr Generic mailbox emails, and — keyed by
+    // the canonical workspace_id (the SAME key mailbox_daily_stats uses) — the count
+    // of generic mailboxes vs the count of ALL Winnr mailboxes in that workspace.
+    // That ratio lets us carve the 773 generic boxes out of the workspace Winnr
+    // total, which is the only per-day sent source that actually has data.
     const genericEmails = new Set();
     const genericWsIds  = new Set();
-    const genericByTeam = new Map(); // team_id -> { ids:[], emails:[] }
-    const winnrCountByTeam   = new Map(); // team_id -> total Winnr-supplier mailboxes
-    const genericCountByTeam = new Map(); // team_id -> generic mailboxes
+    const winnrCountByWs   = new Map(); // workspace_id -> total Winnr-supplier mailboxes
+    const genericCountByWs = new Map(); // workspace_id -> generic mailboxes
     for (const m of (_mailboxCache.mailboxes || [])) {
       const email = (m.email || '').toLowerCase();
       if (!email) continue;
-      const team = String(m.bison_team_id || '');
+      const ws = String(m.workspace_id || '');
       const host = m.domain || email.split('@')[1] || '';
       const isGeneric = WINNR_GENERIC_ROOTS.has(winnrRootOf(host));
       // The generic domains belong to Winnr; count them toward the Winnr cohort
       // even when meta has no explicit supplier row yet.
       const isWinnr = isGeneric || supplierByEmail.get(email) === 'winnr';
-      if (team && isWinnr) winnrCountByTeam.set(team, (winnrCountByTeam.get(team) || 0) + 1);
+      if (ws && isWinnr) winnrCountByWs.set(ws, (winnrCountByWs.get(ws) || 0) + 1);
       if (!isGeneric) continue;
       genericEmails.add(email);
-      if (m.workspace_id) genericWsIds.add(String(m.workspace_id));
-      if (!team) continue;
-      genericCountByTeam.set(team, (genericCountByTeam.get(team) || 0) + 1);
-      if (!genericByTeam.has(team)) genericByTeam.set(team, { ids: [], emails: [] });
-      const g = genericByTeam.get(team);
-      if (m.account_id != null) g.ids.push(Number(m.account_id));
-      g.emails.push(email);
+      if (ws) { genericWsIds.add(ws); genericCountByWs.set(ws, (genericCountByWs.get(ws) || 0) + 1); }
     }
     const emailArr = [...genericEmails];
     const wsArr    = [...genericWsIds];
@@ -10772,37 +10767,17 @@ app.get('/api/mailboxes/winnr-generic-stats', requireSession, async (req, res) =
     }
 
     // ── SENT + BOUNCED ────────────────────────────────────────────────────────
-    // Ground truth: Bison breakdownOfEventsByDate filtered to EXACTLY the generic
-    // sender_email_ids, per workspace (Bison is stateful). This isolates the 773
-    // generic mailboxes from the other Winnr mailboxes that share their workspaces
-    // — which mailbox_daily_stats (workspace+supplier grain) cannot do.
-    const end = serverDateString(new Date());
-    const winDays = lifetime ? 400 : days;
-    const start = serverDateString(new Date(Date.now() - (winDays - 1) * 86400000));
-
+    // Bison has NO working per-mailbox sent source (sender-emails api_sent is 0,
+    // campaign-events/stats returns zeros, the email_events webhook died ~06-15).
+    // The only per-day sent figure that exists is the workspace Winnr-supplier
+    // total in mailbox_daily_stats. So we carve the 773 generic boxes out of it by
+    // their share of the workspace's Winnr mailboxes — an estimate, but the same
+    // apportionment every other card on this page already uses. Keyed by
+    // workspace_id to match the table exactly (no team remapping → no zero-share).
     let sent = 0, bounced = 0;
+    const source = 'apportioned-daily-stats';
     const sentByDate = new Map();
-    for (const [teamId, g] of genericByTeam.entries()) {
-      if (!g.ids.length) continue;
-      let body;
-      try {
-        body = await bisonReq('/api/campaign-events/stats', {
-          wsId: teamId,
-          params: { start_date: start, end_date: end, sender_email_ids: g.ids },
-        });
-      } catch (e) { continue; } // skip a flaky workspace, don't abort the card
-      const s  = eventSeriesByLabel(body, 'Sent');
-      const bo = eventSeriesByLabel(body, 'Bounced');
-      for (const [d, n] of s)  { sent    += n; sentByDate.set(d, (sentByDate.get(d) || 0) + n); }
-      for (const [, n] of bo)  { bounced += n; }
-    }
-
-    // Fallback: if Bison's per-mailbox breakdown returns nothing (it has been
-    // known to return zeros for some workspaces), apportion each workspace's
-    // Winnr-supplier total from mailbox_daily_stats by the generic mailbox share.
-    let source = 'bison-sender-ids';
-    if (sent === 0 && wsArr.length) {
-      source = 'apportioned-daily-stats';
+    if (wsArr.length) {
       const win = lifetime ? '' : `AND date >= (CURRENT_DATE - ($2::int - 1))`;
       const params = lifetime ? [wsArr] : [wsArr, days];
       const ds = await pgdb.query(`
@@ -10811,15 +10786,10 @@ app.get('/api/mailboxes/winnr-generic-stats', requireSession, async (req, res) =
         WHERE workspace_id = ANY($1) AND LOWER(supplier) = 'winnr' ${win}
         GROUP BY workspace_id, date ORDER BY date
       `, params);
-      // workspace_id in the table is the canonical PV id; map to Bison team for shares.
-      const teamByWsId = new Map();
-      for (const m of (_mailboxCache.mailboxes || [])) {
-        if (m.workspace_id && m.bison_team_id) teamByWsId.set(String(m.workspace_id), String(m.bison_team_id));
-      }
       for (const r of ds.rows) {
-        const team = teamByWsId.get(String(r.workspace_id));
-        const gc = team ? (genericCountByTeam.get(team) || 0) : 0;
-        const wc = team ? (winnrCountByTeam.get(team)   || 0) : 0;
+        const ws = String(r.workspace_id);
+        const gc = genericCountByWs.get(ws) || 0;
+        const wc = winnrCountByWs.get(ws)   || 0;
         const share = wc > 0 ? gc / wc : 0;
         const s = Math.round((r.sent || 0) * share);
         sent    += s;
