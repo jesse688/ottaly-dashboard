@@ -196,6 +196,8 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
 
   const [replying, setReplying] = useState(false)
   const [replyMsg, setReplyMsg] = useState('')
+  const [replyHeight, setReplyHeight] = useState(320)
+  const dragRef = useRef<{ startY: number; startH: number } | null>(null)
 
   // Client's private notes on the selected lead (persisted via PATCH …/data).
   const [notes, setNotes] = useState('')
@@ -734,7 +736,7 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
               {selected.dispute_status === 'approved' && <Banner color="green"><strong>Non-lead approved.</strong> Credit refunded.</Banner>}
 
               {/* thread body — each message its own colour-coded block */}
-              <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3 bg-[#fafbfd]">
+              <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 space-y-3 bg-[#fafbfd]">
                 {thread === null ? (
                   <div className="space-y-3">{Array.from({length:2}).map((_,i)=><div key={i} className="h-24 bg-gray-100 rounded-xl animate-pulse" />)}</div>
                 ) : thread.length === 0 ? (
@@ -794,8 +796,35 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
                 })}
               </div>
 
+              {/* drag handle — drag up to grow the reply box */}
+              <div
+                className="h-2 shrink-0 cursor-row-resize flex items-center justify-center group border-t border-gray-100 hover:border-brand-300 transition-colors bg-white"
+                onPointerDown={e => {
+                  e.preventDefault()
+                  const el = e.currentTarget
+                  dragRef.current = { startY: e.clientY, startH: replyHeight }
+                  const onMove = (mv: PointerEvent) => {
+                    if (!dragRef.current) return
+                    const delta = dragRef.current.startY - mv.clientY
+                    setReplyHeight(Math.max(200, Math.min(700, dragRef.current.startH + delta)))
+                  }
+                  const onUp = () => {
+                    dragRef.current = null
+                    el.releasePointerCapture(e.pointerId)
+                    window.removeEventListener('pointermove', onMove)
+                    window.removeEventListener('pointerup', onUp)
+                  }
+                  el.setPointerCapture(e.pointerId)
+                  window.addEventListener('pointermove', onMove)
+                  window.addEventListener('pointerup', onUp)
+                }}
+              >
+                <div className="w-8 h-0.5 rounded-full bg-gray-300 group-hover:bg-brand-400 transition-colors" />
+              </div>
+
               {/* reply composer — Gmail-style rich editor */}
-              <div className="border-t border-gray-100 px-4 py-3 shrink-0">
+              <div className="px-5 py-3 shrink-0 bg-white" style={{ height: replyHeight, overflowY: 'auto' }}>
+                <div className="max-w-[72ch]">
                 <RichReply
                   key={selected.id}
                   toEmail={selected.email ?? ''}
@@ -806,6 +835,7 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
                   seed={forwardSeed}
                   onSend={handleReply}
                 />
+                </div>
               </div>
             </>
           )}
@@ -1208,7 +1238,7 @@ function RichReply({ toEmail, ccEmail = '', placeholderName, sending, statusMsg,
       <div className="relative">
         {empty && <span className="pointer-events-none absolute left-4 top-3 text-sm text-gray-400">Write your reply to {placeholderName}…</span>}
         <div ref={ref} contentEditable suppressContentEditableWarning onInput={onInput}
-          className="min-h-[140px] max-h-[clamp(140px,32vh,380px)] overflow-y-auto px-4 py-3 text-sm leading-[1.55] text-gray-800 outline-none [&_a]:text-brand-600 [&_a]:underline [&_img]:max-w-full [&_img]:rounded" />
+          className="min-h-[120px] px-4 py-3 text-sm leading-[1.55] text-gray-800 outline-none [&_a]:text-brand-600 [&_a]:underline [&_img]:max-w-full [&_img]:rounded" />
       </div>
 
       {/* footer */}
