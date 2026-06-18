@@ -10495,8 +10495,8 @@ async function reconcileBisonReplies() {
           let hitCutoff = false;
           for (const reply of batch) {
             if ((reply.created_at || '') < since) { hitCutoff = true; continue; }
-            const senderEmail = (reply.from_email || reply.reply_email || '').toLowerCase().trim();
-            const mailboxEmail = (reply.to_email || reply.sender_email_address || '').toLowerCase().trim();
+            const senderEmail = (reply.from_email_address || reply.from_email || reply.reply_email || '').toLowerCase().trim();
+            const mailboxEmail = (reply.primary_to_email_address || reply.to_email || reply.sender_email_address || '').toLowerCase().trim();
             if (!senderEmail || !reply.created_at) continue;
 
             const t5 = Math.round(new Date(reply.created_at).getTime() / 1000 / 300);
@@ -10504,7 +10504,8 @@ async function reconcileBisonReplies() {
             if (seen.has(key)) continue;
             seen.add(key);
 
-            const category = BISON_CAT_MAP[reply.status || ''] || 'other';
+            const bisonStatus = reply.status || (reply.interested ? 'interested' : reply.automated_reply ? 'automated_reply' : 'not_automated_reply');
+            const category = BISON_CAT_MAP[bisonStatus] || 'other';
             await pgdb.query(`
               INSERT INTO unibox_replies
                 (workspace_id, sender_email, mailbox_email, subject, category, folder, received_at, raw)

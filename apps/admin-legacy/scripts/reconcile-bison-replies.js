@@ -124,11 +124,12 @@ async function getAllReplies(wsId, since, folder = 'all') {
       process.stderr.write(`${replies.length} total, ${recent.length} in window\n`);
 
       for (const reply of recent) {
-        const senderEmail = (reply.from_email || reply.reply_email || '').toLowerCase().trim();
-        const mailboxEmail = (reply.to_email || reply.sender_email_address || '').toLowerCase().trim();
+        const senderEmail = (reply.from_email_address || reply.from_email || reply.reply_email || '').toLowerCase().trim();
+        const mailboxEmail = (reply.primary_to_email_address || reply.to_email || reply.sender_email_address || '').toLowerCase().trim();
         const subject = reply.subject || '';
         const receivedAt = reply.created_at || reply.updated_at;
-        const category = CAT_MAP[reply.status || ''] || 'other';
+        const bisonStatus = reply.status || (reply.interested ? 'interested' : reply.automated_reply ? 'automated_reply' : 'not_automated_reply');
+        const category = CAT_MAP[bisonStatus] || 'other';
         const folder = reply.folder || 'inbox';
 
         if (!senderEmail || !receivedAt) continue;
