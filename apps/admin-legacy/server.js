@@ -11300,6 +11300,97 @@ app.put('/api/mailboxes/:email', requireSession, async (req, res) => {
 });
 
 // Bulk-assign supplier or type across many mailboxes at once.
+// Find every Bison mailbox carrying a tag named "winnr" (case-insensitive),
+// across all workspaces EXCEPT BlueHawk / Hayes / Bybo. Tags are per-workspace
+// in Bison, so we resolve the tag id per workspace then list sender-emails by it.
+//   GET  /api/mailboxes/winnr-tagged                 → dry-run (list + count)
+//   GET  /api/mailboxes/winnr-tagged?apply=10        → set daily_limit=10 on all
+// Read-only by default; only mutates when ?apply=<int> is present.
+const WINNR_TAG_EXCLUDE_WS = ['bluehawk', 'blue hawk', 'hayes', 'bybo', 'bybodigital'];
+app.get('/api/mailboxes/winnr-tagged', requireSession, async (req, res) => {
+  try {
+    const applyLimit = req.query.apply != null ? parseInt(req.query.apply, 10) : null;
+    if (applyLimit != null && (!Number.isInteger(applyLimit) || applyLimit < 0 || applyLimit > 1000)) {
+      return res.status(400).json({ error: 'apply must be an integer 0–1000' });
+    }
+    const isExcluded = name => {
+      const n = (name || '').toLowerCase();
+      return WINNR_TAG_EXCLUDE_WS.some(x => n.includes(x));
+    };
+
+    const perWorkspace = [];
+    let totalMatched = 0, totalUpdated = 0;
+    const errors = [];
+
+    for (const team of BISON_TEAMS) {
+      if (isExcluded(team.name)) {
+        perWorkspace.push({ workspace: team.name, team_id: team.team_id, skipped: 'excluded', matched: 0 });
+        continue;
+      }
+      try {
+        // 1) find the "winnr" tag id in this workspace
+        const tagsResp = await bisonReq('/api/tags', { wsId: team.team_id });
+        const tags = Array.isArray(tagsResp) ? tagsResp : (tagsResp?.data ?? []);
+        const winnrTag = tags.find(t => (t.name || '').trim().toLowerCase() === 'winnr');
+        if (!winnrTag) {
+          perWorkspace.push({ workspace: team.name, team_id: team.team_id, no_winnr_tag: true, matched: 0 });
+          continue;
+        }
+        // 2) page sender-emails filtered by that tag id
+        const matched = [];
+        let prevSig = '';
+        for (let page = 1; page <= 300; page++) {
+          const resp = await bisonReq('/api/sender-emails', {
+            wsId: team.team_id,
+            params: { per_page: 100, page, tag_ids: [winnrTag.id] },
+          });
+          const list = Array.isArray(resp) ? resp : (resp?.data ?? []);
+          if (!list.length) break;
+          const sig = list.map(a => a.id ?? a.email ?? '').join(',');
+          if (sig === prevSig) break;
+          prevSig = sig;
+          for (const a of list) {
+            if (a.id == null) continue;
+            matched.push({ id: a.id, email: (a.email || a.email_address || '').toLowerCase(), daily_limit: a.daily_limit ?? null });
+          }
+        }
+        totalMatched += matched.length;
+
+        // 3) apply daily-limit if requested
+        let updated = 0;
+        if (applyLimit != null && matched.length) {
+          const ids = matched.map(m => m.id);
+          await bisonReq('/api/sender-emails/daily-limits/bulk', {
+            method: 'PATCH', wsId: team.team_id,
+            body: { sender_email_ids: ids, daily_limit: applyLimit },
+          });
+          updated = ids.length;
+          totalUpdated += updated;
+        }
+        perWorkspace.push({
+          workspace: team.name, team_id: team.team_id, tag_id: winnrTag.id,
+          matched: matched.length, updated,
+          mailboxes: matched.map(m => m.email),
+        });
+      } catch (e) {
+        errors.push({ workspace: team.name, team_id: team.team_id, error: e.message });
+      }
+    }
+
+    res.json({
+      mode: applyLimit != null ? `applied daily_limit=${applyLimit}` : 'dry-run',
+      excluded_workspaces: WINNR_TAG_EXCLUDE_WS,
+      total_matched: totalMatched,
+      total_updated: totalUpdated,
+      workspaces: perWorkspace,
+      errors,
+    });
+  } catch (err) {
+    console.error('[winnr-tagged]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/mailboxes/bulk-tag', requireSession, async (req, res) => {
   try {
     const { emails, field, value } = req.body || {};
