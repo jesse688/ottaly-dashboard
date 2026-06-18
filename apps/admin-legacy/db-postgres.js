@@ -2755,7 +2755,7 @@ class PostgresDatabase {
   // Returns 'email_outlook' | 'email_google' | null (couldn't tell).
   async _providerFromSpf(domain) {
     try {
-      const txt = await dnsPromises.resolveTxt(domain);
+      const txt = await mxResolver.resolveTxt(domain); // public resolver — same automated enrichment path as resolveMx
       const spf = txt.map(parts => parts.join('')).join(' ').toLowerCase();
       if (/spf\.protection\.outlook\.com|outlook\.com|sharepointonline|protection\.outlook/.test(spf)) return 'email_outlook';
       if (/_spf\.google\.com|google\.com|googlemail/.test(spf)) return 'email_google';
