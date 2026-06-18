@@ -186,6 +186,17 @@ async function bison<T>(
   return res.json() as Promise<T>
 }
 
+// Low-level Bison caller for admin one-offs. Call INSIDE withTeam() so it runs on
+// the target workspace's scoped token (Bison is stateful per workspace).
+export async function bisonApi<T>(
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+  path: string,
+  params?: Record<string, string | number | boolean | undefined>,
+  body?: unknown,
+): Promise<T> {
+  return bison<T>(method, path, params, body)
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export interface BisonWorkspace {
