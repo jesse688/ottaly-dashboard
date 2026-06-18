@@ -764,7 +764,7 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
                   <div className="space-y-3">{Array.from({length:2}).map((_,i)=><div key={i} className="h-24 bg-gray-100 rounded-xl animate-pulse" />)}</div>
                 ) : thread.length === 0 ? (
                   <div className="text-center text-sm text-gray-400 py-12">No messages synced yet for this lead.</div>
-                ) : thread.map(m => {
+                ) : [...thread].reverse().map(m => {
                   const out = m.direction === 'OUT'
                   // Prefer plain text; fall back to preview, then to HTML stripped
                   // to text (received mail often has only an HTML body).
