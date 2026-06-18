@@ -8874,25 +8874,17 @@ app.get('/api/domains/health', requireSession, async (req, res) => {
 });
 
 app.post('/api/domains/refresh', requireSession, async (req, res) => {
-  if (_domainHealthRunning) return res.json({ ok: true, message: 'Refresh already running' });
-  refreshDomainHealth().catch(() => {});
-  res.json({ ok: true, message: 'Domain health refresh started' });
+  // Domain-health DISABLED completely — the refresh fires DNSBL lookups (SURBL /
+  // Spamhaus / URIBL) per domain, which created reputation bias. No refresh runs.
+  // Cached rows are still served read-only via GET /api/domains/health.
+  res.json({ ok: true, disabled: true, message: 'Domain health checks are disabled' });
 });
 
 // Single-domain on-demand check (useful when adding a new client)
 app.post('/api/domains/check', requireSession, async (req, res) => {
-  try {
-    const domain = (req.body?.domain || '').toString().trim().toLowerCase();
-    if (!domain || !/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(domain)) {
-      return res.status(400).json({ error: 'Invalid domain' });
-    }
-    const row = await checkDomain(domain, null);
-    const pgdb = app.locals.pgDb;
-    if (pgdb) await pgdb.upsertDomainHealth(row);
-    res.json(row);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  // Domain-health DISABLED completely — single-domain check also fires DNS/DNSBL
+  // lookups. Disabled to avoid any reputation-provider fingerprinting.
+  res.json({ ok: true, disabled: true, message: 'Domain health checks are disabled' });
 });
 
 // Soft-delete a domain from the dashboard. The row is kept (so we can
@@ -15313,8 +15305,11 @@ async function enrichWorkspaceBuckets() {
     console.warn('[enrichBuckets] failed:', err.message);
   }
 }
-setTimeout(enrichWorkspaceBuckets, 90_000);          // 90s after startup
-setInterval(enrichWorkspaceBuckets, 6 * 60 * 60_000); // every 6h
+// MX enrichment DISABLED — high-volume recurring MX lookups (~8k domains/6h) leave
+// a visible automated DNS signature from our resolver. Re-enable only after routing
+// these lookups through a public resolver (1.1.1.1 / 8.8.8.8). Until then: off.
+// setTimeout(enrichWorkspaceBuckets, 90_000);          // 90s after startup
+// setInterval(enrichWorkspaceBuckets, 6 * 60 * 60_000); // every 6h
 
 // Normalize subject/body before hashing so trivial whitespace and merge-tag
 // formatting differences don't fragment our template identity. Merge tags
