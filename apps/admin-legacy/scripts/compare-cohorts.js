@@ -104,11 +104,22 @@ const isSmtp = `lower(coalesce(mailbox_type,'')) NOT IN ('google','microsoft')`;
     const sentTotal = sentDaily ? sum(sentDaily, 'sent') : null;
     const bounceTotal = sentDaily ? sum(sentDaily, 'bounced') : null;
     const repTotal = sum(repDaily, 'total'), human = sum(repDaily, 'human'), auto = sum(repDaily, 'auto');
+    const activeDays = new Set(repDaily.map(r => r.date)).size || 1;
 
     console.log(`\n${'─'.repeat(64)}\n${label}  (${mbx} mailboxes)`);
-    console.log(`  Sent:    ${sentTotal == null ? 'n/a (set BASE/COOKIE to inline from endpoint)' : sentTotal.toLocaleString()}`);
+    if (sentTotal == null) {
+      console.log(`  Sent:    n/a (mailbox_daily_stats empty — trigger sync at /api/mailboxes/sync-daily)`);
+    } else {
+      console.log(`  Sent:    ${sentTotal.toLocaleString()}`);
+    }
     if (bounceTotal != null) console.log(`  Bounced: ${bounceTotal.toLocaleString()}  (${rr(bounceTotal, sentTotal)})`);
-    console.log(`  Replies: ${repTotal} total  ·  human ${human} (${rr(human, sentTotal)})  ·  auto/OOO ${auto}`);
+    console.log(`  Replies: ${repTotal} total  ·  human ${human}  ·  auto/OOO ${auto}`);
+    if (sentTotal != null && sentTotal > 0) {
+      console.log(`  Reply rate (total): ${rr(repTotal, sentTotal)}  ·  human RR: ${rr(human, sentTotal)}`);
+    } else {
+      const humanPerMbxPerDay = mbx > 0 ? (human / mbx / activeDays).toFixed(4) : '—';
+      console.log(`  (no sent data — human replies/mailbox/active-day: ${humanPerMbxPerDay}  over ${activeDays} day(s))`);
+    }
 
     // Per-day table, merging sent + replies on date.
     const byDate = new Map();
@@ -116,12 +127,14 @@ const isSmtp = `lower(coalesce(mailbox_type,'')) NOT IN ('google','microsoft')`;
     for (const r of repDaily) byDate.set(r.date, { ...byDate.get(r.date), total: r.total, human: r.human, auto: r.auto });
     const dates = [...byDate.keys()].sort();
     if (dates.length) {
+      const hasSent = dates.some(d => byDate.get(d)?.sent);
       console.log(`  ── by date ──`);
-      console.log(`    date         sent   replies  human  auto`);
+      console.log(`    date         sent   replies  human  auto${hasSent ? '   human-RR%' : ''}`);
       for (const d of dates) {
         const x = byDate.get(d);
         const c = (v, w) => String(v ?? 0).padStart(w);
-        console.log(`    ${d}  ${c(x.sent, 6)}   ${c(x.total, 6)}  ${c(x.human, 5)}  ${c(x.auto, 4)}`);
+        const rrCol = hasSent ? `   ${(x.sent > 0 ? (100 * (x.human ?? 0) / x.sent).toFixed(2) + '%' : '     —').padStart(9)}` : '';
+        console.log(`    ${d}  ${c(x.sent, 6)}   ${c(x.total, 6)}  ${c(x.human, 5)}  ${c(x.auto, 4)}${rrCol}`);
       }
     }
   }
