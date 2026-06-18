@@ -428,6 +428,9 @@ const BISON_TEAMS = [
   { team_id: '22', name: 'Animo',               pv: '69a686632f5aaca7d9602c1f' },
   { team_id: '23', name: 'ButterflyEco SOP',    pv: '6a1d40b3bb80380c1be750c6' }, // also labelled "ButterflyEco 2" in clients
   { team_id: '24', name: 'Josh - Commercial Flooring', pv: '6989ac90bb085fcd05167fc9' },
+  // Winnr batch workspaces — no PlusVibe client, pv=team_id (same as auto-discovery fallback)
+  { team_id: '25', name: 'Winnr Batch A', pv: '25' },
+  { team_id: '26', name: 'Winnr Batch B', pv: '26' },
 ];
 
 // Resolve an incoming workspace identifier to a Bison team_id. The dashboard
