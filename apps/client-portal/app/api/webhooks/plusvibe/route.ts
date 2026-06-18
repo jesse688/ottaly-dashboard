@@ -247,10 +247,13 @@ async function handleBison(raw: Record<string, unknown>) {
           }
         }
       }
+      // Bison marks automated/warmup replies with automated_reply=true — drop them
+      // at intake so they never enter the classify pipeline.
+      if (reply.automated_reply === true) {
+        console.log(`[webhook/bison] skipping automated reply id=${replyId}`)
+        continue
+      }
       const folder = mappedWorkspaceId ? 'inbox' : 'unmapped'
-      // Bison's own classification of this reply (advisory — distinct from our AI
-      // `category` and the human `admin_label`). Coerce to a tri-state boolean so
-      // an absent field stays NULL rather than becoming a false negative.
       const bisonInterested = typeof reply.interested === 'boolean' ? reply.interested : null
       const bisonAutomated = typeof reply.automated_reply === 'boolean' ? reply.automated_reply : null
       // Resolve the owning client ONCE at intake (same precedence as mark-as-lead)
