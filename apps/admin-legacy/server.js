@@ -10722,14 +10722,17 @@ app.get('/api/mailboxes/winnr-generic-stats', requireSession, async (req, res) =
     const emailArr = [...genericEmails];
     const mailboxCount = emailArr.length;
 
-    // Sent + bounced: lifetime from cache; period from mailbox_daily_stats
+    // Sent + bounced: lifetime from cache; period from email_events (per-mailbox sender)
     let sent = sentLifetime, bounced = bouncedLifetime;
     if (!lifetime && emailArr.length) {
+      const ewin = `AND event_at >= (CURRENT_DATE - ($2::int - 1))`;
       const ds = await pgdb.query(`
-        SELECT COALESCE(SUM(sent),0)::int AS sent, COALESCE(SUM(bounced),0)::int AS bounced
-        FROM mailbox_daily_stats
-        WHERE date >= (CURRENT_DATE - ($1::int - 1)) AND lower(email) = ANY($2)
-      `, [days, emailArr]);
+        SELECT
+          COUNT(*) FILTER (WHERE event_type = 'email_send')::int AS sent,
+          COUNT(*) FILTER (WHERE event_type = 'bounce')::int AS bounced
+        FROM email_events
+        WHERE lower(sender_email) = ANY($1) ${ewin}
+      `, [emailArr, days]);
       sent    = Number(ds.rows[0]?.sent)    || 0;
       bounced = Number(ds.rows[0]?.bounced) || 0;
     }
