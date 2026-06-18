@@ -320,6 +320,9 @@ tr:hover td{background:#FAFBFF}
     <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--red);cursor:pointer">
       <input type="checkbox" id="brokenDnsOnly" onchange="render()"> Broken DNS only
     </label>
+    <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#6366F1;cursor:pointer">
+      <input type="checkbox" id="winnrGenericOnly" onchange="render()"> Winnr Generic only
+    </label>
   </div>
 
   <!-- Bulk action bar -->
@@ -610,6 +613,25 @@ function populateClientFilter() {
   if (names.includes(cur)) sel.value = cur;
 }
 
+// Root domains from winnr_bison_export.csv — 34 unique root domains
+const WINNR_GENERIC_ROOTS = new Set([
+  'azurianstudio.biz','consultantscenter.org','consultantssystems.com','consultantstech.org',
+  'findsolarsupportdept.net','getmktresearch.com','getprovenreports.com','getsolarsupportdept.com',
+  'getsumterreports.com','gohoponstage.biz','goprovenresearch.com','juriscales.com',
+  'juriscales.net','juriscales.org','marketresearchtech.org','mktanalyze.com','mktstudy.com',
+  'nelsonrecords.com','radcliffeinquiry.com','radclifferesearchcenter.com','radcliffestudy.com',
+  'realsolarsupportdept.net','redwoodcomplianceadvisor.com','redwoodcomplianceadvisors.com',
+  'redwoodcomplianceconsultant.com','redwoodcompliancegroup.com','redwoodcomplianceservices.com',
+  'saleslytalents.biz','saleslytalents.org','sokinfinancial.org','springavenue.org',
+  'springdrivepro.com','springdrives.net','thereportspro.com',
+]);
+function isWinnrGeneric(mailbox) {
+  const host = (mailbox.domain || (mailbox.email||'').split('@')[1] || '').toLowerCase();
+  const labels = host.split('.');
+  const root = host.endsWith('.co.uk') ? labels.slice(-3).join('.') : labels.slice(-2).join('.');
+  return WINNR_GENERIC_ROOTS.has(root);
+}
+
 function applyFilters(list) {
   const q  = document.getElementById('search').value.trim().toLowerCase();
   const ws = document.getElementById('wsFilter').value;
@@ -618,6 +640,7 @@ function applyFilters(list) {
   const st = document.getElementById('statusFilter').value;
   const attentionOnly = document.getElementById('attentionOnly')?.checked;
   const brokenDnsOnly = document.getElementById('brokenDnsOnly')?.checked;
+  const winnrGenericOnly = document.getElementById('winnrGenericOnly')?.checked;
   const dmarcF = document.getElementById('dmarcFilter')?.value || '';
   return list.filter(m => {
     if (q  && !(m.email.includes(q) || (m.domain||'').includes(q) || (m.workspace_name||'').toLowerCase().includes(q))) return false;
@@ -630,6 +653,7 @@ function applyFilters(list) {
     if (attentionOnly && !(m.attention && m.attention.length)) return false;
     if (dmarcF === '__missing__' && (m.auth || {}).dmarc_present) return false;
     if (dmarcF && dmarcF !== '__missing__' && (m.auth || {}).dmarc_policy !== dmarcF) return false;
+    if (winnrGenericOnly && !isWinnrGeneric(m)) return false;
     if (brokenDnsOnly) {
       const auth = m.auth || {};
       const hasDnsProblem = !auth.spf_present || !auth.dkim_present || !auth.dmarc_present || (auth.dmarc_policy && auth.dmarc_policy !== 'none');
