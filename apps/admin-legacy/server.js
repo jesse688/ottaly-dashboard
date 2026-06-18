@@ -10707,8 +10707,9 @@ app.get('/api/mailboxes/winnr-generic-stats', requireSession, async (req, res) =
     const days = parseInt(req.query.days, 10) || 0;
     const lifetime = days === 0;
 
-    // Collect all Winnr Generic mailbox emails from cache
+    // Collect all Winnr Generic mailbox emails + their workspace_ids from cache
     const genericEmails = new Set();
+    const genericWsIds  = new Set();
     let sentLifetime = 0, bouncedLifetime = 0;
     for (const m of (_mailboxCache.mailboxes || [])) {
       const host = m.domain || (m.email || '').split('@')[1] || '';
@@ -10716,29 +10717,35 @@ app.get('/api/mailboxes/winnr-generic-stats', requireSession, async (req, res) =
       const email = (m.email || '').toLowerCase();
       if (!email) continue;
       genericEmails.add(email);
+      if (m.workspace_id) genericWsIds.add(String(m.workspace_id));
       sentLifetime    += Number(m.api_sent)    || 0;
       bouncedLifetime += Number(m.api_bounced) || 0;
     }
     const emailArr = [...genericEmails];
+    const wsArr    = [...genericWsIds];
     const mailboxCount = emailArr.length;
 
-    // Sent + bounced: lifetime from cache; period from email_events (per-mailbox sender)
+    // Sent + bounced: lifetime from cache; period from mailbox_daily_stats (by
+    // workspace) — email_events webhooks dried up ~2026-06-15 so they read 0.
+    // Per-mailbox granularity isn't in the daily table, so we use the workspaces
+    // that hold ONLY Winnr Generic mailboxes (teams 25/26 + Winnr supplier).
     let sent = sentLifetime, bounced = bouncedLifetime;
-    if (!lifetime && emailArr.length) {
-      const ewin = `AND event_at >= (CURRENT_DATE - ($2::int - 1))`;
+    let dailySeries = [];
+    if (!lifetime && wsArr.length) {
       const ds = await pgdb.query(`
-        SELECT
-          COUNT(*) FILTER (WHERE event_type = 'email_send')::int AS sent,
-          COUNT(*) FILTER (WHERE event_type = 'bounce')::int AS bounced
-        FROM email_events
-        WHERE lower(sender_email) = ANY($1) ${ewin}
-      `, [emailArr, days]);
-      sent    = Number(ds.rows[0]?.sent)    || 0;
-      bounced = Number(ds.rows[0]?.bounced) || 0;
+        SELECT date::text AS date, SUM(sent)::int AS sent, SUM(bounced)::int AS bounced
+        FROM mailbox_daily_stats
+        WHERE workspace_id = ANY($1) AND date >= (CURRENT_DATE - ($2::int - 1))
+        GROUP BY date ORDER BY date
+      `, [wsArr, days]);
+      sent    = ds.rows.reduce((a,r)=>a+(r.sent||0), 0);
+      bounced = ds.rows.reduce((a,r)=>a+(r.bounced||0), 0);
+      dailySeries = ds.rows;
     }
 
     // Human replies + OOO from unibox_replies, windowed to period
     let humanReplies = 0, oooReplies = 0;
+    const replyByDate = new Map(); // date → {replies, ooo} for the chart
     if (emailArr.length) {
       const rparams = [emailArr];
       let rwin = '';
@@ -10752,6 +10759,31 @@ app.get('/api/mailboxes/winnr-generic-stats', requireSession, async (req, res) =
       `, rparams);
       humanReplies = Number(rr.rows[0]?.human) || 0;
       oooReplies   = Number(rr.rows[0]?.ooo)   || 0;
+
+      // per-day replies for the chart (period only)
+      if (!lifetime) {
+        const rd = await pgdb.query(`
+          SELECT (received_at AT TIME ZONE 'UTC')::date::text AS date,
+                 COUNT(*) FILTER (WHERE COALESCE(admin_label, category) IN ('interested','not_interested','question','unsubscribe'))::int AS replies,
+                 COUNT(*) FILTER (WHERE COALESCE(admin_label, category) IN ('ooo_auto_reply','auto_reply'))::int AS ooo
+          FROM unibox_replies
+          WHERE lower(mailbox_email) = ANY($1) AND received_at >= (CURRENT_DATE - ($2::int - 1))
+          GROUP BY 1
+        `, [emailArr, days]);
+        for (const r of rd.rows) replyByDate.set(r.date, { replies: r.replies||0, ooo: r.ooo||0 });
+      }
+    }
+
+    // Build continuous daily series for the chart (period only)
+    let series = [], chartDates = [];
+    if (!lifetime) {
+      const sentByDate = new Map(dailySeries.map(r => [r.date, r.sent||0]));
+      for (let i = days - 1; i >= 0; i--) {
+        const d = serverDateString(new Date(Date.now() - i * 86400000));
+        chartDates.push(d);
+        const rep = replyByDate.get(d) || { replies:0, ooo:0 };
+        series.push({ sent: sentByDate.get(d) || 0, replies: rep.replies, ooo: rep.ooo });
+      }
     }
 
     // Bounce breakdown (hard/block/soft) from email_events bounce webhooks, windowed to period
@@ -10787,6 +10819,8 @@ app.get('/api/mailboxes/winnr-generic-stats', requireSession, async (req, res) =
       human_replies:    humanReplies,
       ooo_replies:      oooReplies,
       replies_with_ooo: humanReplies + oooReplies,
+      series,
+      dates: chartDates,
     });
   } catch (err) {
     console.error('[winnr-generic-stats]', err.message);

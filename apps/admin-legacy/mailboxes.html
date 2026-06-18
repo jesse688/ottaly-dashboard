@@ -487,6 +487,7 @@ async function load() {
     populateClientFilter();
     render();
     loadPricing();
+    _resetCharts();
     loadSupplierCharts(_mbPeriod);
     loadProviderCharts(_mbPeriod);
     loadWinnrGenericCard(_mbPeriod);
@@ -1440,6 +1441,7 @@ async function syncDailyNow() {
 function setMbPeriod(p) {
   _mbPeriod = p;
   renderMbPeriodBar();
+  _resetCharts();
   loadSupplierCharts(p);
   loadProviderCharts(p);
   loadWinnrGenericCard(p);
@@ -1468,6 +1470,12 @@ async function _fetchProviderStats(p) {
   renderMbBarChart(d);
   await loadMbTrend(d);
   return d;
+}
+// Reset chart registry + counter before a fresh period render (avoids stale leak
+// and the cross-card race where one fetch wipes another card's just-registered chart).
+function _resetCharts() {
+  for (const k in _pcReg) delete _pcReg[k];
+  _chartIdx = 0;
 }
 
 // Daily trend: per-day line charts so you can see direction over the window.
@@ -1590,6 +1598,7 @@ function renderMbBarChart(d) {
 // Left axis = Sent (area + dashed line). Right axis = RR% (two lines: human, +OOO).
 // Hover shows a vertical crosshair + tooltip with all three values for that day.
 let _chartIdx = 0;
+const _pcReg = {}; // chart registry: id → { data, meta, vis } — populated at render time
 function _provChart(series, color, dates) {
   if (!series || series.length < 2) return '';
   const id = 'pc' + (++_chartIdx);
@@ -1633,12 +1642,16 @@ function _provChart(series, color, dates) {
     return `<line x1="${PL}" y1="${y}" x2="${W-PR}" y2="${y}" stroke="#F1F3F9" stroke-width="1"/>`;
   }).join('');
 
-  // encode data for JS tooltip
-  const enc = JSON.stringify(series.map((d,i)=>({
-    date: dates[i]||'', sent: d.sent||0,
-    hr: hrPts[i], oo: ooPts[i],
-    replies: d.replies||0, ooo: d.ooo||0
-  })));
+  // register data NOW (not via inline <script>, which never runs from innerHTML)
+  _pcReg[id] = {
+    data: series.map((d,i)=>({
+      date: dates[i]||'', sent: d.sent||0,
+      hr: hrPts[i], oo: ooPts[i],
+      replies: d.replies||0, ooo: d.ooo||0
+    })),
+    meta: { PL, IW, n, W },
+    vis:  { sent:true, hr:true, oo:true },
+  };
 
   return `<div style="margin:14px 0 6px;position:relative" id="${id}-wrap">
   <svg id="${id}" viewBox="0 0 ${W} ${H}" width="100%" height="${H}"
@@ -1683,15 +1696,6 @@ function _provChart(series, color, dates) {
     <span id="${id}-leg-hr" onclick="_pcToggle('${id}','hr',this)" title="Click to hide/show" style="display:flex;align-items:center;gap:4px;cursor:pointer"><svg width="16" height="6"><line x1="0" y1="3" x2="16" y2="3" stroke="#059669" stroke-width="2"/></svg>RR human</span>
     <span id="${id}-leg-oo" onclick="_pcToggle('${id}','oo',this)" title="Click to hide/show" style="display:flex;align-items:center;gap:4px;cursor:pointer"><svg width="16" height="6"><line x1="0" y1="3" x2="16" y2="3" stroke="#0EA5E9" stroke-width="2" stroke-dasharray="6 3"/></svg>RR+OOO</span>
   </div>
-  <script>
-  (function(){
-    const _d=${enc};
-    const PL=${PL},IW=${IW},n=${n};
-    window['_pcData_${id}'] = _d;
-    window['_pcMeta_${id}'] = {PL,IW,n,W:${W}};
-    window['_pcVis_${id}']  = {sent:true, hr:true, oo:true};
-  })();
-  <\/script>
 </div>`;
 }
 
@@ -1700,9 +1704,11 @@ function _pcHover(evt, id) {
   const svg = document.getElementById(id);
   const tip = document.getElementById(id+'-tip');
   const xh  = document.getElementById(id+'-xh');
-  const meta = window['_pcMeta_'+id];
-  const data = window['_pcData_'+id];
-  if (!svg||!tip||!meta||!data) return;
+  const reg = _pcReg[id];
+  if (!svg||!tip||!reg) return;
+  const meta = reg.meta;
+  const data = reg.data;
+  if (!meta||!data) return;
   const rect = svg.getBoundingClientRect();
   const mx   = (evt.clientX - rect.left) * (meta.W / rect.width);
   const ix   = Math.round((mx - meta.PL) / meta.IW * (meta.n-1));
@@ -1713,7 +1719,7 @@ function _pcHover(evt, id) {
   // crosshair
   xh.setAttribute('x1', xPx); xh.setAttribute('x2', xPx); xh.setAttribute('opacity','0.7');
   // tooltip content — only show series that are currently visible
-  const vis = window['_pcVis_'+id] || {sent:true,hr:true,oo:true};
+  const vis = reg.vis || {sent:true,hr:true,oo:true};
   const fD = iso => { const p=(iso||'').split('-'); return p[2]+'/'+p[1]; };
   let rows = `<div style="font-weight:700;margin-bottom:3px">${fD(pt.date)}</div>`;
   if (vis.sent) rows += `<div>Sent: <b>${(pt.sent||0).toLocaleString()}</b></div>`;
@@ -1738,7 +1744,8 @@ function _pcLeave(id) {
 // Toggle a series (sent/hr/oo) on/off by clicking its legend item.
 function _pcToggle(id, key, legEl) {
   const g   = document.getElementById(id+'-'+key);
-  const vis = window['_pcVis_'+id] || (window['_pcVis_'+id] = {sent:true,hr:true,oo:true});
+  const reg = _pcReg[id] || (_pcReg[id] = { vis:{sent:true,hr:true,oo:true} });
+  const vis = reg.vis;
   vis[key]  = !vis[key];
   if (g) g.style.display = vis[key] ? '' : 'none';
   if (legEl) {
@@ -1843,6 +1850,7 @@ async function loadWinnrGenericCard(p) {
     + `<span style="color:#DC2626">${num(s.bounces_hard)} hard</span> · `
     + `<span style="color:#D97706">${num(s.bounces_block)} block</span> · `
     + `<span style="color:#6B7280">${num(s.bounces_soft)} soft</span></div>`;
+  const chart = (s.series && s.series.length > 1) ? _provChart(s.series, '#6366F1', s.dates || []) : '';
   wrap.innerHTML = `<div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:14px 16px;border-top:3px solid #6366F1">
     <div style="font-size:13px;font-weight:700;margin-bottom:8px">Winnr Generic <span style="font-weight:400;color:var(--muted);font-size:11px">· ${num(s.mailboxes)} mailboxes</span></div>
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
@@ -1850,7 +1858,7 @@ async function loadWinnrGenericCard(p) {
       <div><div style="font-size:18px;font-weight:700;color:#059669">${pct(s.human_replies, s.sent)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">RR (human only)</div></div>
       <div><div style="font-size:18px;font-weight:700;color:#0EA5E9">${pct(s.replies_with_ooo, s.sent)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">RR incl. OOO + auto</div></div>
       <div><div style="font-size:18px;font-weight:700;color:${s.sent>0&&(s.bounced/s.sent)>=0.05?'#DC2626':'var(--text)'}">${pct(s.bounced, s.sent)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Bounce rate</div></div>
-    </div>${hbs}
+    </div>${hbs}${chart}
   </div>`;
 }
 
