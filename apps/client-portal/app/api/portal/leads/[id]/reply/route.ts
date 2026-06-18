@@ -4,6 +4,7 @@ import pool from '@/lib/db'
 import { sendReply } from '@/lib/bison'
 import { notifyAdmin } from '@/lib/notify'
 import { getLockedLeadIds } from '@/lib/balance'
+import { sendEmailReply } from '@/lib/email'
 
 // POST — client replies to a lead.
 // 1. Persist the outgoing message to portal_emails (so it shows in the thread immediately)
@@ -13,7 +14,29 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const session = await getSession()
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   const { id } = await params
-  const { body, bodyHtml, cc, to } = await req.json() as { body: string; bodyHtml?: string; cc?: string; to?: string }
+
+  let body: string, bodyHtml: string | undefined, cc: string | undefined, to: string | undefined
+  const attachments: { filename: string; content: Buffer }[] = []
+
+  const contentType = req.headers.get('content-type') ?? ''
+  if (contentType.includes('multipart/form-data')) {
+    const fd = await req.formData()
+    body = (fd.get('body') as string | null) ?? ''
+    bodyHtml = (fd.get('bodyHtml') as string | null) ?? undefined
+    to = (fd.get('to') as string | null) ?? undefined
+    cc = (fd.get('cc') as string | null) ?? undefined
+    for (const [key, val] of fd.entries()) {
+      if (key === 'files' && val instanceof Blob) {
+        const blob = val as File
+        const buf = Buffer.from(await blob.arrayBuffer())
+        attachments.push({ filename: blob.name || 'attachment', content: buf })
+      }
+    }
+  } else {
+    const j = await req.json() as { body: string; bodyHtml?: string; cc?: string; to?: string }
+    body = j.body; bodyHtml = j.bodyHtml; cc = j.cc; to = j.to
+  }
+
   if (!body?.trim()) return NextResponse.json({ error: 'Empty reply' }, { status: 400 })
   const html = bodyHtml?.trim() ? bodyHtml : `<p>${body.replace(/\n/g, '<br/>')}</p>`
 
@@ -63,9 +86,21 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     ]
   ).catch(err => console.error('[reply] persist failed:', err))
 
-  // 2. Attempt live send via EmailBison (needs the integer reply ID of the last inbound)
+  // 2. Attempt live send.
+  // With attachments → Bison doesn't support them, so send directly via Resend.
+  // Without attachments → prefer Bison (stays in the same email thread).
   let send: { ok: boolean; reason?: string } = { ok: false, reason: 'no-reply-id-in-cache' }
-  if (latestReplyId && !isNaN(latestReplyId)) {
+  if (attachments.length > 0) {
+    send = await sendEmailReply({
+      to: toList,
+      cc: ccList || undefined,
+      subject: subject.startsWith('Re:') ? subject : `Re: ${subject}`,
+      html,
+      text: body,
+      attachments,
+    })
+    if (!send.ok) console.error('[reply] resend-with-attachments failed:', send.reason)
+  } else if (latestReplyId && !isNaN(latestReplyId)) {
     send = await sendReply({
       replyId: latestReplyId,
       bodyText: body,

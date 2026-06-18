@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import pool from '@/lib/db'
 import crypto from 'crypto'
-import { notifyClientOfLead } from '@/lib/email'
+import { notifyClientOfLead, notifyClientOfLeadReply } from '@/lib/email'
 import { enrichLead, leadCompanyOrNull } from '@/lib/sync'
 import { ready } from '@/lib/db'
 import { bisonTeamToWorkspace } from '@/lib/bison'
@@ -216,6 +216,28 @@ async function handleBison(raw: Record<string, unknown>) {
          reply.date_received ?? null, JSON.stringify(reply)]
       ).catch(err => { console.error('[webhook/bison] portal_emails insert failed:', err); return null })
       if (ins) portalEmailId = replyId
+    }
+
+    // When a lead replies AFTER the client has sent at least one message, notify
+    // the client so they know the conversation is live. Best-effort, non-blocking.
+    if (direction === 'IN' && rowEmail && mappedWorkspaceId) {
+      const hasClientReply = await pool.query(
+        `SELECT 1 FROM portal_emails
+          WHERE workspace_id = $1 AND lower(lead_email) = lower($2) AND direction = 'OUT' AND sent_via_portal = true
+          LIMIT 1`,
+        [mappedWorkspaceId, rowEmail]
+      ).catch(() => ({ rows: [] }))
+      if (hasClientReply.rows.length) {
+        const leadDisplayName = leadEmail
+          ? ((reply.lead?.first_name ?? '') + ' ' + (reply.lead?.last_name ?? '')).trim() || leadEmail
+          : senderEmail
+        notifyClientOfLeadReply(
+          mappedWorkspaceId,
+          rowEmail,
+          leadDisplayName,
+          (reply.text_body ?? '').slice(0, 300),
+        ).catch(() => {})
+      }
     }
 
     // Master Unibox row — only inbound replies are worth triaging. Idempotent on

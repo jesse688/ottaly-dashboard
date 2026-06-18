@@ -712,6 +712,12 @@ export function AdminClientsClient() {
                     </div>
                     <div className="grid md:grid-cols-2 gap-4 border-t border-gray-100 pt-4">
                       <div>
+                        <p className="text-xs font-semibold text-gray-700 mb-1">Lead replied to client message</p>
+                        <p className="text-[11px] text-gray-400 mb-1.5">Sent when a lead replies AFTER the client has already replied to them. Tags: <code className="bg-gray-100 px-1 rounded">{'{first_name}'}</code> <code className="bg-gray-100 px-1 rounded">{'{lead_name}'}</code> <code className="bg-gray-100 px-1 rounded">{'{lead_preview}'}</code> <code className="bg-gray-100 px-1 rounded">{'{login_url}'}</code></p>
+                        <input value={tpl.lead_reply_subject ?? ''} onChange={e => setTpl({ ...tpl, lead_reply_subject: e.target.value })} className="w-full px-3 py-2 mb-2 rounded-lg border border-gray-200 text-sm" placeholder="Subject" />
+                        <textarea rows={6} value={tpl.lead_reply_body ?? ''} onChange={e => setTpl({ ...tpl, lead_reply_body: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm font-mono" />
+                      </div>
+                      <div>
                         <p className="text-xs font-semibold text-gray-700 mb-1">New invoice email</p>
                         <p className="text-[11px] text-gray-400 mb-1.5">Tags: <code className="bg-gray-100 px-1 rounded">{'{first_name}'}</code> <code className="bg-gray-100 px-1 rounded">{'{description}'}</code> <code className="bg-gray-100 px-1 rounded">{'{amount}'}</code> <code className="bg-gray-100 px-1 rounded">{'{login_url}'}</code></p>
                         <input value={tpl.invoice_subject ?? ''} onChange={e => setTpl({ ...tpl, invoice_subject: e.target.value })} className="w-full px-3 py-2 mb-2 rounded-lg border border-gray-200 text-sm" placeholder="Subject" />

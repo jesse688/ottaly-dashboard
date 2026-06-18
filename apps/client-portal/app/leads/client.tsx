@@ -327,12 +327,23 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
     setForwardSeed({ id: Date.now(), html })
   }
 
-  async function handleReply(text: string, html: string, to: string, cc: string) {
+  async function handleReply(text: string, html: string, to: string, cc: string, files: File[] = []) {
     if (!text.trim() || !selected) return
     setReplying(true); setReplyMsg('')
-    const res = await fetch(`/api/portal/leads/${selected.id}/reply`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body: text, bodyHtml: html, to, cc }),
-    })
+    let res: Response
+    if (files.length > 0) {
+      const fd = new FormData()
+      fd.append('body', text)
+      fd.append('bodyHtml', html)
+      fd.append('to', to)
+      fd.append('cc', cc)
+      for (const f of files) fd.append('files', f, f.name)
+      res = await fetch(`/api/portal/leads/${selected.id}/reply`, { method: 'POST', body: fd })
+    } else {
+      res = await fetch(`/api/portal/leads/${selected.id}/reply`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body: text, bodyHtml: html, to, cc }),
+      })
+    }
     const d = await res.json().catch(() => ({})) as { ok?: boolean; sentLive?: boolean }
     setReplying(false)
     if (d.ok) {
@@ -1004,10 +1015,12 @@ function RecipientInput({ value, onChange, placeholder }: {
 function RichReply({ toEmail, ccEmail = '', placeholderName, sending, statusMsg, seed, onSend }: {
   toEmail: string; ccEmail?: string; placeholderName: string; sending: boolean; statusMsg: string
   seed: { id: number; html: string } | null
-  onSend: (text: string, html: string, to: string, cc: string) => void
+  onSend: (text: string, html: string, to: string, cc: string, files: File[]) => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const attachRef = useRef<HTMLInputElement>(null)
+  const [attachedFiles, setAttachedFiles] = useState<File[]>([])
   const [empty, setEmpty] = useState(true)
   const [chars, setChars] = useState(0)
   const [to, setTo] = useState<string[]>(toEmail ? [toEmail] : [])
@@ -1129,14 +1142,24 @@ function RichReply({ toEmail, ccEmail = '', placeholderName, sending, statusMsg,
     reader.readAsDataURL(file)
     e.target.value = ''
   }
+  function onPickAttachment(e: ChangeEvent<HTMLInputElement>) {
+    const picked = Array.from(e.target.files ?? [])
+    if (!picked.length) return
+    setAttachedFiles(prev => [...prev, ...picked])
+    e.target.value = ''
+  }
+  function removeAttachment(name: string) {
+    setAttachedFiles(prev => prev.filter(f => f.name !== name))
+  }
+
   function send() {
     const el = ref.current
     if (!el) return
     const text = el.innerText.replace(/​/g, '').trim()
     if (!text || !to.length) return
-    onSend(text, el.innerHTML, to.join(', '), cc.join(', '))
+    onSend(text, el.innerHTML, to.join(', '), cc.join(', '), attachedFiles)
     el.innerHTML = ''
-    setEmpty(true); setChars(0); setCc(ccEmail ? [ccEmail] : []); setShowCc(!!ccEmail); setTo(toEmail ? [toEmail] : []); setExpanded(false)
+    setEmpty(true); setChars(0); setCc(ccEmail ? [ccEmail] : []); setShowCc(!!ccEmail); setTo(toEmail ? [toEmail] : []); setExpanded(false); setAttachedFiles([])
   }
 
   const Btn = ({ cmd, val, title, children }: { cmd?: string; val?: string; title: string; children: ReactNode }) => (
@@ -1206,7 +1229,11 @@ function RichReply({ toEmail, ccEmail = '', placeholderName, sending, statusMsg,
         <button type="button" title="Add image" onMouseDown={e => { e.preventDefault(); fileRef.current?.click() }} className="w-8 h-8 flex items-center justify-center rounded-md hover:bg-gray-100 text-gray-600">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
         </button>
+        <button type="button" title="Attach file" onMouseDown={e => { e.preventDefault(); attachRef.current?.click() }} className="w-8 h-8 flex items-center justify-center rounded-md hover:bg-gray-100 text-gray-600">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+        </button>
         <input ref={fileRef} type="file" accept="image/*" onChange={onPickImage} className="hidden" />
+        <input ref={attachRef} type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.png,.jpg,.jpeg,.gif,.webp,.mp4,.mp3" onChange={onPickAttachment} className="hidden" />
       </div>
 
       {/* editable area — larger, roomier like PV. Cap height to a fraction of the
@@ -1219,13 +1246,26 @@ function RichReply({ toEmail, ccEmail = '', placeholderName, sending, statusMsg,
           className="min-h-[140px] max-h-[clamp(140px,32vh,380px)] overflow-y-auto px-4 py-3 text-sm leading-[1.55] text-gray-800 outline-none [&_a]:text-brand-600 [&_a]:underline [&_img]:max-w-full [&_img]:rounded" />
       </div>
 
+      {/* attachment chips */}
+      {attachedFiles.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 px-4 py-2 border-t border-gray-100 bg-gray-50/40">
+          {attachedFiles.map(f => (
+            <span key={f.name} className="inline-flex items-center gap-1 px-2 py-0.5 bg-white border border-gray-200 rounded-full text-xs text-gray-700">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+              {f.name}
+              <button type="button" onClick={() => removeAttachment(f.name)} className="ml-0.5 text-gray-400 hover:text-red-500">×</button>
+            </span>
+          ))}
+        </div>
+      )}
+
       {/* footer */}
       <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-t border-gray-100">
         <div className="flex items-center gap-3">
           <button onClick={send} disabled={empty || sending || !to.length} className="inline-flex items-center gap-1.5 px-5 py-2 bg-brand-600 hover:bg-brand-700 text-white disabled:bg-gray-300 disabled:text-gray-500 text-sm font-semibold rounded-lg">
             {sending ? 'Sending…' : <><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>Send</>}
           </button>
-          <span className="text-xs">{statusMsg ? <span className="text-green-600 font-medium">{statusMsg}</span> : <span className="text-gray-400">Sent via your campaign mailbox</span>}</span>
+          <span className="text-xs">{statusMsg ? <span className="text-green-600 font-medium">{statusMsg}</span> : <span className="text-gray-400">{attachedFiles.length > 0 ? `${attachedFiles.length} file${attachedFiles.length === 1 ? '' : 's'} attached` : 'Sent via your campaign mailbox'}</span>}</span>
         </div>
         <span className="text-xs text-gray-400">{chars > 0 ? `${chars} character${chars === 1 ? '' : 's'}` : ''}</span>
       </div>
