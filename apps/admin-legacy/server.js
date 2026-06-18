@@ -10703,6 +10703,7 @@ function winnrRootOf(host) {
 }
 app.get('/api/mailboxes/winnr-generic-stats', requireSession, async (req, res) => {
   try {
+    const pgdb = app.locals.pgDb;
     const days = parseInt(req.query.days, 10) || 0;
     const lifetime = days === 0;
 
