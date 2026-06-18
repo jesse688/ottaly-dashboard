@@ -764,7 +764,13 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
                   <div className="space-y-3">{Array.from({length:2}).map((_,i)=><div key={i} className="h-24 bg-gray-100 rounded-xl animate-pulse" />)}</div>
                 ) : thread.length === 0 ? (
                   <div className="text-center text-sm text-gray-400 py-12">No messages synced yet for this lead.</div>
-                ) : [...thread].reverse().map(m => {
+                ) : [...thread].sort((a, b) => {
+                  // Newest first. Sort on the actual timestamp (don't trust the
+                  // API order); fall back to 0 for missing dates so they sink.
+                  const ta = a.timestamp_created ? new Date(a.timestamp_created).getTime() : 0
+                  const tb = b.timestamp_created ? new Date(b.timestamp_created).getTime() : 0
+                  return tb - ta
+                }).map(m => {
                   const out = m.direction === 'OUT'
                   // Prefer plain text; fall back to preview, then to HTML stripped
                   // to text (received mail often has only an HTML body).
