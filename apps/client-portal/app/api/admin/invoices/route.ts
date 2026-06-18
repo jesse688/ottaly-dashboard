@@ -1,0 +1,116 @@
+import { NextResponse, type NextRequest } from 'next/server'
+import { getAdminSession } from '@/lib/auth'
+import pool from '@/lib/db'
+import { notifyClientOfInvoice } from '@/lib/email'
+
+interface InvoiceWithClient {
+  id: string
+  client_id: string
+  company_name: string
+  invoice_number: string | null
+  description: string
+  amount: string
+  currency: string
+  status: string
+  due_date: string | null
+  paid_date: string | null
+  created_at: string
+  has_file: boolean
+}
+
+interface InvoiceRow {
+  id: string
+  client_id: string
+  invoice_number: string | null
+  description: string
+  amount: string
+  currency: string
+  status: string
+  due_date: string | null
+  paid_date: string | null
+  created_at: string
+}
+
+// GET — returns all invoices with client company_name; optional ?clientId= filter
+export async function GET(req: NextRequest) {
+  if (!await getAdminSession()) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const { searchParams } = new URL(req.url)
+  const clientId = searchParams.get('clientId')
+
+  // Select explicit columns (never the file_data BYTEA) + a has_file flag so the
+  // admin list can show whether an invoice PDF has been uploaded.
+  const cols = `i.id, i.client_id, i.invoice_number, i.description, i.amount, i.currency,
+                i.status, i.due_date, i.paid_date, i.created_at,
+                (i.file_data IS NOT NULL) AS has_file, pc.company_name`
+
+  if (clientId) {
+    const res = await pool.query(
+      `SELECT ${cols}
+       FROM portal_invoices i
+       JOIN portal_clients pc ON pc.id = i.client_id
+       WHERE i.client_id = $1
+       ORDER BY i.created_at DESC`,
+      [clientId]
+    )
+    return NextResponse.json(res.rows as InvoiceWithClient[])
+  }
+
+  const res = await pool.query(
+    `SELECT ${cols}
+     FROM portal_invoices i
+     JOIN portal_clients pc ON pc.id = i.client_id
+     ORDER BY i.created_at DESC`
+  )
+
+  return NextResponse.json(res.rows as InvoiceWithClient[])
+}
+
+// POST — create a new invoice
+export async function POST(req: NextRequest) {
+  if (!await getAdminSession()) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const body = await req.json() as {
+    clientId: string
+    invoiceNumber?: string
+    description: string
+    amount: number
+    currency?: string
+    dueDate?: string
+    status?: string
+  }
+
+  const { clientId, invoiceNumber, description, amount, currency, dueDate, status } = body
+
+  if (!clientId || !description || amount == null) {
+    return NextResponse.json({ error: 'clientId, description, and amount are required' }, { status: 400 })
+  }
+  if (!Number.isFinite(Number(amount)) || Number(amount) < 0) {
+    return NextResponse.json({ error: 'Amount must be a non-negative number' }, { status: 400 })
+  }
+  if (status !== undefined && !['unpaid', 'paid', 'void'].includes(status)) {
+    return NextResponse.json({ error: 'Invalid status' }, { status: 400 })
+  }
+
+  const res = await pool.query(
+    `INSERT INTO portal_invoices (client_id, invoice_number, description, amount, currency, status, due_date)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING *`,
+    [
+      clientId,
+      invoiceNumber ?? null,
+      description,
+      amount,
+      currency ?? 'GBP',
+      status ?? 'unpaid',
+      dueDate ?? null,
+    ]
+  )
+
+  // Email the client that a new invoice is waiting (unpaid invoices only).
+  if ((status ?? 'unpaid') === 'unpaid') {
+    notifyClientOfInvoice(clientId, { description, amount: Number(amount), currency: currency ?? 'GBP' }).catch(() => {})
+  }
+
+  return NextResponse.json(res.rows[0] as InvoiceRow, { status: 201 })
+}

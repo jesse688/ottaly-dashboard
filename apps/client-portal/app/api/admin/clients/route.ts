@@ -1,0 +1,89 @@
+import { NextResponse, type NextRequest } from 'next/server'
+import { getAdminSession, generateInviteToken, portalBaseUrl } from '@/lib/auth'
+import pool from '@/lib/db'
+import { backfillWorkspace } from '@/lib/sync'
+import { registerWebhook } from '@/lib/plusvibe'
+
+export async function GET() {
+  if (!await getAdminSession()) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const res = await pool.query(`
+    SELECT pc.id, pc.username, pc.email, pc.company_name, pc.contact_name, pc.workspace_id, pc.active, pc.created_at, pc.topup_buckets, pc.min_topup,
+           pc.cost_per_lead, pc.spend_visibility,
+           pc.warmup_start_date, pc.warmup_days,
+           w.name AS workspace_name
+    FROM portal_clients pc
+    LEFT JOIN esp_workspaces w ON w.id = pc.workspace_id AND w.source = 'plusvibe'
+    ORDER BY pc.company_name ASC
+  `)
+  return NextResponse.json(res.rows)
+}
+
+export async function POST(req: NextRequest) {
+  if (!await getAdminSession()) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const b = await req.json() as {
+    email?: string
+    workspaceId: string
+    companyName: string
+    contactName?: string
+    lowLeadsThreshold?: number
+    costPerLead?: number
+  }
+  const email = (b.email ?? '').trim().toLowerCase() || null
+  const workspaceId = b.workspaceId
+  const companyName = b.companyName
+  const contactName = (b.contactName ?? '').trim()
+
+  // A client = a WORKSPACE (company). People are added separately via Users, so
+  // email/name are NOT required — only workspace + company name.
+  if (!workspaceId || !companyName) {
+    return NextResponse.json({ error: 'Company and workspace are required' }, { status: 400 })
+  }
+
+  // Login lives in portal_user_access (added via Users). Only keep a legacy
+  // single-login invite token if an email was actually given.
+  const inviteToken = email ? generateInviteToken() : null
+
+  try {
+    const res = await pool.query(
+      `INSERT INTO portal_clients (username, email, password_hash, workspace_id, company_name, contact_name, cost_per_lead, low_leads_threshold, invite_token)
+       VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8)
+       RETURNING id`,
+      [email, email, workspaceId, companyName, contactName || null, Number(b.costPerLead) || 0, Number.isFinite(Number(b.lowLeadsThreshold)) ? Math.max(0, Math.floor(Number(b.lowLeadsThreshold))) : 5, inviteToken]
+    )
+
+
+    // Blast guard: mark every lead that ALREADY exists in this workspace as
+    // notified, so the new client only gets emails for leads arriving from now on.
+    const seedNotified = () => pool.query(
+      `INSERT INTO portal_lead_notifications (client_id, lead_id, status)
+         SELECT $1, l.id, 'sent' FROM esp_leads l
+          WHERE l.workspace_id = $2 AND l.source IN ('plusvibe', 'bison') AND l.label = 'INTERESTED'
+         ON CONFLICT (client_id, lead_id) DO NOTHING`,
+      [res.rows[0].id, workspaceId]
+    )
+    await seedNotified()
+
+    // Auto-backfill this client's workspace (leads + real email threads) so they
+    // have data immediately. Runs in the background — client creation returns now.
+    backfillWorkspace(workspaceId)
+      .then(async r => { await seedNotified().catch(() => {}); console.log(`[client-create] backfilled ${companyName}:`, r) })
+      .catch(e => console.error(`[client-create] backfill failed for ${companyName}:`, e))
+
+    // Best-effort: register the PlusVibe lead webhook for this workspace. No-ops
+    // unless PLUSVIBE_WEBHOOK_CREATE_URL/TARGET_URL are configured (polling covers it otherwise).
+    const hook = await registerWebhook(workspaceId)
+
+    // The client sets their own code via this invite link.
+    const inviteUrl = `${portalBaseUrl(req)}/invite/${inviteToken}`
+    return NextResponse.json({ ok: true, id: res.rows[0].id, email, inviteUrl, webhook: hook.ok ? 'registered' : hook.reason })
+  } catch (err: unknown) {
+    const pgErr = err as { code?: string }
+    if (pgErr.code === '23505') {
+      return NextResponse.json({ error: 'A client with that email already exists' }, { status: 409 })
+    }
+    console.error('[admin/clients POST]', err)
+    return NextResponse.json({ error: 'Database error' }, { status: 500 })
+  }
+}

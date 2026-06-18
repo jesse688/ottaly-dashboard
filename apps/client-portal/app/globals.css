@@ -1,0 +1,49 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Ottaly brand kit — BG-Secondary #224388, Text-Primary #050C29,
+   Accent 1 teal #1F6F78, Accent 2 yellow #FFB700 (used sparingly). */
+@theme {
+  --color-brand-50:  #eef3fb;
+  --color-brand-100: #d2e4f8;  /* BG-Quaternary */
+  --color-brand-200: #b3cdf0;
+  --color-brand-300: #7c89cd;  /* BG-Tertiary */
+  --color-brand-400: #5168b0;
+  --color-brand-500: #324f98;
+  --color-brand-600: #224388;  /* BG-Secondary / primary */
+  --color-brand-700: #1b3670;
+  --color-brand-800: #050c29;  /* Text-Primary */
+  --color-teal-accent: #1f6f78;
+  --color-yellow-accent: #ffb700;
+}
+
+/* Genos = primary headings, Inter = body */
+h1, h2, h3, h4, h5, h6, .font-heading {
+  font-family: var(--font-genos), var(--font-inter), system-ui, sans-serif;
+}
+
+/* iOS Safari zooms the page when focusing an input whose text is < 16px.
+   Force ≥16px inputs on small screens so the layout never jumps on focus. */
+@media (max-width: 640px) {
+  input, textarea, select { font-size: 16px; }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+}
+
+:root {
+  --radius: 0.5rem;
+  --background: #ffffff;
+  --foreground: #0f172a;
+}
+
+* {
+  box-sizing: border-box;
+}
