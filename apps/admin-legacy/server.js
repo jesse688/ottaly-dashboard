@@ -9660,28 +9660,31 @@ app.get('/api/stats/domain-sets', requireSession, async (req, res) => {
     const clean       = rows.filter(r => !r.is_blacklisted).map(r => r.domain);
     // Map domain → workspace_id for client-side bucketing
     const domainWs    = Object.fromEntries(rows.map(r => [r.domain, r.workspace_id]));
-    // Winnr Generic mailboxes — derived from winnr_bison_export.csv (775 mailboxes).
-    // Matched by pv (workspace_id). Teams 25 (azurianstudio/gohoponstage/nelsonrecords)
-    // and 26 (consultantssystems/consultantstech) are in the CSV but have no pv mapping
-    // in BISON_TEAMS yet — add their pv ids here once known.
-    const winnrWorkspaceIds = new Set([
-      '690ee665bcb253de4fb44538',   // Ottaly (marketresearchtech.org)
-      '69a9db307af7ef2854f57637',   // ButterflyEco (solar domains)
-      '6',                          // ByboDigital (getmktresearch/goprovenresearch)
-      '6a15cdb4e4f1d4a2e6d6062a',   // Shire (radcliffeinquiry/radclifferesearchcenter)
-      '6a15cda912293dbfe5eab6c3',   // MDH (getprovenreports/getsumterreports)
-      '6a108e72b20829cbce44fa6c',   // Meades (juriscales.net/.org/consultantscenter)
-      '6a108e69cfbd57f86dbea524',   // Lending Team (redwoodcomplianceadvisor/consultant/juriscales.com)
-      '6a0e29d0d004be93be3f33f2',   // Bubble (saleslytalents/springavenue)
-      '6a0cc49a4a80688441614dfb',   // MagnaMoney (redwoodcompliance group/services/advisors/sokinfinancial)
-      '69ffaf6904ca7138af16013a',   // Bruud (springdrivepro/springdrives)
-      '69c43d1e07bf312ff0026643',   // GXI Furniture (mktstudy)
-      '69c43d1407bf312ff0026642',   // GXI (radcliffestudy)
-      '6a19a054d42a3f59aac110d6',   // LVM (mktanalyze/thereportspro)
-      // TODO: add pv for team 25 (azurianstudio/gohoponstage/nelsonrecords)
-      // TODO: add pv for team 26 (consultantssystems/consultantstech)
+    // Root domains from winnr_bison_export.csv — all 34 unique root domains.
+    // Match mailboxes in _mailboxCache by root domain → derive winnrWsIds.
+    const WINNR_ROOT_DOMAINS = new Set([
+      'azurianstudio.biz','consultantscenter.org','consultantssystems.com','consultantstech.org',
+      'findsolarsupportdept.net','getmktresearch.com','getprovenreports.com','getsolarsupportdept.com',
+      'getsumterreports.com','gohoponstage.biz','goprovenresearch.com','juriscales.com',
+      'juriscales.net','juriscales.org','marketresearchtech.org','mktanalyze.com','mktstudy.com',
+      'nelsonrecords.com','radcliffeinquiry.com','radclifferesearchcenter.com','radcliffestudy.com',
+      'realsolarsupportdept.net','redwoodcomplianceadvisor.com','redwoodcomplianceadvisors.com',
+      'redwoodcomplianceconsultant.com','redwoodcompliancegroup.com','redwoodcomplianceservices.com',
+      'saleslytalents.biz','saleslytalents.org','sokinfinancial.org','springavenue.org',
+      'springdrivepro.com','springdrives.net','thereportspro.com',
     ]);
-    res.json({ blacklisted, clean, winnr: [], winnrWorkspaceIds: [...winnrWorkspaceIds], domainWs });
+    function rootDomainOf(email) {
+      const host = (email || '').split('@')[1] || '';
+      const labels = host.split('.');
+      return host.endsWith('.co.uk') ? labels.slice(-3).join('.') : labels.slice(-2).join('.');
+    }
+    const winnrWsIds = new Set();
+    for (const m of (_mailboxCache.mailboxes || [])) {
+      if (m.email && m.workspace_id && WINNR_ROOT_DOMAINS.has(rootDomainOf(m.email))) {
+        winnrWsIds.add(m.workspace_id);
+      }
+    }
+    res.json({ blacklisted, clean, winnrWsIds: [...winnrWsIds], domainWs });
   } catch (err) {
     console.error('[stats-domain-sets]', err.message);
     res.status(500).json({ error: 'Database error' });

@@ -339,8 +339,8 @@ async function loadDomainSets() {
     };
     (_domainSets.blacklisted || []).forEach(d => tag(d, 'blacklisted'));
     (_domainSets.clean       || []).forEach(d => tag(d, 'clean'));
-    // Winnr — matched directly by workspace_id, no domain lookup needed
-    (_domainSets.winnrWorkspaceIds || []).forEach(wsId => {
+    // Winnr — server matched mailbox emails against CSV root domains, returns workspace_ids
+    (_domainSets.winnrWsIds || []).forEach(wsId => {
       (map[wsId] ||= new Set()).add('winnr');
     });
     _wsMailboxSet = map;
@@ -363,7 +363,7 @@ function updateMailboxSetNote() {
   const count = {
     blacklisted: (_domainSets.blacklisted || []).length,
     clean:       (_domainSets.clean || []).length,
-    winnr:       (_domainSets.winnrWorkspaceIds || []).length,
+    winnr:       (_domainSets.winnrWsIds || []).length,
   }[_mailboxSet] || 0;
   const unit = _mailboxSet === 'winnr' ? 'workspace' : 'domain';
   el.textContent = `${count} ${unit}${count !== 1 ? 's' : ''}`;
