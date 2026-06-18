@@ -229,7 +229,7 @@ async function handleBison(raw: Record<string, unknown>) {
       ).catch(() => ({ rows: [] }))
       if (hasClientReply.rows.length) {
         const leadDisplayName = leadEmail
-          ? ((reply.lead?.first_name ?? '') + ' ' + (reply.lead?.last_name ?? '')).trim() || leadEmail
+          ? ((lead?.first_name ?? '') + ' ' + (lead?.last_name ?? '')).trim() || leadEmail
           : senderEmail
         notifyClientOfLeadReply(
           mappedWorkspaceId,
