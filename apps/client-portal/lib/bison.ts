@@ -431,13 +431,23 @@ interface BisonTag { id: number; name: string }
 // mark-as-lead flow) can record bison_tag_state without rolling back billing.
 export async function tagInBison(
   teamId: string | number,
-  leadId: string | number,
+  leadId: string | number | null,
+  leadEmail?: string | null,
 ): Promise<{ ok: boolean; reason?: string }> {
-  if (teamId == null || teamId === '' || leadId == null || leadId === '') {
-    return { ok: false, reason: 'missing-team-or-lead' }
+  if (teamId == null || teamId === '') {
+    return { ok: false, reason: 'missing-team' }
   }
   try {
     return await withTeam(teamId, async () => {
+      // Resolve the numeric Bison lead ID. If we don't have one (untracked reply),
+      // look it up by email — Bison stores every lead it's contacted by email.
+      let resolvedId: number | null = leadId != null && leadId !== '' ? Number(leadId) : null
+      if (!resolvedId && leadEmail) {
+        const found = await getLead(leadEmail)
+        resolvedId = found?.id ?? null
+      }
+      if (!resolvedId) return { ok: false, reason: 'lead-not-found-in-bison' }
+
       // 1) Find or create the "Interested" tag (Bison's own signal for interested leads).
       const list = await bison<{ data?: BisonTag[] }>('GET', '/api/tags')
       const existing = (Array.isArray(list) ? (list as unknown as BisonTag[]) : list.data ?? [])
@@ -451,7 +461,7 @@ export async function tagInBison(
       if (!tagId) return { ok: false, reason: 'tag-create-failed' }
 
       // 2) Attach the tag to the lead via the bulk attach endpoint.
-      await bison('POST', '/api/tags/attach-to-leads', undefined, { tag_ids: [tagId], lead_ids: [Number(leadId)] })
+      await bison('POST', '/api/tags/attach-to-leads', undefined, { tag_ids: [tagId], lead_ids: [resolvedId] })
       return { ok: true }
     })
   } catch (err) {

@@ -213,11 +213,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // 'na' = nothing to tag (lead never came from Bison, so no lead_bison_id) —
     // distinct from 'failed' (a real Bison lead whose tag call errored) so the UI
     // doesn't show a scary "failed" on outside-Bison leads.
-    let tagState: 'done' | 'failed' | 'na' = reply.lead_bison_id ? 'failed' : 'na'
-    if (reply.lead_bison_id && pvWorkspaceId) {
+    // Tag in Bison: try with lead_bison_id first; if null (untracked reply), fall back
+    // to email lookup inside tagInBison. 'na' only if there's no team mapping at all.
+    let tagState: 'done' | 'failed' | 'na' = 'na'
+    if (pvWorkspaceId) {
       const teamId = bisonTeamForWorkspace(pvWorkspaceId)
       if (teamId) {
-        const t = await tagInBison(teamId, reply.lead_bison_id)
+        const t = await tagInBison(teamId, reply.lead_bison_id, reply.lead_email)
         tagState = t.ok ? 'done' : 'failed'
         if (!t.ok) console.error('[admin/unibox/mark-as-lead] tag failed:', t.reason)
 
