@@ -16955,6 +16955,7 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
       }
 
       // ── Phase 2: verify in batches of 100, push each immediately ──
+      let _consecutiveBadBatches = 0;
       for (let i = 0; i < needsVerify.length; i += VERIFY_THEN_PUSH) {
         if (job.cancelled || job.paused) break;
         const chunk = needsVerify.slice(i, i + VERIFY_THEN_PUSH);
@@ -16967,12 +16968,17 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
         }
         if (job.cancelled || job.paused) break;
 
-        // First batch all NETWORK failures = the finder is truly unreachable.
-        // (SMTP-level "unknown" — greylisting, proxy/MX timeouts, blacklisted
-        // verifier IP — is normal and must NOT abort the job; those emails just
-        // stay unknown and are skipped from the safe push, the rest proceed.)
+        // Only abort if TWO consecutive batches are >80% network failures —
+        // a single slow batch (Reacher proxy under load, one slow MX host)
+        // should not kill the whole job. SMTP-level "unknown" is normal and
+        // must NOT count here; only _netfail (true network/timeout) does.
         const netfailCount = batchUpdates.filter(u => u._netfail).length;
-        if (i === 0 && batchUpdates.length > 0 && netfailCount / batchUpdates.length > 0.8) {
+        if (batchUpdates.length > 0 && netfailCount / batchUpdates.length > 0.8) {
+          _consecutiveBadBatches++;
+        } else {
+          _consecutiveBadBatches = 0;
+        }
+        if (_consecutiveBadBatches >= 2) {
           job.status = 'failed';
           job.error = 'Email verification failed — email-finder not responding. Try pushing without verify.';
           return;
@@ -17358,6 +17364,7 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
         }
       }
 
+      let _consecutiveBadBatches2 = 0;
       for (let i = 0; i < needsVerify.length; i += VERIFY_THEN_PUSH) {
         if (job.cancelled || job.paused) break;
         const chunk = needsVerify.slice(i, i + VERIFY_THEN_PUSH);
@@ -17368,10 +17375,13 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
           await Promise.all(chunk.slice(j, j + CONCURRENCY).map(c => verifyOne(c, batchUpdates)));
         }
         if (job.cancelled || job.paused) break;
-        // Only abort if the finder is truly unreachable (all NETWORK failures);
-        // SMTP-level "unknown" (greylist/timeout/blacklist) is normal — skip those.
         const netfailCount = batchUpdates.filter(u => u._netfail).length;
-        if (i === 0 && batchUpdates.length > 0 && netfailCount / batchUpdates.length > 0.8) {
+        if (batchUpdates.length > 0 && netfailCount / batchUpdates.length > 0.8) {
+          _consecutiveBadBatches2++;
+        } else {
+          _consecutiveBadBatches2 = 0;
+        }
+        if (_consecutiveBadBatches2 >= 2) {
           job.status = 'failed';
           job.error = 'Email verification failed — email-finder not responding. Try pushing without verify.';
           return;
