@@ -1599,11 +1599,13 @@ function _provCard(label, color, b) {
       + `<span style="color:#D97706">${num(b.bounces_block)} block</span> · `
       + `<span style="color:#6B7280">${num(b.bounces_soft)} soft</span></div>`
     : '';
+  const repliesWithOoo = (b.replies || 0) + (b.replies_ooo || 0);
   return `<div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:14px 16px;border-top:3px solid ${color}">
     <div style="font-size:13px;font-weight:700;margin-bottom:8px">${label} <span style="font-weight:400;color:var(--muted);font-size:11px">· ${num(b.mailboxes)} mailboxes</span></div>
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
       <div><div style="font-size:18px;font-weight:700">${num(b.sent)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Sent</div></div>
-      <div><div style="font-size:18px;font-weight:700;color:#059669">${pct(b.replies, b.sent)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Reply rate</div></div>
+      <div><div style="font-size:18px;font-weight:700;color:#059669">${pct(b.replies, b.sent)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">RR (human only)</div></div>
+      <div><div style="font-size:18px;font-weight:700;color:#0EA5E9">${pct(repliesWithOoo, b.sent)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">RR incl. OOO + auto</div></div>
       <div><div style="font-size:18px;font-weight:700;color:${(b.bounce_rate||0)>=0.05?'#DC2626':'var(--text)'}">${pct(b.bounces, b.sent)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Bounce rate</div></div>
     </div>${hbs}
   </div>`;
