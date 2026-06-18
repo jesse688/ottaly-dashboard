@@ -10744,6 +10744,33 @@ app.get('/api/mailboxes/winnr-generic-stats', requireSession, async (req, res) =
     const wsArr    = [...genericWsIds];
     const mailboxCount = emailArr.length;
 
+    // ?list=replies → dump the actual reply rows for the generic mailboxes so the
+    // numbers on the card can be eyeballed/audited (windowed to the same period).
+    if (req.query.list === 'replies') {
+      if (!emailArr.length) return res.json({ mailboxes: 0, replies: [] });
+      const rparams = [emailArr];
+      let rwin = '';
+      if (!lifetime) { rparams.push(days); rwin = `AND received_at >= (CURRENT_DATE - ($2::int - 1))`; }
+      const rl = await pgdb.query(`
+        SELECT received_at, lower(mailbox_email) AS mailbox, lower(sender_email) AS sender,
+               COALESCE(admin_label, category) AS category, folder, marked_as_lead,
+               LEFT(COALESCE(subject,''), 80) AS subject,
+               LEFT(COALESCE(body_preview, raw->>'text_body', ''), 160) AS snippet
+        FROM unibox_replies
+        WHERE lower(mailbox_email) = ANY($1) ${rwin}
+        ORDER BY received_at DESC
+      `, rparams);
+      const byCat = {};
+      for (const r of rl.rows) byCat[r.category || 'null'] = (byCat[r.category || 'null'] || 0) + 1;
+      return res.json({
+        mailboxes: mailboxCount,
+        period: lifetime ? 'lifetime' : `${days}d`,
+        total_replies: rl.rowCount,
+        by_category: byCat,
+        replies: rl.rows,
+      });
+    }
+
     // ── SENT + BOUNCED ────────────────────────────────────────────────────────
     // Ground truth: Bison breakdownOfEventsByDate filtered to EXACTLY the generic
     // sender_email_ids, per workspace (Bison is stateful). This isolates the 773
