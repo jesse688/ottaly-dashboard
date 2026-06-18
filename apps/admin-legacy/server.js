@@ -11308,10 +11308,12 @@ app.put('/api/mailboxes/:email', requireSession, async (req, res) => {
 //  would miss them.)
 //   GET  /api/mailboxes/winnr-tagged                 → dry-run (list + count)
 //   GET  /api/mailboxes/winnr-tagged?apply=10        → set daily_limit=10 on all
-// Read-only by default; only mutates when ?apply=<int> is present.
+//   GET  /api/mailboxes/winnr-tagged?tag=WINNR%20Generic&apply=5  → other tag
+// ?tag defaults to "winnr". Read-only by default; only mutates when ?apply=<int>.
 const WINNR_TAG_EXCLUDE_DOMAINS = ['bluehawk', 'hayes', 'bybo'];
 app.get('/api/mailboxes/winnr-tagged', requireSession, async (req, res) => {
   try {
+    const tagName = (req.query.tag || 'winnr').toString().trim().toLowerCase();
     const applyLimit = req.query.apply != null ? parseInt(req.query.apply, 10) : null;
     if (applyLimit != null && (!Number.isInteger(applyLimit) || applyLimit < 0 || applyLimit > 1000)) {
       return res.status(400).json({ error: 'apply must be an integer 0–1000' });
@@ -11334,12 +11336,12 @@ app.get('/api/mailboxes/winnr-tagged', requireSession, async (req, res) => {
         continue;
       }
       try {
-        // 1) find the "winnr" tag id in this workspace
+        // 1) find the requested tag id in this workspace (exact name, case-insensitive)
         const tagsResp = await bisonReq('/api/tags', { wsId: team.team_id });
         const tags = Array.isArray(tagsResp) ? tagsResp : (tagsResp?.data ?? []);
-        const winnrTag = tags.find(t => (t.name || '').trim().toLowerCase() === 'winnr');
+        const winnrTag = tags.find(t => (t.name || '').trim().toLowerCase() === tagName);
         if (!winnrTag) {
-          perWorkspace.push({ workspace: team.name, team_id: team.team_id, no_winnr_tag: true, matched: 0 });
+          perWorkspace.push({ workspace: team.name, team_id: team.team_id, no_tag: true, matched: 0 });
           continue;
         }
         // 2) page sender-emails filtered by that tag id; split into target vs excluded
@@ -11390,6 +11392,7 @@ app.get('/api/mailboxes/winnr-tagged', requireSession, async (req, res) => {
     }
 
     res.json({
+      tag: tagName,
       mode: applyLimit != null ? `applied daily_limit=${applyLimit}` : 'dry-run',
       excluded_domains: WINNR_TAG_EXCLUDE_DOMAINS,
       total_matched: totalMatched,
