@@ -489,7 +489,7 @@ async function load() {
     loadPricing();
     loadSupplierCharts(_mbPeriod);
     loadProviderCharts(_mbPeriod);
-    loadWinnrGenericCard();
+    loadWinnrGenericCard(_mbPeriod);
   } catch (err) {
     toast('Load failed: ' + err.message);
   }
@@ -1441,6 +1441,7 @@ function setMbPeriod(p) {
   renderMbPeriodBar();
   loadSupplierCharts(p);
   loadProviderCharts(p);
+  loadWinnrGenericCard(p);
 }
 
 function _mbPeriodDays(p) {
@@ -1651,24 +1652,39 @@ async function loadSupplierCharts(p) {
 }
 
 // Winnr Generic stats — computed from data.mailboxes lifetime API totals, filtered by CSV root domains
-function loadWinnrGenericCard() {
+async function loadWinnrGenericCard(p) {
   const wrap = document.getElementById('winnrGenericCharts');
   if (!wrap) return;
-  const generic = (data?.mailboxes || []).filter(isWinnrGeneric);
-  if (!generic.length) {
+  wrap.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:.5rem 0">Loading Winnr Generic stats…</div>';
+  const days = _mbPeriodDays(p || _mbPeriod);
+  let s;
+  try {
+    const r = await fetch(`/api/mailboxes/winnr-generic-stats?days=${days}`);
+    s = await r.json();
+  } catch (e) {
+    wrap.innerHTML = `<div style="color:var(--muted);font-size:12px">Failed: ${e.message}</div>`;
+    return;
+  }
+  if (!s.mailboxes) {
     wrap.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:.5rem 0">No Winnr Generic mailboxes found.</div>';
     return;
   }
-  const sent    = generic.reduce((s,m) => s + (m.api_sent    || 0), 0);
-  const replied = generic.reduce((s,m) => s + (m.api_replied || 0), 0);
-  const bounced = generic.reduce((s,m) => s + (m.api_bounced || 0), 0);
-  const active  = generic.filter(m => (m.status||'').toUpperCase() === 'ACTIVE').length;
-  const paused  = generic.filter(m => (m.status||'').toUpperCase() === 'PAUSED').length;
-  const broken  = generic.length - active - paused;
-  wrap.innerHTML = _provCard(
-    'Winnr Generic', '#6366F1',
-    { mailboxes: generic.length, sent, replies: replied, bounces: bounced }
-  );
+  const pct = (n, d) => d > 0 ? (100 * n / d).toFixed(2) + '%' : '—';
+  const num = n => (n || 0).toLocaleString();
+  const hbs = `<div style="font-size:11px;color:var(--muted);margin-top:6px">`
+    + `<span style="color:#DC2626">${num(s.bounces_hard)} hard</span> · `
+    + `<span style="color:#D97706">${num(s.bounces_block)} block</span> · `
+    + `<span style="color:#6B7280">${num(s.bounces_soft)} soft</span></div>`;
+  wrap.innerHTML = `<div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:14px 16px;border-top:3px solid #6366F1">
+    <div style="font-size:13px;font-weight:700;margin-bottom:8px">Winnr Generic <span style="font-weight:400;color:var(--muted);font-size:11px">· ${num(s.mailboxes)} mailboxes</span></div>
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px">
+      <div><div style="font-size:18px;font-weight:700">${num(s.sent)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Sent</div></div>
+      <div><div style="font-size:18px;font-weight:700;color:#059669">${num(s.human_replies)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Human replies</div></div>
+      <div><div style="font-size:18px;font-weight:700;color:#059669">${pct(s.human_replies, s.sent)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Reply rate</div></div>
+      <div><div style="font-size:18px;font-weight:700;color:#0EA5E9">${num(s.replies_with_ooo)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Replies + OOO</div></div>
+      <div><div style="font-size:18px;font-weight:700;color:${s.sent>0&&(s.bounced/s.sent)>=0.05?'#DC2626':'var(--text)'}">${pct(s.bounced, s.sent)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Bounce rate</div></div>
+    </div>${hbs}
+  </div>`;
 }
 
 renderMbPeriodBar();

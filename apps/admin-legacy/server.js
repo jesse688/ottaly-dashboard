@@ -10644,19 +10644,22 @@ app.get('/api/mailboxes/provider-stats', requireSession, async (req, res) => {
       let rwin = '';
       if (!lifetime) { rparams.push(days); rwin = `AND received_at >= (CURRENT_DATE - ($1::int - 1))`; }
       const rr = await pgdb.query(`
-        SELECT lower(mailbox_email) AS sender, COUNT(*)::int AS replies
+        SELECT lower(mailbox_email) AS sender,
+               COUNT(*) FILTER (WHERE COALESCE(admin_label, category) IN ('interested','not_interested','question','unsubscribe'))::int AS replies,
+               COUNT(*) FILTER (WHERE COALESCE(admin_label, category) IN ('ooo_auto_reply','auto_reply'))::int AS ooo_replies
         FROM unibox_replies
         WHERE mailbox_email IS NOT NULL AND mailbox_email <> ''
-          AND COALESCE(admin_label, category) IN ('interested','not_interested','question','unsubscribe')
           ${rwin}
         GROUP BY lower(mailbox_email)
       `, rparams);
       for (const r of rr.rows) {
         const info = senderInfo.get(r.sender);
-        if (!info) { unmatched.replies += r.replies; continue; }
+        if (!info) { unmatched.replies += r.replies||0; continue; }
         const p = byProvider[provKey(info.provider)] = byProvider[provKey(info.provider)] || blank();
         const s = bySupplier[suppKey(info.supplier)] = bySupplier[suppKey(info.supplier)] || blank();
-        p.replies += r.replies; s.replies += r.replies;
+        p.replies += r.replies||0; s.replies += r.replies||0;
+        p.replies_ooo = (p.replies_ooo||0) + (r.ooo_replies||0);
+        s.replies_ooo = (s.replies_ooo||0) + (r.ooo_replies||0);
       }
     } catch (e) {
       console.warn('[mailbox provider-stats] reply query failed (non-fatal):', e.message);
@@ -10675,6 +10678,114 @@ app.get('/api/mailboxes/provider-stats', requireSession, async (req, res) => {
     res.json({ days, lifetime, syncedAt: _dailySyncState.lastRun, byProvider: withRates(byProvider), bySupplier: withRates(bySupplier), unmatched: { ...unmatched, reply_rate: unmatched.sent>0?unmatched.replies/unmatched.sent:0, bounce_rate: unmatched.sent>0?unmatched.bounces/unmatched.sent:0 } });
   } catch (err) {
     console.error('[mailbox provider-stats]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Winnr Generic stats — lifetime sent/bounce from mailbox cache, human replies +
+// OOO from unibox_replies, bounce breakdown from email_events bounce webhooks.
+// Filtered to the 34 root domains from the Winnr batch CSV.
+const WINNR_GENERIC_ROOTS = new Set([
+  'azurianstudio.biz','consultantscenter.org','consultantssystems.com','consultantstech.org',
+  'findsolarsupportdept.net','getmktresearch.com','getprovenreports.com','getsolarsupportdept.com',
+  'getsumterreports.com','gohoponstage.biz','goprovenresearch.com','juriscales.com',
+  'juriscales.net','juriscales.org','marketresearchtech.org','mktanalyze.com','mktstudy.com',
+  'nelsonrecords.com','radcliffeinquiry.com','radclifferesearchcenter.com','radcliffestudy.com',
+  'realsolarsupportdept.net','redwoodcomplianceadvisor.com','redwoodcomplianceadvisors.com',
+  'redwoodcomplianceconsultant.com','redwoodcompliancegroup.com','redwoodcomplianceservices.com',
+  'saleslytalents.biz','saleslytalents.org','sokinfinancial.org','springavenue.org',
+  'springdrivepro.com','springdrives.net','thereportspro.com',
+]);
+function winnrRootOf(host) {
+  const h = (host || '').toLowerCase();
+  const labels = h.split('.');
+  return h.endsWith('.co.uk') ? labels.slice(-3).join('.') : labels.slice(-2).join('.');
+}
+app.get('/api/mailboxes/winnr-generic-stats', requireSession, async (req, res) => {
+  try {
+    const days = parseInt(req.query.days, 10) || 0;
+    const lifetime = days === 0;
+
+    // Collect all Winnr Generic mailbox emails from cache
+    const genericEmails = new Set();
+    let sentLifetime = 0, bouncedLifetime = 0;
+    for (const m of (_mailboxCache.mailboxes || [])) {
+      const host = m.domain || (m.email || '').split('@')[1] || '';
+      if (!WINNR_GENERIC_ROOTS.has(winnrRootOf(host))) continue;
+      const email = (m.email || '').toLowerCase();
+      if (!email) continue;
+      genericEmails.add(email);
+      sentLifetime    += Number(m.api_sent)    || 0;
+      bouncedLifetime += Number(m.api_bounced) || 0;
+    }
+    const emailArr = [...genericEmails];
+    const mailboxCount = emailArr.length;
+
+    // Sent + bounced: lifetime from cache; period from mailbox_daily_stats
+    let sent = sentLifetime, bounced = bouncedLifetime;
+    if (!lifetime && emailArr.length) {
+      const ds = await pgdb.query(`
+        SELECT COALESCE(SUM(sent),0)::int AS sent, COALESCE(SUM(bounced),0)::int AS bounced
+        FROM mailbox_daily_stats
+        WHERE date >= (CURRENT_DATE - ($1::int - 1)) AND lower(email) = ANY($2)
+      `, [days, emailArr]);
+      sent    = Number(ds.rows[0]?.sent)    || 0;
+      bounced = Number(ds.rows[0]?.bounced) || 0;
+    }
+
+    // Human replies + OOO from unibox_replies, windowed to period
+    let humanReplies = 0, oooReplies = 0;
+    if (emailArr.length) {
+      const rparams = [emailArr];
+      let rwin = '';
+      if (!lifetime) { rparams.push(days); rwin = `AND received_at >= (CURRENT_DATE - ($2::int - 1))`; }
+      const rr = await pgdb.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE COALESCE(admin_label, category) IN ('interested','not_interested','question','unsubscribe'))::int AS human,
+          COUNT(*) FILTER (WHERE COALESCE(admin_label, category) IN ('ooo_auto_reply','auto_reply'))::int AS ooo
+        FROM unibox_replies
+        WHERE lower(mailbox_email) = ANY($1) ${rwin}
+      `, rparams);
+      humanReplies = Number(rr.rows[0]?.human) || 0;
+      oooReplies   = Number(rr.rows[0]?.ooo)   || 0;
+    }
+
+    // Bounce breakdown (hard/block/soft) from email_events bounce webhooks, windowed to period
+    let bouncesHard = 0, bouncesBlock = 0, bouncesSoft = 0;
+    if (emailArr.length) {
+      const { isHard, isBlock } = bounceClassExprs("raw->>'msg'");
+      const bparams = [emailArr];
+      let bwin = '';
+      if (!lifetime) { bparams.push(days); bwin = `AND event_at >= (CURRENT_DATE - ($2::int - 1))`; }
+      const bc = await pgdb.query(`
+        SELECT
+          COUNT(*)::int AS n,
+          COUNT(*) FILTER (WHERE ${isHard})::int  AS hard,
+          COUNT(*) FILTER (WHERE ${isBlock})::int AS block
+        FROM email_events
+        WHERE event_type='bounce' AND lower(sender_email) = ANY($1) ${bwin}
+      `, bparams);
+      const bn  = Number(bc.rows[0]?.n)    || 0;
+      const bh  = Number(bc.rows[0]?.hard)  || 0;
+      const bbl = Number(bc.rows[0]?.block) || 0;
+      bouncesHard  = bh;
+      bouncesBlock = bbl;
+      bouncesSoft  = Math.max(0, bn - bh - bbl);
+    }
+
+    res.json({
+      mailboxes:        mailboxCount,
+      sent,
+      bounced,
+      bounces_hard:     bouncesHard,
+      bounces_block:    bouncesBlock,
+      bounces_soft:     bouncesSoft,
+      human_replies:    humanReplies,
+      ooo_replies:      oooReplies,
+      replies_with_ooo: humanReplies + oooReplies,
+    });
+  } catch (err) {
+    console.error('[winnr-generic-stats]', err.message);
     res.status(500).json({ error: err.message });
   }
 });
