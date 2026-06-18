@@ -9675,7 +9675,8 @@ app.get('/api/stats/domain-sets', requireSession, async (req, res) => {
       'getprovenreports.com','getsumterreports.com',
       'mktanalyze.com','thereportspro.com',
       'radcliffeinquiry.com','radclifferesearchcenter.com',
-      'thehydrationworkplace.co.uk','the-hydration-water.co.uk',
+      // thehydrationworkplace.co.uk / the-hydration-water.co.uk excluded —
+      // Hydration Company mailboxes were never uploaded to Winnr Generic tags
       'marketresearchtech.org',
     ];
     res.json({ blacklisted, clean, winnr, domainWs });
