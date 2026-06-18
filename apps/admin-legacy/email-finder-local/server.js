@@ -50,6 +50,29 @@ const REACHER_FALLBACK_BASES = [
 let _reacherBase = null; // resolved at first use
 const REACHER_API_KEY = process.env.REACHER_API_KEY || '';
 
+// Our own sending domains — never run Reacher checks on these.
+// They are internal mailboxes, not lead emails, so verifying them
+// wastes Reacher slots and triggers unnecessary SMTP probes.
+const OWN_SENDING_DOMAINS = new Set([
+  'redwoodcompliancegroup.com','redwoodcomplianceservices.com',
+  'redwoodcomplianceadvisors.com','sokinfinancial.org',
+  'redwoodcomplianceadvisor.com','redwoodcomplianceconsultant.com','juriscales.com',
+  'getsolarsupportdept.com','realsolarsupportdept.net','findsolarsupportdept.net',
+  'azurianstudio.biz','gohoponstage.biz','nelsonrecords.com',
+  'saleslytalents.org','saleslytalents.biz','springavenue.org',
+  'juriscales.net','juriscales.org','consultantscenter.org',
+  'consultantssystems.com','consultantstech.org',
+  'springdrivepro.com','springdrives.net',
+  'getmktresearch.com','goprovenresearch.com',
+  'mktstudy.com','radcliffestudy.com',
+  'getprovenreports.com','getsumterreports.com',
+  'mktanalyze.com','thereportspro.com',
+  'radcliffeinquiry.com','radclifferesearchcenter.com',
+  'thehydrationworkplace.co.uk','the-hydration-water.co.uk',
+  'marketresearchtech.org',
+  'ottaly.co.uk','ottaly.com',
+]);
+
 // Proxy4smtp allows max 5 simultaneous SMTP connections. Sending more causes
 // "Concurrency limit reached" errors from every connection above 5. This
 // semaphore ensures we never have more than PRIMARY_REACHER_CONCURRENCY
@@ -1025,6 +1048,10 @@ function _recordReacherFailure(reason) {
 }
 
 async function checkWithReacher(email, job = null) {
+  const domain = (email.split('@')[1] || '').toLowerCase();
+  if (OWN_SENDING_DOMAINS.has(domain)) {
+    return { email, status: 'safe', confidence: 'high', reason: 'own sending domain — skipped' };
+  }
   let lastResult = null;
   for (let attempt = 0; attempt <= REACHER_RETRIES; attempt += 1) {
     throwIfCancelled(job);
