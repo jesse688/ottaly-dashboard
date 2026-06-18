@@ -8524,6 +8524,12 @@ app.post('/api/health/actions/:id/dismiss', requireSession, async (req, res) => 
 // needed; runs nightly and persists in Postgres so the page loads instantly.
 // ─────────────────────────────────────────────────────────────────────
 const dnsPromises = require('dns').promises;
+// Public resolver (Cloudflare / Google) for high-volume MX enrichment lookups so
+// they blend into global DNS volume rather than fingerprinting our IP. Domain-health
+// checks deliberately do NOT use this (that whole subsystem is disabled).
+const { Resolver: _MxResolver } = require('dns').promises;
+const mxEnrichResolver = new _MxResolver();
+mxEnrichResolver.setServers(['1.1.1.1', '8.8.8.8']);
 
 // Domain-based blacklists (DBLs) — query the domain itself, not its IPs.
 // MX IPs are the *inbound* mail servers (usually Outlook 365 / Google), not
@@ -15189,7 +15195,7 @@ async function lookupMxProvider(domain) {
       provider = await pgdb.resolveDomainMxProvider(domain);
     } else {
       // Fallback (no DB handle): minimal native-pattern classify, NULL on error.
-      const records = await dnsPromises.resolveMx(domain);
+      const records = await mxEnrichResolver.resolveMx(domain); // public resolver
       const joined = records.map(r => (r.exchange || '').toLowerCase()).join(' ');
       provider = /google|gmail|googlemail/.test(joined) ? 'email_google'
         : /protection\.outlook|outlook\.com|office365|hotmail|microsoft/.test(joined) ? 'email_outlook'
@@ -15305,11 +15311,12 @@ async function enrichWorkspaceBuckets() {
     console.warn('[enrichBuckets] failed:', err.message);
   }
 }
-// MX enrichment DISABLED — high-volume recurring MX lookups (~8k domains/6h) leave
-// a visible automated DNS signature from our resolver. Re-enable only after routing
-// these lookups through a public resolver (1.1.1.1 / 8.8.8.8). Until then: off.
-// setTimeout(enrichWorkspaceBuckets, 90_000);          // 90s after startup
-// setInterval(enrichWorkspaceBuckets, 6 * 60 * 60_000); // every 6h
+// MX enrichment re-enabled — lookups now route through public resolvers
+// (1.1.1.1 / 8.8.8.8, see mxEnrichResolver above and mxResolver in db-postgres.js)
+// so the ~8k-per-run volume blends into global DNS traffic instead of
+// fingerprinting our IP.
+setTimeout(enrichWorkspaceBuckets, 90_000);          // 90s after startup
+setInterval(enrichWorkspaceBuckets, 6 * 60 * 60_000); // every 6h
 
 // Normalize subject/body before hashing so trivial whitespace and merge-tag
 // formatting differences don't fragment our template identity. Merge tags

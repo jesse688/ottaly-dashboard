@@ -3,6 +3,14 @@ const path = require('path');
 const fs = require('fs');
 const dnsPromises = require('dns').promises;
 
+// Dedicated resolver for high-volume MX enrichment. Routing these lookups through
+// public resolvers (Cloudflare / Google) instead of the server's default resolver
+// means our ~8k-per-run MX queries blend into global query volume rather than
+// leaving an automated DNS signature attributable to our IP.
+const { Resolver } = require('dns').promises;
+const mxResolver = new Resolver();
+mxResolver.setServers(['1.1.1.1', '8.8.8.8']);
+
 class PostgresDatabase {
   constructor() {
     this.pool = null;
@@ -2703,7 +2711,7 @@ class PostgresDatabase {
     if (!domain) return null;
     let records;
     try {
-      records = await dnsPromises.resolveMx(domain);
+      records = await mxResolver.resolveMx(domain); // public resolver (1.1.1.1 / 8.8.8.8)
     } catch (e) {
       // ENOTFOUND / ENODATA = domain has no MX (dead/parked) → genuinely 'other'
       // (it exists in our data but routes mail nowhere standard). SERVFAIL /
