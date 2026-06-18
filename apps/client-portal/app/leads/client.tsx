@@ -1153,24 +1153,16 @@ function RichReply({ toEmail, ccEmail = '', placeholderName, sending, statusMsg,
 
   return (
     <div className="rounded-xl border border-gray-200 shadow-sm bg-white overflow-hidden focus-within:border-brand-300 focus-within:ring-1 focus-within:ring-brand-200">
-      {/* header */}
-      <div className="px-4 py-2.5 border-b border-gray-100 flex items-center justify-between">
-        <span className="text-sm font-semibold text-[#050c29]">Reply message</span>
-        <div className="flex items-center gap-3">
-          <span className="text-xs text-gray-400">to {placeholderName}</span>
-          <button type="button" onClick={() => setExpanded(false)} title="Collapse" className="text-gray-400 hover:text-gray-600 text-sm leading-none">▾</button>
-        </div>
-      </div>
-
-      {/* recipients */}
-      <div className="px-4 py-2 border-b border-gray-100 flex items-start gap-2">
-        <span className="text-xs font-medium text-gray-500 w-9 mt-2">To:</span>
+      {/* To row — label doubles as the "Reply message" header, collapse button on right */}
+      <div className="px-3 py-1.5 border-b border-gray-100 flex items-center gap-2">
+        <span className="text-xs font-medium text-gray-500 w-7 shrink-0">To:</span>
         <RecipientInput value={to} onChange={setTo} placeholder="add recipients…" />
-        {!showCc && <button type="button" onClick={() => setShowCc(true)} className="text-xs font-medium text-brand-600 hover:text-brand-800 mt-2 shrink-0">Cc</button>}
+        {!showCc && <button type="button" onClick={() => setShowCc(true)} className="text-xs font-medium text-brand-600 hover:text-brand-800 shrink-0">Cc</button>}
+        <button type="button" onClick={() => setExpanded(false)} title="Collapse" className="text-gray-400 hover:text-gray-600 text-sm leading-none shrink-0 ml-1">▾</button>
       </div>
       {showCc && (
-        <div className="px-4 py-2 border-b border-gray-100 flex items-start gap-2">
-          <span className="text-xs font-medium text-gray-500 w-9 mt-2">Cc:</span>
+        <div className="px-3 py-1.5 border-b border-gray-100 flex items-center gap-2">
+          <span className="text-xs font-medium text-gray-500 w-7 shrink-0">Cc:</span>
           <RecipientInput value={cc} onChange={setCc} placeholder="add cc…" />
         </div>
       )}
