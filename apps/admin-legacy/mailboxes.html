@@ -1394,6 +1394,7 @@ const MB_PERIODS = [
 ];
 let _mbPeriod = 'lifetime';
 let _mbLastData = null;
+let _mbTrendData = null; // cached daily-trend response, refreshed with each period change
 
 function renderMbPeriodBar() {
   const bar = document.getElementById('mbPeriodBar');
@@ -1465,7 +1466,7 @@ async function _fetchProviderStats(p) {
     }
   }
   renderMbBarChart(d);
-  loadMbTrend(d);
+  await loadMbTrend(d);
   return d;
 }
 
@@ -1475,6 +1476,7 @@ async function loadMbTrend(provData) {
   const wrap = document.getElementById('mbTrend');
   if (!wrap) return;
   if (provData && provData.lifetime) {
+    _mbTrendData = null;
     wrap.innerHTML = '<div style="font-size:11px;color:var(--muted)">Pick a period (Today / 7d / 30d…) to see the day-by-day trend.</div>';
     return;
   }
@@ -1485,6 +1487,7 @@ async function loadMbTrend(provData) {
     if (!r.ok) throw new Error(r.status);
     d = await r.json();
   } catch (e) { wrap.innerHTML = `<div style="font-size:11px;color:var(--muted)">Trend unavailable: ${e.message}</div>`; return; }
+  _mbTrendData = d;
   renderMbTrend(d);
 }
 
@@ -1524,17 +1527,10 @@ function renderMbTrend(d) {
   const cards = metrics.map(m => {
     const pts = series.map(s => s[m.key]||0);
     const total = pts.reduce((a,b)=>a+b,0);
-    // trend arrow: compare first half avg vs second half avg
-    const half = Math.floor(pts.length/2) || 1;
-    const firstAvg = pts.slice(0,half).reduce((a,b)=>a+b,0)/half;
-    const lastAvg  = pts.slice(-half).reduce((a,b)=>a+b,0)/half;
-    let arrow = '→', acol = '#6B7280';
-    if (lastAvg > firstAvg*1.05) { arrow='▲'; acol = m.key==='bounces'?'#DC2626':'#059669'; }
-    else if (lastAvg < firstAvg*0.95) { arrow='▼'; acol = m.key==='bounces'?'#059669':'#DC2626'; }
     return `<div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:12px 14px">
       <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
         <span style="font-size:12px;font-weight:700;color:#1f2937">${m.label}</span>
-        <span style="font-size:11px;color:var(--muted)">${num(total)} <span style="color:${acol};font-weight:700">${arrow}</span></span>
+        <span style="font-size:11px;font-weight:700;color:#1f2937">${num(total)}</span>
       </div>
       ${_sparkline(pts, m.color, 240, 56)}
       <div style="display:flex;justify-content:space-between;font-size:10px;color:#9AA1AD;margin-top:3px">
@@ -1590,7 +1586,59 @@ function renderMbBarChart(d) {
       ${suppRows || '<div style="font-size:12px;color:var(--muted)">No data</div>'}
     </div>`;
 }
-function _provCard(label, color, b) {
+// Dual-axis SVG line chart: sent (left axis, blue bars as area), RR human (green line), RR+OOO (cyan line).
+// series = array of {sent, replies, ooo} one per day. dates = array of 'YYYY-MM-DD'.
+function _provChart(series, color, dates) {
+  if (!series || series.length < 2) return '';
+  const W = 320, H = 80, PAD = { t:6, b:18, l:36, r:36 };
+  const IW = W - PAD.l - PAD.r, IH = H - PAD.t - PAD.b;
+  const n = series.length;
+  const sentPts  = series.map(d => d.sent    || 0);
+  const hrPts    = series.map(d => d.sent > 0 ? 100 * (d.replies||0) / d.sent : 0);
+  const ooPts    = series.map(d => d.sent > 0 ? 100 * ((d.replies||0) + (d.ooo||0)) / d.sent : 0);
+  const maxSent  = Math.max(...sentPts, 1);
+  const maxRR    = Math.max(...ooPts, 0.01);
+  const X = i => PAD.l + (n === 1 ? IW/2 : i * IW / (n-1));
+  const YS = v => PAD.t + IH - (v / maxSent) * IH;
+  const YR = v => PAD.t + IH - (v / maxRR)   * IH;
+  const fmtD = iso => { const p = iso.split('-'); return p[2]+'/'+p[1]; };
+  // sent area
+  const saLine = sentPts.map((v,i) => `${i?'L':'M'}${X(i).toFixed(1)},${YS(v).toFixed(1)}`).join(' ');
+  const saArea = `${saLine} L${X(n-1).toFixed(1)},${(PAD.t+IH).toFixed(1)} L${X(0).toFixed(1)},${(PAD.t+IH).toFixed(1)} Z`;
+  // RR lines
+  const rrLine = hrPts.map((v,i)  => `${i?'L':'M'}${X(i).toFixed(1)},${YR(v).toFixed(1)}`).join(' ');
+  const ooLine = ooPts.map((v,i)  => `${i?'L':'M'}${X(i).toFixed(1)},${YR(v).toFixed(1)}`).join(' ');
+  // y-axis labels
+  const sentK = v => v >= 1000 ? (v/1000).toFixed(1)+'k' : v;
+  const rrFmt = v => v.toFixed(1)+'%';
+  return `<div style="margin:10px 0 4px;overflow:hidden">
+  <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" style="display:block;overflow:visible">
+    <!-- sent area -->
+    <path d="${saArea}" fill="${color}18"/>
+    <path d="${saLine}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="4 2"/>
+    <!-- RR human -->
+    <path d="${rrLine}" fill="none" stroke="#059669" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    <!-- RR + OOO -->
+    <path d="${ooLine}" fill="none" stroke="#0EA5E9" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="5 2"/>
+    <!-- left axis labels (sent) -->
+    <text x="${PAD.l-3}" y="${PAD.t+4}" font-size="8" fill="#9AA1AD" text-anchor="end">${sentK(maxSent)}</text>
+    <text x="${PAD.l-3}" y="${PAD.t+IH+1}" font-size="8" fill="#9AA1AD" text-anchor="end">0</text>
+    <!-- right axis labels (RR) -->
+    <text x="${W-PAD.r+3}" y="${PAD.t+4}" font-size="8" fill="#059669" text-anchor="start">${rrFmt(maxRR)}</text>
+    <text x="${W-PAD.r+3}" y="${PAD.t+IH+1}" font-size="8" fill="#059669" text-anchor="start">0%</text>
+    <!-- date axis -->
+    <text x="${PAD.l}" y="${H-2}" font-size="8" fill="#9AA1AD" text-anchor="start">${fmtD(dates[0]||'')}</text>
+    <text x="${W-PAD.r}" y="${H-2}" font-size="8" fill="#9AA1AD" text-anchor="end">${fmtD(dates[dates.length-1]||'')}</text>
+  </svg>
+  <div style="display:flex;gap:10px;font-size:9px;color:var(--muted);margin-top:2px">
+    <span style="display:flex;align-items:center;gap:3px"><svg width="14" height="6"><line x1="0" y1="3" x2="14" y2="3" stroke="${color}" stroke-width="1.5" stroke-dasharray="4 2"/></svg>Sent</span>
+    <span style="display:flex;align-items:center;gap:3px"><svg width="14" height="6"><line x1="0" y1="3" x2="14" y2="3" stroke="#059669" stroke-width="2"/></svg>RR human</span>
+    <span style="display:flex;align-items:center;gap:3px"><svg width="14" height="6"><line x1="0" y1="3" x2="14" y2="3" stroke="#0EA5E9" stroke-width="2" stroke-dasharray="5 2"/></svg>RR+OOO</span>
+  </div>
+  </div>`;
+}
+
+function _provCard(label, color, b, trendSeries, trendDates) {
   const pct = (n, d) => d > 0 ? (100 * n / d).toFixed(2) + '%' : '—';
   const num = n => (n || 0).toLocaleString();
   const hbs = (b.bounces_hard || b.bounces_block || b.bounces_soft)
@@ -1600,6 +1648,7 @@ function _provCard(label, color, b) {
       + `<span style="color:#6B7280">${num(b.bounces_soft)} soft</span></div>`
     : '';
   const repliesWithOoo = (b.replies || 0) + (b.replies_ooo || 0);
+  const chart = trendSeries ? _provChart(trendSeries, color, trendDates || []) : '';
   return `<div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:14px 16px;border-top:3px solid ${color}">
     <div style="font-size:13px;font-weight:700;margin-bottom:8px">${label} <span style="font-weight:400;color:var(--muted);font-size:11px">· ${num(b.mailboxes)} mailboxes</span></div>
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
@@ -1607,7 +1656,7 @@ function _provCard(label, color, b) {
       <div><div style="font-size:18px;font-weight:700;color:#059669">${pct(b.replies, b.sent)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">RR (human only)</div></div>
       <div><div style="font-size:18px;font-weight:700;color:#0EA5E9">${pct(repliesWithOoo, b.sent)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">RR incl. OOO + auto</div></div>
       <div><div style="font-size:18px;font-weight:700;color:${(b.bounce_rate||0)>=0.05?'#DC2626':'var(--text)'}">${pct(b.bounces, b.sent)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Bounce rate</div></div>
-    </div>${hbs}
+    </div>${hbs}${chart}
   </div>`;
 }
 function _mbEmptyMsg(d, kind) {
@@ -1634,7 +1683,9 @@ async function loadProviderCharts(p) {
   if (!keys.length || totalSent === 0) {
     wrap.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:.5rem 0">'+_mbEmptyMsg(d,'provider')+'</div>'; return;
   }
-  wrap.innerHTML = keys.map(k => _provCard(LBL[k]||k, COL[k]||'#475569', d.byProvider[k])).join('');
+  const trend = _mbTrendData;
+  wrap.innerHTML = keys.map(k => _provCard(LBL[k]||k, COL[k]||'#475569', d.byProvider[k],
+    trend && trend.byProvider && trend.byProvider[k], trend && trend.dates)).join('');
 }
 // Accurate per-SUPPLIER performance (Winnr / Maildoso / …) — same real source.
 async function loadSupplierCharts(p) {
@@ -1650,7 +1701,9 @@ async function loadSupplierCharts(p) {
   if (!keys.length || totalSent === 0) {
     wrap.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:.5rem 0">'+_mbEmptyMsg(d,'supplier')+'</div>'; return;
   }
-  wrap.innerHTML = keys.map((k,i) => _provCard(k, PAL[i%PAL.length], d.bySupplier[k])).join('');
+  const trend = _mbTrendData;
+  wrap.innerHTML = keys.map((k,i) => _provCard(k, PAL[i%PAL.length], d.bySupplier[k],
+    trend && trend.bySupplier && trend.bySupplier[k], trend && trend.dates)).join('');
 }
 
 // Winnr Generic stats — computed from data.mailboxes lifetime API totals, filtered by CSV root domains
@@ -1667,8 +1720,12 @@ async function loadWinnrGenericCard(p) {
     wrap.innerHTML = `<div style="color:var(--muted);font-size:12px">Failed: ${e.message}</div>`;
     return;
   }
+  if (s.error) {
+    wrap.innerHTML = `<div style="color:#DC2626;font-size:12px;padding:.5rem 0">Error: ${s.error}</div>`;
+    return;
+  }
   if (!s.mailboxes) {
-    wrap.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:.5rem 0">No Winnr Generic mailboxes found.</div>';
+    wrap.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:.5rem 0">No Winnr Generic mailboxes found in cache — click Refresh.</div>';
     return;
   }
   const pct = (n, d) => d > 0 ? (100 * n / d).toFixed(2) + '%' : '—';

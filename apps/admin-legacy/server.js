@@ -10803,38 +10803,99 @@ app.get('/api/mailboxes/daily-trend', requireSession, async (req, res) => {
     if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
     const days = Math.max(1, Math.min(365, parseInt(req.query.days, 10) || 7));
 
-    // sent + bounces per day from the synced table.
-    const sb = await pgdb.query(`
-      SELECT date::text AS date, SUM(sent)::int AS sent, SUM(bounced)::int AS bounces
-      FROM mailbox_daily_stats
-      WHERE date >= (CURRENT_DATE - ($1::int - 1))
-      GROUP BY date ORDER BY date
-    `, [days]);
+    // sent + bounces per day — total and per-provider/supplier
+    const [sb, sbSplit] = await Promise.all([
+      pgdb.query(`
+        SELECT date::text AS date, SUM(sent)::int AS sent, SUM(bounced)::int AS bounces
+        FROM mailbox_daily_stats
+        WHERE date >= (CURRENT_DATE - ($1::int - 1))
+        GROUP BY date ORDER BY date
+      `, [days]),
+      pgdb.query(`
+        SELECT date::text AS date, provider, supplier,
+               SUM(sent)::int AS sent, SUM(bounced)::int AS bounces
+        FROM mailbox_daily_stats
+        WHERE date >= (CURRENT_DATE - ($1::int - 1))
+        GROUP BY date, provider, supplier ORDER BY date
+      `, [days]),
+    ]);
 
-    // human replies + OOO per day from the client portal (the canonical source).
-    const rp = await pgdb.query(`
-      SELECT (received_at AT TIME ZONE 'UTC')::date::text AS date,
-             COUNT(*) FILTER (WHERE COALESCE(admin_label, category) IN ('interested','not_interested','question','unsubscribe'))::int AS replies,
-             COUNT(*) FILTER (WHERE COALESCE(admin_label, category) = 'ooo_auto_reply')::int AS ooo
-      FROM unibox_replies
-      WHERE mailbox_email IS NOT NULL AND mailbox_email <> ''
-        AND received_at >= (CURRENT_DATE - ($1::int - 1))
-      GROUP BY 1 ORDER BY 1
-    `, [days]);
+    // human replies + OOO per day — total and per provider/supplier via senderInfo join
+    // Build senderInfo map (email → provider/supplier) from mailbox cache + meta
+    const metaForTrend = pgdb ? await pgdb.listMailboxMeta() : [];
+    const senderInfoTrend = new Map();
+    for (const m of metaForTrend) senderInfoTrend.set((m.email||'').toLowerCase(), { provider: m.provider||null, supplier: m.supplier||null });
+    for (const m of (_mailboxCache.mailboxes||[])) {
+      const e = (m.email||'').toLowerCase(); if (!e) continue;
+      if (!senderInfoTrend.has(e)) senderInfoTrend.set(e, { provider: detectMailboxType(m.provider)||'smtp', supplier: null });
+    }
+
+    const [rp, rpSplit] = await Promise.all([
+      pgdb.query(`
+        SELECT (received_at AT TIME ZONE 'UTC')::date::text AS date,
+               COUNT(*) FILTER (WHERE COALESCE(admin_label, category) IN ('interested','not_interested','question','unsubscribe'))::int AS replies,
+               COUNT(*) FILTER (WHERE COALESCE(admin_label, category) IN ('ooo_auto_reply','auto_reply'))::int AS ooo
+        FROM unibox_replies
+        WHERE mailbox_email IS NOT NULL AND mailbox_email <> ''
+          AND received_at >= (CURRENT_DATE - ($1::int - 1))
+        GROUP BY 1 ORDER BY 1
+      `, [days]),
+      pgdb.query(`
+        SELECT (received_at AT TIME ZONE 'UTC')::date::text AS date,
+               lower(mailbox_email) AS email,
+               COUNT(*) FILTER (WHERE COALESCE(admin_label, category) IN ('interested','not_interested','question','unsubscribe'))::int AS replies,
+               COUNT(*) FILTER (WHERE COALESCE(admin_label, category) IN ('ooo_auto_reply','auto_reply'))::int AS ooo
+        FROM unibox_replies
+        WHERE mailbox_email IS NOT NULL AND mailbox_email <> ''
+          AND received_at >= (CURRENT_DATE - ($1::int - 1))
+        GROUP BY 1, 2
+      `, [days]),
+    ]);
 
     const sbBy = new Map(sb.rows.map(r => [r.date, r]));
     const rpBy = new Map(rp.rows.map(r => [r.date, r]));
 
+    // per-provider and per-supplier daily sent+replies: { google: { '2026-06-01': {sent,replies,ooo}, ... } }
+    const provDays = {}, suppDays = {};
+    const provKey = p => p || 'smtp';
+    const suppKey = s => s || '(unassigned)';
+    for (const r of sbSplit.rows) {
+      const pk = provKey(r.provider), sk = suppKey(r.supplier);
+      if (!provDays[pk]) provDays[pk] = {};
+      if (!suppDays[sk]) suppDays[sk] = {};
+      const pd = provDays[pk][r.date] = provDays[pk][r.date] || { sent:0, replies:0, ooo:0 };
+      const sd = suppDays[sk][r.date] = suppDays[sk][r.date] || { sent:0, replies:0, ooo:0 };
+      pd.sent += r.sent || 0; sd.sent += r.sent || 0;
+    }
+    // join per-mailbox replies to provider/supplier
+    for (const r of rpSplit.rows) {
+      const info = senderInfoTrend.get(r.email) || {};
+      const pk = provKey(info.provider), sk = suppKey(info.supplier);
+      if (!provDays[pk]) provDays[pk] = {};
+      if (!suppDays[sk]) suppDays[sk] = {};
+      const pd = provDays[pk][r.date] = provDays[pk][r.date] || { sent:0, replies:0, ooo:0 };
+      const sd = suppDays[sk][r.date] = suppDays[sk][r.date] || { sent:0, replies:0, ooo:0 };
+      pd.replies += r.replies||0; pd.ooo += r.ooo||0;
+      sd.replies += r.replies||0; sd.ooo += r.ooo||0;
+    }
+
     // build a continuous date axis so flat/zero days still show on the chart.
-    const series = [];
-    for (let i = days - 1; i >= 0; i--) {
-      const d = serverDateString(new Date(Date.now() - i * 86400000));
+    const dates = [];
+    for (let i = days - 1; i >= 0; i--) dates.push(serverDateString(new Date(Date.now() - i * 86400000)));
+
+    const series = dates.map(d => {
       const s = sbBy.get(d) || {}; const r = rpBy.get(d) || {};
       const sent = s.sent || 0, bounces = s.bounces || 0;
       const replies = r.replies || 0, ooo = r.ooo || 0;
-      series.push({ date: d, sent, bounces, replies, repliesOoo: replies + ooo });
-    }
-    res.json({ days, syncedAt: _dailySyncState.lastRun, series });
+      return { date: d, sent, bounces, replies, repliesOoo: replies + ooo };
+    });
+
+    // convert per-provider/supplier date maps to ordered arrays matching `dates`
+    const toSeries = dayMap => Object.fromEntries(
+      Object.entries(dayMap).map(([k, dm]) => [k, dates.map(d => dm[d] || { sent:0, replies:0, ooo:0 })])
+    );
+
+    res.json({ days, syncedAt: _dailySyncState.lastRun, series, byProvider: toSeries(provDays), bySupplier: toSeries(suppDays), dates });
   } catch (err) {
     console.error('[mailbox daily-trend]', err.message);
     res.status(500).json({ error: err.message });
