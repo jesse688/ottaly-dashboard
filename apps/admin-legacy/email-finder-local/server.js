@@ -166,7 +166,22 @@ const _reacherMember = (() => {
   };
 })();
 
-function _reacherTodayUtc() { return new Date().toISOString().slice(0, 10); }
+// Returns the current "Reacher day" key — resets at 05:00 Europe/London.
+// e.g. at 04:59 London on Jun 19 we're still on "2026-06-18",
+//      at 05:00 London on Jun 19 we flip to "2026-06-19".
+function _reacherTodayUtc() {
+  const now = new Date();
+  // London offset: UTC+1 in BST (late-Mar→late-Oct), UTC+0 otherwise.
+  const londonOffset = (() => {
+    const jan = new Date(now.getFullYear(), 0, 1).getTimezoneOffset();
+    const jul = new Date(now.getFullYear(), 6, 1).getTimezoneOffset();
+    const stdOffset = Math.max(jan, jul); // stdOffset = 0 for Europe/London
+    return now.getTimezoneOffset() < stdOffset ? 60 : 0; // +60 min = BST
+  })();
+  // Shift now back by (londonOffset - 5h) so that London 05:00 aligns with UTC midnight
+  const shifted = new Date(now.getTime() + londonOffset * 60000 - 5 * 3600000);
+  return shifted.toISOString().slice(0, 10);
+}
 const REACHER_FROM_EMAIL = process.env.REACHER_FROM_EMAIL || SMTP_SENDER || '';
 const REACHER_HELLO_NAME = process.env.REACHER_HELLO_NAME || '';
 const REACHER_TIMEOUT_MS = Math.max(10000, parseInt(process.env.REACHER_TIMEOUT_MS || '60000', 10));
