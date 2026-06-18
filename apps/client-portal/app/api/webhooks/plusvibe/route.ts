@@ -251,7 +251,7 @@ async function handleBison(raw: Record<string, unknown>) {
       // at intake so they never enter the classify pipeline.
       if (reply.automated_reply === true) {
         console.log(`[webhook/bison] skipping automated reply id=${replyId}`)
-        continue
+        return
       }
       const folder = mappedWorkspaceId ? 'inbox' : 'unmapped'
       const bisonInterested = typeof reply.interested === 'boolean' ? reply.interested : null
