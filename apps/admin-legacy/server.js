@@ -10258,6 +10258,138 @@ app.get('/api/mailboxes/sync-daily/status', requireSession, (req, res) => res.js
 setTimeout(() => syncMailboxDailyStats().catch(() => {}), 5 * 60 * 1000);
 setInterval(() => syncMailboxDailyStats().catch(() => {}), 3 * 60 * 60 * 1000);
 
+// ── NDR bounce sync ──────────────────────────────────────────────────────────
+// Bison only records SMTP-level bounces in its stats. NDR bounce-back emails
+// (Office 365 / Google "couldn't deliver" messages) land in the Bounces folder
+// of the Master Inbox as received messages — not as stats events. This sync
+// polls every workspace's bounce folder, parses the failed recipient email out
+// of the NDR, and writes it to email_events so the Mailboxes stats page shows
+// accurate bounce rates per provider. Uses per-workspace tokens (no switch).
+let _ndrSyncState = { running: false, lastRun: null, inserted: 0 };
+
+// Extract the original failed-to address from an NDR message body.
+// NDR bodies from O365 / Google / generic MTAs follow recognisable patterns.
+function extractNdrRecipient(msg) {
+  const text = (msg.text_body || '') + ' ' + (msg.html_body || '');
+  // O365: "Your message to <email> couldn't be delivered"
+  // Google: "Address not found … wasn't delivered to email@domain.com"
+  // Generic MAILER-DAEMON: "The following address(es) failed: email@domain.com"
+  const patterns = [
+    /your message to\s+<?([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})>?\s+couldn/i,
+    /wasn['']t delivered to\s+<?([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})>?/i,
+    /failed:\s*<?([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})>?/i,
+    /delivering.*?to\s+<?([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})>?/i,
+    /\bto:\s*<?([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})>?/i,
+  ];
+  for (const re of patterns) {
+    const m = text.match(re);
+    if (m) return m[1].toLowerCase();
+  }
+  // Fallback: primary_to_email_address on the message object itself
+  return (msg.primary_to_email_address || '').toLowerCase() || null;
+}
+
+async function syncNdrBounces() {
+  if (_ndrSyncState.running) return;
+  const pgdb = app.locals.pgDb;
+  if (!pgdb) return;
+  _ndrSyncState.running = true;
+  let inserted = 0;
+
+  try {
+    const allTeamIds = BISON_TEAMS.map(t => t.team_id).filter(Boolean);
+    for (const teamId of allTeamIds) {
+      try {
+        // Per-workspace token — no switch-workspace needed.
+        let token = getBisonWsToken(teamId);
+        if (!token) {
+          try { token = await mintBisonWsToken(Number(teamId)); } catch { continue; }
+        }
+        if (!token) continue;
+
+        // Find the workspace_id for this team (for email_events).
+        const team = BISON_TEAMS.find(t => t.team_id === String(teamId));
+        const wsId = team?.pv || String(teamId);
+        // Use wsId opt so _bisonRaw picks up the per-workspace token automatically.
+        const wsOpts = { wsId: teamId };
+
+        // Fetch sender_email_id → email map for this workspace.
+        const senderMap = new Map();
+        let sPage = 1;
+        while (sPage <= 60) {
+          const sr = await _bisonRaw(`/api/sender-emails?per_page=100&page=${sPage}`, wsOpts);
+          const rows = sr?.data || [];
+          if (!rows.length) break;
+          rows.forEach(s => { if (s.id && s.email) senderMap.set(s.id, (s.email || '').toLowerCase()); });
+          if (rows.length < 15) break;
+          sPage++;
+        }
+        if (!senderMap.size) continue;
+
+        // Fetch bounce folder — page until we've seen everything new.
+        let page = 1;
+        while (page <= 20) {
+          const r = await _bisonRaw(`/api/replies?folder=bounced&per_page=50&page=${page}`, wsOpts);
+          const msgs = r?.data || [];
+          if (!msgs.length) break;
+
+          for (const msg of msgs) {
+            const bisonReplyId = String(msg.id || '');
+            if (!bisonReplyId) continue;
+
+            // Skip if already recorded.
+            const existing = await pgdb.query(
+              `SELECT 1 FROM email_events WHERE event_type='bounce' AND raw->>'bison_reply_id'=$1 LIMIT 1`,
+              [bisonReplyId]
+            );
+            if (existing.rows.length) continue;
+
+            const senderEmail = senderMap.get(msg.sender_email_id) || '';
+            const leadEmail = extractNdrRecipient(msg);
+            if (!leadEmail) continue; // can't parse recipient — skip
+
+            const eventAt = msg.date_received || new Date().toISOString();
+            const rawMsg = JSON.stringify({ ...msg, bison_reply_id: bisonReplyId, ndr: true });
+
+            await pgdb.query(
+              `INSERT INTO email_events
+                 (workspace_id, event_type, lead_email, sender_email, event_at, raw, created_at)
+               VALUES ($1, 'bounce', $2, $3, $4, $5::jsonb, NOW())
+               ON CONFLICT DO NOTHING`,
+              [wsId, leadEmail, senderEmail, eventAt, rawMsg]
+            );
+            inserted++;
+          }
+
+          if (msgs.length < 50) break;
+          page++;
+        }
+      } catch (e) {
+        console.warn(`[ndr-sync] workspace ${teamId} failed:`, e.message);
+      }
+    }
+
+    _ndrSyncState.lastRun = new Date().toISOString();
+    _ndrSyncState.inserted = (_ndrSyncState.inserted || 0) + inserted;
+    if (inserted > 0) console.log(`[ndr-sync] recorded ${inserted} NDR bounce(s) from Bison bounce folders`);
+  } catch (err) {
+    console.warn('[ndr-sync] failed:', err.message);
+  } finally {
+    _ndrSyncState.running = false;
+  }
+}
+
+// Run every 30 min, starting 3 min after boot.
+setTimeout(() => syncNdrBounces().catch(() => {}), 3 * 60 * 1000);
+setInterval(() => syncNdrBounces().catch(() => {}), 30 * 60 * 1000);
+
+app.post('/api/mailboxes/sync-ndr', requireSession, async (req, res) => {
+  if (_ndrSyncState.running) return res.json({ ok: true, alreadyRunning: true });
+  syncNdrBounces().catch(() => {});
+  res.json({ ok: true, started: true });
+});
+app.get('/api/mailboxes/sync-ndr/status', requireSession, (req, res) => res.json(_ndrSyncState));
+
 function mergeMailboxesWithMeta(mailboxes, metaByEmail) {
   return mailboxes.map(m => {
     const meta = metaByEmail.get(m.email) || {};
