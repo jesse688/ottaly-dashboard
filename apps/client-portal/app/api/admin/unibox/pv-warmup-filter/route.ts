@@ -34,23 +34,30 @@ async function collectMailboxes(warmupOnly: boolean) {
   const workspaces = await pv<PvWorkspace[]>('/workspaces')
   const emails = new Set<string>()
   let warmupEnabled = 0
+  const errored: string[] = []
   for (const ws of workspaces) {
-    for (let skip = 0; skip < 10000; skip += 100) {
-      const { accounts } = await pv<{ accounts?: PvAccount[] }>(
-        `/account/list?workspace_id=${ws.id}&skip=${skip}&limit=100`
-      )
-      if (!accounts || accounts.length === 0) break
-      for (const a of accounts) {
-        const email = (a.email ?? '').toLowerCase().trim()
-        if (!email) continue
-        const isWarmup = !!a.warmup_status && !/disabled|off|none|paused/i.test(a.warmup_status)
-        if (isWarmup) warmupEnabled++
-        if (!warmupOnly || isWarmup) emails.add(email)
+    try {
+      for (let skip = 0; skip < 10000; skip += 100) {
+        const { accounts } = await pv<{ accounts?: PvAccount[] }>(
+          `/account/list?workspace_id=${ws.id}&skip=${skip}&limit=100`
+        )
+        if (!accounts || accounts.length === 0) break
+        for (const a of accounts) {
+          const email = (a.email ?? '').toLowerCase().trim()
+          if (!email) continue
+          const isWarmup = !!a.warmup_status && !/disabled|off|none|paused/i.test(a.warmup_status)
+          if (isWarmup) warmupEnabled++
+          if (!warmupOnly || isWarmup) emails.add(email)
+        }
+        if (accounts.length < 100) break
       }
-      if (accounts.length < 100) break
+    } catch (err) {
+      // One bad workspace (e.g. an empty/broken one returning 400) must not abort
+      // the whole sweep — record it and carry on.
+      errored.push(`${ws.name ?? ws.id}: ${String(err).slice(0, 60)}`)
     }
   }
-  return { emails, workspaceCount: workspaces.length, warmupEnabled }
+  return { emails, workspaceCount: workspaces.length, warmupEnabled, errored }
 }
 
 // Replies we will NOT touch even if the sender is one of our mailboxes.
@@ -107,6 +114,7 @@ async function handle(req: NextRequest, apply: boolean) {
       workspaces: mailboxes.workspaceCount,
       mailboxes_in_set: emailList.length,
       warmup_enabled_mailboxes: mailboxes.warmupEnabled,
+      errored_workspaces: mailboxes.errored,
       replies_matched: total,
       matched_by_folder: match.rows,
     })
