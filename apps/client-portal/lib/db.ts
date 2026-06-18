@@ -185,6 +185,21 @@ async function runMigration() {
       `CREATE INDEX IF NOT EXISTS idx_portal_emails_ws_lead ON portal_emails (workspace_id, lower(lead_email))`,
       `CREATE INDEX IF NOT EXISTS idx_portal_emails_thread ON portal_emails (thread_id)`,
 
+      // Files attached to a client's outgoing reply. Bytes stored inline (base64
+      // in `content`) so they can be previewed/downloaded without external storage.
+      // Scoped by workspace_id so the download route can authorize the viewer.
+      `CREATE TABLE IF NOT EXISTS portal_attachments (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        email_id TEXT NOT NULL,                    -- portal_emails.id this belongs to
+        workspace_id TEXT NOT NULL,
+        filename TEXT NOT NULL,
+        content_type TEXT,
+        size INTEGER,
+        content TEXT NOT NULL,                      -- base64-encoded bytes
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_portal_attachments_email ON portal_attachments (email_id)`,
+
       // ── Lead-credit balance ledger ─────────────────────────────────
       // type: topup (+), lead_charge (-), dispute_refund (+), adjustment (+/-)
       // amount is signed: positive = credit, negative = debit

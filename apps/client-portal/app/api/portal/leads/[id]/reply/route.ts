@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { getSession } from '@/lib/auth'
-import pool from '@/lib/db'
+import pool, { ready } from '@/lib/db'
 import { sendReply } from '@/lib/bison'
 import { notifyAdmin } from '@/lib/notify'
 import { getLockedLeadIds } from '@/lib/balance'
@@ -13,10 +13,11 @@ import { sendEmailReply } from '@/lib/email'
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getSession()
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  await ready() // ensure portal_attachments exists before storing files
   const { id } = await params
 
   let body: string, bodyHtml: string | undefined, cc: string | undefined, to: string | undefined
-  const attachments: { filename: string; content: Buffer }[] = []
+  const attachments: { filename: string; contentType: string; content: Buffer }[] = []
 
   const contentType = req.headers.get('content-type') ?? ''
   if (contentType.includes('multipart/form-data')) {
@@ -29,7 +30,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       if (key === 'files' && val instanceof Blob) {
         const blob = val as File
         const buf = Buffer.from(await blob.arrayBuffer())
-        attachments.push({ filename: blob.name || 'attachment', content: buf })
+        attachments.push({
+          filename: blob.name || 'attachment',
+          contentType: blob.type || 'application/octet-stream',
+          content: buf,
+        })
       }
     }
   } else {
@@ -73,11 +78,26 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const latestReplyId = ctx.rows[0]?.id ? parseInt(ctx.rows[0].id, 10) : null
 
   // 1. Persist outgoing message (synthetic id so it's stable + idempotent-ish).
-  // Record attachment filenames in raw so the thread can show them on the sent message.
   const outId = `portal-${id}-${Date.now()}`
-  const rawMeta = attachments.length
-    ? JSON.stringify({ attachments: attachments.map(a => ({ filename: a.filename, size: a.content.length })) })
-    : '{}'
+
+  // Store each attachment's bytes so it can be previewed/downloaded later, and
+  // collect its metadata (id/filename/size/type) for the email's raw so the
+  // thread can render clickable chips.
+  const attachMeta: { id: string; filename: string; size: number; content_type: string }[] = []
+  for (const a of attachments) {
+    try {
+      const ins = await pool.query(
+        `INSERT INTO portal_attachments (email_id, workspace_id, filename, content_type, size, content)
+         VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+        [outId, session.workspaceId, a.filename, a.contentType, a.content.length, a.content.toString('base64')]
+      )
+      attachMeta.push({ id: ins.rows[0].id as string, filename: a.filename, size: a.content.length, content_type: a.contentType })
+    } catch (err) {
+      console.error('[reply] attachment persist failed:', err)
+    }
+  }
+  const rawMeta = attachMeta.length ? JSON.stringify({ attachments: attachMeta }) : '{}'
+
   await pool.query(
     `INSERT INTO portal_emails (
        id, workspace_id, lead_email, direction, subject, body_text, body_html,

@@ -69,7 +69,7 @@ interface ThreadMsg {
   pv_label: string | null
   sent_via_portal: boolean
   timestamp_created: string | null
-  attachments?: { filename: string; size?: number }[] | null
+  attachments?: { id?: string; filename: string; size?: number; content_type?: string }[] | null
 }
 
 interface CustomLabel { id: string; name: string; color: string; prompts_value?: boolean }
@@ -801,13 +801,30 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
                         )}
                         {m.attachments && m.attachments.length > 0 && (
                           <div className="flex flex-wrap gap-1.5 mt-3">
-                            {m.attachments.map((a, i) => (
-                              <span key={`${a.filename}-${i}`} className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-white border border-gray-200 rounded-lg text-xs text-gray-700">
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-gray-400"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-                                <span className="max-w-[200px] truncate">{a.filename}</span>
-                                {a.size != null && <span className="text-gray-400">{a.size > 1024 * 1024 ? `${(a.size / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(a.size / 1024))} KB`}</span>}
-                              </span>
-                            ))}
+                            {m.attachments.map((a, i) => {
+                              const sizeLabel = a.size != null
+                                ? (a.size > 1024 * 1024 ? `${(a.size / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(a.size / 1024))} KB`)
+                                : null
+                              const chipInner = (
+                                <>
+                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-gray-400"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                                  <span className="max-w-[200px] truncate">{a.filename}</span>
+                                  {sizeLabel && <span className="text-gray-400">{sizeLabel}</span>}
+                                </>
+                              )
+                              // Clickable when we have a stored id → opens an inline preview in a new tab.
+                              return a.id ? (
+                                <a key={`${a.filename}-${i}`} href={`/api/portal/attachments/${a.id}`} target="_blank" rel="noreferrer"
+                                  title="Open attachment"
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-white border border-gray-200 rounded-lg text-xs text-gray-700 hover:border-brand-300 hover:text-brand-700 transition-colors">
+                                  {chipInner}
+                                </a>
+                              ) : (
+                                <span key={`${a.filename}-${i}`} className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-white border border-gray-200 rounded-lg text-xs text-gray-700">
+                                  {chipInner}
+                                </span>
+                              )
+                            })}
                           </div>
                         )}
                         {quoted && !m.sent_via_portal && !m.body_html_safe && (
