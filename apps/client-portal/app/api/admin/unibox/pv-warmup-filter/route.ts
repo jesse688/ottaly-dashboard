@@ -2,20 +2,24 @@ import { NextResponse, type NextRequest } from 'next/server'
 import pool, { ready } from '@/lib/db'
 import { getAdminSession } from '@/lib/auth'
 
-// Filter warm-up replies out of the Master Unibox using PlusVibe's OWN data.
+// One-off: filter PV warm-up replies out of the Master Unibox using PlusVibe's
+// OWN warm-up filter tags.
 //
-// Warm-up traffic is our own mailboxes emailing each other. So: pull every
-// mailbox address from every PV workspace, then any unibox reply whose sender is
-// one of those mailboxes is warm-up — deterministically, no AI guessing.
+// Every PV mailbox has a unique "Warmup Filter Tag" (the warmup_custom_words
+// field, e.g. "harbor-roadway") that PV injects into the body of EVERY warm-up
+// email it sends, precisely so they can be filtered from the inbox. Migrating
+// PV->Bison leaked these warm-up replies into our unibox.
 //
-// GET  ?secret=CRON_SECRET → preview: how many mailboxes + how many replies match
-// POST ?secret=CRON_SECRET → apply: move matched replies to the warmup folder
+// So: pull every mailbox's filter tag from all workspaces (/account/list), then
+// any unibox reply whose subject/body contains one of those exact tags is a
+// warm-up — deterministically, no AI.
 //
-// ?warmupOnly=true restricts the mailbox set to warmup-enabled accounts only.
+// GET  ?secret=CRON_SECRET → preview (tag count, matched replies, samples)
+// POST ?secret=CRON_SECRET → apply (move matches to the warmup folder)
 const PV_BASE = 'https://api.plusvibe.ai/api/v1'
 
 interface PvWorkspace { id: string; name?: string }
-interface PvAccount { email?: string; warmup_status?: string }
+interface PvAccount { payload?: { warmup?: { warmup_custom_words?: string } } }
 
 async function pv<T>(path: string): Promise<T> {
   const key = process.env.PLUSVIBE_API_KEY
@@ -28,12 +32,14 @@ async function pv<T>(path: string): Promise<T> {
   return res.json() as Promise<T>
 }
 
-// Every mailbox address across all workspaces (lowercased). Optionally restricted
-// to warmup-enabled accounts.
-async function collectMailboxes(warmupOnly: boolean) {
+function escapeRe(s: string) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// Pull every mailbox's warm-up filter tag across all workspaces.
+async function collectFilterTags() {
   const workspaces = await pv<PvWorkspace[]>('/workspaces')
-  const emails = new Set<string>()
-  let warmupEnabled = 0
+  const tags = new Set<string>()
   const errored: string[] = []
   for (const ws of workspaces) {
     try {
@@ -43,37 +49,38 @@ async function collectMailboxes(warmupOnly: boolean) {
         )
         if (!accounts || accounts.length === 0) break
         for (const a of accounts) {
-          const email = (a.email ?? '').toLowerCase().trim()
-          if (!email) continue
-          const isWarmup = !!a.warmup_status && !/disabled|off|none|paused/i.test(a.warmup_status)
-          if (isWarmup) warmupEnabled++
-          if (!warmupOnly || isWarmup) emails.add(email)
+          const tag = (a.payload?.warmup?.warmup_custom_words ?? '').trim().toLowerCase()
+          // Guard: must be a real 2+ word filter tag, not blank/single common word.
+          if (tag && /[\s\-_]/.test(tag) && tag.length >= 7) tags.add(tag)
         }
         if (accounts.length < 100) break
       }
     } catch (err) {
-      // One bad workspace (e.g. an empty/broken one returning 400) must not abort
-      // the whole sweep — record it and carry on.
-      errored.push(`${ws.name ?? ws.id}: ${String(err).slice(0, 60)}`)
+      errored.push(`${ws.name ?? ws.id}: ${String(err).slice(0, 50)}`)
     }
   }
-  return { emails, workspaceCount: workspaces.length, warmupEnabled, errored }
+  return { tags, workspaceCount: workspaces.length, errored }
 }
 
-// Replies we will NOT touch even if the sender is one of our mailboxes.
+// One regex matching ANY filter tag, tolerant of hyphen/space/underscore between
+// the words (PV renders "harbor-roadway" but the body may have "harbor roadway").
+function buildTagRegex(tags: Set<string>): RegExp | null {
+  const alts = [...tags].map(t =>
+    t.split(/[\s\-_]+/).map(escapeRe).join('[\\s\\-_]+')
+  )
+  if (alts.length === 0) return null
+  return new RegExp(`(?:^|[^a-z])(${alts.join('|')})(?:[^a-z]|$)`, 'i')
+}
+
+// Rows we never touch even on a tag match.
 const SAFE = `
   marked_as_lead = FALSE
   AND admin_label IS NULL
-  AND folder <> 'replies'
-  AND folder <> 'warmup'
+  AND folder NOT IN ('replies', 'warmup')
 `
 
-export async function GET(req: NextRequest) {
-  return handle(req, false)
-}
-export async function POST(req: NextRequest) {
-  return handle(req, true)
-}
+export async function GET(req: NextRequest) { return handle(req, false) }
+export async function POST(req: NextRequest) { return handle(req, true) }
 
 async function handle(req: NextRequest, apply: boolean) {
   const url = new URL(req.url)
@@ -81,58 +88,69 @@ async function handle(req: NextRequest, apply: boolean) {
   if (!authed) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   await ready()
 
-  const warmupOnly = url.searchParams.get('warmupOnly') === 'true'
-
-  let mailboxes
+  let collected
   try {
-    mailboxes = await collectMailboxes(warmupOnly)
+    collected = await collectFilterTags()
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 502 })
   }
-  const emailList = [...mailboxes.emails]
-  if (emailList.length === 0) {
-    return NextResponse.json({
-      ok: true,
-      note: 'No mailboxes returned from PV — are the workspaces enabled for this API key?',
-      workspaces_seen: mailboxes.workspaceCount,
-    })
+  const re = buildTagRegex(collected.tags)
+  if (!re) {
+    return NextResponse.json({ ok: true, note: 'No filter tags returned from PV.', workspaces: collected.workspaceCount })
+  }
+
+  // Scan candidate replies (full body) and match the tag regex in JS.
+  const rows = await pool.query(
+    `SELECT id, folder, lead_email, subject,
+            COALESCE(raw->>'text_body', raw->>'html_body', body_preview, '') AS body
+       FROM unibox_replies
+      WHERE ${SAFE} AND folder IN ('inbox','review','unmapped')`
+  )
+  const matched: string[] = []
+  const byFolder: Record<string, number> = {}
+  const samples: { email: string; subject: string; tag: string }[] = []
+  for (const r of rows.rows) {
+    const hay = `${r.subject ?? ''}\n${r.body ?? ''}`
+    const m = re.exec(hay)
+    if (!m) continue
+    matched.push(r.id as string)
+    byFolder[r.folder as string] = (byFolder[r.folder as string] ?? 0) + 1
+    if (samples.length < 15) {
+      samples.push({ email: r.lead_email as string, subject: (r.subject as string ?? '').slice(0, 60), tag: m[1] })
+    }
   }
 
   if (!apply) {
-    // How many unibox replies were sent FROM one of our mailboxes, split by folder.
-    const match = await pool.query(
-      `SELECT folder, COUNT(*)::int n FROM unibox_replies
-        WHERE lower(sender_email) = ANY($1) AND ${SAFE}
-        GROUP BY folder ORDER BY n DESC`,
-      [emailList]
-    )
-    const total = match.rows.reduce((s, r) => s + (r.n as number), 0)
     return NextResponse.json({
       ok: true,
       mode: 'preview',
-      warmupOnly,
-      workspaces: mailboxes.workspaceCount,
-      mailboxes_in_set: emailList.length,
-      warmup_enabled_mailboxes: mailboxes.warmupEnabled,
-      errored_workspaces: mailboxes.errored,
-      replies_matched: total,
-      matched_by_folder: match.rows,
+      filter_tags_pulled: collected.tags.size,
+      workspaces: collected.workspaceCount,
+      errored_workspaces: collected.errored,
+      replies_scanned: rows.rowCount ?? 0,
+      replies_matched: matched.length,
+      matched_by_folder: byFolder,
+      samples,
     })
   }
 
-  const moved = await pool.query(
-    `UPDATE unibox_replies
-        SET folder = 'warmup', category = 'warmup', classify_state = 'done',
-            ai_model = 'pv-mailbox', ai_reasoning = 'sender is a PV warm-up mailbox',
-            updated_at = NOW()
-      WHERE lower(sender_email) = ANY($1) AND ${SAFE}
-      RETURNING id`,
-    [emailList]
-  )
+  let moved = 0
+  if (matched.length) {
+    const res = await pool.query(
+      `UPDATE unibox_replies
+          SET folder = 'warmup', category = 'warmup', classify_state = 'done',
+              ai_model = 'pv-filter-tag', ai_reasoning = 'PV warmup filter tag in body',
+              updated_at = NOW()
+        WHERE id = ANY($1) AND ${SAFE}
+        RETURNING id`,
+      [matched]
+    )
+    moved = res.rowCount ?? 0
+  }
   return NextResponse.json({
     ok: true,
     mode: 'apply',
-    mailboxes_in_set: emailList.length,
-    replies_moved_to_warmup: moved.rowCount ?? 0,
+    filter_tags_pulled: collected.tags.size,
+    replies_moved_to_warmup: moved,
   })
 }
