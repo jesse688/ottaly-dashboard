@@ -153,7 +153,7 @@ function splitQuote(text: string): { main: string; quoted: string } {
   return { main: text.slice(0, idx).trim(), quoted }
 }
 
-export function UniboxClient({ companyName, clientName, workspaces = [], activeWorkspaceId }: { companyName: string; clientName: string; workspaces?: Array<{ clientId: string; workspaceId: string; companyName: string }>; activeWorkspaceId?: string }) {
+export function UniboxClient({ companyName, clientName, clientEmail = '', workspaces = [], activeWorkspaceId }: { companyName: string; clientName: string; clientEmail?: string; workspaces?: Array<{ clientId: string; workspaceId: string; companyName: string }>; activeWorkspaceId?: string }) {
   async function switchWorkspace(workspaceId: string) {
     if (!workspaceId || workspaceId === activeWorkspaceId) return
     try {
@@ -799,6 +799,7 @@ export function UniboxClient({ companyName, clientName, workspaces = [], activeW
                 <RichReply
                   key={selected.id}
                   toEmail={selected.email ?? ''}
+                  ccEmail={clientEmail}
                   placeholderName={selected.first_name ?? fullName(selected).split(' ')[0]}
                   sending={replying}
                   statusMsg={replyMsg}
@@ -992,8 +993,8 @@ function RecipientInput({ value, onChange, placeholder }: {
 
 // Gmail-style rich text reply: editable To, Cc, bold/italic/underline, font,
 // size, link, image — and a forward seed that prefills quoted content.
-function RichReply({ toEmail, placeholderName, sending, statusMsg, seed, onSend }: {
-  toEmail: string; placeholderName: string; sending: boolean; statusMsg: string
+function RichReply({ toEmail, ccEmail = '', placeholderName, sending, statusMsg, seed, onSend }: {
+  toEmail: string; ccEmail?: string; placeholderName: string; sending: boolean; statusMsg: string
   seed: { id: number; html: string } | null
   onSend: (text: string, html: string, to: string, cc: string) => void
 }) {
@@ -1002,8 +1003,10 @@ function RichReply({ toEmail, placeholderName, sending, statusMsg, seed, onSend 
   const [empty, setEmpty] = useState(true)
   const [chars, setChars] = useState(0)
   const [to, setTo] = useState<string[]>(toEmail ? [toEmail] : [])
-  const [showCc, setShowCc] = useState(false)
-  const [cc, setCc] = useState<string[]>([])
+  // Pre-fill Cc with the client's own profile email so they get a copy — shown openly
+  // in the Cc field so they can remove it if they don't want it (not hidden/forced).
+  const [showCc, setShowCc] = useState(!!ccEmail)
+  const [cc, setCc] = useState<string[]>(ccEmail ? [ccEmail] : [])
   // Collapsed by default — a slim bar that reclaims reading space. Clicking it
   // (or a forward seed arriving) expands the full composer and focuses it.
   const [expanded, setExpanded] = useState(false)
@@ -1125,7 +1128,7 @@ function RichReply({ toEmail, placeholderName, sending, statusMsg, seed, onSend 
     if (!text || !to.length) return
     onSend(text, el.innerHTML, to.join(', '), cc.join(', '))
     el.innerHTML = ''
-    setEmpty(true); setChars(0); setCc([]); setShowCc(false); setTo(toEmail ? [toEmail] : []); setExpanded(false)
+    setEmpty(true); setChars(0); setCc(ccEmail ? [ccEmail] : []); setShowCc(!!ccEmail); setTo(toEmail ? [toEmail] : []); setExpanded(false)
   }
 
   const Btn = ({ cmd, val, title, children }: { cmd?: string; val?: string; title: string; children: ReactNode }) => (
