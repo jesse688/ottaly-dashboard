@@ -23,7 +23,7 @@ async function handle(req: NextRequest, apply: boolean) {
 
   if (!apply) {
     const [warmup, other] = await Promise.all([
-      pool.query(`SELECT COUNT(*) FROM unibox_replies WHERE category = 'warmup' AND folder != 'warmup'`),
+      pool.query(`SELECT COUNT(*) FROM unibox_replies WHERE category = 'warmup' AND folder NOT IN ('warmup','replies') AND admin_label IS NULL AND marked_as_lead = FALSE`),
       pool.query(`SELECT COUNT(*) FROM unibox_replies WHERE category = 'other' AND folder IN ('inbox','review') AND classify_state = 'done'`),
     ])
     return NextResponse.json({
@@ -35,11 +35,16 @@ async function handle(req: NextRequest, apply: boolean) {
   }
 
   const [warmupResult, otherResult] = await Promise.all([
-    // Move any warmup-classified row that isn't already in the warmup folder
+    // Move warmup-classified rows to warmup folder — but never touch rows that
+    // are already with the client (folder='replies') or human-reviewed
+    // (admin_label IS NOT NULL or marked_as_lead=TRUE).
     pool.query(
       `UPDATE unibox_replies
           SET folder = 'warmup', updated_at = NOW()
-        WHERE category = 'warmup' AND folder != 'warmup'
+        WHERE category = 'warmup'
+          AND folder NOT IN ('warmup', 'replies')
+          AND admin_label IS NULL
+          AND marked_as_lead = FALSE
         RETURNING id`
     ),
     // Re-queue 'other' rows in inbox/review for Gemini reclassification
