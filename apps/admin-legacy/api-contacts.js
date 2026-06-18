@@ -76,11 +76,33 @@ module.exports = (db) => {
             return;
           }
 
+          // Free/consumer email domains must never reach B2B campaigns.
+          // Flag them at import so they fail the push gate and are visible in the table.
+          const FREE_EMAIL_DOMAINS_IMPORT = new Set([
+            'gmail.com','googlemail.com',
+            'yahoo.com','yahoo.co.uk','yahoo.fr','yahoo.de','yahoo.es','yahoo.it',
+            'hotmail.com','hotmail.co.uk','hotmail.fr','hotmail.de','hotmail.es',
+            'outlook.com','outlook.co.uk','live.com','live.co.uk','msn.com',
+            'icloud.com','me.com','mac.com','aol.com','aim.com',
+            'protonmail.com','proton.me','zoho.com',
+            'mail.com','email.com','usa.com','post.com',
+            'btinternet.com','btopenworld.com','sky.com','talk21.com','talktalk.net',
+            'ntlworld.com','virgin.net','virginmedia.com','blueyonder.co.uk',
+            'yopmail.com','mailinator.com','guerrillamail.com','10minutemail.com',
+            'throwaway.email','tempmail.com','temp-mail.org','dispostable.com',
+            'example.com','test.com','sample.com',
+          ]);
           const contacts = [];
           for (const row of rows) {
             const contact = importer.mapApolloRow(row);
             if (!contact.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact.email)) continue;
             if (!contact.firstName && !contact.lastName) continue;
+            // Flag free-domain contacts as invalid at import time
+            const importDomain = (contact.email.split('@')[1] || '').toLowerCase();
+            if (FREE_EMAIL_DOMAINS_IMPORT.has(importDomain)) {
+              contact.email_status = 'invalid';
+              contact.do_not_contact = true;
+            }
             contacts.push(contact);
           }
 

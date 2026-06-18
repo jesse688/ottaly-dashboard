@@ -14460,13 +14460,77 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
 // Separate path from PlusVibe (PV endpoint above unchanged). Bison 2-step:
 // create/update leads → import-by-ids into the campaign, after switch-workspace.
 
+// Free / consumer / generic email domains that should never appear in a B2B
+// outbound campaign. Reacher can't catch spam traps on aged domains like email.com.
+// This list gates both the push-to-Bison path and the import classifier.
+const FREE_EMAIL_DOMAINS = new Set([
+  // Big consumer webmail
+  'gmail.com','googlemail.com',
+  'yahoo.com','yahoo.co.uk','yahoo.fr','yahoo.de','yahoo.es','yahoo.it',
+  'hotmail.com','hotmail.co.uk','hotmail.fr','hotmail.de','hotmail.es',
+  'outlook.com','outlook.co.uk',
+  'live.com','live.co.uk',
+  'msn.com',
+  'icloud.com','me.com','mac.com',
+  'aol.com','aim.com',
+  'protonmail.com','proton.me',
+  'zoho.com',
+  'mail.com','email.com','usa.com','post.com',   // mail.com group — spam trap risk
+  // UK consumer
+  'btinternet.com','btopenworld.com',
+  'sky.com','talk21.com','talktalk.net',
+  'ntlworld.com','virgin.net','virginmedia.com',
+  'blueyonder.co.uk',
+  // Common free/disposable
+  'yopmail.com','mailinator.com','guerrillamail.com','10minutemail.com',
+  'throwaway.email','tempmail.com','temp-mail.org','dispostable.com',
+  'sharklasers.com','guerrillamailblock.com','grr.la','spam4.me',
+  // Generic catch-alls that appear in B2B lists but aren't companies
+  'example.com','test.com','sample.com',
+]);
+
+function isFreeDomain(email) {
+  const domain = (email || '').split('@')[1] || '';
+  return FREE_EMAIL_DOMAINS.has(domain.toLowerCase());
+}
+
+// One-shot: flag all existing contacts whose email is on a free/consumer domain.
+// Safe to run multiple times (WHERE email_status != 'invalid' guards it).
+app.post('/api/admin/flag-free-domain-contacts', requireAdmin, async (req, res) => {
+  const pgdb = req.app.locals.pgDb;
+  if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
+  try {
+    const domainList = [...FREE_EMAIL_DOMAINS].map(d => `%@${d}`);
+    // Build: email ILIKE '%@gmail.com' OR email ILIKE '%@email.com' …
+    const conditions = domainList.map((_, i) => `email ILIKE $${i + 1}`).join(' OR ');
+    const { rowCount } = await pgdb.query(
+      `UPDATE contacts
+          SET email_status = 'invalid', do_not_contact = true, updated_at = NOW()
+        WHERE (${conditions})
+          AND (email_status IS DISTINCT FROM 'invalid' OR do_not_contact IS DISTINCT FROM true)`,
+      domainList
+    );
+    // Also log what we found (for the peter.parker audit)
+    const found = await pgdb.query(
+      `SELECT email, workspace_id, created_at FROM contacts WHERE (${conditions}) ORDER BY created_at LIMIT 500`,
+      domainList
+    );
+    console.log(`[flag-free-domains] flagged ${rowCount} contacts; sample:`, found.rows.slice(0, 10).map(r => r.email));
+    res.json({ ok: true, flagged: rowCount, sample: found.rows.slice(0, 50) });
+  } catch (err) {
+    console.error('[flag-free-domains]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Shared contact→pushable filter (same rules as the PV path). Pure function.
 function filterPushableContacts(allContacts, { cooldownWorkspaceId, campaignName }) {
   const cooloffDate = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const campaignNameLc = (campaignName || '').toString().trim().toLowerCase();
-  const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, missingEnrichment: 0, missingName: 0 };
+  const skipped = { unsafe: 0, dnc: 0, freeDomain: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, missingEnrichment: 0, missingName: 0 };
   const PUSHABLE_STATUSES = new Set(['safe', 'safe_catchall']);
   const contacts = allContacts.filter(c => {
+    if (isFreeDomain(c.email)) { skipped.freeDomain++; return false; }
     if (!PUSHABLE_STATUSES.has((c.email_status || '').toLowerCase())) { skipped.unsafe++; return false; }
     if (c.do_not_contact) { skipped.dnc++; return false; }
     // Bison requires non-empty first_name AND last_name (422s otherwise).
