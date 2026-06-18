@@ -176,7 +176,9 @@ tr:hover td{background:#FAFBFF}
   <div style="font-size:11px;color:var(--muted);margin:-2px 0 8px">By provider type (Google / Microsoft / SMTP):</div>
   <div id="providerCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1rem;margin-bottom:.75rem"></div>
   <div style="font-size:11px;color:var(--muted);margin:0 0 8px">By supplier (Winnr / Maildoso / Mithun):</div>
-  <div id="supplierCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1rem;margin-bottom:1rem"></div>
+  <div id="supplierCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1rem;margin-bottom:.75rem"></div>
+  <div style="font-size:11px;color:var(--muted);margin:0 0 8px">Winnr Generic mailboxes only (from CSV):</div>
+  <div id="winnrGenericCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1rem;margin-bottom:1rem"></div>
 
   <!-- Stats: per type -->
   <div class="section-h">By type — Google vs Microsoft vs SMTP</div>
@@ -487,6 +489,7 @@ async function load() {
     loadPricing();
     loadSupplierCharts(_mbPeriod);
     loadProviderCharts(_mbPeriod);
+    loadWinnrGenericCard();
   } catch (err) {
     toast('Load failed: ' + err.message);
   }
@@ -1646,6 +1649,28 @@ async function loadSupplierCharts(p) {
   }
   wrap.innerHTML = keys.map((k,i) => _provCard(k, PAL[i%PAL.length], d.bySupplier[k])).join('');
 }
+
+// Winnr Generic stats — computed from data.mailboxes lifetime API totals, filtered by CSV root domains
+function loadWinnrGenericCard() {
+  const wrap = document.getElementById('winnrGenericCharts');
+  if (!wrap) return;
+  const generic = (data?.mailboxes || []).filter(isWinnrGeneric);
+  if (!generic.length) {
+    wrap.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:.5rem 0">No Winnr Generic mailboxes found.</div>';
+    return;
+  }
+  const sent    = generic.reduce((s,m) => s + (m.api_sent    || 0), 0);
+  const replied = generic.reduce((s,m) => s + (m.api_replied || 0), 0);
+  const bounced = generic.reduce((s,m) => s + (m.api_bounced || 0), 0);
+  const active  = generic.filter(m => (m.status||'').toUpperCase() === 'ACTIVE').length;
+  const paused  = generic.filter(m => (m.status||'').toUpperCase() === 'PAUSED').length;
+  const broken  = generic.length - active - paused;
+  wrap.innerHTML = _provCard(
+    'Winnr Generic', '#6366F1',
+    { mailboxes: generic.length, sent, replies: replied, bounces: bounced }
+  );
+}
+
 renderMbPeriodBar();
 </script>
 </body>

@@ -74,8 +74,8 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-h
 .all-card .client-row{background:#f4f6fc}
 .all-card .client-name{color:var(--navy-dark);font-weight:700}
 /* Recipient-provider selector + cards */
-.prov-tab,.mset-tab{padding:4px 13px;border:1px solid var(--border);background:#fff;border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;color:var(--muted);transition:all .15s}
-.prov-tab.active,.mset-tab.active{background:var(--navy-dark);color:#fff;border-color:var(--navy-dark)}
+.prov-tab{padding:4px 13px;border:1px solid var(--border);background:#fff;border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;color:var(--muted);transition:all .15s}
+.prov-tab.active{background:var(--navy-dark);color:#fff;border-color:var(--navy-dark)}
 .prov-metric{background:#fafbfd;border:1px solid var(--border);border-radius:8px;padding:.6rem .75rem;text-align:center}
 .prov-metric .pm-val{font-size:18px;font-weight:700;color:var(--navy-dark)}
 .prov-metric .pm-lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-top:2px}
@@ -137,16 +137,6 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-h
     <div id="providerCards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.6rem"></div>
   </div>
 
-  <!-- Mailbox set filter — which sending domains to include -->
-  <div id="mailboxSetPanel" style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.75rem 1rem;margin-bottom:1.25rem;display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
-    <span style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)">Mailbox set</span>
-    <div style="display:flex;gap:.25rem;flex-wrap:wrap">
-      <button class="mset-tab active" data-mset="all"         onclick="setMailboxSet('all')">All</button>
-      <button class="mset-tab"        data-mset="clean"       onclick="setMailboxSet('clean')">Non-blacklisted</button>
-      <button class="mset-tab"        data-mset="blacklisted" onclick="setMailboxSet('blacklisted')">Blacklisted domains</button>
-    </div>
-    <span id="mailboxSetNote" style="margin-left:auto;font-size:11px;color:var(--muted)"></span>
-  </div>
 
   <div id="loading" class="spinner">Loading stats…</div>
   <div id="content" style="display:none">
@@ -251,7 +241,6 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:false})).then(s=>{
   const _so = document.getElementById('signOutBtn'); if (_so) _so.style.display = '';
   setPeriod('7d');
   startAutoRefresh();
-  loadDomainSets();
 });
 
 function fmt(n, dec=1) {
@@ -319,62 +308,6 @@ let _partialRetryTimer = null;
 let _partialTries = 0;
 const MAX_PARTIAL_TRIES = 3;  // after this, render whatever we have rather than spin forever
 
-// ── Mailbox-set filter ──────────────────────────────────────────────────────
-let _mailboxSet = 'all';
-let _domainSets = null;
-let _wsMailboxSet = {}; // workspace_id → Set of memberships
-
-async function loadDomainSets() {
-  try {
-    const r = await fetch('/api/stats/domain-sets');
-    if (!r.ok) return;
-    _domainSets = await r.json();
-    const map = {};
-    // Domain-based sets (blacklisted / clean) — keyed via domainWs lookup
-    const tag = (domain, set) => {
-      const ws = _domainSets.domainWs[domain];
-      if (!ws) return;
-      (map[ws] ||= new Set()).add(set);
-    };
-    (_domainSets.blacklisted || []).forEach(d => tag(d, 'blacklisted'));
-    (_domainSets.clean       || []).forEach(d => tag(d, 'clean'));
-    // Winnr — server matched mailbox emails against CSV root domains, returns workspace_ids
-    (_domainSets.winnrWsIds || []).forEach(wsId => {
-      (map[wsId] ||= new Set()).add('winnr');
-    });
-    _wsMailboxSet = map;
-    updateMailboxSetNote();
-  } catch { /* non-critical */ }
-}
-
-function setMailboxSet(s) {
-  _mailboxSet = s;
-  document.querySelectorAll('.mset-tab').forEach(b =>
-    b.classList.toggle('active', b.dataset.mset === s));
-  updateMailboxSetNote();
-  if (_data) renderClients();
-}
-
-function updateMailboxSetNote() {
-  const el = document.getElementById('mailboxSetNote');
-  if (!el || !_domainSets) return;
-  if (_mailboxSet === 'all') { el.textContent = ''; return; }
-  const count = {
-    blacklisted: (_domainSets.blacklisted || []).length,
-    clean:       (_domainSets.clean || []).length,
-    winnr:       (_domainSets.winnrWsIds || []).length,
-  }[_mailboxSet] || 0;
-  const unit = _mailboxSet === 'winnr' ? 'workspace' : 'domain';
-  el.textContent = `${count} ${unit}${count !== 1 ? 's' : ''}`;
-}
-
-// Returns true if workspace should be shown under current mailbox-set filter.
-function wsPassesMailboxFilter(wsId) {
-  if (_mailboxSet === 'all') return true;
-  const sets = _wsMailboxSet[wsId];
-  if (!sets) return false;
-  return sets.has(_mailboxSet);
-}
 
 // ── Recipient-provider strip (additive; independent of the table below) ──
 let _provider = 'all';
@@ -761,10 +694,7 @@ function renderClients() {
   }
   document.getElementById('content').style.display = '';
 
-  // Apply mailbox-set filter (hide workspaces not using the selected domain set).
-  // The "All Workspaces" aggregate is always shown; individual rows are filtered.
-  const wsFiltered = _mailboxSet === 'all' ? wsRaw
-    : wsRaw.filter(w => wsPassesMailboxFilter(w.workspace_id));
+  const wsFiltered = wsRaw;
 
   // Prepend the "All Workspaces" aggregate row above the individual clients.
   const allRow = buildAllWorkspaces(wsFiltered);
