@@ -10725,19 +10725,25 @@ app.get('/api/mailboxes/winnr-generic-stats', requireSession, async (req, res) =
     const wsArr    = [...genericWsIds];
     const mailboxCount = emailArr.length;
 
-    // Sent + bounced: lifetime from cache; period from mailbox_daily_stats (by
-    // workspace) — email_events webhooks dried up ~2026-06-15 so they read 0.
-    // Per-mailbox granularity isn't in the daily table, so we use the workspaces
-    // that hold ONLY Winnr Generic mailboxes (teams 25/26 + Winnr supplier).
+    // Sent + bounced: lifetime from cache (per-mailbox api_sent — EXACT for the 773).
+    // Period: per-mailbox from email_events.sender_email — the ONLY per-mailbox
+    // source. mailbox_daily_stats is workspace-level so it cannot isolate these
+    // 773 from the thousands of other Winnr mailboxes in the same workspaces —
+    // using it over-counted (7,830 was the whole workspace, not the 773).
+    // If email_events is sparse (Bison webhooks slowed ~06-15) the period reads
+    // low — that is the honest figure, not an inflated workspace total.
     let sent = sentLifetime, bounced = bouncedLifetime;
     let dailySeries = [];
-    if (!lifetime && wsArr.length) {
+    if (!lifetime && emailArr.length) {
       const ds = await pgdb.query(`
-        SELECT date::text AS date, SUM(sent)::int AS sent, SUM(bounced)::int AS bounced
-        FROM mailbox_daily_stats
-        WHERE workspace_id = ANY($1) AND date >= (CURRENT_DATE - ($2::int - 1))
-        GROUP BY date ORDER BY date
-      `, [wsArr, days]);
+        SELECT (event_at AT TIME ZONE 'UTC')::date::text AS date,
+               COUNT(*) FILTER (WHERE event_type = 'email_send')::int AS sent,
+               COUNT(*) FILTER (WHERE event_type = 'bounce')::int     AS bounced
+        FROM email_events
+        WHERE lower(sender_email) = ANY($1)
+          AND event_at >= (CURRENT_DATE - ($2::int - 1))
+        GROUP BY 1 ORDER BY 1
+      `, [emailArr, days]);
       sent    = ds.rows.reduce((a,r)=>a+(r.sent||0), 0);
       bounced = ds.rows.reduce((a,r)=>a+(r.bounced||0), 0);
       dailySeries = ds.rows;
@@ -10857,14 +10863,20 @@ app.get('/api/mailboxes/daily-trend', requireSession, async (req, res) => {
       `, [days]),
     ]);
 
-    // human replies + OOO per day — total and per provider/supplier via senderInfo join
-    // Build senderInfo map (email → provider/supplier) from mailbox cache + meta
+    // human replies + OOO per day — total and per provider/supplier via senderInfo join.
+    // Build the SAME way provider-stats does: provider ALWAYS via detectMailboxType
+    // (the live cache), supplier from meta. Earlier this used meta.provider RAW
+    // (e.g. 'GOOGLE') as the bucket key, which never matched the 'google' bucket
+    // that sent lives under — so per-provider reply lines rendered flat-zero.
     const metaForTrend = pgdb ? await pgdb.listMailboxMeta() : [];
+    const supplierByEmailTrend = new Map((metaForTrend||[]).map(m => [(m.email||'').toLowerCase(), m.supplier||null]));
     const senderInfoTrend = new Map();
-    for (const m of metaForTrend) senderInfoTrend.set((m.email||'').toLowerCase(), { provider: m.provider||null, supplier: m.supplier||null });
     for (const m of (_mailboxCache.mailboxes||[])) {
       const e = (m.email||'').toLowerCase(); if (!e) continue;
-      if (!senderInfoTrend.has(e)) senderInfoTrend.set(e, { provider: detectMailboxType(m.provider)||'smtp', supplier: null });
+      senderInfoTrend.set(e, {
+        provider: detectMailboxType(m.provider) || 'smtp',
+        supplier: supplierByEmailTrend.get(e) || null,
+      });
     }
 
     const [rp, rpSplit] = await Promise.all([
