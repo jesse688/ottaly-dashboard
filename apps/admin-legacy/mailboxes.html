@@ -1586,56 +1586,145 @@ function renderMbBarChart(d) {
       ${suppRows || '<div style="font-size:12px;color:var(--muted)">No data</div>'}
     </div>`;
 }
-// Dual-axis SVG line chart: sent (left axis, blue bars as area), RR human (green line), RR+OOO (cyan line).
-// series = array of {sent, replies, ooo} one per day. dates = array of 'YYYY-MM-DD'.
+// Dual-axis interactive line chart. series = [{sent,replies,ooo}…], dates = ['YYYY-MM-DD'…]
+// Left axis = Sent (area + dashed line). Right axis = RR% (two lines: human, +OOO).
+// Hover shows a vertical crosshair + tooltip with all three values for that day.
+let _chartIdx = 0;
 function _provChart(series, color, dates) {
   if (!series || series.length < 2) return '';
-  const W = 320, H = 80, PAD = { t:6, b:18, l:36, r:36 };
-  const IW = W - PAD.l - PAD.r, IH = H - PAD.t - PAD.b;
+  const id = 'pc' + (++_chartIdx);
+  const W = 480, H = 130, PL = 42, PR = 46, PT = 10, PB = 22;
+  const IW = W - PL - PR, IH = H - PT - PB;
   const n = series.length;
-  const sentPts  = series.map(d => d.sent    || 0);
-  const hrPts    = series.map(d => d.sent > 0 ? 100 * (d.replies||0) / d.sent : 0);
-  const ooPts    = series.map(d => d.sent > 0 ? 100 * ((d.replies||0) + (d.ooo||0)) / d.sent : 0);
-  const maxSent  = Math.max(...sentPts, 1);
-  const maxRR    = Math.max(...ooPts, 0.01);
-  const X = i => PAD.l + (n === 1 ? IW/2 : i * IW / (n-1));
-  const YS = v => PAD.t + IH - (v / maxSent) * IH;
-  const YR = v => PAD.t + IH - (v / maxRR)   * IH;
-  const fmtD = iso => { const p = iso.split('-'); return p[2]+'/'+p[1]; };
-  // sent area
-  const saLine = sentPts.map((v,i) => `${i?'L':'M'}${X(i).toFixed(1)},${YS(v).toFixed(1)}`).join(' ');
-  const saArea = `${saLine} L${X(n-1).toFixed(1)},${(PAD.t+IH).toFixed(1)} L${X(0).toFixed(1)},${(PAD.t+IH).toFixed(1)} Z`;
-  // RR lines
-  const rrLine = hrPts.map((v,i)  => `${i?'L':'M'}${X(i).toFixed(1)},${YR(v).toFixed(1)}`).join(' ');
-  const ooLine = ooPts.map((v,i)  => `${i?'L':'M'}${X(i).toFixed(1)},${YR(v).toFixed(1)}`).join(' ');
-  // y-axis labels
-  const sentK = v => v >= 1000 ? (v/1000).toFixed(1)+'k' : v;
-  const rrFmt = v => v.toFixed(1)+'%';
-  return `<div style="margin:10px 0 4px;overflow:hidden">
-  <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" style="display:block;overflow:visible">
-    <!-- sent area -->
-    <path d="${saArea}" fill="${color}18"/>
-    <path d="${saLine}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="4 2"/>
-    <!-- RR human -->
-    <path d="${rrLine}" fill="none" stroke="#059669" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-    <!-- RR + OOO -->
-    <path d="${ooLine}" fill="none" stroke="#0EA5E9" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="5 2"/>
+
+  const sentPts = series.map(d => d.sent || 0);
+  const hrPts   = series.map(d => d.sent > 0 ? 100*(d.replies||0)/d.sent : 0);
+  const ooPts   = series.map(d => d.sent > 0 ? 100*((d.replies||0)+(d.ooo||0))/d.sent : 0);
+
+  const maxS = Math.max(...sentPts, 1);
+  const maxR = Math.max(...ooPts, 0.001);
+
+  const X  = i  => PL + (n===1 ? IW/2 : i*IW/(n-1));
+  const YS = v  => PT + IH - (v/maxS)*IH;
+  const YR = v  => PT + IH - (v/maxR)*IH;
+  const fD = iso => { const p=(iso||'').split('-'); return p[2]+'/'+p[1]; };
+  const kFmt = v => v>=1000?(v/1000).toFixed(1)+'k':String(v);
+  const pFmt = v => v.toFixed(2)+'%';
+
+  const sLine = sentPts.map((v,i)=>`${i?'L':'M'}${X(i).toFixed(1)},${YS(v).toFixed(1)}`).join('');
+  const sArea = `${sLine}L${X(n-1).toFixed(1)},${(PT+IH).toFixed(1)}L${PL},${(PT+IH).toFixed(1)}Z`;
+  const hLine = hrPts.map((v,i)=>`${i?'L':'M'}${X(i).toFixed(1)},${YR(v).toFixed(1)}`).join('');
+  const oLine = ooPts.map((v,i)=>`${i?'L':'M'}${X(i).toFixed(1)},${YR(v).toFixed(1)}`).join('');
+
+  // dots for each day
+  const sDots = sentPts.map((v,i)=>`<circle cx="${X(i).toFixed(1)}" cy="${YS(v).toFixed(1)}" r="2.5" fill="${color}" stroke="#fff" stroke-width="1"/>`).join('');
+  const hDots = hrPts.map((v,i)=>`<circle cx="${X(i).toFixed(1)}" cy="${YR(v).toFixed(1)}" r="2.5" fill="#059669" stroke="#fff" stroke-width="1"/>`).join('');
+  const oDots = ooPts.map((v,i)=>`<circle cx="${X(i).toFixed(1)}" cy="${YR(v).toFixed(1)}" r="2.5" fill="#0EA5E9" stroke="#fff" stroke-width="1"/>`).join('');
+
+  // x-axis date labels — show every N labels so they don't overlap
+  const step = Math.max(1, Math.ceil(n/7));
+  const xLabels = dates.map((d,i)=> i%step===0||i===n-1
+    ? `<text x="${X(i).toFixed(1)}" y="${H-4}" font-size="9" fill="#9AA1AD" text-anchor="${i===0?'start':i===n-1?'end':'middle'}">${fD(d)}</text>`
+    : '').join('');
+
+  // gridlines
+  const grids = [0,0.25,0.5,0.75,1].map(f=>{
+    const y=(PT+IH*(1-f)).toFixed(1);
+    return `<line x1="${PL}" y1="${y}" x2="${W-PR}" y2="${y}" stroke="#F1F3F9" stroke-width="1"/>`;
+  }).join('');
+
+  // encode data for JS tooltip
+  const enc = JSON.stringify(series.map((d,i)=>({
+    date: dates[i]||'', sent: d.sent||0,
+    hr: hrPts[i], oo: ooPts[i],
+    replies: d.replies||0, ooo: d.ooo||0
+  })));
+
+  return `<div style="margin:14px 0 6px;position:relative" id="${id}-wrap">
+  <svg id="${id}" viewBox="0 0 ${W} ${H}" width="100%" height="${H}"
+       style="display:block;cursor:crosshair;overflow:visible"
+       onmousemove="_pcHover(event,'${id}')" onmouseleave="_pcLeave('${id}')">
+    <!-- grid -->
+    ${grids}
+    <!-- axes -->
+    <line x1="${PL}" y1="${PT}" x2="${PL}" y2="${PT+IH}" stroke="#E5E7EB" stroke-width="1"/>
+    <line x1="${W-PR}" y1="${PT}" x2="${W-PR}" y2="${PT+IH}" stroke="#E5E7EB" stroke-width="1"/>
     <!-- left axis labels (sent) -->
-    <text x="${PAD.l-3}" y="${PAD.t+4}" font-size="8" fill="#9AA1AD" text-anchor="end">${sentK(maxSent)}</text>
-    <text x="${PAD.l-3}" y="${PAD.t+IH+1}" font-size="8" fill="#9AA1AD" text-anchor="end">0</text>
+    <text x="${PL-4}" y="${PT+5}" font-size="9" fill="#9AA1AD" text-anchor="end">${kFmt(maxS)}</text>
+    <text x="${PL-4}" y="${PT+IH+1}" font-size="9" fill="#9AA1AD" text-anchor="end">0</text>
     <!-- right axis labels (RR) -->
-    <text x="${W-PAD.r+3}" y="${PAD.t+4}" font-size="8" fill="#059669" text-anchor="start">${rrFmt(maxRR)}</text>
-    <text x="${W-PAD.r+3}" y="${PAD.t+IH+1}" font-size="8" fill="#059669" text-anchor="start">0%</text>
-    <!-- date axis -->
-    <text x="${PAD.l}" y="${H-2}" font-size="8" fill="#9AA1AD" text-anchor="start">${fmtD(dates[0]||'')}</text>
-    <text x="${W-PAD.r}" y="${H-2}" font-size="8" fill="#9AA1AD" text-anchor="end">${fmtD(dates[dates.length-1]||'')}</text>
+    <text x="${W-PR+4}" y="${PT+5}" font-size="9" fill="#059669" text-anchor="start">${pFmt(maxR)}</text>
+    <text x="${W-PR+4}" y="${PT+IH+1}" font-size="9" fill="#059669" text-anchor="start">0%</text>
+    <!-- sent area + line -->
+    <path d="${sArea}" fill="${color}15"/>
+    <path d="${sLine}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="5 3"/>
+    <!-- RR human -->
+    <path d="${hLine}" fill="none" stroke="#059669" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    <!-- RR+OOO -->
+    <path d="${oLine}" fill="none" stroke="#0EA5E9" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6 3"/>
+    <!-- dots -->
+    ${sDots}${hDots}${oDots}
+    <!-- crosshair (hidden by default) -->
+    <line id="${id}-xh" x1="0" y1="${PT}" x2="0" y2="${PT+IH}" stroke="#6B7280" stroke-width="1" stroke-dasharray="3 2" opacity="0"/>
+    <!-- x-axis dates -->
+    ${xLabels}
   </svg>
-  <div style="display:flex;gap:10px;font-size:9px;color:var(--muted);margin-top:2px">
-    <span style="display:flex;align-items:center;gap:3px"><svg width="14" height="6"><line x1="0" y1="3" x2="14" y2="3" stroke="${color}" stroke-width="1.5" stroke-dasharray="4 2"/></svg>Sent</span>
-    <span style="display:flex;align-items:center;gap:3px"><svg width="14" height="6"><line x1="0" y1="3" x2="14" y2="3" stroke="#059669" stroke-width="2"/></svg>RR human</span>
-    <span style="display:flex;align-items:center;gap:3px"><svg width="14" height="6"><line x1="0" y1="3" x2="14" y2="3" stroke="#0EA5E9" stroke-width="2" stroke-dasharray="5 2"/></svg>RR+OOO</span>
+  <!-- tooltip -->
+  <div id="${id}-tip" style="display:none;position:absolute;top:4px;background:#1f2937;color:#fff;border-radius:7px;padding:7px 10px;font-size:11px;line-height:1.6;pointer-events:none;white-space:nowrap;z-index:99;box-shadow:0 4px 12px rgba(0,0,0,.25)"></div>
+  <div style="display:flex;gap:12px;font-size:10px;color:var(--muted);margin-top:4px">
+    <span style="display:flex;align-items:center;gap:4px"><svg width="16" height="6"><line x1="0" y1="3" x2="16" y2="3" stroke="${color}" stroke-width="1.5" stroke-dasharray="5 3"/></svg>Sent</span>
+    <span style="display:flex;align-items:center;gap:4px"><svg width="16" height="6"><line x1="0" y1="3" x2="16" y2="3" stroke="#059669" stroke-width="2"/></svg>RR human</span>
+    <span style="display:flex;align-items:center;gap:4px"><svg width="16" height="6"><line x1="0" y1="3" x2="16" y2="3" stroke="#0EA5E9" stroke-width="2" stroke-dasharray="6 3"/></svg>RR+OOO</span>
   </div>
-  </div>`;
+  <script>
+  (function(){
+    const _d=${enc};
+    const PL=${PL},IW=${IW},n=${n};
+    window['_pcData_${id}'] = _d;
+    window['_pcMeta_${id}'] = {PL,IW,n,W:${W}};
+  })();
+  <\/script>
+</div>`;
+}
+
+// Chart hover handlers — one shared implementation, chart-id disambiguates
+function _pcHover(evt, id) {
+  const svg = document.getElementById(id);
+  const tip = document.getElementById(id+'-tip');
+  const xh  = document.getElementById(id+'-xh');
+  const meta = window['_pcMeta_'+id];
+  const data = window['_pcData_'+id];
+  if (!svg||!tip||!meta||!data) return;
+  const rect = svg.getBoundingClientRect();
+  const mx   = (evt.clientX - rect.left) * (meta.W / rect.width);
+  const ix   = Math.round((mx - meta.PL) / meta.IW * (meta.n-1));
+  const ci   = Math.max(0, Math.min(meta.n-1, ix));
+  const pt   = data[ci];
+  if (!pt) return;
+  const xPx  = meta.PL + ci * meta.IW / (meta.n-1);
+  // crosshair
+  xh.setAttribute('x1', xPx); xh.setAttribute('x2', xPx); xh.setAttribute('opacity','0.7');
+  // tooltip content
+  const fD = iso => { const p=(iso||'').split('-'); return p[2]+'/'+p[1]; };
+  tip.innerHTML =
+    `<div style="font-weight:700;margin-bottom:3px">${fD(pt.date)}</div>`+
+    `<div>Sent: <b>${(pt.sent||0).toLocaleString()}</b></div>`+
+    `<div style="color:#6EE7B7">RR human: <b>${pt.hr.toFixed(2)}%</b> (${(pt.replies||0)} replies)</div>`+
+    `<div style="color:#7DD3FC">RR+OOO: <b>${pt.oo.toFixed(2)}%</b> (+${(pt.ooo||0)} OOO)</div>`;
+  // position tooltip: prefer right of cursor, flip left if near edge
+  const wrapRect = document.getElementById(id+'-wrap').getBoundingClientRect();
+  const tipW = 200;
+  const svgX  = evt.clientX - rect.left;
+  const left  = svgX / rect.width * 100;
+  tip.style.display = 'block';
+  tip.style.left = left > 60 ? '' : (svgX/rect.width*100+2)+'%';
+  tip.style.right= left > 60 ? ((1-svgX/rect.width)*100+2)+'%' : '';
+}
+function _pcLeave(id) {
+  const tip = document.getElementById(id+'-tip');
+  const xh  = document.getElementById(id+'-xh');
+  if (tip) tip.style.display = 'none';
+  if (xh)  xh.setAttribute('opacity','0');
 }
 
 function _provCard(label, color, b, trendSeries, trendDates) {
