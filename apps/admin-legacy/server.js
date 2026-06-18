@@ -889,7 +889,7 @@ function startEmailFinderApp() {
       REACHER_API_KEY: process.env.REACHER_API_KEY || '',
       REACHER_FROM_EMAIL: process.env.REACHER_FROM_EMAIL || '',
       REACHER_HELLO_NAME: process.env.REACHER_HELLO_NAME || '',
-      REACHER_TIMEOUT_MS: process.env.REACHER_TIMEOUT_MS || '15000',
+      REACHER_TIMEOUT_MS: process.env.REACHER_TIMEOUT_MS || '30000',
       REACHER_TEST_EMAIL: process.env.REACHER_TEST_EMAIL || 'jesse@ottaly.co.uk',
       REACHER_URL_2: process.env.REACHER_URL_2 || '',
       REACHER_API_KEY_2: process.env.REACHER_API_KEY_2 || '',
@@ -936,7 +936,7 @@ function startEv2FinderApp() {
       REACHER_API_KEY: process.env.REACHER_API_KEY || '',
       REACHER_FROM_EMAIL: process.env.REACHER_FROM_EMAIL || '',
       REACHER_HELLO_NAME: process.env.REACHER_HELLO_NAME || '',
-      REACHER_TIMEOUT_MS: process.env.REACHER_TIMEOUT_MS || '15000',
+      REACHER_TIMEOUT_MS: process.env.REACHER_TIMEOUT_MS || '30000',
       MAX_CONTACTS: process.env.MAX_CONTACTS || '10000',
       PRIMARY_REACHER_CONCURRENCY: process.env.PRIMARY_REACHER_CONCURRENCY || '2',
       REACHER_RETRIES: process.env.REACHER_RETRIES || '1',
@@ -16729,7 +16729,8 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
         // (SMTP-level "unknown" — greylisting, proxy/MX timeouts, blacklisted
         // verifier IP — is normal and must NOT abort the job; those emails just
         // stay unknown and are skipped from the safe push, the rest proceed.)
-        if (i === 0 && batchUpdates.length > 0 && batchUpdates.every(u => u._netfail)) {
+        const netfailCount = batchUpdates.filter(u => u._netfail).length;
+        if (i === 0 && batchUpdates.length > 0 && netfailCount / batchUpdates.length > 0.8) {
           job.status = 'failed';
           job.error = 'Email verification failed — email-finder not responding. Try pushing without verify.';
           return;
@@ -17127,7 +17128,8 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
         if (job.cancelled || job.paused) break;
         // Only abort if the finder is truly unreachable (all NETWORK failures);
         // SMTP-level "unknown" (greylist/timeout/blacklist) is normal — skip those.
-        if (i === 0 && batchUpdates.length > 0 && batchUpdates.every(u => u._netfail)) {
+        const netfailCount = batchUpdates.filter(u => u._netfail).length;
+        if (i === 0 && batchUpdates.length > 0 && netfailCount / batchUpdates.length > 0.8) {
           job.status = 'failed';
           job.error = 'Email verification failed — email-finder not responding. Try pushing without verify.';
           return;
