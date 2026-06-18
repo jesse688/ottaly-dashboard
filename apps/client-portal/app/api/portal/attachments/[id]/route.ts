@@ -24,14 +24,17 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   if (!allowed) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
   const buf = Buffer.from(a.content, 'base64')
+  // Hand the body a plain Uint8Array (valid BodyInit) to avoid Buffer/BodyInit
+  // type friction in the edge/runtime types.
+  const bytes = new Uint8Array(buf)
   const download = req.nextUrl.searchParams.get('download') === '1'
   // Quote the filename so spaces/special chars don't break the header.
   const safeName = a.filename.replace(/"/g, '')
-  return new NextResponse(buf, {
+  return new NextResponse(bytes, {
     headers: {
       'Content-Type': a.content_type || 'application/octet-stream',
       'Content-Disposition': `${download ? 'attachment' : 'inline'}; filename="${safeName}"`,
-      'Content-Length': String(buf.length),
+      'Content-Length': String(bytes.length),
       'Cache-Control': 'private, max-age=3600',
     },
   })
