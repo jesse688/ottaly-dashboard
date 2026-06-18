@@ -19461,6 +19461,70 @@ function scheduleAudienceScoring(pgdb) {
     }
   }, 5000);
 
+  // ── Rescue warmup: scan warmup folder for genuine interested replies ─────
+  // Pulls all unibox_replies classified as warmup by the now-removed hyphen-pair
+  // heuristic (ai_reasoning contains 'word-pair'), re-classifies via Gemini,
+  // and returns those that look genuinely interested. Read-only — no DB writes.
+  app.get('/api/admin/rescue-warmup', requireAdmin, async (req, res) => {
+    const pgdb = app.locals.pgDb;
+    if (!pgdb) return res.status(503).json({ error: 'DB not available' });
+    const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+    if (!geminiKey) return res.status(503).json({ error: 'GEMINI_API_KEY not set' });
+
+    try {
+      const limit = Math.min(2000, Number(req.query.limit) || 500);
+      const rows = await pgdb.query(
+        `SELECT u.id, u.workspace_id, u.lead_email, u.subject, u.body_preview, u.ai_reasoning, u.received_at,
+                w.name AS workspace_name
+           FROM unibox_replies u
+           LEFT JOIN clients w ON w.workspace_id = u.workspace_id
+          WHERE u.category = 'warmup'
+            AND u.folder = 'warmup'
+            AND u.ai_model = 'prefilter'
+            AND u.ai_reasoning LIKE '%word-pair%'
+            AND u.admin_label IS NULL
+            AND u.marked_as_lead = FALSE
+          ORDER BY u.received_at DESC
+          LIMIT $1`,
+        [limit]
+      );
+
+      const interested = [];
+      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(geminiKey)}`;
+      for (const row of rows.rows) {
+        try {
+          const prompt = `You classify cold-outreach email replies for a B2B agency inbox. Choose ONE category: interested / not_interested / ooo_auto_reply / question / unsubscribe / other.\n\nSubject: ${row.subject || '(none)'}\n\n${row.body_preview || '(empty body)'}\n\nRespond with ONLY JSON: {"category":"...","confidence":0.0,"reasoning":"..."}`;
+          const gr = await fetch(geminiUrl, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ role: 'user', parts: [{ text: prompt }] }],
+              generationConfig: { temperature: 0, maxOutputTokens: 200, responseMimeType: 'application/json',
+                responseSchema: { type: 'OBJECT', properties: { category: { type: 'STRING' }, confidence: { type: 'NUMBER' }, reasoning: { type: 'STRING' } }, required: ['category','confidence','reasoning'] },
+                thinkingConfig: { thinkingBudget: 0 } },
+            }),
+            signal: AbortSignal.timeout(10000),
+          });
+          if (!gr.ok) continue;
+          const gj = await gr.json();
+          const text = (gj.candidates?.[0]?.content?.parts ?? []).map(p => p.text ?? '').join('').trim();
+          const m = text.match(/\{[\s\S]*\}/);
+          if (!m) continue;
+          const parsed = JSON.parse(m[0]);
+          if (parsed.category === 'interested' || parsed.category === 'question') {
+            interested.push({ ...row, gemini_category: parsed.category, gemini_confidence: parsed.confidence, gemini_reasoning: parsed.reasoning });
+          }
+        } catch (e) { /* skip individual Gemini failures */ }
+      }
+
+      console.log(`[rescue-warmup] scanned ${rows.rows.length} word-pair warmup replies — ${interested.length} look interested`);
+      res.json({ ok: true, scanned: rows.rows.length, interested_count: interested.length, interested });
+    } catch (err) {
+      console.error('[rescue-warmup]', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Sentry error handler after routes, before the generic fallback (v8+ API).
   Sentry.setupExpressErrorHandler(app);
   app.use((err, req, res, next) => {
