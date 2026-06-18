@@ -43,59 +43,25 @@ const WARMUP_PATTERNS: RegExp[] = [
   /\b([a-z]{3,})[\s_]+\1\b/i,                                    // repeated word token: "apple apple"
 ]
 
-// Common real hyphenated compounds — never treated as warm-up pairs.
-const HYPHEN_ALLOW = new Set([
-  'award-winning', 'easy-to', 'eco-friendly', 'next-gen', 'real-time', 'long-term',
-  'high-quality', 'well-being', 'cost-effective', 'up-to', 'state-of', 'one-on',
-  'day-to', 'follow-up', 'check-in', 'in-person', 'full-time', 'part-time', 'end-to',
-  'go-to', 'must-have', 'data-driven', 'world-class', 'top-notch', 'on-the', 'face-to',
-  'win-win', 'co-founder', 'e-commerce', 'sign-up', 'opt-in', 'opt-out', 'time-saving',
-  'game-changer', 'game-changing', 'decision-makers', 'decision-maker', 'mid-sized',
-  'so-called', 'well-known', 'hands-on', 're-engage', 'self-service', 'all-in',
-])
-// A random injected word-pair: lowercase word-word, 4+ letters each, not allowlisted.
-const HYPHEN_PAIR = /\b([a-z]{4,})-([a-z]{4,})\b/g
-
 export interface WarmupSignals {
   subject?: string
   bodyText?: string
-  // false when the reply has NO real lead enrichment behind it (no LinkedIn,
-  // company, title, phone). A genuine forwarded reply can also lack fields, so
-  // this only corroborates a marker match — it never flags warm-up on its own.
+  // Kept for API compatibility — no longer used in detection logic.
+  // Bison filters its own warmup emails; we rely on explicit markers only.
   hasLeadFields?: boolean
-  // true when the reply was forwarded / domain-matched to a lead (a real person
-  // replying from a different address than the campaign lead). Such replies
-  // legitimately lack lead fields, so the no-fields warm-up heuristic must NOT
-  // fire on them — otherwise a genuine reply (e.g. "Energy savings for X") gets
-  // hidden as warm-up. (The cause of the Ian/Whitby-&-Chandler misfire.)
   isForwarded?: boolean
 }
 
-// Cheap, deterministic warm-up detector.
-//   • An EXPLICIT marker ("warmup", tool names, repeated-word token) → warm-up on its own.
-//   • A random injected hyphen-pair ("rapid-provision") → warm-up ONLY when the
-//     reply also has NO lead enrichment. Per Jesse: a warm-up has the odd word-pair
-//     AND no real data; a genuine prospect reply carries LinkedIn/company/title
-//     from the campaign, so an odd hyphenate alone never flags it — that goes to Gemini.
+// Cheap, deterministic warm-up detector — explicit markers ONLY.
+// Bison already filters its own warmup emails before they reach our webhook,
+// so we don't need the hyphen-pair heuristic that caused false positives on
+// genuine replies containing normal hyphenated words like "government-funded".
 export function detectWarmup(s: WarmupSignals): { isWarmup: boolean; reason: string } {
   const hay = `${s.subject ?? ''}\n${s.bodyText ?? ''}`
-  const noFields = s.hasLeadFields === false
 
   const marker = WARMUP_PATTERNS.find(re => re.test(hay))
   if (marker) {
     return { isWarmup: true, reason: `warm-up marker ${String(marker)}` }
-  }
-
-  // Random hyphenated word-pair(s) injected into prose — REQUIRES no lead data.
-  // A FORWARDED reply legitimately lacks lead fields (it came from a colleague's
-  // address), so the no-fields path must not fire on it — only a marker (above)
-  // can flag a forwarded reply as warm-up.
-  const pairs: string[] = []
-  for (const m of hay.toLowerCase().matchAll(HYPHEN_PAIR)) {
-    if (!HYPHEN_ALLOW.has(m[0])) pairs.push(m[0])
-  }
-  if (pairs.length > 0 && noFields && !s.isForwarded) {
-    return { isWarmup: true, reason: `warm-up word-pair(s) ${pairs.slice(0, 3).join(', ')} + no lead enrichment` }
   }
 
   return { isWarmup: false, reason: '' }
