@@ -11407,6 +11407,62 @@ app.get('/api/mailboxes/winnr-tagged', requireSession, async (req, res) => {
   }
 });
 
+// GET variant: audit by the 34 WINNR_GENERIC_ROOTS domains — no payload needed.
+// Scans every workspace, finds every mailbox on a Winnr Generic root domain, and
+// reports which carry the "winnr generic" tag vs which don't. Answers "where are
+// the missing CSV mailboxes" from a plain browser GET.
+//   GET /api/mailboxes/winnr-generic-audit
+app.get('/api/mailboxes/winnr-generic-audit', requireSession, async (req, res) => {
+  try {
+    const onGenericDomain = email => WINNR_GENERIC_ROOTS.has(winnrRootOf((email.split('@')[1] || '')));
+    const byRoot = {}; // root -> { total, tagged, untagged, untagged_emails[] }
+    const scanErrors = [];
+    let total = 0, tagged = 0, untagged = 0;
+
+    for (const team of BISON_TEAMS) {
+      try {
+        let prevSig = '';
+        for (let page = 1; page <= 300; page++) {
+          const resp = await bisonReq('/api/sender-emails', { wsId: team.team_id, params: { per_page: 100, page } });
+          const list = Array.isArray(resp) ? resp : (resp?.data ?? []);
+          if (!list.length) break;
+          const sig = list.map(a => a.id ?? a.email ?? '').join(',');
+          if (sig === prevSig) break;
+          prevSig = sig;
+          for (const a of list) {
+            const email = (a.email || a.email_address || '').toLowerCase();
+            if (!email || !onGenericDomain(email)) continue;
+            const root = winnrRootOf(email.split('@')[1] || '');
+            const tags = Array.isArray(a.tags) ? a.tags.map(t => (t.name || '').trim().toLowerCase()) : [];
+            const hasGeneric = tags.includes('winnr generic');
+            const b = byRoot[root] = byRoot[root] || { total: 0, tagged: 0, untagged: 0, untagged_emails: [], workspace: team.name };
+            b.total++; total++;
+            if (hasGeneric) { b.tagged++; tagged++; }
+            else { b.untagged++; untagged++; b.untagged_emails.push({ email, tags: a.tags ? a.tags.map(t=>t.name) : [], workspace: team.name }); }
+          }
+        }
+      } catch (e) {
+        scanErrors.push({ workspace: team.name, team_id: team.team_id, error: e.message });
+      }
+    }
+
+    // roots present in CSV but with ZERO mailboxes found in Bison at all
+    const missingRoots = [...WINNR_GENERIC_ROOTS].filter(r => !byRoot[r]).sort();
+
+    res.json({
+      total_on_generic_domains: total,
+      tagged_winnr_generic: tagged,
+      on_domain_but_untagged: untagged,
+      roots_with_no_mailboxes_in_bison: missingRoots,
+      per_root: byRoot,
+      scan_errors: scanErrors,
+    });
+  } catch (err) {
+    console.error('[winnr-generic-audit]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Read-only diagnostic: given a list of emails (e.g. the Winnr CSV), report for
 // each whether it exists in Bison, in which workspace, and what tags it carries.
 // Used to find why N CSV mailboxes aren't showing under a tag.
