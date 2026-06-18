@@ -11301,30 +11301,36 @@ app.put('/api/mailboxes/:email', requireSession, async (req, res) => {
 
 // Bulk-assign supplier or type across many mailboxes at once.
 // Find every Bison mailbox carrying a tag named "winnr" (case-insensitive),
-// across all workspaces EXCEPT BlueHawk / Hayes / Bybo. Tags are per-workspace
-// in Bison, so we resolve the tag id per workspace then list sender-emails by it.
+// across all workspaces. EXCLUDES any mailbox whose DOMAIN contains bluehawk,
+// hayes, or bybo — these are the BlueHawk/Hayes/Bybo sets that must NOT change.
+// (NB: exclusion is by mailbox domain, NOT workspace name — BlueHawk lives inside
+//  "Winnr Batch A" and Hayes inside "Winnr Batch B", so a workspace-level skip
+//  would miss them.)
 //   GET  /api/mailboxes/winnr-tagged                 → dry-run (list + count)
 //   GET  /api/mailboxes/winnr-tagged?apply=10        → set daily_limit=10 on all
 // Read-only by default; only mutates when ?apply=<int> is present.
-const WINNR_TAG_EXCLUDE_WS = ['bluehawk', 'blue hawk', 'hayes', 'bybo', 'bybodigital'];
+const WINNR_TAG_EXCLUDE_DOMAINS = ['bluehawk', 'hayes', 'bybo'];
 app.get('/api/mailboxes/winnr-tagged', requireSession, async (req, res) => {
   try {
     const applyLimit = req.query.apply != null ? parseInt(req.query.apply, 10) : null;
     if (applyLimit != null && (!Number.isInteger(applyLimit) || applyLimit < 0 || applyLimit > 1000)) {
       return res.status(400).json({ error: 'apply must be an integer 0–1000' });
     }
-    const isExcluded = name => {
-      const n = (name || '').toLowerCase();
-      return WINNR_TAG_EXCLUDE_WS.some(x => n.includes(x));
+    // A mailbox is excluded if its domain contains any excluded brand.
+    const isExcludedMailbox = email => {
+      const domain = (email.split('@')[1] || '').toLowerCase();
+      return WINNR_TAG_EXCLUDE_DOMAINS.some(x => domain.includes(x));
     };
 
     const perWorkspace = [];
-    let totalMatched = 0, totalUpdated = 0;
+    let totalMatched = 0, totalExcluded = 0, totalUpdated = 0;
     const errors = [];
 
     for (const team of BISON_TEAMS) {
-      if (isExcluded(team.name)) {
-        perWorkspace.push({ workspace: team.name, team_id: team.team_id, skipped: 'excluded', matched: 0 });
+      // ByboDigital is excluded as a whole workspace (its mailboxes aren't all on
+      // a bybo* domain, so a domain filter wouldn't catch them).
+      if ((team.name || '').toLowerCase().includes('bybo')) {
+        perWorkspace.push({ workspace: team.name, team_id: team.team_id, skipped: 'excluded workspace', matched: 0 });
         continue;
       }
       try {
@@ -11336,8 +11342,9 @@ app.get('/api/mailboxes/winnr-tagged', requireSession, async (req, res) => {
           perWorkspace.push({ workspace: team.name, team_id: team.team_id, no_winnr_tag: true, matched: 0 });
           continue;
         }
-        // 2) page sender-emails filtered by that tag id
-        const matched = [];
+        // 2) page sender-emails filtered by that tag id; split into target vs excluded
+        const target = [];   // will receive the daily-limit change
+        const excluded = []; // bluehawk/hayes/bybo — left untouched
         let prevSig = '';
         for (let page = 1; page <= 300; page++) {
           const resp = await bisonReq('/api/sender-emails', {
@@ -11351,15 +11358,19 @@ app.get('/api/mailboxes/winnr-tagged', requireSession, async (req, res) => {
           prevSig = sig;
           for (const a of list) {
             if (a.id == null) continue;
-            matched.push({ id: a.id, email: (a.email || a.email_address || '').toLowerCase(), daily_limit: a.daily_limit ?? null });
+            const email = (a.email || a.email_address || '').toLowerCase();
+            const row = { id: a.id, email, daily_limit: a.daily_limit ?? null };
+            if (isExcludedMailbox(email)) excluded.push(row);
+            else target.push(row);
           }
         }
-        totalMatched += matched.length;
+        totalMatched  += target.length;
+        totalExcluded += excluded.length;
 
-        // 3) apply daily-limit if requested
+        // 3) apply daily-limit to the TARGET set only (never the excluded brands)
         let updated = 0;
-        if (applyLimit != null && matched.length) {
-          const ids = matched.map(m => m.id);
+        if (applyLimit != null && target.length) {
+          const ids = target.map(m => m.id);
           await bisonReq('/api/sender-emails/daily-limits/bulk', {
             method: 'PATCH', wsId: team.team_id,
             body: { sender_email_ids: ids, daily_limit: applyLimit },
@@ -11369,8 +11380,9 @@ app.get('/api/mailboxes/winnr-tagged', requireSession, async (req, res) => {
         }
         perWorkspace.push({
           workspace: team.name, team_id: team.team_id, tag_id: winnrTag.id,
-          matched: matched.length, updated,
-          mailboxes: matched.map(m => m.email),
+          matched: target.length, excluded: excluded.length, updated,
+          mailboxes: target.map(m => m.email),
+          excluded_mailboxes: excluded.map(m => m.email),
         });
       } catch (e) {
         errors.push({ workspace: team.name, team_id: team.team_id, error: e.message });
@@ -11379,8 +11391,9 @@ app.get('/api/mailboxes/winnr-tagged', requireSession, async (req, res) => {
 
     res.json({
       mode: applyLimit != null ? `applied daily_limit=${applyLimit}` : 'dry-run',
-      excluded_workspaces: WINNR_TAG_EXCLUDE_WS,
+      excluded_domains: WINNR_TAG_EXCLUDE_DOMAINS,
       total_matched: totalMatched,
+      total_excluded: totalExcluded,
       total_updated: totalUpdated,
       workspaces: perWorkspace,
       errors,
