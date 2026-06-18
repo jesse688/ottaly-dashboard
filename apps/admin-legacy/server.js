@@ -10710,7 +10710,6 @@ app.get('/api/mailboxes/winnr-generic-stats', requireSession, async (req, res) =
     // Collect all Winnr Generic mailbox emails + their workspace_ids from cache
     const genericEmails = new Set();
     const genericWsIds  = new Set();
-    let sentLifetime = 0, bouncedLifetime = 0;
     for (const m of (_mailboxCache.mailboxes || [])) {
       const host = m.domain || (m.email || '').split('@')[1] || '';
       if (!WINNR_GENERIC_ROOTS.has(winnrRootOf(host))) continue;
@@ -10718,35 +10717,30 @@ app.get('/api/mailboxes/winnr-generic-stats', requireSession, async (req, res) =
       if (!email) continue;
       genericEmails.add(email);
       if (m.workspace_id) genericWsIds.add(String(m.workspace_id));
-      sentLifetime    += Number(m.api_sent)    || 0;
-      bouncedLifetime += Number(m.api_bounced) || 0;
     }
     const emailArr = [...genericEmails];
     const wsArr    = [...genericWsIds];
     const mailboxCount = emailArr.length;
 
-    // Sent + bounced: lifetime from cache (per-mailbox api_sent — EXACT for the 773).
-    // Period: per-mailbox from email_events.sender_email — the ONLY per-mailbox
-    // source. mailbox_daily_stats is workspace-level so it cannot isolate these
-    // 773 from the thousands of other Winnr mailboxes in the same workspaces —
-    // using it over-counted (7,830 was the whole workspace, not the 773).
-    // If email_events is sparse (Bison webhooks slowed ~06-15) the period reads
-    // low — that is the honest figure, not an inflated workspace total.
-    let sent = sentLifetime, bounced = bouncedLifetime;
+    // Sent + bounced: use mailbox_daily_stats (synced from Bison breakdownOfEventsByDate)
+    // filtered to the Winnr Generic workspace IDs + supplier='Winnr'. Bison's per-mailbox
+    // emails_sent_count is 0 for these mailboxes and email_events webhooks stopped ~06-15,
+    // so mailbox_daily_stats is the only reliable source. Winnr Generic domains map to
+    // dedicated Bison workspaces, so workspace+supplier filter is accurate.
+    let sent = 0, bounced = 0;
     let dailySeries = [];
-    if (!lifetime && emailArr.length) {
+    if (wsArr.length) {
+      const win = lifetime ? '' : `AND date >= (CURRENT_DATE - ($2::int - 1))`;
+      const params = lifetime ? [wsArr] : [wsArr, days];
       const ds = await pgdb.query(`
-        SELECT (event_at AT TIME ZONE 'UTC')::date::text AS date,
-               COUNT(*) FILTER (WHERE event_type = 'email_send')::int AS sent,
-               COUNT(*) FILTER (WHERE event_type = 'bounce')::int     AS bounced
-        FROM email_events
-        WHERE lower(sender_email) = ANY($1)
-          AND event_at >= (CURRENT_DATE - ($2::int - 1))
-        GROUP BY 1 ORDER BY 1
-      `, [emailArr, days]);
+        SELECT date::text, SUM(sent)::int AS sent, SUM(bounced)::int AS bounced
+        FROM mailbox_daily_stats
+        WHERE workspace_id = ANY($1) AND LOWER(supplier) = 'winnr' ${win}
+        GROUP BY date ORDER BY date
+      `, params);
       sent    = ds.rows.reduce((a,r)=>a+(r.sent||0), 0);
       bounced = ds.rows.reduce((a,r)=>a+(r.bounced||0), 0);
-      dailySeries = ds.rows;
+      if (!lifetime) dailySeries = ds.rows;
     }
 
     // Human replies + OOO from unibox_replies, windowed to period
