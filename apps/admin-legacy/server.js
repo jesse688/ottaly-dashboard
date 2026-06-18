@@ -9673,14 +9673,16 @@ app.get('/api/stats/domain-sets', requireSession, async (req, res) => {
       'saleslytalents.biz','saleslytalents.org','sokinfinancial.org','springavenue.org',
       'springdrivepro.com','springdrives.net','thereportspro.com',
     ]);
-    function rootDomainOf(email) {
-      const host = (email || '').split('@')[1] || '';
-      const labels = host.split('.');
-      return host.endsWith('.co.uk') ? labels.slice(-3).join('.') : labels.slice(-2).join('.');
+    function rootDomainOf(host) {
+      const h = (host || '').toLowerCase();
+      const labels = h.split('.');
+      return h.endsWith('.co.uk') ? labels.slice(-3).join('.') : labels.slice(-2).join('.');
     }
     const winnrWsIds = new Set();
     for (const m of (_mailboxCache.mailboxes || [])) {
-      if (m.email && m.workspace_id && WINNR_ROOT_DOMAINS.has(rootDomainOf(m.email))) {
+      // m.domain = full host e.g. "hq.azurianstudio.biz"; extract root to match CSV
+      const root = rootDomainOf(m.domain || (m.email || '').split('@')[1]);
+      if (root && m.workspace_id && WINNR_ROOT_DOMAINS.has(root)) {
         winnrWsIds.add(m.workspace_id);
       }
     }
