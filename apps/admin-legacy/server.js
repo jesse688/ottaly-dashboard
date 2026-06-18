@@ -9660,26 +9660,33 @@ app.get('/api/stats/domain-sets', requireSession, async (req, res) => {
     const clean       = rows.filter(r => !r.is_blacklisted).map(r => r.domain);
     // Map domain → workspace_id for client-side bucketing
     const domainWs    = Object.fromEntries(rows.map(r => [r.domain, r.workspace_id]));
-    const winnr = [
-      'redwoodcompliancegroup.com','redwoodcomplianceservices.com',
-      'redwoodcomplianceadvisors.com','sokinfinancial.org',
-      'redwoodcomplianceadvisor.com','redwoodcomplianceconsultant.com','juriscales.com',
-      'getsolarsupportdept.com','realsolarsupportdept.net','findsolarsupportdept.net',
-      'azurianstudio.biz','gohoponstage.biz','nelsonrecords.com',
-      'saleslytalents.org','saleslytalents.biz','springavenue.org',
-      'juriscales.net','juriscales.org','consultantscenter.org',
-      'consultantssystems.com','consultantstech.org',
-      'springdrivepro.com','springdrives.net',
-      'getmktresearch.com','goprovenresearch.com',
-      'mktstudy.com','radcliffestudy.com',
-      'getprovenreports.com','getsumterreports.com',
-      'mktanalyze.com','thereportspro.com',
-      'radcliffeinquiry.com','radclifferesearchcenter.com',
-      // thehydrationworkplace.co.uk / the-hydration-water.co.uk excluded —
-      // Hydration Company mailboxes were never uploaded to Winnr Generic tags
-      'marketresearchtech.org',
-    ];
-    res.json({ blacklisted, clean, winnr, domainWs });
+    // Winnr Generic mailboxes were uploaded to these specific Bison workspaces.
+    // Matched by pv (workspace_id) so the frontend can filter rows directly
+    // without needing domain_health entries for the Winnr sending domains.
+    // HydrationCompany (pv 69525a0eceae00718efdaeaa) excluded — their mailboxes
+    // were never uploaded to Winnr Generic tags.
+    const winnrWorkspaceIds = new Set([
+      '6',                          // ByboDigital
+      '69a9db307af7ef2854f57637',   // ButterflyEco
+      '6a15cdb4e4f1d4a2e6d6062a',   // Shire
+      '6a15cda912293dbfe5eab6c3',   // MDH
+      '6a108e72b20829cbce44fa6c',   // Meades
+      '6a108e69cfbd57f86dbea524',   // Lending Team
+      '6a0e29d0d004be93be3f33f2',   // Bubble
+      '6a0cc49a4a80688441614dfb',   // MagnaMoney
+      '69ffaf6904ca7138af16013a',   // Bruud
+      '69c43d1e07bf312ff0026643',   // GXI Furniture
+      '69c43d1407bf312ff0026642',   // GXI
+      '6a19a054d42a3f59aac110d6',   // LVM
+      '695259c3d6154e27d164bcf7',   // Indigo
+      '699714b02f0830a7148fcf3e',   // Enviro
+      '695259dc8de377db7577dc45',   // PPC
+      '697e20f02db8460f8ba68792',   // Jumping Spider
+      '69a686632f5aaca7d9602c1f',   // Animo
+      '6a1d40b3bb80380c1be750c6',   // ButterflyEco SOP
+      '6989ac90bb085fcd05167fc9',   // Josh - Commercial Flooring
+    ]);
+    res.json({ blacklisted, clean, winnr: [], winnrWorkspaceIds: [...winnrWorkspaceIds], domainWs });
   } catch (err) {
     console.error('[stats-domain-sets]', err.message);
     res.status(500).json({ error: 'Database error' });

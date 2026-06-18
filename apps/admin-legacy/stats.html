@@ -321,31 +321,28 @@ let _partialTries = 0;
 const MAX_PARTIAL_TRIES = 3;  // after this, render whatever we have rather than spin forever
 
 // ── Mailbox-set filter ──────────────────────────────────────────────────────
-// Filters the workspace table by which sending domains the workspace uses.
-// Domain sets come from /api/stats/domain-sets (domain_health + hardcoded Winnr list).
-// Filtering is purely client-side after the initial fetch.
 let _mailboxSet = 'all';
-let _domainSets = null; // { blacklisted:[], clean:[], winnr:[], domainWs:{} }
-// workspace_id → set membership: 'blacklisted' | 'clean' | 'winnr' | null
-let _wsMailboxSet = {};
+let _domainSets = null;
+let _wsMailboxSet = {}; // workspace_id → Set of memberships
 
 async function loadDomainSets() {
   try {
     const r = await fetch('/api/stats/domain-sets');
     if (!r.ok) return;
     _domainSets = await r.json();
-    // Build workspace → set map.
-    // A workspace can appear in multiple sets (e.g. both clean + winnr) — we
-    // store all that apply so each filter shows the right rows.
     const map = {};
+    // Domain-based sets (blacklisted / clean) — keyed via domainWs lookup
     const tag = (domain, set) => {
       const ws = _domainSets.domainWs[domain];
       if (!ws) return;
       (map[ws] ||= new Set()).add(set);
     };
-    _domainSets.blacklisted.forEach(d => tag(d, 'blacklisted'));
-    _domainSets.clean.forEach(d => tag(d, 'clean'));
-    _domainSets.winnr.forEach(d => tag(d, 'winnr'));
+    (_domainSets.blacklisted || []).forEach(d => tag(d, 'blacklisted'));
+    (_domainSets.clean       || []).forEach(d => tag(d, 'clean'));
+    // Winnr — matched directly by workspace_id, no domain lookup needed
+    (_domainSets.winnrWorkspaceIds || []).forEach(wsId => {
+      (map[wsId] ||= new Set()).add('winnr');
+    });
     _wsMailboxSet = map;
     updateMailboxSetNote();
   } catch { /* non-critical */ }
@@ -364,11 +361,12 @@ function updateMailboxSetNote() {
   if (!el || !_domainSets) return;
   if (_mailboxSet === 'all') { el.textContent = ''; return; }
   const count = {
-    blacklisted: _domainSets.blacklisted.length,
-    clean:       _domainSets.clean.length,
-    winnr:       _domainSets.winnr.length,
+    blacklisted: (_domainSets.blacklisted || []).length,
+    clean:       (_domainSets.clean || []).length,
+    winnr:       (_domainSets.winnrWorkspaceIds || []).length,
   }[_mailboxSet] || 0;
-  el.textContent = `${count} domain${count !== 1 ? 's' : ''}`;
+  const unit = _mailboxSet === 'winnr' ? 'workspace' : 'domain';
+  el.textContent = `${count} ${unit}${count !== 1 ? 's' : ''}`;
 }
 
 // Returns true if workspace should be shown under current mailbox-set filter.
