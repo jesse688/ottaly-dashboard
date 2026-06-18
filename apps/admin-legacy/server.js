@@ -4628,10 +4628,10 @@ async function activePerformanceWorkspaces() {
 // historic (PlusVibe-era) numbers. sent/bounce/contacted always stay from Bison —
 // the portal doesn't track sends. Leads are unchanged (revenueCache/esp_leads).
 //
-//   replies    = HUMAN replies  (interested + not_interested + question + unsubscribe)
-//   oooReplies = ooo_auto_reply
+//   replies    = ALL replies except warmup (human + OOO + auto_reply + bounces etc.)
+//   oooReplies = ooo_auto_reply (subset of replies, for breakdown display)
 //   posReplies = interested  (the "positive reply" the RTL view keys on)
-//   warmup is EXCLUDED entirely.
+//   warmup is EXCLUDED entirely (Bison warmup tag only).
 //
 // One batched query for all needed (wsId,date) pairs (keyed off received_at::date),
 // so there's no per-day N+1. Returns Map "wsId|date" -> {replies,oooReplies,posReplies}.
@@ -4649,8 +4649,7 @@ async function fetchPortalReplyCounts(wsIds, dates) {
     const { rows } = await pgdb.query(
       `SELECT workspace_id AS ws,
               to_char(received_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS date,
-              COUNT(*) FILTER (WHERE COALESCE(admin_label, category)
-                       IN ('interested','not_interested','question','unsubscribe'))::int AS replies,
+              COUNT(*) FILTER (WHERE COALESCE(admin_label, category) NOT IN ('warmup','warm_up'))::int AS replies,
               COUNT(*) FILTER (WHERE COALESCE(admin_label, category) = 'ooo_auto_reply')::int AS ooo,
               COUNT(*) FILTER (WHERE COALESCE(admin_label, category) = 'interested')::int AS pos
          FROM unibox_replies

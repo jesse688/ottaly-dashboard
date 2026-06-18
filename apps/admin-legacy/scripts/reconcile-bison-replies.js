@@ -147,10 +147,20 @@ async function getAllReplies(wsId, since, folder = 'all') {
 
         await pool.query(`
           INSERT INTO unibox_replies
-            (workspace_id, sender_email, mailbox_email, subject, category, folder, received_at, raw)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-          ON CONFLICT DO NOTHING
-        `, [workspaceId, senderEmail, mailboxEmail, subject, category, folder, receivedAt, JSON.stringify(reply)]);
+            (bison_team_id, bison_reply_id, lead_email,
+             workspace_id, sender_email, mailbox_email, subject, category, folder,
+             received_at, raw, ingest_source,
+             bison_interested, bison_automated_reply, sender_email_id)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'reconciler',$12,$13,$14)
+          ON CONFLICT (bison_team_id, bison_reply_id) DO NOTHING
+        `, [
+          wsId, String(reply.id), senderEmail,
+          workspaceId, senderEmail, mailboxEmail,
+          subject, category, folder.toLowerCase(),
+          receivedAt, JSON.stringify(reply),
+          !!reply.interested, !!reply.automated_reply,
+          reply.sender_email_id ? String(reply.sender_email_id) : null,
+        ]);
 
         existingKeys.add(key);
         totalInserted++;
