@@ -25,11 +25,12 @@ export async function GET(req: NextRequest) {
   const catParam = url.searchParams.get('category') ?? ''
   const category = (CATEGORIES as readonly string[]).includes(catParam) ? catParam : ''
 
-  // Firehose: folder=all (or searching / category-filtering) looks ACROSS all
-  // folders. Otherwise scope to the selected folder.
+  // Firehose: folder=all (or free-text searching) looks ACROSS all folders.
+  // Category filtering stays scoped to the current folder so chips act as
+  // sub-filters within the tab, not cross-folder searches.
   const params: unknown[] = []
   let folderFilter: string
-  if (q || category || folderParam === 'all') {
+  if (q || folderParam === 'all') {
     folderFilter = 'TRUE'
   } else {
     params.push(folder)
