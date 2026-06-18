@@ -91,24 +91,30 @@ async function handle(req: NextRequest, apply: boolean) {
     })
   }
 
-  // 1) Hide Bison-confirmed automated.
+  // Default action = HIDE only: remove everything Bison tagged as automated from
+  // the working queues. The PV-era warm-up re-queue (Gemini rescue) is opt-in via
+  // ?mode=full, since Gemini over-calls those as interested.
+  const mode = new URL(req.url).searchParams.get('mode') ?? 'hide'
+
   const hidden = await pool.query(
     `UPDATE unibox_replies SET folder = 'warmup', updated_at = NOW()
       WHERE ${HIDE} RETURNING id`
   )
 
-  // 2) Re-queue our-tagged warm-ups for AI re-classification.
-  const requeued = await pool.query(
-    `UPDATE unibox_replies
-        SET classify_state = 'pending', classify_next_at = NULL, classify_attempts = 0,
-            folder = 'inbox', category = NULL, ai_model = NULL, ai_reasoning = NULL,
-            updated_at = NOW()
-      WHERE ${REQUEUE} RETURNING id`
-  )
+  let requeued = { rowCount: 0 } as { rowCount: number | null }
+  if (mode === 'full') {
+    requeued = await pool.query(
+      `UPDATE unibox_replies
+          SET classify_state = 'pending', classify_next_at = NULL, classify_attempts = 0,
+              folder = 'inbox', category = NULL, ai_model = NULL, ai_reasoning = NULL,
+              updated_at = NOW()
+        WHERE ${REQUEUE} RETURNING id`
+    )
+  }
 
   return NextResponse.json({
     ok: true,
-    mode: 'apply',
+    mode: mode === 'full' ? 'apply-full' : 'apply-hide-only',
     automated_hidden: hidden.rowCount ?? 0,
     warmups_requeued_for_ai: requeued.rowCount ?? 0,
   })
