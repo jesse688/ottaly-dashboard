@@ -77,12 +77,20 @@ const COLOR_MAP: Record<string, string> = {
   purple: 'bg-purple-400', pink: 'bg-pink-400', orange: 'bg-orange-400',
   cyan: 'bg-cyan-400', lime: 'bg-lime-400', rose: 'bg-rose-400',
   green: 'bg-green-400', blue: 'bg-blue-400', teal: 'bg-teal-400',
-  red: 'bg-red-400', gray: 'bg-gray-400', yellow: 'bg-yellow-400',
+  red: 'bg-red-400', yellow: 'bg-yellow-400', indigo: 'bg-indigo-400',
+  amber: 'bg-amber-400', sky: 'bg-sky-400', violet: 'bg-violet-400',
+  fuchsia: 'bg-fuchsia-400', emerald: 'bg-emerald-400', gray: 'bg-gray-400',
 }
 const COLOR_BADGE: Record<string, string> = {
   purple: 'bg-purple-100 text-purple-700', pink: 'bg-pink-100 text-pink-700',
   orange: 'bg-orange-100 text-orange-700', cyan: 'bg-cyan-100 text-cyan-700',
   lime: 'bg-lime-100 text-lime-700', rose: 'bg-rose-100 text-rose-700',
+  green: 'bg-green-100 text-green-700', blue: 'bg-blue-100 text-blue-700',
+  teal: 'bg-teal-100 text-teal-700', red: 'bg-red-100 text-red-700',
+  yellow: 'bg-yellow-100 text-yellow-700', indigo: 'bg-indigo-100 text-indigo-700',
+  amber: 'bg-amber-100 text-amber-700', sky: 'bg-sky-100 text-sky-700',
+  violet: 'bg-violet-100 text-violet-700', fuchsia: 'bg-fuchsia-100 text-fuchsia-700',
+  emerald: 'bg-emerald-100 text-emerald-700', gray: 'bg-gray-100 text-gray-700',
 }
 const CUSTOM_COLORS = Object.keys(COLOR_BADGE)
 
