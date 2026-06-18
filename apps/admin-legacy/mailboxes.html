@@ -1677,11 +1677,10 @@ async function loadWinnrGenericCard(p) {
     + `<span style="color:#6B7280">${num(s.bounces_soft)} soft</span></div>`;
   wrap.innerHTML = `<div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:14px 16px;border-top:3px solid #6366F1">
     <div style="font-size:13px;font-weight:700;margin-bottom:8px">Winnr Generic <span style="font-weight:400;color:var(--muted);font-size:11px">· ${num(s.mailboxes)} mailboxes</span></div>
-    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px">
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
       <div><div style="font-size:18px;font-weight:700">${num(s.sent)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Sent</div></div>
-      <div><div style="font-size:18px;font-weight:700;color:#059669">${num(s.human_replies)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Human replies</div></div>
-      <div><div style="font-size:18px;font-weight:700;color:#059669">${pct(s.human_replies, s.sent)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Reply rate</div></div>
-      <div><div style="font-size:18px;font-weight:700;color:#0EA5E9">${num(s.replies_with_ooo)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Replies + OOO</div></div>
+      <div><div style="font-size:18px;font-weight:700;color:#059669">${pct(s.human_replies, s.sent)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">RR (human only)</div></div>
+      <div><div style="font-size:18px;font-weight:700;color:#0EA5E9">${pct(s.replies_with_ooo, s.sent)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">RR incl. OOO + auto</div></div>
       <div><div style="font-size:18px;font-weight:700;color:${s.sent>0&&(s.bounced/s.sent)>=0.05?'#DC2626':'var(--text)'}">${pct(s.bounced, s.sent)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Bounce rate</div></div>
     </div>${hbs}
   </div>`;
