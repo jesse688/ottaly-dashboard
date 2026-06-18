@@ -106,17 +106,30 @@ async function handle(req: NextRequest, apply: boolean) {
        FROM unibox_replies
       WHERE ${SAFE} AND folder IN ('inbox','review','unmapped')`
   )
+  // ?sampleFolder=review focuses the sample list on one folder so we can verify
+  // the riskier Review matches in context before applying.
+  const sampleFolder = url.searchParams.get('sampleFolder')
   const matched: string[] = []
   const byFolder: Record<string, number> = {}
-  const samples: { email: string; subject: string; tag: string }[] = []
+  const samples: { folder: string; email: string; subject: string; tag: string; context: string }[] = []
   for (const r of rows.rows) {
     const hay = `${r.subject ?? ''}\n${r.body ?? ''}`
     const m = re.exec(hay)
     if (!m) continue
     matched.push(r.id as string)
     byFolder[r.folder as string] = (byFolder[r.folder as string] ?? 0) + 1
-    if (samples.length < 15) {
-      samples.push({ email: r.lead_email as string, subject: (r.subject as string ?? '').slice(0, 60), tag: m[1] })
+    const wantSample = !sampleFolder || r.folder === sampleFolder
+    if (wantSample && samples.length < 20) {
+      // ±60 chars around the matched tag, so we can SEE it in its sentence.
+      const idx = Math.max(0, (m.index ?? 0) - 60)
+      const context = hay.slice(idx, (m.index ?? 0) + m[0].length + 60).replace(/\s+/g, ' ').trim()
+      samples.push({
+        folder: r.folder as string,
+        email: r.lead_email as string,
+        subject: (r.subject as string ?? '').slice(0, 60),
+        tag: m[1],
+        context,
+      })
     }
   }
 
