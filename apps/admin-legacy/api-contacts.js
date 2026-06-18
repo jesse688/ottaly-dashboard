@@ -568,6 +568,11 @@ module.exports = (db) => {
         cooldownWorkspace: rest.cooldownWorkspace,
         numEmployeesRanges: rest.numEmployeesRanges,
         maxPerCompany,
+        chStatus: rest.chStatus,
+        chInsolvency: rest.chInsolvency,
+        chCharges: rest.chCharges,
+        chOverdue: rest.chOverdue,
+        chOnlyEnriched: rest.chOnlyEnriched,
       };
 
       // Master exclusions per client — when a target client is selected, load
