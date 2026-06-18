@@ -9639,6 +9639,52 @@ app.get('/api/stats/bounce-breakdown', requireSession, async (req, res) => {
   }
 });
 
+// Returns three domain sets for the stats page mailbox-set filter:
+//   blacklisted  — domains with at least one DBL hit in domain_health
+//   clean        — domains in domain_health with no DBL hit
+//   winnr        — hardcoded Winnr client sending domains
+// Workspaces on the stats page are bucketed client-side by matching
+// their sender_email domains against these sets.
+app.get('/api/stats/domain-sets', requireSession, async (req, res) => {
+  try {
+    const pgdb = req.app.locals.pgDb;
+    if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
+    const { rows } = await pgdb.query(
+      `SELECT domain, workspace_id,
+              (blacklists IS NOT NULL AND jsonb_array_length(blacklists::jsonb) > 0) AS is_blacklisted
+       FROM domain_health
+       WHERE ignored_at IS NULL
+       ORDER BY domain`
+    );
+    const blacklisted = rows.filter(r => r.is_blacklisted).map(r => r.domain);
+    const clean       = rows.filter(r => !r.is_blacklisted).map(r => r.domain);
+    // Map domain → workspace_id for client-side bucketing
+    const domainWs    = Object.fromEntries(rows.map(r => [r.domain, r.workspace_id]));
+    const winnr = [
+      'redwoodcompliancegroup.com','redwoodcomplianceservices.com',
+      'redwoodcomplianceadvisors.com','sokinfinancial.org',
+      'redwoodcomplianceadvisor.com','redwoodcomplianceconsultant.com','juriscales.com',
+      'getsolarsupportdept.com','realsolarsupportdept.net','findsolarsupportdept.net',
+      'azurianstudio.biz','gohoponstage.biz','nelsonrecords.com',
+      'saleslytalents.org','saleslytalents.biz','springavenue.org',
+      'juriscales.net','juriscales.org','consultantscenter.org',
+      'consultantssystems.com','consultantstech.org',
+      'springdrivepro.com','springdrives.net',
+      'getmktresearch.com','goprovenresearch.com',
+      'mktstudy.com','radcliffestudy.com',
+      'getprovenreports.com','getsumterreports.com',
+      'mktanalyze.com','thereportspro.com',
+      'radcliffeinquiry.com','radclifferesearchcenter.com',
+      'thehydrationworkplace.co.uk','the-hydration-water.co.uk',
+      'marketresearchtech.org',
+    ];
+    res.json({ blacklisted, clean, winnr, domainWs });
+  } catch (err) {
+    console.error('[stats-domain-sets]', err.message);
+    res.status(500).json({ error: 'Database error' });
+  }
+});
+
 // ─────────────────────────────────────────────────────────────────────
 // Google Postmaster Tools — daily domain + IP reputation, spam rate
 // ─────────────────────────────────────────────────────────────────────

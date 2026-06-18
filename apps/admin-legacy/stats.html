@@ -74,8 +74,8 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-h
 .all-card .client-row{background:#f4f6fc}
 .all-card .client-name{color:var(--navy-dark);font-weight:700}
 /* Recipient-provider selector + cards */
-.prov-tab{padding:4px 13px;border:1px solid var(--border);background:#fff;border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;color:var(--muted);transition:all .15s}
-.prov-tab.active{background:var(--navy-dark);color:#fff;border-color:var(--navy-dark)}
+.prov-tab,.mset-tab{padding:4px 13px;border:1px solid var(--border);background:#fff;border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;color:var(--muted);transition:all .15s}
+.prov-tab.active,.mset-tab.active{background:var(--navy-dark);color:#fff;border-color:var(--navy-dark)}
 .prov-metric{background:#fafbfd;border:1px solid var(--border);border-radius:8px;padding:.6rem .75rem;text-align:center}
 .prov-metric .pm-val{font-size:18px;font-weight:700;color:var(--navy-dark)}
 .prov-metric .pm-lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-top:2px}
@@ -135,6 +135,18 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-h
       <span id="providerNote" style="margin-left:auto;font-size:11px;color:var(--muted)" title="'All' totals match the per-client table exactly (same Bison daily source). Bison has no provider breakdown, so the split across Google/Outlook/Other/Unknown is estimated from the captured email_events recipient-MX ratios and apportioned to the true total. Coverage = share of sends the event log captured.">by recipient MX · sends in period</span>
     </div>
     <div id="providerCards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.6rem"></div>
+  </div>
+
+  <!-- Mailbox set filter — which sending domains to include -->
+  <div id="mailboxSetPanel" style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.75rem 1rem;margin-bottom:1.25rem;display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
+    <span style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)">Mailbox set</span>
+    <div style="display:flex;gap:.25rem;flex-wrap:wrap">
+      <button class="mset-tab active" data-mset="all"         onclick="setMailboxSet('all')">All</button>
+      <button class="mset-tab"        data-mset="clean"       onclick="setMailboxSet('clean')">Non-blacklisted</button>
+      <button class="mset-tab"        data-mset="blacklisted" onclick="setMailboxSet('blacklisted')">Blacklisted domains</button>
+      <button class="mset-tab"        data-mset="winnr"       onclick="setMailboxSet('winnr')">Winnr mailboxes</button>
+    </div>
+    <span id="mailboxSetNote" style="margin-left:auto;font-size:11px;color:var(--muted)"></span>
   </div>
 
   <div id="loading" class="spinner">Loading stats…</div>
@@ -240,6 +252,7 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:false})).then(s=>{
   const _so = document.getElementById('signOutBtn'); if (_so) _so.style.display = '';
   setPeriod('7d');
   startAutoRefresh();
+  loadDomainSets();
 });
 
 function fmt(n, dec=1) {
@@ -306,6 +319,65 @@ let _refreshTimer = null;
 let _partialRetryTimer = null;
 let _partialTries = 0;
 const MAX_PARTIAL_TRIES = 3;  // after this, render whatever we have rather than spin forever
+
+// ── Mailbox-set filter ──────────────────────────────────────────────────────
+// Filters the workspace table by which sending domains the workspace uses.
+// Domain sets come from /api/stats/domain-sets (domain_health + hardcoded Winnr list).
+// Filtering is purely client-side after the initial fetch.
+let _mailboxSet = 'all';
+let _domainSets = null; // { blacklisted:[], clean:[], winnr:[], domainWs:{} }
+// workspace_id → set membership: 'blacklisted' | 'clean' | 'winnr' | null
+let _wsMailboxSet = {};
+
+async function loadDomainSets() {
+  try {
+    const r = await fetch('/api/stats/domain-sets');
+    if (!r.ok) return;
+    _domainSets = await r.json();
+    // Build workspace → set map.
+    // A workspace can appear in multiple sets (e.g. both clean + winnr) — we
+    // store all that apply so each filter shows the right rows.
+    const map = {};
+    const tag = (domain, set) => {
+      const ws = _domainSets.domainWs[domain];
+      if (!ws) return;
+      (map[ws] ||= new Set()).add(set);
+    };
+    _domainSets.blacklisted.forEach(d => tag(d, 'blacklisted'));
+    _domainSets.clean.forEach(d => tag(d, 'clean'));
+    _domainSets.winnr.forEach(d => tag(d, 'winnr'));
+    _wsMailboxSet = map;
+    updateMailboxSetNote();
+  } catch { /* non-critical */ }
+}
+
+function setMailboxSet(s) {
+  _mailboxSet = s;
+  document.querySelectorAll('.mset-tab').forEach(b =>
+    b.classList.toggle('active', b.dataset.mset === s));
+  updateMailboxSetNote();
+  if (_data) renderClients();
+}
+
+function updateMailboxSetNote() {
+  const el = document.getElementById('mailboxSetNote');
+  if (!el || !_domainSets) return;
+  if (_mailboxSet === 'all') { el.textContent = ''; return; }
+  const count = {
+    blacklisted: _domainSets.blacklisted.length,
+    clean:       _domainSets.clean.length,
+    winnr:       _domainSets.winnr.length,
+  }[_mailboxSet] || 0;
+  el.textContent = `${count} domain${count !== 1 ? 's' : ''}`;
+}
+
+// Returns true if workspace should be shown under current mailbox-set filter.
+function wsPassesMailboxFilter(wsId) {
+  if (_mailboxSet === 'all') return true;
+  const sets = _wsMailboxSet[wsId];
+  if (!sets) return false;
+  return sets.has(_mailboxSet);
+}
 
 // ── Recipient-provider strip (additive; independent of the table below) ──
 let _provider = 'all';
@@ -692,9 +764,14 @@ function renderClients() {
   }
   document.getElementById('content').style.display = '';
 
+  // Apply mailbox-set filter (hide workspaces not using the selected domain set).
+  // The "All Workspaces" aggregate is always shown; individual rows are filtered.
+  const wsFiltered = _mailboxSet === 'all' ? wsRaw
+    : wsRaw.filter(w => wsPassesMailboxFilter(w.workspace_id));
+
   // Prepend the "All Workspaces" aggregate row above the individual clients.
-  const allRow = buildAllWorkspaces(wsRaw);
-  const ws = allRow ? [allRow, ...wsRaw] : wsRaw;
+  const allRow = buildAllWorkspaces(wsFiltered);
+  const ws = allRow ? [allRow, ...wsFiltered] : wsFiltered;
   _rows = ws;   // includes the synthetic row, so toggles can find it
 
   // Winning provider per client (+ change detection / toast).
