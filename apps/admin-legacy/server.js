@@ -10873,6 +10873,8 @@ app.get('/api/mailboxes/winnr-generic-stats', requireSession, async (req, res) =
                LEFT(COALESCE(body_preview, raw->>'text_body', ''), 160) AS snippet
         FROM unibox_replies
         WHERE lower(mailbox_email) = ANY($1) ${rwin}
+          AND COALESCE(admin_label, category) NOT IN ('warmup','warm_up')
+          AND folder NOT IN ('warmup','sent','bounced','spam')
         ORDER BY received_at DESC
       `, rparams);
       const byCat = {};
