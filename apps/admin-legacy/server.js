@@ -1601,7 +1601,13 @@ function extractJson(text) {
 // real indexed company sites — far better than asking an LLM to recall a small
 // UK company's domain. SEARXNG_URL overrides the default host.
 const SEARXNG_URL = (process.env.SEARXNG_URL || 'https://ottaly-searxng.oix3xv.easypanel.host').replace(/\/$/, '');
-const SEARXNG_ENGINES = process.env.SEARXNG_ENGINES || 'mojeek';
+// Engine priority for company-URL lookup. Mojeek gives the cleanest company
+// sites; bing survives the datacenter IP more often but is noisy (the token
+// scorer filters its junk). Tried in order, first confident match wins. On a
+// datacenter IP all engines block intermittently — when they do, we fall back
+// to Gemini. (A residential proxy would fix the blocking but is deliberately
+// NOT used here so SearXNG never touches Reacher's metered proxy quota.)
+const SEARXNG_ENGINES = process.env.SEARXNG_ENGINES || 'mojeek,bing';
 
 // Directory / aggregator / junk domains that are never a company's own site.
 const NON_COMPANY_DOMAINS = new Set([
@@ -1635,41 +1641,47 @@ function companyNameTokens(name) {
 async function searxLookupDomain(company) {
   const name = (typeof company === 'string') ? company : company.company_name;
   if (!name) return null;
-  try {
-    const url = `${SEARXNG_URL}/search?q=${encodeURIComponent(name)}&format=json&engines=${encodeURIComponent(SEARXNG_ENGINES)}`;
-    const r = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(12000) });
-    if (!r.ok) return null;
-    const j = await r.json();
-    const results = Array.isArray(j?.results) ? j.results : [];
-    if (!results.length) return null;
-
-    const tokens = companyNameTokens(name);
-    const scored = [];
-    const seen = new Set();
-    for (let i = 0; i < results.length; i++) {
-      let host;
-      try { host = new URL(results[i].url).hostname.toLowerCase().replace(/^www\./, ''); } catch { continue; }
-      const root = searxRootDomain(host);
-      if (NON_COMPANY_DOMAINS.has(root) || NON_COMPANY_DOMAINS.has(host)) continue;
-      if (seen.has(root)) continue;
-      seen.add(root);
-      const domainText = root.replace(/\.[a-z.]+$/, ''); // strip TLD for token matching
-      // score: how many company tokens appear in the domain + rank bonus + tld bonus
-      let score = 0;
-      for (const t of tokens) if (domainText.includes(t)) score += 3;
-      // also reward whole-name-no-spaces match (e.g. "rentmyplaceuk" for "Rent My Place UK")
-      const compact = tokens.join('');
-      if (compact && domainText.includes(compact)) score += 4;
-      score += Math.max(0, 5 - i) * 0.5;            // earlier result = small bonus
-      if (/\.co\.uk$/.test(root) || /\.uk$/.test(root)) score += 1; // UK company → UK TLD
-      if (score > 0) scored.push({ root, score, rank: i });
+  // Try each engine in priority order; first that returns a confident match wins.
+  // On a datacenter IP engines get blocked/rate-limited unpredictably, so we
+  // fall through engine-by-engine, then return null so the caller uses Gemini.
+  // The token-scorer rejects junk (so Bing's noisy results can't produce a wrong
+  // domain — only a real name-matching domain scores > 0).
+  const tokens = companyNameTokens(name);
+  const compact = tokens.join('');
+  const engineList = SEARXNG_ENGINES.split(',').map(e => e.trim()).filter(Boolean);
+  for (const engine of engineList) {
+    try {
+      const url = `${SEARXNG_URL}/search?q=${encodeURIComponent(name)}&format=json&engines=${encodeURIComponent(engine)}`;
+      const r = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8000) });
+      if (!r.ok) continue;
+      const j = await r.json();
+      const results = Array.isArray(j?.results) ? j.results : [];
+      if (!results.length) continue; // engine blocked or no hits → next engine
+      const scored = [];
+      const seen = new Set();
+      for (let i = 0; i < results.length; i++) {
+        let host;
+        try { host = new URL(results[i].url).hostname.toLowerCase().replace(/^www\./, ''); } catch { continue; }
+        const root = searxRootDomain(host);
+        if (NON_COMPANY_DOMAINS.has(root) || NON_COMPANY_DOMAINS.has(host)) continue;
+        if (seen.has(root)) continue;
+        seen.add(root);
+        const domainText = root.replace(/\.[a-z.]+$/, ''); // strip TLD for token matching
+        let score = 0;
+        for (const t of tokens) if (domainText.includes(t)) score += 3;
+        if (compact && domainText.includes(compact)) score += 4; // "rentmyplaceuk" ← "Rent My Place UK"
+        score += Math.max(0, 5 - i) * 0.5;                       // earlier result = small bonus
+        if (/\.co\.uk$/.test(root) || /\.uk$/.test(root)) score += 1;
+        if (score > 0) scored.push({ root, score, rank: i });
+      }
+      if (!scored.length) continue; // results were all junk → try next engine
+      scored.sort((a, b) => b.score - a.score || a.rank - b.rank);
+      return scored[0].root;
+    } catch {
+      continue; // timeout/blocked → next engine
     }
-    if (!scored.length) return null;
-    scored.sort((a, b) => b.score - a.score || a.rank - b.rank);
-    return scored[0].root;
-  } catch {
-    return null;
   }
+  return null;
 }
 
 // Look up a company's website domain via Gemini using a strict responseSchema
