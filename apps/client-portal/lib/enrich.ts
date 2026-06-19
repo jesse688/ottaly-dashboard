@@ -125,10 +125,14 @@ export async function enrichUniboxReply(input: {
   try {
     // 1) Ensure a lead row exists (no label/status → not billable, not on the
     //    client dashboard, but readable by the Unibox JOIN). Idempotent.
+    // The live esp_leads table has a UNIQUE constraint on (id) — the webhook's own
+    // lead-ingest uses ON CONFLICT (id). Match it; (id, source) threw
+    // "no unique or exclusion constraint matching the ON CONFLICT specification"
+    // and 500'd the whole webhook, so the reply never stored.
     await pool.query(
       `INSERT INTO esp_leads (id, workspace_id, campaign_id, source, email, created_at, updated_at)
        VALUES ($1,$2,NULL,'bison',$3,NOW(),NOW())
-       ON CONFLICT (id, source) DO NOTHING`,
+       ON CONFLICT (id) DO NOTHING`,
       [leadId, input.workspaceId, email]
     )
 

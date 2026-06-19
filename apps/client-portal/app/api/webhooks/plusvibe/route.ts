@@ -229,7 +229,7 @@ async function handleBison(raw: Record<string, unknown>, deliveryId: string | nu
          lead.email, lead.first_name ?? null, lead.last_name ?? null,
          await leadCompanyOrNull(mappedWorkspaceId, lead.company_name), lead.status ?? null,
          eventType === 'lead_replied' ? new Date().toISOString() : null]
-      )
+      ).catch(err => console.error('[webhook/bison] lead ingest failed (non-fatal):', err))
     }
   }
 
