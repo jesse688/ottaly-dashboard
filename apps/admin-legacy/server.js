@@ -2807,33 +2807,22 @@ app.post('/api/admin/mailbox-diff', requireAdmin, (req, res) => {
 });
 
 app.get('/api/admin/mailbox-debug', requireAdmin, async (req, res) => {
-  if (!getBisonKey()) return res.status(400).json({ error: 'No Bison key configured' });
+  if (!getPvKey()) return res.status(400).json({ error: 'No PlusVibe key configured' });
   try {
-    const wsRaw = listBisonWorkspaces();
-    const workspaces = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.data || []);
-    const PER_PAGE = 200;
+    const workspaces = listBisonWorkspaces(); // array of {id,name} (PV workspace_id)
     const perWorkspace = [];
     let total = 0;
     for (const w of workspaces) {
-      let count = 0, pages = 0, firstPageLen = null, err = null, prevSig = '';
+      let count = 0, err = null;
       try {
-        for (let page = 1; page <= 300; page++) {
-          const resp = await bisonReq('/api/sender-emails', { wsId: String(w.id), params: { per_page: PER_PAGE, page } });
-          const list = Array.isArray(resp) ? resp : (resp?.data ?? []);
-          if (page === 1) firstPageLen = list.length;
-          if (!list.length) break;
-          const sig = list.map(a => a.id ?? a.email ?? '').join(',');
-          if (sig === prevSig) break; // Bison repeated the page → end
-          prevSig = sig;
-          count += list.length;
-          pages = page;
-        }
+        const list = await pvListAllAccounts(String(w.id));
+        count = list.length;
       } catch (e) { err = e.message; }
       total += count;
-      perWorkspace.push({ team_id: String(w.id), name: w.name, count, pages, first_page_len: firstPageLen, error: err });
+      perWorkspace.push({ team_id: String(w.id), name: w.name, count, error: err });
     }
     perWorkspace.sort((a, b) => b.count - a.count);
-    res.json({ total, workspace_count: workspaces.length, per_page: PER_PAGE, workspaces: perWorkspace });
+    res.json({ total, workspace_count: workspaces.length, workspaces: perWorkspace });
   } catch (err) {
     res.status(502).json({ error: err.message });
   }
@@ -3688,9 +3677,12 @@ app.get('/api/leads/:id/thread', requireAuth, async (req, res) => {
   if (!row) return res.status(404).json({ error: 'Lead not found' });
   const lead = JSON.parse(row.data);
   try {
-    var threadRaw = await bisonFetch('/api/replies/' + (lead.last_thread_id || lead.bison_reply_id) + '/conversation-thread', { wsId: lead.workspace_id });
-    var threadMsgs = [].concat(threadRaw.data && threadRaw.data.older_messages || [], threadRaw.data && threadRaw.data.current_reply ? [threadRaw.data.current_reply] : [], threadRaw.data && threadRaw.data.newer_messages || []).map(function(m) { return { id: m.id, direction: m.folder === 'Sent' ? 'OUT' : 'IN', subject: m.subject, body: { html: m.html_body, text: m.text_body }, timestamp_created: m.date_received, from_address_email: m.from_email_address, to_address_email_list: m.primary_to_email_address, is_unread: m.read ? 0 : 1 }; });
-    res.json({ source: 'bison', data: { messages: threadMsgs } });
+    // PlusVibe thread: /unibox/emails?thread_id= (fall back to ?lead= when no thread id).
+    const params = lead.last_thread_id
+      ? { thread_id: lead.last_thread_id }
+      : { lead: lead.email };
+    const data = await pvApi('/unibox/emails', { wsId: lead.workspace_id, params });
+    res.json({ source: 'plusvibe', data });
   } catch {
     res.json({
       source: 'webhook',
@@ -3714,10 +3706,20 @@ app.post('/api/leads/:id/reply', requireAuth, async (req, res) => {
   const { body } = req.body || {};
   if (!body?.trim()) return res.status(400).json({ error: 'Reply body required' });
   const body_text = typeof body === 'string' ? body : (body && body.text) || '';
+  const htmlBody = body_text.includes('<') ? body_text : `<p>${body_text.replace(/\n/g, '</p><p>')}</p>`;
   try {
-    var replyPayload = { message: (body && body.text) || body_text || '', content_type: 'text', reply_all: true };
-    var replyRes = await bisonFetch('/api/replies/' + (lead.last_thread_id || lead.bison_reply_id) + '/reply', { wsId: lead.workspace_id, method: 'POST', body: replyPayload });
-    res.json({ ok: true, result: replyRes });
+    // PlusVibe reply: POST /unibox/emails/reply
+    const result = await pvApi('/unibox/emails/reply', {
+      method: 'POST', wsId: lead.workspace_id,
+      body: {
+        reply_to_id: lead.last_email_id || lead.last_thread_id,
+        subject: `Re: ${lead.last_lead_reply_subject || lead.latest_subject || ''}`,
+        from: lead.email_account_name,
+        to: lead.email,
+        body: htmlBody,
+      },
+    });
+    res.json({ ok: true, result });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -17096,37 +17098,14 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
         for (let i = 0; i < batch.length; i += 100) {
           if (job.cancelled || job.paused) return;
           const slice = batch.slice(i, i + 100);
-          let r, d = {};
-          /* workspace switch handled by bisonReq wsId */ true;
-          var bisonLeadPayload = (slice.map(toLead))
-            // Bison requires non-empty first_name AND last_name (422s on null/""/" ").
-            // Final safety net at the payload layer so no nameless lead reaches Bison
-            // regardless of upstream filtering.
-            .filter(function(l){ return l.first_name && String(l.first_name).trim() && l.last_name && String(l.last_name).trim(); })
-            .map(function(l) {
-            var cv = [];
-            if (l.phone_number) cv.push({ name: 'phone_number', value: String(l.phone_number) });
-            if (l.city) cv.push({ name: 'city', value: String(l.city) });
-            if (l.state) cv.push({ name: 'state', value: String(l.state) });
-            if (l.country) cv.push({ name: 'country', value: String(l.country) });
-            if (l.industry) cv.push({ name: 'industry', value: String(l.industry) });
-            if (l.linkedin_person_url) cv.push({ name: 'linkedin_person_url', value: String(l.linkedin_person_url) });
-            if (l.linkedin_company_url) cv.push({ name: 'linkedin_company_url', value: String(l.linkedin_company_url) });
-            if (l.company_website) cv.push({ name: 'company_website', value: String(l.company_website) });
-            if (l.department) cv.push({ name: 'department', value: String(l.department) });
-            if (l.address_line) cv.push({ name: 'address_line', value: String(l.address_line) });
-            return { email: l.email, first_name: l.first_name || null, last_name: l.last_name || null, title: l.job_title || l.title || null, company: l.company_name || l.company || null, custom_variables: cv };
-          });
-          if (!bisonLeadPayload.length) { continue; }
-          // Ensure every custom var these leads use exists in the workspace, or Bison 422s.
-          await ensureBisonCustomVars(workspace_id, new Set(bisonLeadPayload.flatMap(function(l){ return (l.custom_variables||[]).map(function(v){ return v.name; }); })));
-          var createRes = await bisonReq('/api/leads/create-or-update/multiple', { wsId: workspace_id, method: 'POST', body: { leads: bisonLeadPayload } });
-          if (campaign_id && createRes && createRes.data) {
-            var leadIds = (createRes.data.leads || createRes.data || []).map(function(l) { return l.id; }).filter(Boolean);
-            if (leadIds.length) {
-              await bisonReq('/api/campaigns/' + campaign_id + '/leads/attach-leads', { wsId: workspace_id, method: 'POST', body: { lead_ids: leadIds } }).catch(function(e) { console.warn('[bison] campaign-assign FAILED:', e.message); });
-            }
-          }
+          let r;
+          // PlusVibe wants top-level native fields (toLead already returns them).
+          // Require non-empty first+last name. Batch add + campaign assignment in
+          // one /lead/add call: { workspace_id, campaign_id, leads }.
+          var pvLeadPayload = slice.map(toLead)
+            .filter(function(l){ return l.first_name && String(l.first_name).trim() && l.last_name && String(l.last_name).trim(); });
+          if (!pvLeadPayload.length) { continue; }
+          await pvApi('/lead/add', { method: 'POST', wsId: workspace_id, body: { workspace_id, campaign_id, leads: pvLeadPayload } });
           r = { ok: true };
           // Stamp pushed_campaigns so future verify-and-push runs against
           // this same campaign skip these contacts cleanly. Fire-and-forget
@@ -17563,10 +17542,10 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
               };
             });
           if (!pvPayload.length) { continue; }
-          for (const lead of pvPayload) {
-            await pvApi('/lead/add', { method: 'POST', wsId: workspace_id, body: { lead_list_id: campaign_id || null, ...lead } })
-              .catch(function(e) { console.warn('[pv-push] lead add failed:', e.message); });
-          }
+          // Batch add + campaign assignment in one call.
+          try {
+            await pvApi('/lead/add', { method: 'POST', wsId: workspace_id, body: { workspace_id, campaign_id, leads: pvPayload } });
+          } catch (e) { console.warn('[pv-push] lead add failed:', e.message); }
           try {
             const ids = slice.map(c => c.id).filter(Boolean);
             if (ids.length && db.stampPushedCampaign) {
@@ -19647,23 +19626,17 @@ function scheduleAudienceScoring(pgdb) {
       };
     });
     let pushed = 0;
+    // PlusVibe batch add + campaign assignment: { workspace_id, campaign_id, leads }.
     for (let i = 0; i < leads.length; i += 100) {
       const slice = leads.slice(i, i + 100);
-      for (const lead of slice) {
-        try {
-          await pvApi('/lead/add', { method: 'POST', wsId: workspace_id, body: lead });
-          pushed++;
-        } catch (e) {
-          console.warn('[ch-push] create lead failed:', e.message);
-        }
+      try {
+        await pvApi('/lead/add', { method: 'POST', wsId: workspace_id, body: { workspace_id, campaign_id, leads: slice } });
+        pushed += slice.length;
+      } catch (e) {
+        console.warn('[ch-push] create leads failed:', e.message);
       }
     }
     if (pushed > 0) {
-      try {
-        await pvApi(`/campaign/${campaign_id}/leads/add`, { method: 'POST', wsId: workspace_id, body: { emails: leads.map(l => l.email) } });
-      } catch (e) {
-        console.warn('[ch-push] add to campaign failed:', e.message);
-      }
       await db.query(`UPDATE ch_directors SET pushed_to_bison_at=NOW() WHERE id = ANY($1::int[])`, [rows.rows.map(d => d.id)]);
     }
     res.json({ pushed, skipped });
