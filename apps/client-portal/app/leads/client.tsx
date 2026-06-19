@@ -28,6 +28,7 @@ interface Lead {
   linkedin_url: string | null
   linkedin_company_url: string | null
   phone_number: string | null
+  custom_fields: { label: string; value: string }[] | null
   deal_value: string | null
   deal_notes: string | null
   client_label: string | null
@@ -908,6 +909,17 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
                 {selected.address_line && <Row icon="pin" label={selected.address_line} />}
                 {(selected.city || selected.state || selected.country) && <Row icon="pin" label={[selected.city, selected.state, selected.country].filter(Boolean).join(', ')} />}
                 {selected.linkedin_company_url && <Row icon="link" label="Company LinkedIn" href={selected.linkedin_company_url} />}
+              </Section>
+            )}
+
+            {Array.isArray(selected.custom_fields) && selected.custom_fields.some(c => c?.label && c?.value) && (
+              <Section title="More details">
+                {selected.custom_fields.filter(c => c?.label && c?.value).map((c, i) => (
+                  <div key={`cf-${i}`} className="flex items-start gap-2 mb-1.5">
+                    <span className="text-[10px] uppercase tracking-wide text-gray-400 shrink-0 mt-0.5 min-w-[80px]">{c.label}</span>
+                    <span className="text-sm text-gray-700 break-words">{c.value}</span>
+                  </div>
+                ))}
               </Section>
             )}
 
