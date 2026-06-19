@@ -10550,8 +10550,93 @@ async function reconcileBisonReplies() {
   }
 }
 
+// ── Winnr reply reconciler ────────────────────────────────────────────────────
+// Winnr mailboxes are NOT in Bison — their replies don't come via webhook.
+// This reconciler pulls from the Winnr API every 15 min and inserts into
+// unibox_replies, mapping mailbox→workspace_id from existing unibox history.
+const WINNR_API_TOKEN = process.env.WINNR_API_TOKEN || 'wnr_3wLH2RGe6NVUxgxLtLXt_XvWLaqf3ncbrFEX6wDOzwP5l';
+let _winnrReconcileRunning = false;
+
+function classifyWinnrReply(msg) {
+  const text = ((msg.subject || '') + ' ' + (msg.body || '').slice(0, 300)).toLowerCase();
+  if (/automatic reply|out of office|auto.?reply|away from|on holiday|on leave|i am currently|ooo/i.test(text)) return 'ooo_auto_reply';
+  if (/unsubscribe|remove me|opt.?out|stop emailing/i.test(text)) return 'unsubscribe';
+  return 'not_interested';
+}
+
+async function reconcileWinnrReplies() {
+  if (_winnrReconcileRunning) return;
+  const pgdb = app.locals.pgDb;
+  if (!pgdb) return;
+  _winnrReconcileRunning = true;
+  try {
+    const since = new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10);
+
+    // Build mailbox→workspace map from unibox_replies history (webhook rows have it)
+    const mapRows = await pgdb.query(`
+      SELECT lower(mailbox_email) AS mbx, workspace_id
+      FROM unibox_replies
+      WHERE mailbox_email IS NOT NULL AND workspace_id IS NOT NULL
+        AND ingest_source != 'winnr'
+      GROUP BY lower(mailbox_email), workspace_id
+      ORDER BY COUNT(*) DESC
+    `);
+    const mbxWs = new Map();
+    for (const r of mapRows.rows) if (!mbxWs.has(r.mbx)) mbxWs.set(r.mbx, r.workspace_id);
+
+    // Fetch Winnr inbox for last 2 days
+    let allMsgs = [];
+    for (let page = 1; page <= 20; page++) {
+      const url = `https://api.winnr.app/v1/inbox?exclude_warmup=true&date_from=${since}&per_page=100&page=${page}`;
+      const r = await fetch(url, { headers: { Authorization: `Bearer ${WINNR_API_TOKEN}` }, signal: AbortSignal.timeout(15000) });
+      if (!r.ok) break;
+      const d = await r.json();
+      const msgs = d.data || d.messages || d.results || [];
+      if (!Array.isArray(msgs) || !msgs.length) break;
+      allMsgs.push(...msgs);
+      if (msgs.length < 100) break;
+    }
+
+    // Existing keys to avoid dupes
+    const existing = await pgdb.query(`
+      SELECT lower(sender_email)||'|'||lower(mailbox_email) AS k
+      FROM unibox_replies WHERE ingest_source = 'winnr' AND received_at >= $1
+    `, [since]);
+    const existingSet = new Set(existing.rows.map(r => r.k));
+
+    let inserted = 0;
+    for (const msg of allMsgs) {
+      const senderEmail = (msg.from_email || '').toLowerCase().trim();
+      const mailboxEmail = (msg.mailbox || '').toLowerCase().trim();
+      if (!senderEmail || !mailboxEmail) continue;
+      const key = `${senderEmail}|${mailboxEmail}`;
+      if (existingSet.has(key)) continue;
+      const workspaceId = mbxWs.get(mailboxEmail);
+      if (!workspaceId) continue;
+      const category = classifyWinnrReply(msg);
+      await pgdb.query(`
+        INSERT INTO unibox_replies
+          (workspace_id, sender_email, mailbox_email, subject, category, folder,
+           received_at, raw, ingest_source, lead_email, bison_team_id, bison_reply_id)
+        VALUES ($1,$2,$3,$4,$5,'inbox',$6,$7,'winnr',$2,'winnr',$8)
+        ON CONFLICT DO NOTHING
+      `, [workspaceId, senderEmail, mailboxEmail, msg.subject || '', category,
+          msg.received_at, JSON.stringify(msg), String(msg.uid || msg.id)]);
+      existingSet.add(key);
+      inserted++;
+    }
+    if (inserted) console.log(`[winnr-reconcile] inserted ${inserted} missing reply row(s)`);
+  } catch (e) {
+    console.warn('[winnr-reconcile] failed:', e.message);
+  } finally {
+    _winnrReconcileRunning = false;
+  }
+}
+
 setTimeout(() => reconcileBisonReplies().catch(() => {}), 2 * 60 * 1000);
 setInterval(() => reconcileBisonReplies().catch(() => {}), 15 * 60 * 1000);
+setTimeout(() => reconcileWinnrReplies().catch(() => {}), 3 * 60 * 1000);
+setInterval(() => reconcileWinnrReplies().catch(() => {}), 15 * 60 * 1000);
 
 app.post('/api/admin/reconcile-replies', requireAdmin, async (req, res) => {
   if (_reconcileState.running) return res.json({ ok: true, alreadyRunning: true, state: _reconcileState });
