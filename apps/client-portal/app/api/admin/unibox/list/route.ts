@@ -95,6 +95,7 @@ export async function GET(req: NextRequest) {
               l.first_name, l.last_name, l.company_name AS lead_company,
               l.raw->>'job_title'            AS job_title,
               l.raw->>'industry'             AS industry,
+              l.raw->>'address'              AS address,
               l.raw->>'city'                 AS city,
               l.raw->>'state'                AS state,
               l.raw->>'country'              AS country,
@@ -102,6 +103,7 @@ export async function GET(req: NextRequest) {
               l.raw->>'linkedin_person_url'  AS linkedin_url,
               l.raw->>'linkedin_company_url' AS linkedin_company_url,
               l.raw->>'phone_number'         AS phone_number,
+              l.raw->'custom_fields'         AS custom_fields,
               -- Full HTML body (with the lead's signature/photos): prefer the cached
               -- portal_emails row, else read it straight from the reply's raw payload
               -- (unattached replies have no portal_emails row but DO have raw.html_body).
