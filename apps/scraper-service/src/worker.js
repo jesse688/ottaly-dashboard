@@ -4,6 +4,7 @@ import {
 } from './db.js'
 import { discoverDomain } from './discover.js'
 import { scrapeBatch } from './scrape.js'
+import { initProxies } from './proxies.js'
 import { normaliseDomain } from './extract.js'
 import { normaliseFields, wantsClaude, CLAUDE_FIELD_KEYS } from './fields.js'
 import { classifyBusiness, classifierAvailable, classifierProvider } from './classify.js'
@@ -139,6 +140,7 @@ async function processJob(job) {
 
 export async function runWorker() {
   await ensureSchema()
+  await initProxies()
   log(`scraper-service ready — schema ensured, AI classifier=${classifierProvider}, polling for jobs`)
 
   // Recover any job left 'running' by a crash: its pending items will be picked
