@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <meta name="theme-color" content="#050C29">
+  <title>Enrichment — Ottaly</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/ottaly.css">
+  <style>
+    :root{
+      --bg:#0d1117; --bg-inset:#010409; --panel:#161b22; --panel-2:#1c2128;
+      --border:#30363d; --border-soft:#21262d; --accent:#22d3ee; --accent-dim:#0e7490;
+      --green:#3fb950; --amber:#e3b341; --red:#f85149;
+      --text:#e6edf3; --text-hi:#f0f6fc; --muted:#8b949e; --faint:#6e7681;
+      --radius:10px; --radius-sm:7px;
+    }
+    *{margin:0;padding:0;box-sizing:border-box;}
+    body{font-family:'Inter',-apple-system,sans-serif;background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased;}
+    .main{max-width:1400px;margin:0 auto;padding:24px 28px 120px;}
+    .page-head h1{font-size:21px;font-weight:700;color:var(--text-hi);}
+    .page-head p{font-size:13px;color:var(--muted);margin-top:3px;}
+    .page-head a{color:var(--accent);text-decoration:none;}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:20px;}
+    @media(max-width:880px){.grid{grid-template-columns:1fr;}}
+    .panel{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);}
+    .panel-head{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-bottom:1px solid var(--border-soft);}
+    .panel-title{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);}
+    .panel-body{padding:16px;}
+    textarea{width:100%;height:200px;background:var(--bg-inset);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);padding:10px;font-family:ui-monospace,monospace;font-size:12px;outline:none;resize:vertical;}
+    textarea:focus{border-color:var(--accent);}
+    .hint{font-size:12px;color:var(--muted);margin-top:8px;line-height:1.6;}
+    .hint code{background:var(--panel-2);color:var(--accent);padding:1px 5px;border-radius:4px;font-size:11px;}
+    .upload{font-size:12px;color:var(--accent);cursor:pointer;}
+    .upload input{display:none;}
+    .fields{display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;}
+    .field-row{display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;}
+    .field-row input{width:15px;height:15px;accent-color:var(--accent);cursor:pointer;}
+    .field-row .ai{font-size:10px;font-weight:700;color:var(--accent);border:1px solid var(--accent-dim);border-radius:4px;padding:0 4px;}
+    .btn{display:inline-flex;align-items:center;gap:6px;padding:0 14px;height:36px;border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer;border:1px solid transparent;font-family:inherit;}
+    .btn-primary{background:var(--accent);color:#062b33;}
+    .btn-primary:hover{background:#4fdef0;}
+    .btn-secondary{background:var(--panel-2);color:var(--text);border:1px solid var(--border);}
+    .btn:disabled{opacity:.4;cursor:not-allowed;}
+    .actions{display:flex;gap:10px;margin-top:18px;align-items:center;}
+    .progress-wrap{margin-top:16px;}
+    .progress-meta{display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px;}
+    .progress-bar{height:8px;background:var(--panel-2);border-radius:6px;overflow:hidden;}
+    .progress-fill{height:100%;background:var(--accent);transition:width .3s;}
+    .progress-fill.failed{background:var(--red);}
+    table{width:100%;border-collapse:collapse;font-size:13px;}
+    thead th{text-align:left;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);padding:10px 12px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--panel);}
+    tbody td{padding:10px 12px;border-bottom:1px solid var(--border-soft);vertical-align:top;}
+    tbody tr:hover{background:var(--panel-2);}
+    .muted{color:var(--faint);}
+    .name{font-weight:600;color:var(--text-hi);}
+    .loc{font-size:11px;color:var(--muted);}
+    .status{font-size:11px;font-weight:700;text-transform:uppercase;}
+    .status.ok{color:var(--green);} .status.error{color:var(--red);} .status.pending{color:var(--muted);}
+    .truncate{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .table-scroll{overflow-x:auto;max-height:600px;overflow-y:auto;}
+    #toast{position:fixed;bottom:24px;right:24px;background:#161b22;border:1px solid var(--border);color:var(--text);padding:12px 16px;border-radius:8px;font-size:13px;display:none;box-shadow:0 8px 30px rgba(0,0,0,.4);}
+  </style>
+</head>
+<body>
+<div class="main">
+  <div class="page-head">
+    <h1>Business Enrichment</h1>
+    <p>Drop in any list of businesses — get back websites, contact details, address, type, industry and keywords. For Companies House data, use the <a href="/companies-house.html">CH Pipeline</a>.</p>
+  </div>
+
+  <div class="grid">
+    <!-- Input -->
+    <div class="panel">
+      <div class="panel-head">
+        <span class="panel-title">1. Your list</span>
+        <label class="upload">Upload CSV<input type="file" accept=".csv,text/csv" id="file"></label>
+      </div>
+      <div class="panel-body">
+        <textarea id="raw" placeholder="name,location,website
+Acme Care Ltd,Leeds,
+Smith Plumbing,Bristol,smithplumbing.co.uk"></textarea>
+        <div class="hint">CSV with a header row. Recognised columns: <code>name</code>, <code>location</code>/<code>postcode</code>, <code>website</code>. A known website skips discovery. <span id="rowCount"></span></div>
+      </div>
+    </div>
+
+    <!-- Fields -->
+    <div class="panel">
+      <div class="panel-head"><span class="panel-title">2. What to extract</span></div>
+      <div class="panel-body">
+        <div class="fields" id="fields"></div>
+        <div class="actions">
+          <button class="btn btn-primary" id="startBtn" onclick="start()">Enrich businesses</button>
+          <button class="btn btn-secondary" id="dlBtn" onclick="exportCsv()" style="display:none">Download CSV</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Progress -->
+  <div class="progress-wrap panel" id="progressPanel" style="display:none">
+    <div class="panel-body">
+      <div class="progress-meta">
+        <span><strong id="jobLabel">Job</strong> · <span id="jobStatus"></span></span>
+        <span class="muted" id="jobCounts"></span>
+      </div>
+      <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+    </div>
+  </div>
+
+  <!-- Results -->
+  <div class="panel" id="resultsPanel" style="display:none;margin-top:16px;">
+    <div class="table-scroll">
+      <table id="resultsTable"><thead></thead><tbody></tbody></table>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script src="/ch-fields-client.js"></script>
+<script>
+// ── State ────────────────────────────────────────────────────────────────
+let rows = [];
+let fields = DEFAULT_FIELD_KEYS.slice();
+let activeJob = null;
+let results = [];
+let pollTimer = null;
+
+// ── Toast ────────────────────────────────────────────────────────────────
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.style.display = 'block';
+  clearTimeout(toast._t); toast._t = setTimeout(()=>{ t.style.display='none'; }, 3500);
+}
+
+// ── Field picker ─────────────────────────────────────────────────────────
+function renderFields(){
+  const host = document.getElementById('fields');
+  host.innerHTML = '';
+  for(const f of FIELD_CATALOG){
+    const id = 'f_' + f.key;
+    const label = document.createElement('label');
+    label.className = 'field-row';
+    label.innerHTML =
+      `<input type="checkbox" id="${id}" ${fields.includes(f.key)?'checked':''}>` +
+      `<span>${f.label}</span>` + (f.claude ? `<span class="ai">AI</span>` : '');
+    label.querySelector('input').addEventListener('change', e=>{
+      if(e.target.checked){ if(!fields.includes(f.key)) fields.push(f.key); }
+      else { fields = fields.filter(k=>k!==f.key); }
+    });
+    host.appendChild(label);
+  }
+}
+
+// ── CSV parsing (quotes, commas, CRLF) ─────────────────────────────────────
+function parseCsv(text){
+  const grid=[]; let row=[],cell='',q=false;
+  for(let i=0;i<text.length;i++){
+    const ch=text[i];
+    if(q){ if(ch==='"'){ if(text[i+1]==='"'){cell+='"';i++;} else q=false; } else cell+=ch; }
+    else if(ch==='"') q=true;
+    else if(ch===',') { row.push(cell); cell=''; }
+    else if(ch==='\n'||ch==='\r'){ if(ch==='\r'&&text[i+1]==='\n')i++; row.push(cell); cell=''; if(row.some(c=>c.trim()!=='')) grid.push(row); row=[]; }
+    else cell+=ch;
+  }
+  if(cell!==''||row.length){ row.push(cell); if(row.some(c=>c.trim()!=='')) grid.push(row); }
+  return grid;
+}
+const NAME_H=/^(name|company|company.?name|business|business.?name|organi[sz]ation)$/i;
+const LOC_H=/^(location|town|city|postcode|postal.?code|county|area)$/i;
+const WEB_H=/^(website|url|domain|site|web|homepage)$/i;
+function rowsFromCsv(text){
+  const grid=parseCsv(text);
+  if(!grid.length) return [];
+  const header=grid[0].map(h=>h.trim());
+  const ni=header.findIndex(h=>NAME_H.test(h));
+  const li=header.findIndex(h=>LOC_H.test(h));
+  const wi=header.findIndex(h=>WEB_H.test(h));
+  if(ni===-1 && wi===-1){
+    return grid.map(r=>({name:(r[0]||'').trim()})).filter(r=>r.name);
+  }
+  return grid.slice(1).map(r=>({
+    name: ni>=0 ? (r[ni]||'').trim() : undefined,
+    location: li>=0 ? (r[li]||'').trim() : undefined,
+    website: wi>=0 ? (r[wi]||'').trim() : undefined,
+  })).filter(r=>(r.name)||(r.website));
+}
+
+function refreshRows(){
+  rows = rowsFromCsv(document.getElementById('raw').value);
+  document.getElementById('rowCount').textContent = rows.length ? `· ${rows.length} rows parsed` : '';
+}
+document.getElementById('raw').addEventListener('input', refreshRows);
+document.getElementById('file').addEventListener('change', e=>{
+  const file = e.target.files && e.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ()=>{ document.getElementById('raw').value = String(reader.result||''); refreshRows(); };
+  reader.readAsText(file);
+});
+
+// ── Queue + poll ───────────────────────────────────────────────────────────
+async function start(){
+  if(!rows.length){ toast('Paste or upload some rows first'); return; }
+  if(!fields.length){ toast('Tick at least one field to extract'); return; }
+  document.getElementById('startBtn').disabled = true;
+  try{
+    const res = await fetch('/api/enrich', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ rows, fields, label:`list: ${rows.length}` })
+    });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error||'Failed');
+    results = [];
+    activeJob = { id:data.jobId, status:'queued', total:data.total, done:0, ok:0, failed:0, error:null };
+    renderProgress(); renderResults();
+    toast(`Queued job #${data.jobId} — ${data.total} businesses`);
+    startPolling(data.jobId);
+  }catch(e){ toast('Could not start: '+e.message); document.getElementById('startBtn').disabled=false; }
+}
+
+function startPolling(jobId){
+  if(pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async ()=>{
+    try{
+      const res = await fetch('/api/ch/jobs/'+jobId);
+      const data = await res.json();
+      if(!res.ok) return;
+      activeJob = data.job;
+      results = data.items || [];
+      renderProgress(); renderResults();
+      if(activeJob.status==='done' || activeJob.status==='failed'){
+        clearInterval(pollTimer); pollTimer=null;
+        document.getElementById('startBtn').disabled=false;
+        toast(activeJob.status==='done' ? `Done — ${activeJob.ok}/${activeJob.total} enriched` : `Failed: ${activeJob.error||'error'}`);
+      }
+    }catch(e){ /* keep polling */ }
+  }, 5000);
+}
+
+function renderProgress(){
+  if(!activeJob){ document.getElementById('progressPanel').style.display='none'; return; }
+  document.getElementById('progressPanel').style.display='block';
+  document.getElementById('jobLabel').textContent = 'Job #'+activeJob.id;
+  document.getElementById('jobStatus').textContent = activeJob.status;
+  document.getElementById('jobCounts').textContent =
+    `${activeJob.done}/${activeJob.total} done · ${activeJob.ok} enriched · ${activeJob.failed} failed`;
+  const pct = activeJob.status==='done' ? 100 : (activeJob.total>0 ? Math.round(activeJob.done/activeJob.total*100) : 0);
+  const fill = document.getElementById('progressFill');
+  fill.style.width = pct+'%';
+  fill.className = 'progress-fill' + (activeJob.status==='failed' ? ' failed' : '');
+}
+
+// ── Results table ──────────────────────────────────────────────────────────
+const COLS = [
+  { key:'business', label:'Business', always:true },
+  { key:'website',  label:'Website',  always:true },
+  { key:'emails',   label:'Emails' },
+  { key:'phones',   label:'Phones' },
+  { key:'address',  label:'Address' },
+  { key:'business_type', label:'Type' },
+  { key:'industry', label:'Industry' },
+  { key:'keywords', label:'Keywords' },
+  { key:'status',   label:'Status', always:true },
+];
+function show(k){ return fields.includes(k); }
+function cellVal(r, k){
+  switch(k){
+    case 'emails': return (r.emails||[]).join(', ');
+    case 'phones': return (r.phones||[]).join(', ');
+    case 'address': return r.address||'';
+    case 'business_type': return r.business_type||'';
+    case 'industry': return r.industry||'';
+    case 'keywords': return (r.keywords||[]).join(', ');
+    default: return '';
+  }
+}
+function renderResults(){
+  const panel = document.getElementById('resultsPanel');
+  if(!results.length){ panel.style.display='none'; document.getElementById('dlBtn').style.display='none'; return; }
+  panel.style.display='block';
+  document.getElementById('dlBtn').style.display='inline-flex';
+  const cols = COLS.filter(c=>c.always || show(c.key));
+  const thead = document.querySelector('#resultsTable thead');
+  thead.innerHTML = '<tr>'+cols.map(c=>`<th>${c.label}</th>`).join('')+'</tr>';
+  const tbody = document.querySelector('#resultsTable tbody');
+  tbody.innerHTML = results.map(r=>{
+    return '<tr>'+cols.map(c=>{
+      if(c.key==='business'){
+        return `<td><div class="name">${esc(r.company_name)||'—'}</div>${r.location?`<div class="loc">${esc(r.location)}</div>`:''}</td>`;
+      }
+      if(c.key==='website'){
+        const w = r.domain || r.website;
+        return `<td>${w?esc(w):'<span class="muted">—</span>'}</td>`;
+      }
+      if(c.key==='status'){
+        const st = r.item_status==='error' ? 'error' : (r.scrape_status ? 'ok' : 'pending');
+        const txt = r.item_status==='error' ? 'failed' : (r.scrape_status || (r.item_status==='done'?'done':'pending'));
+        return `<td><span class="status ${st}">${txt}</span></td>`;
+      }
+      const v = cellVal(r, c.key);
+      return `<td class="truncate" title="${esc(v)}">${v?esc(v):'<span class="muted">—</span>'}</td>`;
+    }).join('')+'</tr>';
+  }).join('');
+}
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m])); }
+
+// ── CSV export ─────────────────────────────────────────────────────────────
+function csvEscape(v){ return /[",\n]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v; }
+function exportCsv(){
+  if(!results.length) return;
+  const cols = ['name','location','domain', ...fields.filter(f=>f!=='website')];
+  const cell = (r,f)=>{
+    switch(f){
+      case 'name': return r.company_name||'';
+      case 'location': return r.location||'';
+      case 'domain': return r.domain||r.website||'';
+      case 'emails': return (r.emails||[]).join('; ');
+      case 'phones': return (r.phones||[]).join('; ');
+      case 'address': return r.address||'';
+      case 'social_links': return r.socials ? Object.values(r.socials).join('; ') : '';
+      case 'description': return r.description||'';
+      case 'business_type': return r.business_type||'';
+      case 'industry': return r.industry||'';
+      case 'keywords': return (r.keywords||[]).join('; ');
+      default: return '';
+    }
+  };
+  const lines = [cols.join(',')].concat(results.map(r=>cols.map(c=>csvEscape(cell(r,c))).join(',')));
+  const blob = new Blob([lines.join('\n')], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `enrichment-${activeJob?activeJob.id:'results'}.csv`; a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────
+renderFields();
+refreshRows();
+</script>
+</body>
+</html>

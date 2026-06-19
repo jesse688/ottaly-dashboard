@@ -8584,6 +8584,8 @@ app.post('/api/domains/:domain/restore', requireSession, async (req, res) => {
 
 app.get('/domains', (req, res) => res.sendFile(path.join(__dirname, 'domains.html')));
 app.get('/domains.html', (req, res) => res.sendFile(path.join(__dirname, 'domains.html')));
+app.get('/enrichment',      (req, res) => res.sendFile(path.join(__dirname, 'enrichment.html')));
+app.get('/enrichment.html', (req, res) => res.sendFile(path.join(__dirname, 'enrichment.html')));
 
 // ─────────────────────────────────────────────────────────────────────
 // Gateway deliverability — reply/lead/bounce per inbound email gateway
@@ -19708,6 +19710,181 @@ function scheduleAudienceScoring(pgdb) {
       await db.query(`UPDATE ch_directors SET pushed_to_bison_at=NOW() WHERE id = ANY($1::int[])`, [rows.rows.map(d => d.id)]);
     }
     res.json({ pushed, skipped });
+  });
+
+  // ── Website scraping / enrichment jobs ───────────────────────────────────
+  // The dashboard queues jobs into scrape_jobs/scrape_job_items; the standalone
+  // scraper-service worker (Easypanel, Crawlee/CheerioCrawler) claims them,
+  // crawls each business's site, extracts contacts, optionally Claude-classifies
+  // the fuzzy fields, and writes results to scraped_contacts. These routes only
+  // queue work and read progress/results — no scraping happens in this process.
+  const { normaliseFields: chNormaliseFields } = require('./ch-fields.js');
+
+  function toScrapeDomain(website) {
+    if (!website) return null;
+    const d = String(website).trim()
+      .replace(/^https?:\/\//i, '').replace(/^www\./i, '')
+      .replace(/\/.*$/, '').trim().toLowerCase();
+    return d && d.includes('.') ? d : null;
+  }
+
+  // Build a WHERE clause + params for ch_companies from the same query params the
+  // /api/ch/companies search uses, so "scrape these filtered companies" matches
+  // exactly what the user sees in the table.
+  function buildChFilter(q) {
+    const conditions = [];
+    const params = [];
+    if (q.sic) {
+      const sicArr = String(q.sic).split(',').map(s => s.trim()).filter(Boolean);
+      if (sicArr.length) { params.push(sicArr); conditions.push(`string_to_array(sic_codes, ',') && $${params.length}::text[]`); }
+    }
+    if (q.postcode_prefix) { params.push(q.postcode_prefix.toUpperCase() + '%'); conditions.push(`postcode ILIKE $${params.length}`); }
+    if (q.company_type) { params.push(q.company_type); conditions.push(`company_type ILIKE $${params.length}`); }
+    if (q.search) { params.push('%' + q.search + '%'); conditions.push(`company_name ILIKE $${params.length}`); }
+    if (q.county) { params.push(q.county); conditions.push(`UPPER(county) = UPPER($${params.length})`); }
+    if (q.town) { params.push(q.town); conditions.push(`UPPER(post_town) = UPPER($${params.length})`); }
+    if (q.inc_after) { params.push(q.inc_after); conditions.push(`incorporated_on >= $${params.length}`); }
+    if (q.inc_before) { params.push(q.inc_before); conditions.push(`incorporated_on <= $${params.length}`); }
+    if (q.country) {
+      const ctry = String(q.country).toUpperCase();
+      if (ctry === 'SCOTLAND') conditions.push(`(postcode ILIKE 'AB%' OR postcode ILIKE 'DD%' OR postcode ILIKE 'DG%' OR postcode ILIKE 'EH%' OR postcode ILIKE 'FK%' OR postcode ILIKE 'G%' OR postcode ILIKE 'HS%' OR postcode ILIKE 'IV%' OR postcode ILIKE 'KA%' OR postcode ILIKE 'KW%' OR postcode ILIKE 'KY%' OR postcode ILIKE 'ML%' OR postcode ILIKE 'PA%' OR postcode ILIKE 'PH%' OR postcode ILIKE 'TD%' OR postcode ILIKE 'ZE%')`);
+      else if (ctry === 'WALES') conditions.push(`(postcode ILIKE 'CF%' OR postcode ILIKE 'LD%' OR postcode ILIKE 'LL%' OR postcode ILIKE 'NP%' OR postcode ILIKE 'SA%' OR postcode ILIKE 'SY%')`);
+      else if (ctry === 'NORTHERN IRELAND') conditions.push(`postcode ILIKE 'BT%'`);
+    }
+    return { where: conditions.length ? 'WHERE ' + conditions.join(' AND ') : '', params };
+  }
+
+  // Queue a scrape/enrich job for Companies House businesses already in our DB.
+  // Body: { company_numbers?: string[], filters?: {...}, fields?: string[], label?, max? }
+  // - company_numbers given  → scrape exactly those (explicit selection)
+  // - filters given (or none) → scrape everything matching the filter (run-all)
+  app.post('/api/ch/scrape', requireSession, async (req, res) => {
+    const db = req.app.locals.pgDb;
+    if (!db) return res.status(503).json({ error: 'Database unavailable' });
+    const fields = chNormaliseFields(req.body.fields);
+    const MAX = Math.min(50000, Math.max(1, parseInt(req.body.max) || 50000));
+    const client = await db.pool.connect();
+    try {
+      let selectSql, selectParams;
+      if (Array.isArray(req.body.company_numbers) && req.body.company_numbers.length) {
+        selectSql = `SELECT company_number, company_name, website FROM ch_companies WHERE company_number = ANY($1::text[]) LIMIT ${MAX}`;
+        selectParams = [req.body.company_numbers];
+      } else {
+        const { where, params } = buildChFilter(req.body.filters || {});
+        selectSql = `SELECT company_number, company_name, website FROM ch_companies ${where} ORDER BY company_name LIMIT ${MAX}`;
+        selectParams = params;
+      }
+      const sel = await client.query(selectSql, selectParams);
+      if (!sel.rows.length) return res.status(400).json({ error: 'No matching companies to scrape' });
+
+      const nums = sel.rows.map(r => r.company_number);
+      const names = sel.rows.map(r => r.company_name || null);
+      const domains = sel.rows.map(r => toScrapeDomain(r.website));
+
+      await client.query('BEGIN');
+      const job = await client.query(
+        `INSERT INTO scrape_jobs (label, status, source, fields, total)
+         VALUES ($1, 'queued', 'ch', $2, $3) RETURNING id`,
+        [(req.body.label || `CH: ${nums.length} companies`).slice(0, 200), fields, nums.length]
+      );
+      const jobId = job.rows[0].id;
+      await client.query(
+        `INSERT INTO scrape_job_items (job_id, company_number, company_name, domain)
+         SELECT $1, n, nm, d FROM unnest($2::text[], $3::text[], $4::text[]) AS t(n, nm, d)`,
+        [jobId, nums, names, domains]
+      );
+      await client.query('COMMIT');
+      res.json({ jobId, total: nums.length, fields });
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      console.error('[ch-scrape]', e.message);
+      res.status(500).json({ error: 'Failed to queue scrape job' });
+    } finally {
+      client.release();
+    }
+  });
+
+  // Queue an enrichment job from a flexible pasted/uploaded list (no CH needed).
+  // Body: { rows: [{name?, location?, website?}], fields?: string[], label? }
+  app.post('/api/enrich', requireSession, async (req, res) => {
+    const db = req.app.locals.pgDb;
+    if (!db) return res.status(503).json({ error: 'Database unavailable' });
+    const fields = chNormaliseFields(req.body.fields);
+    const rows = (Array.isArray(req.body.rows) ? req.body.rows : [])
+      .filter(r => (r && ((r.name && String(r.name).trim()) || r.website)));
+    if (!rows.length) return res.status(400).json({ error: 'No usable rows (need a name or a website)' });
+    if (rows.length > 5000) return res.status(400).json({ error: 'Too many rows — max 5000 per job' });
+
+    const names = rows.map(r => (r.name ? String(r.name).trim() : '') || null);
+    const locations = rows.map(r => (r.location ? String(r.location).trim() : '') || null);
+    const domains = rows.map(r => toScrapeDomain(r.website));
+
+    const client = await db.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const job = await client.query(
+        `INSERT INTO scrape_jobs (label, status, source, fields, total)
+         VALUES ($1, 'queued', 'list', $2, $3) RETURNING id`,
+        [(req.body.label || `list: ${rows.length}`).slice(0, 200), fields, rows.length]
+      );
+      const jobId = job.rows[0].id;
+      await client.query(
+        `INSERT INTO scrape_job_items (job_id, company_name, location, domain)
+         SELECT $1, n, l, d FROM unnest($2::text[], $3::text[], $4::text[]) AS t(n, l, d)`,
+        [jobId, names, locations, domains]
+      );
+      await client.query('COMMIT');
+      res.json({ jobId, total: rows.length, fields });
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      console.error('[enrich]', e.message);
+      res.status(500).json({ error: 'Failed to queue enrichment job' });
+    } finally {
+      client.release();
+    }
+  });
+
+  // List recent scrape/enrich jobs (newest first) for progress polling.
+  app.get('/api/ch/jobs', requireSession, async (req, res) => {
+    const db = req.app.locals.pgDb;
+    if (!db) return res.status(503).json({ error: 'Database unavailable' });
+    try {
+      const { rows } = await db.query(
+        `SELECT id, label, status, source, fields, total, done, ok, failed, error,
+                created_at, started_at, finished_at
+           FROM scrape_jobs ORDER BY id DESC LIMIT 50`
+      );
+      res.json({ rows });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // One job's progress + its results (joined to scraped_contacts by domain).
+  app.get('/api/ch/jobs/:id', requireSession, async (req, res) => {
+    const db = req.app.locals.pgDb;
+    if (!db) return res.status(503).json({ error: 'Database unavailable' });
+    const jobId = parseInt(req.params.id, 10);
+    if (!Number.isFinite(jobId)) return res.status(400).json({ error: 'Bad job id' });
+    try {
+      const jobQ = await db.query(`SELECT * FROM scrape_jobs WHERE id = $1`, [jobId]);
+      if (!jobQ.rows.length) return res.status(404).json({ error: 'Job not found' });
+      const items = await db.query(
+        `SELECT i.company_name, i.location, i.domain, i.status AS item_status,
+                s.website, s.emails, s.phones, s.address, s.business_type,
+                s.industry, s.keywords, s.description, s.socials,
+                s.status AS scrape_status
+           FROM scrape_job_items i
+           LEFT JOIN scraped_contacts s ON s.domain = i.domain
+          WHERE i.job_id = $1
+          ORDER BY i.id
+          LIMIT 5000`,
+        [jobId]
+      );
+      res.json({ job: jobQ.rows[0], items: items.rows });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   scheduleEspSync();
