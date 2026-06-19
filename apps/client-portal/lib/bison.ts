@@ -563,6 +563,26 @@ export async function registerWebhook(): Promise<{ ok: boolean; reason?: string 
   return registerWebhookHere()
 }
 
+// Inspect what webhooks are CURRENTLY registered in each mapped workspace — so we
+// can see whether Bison is pointed at us (and at the right URL/events) without
+// re-registering. Returns one entry per team with its registered hooks.
+export async function inspectWebhooksAllWorkspaces(): Promise<{ ok: boolean; target: string; teams: Record<string, { url: string; events: string[]; pointsAtUs: boolean }[] | string> }> {
+  if (!await getBisonKey()) return { ok: false, target: WEBHOOK_TARGET, teams: {} }
+  const teamIds = Array.from(new Set(Object.values(PV_TO_BISON_TEAM)))
+  const teams: Record<string, { url: string; events: string[]; pointsAtUs: boolean }[] | string> = {}
+  for (const teamId of teamIds) {
+    try {
+      teams[teamId] = await withTeam(teamId, async () => {
+        const list = await bison<{ data?: BisonHook[] }>('GET', '/api/webhook-url').catch(() => ({ data: [] as BisonHook[] }))
+        return (list.data ?? []).map(h => ({ url: h.url, events: h.events, pointsAtUs: h.url === WEBHOOK_TARGET }))
+      })
+    } catch (err) {
+      teams[teamId] = `error: ${String(err).slice(0, 80)}`
+    }
+  }
+  return { ok: true, target: WEBHOOK_TARGET, teams }
+}
+
 // Register the webhook in EVERY mapped workspace. Bison webhooks are
 // PER-WORKSPACE, so a single boot-time register only covers one team and every
 // other client's replies never fire. This loops all teams (each via withTeam so
