@@ -20079,6 +20079,37 @@ function scheduleAudienceScoring(pgdb) {
     }
   });
 
+  // Diagnostic: where did the scraped data go? Read-only counts so we can see
+  // whether scraping produced emails and whether contacts actually landed.
+  app.get('/api/ch/scrape-debug', requireSession, async (req, res) => {
+    const db = req.app.locals.pgDb;
+    if (!db) return res.status(503).json({ error: 'Database unavailable' });
+    try {
+      const [scraped, withEmail, chContacts, sampleC, byWs] = await Promise.all([
+        db.query(`SELECT COUNT(*)::int n FROM scraped_contacts`),
+        db.query(`SELECT COUNT(*)::int n FROM scraped_contacts WHERE emails IS NOT NULL AND array_length(emails,1) > 0`),
+        db.query(`SELECT COUNT(*)::int n FROM contacts WHERE source = 'ch_scraper'`),
+        db.query(`SELECT workspace_id, email, company_name, industry FROM contacts WHERE source = 'ch_scraper' ORDER BY imported_at DESC NULLS LAST LIMIT 10`),
+        db.query(`SELECT workspace_id, COUNT(*)::int n FROM contacts WHERE source = 'ch_scraper' GROUP BY workspace_id`),
+      ]);
+      // A peek at the latest scraped rows so we can see if emails were found at all.
+      const sampleS = await db.query(
+        `SELECT domain, company_number, status, array_length(emails,1) AS email_count, array_length(phones,1) AS phone_count
+           FROM scraped_contacts ORDER BY scraped_at DESC LIMIT 10`
+      );
+      res.json({
+        scraped_contacts_total: scraped.rows[0].n,
+        scraped_with_email: withEmail.rows[0].n,
+        ch_scraper_contacts_total: chContacts.rows[0].n,
+        ch_scraper_by_workspace: byWs.rows,
+        latest_ch_scraper_contacts: sampleC.rows,
+        latest_scraped_rows: sampleS.rows,
+      });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   scheduleEspSync();
   startSlackBot();
 
