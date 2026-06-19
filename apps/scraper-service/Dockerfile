@@ -1,15 +1,17 @@
-# Cheerio-based scraper — no browser needed, so a slim Node image is enough.
-FROM node:20-slim
+# Crawlee's own base image for CheerioCrawler (no browser, Alpine, includes the
+# system tools Crawlee expects). Recommended by https://crawlee.dev for Cheerio.
+FROM apify/actor-node:20
 
-# Crawlee's autoscaler shells out to `ps` (from procps) for memory snapshots;
-# the slim image omits it, which crashes jobs with "spawn ps ENOENT".
-RUN apt-get update && apt-get install -y --no-install-recommends procps \
-    && rm -rf /var/lib/apt/lists/*
+# Alpine ships `ps` via busybox, but install procps so Crawlee's memory snapshot
+# (which may shell out to `ps`) always finds a full implementation.
+USER root
+RUN apk add --no-cache procps || true
 
 WORKDIR /app
 
+# Copy manifests and install prod deps. (--omit=dev keeps the image lean.)
 COPY package.json package-lock.json* ./
-RUN npm install --omit=dev
+RUN npm install --omit=dev --no-optional
 
 COPY . .
 
