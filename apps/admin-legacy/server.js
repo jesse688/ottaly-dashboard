@@ -8882,17 +8882,20 @@ app.get('/api/domains/health', requireSession, async (req, res) => {
 });
 
 app.post('/api/domains/refresh', requireSession, async (req, res) => {
-  // Domain-health DISABLED completely — the refresh fires DNSBL lookups (SURBL /
-  // Spamhaus / URIBL) per domain, which created reputation bias. No refresh runs.
-  // Cached rows are still served read-only via GET /api/domains/health.
-  res.json({ ok: true, disabled: true, message: 'Domain health checks are disabled' });
+  res.json({ ok: true, started: true });
+  refreshDomainHealth().catch(e => console.error('[domain-health] refresh error:', e.message));
 });
 
 // Single-domain on-demand check (useful when adding a new client)
 app.post('/api/domains/check', requireSession, async (req, res) => {
-  // Domain-health DISABLED completely — single-domain check also fires DNS/DNSBL
-  // lookups. Disabled to avoid any reputation-provider fingerprinting.
-  res.json({ ok: true, disabled: true, message: 'Domain health checks are disabled' });
+  const { domain } = req.body;
+  if (!domain) return res.status(400).json({ error: 'domain required' });
+  try {
+    const row = await checkDomain(domain.toLowerCase().trim(), null);
+    res.json({ ok: true, row });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Soft-delete a domain from the dashboard. The row is kept (so we can
