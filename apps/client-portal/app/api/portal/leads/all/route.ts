@@ -54,6 +54,13 @@ export async function GET() {
               l.raw->>'linkedin_company_url' AS linkedin_company_url,
               l.raw->>'phone_number'         AS phone_number,
               l.raw->'custom_fields'         AS custom_fields,
+              -- Most-recent INBOUND reply from the lead, for the list timestamp.
+              (
+                SELECT max(ein.timestamp_created) FROM portal_emails ein
+                 WHERE ein.workspace_id = l.workspace_id
+                   AND lower(ein.lead_email) = lower(l.email)
+                   AND ein.direction = 'IN'
+              ) AS last_reply_at,
               ld.deal_value, ld.notes AS deal_notes, ld.client_label, ld.first_responded_at,
               pd.status AS dispute_status, pd.reason AS dispute_reason, pd.admin_note AS dispute_admin_note,
               EXISTS (

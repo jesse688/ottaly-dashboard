@@ -137,14 +137,19 @@ export async function sendEmailReply(opts: {
 
 // Notify the client when a lead replies AFTER the client has already sent a message.
 // Only fires once per (lead_email, workspace) conversation thread — deduped via portal_meta.
-export async function notifyClientOfLeadReply(workspaceId: string, leadEmail: string, leadName: string, preview: string): Promise<void> {
+export async function notifyClientOfLeadReply(workspaceId: string, leadEmail: string, leadName: string, preview: string, replyId?: string | null): Promise<void> {
   try {
-    const dedupKey = `lead_reply_notif_${workspaceId}_${leadEmail.toLowerCase()}`
+    // Dedup PER REPLY (not per thread) so every new reply from the lead notifies —
+    // a thread-level key would only ever fire on the first reply. Fall back to a
+    // timestamped key when we have no reply id so we still don't spam on retries.
+    const dedupKey = replyId
+      ? `lead_reply_notif_${workspaceId}_${replyId}`
+      : `lead_reply_notif_${workspaceId}_${leadEmail.toLowerCase()}_${Date.now()}`
     const ins = await pool.query(
       `INSERT INTO portal_meta (key) VALUES ($1) ON CONFLICT (key) DO NOTHING RETURNING key`,
       [dedupKey]
     )
-    if (!ins.rows.length) return // already notified this thread
+    if (!ins.rows.length) return // this reply already notified (webhook retry)
 
     const tpl = await getTemplates()
 

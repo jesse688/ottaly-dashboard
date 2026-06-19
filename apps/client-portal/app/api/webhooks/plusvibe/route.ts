@@ -236,6 +236,7 @@ async function handleBison(raw: Record<string, unknown>) {
           rowEmail,
           leadDisplayName,
           (reply.text_body ?? '').slice(0, 300),
+          replyId,
         ).catch(() => {})
       }
     }

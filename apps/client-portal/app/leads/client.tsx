@@ -15,6 +15,7 @@ interface Lead {
   label: string | null
   first_replied_at: string | null
   first_responded_at: string | null
+  last_reply_at: string | null
   created_at: string | null
   campaign_name: string | null
   job_title: string | null
@@ -663,7 +664,7 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-2">
                         <span className={`text-sm truncate ${l.has_unread ? 'font-bold text-[#050c29]' : 'font-medium text-gray-800'}`}>{l.locked ? `New lead${l.first_name ? ` from ${l.first_name}` : ''}` : fullName(l)}</span>
-                        <span className="text-[11px] text-gray-400 shrink-0">{fmtDate(l.first_replied_at ?? l.created_at)}</span>
+                        <span className="text-[11px] text-gray-400 shrink-0">{fmtDate(l.last_reply_at ?? l.first_replied_at ?? l.created_at)}</span>
                       </div>
                       {l.locked
                         ? <p className="text-xs text-[#b8860b] font-medium truncate">🔒 Top up to unlock</p>
