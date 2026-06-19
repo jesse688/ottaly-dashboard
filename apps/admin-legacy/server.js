@@ -8883,8 +8883,7 @@ app.get('/api/domains/health', requireSession, async (req, res) => {
 });
 
 app.post('/api/domains/refresh', requireSession, async (req, res) => {
-  res.json({ ok: true, started: true });
-  refreshDomainHealth().catch(e => console.error('[domain-health] refresh error:', e.message));
+  res.json({ ok: true, disabled: true, message: 'Domain health refresh is disabled' });
 });
 
 // Single-domain on-demand check (useful when adding a new client)
