@@ -238,15 +238,26 @@ async function handleBison(raw: Record<string, unknown>, deliveryId: string | nu
   // (only under the CORRECT PV workspace_id) so existing thread views work.
   if (reply?.id && eventType !== 'lead_interested') {
     const leadEmail = (lead?.email ?? '').toLowerCase()
-    const direction = reply.folder?.toLowerCase() === 'sent' ? 'OUT' : 'IN'
+    const folderLc = (reply.folder ?? '').toLowerCase()
+    const direction = folderLc === 'sent' ? 'OUT' : 'IN'
     const replyId = String(reply.id)
+    const senderEmailEarly = (reply.from_email_address ?? '').toLowerCase()
+
+    // Drop obvious non-replies at intake: Spam/Bounce folders and bounce daemons
+    // (mailer-daemon/postmaster). These aren't real prospect replies and would
+    // otherwise clutter the Unibox inbox.
+    const isBounceSender = /(^|[._-])(mailer-daemon|postmaster|no-?reply|bounce|abuse)@/.test(senderEmailEarly)
+    if (folderLc === 'spam' || folderLc === 'bounce' || folderLc === 'bounced' || isBounceSender) {
+      if (deliveryId) await markDelivery(deliveryId, `skipped:${folderLc || 'bounce_sender'}`, mappedWorkspaceId)
+      return
+    }
     const leadBisonId = lead?.id ? String(lead.id) : (reply.lead_id ? String(reply.lead_id) : null)
     // Bison's reply payload puts the subject in `email_subject` (not `subject`).
     const replySubject = reply.email_subject ?? reply.subject ?? null
 
     // The address that actually SENT this reply (may differ from the campaign
     // lead, e.g. forwarded to a colleague who replies from their own address).
-    const senderEmail = (reply.from_email_address ?? '').toLowerCase()
+    const senderEmail = senderEmailEarly
     // The unibox row's primary email = the campaign lead if known, else the sender.
     // Last resort: if BOTH are empty (some LEAD_REPLIED payloads carry neither),
     // resolve the lead's email from our DB via the Bison lead id — otherwise the
