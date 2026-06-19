@@ -262,7 +262,7 @@
     <div class="page-head">
       <div class="page-head-left">
         <h1>CH Pipeline</h1>
-        <p>Search 5M+ Companies House records — enrich, find owners, verify emails, push to Bison.</p>
+        <p>Search 5M+ Companies House records — enrich, find owners, verify emails, push to PlusVibe.</p>
       </div>
     </div>
 
@@ -271,7 +271,7 @@
       <div class="stat-card"><div class="lbl">Companies</div><div class="val accent" id="statCompanies">—</div></div>
       <div class="stat-card"><div class="lbl">Directors</div><div class="val accent" id="statDirectors">—</div></div>
       <div class="stat-card"><div class="lbl">Emails verified</div><div class="val accent" id="statEmails">—</div></div>
-      <div class="stat-card"><div class="lbl">Pushed to Bison</div><div class="val accent" id="statPushed">—</div></div>
+      <div class="stat-card"><div class="lbl">Pushed to PlusVibe</div><div class="val accent" id="statPushed">—</div></div>
       <div class="stat-card"><div class="lbl">Last import</div><div class="val" id="statLastImport" style="font-size:14px;margin-top:8px">—</div></div>
     </div>
 
@@ -285,7 +285,7 @@
       <span class="step-arrow">›</span>
       <div class="step" id="step4"><span class="step-num">4</span> Find Emails</div>
       <span class="step-arrow">›</span>
-      <div class="step" id="step5"><span class="step-num">5</span> Push to Bison</div>
+      <div class="step" id="step5"><span class="step-num">5</span> Push to PlusVibe</div>
     </div>
 
     <!-- CLI note -->
@@ -482,7 +482,7 @@
       </div>
       <div class="dir-action-bar">
         <button class="btn btn-secondary" onclick="openFindEmailsModal()">Find emails</button>
-        <button class="btn btn-primary" onclick="openPushModal()">Push to Bison</button>
+        <button class="btn btn-primary" onclick="openPushModal()">Push to PlusVibe</button>
         <span class="spacer"></span>
         <span class="dir-sel-count" id="selectedDirCount"></span>
       </div>
@@ -535,10 +535,10 @@
   </div>
 </div>
 
-<!-- Push to Bison Modal -->
+<!-- Push to PlusVibe Modal -->
 <div class="modal-overlay hidden" id="pushModal">
   <div class="modal">
-    <h3>Push to Bison</h3>
+    <h3>Push to PlusVibe</h3>
     <p class="modal-sub">Only directors with a verified or catch-all email are pushed. Duplicates are skipped automatically.</p>
     <div class="form-group">
       <label>Workspace</label>
@@ -1246,7 +1246,7 @@
     runChunk(0);
   }
 
-  // ── Push to Bison ─────────────────────────────────────────────────────────
+  // ── Push to PlusVibe ─────────────────────────────────────────────────────────
   function openPushModal() {
     var sel = getSelectedDirIds();
     if (!sel.length) { showStatus('Select at least one director', 'error'); return; }
@@ -1284,7 +1284,7 @@
     var ids = getSelectedDirIds();
     closeModal('pushModal');
     setStep(5);
-    showStatus('Pushing ' + ids.length + ' directors to Bison…', 'info');
+    showStatus('Pushing ' + ids.length + ' directors to PlusVibe…', 'info');
     fetch('/api/ch/push-to-bison', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ director_ids: ids, workspace_id: wsId, campaign_id: campId }),

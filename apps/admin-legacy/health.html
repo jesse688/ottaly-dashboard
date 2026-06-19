@@ -776,7 +776,7 @@ function renderVariants(variants) {
   }
   $('modalBody').innerHTML = `
     <div style="font-size:12px;color:var(--muted);margin-bottom:.25rem">
-      Replace the decayed subject in <strong>${escapeHTML(CURRENT_ALERT.campaign_name || 'campaign')}</strong>, step ${CURRENT_ALERT.step ?? '?'}, variant ${escapeHTML(CURRENT_ALERT.variant || 'A')}. Edit in Bison to apply.
+      Replace the decayed subject in <strong>${escapeHTML(CURRENT_ALERT.campaign_name || 'campaign')}</strong>, step ${CURRENT_ALERT.step ?? '?'}, variant ${escapeHTML(CURRENT_ALERT.variant || 'A')}. Edit in PlusVibe to apply.
     </div>
     <div class="variant-list">
       ${variants.map((v, i) => `

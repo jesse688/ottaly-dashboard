@@ -250,7 +250,10 @@ const bisonFetch = bisonReq;
 
 // Dead Bison stubs — prevent ReferenceErrors for any code paths not yet cleaned up.
 function getBisonKey() { return getPvKey(); }
-function listBisonWorkspaces() { return listPvWorkspaces(); }
+// NOTE: returns an ARRAY of {id,name} (id = PV workspace_id). Callers read it as
+// `Array.isArray(x) ? x : x.data` — listPvWorkspaces() returns {workspaces:[...]}
+// which would give them nothing, so map to a bare array here.
+function listBisonWorkspaces() { return PV_WORKSPACES.map(t => ({ id: t.pv, name: t.name })); }
 function resolveBisonTeamId(wsId) { return wsId; }
 function getBisonWsToken(_teamId) { return null; }
 async function mintBisonWsToken(_teamId) { return null; }
@@ -2854,16 +2857,17 @@ app.get('/api/admin/stats-debug', requireAdmin, async (req, res) => {
       try { out.has_ws_token = !!getBisonWsToken(out.team_id); } catch {}
       // Single-day (today) — the old behaviour
       try {
-        const single = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { wsId, params: { start_date: today, end_date: today } });
-        out.single_day = { ok: true, labels: ((single.data || single) || []).map(s => ({ label: s.label, points: (s.dates || []).length })) };
+        const single = await pvApi('/account/email-stats', { wsId, params: { start_date: today, end_date: today } });
+        const sp = pivotBisonStats(single);
+        out.single_day = { ok: true, dates: Object.keys(sp), agg: aggPvEmailStats(Object.values(sp)) };
       } catch (e) { out.single_day = { ok: false, error: e.message }; }
       // Range — defaults to yesterday..today; override with ?from=&to= to look back
       // further and confirm whether the workspace has ANY sends in a wider window.
       const rFrom = String(req.query.from || serverDateString(y));
       const rTo   = String(req.query.to   || today);
       try {
-        const range = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { wsId, params: { start_date: rFrom, end_date: rTo } });
-        const pivot = pivotBisonStats((range.data || range) || []);
+        const range = await pvApi('/account/email-stats', { wsId, params: { start_date: rFrom, end_date: rTo } });
+        const pivot = pivotBisonStats(range);
         const nonZero = Object.values(pivot).filter(d => d.total_sent_count > 0).map(d => ({ date: d.date, sent: d.total_sent_count, replies: d.total_reply_count }));
         out.range = { from: rFrom, to: rTo, ok: true, dates: Object.keys(pivot), days_with_sends: nonZero, agg: aggPvEmailStats(Object.values(pivot)) };
       } catch (e) { out.range = { ok: false, error: e.message }; }
@@ -2917,10 +2921,10 @@ app.get('/api/admin/stats-debug', requireAdmin, async (req, res) => {
         const teamId = resolveBisonTeamId(wsId);
         const r = { name: c.workspace_name, workspace_id: wsId, team_id: teamId, mapped: !!teamId };
         if (!teamId) { r.note = 'not in BISON_TEAMS — no data'; results.push(r); continue; }
-        // Live Bison
+        // Live PlusVibe
         try {
-          const live = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { wsId, params: { start_date: aFrom, end_date: aTo } });
-          r.live = aggPvEmailStats(Object.values(pivotBisonStats((live.data || live) || [])));
+          const live = await pvApi('/account/email-stats', { wsId, params: { start_date: aFrom, end_date: aTo } });
+          r.live = aggPvEmailStats(Object.values(pivotBisonStats(live)));
         } catch (e) { r.live = { error: e.message }; }
         // What the cache holds for the same window
         const cAgg = { sent: 0, replies: 0, bounces: 0 };
@@ -3839,8 +3843,13 @@ async function bisonSwitch(_wsId) {
 function pivotBisonStats(statsData) {
   var out = {};
   var rows = Array.isArray(statsData) ? statsData : (statsData && (statsData.chart || statsData.data)) || [];
-  // Detect format: PV rows have a `date` field; Bison series have `label`+`dates`.
-  var isPvRows = rows.length && (rows[0].date != null || rows[0].day != null) && rows[0].label == null;
+  // Detect format: PV per-date rows carry total_*_count metrics (and a `date`);
+  // Bison label-series rows carry a `dates` ARRAY. NOTE: PV rows ALSO have a
+  // `label` (the human date e.g. "12 Jun 26"), so we must NOT key off label —
+  // key off the presence of total_sent_count / absence of a dates[] array.
+  var isPvRows = rows.length && rows[0] &&
+    (rows[0].total_sent_count !== undefined || rows[0].total_reply_count !== undefined ||
+     (rows[0].date != null && !Array.isArray(rows[0].dates)));
   if (isPvRows) {
     rows.forEach(function(row) {
       var date = String(row.date || row.day || '').slice(0, 10);
@@ -7563,8 +7572,8 @@ app.post('/api/intelligence/deep-backfill', requireAdmin, async (req, res) => {
           // Pass wsId so the per-workspace token (or switch) targets THIS workspace
           // — without it the call hit whatever workspace was active and returned
           // wrong/zero stats.
-          var bStats = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { wsId: wsId, params: { start_date: start, end_date: end } });
-          var raw = Object.values(pivotBisonStats((bStats.data || bStats) || []));
+          var bStats = await pvApi('/account/email-stats', { wsId: wsId, params: { start_date: start, end_date: end } });
+          var raw = Object.values(pivotBisonStats(bStats));
           const chart = Array.isArray(raw) ? raw : (raw?.chart || []);
           for (const row of chart) {
             const date = (row.date || row.day || '').slice(0, 10);
@@ -8406,6 +8415,15 @@ async function listSendingMailboxes() {
         const email = (a.email || a.email_address || a.from_email || a.name || '').toString().trim().toLowerCase();
         if (!email.includes('@') || seenEmails.has(email)) continue;
         seenEmails.add(email);
+        // PlusVibe shape: status 'ACTIVE'/'INACTIVE'; per-account settings nested in
+        // payload (daily_limit, sending_gap, name, tags, warmup); provider is
+        // GOOGLE_WORKSPACE / MICROSOFT365 / (SMTP host otherwise).
+        const p = a.payload || {};
+        const rawStatus = String(a.status || '').toLowerCase();
+        const provRaw = String(a.provider || '').toUpperCase();
+        const provider = provRaw.includes('GOOGLE') ? 'google'
+          : (provRaw.includes('MICROSOFT') || provRaw.includes('OFFICE') || provRaw.includes('OUTLOOK')) ? 'microsoft'
+          : (a.provider || p.smtp_host || null);
         mailboxes.push({
           email,
           account_id: a._id || a.id ? String(a._id || a.id) : null,
@@ -8413,22 +8431,23 @@ async function listSendingMailboxes() {
           workspace_id: team.pv,
           workspace_name: team.name,
           bison_team_id: team.pv,
-          status: a.status === 'connected' ? 'active' : (a.status || (a.is_connected === false ? 'inactive' : 'active')),
-          warmup_status: (a.warmup_enabled ?? a.warmup_status === 'ACTIVE') ? 'ACTIVE' : 'PAUSED',
-          provider: a.type || a.provider || a.smtp_host || null,
-          name: a.name || [a.first_name, a.last_name].filter(Boolean).join(' ') || null,
-          daily_limit: typeof a.daily_limit === 'number' ? a.daily_limit : null,
-          sending_gap: null,
-          warmup_limit: a.warmup_daily_limit ?? null,
-          warmup_reply_rate: null,
-          warmup_enabled_at: null,
+          status: (rawStatus === 'connected' || rawStatus === 'active') ? 'active' : (rawStatus || 'active'),
+          warmup_status: String(a.warmup_status || '').toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'PAUSED',
+          provider,
+          name: p.name || a.name || [a.first_name, a.last_name].filter(Boolean).join(' ') || null,
+          daily_limit: typeof p.daily_limit === 'number' ? p.daily_limit : (typeof a.daily_limit === 'number' ? a.daily_limit : null),
+          sending_gap: typeof p.sending_gap === 'number' ? p.sending_gap : null,
+          warmup_limit: (a.warmup_daily_limit ?? p.warmup?.warmup_max_daily_limit) ?? null,
+          warmup_reply_rate: p.warmup?.warmup_reply_rate ?? null,
+          warmup_enabled_at: a.warmup_enb_dt || null,
+          tags: Array.isArray(p.tags) ? p.tags : [],
           campaigns_count: 0,
           campaign_ids: [],
-          created_at: a.created_at || null,
-          updated_at: a.updated_at || null,
-          api_sent:    Number(a.sent_count    ?? a.emails_sent_count    ?? 0) || 0,
-          api_replied: Number(a.replied_count ?? a.total_replied_count  ?? 0) || 0,
-          api_bounced: Number(a.bounced_count ?? 0) || 0,
+          created_at: a.timestamp_created || a.created_at || null,
+          updated_at: a.timestamp_updated || a.updated_at || null,
+          api_sent:    Number(p.analytics?.sent_count    ?? a.sent_count    ?? 0) || 0,
+          api_replied: Number(p.analytics?.replied_count ?? a.replied_count ?? 0) || 0,
+          api_bounced: Number(p.analytics?.bounced_count ?? a.bounced_count ?? 0) || 0,
         });
         found++;
       }
@@ -9888,17 +9907,20 @@ async function syncMailboxDailyStats({ days = 35 } = {}) {
     }
 
     for (const [teamId, ws] of byWorkspace.entries()) {
-      let body;
+      let pivot;
       try {
-        body = await bisonReq('/api/workspaces/v1.1/line-area-chart-stats', {
-          wsId: teamId, params: { start_date: start, end_date: end },
-        });
+        const stats = await pvApi('/account/email-stats', { wsId: teamId, params: { start_date: start, end_date: end } });
+        pivot = pivotBisonStats(stats);
       } catch (e) {
-        continue; // skip this workspace; transient Bison errors shouldn't abort the sweep
+        continue; // skip this workspace; transient PV errors shouldn't abort the sweep
       }
-      const sent    = eventSeriesByLabel(body, 'Sent');
-      const replied = eventSeriesByLabel(body, 'Replied');
-      const bounced = eventSeriesByLabel(body, 'Bounced');
+      // Build date→count maps from the PV per-date pivot.
+      const sent = new Map(), replied = new Map(), bounced = new Map();
+      for (const [date, row] of Object.entries(pivot)) {
+        sent.set(date, row.total_sent_count || 0);
+        replied.set(date, row.total_reply_count || 0);
+        bounced.set(date, row.total_bounce_count || 0);
+      }
       const allDates = new Set([...sent.keys(), ...replied.keys(), ...bounced.keys()]);
 
       const bucketList = [...ws.buckets.values()];
@@ -13066,8 +13088,9 @@ app.post('/api/copy/refresh-templates', requireSession, async (req, res) => {
     const { workspace_id } = req.query;
     if (!workspace_id) return res.status(400).json({ error: 'Missing workspace_id' });
 
-    var camp_raw = await bisonFetch('/api/campaigns', { wsId: ws.id || wsId || workspace_id });
-    var campaigns = (camp_raw.data || []).map(function(c) { return { id: c.id, camp_name: c.name, status: c.status, sent_count: c.emails_sent || 0, replied_count: c.replied || 0, unique_opened_count: c.unique_opens || 0, bounced_count: c.bounced || 0, lead_count: c.total_leads || 0, lead_contacted_count: c.total_leads_contacted || 0, positive_reply_count: 0, sequences: [] }; });
+    var camp_raw = await pvApi('/campaign/list', { wsId: workspace_id });
+    var camp_list = Array.isArray(camp_raw) ? camp_raw : (camp_raw?.data || camp_raw?.campaigns || []);
+    var campaigns = camp_list.map(function(c) { return { id: c.id || c._id, camp_name: c.name, status: c.status, sent_count: 0, replied_count: 0, unique_opened_count: 0, bounced_count: 0, lead_count: 0, lead_contacted_count: 0, positive_reply_count: 0, sequences: [] }; });
     if (!Array.isArray(campaigns)) return res.status(502).json({ error: 'PlusVibe returned no campaigns' });
 
     let captured = 0;
@@ -13379,9 +13402,10 @@ app.post('/api/campaigns/apply-optimisation', requireSession, async (req, res) =
     return res.status(400).json({ error: 'Missing params' });
   try {
     // Get current campaign sequence structure
-    var camp_raw = await bisonFetch('/api/campaigns', { wsId: ws.id || wsId || workspace_id });
-    var campaigns = (camp_raw.data || []).map(function(c) { return { id: c.id, camp_name: c.name, status: c.status, sent_count: c.emails_sent || 0, replied_count: c.replied || 0, unique_opened_count: c.unique_opens || 0, bounced_count: c.bounced || 0, lead_count: c.total_leads || 0, lead_contacted_count: c.total_leads_contacted || 0, positive_reply_count: 0, sequences: [] }; });
-    const camp = (Array.isArray(campaigns) ? campaigns : []).find(c => c.id === campId);
+    var camp_raw = await pvApi('/campaign/list', { wsId });
+    var camp_list = Array.isArray(camp_raw) ? camp_raw : (camp_raw?.data || camp_raw?.campaigns || []);
+    var campaigns = camp_list.map(function(c) { return { id: c.id || c._id, camp_name: c.name, status: c.status, sequences: [] }; });
+    const camp = campaigns.find(c => c.id === campId);
     if (!camp) return res.status(404).json({ error: 'Campaign not found' });
 
     // Build updated sequences with losing variants deactivated
@@ -14560,18 +14584,18 @@ app.get('/api/perfshim/account/email-stats', requireSession, async (req, res) =>
       d.setUTCDate(d.getUTCDate() - 1);
       fetchStart = d.toISOString().slice(0, 10);
     }
-    const bStats = await bisonReq('/api/workspaces/v1.1/line-area-chart-stats', {
+    const bStats = await pvApi('/account/email-stats', {
       wsId,
       params: { start_date: fetchStart, end_date },
     });
-    const pivoted = pivotBisonStats((bStats.data || bStats) || []);
+    const pivoted = pivotBisonStats(bStats);
     // keep only rows inside the REQUESTED window (drop the extra padding day).
     const rows = Object.values(pivoted).filter(r => r.date >= start_date && r.date <= end_date);
     const agg = aggPvEmailStats(rows); // { sent, replies, oooReplies, posReplies, bounces, contacted }
     res.json({ header: {
       total_sent_count:      agg.sent,
       total_reply_count:     agg.replies,
-      total_ooo_reply_count: agg.oooReplies, // Bison has no OOO dimension -> 0 (see pivotBisonStats)
+      total_ooo_reply_count: agg.oooReplies,
       total_pos_reply_count: agg.posReplies,
       total_bounce_count:    agg.bounces,
       total_contacted_count: agg.contacted,
@@ -14589,16 +14613,17 @@ app.get('/api/perfshim/analytics/campaign/stats', requireSession, async (req, re
   try {
     const wsId = perfshimTeamId(workspace_id);
     if (!wsId) return res.json([]);
-    const data = await bisonReq('/api/campaigns', { wsId });
-    const list = (data?.data || []).map(c => ({
+    const data = await pvApi('/campaign/list', { wsId });
+    const arr = Array.isArray(data) ? data : (data?.data || data?.campaigns || []);
+    const list = arr.map(c => ({
       camp_name:            c.name,
       name:                 c.name,
       status:               c.status,
-      sent_count:           c.emails_sent || 0,
-      replied_count:        c.replied || 0,
-      ooo_reply_count:      0, // Bison has no OOO dimension
-      positive_reply_count: 0, // Bison campaign list has no positive-reply field
-      bounced_count:        c.bounced || 0,
+      sent_count:           c.emails_sent || c.sent_count || 0,
+      replied_count:        c.replied || c.replied_count || 0,
+      ooo_reply_count:      0,
+      positive_reply_count: 0,
+      bounced_count:        c.bounced || c.bounced_count || 0,
       lead_contacted_count: c.total_leads_contacted || 0,
     }));
     res.json(list);
@@ -14663,12 +14688,13 @@ app.get('/api/perfshim/lead/count/lead-status', requireSession, async (req, res)
   try {
     const wsId = perfshimTeamId(workspace_id);
     if (!wsId) return res.json(empty);
-    const data = await bisonReq('/api/campaigns', { wsId });
+    const data = await pvApi('/campaign/list', { wsId });
+    const arr = Array.isArray(data) ? data : (data?.data || data?.campaigns || []);
     const out = { ...empty };
-    (data?.data || []).forEach(c => {
+    arr.forEach(c => {
       out.CONTACTED += c.total_leads_contacted || 0;
-      out.REPLIED   += c.replied || 0;
-      out.BOUNCED   += c.bounced || 0;
+      out.REPLIED   += c.replied || c.replied_count || 0;
+      out.BOUNCED   += c.bounced || c.bounced_count || 0;
     });
     res.json(out);
   } catch (err) {
@@ -14694,15 +14720,11 @@ app.get('/api/pv/campaigns', requireSession, async (req, res) => {
   const { workspace_id } = req.query;
   if (!workspace_id) return res.status(400).json({ error: 'Missing workspace_id' });
   try {
-    // Bison is stateful: bisonReq wsId switches the workspace, then /api/campaigns
-    // returns { data: [{id,name,status,...}] }. Resolve the incoming PV id (or
-    // team_id) to a Bison team_id; a mapping miss is a clear error, not an empty
-    // list that looks like "no campaigns".
-    const wsId = resolveBisonTeamId(workspace_id);
-    if (!wsId) return res.status(404).json({ error: 'This client is not mapped to a Bison workspace yet.' });
-    const data = await bisonReq('/api/campaigns', { wsId });
-    const list = (data?.data || []).map(c => ({
-      id: c.id,
+    // PlusVibe /campaign/list returns a bare array of {id,name,status,...}.
+    const data = await pvApi('/campaign/list', { wsId: workspace_id });
+    const arr = Array.isArray(data) ? data : (data?.data || data?.campaigns || []);
+    const list = arr.map(c => ({
+      id: c.id || c._id,
       name: c.name,          // contacts.html renders c.name in the dropdown
       camp_name: c.name,     // older callers expect camp_name
       status: c.status,
@@ -14836,11 +14858,11 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
           };
         });
       if (!pvLeadPayload.length) { continue; }
-      for (const lead of pvLeadPayload) {
-        await pvApi('/lead/add', { method: 'POST', wsId: workspace_id, body: { lead_list_id: campaign_id || null, ...lead } })
-          .catch(function(e) { console.warn('[pv-push] lead add failed:', e.message); });
-      }
-      pushed += batch.length;
+      // PlusVibe batch add + campaign assignment in one call.
+      try {
+        await pvApi('/lead/add', { method: 'POST', wsId: workspace_id, body: { workspace_id, campaign_id, leads: pvLeadPayload } });
+        pushed += pvLeadPayload.length;
+      } catch (e) { console.warn('[pv-push] lead add failed:', e.message); }
     }
 
     // Stamp emailed_workspaces so these contacts are snoozed for 60 days
@@ -15035,19 +15057,17 @@ app.post('/api/bison/push-contacts', requireSession, async (req, res) => {
     console.log(`[pv-push] filtered ${allContacts.length} → ${contacts.length}`, skipped);
     if (contacts.length === 0) return res.json({ success: true, pushed: 0, total: 0, skipped });
 
-    // Push leads to PlusVibe /lead/add (top-level fields, no custom_variables pre-step needed).
+    // Push leads to PlusVibe /lead/add — batch { workspace_id, campaign_id, leads }
+    // (top-level native fields; campaign assignment happens in the same call).
     let pushed = 0;
     for (let i = 0; i < contacts.length; i += 100) {
       const slice = contacts.slice(i, i + 100);
-      for (const c of slice) {
-        const lead = contactToBisonLead(c);
-        if (!lead.first_name || !lead.last_name) continue;
-        await pvApi('/lead/add', {
-          method: 'POST', wsId: ws_id,
-          body: { lead_list_id: campaign_id, ...lead },
-        }).catch(e => console.warn('[pv-push] lead add failed:', e.message));
-      }
-      pushed += slice.length;
+      const leads = slice.map(contactToBisonLead).filter(l => l.first_name && l.last_name);
+      if (!leads.length) continue;
+      try {
+        await pvApi('/lead/add', { method: 'POST', wsId: ws_id, body: { workspace_id: ws_id, campaign_id, leads } });
+        pushed += leads.length;
+      } catch (e) { console.warn('[pv-push] lead add failed:', e.message); }
     }
 
     const pushedIds = contacts.map(c => c.id).filter(Boolean);

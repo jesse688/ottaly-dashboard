@@ -132,7 +132,7 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-h
         <button class="prov-tab"        data-prov="outlook" onclick="setProvider('outlook')">Microsoft</button>
         <button class="prov-tab"        data-prov="other"   onclick="setProvider('other')">Other</button>
       </div>
-      <span id="providerNote" style="margin-left:auto;font-size:11px;color:var(--muted)" title="'All' totals match the per-client table exactly (same Bison daily source). Bison has no provider breakdown, so the split across Google/Outlook/Other/Unknown is estimated from the captured email_events recipient-MX ratios and apportioned to the true total. Coverage = share of sends the event log captured.">by recipient MX · sends in period</span>
+      <span id="providerNote" style="margin-left:auto;font-size:11px;color:var(--muted)" title="'All' totals match the per-client table exactly (same PlusVibe daily source). PlusVibe has no provider breakdown, so the split across Google/Outlook/Other/Unknown is estimated from the captured email_events recipient-MX ratios and apportioned to the true total. Coverage = share of sends the event log captured.">by recipient MX · sends in period</span>
     </div>
     <div id="providerCards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.6rem"></div>
   </div>
@@ -176,7 +176,7 @@ const _chartInstances = {};
 const _toggles = {};
 // hardRate/blockRate/softRate are OFF by default (opt-in detail) and sourced
 // from the bounce-breakdown overlay (email_events classification), not the
-// Bison total. bounceRate stays the authoritative Bison-derived line.
+// PlusVibe total. bounceRate stays the authoritative PlusVibe-derived line.
 const ALL_SERIES = ['humanRR','oooRR','bounceRate','hardRate','blockRate','softRate','rtl','sent','leads'];
 const DEFAULT_OFF = new Set(['hardRate','blockRate','softRate']);
 const SERIES_LABEL = {
@@ -215,7 +215,7 @@ function seriesValue(s, d) {
   if (s === 'oooRR')      return sent > 0 ? +(ooo / sent * 100).toFixed(2) : null;
   if (s === 'bounceRate') return sent > 0 ? +((d.bounces || 0) / sent * 100).toFixed(2) : null;
   // hard/block/soft rates use the classified email_events overlay merged into d.
-  // (bounceHard etc.). Denominator is the same Bison sent, so they're directly
+  // (bounceHard etc.). Denominator is the same PlusVibe sent, so they're directly
   // comparable to the authoritative Bounce Rate line above.
   if (s === 'hardRate')   return sent > 0 ? +((d.bounceHard  || 0) / sent * 100).toFixed(2) : null;
   if (s === 'blockRate')  return sent > 0 ? +((d.bounceBlock || 0) / sent * 100).toFixed(2) : null;
@@ -372,7 +372,7 @@ async function loadStats(start, end, silent = false) {
     _data = await r.json();
     // ADDITIVE overlay: merge the email_events hard/block/soft split into each
     // day point. Best-effort — if it fails, the chart just shows the existing
-    // Bison Bounce Rate with no split (never blocks the page).
+    // PlusVibe Bounce Rate with no split (never blocks the page).
     await mergeBounceBreakdown(start, end);
     if (_data.updatedAt) {
       const ts = new Date(_data.updatedAt).toLocaleTimeString();
@@ -687,7 +687,7 @@ function renderClients() {
     // Partial + no rows means the PlusVibe fetch hasn't landed yet (or is failing),
     // not a genuinely empty period — say so, and the background retry will refill.
     em.textContent = _data?.partial
-      ? 'Still caching stats from Bison — this will refresh automatically.'
+      ? 'Still caching stats from PlusVibe — this will refresh automatically.'
       : 'No data for this period.';
     em.style.display = '';
     return;

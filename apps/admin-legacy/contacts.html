@@ -1230,10 +1230,10 @@
               <input type="checkbox" id="filterExportedOnly" style="accent-color:#3b82f6"> Exported to Apollo only
             </label>
             <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;">
-              <input type="checkbox" id="filterSentToPV" style="accent-color:#16a34a"> ✅ Sent to Bison
+              <input type="checkbox" id="filterSentToPV" style="accent-color:#16a34a"> ✅ Sent to PlusVibe
             </label>
             <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;">
-              <input type="checkbox" id="filterNotSentToPV" style="accent-color:#f59e0b"> ⏳ Not sent to Bison
+              <input type="checkbox" id="filterNotSentToPV" style="accent-color:#f59e0b"> ⏳ Not sent to PlusVibe
             </label>
           </div>
         </div>
@@ -1440,7 +1440,7 @@
         </button>
         <div style="flex:1;"></div>
         <button class="btn btn-plusvibe" id="pushBtn" onclick="openPushModal()">
-          🚀 Verify &amp; Push to Bison
+          🚀 Verify &amp; Push to PlusVibe
         </button>
       </div>
 
@@ -1621,7 +1621,7 @@
   <!-- Push to PlusVibe Modal -->
   <div id="pushModal" class="modal">
     <div class="modal-content" style="max-width:500px;">
-      <div class="modal-header">🚀 Push to Bison</div>
+      <div class="modal-header">🚀 Push to PlusVibe</div>
 
       <!-- Step 1: Configure -->
       <div id="pushStep1">
@@ -1650,7 +1650,7 @@
           </select>
           <div id="pushNewCampWrap" style="display:none;">
             <input type="text" id="pushNewCampaignName" style="width:100%;padding:10px 12px;" placeholder="New campaign name">
-            <p style="font-size:11px;color:#9ca3af;margin:4px 0 0;">Auto-named from your filters (editable). Created as a Draft in Bison — launch it there when ready.</p>
+            <p style="font-size:11px;color:#9ca3af;margin:4px 0 0;">Auto-named from your filters (editable). Created as a Draft in PlusVibe — launch it there when ready.</p>
 
             <!-- New-campaign settings (applied to the Draft via PATCH /update) -->
             <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:14px;margin-top:10px;">
@@ -1718,22 +1718,22 @@
 
       <div class="modal-footer" style="flex-wrap:wrap;gap:.5rem;">
         <button class="btn btn-secondary" onclick="closePushModal()">Cancel</button>
-        <button class="btn btn-ghost" onclick="downloadPushCsv()" title="Download selected contacts as CSV to import manually into Bison">⬇ Download CSV</button>
+        <button class="btn btn-ghost" onclick="downloadPushCsv()" title="Download selected contacts as CSV to import manually into PlusVibe">⬇ Download CSV</button>
         <button id="pushConfirmBtn" class="btn btn-plusvibe" onclick="executePush()">Push Contacts</button>
       </div>
     </div>
   </div>
 
-  <!-- Push to Bison Modal -->
+  <!-- Push to PlusVibe Modal -->
   <div id="bisonPushModal" class="modal">
     <div class="modal-content">
-      <div class="modal-header">🚀 Push to Bison</div>
+      <div class="modal-header">🚀 Push to PlusVibe</div>
       <div id="bisonPushStep1">
         <p style="font-size:13px;color:#6b7280;margin-bottom:16px;">
           Pushing <strong><span id="bisonPushCount">0</span> contacts</strong>
         </p>
         <div class="form-group">
-          <label>Bison Workspace</label>
+          <label>PlusVibe Workspace</label>
           <select id="bisonWorkspace" onchange="loadBisonCampaigns()" style="width:100%;padding:10px 12px;">
             <option value="">Loading workspaces...</option>
           </select>
@@ -1769,7 +1769,7 @@
             <input type="text" id="bisonNewCampaignName" style="flex:1;padding:10px 12px;" placeholder="New campaign name">
             <button type="button" id="bisonRegenName" onclick="regenBisonName()" title="Regenerate from current filters" style="padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;background:#fff;cursor:pointer;">↻</button>
           </div>
-          <p style="font-size:11px;color:#6b7280;margin:6px 0 0;" id="bisonNameHint">Auto-named from your active filters. Created as a Draft — edit/launch it in Bison when ready.</p>
+          <p style="font-size:11px;color:#6b7280;margin:6px 0 0;" id="bisonNameHint">Auto-named from your active filters. Created as a Draft — edit/launch it in PlusVibe when ready.</p>
 
           <!-- Campaign settings (applied to the new Draft via PATCH /update) -->
           <div style="border:1px solid #e5e7eb;border-radius:8px;padding:14px;margin-top:12px;background:#fafafa;">
@@ -1777,7 +1777,7 @@
             <div style="display:flex;gap:12px;flex-wrap:wrap;">
               <div style="flex:1;min-width:140px;">
                 <label style="font-size:12px;">Max emails / day</label>
-                <input type="number" id="bisonMaxEmails" min="0" value="1000" style="width:100%;padding:8px 10px;" placeholder="Bison default">
+                <input type="number" id="bisonMaxEmails" min="0" value="1000" style="width:100%;padding:8px 10px;" placeholder="PlusVibe default">
               </div>
               <div style="flex:1;min-width:140px;">
                 <label style="font-size:12px;">Max new leads / day</label>
@@ -1799,13 +1799,13 @@
           </div>
         </div>
         <div style="background:#fefce8;border:1px solid #fde047;border-radius:8px;padding:14px;margin-top:10px;">
-          <p style="font-size:12px;color:#854d0e;margin:0;">Only safe/verified contacts with keywords + industry are pushed. 60-day per-client cooldown applies (shared with Bison, based on the client filter selection). This path does not verify — contacts must already be verified.</p>
+          <p style="font-size:12px;color:#854d0e;margin:0;">Only safe/verified contacts with keywords + industry are pushed. 60-day per-client cooldown applies (shared with PlusVibe, based on the client filter selection). This path does not verify — contacts must already be verified.</p>
         </div>
         <div id="bisonPushError" style="display:none;background:#fee2e2;color:#dc2626;padding:10px 14px;border-radius:6px;font-size:13px;margin-top:12px;"></div>
       </div>
       <div class="modal-footer" style="flex-wrap:wrap;gap:.5rem;">
         <button class="btn btn-secondary" onclick="closeBisonPushModal()">Cancel</button>
-        <button id="bisonPushConfirmBtn" class="btn btn-plusvibe" style="background:#7c3aed;" onclick="executeBisonPush()">Push to Bison</button>
+        <button id="bisonPushConfirmBtn" class="btn btn-plusvibe" style="background:#7c3aed;" onclick="executeBisonPush()">Push to PlusVibe</button>
       </div>
     </div>
   </div>
@@ -3636,7 +3636,7 @@
       const contactIds = [..._selectedIds];
       const wsName = pvWorkspaces.find(w => w._id === wsId)?.name || wsId;
 
-      // Resolve the target campaign. For "new", create a Draft in Bison first,
+      // Resolve the target campaign. For "new", create a Draft in PlusVibe first,
       // then push into it. Verification still runs either way (below).
       let campId, campName;
       if (campMode === 'new') {
@@ -3646,7 +3646,7 @@
         btn.disabled = true; const orig = btn.textContent; btn.textContent = 'Creating campaign…';
         try {
           // Gather campaign settings from the panel. Blank max-emails => omit
-          // (Bison default); booleans always sent.
+          // (PlusVibe default); booleans always sent.
           const maxEmailsRaw = (document.getElementById('pushMaxEmails').value || '').trim();
           const maxNewRaw = (document.getElementById('pushMaxNewLeads').value || '').trim();
           const settings = {
@@ -3784,7 +3784,7 @@
           if (j.status === 'verifying') {
             statusLabel = j.verifyOnly ? `🔍 Verifying for CSV — ${j.verified||0}/${j.toVerify||0}` : `🔍 Verifying with Reacher — ${j.verified||0}/${j.toVerify||0}`;
           } else if (j.status === 'pushing') {
-            statusLabel = `🚀 Pushing to Bison — ${j.pushed||0} sent`;
+            statusLabel = `🚀 Pushing to PlusVibe — ${j.pushed||0} sent`;
           } else if (j.status === 'n2b_verifying') {
             statusLabel = `🔬 No2Bounce validating ${j.n2bTotal||0} catch-all contacts…`;
           } else if (j.status === 'completed') {
@@ -3927,7 +3927,7 @@
       document.getElementById('pushModal').classList.remove('active');
     }
 
-    // ── Push to Bison ──────────────────────────────────────────
+    // ── Push to PlusVibe ──────────────────────────────────────────
     // Build an auto campaign name from the currently-active filters (NOT the
     // client — the workspace already identifies them). Caps each list to 2
     // values and appends a short date. Falls back to "New campaign · <date>".
@@ -3987,13 +3987,13 @@
         input.readOnly = true;
         input.style.background = '#f9fafb';
         if (regen) regen.style.display = '';
-        if (hint) hint.textContent = 'Auto-named from your active filters. Created as a Draft — edit/launch in Bison when ready.';
+        if (hint) hint.textContent = 'Auto-named from your active filters. Created as a Draft — edit/launch in PlusVibe when ready.';
       } else {
         input.readOnly = false;
         input.style.background = '#fff';
         input.focus();
         if (regen) regen.style.display = 'none';
-        if (hint) hint.textContent = 'Type any name. Created as a Draft — edit/launch in Bison when ready.';
+        if (hint) hint.textContent = 'Type any name. Created as a Draft — edit/launch in PlusVibe when ready.';
       }
     }
     function regenBisonName() {
@@ -4022,7 +4022,7 @@
       try {
         const res = await fetch('/api/bison/workspaces').then(r => r.json());
         const ws = res.workspaces || [];
-        if (!ws.length) { wsEl.innerHTML = '<option value="">No Bison workspaces found</option>'; return; }
+        if (!ws.length) { wsEl.innerHTML = '<option value="">No PlusVibe workspaces found</option>'; return; }
         wsEl.innerHTML = '<option value="">— Select workspace —</option>' +
           ws.map(w => `<option value="${w.id}" data-pv="${w.pv_workspace_id || ''}">${w.name}</option>`).join('');
       } catch (err) {
@@ -4050,7 +4050,7 @@
       const wsId = document.getElementById('bisonWorkspace').value;
       const errEl = document.getElementById('bisonPushError');
       const mode = (document.querySelector('input[name="bisonPushMode"]:checked') || {}).value || 'existing';
-      if (!wsId) { errEl.textContent = 'Please select a Bison workspace.'; errEl.style.display = ''; return; }
+      if (!wsId) { errEl.textContent = 'Please select a PlusVibe workspace.'; errEl.style.display = ''; return; }
 
       let campId = document.getElementById('bisonCampaign').value;
       let campName;
@@ -4063,7 +4063,7 @@
       }
 
       // Shared cooldown keyed by the client's PV workspace_id: prefer the
-      // selected Bison workspace's mapped pv id, fall back to the sidebar filter.
+      // selected PlusVibe workspace's mapped pv id, fall back to the sidebar filter.
       const wsEl2 = document.getElementById('bisonWorkspace');
       const cooldownWsId = wsEl2.selectedOptions[0]?.dataset.pv
         || document.getElementById('clientFilter')?.value || null;
@@ -4075,7 +4075,7 @@
         if (mode === 'new') {
           btn.textContent = 'Creating campaign…';
           // Gather campaign settings from the panel. Max emails left blank => omit
-          // (keep Bison default); everything else is always sent.
+          // (keep PlusVibe default); everything else is always sent.
           const maxEmailsRaw = document.getElementById('bisonMaxEmails').value.trim();
           const maxNewRaw = document.getElementById('bisonMaxNewLeads').value.trim();
           const settings = {
@@ -4114,14 +4114,14 @@
         const sk = data.skipped || {};
         const skTotal = Object.values(sk).reduce((a, b) => a + (b || 0), 0);
         if (mode === 'new') {
-          showMessage(`✅ Created draft campaign '${campName}' and pushed ${data.pushed} contact(s)${skTotal ? ` (${skTotal} skipped)` : ''}. Launch it in Bison when ready.`, 'success');
+          showMessage(`✅ Created draft campaign '${campName}' and pushed ${data.pushed} contact(s)${skTotal ? ` (${skTotal} skipped)` : ''}. Launch it in PlusVibe when ready.`, 'success');
         } else {
-          showMessage(`✅ Pushed ${data.pushed} contact(s) to Bison${skTotal ? ` (${skTotal} skipped)` : ''}.`, 'success');
+          showMessage(`✅ Pushed ${data.pushed} contact(s) to PlusVibe${skTotal ? ` (${skTotal} skipped)` : ''}.`, 'success');
         }
       } catch (err) {
         errEl.textContent = err.message; errEl.style.display = '';
       } finally {
-        btn.disabled = false; btn.textContent = 'Push to Bison';
+        btn.disabled = false; btn.textContent = 'Push to PlusVibe';
       }
     }
 

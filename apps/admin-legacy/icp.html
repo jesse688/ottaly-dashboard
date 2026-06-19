@@ -107,7 +107,7 @@
     </select>
     <button class="client-select" id="refreshBtn" onclick="runRefresh()" style="min-width:auto;background:var(--navy);color:#fff;border-color:var(--navy);cursor:pointer">↻ Refresh All</button>
     <button class="client-select" id="backfillBtn" onclick="runBackfill()" style="min-width:auto;background:#fff;color:var(--navy);border-color:var(--navy);cursor:pointer" title="Spread known industry/city/state across contacts at the same domain — fast, no API walk">↺ Fill Unknowns</button>
-    <button class="client-select" id="empSizeBtn" onclick="runEmpSizeBackfill()" style="min-width:auto;background:#fff;color:var(--teal);border-color:var(--teal);cursor:pointer" title="Pull company size from Bison enrichment data (all workspaces, ~1–2 min)">⬇ Sync Company Size</button>
+    <button class="client-select" id="empSizeBtn" onclick="runEmpSizeBackfill()" style="min-width:auto;background:#fff;color:var(--teal);border-color:var(--teal);cursor:pointer" title="Pull company size from PlusVibe enrichment data (all workspaces, ~1–2 min)">⬇ Sync Company Size</button>
     <span id="refreshStatus" style="font-size:13px;color:var(--muted)"></span>
   </div>
 
@@ -697,7 +697,7 @@ async function runEmpSizeBackfill() {
   const status = document.getElementById('refreshStatus');
   btn.disabled = true;
   btn.textContent = '⬇ Syncing…';
-  status.textContent = 'Fetching employee size from Bison for all clients — may take 1–2 min…';
+  status.textContent = 'Fetching employee size from PlusVibe for all clients — may take 1–2 min…';
   try {
     const r = await fetch('/api/audience/backfill-employee-size', { method: 'POST' }).then(r => r.json());
     if (r.error) {
@@ -719,7 +719,7 @@ async function runRefresh() {
   const status = document.getElementById('refreshStatus');
   btn.disabled = true;
   btn.textContent = '↻ Running…';
-  status.textContent = 'Pulling replies from Bison for all clients…';
+  status.textContent = 'Pulling replies from PlusVibe for all clients…';
   try {
     const r = await fetch('/api/audience/refresh-all', { method: 'POST' }).then(r => r.json());
     status.textContent = `Done — ${r.clients} clients refreshed.`;

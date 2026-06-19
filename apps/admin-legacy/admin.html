@@ -171,15 +171,15 @@ tbody tr:hover { background:#FAFBFC; }
 <div id="adminPanel">
   <div class="container">
 
-    <!-- Bison API key -->
-    <div class="section-title">Bison API Key</div>
+    <!-- PlusVibe API key -->
+    <div class="section-title">PlusVibe API Key</div>
     <div class="card" style="margin-bottom:1rem;">
       <p style="font-size:13px;color:#6B7280;margin-bottom:1rem;">
-        The EmailBison API key the dashboard uses for all mailbox, campaign, lead and stats calls.
+        The PlusVibe API key the dashboard uses for all mailbox, campaign, lead and stats calls.
         A key saved here overrides the server's environment variable and takes effect immediately — no restart needed.
       </p>
       <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
-        <input type="password" id="bisonKeyInput" placeholder="Paste Bison API key" style="flex:1;min-width:260px;padding:.55rem .75rem;border:1px solid #D1D5DB;border-radius:8px;font-size:14px;">
+        <input type="password" id="bisonKeyInput" placeholder="Paste PlusVibe API key" style="flex:1;min-width:260px;padding:.55rem .75rem;border:1px solid #D1D5DB;border-radius:8px;font-size:14px;">
         <button class="btn btn-primary" onclick="saveBisonKey()">Save</button>
         <button class="btn" onclick="testBisonKey()" style="border:1px solid #D1D5DB;">Test connection</button>
         <button class="btn" onclick="clearBisonKey()" style="border:1px solid #D1D5DB;color:#B91C1C;">Use env key</button>
@@ -187,12 +187,12 @@ tbody tr:hover { background:#FAFBFC; }
       <div id="bisonKeyStatus" style="margin-top:.75rem;font-size:13px;color:#6B7280;">Loading…</div>
     </div>
 
-    <!-- Per-workspace Bison tokens -->
-    <div class="section-title">Per-workspace Bison tokens</div>
+    <!-- Per-workspace PlusVibe tokens -->
+    <div class="section-title">Per-workspace PlusVibe tokens</div>
     <div class="card" style="margin-bottom:1rem;">
       <p style="font-size:13px;color:#6B7280;margin-bottom:1rem;">
         Gives each workspace its own scoped API token so the background jobs never call <code>switch-workspace</code>
-        on the shared key — which is what logs you out of the Bison web UI ("only one login at a time").
+        on the shared key — which is what logs you out of the PlusVibe web UI ("only one login at a time").
         Minting uses the super-admin key above; tokens are stored server-side and take effect immediately.
         Workspaces without a token keep using the old switch-the-shared-key path.
       </p>
@@ -442,8 +442,8 @@ tbody tr:hover { background:#FAFBFC; }
       <div id="payslipList" style="margin-top:1rem"></div>
     </div>
 
-    <!-- Bison workspaces -->
-    <div class="section-title">Bison Workspaces</div>
+    <!-- PlusVibe workspaces -->
+    <div class="section-title">PlusVibe Workspaces</div>
     <div class="card">
       <p style="font-size:13px;color:#9CA3AF;margin-bottom:1rem;">Click a workspace to fill the Workspace ID field above.</p>
       <div class="ws-grid" id="wsGrid"><p style="color:#9CA3AF;font-size:13px;">Loading…</p></div>
@@ -648,7 +648,7 @@ function adminHeaders() {
   return { 'Content-Type': 'application/json' };
 }
 
-// ── Bison API key settings ──────────────────────────────
+// ── PlusVibe API key settings ──────────────────────────────
 function setBisonStatus(html, color) {
   const el = document.getElementById('bisonKeyStatus');
   if (el) { el.innerHTML = html; el.style.color = color || '#6B7280'; }
@@ -661,7 +661,7 @@ async function loadBisonKey() {
       const src = d.source === 'dashboard' ? 'saved here' : 'from environment';
       setBisonStatus(`Current key: <strong>${d.masked}</strong> <span style="color:#9CA3AF">(${src})</span>`, '#059669');
     } else {
-      setBisonStatus('No Bison key configured — paste one above to enable Bison calls.', '#B91C1C');
+      setBisonStatus('No PlusVibe key configured — paste one above to enable PlusVibe calls.', '#B91C1C');
     }
   } catch (e) { setBisonStatus('Could not load key status: ' + e.message, '#B91C1C'); }
 }
@@ -682,12 +682,12 @@ async function saveBisonKey() {
 }
 
 async function testBisonKey() {
-  setBisonStatus('Testing connection to Bison…');
+  setBisonStatus('Testing connection to PlusVibe…');
   try {
     const r = await fetch('/api/admin/bison-key/test', { method: 'POST', headers: adminHeaders() });
     const d = await r.json();
     if (!r.ok || !d.ok) throw new Error(d.error || 'Test failed');
-    setBisonStatus(`✓ Connected to Bison — ${d.workspaces} workspace(s) visible.`, '#059669');
+    setBisonStatus(`✓ Connected to PlusVibe — ${d.workspaces} workspace(s) visible.`, '#059669');
   } catch (e) { setBisonStatus('✗ Connection failed: ' + e.message, '#B91C1C'); }
 }
 
@@ -702,7 +702,7 @@ async function clearBisonKey() {
   } catch (e) { setBisonStatus('Clear failed: ' + e.message, '#B91C1C'); }
 }
 
-// ── Per-workspace Bison tokens ──────────────────────────
+// ── Per-workspace PlusVibe tokens ──────────────────────────
 function setTokensStatus(html, color) {
   const el = document.getElementById('bisonTokensStatus');
   if (el) { el.innerHTML = html; el.style.color = color || '#6B7280'; }
@@ -723,7 +723,7 @@ async function loadBisonTokens() {
     const d = await fetch('/api/admin/bison-tokens', { headers: adminHeaders() }).then(r => r.json());
     renderTokenChips(d.teams);
     if (!d.superAdminConfigured) {
-      setTokensStatus('Configure the super-admin Bison key above before minting per-workspace tokens.', '#B91C1C');
+      setTokensStatus('Configure the super-admin PlusVibe key above before minting per-workspace tokens.', '#B91C1C');
     } else if (d.count === d.total) {
       setTokensStatus(`✓ All ${d.total} workspaces have their own token — crons will not switch the shared key.`, '#059669');
     } else {

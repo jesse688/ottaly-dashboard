@@ -182,7 +182,7 @@ th.sortable.desc::after{border-top:5px solid currentColor;opacity:1}
 <div class="header">
   <div class="logo">Ottaly<span>.</span> <span style="font-size:1rem;font-weight:500;letter-spacing:0;opacity:.6;margin-left:4px">Copy Analytics</span></div>
   <div class="header-right">
-    <button class="refresh-btn" id="refreshBtn" title="Re-sync templates from Bison">
+    <button class="refresh-btn" id="refreshBtn" title="Re-sync templates from PlusVibe">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
       <span>Refresh templates</span>
     </button>
@@ -239,7 +239,7 @@ th.sortable.desc::after{border-top:5px solid currentColor;opacity:1}
           </thead>
           <tbody id="tplBody"></tbody>
         </table>
-        <div class="data-note">Click any column to sort. <strong>All-time stats from Bison</strong> — workspace totals above are all-time from Bison. <strong>Score</strong> 0–100 weighs reply rate, lead rate, bounce rate and volume. <strong>Profiled</strong> = high-volume copy with collapsed responses — stop using it.</div>
+        <div class="data-note">Click any column to sort. <strong>All-time stats from PlusVibe</strong> — workspace totals above are all-time from PlusVibe. <strong>Score</strong> 0–100 weighs reply rate, lead rate, bounce rate and volume. <strong>Profiled</strong> = high-volume copy with collapsed responses — stop using it.</div>
       </div>
     </div>
 
@@ -270,7 +270,7 @@ th.sortable.desc::after{border-top:5px solid currentColor;opacity:1}
           </thead>
           <tbody id="subBody"></tbody>
         </table>
-        <div class="data-note">Click any column to sort. <strong>All-time stats from Bison</strong> — workspace totals above are all-time from Bison. <strong>Score</strong> 0–100. <strong>Profiled</strong> = burnt copy — stop using it.</div>
+        <div class="data-note">Click any column to sort. <strong>All-time stats from PlusVibe</strong> — workspace totals above are all-time from PlusVibe. <strong>Score</strong> 0–100. <strong>Profiled</strong> = burnt copy — stop using it.</div>
       </div>
     </div>
 
@@ -282,7 +282,7 @@ th.sortable.desc::after{border-top:5px solid currentColor;opacity:1}
       <div class="step-section" id="stepSection">
         <div class="step-grid" id="stepGrid"></div>
       </div>
-      <div class="data-note" style="border-radius:8px;margin-bottom:1.75rem"><strong>All-time stats from Bison</strong> (sent, replies, bounces per step), plus lead counts from webhook events. Workspace totals above are last-N-days from webhooks. Bars are relative to the best-performing step.</div>
+      <div class="data-note" style="border-radius:8px;margin-bottom:1.75rem"><strong>All-time stats from PlusVibe</strong> (sent, replies, bounces per step), plus lead counts from webhook events. Workspace totals above are last-N-days from webhooks. Bars are relative to the best-performing step.</div>
     </div>
 
     <!-- Diagnostic tab -->
@@ -293,7 +293,7 @@ th.sortable.desc::after{border-top:5px solid currentColor;opacity:1}
       </div>
       <div class="min-notice">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-        Raw event field population — shows what Bison is sending us and which attribution strategy each event uses.
+        Raw event field population — shows what PlusVibe is sending us and which attribution strategy each event uses.
       </div>
       <div id="diagContent" style="display:flex;flex-direction:column;gap:1.5rem;padding:1rem 0;"></div>
     </div>
@@ -324,7 +324,7 @@ th.sortable.desc::after{border-top:5px solid currentColor;opacity:1}
           </thead>
           <tbody id="staleBody"></tbody>
         </table>
-        <div class="data-note"><strong>Signal</strong> = replies + leads. <strong>Disable</strong> pauses the variant in Bison and hides it from copy analytics.</div>
+        <div class="data-note"><strong>Signal</strong> = replies + leads. <strong>Disable</strong> pauses the variant in PlusVibe and hides it from copy analytics.</div>
       </div>
     </div>
 
@@ -702,7 +702,7 @@ th.sortable.desc::after{border-top:5px solid currentColor;opacity:1}
       <div class="stat-card teal">
         <div class="stat-label">Total Sent</div>
         <div class="stat-val">${totalSent.toLocaleString()}</div>
-        <div class="stat-sub">all-time from Bison</div>
+        <div class="stat-sub">all-time from PlusVibe</div>
       </div>
       <div class="stat-card green">
         <div class="stat-label">Total Replies</div>

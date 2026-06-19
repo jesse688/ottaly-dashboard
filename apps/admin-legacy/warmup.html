@@ -60,7 +60,7 @@ tr:hover td{background:#FAFBFE}
   <div class="page-header">
     <div>
       <div class="page-title">Warmup</div>
-      <div class="page-sub">Warmup health across every sending mailbox, pulled live from EmailBison. At-risk mailboxes are surfaced first.</div>
+      <div class="page-sub">Warmup health across every sending mailbox, pulled live from PlusVibe. At-risk mailboxes are surfaced first.</div>
     </div>
     <div style="display:flex;gap:.5rem;align-items:center">
       <span id="meta" class="muted" style="font-size:12px"></span>
@@ -143,7 +143,7 @@ async function load() {
     // First-ever load builds the cache in the background (slow — 22 workspaces).
     // The API returns warming:true with no data; poll until it's ready.
     if (d.warming && (!d.mailboxes || !d.mailboxes.length)) {
-      document.getElementById('meta').textContent = 'Building warmup data from Bison… (first load can take a minute)';
+      document.getElementById('meta').textContent = 'Building warmup data from PlusVibe… (first load can take a minute)';
       document.getElementById('rows').innerHTML =
         '<tr><td colspan="9" style="text-align:center;padding:2rem" class="muted">Fetching warmup stats across all workspaces…</td></tr>';
       if (d.error) document.getElementById('err').textContent = 'Last refresh error: ' + d.error;
@@ -230,7 +230,7 @@ function updateBulk(){ const b=document.getElementById('bulkBar'); b.classList.t
 async function bulkWarmup(action){
   if(!sel.size) return;
   if(!confirm(`${action==='enable'?'Enable':'Disable'} warmup for ${sel.size} mailbox(es)?`)) return;
-  // Group selected account IDs by workspace (Bison is stateful per workspace).
+  // Group selected account IDs by workspace (PlusVibe is stateful per workspace).
   const byWs = {};
   for(const id of sel){ const ws=selWs[id]; (byWs[ws]=byWs[ws]||[]).push(id); }
   document.getElementById('err').textContent = '';

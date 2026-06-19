@@ -149,7 +149,7 @@ function render(data){
   var rRtl   = range(function(g){return g.rtl;});
   var rHard  = range(function(g){return g.hardRate;});
 
-  // Security gateways that block cold email — isolate/avoid these (per Bison
+  // Security gateways that block cold email — isolate/avoid these (per PlusVibe
   // guidance). Flag a row red if it's one of these OR its block rate is high.
   var BAD_GW = ['Mimecast','Barracuda','Proofpoint','Cisco Ironport','Sophos','Forcepoint/Mailcontrol','Trend Micro','FortiMail'];
   function gwVerdict(g){

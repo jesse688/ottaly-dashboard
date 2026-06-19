@@ -764,7 +764,7 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
 <script>
     const CFG = {
         // Server-side compatibility shim (Express /api/perfshim/*) that returns the
-        // same response shapes this page parses, sourced from EmailBison. Same-origin,
+        // same response shapes this page parses, sourced from PlusVibe. Same-origin,
         // session-cookie auth — no PlusVibe API key in the browser anymore.
         BASE:      '/api/perfshim',
         REFRESH_MS: 3 * 60 * 1000,
@@ -1009,7 +1009,7 @@ fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true,role:'admin',name:''
         }
 
         if (staleCount > 0) {
-            alerts.push({ cls: 'red', msg: `🔴 <strong>Action required:</strong> ${staleCount} profiled or high-bounce template${staleCount > 1 ? 's' : ''} still sending — pause ${staleCount > 1 ? 'these variants' : 'this variant'} in Bison. <a href="/copy.html" style="color:inherit;text-decoration:underline">See flagged copy →</a>` });
+            alerts.push({ cls: 'red', msg: `🔴 <strong>Action required:</strong> ${staleCount} profiled or high-bounce template${staleCount > 1 ? 's' : ''} still sending — pause ${staleCount > 1 ? 'these variants' : 'this variant'} in PlusVibe. <a href="/copy.html" style="color:inherit;text-decoration:underline">See flagged copy →</a>` });
         }
 
         document.getElementById('alerts').innerHTML = alerts.map(a =>

@@ -161,8 +161,8 @@ tr:hover td{background:#FAFBFF}
   <div class="section-h">By supplier — who performs best</div>
   <div class="gridN" id="bySupplier"></div>
 
-  <!-- Provider/supplier performance. Lifetime = Bison sender-emails API totals.
-       Period (Today/7d/30d) = mailbox_daily_stats (synced from Bison's
+  <!-- Provider/supplier performance. Lifetime = PlusVibe sender-emails API totals.
+       Period (Today/7d/30d) = mailbox_daily_stats (synced from PlusVibe's
        breakdownOfEventsByDate). Replies always come from the client portal. -->
   <div class="section-h" style="display:flex;align-items:center;justify-content:space-between;margin-top:1rem;flex-wrap:wrap;gap:8px">
     <span>Sending performance by provider &amp; supplier</span>
@@ -901,7 +901,7 @@ async function bulkApply(field) {
 async function bulkRemove() {
   if (!selected.size) return;
   const n = selected.size;
-  if (!confirm(`Remove ${n} mailbox${n === 1 ? '' : 'es'} from the dashboard?\n\nThey will be hidden here but remain in Bison. You can restore them by contacting an admin.`)) return;
+  if (!confirm(`Remove ${n} mailbox${n === 1 ? '' : 'es'} from the dashboard?\n\nThey will be hidden here but remain in PlusVibe. You can restore them by contacting an admin.`)) return;
   try {
     const r = await fetch('/api/mailboxes/bulk-remove', {
       method: 'POST', headers: {'Content-Type':'application/json'},
@@ -1382,8 +1382,8 @@ async function enableAllWarmup() {
 
 // ── Supplier performance charts ──────────────────────────────
 // Period model:
-//   lifetime → days=0 → Bison sender-emails API totals (all-time).
-//   today/7d/30d/… → days=N → mailbox_daily_stats (synced from Bison's
+//   lifetime → days=0 → PlusVibe sender-emails API totals (all-time).
+//   today/7d/30d/… → days=N → mailbox_daily_stats (synced from PlusVibe's
 //   breakdownOfEventsByDate). Replies always come from the client portal.
 const MB_PERIODS = [
   { key:'lifetime', label:'Lifetime' },
@@ -1406,7 +1406,7 @@ function renderMbPeriodBar() {
       + `background:${active?'var(--navy-dark)':'#fff'};color:${active?'#fff':'var(--muted)'};border:1px solid ${active?'var(--navy-dark)':'var(--border)'}">${p.label}</button>`;
   }).join('');
   bar.innerHTML = btns
-    + `<button id="mbSyncBtn" onclick="syncDailyNow()" title="Pull the latest per-day sent/reply/bounce from Bison into the local table. Takes a few minutes." style="font-family:inherit;font-size:12px;font-weight:600;padding:4px 10px;border-radius:7px;cursor:pointer;background:#fff;color:var(--navy);border:1px solid var(--navy);margin-left:8px">⟳ Sync now</button>`;
+    + `<button id="mbSyncBtn" onclick="syncDailyNow()" title="Pull the latest per-day sent/reply/bounce from PlusVibe into the local table. Takes a few minutes." style="font-family:inherit;font-size:12px;font-weight:600;padding:4px 10px;border-radius:7px;cursor:pointer;background:#fff;color:var(--navy);border:1px solid var(--navy);margin-left:8px">⟳ Sync now</button>`;
 }
 
 // Trigger the per-mailbox daily-stats sync, then poll status until it finishes
@@ -1461,10 +1461,10 @@ async function _fetchProviderStats(p) {
   const note = document.getElementById('mbPeriodNote');
   if (note) {
     if (d.lifetime) {
-      note.textContent = 'Lifetime totals from Bison (all-time). Replies are human replies from the client portal.';
+      note.textContent = 'Lifetime totals from PlusVibe (all-time). Replies are human replies from the client portal.';
     } else {
       const synced = d.syncedAt ? new Date(d.syncedAt).toLocaleString() : 'not yet — run the daily sync';
-      note.textContent = `Last ${d.days} day(s), per-day stats synced from Bison. Last sync: ${synced}. Replies from the client portal.`;
+      note.textContent = `Last ${d.days} day(s), per-day stats synced from PlusVibe. Last sync: ${synced}. Replies from the client portal.`;
     }
   }
   renderMbBarChart(d);
