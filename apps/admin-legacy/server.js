@@ -10459,6 +10459,63 @@ app.post('/api/admin/cleanup-bison-warmup', requireAdmin, async (req, res) => {
 });
 app.get('/api/admin/cleanup-bison-warmup/status', requireAdmin, (req, res) => res.json(_warmupCleanupState));
 
+// One-time READ-ONLY report: pull what EmailBison sent (and replied/bounced) over
+// a date range, straight from the Bison API. Bison is no longer sending, so its
+// today total is final — this lets us compute the REAL reply rate for the cutover
+// days (replies arriving now are responses to Bison-era sends, but PV's "sent" is
+// near-0). Touches NOTHING in our stores — pure read, safe to run anytime.
+//   GET /api/admin/bison-sends-report?days=1[&key=<bisonkey>]
+// Uses BISON_API_KEY env (still set) unless ?key= is supplied.
+app.get('/api/admin/bison-sends-report', requireAdmin, async (req, res) => {
+  const key = String(req.query.key || process.env.BISON_API_KEY || '').trim();
+  const base = (process.env.BISON_API_URL || 'https://send.ottaly.co.uk').replace(/\/$/, '');
+  if (!key) return res.status(400).json({ error: 'No Bison key — pass ?key=<bison key> or set BISON_API_KEY env' });
+  const days = Math.min(Math.max(parseInt(req.query.days || '1', 10) || 1, 1), 30);
+  const today = serverDateString(new Date());
+  const start = serverDateString(new Date(Date.now() - (days - 1) * 86400000));
+  // PV workspace name → Bison team_id (the 14 clients that ran on Bison).
+  const TEAMS = [
+    { name: 'Ottaly', team: 3 }, { name: 'AccrueAccounting', team: 4 }, { name: 'ButterflyEco', team: 5 },
+    { name: 'MagnaMoney', team: 12 }, { name: 'Bruud', team: 13 }, { name: 'GXI Furniture', team: 14 },
+    { name: 'GXI', team: 15 }, { name: 'Indigo', team: 17 }, { name: 'Enviro', team: 18 },
+    { name: 'PPC', team: 19 }, { name: 'Jumping Spider', team: 20 }, { name: 'HydrationCompany', team: 21 },
+    { name: 'Animo', team: 22 }, { name: 'ButterflyEco SOP', team: 23 },
+  ];
+  async function bisonStats(teamId) {
+    // Stateful: switch workspace, then pull the daily chart. Serial + small gap.
+    await fetch(`${base}/api/workspaces/v1.1/switch-workspace`, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ team_id: teamId }), signal: AbortSignal.timeout(15000),
+    });
+    const r = await fetch(`${base}/api/workspaces/v1.1/line-area-chart-stats?start_date=${start}&end_date=${today}`,
+      { headers: { 'Authorization': 'Bearer ' + key }, signal: AbortSignal.timeout(15000) });
+    if (!r.ok) throw new Error(`Bison ${r.status}: ${(await r.text()).slice(0, 120)}`);
+    return r.json();
+  }
+  const report = [];
+  let tSent = 0, tReplies = 0, tBounce = 0;
+  for (const t of TEAMS) {
+    try {
+      const raw = await bisonStats(t.team);
+      const pivot = pivotBisonStats(raw.data || raw || []);  // Bison label-series branch
+      const agg = aggPvEmailStats(Object.values(pivot));
+      report.push({ name: t.name, team: t.team, sent: agg.sent, replies: agg.replies, bounces: agg.bounces });
+      tSent += agg.sent; tReplies += agg.replies; tBounce += agg.bounces;
+    } catch (e) {
+      report.push({ name: t.name, team: t.team, error: e.message });
+    }
+    await new Promise(r => setTimeout(r, 400));
+  }
+  report.sort((a, b) => (b.sent || 0) - (a.sent || 0));
+  res.json({
+    range: { start, end: today },
+    note: 'Bison sent (final — Bison no longer sending). Reply rate today ≈ portal human replies ÷ this sent.',
+    totals: { sent: tSent, bison_replies: tReplies, bounces: tBounce },
+    workspaces: report,
+  });
+});
+
 app.post('/api/mailboxes/sync-ndr', requireSession, async (req, res) => {
   if (_ndrSyncState.running) return res.json({ ok: true, alreadyRunning: true });
   syncNdrBounces().catch(() => {});
