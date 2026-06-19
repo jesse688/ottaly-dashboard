@@ -10432,11 +10432,24 @@ async function bisonWarmupCleanup(apply) {
     const c = await pgdb.query(`SELECT COUNT(*)::int n FROM unibox_replies WHERE ${where}`, [bisonRe, pvRe]);
     return { dryRun: true, matched: c.rows[0].n, sample: r.rows };
   }
-  const r = await pgdb.query(
-    `UPDATE unibox_replies SET folder='warmup', category='warmup', updated_at=NOW() WHERE ${where}`,
-    [bisonRe, pvRe]
-  );
-  return { dryRun: false, moved: r.rowCount };
+  // Resolve matching ids ONCE (single read scan), then UPDATE by id in small
+  // batches. A single UPDATE with the regex in its WHERE re-scans raw::text while
+  // holding write locks → lock/statement timeout on a big table. Batched id
+  // updates are indexed and short-lived.
+  const idRes = await pgdb.query(`SELECT id FROM unibox_replies WHERE ${where}`, [bisonRe, pvRe]);
+  const ids = idRes.rows.map(r => r.id);
+  let moved = 0;
+  for (let i = 0; i < ids.length; i += 200) {
+    const chunk = ids.slice(i, i + 200);
+    const r = await pgdb.query(
+      `UPDATE unibox_replies SET folder='warmup', category='warmup', updated_at=NOW()
+        WHERE id = ANY($1::uuid[])
+          AND (marked_as_lead IS NOT TRUE) AND (admin_label IS NULL)`,
+      [chunk]
+    );
+    moved += r.rowCount;
+  }
+  return { dryRun: false, moved };
 }
 app.get('/api/admin/cleanup-bison-warmup', requireAdmin, async (req, res) => {
   try { res.json(await bisonWarmupCleanup(req.query.apply === '1')); }
