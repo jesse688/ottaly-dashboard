@@ -157,6 +157,43 @@ const BISON_TEAMS = PV_WORKSPACES.map(t => ({ team_id: t.pv, pv: t.pv, name: t.n
 // Shim used by old pvFetch('/workspaces') callers.
 var pvFetch;
 
+// ── Cutover-day Bison send backfill (2026-06-19 ONLY) ─────────────────────────
+// On the migration day BOTH ESPs sent: PlusVibe AND EmailBison. PV's email-stats
+// only knows PV's own sends, so today's totals were short by Bison's volume.
+// These are Bison's FINAL per-workspace sends/bounces for 2026-06-19 (Bison no
+// longer sends), ADDED on top of PV's so the day's totals are complete. Replies
+// are NOT here — the portal already captures replies to both ESPs. Keyed by PV
+// workspace_id; a no-op for any other date.
+const BISON_CUTOVER_BACKFILL = {
+  '2026-06-19': {
+    '69a9db307af7ef2854f57637': { sent: 77,  bounces: 10 }, // ButterflyEco
+    '6a15cdb4e4f1d4a2e6d6062a': { sent: 100, bounces: 3 },  // Shire
+    '6a15cda912293dbfe5eab6c3': { sent: 4,   bounces: 0 },  // MDH
+    '6a108e72b20829cbce44fa6c': { sent: 108, bounces: 2 },  // Meades
+    '6a108e69cfbd57f86dbea524': { sent: 71,  bounces: 0 },  // Lending Team
+    '6a0e29d0d004be93be3f33f2': { sent: 142, bounces: 1 },  // Bubble
+    '6a0cc49a4a80688441614dfb': { sent: 181, bounces: 3 },  // MagnaMoney
+    '69ffaf6904ca7138af16013a': { sent: 103, bounces: 0 },  // Bruud
+    '69c43d1e07bf312ff0026643': { sent: 42,  bounces: 0 },  // GXI Furniture
+    '69c43d1407bf312ff0026642': { sent: 12,  bounces: 0 },  // GXI
+    '6a19a054d42a3f59aac110d6': { sent: 143, bounces: 0 },  // LVM
+    '695259c3d6154e27d164bcf7': { sent: 124, bounces: 7 },  // Indigo
+    '699714b02f0830a7148fcf3e': { sent: 83,  bounces: 4 },  // Enviro
+    '695259dc8de377db7577dc45': { sent: 73,  bounces: 0 },  // PPC
+    '697e20f02db8460f8ba68792': { sent: 121, bounces: 5 },  // Jumping Spider
+    '69525a0eceae00718efdaeaa': { sent: 196, bounces: 0 },  // HydrationCompany
+  },
+};
+// Add the cutover backfill to a per-(wsId,date) agg in place. Idempotent per call
+// (the override is a fixed constant, added once when the agg is (re)built).
+function applyCutoverBackfill(wsId, date, agg) {
+  const b = BISON_CUTOVER_BACKFILL[date] && BISON_CUTOVER_BACKFILL[date][wsId];
+  if (!b) return agg;
+  agg.sent = (agg.sent || 0) + (b.sent || 0);
+  agg.bounces = (agg.bounces || 0) + (b.bounces || 0);
+  return agg;
+}
+
 // ── "Fresh start" date floor ──────────────────────────────────────────────────
 // Stats date range clamp (sequencer views only — NOT finance/revenue).
 let _freshStartDate = null;
@@ -4365,8 +4402,10 @@ async function ensurePerformanceDailyStats(wsIds, dates, dailyStats = performanc
         const seen = new Set();
         for (const date of dates) {
           const row = pivot[date];
-          if (!row) continue;
-          const agg = aggPvEmailStats([row]);
+          const hasBackfill = !!(BISON_CUTOVER_BACKFILL[date] && BISON_CUTOVER_BACKFILL[date][wsId]);
+          if (!row && !hasBackfill) continue;
+          const agg = aggPvEmailStats(row ? [row] : []);
+          applyCutoverBackfill(wsId, date, agg); // + Bison cutover-day sends/bounces
           // Don't let a transient empty/0 today overwrite a known-good today value.
           if (date === today && agg.sent === 0) {
             const prev = dailyStats.get(`${wsId}|${date}`);
@@ -9914,6 +9953,14 @@ async function syncMailboxDailyStats({ days = 35 } = {}) {
         sent.set(date, row.total_sent_count || 0);
         replied.set(date, row.total_reply_count || 0);
         bounced.set(date, row.total_bounce_count || 0);
+      }
+      // Add Bison cutover-day sends/bounces on top of PV's for this workspace.
+      const wsPv = ws.workspaceId;
+      for (const [date, bf] of Object.entries(BISON_CUTOVER_BACKFILL)) {
+        const b = bf[wsPv];
+        if (!b) continue;
+        sent.set(date, (sent.get(date) || 0) + (b.sent || 0));
+        bounced.set(date, (bounced.get(date) || 0) + (b.bounces || 0));
       }
       const allDates = new Set([...sent.keys(), ...replied.keys(), ...bounced.keys()]);
 
