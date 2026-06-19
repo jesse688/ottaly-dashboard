@@ -72,17 +72,32 @@ export async function POST(req: NextRequest) {
     // Detect payload format: PlusVibe sends event as a string, Bison as an object.
     if (typeof parsed.event === 'string') {
       await handlePlusVibe(parsed)
+      // PlusVibe path doesn't set its own outcome; mark it terminal here.
+      if (deliveryId) await markDelivery(deliveryId, 'done:plusvibe')
     } else {
+      // handleBison sets its OWN specific outcome (stored:<folder> | skipped:<why>
+      // | error:...). Don't overwrite it with a generic 'done' — that destroyed the
+      // diagnostic. Only fall back to 'done' if the handler set nothing.
       await handleBison(parsed, deliveryId)
+      if (deliveryId) await finalizeDelivery(deliveryId)
     }
 
-    if (deliveryId) await markDelivery(deliveryId, 'done')
     return NextResponse.json({ ok: true })
   } catch (err) {
     console.error('[webhook] error:', err)
     if (deliveryId) await markDelivery(deliveryId, `error:${String(err).slice(0, 200)}`)
     return NextResponse.json({ error: 'Webhook processing failed' }, { status: 500 })
   }
+}
+
+// Mark 'done' only if the handler left the delivery in a non-terminal state
+// (still 'received' or just 'routed:<event>') — preserves any specific outcome.
+async function finalizeDelivery(id: string) {
+  await pool.query(
+    `UPDATE webhook_deliveries SET outcome = 'done'
+      WHERE id = $1 AND (outcome = 'received' OR outcome LIKE 'routed:%')`,
+    [id]
+  ).catch(() => {})
 }
 
 // Update a delivery's outcome (and workspace once we've mapped it). Best-effort.
@@ -180,7 +195,11 @@ interface BisonPayload {
 
 async function handleBison(raw: Record<string, unknown>, deliveryId: string | null = null) {
   const ev = raw as unknown as BisonPayload
-  const eventType = ev.event?.type ?? ''
+  // Bison sends event types in UPPERCASE (e.g. LEAD_REPLIED, LEAD_INTERESTED);
+  // every comparison below is lowercase, so normalize once here. A mismatch made
+  // LEAD_INTERESTED skip lead-ingest AND pass the reply-store guard — replies
+  // silently fell through. Lowercasing fixes both.
+  const eventType = (ev.event?.type ?? '').toLowerCase()
   // The payload carries the raw Bison team id. Reverse-map it to the PV
   // workspace_id the rest of the portal keys off (portal_clients.workspace_id).
   const rawTeamId = ev.event?.workspace_id != null ? String(ev.event.workspace_id) : ''
@@ -229,7 +248,17 @@ async function handleBison(raw: Record<string, unknown>, deliveryId: string | nu
     // lead, e.g. forwarded to a colleague who replies from their own address).
     const senderEmail = (reply.from_email_address ?? '').toLowerCase()
     // The unibox row's primary email = the campaign lead if known, else the sender.
-    const rowEmail = leadEmail || senderEmail
+    // Last resort: if BOTH are empty (some LEAD_REPLIED payloads carry neither),
+    // resolve the lead's email from our DB via the Bison lead id — otherwise the
+    // reply would be silently dropped for having no rowEmail.
+    let rowEmail = leadEmail || senderEmail
+    if (!rowEmail && leadBisonId) {
+      const le = await pool.query(
+        `SELECT email FROM esp_leads WHERE id = $1 ORDER BY (source='bison') DESC LIMIT 1`,
+        [leadBisonId]
+      ).catch(() => ({ rows: [] as { email: string }[] }))
+      rowEmail = (le.rows[0]?.email ?? '').toLowerCase()
+    }
 
     // Cache the FULL reply (html + text body, with the lead's signature/photos) into
     // portal_emails so the client inbox can render it. Key on rowEmail (sender when

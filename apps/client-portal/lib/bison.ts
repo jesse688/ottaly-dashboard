@@ -542,17 +542,32 @@ const WEBHOOK_EVENTS = ['lead_interested', 'lead_replied', 'untracked_reply_rece
 
 interface BisonHook { id: number; name: string; url: string; events: string[] }
 
+// Stale webhook targets to prune when (re)registering — old admin-legacy hooks
+// that double-deliver to a dead endpoint.
+const STALE_WEBHOOK_HOSTS = ['ottaly-git.oix3xv.easypanel.host']
+
 // Register the webhook in the CURRENT workspace context (the active token's
-// workspace). Idempotent — skips if the exact URL is already registered.
+// workspace). Idempotent — skips creating if the exact URL is already registered,
+// but ALWAYS prunes known-stale hooks so dead endpoints stop receiving copies.
 async function registerWebhookHere(): Promise<{ ok: boolean; reason?: string }> {
   try {
     const list = await bison<{ data?: BisonHook[] }>('GET', '/api/webhook-url').catch(() => ({ data: [] as BisonHook[] }))
-    const exact = (list.data ?? []).some(h => h.url === WEBHOOK_TARGET)
-    if (exact) return { ok: true, reason: 'already-exists' }
+    const hooks = list.data ?? []
+
+    // Prune stale admin-legacy hooks (best-effort; don't fail the whole op).
+    let pruned = 0
+    for (const h of hooks) {
+      if (STALE_WEBHOOK_HOSTS.some(host => h.url.includes(host))) {
+        await bison('DELETE', `/api/webhook-url/${h.id}`).then(() => { pruned++ }).catch(() => {})
+      }
+    }
+
+    const exact = hooks.some(h => h.url === WEBHOOK_TARGET)
+    if (exact) return { ok: true, reason: pruned ? `already-exists,pruned:${pruned}` : 'already-exists' }
     await bison('POST', '/api/webhook-url', undefined, {
       name: 'Ottaly Portal', url: WEBHOOK_TARGET, events: WEBHOOK_EVENTS,
     })
-    return { ok: true, reason: 'created' }
+    return { ok: true, reason: pruned ? `created,pruned:${pruned}` : 'created' }
   } catch (err) {
     return { ok: false, reason: String(err) }
   }
