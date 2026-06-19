@@ -12,6 +12,12 @@ log.setLevel(LogLevel.WARNING)
 // each batch is independent and the source of truth is Postgres.
 Configuration.getGlobalConfig().set('persistStorage', false)
 
+// Crawlee's autoscaler snapshots system memory by shelling out to `ps` (procps).
+// The Dockerfile installs procps so that binary exists; without it jobs crash
+// with "spawn ps ENOENT". Cap the memory ratio so the autoscaler stays modest
+// on a small container regardless.
+Configuration.getGlobalConfig().set('availableMemoryRatio', 0.5)
+
 /**
  * Scrape a batch of domains for emails / phones / names.
  * @param {{domain:string, company_number?:string}[]} targets
