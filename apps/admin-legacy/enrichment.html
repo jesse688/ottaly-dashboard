@@ -103,7 +103,10 @@ Smith Plumbing,Bristol,smithplumbing.co.uk"></textarea>
     <div class="panel-body">
       <div class="progress-meta">
         <span><strong id="jobLabel">Job</strong> · <span id="jobStatus"></span></span>
-        <span class="muted" id="jobCounts"></span>
+        <span style="display:flex;align-items:center;gap:12px">
+          <span class="muted" id="jobCounts"></span>
+          <button class="btn btn-secondary" id="cancelBtn" onclick="cancelJob()" style="display:none;height:28px;padding:0 12px">Cancel</button>
+        </span>
       </div>
       <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
     </div>
@@ -251,6 +254,23 @@ function renderProgress(){
   const fill = document.getElementById('progressFill');
   fill.style.width = pct+'%';
   fill.className = 'progress-fill' + (activeJob.status==='failed' ? ' failed' : '');
+  const active = activeJob.status==='queued' || activeJob.status==='running';
+  document.getElementById('cancelBtn').style.display = active ? 'inline-flex' : 'none';
+}
+
+function cancelJob(){
+  if(!activeJob) return;
+  if(!confirm('Cancel job #'+activeJob.id+'? Businesses already processed are kept.')) return;
+  fetch('/api/ch/jobs/'+activeJob.id+'/cancel', { method:'POST' })
+    .then(r=>r.json().then(d=>({ok:r.ok,d})))
+    .then(res=>{
+      if(!res.ok) throw new Error(res.d.error||'Failed');
+      toast('Cancelled job #'+activeJob.id);
+      if(pollTimer){ clearInterval(pollTimer); pollTimer=null; }
+      document.getElementById('startBtn').disabled=false;
+      if(activeJob){ activeJob.status='cancelled'; renderProgress(); }
+    })
+    .catch(e=>toast('Could not cancel: '+e.message));
 }
 
 // ── Results table ──────────────────────────────────────────────────────────

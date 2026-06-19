@@ -183,11 +183,18 @@ export async function bumpJob(jobId, { okDelta = 0, failedDelta = 0, doneDelta =
   )
 }
 
+// Don't overwrite a job the dashboard cancelled — only finalise queued/running.
 export async function finishJob(jobId, error) {
   await pool.query(
     `UPDATE scrape_jobs
         SET status = $2, finished_at = now(), error = $3
-      WHERE id = $1`,
+      WHERE id = $1 AND status IN ('queued','running')`,
     [jobId, error ? 'failed' : 'done', error ?? null]
   )
+}
+
+// Lightweight status check so the worker can stop a cancelled job mid-run.
+export async function getJobStatus(jobId) {
+  const { rows } = await pool.query(`SELECT status FROM scrape_jobs WHERE id = $1`, [jobId])
+  return rows[0]?.status ?? null
 }

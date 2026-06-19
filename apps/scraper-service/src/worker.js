@@ -1,6 +1,6 @@
 import {
   ensureSchema, claimNextJob, loadPendingItems, saveContact, getCompanyContext,
-  writeBackDomain, markItem, bumpJob, finishJob, pool,
+  writeBackDomain, markItem, bumpJob, finishJob, getJobStatus, pool,
 } from './db.js'
 import { discoverDomain } from './discover.js'
 import { scrapeBatch } from './scrape.js'
@@ -61,6 +61,11 @@ async function processJob(job) {
   }
 
   while (true) {
+    // Stop promptly if the dashboard cancelled this job mid-run.
+    if (await getJobStatus(job.id) === 'cancelled') {
+      log(`■ job ${job.id} cancelled — stopping`)
+      return
+    }
     const items = await loadPendingItems(job.id, BATCH_SIZE)
     if (items.length === 0) break
 

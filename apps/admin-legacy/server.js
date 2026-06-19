@@ -19887,6 +19887,133 @@ function scheduleAudienceScoring(pgdb) {
     }
   });
 
+  // Cancel a queued/running scrape job: mark it cancelled and drop its pending
+  // items so the worker stops claiming work for it. Items already done stay.
+  app.post('/api/ch/jobs/:id/cancel', requireSession, async (req, res) => {
+    const db = req.app.locals.pgDb;
+    if (!db) return res.status(503).json({ error: 'Database unavailable' });
+    const jobId = parseInt(req.params.id, 10);
+    if (!Number.isFinite(jobId)) return res.status(400).json({ error: 'Bad job id' });
+    try {
+      const upd = await db.query(
+        `UPDATE scrape_jobs SET status='cancelled', finished_at=now()
+          WHERE id=$1 AND status IN ('queued','running') RETURNING id`,
+        [jobId]
+      );
+      if (!upd.rows.length) return res.status(409).json({ error: 'Job is not queued/running (already finished?)' });
+      // Remove pending items so the worker's batch loop finds nothing left to do.
+      const del = await db.query(`DELETE FROM scrape_job_items WHERE job_id=$1 AND status='pending'`, [jobId]);
+      res.json({ cancelled: jobId, pending_removed: del.rowCount });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Push a finished job's scraped contacts into the `contacts` table so they
+  // flow into the Contacts page → verify → push-to-PlusVibe pipeline. Each
+  // scraped EMAIL becomes a contact (Contacts is email-keyed). Companies with no
+  // email are skipped (nothing to contact). Dedups via ON CONFLICT.
+  app.post('/api/ch/jobs/:id/to-contacts', requireSession, async (req, res) => {
+    const db = req.app.locals.pgDb;
+    if (!db) return res.status(503).json({ error: 'Database unavailable' });
+    const jobId = parseInt(req.params.id, 10);
+    if (!Number.isFinite(jobId)) return res.status(400).json({ error: 'Bad job id' });
+    const workspaceId = (req.body && req.body.workspace_id) || 'ottaly-global';
+    try {
+      // Join scraped results + (for CH jobs) the ch_companies record so contacts
+      // carry everything a campaign needs: name, clean company, email, address,
+      // industry, SIC codes and CH info (number/status/type/registered address).
+      const rows = await db.query(
+        `SELECT i.company_name AS item_company, i.domain, i.company_number,
+                s.emails, s.phones, s.address AS scraped_address, s.industry,
+                s.keywords, s.website, s.raw_names, s.business_type, s.description,
+                c.company_name AS ch_name, c.sic_codes, c.company_status,
+                c.company_type, c.incorporated_on, c.post_town, c.county, c.postcode,
+                c.address_line1, c.address_line2
+           FROM scrape_job_items i
+           JOIN scraped_contacts s ON s.domain = i.domain
+           LEFT JOIN ch_companies c ON c.company_number = i.company_number
+          WHERE i.job_id = $1 AND s.emails IS NOT NULL AND array_length(s.emails,1) > 0`,
+        [jobId]
+      );
+
+      // Tidy a raw CH legal name into something campaign-friendly ("ACME CARE
+      // LTD" → "Acme Care"). Drops trailing LTD/LIMITED/PLC/LLP and title-cases.
+      const cleanCompany = (name) => {
+        if (!name) return null;
+        let n = String(name).replace(/\s+(LTD|LIMITED|PLC|LLP|LP|CIC|CIO)\.?$/i, '').trim();
+        if (n === n.toUpperCase() || n === n.toLowerCase()) {
+          n = n.toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase());
+        }
+        return n || null;
+      };
+      const splitName = (full) => {
+        const parts = String(full || '').trim().split(/\s+/).filter(Boolean);
+        if (parts.length < 2) return { first: parts[0] || null, last: null };
+        return { first: parts[0], last: parts.slice(1).join(' ') };
+      };
+
+      let inserted = 0, companies = 0, skippedNoEmail = 0;
+      for (const r of rows.rows) {
+        const emails = Array.isArray(r.emails) ? r.emails : [];
+        if (!emails.length) { skippedNoEmail++; continue; }
+        companies++;
+        const phone = Array.isArray(r.phones) && r.phones.length ? r.phones[0] : null;
+        const kw = Array.isArray(r.keywords) ? r.keywords.join(', ') : (r.keywords || null);
+        const company = cleanCompany(r.ch_name || r.item_company);
+        // Prefer the scraped (real, current) address; fall back to CH registered.
+        const chAddress = [r.address_line1, r.address_line2, r.post_town, r.county, r.postcode].filter(Boolean).join(', ');
+        const address = r.scraped_address || chAddress || null;
+        const names = Array.isArray(r.raw_names) ? r.raw_names : [];
+        // CH + SIC + extras live in raw_data so nothing campaign-relevant is lost.
+        const rawData = JSON.stringify({
+          source: 'ch_scraper', job_id: jobId, domain: r.domain,
+          company_number: r.company_number || null,
+          sic_codes: r.sic_codes || null,
+          company_status: r.company_status || null,
+          company_type: r.company_type || null,
+          incorporated_on: r.incorporated_on || null,
+          business_type: r.business_type || null,
+          description: r.description || null,
+          ch_registered_address: chAddress || null,
+        });
+
+        for (let ei = 0; ei < emails.length; ei++) {
+          const clean = String(emails[ei] || '').trim().toLowerCase();
+          if (!clean || !clean.includes('@')) continue;
+          // Pair each email with a scraped name when we have one (best-effort).
+          const nm = splitName(names[ei] || (ei === 0 ? names[0] : ''));
+          try {
+            await db.query(
+              `INSERT INTO contacts (workspace_id, email, first_name, last_name,
+                 company_name, company_domain, phone, industry, keywords,
+                 company_address, tags, raw_data, source, imported_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'ch_scraper', CURRENT_TIMESTAMP)
+               ON CONFLICT (workspace_id, email) DO UPDATE SET
+                 first_name     = COALESCE(EXCLUDED.first_name, contacts.first_name),
+                 last_name      = COALESCE(EXCLUDED.last_name, contacts.last_name),
+                 company_name   = COALESCE(EXCLUDED.company_name, contacts.company_name),
+                 company_domain = COALESCE(EXCLUDED.company_domain, contacts.company_domain),
+                 phone          = COALESCE(EXCLUDED.phone, contacts.phone),
+                 industry       = COALESCE(EXCLUDED.industry, contacts.industry),
+                 keywords       = COALESCE(EXCLUDED.keywords, contacts.keywords),
+                 company_address= COALESCE(EXCLUDED.company_address, contacts.company_address),
+                 raw_data       = COALESCE(EXCLUDED.raw_data, contacts.raw_data)`,
+              [workspaceId, clean, nm.first, nm.last, company, r.domain || r.website || null,
+               phone, r.industry || null, kw, address, ['ch_scraper'], rawData]
+            );
+            inserted++;
+          } catch (e) {
+            console.warn('[ch->contacts] insert failed for', clean, e.message);
+          }
+        }
+      }
+      res.json({ ok: true, workspace_id: workspaceId, companies, contacts_inserted: inserted, skipped_no_email: skippedNoEmail });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   scheduleEspSync();
   startSlackBot();
 

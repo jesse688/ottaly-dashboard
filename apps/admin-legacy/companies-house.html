@@ -1129,10 +1129,20 @@
         var sub = j.done + '/' + j.total + ' done · ' + (j.ok||0) + ' enriched · ' + (j.failed||0) + ' failed' +
           (j.source ? ' · ' + j.source : '') + (j.fields && j.fields.length ? ' · ' + j.fields.join(', ') : '');
         if (j.status === 'failed' && j.error) sub += ' · ' + esc(j.error);
+        var active = (j.status === 'queued' || j.status === 'running');
+        var actions = '';
+        if (active) {
+          actions = '<button class="btn btn-ghost btn-sm" onclick="cancelScrapeJob(' + j.id + ')">Cancel</button>';
+        } else if (j.status === 'done' && (j.ok || 0) > 0) {
+          actions = '<button class="btn btn-secondary btn-sm" onclick="jobToContacts(' + j.id + ', this)">→ Send to Contacts</button>';
+        }
         return '<div class="job-row">' +
           '<div class="job-main"><div class="job-label">#' + j.id + ' ' + esc(j.label || '') + '</div>' +
           '<div class="job-sub">' + sub + '</div></div>' +
-          '<span class="job-badge ' + j.status + '">' + j.status + '</span>' +
+          '<div style="display:flex;align-items:center;gap:8px">' +
+            actions +
+            '<span class="job-badge ' + j.status + '">' + j.status + '</span>' +
+          '</div>' +
           '<div class="job-bar"><div class="job-bar-fill ' + (j.status==='failed'?'failed':'') + '" style="width:' + pct + '%"></div></div>' +
           '</div>';
       }).join('');
@@ -1141,6 +1151,33 @@
   }
   function startJobsPolling(){ if (!_jobsTimer) _jobsTimer = setInterval(loadScrapeJobs, 4000); }
   function stopJobsPolling(){ if (_jobsTimer) { clearInterval(_jobsTimer); _jobsTimer = null; } }
+
+  function cancelScrapeJob(id) {
+    if (!confirm('Cancel scrape job #' + id + '? Companies already processed are kept; the rest are dropped.')) return;
+    fetch('/api/ch/jobs/' + id + '/cancel', { method: 'POST' })
+      .then(function(r){ return r.json().then(function(d){ return { ok: r.ok, d: d }; }); })
+      .then(function(res){
+        if (!res.ok) throw new Error(res.d.error || 'Failed');
+        showStatus('Cancelled job #' + id + '.', 'success');
+        loadScrapeJobs();
+      })
+      .catch(function(e){ showStatus('Could not cancel: ' + e.message, 'error'); });
+  }
+
+  function jobToContacts(id, btn) {
+    if (!confirm('Send job #' + id + "'s scraped emails into Contacts? They'll appear on the Contacts page ready to verify and push to PlusVibe.")) return;
+    if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+    fetch('/api/ch/jobs/' + id + '/to-contacts', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({})
+    })
+      .then(function(r){ return r.json().then(function(d){ return { ok: r.ok, d: d }; }); })
+      .then(function(res){
+        if (btn) { btn.disabled = false; btn.textContent = '→ Send to Contacts'; }
+        if (!res.ok) throw new Error(res.d.error || 'Failed');
+        showStatus('Added ' + res.d.contacts_inserted + ' contact(s) from ' + res.d.companies + ' companies. Open the Contacts page to verify & push to PlusVibe.', 'success');
+      })
+      .catch(function(e){ if (btn) { btn.disabled = false; btn.textContent = '→ Send to Contacts'; } showStatus('Could not send to Contacts: ' + e.message, 'error'); });
+  }
 
   // ── Pipeline ──────────────────────────────────────────────────────────────
   function enrichCompanies() {

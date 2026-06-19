@@ -50,16 +50,6 @@ export async function scrapeBatch(targets, opts = {}) {
 
   const proxyConfiguration = proxyUrls.length > 0 ? new ProxyConfiguration({ proxyUrls }) : undefined
 
-  // A rotating set of realistic browser header sets. CheerioCrawler sends no
-  // browser-like headers by default, so many sites 403 it instantly. We rotate
-  // a recent Chrome/Firefox/Safari identity per request to look less like a bot.
-  const UA_POOL = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',
-  ]
-
   const crawler = new CheerioCrawler({
     proxyConfiguration,
     maxConcurrency: opts.maxConcurrency ?? parseInt(process.env.MAX_CONCURRENCY || '50', 10),
@@ -74,26 +64,25 @@ export async function scrapeBatch(targets, opts = {}) {
     maxRequestRetries: 3,
     maxSessionRotations: 2,
     ignoreSslErrors: true,
+    // Session pool retires blocked/error sessions and rotates IP+identity.
     useSessionPool: true,
     persistCookiesPerSession: true,
     sessionPoolOptions: { maxPoolSize: 100 },
-    // Send a full, realistic browser header set (rotated) on every request.
+    // The Crawlee-correct way to look like a real browser: CheerioCrawler uses
+    // got-scraping, whose HeaderGenerator is ON by default and produces a full,
+    // consistent, realistic header set (UA + sec-ch-ua + accept-language…). We
+    // do NOT hand-roll/override headers (that defeats the generator). We only
+    // STEER it toward modern desktop browsers via gotOptions.headerGeneratorOptions
+    // (it's a per-request option, not a crawler-level one), and enable http2.
     preNavigationHooks: [
-      async ({ request }, gotOptions) => {
-        const ua = UA_POOL[Math.floor((request.retryCount || 0)) % UA_POOL.length] || UA_POOL[0]
-        request.headers = {
-          ...request.headers,
-          'User-Agent': ua,
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-          'Accept-Language': 'en-GB,en;q=0.9',
-          'Accept-Encoding': 'gzip, deflate, br',
-          'Upgrade-Insecure-Requests': '1',
-          'Sec-Fetch-Dest': 'document',
-          'Sec-Fetch-Mode': 'navigate',
-          'Sec-Fetch-Site': 'none',
-          'Sec-Fetch-User': '?1',
+      async (_ctx, gotOptions) => {
+        gotOptions.http2 = true
+        gotOptions.headerGeneratorOptions = {
+          browsers: [{ name: 'chrome', minVersion: 110 }, { name: 'firefox', minVersion: 110 }],
+          devices: ['desktop'],
+          operatingSystems: ['windows', 'macos'],
+          locales: ['en-GB', 'en-US'],
         }
-        if (gotOptions) { gotOptions.http2 = true; gotOptions.timeout = { request: 20000 } }
       },
     ],
     async requestHandler({ $, request }) {
