@@ -3,6 +3,7 @@ import pool from '@/lib/db'
 import crypto from 'crypto'
 import { notifyClientOfLead, notifyClientOfLeadReply } from '@/lib/email'
 import { enrichLead, leadCompanyOrNull } from '@/lib/sync'
+import { enrichUniboxReply } from '@/lib/enrich'
 import { ready } from '@/lib/db'
 import { bisonTeamToWorkspace } from '@/lib/bison'
 import { notifyAdmin } from '@/lib/notify'
@@ -283,7 +284,7 @@ async function handleBison(raw: Record<string, unknown>) {
       // so the firehose can scope/zoom on a stable client_id even when a workspace
       // maps to more than one client.
       const clientId = await resolveClientId(mappedWorkspaceId)
-      await pool.query(
+      const uboxIns = await pool.query(
         // Idempotent on (bison_team_id, bison_reply_id). On a retry or a later,
         // richer delivery (e.g. an event that carries Bison's interested/automated
         // flags the first one lacked) we COALESCE-merge to backfill NULLs and
@@ -308,7 +309,8 @@ async function handleBison(raw: Record<string, unknown>) {
            sender_email_id       = COALESCE(unibox_replies.sender_email_id, EXCLUDED.sender_email_id),
            mailbox_email         = COALESCE(unibox_replies.mailbox_email, EXCLUDED.mailbox_email),
            last_seen_at          = NOW(),
-           updated_at            = NOW()`,
+           updated_at            = NOW()
+         RETURNING id`,
         // rawTeamId is ALWAYS stored verbatim — never collapsed to a shared
         // 'unknown' constant, which made two distinct unmapped teams with the same
         // reply.id collide on ('unknown', id) and silently drop the second.
@@ -324,7 +326,22 @@ async function handleBison(raw: Record<string, unknown>) {
          reply.sender_email_id != null ? String(reply.sender_email_id) : null,
          // For an INBOUND reply, primary_to_email_address is our sending mailbox.
          (reply.primary_to_email_address ?? '').toLowerCase() || null]
-      ).catch(err => console.error('[webhook/bison] unibox_replies insert failed:', err))
+      ).catch(err => { console.error('[webhook/bison] unibox_replies insert failed:', err); return null })
+
+      // Enrich the lead from the reply's signature + our contacts DB so the admin
+      // Unibox panel shows everything we know the moment the reply lands. Uses the
+      // primary email (matched lead if forwarded). Best-effort, non-blocking.
+      const uboxId = uboxIns?.rows?.[0]?.id as string | undefined
+      const enrichEmail = matchedLeadEmail || rowEmail
+      if (uboxId && mappedWorkspaceId && enrichEmail) {
+        enrichUniboxReply({
+          uniboxId: uboxId,
+          workspaceId: mappedWorkspaceId,
+          email: enrichEmail,
+          leadBisonId,
+          body: reply.html_body ?? reply.text_body ?? null,
+        }).catch(() => {})
+      }
 
       // Alert admins once about a team we can't map to a client workspace.
       if (!mappedWorkspaceId) {
