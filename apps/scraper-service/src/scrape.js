@@ -12,10 +12,10 @@ log.setLevel(LogLevel.WARNING)
 // each batch is independent and the source of truth is Postgres.
 Configuration.getGlobalConfig().set('persistStorage', false)
 
-// Crawlee's autoscaler snapshots system memory by shelling out to `ps` (procps).
-// The Dockerfile installs procps so that binary exists; without it jobs crash
-// with "spawn ps ENOENT". Cap the memory ratio so the autoscaler stays modest
-// on a small container regardless.
+// Crawlee's memory snapshot needs `ps` (provided by procps in the Docker image;
+// index.js probes for it at startup). Keep the autoscaler modest on a small
+// container so a 1000-item job doesn't try to fan out beyond what the box / the
+// proxy pool can handle.
 Configuration.getGlobalConfig().set('availableMemoryRatio', 0.5)
 
 /**

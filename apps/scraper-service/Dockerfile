@@ -1,21 +1,22 @@
-# Crawlee's own base image for CheerioCrawler (no browser, Alpine, includes the
-# system tools Crawlee expects). Recommended by https://crawlee.dev for Cheerio.
+# Crawlee (3.17) takes memory snapshots by spawning the `ps` command and there is
+# no reliable env/config switch to avoid it — so `ps` MUST exist in the image.
+# apify/actor-node is Crawlee's own Cheerio image and ships procps. We also
+# install it explicitly + verify at build time so a missing `ps` fails the BUILD
+# (loud) instead of every scrape job at runtime (silent crash).
 FROM apify/actor-node:20
 
-# Alpine ships `ps` via busybox, but install procps so Crawlee's memory snapshot
-# (which may shell out to `ps`) always finds a full implementation.
 USER root
-RUN apk add --no-cache procps || true
+RUN apk add --no-cache procps \
+    && which ps \
+    && ps --version 2>/dev/null || ps -A -o ppid,pid,stat,rss,comm | head -1
 
 WORKDIR /app
 
-# Copy manifests and install prod deps. (--omit=dev keeps the image lean.)
 COPY package.json package-lock.json* ./
 RUN npm install --omit=dev --no-optional
 
 COPY . .
 
-# Crawlee writes temp storage; keep it inside the container and ephemeral.
 ENV CRAWLEE_STORAGE_DIR=/tmp/crawlee
 
 CMD ["node", "index.js"]
