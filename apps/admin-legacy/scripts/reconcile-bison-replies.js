@@ -132,7 +132,7 @@ async function getAllReplies(wsId, since, folder = 'all') {
         const category = CAT_MAP[bisonStatus] || 'other';
         const folder = reply.folder || 'inbox';
 
-        if ((reply.folder || '').toLowerCase() === 'sent') continue;
+        if ((reply.folder || 'inbox').toLowerCase() !== 'inbox') continue;
         if (!senderEmail || !receivedAt) continue;
 
         const ts5 = Math.round(new Date(receivedAt).getTime() / 1000 / 300);

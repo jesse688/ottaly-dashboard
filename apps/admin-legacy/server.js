@@ -4650,7 +4650,7 @@ async function fetchPortalReplyCounts(wsIds, dates) {
       `SELECT workspace_id AS ws,
               to_char(received_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS date,
               COUNT(*) FILTER (WHERE COALESCE(admin_label, category) NOT IN ('warmup','warm_up','other')
-                               AND folder != 'sent')::int AS replies,
+                               AND folder = 'inbox')::int AS replies,
               COUNT(*) FILTER (WHERE COALESCE(admin_label, category) = 'ooo_auto_reply')::int AS ooo,
               COUNT(*) FILTER (WHERE COALESCE(admin_label, category) = 'interested')::int AS pos
          FROM unibox_replies
@@ -10498,7 +10498,8 @@ async function reconcileBisonReplies() {
           let hitCutoff = false;
           for (const reply of batch) {
             if ((reply.created_at || '') < since) { hitCutoff = true; continue; }
-            if ((reply.folder || '').toLowerCase() === 'sent') continue;
+            const replyFolder = (reply.folder || 'inbox').toLowerCase();
+            if (replyFolder !== 'inbox') continue;
             const senderEmail = (reply.from_email_address || reply.from_email || reply.reply_email || '').toLowerCase().trim();
             const mailboxEmail = (reply.primary_to_email_address || reply.to_email || reply.sender_email_address || '').toLowerCase().trim();
             if (!senderEmail || !reply.created_at) continue;
