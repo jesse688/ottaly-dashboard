@@ -10467,9 +10467,17 @@ app.get('/api/admin/cleanup-bison-warmup/status', requireAdmin, (req, res) => re
 //   GET /api/admin/bison-sends-report?days=1[&key=<bisonkey>]
 // Uses BISON_API_KEY env (still set) unless ?key= is supplied.
 app.get('/api/admin/bison-sends-report', requireAdmin, async (req, res) => {
-  const key = String(req.query.key || process.env.BISON_API_KEY || '').trim();
+  // Resolve the Bison super-admin key: ?key= → env → the dashboard-saved value in
+  // app_settings (where the old Bison admin panel stored it).
+  let key = String(req.query.key || process.env.BISON_API_KEY || '').trim();
+  if (!key) {
+    try {
+      const pgdb = app.locals.pgDb;
+      if (pgdb) key = String((await pgdb.getSetting('bison_api_key', '')) || '').trim();
+    } catch {}
+  }
   const base = (process.env.BISON_API_URL || 'https://send.ottaly.co.uk').replace(/\/$/, '');
-  if (!key) return res.status(400).json({ error: 'No Bison key — pass ?key=<bison key> or set BISON_API_KEY env' });
+  if (!key) return res.status(400).json({ error: 'No Bison key found (env/app_settings empty) — pass ?key=<bison key>' });
   const days = Math.min(Math.max(parseInt(req.query.days || '1', 10) || 1, 1), 30);
   const today = serverDateString(new Date());
   const start = serverDateString(new Date(Date.now() - (days - 1) * 86400000));
