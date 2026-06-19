@@ -128,7 +128,8 @@ async function getAllReplies(wsId, since, folder = 'all') {
         const mailboxEmail = (reply.primary_to_email_address || reply.to_email || reply.sender_email_address || '').toLowerCase().trim();
         const subject = reply.subject || '';
         const receivedAt = reply.created_at || reply.updated_at;
-        const bisonStatus = reply.status || (reply.interested ? 'interested' : reply.automated_reply ? 'automated_reply' : 'not_automated_reply');
+        const bisonStatus = reply.status || (reply.interested ? 'interested' : reply.automated_reply ? 'automated_reply' : reply.not_automated_reply ? 'not_automated_reply' : null);
+        if (!bisonStatus) continue; // skip unclassified (spam/junk in inbox)
         const category = CAT_MAP[bisonStatus] || 'other';
         const folder = reply.folder || 'inbox';
 

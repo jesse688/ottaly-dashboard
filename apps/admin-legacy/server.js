@@ -10509,7 +10509,8 @@ async function reconcileBisonReplies() {
             if (seen.has(key)) continue;
             seen.add(key);
 
-            const bisonStatus = reply.status || (reply.interested ? 'interested' : reply.automated_reply ? 'automated_reply' : 'not_automated_reply');
+            const bisonStatus = reply.status || (reply.interested ? 'interested' : reply.automated_reply ? 'automated_reply' : reply.not_automated_reply ? 'not_automated_reply' : null);
+            if (!bisonStatus) continue; // skip unclassified (spam/junk landing in inbox)
             const category = BISON_CAT_MAP[bisonStatus] || 'other';
             await pgdb.query(`
               INSERT INTO unibox_replies
