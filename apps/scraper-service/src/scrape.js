@@ -65,6 +65,9 @@ export async function scrapeBatch(targets, opts = {}) {
     maxConcurrency: opts.maxConcurrency ?? parseInt(process.env.MAX_CONCURRENCY || '50', 10),
     requestHandlerTimeoutSecs: 25,
     navigationTimeoutSecs: 20,
+    // Some (mis-configured) servers label their HTML as octet-stream / plain text.
+    // Accept those too so we still parse the page instead of skipping the domain.
+    additionalMimeTypes: ['application/octet-stream', 'text/plain', 'application/x-download'],
     // More retries + session rotation gives blocked requests a chance from a
     // fresh IP/identity before we give up on a domain.
     maxRequestRetries: 3,
