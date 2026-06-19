@@ -55,6 +55,15 @@ async function fetchWebshareApi(apiKey) {
 //   PROXY_LIST        → manual comma-separated list
 // Safe to call once at startup; logs how many loaded so it's obvious in the logs.
 export async function initProxies() {
+  // Log this container's public IP — Webshare proxies often require the
+  // CLIENT IP to be whitelisted (407 "not in your list" otherwise). Add THIS
+  // IP under Webshare → Proxy Settings → IP Authorizations.
+  try {
+    const ipRes = await fetch('https://api.ipify.org', { signal: AbortSignal.timeout(8000) })
+    const ip = (await ipRes.text()).trim()
+    console.log(`[proxies] this worker's public IP = ${ip} (whitelist it in Webshare → IP Authorizations if you get 407s)`)
+  } catch { console.log('[proxies] could not determine public IP') }
+
   const apiKey = process.env.WEBSHARE_API_KEY
   const url = process.env.PROXY_LIST_URL
   try {
