@@ -52,7 +52,10 @@ export async function scrapeBatch(targets, opts = {}) {
 
   const crawler = new CheerioCrawler({
     proxyConfiguration,
-    maxConcurrency: opts.maxConcurrency ?? parseInt(process.env.MAX_CONCURRENCY || '50', 10),
+    // Default low: a small free proxy pool (e.g. 10 shared IPs) gets overloaded
+    // and returns 502s under high concurrency. ~5 is safe for 10 proxies; raise
+    // MAX_CONCURRENCY once you have a larger/paid pool.
+    maxConcurrency: opts.maxConcurrency ?? parseInt(process.env.MAX_CONCURRENCY || '5', 10),
     requestHandlerTimeoutSecs: 25,
     navigationTimeoutSecs: 20,
     // Some (mis-configured) servers label their HTML as octet-stream / plain text.

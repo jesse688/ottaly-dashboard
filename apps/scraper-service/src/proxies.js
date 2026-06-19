@@ -30,26 +30,52 @@ function buildAgents() {
 }
 buildAgents()
 
-// Fetch the proxy list from PROXY_LIST_URL if set (overrides PROXY_LIST). Safe to
-// call once at startup; logs how many proxies loaded so it's obvious in the logs.
+// Fetch proxies from Webshare's API (preferred — the API token does NOT expire
+// like the download-link token). Returns host:port:user:pass entries or [].
+async function fetchWebshareApi(apiKey) {
+  const out = []
+  let url = 'https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&page=1&page_size=100'
+  while (url) {
+    const res = await fetch(url, { headers: { Authorization: `Token ${apiKey}` }, signal: AbortSignal.timeout(15000) })
+    if (!res.ok) throw new Error(`Webshare API HTTP ${res.status}`)
+    const j = await res.json()
+    for (const p of (j.results || [])) {
+      if (p.proxy_address && p.port) {
+        out.push(`${p.proxy_address}:${p.port}:${p.username || ''}:${p.password || ''}`)
+      }
+    }
+    url = j.next || null
+  }
+  return parseList(out.join('\n'))
+}
+
+// Load proxies, in order of preference:
+//   WEBSHARE_API_KEY  → Webshare API (token never expires) [recommended]
+//   PROXY_LIST_URL    → a download URL (note: Webshare download tokens expire)
+//   PROXY_LIST        → manual comma-separated list
+// Safe to call once at startup; logs how many loaded so it's obvious in the logs.
 export async function initProxies() {
+  const apiKey = process.env.WEBSHARE_API_KEY
   const url = process.env.PROXY_LIST_URL
-  if (url) {
-    try {
+  try {
+    if (apiKey) {
+      const fromApi = await fetchWebshareApi(apiKey)
+      if (fromApi.length) { proxyUrls = fromApi; buildAgents() }
+      console.log(`[proxies] loaded ${proxyUrls.length} from Webshare API`)
+    } else if (url) {
       const res = await fetch(url, { signal: AbortSignal.timeout(15000) })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const text = await res.text()
+      // Webshare returns JSON on a bad download token — detect & warn clearly.
+      if (text.trim().startsWith('{')) throw new Error('URL returned JSON, not a proxy list (download token invalid/expired?)')
       const fromUrl = parseList(text)
-      if (fromUrl.length) {
-        proxyUrls = fromUrl
-        buildAgents()
-      }
-      console.log(`[proxies] loaded ${proxyUrls.length} prox, from PROXY_LIST_URL`)
-    } catch (err) {
-      console.error(`[proxies] PROXY_LIST_URL fetch failed (${err.message}) — falling back to PROXY_LIST (${proxyUrls.length})`)
+      if (fromUrl.length) { proxyUrls = fromUrl; buildAgents() }
+      console.log(`[proxies] loaded ${proxyUrls.length} from PROXY_LIST_URL`)
+    } else {
+      console.log(`[proxies] ${proxyUrls.length} from PROXY_LIST${proxyUrls.length ? '' : ' — NONE set, crawling direct'}`)
     }
-  } else {
-    console.log(`[proxies] ${proxyUrls.length} proxy(ies) from PROXY_LIST${proxyUrls.length ? '' : ' — NONE set, crawling direct'}`)
+  } catch (err) {
+    console.error(`[proxies] load failed (${err.message}) — using PROXY_LIST fallback (${proxyUrls.length})`)
   }
   return proxyUrls
 }
