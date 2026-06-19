@@ -4,7 +4,7 @@ import {
   existingScrapedDomains, pool,
 } from './db.js'
 import { discoverDomain } from './discover.js'
-import { scrapeBatch } from './scrape.js'
+import { scrapeBatch, scrapeBatchPlaywright } from './scrape.js'
 import { initProxies } from './proxies.js'
 import { normaliseDomain } from './extract.js'
 import { normaliseFields, wantsClaude, CLAUDE_FIELD_KEYS } from './fields.js'
@@ -14,6 +14,9 @@ const BATCH_SIZE = parseInt(process.env.BATCH_SIZE || '100', 10)
 const IDLE_POLL_MS = parseInt(process.env.IDLE_POLL_MS || '5000', 10)
 const DISCOVERY_CONCURRENCY = parseInt(process.env.DISCOVERY_CONCURRENCY || '10', 10)
 const ENRICH_CONCURRENCY = parseInt(process.env.ENRICH_CONCURRENCY || '6', 10)
+// Opt-in: retry blocked/empty domains with a real browser. Needs the Playwright
+// image + ≥2GB RAM. Off by default so a small container isn't overwhelmed.
+const PLAYWRIGHT_FALLBACK = /^(1|true|yes)$/i.test(process.env.PLAYWRIGHT_FALLBACK || '')
 
 // Assemble the row to save, populating ONLY the fields the user ticked.
 function buildContact(r, context, cls, fields) {
@@ -113,6 +116,37 @@ async function processJob(job) {
       const results = await scrapeBatch(
         scrapeable.map(it => ({ domain: it.domain, company_number: it.company_number }))
       )
+
+      // 3b) PLAYWRIGHT FALLBACK (opt-in): domains Cheerio couldn't get (blocked,
+      // errored, or loaded but had no contacts — often JS-rendered) get retried
+      // with a real browser, which runs JS and passes most anti-bot walls.
+      if (PLAYWRIGHT_FALLBACK) {
+        const retry = scrapeable.filter(it => {
+          const r = results.get(it.domain)
+          return r && (r.status === 'blocked' || r.status === 'error' || r.status === 'no_contact')
+        })
+        if (retry.length) {
+          log(`  job ${job.id}: Playwright fallback for ${retry.length} blocked/empty domain(s)`)
+          try {
+            const pwResults = await scrapeBatchPlaywright(
+              retry.map(it => ({ domain: it.domain, company_number: it.company_number }))
+            )
+            // Keep the better result: prefer the one that actually found contacts.
+            for (const it of retry) {
+              const pw = pwResults.get(it.domain)
+              const old = results.get(it.domain)
+              if (pw && (pw.emails.length || pw.phones.length) && !(old.emails.length || old.phones.length)) {
+                results.set(it.domain, pw)
+              } else if (pw && pw.status === 'ok' && old.status !== 'ok') {
+                results.set(it.domain, pw)
+              }
+            }
+          } catch (err) {
+            log(`  ! Playwright fallback failed: ${err.message}`)
+          }
+        }
+      }
+
       await mapPool(scrapeable, ENRICH_CONCURRENCY, async (it) => {
         const r = results.get(it.domain)
         try {

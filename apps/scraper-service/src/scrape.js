@@ -1,4 +1,5 @@
-import { CheerioCrawler, ProxyConfiguration, log, LogLevel, Configuration } from 'crawlee'
+import { CheerioCrawler, PlaywrightCrawler, ProxyConfiguration, log, LogLevel, Configuration } from 'crawlee'
+import * as cheerio from 'cheerio'
 import { proxyUrls } from './proxies.js'
 import {
   extractEmails, extractPhones, extractNames, CONTACT_PATHS,
@@ -11,6 +12,95 @@ log.setLevel(LogLevel.WARNING)
 // Don't let Crawlee persist request queues / datasets to disk between runs —
 // each batch is independent and the source of truth is Postgres.
 Configuration.getGlobalConfig().set('persistStorage', false)
+
+// Shared per-page extraction — used by BOTH the Cheerio and Playwright crawlers
+// so they produce identical results. Takes a cheerio $ (Playwright loads its
+// rendered HTML into cheerio first), the result accumulator, whether it's a
+// sub-page, and the page URL.
+function applyExtraction($, r, isSub, url) {
+  if (typeof $ !== 'function') { if (r.status === 'pending') r.status = 'ok'; return }
+  const body = $('body').text()
+  r.emails = [...new Set([...r.emails, ...extractEmails(body)])]
+  r.phones = [...new Set([...r.phones, ...extractPhones(body)])]
+  r.names = [...new Set([...r.names, ...extractNames($)])].slice(0, 10)
+  r.socials = { ...extractSocials($), ...r.socials }
+  r.metaKeywords = [...new Set([...r.metaKeywords, ...extractMetaKeywords($)])].slice(0, 25)
+  const jsonld = extractJsonLd($)
+  if (!r.address) r.address = jsonld.address || extractAddressHeuristic($)
+  if (!r.jsonldType && jsonld.type) r.jsonldType = jsonld.type
+  if (!isSub) {
+    r.pageUrl = url
+    r.description = extractMetaDescription($) || r.description
+    r.textSample = pageTextSample($)
+  } else if (!r.description) {
+    r.description = extractMetaDescription($)
+  }
+  if (r.status === 'pending') r.status = 'ok'
+}
+
+// Build the empty per-domain result accumulator + start URLs (homepage + contact
+// paths). Shared so Cheerio and Playwright batches start from the same shape.
+function buildTargets(targets) {
+  const results = new Map()
+  const startUrls = []
+  for (const t of targets) {
+    results.set(t.domain, {
+      domain: t.domain, company_number: t.company_number ?? null,
+      pageUrl: `https://${t.domain}`, website: `https://${t.domain}`,
+      emails: [], phones: [], names: [], socials: {}, metaKeywords: [],
+      description: null, address: null, jsonldType: null, textSample: null,
+      status: 'pending', errorMsg: null,
+    })
+    const base = `https://${t.domain}`
+    startUrls.push({ url: base, userData: { domain: t.domain, isSub: false } })
+    for (const p of CONTACT_PATHS) startUrls.push({ url: base + p, userData: { domain: t.domain, isSub: true } })
+  }
+  return { results, startUrls }
+}
+
+function finaliseStatuses(results) {
+  for (const r of results.values()) {
+    if (r.status === 'ok' && r.emails.length === 0 && r.phones.length === 0) r.status = 'no_contact'
+    if (r.status === 'pending') { r.status = 'error'; r.errorMsg = r.errorMsg || 'No response' }
+  }
+}
+
+/**
+ * Playwright (real browser) fallback for domains Cheerio couldn't get — runs JS,
+ * passes most anti-bot challenges. Heavier: needs Chromium + RAM. Same result
+ * shape as scrapeBatch. Only call this for the blocked/empty domains.
+ */
+export async function scrapeBatchPlaywright(targets, opts = {}) {
+  const { results, startUrls } = buildTargets(targets)
+  const proxyConfiguration = proxyUrls.length > 0 ? new ProxyConfiguration({ proxyUrls }) : undefined
+  const crawler = new PlaywrightCrawler({
+    proxyConfiguration,
+    maxConcurrency: opts.maxConcurrency ?? parseInt(process.env.PLAYWRIGHT_CONCURRENCY || '2', 10),
+    requestHandlerTimeoutSecs: 45,
+    navigationTimeoutSecs: 30,
+    maxRequestRetries: 1,
+    headless: true,
+    async requestHandler({ page, request }) {
+      const { domain, isSub } = request.userData
+      const r = results.get(domain)
+      if (!r) return
+      try { await page.waitForLoadState('domcontentloaded', { timeout: 15000 }) } catch { /* best effort */ }
+      const html = await page.content()
+      applyExtraction(cheerio.load(html), r, isSub, request.url)
+    },
+    failedRequestHandler({ request }, error) {
+      const { domain, isSub } = request.userData
+      const r = results.get(domain)
+      if (r && !isSub && r.status === 'pending') {
+        r.status = 'error'
+        r.errorMsg = `Playwright failed: ${(error?.message || '').slice(0, 80)}`
+      }
+    },
+  })
+  await crawler.run(startUrls)
+  finaliseStatuses(results)
+  return results
+}
 
 // Crawlee's memory snapshot needs `ps` (provided by procps in the Docker image;
 // index.js probes for it at startup). Keep the autoscaler modest on a small
@@ -99,26 +189,7 @@ export async function scrapeBatch(targets, opts = {}) {
         if (r.status === 'pending') r.status = 'ok'
         return
       }
-      const body = $('body').text()
-      r.emails = [...new Set([...r.emails, ...extractEmails(body)])]
-      r.phones = [...new Set([...r.phones, ...extractPhones(body)])]
-      r.names = [...new Set([...r.names, ...extractNames($)])].slice(0, 10)
-      r.socials = { ...extractSocials($), ...r.socials } // earlier (homepage) wins
-      r.metaKeywords = [...new Set([...r.metaKeywords, ...extractMetaKeywords($)])].slice(0, 25)
-
-      const jsonld = extractJsonLd($)
-      if (!r.address) r.address = jsonld.address || extractAddressHeuristic($)
-      if (!r.jsonldType && jsonld.type) r.jsonldType = jsonld.type
-
-      // Prefer the homepage for description + the classifier text sample.
-      if (!isSub) {
-        r.pageUrl = request.url
-        r.description = extractMetaDescription($) || r.description
-        r.textSample = pageTextSample($)
-      } else if (!r.description) {
-        r.description = extractMetaDescription($)
-      }
-      if (r.status === 'pending') r.status = 'ok'
+      applyExtraction($, r, isSub, request.url)
     },
     failedRequestHandler({ request }, error) {
       const { domain, isSub } = request.userData

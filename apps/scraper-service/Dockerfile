@@ -1,18 +1,21 @@
-# Crawlee (3.17) takes memory snapshots by spawning the `ps` command and there is
-# no reliable env/config switch to avoid it — so `ps` MUST exist in the image.
-# apify/actor-node is Crawlee's own Cheerio image and ships procps. We also
-# install it explicitly + verify at build time so a missing `ps` fails the BUILD
-# (loud) instead of every scrape job at runtime (silent crash).
-FROM apify/actor-node:20
+# Crawlee's Playwright image — bundles Chromium + Playwright + all OS deps, and
+# ships `ps` (procps) which Crawlee's memory snapshot needs. This is heavier than
+# the Cheerio-only image (~1GB) and Chromium needs RAM, so give the Easypanel
+# container ≥2GB. The worker uses Cheerio FIRST and only falls back to Playwright
+# for blocked/JS sites when PLAYWRIGHT_FALLBACK=1.
+FROM apify/actor-node-playwright-chrome:20
 
+# procps for the memory snapshot (the base image is Debian-based; apt not apk).
 USER root
-RUN apk add --no-cache procps \
-    && which ps \
-    && ps --version 2>/dev/null || ps -A -o ppid,pid,stat,rss,comm | head -1
+RUN (apt-get update && apt-get install -y --no-install-recommends procps && rm -rf /var/lib/apt/lists/*) || true \
+    && (which ps || true)
 
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
+# The base image already has playwright + chromium installed globally; install
+# our remaining prod deps. Don't re-download browsers (image already has them).
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 RUN npm install --omit=dev --no-optional
 
 COPY . .
