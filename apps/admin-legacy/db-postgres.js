@@ -1647,6 +1647,19 @@ class PostgresDatabase {
     safe('phone',         () => { if (filters.phone)         { clauses.push(`(corporate_phone ILIKE $${p} OR company_phone ILIKE $${p})`); params.push(`%${filters.phone}%`); p++; } });
     safe('company',       () => { if (filters.company)       { clauses.push(`(company_name ILIKE $${p} OR company_domain ILIKE $${p})`); params.push(`%${filters.company}%`); p++; } });
     safe('search',        () => { if (filters.search)        { clauses.push(`(email ILIKE $${p} OR first_name ILIKE $${p} OR last_name ILIKE $${p} OR company_name ILIKE $${p})`); params.push(`%${filters.search}%`); p++; } });
+    // Tag filter — match contacts whose tags[] array overlaps any given tag.
+    // Comma-separated; uses the GIN index (tags && ARRAY[...]). Lets you filter
+    // to a named scrape batch (the batch name is stored as a tag) or 'ch_scraper'.
+    safe('tags',          () => {
+      if (!filters.tags) return;
+      const values = String(filters.tags).split(',').map(v => v.trim()).filter(Boolean);
+      if (!values.length) return;
+      clauses.push(`tags && $${p}::text[]`);
+      params.push(values);
+      p++;
+    });
+    // Source filter (e.g. 'ch_scraper', 'apollo_csv') — exact match on source col.
+    safe('source',        () => { if (filters.source) eqMulti('source', filters.source); });
 
     // Verification status filter — multi-select values from email_status column.
     // 'not_verified' is a synthetic value mapped to IS NULL.

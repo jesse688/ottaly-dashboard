@@ -482,7 +482,12 @@
           <span style="font-size:12px;color:var(--accent);font-weight:600" id="selectedCompanyCount"></span>
         </div>
         <div class="scrape-fields hidden" id="scrapeFieldsBar">
-          <span class="label">Scrape &amp; enrich — extract:</span>
+          <div style="display:flex;align-items:center;gap:8px;width:100%">
+            <span class="label">Batch name:</span>
+            <input type="text" id="scrapeBatchName" placeholder="e.g. Care homes — Leeds" style="flex:1;max-width:320px">
+            <span class="scrape-fields-note" style="margin-left:0">name it so you can find this batch later</span>
+          </div>
+          <span class="label">Extract:</span>
           <div class="scrape-fields-list" id="scrapeFieldsList"></div>
           <span class="scrape-fields-note">AI fields use Claude</span>
         </div>
@@ -1090,12 +1095,18 @@
     if (!nums.length) { showStatus('Select some companies first.', 'error'); return; }
     var fields = getScrapeFields();
     if (!fields.length) { showStatus('Tick at least one field to extract.', 'error'); return; }
-    if (!confirm('Queue a scrape & enrich job for ' + nums.length + ' companies? The Crawlee worker will crawl each website and write results back. Watch progress on the Enrichment page.')) return;
+    var name = (document.getElementById('scrapeBatchName').value || '').trim();
+    if (!name) {
+      showStatus('Name this batch first (so you can find it later).', 'error');
+      var nf = document.getElementById('scrapeBatchName'); if (nf) nf.focus();
+      return;
+    }
+    if (!confirm('Queue scrape & enrich for ' + nums.length + ' companies as “' + name + '”? The Crawlee worker crawls each site and writes results back.')) return;
     var btn = document.getElementById('floatScrape');
     btn.disabled = true;
     fetch('/api/ch/scrape', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ company_numbers: nums, fields: fields, label: 'CH: ' + nums.length + ' companies' }),
+      body: JSON.stringify({ company_numbers: nums, fields: fields, label: name }),
     }).then(function(r){ return r.json().then(function(d){ return { ok: r.ok, d: d }; }); })
       .then(function(res) {
         btn.disabled = false;

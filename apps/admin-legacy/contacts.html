@@ -1000,6 +1000,13 @@
           </div>
         </div>
 
+        <div class="filter-section" data-clear="scrapeTag">
+          <div class="filter-label">Scrape batch / tag</div>
+          <div class="filter-control">
+            <input type="text" id="scrapeTag" placeholder="e.g. Care homes — Leeds, or ch_scraper">
+          </div>
+        </div>
+
         <div class="filter-section" data-clear="industry">
           <div class="filter-label">Industry</div>
           <div class="filter-control">
@@ -2476,6 +2483,7 @@
         jobTitle: sel('jobTitle'),
         jobTitleExclude: excl('jobTitle'),
         company: get('company'),
+        tags: get('scrapeTag'),
         industry: sel('industry'),
         industryExclude: excl('industry'),
         keywords: sel('keywords'),

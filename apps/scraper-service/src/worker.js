@@ -1,6 +1,7 @@
 import {
   ensureSchema, claimNextJob, loadPendingItems, saveContact, getCompanyContext,
-  writeBackDomain, markItem, bumpJob, finishJob, getJobStatus, pool,
+  writeBackDomain, markItem, bumpJob, finishJob, getJobStatus,
+  existingScrapedDomains, pool,
 } from './db.js'
 import { discoverDomain } from './discover.js'
 import { scrapeBatch } from './scrape.js'
@@ -83,7 +84,7 @@ async function processJob(job) {
       }
     })
 
-    const scrapeable = items.filter(it => it.domain)
+    const withDomain = items.filter(it => it.domain)
     const undiscovered = items.filter(it => !it.domain)
 
     // 2) Items we couldn't find a domain for: mark failed, no scrape.
@@ -92,7 +93,22 @@ async function processJob(job) {
       await bumpJob(job.id, { failedDelta: 1, doneDelta: 1 })
     }
 
-    // 3) Scrape everything that has a domain, then enrich + classify per item.
+    // 2b) DEDUP: skip any domain we've ALREADY scraped — reuse the stored row,
+    // no re-crawl. Saves proxy bandwidth + Gemini cost and means we never scrape
+    // the same business twice. (Link CH company_number to the existing row.)
+    const known = await existingScrapedDomains(withDomain.map(it => it.domain))
+    const alreadyScraped = withDomain.filter(it => known.has(it.domain))
+    const scrapeable = withDomain.filter(it => !known.has(it.domain))
+    for (const it of alreadyScraped) {
+      if (it.company_number) await writeBackDomain(it.company_number, it.domain)
+      await markItem(it.id, 'done', it.domain)
+      await bumpJob(job.id, { okDelta: 1, doneDelta: 1 })
+    }
+    if (alreadyScraped.length) {
+      log(`  job ${job.id}: skipped ${alreadyScraped.length} already-scraped domain(s)`)
+    }
+
+    // 3) Scrape everything NEW that has a domain, then enrich + classify per item.
     if (scrapeable.length) {
       const results = await scrapeBatch(
         scrapeable.map(it => ({ domain: it.domain, company_number: it.company_number }))

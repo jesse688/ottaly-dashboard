@@ -19985,6 +19985,12 @@ function scheduleAudienceScoring(pgdb) {
     if (!Number.isFinite(jobId)) return res.status(400).json({ error: 'Bad job id' });
     const workspaceId = (req.body && req.body.workspace_id) || 'ottaly-global';
     try {
+      // The job's label is the batch name the user typed — tag every contact with
+      // it so they can filter the Contacts page down to exactly this batch.
+      const jobMeta = await db.query(`SELECT label FROM scrape_jobs WHERE id = $1`, [jobId]);
+      const batchName = (jobMeta.rows[0] && jobMeta.rows[0].label) ? String(jobMeta.rows[0].label).slice(0, 60) : null;
+      const batchTags = batchName ? ['ch_scraper', batchName] : ['ch_scraper'];
+
       // Join scraped results + (for CH jobs) the ch_companies record so contacts
       // carry everything a campaign needs: name, clean company, email, address,
       // industry, SIC codes and CH info (number/status/type/registered address).
@@ -20065,7 +20071,7 @@ function scheduleAudienceScoring(pgdb) {
                  company_address= COALESCE(EXCLUDED.company_address, contacts.company_address),
                  raw_data       = COALESCE(EXCLUDED.raw_data, contacts.raw_data)`,
               [workspaceId, clean, nm.first, nm.last, company, r.domain || r.website || null,
-               phone, r.industry || null, kw, address, ['ch_scraper'], rawData]
+               phone, r.industry || null, kw, address, batchTags, rawData]
             );
             inserted++;
           } catch (e) {

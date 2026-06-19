@@ -574,6 +574,7 @@ module.exports = (db) => {
         companyRegion: rest.companyRegion, companyCounty: rest.companyCounty, companyTown: rest.companyTown,
         locationNeedsReview: rest.locationNeedsReview,
         email: rest.email, phone: rest.phone, linkedinUrl: rest.linkedinUrl,
+        tags: rest.tags, source: rest.source,
         emailProviders: rest.emailProviders,
         gatewayExclude: rest.gatewayExclude,
         gateway: rest.gateway,

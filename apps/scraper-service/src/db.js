@@ -100,6 +100,18 @@ export async function loadPendingItems(jobId, limit) {
   return rows
 }
 
+// Given a list of domains, return the set already present in scraped_contacts —
+// so the worker can skip re-crawling anything we already have (dedup / save cost).
+export async function existingScrapedDomains(domains) {
+  const list = [...new Set((domains || []).filter(Boolean))]
+  if (!list.length) return new Set()
+  const { rows } = await pool.query(
+    `SELECT domain FROM scraped_contacts WHERE domain = ANY($1::text[])`,
+    [list]
+  )
+  return new Set(rows.map(r => r.domain))
+}
+
 // CH context for fallback values + classifier hints (null for list-source items).
 export async function getCompanyContext(companyNumber) {
   if (!companyNumber) return null
