@@ -86,7 +86,10 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     console.error('[webhook] error:', err)
     if (deliveryId) await markDelivery(deliveryId, `error:${String(err).slice(0, 200)}`)
-    return NextResponse.json({ error: 'Webhook processing failed' }, { status: 500 })
+    // ALWAYS return 200. A 500 makes Bison treat the delivery as failed and, after
+    // repeated failures, auto-disable/back-off the webhook — which silently stops
+    // ALL replies. We've logged the error for ourselves; never signal failure to Bison.
+    return NextResponse.json({ ok: false, logged: true })
   }
 }
 
