@@ -10081,18 +10081,56 @@ async function syncNdrBounces() {
 setTimeout(() => syncNdrBounces().catch(() => {}), 3 * 60 * 1000);
 setInterval(() => syncNdrBounces().catch(() => {}), 30 * 60 * 1000);
 
-// ── Bison reply reconciler ────────────────────────────────────────────────────
-// Polls GET /api/replies per workspace (newest-first, stops at window cutoff)
-// and INSERTs any rows missing from unibox_replies. Catches replies that the
-// Bison webhook missed. Runs every 15 min; first run 2 min after boot.
-const RECONCILE_DAYS = 1; // look back 1 day each run
+// ── PlusVibe reply reconciler ─────────────────────────────────────────────────
+// Polls PV GET /unibox/emails per workspace (newest-first via page_trail, stops
+// at the window cutoff) and INSERTs inbound replies into unibox_replies. This is
+// THE feed for the client-portal unibox on PlusVibe (PV webhooks are optional;
+// this polling pass guarantees every reply lands). Runs every 5 min; first run
+// 2 min after boot. unibox_replies is shared Postgres (portal reads it).
+const RECONCILE_DAYS = 2; // look back 2 days each run (overlap covers downtime)
 let _reconcileState = { running: false, lastRun: null, lastError: null, inserted: 0 };
 
-const BISON_CAT_MAP = {
-  interested:          'interested',
-  automated_reply:     'auto_reply',
-  not_automated_reply: 'not_interested',
-};
+// EmailBison warmup filter tags (one per Bison workspace). Bison injects its
+// workspace's code into every warm-up email body/subject. After the Bison→PV
+// migration these leftover warm-ups can still land in PV-monitored inboxes, but
+// PV doesn't know they're warm-up (no WARMUP label), so they'd leak into the
+// unibox. Any reply/email containing one of these codes is a Bison warm-up and
+// is dropped — per policy, warm-up tags are the ONLY thing ever removed.
+const BISON_WARMUP_TAGS = [
+  'tc5odbtm','sk85oa7k','0e24psnp','eucrj0hz','rndyajpa','ahy9frqv','xzvjsvdu',
+  'dvyu4kdr','uiizjrlh','d1ymr6mx','n9qrgswv','raftziqa','qlctqsof','rcduzjkl',
+  '13aqstcm','op7as3ft','ht8jbwh2','gdf6uvrl','dau5wphh','antm9hol','9jbxm636',
+  '8k5natot','sdwgchhk','ss4me0qc','oly08aoy',
+];
+const BISON_WARMUP_TAG_RE = new RegExp('\\b(' + BISON_WARMUP_TAGS.join('|') + ')\\b', 'i');
+function hasBisonWarmupTag(text) {
+  return !!text && BISON_WARMUP_TAG_RE.test(String(text));
+}
+
+// PlusVibe `label` → unibox category. PV pre-classifies every reply, so we map
+// it straight through (no AI pass needed). 'warmup' is the PV warmup label.
+function pvLabelToCategory(label) {
+  const l = String(label || '').trim().toUpperCase().replace(/\s+/g, '_');
+  switch (l) {
+    case 'INTERESTED':
+    case 'LEAD':
+    case 'MEETING_BOOKED':
+    case 'MEETING_COMPLETED':
+    case 'CLOSED':              return 'interested';
+    case 'NOT_INTERESTED':
+    case 'NOT_NOW':
+    case 'WRONG_PERSON':        return 'not_interested';
+    case 'OUT_OF_OFFICE':
+    case 'AUTO_REPLY':
+    case 'AUTOMATED_REPLY':     return 'ooo_auto_reply';
+    case 'UNSUBSCRIBE':
+    case 'DO_NOT_CONTACT':      return 'unsubscribe';
+    case 'QUESTION':            return 'question';
+    case 'WARMUP':
+    case 'WARM_UP':             return 'warmup';
+    default:                    return 'other';
+  }
+}
 
 async function reconcileBisonReplies() {
   if (_reconcileState.running) return;
@@ -10100,77 +10138,79 @@ async function reconcileBisonReplies() {
   if (!pgdb) return;
   _reconcileState.running = true;
   _reconcileState.lastError = null;
-  const since = new Date(Date.now() - RECONCILE_DAYS * 86400000).toISOString();
+  const sinceMs = Date.now() - RECONCILE_DAYS * 86400000;
+  const since = new Date(sinceMs).toISOString();
   let inserted = 0;
 
   try {
-    // Bulk-fetch existing rows in window — dedup in memory, no per-row queries
-    const existing = await pgdb.query(`
-      SELECT lower(sender_email) AS e,
-             round(extract(epoch FROM received_at) / 300)::bigint AS t
-      FROM unibox_replies WHERE received_at >= $1
-    `, [since]);
-    const seen = new Set(existing.rows.map(r => `${r.e}|${r.t}`));
+    // Bulk-fetch existing reply ids in window — dedup by PV email id, no per-row queries.
+    const existing = await pgdb.query(
+      `SELECT bison_reply_id FROM unibox_replies WHERE received_at >= $1`,
+      [since]
+    );
+    const seen = new Set(existing.rows.map(r => String(r.bison_reply_id)));
 
-    const wsRaw = listBisonWorkspaces();
-    const workspaces = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.data || []);
-
-    for (const ws of workspaces) {
-      const teamId = String(ws.id);
-      const pvEntry = BISON_TEAMS.find(t => String(t.team_id) === teamId);
-      const workspaceId = pvEntry?.pv || teamId;
-
+    for (const ws of PV_WORKSPACES) {
+      const workspaceId = ws.pv;
       try {
-        // Switch workspace then page replies, stopping when we hit old data
-        await bisonReq('/api/workspaces/v1.1/switch-workspace', { wsId: teamId, method: 'POST', body: { team_id: teamId } }).catch(() => {});
-
-        let prevSig = '';
-        for (let page = 1; page <= 50; page++) {
-          const d = await bisonReq('/api/replies', { wsId: teamId, params: { folder: 'all', page, per_page: 100 } });
-          const batch = d?.data ?? [];
+        let pageTrail = null;
+        let caughtUp = false;
+        // newest-first; cap pages as a backstop. In steady state we break on the
+        // first already-stored reply (everything older is already in the unibox).
+        for (let page = 0; page < 40 && !caughtUp; page++) {
+          const params = {};
+          if (pageTrail) params.page_trail = pageTrail;
+          const resp = await pvApi('/unibox/emails', { wsId: workspaceId, params });
+          const batch = Array.isArray(resp?.data) ? resp.data : [];
           if (!batch.length) break;
-          const sig = batch.map(r => r.id).join(',');
-          if (sig === prevSig) break;
-          prevSig = sig;
+          pageTrail = resp.page_trail || null;
 
-          let hitCutoff = false;
-          for (const reply of batch) {
-            if ((reply.created_at || '') < since) { hitCutoff = true; continue; }
-            const replyFolder = (reply.folder || 'inbox').toLowerCase();
-            if (replyFolder !== 'inbox') continue;
-            const senderEmail = (reply.from_email_address || reply.from_email || reply.reply_email || '').toLowerCase().trim();
-            const mailboxEmail = (reply.primary_to_email_address || reply.to_email || reply.sender_email_address || '').toLowerCase().trim();
-            if (!senderEmail || !reply.created_at) continue;
+          for (const m of batch) {
+            const ts = m.timestamp_created || m.source_modified_at || '';
+            if (ts && new Date(ts).getTime() < sinceMs) { caughtUp = true; break; } // older than window → done
+            const replyId = String(m.id || '');
+            // First reply already in the unibox → newest-first guarantees the rest
+            // are too (or were skipped as OUT/warmup in a prior run). Stop here.
+            if (replyId && seen.has(replyId)) { caughtUp = true; break; }
+            // Only inbound replies belong in the unibox; skip OUT (cheap, not stored).
+            if (String(m.direction || '').toUpperCase() !== 'IN') continue;
+            if (!replyId) continue;
 
-            const t5 = Math.round(new Date(reply.created_at).getTime() / 1000 / 300);
-            const key = `${senderEmail}|${t5}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
+            const senderEmail = String(m.from_address_email || '').toLowerCase().trim();
+            const leadEmail   = String(m.lead || senderEmail).toLowerCase().trim();
+            const mailboxEmail = String(m.eaccount || '').toLowerCase().trim();
+            if (!senderEmail) continue;
 
-            const bisonStatus = reply.status || (reply.interested ? 'interested' : reply.automated_reply ? 'automated_reply' : reply.not_automated_reply ? 'not_automated_reply' : null);
-            if (!bisonStatus) continue; // skip unclassified (spam/junk landing in inbox)
-            const category = BISON_CAT_MAP[bisonStatus] || 'other';
+            // Drop bounce daemons + obvious non-replies at intake (mirrors portal).
+            if (/(^|[._-])(mailer-daemon|postmaster|no-?reply|bounce|abuse)@/.test(senderEmail)) continue;
+
+            const category = pvLabelToCategory(m.label);
+            // NEVER surface warmup in the unibox — warmup is the ONLY thing we drop.
+            // (a) PV's own WARMUP label; (b) leftover Bison warm-ups carrying a
+            // Bison warmup filter tag in the subject/body/preview.
+            if (category === 'warmup') continue;
+            if (hasBisonWarmupTag(m.subject) || hasBisonWarmupTag(m.content_preview) || hasBisonWarmupTag(m.body)) continue;
+
+            seen.add(replyId);
             await pgdb.query(`
               INSERT INTO unibox_replies
                 (bison_team_id, bison_reply_id, lead_email,
-                 workspace_id, sender_email, mailbox_email, subject, category, folder,
-                 received_at, raw, ingest_source,
-                 bison_interested, bison_automated_reply, sender_email_id)
-              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'reconciler',$12,$13,$14)
+                 workspace_id, sender_email, mailbox_email, subject, body_preview, category, folder,
+                 received_at, raw, ingest_source, campaign_id)
+              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'inbox',$10,$11,'pv-reconciler',$12)
               ON CONFLICT (bison_team_id, bison_reply_id) DO NOTHING
             `, [
-              teamId,
-              String(reply.id),
-              senderEmail,
+              workspaceId,
+              replyId,
+              leadEmail,
               workspaceId, senderEmail, mailboxEmail,
-              reply.subject || '', category, (reply.folder || 'Inbox').toLowerCase(),
-              reply.created_at, JSON.stringify(reply),
-              !!reply.interested, !!reply.automated_reply,
-              reply.sender_email_id ? String(reply.sender_email_id) : null,
+              m.subject || '', (m.content_preview || '').slice(0, 500), category,
+              ts || new Date().toISOString(), JSON.stringify(m),
+              m.campaign_id ? String(m.campaign_id) : null,
             ]);
             inserted++;
           }
-          if (hitCutoff) break;
+          if (!pageTrail) break;
         }
       } catch (e) {
         console.warn(`[reconcile] ${ws.name}: ${e.message}`);
@@ -10179,7 +10219,7 @@ async function reconcileBisonReplies() {
 
     _reconcileState.lastRun = new Date().toISOString();
     _reconcileState.inserted = inserted;
-    if (inserted) console.log(`[reconcile] inserted ${inserted} missing reply row(s)`);
+    if (inserted) console.log(`[reconcile] inserted ${inserted} PlusVibe reply row(s) into unibox`);
   } catch (err) {
     _reconcileState.lastError = err.message;
     console.error('[reconcile] failed:', err.message);
@@ -10271,8 +10311,9 @@ async function reconcileWinnrReplies() {
   }
 }
 
-setTimeout(() => reconcileBisonReplies().catch(() => {}), 2 * 60 * 1000);
-setInterval(() => reconcileBisonReplies().catch(() => {}), 15 * 60 * 1000);
+// PlusVibe reply reconciler — the unibox feed. Every 5 min; first run 1 min after boot.
+setTimeout(() => reconcileBisonReplies().catch(() => {}), 60 * 1000);
+setInterval(() => reconcileBisonReplies().catch(() => {}), 5 * 60 * 1000);
 setTimeout(() => reconcileWinnrReplies().catch(() => {}), 3 * 60 * 1000);
 setInterval(() => reconcileWinnrReplies().catch(() => {}), 15 * 60 * 1000);
 
@@ -10282,6 +10323,50 @@ app.post('/api/admin/reconcile-replies', requireAdmin, async (req, res) => {
   res.json({ ok: true, started: true, state: _reconcileState });
 });
 app.get('/api/admin/reconcile-replies/status', requireAdmin, (req, res) => res.json(_reconcileState));
+
+// One-off cleanup: move any EXISTING unibox replies that carry a Bison warm-up
+// filter tag (subject/body_preview/raw) into the warmup folder so they drop out
+// of the inbox view. Nothing is deleted — folder='warmup' just hides them. Per
+// policy, warm-up-tagged rows are the ONLY rows we ever remove from the inbox.
+// GET (?dry=1 default) previews; POST applies. Skips marked-as-lead / admin-labeled
+// rows defensively so a human decision is never overridden.
+async function bisonWarmupCleanup(apply) {
+  const pgdb = app.locals.pgDb;
+  if (!pgdb) throw new Error('DB unavailable');
+  const tagAlt = BISON_WARMUP_TAGS.join('|');
+  // Postgres regex: \y is word boundary. Match in subject, body_preview, or raw text.
+  const re = `\\y(${tagAlt})\\y`;
+  const where = `
+    (folder IS NULL OR folder NOT IN ('warmup','sent','bounced','spam'))
+    AND (marked_as_lead IS NOT TRUE)
+    AND (admin_label IS NULL)
+    AND (
+      COALESCE(subject,'')      ~* $1 OR
+      COALESCE(body_preview,'') ~* $1 OR
+      raw::text                 ~* $1
+    )`;
+  if (!apply) {
+    const r = await pgdb.query(
+      `SELECT id, workspace_id, lead_email, subject, category, folder FROM unibox_replies WHERE ${where} ORDER BY received_at DESC LIMIT 50`,
+      [re]
+    );
+    const c = await pgdb.query(`SELECT COUNT(*)::int n FROM unibox_replies WHERE ${where}`, [re]);
+    return { dryRun: true, matched: c.rows[0].n, sample: r.rows };
+  }
+  const r = await pgdb.query(
+    `UPDATE unibox_replies SET folder='warmup', category='warmup', updated_at=NOW() WHERE ${where}`,
+    [re]
+  );
+  return { dryRun: false, moved: r.rowCount };
+}
+app.get('/api/admin/cleanup-bison-warmup', requireAdmin, async (req, res) => {
+  try { res.json(await bisonWarmupCleanup(req.query.apply === '1')); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/admin/cleanup-bison-warmup', requireAdmin, async (req, res) => {
+  try { res.json(await bisonWarmupCleanup(true)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 app.post('/api/mailboxes/sync-ndr', requireSession, async (req, res) => {
   if (_ndrSyncState.running) return res.json({ ok: true, alreadyRunning: true });
