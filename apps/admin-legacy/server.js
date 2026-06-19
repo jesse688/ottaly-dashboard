@@ -4344,62 +4344,59 @@ async function fetchPortalReplyCounts(wsIds, dates) {
 
 async function ensurePerformanceDailyStats(wsIds, dates, dailyStats = performanceCache.dailyStats, forceDates = new Set()) {
   const today = serverDateString(new Date());
-  // Build list of (wsId, date) pairs that actually need a fetch.
-  const needed = [];
-  for (const wsId of wsIds) {
-    for (const date of dates) {
-      const key = `${wsId}|${date}`;
-      const cached = dailyStats.get(key);
+  if (!dates.length) return dailyStats;
+  // Which workspaces have ANY stale/missing/forced day in this window? Only those
+  // get re-fetched — but each is fetched as ONE RANGE call (not per-day). PlusVibe
+  // /account/email-stats returns a per-day `chart` for the whole range in a single
+  // call, so we never fire wsIds×dates requests (the per-day pattern throttled PV
+  // and undercounted — see project_perfcache_range_fetch). PV DOES include today
+  // in a range response, so no single-day workaround is needed.
+  const sorted = [...dates].sort();
+  const rangeStart = sorted[0];
+  const rangeEnd = sorted[sorted.length - 1];
+  const dateSet = new Set(dates);
+  const wsNeeding = wsIds.filter(wsId =>
+    dates.some(date => {
+      const cached = dailyStats.get(`${wsId}|${date}`);
       const ttl = date === today ? PERF_TODAY_TTL_MS : PERF_OLD_TTL_MS;
-      if (forceDates.has(date) || !cached || Date.now() - cached.savedAt > ttl) needed.push({ wsId, date, key });
-    }
-  }
-  // Fetch up to 8 at once — fast enough to feel instant, gentle on PlusVibe.
-  const CONC = 8;
-  for (let i = 0; i < needed.length; i += CONC) {
-    await Promise.allSettled(needed.slice(i, i + CONC).map(async ({ wsId, date, key }) => {
+      return forceDates.has(date) || !cached || Date.now() - cached.savedAt > ttl;
+    })
+  );
+  const CONC = 6;
+  for (let i = 0; i < wsNeeding.length; i += CONC) {
+    await Promise.allSettled(wsNeeding.slice(i, i + CONC).map(async (wsId) => {
       try {
-        // MUST pass wsId so bisonFetch uses this workspace's per-workspace token
-        // (or switches to it). Without it the call hit whatever workspace was
-        // active -> stats for the wrong/no workspace -> "0 sent" on the Stats page.
-        //
-        // TODAY is special: Bison's line-area-chart-stats does NOT return a bucket
-        // for the current (incomplete) day on a single-day start==end query, so the
-        // per-day warm fetch came back empty and today showed 0/frozen while older
-        // days were fine. Every other caller of this endpoint queries a RANGE, which
-        // does include today. So for today we fetch a 2-day range (yesterday..today)
-        // and pull today's bucket out of the pivot by its date key.
-        var fetchStart = date, fetchEnd = date;
-        if (date === today) {
-          var y = new Date(date + 'T00:00:00'); y.setDate(y.getDate() - 1);
-          fetchStart = serverDateString(y);
-        }
-        // PlusVibe /account/email-stats returns per-day chart rows for the range.
-        var pvStatsResp = await pvApi('/account/email-stats', { wsId: wsId, params: { start_date: fetchStart, end_date: fetchEnd } });
-        var chart = Array.isArray(pvStatsResp) ? pvStatsResp : (pvStatsResp?.chart || pvStatsResp?.data || []);
-        var pivot = pivotBisonStats(chart);
-        var rows = (fetchStart === fetchEnd) ? Object.values(pivot) : (pivot[date] ? [pivot[date]] : []);
-        var agg = aggPvEmailStats(rows);
-        // Today can legitimately be 0 early in the day, but an empty range response
-        // (Bison hiccup) also yields 0 and would freeze a previously-good number for
-        // a full TTL. If today comes back with no sends AND we already have a good
-        // non-zero value, keep it and mark stale so the next 2-min pass retries.
-        if (date === today && agg.sent === 0) {
-          var prev = dailyStats.get(key);
-          if (prev && prev.data && prev.data.sent > 0) {
-            dailyStats.set(key, { savedAt: 0, data: prev.data });
-            return;
+        const pvStatsResp = await pvApi('/account/email-stats', { wsId, params: { start_date: rangeStart, end_date: rangeEnd } });
+        const chart = Array.isArray(pvStatsResp) ? pvStatsResp : (pvStatsResp?.chart || pvStatsResp?.data || []);
+        const pivot = pivotBisonStats(chart);
+        const seen = new Set();
+        for (const date of dates) {
+          const row = pivot[date];
+          if (!row) continue;
+          const agg = aggPvEmailStats([row]);
+          // Don't let a transient empty/0 today overwrite a known-good today value.
+          if (date === today && agg.sent === 0) {
+            const prev = dailyStats.get(`${wsId}|${date}`);
+            if (prev && prev.data && prev.data.sent > 0) { seen.add(date); continue; }
           }
+          dailyStats.set(`${wsId}|${date}`, { savedAt: Date.now(), data: agg });
+          seen.add(date);
         }
-        dailyStats.set(key, { savedAt: Date.now(), data: agg });
+        // A day absent from a SUCCESSFUL chart response genuinely had 0 activity —
+        // cache a real zero so it isn't retried forever (never overwrite non-zero).
+        for (const date of dates) {
+          if (seen.has(date) || date > today) continue;
+          const key = `${wsId}|${date}`;
+          const prev = dailyStats.get(key);
+          if (prev && prev.data && (prev.data.sent > 0 || prev.data.replies > 0)) continue;
+          dailyStats.set(key, { savedAt: Date.now(), data: { ...EMPTY_PERF_AGG } });
+        }
       } catch {
-        // Fetch FAILED (429 exhausted / network / bad response). Do NOT cache a
-        // zero — a poisoned 0 is indistinguishable from a real "0 sends" day and
-        // the TTL would trust it for up to 12h, masking real data. Keep any prior
-        // good value; if none exists, store zeros but mark stale (savedAt:0) so
-        // the next pass retries instead of trusting the failure.
-        if (!dailyStats.has(key)) {
-          dailyStats.set(key, { savedAt: 0, data: { ...EMPTY_PERF_AGG } });
+        // Fetch FAILED — never poison with a trusted 0. Keep prior values; for any
+        // missing day store zeros marked stale (savedAt:0) so the next pass retries.
+        for (const date of dates) {
+          const key = `${wsId}|${date}`;
+          if (!dailyStats.has(key)) dailyStats.set(key, { savedAt: 0, data: { ...EMPTY_PERF_AGG } });
         }
       }
     }));
