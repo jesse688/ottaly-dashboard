@@ -10131,6 +10131,35 @@ function hasBisonWarmupTag(text) {
   return !!text && BISON_WARMUP_TAG_RE.test(String(text));
 }
 
+// PlusVibe's OWN warm-up filter tags. PV injects a unique per-mailbox
+// `warmup_custom_words` (e.g. "engrossed-honest") into every warm-up email body,
+// exactly so they can be filtered. We pull EVERY mailbox's tag per workspace and
+// drop any reply whose subject/body/preview contains one — so PV warm-up replies
+// never enter the unibox. Cached 1h (tags change rarely). Hyphen/space/underscore
+// tolerant; 2+ word, len>=7 guard avoids matching ordinary words.
+const _pvWarmupTagCache = new Map(); // wsId -> { re, at }
+const PV_WARMUP_TAG_TTL_MS = 60 * 60 * 1000;
+function _escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+async function pvWarmupTagRegex(wsId) {
+  const cached = _pvWarmupTagCache.get(wsId);
+  if (cached && Date.now() - cached.at < PV_WARMUP_TAG_TTL_MS) return cached.re;
+  let re = null;
+  try {
+    const accounts = await pvListAllAccounts(wsId);
+    const tags = new Set();
+    for (const a of accounts) {
+      const tag = String((a.payload?.warmup?.warmup_custom_words) || '').trim().toLowerCase();
+      if (tag && /[\s\-_]/.test(tag) && tag.length >= 7) tags.add(tag);
+    }
+    if (tags.size) {
+      const alts = [...tags].map(t => t.split(/[\s\-_]+/).map(_escapeRe).join('[\\s\\-_]+'));
+      re = new RegExp(`(?:^|[^a-z0-9])(${alts.join('|')})(?:[^a-z0-9]|$)`, 'i');
+    }
+  } catch (e) { console.warn('[reconcile] warmup-tag fetch failed for', wsId, '-', e.message); }
+  _pvWarmupTagCache.set(wsId, { re, at: Date.now() });
+  return re;
+}
+
 // PlusVibe `label` → unibox category. PV pre-classifies every reply, so we map
 // it straight through (no AI pass needed). 'warmup' is the PV warmup label.
 function pvLabelToCategory(label) {
@@ -10177,6 +10206,9 @@ async function reconcileBisonReplies() {
     for (const ws of PV_WORKSPACES) {
       const workspaceId = ws.pv;
       try {
+        // Pull this workspace's PV warm-up filter tags (cached 1h) so PV warm-up
+        // replies are dropped at ingest.
+        const pvWarmRe = await pvWarmupTagRegex(workspaceId);
         let pageTrail = null;
         let caughtUp = false;
         // newest-first; cap pages as a backstop. In steady state we break on the
@@ -10213,7 +10245,9 @@ async function reconcileBisonReplies() {
             // (a) PV's own WARMUP label; (b) leftover Bison warm-ups carrying a
             // Bison warmup filter tag in the subject/body/preview.
             if (category === 'warmup') continue;
-            if (hasBisonWarmupTag(m.subject) || hasBisonWarmupTag(m.content_preview) || hasBisonWarmupTag(m.body)) continue;
+            const warmupHay = `${m.subject || ''}\n${m.content_preview || ''}\n${m.body || ''}`;
+            if (hasBisonWarmupTag(warmupHay)) continue;            // leftover Bison warm-ups
+            if (pvWarmRe && pvWarmRe.test(warmupHay)) continue;    // PlusVibe's own warm-ups
 
             seen.add(replyId);
             await pgdb.query(`
@@ -10354,32 +10388,53 @@ app.get('/api/admin/reconcile-replies/status', requireAdmin, (req, res) => res.j
 // policy, warm-up-tagged rows are the ONLY rows we ever remove from the inbox.
 // GET (?dry=1 default) previews; POST applies. Skips marked-as-lead / admin-labeled
 // rows defensively so a human decision is never overridden.
+// Collect EVERY PlusVibe warm-up filter tag (warmup_custom_words) across all
+// workspaces and build a Postgres ERE alternation (hyphen/space/underscore
+// tolerant). Used by the existing-rows cleanup so already-leaked PV warm-ups
+// get swept too. ~21 API calls — only runs on the manual cleanup endpoint.
+async function collectPvWarmupTagsRe() {
+  const tags = new Set();
+  for (const ws of PV_WORKSPACES) {
+    try {
+      const accounts = await pvListAllAccounts(ws.pv);
+      for (const a of accounts) {
+        const t = String((a.payload?.warmup?.warmup_custom_words) || '').trim().toLowerCase();
+        if (t && /[\s\-_]/.test(t) && t.length >= 7) tags.add(t);
+      }
+    } catch { /* skip workspace */ }
+  }
+  if (!tags.size) return null;
+  // each "word-a-word-b" → word-a[-_[:space:]]+word-b ; words are simple lowercase.
+  const alt = [...tags].map(t => t.split(/[\s\-_]+/).join('[-_[:space:]]+')).join('|');
+  return `(${alt})`;
+}
+
 async function bisonWarmupCleanup(apply) {
   const pgdb = app.locals.pgDb;
   if (!pgdb) throw new Error('DB unavailable');
-  const tagAlt = BISON_WARMUP_TAGS.join('|');
-  // Postgres regex: \y is word boundary. Match in subject, body_preview, or raw text.
-  const re = `\\y(${tagAlt})\\y`;
+  // $1 = Bison codes (word-boundary); $2 = PV warmup_custom_words (or never-match).
+  const bisonRe = `\\y(${BISON_WARMUP_TAGS.join('|')})\\y`;
+  const pvRe = (await collectPvWarmupTagsRe()) || '(?!x)x'; // matches nothing if no PV tags
   const where = `
     (folder IS NULL OR folder NOT IN ('warmup','sent','bounced','spam'))
     AND (marked_as_lead IS NOT TRUE)
     AND (admin_label IS NULL)
     AND (
-      COALESCE(subject,'')      ~* $1 OR
-      COALESCE(body_preview,'') ~* $1 OR
-      raw::text                 ~* $1
+      COALESCE(subject,'')      ~* $1 OR COALESCE(subject,'')      ~* $2 OR
+      COALESCE(body_preview,'') ~* $1 OR COALESCE(body_preview,'') ~* $2 OR
+      raw::text                 ~* $1 OR raw::text                 ~* $2
     )`;
   if (!apply) {
     const r = await pgdb.query(
       `SELECT id, workspace_id, lead_email, subject, category, folder FROM unibox_replies WHERE ${where} ORDER BY received_at DESC LIMIT 50`,
-      [re]
+      [bisonRe, pvRe]
     );
-    const c = await pgdb.query(`SELECT COUNT(*)::int n FROM unibox_replies WHERE ${where}`, [re]);
+    const c = await pgdb.query(`SELECT COUNT(*)::int n FROM unibox_replies WHERE ${where}`, [bisonRe, pvRe]);
     return { dryRun: true, matched: c.rows[0].n, sample: r.rows };
   }
   const r = await pgdb.query(
     `UPDATE unibox_replies SET folder='warmup', category='warmup', updated_at=NOW() WHERE ${where}`,
-    [re]
+    [bisonRe, pvRe]
   );
   return { dryRun: false, moved: r.rowCount };
 }
