@@ -133,6 +133,14 @@
     tbody tr { transition: background .1s; }
     tbody tr:hover td { background: var(--panel-2); }
     tbody tr.selected td { background: rgba(34,211,238,.05); }
+
+    /* ── Scrape field picker bar ── */
+    .scrape-fields { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 14px; border-top: 1px solid var(--border-soft); background: var(--bg-inset); }
+    .scrape-fields .label { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+    .scrape-fields-list { display: flex; gap: 12px; flex-wrap: wrap; }
+    .scrape-fields-list label { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; cursor: pointer; }
+    .scrape-fields-list .ai-tag { font-size: 9px; font-weight: 700; color: var(--accent); border: 1px solid var(--accent-dim); border-radius: 3px; padding: 0 3px; }
+    .scrape-fields-note { font-size: 11px; color: var(--faint); margin-left: auto; }
     td.mono { font-family: ui-monospace, monospace; font-size: 12px; }
     .cell-sub { color: var(--faint); font-size: 11px; font-family: ui-monospace, monospace; margin-top: 2px; }
     .cell-muted { color: var(--muted); font-size: 12px; }
@@ -457,6 +465,11 @@
           <span class="sep"></span>
           <span style="font-size:12px;color:var(--accent);font-weight:600" id="selectedCompanyCount"></span>
         </div>
+        <div class="scrape-fields hidden" id="scrapeFieldsBar">
+          <span class="label">Scrape &amp; enrich — extract:</span>
+          <div class="scrape-fields-list" id="scrapeFieldsList"></div>
+          <span class="scrape-fields-note">AI fields use Claude</span>
+        </div>
         <div class="pagination hidden" id="companyPagination">
           <span class="page-info" id="companyPageInfo"></span>
           <button class="btn btn-secondary btn-sm" id="prevPageBtn" onclick="changePage(-1)">‹ Prev</button>
@@ -516,6 +529,7 @@
   </div>
   <div class="float-bar-spacer"></div>
   <button class="btn btn-secondary" id="floatJustOwners" onclick="fetchDirectors(false)">Just get owners</button>
+  <button class="btn btn-secondary" id="floatScrape" onclick="scrapeSelected()">🕷 Scrape &amp; enrich</button>
   <button class="btn btn-hero" id="floatRunPipeline" onclick="enrichCompanies()">▶ Run pipeline</button>
 </div>
 
@@ -572,6 +586,7 @@
 </div>
 
 <script src="/nav.js"></script>
+<script src="/ch-fields-client.js"></script>
 <script>
   // ── State ────────────────────────────────────────────────────────────────
   var _currentPage = 1;
@@ -895,6 +910,7 @@
         '<div class="desc">Try widening your filters or removing a SIC code.</div>' +
         '<button class="btn btn-ghost btn-sm" onclick="clearFilters()">Clear all filters</button></div>';
       document.getElementById('companySelectBar').classList.add('hidden');
+      document.getElementById('scrapeFieldsBar').classList.add('hidden');
       document.getElementById('companyPagination').classList.add('hidden');
       updateCompanySelection();
       return;
@@ -949,6 +965,8 @@
     html += '</tbody></table></div></div>';
     document.getElementById('companiesTable').innerHTML = html;
     document.getElementById('companySelectBar').classList.remove('hidden');
+    document.getElementById('scrapeFieldsBar').classList.remove('hidden');
+    renderScrapeFields();
 
     var pg = document.getElementById('companyPagination');
     var totalPages = Math.ceil(_totalCompanies / _perPage);
@@ -1018,6 +1036,46 @@
 
   function getSelectedCompanyNumbers() {
     return Array.from(document.querySelectorAll('.company-cb:checked')).map(function(el){ return el.dataset.id; });
+  }
+
+  // ── Scrape & enrich (Crawlee worker) ───────────────────────────────────────
+  // Ticked fields persist across re-renders. Default to the catalog defaults.
+  var _scrapeFields = (window.DEFAULT_FIELD_KEYS || []).slice();
+  var _scrapeFieldsRendered = false;
+  function renderScrapeFields() {
+    if (_scrapeFieldsRendered) return; // build once; checkbox state lives in the DOM
+    var host = document.getElementById('scrapeFieldsList');
+    if (!host || !window.FIELD_CATALOG) return;
+    host.innerHTML = window.FIELD_CATALOG.map(function(f) {
+      var checked = _scrapeFields.indexOf(f.key) !== -1 ? 'checked' : '';
+      return '<label><input type="checkbox" class="scrape-field-cb" value="' + f.key + '" ' + checked + '>' +
+        '<span>' + f.label + '</span>' + (f.claude ? '<span class="ai-tag">AI</span>' : '') + '</label>';
+    }).join('');
+    _scrapeFieldsRendered = true;
+  }
+  function getScrapeFields() {
+    return Array.from(document.querySelectorAll('.scrape-field-cb:checked')).map(function(el){ return el.value; });
+  }
+
+  function scrapeSelected() {
+    var nums = getSelectedCompanyNumbers();
+    if (!nums.length) { showStatus('Select some companies first.', 'error'); return; }
+    var fields = getScrapeFields();
+    if (!fields.length) { showStatus('Tick at least one field to extract.', 'error'); return; }
+    if (!confirm('Queue a scrape & enrich job for ' + nums.length + ' companies? The Crawlee worker will crawl each website and write results back. Watch progress on the Enrichment page.')) return;
+    var btn = document.getElementById('floatScrape');
+    btn.disabled = true;
+    fetch('/api/ch/scrape', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ company_numbers: nums, fields: fields, label: 'CH: ' + nums.length + ' companies' }),
+    }).then(function(r){ return r.json().then(function(d){ return { ok: r.ok, d: d }; }); })
+      .then(function(res) {
+        btn.disabled = false;
+        if (!res.ok) throw new Error(res.d.error || 'Failed to queue');
+        showStatus('Queued scrape job #' + res.d.jobId + ' for ' + res.d.total + ' companies. Opening Enrichment page to watch progress…', 'success');
+        window.open('/enrichment.html', '_blank');
+      })
+      .catch(function(e){ btn.disabled = false; showStatus('Could not queue scrape: ' + e.message, 'error'); });
   }
 
   // ── Pipeline ──────────────────────────────────────────────────────────────

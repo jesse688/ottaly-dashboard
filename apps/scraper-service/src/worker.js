@@ -6,7 +6,7 @@ import { discoverDomain } from './discover.js'
 import { scrapeBatch } from './scrape.js'
 import { normaliseDomain } from './extract.js'
 import { normaliseFields, wantsClaude, CLAUDE_FIELD_KEYS } from './fields.js'
-import { classifyBusiness, classifierAvailable } from './classify.js'
+import { classifyBusiness, classifierAvailable, classifierProvider } from './classify.js'
 
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE || '100', 10)
 const IDLE_POLL_MS = parseInt(process.env.IDLE_POLL_MS || '5000', 10)
@@ -134,7 +134,7 @@ async function processJob(job) {
 
 export async function runWorker() {
   await ensureSchema()
-  log('scraper-service ready — schema ensured, polling for jobs')
+  log(`scraper-service ready — schema ensured, AI classifier=${classifierProvider}, polling for jobs`)
 
   // Recover any job left 'running' by a crash: its pending items will be picked
   // up again here since we re-select pending rows.

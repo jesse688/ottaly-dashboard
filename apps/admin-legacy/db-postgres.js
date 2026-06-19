@@ -848,6 +848,62 @@ class PostgresDatabase {
       `ALTER TABLE ch_companies ADD COLUMN IF NOT EXISTS description TEXT`,
       `ALTER TABLE ch_companies ADD COLUMN IF NOT EXISTS enriched_at TIMESTAMPTZ`,
       `ALTER TABLE ch_companies ADD COLUMN IF NOT EXISTS domain_checked_at TIMESTAMPTZ`,
+
+      // ── Website-scraping / enrichment tables ──────────────────────
+      // The dashboard queues jobs here; the standalone scraper-service
+      // worker (Easypanel, Crawlee/CheerioCrawler) claims and processes
+      // them, writing results back to scraped_contacts. Schema MUST stay
+      // in sync with apps/scraper-service/src/db.js (it self-migrates too).
+      `CREATE TABLE IF NOT EXISTS scraped_contacts (
+        domain         TEXT PRIMARY KEY,
+        company_number TEXT,
+        page_url       TEXT,
+        emails         TEXT[] NOT NULL DEFAULT '{}',
+        phones         TEXT[] NOT NULL DEFAULT '{}',
+        raw_names      TEXT[] NOT NULL DEFAULT '{}',
+        status         TEXT NOT NULL DEFAULT 'ok',
+        error_msg      TEXT,
+        scraped_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_scraped_company ON scraped_contacts(company_number)`,
+      `CREATE INDEX IF NOT EXISTS idx_scraped_at ON scraped_contacts(scraped_at)`,
+      `ALTER TABLE scraped_contacts ADD COLUMN IF NOT EXISTS website       TEXT`,
+      `ALTER TABLE scraped_contacts ADD COLUMN IF NOT EXISTS address       TEXT`,
+      `ALTER TABLE scraped_contacts ADD COLUMN IF NOT EXISTS business_type TEXT`,
+      `ALTER TABLE scraped_contacts ADD COLUMN IF NOT EXISTS industry      TEXT`,
+      `ALTER TABLE scraped_contacts ADD COLUMN IF NOT EXISTS keywords      TEXT[] NOT NULL DEFAULT '{}'`,
+      `ALTER TABLE scraped_contacts ADD COLUMN IF NOT EXISTS description   TEXT`,
+      `ALTER TABLE scraped_contacts ADD COLUMN IF NOT EXISTS socials       JSONB`,
+
+      `CREATE TABLE IF NOT EXISTS scrape_jobs (
+        id          SERIAL PRIMARY KEY,
+        label       TEXT,
+        status      TEXT NOT NULL DEFAULT 'queued',
+        total       INTEGER NOT NULL DEFAULT 0,
+        done        INTEGER NOT NULL DEFAULT 0,
+        ok          INTEGER NOT NULL DEFAULT 0,
+        failed      INTEGER NOT NULL DEFAULT 0,
+        error       TEXT,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        started_at  TIMESTAMPTZ,
+        finished_at TIMESTAMPTZ
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_scrape_jobs_status ON scrape_jobs(status)`,
+      `ALTER TABLE scrape_jobs ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'ch'`,
+      `ALTER TABLE scrape_jobs ADD COLUMN IF NOT EXISTS fields TEXT[]`,
+
+      `CREATE TABLE IF NOT EXISTS scrape_job_items (
+        id             SERIAL PRIMARY KEY,
+        job_id         INTEGER NOT NULL REFERENCES scrape_jobs(id) ON DELETE CASCADE,
+        company_number TEXT,
+        company_name   TEXT,
+        domain         TEXT,
+        status         TEXT NOT NULL DEFAULT 'pending',
+        created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_job_items_job ON scrape_job_items(job_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_job_items_status ON scrape_job_items(job_id, status)`,
+      `ALTER TABLE scrape_job_items ADD COLUMN IF NOT EXISTS location TEXT`,
     ];
 
     // Migrations run with lock_timeout so a stuck previous-deploy query

@@ -32,6 +32,7 @@
       pages: [
         { href: 'contacts.html',        label: 'Contacts' },
         { href: 'companies-house.html', label: 'CH Pipeline' },
+        { href: 'enrichment.html',      label: 'Enrichment' },
         { href: 'database.html',        label: 'Database' },
         { href: 'apollo-prep.html',    label: 'Apollo Prep' },
         { href: 'verify-split.html',   label: 'Verify Split' },
