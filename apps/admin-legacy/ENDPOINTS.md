@@ -1,12 +1,12 @@
 # Ottaly Admin (admin-legacy) — Endpoint & API Reference
 
 Single source of truth for **what APIs this app calls out to** and **how it talks to
-EmailBison**. Keep this updated when you add/remove/change an endpoint or a Bison call.
+PlusVibe**. Keep this updated when you add/remove/change an endpoint or a PlusVibe call.
 
 > Regenerate the inbound-route list any time with:
 > `node scripts/list-endpoints.js`  (writes the table in §3 below)
 
-Last reviewed: 2026-06-14 (post PlusVibe→Bison migration)
+Last reviewed: 2026-06-19 (post Bison→PlusVibe migration — Bison account deactivated)
 
 ---
 
@@ -14,55 +14,53 @@ Last reviewed: 2026-06-14 (post PlusVibe→Bison migration)
 
 | Service | Base URL | Auth | Notes |
 |---|---|---|---|
-| **EmailBison** | `BISON_API_URL` (default `https://send.ottaly.co.uk`) | `Authorization: Bearer <key>` | Key from admin dashboard (app_settings `bison_api_key`) → falls back to `BISON_API_KEY` env. Read live via `getBisonKey()`. **STATEFUL** — see §2. |
+| **PlusVibe** | `https://api.plusvibe.ai/api/v1` | `x-api-key: <key>` | Key from admin dashboard (app_settings `pv_api_key`) → falls back to `PLUSVIBE_KEY` env. Read live via `getPvKey()`. **STATELESS** — workspace_id is a query param, no session switch. Needs `User-Agent` header (Cloudflare). See §2. |
 | Anthropic | api.anthropic.com | `x-api-key: ANTHROPIC_API_KEY` | LLM calls (briefings, enrichment). Not ESP. |
 | Companies House | api.company-information.service.gov.uk | Basic | Company/officer lookups. |
 | Reacher / SMTP verify | internal | — | Email verification. |
-| ~~PlusVibe~~ | ~~api.plusvibe.ai~~ | ~~x-api-key~~ | **RETIRED.** Key deprecated. All calls migrated to Bison. Do not reintroduce. |
+| ~~EmailBison~~ | ~~send.ottaly.co.uk~~ | ~~Bearer~~ | **RETIRED 2026-06-19.** Account deactivated. All calls migrated back to PlusVibe. Bison helpers are stubs. Do not reintroduce. |
 
 ---
 
-## 2. EmailBison — how we call it
+## 2. PlusVibe — how we call it
 
-**Stateful workspace model:** Bison ties the active workspace to the token/session.
-`POST /api/workspaces/v1.1/switch-workspace {team_id}` changes it for the whole token.
-Calling concurrently from multiple places trips Bison's "only one login at a time".
+**Stateless workspace model:** PlusVibe takes `workspace_id` as a query param on every
+call — no switch-workspace, no per-workspace tokens, no mutex. Concurrent calls are safe
+(rate-limited to ~1 req / 600ms via a shared gap in `pvApi`).
 
 **Helpers (all in server.js, module-scope):**
-- `bisonReq(path, {wsId, params, method, body})` — primary client. Serialized via
-  `_bisonGate` mutex so switch+fetch is atomic. Returns parsed JSON, throws on non-2xx.
-- `bisonFetch(path, {wsId, params, method, body})` — older equivalent, same gate.
-- `bisonSwitch(wsId)` — standalone switch (rarely needed; prefer passing `wsId` to the above).
-- `bisonWorkspaceLeads(wsId, {label, page, perPage})` — replaces PV `/lead/workspace-leads`.
-  Maps PV `label` → Bison `filters[lead_campaign_status]`, returns a plain leads array.
-- `getBisonKey()` — current key (dashboard override or env).
-- `BISON_TEAMS` — PV workspace_id ↔ Bison team_id map (frontend/clients table key by PV id;
-  Bison keys by numeric team_id — always map at the boundary).
+- `pvApi(path, {method, body, wsId, params})` — primary client. Adds `workspace_id`,
+  `x-api-key`, `User-Agent`. Retries on 429 with backoff. Returns parsed JSON (null on 204).
+- `pvListAllAccounts(wsId, {skip, limit})` — paginate `/account/list` (limit/skip) → flat array.
+- `pvWorkspaceLeads(wsId, {label, page, perPage})` — `/lead/workspace-leads` → plain leads array.
+- `listPvWorkspaces()` — returns `{workspaces:[{id,name}]}` from the static `PV_WORKSPACES` map.
+- `getPvKey()` — current key (dashboard override `pv_api_key` or `PLUSVIBE_KEY` env).
+- `PV_WORKSPACES` — `{pv, name}` per client (PV workspace_id). `BISON_TEAMS` is a back-compat
+  alias mapping `{team_id: pv, pv, name}` for a few admin endpoints; both key off the PV id.
+- Bison shims (`bisonReq`, `bisonFetch`, `bisonSwitch`, `getBisonKey`, `listBisonWorkspaces`,
+  `resolveBisonTeamId`, `bisonListSenderEmails`, etc.) remain as thin redirects to the PV
+  helpers (or safe no-ops) so leftover diagnostic call-sites don't ReferenceError.
 
-**Bison endpoints we use:**
+**PlusVibe endpoints we use:**
 
-| Bison endpoint | Used for | Helper sites |
+| PlusVibe endpoint | Used for | Helper sites |
 |---|---|---|
-| `GET /api/workspaces/v1.1` | List all workspaces | mailbox list, admin/pv workspaces, perfshim, webhook reg |
-| `POST /api/workspaces/v1.1/switch-workspace` | Activate a workspace | inside bisonReq/bisonFetch when `wsId` given |
-| `GET /api/workspaces/v1.1/line-area-chart-stats` | Daily sent/reply/bounce stats | stats, perfshim email-stats, combo-analysis |
-| `GET /api/sender-emails` | **List mailboxes** (paginated `page`+`per_page`) | listSendingMailboxes, warmup cron, perfshim account-list, mailbox-debug |
-| `GET /api/campaigns` | List campaigns | campaign cache, pv/campaigns, perfshim, copy |
-| `POST /api/campaigns/{id}/leads/attach-leads` | Add leads to campaign | push-to-bison paths |
-| `GET /api/leads` | List/filter leads | bisonWorkspaceLeads (audience seed, backfill, debug) |
-| `POST /api/leads/create-or-update/multiple` | Create/update leads | all push-contacts paths |
-| `POST /api/custom-variables` | Ensure custom vars exist | push paths |
-| `PATCH /api/warmup/sender-emails/enable` | Enable warmup | mailboxes enable-warmup |
-| `POST /api/replies/{id}/reply` | Send a reply | portal/inbox reply |
-| `GET /api/replies/{id}/conversation-thread` | Thread messages | lead thread view |
-| `GET|POST /api/webhook-url` | Register reply webhooks | startup webhook auto-register |
+| `GET /account/email-stats` | Daily sent/reply/bounce chart (per-date rows) | stats, perfshim email-stats, combo-analysis |
+| `GET /account/list` | **List mailboxes** (`limit`+`skip`) | listSendingMailboxes, warmup, perfshim, mailbox-debug |
+| `PATCH /account/bulk-update-warmup` | Enable/disable warmup | warmup enable/disable, pv-shutdown |
+| `PATCH /account/bulk-update` | Set daily_limit (e.g. zero out sending) | pv-shutdown |
+| `GET /campaign/list` | List campaigns | campaign cache, pv/campaigns, perfshim |
+| `POST /campaign/create` | Create campaign | bison/create-campaign |
+| `GET /lead/workspace-leads` | List/filter leads by label | pvWorkspaceLeads (perf, push, debug) |
+| `POST /lead/add` | Create a lead (top-level native fields) | all push-contacts paths, ch-push |
+| `POST /blocklist/add` | Suppress a bounced email | blocklistEmailEverywhere |
 
-**Migration notes (PV → Bison equivalents):**
-- PV `/workspaces` → `/api/workspaces/v1.1` (pvFetch('/workspaces') auto-redirects).
-- PV `/account/list`, `/email-account/list` → `/api/sender-emails`.
-- PV `/campaign/list` → `/api/campaigns`.
-- PV `/lead/workspace-leads` → `/api/leads` (via `bisonWorkspaceLeads`).
-- PV `/account/bulk-update-warmup` → `/api/warmup/sender-emails/enable`.
+**Lead payload format (CRITICAL):** PlusVibe native fields (`first_name`, `last_name`,
+`email`, `job_title`, `company_name`, `industry`, `city`, `linkedin_person_url`, etc.) must be
+**top-level** on the lead object — NOT in a `custom_variables` array — or merge tags fail.
+
+**Webhooks:** configured in the PlusVibe UI (no API registration). PV reply events arrive at
+`/webhook/plusvibe-reply`; PV sends `event` as a string (Bison sent it as an object).
 
 ---
 

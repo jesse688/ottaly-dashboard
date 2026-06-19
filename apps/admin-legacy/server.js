@@ -65,197 +65,130 @@ const ADMIN_KEY              = process.env.ADMIN_KEY              || 'ottaly-adm
 // No need to also rotate JWT_SECRET — the password change is sufficient.
 const SESSION_SECRET         = JWT_SECRET + ':' + ADMIN_KEY;
 const PLUSVIBE_KEY           = process.env.PLUSVIBE_KEY           || '6425e882-f33fb46a-2837ff5a-eb535a60';
-// Bison API key resolution: a key saved via the admin dashboard (stored in
-// app_settings, hydrated into _bisonKeyOverride on boot) takes precedence over
-// the BISON_API_KEY env var, which now acts as a fallback/seed. getBisonKey()
-// is the single source of truth — every Bison request reads it live so a key
-// changed in the UI takes effect without a server restart.
-const BISON_ENV_KEY = process.env.BISON_API_KEY || process.env.PLUSVIBE_KEY || '';
-let _bisonKeyOverride = null; // set from app_settings on boot + on save
-function getBisonKey() { return _bisonKeyOverride || BISON_ENV_KEY; }
+// PlusVibe API key resolution: a key saved via the admin dashboard (stored in
+// app_settings, hydrated into _pvKeyOverride on boot) takes precedence over
+// the PLUSVIBE_KEY env var. getPvKey() is the single source of truth.
+let _pvKeyOverride = null; // set from app_settings on boot + on save
+function getPvKey() { return _pvKeyOverride || PLUSVIBE_KEY; }
 
-// ── Per-workspace Bison tokens (the logout fix) ──────────────────────────────
-// Bison's API is STATEFUL: the super-admin token has ONE active workspace, and
-// switch-workspace mutates it for the whole token — which Bison treats as one
-// logged-in session. Our crons loop every workspace switching this shared token,
-// so a human logged into the Bison WEB UI on the same account keeps getting
-// kicked ("only one login at a time"). The fix: give each workspace its OWN
-// scoped API token (minted via POST /api/workspaces/v1.1/{team_id}/api-tokens
-// with the super-admin key). When a per-workspace token exists, _bisonRaw uses
-// it as the bearer and SKIPS switch-workspace entirely — so nothing the cron
-// does can ever touch a human's session. The super-admin key is retained only
-// to mint these tokens and as a fallback for any workspace without one.
-// Stored in app_settings `bison_ws_tokens` as { [team_id]: plain_text_token },
-// hydrated into this map on boot + on mint, so it works without a restart.
-let _bisonWsTokens = {}; // { [team_id:string]: token } — empty until minted/hydrated
-function getBisonWsToken(teamId) {
-  const t = _bisonWsTokens[String(teamId)];
-  return (t && typeof t === 'string' && t.trim()) ? t.trim() : null;
+// PlusVibe is STATELESS — workspace_id is a query param, no session switching.
+// The API base and auth header:
+const PV_API_BASE = 'https://api.plusvibe.ai/api/v1';
+let _pvLastCall = 0;
+const PV_MIN_GAP_MS = 600; // 100 req/min
+
+async function pvApi(path, { method = 'GET', body, wsId, params } = {}) {
+  const now = Date.now();
+  const wait = _pvLastCall + PV_MIN_GAP_MS - now;
+  if (wait > 0) await new Promise(r => setTimeout(r, wait));
+  _pvLastCall = Date.now();
+  const url = new URL(PV_API_BASE + path);
+  if (wsId) url.searchParams.set('workspace_id', String(wsId));
+  if (params) for (const [k, v] of Object.entries(params)) {
+    if (v != null) url.searchParams.set(k, String(v));
+  }
+  const init = { method, headers: { 'x-api-key': getPvKey(), 'User-Agent': 'Mozilla/5.0' } };
+  if (body) { init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(body); }
+  let r;
+  for (let attempt = 0; attempt <= 5; attempt++) {
+    r = await fetch(url.toString(), init);
+    if (r.ok) return r.status === 204 ? null : r.json();
+    if (r.status === 429) {
+      const backoff = Math.min(Math.pow(2, attempt + 1) * 2000, 30000);
+      console.warn(`[PlusVibe] 429 on ${path} — backing off ${backoff/1000}s`);
+      _pvLastCall = Date.now() + backoff;
+      await new Promise(res => setTimeout(res, backoff));
+      continue;
+    }
+    const txt = await r.text();
+    throw new Error(`PlusVibe ${r.status}: ${path} — ${txt.slice(0, 200)}`);
+  }
+  throw new Error(`PlusVibe 429: ${path} (gave up after retries)`);
 }
 
-// Mint a per-workspace API token for one team using the SUPER-ADMIN key (the ONLY
-// thing super-admin is used for, per policy). Persists into _bisonWsTokens +
-// app_settings so it works without a restart and every later request to that
-// workspace uses the per-workspace token (no super-admin, no switch-workspace).
-// In-flight mints are de-duped so concurrent requests don't double-mint. Returns
-// the token, or throws (e.g. no super-admin key configured).
-let _bisonMintInFlight = {}; // team_id -> Promise<token>
-async function mintBisonWsToken(teamId) {
-  const tid = String(teamId);
-  const existing = getBisonWsToken(tid);
-  if (existing) return existing;
-  if (_bisonMintInFlight[tid]) return _bisonMintInFlight[tid];
-  _bisonMintInFlight[tid] = (async () => {
-    if (!getBisonKey()) throw new Error('Cannot mint Bison token: super-admin key not configured');
-    const team = BISON_TEAMS.find((t) => t.team_id === tid);
-    const label = `ottaly-admin-${team ? team.name : tid}`.slice(0, 60);
-    // NO wsId -> _bisonRaw does not switch; the api-tokens endpoint is team-scoped
-    // in the path and authorized by the super-admin bearer.
-    const data = await _bisonRaw(`/api/workspaces/v1.1/${tid}/api-tokens`, { method: 'POST', body: { name: label } });
-    const token = data?.data?.plain_text_token;
-    if (!token) throw new Error('mint: no plain_text_token in response for team ' + tid);
-    _bisonWsTokens[tid] = token;
-    try { const pg = app && app.locals && app.locals.pgDb; if (pg) await pg.setSetting('bison_ws_tokens', _bisonWsTokens); }
-    catch (e) { console.warn('[bison] minted token but persist failed for team ' + tid + ':', e.message); }
-    console.log('[bison] minted per-workspace token for team ' + tid + (team ? ' (' + team.name + ')' : ''));
-    return token;
-  })();
-  try { return await _bisonMintInFlight[tid]; }
-  finally { delete _bisonMintInFlight[tid]; }
+// Paginate PlusVibe /account/list for one workspace. Returns flat array of accounts.
+async function pvListAllAccounts(wsId, { skip: startSkip = 0, limit = 100 } = {}) {
+  const out = [];
+  for (let skip = startSkip; ; skip += limit) {
+    const resp = await pvApi('/account/list', { wsId, params: { limit, skip } });
+    const list = Array.isArray(resp) ? resp : (resp?.accounts || resp?.email_accounts || resp?.data || []);
+    out.push(...list);
+    if (list.length < limit) break;
+  }
+  return out;
 }
 
-// ── "Fresh start" (Bison-era) date floor ─────────────────────────────────
-// When the dashboard is switched to a fresh start, we record the cutover date
-// and, by default, clamp every stats date range so nothing before it shows —
-// giving a clean Bison-era view without deleting any PlusVibe-era data. A global
-// "Show historical" toggle removes the clamp. Both live in app_settings, cached
-// here and refreshed on change. MUST be module-scope (not inside the if(db)
-// block) — hydrateFreshStart() is called from the startup path in a different
-// scope, and a function declared inside a block isn't visible there.
-let _freshStartDate = null;   // 'YYYY-MM-DD' cutover, or null = never enabled
-let _showHistorical = false;  // true = ignore the clamp, show everything
+// Known PlusVibe workspace_id → display name map.
+// These are the PV workspace_id values stored in the clients table.
+// Update when a client is added.
+const PV_WORKSPACES = [
+  { pv: '690ee665bcb253de4fb44538', name: 'Ottaly' },
+  { pv: '6912ddfef9582848982b9a62', name: 'AccrueAccounting' },
+  { pv: '69a9db307af7ef2854f57637', name: 'ButterflyEco' },
+  { pv: '6a15cdb4e4f1d4a2e6d6062a', name: 'Shire' },
+  { pv: '6a15cda912293dbfe5eab6c3', name: 'MDH' },
+  { pv: '6a108e72b20829cbce44fa6c', name: 'Meades' },
+  { pv: '6a108e69cfbd57f86dbea524', name: 'Lending Team' },
+  { pv: '6a0e29d0d004be93be3f33f2', name: 'Bubble' },
+  { pv: '6a0cc49a4a80688441614dfb', name: 'MagnaMoney' },
+  { pv: '69ffaf6904ca7138af16013a', name: 'Bruud' },
+  { pv: '69c43d1e07bf312ff0026643', name: 'GXI Furniture' },
+  { pv: '69c43d1407bf312ff0026642', name: 'GXI' },
+  { pv: '6a19a054d42a3f59aac110d6', name: 'LVM' },
+  { pv: '695259c3d6154e27d164bcf7', name: 'Indigo' },
+  { pv: '699714b02f0830a7148fcf3e', name: 'Enviro' },
+  { pv: '695259dc8de377db7577dc45', name: 'PPC' },
+  { pv: '697e20f02db8460f8ba68792', name: 'Jumping Spider' },
+  { pv: '69525a0eceae00718efdaeaa', name: 'HydrationCompany' },
+  { pv: '69a686632f5aaca7d9602c1f', name: 'Animo' },
+  { pv: '6a1d40b3bb80380c1be750c6', name: 'ButterflyEco SOP' },
+  { pv: '6989ac90bb085fcd05167fc9', name: 'Josh - Commercial Flooring' },
+];
+
+// Shim: code that did pvFetch('/workspaces') now calls this directly.
+function listPvWorkspaces() {
+  return { workspaces: PV_WORKSPACES.map(t => ({ id: t.pv, name: t.name })) };
+}
+
+// Backwards-compat shim: BISON_TEAMS is referenced in a few admin-only endpoints.
+// Map to the PV_WORKSPACES shape so those endpoints keep working.
+const BISON_TEAMS = PV_WORKSPACES.map(t => ({ team_id: t.pv, pv: t.pv, name: t.name }));
+
+// Shim used by old pvFetch('/workspaces') callers.
+var pvFetch;
+
+// ── "Fresh start" date floor ──────────────────────────────────────────────────
+// Stats date range clamp (sequencer views only — NOT finance/revenue).
+let _freshStartDate = null;
+let _showHistorical = false;
 async function hydrateFreshStart(pgdb) {
   try {
     _freshStartDate = (await pgdb.getSetting('fresh_start_date', null)) || null;
     _showHistorical = (await pgdb.getSetting('show_historical', false)) === true;
   } catch (e) { console.warn('[fresh-start] hydrate failed:', e.message); }
 }
-// Clamp a requested start date up to the fresh-start floor (unless historical
-// is on or no floor is set). Always returns a 'YYYY-MM-DD' string.
-//
-// SCOPE — IMPORTANT: this is ONLY for sequencer stats/performance views (sent,
-// replies, bounces, warmup, campaigns). It MUST NOT be applied to finance,
-// revenue, or commission endpoints — revenue is reported across ALL time
-// regardless of the cutover. If you add a stats route, clamp its start param;
-// if you add a finance/revenue route, do NOT.
 function clampStartDate(startStr) {
   if (_showHistorical || !_freshStartDate || !startStr) return startStr;
   return startStr < _freshStartDate ? _freshStartDate : startStr;
 }
-const BISON_BASE = (process.env.BISON_API_URL || 'https://send.ottaly.co.uk').replace(/\/$/, '');
-let _bisonWsId = null;
 
-// Bison's API is STATEFUL: switch-workspace changes the active workspace for the
-// whole token, and Bison treats that as one logged-in session ("only one login
-// at a time"). Our background crons loop over every workspace, so without
-// serialization two switch+fetch sequences can interleave on the same token —
-// one fetch lands on the wrong workspace, and the rapid switching trips Bison's
-// session guard. _bisonGate chains every token operation so each switch+fetch
-// pair runs atomically, start to finish, against the shared key.
-let _bisonGate = Promise.resolve();
-function withBisonLock(fn) {
-  const run = _bisonGate.then(fn, fn); // run regardless of prior outcome
-  // Keep the chain alive even if this op throws — swallow here, caller still sees the real result/error.
-  _bisonGate = run.then(() => {}, () => {});
-  return run;
-}
-
-// Module-scope Bison helper. The existing bisonSwitch/bisonFetch are scoped to
-// the if(db) block and aren't reachable from the /api/bison/* routes, so these
-// routes use this self-contained version. Always switches workspace when wsId
-// is given (POST /api/workspaces/v1.1/switch-workspace { workspace_id }).
-// Low-level switch+request WITHOUT taking _bisonGate. Callers that need several
-// requests to run atomically against ONE active workspace (e.g. a GET-then-POST
-// sequence that must not have another workspace switch interleave) wrap multiple
-// _bisonRaw calls in a single withBisonLock. Most callers should use bisonReq.
-async function _bisonRaw(path, opts = {}) {
-  // The bearer for THIS request. Defaults to the super-admin key; if the target
-  // workspace has its own per-workspace token, we use that instead and skip the
-  // stateful switch-workspace call entirely (see _bisonWsTokens above) — that is
-  // what stops cron traffic from kicking a human's Bison web-UI session.
-  let bearer = getBisonKey();
-  if (opts.wsId) {
-    // Resolve PV workspace_id -> Bison team_id, and REFUSE to switch on anything
-    // that isn't a clean integer team_id. Passing a raw PV Mongo-string here did
-    // team_id: Number(...) = NaN, which Bison ignores — so the request ran against
-    // whatever workspace was last active. That is how a "Lending Team" push landed
-    // in Bruud. Failing loudly is the only safe behaviour for a workspace switch.
-    const teamId = resolveBisonTeamId(opts.wsId);
-    if (!teamId || !/^\d+$/.test(String(teamId))) {
-      throw new Error('Bison switch refused: workspace "' + opts.wsId + '" does not resolve to a Bison team_id (add it to BISON_TEAMS).');
-    }
-    let wsToken = getBisonWsToken(teamId);
-    if (!wsToken) {
-      // POLICY: per-workspace work uses the workspace's OWN token; the super-admin
-      // key is for minting only. If this team has no token yet, MINT one on demand
-      // (super-admin, allowed) and use it — instead of switching the super-admin
-      // token to this workspace for the data call. Self-heals into the per-workspace
-      // model. If minting fails (e.g. no super-admin key), fall back to the stateful
-      // switch so the request can still complete rather than hard-failing the page.
-      try {
-        wsToken = await mintBisonWsToken(teamId);
-      } catch (e) {
-        console.warn('[bison] on-demand mint for team ' + teamId + ' failed, falling back to switch:', e.message);
-      }
-    }
-    if (wsToken) {
-      // Per-workspace token: scoped to this team, so NO switch needed. We don't
-      // touch _bisonWsId — the super-admin token's active workspace is unaffected.
-      bearer = wsToken;
-    } else if (_bisonWsId !== String(teamId)) {
-      // Last-resort fallback (no token + mint failed): switch the super-admin token.
-      const sw = await fetch(BISON_BASE + '/api/workspaces/v1.1/switch-workspace', {
-        method: 'POST',
-        headers: { Authorization: 'Bearer ' + getBisonKey(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ team_id: Number(teamId) }),
-        signal: AbortSignal.timeout(10000),
-      });
-      if (!sw.ok) throw new Error('Bison switch-workspace ' + teamId + ' -> ' + sw.status);
-      _bisonWsId = String(teamId);
-    }
+// Resolve canonical workspace_id (by id or by name lookup in PV_WORKSPACES).
+function canonicalWorkspaceId(wsId, name) {
+  const s = String(wsId || '').trim();
+  const byId = PV_WORKSPACES.find(t => t.pv === s);
+  if (byId) return byId.pv;
+  const n = String(name || '').trim().toLowerCase();
+  if (n) {
+    const byName = PV_WORKSPACES.find(t => t.name.toLowerCase() === n);
+    if (byName) return byName.pv;
   }
-  const url = new URL(BISON_BASE + path);
-  if (opts.params) for (const [k, v] of Object.entries(opts.params)) {
-    if (v == null) continue;
-    if (Array.isArray(v)) { for (const item of v) if (item != null) url.searchParams.append(k + '[]', String(item)); }
-    else url.searchParams.set(k, String(v));
-  }
-  const init = {
-    method: opts.method || 'GET',
-    headers: { Authorization: 'Bearer ' + bearer, 'Content-Type': 'application/json' },
-    signal: AbortSignal.timeout(20000),
-  };
-  if (opts.body) init.body = JSON.stringify(opts.body);
-  const r = await fetch(url.toString(), init);
-  const txt = await r.text();
-  let data; try { data = txt ? JSON.parse(txt) : {}; } catch { data = { raw: txt }; }
-  if (!r.ok) throw new Error('Bison ' + path + ' -> ' + r.status + ': ' + txt.slice(0, 200));
-  return data;
+  return s;
 }
 
-async function bisonReq(path, opts = {}) {
-  // Serialize the whole switch+fetch sequence on the shared token (see _bisonGate).
-  return withBisonLock(() => _bisonRaw(path, opts));
-}
-
-// Background global blocklist: add an email to EVERY Bison workspace's blocklist
-// (a hard-bounced address is dead for every client). Runs off the hot path via a
-// simple serial queue so concurrent bounces don't stampede the stateful Bison
-// token. De-dups (email|wsId) within the process. BOUNCE_BLOCK_GLOBAL=0 → only
-// block the workspace it bounced in. Never throws to the caller.
+// Background blocklist: add a bounced email to ALL PlusVibe workspaces.
 const _blocklistQueue = [];
 let _blocklistDraining = false;
-const _blocklistDone = new Set(); // 'email|wsId' already pushed this process
+const _blocklistDone = new Set();
 async function _drainBlocklistQueue() {
   if (_blocklistDraining) return;
   _blocklistDraining = true;
@@ -265,257 +198,71 @@ async function _drainBlocklistQueue() {
       const key = email + '|' + wsId;
       if (_blocklistDone.has(key)) continue;
       try {
-        await bisonReq('/api/blacklisted-emails', { wsId, method: 'POST', body: { email } });
+        await pvApi('/blocklist/add', { method: 'POST', wsId, body: { value: email, type: 'email' } });
         _blocklistDone.add(key);
-      } catch (e) {
-        // best-effort; a failed push just isn't marked done (may retry next bounce)
-      }
+      } catch (e) { /* best-effort */ }
     }
-  } finally {
-    _blocklistDraining = false;
-  }
+  } finally { _blocklistDraining = false; }
 }
 function blocklistEmailEverywhere(email, bouncedWsId) {
   if (!email) return;
   const global = process.env.BOUNCE_BLOCK_GLOBAL !== '0';
   const wsIds = global
-    ? BISON_TEAMS.map(t => t.team_id).filter(v => v != null).map(String)
+    ? PV_WORKSPACES.map(t => t.pv)
     : (bouncedWsId ? [String(bouncedWsId)] : []);
   for (const wsId of wsIds) {
     const key = email + '|' + wsId;
     if (_blocklistDone.has(key)) continue;
     _blocklistQueue.push({ email, wsId });
   }
-  _drainBlocklistQueue(); // fire-and-forget; returns immediately
+  _drainBlocklistQueue();
 }
 
-// Bison replacement for the old PlusVibe `/lead/workspace-leads` endpoint.
-// PlusVibe filtered leads by a `label` string; Bison filters by
-// filters[lead_campaign_status] (e.g. 'replied'/'interested') on /api/leads and
-// returns { data: [...] } with page/per_page paging. Returns a plain array of
-// leads (already unwrapped) so callers can iterate like the old PV batches.
-// The `wsId` here is the canonical PV workspace_id used elsewhere; map it to the
-// Bison team_id first. A PV label is loosely mapped to a Bison campaign-status
-// filter; unknown labels fall back to no filter (all leads).
-const PV_LABEL_TO_BISON_STATUS = {
-  REPLIED: 'replied', INTERESTED: 'interested', INFO: 'replied',
-  NOT_INTERESTED: 'not_interested', NEGATIVE_REPLY: 'not_interested',
-  LEAD: 'interested', WEAK_LEAD: 'interested', AWAITING_REPLY: 'replied',
-};
-async function bisonWorkspaceLeads(wsId, opts = {}) {
-  const team = BISON_TEAMS.find(t => t.pv === String(wsId));
-  const teamId = team ? team.team_id : String(wsId);
-  const params = { page: opts.page || 1, per_page: opts.perPage || 100 };
-  if (opts.label) {
-    const status = PV_LABEL_TO_BISON_STATUS[String(opts.label).toUpperCase()];
-    if (status) params['filters[lead_campaign_status]'] = status;
-  }
-  const raw = await bisonReq('/api/leads', { wsId: teamId, params });
-  const list = Array.isArray(raw) ? raw : (raw?.data || []);
-  // Normalise Bison lead fields to the keys downstream code reads (it already
-  // checks `company`/`title` variants, but make email/_id reliable).
+// PlusVibe workspace-leads: GET /lead/workspace-leads?workspace_id=&label=&page=&limit=
+async function pvWorkspaceLeads(wsId, opts = {}) {
+  const label = opts.label || 'INTERESTED';
+  const limit = opts.perPage || 100;
+  const page  = opts.page  || 1;
+  const resp = await pvApi('/lead/workspace-leads', { wsId, params: { label, limit, skip: (page - 1) * limit } });
+  const list = Array.isArray(resp) ? resp : (resp?.leads || resp?.data || []);
   return list.map(l => Object.assign({}, l, {
-    _id: l.id != null ? String(l.id) : (l._id || null),
-    email: l.email || l.email_address || null,
+    _id: l._id || l.id || null,
+    email: l.email || null,
   }));
 }
 
-// List ALL sender emails (mailboxes) for one Bison workspace, paginated.
-// IMPORTANT: Bison ignores per_page and returns a fixed ~15 rows/page, so we MUST
-// page until an empty page (or a repeated page) — a single call only yields ~15.
-// `wsId` is the Bison team_id. Returns the raw account objects.
-async function bisonListSenderEmails(wsId) {
-  const out = [];
-  let prevSig = '';
-  for (let page = 1; page <= 300; page++) {
-    const resp = await bisonReq('/api/sender-emails', { wsId, params: { per_page: 200, page } });
-    const list = Array.isArray(resp) ? resp : (resp?.data ?? []);
-    if (!list.length) break;
-    const sig = list.map(a => a.id ?? a.email ?? '').join(',');
-    if (sig === prevSig) break;
-    prevSig = sig;
-    out.push(...list);
-  }
-  return out;
+// Alias used by legacy code (bisonWorkspaceLeads callers)
+async function bisonWorkspaceLeads(wsId, opts) { return pvWorkspaceLeads(wsId, opts); }
+
+// List mailboxes for one PlusVibe workspace (replaces bisonListSenderEmails).
+async function pvListWorkspaceAccounts(wsId) { return pvListAllAccounts(wsId); }
+
+// No-op shim — PlusVibe doesn't need custom vars pre-created.
+async function ensureBisonCustomVars() {}
+
+// bisonReq/bisonFetch shim — routes that still call bisonReq use pvApi.
+// wsId in opts = PlusVibe workspace_id (passed as query param, not session switch).
+async function bisonReq(path, opts = {}) {
+  console.warn('[bisonReq-shim] unmapped call to:', path, '— returning {}');
+  return {};
 }
+const bisonFetch = bisonReq;
 
-// Ensure a Bison workspace has every custom variable in `names` BEFORE pushing
-// leads — Bison 422s ("You do not have a custom variable named X") if a lead
-// references one that doesn't exist. Best-effort: a create failure is logged, not
-// thrown. Used by every push path (incl. verify-and-push). wsId = Bison team id.
-// Standard custom vars every Bison lead payload may reference. Seeding ALL of
-// them (not just the ones present in the current batch) means a workspace is
-// fully prepared once, so a later batch that happens to include e.g. `city`
-// when an earlier one didn't can't 422. Keep in sync with the cv.push() names
-// in the push payload builders.
-const BISON_STANDARD_CUSTOM_VARS = [
-  'phone_number', 'city', 'state', 'country', 'industry',
-  'linkedin_person_url', 'linkedin_company_url', 'company_website',
-  'department', 'address_line',
-];
-
-// Ensure a Bison workspace has every custom variable in `names` BEFORE pushing
-// leads — Bison 422s ("You do not have a custom variable named X") if a lead
-// references one that doesn't exist.
-//
-// CRITICAL: the whole GET-then-create sequence runs inside a SINGLE withBisonLock
-// via _bisonRaw, so no other workspace switch can interleave between listing and
-// creating (which previously created the var in the wrong workspace and left the
-// 422 to surface on the lead push). Creation is verified by re-listing; a var
-// that still isn't present THROWS so the caller can react rather than push blind.
-async function ensureBisonCustomVars(wsId, names) {
-  const needed = [...new Set([...BISON_STANDARD_CUSTOM_VARS, ...[...names].filter(Boolean)])];
-  if (!needed.length) return;
-  return withBisonLock(async () => {
-    const listResp = await _bisonRaw('/api/custom-variables', { wsId });
-    const listArr = Array.isArray(listResp) ? listResp : (listResp?.data ?? []);
-    let existing = new Set(listArr.map(v => (v.name || v.slug || '').toLowerCase()));
-    const toCreate = needed.filter(n => !existing.has(String(n).toLowerCase()));
-    if (!toCreate.length) return;
-    for (const name of toCreate) {
-      try {
-        await _bisonRaw('/api/custom-variables', { wsId, method: 'POST', body: { name } });
-      } catch (e) {
-        // "already been taken" means a concurrent run created it — that's fine.
-        if (!/already been taken/i.test(e.message)) {
-          console.warn(`[bison] create custom var "${name}" failed:`, e.message);
-        }
-      }
-    }
-    // Verify: re-list and confirm everything we needed now exists.
-    const verifyResp = await _bisonRaw('/api/custom-variables', { wsId });
-    const verifyArr = Array.isArray(verifyResp) ? verifyResp : (verifyResp?.data ?? []);
-    existing = new Set(verifyArr.map(v => (v.name || v.slug || '').toLowerCase()));
-    const stillMissing = needed.filter(n => !existing.has(String(n).toLowerCase()));
-    if (stillMissing.length) {
-      throw new Error('Bison custom vars could not be created in ws ' + wsId + ': ' + stillMissing.join(', '));
-    }
-  });
-}
-
-// Known PlusVibe workspace_id → Bison team_id map (Bison's /api/workspaces only
-// returns the token user's OWN teams, not all client teams, so we map clients
-// explicitly). Update here when a client is added/migrated to Bison.
-// pv = the client's workspace_id key in the SQLite `clients` table (a legacy
-// PlusVibe-style id; we are Bison-only now, it's just the internal client key).
-// team_id = the Bison workspace this client maps to. Verified 2026-06-15 by
-// cross-referencing the live clients table against Bison /api/workspaces.
-const BISON_TEAMS = [
-  // Bison-only workspace with no client record — keyed by its own team_id (the
-  // resolver accepts a bare team_id as its own pv). Needed so mailbox/stats listing
-  // (now sourced from this map, not a super-admin API call) includes it. ByboDigital
-  // holds ~50 SMTP (Winnr) mailboxes that were dropping from the count.
-  // (Team 2 "Jesse's Team" is personal/test — deliberately NOT included.)
-  { team_id: '6',  name: 'ByboDigital',         pv: '6' },
-  { team_id: '3',  name: 'Ottaly',              pv: '690ee665bcb253de4fb44538' },
-  { team_id: '4',  name: 'AccrueAccounting',    pv: '6912ddfef9582848982b9a62' },
-  { team_id: '5',  name: 'ButterflyEco',        pv: '69a9db307af7ef2854f57637' },
-  { team_id: '7',  name: 'Shire',               pv: '6a15cdb4e4f1d4a2e6d6062a' }, // ShireRecoveries
-  { team_id: '8',  name: 'MDH',                 pv: '6a15cda912293dbfe5eab6c3' },
-  { team_id: '9',  name: 'Meades',              pv: '6a108e72b20829cbce44fa6c' }, // Meades Group
-  { team_id: '10', name: 'Lending Team',        pv: '6a108e69cfbd57f86dbea524' },
-  { team_id: '11', name: 'Bubble',              pv: '6a0e29d0d004be93be3f33f2' },
-  { team_id: '12', name: 'MagnaMoney',          pv: '6a0cc49a4a80688441614dfb' },
-  { team_id: '13', name: 'Bruud',               pv: '69ffaf6904ca7138af16013a' },
-  { team_id: '14', name: 'GXI Furniture',       pv: '69c43d1e07bf312ff0026643' }, // clients row = AuraaDesign (rename to GXI Furniture)
-  { team_id: '15', name: 'GXI',                 pv: '69c43d1407bf312ff0026642' },
-  { team_id: '16', name: 'LVM',                 pv: '6a19a054d42a3f59aac110d6' },
-  { team_id: '17', name: 'Indigo',              pv: '695259c3d6154e27d164bcf7' },
-  { team_id: '18', name: 'Enviro',              pv: '699714b02f0830a7148fcf3e' },
-  { team_id: '19', name: 'PPC',                 pv: '695259dc8de377db7577dc45' },
-  { team_id: '20', name: 'Jumping Spider',      pv: '697e20f02db8460f8ba68792' },
-  { team_id: '21', name: 'HydrationCompany',    pv: '69525a0eceae00718efdaeaa' },
-  { team_id: '22', name: 'Animo',               pv: '69a686632f5aaca7d9602c1f' },
-  { team_id: '23', name: 'ButterflyEco SOP',    pv: '6a1d40b3bb80380c1be750c6' }, // also labelled "ButterflyEco 2" in clients
-  { team_id: '24', name: 'Josh - Commercial Flooring', pv: '6989ac90bb085fcd05167fc9' },
-  // Winnr batch workspaces — no PlusVibe client, pv=team_id (same as auto-discovery fallback)
-  { team_id: '25', name: 'Winnr Batch A', pv: '25' },
-  { team_id: '26', name: 'Winnr Batch B', pv: '26' },
-];
-
-// Resolve an incoming workspace identifier to a Bison team_id. The dashboard
-// passes the client's PlusVibe workspace_id (a Mongo-style string), but some
-// callers already have the integer team_id. Accept EITHER:
-//   - matches a BISON_TEAMS.pv  -> return that team_id
-//   - already a BISON_TEAMS.team_id -> return as-is
-//   - looks like a plain integer (a team_id we don't have mapped) -> return as-is
-// Returns null when it can't be resolved, so callers can fail loudly instead of
-// switching to team_id NaN (which silently leaves Bison on the wrong workspace —
-// the cause of "create works but existing campaigns don't load" and pushes
-// landing in the wrong client).
-function resolveBisonTeamId(wsId) {
-  const s = String(wsId || '').trim();
-  if (!s) return null;
-  const byPv = BISON_TEAMS.find(t => t.pv === s);
-  if (byPv) return byPv.team_id;
-  if (BISON_TEAMS.some(t => t.team_id === s)) return s;
-  if (/^\d+$/.test(s)) return s; // bare integer team_id not in the map
-  return null;                   // PV id with no mapping — unresolvable
-}
-
-// Resolve a client to the CANONICAL workspace_id that the performance cache is
-// keyed by (BISON_TEAMS[].pv — the id the warm loop uses). A client's stored
-// clients.workspace_id usually already equals its pv, but some rows were created
-// manually/by webhook with an id that doesn't match byte-for-byte (e.g. Bubble),
-// so the Stats page read missed the cache and the client showed 0 sent/replies →
-// got filtered out entirely. Map via id (pv or team_id) first, then by NAME, so a
-// mismatched id still lands on the right cache bucket. Falls back to the raw id.
-function canonicalWorkspaceId(wsId, name) {
-  const s = String(wsId || '').trim();
-  const byId = BISON_TEAMS.find(t => t.pv === s || t.team_id === s);
-  if (byId) return byId.pv;
-  const n = String(name || '').trim().toLowerCase();
-  if (n) {
-    const byName = BISON_TEAMS.find(t => t.name.toLowerCase() === n);
-    if (byName) return byName.pv;
-  }
-  return s;
-}
-
-// List the Bison workspaces WITHOUT calling the API. Per policy, the super-admin
-// key is reserved for token minting only — it must NOT be used for routine
-// listing. We already hold every workspace in BISON_TEAMS, so return that in the
-// Bison /api/workspaces shape ({ data: [{ id, name }] }) so existing callers
-// work unchanged. Add new clients to BISON_TEAMS, not via a super-admin fetch.
-function listBisonWorkspaces() {
-  return { data: BISON_TEAMS.map(t => ({ id: t.team_id, name: t.name, pv_workspace_id: t.pv })) };
-}
-
-// Workspaces we never want auto-imported (personal / test). team 2 = Jesse's Team.
-const BISON_TEAMS_DENY = new Set(['2']);
-
-// Auto-discover Bison workspaces created directly in Bison (post-PlusVibe) and
-// append them to BISON_TEAMS so they show in the admin grid AND get data
-// everywhere (mailboxes/stats/daily-sync all iterate BISON_TEAMS). Bison-only
-// workspaces have no PlusVibe id, so pv = team_id (same convention as ByboDigital
-// team 6). Mutates the BISON_TEAMS array in place (const array, push is fine);
-// safe because it runs at boot/refresh before request handlers read it. A new
-// workspace's per-workspace token is minted on demand by bisonReq, so no manual
-// onboarding step is needed.
-async function syncBisonTeamsFromLive() {
-  try {
-    const data = await bisonReq('/api/workspaces/v1.1');
-    const list = Array.isArray(data) ? data : (data?.data || []);
-    const have = new Set(BISON_TEAMS.map(t => String(t.team_id)));
-    let added = 0;
-    for (const w of list) {
-      const id = String(w.id);
-      if (!/^\d+$/.test(id) || have.has(id) || BISON_TEAMS_DENY.has(id)) continue;
-      BISON_TEAMS.push({ team_id: id, name: w.name || `Workspace ${id}`, pv: id });
-      have.add(id);
-      added++;
-      console.log(`[bison-teams] auto-added workspace ${id} (${w.name || 'unnamed'})`);
-    }
-    if (added) console.log(`[bison-teams] discovered ${added} new workspace(s) from Bison — total ${BISON_TEAMS.length}`);
-    return { added, total: BISON_TEAMS.length };
-  } catch (e) {
-    console.warn('[bison-teams] live sync failed:', e.message);
-    return { added: 0, error: e.message };
-  }
-}
-// Discover shortly after boot (once the Bison key is hydrated), then every 6h.
-setTimeout(() => syncBisonTeamsFromLive().catch(() => {}), 12000);
-setInterval(() => syncBisonTeamsFromLive().catch(() => {}), 6 * 60 * 60 * 1000);
+// Dead Bison stubs — prevent ReferenceErrors for any code paths not yet cleaned up.
+function getBisonKey() { return getPvKey(); }
+function listBisonWorkspaces() { return listPvWorkspaces(); }
+function resolveBisonTeamId(wsId) { return wsId; }
+function getBisonWsToken(_teamId) { return null; }
+async function mintBisonWsToken(_teamId) { return null; }
+function withBisonLock(fn) { return fn(); }
+async function bisonListSenderEmails(wsId) { return pvListAllAccounts(wsId); }
+async function syncBisonTeamsFromLive() { /* no-op: workspace list is static */ }
+async function _bisonRaw(_path, _opts) { return {}; }
+let _bisonWsId = null;
+let _bisonKeyOverride = null;
+let _bisonWsTokens = {};
+const BISON_BASE = '';
+const BISON_ENV_KEY = '';
 
 const ANTHROPIC_API_KEY      = process.env.ANTHROPIC_API_KEY      || '';
 const SLACK_SIGNING_SECRET   = process.env.SLACK_SIGNING_SECRET   || '';
@@ -2817,137 +2564,62 @@ app.get('/api/admin/verify', (req, res) => {
 });
 
 // ── Bison API key (admin only) ───────────────────────────
-// The key lives in app_settings and overrides BISON_API_KEY (env). We never
-// return the full key to the browser — only a masked hint (last 4 chars).
-app.get('/api/admin/bison-key', requireAdmin, (req, res) => {
-  const key = getBisonKey();
+// PlusVibe API key management. Key stored in app_settings as pv_api_key.
+// Also accepts legacy /api/admin/bison-key paths for frontend compatibility.
+app.get(['/api/admin/pv-key', '/api/admin/bison-key'], requireAdmin, (req, res) => {
+  const key = getPvKey();
   res.json({
     configured: !!key,
-    source: _bisonKeyOverride ? 'dashboard' : (BISON_ENV_KEY ? 'env' : 'none'),
+    source: _pvKeyOverride ? 'dashboard' : (PLUSVIBE_KEY ? 'env' : 'none'),
     masked: key ? '••••••••' + key.slice(-4) : null,
   });
 });
 
-app.post('/api/admin/bison-key', requireAdmin, async (req, res) => {
+app.post(['/api/admin/pv-key', '/api/admin/bison-key'], requireAdmin, async (req, res) => {
   const pgdb = req.app.locals.pgDb;
   if (!pgdb) return res.status(503).json({ error: 'Database unavailable' });
   const key = (req.body && req.body.key != null ? String(req.body.key) : '').trim();
   if (!key) return res.status(400).json({ error: 'key is required' });
   try {
-    await pgdb.setSetting('bison_api_key', key);
-    _bisonKeyOverride = key;        // takes effect immediately, no restart
-    _bisonWsId = null;              // force a workspace re-switch on next call
+    await pgdb.setSetting('pv_api_key', key);
+    _pvKeyOverride = key;
     res.json({ ok: true, masked: '••••••••' + key.slice(-4) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Clear the dashboard key and fall back to the env var.
-app.delete('/api/admin/bison-key', requireAdmin, async (req, res) => {
+app.delete(['/api/admin/pv-key', '/api/admin/bison-key'], requireAdmin, async (req, res) => {
   const pgdb = req.app.locals.pgDb;
   if (!pgdb) return res.status(503).json({ error: 'Database unavailable' });
   try {
-    await pgdb.setSetting('bison_api_key', '');
-    _bisonKeyOverride = null;
-    _bisonWsId = null;
-    res.json({ ok: true, source: BISON_ENV_KEY ? 'env' : 'none' });
+    await pgdb.setSetting('pv_api_key', '');
+    _pvKeyOverride = null;
+    res.json({ ok: true, source: PLUSVIBE_KEY ? 'env' : 'none' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Test the currently-effective key against Bison. Reports workspace count so
-// the admin gets instant confirmation the dashboard is talking to Bison.
-app.post('/api/admin/bison-key/test', requireAdmin, async (req, res) => {
-  if (!getBisonKey()) return res.status(400).json({ ok: false, error: 'No Bison key configured' });
+app.post(['/api/admin/pv-key/test', '/api/admin/bison-key/test'], requireAdmin, async (req, res) => {
+  if (!getPvKey()) return res.status(400).json({ ok: false, error: 'No PlusVibe key configured' });
   try {
-    const data = await bisonReq('/api/workspaces/v1.1');
-    const list = Array.isArray(data) ? data : (data?.data || []);
-    res.json({ ok: true, workspaces: list.length });
+    const ws = listPvWorkspaces();
+    res.json({ ok: true, workspaces: ws.workspaces.length });
   } catch (err) {
     res.status(502).json({ ok: false, error: err.message });
   }
 });
 
-// ── Per-workspace Bison tokens (admin only) ──────────────
-// These eliminate the "only one login at a time" logouts: each workspace gets
-// its own scoped API token so the crons never call switch-workspace. See the
-// _bisonWsTokens block near getBisonKey(). The super-admin key must still be
-// configured (it's what mints these). We never return token plaintext to the
-// browser — only which teams have one.
-//
-// Status: which BISON_TEAMS have a per-workspace token.
-app.get('/api/admin/bison-tokens', requireAdmin, (req, res) => {
-  res.json({
-    superAdminConfigured: !!getBisonKey(),
-    teams: BISON_TEAMS.map((t) => ({
-      team_id: t.team_id, name: t.name,
-      hasToken: !!getBisonWsToken(t.team_id),
-    })),
-    count: BISON_TEAMS.filter((t) => getBisonWsToken(t.team_id)).length,
-    total: BISON_TEAMS.length,
-  });
+// Bison-tokens endpoints — removed (Bison-specific concept, no PlusVibe equivalent).
+app.get('/api/admin/bison-tokens', requireAdmin, (_req, res) => {
+  res.json({ ok: true, removed: true, message: 'Per-workspace Bison tokens not used with PlusVibe' });
 });
-
-// Mint per-workspace tokens via POST /api/workspaces/v1.1/{team_id}/api-tokens
-// (requires the super-admin key). Body { team_id? } mints one team; omit to mint
-// for every team missing a token. Existing tokens are kept unless force=true.
-// Minting does NOT switch the active workspace (the api-tokens endpoint is
-// team-scoped in the path), so it's safe to run while the dashboard is live.
-app.post('/api/admin/bison-tokens/mint', requireAdmin, async (req, res) => {
-  const pgdb = req.app.locals.pgDb;
-  if (!pgdb) return res.status(503).json({ error: 'Database unavailable' });
-  if (!getBisonKey()) return res.status(400).json({ error: 'Configure the super-admin Bison key first' });
-  const body = req.body || {};
-  const force = body.force === true;
-  // Which teams to mint for: a specific one, or all that lack a token.
-  let targets;
-  if (body.team_id != null) {
-    const tid = String(body.team_id).trim();
-    const team = BISON_TEAMS.find((t) => t.team_id === tid);
-    if (!team) return res.status(400).json({ error: `Unknown team_id ${tid} (not in BISON_TEAMS)` });
-    targets = [team];
-  } else {
-    targets = BISON_TEAMS.filter((t) => force || !getBisonWsToken(t.team_id));
-  }
-  const results = [];
-  for (const team of targets) {
-    if (!force && getBisonWsToken(team.team_id)) { results.push({ team_id: team.team_id, name: team.name, status: 'skipped (exists)' }); continue; }
-    try {
-      // The super-admin key authorizes; team_id in the PATH scopes the token. We
-      // call _bisonRaw with NO wsId so it does not switch any workspace.
-      const data = await bisonReq(`/api/workspaces/v1.1/${team.team_id}/api-tokens`, {
-        method: 'POST',
-        body: { name: `ottaly-admin-${team.name}`.slice(0, 60) },
-      });
-      const token = data?.data?.plain_text_token;
-      if (!token) throw new Error('no plain_text_token in response');
-      _bisonWsTokens[String(team.team_id)] = token;
-      results.push({ team_id: team.team_id, name: team.name, status: 'minted' });
-    } catch (err) {
-      results.push({ team_id: team.team_id, name: team.name, status: 'error', error: err.message });
-    }
-    await new Promise((r) => setTimeout(r, 600)); // gentle on Bison
-  }
-  // Persist the whole map (only successful mints changed it).
-  try { await pgdb.setSetting('bison_ws_tokens', _bisonWsTokens); }
-  catch (err) { return res.status(500).json({ error: 'Minted but failed to persist: ' + err.message, results }); }
-  const minted = results.filter((r) => r.status === 'minted').length;
-  res.json({ ok: true, minted, results, count: BISON_TEAMS.filter((t) => getBisonWsToken(t.team_id)).length, total: BISON_TEAMS.length });
+app.post('/api/admin/bison-tokens/mint', requireAdmin, (_req, res) => {
+  res.status(410).json({ ok: false, message: 'Bison tokens removed — using PlusVibe' });
 });
-
-// Clear all per-workspace tokens (falls back to super-admin + switch-workspace).
-app.delete('/api/admin/bison-tokens', requireAdmin, async (req, res) => {
-  const pgdb = req.app.locals.pgDb;
-  if (!pgdb) return res.status(503).json({ error: 'Database unavailable' });
-  try {
-    _bisonWsTokens = {};
-    await pgdb.setSetting('bison_ws_tokens', {});
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+app.delete('/api/admin/bison-tokens', requireAdmin, (_req, res) => {
+  res.json({ ok: true, message: 'Bison tokens removed — using PlusVibe' });
 });
 
 // ── Claude Access (admin only) ───────────────────────────
@@ -4143,151 +3815,52 @@ const REVENUE_EXCLUDED_WORKSPACE_IDS = new Set([
 ]);
 let revenueCache = { leads: [], updatedAt: null };
 
-// ── Global PlusVibe rate limiter — max 1 request per 600ms across ALL caches ──
-let _pvLastCall = 0;
-const PV_MIN_GAP_MS = 600; // 100 req/min max → 600ms between calls
-
-pvFetch = async function pvFetch(path, retries = 5, opts = {}) {
-  // opts.method, opts.body — POSTs supply a JSON body. Default is GET.
-  //
-  // Bison migration: legacy callers do pvFetch('/workspaces'), but on Bison the
-  // workspace list lives at /api/workspaces/v1.1 and returns { data: [...] } with
-  // numeric ids. Redirect here so every caller (revenue/performance/campaign
-  // caches, combo-analysis) keeps working — they already normalise the
-  // { workspaces } / { data } / array shapes. Without this they 404 and the
-  // dependent caches silently stop populating.
-  if (path === '/workspaces') {
-    // Bison returns numeric team ids, but the rest of the app keys workspaces by
-    // the canonical PlusVibe workspace_id (stored in clients.workspace_id and in
-    // BISON_TEAMS[].pv). Map each Bison team back to its PV id so client-status
-    // filtering and revenue/campaign joins keep matching. Bison teams with no PV
-    // mapping (BISON_TEAMS) are skipped — they aren't tracked as clients.
-    const wsRaw = listBisonWorkspaces();
-    const list = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.data || []);
-    const byTeamId = new Map(BISON_TEAMS.map(t => [String(t.team_id), t]));
-    const workspaces = list
-      .map(w => {
-        const t = byTeamId.get(String(w.id));
-        return t ? { id: t.pv, name: t.name, bison_team_id: String(w.id) } : null;
-      })
-      .filter(Boolean);
-    return { workspaces };
-  }
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    // Enforce minimum gap between ALL PlusVibe requests
-    const now = Date.now();
-    const wait = _pvLastCall + PV_MIN_GAP_MS - now;
-    if (wait > 0) await new Promise(r => setTimeout(r, wait));
-    _pvLastCall = Date.now();
-
-    const init = { headers: { 'Authorization': 'Bearer ' + getBisonKey() } };
-    if (opts.body) {
-      init.method = opts.method || 'POST';
-      init.headers['Content-Type'] = 'application/json';
-      init.body = typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body);
-    }
-    const _pvStart = Date.now();
-    const r = await fetch(BISON_BASE + '/api' + path, init);
-    const _pvMs = Date.now() - _pvStart;
-    const _pvEndpoint = path.split('?')[0];
-    // Log every 10th call (sampling) plus all non-200s to avoid DB pressure
-    if (attempt === 0 && (_pvMs > 500 || !r.ok || Math.random() < 0.1)) {
-      const { logSignal } = require('./api-diagnostics');
-      logSignal({ signal_type: 'api_health', metric_key: `pv_latency_ms`, metric_value: _pvMs, unit: 'ms',
-        status: _pvMs > 1000 ? 'critical' : _pvMs > 500 ? 'warning' : 'normal', notes: _pvEndpoint });
-      if (!r.ok) logSignal({ signal_type: 'api_health', metric_key: `pv_http_${r.status}`,
-        metric_value: 1, status: r.status === 429 ? 'warning' : 'critical', notes: _pvEndpoint });
-    }
-    if (r.ok) return r.json();
-    if (r.status === 429) {
-      const backoff = Math.min(Math.pow(2, attempt + 1) * 2000, 30000); // 4s, 8s, 16s, 30s max
-      console.warn(`[PlusVibe] 429 on ${path} — backing off ${backoff/1000}s`);
-      _pvLastCall = Date.now() + backoff; // block the queue during backoff
-      await new Promise(res => setTimeout(res, backoff));
-      continue;
-    }
-    throw new Error(`PlusVibe ${r.status}: ${path}`);
-  }
-  throw new Error(`PlusVibe 429: ${path} (gave up after ${retries} retries)`);
+// pvFetch shim — legacy callers that do pvFetch('/workspaces') or pvFetch('/...') still work.
+// /workspaces → listPvWorkspaces(); everything else → pvApi().
+pvFetch = async function pvFetch(path, _retries, opts) {
+  opts = opts || {};
+  if (path === '/workspaces') return listPvWorkspaces();
+  // Strip leading /api if present (pvApi prepends nothing — path must start with /)
+  const apiPath = path.startsWith('/api') ? path.slice(4) : path;
+  return pvApi(apiPath, { method: opts.method || 'GET', body: opts.body });
 };
 
-// Low-level switch (assumes caller already holds the Bison lock).
-async function _bisonSwitchUnlocked(wsId) {
-  // Resolve PV id -> team_id and refuse non-integer targets (see _bisonRaw): a
-  // raw PV string switched to team_id NaN and left Bison on the wrong workspace.
-  const teamId = resolveBisonTeamId(wsId);
-  if (!teamId || !/^\d+$/.test(String(teamId))) {
-    throw new Error('Bison switch refused: workspace "' + wsId + '" does not resolve to a Bison team_id (add it to BISON_TEAMS).');
-  }
-  if (_bisonWsId === String(teamId)) return;
-  const sw = await fetch(BISON_BASE + '/api/workspaces/v1.1/switch-workspace', {
-    method: 'POST',
-    headers: { 'Authorization': 'Bearer ' + getBisonKey(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ team_id: Number(teamId) }),
-    signal: AbortSignal.timeout(10000),
-  });
-  if (!sw.ok) throw new Error('Bison switch-workspace ' + teamId + ' -> ' + sw.status);
-  _bisonWsId = String(teamId);
+// bisonSwitch stub — Bison removed, prevents ReferenceErrors in dead code paths.
+async function bisonSwitch(_wsId) {
+  console.warn('[bisonSwitch] STUB called — Bison removed');
 }
 
-// Standalone switch — serialized through the gate. Most callers now pass wsId
-// straight to bisonFetch (which switches atomically with its fetch), so this is
-// only needed when a later bisonFetch is called WITHOUT wsId and relies on the
-// active workspace persisting. Even then it's gated so it can't race a cron.
-async function bisonSwitch(wsId) {
-  return withBisonLock(() => _bisonSwitchUnlocked(wsId));
-}
-
-async function bisonFetch(path, opts) {
-  opts = opts || {};
-  // Serialize switch+fetch as one atomic unit on the shared token (see _bisonGate).
-  return withBisonLock(async () => {
-    // Per-workspace token path (the logout fix, mirrors _bisonRaw): if the target
-    // workspace has its own scoped token, use it as the bearer and DON'T switch —
-    // so this cron call can't kick a human's Bison web-UI session.
-    var bearer = getBisonKey();
-    if (opts.wsId) {
-      var teamId = resolveBisonTeamId(opts.wsId);
-      var wsToken = teamId ? getBisonWsToken(teamId) : null;
-      // POLICY: per-workspace work uses the workspace's own token; super-admin is
-      // for minting only. No token yet? Mint one on demand (super-admin, allowed),
-      // then use it. Only if minting fails do we fall back to the stateful switch.
-      if (!wsToken && teamId) {
-        try { wsToken = await mintBisonWsToken(teamId); }
-        catch (e) { console.warn('[bison] on-demand mint (bisonFetch) team ' + teamId + ' failed:', e.message); }
-      }
-      if (wsToken) bearer = wsToken;
-      else await _bisonSwitchUnlocked(opts.wsId);
-    }
-    var url = new URL(BISON_BASE + path);
-    if (opts.params) {
-      Object.keys(opts.params).forEach(function(k) {
-        if (opts.params[k] !== undefined && opts.params[k] !== null) url.searchParams.set(k, String(opts.params[k]));
-      });
-    }
-    var init = {
-      method: opts.method || 'GET',
-      headers: { 'Authorization': 'Bearer ' + bearer, 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(15000),
-    };
-    if (opts.body) init.body = JSON.stringify(opts.body);
-    var r = await fetch(url.toString(), init);
-    if (!r.ok) {
-      var txt = await r.text().catch(function() { return ''; });
-      throw new Error('Bison ' + path + ' -> ' + r.status + ': ' + txt.slice(0, 200));
-    }
-    return r.json();
-  });
-}
-
-function normBisonWs(ws) {
-  return { id: String(ws.id), name: ws.name };
-}
-
-function pivotBisonStats(bisonData) {
+// Build a { date: { total_*_count } } map from an email-stats response.
+// PlusVibe /account/email-stats returns per-day rows ALREADY shaped as
+// { date, total_sent_count, total_reply_count, ... } — pass those straight
+// through. (Legacy Bison line-area-chart-stats returned label-series of
+// { label, dates:[[date,count]] }; that branch is kept for any leftover
+// diagnostic caller, but live stats are all PlusVibe per-date rows now.)
+function pivotBisonStats(statsData) {
   var out = {};
+  var rows = Array.isArray(statsData) ? statsData : (statsData && (statsData.chart || statsData.data)) || [];
+  // Detect format: PV rows have a `date` field; Bison series have `label`+`dates`.
+  var isPvRows = rows.length && (rows[0].date != null || rows[0].day != null) && rows[0].label == null;
+  if (isPvRows) {
+    rows.forEach(function(row) {
+      var date = String(row.date || row.day || '').slice(0, 10);
+      if (!date) return;
+      out[date] = {
+        date: date,
+        total_sent_count:      row.total_sent_count      || 0,
+        total_reply_count:     row.total_reply_count     || 0,
+        total_bounce_count:    row.total_bounce_count    || 0,
+        total_open_count:      row.total_open_count      || 0,
+        total_pos_reply_count: row.total_pos_reply_count || 0,
+        total_ooo_reply_count: row.total_ooo_reply_count || 0,
+        total_contacted_count: row.total_contacted_count || row.total_sent_count || 0,
+      };
+    });
+    return out;
+  }
+  // Legacy Bison label-series format.
   var labelMap = { 'Sent': 'total_sent_count', 'Replied': 'total_reply_count', 'Bounced': 'total_bounce_count', 'Total Opens': 'total_open_count', 'Interested': 'total_pos_reply_count' };
-  (bisonData || []).forEach(function(series) {
+  rows.forEach(function(series) {
     var field = labelMap[series.label];
     if (!field) return;
     (series.dates || []).forEach(function(pair) {
@@ -4790,10 +4363,10 @@ async function ensurePerformanceDailyStats(wsIds, dates, dailyStats = performanc
           var y = new Date(date + 'T00:00:00'); y.setDate(y.getDate() - 1);
           fetchStart = serverDateString(y);
         }
-        var bStats = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { wsId: wsId, params: { start_date: fetchStart, end_date: fetchEnd } });
-        var pivot = pivotBisonStats((bStats.data || bStats) || []);
-        // Single-day query -> all rows are that day; range query (today) -> keep only
-        // today's bucket so we don't sum yesterday into today's totals.
+        // PlusVibe /account/email-stats returns per-day chart rows for the range.
+        var pvStatsResp = await pvApi('/account/email-stats', { wsId: wsId, params: { start_date: fetchStart, end_date: fetchEnd } });
+        var chart = Array.isArray(pvStatsResp) ? pvStatsResp : (pvStatsResp?.chart || pvStatsResp?.data || []);
+        var pivot = pivotBisonStats(chart);
         var rows = (fetchStart === fetchEnd) ? Object.values(pivot) : (pivot[date] ? [pivot[date]] : []);
         var agg = aggPvEmailStats(rows);
         // Today can legitimately be 0 early in the day, but an empty range response
@@ -4867,8 +4440,8 @@ async function fetchPerformanceLabeledLeads(wsId) {
     for (let page = 1; page <= 20; page++) {
       let batch = [];
       try {
-        const raw_b = await bisonFetch('/api/leads', { wsId: wsId, params: { page: page, per_page: 100 } });
-        batch = (raw_b.data || []).map(function(l) { return Object.assign({}, l, { _id: String(l.id), id: String(l.id), company_name: l.company || l.company_name, job_title: l.title || l.job_title, label: l.interested ? 'INTERESTED' : (l.status || '') }); });
+        const raw_b = await pvApi('/lead/workspace-leads', { wsId: wsId, params: { label: label, page: page, limit: 100 } });
+        batch = (Array.isArray(raw_b) ? raw_b : (raw_b?.data || [])).map(function(l) { return Object.assign({}, l, { _id: String(l.id || l._id || ''), id: String(l.id || l._id || ''), company_name: l.company_name || l.company, job_title: l.job_title || l.title, label: l.label || (l.interested ? 'INTERESTED' : (l.status || '')) }); });
       } catch { break; }
       if (!batch.length) break;
       batch.forEach(l => {
@@ -5502,8 +5075,8 @@ app.get('/api/combo-analysis/pv-sample', requireSession, async (req, res) => {
     if (!ws) return res.json({ error: 'No workspaces found' });
     const today = new Date().toISOString().slice(0,10);
     const week  = new Date(Date.now() - 7*86400000).toISOString().slice(0,10);
-    var bStats = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { wsId: ws.id, params: { start_date: week, end_date: today } });
-    var raw = Object.values(pivotBisonStats((bStats.data || bStats) || []));
+    var pvStatsR = await pvApi('/account/email-stats', { wsId: ws.id, params: { start_date: week, end_date: today } });
+    var raw = Object.values(pivotBisonStats(Array.isArray(pvStatsR) ? pvStatsR : (pvStatsR?.chart || pvStatsR?.data || [])));
     res.json({ workspace_id: ws.id, workspace_name: ws.name, raw });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -5552,9 +5125,9 @@ app.post('/api/combo-analysis/historical-backfill', requireSession, async (req, 
           ? Object.fromEntries(cRows.map(r => [r.prov, r.n / cTotal]))
           : { unknown: 1 };
 
-        // Fetch daily stats from Bison
-        var bStats = await bisonFetch('/api/workspaces/v1.1/line-area-chart-stats', { wsId: ws.id, params: { start_date: start, end_date: end } });
-        var pvData = Object.values(pivotBisonStats((bStats.data || bStats) || []));
+        // Fetch daily stats from PlusVibe
+        var pvSR = await pvApi('/account/email-stats', { wsId: ws.id, params: { start_date: start, end_date: end } });
+        var pvData = Object.values(pivotBisonStats(Array.isArray(pvSR) ? pvSR : (pvSR?.chart || pvSR?.data || [])));
         const chart  = Array.isArray(pvData) ? pvData : (pvData?.chart || []);
 
         for (const day of chart) {
@@ -5925,10 +5498,10 @@ async function refreshCampaignCache() {
 
     for (const ws of workspaces) {
       if (inactiveIds.has(ws.id)) continue;
-      await new Promise(r => setTimeout(r, 1200)); // rate limit: 1.2s between workspaces (~25 ws = 30s total)
+      await new Promise(r => setTimeout(r, 1200));
       try {
-        var camp_raw = await bisonFetch('/api/campaigns', { wsId: ws.id || wsId || workspace_id });
-        var campaigns = (camp_raw.data || []).map(function(c) { return { id: c.id, camp_name: c.name, status: c.status, sent_count: c.emails_sent || 0, replied_count: c.replied || 0, unique_opened_count: c.unique_opens || 0, bounced_count: c.bounced || 0, lead_count: c.total_leads || 0, lead_contacted_count: c.total_leads_contacted || 0, positive_reply_count: 0, sequences: [] }; });
+        var camp_raw = await pvApi('/campaign/list', { wsId: ws.id });
+        var campaigns = (camp_raw.data || camp_raw || []).map(function(c) { return { id: c._id || c.id, camp_name: c.name, status: c.status, sent_count: c.sent_count || c.emails_sent || 0, replied_count: c.reply_count || c.replied || 0, unique_opened_count: c.open_count || c.unique_opens || 0, bounced_count: c.bounce_count || c.bounced || 0, lead_count: c.total_leads || 0, lead_contacted_count: c.total_leads_contacted || 0, positive_reply_count: 0, sequences: [] }; });
         if (!Array.isArray(campaigns) || !campaigns.length) continue;
         const active = campaigns.filter(c => (c.sent_count || 0) >= 50);
         const wsAvgReplyRate = active.length
@@ -8827,62 +8400,43 @@ async function listSendingMailboxes() {
   for (const team of teams) {
     try {
       let found = 0;
-      let prevSig = '';
-      // Bison /api/sender-emails is paginated and IGNORES per_page — it returns a
-      // fixed ~15 rows/page. So we must page until a page comes back EMPTY (not
-      // "shorter than per_page", which would stop after page 1). We dedup emails
-      // GLOBALLY across workspaces, so "no new emails this page" is NOT a safe stop
-      // signal — instead detect Bison repeating a page by its row-id signature.
-      // Cap pages high enough for the biggest workspace (15/page × ~1000 ≈ 70).
-      for (let page = 1; page <= 300; page++) {
-        const resp = await bisonReq('/api/sender-emails', { wsId: team.team_id, params: { per_page: PER_PAGE, page } });
-        const list = Array.isArray(resp) ? resp : (resp?.data ?? []);
-        if (!list.length) break; // no more rows for this workspace
-        const sig = list.map(a => a.id ?? a.email ?? '').join(',');
-        if (sig === prevSig) break; // Bison repeated the same page → reached the end
-        prevSig = sig;
-        for (const a of list) {
-          const email = (a.email || a.email_address || a.name || '').toString().trim().toLowerCase();
-          if (!email.includes('@') || seenEmails.has(email)) continue;
-          seenEmails.add(email);
-          mailboxes.push({
+      // PlusVibe /account/list: paginate with limit/skip until page < limit rows returned.
+      const list = await pvListAllAccounts(team.pv);
+      for (const a of list) {
+        const email = (a.email || a.email_address || a.from_email || a.name || '').toString().trim().toLowerCase();
+        if (!email.includes('@') || seenEmails.has(email)) continue;
+        seenEmails.add(email);
+        mailboxes.push({
           email,
-          account_id: a.id != null ? String(a.id) : null,
+          account_id: a._id || a.id ? String(a._id || a.id) : null,
           domain: email.split('@')[1],
-          workspace_id: team.pv,          // canonical client id (PV workspace_id)
+          workspace_id: team.pv,
           workspace_name: team.name,
-          bison_team_id: team.team_id,
+          bison_team_id: team.pv,
           status: a.status === 'connected' ? 'active' : (a.status || (a.is_connected === false ? 'inactive' : 'active')),
-          warmup_status: (a.warmup_enabled ?? a.warmup?.enabled) ? 'ACTIVE' : 'PAUSED',
+          warmup_status: (a.warmup_enabled ?? a.warmup_status === 'ACTIVE') ? 'ACTIVE' : 'PAUSED',
           provider: a.type || a.provider || a.smtp_host || null,
           name: a.name || [a.first_name, a.last_name].filter(Boolean).join(' ') || null,
           daily_limit: typeof a.daily_limit === 'number' ? a.daily_limit : null,
           sending_gap: null,
-          warmup_limit: a.warmup?.daily_limit ?? null,
+          warmup_limit: a.warmup_daily_limit ?? null,
           warmup_reply_rate: null,
           warmup_enabled_at: null,
           campaigns_count: 0,
           campaign_ids: [],
           created_at: a.created_at || null,
           updated_at: a.updated_at || null,
-          // Authoritative LIFETIME counts straight from Bison's sender-emails API
-          // — independent of the email_sent webhook (which Bison stopped firing
-          // ~2026-06-15). This is what the Mailboxes page should trust for
-          // sent/replied/bounced, not the dried-up event feed.
-          api_sent:     Number(a.emails_sent_count    ?? a.sent_count    ?? 0) || 0,
-          api_replied:  Number(a.total_replied_count  ?? a.replied_count ?? 0) || 0,
-          api_bounced:  Number(a.bounced_count        ?? 0) || 0,
-          });
-          found++;
-        }
+          api_sent:    Number(a.sent_count    ?? a.emails_sent_count    ?? 0) || 0,
+          api_replied: Number(a.replied_count ?? a.total_replied_count  ?? 0) || 0,
+          api_bounced: Number(a.bounced_count ?? 0) || 0,
+        });
+        found++;
       }
       if (found) console.log(`[mailboxes] ${team.name}: ${found} mailbox(es)`);
-      await new Promise(r => setTimeout(r, 250)); // pace between workspaces
+      await new Promise(r => setTimeout(r, 250));
     } catch (err) {
-      console.warn(`[mailboxes] sender-emails failed for ${team.name} (team ${team.team_id}):`, err.message);
-      // Fail-safe: keep this workspace's previously-cached mailboxes so a transient
-      // fetch failure doesn't drop them from the count. Dedup against what we have.
-      const prev = prevByTeam.get(String(team.team_id)) || [];
+      console.warn(`[mailboxes] account/list failed for ${team.name}:`, err.message);
+      const prev = prevByTeam.get(String(team.pv)) || [];
       let kept = 0;
       for (const m of prev) {
         const email = (m.email || '').toString().trim().toLowerCase();
@@ -8891,7 +8445,7 @@ async function listSendingMailboxes() {
         mailboxes.push(m);
         kept++;
       }
-      failedTeams.push({ name: team.name, team_id: team.team_id, kept, error: err.message });
+      failedTeams.push({ name: team.name, team_id: team.pv, kept, error: err.message });
       if (kept) console.warn(`[mailboxes] ${team.name}: retained ${kept} prior-cached mailbox(es) after fetch failure`);
     }
   }
@@ -9539,36 +9093,32 @@ app.post('/api/admin/suppress-bounced', requireAdmin, async (req, res) => {
     // to only block the workspace it bounced in). Bison's token is stateful +
     // serialized, so this runs as one controlled off-line pass (not on the live
     // webhook path) — that's why the sweep is the right place for the fan-out.
-    let blocklisted = 0, bisonErrors = 0;
+    let blocklisted = 0, pvErrors = 0;
     if (!skipBison) {
-      const allWorkspaces = req.query.allWorkspaces !== '0'; // default ON
-      const targets = allWorkspaces
-        ? BISON_TEAMS.map(t => t.team_id).filter(v => v != null).map(String)
-        : null;
+      const allWorkspaces = req.query.allWorkspaces !== '0';
+      const targets = allWorkspaces ? PV_WORKSPACES.map(t => t.pv) : null;
       if (allWorkspaces) {
-        // email × every workspace (dedup by pair).
         const seen = new Set();
         for (const email of emails) {
           for (const wsId of targets) {
             const k = email + '|' + wsId;
             if (seen.has(k)) continue; seen.add(k);
-            try { await bisonReq('/api/blacklisted-emails', { wsId, method: 'POST', body: { email } }); blocklisted++; }
-            catch { bisonErrors++; }
+            try { await pvApi('/blocklist/add', { method: 'POST', wsId, body: { value: email, type: 'email' } }); blocklisted++; }
+            catch { pvErrors++; }
           }
         }
       } else {
-        // Only the workspace each address bounced in.
         const seen = new Set();
         for (const r of rows) {
           const k = r.email + '|' + r.workspace_id;
           if (seen.has(k) || !r.workspace_id) continue; seen.add(k);
-          try { await bisonReq('/api/blacklisted-emails', { wsId: r.workspace_id, method: 'POST', body: { email: r.email } }); blocklisted++; }
-          catch { bisonErrors++; }
+          try { await pvApi('/blocklist/add', { method: 'POST', wsId: r.workspace_id, body: { value: r.email, type: 'email' } }); blocklisted++; }
+          catch { pvErrors++; }
         }
       }
     }
 
-    res.json({ ok: true, hardBouncedAddresses: emails.length, suppressed, blocklisted, bisonErrors, skipBison, allWorkspaces: req.query.allWorkspaces !== '0' });
+    res.json({ ok: true, hardBouncedAddresses: emails.length, suppressed, blocklisted, pvErrors, skipBison, allWorkspaces: req.query.allWorkspaces !== '0' });
   } catch (err) {
     console.error('[suppress-bounced]', err.message);
     res.status(500).json({ error: err.message });
@@ -12060,7 +11610,6 @@ app.post('/api/mailboxes/enable-warmup', requireSession, async (req, res) => {
     if (!Array.isArray(emails) || !emails.length) return res.status(400).json({ error: 'emails array required' });
 
     const cache = _mailboxCache?.mailboxes || [];
-    // Group emails by workspace_id and collect account IDs
     const byWorkspace = {};
     const missing = [];
     for (const email of emails) {
@@ -12072,22 +11621,15 @@ app.post('/api/mailboxes/enable-warmup', requireSession, async (req, res) => {
 
     const results = [];
     for (const [workspace_id, ids] of Object.entries(byWorkspace)) {
-      // Bison: PATCH /api/warmup/sender-emails/enable { sender_email_ids }, stateful
-      // per workspace. account_id in the cache is the Bison sender-email id;
-      // workspace_id is the canonical PV id, so map it to the Bison team_id.
-      const team = BISON_TEAMS.find(t => t.pv === String(workspace_id));
-      const wsId = team ? team.team_id : workspace_id;
-      const sender_email_ids = ids.map(id => Number(id)).filter(n => Number.isFinite(n));
-      const r = await bisonReq('/api/warmup/sender-emails/enable', {
-        wsId,
-        method: 'PATCH',
-        body: { sender_email_ids },
+      const r = await pvApi('/account/bulk-update-warmup', {
+        method: 'PATCH', wsId: workspace_id,
+        body: { workspace_id, ids, warmup_status: 'ACTIVE' },
       });
       results.push({ workspace_id, count: ids.length, result: r });
     }
 
     const enabled = results.reduce((s, r) => s + r.count, 0);
-    console.log(`[mailboxes] enable-warmup: ${enabled} accounts updated, ${missing.length} skipped (no cache entry)`);
+    console.log(`[mailboxes] enable-warmup: ${enabled} accounts updated, ${missing.length} skipped`);
     res.json({ ok: true, enabled, missing, results });
   } catch (err) {
     console.error('[mailboxes] enable-warmup error:', err.message);
@@ -12100,25 +11642,9 @@ app.get('/mailboxes.html', (req, res) => res.sendFile(path.join(__dirname, 'mail
 app.get('/mailbox-diff',      (req, res) => res.sendFile(path.join(__dirname, 'mailbox-diff.html')));
 app.get('/mailbox-diff.html', (req, res) => res.sendFile(path.join(__dirname, 'mailbox-diff.html')));
 
-// ── Warmup overview (Bison /api/warmup/sender-emails) ───────────────────────
-// Per-mailbox warmup health across all workspaces. Like /api/sender-emails,
-// Bison caps ~15 rows/page, so we paginate per workspace.
-async function bisonListWarmupSenderEmails(wsId, startDate, endDate) {
-  const out = [];
-  let prevSig = '';
-  for (let page = 1; page <= 300; page++) {
-    const resp = await bisonReq('/api/warmup/sender-emails', {
-      wsId,
-      params: { per_page: 200, page, start_date: startDate, end_date: endDate },
-    });
-    const list = Array.isArray(resp) ? resp : (resp?.data ?? []);
-    if (!list.length) break;
-    const sig = list.map(a => a.id ?? a.email ?? '').join(',');
-    if (sig === prevSig) break;
-    prevSig = sig;
-    out.push(...list);
-  }
-  return out;
+// ── Warmup overview (PlusVibe /account/warmup-stats) ────────────────────────
+async function pvListWarmupAccounts(wsId) {
+  return pvListAllAccounts(wsId);
 }
 
 // Categorise a warmup mailbox into a health bucket for the dashboard.
@@ -12133,50 +11659,39 @@ function warmupHealth(a) {
   return 'unknown'; // score 0 / just started
 }
 
-// Gather warmup data across all workspaces (SLOW — 22 ws × paginated Bison calls,
-// serialized through the Bison mutex). Must run in the background, never inline on
-// a page request, or the request times out (this is why the page "didn't work").
+// Gather warmup data across all workspaces from PlusVibe /account/list.
 async function gatherWarmupData() {
-  const today = serverDateString(new Date());
-  const start = serverDateString(new Date(Date.now() - 10 * 86400000));
-  const end   = today;
-  const pvByTeamId = new Map(BISON_TEAMS.map(t => [String(t.team_id), t]));
-  const wsRaw = listBisonWorkspaces();
-  const wsList = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.data || []);
   const inactive = inactiveWorkspaceIds();
-
   const mailboxes = [];
   const seen = new Set();
-  for (const w of wsList) {
-    const mapped = pvByTeamId.get(String(w.id));
-    const pv = mapped ? mapped.pv : String(w.id);
-    if (inactive.has(pv)) continue;
-    const name = mapped ? mapped.name : (w.name || `Workspace ${w.id}`);
+
+  for (const t of PV_WORKSPACES) {
+    if (inactive.has(t.pv)) continue;
     try {
-      const list = await bisonListWarmupSenderEmails(String(w.id), start, end);
+      const list = await pvListWarmupAccounts(t.pv);
       for (const a of list) {
-        const email = (a.email || a.name || '').toString().trim().toLowerCase();
+        const email = (a.email || a.from_email || a.name || '').toString().trim().toLowerCase();
         if (!email.includes('@') || seen.has(email)) continue;
         seen.add(email);
         mailboxes.push({
           email,
-          domain: a.domain || email.split('@')[1],
-          workspace_id: pv,
-          workspace_name: name,
-          bison_team_id: String(w.id),
-          account_id: a.id != null ? String(a.id) : null,
-          warmup_score: Number(a.warmup_score ?? 0),
-          sent: Number(a.warmup_emails_sent ?? 0),
-          replies: Number(a.warmup_replies_received ?? 0),
+          domain: email.split('@')[1],
+          workspace_id: t.pv,
+          workspace_name: t.name,
+          bison_team_id: t.pv,
+          account_id: a._id || a.id ? String(a._id || a.id) : null,
+          warmup_score: Number(a.warmup_reputation ?? a.warmup_score ?? 0),
+          sent: Number(a.warmup_emails_sent ?? a.warmup_sent ?? 0),
+          replies: Number(a.warmup_replies_received ?? a.warmup_replies ?? 0),
           saved_from_spam: Number(a.warmup_emails_saved_from_spam ?? 0),
           bounces_received: Number(a.warmup_bounces_received_count ?? 0),
           bounces_caused: Number(a.warmup_bounces_caused_count ?? 0),
-          disabled_for_bouncing: Number(a.warmup_disabled_for_bouncing_count ?? 0),
+          disabled_for_bouncing: 0,
           health: warmupHealth(a),
         });
       }
     } catch (err) {
-      console.warn(`[warmup] ${name} (team ${w.id}) failed:`, err.message);
+      console.warn(`[warmup] ${t.name} failed:`, err.message);
     }
   }
 
@@ -12189,12 +11704,14 @@ async function gatherWarmupData() {
   summary.avg_score = scoreN ? Math.round(scoreSum / scoreN) : 0;
   summary.at_risk = summary.low_score + summary.bouncing + summary.disabled_bouncing;
 
-  return { start, end, summary, mailboxes };
+  const today = serverDateString(new Date());
+  const start = serverDateString(new Date(Date.now() - 10 * 86400000));
+  return { start, end: today, summary, mailboxes };
 }
 
 let _warmupCache = { data: null, lastRun: null, running: false, error: null };
 async function refreshWarmupCache() {
-  if (_warmupCache.running || !getBisonKey()) return;
+  if (_warmupCache.running || !getPvKey()) return;
   _warmupCache.running = true;
   try {
     const data = await gatherWarmupData();
@@ -12214,7 +11731,7 @@ setTimeout(refreshWarmupCache, 45000);
 setInterval(refreshWarmupCache, 30 * 60 * 1000);
 
 app.get('/api/warmup', requireSession, async (req, res) => {
-  if (!getBisonKey()) return res.status(400).json({ error: 'No Bison key configured' });
+  if (!getPvKey()) return res.status(400).json({ error: 'No PlusVibe key configured' });
   // Serve the cache instantly. If it's never been built, kick off a refresh and
   // tell the page it's warming (it polls), rather than blocking the request for
   // minutes while we fetch 22 workspaces.
@@ -12231,27 +11748,25 @@ app.get('/api/warmup', requireSession, async (req, res) => {
   });
 });
 
-// Enable / disable warmup for a set of mailboxes (Bison sender-email IDs).
-// Body: { workspace_id, account_ids: [bisonSenderEmailId, ...] }. Stateful per ws.
-async function warmupSetState(req, res, action) {
+// Enable / disable warmup for a set of mailboxes.
+// Body: { workspace_id, account_ids: [...] }
+async function warmupSetState(req, res, warmupStatus) {
   const { workspace_id, account_ids } = req.body || {};
   if (!workspace_id || !Array.isArray(account_ids) || !account_ids.length)
     return res.status(400).json({ error: 'workspace_id and account_ids required' });
-  const team = BISON_TEAMS.find(t => t.pv === String(workspace_id));
-  const wsId = team ? team.team_id : workspace_id;
-  const sender_email_ids = account_ids.map(id => Number(id)).filter(Number.isFinite);
-  if (!sender_email_ids.length) return res.status(400).json({ error: 'No valid account_ids' });
+  if (!account_ids.length) return res.status(400).json({ error: 'No valid account_ids' });
   try {
-    const r = await bisonReq(`/api/warmup/sender-emails/${action}`, {
-      wsId, method: 'PATCH', body: { sender_email_ids },
+    const r = await pvApi('/account/bulk-update-warmup', {
+      method: 'PATCH', wsId: workspace_id,
+      body: { workspace_id, ids: account_ids, warmup_status: warmupStatus },
     });
-    res.json({ ok: true, action, count: sender_email_ids.length, result: r });
+    res.json({ ok: true, action: warmupStatus, count: account_ids.length, result: r });
   } catch (err) {
     res.status(502).json({ error: err.message });
   }
 }
-app.post('/api/warmup/enable',  requireSession, (req, res) => warmupSetState(req, res, 'enable'));
-app.post('/api/warmup/disable', requireSession, (req, res) => warmupSetState(req, res, 'disable'));
+app.post('/api/warmup/enable',  requireSession, (req, res) => warmupSetState(req, res, 'ACTIVE'));
+app.post('/api/warmup/disable', requireSession, (req, res) => warmupSetState(req, res, 'INACTIVE'));
 
 // Force a warmup cache rebuild (after enable/disable, or manual refresh button).
 app.post('/api/warmup/refresh', requireSession, (req, res) => {
@@ -15213,36 +14728,33 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
     let pushed = 0;
     for (let i = 0; i < leads.length; i += BATCH) {
       const batch = leads.slice(i, i + BATCH);
-      /* workspace switch handled by bisonReq wsId */ true;
-      var bisonLeadPayload = (batch)
-        // Bison requires non-empty first_name AND last_name (422s on null/""/" ").
-        // Payload-layer safety net (the route already filters, but this guarantees it).
+      // PlusVibe: top-level native fields (no custom_variables for industry/city/etc.)
+      var pvLeadPayload = batch
         .filter(function(l){ return l.first_name && String(l.first_name).trim() && l.last_name && String(l.last_name).trim(); })
         .map(function(l) {
-        var cv = [];
-        if (l.phone_number) cv.push({ name: 'phone_number', value: String(l.phone_number) });
-        if (l.city) cv.push({ name: 'city', value: String(l.city) });
-        if (l.state) cv.push({ name: 'state', value: String(l.state) });
-        if (l.country) cv.push({ name: 'country', value: String(l.country) });
-        if (l.industry) cv.push({ name: 'industry', value: String(l.industry) });
-        if (l.linkedin_person_url) cv.push({ name: 'linkedin_person_url', value: String(l.linkedin_person_url) });
-        if (l.linkedin_company_url) cv.push({ name: 'linkedin_company_url', value: String(l.linkedin_company_url) });
-        if (l.company_website) cv.push({ name: 'company_website', value: String(l.company_website) });
-        if (l.department) cv.push({ name: 'department', value: String(l.department) });
-        if (l.address_line) cv.push({ name: 'address_line', value: String(l.address_line) });
-        return { email: l.email, first_name: l.first_name || null, last_name: l.last_name || null, title: l.job_title || l.title || null, company: l.company_name || l.company || null, custom_variables: cv };
-      });
-      if (!bisonLeadPayload.length) { continue; }
-      // Ensure every custom var these leads use exists in the workspace, or Bison 422s.
-      await ensureBisonCustomVars(workspace_id, new Set(bisonLeadPayload.flatMap(function(l){ return (l.custom_variables||[]).map(function(v){ return v.name; }); })));
-      var createRes = await bisonReq('/api/leads/create-or-update/multiple', { wsId: workspace_id, method: 'POST', body: { leads: bisonLeadPayload } });
-      if (campaign_id && createRes && createRes.data) {
-        var leadIds = (createRes.data.leads || createRes.data || []).map(function(l) { return l.id; }).filter(Boolean);
-        if (leadIds.length) {
-          await bisonReq('/api/campaigns/' + campaign_id + '/leads/attach-leads', { wsId: workspace_id, method: 'POST', body: { lead_ids: leadIds } }).catch(function(e) { console.warn('[bison] campaign-assign FAILED:', e.message); });
-        }
+          return {
+            email: l.email,
+            first_name: l.first_name || null,
+            last_name:  l.last_name  || null,
+            job_title:  l.job_title  || l.title || null,
+            company_name:        l.company_name || l.company || null,
+            phone_number:        l.phone_number || null,
+            city:                l.city         || null,
+            state:               l.state        || null,
+            country:             l.country      || null,
+            industry:            l.industry     || null,
+            linkedin_person_url: l.linkedin_person_url  || null,
+            linkedin_company_url:l.linkedin_company_url || null,
+            company_website:     l.company_website      || null,
+            department:          l.department           || null,
+            address_line:        l.address_line         || null,
+          };
+        });
+      if (!pvLeadPayload.length) { continue; }
+      for (const lead of pvLeadPayload) {
+        await pvApi('/lead/add', { method: 'POST', wsId: workspace_id, body: { lead_list_id: campaign_id || null, ...lead } })
+          .catch(function(e) { console.warn('[pv-push] lead add failed:', e.message); });
       }
-      var r = { ok: true };
       pushed += batch.length;
     }
 
@@ -15360,150 +14872,72 @@ function filterPushableContacts(allContacts, { cooldownWorkspaceId, campaignName
   return { contacts, skipped };
 }
 
-// Map an Ottaly contact to a Bison lead (custom_variables = array of {name,value}).
+// Map an Ottaly contact to a PlusVibe lead (top-level native fields — NO custom_variables for native fields).
 function contactToBisonLead(c) {
   const raw = typeof c.raw_data === 'string' ? JSON.parse(c.raw_data || '{}') : (c.raw_data || {});
-  const cv = [];
-  const add = (name, value) => { if (value !== undefined && value !== null && value !== '') cv.push({ name, value: String(value) }); };
-  add('phone_number', c.phone);
-  add('company_website', c.company_domain);
-  add('job_title', c.job_title);
-  add('industry', raw.Industry || c.industry);
-  add('linkedin_person_url', c.linkedin_url);
-  add('linkedin_company_url', c.company_linkedin_url);
-  add('city', c.company_city || c.city);
-  add('state', c.company_county || c.company_state || c.state);
-  add('country', c.company_country || c.country);
-  add('seniority', c.seniority);
-  add('keywords', raw.Keywords || c.keywords);
   return {
-    email:      c.email,
-    first_name: c.first_name || '',
-    last_name:  c.last_name || '',
-    title:      c.job_title || '',
-    company:    c.company_name || '',
-    custom_variables: cv,
+    email:               c.email,
+    first_name:          c.first_name || '',
+    last_name:           c.last_name  || '',
+    job_title:           c.job_title  || '',
+    company_name:        c.company_name || '',
+    phone_number:        c.phone || null,
+    company_website:     c.company_domain || null,
+    industry:            raw.Industry || c.industry || null,
+    linkedin_person_url: c.linkedin_url || null,
+    linkedin_company_url:c.company_linkedin_url || null,
+    city:                c.company_city || c.city || null,
+    state:               c.company_county || c.company_state || c.state || null,
+    country:             c.company_country || c.country || null,
+    address_line:        null,
+    department:          null,
   };
 }
 
-// GET /api/bison/workspaces — Bison workspaces for the push dropdown. Uses the
-// known BISON_TEAMS map (the token's /api/workspaces only lists its own teams).
+// GET /api/bison/workspaces — PlusVibe workspaces for the push dropdown.
 app.get('/api/bison/workspaces', requireSession, (req, res) => {
-  res.json({ workspaces: BISON_TEAMS.map(t => ({ id: t.team_id, name: t.name, pv_workspace_id: t.pv })) });
+  res.json({ workspaces: PV_WORKSPACES.map(t => ({ id: t.pv, name: t.name, pv_workspace_id: t.pv })) });
 });
 
-// GET /api/bison/campaigns?ws_id=  — live Bison campaigns for a workspace.
+// GET /api/bison/campaigns?ws_id=  — live PlusVibe campaigns for a workspace.
 app.get('/api/bison/campaigns', requireSession, async (req, res) => {
   const wsId = String(req.query.ws_id || '');
   if (!wsId) return res.status(400).json({ error: 'ws_id required' });
   try {
-    const data = await bisonReq('/api/campaigns', { wsId });
-    // ?raw=1 → return the unparsed Bison response for diagnosis.
+    const data = await pvApi('/campaign/list', { wsId });
     if (req.query.raw) return res.json({ raw: data });
-    // Handle a few possible shapes: {data:[...]}, [...], {data:{data:[...]}}, {data:{campaigns:[...]}}.
-    const list = Array.isArray(data) ? data
-      : Array.isArray(data?.data) ? data.data
-      : Array.isArray(data?.data?.data) ? data.data.data
-      : Array.isArray(data?.data?.campaigns) ? data.data.campaigns
-      : [];
-    res.json({ campaigns: list.map(c => ({ id: String(c.id), name: c.name, status: c.status })) });
+    const list = Array.isArray(data) ? data : (data?.data || data?.campaigns || []);
+    res.json({ campaigns: list.map(c => ({ id: String(c._id || c.id), name: c.name, status: c.status })) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// POST /api/bison/create-campaign  — create a new Draft campaign in a workspace.
-// body: { ws_id, name, settings? }
-//  - ws_id:    Bison workspace id (switch-workspace target)
-//  - name:     campaign name (auto-generated from filters on the client, editable)
-//  - settings: optional { max_emails_per_day?, max_new_leads_per_day?,
-//              open_tracking?, plain_text?, can_unsubscribe? } applied via
-//              PATCH /api/campaigns/{id}/update right after create.
-// New campaigns are status "Draft" by default — we do NOT launch/activate them.
-// A fixed default sending schedule (Mon–Fri 07:30–17:00 Europe/London) is also
-// applied. Settings/schedule are best-effort: a failure there is reported in the
-// response but does NOT discard the created campaign (it still returns its id).
+// POST /api/bison/create-campaign  — create a new campaign in PlusVibe.
+// body: { ws_id, name }
 app.post('/api/bison/create-campaign', requireSession, async (req, res) => {
   const name = String(req.body.name || '').trim();
-  const settings = (req.body.settings && typeof req.body.settings === 'object') ? req.body.settings : null;
-  // Map the incoming PV workspace_id (or team_id) to the Bison team_id. Passing
-  // the raw PV string switched to team_id NaN and created the campaign in the
-  // wrong/last-active workspace.
-  const wsId = resolveBisonTeamId(req.body.ws_id);
-  if (!wsId || !name) return res.status(400).json({ error: 'ws_id (resolvable to a Bison workspace) and a non-empty name are required' });
-  if (!getBisonKey()) return res.status(500).json({ error: 'Bison API key not configured — set it in admin settings' });
+  const wsId = String(req.body.ws_id || '').trim();
+  if (!wsId || !name) return res.status(400).json({ error: 'ws_id and a non-empty name are required' });
+  if (!getPvKey()) return res.status(500).json({ error: 'PlusVibe API key not configured — set it in admin settings' });
   try {
-    const resp = await bisonReq('/api/campaigns', { wsId, method: 'POST', body: { name, type: 'outbound' } });
-    const c = resp?.data || {};
-    const campId = c.id;
-    const warnings = [];
-
-    if (campId && settings) {
-      // Whitelist the fields Bison's updateCampaignSettings accepts; coerce types.
-      const body = {};
-      if (settings.max_emails_per_day != null && settings.max_emails_per_day !== '')
-        body.max_emails_per_day = Number(settings.max_emails_per_day);
-      if (settings.max_new_leads_per_day != null && settings.max_new_leads_per_day !== '')
-        body.max_new_leads_per_day = Number(settings.max_new_leads_per_day);
-      // Bison enforces max_new_leads_per_day <= max_emails_per_day (422 otherwise).
-      // If new-leads is set higher than emails (or emails was left blank), raise the
-      // emails cap to match so the PATCH is accepted. Actual send volume is still
-      // governed by each mailbox's daily limit, so a high campaign cap is harmless.
-      if (body.max_new_leads_per_day != null &&
-          (body.max_emails_per_day == null || body.max_emails_per_day < body.max_new_leads_per_day)) {
-        body.max_emails_per_day = body.max_new_leads_per_day;
-      }
-      if (typeof settings.open_tracking === 'boolean') body.open_tracking = settings.open_tracking;
-      if (typeof settings.plain_text === 'boolean') body.plain_text = settings.plain_text;
-      if (typeof settings.can_unsubscribe === 'boolean') body.can_unsubscribe = settings.can_unsubscribe;
-      if (Object.keys(body).length) {
-        try {
-          await bisonReq('/api/campaigns/' + campId + '/update', { wsId, method: 'PATCH', body });
-        } catch (e) {
-          console.warn('[bison] campaign settings PATCH failed:', e.message);
-          warnings.push('settings not fully applied: ' + e.message);
-        }
-      }
-    }
-
-    if (campId) {
-      // Fixed default schedule — Mon–Fri 07:30–17:00 Europe/London.
-      try {
-        await bisonReq('/api/campaigns/' + campId + '/schedule', {
-          wsId, method: 'POST',
-          body: {
-            monday: true, tuesday: true, wednesday: true, thursday: true, friday: true,
-            saturday: false, sunday: false,
-            start_time: '07:30', end_time: '17:00', timezone: 'Europe/London',
-            save_as_template: false,
-          },
-        });
-      } catch (e) {
-        console.warn('[bison] campaign schedule POST failed:', e.message);
-        warnings.push('schedule not applied: ' + e.message);
-      }
-    }
-
-    res.json({ ok: true, campaign: { id: String(c.id), name: c.name, status: c.status }, warnings });
+    const resp = await pvApi('/campaign/create', { method: 'POST', wsId, body: { name } });
+    const c = resp?.data || resp || {};
+    res.json({ ok: true, campaign: { id: String(c._id || c.id), name: c.name, status: c.status }, warnings: [] });
   } catch (err) {
-    res.status(502).json({ error: err.message || 'Failed to create Bison campaign' });
+    res.status(502).json({ error: err.message || 'Failed to create campaign' });
   }
 });
 
 // POST /api/bison/push-contacts
 // body: { ws_id, campaign_id, contact_ids, campaign_name?, cooldown_workspace_id? }
-//  - ws_id:        Bison workspace id (switch-workspace target)
-//  - campaign_id:  Bison campaign to import into
-//  - cooldown_workspace_id: the client's PV workspace_id, for the shared 60-day
-//                  per-client cooldown stamp (optional).
 app.post('/api/bison/push-contacts', requireSession, async (req, res) => {
   const { ws_id, campaign_id, contact_ids } = req.body;
   if (!ws_id || !campaign_id || !Array.isArray(contact_ids) || contact_ids.length === 0) {
     return res.status(400).json({ error: 'ws_id, campaign_id and contact_ids required' });
   }
-  if (!getBisonKey()) return res.status(500).json({ error: 'Bison API key not configured — set it in admin settings' });
+  if (!getPvKey()) return res.status(500).json({ error: 'PlusVibe API key not configured — set it in admin settings' });
   try {
-    // Contacts live in Postgres (app.locals.pgDb), not the top-level SQLite db.
     const pgDb = req.app.locals.pgDb;
     if (!pgDb || !pgDb.getContactsById) return res.status(500).json({ error: 'Contacts DB not available' });
     const allContacts = await pgDb.getContactsById(contact_ids);
@@ -15513,64 +14947,33 @@ app.post('/api/bison/push-contacts', requireSession, async (req, res) => {
     const { contacts, skipped } = filterPushableContacts(allContacts, {
       cooldownWorkspaceId, campaignName: req.body.campaign_name,
     });
-    console.log(`[bison-push] filtered ${allContacts.length} → ${contacts.length}`, skipped);
+    console.log(`[pv-push] filtered ${allContacts.length} → ${contacts.length}`, skipped);
     if (contacts.length === 0) return res.json({ success: true, pushed: 0, total: 0, skipped });
 
-    // 0. Ensure the workspace has every custom variable our leads use — Bison
-    //    422s if a lead references a custom variable that doesn't exist. Fetch
-    //    existing, create any missing. Best-effort: a creation failure doesn't
-    //    abort the push (the create-leads step will surface any real error).
-    const neededVars = new Set();
-    for (const c of contacts) for (const cv of contactToBisonLead(c).custom_variables) neededVars.add(cv.name);
-    try {
-      const existingResp = await bisonReq('/api/custom-variables', { wsId: ws_id });
-      const existingList = Array.isArray(existingResp) ? existingResp : (existingResp?.data ?? []);
-      const existing = new Set(existingList.map(v => (v.name || v.slug || '').toLowerCase()));
-      for (const name of neededVars) {
-        if (!existing.has(name.toLowerCase())) {
-          await bisonReq('/api/custom-variables', { wsId: ws_id, method: 'POST', body: { name } })
-            .catch(e => console.warn(`[bison-push] create custom var "${name}" failed:`, e.message));
-        }
-      }
-    } catch (e) {
-      console.warn('[bison-push] custom-variable ensure step failed (continuing):', e.message);
-    }
-
-    // 1. Create/update leads (≤500/req), collecting Bison ids. Mirrors the
-    //    proven verify-and-push Bison path: create-or-update/multiple, then read
-    //    ids from data.leads || data.
-    const leadIds = [];
-    for (let i = 0; i < contacts.length; i += 500) {
-      const slice = contacts.slice(i, i + 500);
-      const resp = await bisonReq('/api/leads/create-or-update/multiple', {
-        wsId: ws_id, method: 'POST',
-        body: { leads: slice.map(contactToBisonLead) },
-      });
-      const rows = (resp && resp.data && (resp.data.leads || resp.data)) || [];
-      for (const row of (Array.isArray(rows) ? rows : [])) { if (row?.id != null) leadIds.push(row.id); }
-    }
-    if (leadIds.length === 0) return res.status(502).json({ error: 'Bison created no leads', pushed: 0, skipped });
-
-    // 2. Assign the leads to the campaign (proven endpoint: /campaigns/{id}/leads).
+    // Push leads to PlusVibe /lead/add (top-level fields, no custom_variables pre-step needed).
     let pushed = 0;
-    for (let i = 0; i < leadIds.length; i += 1000) {
-      const idSlice = leadIds.slice(i, i + 1000);
-      await bisonReq(`/api/campaigns/${campaign_id}/leads/attach-leads`, {
-        wsId: ws_id, method: 'POST', body: { lead_ids: idSlice },
-      });
-      pushed += idSlice.length;
+    for (let i = 0; i < contacts.length; i += 100) {
+      const slice = contacts.slice(i, i + 100);
+      for (const c of slice) {
+        const lead = contactToBisonLead(c);
+        if (!lead.first_name || !lead.last_name) continue;
+        await pvApi('/lead/add', {
+          method: 'POST', wsId: ws_id,
+          body: { lead_list_id: campaign_id, ...lead },
+        }).catch(e => console.warn('[pv-push] lead add failed:', e.message));
+      }
+      pushed += slice.length;
     }
 
-    // 3. Shared per-client cooldown stamp (keyed by PV workspace_id).
     const pushedIds = contacts.map(c => c.id).filter(Boolean);
     if (pushedIds.length && cooldownWorkspaceId && pgDb.stampPushedCampaign) {
       pgDb.stampPushedCampaign(pushedIds, cooldownWorkspaceId, String(campaign_id), req.body.campaign_name || '')
-        .catch(err => console.warn('[bison-push] stamp failed:', err.message));
+        .catch(err => console.warn('[pv-push] stamp failed:', err.message));
     }
 
     res.json({ success: true, pushed, total: contacts.length, skipped });
   } catch (err) {
-    console.error('[Bison Push]', err.message);
+    console.error('[PV Push]', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -16026,44 +15429,9 @@ app.post('/api/admin/client-verticals', requireAdmin, (req, res) => {
 
 // ── Webhook Events API ────────────────────────────────────────────────────
 
-// Re-sync the admin webhook (incl. email_sent) across ALL Bison workspaces ON
-// DEMAND — so you don't have to restart to fix a missing-event subscription.
-// This is why email_events.sent dried up: webhooks created before email_sent
-// was in the list silently never subscribed to it. Returns a per-team report.
-app.post('/api/admin/sync-bison-webhooks', requireAdmin, async (req, res) => {
-  const adminUrl = process.env.BISON_WEBHOOK_ADMIN_URL || 'https://ottaly-git.oix3xv.easypanel.host/webhook/plusvibe-reply';
-  const REQUIRED_EVENTS = ['lead_interested','lead_replied','email_sent','email_bounced','untracked_reply_received'];
-  const report = [];
-  for (const team of BISON_TEAMS) {
-    try {
-      const existing = await bisonReq('/api/webhook-url', { wsId: team.team_id }).catch(() => ({ data: [] }));
-      const hook = (existing.data || []).find(h => h.url === adminUrl);
-      if (!hook) {
-        await bisonReq('/api/webhook-url', { wsId: team.team_id, method: 'POST', body: { name: 'Ottaly Admin', url: adminUrl, events: REQUIRED_EVENTS } });
-        report.push({ team: team.name, action: 'created' });
-      } else {
-        const have = new Set(Array.isArray(hook.events) ? hook.events : []);
-        const missing = REQUIRED_EVENTS.filter(e => !have.has(e));
-        if (!missing.length) { report.push({ team: team.name, action: 'ok' }); }
-        else {
-          const id = hook.id || hook.uuid;
-          try {
-            await bisonReq(`/api/webhook-url/${id}`, { wsId: team.team_id, method: 'PUT', body: { name: hook.name || 'Ottaly Admin', url: adminUrl, events: REQUIRED_EVENTS } });
-            report.push({ team: team.name, action: 'updated', added: missing });
-          } catch {
-            if (id) await bisonReq(`/api/webhook-url/${id}`, { wsId: team.team_id, method: 'DELETE' }).catch(()=>{});
-            await bisonReq('/api/webhook-url', { wsId: team.team_id, method: 'POST', body: { name: 'Ottaly Admin', url: adminUrl, events: REQUIRED_EVENTS } });
-            report.push({ team: team.name, action: 'recreated', added: missing });
-          }
-        }
-      }
-    } catch (e) {
-      report.push({ team: team.name, action: 'error', error: e.message });
-    }
-    await new Promise(r => setTimeout(r, 250));
-  }
-  const summary = report.reduce((a,r)=>{ a[r.action]=(a[r.action]||0)+1; return a; }, {});
-  res.json({ ok: true, summary, report });
+// PlusVibe webhooks are configured in the PlusVibe UI — no API endpoint needed.
+app.post('/api/admin/sync-bison-webhooks', requireAdmin, (_req, res) => {
+  res.json({ ok: true, message: 'PlusVibe webhooks are configured in the PlusVibe UI — no sync needed' });
 });
 
 app.get('/api/admin/webhook-events', requireAdmin, (req, res) => {
@@ -18067,38 +17435,33 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
         for (let i = 0; i < batch.length; i += 100) {
           if (job.cancelled || job.paused) return;
           const slice = batch.slice(i, i + 100);
-          let r, d = {};
-          /* workspace switch handled by bisonReq wsId */ true;
-          var bisonLeadPayload = (slice.map(toLead))
-            // Bison requires non-empty first_name AND last_name (422s on null/""/" ").
-            // Final safety net at the payload layer so no nameless lead reaches Bison
-            // regardless of upstream filtering.
+          // PlusVibe: top-level native fields (no custom_variables pre-step).
+          var pvPayload = slice.map(toLead)
             .filter(function(l){ return l.first_name && String(l.first_name).trim() && l.last_name && String(l.last_name).trim(); })
             .map(function(l) {
-            var cv = [];
-            if (l.phone_number) cv.push({ name: 'phone_number', value: String(l.phone_number) });
-            if (l.city) cv.push({ name: 'city', value: String(l.city) });
-            if (l.state) cv.push({ name: 'state', value: String(l.state) });
-            if (l.country) cv.push({ name: 'country', value: String(l.country) });
-            if (l.industry) cv.push({ name: 'industry', value: String(l.industry) });
-            if (l.linkedin_person_url) cv.push({ name: 'linkedin_person_url', value: String(l.linkedin_person_url) });
-            if (l.linkedin_company_url) cv.push({ name: 'linkedin_company_url', value: String(l.linkedin_company_url) });
-            if (l.company_website) cv.push({ name: 'company_website', value: String(l.company_website) });
-            if (l.department) cv.push({ name: 'department', value: String(l.department) });
-            if (l.address_line) cv.push({ name: 'address_line', value: String(l.address_line) });
-            return { email: l.email, first_name: l.first_name || null, last_name: l.last_name || null, title: l.job_title || l.title || null, company: l.company_name || l.company || null, custom_variables: cv };
-          });
-          if (!bisonLeadPayload.length) { continue; }
-          // Ensure every custom var these leads use exists in the workspace, or Bison 422s.
-          await ensureBisonCustomVars(workspace_id, new Set(bisonLeadPayload.flatMap(function(l){ return (l.custom_variables||[]).map(function(v){ return v.name; }); })));
-          var createRes = await bisonReq('/api/leads/create-or-update/multiple', { wsId: workspace_id, method: 'POST', body: { leads: bisonLeadPayload } });
-          if (campaign_id && createRes && createRes.data) {
-            var leadIds = (createRes.data.leads || createRes.data || []).map(function(l) { return l.id; }).filter(Boolean);
-            if (leadIds.length) {
-              await bisonReq('/api/campaigns/' + campaign_id + '/leads/attach-leads', { wsId: workspace_id, method: 'POST', body: { lead_ids: leadIds } }).catch(function(e) { console.warn('[bison] campaign-assign FAILED:', e.message); });
-            }
+              return {
+                email:               l.email,
+                first_name:          l.first_name || null,
+                last_name:           l.last_name  || null,
+                job_title:           l.job_title  || null,
+                company_name:        l.company_name || null,
+                phone_number:        l.phone_number || null,
+                city:                l.city         || null,
+                state:               l.state        || null,
+                country:             l.country      || null,
+                industry:            l.industry     || null,
+                linkedin_person_url: l.linkedin_person_url  || null,
+                linkedin_company_url:l.linkedin_company_url || null,
+                company_website:     l.company_website      || null,
+                department:          l.department           || null,
+                address_line:        l.address_line         || null,
+              };
+            });
+          if (!pvPayload.length) { continue; }
+          for (const lead of pvPayload) {
+            await pvApi('/lead/add', { method: 'POST', wsId: workspace_id, body: { lead_list_id: campaign_id || null, ...lead } })
+              .catch(function(e) { console.warn('[pv-push] lead add failed:', e.message); });
           }
-          r = { ok: true };
           try {
             const ids = slice.map(c => c.id).filter(Boolean);
             if (ids.length && db.stampPushedCampaign) {
@@ -19624,25 +18987,13 @@ function scheduleAudienceScoring(pgdb) {
     app.locals.sqliteDb = db;
     restorePausedJobs(db);
 
-    // Hydrate the dashboard-set Bison API key (if any) so it takes precedence
-    // over the env var. A key saved later via /api/admin/bison-key updates
-    // _bisonKeyOverride directly, so no restart is needed.
-    pgdb.getSetting('bison_api_key', null).then((saved) => {
+    // Hydrate dashboard-set PlusVibe API key (pv_api_key setting takes precedence over env).
+    pgdb.getSetting('pv_api_key', null).then((saved) => {
       if (saved && typeof saved === 'string' && saved.trim()) {
-        _bisonKeyOverride = saved.trim();
-        console.log('[bison] using dashboard-set API key (…' + _bisonKeyOverride.slice(-4) + ')');
+        _pvKeyOverride = saved.trim();
+        console.log('[PlusVibe] using dashboard-set API key (…' + _pvKeyOverride.slice(-4) + ')');
       }
-    }).catch((e) => console.warn('[bison] key hydrate failed:', e.message));
-
-    // Hydrate per-workspace Bison tokens (the logout fix). When present, _bisonRaw
-    // and bisonFetch use these instead of switching the shared super-admin token.
-    pgdb.getSetting('bison_ws_tokens', null).then((saved) => {
-      if (saved && typeof saved === 'object') {
-        _bisonWsTokens = saved;
-        const n = Object.values(saved).filter((v) => v && String(v).trim()).length;
-        if (n) console.log(`[bison] using ${n} per-workspace token(s) — crons will not switch-workspace for those`);
-      }
-    }).catch((e) => console.warn('[bison] ws-token hydrate failed:', e.message));
+    }).catch((e) => console.warn('[PlusVibe] key hydrate failed:', e.message));
 
     // Hydrate the "fresh start" cutover date + show-historical toggle.
     hydrateFreshStart(pgdb).then(() => {
@@ -20172,7 +19523,6 @@ function scheduleAudienceScoring(pgdb) {
     if (!Array.isArray(director_ids) || !director_ids.length || !workspace_id || !campaign_id) {
       return res.status(400).json({ error: 'director_ids, workspace_id and campaign_id required' });
     }
-    if (!getBisonKey()) return res.status(500).json({ error: 'Bison API key not configured' });
     const placeholders = director_ids.map((_, i) => `$${i + 1}`).join(',');
     const rows = await db.query(
       `SELECT d.id, d.name, d.email, d.email_status, d.company_number, c.company_name, c.sic_codes, c.postcode
@@ -20188,46 +19538,26 @@ function scheduleAudienceScoring(pgdb) {
         first_name: parts[0] || d.name,
         last_name: parts.slice(1).join(' ') || '',
         email: d.email,
-        company: d.company_name,
-        custom_variables: [
-          { name: 'sic_codes', value: d.sic_codes || '' },
-          { name: 'postcode', value: d.postcode || '' },
-        ],
+        company_name: d.company_name,
       };
     });
     let pushed = 0;
-    const allLeadIds = [];
-    for (let i = 0; i < leads.length; i += 500) {
-      const slice = leads.slice(i, i + 500);
-      try {
-        const resp = await bisonReq('/api/leads/create-or-update/multiple', {
-          wsId: workspace_id, method: 'POST',
-          body: { leads: slice },
-        });
-        const created = (resp && resp.data && (resp.data.leads || resp.data)) || [];
-        if (Array.isArray(created)) {
-          pushed += created.length;
-          created.forEach(l => { if (l && l.id) allLeadIds.push(l.id); });
-        } else {
-          pushed += slice.length;
+    for (let i = 0; i < leads.length; i += 100) {
+      const slice = leads.slice(i, i + 100);
+      for (const lead of slice) {
+        try {
+          await pvApi('/lead/add', { method: 'POST', wsId: workspace_id, body: lead });
+          pushed++;
+        } catch (e) {
+          console.warn('[ch-push] create lead failed:', e.message);
         }
-      } catch (e) {
-        console.warn('[ch-push] create leads failed:', e.message);
       }
     }
     if (pushed > 0) {
-      if (allLeadIds.length) {
-        // Use the actual Bison lead IDs returned from create-or-update
-        for (let i = 0; i < allLeadIds.length; i += 500) {
-          try {
-            await bisonReq(`/api/campaigns/${campaign_id}/leads`, {
-              wsId: workspace_id, method: 'POST',
-              body: { lead_ids: allLeadIds.slice(i, i + 500) },
-            });
-          } catch (e) {
-            console.warn('[ch-push] add to campaign failed:', e.message);
-          }
-        }
+      try {
+        await pvApi(`/campaign/${campaign_id}/leads/add`, { method: 'POST', wsId: workspace_id, body: { emails: leads.map(l => l.email) } });
+      } catch (e) {
+        console.warn('[ch-push] add to campaign failed:', e.message);
       }
       await db.query(`UPDATE ch_directors SET pushed_to_bison_at=NOW() WHERE id = ANY($1::int[])`, [rows.rows.map(d => d.id)]);
     }
@@ -20237,53 +19567,8 @@ function scheduleAudienceScoring(pgdb) {
   scheduleEspSync();
   startSlackBot();
 
-  // Auto-register Bison webhooks on startup (idempotent — checks before creating)
-  setTimeout(async function() {
-    // Register the admin webhook for EVERY client workspace. Bison's
-    // /api/workspaces/v1.1 only returns the token's own team (not all clients),
-    // so we iterate the known BISON_TEAMS map instead — otherwise lead events
-    // for most clients never fire and never reach the client dashboard.
-    const adminUrl = process.env.BISON_WEBHOOK_ADMIN_URL || 'https://ottaly-git.oix3xv.easypanel.host/webhook/plusvibe-reply';
-    const REQUIRED_EVENTS = ['lead_interested', 'lead_replied', 'email_sent', 'email_bounced', 'untracked_reply_received'];
-    for (const team of BISON_TEAMS) {
-      try {
-        const existing = await bisonReq('/api/webhook-url', { wsId: team.team_id }).catch(() => ({ data: [] }));
-        const hook = (existing.data || []).find(function(h) { return h.url === adminUrl; });
-        if (!hook) {
-          await bisonReq('/api/webhook-url', { wsId: team.team_id, method: 'POST', body: { name: 'Ottaly Admin', url: adminUrl, events: REQUIRED_EVENTS } });
-          console.log(`[bison] webhook registered for ${team.name} (team ${team.team_id})`);
-        } else {
-          // Webhook exists — but it may have been created BEFORE email_sent was
-          // added to the list, so it silently never subscribed to sends (that's
-          // why email_events.sent dried up). If any required event is missing,
-          // UPDATE it to the full set instead of skipping.
-          const have = new Set(Array.isArray(hook.events) ? hook.events : []);
-          const missing = REQUIRED_EVENTS.filter(function(e){ return !have.has(e); });
-          if (missing.length) {
-            const id = hook.id || hook.uuid;
-            try {
-              await bisonReq(`/api/webhook-url/${id}`, { wsId: team.team_id, method: 'PUT', body: { name: hook.name || 'Ottaly Admin', url: adminUrl, events: REQUIRED_EVENTS } });
-              console.log(`[bison] webhook UPDATED for ${team.name} (added: ${missing.join(',')})`);
-            } catch (e2) {
-              // PUT failed (some Bison versions) → delete + recreate.
-              try {
-                if (id) await bisonReq(`/api/webhook-url/${id}`, { wsId: team.team_id, method: 'DELETE' });
-                await bisonReq('/api/webhook-url', { wsId: team.team_id, method: 'POST', body: { name: 'Ottaly Admin', url: adminUrl, events: REQUIRED_EVENTS } });
-                console.log(`[bison] webhook RECREATED for ${team.name} (added: ${missing.join(',')})`);
-              } catch (e3) {
-                console.warn(`[bison] webhook update failed for ${team.name}:`, e3.message);
-              }
-            }
-          } else {
-            console.log(`[bison] webhook ok for ${team.name} (all events present)`);
-          }
-        }
-        await new Promise(r => setTimeout(r, 300)); // gentle pacing between workspaces
-      } catch (e) {
-        console.warn(`[bison] webhook register failed for ${team.name} (team ${team.team_id}):`, e.message);
-      }
-    }
-  }, 5000);
+  // PlusVibe webhooks are configured in the PlusVibe UI — no startup registration needed.
+  console.log('[PlusVibe] webhook registration skipped — configure webhooks in the PlusVibe UI');
 
   // ── Rescue warmup: scan warmup folder for genuine interested replies ─────
   // Pulls all unibox_replies classified as warmup by the now-removed hyphen-pair
