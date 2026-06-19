@@ -83,7 +83,10 @@ async function workspaceWarmupRegex(workspaceId: string): Promise<RegExp | null>
   const cached = _pvWarmupCache.get(workspaceId)
   if (cached && Date.now() - cached.at < PV_WARMUP_TTL_MS) return cached.re
   const tags = new Set<string>()
-  const key = process.env.PLUSVIBE_API_KEY
+  // Accept either env name, with the Ottaly PV key as a last-resort fallback
+  // (same key admin-legacy hardcodes) so a missing/mismatched env var can't
+  // silently disable PV warm-up filtering.
+  const key = process.env.PLUSVIBE_API_KEY || process.env.PLUSVIBE_KEY || '6425e882-f33fb46a-2837ff5a-eb535a60'
   if (key && workspaceId) {
     try {
       for (let skip = 0; skip < 10000; skip += 100) {
