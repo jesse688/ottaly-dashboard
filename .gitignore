@@ -8,3 +8,6 @@ dist/
 .DS_Store
 *.db
 .vercel/
+
+# Local test-dashboard output (screenshots + report) — not needed in repo
+.claude/test-report/
