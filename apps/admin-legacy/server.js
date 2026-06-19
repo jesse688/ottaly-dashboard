@@ -10397,7 +10397,9 @@ async function bisonWarmupCleanup(apply) {
   for (let page = 0; page < 500; page++) {
     const res = await pgdb.query(
       `SELECT id, subject, lead_email, category, folder,
-              LEFT(COALESCE(raw->>'text_body', raw->>'html_body', body_preview, ''), 4000) AS bodytext
+              -- match the FULL serialized raw (capped) so the tag is caught wherever
+              -- it lives: top-level text_body, nested reply.text_body/html_body, etc.
+              LEFT(raw::text, 12000) AS bodytext, body_preview
          FROM unibox_replies
         WHERE id > $1
           AND (folder IS NULL OR folder NOT IN ('warmup','sent','bounced','spam'))
@@ -10409,7 +10411,7 @@ async function bisonWarmupCleanup(apply) {
     if (!res.rows.length) break;
     for (const r of res.rows) {
       lastId = r.id;
-      const hay = `${r.subject || ''}\n${r.bodytext || ''}`;
+      const hay = `${r.subject || ''}\n${r.body_preview || ''}\n${r.bodytext || ''}`;
       if (WARMUP_RE.test(hay)) {
         matchIds.push(r.id);
         if (sample.length < 50) sample.push({ id: r.id, lead_email: r.lead_email, subject: r.subject, category: r.category, folder: r.folder });
