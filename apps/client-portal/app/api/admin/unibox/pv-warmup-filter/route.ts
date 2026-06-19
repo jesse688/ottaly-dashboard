@@ -18,6 +18,19 @@ import { getAdminSession } from '@/lib/auth'
 // POST ?secret=CRON_SECRET → apply (move matches to the warmup folder)
 const PV_BASE = 'https://api.plusvibe.ai/api/v1'
 
+// EmailBison warm-up filter tags (one per Bison workspace). Bison injects its
+// workspace code into every warm-up email body/subject. After the Bison->PV
+// migration these leftover warm-ups can still land in PV inboxes; PV doesn't
+// know they're warm-up, so they leak into the unibox. These single-token codes
+// are matched on an exact word boundary (they wouldn't pass the multi-word PV
+// tag guard). Per policy, warm-up-tagged rows are the ONLY rows we ever remove.
+const BISON_WARMUP_TAGS = [
+  'tc5odbtm','sk85oa7k','0e24psnp','eucrj0hz','rndyajpa','ahy9frqv','xzvjsvdu',
+  'dvyu4kdr','uiizjrlh','d1ymr6mx','n9qrgswv','raftziqa','qlctqsof','rcduzjkl',
+  '13aqstcm','op7as3ft','ht8jbwh2','gdf6uvrl','dau5wphh','antm9hol','9jbxm636',
+  '8k5natot','sdwgchhk','ss4me0qc','oly08aoy',
+]
+
 interface PvWorkspace { id: string; name?: string }
 interface PvAccount { payload?: { warmup?: { warmup_custom_words?: string } } }
 
@@ -68,8 +81,10 @@ function buildTagRegex(tags: Set<string>): RegExp | null {
   const alts = [...tags].map(t =>
     t.split(/[\s\-_]+/).map(escapeRe).join('[\\s\\-_]+')
   )
+  // Bison single-token codes: exact match (escaped), no inner-word splitting.
+  for (const code of BISON_WARMUP_TAGS) alts.push(escapeRe(code))
   if (alts.length === 0) return null
-  return new RegExp(`(?:^|[^a-z])(${alts.join('|')})(?:[^a-z]|$)`, 'i')
+  return new RegExp(`(?:^|[^a-z0-9])(${alts.join('|')})(?:[^a-z0-9]|$)`, 'i')
 }
 
 // Rows we never touch even on a tag match.
