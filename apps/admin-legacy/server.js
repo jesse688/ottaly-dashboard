@@ -15030,9 +15030,12 @@ app.post('/api/bison/create-campaign', requireSession, async (req, res) => {
   if (!wsId || !name) return res.status(400).json({ error: 'ws_id and a non-empty name are required' });
   if (!getPvKey()) return res.status(500).json({ error: 'PlusVibe API key not configured — set it in admin settings' });
   try {
-    const resp = await pvApi('/campaign/create', { method: 'POST', wsId, body: { name } });
-    const c = resp?.data || resp || {};
-    res.json({ ok: true, campaign: { id: String(c._id || c.id), name: c.name, status: c.status }, warnings: [] });
+    // PlusVibe create campaign: POST /campaign/add/campaign { workspace_id, camp_name }
+    // → { status: 'success', id: '<new campaign id>' }
+    const resp = await pvApi('/campaign/add/campaign', { method: 'POST', wsId, body: { workspace_id: wsId, camp_name: name } });
+    const cid = resp?.id || resp?.data?.id || resp?._id || '';
+    if (!cid) throw new Error('PlusVibe did not return a campaign id');
+    res.json({ ok: true, campaign: { id: String(cid), name, status: 'DRAFT' }, warnings: [] });
   } catch (err) {
     res.status(502).json({ error: err.message || 'Failed to create campaign' });
   }
