@@ -2689,21 +2689,15 @@ app.get('/api/admin/mailbox-emails', requireAdmin, (req, res) => {
 // GET  ?dry=1            → preview (counts per workspace, no changes)
 // POST                   → execute
 // Optional ?key=<pvkey>  → override the (possibly stale) PLUSVIBE_KEY env.
-const PV_API_BASE = 'https://api.plusvibe.ai/api/v1';
-async function pvApi(path, { method = 'GET', body, key } = {}) {
-  const apiKey = key || PLUSVIBE_KEY;
-  const init = { method, headers: { 'x-api-key': apiKey, 'User-Agent': 'Mozilla/5.0' } };
-  if (body) { init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(body); }
-  const r = await fetch(PV_API_BASE + path, init);
-  const txt = await r.text();
-  let data; try { data = txt ? JSON.parse(txt) : {}; } catch { data = { raw: txt }; }
-  if (!r.ok) throw new Error(`PV ${path} → ${r.status}: ${txt.slice(0, 200)}`);
-  return data;
-}
-async function pvListAllAccountIds(workspaceId, key) {
+// NOTE: pvApi + PV_API_BASE are already defined at the top of the file (the
+// migration client that sends workspace_id via wsId). This block previously
+// REDECLARED them with a key-based signature that ignored wsId — overriding the
+// real one and breaking every workspace_id call (unibox/campaign 400s). Removed;
+// pvShutdownHandler now uses the canonical pvApi(path, {wsId, params, body}).
+async function pvListAllAccountIds(workspaceId) {
   const ids = [];
   for (let skip = 0; skip < 5000; skip += 200) {
-    const resp = await pvApi(`/account/list?workspace_id=${workspaceId}&limit=200&skip=${skip}`, { key });
+    const resp = await pvApi('/account/list', { wsId: workspaceId, params: { limit: 200, skip } });
     const list = Array.isArray(resp) ? resp : (resp?.accounts || resp?.email_accounts || resp?.data || []);
     if (!list.length) break;
     for (const a of list) { const id = a._id || a.id; if (id) ids.push(String(id)); }
@@ -2712,26 +2706,25 @@ async function pvListAllAccountIds(workspaceId, key) {
   return ids;
 }
 async function pvShutdownHandler(req, res) {
-  const key = (req.query.key || req.body?.key || '').toString().trim() || PLUSVIBE_KEY;
   const dryRun = req.method === 'GET' || req.query.dry === '1';
   try {
-    const wsRaw = await pvApi('/workspaces', { key });
+    const wsRaw = listPvWorkspaces();
     const workspaces = Array.isArray(wsRaw) ? wsRaw : (wsRaw?.workspaces || wsRaw?.data || []);
     const report = [];
     for (const ws of workspaces) {
       const wsId = ws.id || ws._id;
       const name = ws.name || wsId;
       try {
-        const ids = await pvListAllAccountIds(wsId, key);
+        const ids = await pvListAllAccountIds(wsId);
         const entry = { workspace_id: wsId, name, mailboxes: ids.length, warmup_off: 0, daily_zeroed: 0 };
         if (!dryRun && ids.length) {
           // PV bulk endpoints cap batch size; chunk to be safe.
           for (let i = 0; i < ids.length; i += 100) {
             const chunk = ids.slice(i, i + 100);
-            await pvApi('/account/bulk-update-warmup', { method: 'PATCH', key,
+            await pvApi('/account/bulk-update-warmup', { method: 'PATCH', wsId,
               body: { workspace_id: wsId, ids: chunk, warmup_status: 'INACTIVE' } });
             entry.warmup_off += chunk.length;
-            await pvApi('/account/bulk-update', { method: 'PUT', key,
+            await pvApi('/account/bulk-update', { method: 'PUT', wsId,
               body: { workspace_id: wsId, ids: chunk, daily_limit: 0 } });
             entry.daily_zeroed += chunk.length;
           }
