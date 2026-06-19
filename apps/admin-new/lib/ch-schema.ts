@@ -47,6 +47,18 @@ export function ensureScrapeSchema(): Promise<void> {
           created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
         );
         CREATE INDEX IF NOT EXISTS idx_job_items_job ON scrape_job_items(job_id);
+
+        ALTER TABLE scraped_contacts ADD COLUMN IF NOT EXISTS website       TEXT;
+        ALTER TABLE scraped_contacts ADD COLUMN IF NOT EXISTS address       TEXT;
+        ALTER TABLE scraped_contacts ADD COLUMN IF NOT EXISTS business_type TEXT;
+        ALTER TABLE scraped_contacts ADD COLUMN IF NOT EXISTS industry      TEXT;
+        ALTER TABLE scraped_contacts ADD COLUMN IF NOT EXISTS keywords      TEXT[] NOT NULL DEFAULT '{}';
+        ALTER TABLE scraped_contacts ADD COLUMN IF NOT EXISTS description   TEXT;
+        ALTER TABLE scraped_contacts ADD COLUMN IF NOT EXISTS socials       JSONB;
+
+        ALTER TABLE scrape_jobs      ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'ch';
+        ALTER TABLE scrape_jobs      ADD COLUMN IF NOT EXISTS fields TEXT[];
+        ALTER TABLE scrape_job_items ADD COLUMN IF NOT EXISTS location TEXT;
       `)
       .then(() => undefined)
       .catch((err) => {

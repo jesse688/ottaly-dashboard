@@ -20,14 +20,21 @@ export async function GET(req: NextRequest) {
     const rows = await pool.query(
       `SELECT c.company_number, c.company_name, c.company_status, c.sic_codes,
               c.postcode, c.website,
-              sc.domain      AS scraped_domain,
-              sc.emails      AS emails,
-              sc.phones      AS phones,
-              sc.status      AS scrape_status,
-              sc.scraped_at  AS scraped_at
+              sc.domain        AS scraped_domain,
+              sc.emails        AS emails,
+              sc.phones        AS phones,
+              sc.address       AS address,
+              sc.business_type AS business_type,
+              sc.industry      AS industry,
+              sc.keywords      AS keywords,
+              sc.description   AS description,
+              sc.socials       AS socials,
+              sc.status        AS scrape_status,
+              sc.scraped_at    AS scraped_at
          FROM ch_companies c
          LEFT JOIN LATERAL (
-           SELECT domain, emails, phones, status, scraped_at
+           SELECT domain, emails, phones, status, scraped_at,
+                  address, business_type, industry, keywords, description, socials
              FROM scraped_contacts s
             WHERE s.company_number = c.company_number
             ORDER BY s.scraped_at DESC

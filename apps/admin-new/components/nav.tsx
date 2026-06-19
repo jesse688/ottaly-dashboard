@@ -17,6 +17,7 @@ const NAV_SECTIONS = [
   ]},
   { label: 'Data', items: [
     { href: '/ch',            label: 'Companies House' },
+    { href: '/enrich',        label: 'Enrichment' },
     { href: '/contacts',      label: 'Contacts' },
     { href: '/database',      label: 'Database' },
     { href: '/apollo-prep',   label: 'Apollo Prep' },

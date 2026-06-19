@@ -1,8 +1,17 @@
 # scraper-service
 
-Background worker that finds and scrapes contact details (emails, phones, names)
-for Companies House businesses and stores them in Postgres. Triggered from the
-**CH** page in `admin-new`; runs on Easypanel (not Vercel — Crawlee is long-running).
+Background worker that finds and **enriches** businesses — websites, emails,
+phones, address, social profiles, description, plus AI-classified business type /
+industry / keywords — and stores the result in Postgres. Triggered from two pages
+in `admin-new`: the **CH** page (Companies House businesses) and the **Enrichment**
+page (paste any CSV of businesses). Runs on Easypanel (not Vercel — Crawlee is
+long-running).
+
+Each job carries a `fields` list (what the user ticked) and a `source` (`ch` or
+`list`). The worker only runs the selected extractors, and only calls Claude when
+an AI-backed field (business_type / industry / keywords) is selected and
+`ANTHROPIC_API_KEY` is set. For CH items, SIC codes / company type / registered
+address are used as classifier hints and fallbacks.
 
 ## How it fits together
 

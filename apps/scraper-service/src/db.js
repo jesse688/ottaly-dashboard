@@ -55,6 +55,19 @@ export async function ensureSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_job_items_job ON scrape_job_items(job_id);
     CREATE INDEX IF NOT EXISTS idx_job_items_status ON scrape_job_items(job_id, status);
+
+    -- Enrichment columns (added incrementally; safe on existing installs).
+    ALTER TABLE scraped_contacts ADD COLUMN IF NOT EXISTS website       TEXT;
+    ALTER TABLE scraped_contacts ADD COLUMN IF NOT EXISTS address       TEXT;
+    ALTER TABLE scraped_contacts ADD COLUMN IF NOT EXISTS business_type TEXT;
+    ALTER TABLE scraped_contacts ADD COLUMN IF NOT EXISTS industry      TEXT;
+    ALTER TABLE scraped_contacts ADD COLUMN IF NOT EXISTS keywords      TEXT[] NOT NULL DEFAULT '{}';
+    ALTER TABLE scraped_contacts ADD COLUMN IF NOT EXISTS description   TEXT;
+    ALTER TABLE scraped_contacts ADD COLUMN IF NOT EXISTS socials       JSONB;
+
+    ALTER TABLE scrape_jobs       ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'ch';
+    ALTER TABLE scrape_jobs       ADD COLUMN IF NOT EXISTS fields TEXT[];
+    ALTER TABLE scrape_job_items  ADD COLUMN IF NOT EXISTS location TEXT;
   `)
 }
 
@@ -77,7 +90,7 @@ export async function claimNextJob() {
 
 export async function loadPendingItems(jobId, limit) {
   const { rows } = await pool.query(
-    `SELECT id, company_number, company_name, domain
+    `SELECT id, company_number, company_name, domain, location
        FROM scrape_job_items
       WHERE job_id = $1 AND status = 'pending'
       ORDER BY id
@@ -87,21 +100,58 @@ export async function loadPendingItems(jobId, limit) {
   return rows
 }
 
+// CH context for fallback values + classifier hints (null for list-source items).
+export async function getCompanyContext(companyNumber) {
+  if (!companyNumber) return null
+  const { rows } = await pool.query(
+    `SELECT company_name, company_type, sic_codes, industry,
+            address_line1, address_line2, post_town, county, postcode
+       FROM ch_companies WHERE company_number = $1`,
+    [companyNumber]
+  )
+  if (!rows[0]) return null
+  const r = rows[0]
+  const address = [r.address_line1, r.address_line2, r.post_town, r.county, r.postcode]
+    .filter(Boolean)
+    .join(', ')
+  return {
+    company_type: r.company_type || null,
+    sic_codes: r.sic_codes || null,
+    industry: r.industry || null,
+    address: address || null,
+  }
+}
+
 export async function saveContact(c) {
   await pool.query(
     `INSERT INTO scraped_contacts
-       (domain, company_number, page_url, emails, phones, raw_names, status, error_msg, scraped_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
+       (domain, company_number, page_url, website, emails, phones, raw_names,
+        address, business_type, industry, keywords, description, socials,
+        status, error_msg, scraped_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, now())
      ON CONFLICT (domain) DO UPDATE SET
        company_number = COALESCE(EXCLUDED.company_number, scraped_contacts.company_number),
-       page_url   = EXCLUDED.page_url,
-       emails     = EXCLUDED.emails,
-       phones     = EXCLUDED.phones,
-       raw_names  = EXCLUDED.raw_names,
-       status     = EXCLUDED.status,
-       error_msg  = EXCLUDED.error_msg,
-       scraped_at = now()`,
-    [c.domain, c.company_number ?? null, c.pageUrl ?? null, c.emails ?? [], c.phones ?? [], c.names ?? [], c.status, c.errorMsg ?? null]
+       page_url      = EXCLUDED.page_url,
+       website       = EXCLUDED.website,
+       emails        = EXCLUDED.emails,
+       phones        = EXCLUDED.phones,
+       raw_names     = EXCLUDED.raw_names,
+       address       = COALESCE(EXCLUDED.address, scraped_contacts.address),
+       business_type = COALESCE(EXCLUDED.business_type, scraped_contacts.business_type),
+       industry      = COALESCE(EXCLUDED.industry, scraped_contacts.industry),
+       keywords      = EXCLUDED.keywords,
+       description   = COALESCE(EXCLUDED.description, scraped_contacts.description),
+       socials       = EXCLUDED.socials,
+       status        = EXCLUDED.status,
+       error_msg     = EXCLUDED.error_msg,
+       scraped_at    = now()`,
+    [
+      c.domain, c.company_number ?? null, c.pageUrl ?? null, c.website ?? (c.domain ? `https://${c.domain}` : null),
+      c.emails ?? [], c.phones ?? [], c.names ?? [],
+      c.address ?? null, c.business_type ?? null, c.industry ?? null,
+      c.keywords ?? [], c.description ?? null, c.socials ? JSON.stringify(c.socials) : null,
+      c.status, c.errorMsg ?? null,
+    ]
   )
 }
 

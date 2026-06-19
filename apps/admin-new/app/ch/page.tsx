@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { FieldPicker } from '@/components/field-picker'
+import { DEFAULT_FIELD_KEYS } from '@/lib/enrich-fields'
 
 interface Company {
   company_number: string
@@ -15,6 +17,12 @@ interface Company {
   scraped_domain: string | null
   emails: string[] | null
   phones: string[] | null
+  address: string | null
+  business_type: string | null
+  industry: string | null
+  keywords: string[] | null
+  description: string | null
+  socials: Record<string, string> | null
   scrape_status: string | null
   scraped_at: string | null
 }
@@ -59,6 +67,7 @@ export default function ChPage() {
   const [scraped, setScraped] = useState<'' | 'yes' | 'no'>('')
 
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [fields, setFields] = useState<string[]>(DEFAULT_FIELD_KEYS)
   const [activeJob, setActiveJob] = useState<Job | null>(null)
   const [toast, setToast] = useState('')
 
@@ -186,7 +195,7 @@ export default function ChPage() {
   const scrapeSelected = () => {
     if (selected.size === 0) return
     queueJob(
-      { mode: 'selected', companyNumbers: Array.from(selected), label: `${selected.size} selected` },
+      { mode: 'selected', companyNumbers: Array.from(selected), fields, label: `${selected.size} selected` },
       selected.size
     )
   }
@@ -198,6 +207,7 @@ export default function ChPage() {
       {
         mode: 'filtered',
         filter: { q, sic, status, hasWebsite, scraped },
+        fields,
         label: `filtered: ${total}`,
       },
       total
@@ -317,9 +327,17 @@ export default function ChPage() {
         </div>
       </div>
 
+      {/* What to extract */}
+      <div className="bg-white border-b px-8 py-4">
+        <div className="max-w-7xl mx-auto">
+          <div className="text-xs font-bold uppercase tracking-wider text-gray-600 mb-2">What to extract when scraping</div>
+          <FieldPicker value={fields} onChange={setFields} />
+        </div>
+      </div>
+
       {/* Table */}
       <div className="px-8 py-6">
-        <div className="max-w-7xl mx-auto bg-white rounded-lg border overflow-hidden">
+        <div className="max-w-7xl mx-auto bg-white rounded-lg border overflow-x-auto">
           {companies.length === 0 ? (
             <div className="py-12 text-center text-gray-600">
               {loading ? 'Loading…' : 'No companies match these filters.'}
@@ -336,6 +354,8 @@ export default function ChPage() {
                     <TableHead className="text-xs font-bold uppercase">Website / Domain</TableHead>
                     <TableHead className="text-xs font-bold uppercase">Emails</TableHead>
                     <TableHead className="text-xs font-bold uppercase">Phones</TableHead>
+                    <TableHead className="text-xs font-bold uppercase">Type</TableHead>
+                    <TableHead className="text-xs font-bold uppercase">Industry</TableHead>
                     <TableHead className="text-xs font-bold uppercase">Scrape</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -382,6 +402,8 @@ export default function ChPage() {
                             </span>
                           ) : <span className="text-gray-400">—</span>}
                         </TableCell>
+                        <TableCell className="text-sm">{c.business_type || <span className="text-gray-400">—</span>}</TableCell>
+                        <TableCell className="text-sm">{c.industry || <span className="text-gray-400">—</span>}</TableCell>
                         <TableCell><ScrapePill company={c} /></TableCell>
                       </TableRow>
                     )

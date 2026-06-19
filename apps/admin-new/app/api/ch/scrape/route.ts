@@ -2,12 +2,14 @@ import { NextRequest, NextResponse } from 'next/server'
 import pool from '@/lib/db'
 import { buildChWhere, ChFilter } from '@/lib/ch'
 import { ensureScrapeSchema } from '@/lib/ch-schema'
+import { normaliseFields } from '@/lib/enrich-fields'
 
 interface ScrapeBody {
   mode: 'selected' | 'filtered'
   label?: string
   companyNumbers?: string[]
   filter?: ChFilter
+  fields?: string[]
 }
 
 export async function POST(req: NextRequest) {
@@ -16,11 +18,12 @@ export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as ScrapeBody
     const label = body.label?.slice(0, 200) ?? null
+    const fields = normaliseFields(body.fields)
 
     await client.query('BEGIN')
     const job = await client.query(
-      `INSERT INTO scrape_jobs (label, status) VALUES ($1, 'queued') RETURNING id`,
-      [label]
+      `INSERT INTO scrape_jobs (label, status, source, fields) VALUES ($1, 'queued', 'ch', $2) RETURNING id`,
+      [label, fields]
     )
     const jobId: number = job.rows[0].id
 

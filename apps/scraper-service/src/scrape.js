@@ -1,6 +1,10 @@
 import { CheerioCrawler, ProxyConfiguration, log, LogLevel, Configuration } from 'crawlee'
 import { proxyUrls } from './proxies.js'
-import { extractEmails, extractPhones, extractNames, CONTACT_PATHS } from './extract.js'
+import {
+  extractEmails, extractPhones, extractNames, CONTACT_PATHS,
+  extractSocials, extractMetaDescription, extractMetaKeywords,
+  extractJsonLd, extractAddressHeuristic, pageTextSample,
+} from './extract.js'
 
 log.setLevel(LogLevel.WARNING)
 
@@ -21,7 +25,10 @@ export async function scrapeBatch(targets, opts = {}) {
       domain: t.domain,
       company_number: t.company_number ?? null,
       pageUrl: `https://${t.domain}`,
+      website: `https://${t.domain}`,
       emails: [], phones: [], names: [],
+      socials: {}, metaKeywords: [],
+      description: null, address: null, jsonldType: null, textSample: null,
       status: 'pending', errorMsg: null,
     })
   }
@@ -52,7 +59,21 @@ export async function scrapeBatch(targets, opts = {}) {
       r.emails = [...new Set([...r.emails, ...extractEmails(body)])]
       r.phones = [...new Set([...r.phones, ...extractPhones(body)])]
       r.names = [...new Set([...r.names, ...extractNames($)])].slice(0, 10)
-      if (!isSub) r.pageUrl = request.url
+      r.socials = { ...extractSocials($), ...r.socials } // earlier (homepage) wins
+      r.metaKeywords = [...new Set([...r.metaKeywords, ...extractMetaKeywords($)])].slice(0, 25)
+
+      const jsonld = extractJsonLd($)
+      if (!r.address) r.address = jsonld.address || extractAddressHeuristic($)
+      if (!r.jsonldType && jsonld.type) r.jsonldType = jsonld.type
+
+      // Prefer the homepage for description + the classifier text sample.
+      if (!isSub) {
+        r.pageUrl = request.url
+        r.description = extractMetaDescription($) || r.description
+        r.textSample = pageTextSample($)
+      } else if (!r.description) {
+        r.description = extractMetaDescription($)
+      }
       if (r.status === 'pending') r.status = 'ok'
     },
     failedRequestHandler({ request }) {
