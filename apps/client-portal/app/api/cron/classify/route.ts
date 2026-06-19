@@ -89,11 +89,11 @@ export async function GET(req: NextRequest) {
       // apple-apple token. This is what catches PV warm-ups that otherwise fool
       // Gemini into "interested". rawText pulls the full body (body_preview is
       // truncated at 500 chars and may cut off before the tag).
-      const rawObj = raw as Record<string, unknown>
-      const rawReply = (rawObj.reply ?? {}) as Record<string, unknown>
-      const rawText = String(
-        rawReply.text_body ?? rawReply.html_body ?? rawObj.text_body ?? rawObj.html_body ?? rawObj.body ?? rawObj.content_preview ?? ''
-      ).slice(0, 5000)
+      // Use the FULL serialized raw (capped) as the warm-up haystack so the tag is
+      // caught wherever it's stored (top-level text_body, nested reply.text_body,
+      // html_body, etc.) — body_preview is truncated at 500 chars.
+      let rawText = ''
+      try { rawText = JSON.stringify(raw).slice(0, 12000) } catch { rawText = '' }
       const warmup = await detectWarmupFull(String(row.workspace_id ?? ''), {
         subject: (row.subject as string) ?? '',
         bodyText: (row.body_preview as string) ?? '',
