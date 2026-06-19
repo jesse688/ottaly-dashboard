@@ -16,6 +16,7 @@ const NAV_SECTIONS = [
     { href: '/leads-analysis',label: 'Leads Analysis' },
   ]},
   { label: 'Data', items: [
+    { href: '/ch',            label: 'Companies House' },
     { href: '/contacts',      label: 'Contacts' },
     { href: '/database',      label: 'Database' },
     { href: '/apollo-prep',   label: 'Apollo Prep' },

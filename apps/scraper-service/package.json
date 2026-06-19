@@ -1,0 +1,19 @@
+{
+  "name": "scraper-service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Background worker: discovers + scrapes contact details for Companies House businesses into Postgres",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "crawlee": "^3.11.5",
+    "pg": "^8.13.1",
+    "undici": "^7.2.0"
+  }
+}
