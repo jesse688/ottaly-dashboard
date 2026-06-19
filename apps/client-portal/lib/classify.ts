@@ -58,6 +58,75 @@ export function detectWarmup(s: WarmupSignals): { isWarmup: boolean; reason: str
   return { isWarmup: false, reason: '' }
 }
 
+// ── PlusVibe / EmailBison warm-up FILTER TAGS ────────────────────────────────
+// The reliable warm-up signal post-migration: PlusVibe injects a unique
+// per-mailbox `warmup_custom_words` tag (e.g. "removal-thirty") into every
+// warm-up email body. EmailBison did the same with a per-workspace code. A reply
+// quoting/containing one of these tags is a warm-up — deterministic, no AI, no
+// false positives on real hyphenated words. We pull every mailbox's tag per
+// workspace (cached 1h) and match it. This is what catches the warm-ups that
+// fooled Gemini into "interested".
+const _escWarm = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const _pvWarmupCache = new Map<string, { re: RegExp | null; at: number }>()
+const PV_WARMUP_TTL_MS = 60 * 60 * 1000
+// 25 EmailBison warm-up codes (one per workspace) — single tokens, exact match.
+const BISON_WARMUP_CODES = [
+  'tc5odbtm','sk85oa7k','0e24psnp','eucrj0hz','rndyajpa','ahy9frqv','xzvjsvdu',
+  'dvyu4kdr','uiizjrlh','d1ymr6mx','n9qrgswv','raftziqa','qlctqsof','rcduzjkl',
+  '13aqstcm','op7as3ft','ht8jbwh2','gdf6uvrl','dau5wphh','antm9hol','9jbxm636',
+  '8k5natot','sdwgchhk','ss4me0qc','oly08aoy',
+]
+
+interface PvAccount { payload?: { warmup?: { warmup_custom_words?: string } } }
+
+async function workspaceWarmupRegex(workspaceId: string): Promise<RegExp | null> {
+  const cached = _pvWarmupCache.get(workspaceId)
+  if (cached && Date.now() - cached.at < PV_WARMUP_TTL_MS) return cached.re
+  const tags = new Set<string>()
+  const key = process.env.PLUSVIBE_API_KEY
+  if (key && workspaceId) {
+    try {
+      for (let skip = 0; skip < 10000; skip += 100) {
+        const r = await fetch(
+          `https://api.plusvibe.ai/api/v1/account/list?workspace_id=${workspaceId}&skip=${skip}&limit=100`,
+          { headers: { 'x-api-key': key, 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(20000) }
+        )
+        if (!r.ok) break
+        const j = (await r.json()) as { accounts?: PvAccount[] }
+        const accts = j.accounts ?? []
+        if (!accts.length) break
+        for (const a of accts) {
+          const t = (a.payload?.warmup?.warmup_custom_words ?? '').trim().toLowerCase()
+          if (t && /[\s\-_]/.test(t) && t.length >= 7) tags.add(t)
+        }
+        if (accts.length < 100) break
+      }
+    } catch { /* fall through with whatever we collected */ }
+  }
+  const alts = [...tags].map(t => t.split(/[\s\-_]+/).map(_escWarm).join('[\\s\\-_]+'))
+  for (const code of BISON_WARMUP_CODES) alts.push(_escWarm(code))
+  const re = alts.length ? new RegExp(`(?:^|[^a-z0-9])(${alts.join('|')})(?:[^a-z0-9]|$)`, 'i') : null
+  _pvWarmupCache.set(workspaceId, { re, at: Date.now() })
+  return re
+}
+
+// Full warm-up check used by the classify worker: the cheap structural token
+// first, then the authoritative per-workspace PV/Bison filter tags (matched in
+// subject + body + raw). Async because it may fetch+cache the workspace's tags.
+export async function detectWarmupFull(
+  workspaceId: string,
+  s: { subject?: string; bodyText?: string; rawText?: string },
+): Promise<{ isWarmup: boolean; reason: string }> {
+  const base = detectWarmup(s)
+  if (base.isWarmup) return base
+  const re = await workspaceWarmupRegex(workspaceId)
+  if (re) {
+    const hay = `${s.subject ?? ''}\n${s.bodyText ?? ''}\n${s.rawText ?? ''}`
+    if (re.test(hay)) return { isWarmup: true, reason: 'PV/Bison warmup filter tag' }
+  }
+  return { isWarmup: false, reason: '' }
+}
+
 export interface Classification {
   category: ReplyCategory
   confidence: number   // 0..1

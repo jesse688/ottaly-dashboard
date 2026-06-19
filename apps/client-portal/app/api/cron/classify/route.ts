@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import pool, { ready } from '@/lib/db'
-import { classifyReply, CLASSIFIER_MODEL, CLASSIFIER_VERSION, detectWarmup } from '@/lib/classify'
+import { classifyReply, CLASSIFIER_MODEL, CLASSIFIER_VERSION, detectWarmupFull } from '@/lib/classify'
 import { addToBlocklist, unsubscribeLead, bisonTeamForWorkspace } from '@/lib/bison'
 // Triage worker for the Master Unibox. Claims a batch of pending replies with
 // FOR UPDATE SKIP LOCKED (safe to run concurrently / overlapping), pre-filters
@@ -84,15 +84,20 @@ export async function GET(req: NextRequest) {
       // a real company website — exempts a hyphen-pair reply from warm-up. A bare
       // email / job_title is not enough (that's how "interest-advance / journey-
       // region" warm-ups were slipping through to Gemini and coming back interested).
-      const hasLeadFields = Boolean(
-        row.linkedin_url || row.company_website
-      )
-      const warmup = detectWarmup({
+      // Authoritative warm-up check: the PV/Bison per-mailbox filter tags
+      // (e.g. "removal-thirty") matched in subject/body/raw, plus the structural
+      // apple-apple token. This is what catches PV warm-ups that otherwise fool
+      // Gemini into "interested". rawText pulls the full body (body_preview is
+      // truncated at 500 chars and may cut off before the tag).
+      const rawObj = raw as Record<string, unknown>
+      const rawReply = (rawObj.reply ?? {}) as Record<string, unknown>
+      const rawText = String(
+        rawReply.text_body ?? rawReply.html_body ?? rawObj.text_body ?? rawObj.html_body ?? rawObj.body ?? rawObj.content_preview ?? ''
+      ).slice(0, 5000)
+      const warmup = await detectWarmupFull(String(row.workspace_id ?? ''), {
         subject: (row.subject as string) ?? '',
         bodyText: (row.body_preview as string) ?? '',
-        hasLeadFields,
-        // A forwarded reply legitimately lacks lead fields — don't auto-warmup it.
-        isForwarded: Boolean(row.is_forwarded),
+        rawText,
       })
       if (warmup.isWarmup) {
         // Warmup goes to its OWN visible folder (not hidden 'rejected'), so a
