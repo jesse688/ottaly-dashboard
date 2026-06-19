@@ -185,6 +185,23 @@ async function runMigration() {
       `CREATE INDEX IF NOT EXISTS idx_portal_emails_ws_lead ON portal_emails (workspace_id, lower(lead_email))`,
       `CREATE INDEX IF NOT EXISTS idx_portal_emails_thread ON portal_emails (thread_id)`,
 
+      // Raw log of EVERY inbound webhook delivery — for diagnosing replies that
+      // land in Bison but never reach the Unibox. Records the payload + how we
+      // routed it (provider/event/team) + the outcome. Capped via a periodic prune.
+      `CREATE TABLE IF NOT EXISTS webhook_deliveries (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        received_at TIMESTAMPTZ DEFAULT NOW(),
+        provider TEXT,                              -- 'bison' | 'plusvibe' | 'unknown'
+        event_type TEXT,
+        team_id TEXT,
+        workspace_id TEXT,
+        reply_id TEXT,
+        outcome TEXT,                               -- stored | skipped:<reason> | error:<msg>
+        signature_present BOOLEAN,
+        body JSONB
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_recv ON webhook_deliveries (received_at DESC)`,
+
       // Files attached to a client's outgoing reply. Bytes stored inline (base64
       // in `content`) so they can be previewed/downloaded without external storage.
       // Scoped by workspace_id so the download route can authorize the viewer.

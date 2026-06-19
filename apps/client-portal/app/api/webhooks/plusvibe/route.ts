@@ -43,6 +43,29 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
   }
 
+  // Log EVERY delivery first (best-effort) so a reply that lands in Bison but not
+  // the Unibox can be traced: did the webhook even arrive, and how did we route it?
+  let deliveryId: string | null = null
+  try {
+    const probe = JSON.parse(body) as Record<string, unknown>
+    const isBison = typeof probe.event !== 'string'
+    const evObj = probe.event as { type?: string; workspace_id?: string | number } | undefined
+    const data = probe.data as { reply?: { id?: string | number }; lead?: unknown } | undefined
+    const ins = await pool.query(
+      `INSERT INTO webhook_deliveries (provider, event_type, team_id, reply_id, signature_present, body, outcome)
+       VALUES ($1,$2,$3,$4,$5,$6,'received') RETURNING id`,
+      [
+        isBison ? 'bison' : 'plusvibe',
+        isBison ? (evObj?.type ?? null) : String(probe.event ?? ''),
+        isBison && evObj?.workspace_id != null ? String(evObj.workspace_id) : null,
+        data?.reply?.id != null ? String(data.reply.id) : null,
+        !!signature,
+        body.slice(0, 20000),
+      ]
+    )
+    deliveryId = ins.rows[0]?.id ?? null
+  } catch { /* logging must never block intake */ }
+
   try {
     const parsed = JSON.parse(body) as Record<string, unknown>
 
@@ -50,14 +73,24 @@ export async function POST(req: NextRequest) {
     if (typeof parsed.event === 'string') {
       await handlePlusVibe(parsed)
     } else {
-      await handleBison(parsed)
+      await handleBison(parsed, deliveryId)
     }
 
+    if (deliveryId) await markDelivery(deliveryId, 'done')
     return NextResponse.json({ ok: true })
   } catch (err) {
     console.error('[webhook] error:', err)
+    if (deliveryId) await markDelivery(deliveryId, `error:${String(err).slice(0, 200)}`)
     return NextResponse.json({ error: 'Webhook processing failed' }, { status: 500 })
   }
+}
+
+// Update a delivery's outcome (and workspace once we've mapped it). Best-effort.
+async function markDelivery(id: string, outcome: string, workspaceId?: string | null) {
+  await pool.query(
+    `UPDATE webhook_deliveries SET outcome = $2, workspace_id = COALESCE($3, workspace_id) WHERE id = $1`,
+    [id, outcome, workspaceId ?? null]
+  ).catch(() => {})
 }
 
 // ── PlusVibe payload ──────────────────────────────────────────────────────────
@@ -145,7 +178,7 @@ interface BisonPayload {
   }
 }
 
-async function handleBison(raw: Record<string, unknown>) {
+async function handleBison(raw: Record<string, unknown>, deliveryId: string | null = null) {
   const ev = raw as unknown as BisonPayload
   const eventType = ev.event?.type ?? ''
   // The payload carries the raw Bison team id. Reverse-map it to the PV
@@ -158,6 +191,7 @@ async function handleBison(raw: Record<string, unknown>) {
   const reply = ev.data?.reply
 
   console.log(`[webhook/bison] ${eventType} team=${rawTeamId} workspace=${mappedWorkspaceId ?? 'UNMAPPED'}`)
+  if (deliveryId) await markDelivery(deliveryId, `routed:${eventType}`, mappedWorkspaceId)
 
   // Ingest the lead record. Decoupled from billing: label stays NULL on ingest
   // (PRESERVED on conflict) — only the admin "Mark as lead" action sets
@@ -244,6 +278,10 @@ async function handleBison(raw: Record<string, unknown>) {
 
     // Master Unibox row — only inbound replies are worth triaging. Idempotent on
     // (bison_team_id, bison_reply_id) so webhook retries never duplicate.
+    if (direction !== 'IN' || !rowEmail) {
+      // Not stored in the Unibox: outbound (Sent) reply, or no resolvable email.
+      if (deliveryId) await markDelivery(deliveryId, `skipped:${direction !== 'IN' ? 'direction_' + direction : 'no_email'}`, mappedWorkspaceId)
+    }
     if (direction === 'IN' && rowEmail) {
       // #2 FORWARDED / UNLINKED: if the reply isn't tied to a known lead (no
       // lead.email, or the sender differs from the lead), try to match the
@@ -275,6 +313,7 @@ async function handleBison(raw: Record<string, unknown>) {
       // at intake so they never enter the classify pipeline.
       if (reply.automated_reply === true) {
         console.log(`[webhook/bison] skipping automated reply id=${replyId}`)
+        if (deliveryId) await markDelivery(deliveryId, 'skipped:automated_reply', mappedWorkspaceId)
         return
       }
       const folder = mappedWorkspaceId ? 'inbox' : 'unmapped'
@@ -327,6 +366,8 @@ async function handleBison(raw: Record<string, unknown>) {
          // For an INBOUND reply, primary_to_email_address is our sending mailbox.
          (reply.primary_to_email_address ?? '').toLowerCase() || null]
       ).catch(err => { console.error('[webhook/bison] unibox_replies insert failed:', err); return null })
+
+      if (deliveryId) await markDelivery(deliveryId, uboxIns ? `stored:${folder}` : 'error:unibox_insert_failed', mappedWorkspaceId)
 
       // Enrich the lead from the reply's signature + our contacts DB so the admin
       // Unibox panel shows everything we know the moment the reply lands. Uses the
