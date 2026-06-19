@@ -1595,6 +1595,83 @@ function extractJson(text) {
   if (start === -1 || end === -1 || end < start) return null;
   try { return JSON.parse(cleaned.slice(start, end + 1)); } catch { return null; }
 }
+// ── SearXNG web-search domain finder ───────────────────────────────────────
+// Self-hosted SearXNG (Easypanel) with JSON output enabled. Mojeek is the only
+// reliable engine (Google/DuckDuckGo/Brave block the datacenter IP); it returns
+// real indexed company sites — far better than asking an LLM to recall a small
+// UK company's domain. SEARXNG_URL overrides the default host.
+const SEARXNG_URL = (process.env.SEARXNG_URL || 'https://ottaly-searxng.oix3xv.easypanel.host').replace(/\/$/, '');
+const SEARXNG_ENGINES = process.env.SEARXNG_ENGINES || 'mojeek';
+
+// Directory / aggregator / junk domains that are never a company's own site.
+const NON_COMPANY_DOMAINS = new Set([
+  'companieshouse.gov.uk', 'find-and-update.company-information.service.gov.uk',
+  'gov.uk', 'endole.co.uk', 'dnb.com', 'opencorporates.com', 'companycheck.co.uk',
+  'companieslist.co.uk', 'creditsafe.com', 'globaldatabase.com', 'bizdb.co.uk',
+  'linkedin.com', 'facebook.com', 'twitter.com', 'x.com', 'instagram.com',
+  'youtube.com', 'tiktok.com', 'pinterest.com', 'yell.com', 'yelp.com',
+  'trustpilot.com', 'tripadvisor.com', 'tripadvisor.co.uk', 'glassdoor.com',
+  'indeed.com', 'crunchbase.com', 'bloomberg.com', 'reuters.com', 'wikipedia.org',
+  'amazon.co.uk', 'amazon.com', 'ebay.co.uk', 'booking.com', 'dailymail.co.uk',
+  'skybet.com', 'companiesintheuk.co.uk', 'ukbusinessforums.co.uk',
+]);
+function searxRootDomain(host) {
+  const h = (host || '').toLowerCase().replace(/^www\./, '');
+  const labels = h.split('.');
+  // keep 3 labels for *.co.uk / *.org.uk / *.ltd.uk etc., else 2
+  if (/\.(co|org|ltd|plc|me|gov|ac|net)\.uk$/.test(h)) return labels.slice(-3).join('.');
+  return labels.slice(-2).join('.');
+}
+// Tokenise a company name into meaningful words (drop LTD/LIMITED/THE/&/etc.)
+function companyNameTokens(name) {
+  return (name || '').toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length > 2 && !['ltd','limited','plc','llp','the','and','uk','group','company','co','services','holdings','international'].includes(w));
+}
+// Query SearXNG and return the best-matching official domain for a company, or
+// null. Scores candidates by company-name tokens appearing in the domain,
+// preferring .co.uk/.uk, and rejecting directory/social/aggregator domains.
+async function searxLookupDomain(company) {
+  const name = (typeof company === 'string') ? company : company.company_name;
+  if (!name) return null;
+  try {
+    const url = `${SEARXNG_URL}/search?q=${encodeURIComponent(name)}&format=json&engines=${encodeURIComponent(SEARXNG_ENGINES)}`;
+    const r = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(12000) });
+    if (!r.ok) return null;
+    const j = await r.json();
+    const results = Array.isArray(j?.results) ? j.results : [];
+    if (!results.length) return null;
+
+    const tokens = companyNameTokens(name);
+    const scored = [];
+    const seen = new Set();
+    for (let i = 0; i < results.length; i++) {
+      let host;
+      try { host = new URL(results[i].url).hostname.toLowerCase().replace(/^www\./, ''); } catch { continue; }
+      const root = searxRootDomain(host);
+      if (NON_COMPANY_DOMAINS.has(root) || NON_COMPANY_DOMAINS.has(host)) continue;
+      if (seen.has(root)) continue;
+      seen.add(root);
+      const domainText = root.replace(/\.[a-z.]+$/, ''); // strip TLD for token matching
+      // score: how many company tokens appear in the domain + rank bonus + tld bonus
+      let score = 0;
+      for (const t of tokens) if (domainText.includes(t)) score += 3;
+      // also reward whole-name-no-spaces match (e.g. "rentmyplaceuk" for "Rent My Place UK")
+      const compact = tokens.join('');
+      if (compact && domainText.includes(compact)) score += 4;
+      score += Math.max(0, 5 - i) * 0.5;            // earlier result = small bonus
+      if (/\.co\.uk$/.test(root) || /\.uk$/.test(root)) score += 1; // UK company → UK TLD
+      if (score > 0) scored.push({ root, score, rank: i });
+    }
+    if (!scored.length) return null;
+    scored.sort((a, b) => b.score - a.score || a.rank - b.rank);
+    return scored[0].root;
+  } catch {
+    return null;
+  }
+}
+
 // Look up a company's website domain via Gemini using a strict responseSchema
 // (so the model returns a typed object, not free text + preamble) and a token
 // budget high enough to survive 2.5-flash's thinking tokens. Returns a bare
@@ -20044,19 +20121,28 @@ function scheduleAudienceScoring(pgdb) {
           return;
         }
         const data = await geminiEnrichCompany(geminiKey, co);
-        if (!data) return;
-        let website = normDomain(data.website);
+        // Gemini provides firmographics; the WEBSITE is sourced from SearXNG
+        // (real indexed web results) first, falling back to Gemini's guess.
+        // SearXNG finds small UK companies the LLM has never heard of.
+        let website = await searxLookupDomain(co);
+        let websiteSource = website ? 'searxng' : null;
+        if (!website && data) { website = normDomain(data.website); if (website) websiteSource = 'gemini'; }
+        website = normDomain(website);
         // Drop hallucinated/dead/parked domains — only keep ones whose website
         // actually serves a page. This is what makes the later email-finding
         // step trust the stored website without re-checking, protecting the
         // limited verification quota.
         if (website && !(await websiteIsLive(website))) {
-          console.log(`[ch-enrich] discarded non-live domain "${website}" for "${co.company_name}"`);
+          console.log(`[ch-enrich] discarded non-live domain "${website}" (${websiteSource}) for "${co.company_name}"`);
           website = null;
+        } else if (website) {
+          console.log(`[ch-enrich] domain "${website}" via ${websiteSource} for "${co.company_name}"`);
         }
+        if (!data && !website) return; // nothing from either source
+        const d = data || {};
         await db.query(
           `UPDATE ch_companies SET website=$1, linkedin=$2, employees=$3, industry=$4, keywords=$5, description=$6, enriched_at=NOW(), domain_checked_at=NOW(), updated_at=NOW() WHERE company_number=$7`,
-          [website, data.linkedin || null, data.employees || null, data.industry || null, data.keywords || null, data.description || null, co.company_number]
+          [website, d.linkedin || null, d.employees || null, d.industry || null, d.keywords || null, d.description || null, co.company_number]
         );
         counters.enriched++;
         if (website) counters.with_domain++; else counters.no_domain++;
