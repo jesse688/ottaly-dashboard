@@ -69,8 +69,10 @@ export async function scrapeBatch(targets, opts = {}) {
     // Accept those too so we still parse the page instead of skipping the domain.
     additionalMimeTypes: ['application/octet-stream', 'text/plain', 'application/x-download'],
     // More retries + session rotation gives blocked requests a chance from a
-    // fresh IP/identity before we give up on a domain.
+    // fresh IP/identity before we give up on a domain. Cap session rotations so
+    // a dead proxy / 502-ing site doesn't retry ~10x (was flooding the log).
     maxRequestRetries: 3,
+    maxSessionRotations: 2,
     ignoreSslErrors: true,
     useSessionPool: true,
     persistCookiesPerSession: true,
@@ -98,6 +100,13 @@ export async function scrapeBatch(targets, opts = {}) {
       const { domain, isSub } = request.userData
       const r = results.get(domain)
       if (!r) return
+      // For non-HTML bodies we accepted via additionalMimeTypes (octet-stream,
+      // plain text), Crawlee doesn't build a Cheerio object — `$` is undefined.
+      // Mark the page reached but skip extraction rather than crash.
+      if (typeof $ !== 'function') {
+        if (r.status === 'pending') r.status = 'ok'
+        return
+      }
       const body = $('body').text()
       r.emails = [...new Set([...r.emails, ...extractEmails(body)])]
       r.phones = [...new Set([...r.phones, ...extractPhones(body)])]

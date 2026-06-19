@@ -68,9 +68,15 @@ const NON_COMPANY = new Set([
   'dnb.com','opencorporates.com','companycheck.co.uk','companieslist.co.uk','creditsafe.com','globaldatabase.com',
   'bizdb.co.uk','linkedin.com','facebook.com','twitter.com','x.com','instagram.com','youtube.com','tiktok.com',
   'pinterest.com','yell.com','yelp.com','trustpilot.com','tripadvisor.com','tripadvisor.co.uk','glassdoor.com',
-  'indeed.com','crunchbase.com','bloomberg.com','reuters.com','wikipedia.org','amazon.co.uk','amazon.com',
+  'indeed.com','crunchbase.com','bloomberg.com','reuters.com','wikipedia.org','wikipedia.com','amazon.co.uk','amazon.com',
   'ebay.co.uk','booking.com','dailymail.co.uk','companiesintheuk.co.uk','ukbusinessforums.co.uk',
+  'reddit.com','medium.com','github.com','gov.scot','nhs.uk','google.com','bing.com','apple.com','microsoft.com',
 ])
+
+// Minimum score a candidate must reach before we trust it as the company's site.
+// Stops weak coincidental matches (e.g. a "101…" company matching spiele101.de
+// on a single numeric token) from being accepted.
+const MIN_SCORE = 4
 
 async function searxLookup(name) {
   if (!SEARXNG_URL || !name) return null
@@ -93,11 +99,19 @@ async function searxLookup(name) {
         seen.add(root)
         const domainText = root.replace(/\.[a-z.]+$/, '')
         let score = 0
-        for (const t of tokens) if (domainText.includes(t)) score += 3
-        if (compact && domainText.includes(compact)) score += 4
+        let alphaMatch = false
+        for (const t of tokens) {
+          if (!domainText.includes(t)) continue
+          // Pure-numeric or very short tokens (e.g. "101") match too easily and
+          // produce wrong domains — score them low and don't let them qualify alone.
+          if (/^\d+$/.test(t) || t.length <= 3) { score += 0.5 }
+          else { score += 3; alphaMatch = true }
+        }
+        if (compact && compact.length >= 5 && domainText.includes(compact)) { score += 4; alphaMatch = true }
         score += Math.max(0, 5 - i) * 0.5
         if (/\.co\.uk$/.test(root) || /\.uk$/.test(root)) score += 1
-        if (score > 0) scored.push({ root, score, rank: i })
+        // Require a real (alphabetic) name match, not just a stray number/rank bonus.
+        if (score >= MIN_SCORE && alphaMatch) scored.push({ root, score, rank: i })
       }
       if (!scored.length) continue
       scored.sort((a, b) => b.score - a.score || a.rank - b.rank)
