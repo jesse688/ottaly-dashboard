@@ -183,7 +183,11 @@ async function bison<T>(
     const txt = await res.text().catch(() => '')
     throw new Error(`Bison ${method} ${path} -> ${res.status}: ${txt.slice(0, 200)}`)
   }
-  return res.json() as Promise<T>
+  // 204 No Content (common for DELETE) has an empty body — res.json() would throw.
+  // Return null in that case instead of failing an otherwise-successful call.
+  if (res.status === 204) return null as T
+  const text = await res.text()
+  return (text ? JSON.parse(text) : null) as T
 }
 
 // Low-level Bison caller for admin one-offs. Call INSIDE withTeam() so it runs on
