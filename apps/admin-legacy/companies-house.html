@@ -4,32 +4,32 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-  <meta name="theme-color" content="#050C29">
+  <meta name="theme-color" content="#ffffff">
   <title>CH Pipeline — Ottaly</title>
   <script>document.write('<script src="/splash.js?v=' + Date.now() + '"><\/script>');</script>
   <link href="https://fonts.googleapis.com/css2?family=Genos:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/ottaly.css">
   <style>
     :root {
-      --bg: #0d1117;
-      --bg-inset: #010409;
-      --panel: #161b22;
-      --panel-2: #1c2128;
-      --border: #30363d;
-      --border-soft: #21262d;
-      --accent: #22d3ee;
-      --accent-dim: #0e7490;
-      --accent-glow: rgba(34,211,238,.15);
-      --green: #3fb950;
-      --amber: #e3b341;
-      --blue: #58a6ff;
-      --red: #f85149;
-      --text: #e6edf3;
-      --text-hi: #f0f6fc;
-      --muted: #8b949e;
-      --faint: #6e7681;
-      --radius: 10px;
-      --radius-sm: 7px;
+      --bg: #f4f6fb;
+      --bg-inset: #ffffff;
+      --panel: #ffffff;
+      --panel-2: #f7f9fc;
+      --border: #d9deea;
+      --border-soft: #e7ebf3;
+      --accent: #2563eb;
+      --accent-dim: #bfd4ff;
+      --accent-glow: rgba(37,99,235,.12);
+      --green: #16a34a;
+      --amber: #d97706;
+      --blue: #2563eb;
+      --red: #dc2626;
+      --text: #1f2733;
+      --text-hi: #0b1220;
+      --muted: #5b6675;
+      --faint: #9aa4b2;
+      --radius: 12px;
+      --radius-sm: 8px;
       --radius-xs: 5px;
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -44,7 +44,7 @@
 
     /* ── Stats bar ── */
     .stats-bar { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; margin-bottom: 20px; }
-    .stat-card { position: relative; background: linear-gradient(180deg, var(--panel) 0%, #13181f 100%); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; overflow: hidden; }
+    .stat-card { position: relative; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; overflow: hidden; box-shadow: 0 1px 2px rgba(16,24,40,.04); }
     .stat-card::before { content: ''; position: absolute; top: 0; left: 0; width: 3px; height: 100%; background: var(--accent); opacity: .7; }
     .stat-card .lbl { font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
     .stat-card .val { font-size: 24px; font-weight: 700; color: var(--text-hi); margin-top: 5px; line-height: 1.1; font-variant-numeric: tabular-nums; }
@@ -107,14 +107,14 @@
     /* ── Buttons ── */
     .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 14px; height: 34px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 600; cursor: pointer; border: 1px solid transparent; font-family: inherit; white-space: nowrap; transition: background .12s, border-color .12s, transform .05s, box-shadow .12s; }
     .btn:active { transform: translateY(1px); }
-    .btn-primary { background: var(--accent); color: #062b33; }
+    .btn-primary { background: var(--accent); color: #fff; }
     .btn-primary:hover { background: #4fdef0; box-shadow: 0 2px 10px rgba(34,211,238,.25); }
-    .btn-hero { background: linear-gradient(135deg, #22d3ee, #06b6d4); color: #042b33; font-weight: 700; box-shadow: 0 2px 14px rgba(34,211,238,.25); }
+    .btn-hero { background: linear-gradient(135deg, #2563eb, #1d4ed8); color: #fff; font-weight: 700; box-shadow: 0 2px 14px rgba(37,99,235,.25); }
     .btn-hero:hover { box-shadow: 0 4px 20px rgba(34,211,238,.4); }
     .btn-secondary { background: var(--panel-2); color: var(--text); border-color: var(--border); }
-    .btn-secondary:hover { background: #262c36; border-color: #444c56; }
+    .btn-secondary:hover { background: var(--panel-2); border-color: var(--faint); }
     .btn-ghost { background: transparent; color: var(--muted); border-color: var(--border); }
-    .btn-ghost:hover { color: var(--text); border-color: #444c56; }
+    .btn-ghost:hover { color: var(--text); border-color: var(--faint); }
     .btn-danger { background: rgba(248,81,73,.1); color: var(--red); border-color: rgba(248,81,73,.3); }
     .btn-sm { padding: 0 10px; height: 28px; font-size: 12px; }
     .btn:disabled { opacity: .4; cursor: not-allowed; transform: none; box-shadow: none; }
@@ -123,7 +123,7 @@
     .table-wrap { overflow-x: auto; border-radius: var(--radius-sm); }
     .table-scroll { max-height: 520px; overflow-y: auto; border-radius: var(--radius-sm); }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    thead th { position: sticky; top: 0; z-index: 2; background: #12171e; text-align: left; padding: 9px 12px; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); border-bottom: 1px solid var(--border); font-weight: 600; white-space: nowrap; }
+    thead th { position: sticky; top: 0; z-index: 2; background: var(--panel-2); text-align: left; padding: 9px 12px; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); border-bottom: 1px solid var(--border); font-weight: 600; white-space: nowrap; }
     thead th.sortable { cursor: pointer; user-select: none; }
     thead th.sortable:hover { color: var(--text); }
     thead th.sort-asc::after { content: ' ↑'; color: var(--accent); }
@@ -141,6 +141,22 @@
     .scrape-fields-list label { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; cursor: pointer; }
     .scrape-fields-list .ai-tag { font-size: 9px; font-weight: 700; color: var(--accent); border: 1px solid var(--accent-dim); border-radius: 3px; padding: 0 3px; }
     .scrape-fields-note { font-size: 11px; color: var(--faint); margin-left: auto; }
+
+    /* ── Scrape jobs panel ── */
+    .jobs-empty { font-size: 13px; color: var(--muted); padding: 6px 2px; }
+    .job-row { display: grid; grid-template-columns: 1fr auto; gap: 6px 14px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border-soft); }
+    .job-row:last-child { border-bottom: none; }
+    .job-main { min-width: 0; }
+    .job-label { font-size: 13px; font-weight: 600; color: var(--text-hi); }
+    .job-sub { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+    .job-badge { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 2px 8px; border-radius: 20px; white-space: nowrap; }
+    .job-badge.queued  { background: rgba(217,119,6,.12);  color: var(--amber); }
+    .job-badge.running { background: rgba(37,99,235,.12);  color: var(--accent); }
+    .job-badge.done    { background: rgba(22,163,74,.12);  color: var(--green); }
+    .job-badge.failed  { background: rgba(220,38,38,.12);  color: var(--red); }
+    .job-bar { grid-column: 1 / -1; height: 6px; background: var(--panel-2); border-radius: 6px; overflow: hidden; }
+    .job-bar-fill { height: 100%; background: linear-gradient(90deg,#2563eb,#3b82f6); border-radius: 6px; transition: width .35s ease; }
+    .job-bar-fill.failed { background: var(--red); }
     td.mono { font-family: ui-monospace, monospace; font-size: 12px; }
     .cell-sub { color: var(--faint); font-size: 11px; font-family: ui-monospace, monospace; margin-top: 2px; }
     .cell-muted { color: var(--muted); font-size: 12px; }
@@ -217,7 +233,7 @@
     @keyframes spin { to { transform: rotate(360deg); } }
     .progress-count { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
     .progress-track { background: var(--bg-inset); border-radius: 6px; height: 8px; overflow: hidden; }
-    .progress-fill { background: linear-gradient(90deg, #06b6d4, #22d3ee); height: 100%; width: 0%; border-radius: 6px; transition: width .35s ease; }
+    .progress-fill { background: linear-gradient(90deg, #2563eb, #3b82f6); height: 100%; width: 0%; border-radius: 6px; transition: width .35s ease; }
     .progress-stats { font-size: 11.5px; color: var(--muted); margin-top: 8px; display: flex; gap: 12px; flex-wrap: wrap; }
     .progress-stat { display: flex; align-items: center; gap: 4px; }
     .progress-stat .dot { width: 6px; height: 6px; border-radius: 50%; }
@@ -518,6 +534,17 @@
       <div class="progress-stats" id="progressStats"></div>
     </div>
 
+    <!-- Scrape & enrich jobs (Crawlee worker) -->
+    <div class="panel" id="scrapeJobsPanel" style="margin-top:16px;">
+      <div class="panel-head">
+        <span class="panel-title">🕷 Scrape &amp; enrich jobs <span class="count" id="scrapeJobsCount"></span></span>
+        <button class="btn btn-ghost btn-sm" onclick="loadScrapeJobs()">↻ Refresh</button>
+      </div>
+      <div class="panel-body">
+        <div id="scrapeJobsList"><div class="jobs-empty">No scrape jobs yet. Select companies above and hit “Scrape &amp; enrich”, or use the <a href="/enrichment.html" style="color:var(--accent)">Enrichment page</a> for a pasted list.</div></div>
+      </div>
+    </div>
+
   </div>
 </div>
 
@@ -616,6 +643,7 @@
 
   loadStats();
   renderPresets();
+  loadScrapeJobs();
 
   // Keyboard shortcuts
   document.addEventListener('keydown', function(e) {
@@ -1072,11 +1100,47 @@
       .then(function(res) {
         btn.disabled = false;
         if (!res.ok) throw new Error(res.d.error || 'Failed to queue');
-        showStatus('Queued scrape job #' + res.d.jobId + ' for ' + res.d.total + ' companies. Opening Enrichment page to watch progress…', 'success');
-        window.open('/enrichment.html', '_blank');
+        showStatus('Queued scrape job #' + res.d.jobId + ' for ' + res.d.total + ' companies — see “Scrape & enrich jobs” below.', 'success');
+        loadScrapeJobs();
+        var p = document.getElementById('scrapeJobsPanel');
+        if (p) p.scrollIntoView({ behavior: 'smooth', block: 'center' });
       })
       .catch(function(e){ btn.disabled = false; showStatus('Could not queue scrape: ' + e.message, 'error'); });
   }
+
+  // ── Scrape jobs panel (polls /api/ch/jobs) ─────────────────────────────────
+  var _jobsTimer = null;
+  function loadScrapeJobs() {
+    fetch('/api/ch/jobs').then(function(r){ return r.json(); }).then(function(d){
+      var rows = (d && d.rows) || [];
+      // Only the scrape/list jobs this feature creates (skip nothing — all are ours).
+      var host = document.getElementById('scrapeJobsList');
+      var cnt = document.getElementById('scrapeJobsCount');
+      cnt.textContent = rows.length ? '· ' + rows.length : '';
+      if (!rows.length) {
+        host.innerHTML = '<div class="jobs-empty">No scrape jobs yet. Select companies above and hit “Scrape &amp; enrich”, or use the <a href="/enrichment.html" style="color:var(--accent)">Enrichment page</a> for a pasted list.</div>';
+        stopJobsPolling();
+        return;
+      }
+      var anyActive = false;
+      host.innerHTML = rows.map(function(j){
+        var pct = j.status === 'done' ? 100 : (j.total > 0 ? Math.round((j.done / j.total) * 100) : 0);
+        if (j.status === 'queued' || j.status === 'running') anyActive = true;
+        var sub = j.done + '/' + j.total + ' done · ' + (j.ok||0) + ' enriched · ' + (j.failed||0) + ' failed' +
+          (j.source ? ' · ' + j.source : '') + (j.fields && j.fields.length ? ' · ' + j.fields.join(', ') : '');
+        if (j.status === 'failed' && j.error) sub += ' · ' + esc(j.error);
+        return '<div class="job-row">' +
+          '<div class="job-main"><div class="job-label">#' + j.id + ' ' + esc(j.label || '') + '</div>' +
+          '<div class="job-sub">' + sub + '</div></div>' +
+          '<span class="job-badge ' + j.status + '">' + j.status + '</span>' +
+          '<div class="job-bar"><div class="job-bar-fill ' + (j.status==='failed'?'failed':'') + '" style="width:' + pct + '%"></div></div>' +
+          '</div>';
+      }).join('');
+      if (anyActive) startJobsPolling(); else stopJobsPolling();
+    }).catch(function(){ /* leave existing render */ });
+  }
+  function startJobsPolling(){ if (!_jobsTimer) _jobsTimer = setInterval(loadScrapeJobs, 4000); }
+  function stopJobsPolling(){ if (_jobsTimer) { clearInterval(_jobsTimer); _jobsTimer = null; } }
 
   // ── Pipeline ──────────────────────────────────────────────────────────────
   function enrichCompanies() {
