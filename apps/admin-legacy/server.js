@@ -10131,34 +10131,28 @@ function hasBisonWarmupTag(text) {
   return !!text && BISON_WARMUP_TAG_RE.test(String(text));
 }
 
-// PlusVibe's OWN warm-up filter tags. PV injects a unique per-mailbox
-// `warmup_custom_words` (e.g. "engrossed-honest") into every warm-up email body,
-// exactly so they can be filtered. We pull EVERY mailbox's tag per workspace and
-// drop any reply whose subject/body/preview contains one — so PV warm-up replies
-// never enter the unibox. Cached 1h (tags change rarely). Hyphen/space/underscore
-// tolerant; 2+ word, len>=7 guard avoids matching ordinary words.
-const _pvWarmupTagCache = new Map(); // wsId -> { re, at }
-const PV_WARMUP_TAG_TTL_MS = 60 * 60 * 1000;
+// PlusVibe's OWN warm-up filter tags — the full static list of every mailbox's
+// `warmup_custom_words` (e.g. "engrossed-honest"), baked in so there is ZERO
+// runtime PV API dependency (fetching 1900+ tags live timed out / silently
+// missed tags — the cause of warm-ups slipping into the inbox). PV injects the
+// mailbox's tag into every warm-up body; a reply containing one is warm-up.
 function _escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
-async function pvWarmupTagRegex(wsId) {
-  const cached = _pvWarmupTagCache.get(wsId);
-  if (cached && Date.now() - cached.at < PV_WARMUP_TAG_TTL_MS) return cached.re;
-  let re = null;
-  try {
-    const accounts = await pvListAllAccounts(wsId);
-    const tags = new Set();
-    for (const a of accounts) {
-      const tag = String((a.payload?.warmup?.warmup_custom_words) || '').trim().toLowerCase();
-      if (tag && /[\s\-_]/.test(tag) && tag.length >= 7) tags.add(tag);
-    }
-    if (tags.size) {
-      const alts = [...tags].map(t => t.split(/[\s\-_]+/).map(_escapeRe).join('[\\s\\-_]+'));
-      re = new RegExp(`(?:^|[^a-z0-9])(${alts.join('|')})(?:[^a-z0-9]|$)`, 'i');
-    }
-  } catch (e) { console.warn('[reconcile] warmup-tag fetch failed for', wsId, '-', e.message); }
-  _pvWarmupTagCache.set(wsId, { re, at: Date.now() });
-  return re;
+const PV_WARMUP_TAGS = (() => { try { return require('./pv-warmup-tags.js'); } catch { return []; } })();
+// ONE combined regex (PV word-pairs hyphen/space tolerant + Bison single codes),
+// compiled once at boot. Matched against subject + body + raw text.
+const WARMUP_RE = (() => {
+  const alts = [];
+  for (const t of PV_WARMUP_TAGS) alts.push(t.split(/[\s\-_]+/).map(_escapeRe).join('[\\s\\-_]+'));
+  for (const c of BISON_WARMUP_TAGS) alts.push(_escapeRe(c));
+  return alts.length ? new RegExp(`(?:^|[^a-z0-9])(${alts.join('|')})(?:[^a-z0-9]|$)`, 'i') : null;
+})();
+function isWarmupText(text) {
+  return !!WARMUP_RE && !!text && WARMUP_RE.test(String(text));
 }
+// Reconciler/classify use the same static regex regardless of workspace — tags
+// are globally unique random pairs, so a tag from one workspace won't false-match
+// another's genuine replies.
+async function pvWarmupTagRegex(_wsId) { return WARMUP_RE; }
 
 // PlusVibe `label` → unibox category. PV pre-classifies every reply, so we map
 // it straight through (no AI pass needed). 'warmup' is the PV warmup label.
@@ -10388,77 +10382,88 @@ app.get('/api/admin/reconcile-replies/status', requireAdmin, (req, res) => res.j
 // policy, warm-up-tagged rows are the ONLY rows we ever remove from the inbox.
 // GET (?dry=1 default) previews; POST applies. Skips marked-as-lead / admin-labeled
 // rows defensively so a human decision is never overridden.
-// Collect EVERY PlusVibe warm-up filter tag (warmup_custom_words) across all
-// workspaces and build a Postgres ERE alternation (hyphen/space/underscore
-// tolerant). Used by the existing-rows cleanup so already-leaked PV warm-ups
-// get swept too. ~21 API calls — only runs on the manual cleanup endpoint.
-async function collectPvWarmupTagsRe() {
-  const tags = new Set();
-  for (const ws of PV_WORKSPACES) {
-    try {
-      const accounts = await pvListAllAccounts(ws.pv);
-      for (const a of accounts) {
-        const t = String((a.payload?.warmup?.warmup_custom_words) || '').trim().toLowerCase();
-        if (t && /[\s\-_]/.test(t) && t.length >= 7) tags.add(t);
-      }
-    } catch { /* skip workspace */ }
-  }
-  if (!tags.size) return null;
-  // each "word-a-word-b" → word-a[-_[:space:]]+word-b ; words are simple lowercase.
-  const alt = [...tags].map(t => t.split(/[\s\-_]+/).join('[-_[:space:]]+')).join('|');
-  return `(${alt})`;
-}
-
+// Cleanup matches in APPLICATION CODE against the static WARMUP_RE (no runtime PV
+// fetch, no giant SQL regex). Fetches candidate rows in pages, tests each body in
+// JS, and batch-updates the matches to the warmup folder. Pulls each row's full
+// stored body (text/html) so a tag past the 500-char body_preview is still caught.
 async function bisonWarmupCleanup(apply) {
   const pgdb = app.locals.pgDb;
   if (!pgdb) throw new Error('DB unavailable');
-  // $1 = Bison codes (word-boundary); $2 = PV warmup_custom_words (or never-match).
-  const bisonRe = `\\y(${BISON_WARMUP_TAGS.join('|')})\\y`;
-  const pvRe = (await collectPvWarmupTagsRe()) || '(?!x)x'; // matches nothing if no PV tags
-  const where = `
-    (folder IS NULL OR folder NOT IN ('warmup','sent','bounced','spam'))
-    AND (marked_as_lead IS NOT TRUE)
-    AND (admin_label IS NULL)
-    AND (
-      COALESCE(subject,'')      ~* $1 OR COALESCE(subject,'')      ~* $2 OR
-      COALESCE(body_preview,'') ~* $1 OR COALESCE(body_preview,'') ~* $2 OR
-      raw::text                 ~* $1 OR raw::text                 ~* $2
-    )`;
-  if (!apply) {
-    const r = await pgdb.query(
-      `SELECT id, workspace_id, lead_email, subject, category, folder FROM unibox_replies WHERE ${where} ORDER BY received_at DESC LIMIT 50`,
-      [bisonRe, pvRe]
+  if (!WARMUP_RE) return apply ? { dryRun: false, moved: 0 } : { dryRun: true, matched: 0, sample: [], tagCount: 0 };
+  const matchIds = [];
+  const sample = [];
+  let lastId = '00000000-0000-0000-0000-000000000000';
+  // Keyset-paginate candidates by id so we never load the whole table at once.
+  for (let page = 0; page < 500; page++) {
+    const res = await pgdb.query(
+      `SELECT id, subject, lead_email, category, folder,
+              LEFT(COALESCE(raw->>'text_body', raw->>'html_body', body_preview, ''), 4000) AS bodytext
+         FROM unibox_replies
+        WHERE id > $1
+          AND (folder IS NULL OR folder NOT IN ('warmup','sent','bounced','spam'))
+          AND marked_as_lead IS NOT TRUE AND admin_label IS NULL
+        ORDER BY id ASC
+        LIMIT 1000`,
+      [lastId]
     );
-    const c = await pgdb.query(`SELECT COUNT(*)::int n FROM unibox_replies WHERE ${where}`, [bisonRe, pvRe]);
-    return { dryRun: true, matched: c.rows[0].n, sample: r.rows };
+    if (!res.rows.length) break;
+    for (const r of res.rows) {
+      lastId = r.id;
+      const hay = `${r.subject || ''}\n${r.bodytext || ''}`;
+      if (WARMUP_RE.test(hay)) {
+        matchIds.push(r.id);
+        if (sample.length < 50) sample.push({ id: r.id, lead_email: r.lead_email, subject: r.subject, category: r.category, folder: r.folder });
+      }
+    }
+    if (res.rows.length < 1000) break;
   }
-  // Resolve matching ids ONCE (single read scan), then UPDATE by id in small
-  // batches. A single UPDATE with the regex in its WHERE re-scans raw::text while
-  // holding write locks → lock/statement timeout on a big table. Batched id
-  // updates are indexed and short-lived.
-  const idRes = await pgdb.query(`SELECT id FROM unibox_replies WHERE ${where}`, [bisonRe, pvRe]);
-  const ids = idRes.rows.map(r => r.id);
+  if (!apply) return { dryRun: true, matched: matchIds.length, sample, tagCount: PV_WARMUP_TAGS.length };
   let moved = 0;
-  for (let i = 0; i < ids.length; i += 200) {
-    const chunk = ids.slice(i, i + 200);
-    const r = await pgdb.query(
+  for (let i = 0; i < matchIds.length; i += 200) {
+    const chunk = matchIds.slice(i, i + 200);
+    const u = await pgdb.query(
       `UPDATE unibox_replies SET folder='warmup', category='warmup', updated_at=NOW()
-        WHERE id = ANY($1::uuid[])
-          AND (marked_as_lead IS NOT TRUE) AND (admin_label IS NULL)`,
+        WHERE id = ANY($1::uuid[]) AND marked_as_lead IS NOT TRUE AND admin_label IS NULL`,
       [chunk]
     );
-    moved += r.rowCount;
+    moved += u.rowCount;
   }
-  return { dryRun: false, moved };
+  return { dryRun: false, moved, tagCount: PV_WARMUP_TAGS.length };
+}
+// apply runs in the BACKGROUND (it fetches PV tags from ~21 workspaces + scans
+// raw::text + batched updates — too slow for one HTTP request). Returns instantly;
+// poll /cleanup-bison-warmup/status for progress. Preview (no ?apply=1) stays sync.
+let _warmupCleanupState = { running: false, lastRun: null, matched: null, moved: null, error: null };
+async function runWarmupCleanupBg() {
+  if (_warmupCleanupState.running) return;
+  _warmupCleanupState.running = true;
+  _warmupCleanupState.error = null;
+  _warmupCleanupState.moved = null;
+  try {
+    const res = await bisonWarmupCleanup(true);
+    _warmupCleanupState.moved = res.moved;
+    _warmupCleanupState.lastRun = new Date().toISOString();
+  } catch (e) {
+    _warmupCleanupState.error = e.message;
+  } finally {
+    _warmupCleanupState.running = false;
+  }
 }
 app.get('/api/admin/cleanup-bison-warmup', requireAdmin, async (req, res) => {
-  try { res.json(await bisonWarmupCleanup(req.query.apply === '1')); }
+  if (req.query.apply === '1') {
+    if (_warmupCleanupState.running) return res.json({ ok: true, running: true, state: _warmupCleanupState });
+    runWarmupCleanupBg();
+    return res.json({ ok: true, started: true, note: 'Running in background — poll /api/admin/cleanup-bison-warmup/status' });
+  }
+  try { res.json(await bisonWarmupCleanup(false)); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/admin/cleanup-bison-warmup', requireAdmin, async (req, res) => {
-  try { res.json(await bisonWarmupCleanup(true)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  if (_warmupCleanupState.running) return res.json({ ok: true, running: true, state: _warmupCleanupState });
+  runWarmupCleanupBg();
+  res.json({ ok: true, started: true, note: 'Running in background — poll /api/admin/cleanup-bison-warmup/status' });
 });
+app.get('/api/admin/cleanup-bison-warmup/status', requireAdmin, (req, res) => res.json(_warmupCleanupState));
 
 app.post('/api/mailboxes/sync-ndr', requireSession, async (req, res) => {
   if (_ndrSyncState.running) return res.json({ ok: true, alreadyRunning: true });
