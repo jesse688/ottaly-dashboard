@@ -122,6 +122,12 @@ body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-h
     </div>
   </div>
 
+  <!-- Cutover-day (19 Jun 2026) PlusVibe vs EmailBison send split. Shows only when
+       19 Jun is in the selected range. Both ESPs sent that day; sent totals merge. -->
+  <div id="cutoverNote" style="display:none;background:#eef6ff;border:1px solid #bcd9f5;border-radius:8px;padding:.55rem .85rem;margin-bottom:1rem;font-size:12px;color:#1e477a">
+    <strong>19 Jun cutover day:</strong> 1,437 sent via <strong>PlusVibe</strong> + 1,580 via <strong>EmailBison</strong> = <strong>3,017 total</strong>. Bison stopped sending after this — replies/leads are combined (captured once per reply, regardless of which ESP sent).
+  </div>
+
   <!-- Recipient-provider breakdown (additive; contacts.mx_provider based) -->
   <div id="providerPanel" style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.85rem 1rem;margin-bottom:1.25rem">
     <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.65rem">
@@ -378,6 +384,11 @@ async function loadStats(start, end, silent = false) {
       const ts = new Date(_data.updatedAt).toLocaleTimeString();
       document.getElementById('updatedAt').textContent = _data.partial ? `⏳ Caching… ${ts}` : `Updated ${ts}`;
     }
+    // Cutover-day note: show only when 19 Jun 2026 falls inside the selected range.
+    try {
+      const cn = document.getElementById('cutoverNote');
+      if (cn) cn.style.display = (start <= '2026-06-19' && end >= '2026-06-19') ? 'block' : 'none';
+    } catch {}
     // Render if data is complete, OR we've waited long enough. The retry budget
     // is unconditional — a partial response with ZERO rows (every workspace's
     // PlusVibe fetch failed, so sent=0 & leads=0 and all rows get filtered out)
