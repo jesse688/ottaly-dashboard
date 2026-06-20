@@ -1,4 +1,5 @@
 import { type NextRequest, NextResponse } from 'next/server'
+import * as Sentry from '@sentry/nextjs'
 import pool from '@/lib/db'
 import '@/lib/cache-warming' // Initialize cache warming on first import
 
@@ -43,7 +44,7 @@ export async function GET(req: NextRequest) {
 
   try {
     // Get active workspace list from workspace_stats
-    let wsQuery = `
+    const wsQuery = `
       SELECT DISTINCT workspace_id, workspace_name
       FROM workspace_stats
       WHERE workspace_id IS NOT NULL AND workspace_id != ''
@@ -68,8 +69,7 @@ export async function GET(req: NextRequest) {
     )
 
     const perfByDateAndWs: Record<string, Record<string, Record<string, number>>> = {}
-    perfRes.rows.forEach((row: any) => {
-      const key = `${row.ws_id}|${row.date}`
+    ;(perfRes.rows as Array<{ ws_id: string; date: string; data: Record<string, number> | null }>).forEach(row => {
       if (!perfByDateAndWs[row.ws_id]) perfByDateAndWs[row.ws_id] = {}
       perfByDateAndWs[row.ws_id][row.date] = row.data || {}
     })
@@ -142,7 +142,10 @@ export async function GET(req: NextRequest) {
       updatedAt: new Date().toISOString(),
     })
   } catch (err) {
-    console.error('[stats/summary]', err)
-    return NextResponse.json({ error: 'Failed to fetch stats' }, { status: 500 })
+    // Capture to Sentry (not a silent console.error) and return an informative
+    // message the page can surface — never a blank "no data".
+    Sentry.captureException(err, { tags: { tag: 'stats/summary' }, extra: { start, end } })
+    const msg = err instanceof Error ? err.message : 'Failed to fetch stats'
+    return NextResponse.json({ error: msg }, { status: 500 })
   }
 }

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
-import { Nav } from "@/components/nav";
+import { Sidebar } from "@/components/shell/sidebar";
+import { ThemeProvider, THEME_INIT_SCRIPT } from "@/components/theme-provider";
 import "./globals.css";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
@@ -8,6 +9,7 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 export const metadata: Metadata = {
   title: "Ottaly Admin",
   description: "Ottaly agency dashboard",
+  icons: { icon: "/logo-navy.svg" },
 };
 
 export default function RootLayout({
@@ -16,10 +18,16 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${inter.variable} h-full`}>
-      <body className="h-full" style={{ marginLeft: 65, background: '#F0F2F8', fontFamily: 'Inter, -apple-system, sans-serif', color: '#050C29' }}>
-        <Nav />
-        <main className="min-h-screen">{children}</main>
+    <html lang="en" className={`${inter.variable} dark h-full`} suppressHydrationWarning>
+      <head>
+        {/* Set theme class before paint to avoid a flash of the wrong theme. */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+      </head>
+      <body className="h-full bg-background font-sans text-foreground antialiased">
+        <ThemeProvider>
+          <Sidebar />
+          <main className="min-h-screen pl-[220px]">{children}</main>
+        </ThemeProvider>
       </body>
     </html>
   );
