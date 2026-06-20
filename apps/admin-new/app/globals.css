@@ -80,14 +80,15 @@
   --chart-4: oklch(0.81 0.16 84);            /* #FFB700 yellow */
   --chart-5: oklch(0.63 0.17 149);           /* #16A34A green */
   --radius: 0.375rem;                        /* 6px */
-  --sidebar: oklch(0.18 0.07 273);           /* navy — sidebar always dark */
-  --sidebar-foreground: oklch(0.97 0.01 271);
-  --sidebar-primary: oklch(0.56 0.085 197);  /* teal */
-  --sidebar-primary-foreground: oklch(0.99 0 0);
-  --sidebar-accent: oklch(0.26 0.06 272);    /* lighter navy */
-  --sidebar-accent-foreground: oklch(0.97 0.01 271);
-  --sidebar-border: oklch(1 0 0 / 12%);
-  --sidebar-ring: oklch(0.56 0.085 197);
+  /* Light sidebar: white surface, navy text, teal active highlight. */
+  --sidebar: #FFFFFF;
+  --sidebar-foreground: #050C29;             /* navy text */
+  --sidebar-primary: #1F6F78;                /* teal */
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #EAF0FB;                 /* soft tint for hover/active row */
+  --sidebar-accent-foreground: #050C29;
+  --sidebar-border: #E2E6F0;
+  --sidebar-ring: #1F6F78;
 }
 
 .dark {
@@ -115,16 +116,15 @@
   --chart-3: #9AA6E0;                         /* purple */
   --chart-4: #FFB700;                         /* yellow (brand exact) */
   --chart-5: #22C55E;                         /* green */
-  /* Sidebar: brand navy #224388 (NOT near-black) so text reads clearly.
-     Foreground pure-bright; nav items use high-contrast text, teal active accent. */
-  --sidebar: #1B2F5E;                        /* navy, lifted off #050C29 for readability */
-  --sidebar-foreground: #EAF0FF;             /* near-white, high contrast */
-  --sidebar-primary: #3FB0BD;                /* brand teal, brightened for dark nav */
+  /* Dark theme: sidebar is a raised dark surface (not pure light) with bright text. */
+  --sidebar: #0E1B3D;                        /* slightly raised navy panel */
+  --sidebar-foreground: #EAF0FF;
+  --sidebar-primary: #2FA0AC;                /* teal, brightened for dark */
   --sidebar-primary-foreground: #04261B;
-  --sidebar-accent: #2C4A8C;                 /* lighter navy for hover/active row */
+  --sidebar-accent: #1E3160;                 /* hover/active row */
   --sidebar-accent-foreground: #FFFFFF;
-  --sidebar-border: rgba(255,255,255,0.14);
-  --sidebar-ring: #3FB0BD;
+  --sidebar-border: rgba(255,255,255,0.12);
+  --sidebar-ring: #2FA0AC;
 }
 
 @layer base {

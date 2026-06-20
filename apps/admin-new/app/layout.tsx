@@ -33,7 +33,7 @@ export default function RootLayout({
       <body className="h-full bg-background font-sans text-foreground antialiased">
         <ThemeProvider>
           <Sidebar />
-          <main className="min-h-screen pl-[220px]">{children}</main>
+          <main className="min-h-screen pl-16">{children}</main>
         </ThemeProvider>
       </body>
     </html>

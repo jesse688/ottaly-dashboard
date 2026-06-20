@@ -57,20 +57,20 @@ const GROUPS: NavGroup[] = [
   },
 ]
 
+/** Narrow 64px icon rail — light surface, navy icons, teal active. Labels on hover. */
 export function Sidebar() {
   const pathname = usePathname()
   return (
-    <aside className="fixed inset-y-0 left-0 z-30 flex w-[220px] flex-col bg-sidebar text-sidebar-foreground">
-      <div className="flex h-14 items-center gap-2 border-b border-sidebar-border px-4">
-        <Image src="/logo-white.svg" alt="Ottaly" width={104} height={26} priority className="h-6 w-auto" />
+    <aside className="fixed inset-y-0 left-0 z-30 flex w-16 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
+      <div className="flex h-12 items-center justify-center overflow-hidden border-b border-sidebar-border">
+        {/* Use the wordmark cropped to its otter glyph area; navy on light, white on dark. */}
+        <Image src="/logo-navy.svg" alt="Ottaly" width={40} height={24} priority className="h-7 w-auto max-w-[44px] object-contain object-left dark:hidden" />
+        <Image src="/logo-white.svg" alt="Ottaly" width={40} height={24} priority className="hidden h-7 w-auto max-w-[44px] object-contain object-left dark:block" />
       </div>
 
-      <nav className="flex-1 overflow-y-auto px-2 py-3">
-        {GROUPS.map(group => (
-          <div key={group.label} className="mb-4">
-            <div className="px-2.5 pb-1 text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground/60">
-              {group.label}
-            </div>
+      <nav className="flex-1 overflow-y-auto overflow-x-visible py-2 [scrollbar-width:none]">
+        {GROUPS.map((group, gi) => (
+          <div key={group.label} className={cn('flex flex-col items-center gap-0.5', gi > 0 && 'mt-2 border-t border-sidebar-border/60 pt-2')}>
             {group.items.map(item => {
               const active = pathname === item.href || pathname.startsWith(item.href + '/')
               const Icon = item.icon
@@ -78,18 +78,22 @@ export function Sidebar() {
                 <Link
                   key={item.href}
                   href={item.href}
+                  title={item.label}
                   className={cn(
-                    'group relative flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors',
+                    'group relative flex h-10 w-10 items-center justify-center rounded-md transition-colors',
                     active
-                      ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-                      : 'text-sidebar-foreground/85 hover:bg-sidebar-accent/70 hover:text-sidebar-foreground',
+                      ? 'bg-sidebar-accent text-sidebar-primary'
+                      : 'text-sidebar-foreground/55 hover:bg-sidebar-accent hover:text-sidebar-foreground',
                   )}
                 >
                   {active && (
-                    <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-full bg-sidebar-primary" />
+                    <span className="absolute left-[-8px] top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-full bg-sidebar-primary" />
                   )}
-                  <Icon size={16} className={active ? 'text-sidebar-primary' : ''} />
-                  {item.label}
+                  <Icon size={19} strokeWidth={active ? 2.3 : 1.9} />
+                  {/* Hover label flyout */}
+                  <span className="pointer-events-none absolute left-[52px] z-50 whitespace-nowrap rounded-md bg-popover px-2 py-1 text-xs font-medium text-popover-foreground opacity-0 shadow-md ring-1 ring-border transition-opacity group-hover:opacity-100">
+                    {item.label}
+                  </span>
                 </Link>
               )
             })}
@@ -97,8 +101,7 @@ export function Sidebar() {
         ))}
       </nav>
 
-      <div className="flex items-center justify-between border-t border-sidebar-border px-3 py-2.5">
-        <span className="text-[11px] text-sidebar-foreground/40">Ottaly Admin</span>
+      <div className="flex items-center justify-center border-t border-sidebar-border py-2">
         <ThemeToggle />
       </div>
     </aside>
