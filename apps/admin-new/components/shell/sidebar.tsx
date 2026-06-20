@@ -57,20 +57,18 @@ const GROUPS: NavGroup[] = [
   },
 ]
 
-/** Narrow 64px icon rail — light surface, navy icons, teal active. Labels on hover. */
+/** Narrow ~84px rail — light surface, otter mark, icon + small label per item (like legacy). */
 export function Sidebar() {
   const pathname = usePathname()
   return (
-    <aside className="fixed inset-y-0 left-0 z-30 flex w-16 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
-      <div className="flex h-12 items-center justify-center overflow-hidden border-b border-sidebar-border">
-        {/* Use the wordmark cropped to its otter glyph area; navy on light, white on dark. */}
-        <Image src="/logo-navy.svg" alt="Ottaly" width={40} height={24} priority className="h-7 w-auto max-w-[44px] object-contain object-left dark:hidden" />
-        <Image src="/logo-white.svg" alt="Ottaly" width={40} height={24} priority className="hidden h-7 w-auto max-w-[44px] object-contain object-left dark:block" />
+    <aside className="fixed inset-y-0 left-0 z-30 flex w-[84px] flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
+      <div className="flex h-14 items-center justify-center border-b border-sidebar-border">
+        <Image src="/favicon.svg" alt="Ottaly" width={30} height={30} priority className="h-[30px] w-[30px]" />
       </div>
 
-      <nav className="flex-1 overflow-y-auto overflow-x-visible py-2 [scrollbar-width:none]">
+      <nav className="flex-1 overflow-y-auto overflow-x-hidden py-2 [scrollbar-width:none]">
         {GROUPS.map((group, gi) => (
-          <div key={group.label} className={cn('flex flex-col items-center gap-0.5', gi > 0 && 'mt-2 border-t border-sidebar-border/60 pt-2')}>
+          <div key={group.label} className={cn('flex flex-col items-center gap-0.5 px-1.5', gi > 0 && 'mt-1.5 border-t border-sidebar-border/70 pt-1.5')}>
             {group.items.map(item => {
               const active = pathname === item.href || pathname.startsWith(item.href + '/')
               const Icon = item.icon
@@ -78,22 +76,18 @@ export function Sidebar() {
                 <Link
                   key={item.href}
                   href={item.href}
-                  title={item.label}
                   className={cn(
-                    'group relative flex h-10 w-10 items-center justify-center rounded-md transition-colors',
+                    'group relative flex w-full flex-col items-center gap-1 rounded-md py-2 transition-colors',
                     active
                       ? 'bg-sidebar-accent text-sidebar-primary'
-                      : 'text-sidebar-foreground/55 hover:bg-sidebar-accent hover:text-sidebar-foreground',
+                      : 'text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground',
                   )}
                 >
                   {active && (
-                    <span className="absolute left-[-8px] top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-full bg-sidebar-primary" />
+                    <span className="absolute left-0 top-1/2 h-7 w-[3px] -translate-y-1/2 rounded-full bg-sidebar-primary" />
                   )}
                   <Icon size={19} strokeWidth={active ? 2.3 : 1.9} />
-                  {/* Hover label flyout */}
-                  <span className="pointer-events-none absolute left-[52px] z-50 whitespace-nowrap rounded-md bg-popover px-2 py-1 text-xs font-medium text-popover-foreground opacity-0 shadow-md ring-1 ring-border transition-opacity group-hover:opacity-100">
-                    {item.label}
-                  </span>
+                  <span className="text-[9px] font-semibold uppercase leading-none tracking-wide">{item.label}</span>
                 </Link>
               )
             })}
