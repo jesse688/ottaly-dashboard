@@ -42,7 +42,7 @@ export function KpiCard({
       {loading ? (
         <div className="mt-2 h-7 w-20 animate-pulse rounded bg-muted" />
       ) : (
-        <div className="mt-1 text-2xl font-bold tabular-nums text-foreground">{value}</div>
+        <div className="mt-1 font-[family-name:var(--font-display)] text-[2rem] font-bold leading-none tabular-nums text-foreground">{value}</div>
       )}
       <div className="mt-0.5 flex items-center gap-2">
         {sub && <span className="text-xs text-muted-foreground">{sub}</span>}

@@ -68,7 +68,7 @@ export function Sidebar() {
       <nav className="flex-1 overflow-y-auto px-2 py-3">
         {GROUPS.map(group => (
           <div key={group.label} className="mb-4">
-            <div className="px-2.5 pb-1 text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground/40">
+            <div className="px-2.5 pb-1 text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground/60">
               {group.label}
             </div>
             {group.items.map(item => {
@@ -81,8 +81,8 @@ export function Sidebar() {
                   className={cn(
                     'group relative flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors',
                     active
-                      ? 'bg-sidebar-accent text-sidebar-foreground'
-                      : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground',
+                      ? 'bg-sidebar-accent text-sidebar-accent-foreground'
+                      : 'text-sidebar-foreground/85 hover:bg-sidebar-accent/70 hover:text-sidebar-foreground',
                   )}
                 >
                   {active && (

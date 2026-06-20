@@ -1,10 +1,17 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { Inter, Genos } from "next/font/google";
 import { Sidebar } from "@/components/shell/sidebar";
 import { ThemeProvider, THEME_INIT_SCRIPT } from "@/components/theme-provider";
 import "./globals.css";
 
-const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
+// Inter = body/UI; Genos = Ottaly's brand display font (logo, headings, big numbers).
+const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "swap" });
+const genos = Genos({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700", "800"],
+  variable: "--font-genos",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "Ottaly Admin",
@@ -18,7 +25,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${inter.variable} dark h-full`} suppressHydrationWarning>
+    <html lang="en" className={`${inter.variable} ${genos.variable} dark h-full`} suppressHydrationWarning>
       <head>
         {/* Set theme class before paint to avoid a flash of the wrong theme. */}
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
