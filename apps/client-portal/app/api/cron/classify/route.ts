@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import pool, { ready } from '@/lib/db'
 import { classifyReply, CLASSIFIER_MODEL, CLASSIFIER_VERSION, detectWarmupFull } from '@/lib/classify'
 import { addToBlocklist, unsubscribeLead, bisonTeamForWorkspace } from '@/lib/bison'
+import { enrichReplyWithCH } from '@/lib/enrich'
 // Triage worker for the Master Unibox. Claims a batch of pending replies with
 // FOR UPDATE SKIP LOCKED (safe to run concurrently / overlapping), pre-filters
 // automated replies for free, and calls Claude on the rest. Authed by
@@ -150,6 +151,17 @@ export async function GET(req: NextRequest) {
         summary.processed++
         if (result.category === 'interested' || result.category === 'question') {
           summary.interested++
+          // Positive reply → enrich with verified Companies House data so the
+          // rundown is ready in the unibox. Fire-and-forget (uses the pool, not
+          // this cron's txn client); CH skips already-matched rows. Only positive
+          // categories get a lookup — never OOO/warmup/unsubscribe/not-interested.
+          const chEmail = String(row.lead_email ?? '')
+          if (chEmail) {
+            void enrichReplyWithCH(id, {
+              email: chEmail,
+              companyName: (row.lead_company as string | null) ?? (row.company_name as string | null) ?? null,
+            }).catch(() => {})
+          }
         }
         // Queue auto-unsubscribe: AI says they want out → honour it. Only when
         // we know the client's workspace (mapped) so we hit the right Bison team.

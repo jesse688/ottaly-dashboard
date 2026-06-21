@@ -9,8 +9,10 @@ import { enrichUniboxReply, enrichReplyWithCH } from '@/lib/enrich'
 //
 // GET  ?limit=N                 → preview how many would be processed (no writes)
 // POST ?limit=N&days=D          → enrich up to N replies in the last D days
-//      &interested=1            → only replies classified interested / already a
-//                                  lead (the ones in the inbox worth a rundown)
+//      &interested=1            → only POSITIVE replies: classified interested or
+//                                  question, or already marked a lead (the ones
+//                                  worth a company rundown — excludes not-
+//                                  interested / OOO / unsubscribe / warmup / other)
 //      &ch=1 (default) / &ch=0  → include / skip the Companies House lookup
 //                         (defaults: limit 200, days 30). Admin-only.
 export async function GET(req: NextRequest) {
@@ -23,7 +25,7 @@ export async function GET(req: NextRequest) {
     `SELECT COUNT(*)::int AS n FROM unibox_replies
       WHERE workspace_id IS NOT NULL AND lead_email IS NOT NULL
         AND received_at >= NOW() - ($1 || ' days')::interval
-        ${interestedOnly ? `AND (COALESCE(admin_label, category) = 'interested' OR marked_as_lead = TRUE)` : ''}`,
+        ${interestedOnly ? `AND (COALESCE(admin_label, category) IN ('interested', 'question') OR marked_as_lead = TRUE)` : ''}`,
     [days]
   )
   return NextResponse.json({ candidates: r.rows[0]?.n ?? 0, days, interestedOnly })
@@ -49,7 +51,7 @@ export async function POST(req: NextRequest) {
        FROM unibox_replies
       WHERE workspace_id IS NOT NULL AND lead_email IS NOT NULL
         AND received_at >= NOW() - ($1 || ' days')::interval
-        ${interestedOnly ? `AND (COALESCE(admin_label, category) = 'interested' OR marked_as_lead = TRUE)` : ''}
+        ${interestedOnly ? `AND (COALESCE(admin_label, category) IN ('interested', 'question') OR marked_as_lead = TRUE)` : ''}
         ${withCH && skipMatched ? `AND (enrich_state IS DISTINCT FROM 'matched')` : ''}
       ORDER BY received_at DESC
       LIMIT $2`,

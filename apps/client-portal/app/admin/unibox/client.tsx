@@ -193,6 +193,8 @@ export function AdminUniboxClient() {
   const [zoomClient, setZoomClient] = useState('')   // firehose per-client zoom ('' = all clients)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
+  // Companies House backfill (interested replies in batches) state.
+  const [chBackfill, setChBackfill] = useState<{ running: boolean; status: string }>({ running: false, status: '' })
   // Editable lead-details panel (fill in domain/title/etc. for sparse leads).
   const [editLead, setEditLead] = useState(false)
   const [leadForm, setLeadForm] = useState<LeadForm>(BLANK_LEAD_FORM)
@@ -322,6 +324,37 @@ export function AdminUniboxClient() {
     }
   }
 
+  // Backfill Companies House data for EXISTING positive replies — interested or
+  // question, or already a lead. Always interested=1 (never the full firehose).
+  // Runs in batches of 100 until a pass enriches nothing new, so a big inbox
+  // completes without one giant request. CH skips already-matched rows, so
+  // re-running is safe.
+  async function backfillCompaniesHouse() {
+    if (chBackfill.running) return
+    if (!confirm('Look up Companies House data for all positive replies (interested + questions + leads) from the last year? This may take a few minutes.')) return
+    setChBackfill({ running: true, status: 'Starting…' })
+    let totalProcessed = 0, totalMatched = 0, rounds = 0
+    try {
+      while (rounds < 60) { // hard cap: 60 × 100 = 6000 replies max per click
+        rounds++
+        const r = await fetch('/api/admin/unibox/enrich-replies?interested=1&days=365&limit=100', { method: 'POST' })
+        const d = await r.json() as { ok?: boolean; processed?: number; chMatched?: number; error?: string }
+        if (!r.ok || !d.ok) { setChBackfill({ running: false, status: d.error ?? 'Backfill failed.' }); return }
+        const processed = d.processed ?? 0
+        totalProcessed += processed
+        totalMatched += d.chMatched ?? 0
+        setChBackfill({ running: true, status: `Processed ${totalProcessed} · matched ${totalMatched}…` })
+        // A pass returns rows it hasn't matched yet; when it processes 0 (all
+        // remaining are already matched), we're done.
+        if (processed === 0) break
+      }
+      setChBackfill({ running: false, status: `Done — ${totalMatched} companies matched across ${totalProcessed} replies.` })
+      await load(folder, undefined, activeQuery, category, zoomClient)
+    } catch {
+      setChBackfill({ running: false, status: 'Backfill failed — try again.' })
+    }
+  }
+
   // Mark as an "Info" lead: pushed to the client (shown, badged) but NEVER
   // charged. Separate endpoint that never touches the ledger — see mark-as-info.
   async function markAsInfo() {
@@ -431,10 +464,21 @@ export function AdminUniboxClient() {
         <span className="text-slate-500 text-xs">|</span>
         <span className="text-slate-300 text-sm">Master Unibox</span>
         <div className="ml-auto flex items-center gap-4">
+          <button
+            onClick={backfillCompaniesHouse}
+            disabled={chBackfill.running}
+            title="Look up Companies House data for all positive replies (interested + questions + leads) from the last year"
+            className="text-xs font-medium text-slate-300 hover:text-white disabled:opacity-50"
+          >
+            {chBackfill.running ? '⏳ Backfilling…' : '🏛 Backfill Companies House'}
+          </button>
           <a href="/admin/clients" className="text-slate-400 hover:text-white text-xs">Clients</a>
           <a href="/admin/unibox" className="text-white text-xs font-medium">Unibox</a>
         </div>
       </header>
+      {chBackfill.status && (
+        <div className="bg-sky-50 border-b border-sky-100 text-sky-800 text-xs px-6 py-1.5">{chBackfill.status}</div>
+      )}
 
       <div className="flex" style={{ height: 'calc(100vh - 3rem)' }}>
         {/* Left: folder tabs + reply list. Full-width on mobile; hidden once a reply
