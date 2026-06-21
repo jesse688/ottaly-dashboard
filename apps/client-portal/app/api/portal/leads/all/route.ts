@@ -53,6 +53,14 @@ export async function GET() {
               l.raw->>'linkedin_person_url'  AS linkedin_url,
               l.raw->>'linkedin_company_url' AS linkedin_company_url,
               l.raw->>'phone_number'         AS phone_number,
+              l.raw->>'ch_company_number'    AS ch_company_number,
+              l.raw->>'ch_company_status'    AS ch_company_status,
+              l.raw->>'ch_company_type'      AS ch_company_type,
+              l.raw->>'ch_incorporated_on'   AS ch_incorporated_on,
+              l.raw->>'ch_registered_address' AS ch_registered_address,
+              l.raw->>'ch_sic_codes'         AS ch_sic_codes,
+              l.raw->>'ch_companies_house_url' AS ch_companies_house_url,
+              l.raw->>'ch_endole_url'        AS ch_endole_url,
               ld.deal_value, ld.notes AS deal_notes, ld.client_label, ld.first_responded_at,
               pd.status AS dispute_status, pd.reason AS dispute_reason, pd.admin_note AS dispute_admin_note,
               EXISTS (
@@ -113,7 +121,9 @@ export async function GET() {
        LEFT JOIN portal_lead_disputes pd ON pd.lead_id = l.id AND pd.client_id = $3
        WHERE l.workspace_id = $1
          AND l.source IN ('plusvibe', 'bison')
-         AND l.label = 'INTERESTED'
+         -- INTERESTED = billable leads; INFO = near-leads shown to the client but
+         -- never charged (label='INFO' keeps them out of reconcileLeadCharges).
+         AND l.label IN ('INTERESTED', 'INFO')
          AND ($2::text[] = '{}' OR l.label != ALL($2::text[]))
          -- Dedup PV/Bison: drop a frozen PV row when a Bison row exists for the
          -- same email (Bison wins), so migrated clients aren't double-counted.
@@ -121,7 +131,7 @@ export async function GET() {
            SELECT 1 FROM esp_leads b
            WHERE b.workspace_id = l.workspace_id
              AND lower(b.email) = lower(l.email)
-             AND b.source = 'bison' AND b.label = 'INTERESTED'
+             AND b.source = 'bison' AND b.label IN ('INTERESTED', 'INFO')
          ))
        ORDER BY l.first_replied_at DESC NULLS LAST, l.created_at DESC`,
       [session.workspaceId, hiddenLabels, session.clientId]
@@ -138,7 +148,10 @@ export async function GET() {
     const rows = res.rows.map(r => {
       const out = { ...r }
       for (const f of suppress) out[f] = null
-      const locked = lockedIds.has(r.id)
+      // Info leads are free — they never count against credit, so they never lock.
+      const isInfo = r.label === 'INFO'
+      out.is_info = isInfo
+      const locked = !isInfo && lockedIds.has(r.id)
       if (locked) for (const f of LOCKED_SUPPRESS) out[f] = null
       out.locked = locked
       return out

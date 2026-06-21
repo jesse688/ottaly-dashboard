@@ -89,6 +89,7 @@ export async function GET(req: NextRequest) {
               u.ai_model, u.ai_reasoning, u.admin_label, u.folder,
               u.marked_as_lead, u.marked_by, u.marked_at, u.bison_tag_state,
               u.is_forwarded, u.sender_email, u.matched_lead_email, u.matched_by,
+              u.label_type, u.enrich_state, u.ch_data,
               u.received_at, u.created_at,
               c.id AS client_id, c.company_name,
               l.first_name, l.last_name, l.company_name AS lead_company,

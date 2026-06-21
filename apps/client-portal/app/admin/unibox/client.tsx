@@ -50,6 +50,30 @@ interface Reply {
   body_html: string | null
   body_html_safe: string | null   // server-sanitized HTML, safe to render
   body_text: string | null
+  // Lead enrichment (Companies House) + Info-lead state.
+  label_type: 'lead' | 'info' | null
+  enrich_state: 'matched' | 'unmatched' | 'error' | null
+  ch_data: CompanyRundown | null
+}
+
+// Mirrors the CompanyRundown shape returned by lib/companies-house.ts.
+interface CompanyRundown {
+  company_number: string
+  company_name: string | null
+  company_status: string | null
+  company_type: string | null
+  incorporated_on: string | null
+  date_of_cessation: string | null
+  sic_codes: string[]
+  jurisdiction: string | null
+  registered_address: string | null
+  last_accounts_date: string | null
+  flags: { insolvency_history: boolean; has_charges: boolean; accounts_overdue: boolean; dissolved: boolean }
+  active_officers: { name: string; role: string; appointed_on: string | null }[]
+  companies_house_url: string
+  endole_url: string
+  matched_by: 'company_number' | 'name_search'
+  fetched_at: string
 }
 
 interface PortalClientLite { id: string; company_name: string; workspace_id: string }
@@ -263,6 +287,27 @@ export function AdminUniboxClient() {
       setMsg(d.healed ? 'Re-synced — lead is now on the client dashboard.'
         : d.already ? 'Already marked as a lead.'
         : `Marked as lead${d.bison_tag_state ? ` (tag: ${d.bison_tag_state})` : ''}.`)
+      await load(folder, undefined, activeQuery, category, zoomClient)
+      setSelected(null)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // Mark as an "Info" lead: pushed to the client (shown, badged) but NEVER
+  // charged. Separate endpoint that never touches the ledger — see mark-as-info.
+  async function markAsInfo() {
+    if (!selected) return
+    setBusy(true); setMsg('')
+    try {
+      const r = await fetch(`/api/admin/unibox/${selected.id}/mark-as-info`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const d = await r.json() as { ok?: boolean; error?: string }
+      if (!r.ok || !d.ok) { setMsg(d.error ?? 'Failed to mark as info'); return }
+      setMsg('Marked as Info — shown to client, not charged.')
       await load(folder, undefined, activeQuery, category, zoomClient)
       setSelected(null)
     } finally {
@@ -558,6 +603,13 @@ export function AdminUniboxClient() {
               <div className="mt-5 border-t border-gray-100 pt-5">
                 <p className="text-xs font-semibold text-gray-600 mb-3">Action</p>
                 {selected.marked_as_lead ? (
+                  selected.label_type === 'info' ? (
+                  <div className="text-sm text-sky-700 bg-sky-50 border border-sky-100 rounded-lg p-3">
+                    <div>
+                      ✓ Marked as <strong>Info</strong>{selected.marked_at ? ` on ${fmtDate(selected.marked_at)}` : ''} · shown to client, not charged
+                    </div>
+                  </div>
+                  ) : (
                   <div className="text-sm text-green-700 bg-green-50 border border-green-100 rounded-lg p-3">
                     <div>
                       ✓ Marked as lead{selected.marked_at ? ` on ${fmtDate(selected.marked_at)}` : ''}
@@ -574,6 +626,7 @@ export function AdminUniboxClient() {
                       {busy ? 'Re-syncing…' : 'Re-sync to client dashboard'}
                     </button>
                   </div>
+                  )
                 ) : (
                   <>
                     {!isInterested && (
@@ -603,6 +656,14 @@ export function AdminUniboxClient() {
                           : 'border border-green-300 text-green-700 hover:bg-green-50'}`}
                       >
                         {busy ? 'Working…' : isInterested ? 'Mark as lead' : 'Mark as lead anyway'}
+                      </button>
+                      <button
+                        onClick={markAsInfo}
+                        disabled={busy}
+                        title="Show this to the client as an Info lead — not charged"
+                        className="px-4 py-2 text-sm font-medium rounded-lg border border-sky-300 text-sky-700 hover:bg-sky-50 disabled:opacity-50"
+                      >
+                        {busy ? 'Working…' : 'Mark as Info'}
                       </button>
                       <button
                         onClick={reject}
@@ -699,6 +760,11 @@ export function AdminUniboxClient() {
                    {(selected.city || selected.state || selected.country) && <ContactRow label="Location" value={[selected.city, selected.state, selected.country].filter(Boolean).join(', ')} />}
                  </dl>
 
+                 {/* Companies House rundown — verified register data captured at
+                     intake. Shown so the admin has the full company picture before
+                     deciding Lead vs Info. */}
+                 <CHRundownPanel reply={selected} />
+
                  {/* Fill in lead details — for sparse leads (question/forwarded/
                      outside-Bison) where the webhook captured no name/company/etc.
                      Saves to esp_leads so the client dashboard shows them. */}
@@ -769,6 +835,76 @@ function ContactRow({ label, value, href }: { label: string; value: string; href
       <dd className="text-gray-700 break-words">
         {href ? <a href={href} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:text-indigo-800">{value}</a> : value}
       </dd>
+    </div>
+  )
+}
+
+// Companies House rundown — verified register facts pulled at reply intake.
+// Renders nothing until enrichment has run; a clear "no match" note when CH
+// found no confident company (so the admin can fill it in manually).
+function CHRundownPanel({ reply }: { reply: Reply }) {
+  const ch = reply.ch_data
+  if (!ch && reply.enrich_state == null) return null // not enriched yet
+
+  if (!ch) {
+    return (
+      <div className="mt-4 pt-4 border-t border-gray-100">
+        <p className="text-xs font-semibold text-gray-600 mb-1">Companies House</p>
+        <p className="text-[11px] text-gray-500">
+          {reply.enrich_state === 'error'
+            ? 'Lookup failed — try again later.'
+            : 'No confident company match — verify and fill in manually.'}
+        </p>
+      </div>
+    )
+  }
+
+  const flags: string[] = []
+  if (ch.flags.dissolved) flags.push('Dissolved')
+  if (ch.flags.insolvency_history) flags.push('Insolvency history')
+  if (ch.flags.has_charges) flags.push('Has charges')
+  if (ch.flags.accounts_overdue) flags.push('Accounts overdue')
+
+  return (
+    <div className="mt-4 pt-4 border-t border-gray-100">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs font-semibold text-gray-600">Companies House</p>
+        <span className="text-[10px] text-gray-400">verified</span>
+      </div>
+      <dl className="space-y-2 text-xs">
+        {ch.company_name && <ContactRow label="Registered name" value={ch.company_name} />}
+        <ContactRow label="Company number" value={ch.company_number} href={ch.companies_house_url} />
+        {ch.company_status && <ContactRow label="Status" value={ch.company_status} />}
+        {ch.company_type && <ContactRow label="Type" value={ch.company_type} />}
+        {ch.incorporated_on && <ContactRow label="Incorporated" value={ch.incorporated_on} />}
+        {ch.registered_address && <ContactRow label="Registered address" value={ch.registered_address} />}
+        {ch.sic_codes.length > 0 && <ContactRow label="SIC codes" value={ch.sic_codes.join(', ')} />}
+        {ch.last_accounts_date && <ContactRow label="Last accounts" value={ch.last_accounts_date} />}
+      </dl>
+
+      {flags.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {flags.map(f => (
+            <span key={f} className="text-[10px] font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">⚠ {f}</span>
+          ))}
+        </div>
+      )}
+
+      {ch.active_officers.length > 0 && (
+        <div className="mt-3">
+          <p className="text-[10px] uppercase tracking-wide text-gray-400 mb-1">Officers</p>
+          <ul className="space-y-0.5">
+            {ch.active_officers.slice(0, 6).map((o, i) => (
+              <li key={i} className="text-[11px] text-gray-700">{o.name}{o.role ? ` · ${o.role}` : ''}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div className="mt-3 flex gap-3">
+        <a href={ch.companies_house_url} target="_blank" rel="noopener noreferrer" className="text-[11px] font-medium text-indigo-600 hover:text-indigo-800">Companies House ↗</a>
+        <a href={ch.endole_url} target="_blank" rel="noopener noreferrer" className="text-[11px] font-medium text-indigo-600 hover:text-indigo-800">Endole ↗</a>
+      </div>
     </div>
   )
 }

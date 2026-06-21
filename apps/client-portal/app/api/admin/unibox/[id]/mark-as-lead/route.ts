@@ -4,7 +4,7 @@ import { getAdminSession } from '@/lib/auth'
 import { reconcileLeadCharges } from '@/lib/balance'
 import { addToBlocklist, bisonTeamForWorkspace, tagInBison } from '@/lib/bison'
 import { notifyClientOfLead } from '@/lib/email'
-import { enrichLeadFromContacts } from '@/lib/enrich'
+import { enrichLeadFromContacts, applyCHRundownToLead } from '@/lib/enrich'
 
 // Admin marks a Unibox reply as a real lead. This is the ONLY path that sets
 // esp_leads.label='INTERESTED' (which reconcileLeadCharges keys on to bill the
@@ -183,7 +183,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // if reconcile is a no-op (e.g. cost_per_lead not set yet).
     await client.query(
       `UPDATE unibox_replies
-          SET marked_as_lead = TRUE, folder = 'done', marked_by = 'admin',
+          SET marked_as_lead = TRUE, label_type = 'lead', folder = 'done', marked_by = 'admin',
               marked_at = NOW(), bison_tag_state = 'pending', updated_at = NOW()
         WHERE id = $1`,
       [id]
@@ -196,6 +196,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // that it's an interested lead. Best-effort, after commit.
     if (leadRowId && pvWorkspaceId && reply.lead_email) {
       await enrichLeadFromContacts(leadRowId, pvWorkspaceId, reply.lead_email).catch(() => {})
+      // Push the verified Companies House rundown (captured at intake) onto the
+      // lead so the client sees the full company breakdown.
+      await applyCHRundownToLead(leadRowId, pvWorkspaceId, id).catch(() => {})
     }
 
     // reconcileLeadCharges is idempotent (uq_ledger_lead_charge). Run ONCE, after

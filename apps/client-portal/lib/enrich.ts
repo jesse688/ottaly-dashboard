@@ -1,4 +1,5 @@
 import pool from './db'
+import { resolveCompany, rundownToRawFields, type CompanyRundown } from './companies-house'
 
 // When a lead becomes INTERESTED we enrich it from our OWN contacts database — the
 // full Apollo/PlusVibe record (linkedin, industry, location, address, seniority...).
@@ -87,5 +88,119 @@ export async function enrichLeadFromContacts(
   } catch (err) {
     console.error('[enrichLeadFromContacts] failed:', err)
     return null
+  }
+}
+
+// ── Companies House enrichment ────────────────────────────────────────────────
+// Runs at reply intake so the verified company rundown is ready in the unibox
+// BEFORE the admin decides Lead vs Info. Resolves the company NUMBER-FIRST (a
+// number we already hold in contacts), else a confident name match — never a
+// guess (resolveCompany returns null when uncertain, and we record that so the
+// reply can be flagged for manual matching). Idempotent per unibox row; cheap to
+// re-run (skips when already matched). Best-effort: callers never await its
+// result for control flow.
+
+// Hints to resolve the company for an email. We pull a CH company number from
+// contacts if that column exists (number-first = a certain match), and always
+// the company name as the search fallback. Column presence is detected once via
+// information_schema so this works whether or not contacts carries ch_company_number.
+let contactsHasChNumber: boolean | null = null
+async function detectChNumberColumn(): Promise<boolean> {
+  if (contactsHasChNumber !== null) return contactsHasChNumber
+  const r = await pool.query(
+    `SELECT 1 FROM information_schema.columns
+      WHERE table_name = 'contacts' AND column_name = 'ch_company_number' LIMIT 1`
+  ).catch(() => ({ rows: [] as unknown[] }))
+  contactsHasChNumber = r.rows.length > 0
+  return contactsHasChNumber
+}
+
+async function companyHintsForEmail(email: string): Promise<{ chNumber: string | null; companyName: string | null }> {
+  const e = email.trim().toLowerCase()
+  if (!e) return { chNumber: null, companyName: null }
+  const hasCh = await detectChNumberColumn()
+  const cols = hasCh ? 'ch_company_number, company_name' : 'NULL AS ch_company_number, company_name'
+  const r = await pool.query(
+    `SELECT ${cols} FROM contacts WHERE lower(email) = $1 AND workspace_id = $2 LIMIT 1`,
+    [e, GLOBAL_WS]
+  ).catch(() => ({ rows: [] as { ch_company_number: string | null; company_name: string | null }[] }))
+  const row = r.rows[0]
+  return {
+    chNumber: row?.ch_company_number?.trim() || null,
+    companyName: row?.company_name?.trim() || null,
+  }
+}
+
+// Enrich one unibox reply with Companies House data. Stores the full rundown +
+// match state on the row. Returns the rundown (or null when no confident match).
+export async function enrichReplyWithCH(
+  uniboxReplyId: string,
+  opts: { email?: string | null; companyName?: string | null }
+): Promise<CompanyRundown | null> {
+  try {
+    // Skip if we've already resolved a company for this reply (idempotent).
+    const cur = await pool.query(
+      `SELECT enrich_state FROM unibox_replies WHERE id = $1`, [uniboxReplyId]
+    )
+    if (cur.rows[0]?.enrich_state === 'matched') return null
+
+    const email = (opts.email ?? '').trim().toLowerCase()
+    const hints = email ? await companyHintsForEmail(email) : { chNumber: null, companyName: null }
+    const companyName = hints.companyName || (opts.companyName ?? '').trim() || null
+
+    const { rundown, reason } = await resolveCompany({
+      knownNumber: hints.chNumber,
+      companyName,
+    })
+
+    if (!rundown) {
+      // 'no_api_key' isn't a real miss — leave enrich_state null so it retries
+      // once a key is configured. Everything else = tried, no confident match.
+      if (reason !== 'no_api_key') {
+        await pool.query(
+          `UPDATE unibox_replies SET enrich_state = 'unmatched', updated_at = NOW() WHERE id = $1`,
+          [uniboxReplyId]
+        )
+      }
+      return null
+    }
+
+    await pool.query(
+      `UPDATE unibox_replies
+          SET ch_company_number = $2, ch_data = $3::jsonb, enrich_state = 'matched', updated_at = NOW()
+        WHERE id = $1`,
+      [uniboxReplyId, rundown.company_number, JSON.stringify(rundown)]
+    )
+    return rundown
+  } catch (err) {
+    console.error('[enrichReplyWithCH] failed:', err)
+    await pool.query(
+      `UPDATE unibox_replies SET enrich_state = 'error', updated_at = NOW() WHERE id = $1`,
+      [uniboxReplyId]
+    ).catch(() => {})
+    return null
+  }
+}
+
+// Merge a reply's stored CH rundown into the esp_leads.raw fields the client
+// dashboard renders (fills only CH-provided keys, never blanks existing data).
+// Called when a reply is marked as a lead/info so the verified company data
+// reaches the client view. Best-effort.
+export async function applyCHRundownToLead(
+  leadId: string, workspaceId: string, uniboxReplyId: string
+): Promise<void> {
+  try {
+    const r = await pool.query(`SELECT ch_data FROM unibox_replies WHERE id = $1`, [uniboxReplyId])
+    const data = r.rows[0]?.ch_data as CompanyRundown | null
+    if (!data?.company_number) return
+    const fields = rundownToRawFields(data)
+    if (!Object.keys(fields).length) return
+    await pool.query(
+      `UPDATE esp_leads SET raw = COALESCE(raw, '{}'::jsonb) || $1::jsonb, updated_at = NOW()
+        WHERE id = $2 AND workspace_id = $3`,
+      [JSON.stringify(fields), leadId, workspaceId]
+    )
+  } catch (err) {
+    console.error('[applyCHRundownToLead] failed:', err)
   }
 }

@@ -33,7 +33,7 @@ export async function GET(req: NextRequest) {
            FROM esp_leads
            WHERE workspace_id = $1
              AND source IN ('plusvibe', 'bison')
-             AND status IN ('INTERESTED', 'MEETING_BOOKED')
+             AND status IN ('INTERESTED', 'MEETING_BOOKED', 'INFO')
            ORDER BY lower(email), (source = 'bison') DESC, created_at DESC
          ) deduped
          ORDER BY first_replied_at DESC NULLS LAST, created_at DESC
@@ -45,16 +45,19 @@ export async function GET(req: NextRequest) {
            SELECT DISTINCT lower(email)
            FROM esp_leads
            WHERE workspace_id = $1 AND source IN ('plusvibe', 'bison')
-             AND status IN ('INTERESTED', 'MEETING_BOOKED')
+             AND status IN ('INTERESTED', 'MEETING_BOOKED', 'INFO')
          ) d`,
         [session.workspaceId]
       ),
     ])
     const leads = dataRes.rows.map(r => {
       const out = { ...r }
+      const isInfo = r.label === 'INFO'
+      out.is_info = isInfo
       if (hideEmail) out.email = null
       if (hideCompany) out.company_name = null
-      if (lockedIds.has(r.id)) { out.email = null; out.company_name = null; out.locked = true }
+      // Info leads are free — never locked behind credit.
+      if (!isInfo && lockedIds.has(r.id)) { out.email = null; out.company_name = null; out.locked = true }
       return out
     })
 
