@@ -984,15 +984,6 @@ export default function ClientsPage() {
 
 // ── Small helper components ───────────────────────────────────────────────────
 
-function SumCard({ label, value, accent }: { label: string; value: string; accent: 'navy' | 'teal' | 'yellow' | 'purple' }) {
-  const colors = { navy: '#224388', teal: '#1F6F78', yellow: '#FFB700', purple: '#7C89CD' }
-  return (
-    <div className="o-metric" style={{ borderTopColor: colors[accent] }}>
-      <div className="o-metric-label">{label}</div>
-      <div className="o-metric-val" style={{ color: colors[accent] }}>{value}</div>
-    </div>
-  )
-}
 
 function SectionLabel({ children, color }: { children: React.ReactNode; color?: 'teal' | 'red' }) {
   const textColor = color === 'teal' ? '#1F6F78' : color === 'red' ? '#B91C1C' : '#6B7280'
