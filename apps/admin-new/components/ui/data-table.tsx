@@ -23,6 +23,7 @@ export function DataTable<T>({
   onRowClick,
   empty = 'No data.',
   dense = true,
+  footer,
 }: {
   columns: Column<T>[]
   rows: T[]
@@ -30,6 +31,8 @@ export function DataTable<T>({
   onRowClick?: (row: T) => void
   empty?: React.ReactNode
   dense?: boolean
+  /** optional totals/summary row rendered after the body */
+  footer?: React.ReactNode
 }) {
   const [sortKey, setSortKey] = useState<string | null>(null)
   const [dir, setDir] = useState<'asc' | 'desc'>('desc')
@@ -115,6 +118,7 @@ export function DataTable<T>({
               ))
             )}
           </tbody>
+          {footer && sorted.length > 0 && <tfoot>{footer}</tfoot>}
         </table>
       </div>
     </div>

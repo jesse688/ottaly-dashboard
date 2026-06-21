@@ -91,3 +91,72 @@ export function LineChart({
 
   return <div style={{ height }}><canvas ref={canvasRef} /></div>
 }
+
+export interface BarSeries {
+  label: string
+  data: (number | null)[]
+  tone?: 1 | 2 | 3 | 4 | 5
+  color?: string
+}
+
+/**
+ * Themed grouped bar chart sharing the same CSS-var palette as LineChart.
+ * Used for the Finance Revenue-vs-Net 12-month comparison.
+ */
+export function BarChart({
+  labels,
+  series,
+  height = 240,
+  currencyPrefix,
+}: {
+  labels: string[]
+  series: BarSeries[]
+  height?: number
+  currencyPrefix?: string
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const chartRef = useRef<{ destroy(): void } | null>(null)
+
+  useEffect(() => {
+    if (!canvasRef.current) return
+    let cancelled = false
+    import('chart.js/auto').then(({ default: Chart }) => {
+      if (cancelled || !canvasRef.current) return
+      chartRef.current?.destroy()
+      const slot = (n?: number) => cssVar(`--chart-${n ?? 1}`, '#1F6F78')
+      const grid = cssVar('--border', 'rgba(120,120,140,0.2)')
+      const text = cssVar('--muted-foreground', '#6B7280')
+      chartRef.current = new Chart(canvasRef.current, {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: series.map(s => {
+            const col = s.color ?? slot(s.tone)
+            return { label: s.label, data: s.data, backgroundColor: col + 'cc', borderRadius: 4 }
+          }),
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { position: 'top', labels: { color: text, boxWidth: 10, font: { size: 11 } } },
+          },
+          scales: {
+            x: { grid: { display: false }, ticks: { color: text, font: { size: 11 } } },
+            y: {
+              beginAtZero: true, grid: { color: grid },
+              ticks: {
+                color: text, font: { size: 11 },
+                callback: v => (currencyPrefix ?? '') + Number(v).toLocaleString(),
+              },
+            },
+          },
+        },
+      }) as unknown as { destroy(): void }
+    })
+    return () => { cancelled = true; chartRef.current?.destroy(); chartRef.current = null }
+  }, [labels, series, currencyPrefix])
+
+  return <div style={{ height }}><canvas ref={canvasRef} /></div>
+}

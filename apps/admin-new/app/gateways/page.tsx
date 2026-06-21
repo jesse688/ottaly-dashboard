@@ -5,6 +5,7 @@ import { PageShell } from '@/components/shell/page-shell'
 import { KpiCard } from '@/components/ui/kpi-card'
 import { DataTable, type Column } from '@/components/ui/data-table'
 import { StatusBadge } from '@/components/ui/status-badge'
+import { PeriodFilter, periodRange, type PeriodKey } from '@/components/ui/period-filter'
 
 // ── Types (match /api/gateways contract) ───────────────────────────────────────
 interface Split {
@@ -45,16 +46,25 @@ const BUCKET_META: { key: keyof Split; label: string }[] = [
 
 const emptySplit = (): Split => ({ google: 0, microsoft: 0, other: 0, unknown: 0 })
 
+// 'all' = no date filter (every contact); otherwise a period preset.
+type GwPeriod = PeriodKey | 'all'
+
 export default function GatewaysPage() {
   const [data, setData] = useState<GatewaysResponse | null>(null)
   const [status, setStatus] = useState<'loading' | 'ok' | 'empty' | 'error'>('loading')
   const [errMsg, setErrMsg] = useState('')
+  const [period, setPeriod] = useState<GwPeriod>('all')
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (p: GwPeriod) => {
     setStatus('loading')
     setErrMsg('')
     try {
-      const r = await fetch('/api/gateways')
+      let url = '/api/gateways'
+      if (p !== 'all') {
+        const { start, end } = periodRange(p)
+        url += `?start=${start}&end=${end}`
+      }
+      const r = await fetch(url)
       const body: GatewaysResponse = await r.json()
       if (!r.ok || body.error) throw new Error(body.error || `Server returned ${r.status}`)
       setData(body)
@@ -71,8 +81,8 @@ export default function GatewaysPage() {
   }, [])
 
   useEffect(() => {
-    load()
-  }, [load])
+    load(period)
+  }, [load, period])
 
   const total = data?.total ?? 0
   const split = data?.split ?? emptySplit()
@@ -141,6 +151,18 @@ export default function GatewaysPage() {
       title="Gateways"
       subtitle="Recipient mailbox-provider distribution · Google vs Microsoft vs gateway-fronted · per client"
       freshness={{ table: 'contacts', syncedAt: data?.syncedAt ?? null }}
+      actions={
+        <div className="flex flex-wrap items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setPeriod('all')}
+            className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${period === 'all' ? 'bg-primary text-primary-foreground' : 'border border-border bg-card text-muted-foreground hover:bg-accent hover:text-foreground'}`}
+          >
+            All time
+          </button>
+          <PeriodFilter value={period === 'all' ? '30d' : period} onChange={setPeriod} />
+        </div>
+      }
     >
       {/* Agency KPIs */}
       <div className="mb-5 grid grid-cols-2 gap-4 md:grid-cols-4">
@@ -193,7 +215,7 @@ export default function GatewaysPage() {
           <div className="font-semibold">Couldn&rsquo;t load gateways</div>
           <div className="mt-0.5 opacity-90">{errMsg}</div>
           <button
-            onClick={() => load()}
+            onClick={() => load(period)}
             className="mt-2 rounded-md border border-destructive/30 px-2.5 py-1 text-xs font-medium hover:bg-destructive/10"
           >
             Retry

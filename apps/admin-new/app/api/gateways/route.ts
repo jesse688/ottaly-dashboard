@@ -64,15 +64,29 @@ function emptySplit(): Split {
   return { google: 0, microsoft: 0, other: 0, unknown: 0 }
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
+    // Optional date range — filters to contacts emailed in [start, end] via
+    // last_emailed_at (TEXT/timestamp). No range = all contacts.
+    const { searchParams } = new URL(req.url)
+    const start = searchParams.get('start')
+    const end = searchParams.get('end')
+    const params: string[] = []
+    let dateClause = ''
+    if (start && end) {
+      params.push(start, end)
+      dateClause = `WHERE last_emailed_at IS NOT NULL
+                      AND last_emailed_at::date >= $1::date
+                      AND last_emailed_at::date <= $2::date`
+    }
     const rows = await q<Row>(
       `SELECT COALESCE(workspace_id, 'unknown') AS workspace_id,
               mx_provider,
               COUNT(*) AS n
          FROM contacts
+         ${dateClause}
         GROUP BY COALESCE(workspace_id, 'unknown'), mx_provider`,
-      [],
+      params,
       { tag: 'gateways:distribution', timeoutMs: 15000 },
     )
 
