@@ -159,7 +159,7 @@ async function handlePlusVibe(raw: Record<string, unknown>) {
       await pool.query(
         `INSERT INTO esp_leads (id, workspace_id, campaign_id, source, email, first_name, last_name, company_name, status, label, first_replied_at, created_at, updated_at)
          VALUES ($1,$2,$3,'plusvibe',$4,$5,$6,$7,$8,$9,$10,NOW(),NOW())
-         ON CONFLICT (id) DO UPDATE SET
+         ON CONFLICT (id, source) DO UPDATE SET
            status = COALESCE(EXCLUDED.status, esp_leads.status),
            label = COALESCE(EXCLUDED.label, esp_leads.label),
            first_replied_at = COALESCE(esp_leads.first_replied_at, EXCLUDED.first_replied_at),
@@ -224,7 +224,7 @@ async function handleBison(raw: Record<string, unknown>, deliveryId: string | nu
       await pool.query(
         `INSERT INTO esp_leads (id, workspace_id, campaign_id, source, email, first_name, last_name, company_name, status, label, first_replied_at, created_at, updated_at)
          VALUES ($1,$2,$3,'bison',$4,$5,$6,$7,$8,NULL,$9,NOW(),NOW())
-         ON CONFLICT (id) DO UPDATE SET
+         ON CONFLICT (id, source) DO UPDATE SET
            status = COALESCE(EXCLUDED.status, esp_leads.status),
            first_replied_at = COALESCE(esp_leads.first_replied_at, EXCLUDED.first_replied_at),
            updated_at = NOW()`,

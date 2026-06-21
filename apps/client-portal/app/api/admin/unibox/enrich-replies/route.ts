@@ -45,15 +45,22 @@ export async function POST(req: NextRequest) {
   const skipMatched = url.searchParams.get('force') !== '1'
 
   const rows = await pool.query(
-    `SELECT id, workspace_id, lead_email, matched_lead_email, lead_bison_id,
-            company_name AS reply_company,
-            COALESCE(raw->>'html_body', raw->>'text_body') AS body
-       FROM unibox_replies
-      WHERE workspace_id IS NOT NULL AND lead_email IS NOT NULL
-        AND received_at >= NOW() - ($1 || ' days')::interval
-        ${interestedOnly ? `AND (COALESCE(admin_label, category) IN ('interested', 'question') OR marked_as_lead = TRUE)` : ''}
-        ${withCH && skipMatched ? `AND (enrich_state IS DISTINCT FROM 'matched')` : ''}
-      ORDER BY received_at DESC
+    // company_name lives on esp_leads (the prospect record), NOT on unibox_replies.
+    // Join it so the CH lookup can use a company-name fallback when no number.
+    `SELECT u.id, u.workspace_id, u.lead_email, u.matched_lead_email, u.lead_bison_id,
+            l.company_name AS reply_company,
+            COALESCE(u.raw->>'html_body', u.raw->>'text_body') AS body
+       FROM unibox_replies u
+       LEFT JOIN LATERAL (
+         SELECT company_name FROM esp_leads e
+          WHERE e.workspace_id = u.workspace_id AND lower(e.email) = lower(u.lead_email)
+          ORDER BY (e.source = 'bison') DESC, e.updated_at DESC LIMIT 1
+       ) l ON TRUE
+      WHERE u.workspace_id IS NOT NULL AND u.lead_email IS NOT NULL
+        AND u.received_at >= NOW() - ($1 || ' days')::interval
+        ${interestedOnly ? `AND (COALESCE(u.admin_label, u.category) IN ('interested', 'question') OR u.marked_as_lead = TRUE)` : ''}
+        ${withCH && skipMatched ? `AND (u.enrich_state IS DISTINCT FROM 'matched')` : ''}
+      ORDER BY u.received_at DESC
       LIMIT $2`,
     [days, limit]
   )

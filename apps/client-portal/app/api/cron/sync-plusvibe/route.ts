@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
             email, first_name, last_name, company_name, status,
             label, raw, created_at, updated_at
           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-          ON CONFLICT (id) DO UPDATE SET
+          ON CONFLICT (id, source) DO UPDATE SET
             email = COALESCE($5, esp_leads.email),
             first_name = COALESCE($6, esp_leads.first_name),
             last_name = COALESCE($7, esp_leads.last_name),
