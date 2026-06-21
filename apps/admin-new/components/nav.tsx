@@ -50,12 +50,14 @@ const SECTIONS: Section[] = [
       </svg>
     ),
     pages: [
-      { href: '/contacts',      label: 'Contacts' },
-      { href: '/leads',         label: 'Leads' },
-      { href: '/database',      label: 'Database' },
-      { href: '/apollo-prep',   label: 'Apollo Prep' },
-      { href: '/verify-split',  label: 'Verify Split' },
-      { href: '/combo-analysis',label: 'Combo Analysis' },
+      { href: '/data',                label: 'Contacts' },
+      { href: '/data/engine-leads',   label: 'Engine Leads' },
+      { href: '/data/ch-pipeline',    label: 'CH Pipeline' },
+      { href: '/data/enrichment',     label: 'Enrichment' },
+      { href: '/data/database',       label: 'Database' },
+      { href: '/data/apollo-prep',    label: 'Apollo Prep' },
+      { href: '/data/verify-split',   label: 'Verify Split' },
+      { href: '/data/combo-analysis', label: 'Combo Analysis' },
     ],
   },
   {
