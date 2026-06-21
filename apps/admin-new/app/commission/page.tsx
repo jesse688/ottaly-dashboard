@@ -1,6 +1,11 @@
 'use client'
 
 import { useEffect, useState, useCallback, useRef } from 'react'
+import { PageShell } from '@/components/shell/page-shell'
+import { KpiCard } from '@/components/ui/kpi-card'
+import { DataTable, type Column } from '@/components/ui/data-table'
+import { PeriodFilter, periodRange, type PeriodKey } from '@/components/ui/period-filter'
+import { StatusBadge } from '@/components/ui/status-badge'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -85,12 +90,6 @@ interface SessionData {
   commission_rate?: number
 }
 
-interface DateRange {
-  start: Date
-  end: Date
-  label: string
-}
-
 interface ClientRow {
   name: string
   since: string | null
@@ -113,99 +112,51 @@ interface EarnerStats {
   }
 }
 
-type PeriodValue = 'month' | 'lastMonth' | 'quarter' | 'year' | 'all' | 'custom'
+interface DateRange {
+  start: Date
+  end: Date
+}
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+type Status = 'loading' | 'ok' | 'empty' | 'error'
 
-const CLIENT_COLORS = ['#1F6F78', '#224388', '#FFB700', '#7C89CD', '#D2E4F8']
+// ── Period setup ──────────────────────────────────────────────────────────────
+// Reuse the design-system PeriodFilter. We restrict to the presets the legacy
+// commission page exposed and add an "all time" pseudo-preset.
 
-function buildRange(
-  period: PeriodValue,
-  customStart?: string,
-  customEnd?: string
-): DateRange {
-  const now = new Date()
-  const y = now.getFullYear()
-  const m = now.getMonth()
+// PeriodFilter is typed to PeriodKey; commission adds an "all time" pseudo-key.
+type CommPeriod = PeriodKey | 'all'
 
-  if (period === 'month') {
-    return {
-      start: new Date(y, m, 1),
-      end: new Date(y, m + 1, 1),
-      label: now.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }),
-    }
+const COMMISSION_PRESETS: { key: PeriodKey; label: string }[] = [
+  { key: 'this_month', label: 'This Month' },
+  { key: 'last_month', label: 'Last Month' },
+  { key: 'this_year', label: 'This Year' },
+  // 'all' is not a real PeriodKey; cast at the filter boundary below.
+  { key: 'all' as PeriodKey, label: 'All Time' },
+]
+
+// `periodRange` doesn't know "all" — handle it locally and return real Dates.
+function rangeFor(p: CommPeriod): DateRange {
+  if (p === 'all') {
+    return { start: new Date(2020, 0, 1), end: new Date(new Date().getFullYear() + 1, 0, 1) }
   }
-  if (period === 'lastMonth') {
-    return {
-      start: new Date(y, m - 1, 1),
-      end: new Date(y, m, 1),
-      label: new Date(y, m - 1, 1).toLocaleDateString('en-GB', {
-        month: 'long',
-        year: 'numeric',
-      }),
-    }
-  }
-  if (period === 'quarter') {
-    const q = Math.floor(m / 3)
-    return {
-      start: new Date(y, q * 3, 1),
-      end: new Date(y, q * 3 + 3, 1),
-      label: `Q${q + 1} ${y}`,
-    }
-  }
-  if (period === 'year') {
-    return {
-      start: new Date(y, 0, 1),
-      end: new Date(y + 1, 0, 1),
-      label: `${y}`,
-    }
-  }
-  if (period === 'all') {
-    return {
-      start: new Date(2020, 0, 1),
-      end: new Date(y + 1, 0, 1),
-      label: 'All Time',
-    }
-  }
-  // custom
-  const s = customStart ?? ''
-  const e = customEnd ?? ''
+  const { start, end } = periodRange(p)
   return {
-    start: new Date(s + 'T00:00:00'),
-    end: new Date(e + 'T23:59:59'),
-    label: `${s} – ${e}`,
+    start: new Date(start + 'T00:00:00'),
+    // `end` is inclusive (YYYY-MM-DD of the last day) — push to next-day exclusive.
+    end: new Date(new Date(end + 'T00:00:00').getTime() + 24 * 60 * 60 * 1000),
   }
 }
 
-function fmtZar(
-  gbpAmount: number,
-  zarRate: number | null
-): string {
-  if (zarRate && zarRate > 0) {
-    return (
-      'R' +
-      (gbpAmount * zarRate).toLocaleString('en-ZA', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      })
-    )
-  }
-  return '£' + gbpAmount.toFixed(2)
+function monthOf(p: CommPeriod): string {
+  return rangeFor(p).start.toISOString().slice(0, 7)
 }
 
-function fmtZarDirect(zarAmount: number): string {
-  return (
-    'R' +
-    zarAmount.toLocaleString('en-ZA', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })
-  )
-}
+// ── Format helpers ─────────────────────────────────────────────────────────────
 
-function avatarLetter(name: string): string {
-  return (name[0] ?? '?').toUpperCase()
-}
+const zar = (amount: number) =>
+  'R' + amount.toLocaleString('en-ZA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const gbp = (amount: number) => '£' + amount.toFixed(2)
+const num = (n: number) => (n || 0).toLocaleString()
 
 // ── Main component ────────────────────────────────────────────────────────────
 
@@ -215,27 +166,27 @@ export default function CommissionPage() {
   const [allLeads, setAllLeads] = useState<Lead[]>([])
   const [prices, setPrices] = useState<WorkspacePrice[]>([])
   const [workload, setWorkload] = useState<WorkloadData | null>(null)
-  const [managers, setManagers] = useState<Manager[]>([])
   const [avgLeadPrice, setAvgLeadPrice] = useState<number>(0)
   const [zarRate, setZarRate] = useState<number | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  // Manager view state
   const [managerRate, setManagerRate] = useState<ManagerRate | null>(null)
-  const [period, setPeriod] = useState<PeriodValue>('month')
-  const [customStart, setCustomStart] = useState('')
-  const [customEnd, setCustomEnd] = useState('')
-  const [periodLabel, setPeriodLabel] = useState('')
+  const [updatedAt, setUpdatedAt] = useState<string | null>(null)
+  const [status, setStatus] = useState<Status>('loading')
+  const [errMsg, setErrMsg] = useState('')
+
+  // Period (single control drives both views)
+  const [period, setPeriod] = useState<CommPeriod>('this_month')
+
+  // Manager view derived state
   const [clientRows, setClientRows] = useState<ClientRow[]>([])
-  const [sumComm, setSumComm] = useState('R0.00')
+  const [sumCommZar, setSumCommZar] = useState(0)
   const [sumLeads, setSumLeads] = useState(0)
   const [sumClients, setSumClients] = useState(0)
-  const [sumRate, setSumRate] = useState('—')
-  const [salaryDisplay, setSalaryDisplay] = useState('')
-  const [sumTotal, setSumTotal] = useState('')
-  const [showSalaryCard, setShowSalaryCard] = useState(false)
-  const [showTotalCard, setShowTotalCard] = useState(false)
+  const [perLeadZar, setPerLeadZar] = useState(0)
+  const [salaryEarnedZar, setSalaryEarnedZar] = useState(0)
+  const [salaryNote, setSalaryNote] = useState('')
+  const [totalZar, setTotalZar] = useState(0)
+  const [showSalary, setShowSalary] = useState(false)
+  const [showTotal, setShowTotal] = useState(false)
   const [payslipMeta, setPayslipMeta] = useState<PayslipMeta | null>(null)
   const [rateExplanation, setRateExplanation] = useState<{
     avgLead: number
@@ -245,23 +196,13 @@ export default function CommissionPage() {
     zarRateDisplay: string
   } | null>(null)
 
-  // Admin view state
-  const [adminPeriod, setAdminPeriod] = useState<PeriodValue>('month')
-  const [adminCustomStart, setAdminCustomStart] = useState('')
-  const [adminCustomEnd, setAdminCustomEnd] = useState('')
-  const [adminPeriodLabel, setAdminPeriodLabel] = useState('')
-  const [agencyTotal, setAgencyTotal] = useState('£0')
-  const [agencyTotalSub, setAgencyTotalSub] = useState('')
+  // Admin view derived state
+  const [agencyCommGbp, setAgencyCommGbp] = useState(0)
   const [earnerStats, setEarnerStats] = useState<EarnerStats>({})
   const [activeEarner, setActiveEarner] = useState<string | null>(null)
-  const [effectiveRates, setEffectiveRates] = useState<
-    Record<string, Record<string, number>>
-  >({})
-  const [managerSalaryMap, setManagerSalaryMap] = useState<
-    Record<string, number>
-  >({})
+  const [effectiveRates, setEffectiveRates] = useState<Record<string, Record<string, number>>>({})
+  const [managerSalaryMap, setManagerSalaryMap] = useState<Record<string, number>>({})
 
-  // Track init done
   const initDone = useRef(false)
 
   // ── Build effectiveRates ──────────────────────────────────────────────────
@@ -270,18 +211,16 @@ export default function CommissionPage() {
     (
       priceList: WorkspacePrice[],
       mgrList: Manager[],
-      workloadData: WorkloadData
-    ): Record<string, Record<string, number>> => {
+      workloadData: WorkloadData,
+    ): { rates: Record<string, Record<string, number>>; salaryMap: Record<string, number> } => {
       const defaultRate = workloadData.defaultRate ?? 5
       const mgrRateLookup: Record<string, number> = {}
       const salaryMap: Record<string, number> = {}
 
       mgrList.forEach((m) => {
-        mgrRateLookup[m.name.trim().toLowerCase()] =
-          m.commission_rate ?? defaultRate
+        mgrRateLookup[m.name.trim().toLowerCase()] = m.commission_rate ?? defaultRate
         salaryMap[m.name.trim()] = m.base_salary ?? 0
       })
-      setManagerSalaryMap(salaryMap)
 
       const wsNameMap: Record<string, string> = {}
       priceList.forEach((p) => {
@@ -293,8 +232,7 @@ export default function CommissionPage() {
         const name = wsNameMap[a.client_workspace_id]
         if (!name) return
         if (!wsToMgrs[name]) wsToMgrs[name] = []
-        const rate =
-          mgrRateLookup[a.manager_name.toLowerCase()] ?? defaultRate
+        const rate = mgrRateLookup[a.manager_name.toLowerCase()] ?? defaultRate
         wsToMgrs[name].push({ name: a.manager_name, rate })
       })
 
@@ -325,80 +263,71 @@ export default function CommissionPage() {
           rates[wsName][name] = rate
         })
       })
-      return rates
+      return { rates, salaryMap }
     },
-    []
+    [],
   )
 
   // ── Manager render ────────────────────────────────────────────────────────
 
   const renderManager = useCallback(
     (
-      p: PeriodValue,
-      cStart: string,
-      cEnd: string,
+      p: CommPeriod,
       leads: Lead[],
       priceList: WorkspacePrice[],
       mgrRate: ManagerRate | null,
       wkld: WorkloadData | null,
       zarRateVal: number | null,
       avgLead: number,
-      sessName: string
+      sessName: string,
     ) => {
-      const range = buildRange(p, cStart, cEnd)
-      setPeriodLabel(range.label)
+      const range = rangeFor(p)
 
       const defaultRate = mgrRate?.commission_rate ?? wkld?.defaultRate ?? 5
       const perLeadGbp = avgLead * (defaultRate / 100)
-      const perLeadZar = zarRateVal ? perLeadGbp * zarRateVal : perLeadGbp
+      const leadZar = zarRateVal ? perLeadGbp * zarRateVal : perLeadGbp
 
-      // Build my clients
       const myAssigned = new Set(
         (wkld?.assignments || [])
           .filter((a) => a.manager_name === sessName)
-          .map((a) => a.client_workspace_id)
+          .map((a) => a.client_workspace_id),
       )
       const myClients = priceList.filter(
         (pr) =>
           myAssigned.has(pr.workspace_id) ||
-          (pr.campaign_manager &&
-            pr.campaign_manager.toLowerCase() === sessName.toLowerCase()) ||
-          (pr.campaign_manager_2 &&
-            pr.campaign_manager_2.toLowerCase() === sessName.toLowerCase())
+          (pr.campaign_manager && pr.campaign_manager.toLowerCase() === sessName.toLowerCase()) ||
+          (pr.campaign_manager_2 && pr.campaign_manager_2.toLowerCase() === sessName.toLowerCase()),
       )
 
       const rows: ClientRow[] = []
       let totalLeads = 0
       for (const c of myClients) {
-        const mgrStart = c.manager_start_date
-          ? new Date(c.manager_start_date + 'T00:00:00')
-          : null
+        const mgrStart = c.manager_start_date ? new Date(c.manager_start_date + 'T00:00:00') : null
         const filtered = leads.filter(
           (l) =>
             l.client_name === c.workspace_name &&
             l.date &&
             l.date >= range.start &&
             l.date < range.end &&
-            (!mgrStart || l.date >= mgrStart)
+            (!mgrStart || l.date >= mgrStart),
         )
         if (filtered.length === 0) continue
-        const earned = filtered.length * perLeadZar
         totalLeads += filtered.length
         rows.push({
           name: c.workspace_name,
           since: c.manager_start_date,
           leads: filtered.length,
-          earned,
+          earned: filtered.length * leadZar,
         })
       }
       rows.sort((a, b) => b.leads - a.leads)
 
-      const totalCommZar = totalLeads * perLeadZar
-      const isThisMonth = p === 'month'
+      const totalCommZar = totalLeads * leadZar
+      const isThisMonth = p === 'this_month'
       const salary = mgrRate?.base_salary ?? 0
 
-      let salaryEarned = salary
-      let salaryLabel = fmtZarDirect(salary)
+      let salaryAmt = salary
+      let note = ''
       if (isThisMonth && salary > 0) {
         const now = new Date()
         const yr = now.getFullYear()
@@ -406,11 +335,7 @@ export default function CommissionPage() {
         let totalBizDays = 0
         let elapsedBizDays = 0
         const today = now.toISOString().slice(0, 10)
-        for (
-          let d = new Date(yr, mo, 1);
-          d.getMonth() === mo;
-          d.setDate(d.getDate() + 1)
-        ) {
+        for (let d = new Date(yr, mo, 1); d.getMonth() === mo; d.setDate(d.getDate() + 1)) {
           const dow = d.getDay()
           if (dow !== 0 && dow !== 6) {
             totalBizDays++
@@ -418,90 +343,51 @@ export default function CommissionPage() {
           }
         }
         const dailyRate = salary / (totalBizDays || 1)
-        salaryEarned = dailyRate * elapsedBizDays
-        salaryLabel = `R${salaryEarned.toLocaleString('en-ZA', {
-          minimumFractionDigits: 2,
-          maximumFractionDigits: 2,
-        })} (${elapsedBizDays}/${totalBizDays} days · R${dailyRate.toLocaleString(
-          'en-ZA',
-          { minimumFractionDigits: 2, maximumFractionDigits: 2 }
-        )}/day)`
+        salaryAmt = dailyRate * elapsedBizDays
+        note = `${elapsedBizDays}/${totalBizDays} days · ${zar(dailyRate)}/day`
       }
 
-      const totalZar = salaryEarned + totalCommZar
-
-      setSumComm(
-        'R' +
-          totalCommZar.toLocaleString('en-ZA', {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-          })
-      )
+      setPerLeadZar(leadZar)
+      setSumCommZar(totalCommZar)
       setSumLeads(totalLeads)
       setSumClients(rows.length)
-      setSumRate(
-        'R' +
-          perLeadZar.toLocaleString('en-ZA', {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-          }) +
-          '/lead'
-      )
-      setSalaryDisplay(salaryLabel)
-      setSumTotal(
-        'R' +
-          totalZar.toLocaleString('en-ZA', {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-          })
-      )
-      setShowSalaryCard(salary > 0)
-      setShowTotalCard(isThisMonth)
+      setSalaryEarnedZar(salaryAmt)
+      setSalaryNote(note)
+      setTotalZar(salaryAmt + totalCommZar)
+      setShowSalary(salary > 0)
+      setShowTotal(isThisMonth)
       setClientRows(rows)
 
-      // Rate explanation
       setRateExplanation({
         avgLead,
         rate: defaultRate,
         perLeadGbp,
-        perLeadZar,
+        perLeadZar: leadZar,
         zarRateDisplay: zarRateVal ? zarRateVal.toFixed(2) : '23.50',
       })
     },
-    []
+    [],
   )
 
   // ── Admin render ──────────────────────────────────────────────────────────
 
   const renderAdmin = useCallback(
     (
-      p: PeriodValue,
-      cStart: string,
-      cEnd: string,
+      p: CommPeriod,
       leads: Lead[],
       rates: Record<string, Record<string, number>>,
       avgLead: number,
       managerStartMap: Record<string, string | null>,
-      salaryMap: Record<string, number>
     ) => {
-      const range = buildRange(p, cStart, cEnd)
-      setAdminPeriodLabel(range.label)
-
-      const periodLeads = leads.filter(
-        (l) => l.date && l.date >= range.start && l.date < range.end
-      )
+      const range = rangeFor(p)
+      const periodLeads = leads.filter((l) => l.date && l.date >= range.start && l.date < range.end)
 
       const stats: EarnerStats = {}
       periodLeads.forEach((lead) => {
         const clientRates = rates[lead.client_name?.trim()] ?? {}
         if (!Object.keys(clientRates).length) return
         const startDateStr = managerStartMap[lead.client_name?.trim()] ?? null
-        if (
-          startDateStr &&
-          lead.date &&
-          lead.date < new Date(startDateStr + 'T00:00:00')
-        )
-          return
+        if (startDateStr && lead.date && lead.date < new Date(startDateStr + 'T00:00:00')) return
         Object.entries(clientRates).forEach(([earner, ratePct]) => {
           const effectiveRate = ratePct / 100
           if (!stats[earner]) stats[earner] = {}
@@ -517,8 +403,7 @@ export default function CommissionPage() {
           }
           stats[earner][lead.client_name].leads++
           stats[earner][lead.client_name].revenue += lead.lead_price
-          stats[earner][lead.client_name].commission +=
-            avgLead * effectiveRate
+          stats[earner][lead.client_name].commission += avgLead * effectiveRate
         })
       })
 
@@ -529,29 +414,24 @@ export default function CommissionPage() {
         })
       })
 
-      setAgencyTotal('£' + agencyComm.toFixed(2))
-      setAgencyTotalSub(`£${agencyComm.toFixed(0)} commission · ${range.label}`)
+      setAgencyCommGbp(agencyComm)
       setEarnerStats(stats)
 
-      const earners = Object.keys(stats).sort()
-      if (earners.length > 0) {
-        setActiveEarner((prev) =>
-          earners.includes(prev ?? '') ? prev : earners[0]
-        )
+      const earnerKeys = Object.keys(stats).sort()
+      if (earnerKeys.length > 0) {
+        setActiveEarner((prev) => (earnerKeys.includes(prev ?? '') ? prev : earnerKeys[0]))
       } else {
         setActiveEarner(null)
       }
     },
-    []
+    [],
   )
 
   // ── Payslip check ─────────────────────────────────────────────────────────
 
-  const checkPayslip = useCallback(async (p: PeriodValue, cStart: string) => {
-    const range = buildRange(p, cStart, '')
-    const month = range.start.toISOString().slice(0, 7)
+  const checkPayslip = useCallback(async (p: CommPeriod) => {
     try {
-      const res = await fetch(`/api/commission/payslips/${month}/meta`)
+      const res = await fetch(`/api/commission/payslips/${monthOf(p)}/meta`)
       const data: PayslipMeta = await res.json()
       setPayslipMeta(data)
     } catch {
@@ -567,7 +447,6 @@ export default function CommissionPage() {
 
     async function init() {
       try {
-        // Fetch session from legacy
         const sessRes = await fetch('/api/commission/session')
         if (!sessRes.ok) {
           window.location.href = '/login'
@@ -583,14 +462,10 @@ export default function CommissionPage() {
         const [priceData, mgrData, leadsData, wkldData] = await Promise.all([
           fetch('/api/commission/workspace-prices').then((r) => r.json()) as Promise<WorkspacePrice[]>,
           fetch('/api/commission/managers').then((r) =>
-            r.ok ? (r.json() as Promise<Manager[]>) : Promise.resolve([] as Manager[])
+            r.ok ? (r.json() as Promise<Manager[]>) : Promise.resolve([] as Manager[]),
           ),
-          fetch('/api/commission/revenue-leads').then((r) =>
-            r.json()
-          ) as Promise<RevenueLeadsResponse>,
-          fetch('/api/commission/workload').then((r) =>
-            r.json()
-          ) as Promise<WorkloadData>,
+          fetch('/api/commission/revenue-leads').then((r) => r.json()) as Promise<RevenueLeadsResponse>,
+          fetch('/api/commission/workload').then((r) => r.json()) as Promise<WorkloadData>,
         ])
 
         const parsedLeads: Lead[] = (leadsData.leads || [])
@@ -598,35 +473,25 @@ export default function CommissionPage() {
           .map((l: Lead) => ({ ...l, date: l.date ? new Date(l.date as unknown as string) : null }))
 
         setPrices(priceData)
-        setManagers(mgrData)
         setAllLeads(parsedLeads)
         setWorkload(wkldData)
+        setUpdatedAt(leadsData.updatedAt ?? null)
 
         const managerStartMap: Record<string, string | null> = {}
         priceData.forEach((p) => {
           managerStartMap[p.workspace_name] = p.manager_start_date ?? null
         })
 
-        const rates = buildEffectiveRates(priceData, mgrData, wkldData)
+        const { rates, salaryMap } = buildEffectiveRates(priceData, mgrData, wkldData)
         setEffectiveRates(rates)
+        setManagerSalaryMap(salaryMap)
 
-        const avgData: AvgLeadPrice = await fetch(
-          '/api/commission/avg-lead-price'
-        ).then((r) => r.json())
+        const avgData: AvgLeadPrice = await fetch('/api/commission/avg-lead-price').then((r) => r.json())
         const avg = avgData.avg_lead_price_gbp || 0
         setAvgLeadPrice(avg)
 
         if (sess.role === 'admin') {
-          renderAdmin(
-            'month',
-            '',
-            '',
-            parsedLeads,
-            rates,
-            avg,
-            managerStartMap,
-            Object.fromEntries(mgrData.map((m) => [m.name.trim(), m.base_salary ?? 0]))
-          )
+          renderAdmin('this_month', parsedLeads, rates, avg, managerStartMap)
         } else {
           const [zarData, mgrRateData] = await Promise.all([
             fetch('/api/commission/gbp-zar-rate')
@@ -637,568 +502,244 @@ export default function CommissionPage() {
               .catch((): ManagerRate => ({ name: '', commission_rate: 5, base_salary: 0 })) as Promise<ManagerRate>,
           ])
 
-          const zar = zarData.rate || null
-          setZarRate(zar)
+          const zarVal = zarData.rate || null
+          setZarRate(zarVal)
           setManagerRate(mgrRateData)
 
-          renderManager(
-            'month',
-            '',
-            '',
-            parsedLeads,
-            priceData,
-            mgrRateData,
-            wkldData,
-            zar,
-            avg,
-            sess.name
-          )
-          await checkPayslip('month', '')
+          renderManager('this_month', parsedLeads, priceData, mgrRateData, wkldData, zarVal, avg, sess.name)
+          await checkPayslip('this_month')
         }
+
+        setStatus('ok')
       } catch (err) {
-        console.error('[commission init]', err)
-        setError(err instanceof Error ? err.message : 'Failed to load commission data')
-      } finally {
-        setLoading(false)
+        setStatus('error')
+        setErrMsg(err instanceof Error ? err.message : 'Failed to load commission data')
       }
     }
 
     init()
   }, [buildEffectiveRates, renderManager, renderAdmin, checkPayslip])
 
-  // ── Handlers ──────────────────────────────────────────────────────────────
+  // ── Period change ─────────────────────────────────────────────────────────
 
-  const handlePeriodChange = (val: PeriodValue) => {
+  const handlePeriodChange = (val: CommPeriod) => {
     setPeriod(val)
-    if (val !== 'custom') {
-      renderManager(
-        val,
-        customStart,
-        customEnd,
-        allLeads,
-        prices,
-        managerRate,
-        workload,
-        zarRate,
-        avgLeadPrice,
-        session?.name ?? ''
-      )
-      checkPayslip(val, customStart)
-    }
-  }
-
-  const handleApplyCustom = () => {
-    renderManager(
-      'custom',
-      customStart,
-      customEnd,
-      allLeads,
-      prices,
-      managerRate,
-      workload,
-      zarRate,
-      avgLeadPrice,
-      session?.name ?? ''
-    )
-    checkPayslip('custom', customStart)
-  }
-
-  const handleAdminPeriodChange = (val: PeriodValue) => {
-    setAdminPeriod(val)
-    if (val !== 'custom') {
+    if (!session) return
+    if (session.role === 'admin') {
       const managerStartMap: Record<string, string | null> = {}
       prices.forEach((p) => {
         managerStartMap[p.workspace_name] = p.manager_start_date ?? null
       })
-      renderAdmin(
-        val,
-        adminCustomStart,
-        adminCustomEnd,
-        allLeads,
-        effectiveRates,
-        avgLeadPrice,
-        managerStartMap,
-        managerSalaryMap
-      )
+      renderAdmin(val, allLeads, effectiveRates, avgLeadPrice, managerStartMap)
+    } else {
+      renderManager(val, allLeads, prices, managerRate, workload, zarRate, avgLeadPrice, session.name)
+      checkPayslip(val)
     }
   }
 
-  const handleApplyAdminCustom = () => {
-    const managerStartMap: Record<string, string | null> = {}
-    prices.forEach((p) => {
-      managerStartMap[p.workspace_name] = p.manager_start_date ?? null
-    })
-    renderAdmin(
-      'custom',
-      adminCustomStart,
-      adminCustomEnd,
-      allLeads,
-      effectiveRates,
-      avgLeadPrice,
-      managerStartMap,
-      managerSalaryMap
-    )
+  const handleDownloadPayslip = () => {
+    window.open(`/api/commission/payslips/${monthOf(period)}`, '_blank')
   }
 
-  const handleDownloadPayslip = (e: React.MouseEvent) => {
-    e.preventDefault()
-    const range = buildRange(period, customStart, '')
-    const month = range.start.toISOString().slice(0, 7)
-    window.open(`/api/commission/payslips/${month}`, '_blank')
-  }
-
-  // ── Derived admin data ────────────────────────────────────────────────────
+  // ── Derived ───────────────────────────────────────────────────────────────
 
   const earners = Object.keys(earnerStats).sort()
   const allClientKeys = Object.keys(effectiveRates)
+  const isAdmin = session?.role === 'admin'
 
-  // ── Loading / Error states ────────────────────────────────────────────────
+  const clientColumns: Column<ClientRow>[] = [
+    {
+      key: 'name',
+      header: 'Client',
+      sortValue: (r) => r.name.toLowerCase(),
+      cell: (r) => <span className="font-semibold text-foreground">{r.name}</span>,
+    },
+    {
+      key: 'since',
+      header: 'Managing Since',
+      sortValue: (r) => r.since ?? '',
+      cell: (r) => <span className="text-muted-foreground">{r.since ?? '—'}</span>,
+    },
+    {
+      key: 'leads',
+      header: 'Leads',
+      numeric: true,
+      sortValue: (r) => r.leads,
+      cell: (r) => num(r.leads),
+    },
+    {
+      key: 'earned',
+      header: 'Commission Earned',
+      numeric: true,
+      sortValue: (r) => r.earned,
+      cell: (r) => <span className="font-semibold text-emerald-600 dark:text-emerald-400">{zar(r.earned)}</span>,
+    },
+  ]
 
-  if (loading) {
-    return (
-      <div className="o-page" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
-        <span className="o-spin" />
-      </div>
-    )
-  }
+  // ── Shell wrapper ─────────────────────────────────────────────────────────
 
-  if (error) {
-    return (
-      <div className="o-page" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
-        <div className="o-card" style={{ maxWidth: '400px', textAlign: 'center' }}>
-          <div className="o-card-body">
-            <div style={{ fontWeight: 700, marginBottom: '8px', color: '#050C29' }}>
-              Failed to load
-            </div>
-            <div style={{ color: '#6B7280', fontSize: '13px' }}>{error}</div>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  // ── Render ────────────────────────────────────────────────────────────────
+  const title = isAdmin ? 'Commission Tracker' : 'My Commission'
+  const subtitle = isAdmin
+    ? 'Per-manager commission across all clients'
+    : session
+      ? `Commission for ${session.name}`
+      : 'Commission'
 
   return (
-    <div className="o-page">
+    <PageShell
+      title={title}
+      subtitle={subtitle}
+      freshness={{ table: 'revenue_leads', syncedAt: updatedAt }}
+      actions={
+        status === 'ok' ? (
+          <PeriodFilter
+            value={period as PeriodKey}
+            onChange={(p) => handlePeriodChange(p as CommPeriod)}
+            presets={COMMISSION_PRESETS}
+          />
+        ) : undefined
+      }
+    >
+      {status === 'error' && (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+          <div className="font-semibold">Couldn’t load commission data</div>
+          <div className="mt-0.5 opacity-90">{errMsg}</div>
+        </div>
+      )}
 
-      {/* ── Manager View ────────────────────────────────────────────────── */}
-      {session?.role !== 'admin' && (
+      {status === 'loading' && (
+        <div className="mb-5 grid grid-cols-2 gap-4 md:grid-cols-4">
+          <KpiCard label="Commission" value="—" tone="green" loading />
+          <KpiCard label="Leads" value="—" tone="navy" loading />
+          <KpiCard label="Clients" value="—" tone="yellow" loading />
+          <KpiCard label="Rate" value="—" tone="teal" loading />
+        </div>
+      )}
+
+      {/* ── Manager view ─────────────────────────────────────────────────── */}
+      {status === 'ok' && !isAdmin && (
         <>
-          {/* Header */}
-          <div className="o-page-header">
-            <div>
-              <div className="o-page-title">My Commission</div>
-              <div className="o-page-sub">Commission for {session?.name}</div>
+          <div className="mb-5 grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
+            <KpiCard label="Commission Earned" value={zar(sumCommZar)} tone="green" />
+            <KpiCard label="Leads Delivered" value={num(sumLeads)} tone="navy" />
+            <KpiCard label="Active Clients" value={num(sumClients)} tone="yellow" />
+            <KpiCard label="Rate per Lead" value={zar(perLeadZar)} tone="teal" />
+            {showSalary && (
+              <KpiCard
+                label="Base Salary"
+                value={zar(salaryEarnedZar)}
+                sub={salaryNote || undefined}
+                tone="purple"
+              />
+            )}
+            {showTotal && (
+              <KpiCard
+                label="Total This Month"
+                value={zar(totalZar)}
+                sub="Salary + commission"
+                tone="green"
+              />
+            )}
+          </div>
+
+          {rateExplanation && (
+            <div className="mb-5 rounded-lg border border-border bg-card p-4 text-[13px] text-muted-foreground shadow-sm">
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                How your rate is calculated
+              </div>
+              <div className="leading-6">
+                All-time avg lead{' '}
+                <span className="font-semibold text-foreground">{gbp(rateExplanation.avgLead)}</span>{' '}
+                × {rateExplanation.rate}% ={' '}
+                <span className="font-semibold text-foreground">{gbp(rateExplanation.perLeadGbp)}</span>{' '}
+                × R{rateExplanation.zarRateDisplay}/GBP ={' '}
+                <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                  {zar(rateExplanation.perLeadZar)} per lead
+                </span>
+              </div>
             </div>
-            <div className="o-page-actions">
-              <select
-                className="o-select"
-                value={period}
-                onChange={(e) => handlePeriodChange(e.target.value as PeriodValue)}
+          )}
+
+          {payslipMeta?.exists && (
+            <div className="mb-5 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card p-4 shadow-sm">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Pay Slip
+              </div>
+              <button
+                type="button"
+                onClick={handleDownloadPayslip}
+                className="rounded-md bg-primary px-3 py-1 text-xs font-medium text-primary-foreground hover:opacity-90"
               >
-                <option value="month">This Month</option>
-                <option value="lastMonth">Last Month</option>
-                <option value="quarter">This Quarter</option>
-                <option value="year">This Year</option>
-                <option value="all">All Time</option>
-                <option value="custom">Custom Range</option>
-              </select>
-              {period === 'custom' && (
-                <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
-                  <input
-                    className="o-input"
-                    type="date"
-                    value={customStart}
-                    onChange={(e) => setCustomStart(e.target.value)}
-                    style={{ width: 'auto' }}
-                  />
-                  <span style={{ fontSize: '12px', color: '#6B7280' }}>to</span>
-                  <input
-                    className="o-input"
-                    type="date"
-                    value={customEnd}
-                    onChange={(e) => setCustomEnd(e.target.value)}
-                    style={{ width: 'auto' }}
-                  />
-                  <button className="o-btn o-btn-primary o-btn-sm" onClick={handleApplyCustom}>
-                    Apply
-                  </button>
-                </div>
+                Download
+              </button>
+              {payslipMeta.filename && (
+                <span className="text-xs text-muted-foreground">{payslipMeta.filename}</span>
               )}
             </div>
-          </div>
+          )}
 
-          {/* Summary cards */}
-          <div className="o-metrics o-metrics-auto" style={{ marginBottom: '1.5rem' }}>
-            {/* Commission Earned */}
-            <div className="o-metric" style={{ borderTopColor: '#16A34A' }}>
-              <div className="o-metric-label">Commission Earned</div>
-              <div className="o-metric-val" style={{ color: '#16A34A' }}>{sumComm}</div>
-            </div>
-            {/* Leads Delivered */}
-            <div className="o-metric" style={{ borderTopColor: '#224388' }}>
-              <div className="o-metric-label">Leads Delivered</div>
-              <div className="o-metric-val">{String(sumLeads)}</div>
-            </div>
-            {/* Active Clients */}
-            <div className="o-metric" style={{ borderTopColor: '#D97706' }}>
-              <div className="o-metric-label">Active Clients</div>
-              <div className="o-metric-val" style={{ color: '#D97706' }}>{String(sumClients)}</div>
-            </div>
-            {/* Rate per Lead */}
-            <div className="o-metric" style={{ borderTopColor: '#1F6F78' }}>
-              <div className="o-metric-label">Rate per Lead</div>
-              <div className="o-metric-val" style={{ fontSize: '1.1rem' }}>{sumRate}</div>
-            </div>
-
-            {/* Rate explanation card */}
-            {rateExplanation && (
-              <div className="o-metric" style={{ borderTopColor: '#7C89CD' }}>
-                <div className="o-metric-label">How your rate is calculated</div>
-                <div style={{ fontSize: '11px', color: '#6B7280', marginTop: '6px', lineHeight: 1.6 }}>
-                  All-time avg lead:{' '}
-                  <strong>£{rateExplanation.avgLead.toFixed(2)}</strong>
-                  <br />
-                  × {rateExplanation.rate}% commission = £
-                  {rateExplanation.perLeadGbp.toFixed(2)}
-                  <br />
-                  × R{rateExplanation.zarRateDisplay}/GBP
-                  <br />
-                  ={' '}
-                  <strong style={{ color: '#16A34A' }}>
-                    R{rateExplanation.perLeadZar.toFixed(2)} per lead
-                  </strong>
-                </div>
-              </div>
-            )}
-
-            {/* Base Salary */}
-            {showSalaryCard && (
-              <div className="o-metric" style={{ borderTopColor: '#1F6F78' }}>
-                <div className="o-metric-label">Base Salary</div>
-                <div style={{ fontSize: '13px', fontWeight: 600, marginTop: '4px', color: '#050C29' }}>
-                  {salaryDisplay}
-                </div>
-              </div>
-            )}
-
-            {/* Total This Month */}
-            {showTotalCard && (
-              <div className="o-metric" style={{ borderTopColor: '#16A34A' }}>
-                <div className="o-metric-label">Total This Month</div>
-                <div className="o-metric-val">{sumTotal}</div>
-                <div className="o-metric-sub">Salary + commission</div>
-              </div>
-            )}
-
-            {/* Pay Slip */}
-            {payslipMeta?.exists && (
-              <div className="o-metric" style={{ borderTopColor: '#1F6F78' }}>
-                <div className="o-metric-label">Pay Slip</div>
-                <div style={{ marginTop: '8px' }}>
-                  <a
-                    href="#"
-                    onClick={handleDownloadPayslip}
-                    className="o-btn o-btn-primary o-btn-sm"
-                    style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-                  >
-                    ↓ Download
-                  </a>
-                </div>
-                {payslipMeta.filename && (
-                  <div className="o-metric-sub" style={{ marginTop: '6px' }}>
-                    {payslipMeta.filename}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Client Breakdown table */}
-          <div className="o-card" style={{ marginBottom: '1.5rem' }}>
-            <div className="o-card-header">
-              <div className="o-card-title">Client Breakdown</div>
-              <span style={{ fontSize: '12px', color: '#6B7280' }}>{periodLabel}</span>
-            </div>
-            <div className="o-table-wrap">
-              <table className="o-table">
-                <thead>
-                  <tr>
-                    <th>Client</th>
-                    <th>Managing Since</th>
-                    <th style={{ textAlign: 'center' }}>Leads</th>
-                    <th style={{ textAlign: 'right' }}>Commission Earned</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {clientRows.length === 0 ? (
-                    <tr>
-                      <td colSpan={4}>
-                        <div className="o-empty">No leads delivered in this period</div>
-                      </td>
-                    </tr>
-                  ) : (
-                    clientRows.map((row, i) => (
-                      <tr key={i}>
-                        <td>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                            <div
-                              style={{
-                                width: '34px',
-                                height: '34px',
-                                borderRadius: '8px',
-                                background: '#1F6F78',
-                                color: '#fff',
-                                fontWeight: 700,
-                                fontSize: '14px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                flexShrink: 0,
-                              }}
-                            >
-                              {avatarLetter(row.name)}
-                            </div>
-                            <span style={{ fontWeight: 600 }}>{row.name}</span>
-                          </div>
-                        </td>
-                        <td style={{ color: '#6B7280', fontSize: '12px' }}>
-                          {row.since ?? '—'}
-                        </td>
-                        <td style={{ textAlign: 'center', fontWeight: 600 }}>
-                          {row.leads}
-                        </td>
-                        <td style={{ textAlign: 'right', fontWeight: 700, color: '#16A34A' }}>
-                          R
-                          {row.earned.toLocaleString('en-ZA', {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          <DataTable
+            columns={clientColumns}
+            rows={clientRows}
+            getRowKey={(r) => r.name}
+            empty="No leads delivered in this period"
+          />
         </>
       )}
 
-      {/* ── Admin View ──────────────────────────────────────────────────── */}
-      {session?.role === 'admin' && (
+      {/* ── Admin view ───────────────────────────────────────────────────── */}
+      {status === 'ok' && isAdmin && (
         <>
-          {/* Header */}
-          <div className="o-page-header">
-            <div>
-              <div className="o-page-title">Commission Tracker</div>
-              <div className="o-page-sub">{adminPeriodLabel}</div>
-            </div>
-            <div className="o-page-actions">
-              <select
-                className="o-select"
-                value={adminPeriod}
-                onChange={(e) => handleAdminPeriodChange(e.target.value as PeriodValue)}
-              >
-                <option value="month">This Month</option>
-                <option value="lastMonth">Last Month</option>
-                <option value="quarter">This Quarter</option>
-                <option value="year">This Year</option>
-                <option value="all">All Time</option>
-                <option value="custom">Custom Range</option>
-              </select>
-              {adminPeriod === 'custom' && (
-                <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
-                  <input
-                    className="o-input"
-                    type="date"
-                    value={adminCustomStart}
-                    onChange={(e) => setAdminCustomStart(e.target.value)}
-                    style={{ width: 'auto' }}
-                  />
-                  <span style={{ fontSize: '12px', color: '#6B7280' }}>to</span>
-                  <input
-                    className="o-input"
-                    type="date"
-                    value={adminCustomEnd}
-                    onChange={(e) => setAdminCustomEnd(e.target.value)}
-                    style={{ width: 'auto' }}
-                  />
-                  <button className="o-btn o-btn-primary o-btn-sm" onClick={handleApplyAdminCustom}>
-                    Apply
-                  </button>
-                </div>
-              )}
-            </div>
+          <div className="mb-5 grid grid-cols-2 gap-4 md:grid-cols-3">
+            <KpiCard label="Agency Commission" value={gbp(agencyCommGbp)} tone="yellow" />
+            <KpiCard label="Earners" value={num(earners.length)} tone="teal" />
+            <KpiCard
+              label="Active Clients"
+              value={num(new Set(earners.flatMap((e) => Object.keys(earnerStats[e]))).size)}
+              tone="navy"
+            />
           </div>
 
-          {/* Comm layout — agency card + earner panel */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: '220px 1fr',
-              gap: '1.25rem',
-              marginBottom: '2rem',
-              alignItems: 'start',
-            }}
-          >
-            {/* Agency card */}
-            <div
-              style={{
-                background: '#050C29',
-                borderRadius: '12px',
-                padding: '1.5rem',
-                boxShadow: '0 1px 3px rgba(5,12,41,.12)',
-              }}
-            >
-              <div style={{ fontSize: '26px', marginBottom: '.75rem' }}>👁</div>
-              <div
-                style={{
-                  fontSize: '11px',
-                  fontWeight: 600,
-                  color: 'rgba(255,255,255,.5)',
-                  textTransform: 'uppercase',
-                  letterSpacing: '1px',
-                  marginBottom: '6px',
-                }}
-              >
-                Agency Commission
-              </div>
-              <div
-                style={{
-                  fontFamily: "'Genos', sans-serif",
-                  fontSize: '38px',
-                  fontWeight: 700,
-                  color: '#FFB700',
-                  lineHeight: 1,
-                }}
-              >
-                {agencyTotal}
-              </div>
-              <div
-                style={{
-                  fontSize: '12px',
-                  color: 'rgba(255,255,255,.35)',
-                  marginTop: '6px',
-                }}
-              >
-                {agencyTotalSub}
-              </div>
+          {earners.length === 0 ? (
+            <div className="rounded-lg border border-border bg-card p-12 text-center text-sm text-muted-foreground">
+              No commission data for this period.
             </div>
-
-            {/* Earner panel */}
-            <div className="o-card" style={{ overflow: 'hidden' }}>
-              {/* Earner tabs */}
-              <div
-                style={{
-                  display: 'flex',
-                  gap: '.5rem',
-                  padding: '1rem 1.25rem',
-                  borderBottom: '2px solid #E2E6F0',
-                  flexWrap: 'wrap',
-                }}
-              >
-                {earners.length === 0 ? (
-                  <span style={{ color: '#6B7280', fontSize: '13px' }}>
-                    No commission data for this period
-                  </span>
-                ) : (
-                  earners.map((earner) => (
-                    <button
-                      key={earner}
-                      onClick={() => setActiveEarner(earner)}
-                      className={'o-btn' + (activeEarner === earner ? ' o-btn-primary' : ' o-btn-ghost')}
-                      style={{
-                        fontFamily: "'Genos', sans-serif",
-                        fontSize: '18px',
-                        fontWeight: 700,
-                      }}
-                    >
-                      {earner}
-                    </button>
-                  ))
-                )}
+          ) : (
+            <div className="rounded-lg border border-border bg-card shadow-sm">
+              <div className="flex flex-wrap gap-1.5 border-b border-border p-3">
+                {earners.map((earner) => (
+                  <button
+                    key={earner}
+                    type="button"
+                    onClick={() => setActiveEarner(earner)}
+                    className={
+                      'rounded-md px-3 py-1 text-xs font-medium transition-colors ' +
+                      (activeEarner === earner
+                        ? 'bg-primary text-primary-foreground'
+                        : 'border border-border text-muted-foreground hover:bg-accent hover:text-foreground')
+                    }
+                  >
+                    {earner}
+                  </button>
+                ))}
               </div>
-
-              {/* Earner detail */}
-              {activeEarner && earnerStats[activeEarner] ? (
+              {activeEarner && earnerStats[activeEarner] && (
                 <EarnerDetail
                   earner={activeEarner}
                   clients={earnerStats[activeEarner]}
                   salary={managerSalaryMap[activeEarner] ?? 0}
                   allClientKeys={allClientKeys}
                 />
-              ) : (
-                <p style={{ color: '#6B7280', padding: '1.5rem', fontSize: '13px' }}>
-                  {earners.length === 0
-                    ? 'No commission data for this period'
-                    : 'Select a manager above'}
-                </p>
               )}
             </div>
-          </div>
+          )}
         </>
       )}
-    </div>
+    </PageShell>
   )
 }
 
-// ── Sub-components ────────────────────────────────────────────────────────────
-
-function SumCard({
-  label,
-  value,
-  color,
-  smallValue,
-}: {
-  label: string
-  value: string
-  color?: 'green' | 'amber' | 'teal'
-  smallValue?: boolean
-}) {
-  const borderColor =
-    color === 'green'
-      ? '#16A34A'
-      : color === 'amber'
-      ? '#D97706'
-      : color === 'teal'
-      ? '#1F6F78'
-      : '#1F6F78'
-
-  const valueColor =
-    color === 'green'
-      ? '#16A34A'
-      : color === 'amber'
-      ? '#D97706'
-      : color === 'teal'
-      ? '#1F6F78'
-      : undefined
-
-  return (
-    <div className="o-metric" style={{ borderTopColor: borderColor }}>
-      <div className="o-metric-label">{label}</div>
-      <div
-        className="o-metric-val"
-        style={{
-          fontSize: smallValue ? '1.1rem' : undefined,
-          color: valueColor,
-        }}
-      >
-        {value}
-      </div>
-    </div>
-  )
-}
-
-interface EarnerClientStats {
-  leads: number
-  revenue: number
-  commission: number
-  commRate: number
-  share: number
-  startDate: string | null
-}
+// ── Earner detail ──────────────────────────────────────────────────────────────
 
 function EarnerDetail({
   earner,
@@ -1211,197 +752,76 @@ function EarnerDetail({
   salary: number
   allClientKeys: string[]
 }) {
-  const entries = Object.entries(clients).sort(
-    (a, b) => b[1].revenue - a[1].revenue
-  )
+  const entries = Object.entries(clients).sort((a, b) => b[1].revenue - a[1].revenue)
   const totalLeads = entries.reduce((s, [, c]) => s + c.leads, 0)
-  const totalCommission = entries.reduce(
-    (s, [, c]) => s + (c.commission ?? c.revenue * c.commRate),
-    0
-  )
+  const totalCommission = entries.reduce((s, [, c]) => s + (c.commission ?? c.revenue * c.commRate), 0)
 
   return (
     <div>
-      {/* Header */}
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          padding: '1.25rem 1.5rem',
-          borderBottom: '1px solid #E2E6F0',
-          flexWrap: 'wrap',
-          gap: '1rem',
-        }}
-      >
+      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border p-4">
         <div>
-          <div
-            style={{
-              fontFamily: "'Genos', sans-serif",
-              fontSize: '26px',
-              fontWeight: 700,
-              color: '#050C29',
-            }}
-          >
+          <div className="font-[family-name:var(--font-display)] text-xl font-bold text-foreground">
             {earner}
           </div>
-          <div style={{ fontSize: '13px', color: '#6B7280', marginTop: '2px' }}>
-            {entries.length} client{entries.length !== 1 ? 's' : ''} · {totalLeads}{' '}
-            lead{totalLeads !== 1 ? 's' : ''}
+          <div className="mt-0.5 text-xs text-muted-foreground">
+            {entries.length} client{entries.length !== 1 ? 's' : ''} · {totalLeads} lead
+            {totalLeads !== 1 ? 's' : ''}
           </div>
         </div>
-        <div
-          style={{
-            display: 'flex',
-            gap: '1.5rem',
-            alignItems: 'flex-end',
-            flexWrap: 'wrap',
-          }}
-        >
+        <div className="flex flex-wrap items-end gap-6">
           {salary > 0 && (
-            <div style={{ textAlign: 'right' }}>
-              <div
-                style={{
-                  fontSize: '11px',
-                  fontWeight: 600,
-                  color: '#6B7280',
-                  textTransform: 'uppercase',
-                  letterSpacing: '1px',
-                  marginBottom: '4px',
-                }}
-              >
+            <div className="text-right">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                 Base Salary
               </div>
-              <div
-                style={{
-                  fontFamily: "'Genos', sans-serif",
-                  fontSize: '22px',
-                  fontWeight: 700,
-                  color: '#6B7280',
-                }}
-              >
-                R
-                {salary.toLocaleString('en-ZA', {
-                  minimumFractionDigits: 0,
-                  maximumFractionDigits: 0,
-                })}
-                <span style={{ fontSize: '13px' }}>/mo</span>
+              <div className="font-[family-name:var(--font-display)] text-lg font-bold tabular-nums text-muted-foreground">
+                R{salary.toLocaleString('en-ZA', { maximumFractionDigits: 0 })}
+                <span className="text-xs">/mo</span>
               </div>
+              <div className="text-[10px] text-muted-foreground">paid in ZAR separately</div>
             </div>
           )}
-          <div style={{ textAlign: 'right' }}>
-            <div
-              style={{
-                fontSize: '11px',
-                fontWeight: 600,
-                color: '#6B7280',
-                textTransform: 'uppercase',
-                letterSpacing: '1px',
-                marginBottom: '4px',
-              }}
-            >
+          <div className="text-right">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
               Commission
             </div>
-            <div
-              style={{
-                fontFamily: "'Genos', sans-serif",
-                fontSize: '30px',
-                fontWeight: 700,
-                color: '#1F6F78',
-                lineHeight: 1,
-              }}
-            >
-              £{totalCommission.toFixed(2)}
+            <div className="font-[family-name:var(--font-display)] text-2xl font-bold tabular-nums text-primary">
+              {'£' + totalCommission.toFixed(2)}
             </div>
           </div>
-          {salary > 0 && (
-            <div style={{ textAlign: 'right' }}>
-              <div
-                style={{
-                  fontSize: '10px',
-                  fontWeight: 600,
-                  color: '#6B7280',
-                  textTransform: 'uppercase',
-                  letterSpacing: '1px',
-                }}
-              >
-                Note: salary paid in ZAR separately
-              </div>
-            </div>
-          )}
         </div>
       </div>
 
-      {/* Client rows */}
-      {entries.map(([client, stats], i) => {
-        const commission = stats.commission ?? stats.revenue * stats.commRate
-        const colorIdx = allClientKeys.indexOf(client)
-        const color = CLIENT_COLORS[colorIdx % CLIENT_COLORS.length]
-        return (
-          <div
-            key={client}
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              padding: '1rem 1.5rem',
-              borderBottom: i < entries.length - 1 ? '1px solid #E2E6F0' : 'none',
-              flexWrap: 'wrap',
-              gap: '.5rem',
-            }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '10px',
-                fontWeight: 600,
-                fontSize: '13px',
-                color: '#050C29',
-              }}
+      <ul>
+        {entries.map(([client, stats], i) => {
+          const commission = stats.commission ?? stats.revenue * stats.commRate
+          return (
+            <li
+              key={client}
+              className={
+                'flex flex-wrap items-center justify-between gap-2 px-4 py-3' +
+                (i < entries.length - 1 ? ' border-b border-border' : '')
+              }
             >
-              <div
-                style={{
-                  width: '30px',
-                  height: '30px',
-                  borderRadius: '7px',
-                  background: color,
-                  color: '#fff',
-                  fontWeight: 700,
-                  fontSize: '13px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0,
-                }}
-              >
-                {client.charAt(0).toUpperCase()}
-              </div>
-              {client}
-            </div>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '1.25rem',
-                flexWrap: 'wrap',
-              }}
-            >
-              <span style={{ fontSize: '12px', color: '#6B7280', fontWeight: 500 }}>
-                {stats.leads} lead{stats.leads !== 1 ? 's' : ''}
+              <span className="font-semibold text-foreground">
+                {client}
+                {allClientKeys.indexOf(client) === -1 && (
+                  <span className="ml-2 text-[10px] font-normal text-muted-foreground">(unassigned)</span>
+                )}
               </span>
-              <span className="o-status o-status-good">
-                £{commission.toFixed(2)}
-              </span>
-              {stats.startDate && (
-                <span style={{ fontSize: '11px', color: '#6B7280' }}>
-                  from {stats.startDate}
+              <span className="flex flex-wrap items-center gap-3">
+                <span className="text-xs text-muted-foreground">
+                  {stats.leads} lead{stats.leads !== 1 ? 's' : ''}
                 </span>
-              )}
-            </div>
-          </div>
-        )
-      })}
+                <StatusBadge status="ok">{'£' + commission.toFixed(2)}</StatusBadge>
+                {stats.startDate && (
+                  <span className="text-[11px] text-muted-foreground">from {stats.startDate}</span>
+                )}
+              </span>
+            </li>
+          )
+        })}
+      </ul>
     </div>
   )
 }

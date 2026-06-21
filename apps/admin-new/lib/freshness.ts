@@ -10,6 +10,7 @@ const FRESHNESS_SOURCES: Record<string, string> = {
   workspace_stats: 'computed_at',
   mailbox_daily_stats: 'updated_at',
   domain_health: 'last_checked',
+  contacts: 'updated_at',
   warmup_daily_stats: 'synced_at', // new table (approved) — uses synced_at per spec
   client_actions_cache: 'synced_at', // new table (approved)
   client_audience_profiles: 'generated_at', // new table (approved)

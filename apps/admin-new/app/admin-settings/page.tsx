@@ -1,6 +1,21 @@
 'use client'
 
 import { useEffect, useState, useCallback, useRef } from 'react'
+import { PageShell } from '@/components/shell/page-shell'
+import { KpiCard } from '@/components/ui/kpi-card'
+import { DataTable, type Column } from '@/components/ui/data-table'
+import { StatusBadge } from '@/components/ui/status-badge'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { cn } from '@/lib/utils'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -92,6 +107,8 @@ interface CommissionRow {
 
 type PeriodOption = 'lastMonth' | 'month' | 'quarter' | 'year' | 'all' | 'custom'
 
+type TabKey = 'managers' | 'commission' | 'nonleads' | 'clients' | 'payslips' | 'visibility'
+
 // ── Manager pages (matches legacy nav) ───────────────────────────────────────
 
 const MANAGER_PAGES = [
@@ -116,12 +133,15 @@ function paymentKey(manager: string, start: string, end: string): string {
   return `${manager.toLowerCase()}|${start}|${end}`
 }
 
+const num = (n: number) => (n || 0).toLocaleString()
 function fmtGbp(n: number): string {
   return '£' + n.toFixed(2)
 }
-
 function fmtGbpInt(n: number): string {
   return '£' + Math.round(n).toLocaleString('en-GB')
+}
+function dateOnly(s: string | null | undefined): string {
+  return s?.split('T')[0] || '—'
 }
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
@@ -132,14 +152,27 @@ function Toast({ message, onDone }: { message: string; onDone: () => void }) {
     return () => clearTimeout(t)
   }, [onDone])
   return (
-    <div className="o-toast">{message}</div>
+    <div className="fixed bottom-6 right-6 z-50 rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-medium text-foreground shadow-lg">
+      {message}
+    </div>
   )
 }
+
+// ── Tabs ──────────────────────────────────────────────────────────────────────
+
+const TABS: { key: TabKey; label: string }[] = [
+  { key: 'managers', label: 'Managers' },
+  { key: 'commission', label: 'Commission' },
+  { key: 'nonleads', label: 'Non-Lead Requests' },
+  { key: 'clients', label: 'Clients' },
+  { key: 'payslips', label: 'Payslips' },
+  { key: 'visibility', label: 'Page Visibility' },
+]
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function AdminSettingsPage() {
-  // Global state
+  const [tab, setTab] = useState<TabKey>('managers')
   const [toast, setToast] = useState<string | null>(null)
 
   // Managers
@@ -726,614 +759,494 @@ export default function AdminSettingsPage() {
     }
   }
 
-  const { label: periodLabel, startKey: pStart, endKey: pEnd } = getCommissionRange()
+  const { label: periodLabel } = getCommissionRange()
   const totalComm = commRows.reduce((s, r) => s + r.commission, 0)
   const paidComm = commRows.filter(r => r.payment.status === 'paid').reduce((s, r) => s + r.commission, 0)
+
+  // ── Table column defs ─────────────────────────────────────────────────────────
+
+  const managerColumns: Column<Manager>[] = [
+    { key: 'name', header: 'Name', sortValue: m => m.name, cell: m => <span className="font-semibold text-foreground">{m.name}</span> },
+    {
+      key: 'salary', header: 'Base Salary (R/mo)', cell: m => (
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-muted-foreground">R</span>
+          <Input
+            type="number"
+            value={mgrSalaries[m.id] ?? String(m.base_salary)}
+            onChange={e => setMgrSalaries(prev => ({ ...prev, [m.id]: e.target.value }))}
+            min={0} step={100}
+            className="w-24"
+          />
+          <Button size="sm" variant="secondary" onClick={() => updateMgrPay(m.id, m.commission_rate ?? 5)}>Save</Button>
+        </div>
+      ),
+    },
+    {
+      key: 'password', header: 'New Password', cell: m => (
+        <div className="flex items-center gap-1.5">
+          <Input
+            type="password"
+            value={mgrPasswords[m.id] ?? ''}
+            onChange={e => setMgrPasswords(prev => ({ ...prev, [m.id]: e.target.value }))}
+            placeholder="New password"
+            className="w-36"
+          />
+          <Button size="sm" variant="secondary" onClick={() => updateMgrPassword(m.id)}>Update</Button>
+        </div>
+      ),
+    },
+    {
+      key: 'actions', header: '', className: 'text-right', cell: m => (
+        <Button size="sm" variant="destructive" onClick={() => deleteManager(m.id, m.name)}>Remove</Button>
+      ),
+    },
+  ]
+
+  const commissionColumns: Column<CommissionRow>[] = [
+    { key: 'manager', header: 'Manager', sortValue: r => r.manager, cell: r => <span className="font-bold text-foreground">{r.manager}</span> },
+    { key: 'clients', header: 'Clients', cell: r => <span className="text-xs text-muted-foreground">{r.clients.map(c => c.workspace_name).join(', ')}</span> },
+    { key: 'leads', header: 'Leads', numeric: true, sortValue: r => r.leads, cell: r => <span className="font-semibold">{r.leads}</span> },
+    { key: 'revenue', header: 'Revenue', numeric: true, sortValue: r => r.revenue, cell: r => fmtGbpInt(r.revenue) },
+    { key: 'rate', header: 'Rate', numeric: true, sortValue: r => r.rate, cell: r => <span className="font-semibold text-primary">{r.rate ?? 5}%</span> },
+    { key: 'commission', header: 'Commission', numeric: true, sortValue: r => r.commission, cell: r => <span className="font-bold text-emerald-600 dark:text-emerald-400">{fmtGbp(r.commission)}</span> },
+    {
+      key: 'status', header: 'Status', sortValue: r => r.payment.status, cell: r => (
+        <StatusBadge status={r.payment.status === 'paid' ? 'ok' : 'warn'}>{r.payment.status === 'paid' ? 'Paid' : 'Unpaid'}</StatusBadge>
+      ),
+    },
+    {
+      key: 'payslip', header: 'Payslip', cell: r => {
+        const payslipData = 'payslip_data' in r.payment ? r.payment.payslip_data : ''
+        const payslipName = 'payslip_name' in r.payment ? r.payment.payslip_name : ''
+        return payslipData ? (
+          <a href={payslipData} download={payslipName || `${r.manager}-payslip`} target="_blank" rel="noreferrer" className="text-xs font-semibold text-primary hover:underline">
+            {payslipName || 'View payslip'}
+          </a>
+        ) : <span className="text-xs text-muted-foreground">No payslip</span>
+      },
+    },
+    {
+      key: 'actions', header: '', className: 'text-right', cell: r => {
+        const i = commRows.indexOf(r)
+        const paid = r.payment.status === 'paid'
+        return (
+          <div className="flex flex-wrap justify-end gap-1.5">
+            <input
+              type="file"
+              accept=".pdf,image/*"
+              className="hidden"
+              ref={el => { commFileInputRefs.current[i] = el }}
+              onChange={e => { const f = e.target.files?.[0]; if (f) void handleCommPayslipUpload(i, f) }}
+            />
+            <Button size="sm" onClick={() => commFileInputRefs.current[i]?.click()}>{paid ? 'Replace Payslip' : 'Upload & Pay'}</Button>
+            {paid && <Button size="sm" variant="destructive" onClick={() => markCommissionUnpaid(i)}>Mark Unpaid</Button>}
+          </div>
+        )
+      },
+    },
+  ]
+
+  const nlrColumns: Column<NonleadRequest>[] = [
+    {
+      key: 'lead', header: 'Lead', cell: req => (
+        <div>
+          <div className="text-[13px] font-semibold text-foreground">{req.lead_name || '(unnamed)'}</div>
+          <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">{req.lead_email}</div>
+        </div>
+      ),
+    },
+    {
+      key: 'client', header: 'Client', cell: req => (
+        <div>
+          <div className="text-[13px] font-semibold text-foreground">{req.username}</div>
+          <div className="text-[11px] text-muted-foreground">{req.workspace_name}</div>
+        </div>
+      ),
+    },
+    {
+      key: 'reason', header: 'Reason', cell: req => (
+        <div className="max-w-[320px] rounded-md bg-muted px-2.5 py-1.5 text-xs leading-relaxed text-muted-foreground">{req.reason}</div>
+      ),
+    },
+    { key: 'submitted', header: 'Submitted', sortValue: req => req.created_at, cell: req => <span className="whitespace-nowrap text-xs text-muted-foreground">{dateOnly(req.created_at)}</span> },
+    {
+      key: 'actions', header: '', className: 'text-right', cell: req => (
+        <div className="flex justify-end gap-1.5">
+          <Button size="sm" variant="secondary" onClick={() => approveNLR(req.id)}>Approve</Button>
+          <Button size="sm" variant="destructive" onClick={() => rejectNLR(req.id)}>Reject</Button>
+        </div>
+      ),
+    },
+  ]
+
+  const clientColumns: Column<AdminClient>[] = [
+    { key: 'username', header: 'Username', sortValue: c => c.username, cell: c => <span className="font-bold text-foreground">{c.username}</span> },
+    { key: 'workspace', header: 'Workspace', sortValue: c => c.workspace_name, cell: c => c.workspace_name },
+    { key: 'wsid', header: 'Workspace ID', cell: c => <span className="font-mono text-xs text-muted-foreground">{c.workspace_id}</span> },
+    {
+      key: 'plan', header: 'Plan Leads', cell: c => (
+        <div className="flex items-center gap-1.5">
+          <Input
+            type="number"
+            value={clientPlanLeads[c.id] ?? String(c.plan_leads)}
+            onChange={e => setClientPlanLeads(prev => ({ ...prev, [c.id]: e.target.value }))}
+            min={0}
+            className="w-20"
+          />
+          <Button size="sm" onClick={() => saveClientFields(c.id)}>Save</Button>
+        </div>
+      ),
+    },
+    {
+      key: 'price', header: 'Price/Lead', cell: c => (
+        <div className="flex items-center gap-1">
+          <span className="text-xs text-muted-foreground">£</span>
+          <Input
+            type="number"
+            value={clientPricePerLead[c.id] ?? String(c.price_per_lead)}
+            onChange={e => setClientPricePerLead(prev => ({ ...prev, [c.id]: e.target.value }))}
+            min={0} step={0.01}
+            className="w-20"
+          />
+        </div>
+      ),
+    },
+    { key: 'created', header: 'Created', sortValue: c => c.created_at, cell: c => <span className="text-muted-foreground">{dateOnly(c.created_at)}</span> },
+    {
+      key: 'password', header: 'New Password', cell: c => (
+        <div className="flex items-center gap-1.5">
+          <Input
+            type="password"
+            value={clientPasswords[c.id] ?? ''}
+            onChange={e => setClientPasswords(prev => ({ ...prev, [c.id]: e.target.value }))}
+            placeholder="New password"
+            className="w-36"
+          />
+          <Button size="sm" onClick={() => resetClientPassword(c.id)}>Reset</Button>
+        </div>
+      ),
+    },
+    {
+      key: 'actions', header: '', className: 'text-right', cell: c => (
+        <Button size="sm" variant="destructive" onClick={() => deleteClient(c.id, c.username)}>Delete</Button>
+      ),
+    },
+  ]
+
+  const payslipColumns: Column<Payslip>[] = [
+    { key: 'manager', header: 'Manager', sortValue: p => p.manager_name, cell: p => p.manager_name },
+    { key: 'month', header: 'Month', sortValue: p => p.month, cell: p => p.month },
+    { key: 'file', header: 'File', cell: p => <span className="text-muted-foreground">{p.filename}</span> },
+    {
+      key: 'actions', header: '', className: 'text-right', cell: p => (
+        <Button size="sm" variant="destructive" onClick={() => deletePayslip(p.id)}>Delete</Button>
+      ),
+    },
+  ]
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
-    <div className="o-page">
+    <PageShell
+      title="Admin Settings"
+      subtitle="Managers, commissions, clients, payslips and page access."
+      actions={
+        <div className="flex flex-wrap items-center gap-1">
+          {TABS.map(t => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setTab(t.key)}
+              className={cn(
+                'relative rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+                tab === t.key
+                  ? 'bg-primary text-primary-foreground'
+                  : 'border border-border bg-card text-muted-foreground hover:bg-accent hover:text-foreground',
+              )}
+            >
+              {t.label}
+              {t.key === 'nonleads' && nlrRequests.length > 0 && (
+                <span className="ml-1 inline-flex items-center rounded-full bg-destructive px-1.5 text-[10px] font-bold text-white">
+                  {nlrRequests.length}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      }
+    >
       {toast && <Toast message={toast} onDone={() => setToast(null)} />}
 
-      {/* ── Campaign Managers ── */}
-      <div className="o-section-h">Campaign Managers</div>
-
-      {/* CM Bonus Rate */}
-      <div className="o-card" style={{ marginBottom: '1rem' }}>
-        <div className="o-card-body" style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: '#050C29' }}>CM Bonus Rate</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <input
-              type="number"
-              value={defaultCommRate}
-              onChange={e => setDefaultCommRate(e.target.value)}
-              min={0} max={100} step={0.5}
-              className="o-input"
-              style={{ width: 80 }}
-              placeholder="5"
-            />
-            <span style={{ fontSize: 13, color: '#6B7280' }}>%</span>
-            <button onClick={saveDefaultComm} className="o-btn o-btn-teal">Save</button>
+      {/* ── Managers tab ── */}
+      {tab === 'managers' && (
+        <div className="space-y-5">
+          {/* CM Bonus Rate */}
+          <div className="rounded-lg border border-border bg-card p-4 shadow-sm">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="text-[13px] font-semibold text-foreground">CM Bonus Rate</div>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  value={defaultCommRate}
+                  onChange={e => setDefaultCommRate(e.target.value)}
+                  min={0} max={100} step={0.5}
+                  className="w-20"
+                  placeholder="5"
+                />
+                <span className="text-[13px] text-muted-foreground">%</span>
+                <Button variant="secondary" onClick={saveDefaultComm}>Save</Button>
+              </div>
+              <span className="text-xs text-muted-foreground">
+                Per-lead bonus = all-time avg lead price &times; this % &times; live ZAR rate.
+              </span>
+              {defaultCommSaved && <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">✓ Saved</span>}
+            </div>
           </div>
-          <span style={{ fontSize: 12, color: '#6B7280' }}>
-            Per-lead bonus = all-time avg lead price &times; this % &times; live ZAR rate. E.g. if avg lead = £98 and rate = 5%: £98 &times; 5% &times; R23.5 = R115/lead
-          </span>
-          {defaultCommSaved && <span style={{ fontSize: 12, color: '#16A34A' }}>✓ Saved</span>}
+
+          {/* Add manager */}
+          <div className="rounded-lg border border-border bg-card p-4 shadow-sm">
+            <div className="flex flex-wrap gap-2">
+              <Input
+                type="text"
+                value={mgrName}
+                onChange={e => setMgrName(e.target.value)}
+                placeholder="Manager name (e.g. Joey)"
+                className="min-w-[160px] flex-1"
+              />
+              <Input
+                type="password"
+                value={mgrPass}
+                onChange={e => setMgrPass(e.target.value)}
+                placeholder="Password"
+                className="min-w-[160px] flex-1"
+              />
+              <Button onClick={createManager}>Add Manager</Button>
+            </div>
+          </div>
+
+          <DataTable
+            columns={managerColumns}
+            rows={managers}
+            getRowKey={m => String(m.id)}
+            empty={managersLoading ? 'Loading…' : 'No managers yet.'}
+          />
         </div>
-      </div>
+      )}
 
-      {/* Managers table */}
-      <div className="o-card" style={{ marginBottom: '1.5rem' }}>
-        <div className="o-card-body">
-          <div style={{ display: 'flex', gap: 10, marginBottom: '1rem', flexWrap: 'wrap' }}>
-            <input
-              type="text"
-              value={mgrName}
-              onChange={e => setMgrName(e.target.value)}
-              placeholder="Manager name (e.g. Joey)"
-              className="o-input"
-              style={{ flex: 1, minWidth: 140 }}
-            />
-            <input
-              type="password"
-              value={mgrPass}
-              onChange={e => setMgrPass(e.target.value)}
-              placeholder="Password"
-              className="o-input"
-              style={{ flex: 1, minWidth: 140 }}
-            />
-            <button onClick={createManager} className="o-btn o-btn-primary">
-              Add Manager
-            </button>
+      {/* ── Commission tab ── */}
+      {tab === 'commission' && (
+        <div className="space-y-5">
+          <div className="rounded-lg border border-border bg-card p-4 shadow-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <Select value={commPeriod} onValueChange={v => { if (v) handlePeriodChange(v as PeriodOption) }}>
+                <SelectTrigger className="w-44 text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="lastMonth">Last Month</SelectItem>
+                  <SelectItem value="month">This Month</SelectItem>
+                  <SelectItem value="quarter">This Quarter</SelectItem>
+                  <SelectItem value="year">This Year</SelectItem>
+                  <SelectItem value="all">All Time</SelectItem>
+                  <SelectItem value="custom">Custom Range</SelectItem>
+                </SelectContent>
+              </Select>
+              {commPeriod === 'custom' && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input type="date" value={commCustomStart} onChange={e => setCommCustomStart(e.target.value)} className="w-40" />
+                  <span className="text-xs text-muted-foreground">to</span>
+                  <Input type="date" value={commCustomEnd} onChange={e => setCommCustomEnd(e.target.value)} className="w-40" />
+                  <Button size="sm" onClick={() => setCommRows(buildCommissionRows())}>Apply</Button>
+                </div>
+              )}
+              <span className="text-xs font-semibold text-muted-foreground">{periodLabel}</span>
+            </div>
           </div>
-          <div className="o-table-wrap">
-            <table className="o-table">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Base Salary (R/mo)</th>
-                  <th>New Password</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {managersLoading ? (
-                  <tr><td colSpan={4}><div className="o-empty"><span className="o-spin" /> Loading…</div></td></tr>
-                ) : managers.length === 0 ? (
-                  <tr><td colSpan={4}><div className="o-empty">No managers yet</div></td></tr>
-                ) : managers.map(m => (
-                  <tr key={m.id}>
-                    <td style={{ fontWeight: 600 }}>{m.name}</td>
-                    <td>
-                      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                        <span style={{ color: '#6B7280', fontSize: 12 }}>R</span>
-                        <input
-                          type="number"
-                          value={mgrSalaries[m.id] ?? m.base_salary}
-                          onChange={e => setMgrSalaries(prev => ({ ...prev, [m.id]: e.target.value }))}
-                          min={0} step={100}
-                          className="o-input"
-                          style={{ width: 90 }}
-                        />
-                        <button onClick={() => updateMgrPay(m.id, m.commission_rate ?? 5)} className="o-btn o-btn-teal o-btn-sm">Save</button>
-                      </div>
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', gap: 6 }}>
-                        <input
-                          type="password"
-                          value={mgrPasswords[m.id] ?? ''}
-                          onChange={e => setMgrPasswords(prev => ({ ...prev, [m.id]: e.target.value }))}
-                          placeholder="New password"
-                          className="o-input"
-                          style={{ width: 130 }}
-                        />
-                        <button onClick={() => updateMgrPassword(m.id)} className="o-btn o-btn-teal o-btn-sm">Update</button>
-                      </div>
-                    </td>
-                    <td>
-                      <button
-                        onClick={() => deleteManager(m.id, m.name)}
-                        className="o-btn o-btn-danger o-btn-sm"
-                      >
-                        Remove
-                      </button>
-                    </td>
-                  </tr>
+
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+            <KpiCard label="Total Commission" value={fmtGbp(totalComm)} tone="green" loading={commLoading} />
+            <KpiCard label="Unpaid" value={fmtGbp(totalComm - paidComm)} tone="yellow" loading={commLoading} />
+            <KpiCard label="Paid" value={fmtGbp(paidComm)} tone="navy" loading={commLoading} />
+            <KpiCard label="Managers" value={num(commRows.length)} tone="teal" loading={commLoading} />
+          </div>
+
+          <DataTable
+            columns={commissionColumns}
+            rows={commRows}
+            getRowKey={(r, i) => `${r.manager}_${i}`}
+            empty={commLoading ? 'Loading…' : 'No manager commissions for this period.'}
+          />
+        </div>
+      )}
+
+      {/* ── Non-Lead Requests tab ── */}
+      {tab === 'nonleads' && (
+        <DataTable
+          columns={nlrColumns}
+          rows={nlrRequests}
+          getRowKey={req => String(req.id)}
+          empty={nlrLoading ? 'Loading…' : 'No pending requests.'}
+        />
+      )}
+
+      {/* ── Clients tab ── */}
+      {tab === 'clients' && (
+        <div className="space-y-5">
+          {/* Create client */}
+          <div className="rounded-lg border border-border bg-card p-4 shadow-sm">
+            <div className="mb-3 text-[13px] font-semibold text-foreground">Create Client Account</div>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label>Username</Label>
+                <Input type="text" value={newUsername} onChange={e => setNewUsername(e.target.value)} placeholder="e.g. pestcontrol_uk" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Password</Label>
+                <Input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="Strong password" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Workspace ID</Label>
+                <Input type="text" value={newWorkspaceId} onChange={e => setNewWorkspaceId(e.target.value)} placeholder="Pick a workspace below" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Workspace Name (display)</Label>
+                <Input type="text" value={newWorkspaceName} onChange={e => setNewWorkspaceName(e.target.value)} placeholder="e.g. PestControl UK" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Plan Leads</Label>
+                <Input type="number" value={newPlanLeads} onChange={e => setNewPlanLeads(e.target.value)} placeholder="0" min={0} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Price Per Lead (£)</Label>
+                <Input type="number" value={newPricePerLead} onChange={e => setNewPricePerLead(e.target.value)} placeholder="0.00" min={0} step={0.01} />
+              </div>
+            </div>
+            <div className="mt-4 flex items-center gap-3">
+              <Button onClick={createClient}>Create Client</Button>
+              {createError && <span className="text-xs font-medium text-destructive">{createError}</span>}
+              {createSuccess && <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">{createSuccess}</span>}
+            </div>
+          </div>
+
+          {/* Workspace picker */}
+          <div className="rounded-lg border border-border bg-card p-4 shadow-sm">
+            <div className="mb-3 text-[13px] font-semibold text-foreground">PlusVibe Workspaces</div>
+            <p className="mb-3 text-xs text-muted-foreground">Click a workspace to fill the Workspace ID and Name fields above.</p>
+            {wsLoading ? (
+              <div className="py-6 text-center text-sm text-muted-foreground">Loading…</div>
+            ) : workspaces.length === 0 ? (
+              <div className="py-6 text-center text-sm text-muted-foreground">No workspaces found.</div>
+            ) : (
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+                {workspaces.map(w => (
+                  <button
+                    key={w.id}
+                    type="button"
+                    onClick={() => { setNewWorkspaceId(w.id); setNewWorkspaceName(w.name) }}
+                    className="rounded-lg border border-border bg-background px-3.5 py-3 text-left transition-colors hover:border-primary hover:bg-accent/50"
+                  >
+                    <div className="mb-1 text-[13px] font-semibold text-foreground">{w.name}</div>
+                    <div className="font-mono text-[11px] text-muted-foreground">{w.id}</div>
+                    <div className="mt-1 text-[11px] font-semibold text-primary">↑ Click to use</div>
+                  </button>
                 ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      {/* ── Manager Commissions ── */}
-      <div className="o-section-h">Manager Commissions</div>
-
-      <div className="o-card">
-        <div className="o-card-body">
-          {/* Period selector */}
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: '1rem' }}>
-            <select className="o-select" value={commPeriod} onChange={e => handlePeriodChange(e.target.value as PeriodOption)}>
-              <option value="lastMonth">Last Month</option>
-              <option value="month">This Month</option>
-              <option value="quarter">This Quarter</option>
-              <option value="year">This Year</option>
-              <option value="all">All Time</option>
-              <option value="custom">Custom Range</option>
-            </select>
-            {commPeriod === 'custom' && (
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                <input type="date" value={commCustomStart} onChange={e => setCommCustomStart(e.target.value)} className="o-input" />
-                <span style={{ fontSize: 12, color: '#6B7280' }}>to</span>
-                <input type="date" value={commCustomEnd} onChange={e => setCommCustomEnd(e.target.value)} className="o-input" />
-                <button onClick={() => setCommRows(buildCommissionRows())} className="o-btn o-btn-primary o-btn-sm">Apply</button>
               </div>
             )}
-            <span style={{ fontSize: 12, color: '#6B7280', fontWeight: 600 }}>{periodLabel}</span>
           </div>
 
-          {/* Summary cards */}
-          <div className="o-metrics o-metrics-4" style={{ marginBottom: '1rem' }}>
-            <div className="o-metric" style={{ borderTopColor: '#059669' }}>
-              <div className="o-metric-label">Total Commission</div>
-              <div className="o-metric-val" style={{ color: '#059669' }}>{fmtGbp(totalComm)}</div>
-            </div>
-            <div className="o-metric" style={{ borderTopColor: '#D97706' }}>
-              <div className="o-metric-label">Unpaid</div>
-              <div className="o-metric-val" style={{ color: '#D97706' }}>{fmtGbp(totalComm - paidComm)}</div>
-            </div>
-            <div className="o-metric" style={{ borderTopColor: '#224388' }}>
-              <div className="o-metric-label">Paid</div>
-              <div className="o-metric-val" style={{ color: '#224388' }}>{fmtGbp(paidComm)}</div>
-            </div>
-            <div className="o-metric" style={{ borderTopColor: '#224388' }}>
-              <div className="o-metric-label">Managers</div>
-              <div className="o-metric-val" style={{ color: '#224388' }}>{String(commRows.length)}</div>
-            </div>
-          </div>
-
-          {/* Commission table */}
-          <div className="o-table-wrap">
-            <table className="o-table">
-              <thead>
-                <tr>
-                  <th>Manager</th>
-                  <th>Clients</th>
-                  <th style={{ textAlign: 'right' }}>Leads</th>
-                  <th style={{ textAlign: 'right' }}>Revenue</th>
-                  <th style={{ textAlign: 'right' }}>Rate</th>
-                  <th style={{ textAlign: 'right' }}>Commission</th>
-                  <th>Status</th>
-                  <th>Payslip</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {commLoading ? (
-                  <tr><td colSpan={9}><div className="o-empty"><span className="o-spin" /> Loading…</div></td></tr>
-                ) : commRows.length === 0 ? (
-                  <tr><td colSpan={9}><div className="o-empty">No manager commissions for this period.</div></td></tr>
-                ) : commRows.map((row, i) => {
-                  const paidStatus = row.payment.status === 'paid'
-                  const payslipData = 'payslip_data' in row.payment ? row.payment.payslip_data : ''
-                  const payslipName = 'payslip_name' in row.payment ? row.payment.payslip_name : ''
-                  const periodKey = `${pStart}_${pEnd}`
-                  return (
-                    <tr key={`${row.manager}_${periodKey}`}>
-                      <td style={{ fontWeight: 700 }}>{row.manager}</td>
-                      <td style={{ color: '#6B7280', fontSize: 12 }}>{row.clients.map(c => c.workspace_name).join(', ')}</td>
-                      <td style={{ textAlign: 'right', fontWeight: 600 }}>{row.leads}</td>
-                      <td style={{ textAlign: 'right' }}>{fmtGbpInt(row.revenue)}</td>
-                      <td style={{ textAlign: 'right' }}>
-                        <span style={{ background: '#EDE9FE', color: '#5B21B6', fontWeight: 700, fontSize: 12, padding: '2px 7px', borderRadius: 5 }}>
-                          {row.rate ?? 5}%
-                        </span>
-                      </td>
-                      <td style={{ textAlign: 'right', fontWeight: 800, color: '#059669' }}>{fmtGbp(row.commission)}</td>
-                      <td>
-                        <span className={paidStatus ? 'o-status o-status-good' : 'o-status o-status-warning'}>
-                          {paidStatus ? 'Paid' : 'Unpaid'}
-                        </span>
-                      </td>
-                      <td>
-                        {payslipData ? (
-                          <a
-                            href={payslipData}
-                            download={payslipName || `${row.manager}-payslip`}
-                            target="_blank"
-                            rel="noreferrer"
-                            style={{ fontSize: 12, fontWeight: 700, color: '#1F6F78', textDecoration: 'none' }}
-                          >
-                            {payslipName || 'View payslip'}
-                          </a>
-                        ) : (
-                          <span style={{ fontSize: 12, color: '#9CA3AF' }}>No payslip</span>
-                        )}
-                      </td>
-                      <td>
-                        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-                          <input
-                            type="file"
-                            accept=".pdf,image/*"
-                            style={{ display: 'none' }}
-                            ref={el => { commFileInputRefs.current[i] = el }}
-                            onChange={e => {
-                              const f = e.target.files?.[0]
-                              if (f) void handleCommPayslipUpload(i, f)
-                            }}
-                          />
-                          <button
-                            className="o-btn o-btn-primary o-btn-sm"
-                            onClick={() => commFileInputRefs.current[i]?.click()}
-                          >
-                            {paidStatus ? 'Replace Payslip' : 'Upload & Pay'}
-                          </button>
-                          {paidStatus && (
-                            <button className="o-btn o-btn-danger o-btn-sm" onClick={() => markCommissionUnpaid(i)}>
-                              Mark Unpaid
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
+          {/* Client accounts table */}
+          <DataTable
+            columns={clientColumns}
+            rows={clients}
+            getRowKey={c => String(c.id)}
+            empty={clientsLoading ? 'Loading…' : 'No client accounts yet.'}
+          />
         </div>
-      </div>
+      )}
 
-      {/* ── Non-Lead Requests ── */}
-      <div className="o-section-h" style={{ marginTop: '0.5rem' }}>
-        Non-Lead Requests
-        {nlrRequests.length > 0 && (
-          <span style={{ background: '#DC2626', color: 'white', fontSize: 11, fontWeight: 700, padding: '1px 7px', borderRadius: 8, marginLeft: 6 }}>
-            {nlrRequests.length}
-          </span>
-        )}
-      </div>
-
-      <div className="o-card">
-        <div className="o-card-body">
-          <div className="o-table-wrap">
-            <table className="o-table">
-              <thead>
-                <tr>
-                  <th>Lead</th>
-                  <th>Client</th>
-                  <th>Reason</th>
-                  <th>Submitted</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {nlrLoading ? (
-                  <tr><td colSpan={5}><div className="o-empty"><span className="o-spin" /> Loading…</div></td></tr>
-                ) : nlrRequests.length === 0 ? (
-                  <tr><td colSpan={5}><div className="o-empty">No pending requests.</div></td></tr>
-                ) : nlrRequests.map(req => (
-                  <tr key={req.id}>
-                    <td>
-                      <div style={{ fontWeight: 600, fontSize: 13 }}>{req.lead_name || '(unnamed)'}</div>
-                      <div style={{ fontSize: 11, fontFamily: 'monospace', color: '#6B7280', marginTop: 2 }}>{req.lead_email}</div>
-                    </td>
-                    <td>
-                      <div style={{ fontWeight: 600, fontSize: 13 }}>{req.username}</div>
-                      <div style={{ fontSize: 11, color: '#9CA3AF' }}>{req.workspace_name}</div>
-                    </td>
-                    <td>
-                      <div style={{ fontSize: 12, color: '#6B7280', background: '#F9FAFB', borderRadius: 5, padding: '5px 9px', maxWidth: 320, lineHeight: 1.45 }}>
-                        {req.reason}
-                      </div>
-                    </td>
-                    <td style={{ color: '#9CA3AF', fontSize: 12, whiteSpace: 'nowrap' }}>
-                      {req.created_at?.split('T')[0] || '—'}
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', gap: 6 }}>
-                        <button className="o-btn o-btn-teal o-btn-sm" onClick={() => approveNLR(req.id)}>Approve</button>
-                        <button className="o-btn o-btn-danger o-btn-sm" onClick={() => rejectNLR(req.id)}>Reject</button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      {/* ── Payslips tab ── */}
+      {tab === 'payslips' && (
+        <div className="space-y-5">
+          <div className="rounded-lg border border-border bg-card p-4 shadow-sm">
+            <p className="mb-4 text-[13px] text-muted-foreground">
+              Upload a payslip for a manager. The manager sees a download button on their commission page for that month.
+            </p>
+            <div className="grid grid-cols-1 items-end gap-3 md:grid-cols-4">
+              <div className="space-y-1.5">
+                <Label>Manager</Label>
+                <Select value={payslipManager} onValueChange={v => { if (v) setPayslipManager(v) }}>
+                  <SelectTrigger className="text-sm">
+                    <SelectValue placeholder="Select manager…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {managers.map(m => <SelectItem key={m.id} value={m.name}>{m.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Month</Label>
+                <Input type="month" value={payslipMonth} onChange={e => setPayslipMonth(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>File (PDF/image)</Label>
+                <Input type="file" accept=".pdf,.png,.jpg,.jpeg" onChange={e => setPayslipFile(e.target.files?.[0] ?? null)} />
+              </div>
+              <Button onClick={uploadPayslip}>Upload</Button>
+            </div>
+            {payslipUploadMsg && <span className="mt-2 inline-block text-xs font-semibold text-emerald-600 dark:text-emerald-400">Uploaded</span>}
           </div>
+
+          <DataTable
+            columns={payslipColumns}
+            rows={payslips}
+            getRowKey={p => String(p.id)}
+            empty="No payslips uploaded yet."
+          />
         </div>
-      </div>
+      )}
 
-      {/* ── Create Client Account ── */}
-      <div className="o-section-h">Create Client Account</div>
-
-      <div className="o-card">
-        <div className="o-card-body">
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-            <div className="o-field">
-              <label className="o-label">Username</label>
-              <input type="text" value={newUsername} onChange={e => setNewUsername(e.target.value)} placeholder="e.g. pestcontrol_uk" className="o-input" />
-            </div>
-            <div className="o-field">
-              <label className="o-label">Password</label>
-              <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="Strong password" className="o-input" />
-            </div>
-            <div className="o-field">
-              <label className="o-label">Workspace ID</label>
-              <input type="text" value={newWorkspaceId} onChange={e => setNewWorkspaceId(e.target.value)} placeholder="Click workspace below to fill" className="o-input" />
-            </div>
-            <div className="o-field">
-              <label className="o-label">Workspace Name (display)</label>
-              <input type="text" value={newWorkspaceName} onChange={e => setNewWorkspaceName(e.target.value)} placeholder="e.g. PestControl UK" className="o-input" />
-            </div>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem', marginTop: '1rem' }}>
-            <div className="o-field">
-              <label className="o-label">Plan Leads</label>
-              <input type="number" value={newPlanLeads} onChange={e => setNewPlanLeads(e.target.value)} placeholder="0" min={0} className="o-input" />
-            </div>
-            <div className="o-field">
-              <label className="o-label">Price Per Lead (£)</label>
-              <input type="number" value={newPricePerLead} onChange={e => setNewPricePerLead(e.target.value)} placeholder="0.00" min={0} step={0.01} className="o-input" />
-            </div>
-          </div>
-          <button onClick={createClient} className="o-btn o-btn-primary" style={{ marginTop: '1.25rem' }}>
-            Create Client
-          </button>
-          {createError && <div style={{ color: '#DC2626', fontSize: 12, marginTop: '0.5rem' }}>{createError}</div>}
-          {createSuccess && <div style={{ color: '#16A34A', fontSize: 12, marginTop: '0.5rem' }}>{createSuccess}</div>}
-        </div>
-      </div>
-
-      {/* ── Manager Payslips ── */}
-      <div className="o-section-h">Manager Payslips</div>
-
-      <div className="o-card">
-        <div className="o-card-body">
-          <p style={{ fontSize: 13, color: '#6B7280', marginBottom: '1.25rem' }}>
-            Upload a payslip for a manager. The manager will see a download button on their commission page for that month.
-          </p>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto auto', gap: '0.75rem', alignItems: 'end', marginBottom: '1.25rem' }}>
-            <div className="o-field">
-              <label className="o-label">Manager</label>
-              <select value={payslipManager} onChange={e => setPayslipManager(e.target.value)} className="o-select" style={{ width: '100%' }}>
-                <option value="">— Select manager —</option>
-                {managers.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
-              </select>
-            </div>
-            <div className="o-field">
-              <label className="o-label">Month</label>
-              <input
-                type="month"
-                value={payslipMonth}
-                onChange={e => setPayslipMonth(e.target.value)}
-                className="o-input"
-                style={{ width: '100%' }}
-              />
-            </div>
-            <div className="o-field">
-              <label className="o-label">File (PDF/image)</label>
-              <input
-                type="file"
-                accept=".pdf,.png,.jpg,.jpeg"
-                onChange={e => setPayslipFile(e.target.files?.[0] ?? null)}
-                style={{ fontSize: 13 }}
-              />
-            </div>
-            <button onClick={uploadPayslip} className="o-btn o-btn-primary">Upload</button>
-          </div>
-          {payslipUploadMsg && <span style={{ fontSize: 12, color: '#16A34A' }}>Uploaded</span>}
-          {payslips.length === 0 ? (
-            <div className="o-empty" style={{ marginTop: '1rem' }}>No payslips uploaded yet.</div>
-          ) : (
-            <div className="o-table-wrap" style={{ marginTop: '1rem' }}>
-              <table className="o-table">
-                <thead>
-                  <tr>
-                    <th>Manager</th>
-                    <th>Month</th>
-                    <th>File</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {payslips.map(p => (
-                    <tr key={p.id}>
-                      <td>{p.manager_name}</td>
-                      <td>{p.month}</td>
-                      <td style={{ color: '#6B7280' }}>{p.filename}</td>
-                      <td style={{ textAlign: 'right' }}>
-                        <button className="o-btn o-btn-danger o-btn-sm" onClick={() => deletePayslip(p.id)}>Delete</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* ── PlusVibe Workspaces ── */}
-      <div className="o-section-h">PlusVibe Workspaces</div>
-
-      <div className="o-card">
-        <div className="o-card-body">
-          <p style={{ fontSize: 13, color: '#9CA3AF', marginBottom: '1rem' }}>Click a workspace to fill the Workspace ID field above.</p>
-          {wsLoading ? (
-            <div className="o-empty"><span className="o-spin" /> Loading…</div>
-          ) : workspaces.length === 0 ? (
-            <div className="o-empty">No workspaces found.</div>
-          ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.75rem' }}>
-              {workspaces.map(w => (
-                <div
-                  key={w.id}
-                  onClick={() => { setNewWorkspaceId(w.id); setNewWorkspaceName(w.name) }}
-                  style={{
-                    background: '#F9FAFB',
-                    border: '1.5px solid #E5E7EB',
-                    borderRadius: 8,
-                    padding: '0.875rem 1rem',
-                    cursor: 'pointer',
-                    transition: 'all 0.15s',
-                  }}
-                  onMouseEnter={e => {
-                    ;(e.currentTarget as HTMLDivElement).style.borderColor = '#1F6F78'
-                    ;(e.currentTarget as HTMLDivElement).style.background = 'rgba(31,111,120,0.04)'
-                  }}
-                  onMouseLeave={e => {
-                    ;(e.currentTarget as HTMLDivElement).style.borderColor = '#E5E7EB'
-                    ;(e.currentTarget as HTMLDivElement).style.background = '#F9FAFB'
-                  }}
-                >
-                  <div style={{ fontWeight: 600, fontSize: 13, color: '#050C29', marginBottom: 4 }}>{w.name}</div>
-                  <div style={{ fontFamily: 'monospace', fontSize: 11, color: '#9CA3AF' }}>{w.id}</div>
-                  <div style={{ fontSize: 11, color: '#1F6F78', fontWeight: 600, marginTop: 2 }}>↑ Click to use</div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* ── Manager Page Access ── */}
-      <div className="o-section-h">Manager Page Access</div>
-
-      <div className="o-card">
-        <div className="o-card-body">
-          <p style={{ fontSize: 13, color: '#6B7280', marginBottom: '1.25rem' }}>
+      {/* ── Page visibility tab ── */}
+      {tab === 'visibility' && (
+        <div className="rounded-lg border border-border bg-card p-4 shadow-sm">
+          <p className="mb-4 text-[13px] text-muted-foreground">
             Control which pages managers can see in the navigation. Admin-only pages are unaffected.
           </p>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '0.75rem' }}>
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
             {MANAGER_PAGES.map(p => {
               const on = pageVisibility[p.href] !== false
               return (
-                <div key={p.href} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.6rem 0.85rem', borderRadius: 8, border: '1px solid #E2E6F0', background: '#FAFBFC' }}>
-                  <span style={{ fontSize: 13, fontWeight: 500, color: '#050C29' }}>{p.label}</span>
-                  <label style={{ position: 'relative', display: 'inline-block', width: 38, height: 22, flexShrink: 0 }}>
+                <label
+                  key={p.href}
+                  className="flex cursor-pointer items-center justify-between rounded-lg border border-border bg-background px-3.5 py-2.5"
+                >
+                  <span className="text-[13px] font-medium text-foreground">{p.label}</span>
+                  <span className="relative inline-flex h-5 w-9 shrink-0 items-center">
                     <input
                       type="checkbox"
                       checked={on}
                       onChange={e => togglePage(p.href, e.target.checked)}
-                      style={{ opacity: 0, width: 0, height: 0 }}
+                      className="peer sr-only"
                     />
-                    <span
-                      style={{
-                        position: 'absolute',
-                        cursor: 'pointer',
-                        inset: 0,
-                        background: on ? '#1F6F78' : '#D1D5DB',
-                        borderRadius: 22,
-                        transition: '0.2s',
-                      }}
-                    >
-                      <span style={{
-                        position: 'absolute',
-                        content: '',
-                        height: 16,
-                        width: 16,
-                        left: on ? 'calc(100% - 19px)' : 3,
-                        bottom: 3,
-                        background: 'white',
-                        borderRadius: '50%',
-                        transition: '0.2s',
-                      }} />
-                    </span>
-                  </label>
-                </div>
+                    <span className={cn(
+                      'absolute inset-0 rounded-full transition-colors',
+                      on ? 'bg-primary' : 'bg-muted-foreground/30',
+                    )} />
+                    <span className={cn(
+                      'absolute h-3.5 w-3.5 rounded-full bg-white transition-all',
+                      on ? 'left-[18px]' : 'left-1',
+                    )} />
+                  </span>
+                </label>
               )
             })}
           </div>
-          <div style={{ marginTop: '1.25rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
-            <button onClick={savePageVisibility} className="o-btn o-btn-primary">Save</button>
-            {pvSaved && <span style={{ fontSize: 12, color: '#16A34A' }}>Saved</span>}
+          <div className="mt-4 flex items-center gap-3">
+            <Button onClick={savePageVisibility}>Save</Button>
+            {pvSaved && <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">Saved</span>}
           </div>
         </div>
-      </div>
-
-      {/* ── Client Accounts ── */}
-      <div className="o-section-h">Client Accounts</div>
-
-      <div className="o-card">
-        <div className="o-card-body">
-          <div className="o-table-wrap">
-            <table className="o-table" style={{ minWidth: 700 }}>
-              <thead>
-                <tr>
-                  <th>Username</th>
-                  <th>Workspace</th>
-                  <th>Workspace ID</th>
-                  <th>Plan Leads</th>
-                  <th>Price/Lead</th>
-                  <th>Created</th>
-                  <th>New Password</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {clientsLoading ? (
-                  <tr><td colSpan={8}><div className="o-empty"><span className="o-spin" /> Loading…</div></td></tr>
-                ) : clients.length === 0 ? (
-                  <tr><td colSpan={8}><div className="o-empty">No client accounts yet.</div></td></tr>
-                ) : clients.map(c => (
-                  <tr key={c.id}>
-                    <td style={{ fontWeight: 700 }}>{c.username}</td>
-                    <td>{c.workspace_name}</td>
-                    <td style={{ fontFamily: 'monospace', fontSize: 12, color: '#6B7280' }}>{c.workspace_id}</td>
-                    <td>
-                      <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
-                        <input
-                          type="number"
-                          value={clientPlanLeads[c.id] ?? c.plan_leads}
-                          onChange={e => setClientPlanLeads(prev => ({ ...prev, [c.id]: e.target.value }))}
-                          min={0}
-                          className="o-input"
-                          style={{ width: 80 }}
-                        />
-                        <button className="o-btn o-btn-primary o-btn-sm" onClick={() => saveClientFields(c.id)}>Save</button>
-                      </div>
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                        <span style={{ fontSize: 12, color: '#6B7280' }}>£</span>
-                        <input
-                          type="number"
-                          value={clientPricePerLead[c.id] ?? c.price_per_lead}
-                          onChange={e => setClientPricePerLead(prev => ({ ...prev, [c.id]: e.target.value }))}
-                          min={0} step={0.01}
-                          className="o-input"
-                          style={{ width: 80 }}
-                        />
-                      </div>
-                    </td>
-                    <td style={{ color: '#9CA3AF' }}>{c.created_at?.split('T')[0] || '—'}</td>
-                    <td>
-                      <div style={{ display: 'flex', gap: 6 }}>
-                        <input
-                          type="password"
-                          value={clientPasswords[c.id] ?? ''}
-                          onChange={e => setClientPasswords(prev => ({ ...prev, [c.id]: e.target.value }))}
-                          placeholder="New password"
-                          className="o-input"
-                          style={{ width: 130 }}
-                        />
-                        <button className="o-btn o-btn-primary o-btn-sm" onClick={() => resetClientPassword(c.id)}>Reset</button>
-                      </div>
-                    </td>
-                    <td>
-                      <button className="o-btn o-btn-danger o-btn-sm" onClick={() => deleteClient(c.id, c.username)}>Delete</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-    </div>
+      )}
+    </PageShell>
   )
 }
