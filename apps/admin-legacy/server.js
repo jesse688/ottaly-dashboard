@@ -697,6 +697,102 @@ app.get('/api/contacts/export', requireSession, async (req, res) => {
   res.send(csv);
 });
 
+// ── Engine Leads ──────────────────────────────────────────
+// Read-only view over ottaly_engine_leads — clean B2B leads the autonomous
+// data engine promotes into prod. Table grows 24/7, so always paginate.
+// Shared helper: build the WHERE clause + params from query filters so the
+// list and export endpoints stay in sync.
+function buildEngineLeadsFilter(q) {
+  const industry    = (q.industry  || '').trim() || null;
+  const region      = (q.region    || '').trim() || null;
+  const platform    = (q.platform  || '').trim() || null;
+  const search      = (q.search    || '').trim() || null;
+  // has_products: 'true' | 'false' | anything-else => no filter (null)
+  let hasProducts = null;
+  if (q.has_products === 'true')  hasProducts = true;
+  if (q.has_products === 'false') hasProducts = false;
+
+  const where = `
+    WHERE ($1::text IS NULL OR industry ILIKE '%'||$1||'%')
+      AND ($2::text IS NULL OR region   ILIKE '%'||$2||'%')
+      AND ($3::bool IS NULL OR has_products = $3)
+      AND ($4::text IS NULL OR platform ILIKE '%'||$4||'%')
+      AND ($5::text IS NULL OR domain ILIKE '%'||$5||'%' OR company_name ILIKE '%'||$5||'%')`;
+
+  return { where, params: [industry, region, hasProducts, platform, search] };
+}
+
+app.get('/api/engine-leads', requireSession, async (req, res) => {
+  const pgdb = req.app.locals.pgDb;
+  if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
+
+  const limit  = Math.min(parseInt(req.query.limit || '50', 10) || 50, 200);
+  const offset = Math.max(parseInt(req.query.offset || '0', 10) || 0, 0);
+
+  const { where, params } = buildEngineLeadsFilter(req.query);
+
+  try {
+    const countRes = await pgdb.query(
+      `SELECT COUNT(*)::int AS n FROM ottaly_engine_leads ${where}`,
+      params
+    );
+    const total = countRes.rows[0].n;
+
+    const { rows } = await pgdb.query(
+      `SELECT * FROM ottaly_engine_leads ${where}
+       ORDER BY promoted_at DESC NULLS LAST
+       LIMIT $6 OFFSET $7`,
+      [...params, limit, offset]
+    );
+
+    res.json({ total, limit, offset, count: rows.length, leads: rows });
+  } catch (e) {
+    console.error('[engine-leads] query failed:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/engine-leads/export', requireSession, async (req, res) => {
+  const pgdb = req.app.locals.pgDb;
+  if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
+
+  const { where, params } = buildEngineLeadsFilter(req.query);
+
+  try {
+    const { rows } = await pgdb.query(
+      `SELECT domain, company_name, company_number, email_primary, emails,
+              phones, director_name, address, postcode, sic_code, industry,
+              region, company_size, linkedin_url, has_products, product_count,
+              page_count, platform, promoted_at
+       FROM ottaly_engine_leads ${where}
+       ORDER BY promoted_at DESC NULLS LAST`,
+      params
+    );
+
+    const cols = [
+      'Domain', 'Company Name', 'Company Number', 'Email', 'All Emails',
+      'Phones', 'Director', 'Address', 'Postcode', 'SIC Code', 'Industry',
+      'Region', 'Company Size', 'LinkedIn', 'Has Products', 'Product Count',
+      'Page Count', 'Platform', 'Promoted At',
+    ];
+    const arr = v => Array.isArray(v) ? v.join('; ') : (v == null ? '' : v);
+    const esc = v => v == null ? '' : `"${String(v).replace(/"/g, '""')}"`;
+    const csv = [cols.join(','), ...rows.map(r => [
+      r.domain, r.company_name, r.company_number, r.email_primary, arr(r.emails),
+      arr(r.phones), r.director_name, r.address, r.postcode, r.sic_code, r.industry,
+      r.region, r.company_size, r.linkedin_url, r.has_products, r.product_count,
+      r.page_count, r.platform, r.promoted_at,
+    ].map(esc).join(','))].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="engine-leads.csv"`);
+    res.send(csv);
+  } catch (e) {
+    console.error('[engine-leads/export] query failed:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/admin/export-missing-enrichment', requireAdmin, async (req, res) => {
   const pgdb = app.locals.pgDb;
   if (!pgdb) return res.status(503).json({ error: 'Database not available' });
