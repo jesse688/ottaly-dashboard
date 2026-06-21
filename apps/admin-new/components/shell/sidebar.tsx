@@ -62,82 +62,103 @@ const CATEGORIES: Category[] = [
   },
 ]
 
-/** Legacy-style rail: colored category groups, hover reveals a dropdown of its pages. */
+/** Legacy-style rail: colored category groups, hover reveals a dropdown of its pages.
+ *  The dropdown is rendered as a fixed-position layer so the rail's scroll/overflow
+ *  can never clip it (the bug where the flyout was hidden). */
 export function Sidebar() {
   const pathname = usePathname()
   const [open, setOpen] = useState<string | null>(null)
+  const [flyTop, setFlyTop] = useState(0)
+
+  const openCat = CATEGORIES.find(c => c.key === open) ?? null
+
+  function handleEnter(key: string, e: React.MouseEvent<HTMLDivElement>) {
+    const rect = e.currentTarget.getBoundingClientRect()
+    setFlyTop(rect.top)
+    setOpen(key)
+  }
 
   return (
-    <aside className="fixed inset-y-0 left-0 z-30 flex w-[84px] flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
-      <div className="flex h-14 items-center justify-center border-b border-sidebar-border">
-        <Image src="/favicon.svg" alt="Ottaly" width={30} height={30} priority className="h-[30px] w-[30px]" />
-      </div>
+    <>
+      <aside className="fixed inset-y-0 left-0 z-30 flex w-[84px] flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
+        <div className="flex h-14 items-center justify-center border-b border-sidebar-border">
+          <Image src="/favicon.svg" alt="Ottaly" width={30} height={30} priority className="h-[30px] w-[30px]" />
+        </div>
 
-      <nav className="flex-1 overflow-y-auto overflow-x-visible py-2 [scrollbar-width:none]">
-        {CATEGORIES.map(cat => {
-          const Icon = cat.icon
-          const activeInCat = cat.items.some(i => pathname === i.href || pathname.startsWith(i.href + '/'))
-          const isOpen = open === cat.key
-          return (
-            <div
-              key={cat.key}
-              className="relative px-1.5"
-              onMouseEnter={() => setOpen(cat.key)}
-              onMouseLeave={() => setOpen(null)}
-            >
-              <button
-                type="button"
-                className={cn(
-                  'flex w-full flex-col items-center gap-1 rounded-md py-2.5 transition-colors',
-                  activeInCat ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent',
-                )}
-                style={{ color: activeInCat || isOpen ? cat.color : undefined }}
+        <nav className="flex-1 overflow-y-auto py-2 [scrollbar-width:none]">
+          {CATEGORIES.map(cat => {
+            const Icon = cat.icon
+            const activeInCat = cat.items.some(i => pathname === i.href || pathname.startsWith(i.href + '/'))
+            const isOpen = open === cat.key
+            return (
+              <div
+                key={cat.key}
+                className="px-1.5"
+                onMouseEnter={(e) => handleEnter(cat.key, e)}
+                onMouseLeave={() => setOpen(null)}
               >
-                <Icon size={20} strokeWidth={2} style={{ color: cat.color }} />
-                <span
-                  className="text-[9px] font-bold uppercase leading-none tracking-wide"
-                  style={{ color: activeInCat || isOpen ? cat.color : undefined }}
+                <button
+                  type="button"
+                  className={cn(
+                    'flex w-full flex-col items-center gap-1 rounded-md py-2.5 transition-colors',
+                    activeInCat || isOpen ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent',
+                  )}
                 >
-                  {cat.label}
-                </span>
-              </button>
-
-              {/* Hover dropdown flyout */}
-              {isOpen && (
-                <div className="absolute left-[80px] top-0 z-50 min-w-[190px] overflow-hidden rounded-lg border border-border bg-popover py-1.5 shadow-xl">
-                  <div
-                    className="px-3 pb-1.5 pt-1 text-[10px] font-bold uppercase tracking-wider"
-                    style={{ color: cat.color }}
+                  <Icon size={20} strokeWidth={2} style={{ color: cat.color }} />
+                  <span
+                    className="text-[9px] font-bold uppercase leading-none tracking-wide"
+                    style={{ color: activeInCat || isOpen ? cat.color : undefined }}
                   >
                     {cat.label}
-                  </div>
-                  {cat.items.map(item => {
-                    const active = pathname === item.href || pathname.startsWith(item.href + '/')
-                    return (
-                      <Link
-                        key={item.href}
-                        href={item.href}
-                        className={cn(
-                          'block px-3 py-1.5 text-[13px] font-medium transition-colors',
-                          active
-                            ? 'bg-accent text-foreground'
-                            : 'text-muted-foreground hover:bg-accent hover:text-foreground',
-                        )}
-                      >
-                        {item.label}
-                      </Link>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
-          )
-        })}
-      </nav>
+                  </span>
+                </button>
+              </div>
+            )
+          })}
+        </nav>
 
-      <div className="flex items-center justify-center border-t border-sidebar-border py-2">
-        <ThemeToggle />
-      </div>
-    </aside>
+        <div className="flex items-center justify-center border-t border-sidebar-border py-2">
+          <ThemeToggle />
+        </div>
+      </aside>
+
+      {/* Fixed flyout — sits above everything, bridges the gap back to the rail so it
+          doesn't close while the cursor travels across. */}
+      {openCat && (
+        <div
+          className="fixed left-[84px] z-50"
+          style={{ top: flyTop }}
+          onMouseEnter={() => setOpen(openCat.key)}
+          onMouseLeave={() => setOpen(null)}
+        >
+          <div className="min-w-[200px] overflow-hidden rounded-lg border border-border bg-popover py-1.5 shadow-2xl">
+            <div
+              className="px-3 pb-1.5 pt-1 text-[10px] font-bold uppercase tracking-wider"
+              style={{ color: openCat.color }}
+            >
+              {openCat.label}
+            </div>
+            {openCat.items.map(item => {
+              const active = pathname === item.href || pathname.startsWith(item.href + '/')
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  onClick={() => setOpen(null)}
+                  className={cn(
+                    'block px-3 py-1.5 text-[13px] font-medium transition-colors',
+                    active
+                      ? 'bg-accent text-foreground'
+                      : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+                  )}
+                >
+                  {item.label}
+                </Link>
+              )
+            })}
+          </div>
+        </div>
+      )}
+    </>
   )
 }
