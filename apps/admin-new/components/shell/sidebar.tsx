@@ -5,7 +5,7 @@ import Link from 'next/link'
 import Image from 'next/image'
 import { usePathname } from 'next/navigation'
 import {
-  Server, BarChart3, Users, Wallet, Settings,
+  Server, BarChart3, Users, Wallet, Settings, Database,
   PanelLeftClose, PanelLeftOpen, type LucideIcon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -30,6 +30,18 @@ const CATEGORIES: Category[] = [
       { href: '/mailboxes', label: 'Mailboxes' },
       { href: '/warmup', label: 'Warmup' },
       { href: '/apollo-prep', label: 'Apollo Prep' },
+    ],
+  },
+  {
+    key: 'data', label: 'Data', icon: Database, color: '#22D3EE', // cyan
+    items: [
+      { href: '/data', label: 'Contacts' },
+      { href: '/data/engine-leads', label: 'Engine Leads' },
+      { href: '/data/ch-pipeline', label: 'CH Pipeline' },
+      { href: '/data/enrichment', label: 'Enrichment' },
+      { href: '/data/database', label: 'Database' },
+      { href: '/data/verify-split', label: 'Verify Split' },
+      { href: '/data/combo-analysis', label: 'Combo Analysis' },
     ],
   },
   {
