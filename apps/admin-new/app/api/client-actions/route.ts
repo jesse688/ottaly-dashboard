@@ -39,21 +39,35 @@ export async function GET() {
     )
     const fresh = await getCacheFreshness('client_actions_cache')
     return NextResponse.json({
-      rows: rows.map(r => ({
-        workspace_id: r.workspace_id,
-        name: r.workspace_name || r.workspace_id,
-        sent: r.sent, replies: r.replies, oooReplies: r.ooo_replies, bounces: r.bounces, leads: r.leads,
-        replyRate: r.reply_rate ?? (r.sent > 0 ? r.replies / r.sent : 0), // Human RR
-        allReplyRate: r.all_reply_rate ?? (r.sent > 0 ? (r.replies + r.ooo_replies) / r.sent : 0), // incl. OOO
-        bounceRate: r.bounce_rate ?? (r.sent > 0 ? r.bounces / r.sent : 0),
-        leadsLeftPct: r.leads_left_pct,
-        activeCampaigns: r.active_campaigns,
-        pausedCampaigns: r.paused_campaigns,
-        warmupPct: r.warmup_pct,
-        lastSendDate: r.last_send_date,
-        status: r.status ?? 'ok',
-        flagged: r.flagged,
-      })),
+      rows: rows.map(r => {
+        const replyRate = r.reply_rate ?? (r.sent > 0 ? r.replies / r.sent : 0)
+        const allReplyRate = r.all_reply_rate ?? (r.sent > 0 ? (r.replies + r.ooo_replies) / r.sent : 0)
+        const bounceRate = r.bounce_rate ?? (r.sent > 0 ? r.bounces / r.sent : 0)
+        const status = (r.status ?? 'ok') as 'ok' | 'not_sending' | 'need_data'
+        const leadsLeftPct = r.leads_left_pct
+        // Tri-state health (legacy buildClientHealth): red = stopped or reputation
+        // damage, amber = running low / monitor, green = healthy.
+        const highBounce = r.sent > 20 && bounceRate > 0.05
+        const lowData = leadsLeftPct !== null && leadsLeftPct <= 0.2
+        const health: 'red' | 'amber' | 'green' =
+          status === 'not_sending' || highBounce ? 'red'
+          : status === 'need_data' || lowData ? 'amber'
+          : 'green'
+        return {
+          workspace_id: r.workspace_id,
+          name: r.workspace_name || r.workspace_id,
+          sent: r.sent, replies: r.replies, oooReplies: r.ooo_replies, bounces: r.bounces, leads: r.leads,
+          replyRate, allReplyRate, bounceRate,
+          leadsLeftPct,
+          activeCampaigns: r.active_campaigns,
+          pausedCampaigns: r.paused_campaigns,
+          warmupPct: r.warmup_pct,
+          lastSendDate: r.last_send_date,
+          status,
+          health,
+          flagged: r.flagged,
+        }
+      }),
       syncedAt: fresh.syncedAt,
     })
   } catch (err) {

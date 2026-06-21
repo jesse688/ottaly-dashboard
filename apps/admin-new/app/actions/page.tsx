@@ -9,6 +9,7 @@ import { StatusBadge, type StatusTone } from '@/components/ui/status-badge'
 // ── Types ────────────────────────────────────────────────────────────────────
 
 type ActionStatus = 'ok' | 'not_sending' | 'need_data'
+type Health = 'red' | 'amber' | 'green'
 
 interface ClientRow {
   workspace_id: string
@@ -27,8 +28,13 @@ interface ClientRow {
   warmupPct: number | null
   lastSendDate: string | null
   status: ActionStatus
+  health: Health
   flagged: boolean
 }
+
+// Legacy leads tracker (Google Sheet) — same source the legacy board linked to.
+const LEADS_CSV_URL =
+  'https://docs.google.com/spreadsheets/d/1F6UQJ_om6ZeAdEs9IMy_GQOY_daysUeuBeiOMnwzb9k/edit'
 
 interface ActionsResponse {
   rows: ClientRow[]
@@ -44,6 +50,31 @@ const pct = (n: number | null | undefined) =>
   n === null || n === undefined ? '—' : `${(n * 100).toFixed(1)}%`
 const pctWhole = (n: number | null | undefined) =>
   n === null || n === undefined ? '—' : `${Math.round(n)}%`
+
+// Days since the last lead (last_send_date is a TEXT/date column → parse safely).
+function daysSince(date: string | null): number | null {
+  if (!date) return null
+  const t = Date.parse(date)
+  if (Number.isNaN(t)) return null
+  return Math.floor((Date.now() - t) / 86_400_000)
+}
+
+function lastLeadLabel(days: number | null): { text: string; cls: string } {
+  if (days === null) return { text: 'No data', cls: 'text-amber-600 dark:text-amber-400' }
+  if (days <= 0) return { text: 'Today', cls: 'text-emerald-600 dark:text-emerald-400' }
+  if (days === 1) return { text: 'Yesterday', cls: 'text-emerald-600 dark:text-emerald-400' }
+  const cls =
+    days > 14 ? 'text-destructive'
+    : days > 7 ? 'text-amber-600 dark:text-amber-400'
+    : 'text-emerald-600 dark:text-emerald-400'
+  return { text: `${days}d ago`, cls }
+}
+
+const HEALTH_DOT: Record<Health, string> = {
+  red: 'bg-destructive',
+  amber: 'bg-amber-500',
+  green: 'bg-emerald-500',
+}
 
 const STATUS_META: Record<ActionStatus, { tone: StatusTone; label: string }> = {
   ok: { tone: 'ok', label: 'Sending' },
@@ -112,11 +143,19 @@ export default function ActionsPage() {
     [visibleRows],
   )
 
+  // Tri-state health summary (legacy red/amber/green pills).
+  const healthCounts = useMemo(() => {
+    const c = { red: 0, amber: 0, green: 0 }
+    for (const r of visibleRows) c[r.health]++
+    return c
+  }, [visibleRows])
+
   const columns: Column<ClientRow>[] = [
     {
       key: 'name', header: 'Client', sortValue: r => r.name.toLowerCase(),
       cell: r => (
         <div className="flex items-center gap-2">
+          <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${HEALTH_DOT[r.health]}`} title={r.health} />
           <span className="font-semibold text-foreground">{r.name}</span>
           {r.flagged && <StatusBadge status="warn">flag</StatusBadge>}
         </div>
@@ -142,6 +181,14 @@ export default function ActionsPage() {
       ),
     },
     { key: 'leads', header: 'Leads', numeric: true, sortValue: r => r.leads, cell: r => num(r.leads) },
+    {
+      key: 'lastLead', header: 'Last Lead',
+      sortValue: r => daysSince(r.lastSendDate) ?? 9999,
+      cell: r => {
+        const { text, cls } = lastLeadLabel(daysSince(r.lastSendDate))
+        return <span className={`font-semibold ${cls}`}>{text}</span>
+      },
+    },
     {
       key: 'leadsLeftPct', header: 'Leads left', numeric: true,
       sortValue: r => r.leadsLeftPct ?? -1,
@@ -187,6 +234,14 @@ export default function ActionsPage() {
       freshness={{ table: 'client_actions_cache', syncedAt: data?.syncedAt ?? null }}
       actions={
         <div className="flex items-center gap-2">
+          <a
+            href={LEADS_CSV_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded-md border border-border bg-card px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+          >
+            Leads tracker ↗
+          </a>
           {hidden.size > 0 && (
             <button onClick={restoreAll}
               className="rounded-md border border-border bg-card px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground">
@@ -205,6 +260,27 @@ export default function ActionsPage() {
         <KpiCard label="Not Sending" value={num(notSending.length)} tone="red" sub="all campaigns paused" loading={status === 'loading'} />
         <KpiCard label="Need Data" value={num(needData.length)} tone="yellow" sub="≤20% leads left" loading={status === 'loading'} />
       </div>
+
+      {/* Tri-state health summary pills (legacy red / amber / green). */}
+      {status === 'ok' && visibleRows.length > 0 && (
+        <div className="mb-5 flex flex-wrap gap-2">
+          {healthCounts.red > 0 && (
+            <div className="flex items-center gap-2 rounded-lg bg-destructive/10 px-3.5 py-1.5 text-sm font-semibold text-destructive">
+              <span className="text-lg leading-none">{healthCounts.red}</span> Need attention
+            </div>
+          )}
+          {healthCounts.amber > 0 && (
+            <div className="flex items-center gap-2 rounded-lg bg-amber-500/10 px-3.5 py-1.5 text-sm font-semibold text-amber-600 dark:text-amber-400">
+              <span className="text-lg leading-none">{healthCounts.amber}</span> Monitor
+            </div>
+          )}
+          {healthCounts.green > 0 && (
+            <div className="flex items-center gap-2 rounded-lg bg-emerald-500/10 px-3.5 py-1.5 text-sm font-semibold text-emerald-600 dark:text-emerald-400">
+              <span className="text-lg leading-none">{healthCounts.green}</span> Healthy
+            </div>
+          )}
+        </div>
+      )}
 
       {status === 'error' && (
         <div className="mb-5 rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">

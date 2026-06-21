@@ -18,7 +18,13 @@ interface Lead {
   lead_price: number | string
   date: string
   label: string
+  is_nonlead: boolean
   updated_at: string | null
+}
+interface RevenueResponse {
+  leads: Lead[]
+  period?: string
+  error?: string
 }
 interface WsSummary {
   workspace_id: string
@@ -26,15 +32,12 @@ interface WsSummary {
   leads: number
   revenue: number
 }
-interface RevenueResponse {
-  leads: Lead[]
-  summary: WsSummary[]
-  error?: string
-}
 
 // ── Format helpers ─────────────────────────────────────────────────────────────
 const num = (n: number) => (n || 0).toLocaleString('en-GB')
 const gbp = (n: number) =>
+  '£' + (n || 0).toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 2 })
+const gbp0 = (n: number) =>
   '£' + (n || 0).toLocaleString('en-GB', { maximumFractionDigits: 0 })
 const priceOf = (l: Lead) => {
   const p = typeof l.lead_price === 'number' ? l.lead_price : parseFloat(l.lead_price)
@@ -43,22 +46,21 @@ const priceOf = (l: Lead) => {
 const dateOf = (l: Lead) => (l.date ? l.date.slice(0, 10) : '')
 
 export default function RevenuePage() {
-  const [period, setPeriod] = useState<PeriodKey>('this_month')
+  const [period, setPeriod] = useState<PeriodKey>('all_time')
   const [leads, setLeads] = useState<Lead[]>([])
   const [status, setStatus] = useState<'loading' | 'ok' | 'empty' | 'error'>('loading')
   const [errMsg, setErrMsg] = useState('')
   const [syncedAt, setSyncedAt] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  const [includeNonLeads, setIncludeNonLeads] = useState(false)
 
   const load = useCallback(async () => {
     setStatus('loading'); setErrMsg('')
     try {
       const r = await fetch('/api/revenue')
-      if (!r.ok) throw new Error(`Server returned ${r.status}`)
       const data: RevenueResponse = await r.json()
-      if (data.error) throw new Error(data.error)
+      if (!r.ok || data.error) throw new Error(data.error || `Server returned ${r.status}`)
       const rows = data.leads || []
-      // Freshness: latest updated_at across frozen rows.
       const latest = rows.reduce<string | null>((acc, l) => {
         if (!l.updated_at) return acc
         return !acc || l.updated_at > acc ? l.updated_at : acc
@@ -67,7 +69,6 @@ export default function RevenuePage() {
       setLeads(rows)
       setStatus(rows.length ? 'ok' : 'empty')
     } catch (e) {
-      // Visible error — never a silent blank.
       setStatus('error')
       setErrMsg(e instanceof Error ? e.message : String(e))
     }
@@ -77,6 +78,7 @@ export default function RevenuePage() {
 
   // Period filter (client-side; data is frozen so range-filter by lead date).
   const periodLeads = useMemo(() => {
+    if (period === 'all_time') return leads
     const { start, end } = periodRange(period)
     return leads.filter(l => {
       const d = dateOf(l)
@@ -84,10 +86,21 @@ export default function RevenuePage() {
     })
   }, [leads, period])
 
-  // Per-workspace summary recomputed for the active period.
+  // Counted leads exclude non-leads unless the toggle is on (legacy revenue rule).
+  const countedLeads = useMemo(
+    () => (includeNonLeads ? periodLeads : periodLeads.filter(l => !l.is_nonlead)),
+    [periodLeads, includeNonLeads],
+  )
+  const nonLeadCount = useMemo(
+    () => periodLeads.filter(l => l.is_nonlead).length,
+    [periodLeads],
+  )
+
+  // Per-workspace summary recomputed for the active period (real leads only).
   const summary = useMemo<WsSummary[]>(() => {
     const by: Record<string, WsSummary> = {}
     for (const l of periodLeads) {
+      if (l.is_nonlead) continue
       const k = l.workspace_id
       if (!by[k]) by[k] = { workspace_id: k, name: l.workspace_name, leads: 0, revenue: 0 }
       by[k].leads++
@@ -96,20 +109,22 @@ export default function RevenuePage() {
     return Object.values(by).sort((a, b) => b.revenue - a.revenue)
   }, [periodLeads])
 
-  // Lead table with search.
+  // Lead table with search (operates on the counted set).
   const filtered = useMemo(() => {
-    if (!search) return periodLeads
+    if (!search) return countedLeads
     const q = search.toLowerCase()
-    return periodLeads.filter(l =>
+    return countedLeads.filter(l =>
       l.lead_email?.toLowerCase().includes(q) ||
       l.workspace_name?.toLowerCase().includes(q) ||
-      l.campaign?.toLowerCase().includes(q),
+      l.campaign?.toLowerCase().includes(q) ||
+      `${l.first_name} ${l.last_name}`.toLowerCase().includes(q),
     )
-  }, [periodLeads, search])
+  }, [countedLeads, search])
 
   const totalRevenue = summary.reduce((s, r) => s + r.revenue, 0)
   const totalLeads = summary.reduce((s, r) => s + r.leads, 0)
   const avgPerLead = totalLeads > 0 ? totalRevenue / totalLeads : 0
+  const filteredRevenue = filtered.reduce((s, l) => s + (l.is_nonlead ? 0 : priceOf(l)), 0)
   const loading = status === 'loading'
 
   const summaryColumns: Column<WsSummary>[] = [
@@ -141,33 +156,44 @@ export default function RevenuePage() {
     },
     {
       key: 'email', header: 'Email', sortValue: l => l.lead_email?.toLowerCase() ?? '',
-      cell: l => <span className="font-mono text-[12px] text-muted-foreground">{l.lead_email}</span>,
+      cell: l => (
+        <span className="flex items-center gap-2">
+          <span className="font-mono text-[12px] text-muted-foreground">{l.lead_email || '—'}</span>
+          {l.is_nonlead && <StatusBadge status="neutral">non-lead</StatusBadge>}
+        </span>
+      ),
     },
     {
       key: 'campaign', header: 'Campaign', sortValue: l => l.campaign?.toLowerCase() ?? '',
-      cell: l => <span className="block max-w-[16rem] truncate text-foreground">{l.campaign}</span>,
+      cell: l => <span className="block max-w-[16rem] truncate text-foreground" title={l.campaign}>{l.campaign || '—'}</span>,
     },
     {
       key: 'label', header: 'Label',
-      cell: l => (l.label ? <StatusBadge status="ok">{l.label}</StatusBadge> : <span className="text-muted-foreground">—</span>),
+      cell: l => (l.label
+        ? <StatusBadge status={l.is_nonlead ? 'neutral' : 'ok'}>{l.label}</StatusBadge>
+        : <span className="text-muted-foreground">—</span>),
     },
     {
       key: 'price', header: 'Price', numeric: true, sortValue: l => priceOf(l),
-      cell: l => <span className="font-medium text-foreground">{gbp(priceOf(l))}</span>,
+      cell: l => (
+        <span className={l.is_nonlead ? 'text-muted-foreground line-through' : 'font-medium text-foreground'}>
+          {gbp(priceOf(l))}
+        </span>
+      ),
     },
   ]
 
   return (
     <PageShell
       title="Revenue"
-      subtitle="Frozen pay-per-lead revenue from revenue_leads · per-workspace totals · never live"
-      freshness={{ table: 'workspace_stats', syncedAt }}
+      subtitle="Frozen pay-per-lead revenue from revenue_leads · all-time · never live"
+      freshness={{ table: 'revenue_leads', syncedAt }}
       actions={<PeriodFilter value={period} onChange={setPeriod} />}
     >
       {/* KPIs */}
       <div className="mb-5 grid grid-cols-2 gap-4 md:grid-cols-4">
-        <KpiCard label="Revenue" value={gbp(totalRevenue)} tone="green" loading={loading} />
-        <KpiCard label="Leads" value={num(totalLeads)} tone="teal" loading={loading} />
+        <KpiCard label="Revenue" value={gbp0(totalRevenue)} tone="green" loading={loading} />
+        <KpiCard label="Leads delivered" value={num(totalLeads)} tone="teal" loading={loading} />
         <KpiCard label="Avg / Lead" value={gbp(avgPerLead)} tone="purple" loading={loading} />
         <KpiCard label="Workspaces" value={num(summary.length)} tone="navy" loading={loading} />
       </div>
@@ -184,7 +210,7 @@ export default function RevenuePage() {
 
       {status === 'empty' && (
         <div className="rounded-lg border border-border bg-card p-12 text-center text-sm text-muted-foreground">
-          No revenue recorded.
+          No revenue recorded in revenue_leads.
         </div>
       )}
 
@@ -198,18 +224,39 @@ export default function RevenuePage() {
               getRowKey={w => w.workspace_id}
               empty={loading ? 'Loading…' : 'No revenue for this period.'}
             />
+            {/* Totals row */}
+            <div className="mt-2 flex items-center justify-end gap-6 rounded-md border border-border bg-card px-4 py-2 text-sm">
+              <span className="text-muted-foreground">Totals</span>
+              <span className="text-foreground">{num(totalLeads)} leads</span>
+              <span className="font-semibold text-primary">{gbp(totalRevenue)}</span>
+            </div>
           </section>
 
           <section>
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-sm font-semibold text-foreground">Leads</h2>
-              <input
-                type="text"
-                placeholder="Search email, workspace, campaign…"
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                className="w-full max-w-xs rounded-md border border-border bg-card px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
-              />
+              <h2 className="text-sm font-semibold text-foreground">
+                Leads detail
+                <span className="ml-2 font-normal text-muted-foreground">{num(filtered.length)} shown</span>
+              </h2>
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={includeNonLeads}
+                    onChange={e => setIncludeNonLeads(e.target.checked)}
+                    className="accent-primary"
+                  />
+                  Show non-leads
+                  {nonLeadCount > 0 && <span className="text-foreground">({nonLeadCount})</span>}
+                </label>
+                <input
+                  type="text"
+                  placeholder="Search email, name, workspace, campaign…"
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  className="w-full max-w-xs rounded-md border border-border bg-card px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
+              </div>
             </div>
             <DataTable
               columns={leadColumns}
@@ -217,6 +264,13 @@ export default function RevenuePage() {
               getRowKey={(l, i) => `${l.workspace_id}:${l.lead_email}:${i}`}
               empty={loading ? 'Loading…' : 'No leads match.'}
             />
+            {/* Totals row */}
+            <div className="mt-2 flex items-center justify-end gap-6 rounded-md border border-border bg-card px-4 py-2 text-sm">
+              <span className="text-muted-foreground">
+                {num(filtered.length)} rows{includeNonLeads ? ` · ${num(nonLeadCount)} non-leads (£0)` : ''}
+              </span>
+              <span className="font-semibold text-primary">{gbp(filteredRevenue)}</span>
+            </div>
           </section>
         </div>
       )}

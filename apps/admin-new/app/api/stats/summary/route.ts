@@ -24,6 +24,7 @@ interface Workspace {
     bounces: number
     leads: number
     replyRate: number
+    allReplyRate: number
     bounceRate: number
     rtl: number
     sendsPerDay: number
@@ -138,7 +139,10 @@ export async function GET(req: NextRequest) {
         name: ws.workspace_name || ws.workspace_id,
         totals: {
           ...totals,
+          // Human Reply Rate: genuine human replies only (warmup + OOO excluded).
           replyRate: totals.sent > 0 ? totals.replies / totals.sent : 0,
+          // Reply Rate (all): human + OOO/automatic. Warmup never counted.
+          allReplyRate: totals.sent > 0 ? (totals.replies + totals.oooReplies) / totals.sent : 0,
           bounceRate: totals.sent > 0 ? totals.bounces / totals.sent : 0,
           rtl: totals.replies > 0 ? totals.leads / totals.replies : 0,
           sendsPerDay: totals.sent / days,

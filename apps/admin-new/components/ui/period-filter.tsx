@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils'
 
 export type PeriodKey =
   | 'today' | '7d' | '14d' | '30d'
-  | 'this_week' | 'last_week' | 'this_month' | 'last_month' | 'this_year'
+  | 'this_week' | 'last_week' | 'this_month' | 'last_month' | 'this_year' | 'all_time'
 
 export const PERIOD_PRESETS: { key: PeriodKey; label: string }[] = [
   { key: 'today', label: 'Today' },
@@ -16,6 +16,7 @@ export const PERIOD_PRESETS: { key: PeriodKey; label: string }[] = [
   { key: 'this_month', label: 'This Month' },
   { key: 'last_month', label: 'Last Month' },
   { key: 'this_year', label: 'This Year' },
+  { key: 'all_time', label: 'All Time' },
 ]
 
 /** All ranges resolved in Europe/London so day boundaries match the ESP/Bison day. */
@@ -46,6 +47,7 @@ export function periodRange(p: PeriodKey, now = new Date()): { start: string; en
       return { start, end: fmt(e) }
     }
     case 'this_year': return { start: today.slice(0, 4) + '-01-01', end: today }
+    case 'all_time': return { start: '0000-01-01', end: today }
   }
 }
 
