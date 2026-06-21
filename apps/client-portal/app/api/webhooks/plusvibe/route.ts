@@ -3,7 +3,7 @@ import pool from '@/lib/db'
 import crypto from 'crypto'
 import { notifyClientOfLead, notifyClientOfLeadReply } from '@/lib/email'
 import { enrichLead, leadCompanyOrNull } from '@/lib/sync'
-import { enrichReplyWithCH, enrichUniboxReply } from '@/lib/enrich'
+import { enrichUniboxReply } from '@/lib/enrich'
 import { ready } from '@/lib/db'
 import { bisonTeamToWorkspace } from '@/lib/bison'
 import { notifyAdmin } from '@/lib/notify'
@@ -425,15 +425,10 @@ async function handleBison(raw: Record<string, unknown>, deliveryId: string | nu
           leadBisonId,
           body: reply.html_body ?? reply.text_body ?? null,
         }).catch(() => {})
-
-        // Also enrich with verified Companies House data at intake, so the full
-        // company rundown is ready in the unibox before the admin decides Lead vs
-        // Info. Best-effort + non-blocking — never holds up the webhook ACK, and a
-        // CH failure can't lose the reply. Fire-and-forget.
-        void enrichReplyWithCH(uboxId, {
-          email: enrichEmail,
-          companyName: lead?.company_name ?? null,
-        }).catch(() => {})
+        // NOTE: Companies House enrichment is NOT fired here. At intake the reply
+        // is unclassified (classify_state='pending'), so we can't tell a positive
+        // reply from an OOO/warmup/unsubscribe. The classify cron runs CH only for
+        // positive categories (interested/question) — see app/api/cron/classify.
       }
 
       // Alert admins once about a team we can't map to a client workspace.
