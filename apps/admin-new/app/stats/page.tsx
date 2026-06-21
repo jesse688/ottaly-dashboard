@@ -72,14 +72,15 @@ const SERIES_LABEL: Record<SeriesKey, string> = {
   sent: 'Sent',
   leads: 'Leads',
 }
-// Map each series to a themed chart palette slot (--chart-1..5).
-const SERIES_TONE: Record<SeriesKey, 1 | 2 | 3 | 4 | 5> = {
-  humanRR: 1,
-  oooRR: 4,
-  bounceRate: 5,
-  rtl: 3,
-  sent: 2,
-  leads: 4,
+// Distinct, high-contrast SEMANTIC colors per series (legible on light + dark).
+// Bounce = red (per Jesse). Each line clearly distinguishable.
+const SERIES_COLOR: Record<SeriesKey, string> = {
+  humanRR: '#2563EB',    // blue — the primary metric
+  oooRR: '#F59E0B',      // amber/yellow — OOO/auto
+  bounceRate: '#DC2626', // red — bounce
+  rtl: '#7C3AED',        // purple — reply-to-lead
+  sent: '#64748B',       // slate/grey — volume
+  leads: '#16A34A',      // green — the win
 }
 const isPercent = (s: SeriesKey) =>
   s === 'humanRR' || s === 'oooRR' || s === 'bounceRate' || s === 'rtl'
@@ -202,10 +203,9 @@ function ProviderMix({ p }: { p?: ProviderRow }) {
       </div>
       {p.winner && (
         <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-          {PROVIDER_LABEL[p.winner]} {(Math[p.winner === 'google' ? 'round' : 'round'](
+          {PROVIDER_LABEL[p.winner]} {Math.round(
             (p.winner === 'google' ? p.googleShare : p.winner === 'microsoft' ? p.microsoftShare : p.otherShare) * 100,
-          ))}
-          %
+          )}%
         </span>
       )}
     </div>
@@ -234,7 +234,7 @@ function ClientCard({
   const chartSeries: LineSeries[] = ALL_SERIES.filter(s => toggles[s]).map(s => ({
     label: SERIES_LABEL[s],
     data: rolling3(w.series.map(d => seriesValue(s, d))),
-    tone: SERIES_TONE[s],
+    color: SERIES_COLOR[s],
     percent: isPercent(s),
   }))
 
@@ -307,21 +307,25 @@ function ClientCard({
       {open && (
         <div className="border-t border-border bg-muted/30 p-4">
           <div className="mb-3 flex flex-wrap items-center gap-2">
-            {ALL_SERIES.map(s => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => setToggles(prev => ({ ...prev, [s]: !prev[s] }))}
-                className={cn(
-                  'rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-colors',
-                  toggles[s]
-                    ? 'border-primary bg-primary text-primary-foreground'
-                    : 'border-border bg-card text-muted-foreground hover:text-foreground',
-                )}
-              >
-                {SERIES_LABEL[s]}
-              </button>
-            ))}
+            {ALL_SERIES.map(s => {
+              const c = SERIES_COLOR[s]
+              const on = toggles[s]
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setToggles(prev => ({ ...prev, [s]: !prev[s] }))}
+                  className="rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition-colors"
+                  style={
+                    on
+                      ? { background: c, borderColor: c, color: '#fff' }
+                      : { borderColor: c, color: c, background: 'transparent' }
+                  }
+                >
+                  {SERIES_LABEL[s]}
+                </button>
+              )
+            })}
             <span
               className="ml-auto text-[11px] font-medium text-muted-foreground"
               title="Each point averages that day and the previous two. Header totals are not smoothed."

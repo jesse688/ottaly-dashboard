@@ -14,6 +14,8 @@ export interface LineSeries {
   data: (number | null)[]
   /** chart palette slot 1-5; maps to --chart-N */
   tone?: 1 | 2 | 3 | 4 | 5
+  /** explicit color (hex/css) — overrides tone. Use for semantic series colors. */
+  color?: string
   percent?: boolean
 }
 
@@ -49,18 +51,21 @@ export function LineChart({
         type: 'line',
         data: {
           labels,
-          datasets: series.map(s => ({
+          datasets: series.map(s => {
+            const col = s.color ?? slot(s.tone)
+            return {
             label: s.label,
             data: s.data,
-            borderColor: slot(s.tone),
-            backgroundColor: slot(s.tone) + '22',
+            borderColor: col,
+            backgroundColor: col + '22',
             borderWidth: 2,
             pointRadius: labels.length <= 14 ? 3 : 1,
             tension: 0.3,
             spanGaps: true,
             fill: false,
             yAxisID: s.percent ? 'yPct' : 'yCount',
-          })),
+          }
+          }),
         },
         options: {
           responsive: true,
