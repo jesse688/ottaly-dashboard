@@ -5,10 +5,12 @@ import Link from 'next/link'
 import Image from 'next/image'
 import { usePathname } from 'next/navigation'
 import {
-  Server, BarChart3, Users, Wallet, Settings, type LucideIcon,
+  Server, BarChart3, Users, Wallet, Settings,
+  PanelLeftClose, PanelLeftOpen, type LucideIcon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ThemeToggle } from '@/components/ui/theme-toggle'
+import { useSidebar } from '@/components/shell/sidebar-state'
 
 interface NavItem { href: string; label: string }
 interface Category {
@@ -67,10 +69,26 @@ const CATEGORIES: Category[] = [
  *  can never clip it (the bug where the flyout was hidden). */
 export function Sidebar() {
   const pathname = usePathname()
+  const { hidden, toggle } = useSidebar()
   const [open, setOpen] = useState<string | null>(null)
   const [flyTop, setFlyTop] = useState(0)
 
   const openCat = CATEGORIES.find(c => c.key === open) ?? null
+
+  // When hidden, show only a floating button to bring the rail back.
+  if (hidden) {
+    return (
+      <button
+        type="button"
+        onClick={toggle}
+        aria-label="Show sidebar"
+        title="Show sidebar"
+        className="fixed left-3 top-3 z-40 flex h-9 w-9 items-center justify-center rounded-md border border-border bg-card text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground"
+      >
+        <PanelLeftOpen size={18} />
+      </button>
+    )
+  }
 
   function handleEnter(key: string, e: React.MouseEvent<HTMLDivElement>) {
     const rect = e.currentTarget.getBoundingClientRect()
@@ -117,8 +135,17 @@ export function Sidebar() {
           })}
         </nav>
 
-        <div className="flex items-center justify-center border-t border-sidebar-border py-2">
+        <div className="flex items-center justify-center gap-1 border-t border-sidebar-border py-2">
           <ThemeToggle />
+          <button
+            type="button"
+            onClick={toggle}
+            aria-label="Hide sidebar"
+            title="Hide sidebar"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+          >
+            <PanelLeftClose size={16} />
+          </button>
         </div>
       </aside>
 

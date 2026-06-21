@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Inter, Genos } from "next/font/google";
 import { Sidebar } from "@/components/shell/sidebar";
+import { SidebarProvider } from "@/components/shell/sidebar-state";
+import { AppMain } from "@/components/shell/app-main";
 import { ThemeProvider, THEME_INIT_SCRIPT } from "@/components/theme-provider";
 import "./globals.css";
 
@@ -32,8 +34,10 @@ export default function RootLayout({
       </head>
       <body className="h-full bg-background font-sans text-foreground antialiased">
         <ThemeProvider>
-          <Sidebar />
-          <main className="min-h-screen pl-[84px]">{children}</main>
+          <SidebarProvider>
+            <Sidebar />
+            <AppMain>{children}</AppMain>
+          </SidebarProvider>
         </ThemeProvider>
       </body>
     </html>
