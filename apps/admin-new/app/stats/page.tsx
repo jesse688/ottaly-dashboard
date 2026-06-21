@@ -28,7 +28,8 @@ interface WsTotals {
   replyRate: number
   allReplyRate: number
   bounceRate: number
-  rtl: number
+  rtl: number  // leads per 1,000 replies (plain number)
+  lpt: number  // leads per 1,000 sent (plain number)
   sendsPerDay: number
   repliesPerDay: number
 }
@@ -83,7 +84,7 @@ const SERIES_COLOR: Record<SeriesKey, string> = {
   leads: '#16A34A',      // green — the win
 }
 const isPercent = (s: SeriesKey) =>
-  s === 'humanRR' || s === 'oooRR' || s === 'bounceRate' || s === 'rtl'
+  s === 'humanRR' || s === 'oooRR' || s === 'bounceRate'  // RTL is a per-1000 count, not %
 
 function seriesValue(s: SeriesKey, d: DayData): number | null {
   const sent = d.sent || 0
@@ -97,7 +98,8 @@ function seriesValue(s: SeriesKey, d: DayData): number | null {
     case 'bounceRate':
       return sent > 0 ? +(((d.bounces || 0) / sent) * 100).toFixed(2) : null
     case 'rtl':
-      return replies > 0 ? +(((d.leads || 0) / replies) * 100).toFixed(2) : null
+      // leads per 1,000 replies (count, not %)
+      return replies > 0 ? +(((d.leads || 0) / replies) * 1000).toFixed(1) : null
     case 'sent':
       return sent
     case 'leads':
@@ -165,7 +167,8 @@ function buildAllWorkspaces(list: Workspace[]): Workspace | null {
       replyRate: t.sent > 0 ? t.replies / t.sent : 0,
       allReplyRate: t.sent > 0 ? (t.replies + t.oooReplies) / t.sent : 0,
       bounceRate: t.sent > 0 ? t.bounces / t.sent : 0,
-      rtl: t.replies > 0 ? t.leads / t.replies : 0,
+      rtl: t.replies > 0 ? (t.leads / t.replies) * 1000 : 0,
+      lpt: t.sent > 0 ? (t.leads / t.sent) * 1000 : 0,
       sendsPerDay: t.sent / days,
       repliesPerDay: t.replies / days,
     },
@@ -275,10 +278,14 @@ function ClientCard({
           <Lbl>Bounce</Lbl>
         </Cell>
         <Cell>
-          <span className={cn('text-sm font-bold', t.rtl >= 0.1 ? 'text-emerald-500' : 'text-foreground')}>
-            {pct(t.rtl)}
+          <span className={cn('text-sm font-bold', t.rtl >= 100 ? 'text-emerald-500' : 'text-foreground')}>
+            {dec(t.rtl, 0)}
           </span>
-          <Lbl>RTL</Lbl>
+          <Lbl>RTL /1k repl</Lbl>
+        </Cell>
+        <Cell>
+          <span className="text-sm font-bold text-foreground">{dec(t.lpt, 1)}</span>
+          <Lbl>LPT /1k sent</Lbl>
         </Cell>
         <Cell>
           <span className={cn('text-sm font-bold', t.leads > 0 ? 'text-emerald-500' : 'text-foreground')}>
@@ -500,7 +507,8 @@ export default function StatsPage() {
         />
         <KpiCard label="Bounce Rate" value={pct(agg?.totals.bounceRate ?? 0)} tone="red" loading={loading} />
         <KpiCard label="Leads" value={num(agg?.totals.leads ?? 0)} sub="all-time" tone="green" loading={loading} />
-        <KpiCard label="RTL" value={pct(agg?.totals.rtl ?? 0)} tone="yellow" loading={loading} />
+        <KpiCard label="RTL" value={dec(agg?.totals.rtl ?? 0, 0)} sub="leads / 1k replies" tone="yellow" loading={loading} />
+        <KpiCard label="LPT" value={dec(agg?.totals.lpt ?? 0, 1)} sub="leads / 1k sent" tone="green" loading={loading} />
       </div>
 
       {status === 'error' && (

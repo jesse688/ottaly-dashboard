@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { q } from '@/lib/query'
 import { getCacheFreshness } from '@/lib/freshness'
+import { getActiveWorkspaceIds } from '@/lib/active-clients'
 
 /**
  * Gateways — recipient mailbox-provider distribution from the `contacts` table.
@@ -101,12 +102,16 @@ export async function GET(req: Request) {
       if (r.workspace_id && r.workspace_name) names.set(r.workspace_id, r.workspace_name)
     }
 
+    // Hide inactive clients (legacy source of truth). Fails open.
+    const activeIds = await getActiveWorkspaceIds()
+
     const byWs = new Map<string, Split>()
     const agg = emptySplit()
     let total = 0
 
     for (const r of rows) {
       const ws = r.workspace_id || 'unknown'
+      if (activeIds && ws !== 'unknown' && !activeIds.has(ws)) continue
       const bucket = classify(r.mx_provider)
       const n = Number(r.n) || 0
       if (!byWs.has(ws)) byWs.set(ws, emptySplit())

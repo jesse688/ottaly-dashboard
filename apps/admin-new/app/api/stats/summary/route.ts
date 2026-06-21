@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from 'next/server'
 import * as Sentry from '@sentry/nextjs'
 import pool from '@/lib/db'
+import { getActiveWorkspaceIds } from '@/lib/active-clients'
 import '@/lib/cache-warming' // Initialize cache warming on first import
 
 interface DayData {
@@ -27,6 +28,7 @@ interface Workspace {
     allReplyRate: number
     bounceRate: number
     rtl: number
+    lpt: number
     sendsPerDay: number
     repliesPerDay: number
   }
@@ -65,6 +67,13 @@ export async function GET(req: NextRequest) {
     if (workspaceIds) {
       const ids = String(workspaceIds).split(',').filter(Boolean)
       workspaceList = workspaceList.filter(w => ids.includes(w.workspace_id))
+    }
+
+    // Hide inactive clients (legacy is the source of truth). Fails open: if the
+    // status list is unavailable, show all rather than blank the page.
+    const activeIds = await getActiveWorkspaceIds()
+    if (activeIds) {
+      workspaceList = workspaceList.filter(w => activeIds.has(w.workspace_id))
     }
 
     // Query perf_cache_daily for the date range
@@ -144,7 +153,10 @@ export async function GET(req: NextRequest) {
           // Reply Rate (all): human + OOO/automatic. Warmup never counted.
           allReplyRate: totals.sent > 0 ? (totals.replies + totals.oooReplies) / totals.sent : 0,
           bounceRate: totals.sent > 0 ? totals.bounces / totals.sent : 0,
-          rtl: totals.replies > 0 ? totals.leads / totals.replies : 0,
+          // RTL = leads per 1,000 REPLIES (plain number, not %).
+          rtl: totals.replies > 0 ? (totals.leads / totals.replies) * 1000 : 0,
+          // LPT = leads per 1,000 SENT (plain number, not %).
+          lpt: totals.sent > 0 ? (totals.leads / totals.sent) * 1000 : 0,
           sendsPerDay: totals.sent / days,
           repliesPerDay: totals.replies / days,
         },
