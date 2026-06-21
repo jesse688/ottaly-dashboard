@@ -46,7 +46,6 @@ const CATEGORIES: Category[] = [
     key: 'clients', label: 'Clients', icon: Users, color: '#FB923C', // orange
     items: [
       { href: '/clients', label: 'Clients' },
-      { href: '/health', label: 'Health' },
       { href: '/workload', label: 'Workload' },
     ],
   },

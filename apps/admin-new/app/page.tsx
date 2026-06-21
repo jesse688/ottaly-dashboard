@@ -16,7 +16,6 @@ interface WorkspaceRow {
   replyRate: number
   leads: number
 }
-interface HealthRow { health_band: string }
 
 const num = (n: number) => (n || 0).toLocaleString()
 const pct = (n: number) => (isNaN(n) ? '—' : (n * 100).toFixed(1) + '%')
@@ -25,18 +24,15 @@ function rrTone(rr: number) { return rr >= 0.025 ? 'ok' : rr >= 0.01 ? 'warn' : 
 export default function Home() {
   const [rows, setRows] = useState<WorkspaceRow[]>([])
   const [totals, setTotals] = useState({ sent: 0, replies: 0, oooReplies: 0, leads: 0 })
-  const [bands, setBands] = useState({ green: 0, yellow: 0, red: 0 })
   const [status, setStatus] = useState<'loading' | 'ok' | 'error'>('loading')
   const [updatedAt, setUpdatedAt] = useState<string | null>(null)
 
   useEffect(() => {
     const end = new Date().toISOString().slice(0, 10)
     const start = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10)
-    Promise.all([
-      fetch(`/api/stats/summary?start=${start}&end=${end}`).then(r => r.json()),
-      fetch('/api/health').then(r => r.json()).catch(() => []),
-    ])
-      .then(([s, h]) => {
+    fetch(`/api/stats/summary?start=${start}&end=${end}`)
+      .then(r => r.json())
+      .then((s) => {
         if (s.error) throw new Error(s.error)
         const ws = (s.workspaces || []) as Array<{ workspace_id: string; name: string; totals: { sent: number; replies: number; oooReplies: number; leads: number } }>
         const t = ws.reduce((a, w) => ({
@@ -54,12 +50,6 @@ export default function Home() {
           replyRate: w.totals?.sent > 0 ? w.totals.replies / w.totals.sent : 0,
           leads: w.totals?.leads || 0,
         })))
-        const hb = (Array.isArray(h) ? h : []) as HealthRow[]
-        setBands({
-          green: hb.filter(x => x.health_band === 'green').length,
-          yellow: hb.filter(x => x.health_band === 'yellow').length,
-          red: hb.filter(x => x.health_band === 'red').length,
-        })
         setUpdatedAt(s.updatedAt ?? null)
         setStatus('ok')
       })
@@ -120,25 +110,6 @@ export default function Home() {
           </div>
 
           <div className="flex flex-col gap-4">
-            <div className="rounded-lg border border-border bg-card p-4 shadow-sm">
-              <h2 className="mb-3 text-sm font-bold text-foreground">Client Health</h2>
-              <div className="grid grid-cols-3 gap-2">
-                {[
-                  { label: 'Healthy', count: bands.green, cls: 'bg-emerald-500/12 text-emerald-600 dark:text-emerald-400' },
-                  { label: 'Warning', count: bands.yellow, cls: 'bg-amber-500/12 text-amber-600 dark:text-amber-400' },
-                  { label: 'At Risk', count: bands.red, cls: 'bg-red-500/12 text-red-600 dark:text-red-400' },
-                ].map(b => (
-                  <div key={b.label} className={`rounded-md p-3 text-center ${b.cls}`}>
-                    <div className="font-[family-name:var(--font-display)] text-2xl font-bold tabular-nums">{status === 'loading' ? '—' : b.count}</div>
-                    <div className="mt-0.5 text-[10px] font-bold uppercase tracking-wide">{b.label}</div>
-                  </div>
-                ))}
-              </div>
-              <Link href="/health" className="mt-3 flex items-center gap-1 text-xs font-semibold text-primary hover:underline">
-                View health report <ArrowRight size={12} />
-              </Link>
-            </div>
-
             <div className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
               <div className="border-b border-border px-4 py-2.5">
                 <h2 className="text-sm font-bold text-foreground">Quick Links</h2>

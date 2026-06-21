@@ -118,7 +118,6 @@ const MANAGER_PAGES = [
   { href: '/capacity',    label: 'Capacity' },
   { href: '/stats',       label: 'Stats' },
   { href: '/audience',    label: 'Audience' },
-  { href: '/health',      label: 'Health' },
   { href: '/commission',  label: 'Commission' },
   { href: '/copy',        label: 'Copy' },
 ]
