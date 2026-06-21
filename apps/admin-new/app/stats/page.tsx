@@ -10,7 +10,7 @@ import { StatusBadge } from '@/components/ui/status-badge'
 // ── Types (match /api/stats/summary contract) ─────────────────────────────────
 interface WsTotals {
   sent: number; replies: number; posReplies: number; oooReplies: number
-  bounces: number; leads: number; replyRate: number; bounceRate: number
+  bounces: number; leads: number; replyRate: number; allReplyRate: number; bounceRate: number
   rtl: number; sendsPerDay: number; repliesPerDay: number
 }
 interface Workspace {
@@ -40,7 +40,10 @@ function aggregate(list: Workspace[]): WsTotals {
   })
   return {
     ...t,
+    // Human Reply Rate: genuine human replies only (replies excludes OOO + warmup).
     replyRate: t.sent > 0 ? t.replies / t.sent : 0,
+    // Reply Rate (all): human + OOO/automatic. Warmup is never in either.
+    allReplyRate: t.sent > 0 ? (t.replies + t.oooReplies) / t.sent : 0,
     bounceRate: t.sent > 0 ? t.bounces / t.sent : 0,
     rtl: t.replies > 0 ? t.leads / t.replies : 0,
     sendsPerDay: t.sent / days,
@@ -50,6 +53,10 @@ function aggregate(list: Workspace[]): WsTotals {
 
 function rrTone(rr: number) { return rr >= 0.025 ? 'ok' : rr >= 0.01 ? 'warn' : 'error' as const }
 function brTone(br: number) { return br >= 0.05 ? 'error' : br >= 0.02 ? 'warn' : 'ok' as const }
+// Human RR = human replies / sent (replies excludes OOO + warmup).
+const humanRR = (t: WsTotals) => (t.sent > 0 ? t.replies / t.sent : 0)
+// Reply Rate (all) = (human + OOO) / sent. Warmup never counted.
+const allRR = (t: WsTotals) => (t.sent > 0 ? (t.replies + t.oooReplies) / t.sent : 0)
 
 export default function StatsPage() {
   const [period, setPeriod] = useState<PeriodKey>('7d')
@@ -95,8 +102,12 @@ export default function StatsPage() {
       ),
     },
     {
-      key: 'rr', header: 'Reply Rate', numeric: true, sortValue: w => w.totals.replyRate,
-      cell: w => <StatusBadge status={rrTone(w.totals.replyRate)}>{pct(w.totals.replyRate)}</StatusBadge>,
+      key: 'hrr', header: 'Human RR', numeric: true, sortValue: w => humanRR(w.totals),
+      cell: w => <StatusBadge status={rrTone(humanRR(w.totals))}>{pct(humanRR(w.totals))}</StatusBadge>,
+    },
+    {
+      key: 'rr', header: 'Reply Rate', numeric: true, sortValue: w => allRR(w.totals),
+      cell: w => <span className="text-muted-foreground">{pct(allRR(w.totals))}</span>,
     },
     {
       key: 'br', header: 'Bounce Rate', numeric: true, sortValue: w => w.totals.bounceRate,
@@ -115,14 +126,15 @@ export default function StatsPage() {
       freshness={{ table: 'workspace_stats', syncedAt: updatedAt }}
       actions={<PeriodFilter value={period} onChange={setPeriod} />}
     >
-      {/* Agency KPIs */}
+      {/* Agency KPIs — Human RR (real human replies) + Reply Rate (incl. OOO/auto).
+          Warmup replies are never counted in either. */}
       <div className="mb-5 grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
         <KpiCard label="Sent" value={num(agg.sent)} tone="navy" loading={status === 'loading'} />
-        <KpiCard label="Replies" value={num(agg.replies)} tone="teal" loading={status === 'loading'} />
-        <KpiCard label="Reply Rate" value={pct(agg.replyRate)} tone="teal" loading={status === 'loading'} />
+        <KpiCard label="Human RR" value={pct(agg.replyRate)} sub="real replies" tone="teal" loading={status === 'loading'} />
+        <KpiCard label="Reply Rate" value={pct(agg.allReplyRate)} sub="incl. OOO/auto" tone="purple" loading={status === 'loading'} />
         <KpiCard label="Bounce Rate" value={pct(agg.bounceRate)} tone="red" loading={status === 'loading'} />
         <KpiCard label="Leads" value={num(agg.leads)} tone="green" loading={status === 'loading'} />
-        <KpiCard label="RTL" value={pct(agg.rtl)} tone="purple" loading={status === 'loading'} />
+        <KpiCard label="RTL" value={pct(agg.rtl)} tone="yellow" loading={status === 'loading'} />
       </div>
 
       {status === 'error' && (

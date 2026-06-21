@@ -24,7 +24,7 @@ function rrTone(rr: number) { return rr >= 0.025 ? 'ok' : rr >= 0.01 ? 'warn' : 
 
 export default function Home() {
   const [rows, setRows] = useState<WorkspaceRow[]>([])
-  const [totals, setTotals] = useState({ sent: 0, replies: 0, leads: 0 })
+  const [totals, setTotals] = useState({ sent: 0, replies: 0, oooReplies: 0, leads: 0 })
   const [bands, setBands] = useState({ green: 0, yellow: 0, red: 0 })
   const [status, setStatus] = useState<'loading' | 'ok' | 'error'>('loading')
   const [updatedAt, setUpdatedAt] = useState<string | null>(null)
@@ -38,12 +38,13 @@ export default function Home() {
     ])
       .then(([s, h]) => {
         if (s.error) throw new Error(s.error)
-        const ws = (s.workspaces || []) as Array<{ workspace_id: string; name: string; totals: { sent: number; replies: number; leads: number } }>
+        const ws = (s.workspaces || []) as Array<{ workspace_id: string; name: string; totals: { sent: number; replies: number; oooReplies: number; leads: number } }>
         const t = ws.reduce((a, w) => ({
           sent: a.sent + (w.totals?.sent || 0),
           replies: a.replies + (w.totals?.replies || 0),
+          oooReplies: a.oooReplies + (w.totals?.oooReplies || 0),
           leads: a.leads + (w.totals?.leads || 0),
-        }), { sent: 0, replies: 0, leads: 0 })
+        }), { sent: 0, replies: 0, oooReplies: 0, leads: 0 })
         setTotals(t)
         setRows(ws.map(w => ({
           workspace_id: w.workspace_id,
@@ -65,7 +66,8 @@ export default function Home() {
       .catch(() => setStatus('error'))
   }, [])
 
-  const replyRate = totals.sent > 0 ? totals.replies / totals.sent : 0
+  const replyRate = totals.sent > 0 ? totals.replies / totals.sent : 0 // Human RR
+  const allReplyRate = totals.sent > 0 ? (totals.replies + totals.oooReplies) / totals.sent : 0 // incl. OOO/auto
   const activeClients = rows.length
 
   const columns: Column<WorkspaceRow>[] = [
@@ -82,11 +84,13 @@ export default function Home() {
       subtitle={`Last 30 days · ${status === 'loading' ? '…' : `${rows.length} workspaces`}`}
       freshness={{ table: 'workspace_stats', syncedAt: updatedAt }}
     >
-      <div className="mb-5 grid grid-cols-2 gap-4 xl:grid-cols-4">
+      {/* Human RR (real replies) + Reply Rate (incl. OOO/auto); warmup excluded. */}
+      <div className="mb-5 grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
         <KpiCard label="Emails Sent" value={num(totals.sent)} tone="navy" loading={status === 'loading'} />
-        <KpiCard label="Reply Rate" value={pct(replyRate)} tone="teal" loading={status === 'loading'} />
+        <KpiCard label="Human RR" value={pct(replyRate)} sub="real replies" tone="teal" loading={status === 'loading'} />
+        <KpiCard label="Reply Rate" value={pct(allReplyRate)} sub="incl. OOO/auto" tone="purple" loading={status === 'loading'} />
         <KpiCard label="Leads Generated" value={num(totals.leads)} tone="green" loading={status === 'loading'} />
-        <KpiCard label="Active Clients" value={activeClients} tone="purple" loading={status === 'loading'} />
+        <KpiCard label="Active Clients" value={activeClients} tone="yellow" loading={status === 'loading'} />
       </div>
 
       {status === 'error' && (
