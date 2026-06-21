@@ -417,6 +417,21 @@ async function runMigration() {
       )`,
       `ALTER TABLE unibox_replies ADD COLUMN IF NOT EXISTS classifier_version TEXT`,
 
+      // ── Lead enrichment (Companies House) + Info leads ─────────────
+      // Full verified CH rundown captured at reply intake, so the admin sees the
+      // company breakdown in the unibox BEFORE deciding Lead vs Info. Stored as
+      // JSONB on the reply; the dashboard reads the flat ch_* keys from
+      // esp_leads.raw (merged by the enrichment step). enrich_state lets us tell
+      // "not yet tried" from "tried, no confident match" (flag for manual).
+      `ALTER TABLE unibox_replies ADD COLUMN IF NOT EXISTS ch_company_number TEXT`,
+      `ALTER TABLE unibox_replies ADD COLUMN IF NOT EXISTS ch_data JSONB`,
+      `ALTER TABLE unibox_replies ADD COLUMN IF NOT EXISTS enrich_state TEXT`, // null | matched | unmatched | error
+      // "Info" lead: pushed to the client (shown, badged) but NOT billable. The
+      // billable path keys on esp_leads.label='INTERESTED'; an Info lead gets
+      // label='INFO' so reconcileLeadCharges structurally never charges it.
+      // label_type records the admin's decision on the reply for the audit trail.
+      `ALTER TABLE unibox_replies ADD COLUMN IF NOT EXISTS label_type TEXT`, // null | lead | info
+
       // ── One-time migrations marker table ───────────────────────────
       `CREATE TABLE IF NOT EXISTS portal_meta (key TEXT PRIMARY KEY, created_at TIMESTAMPTZ DEFAULT NOW())`,
       // The ledger switched from money units to LEAD-COUNT units. Wipe any
