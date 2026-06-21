@@ -11,20 +11,14 @@ function currentMonthStr(): string {
 async function getFinanceSnapshot(month: string) {
   const pgdb = pool
 
-  // Mailbox data
-  const mailboxesRes = await pgdb.query(
-    `SELECT email, workspace_id, workspace_name, provider, type, supplier, billing_day, billing_start_date, unit_cost
-     FROM mailboxes
-     ORDER BY email`
-  )
-  const allMailboxes = mailboxesRes.rows as any[]
-
-  // Mailbox metadata
+  // Mailbox inventory comes from mailbox_meta (the `mailboxes` table doesn't
+  // exist in Postgres — inventory + supplier/type/billing all live in mailbox_meta).
   const metaRes = await pgdb.query(
     `SELECT email, supplier, mailbox_type, billing_start_date, billing_day
      FROM mailbox_meta
      ORDER BY email`
   )
+  const allMailboxes = metaRes.rows as any[]
   const metaByEmail = new Map(
     (metaRes.rows as any[]).map((m: any) => [m.email?.toLowerCase(), m])
   )
@@ -40,10 +34,12 @@ async function getFinanceSnapshot(month: string) {
     return acc
   }, {})
 
-  // Workspace metadata
+  // Workspace names from workspace_stats (the `clients` table is legacy SQLite,
+  // not reachable from this Postgres pool — names are all we need for the P&L).
   const wsRes = await pgdb.query(
-    `SELECT workspace_id, workspace_name, client_status, campaign_manager, campaign_manager_2
-     FROM clients
+    `SELECT DISTINCT workspace_id, workspace_name
+     FROM workspace_stats
+     WHERE workspace_id IS NOT NULL AND workspace_id <> ''
      ORDER BY workspace_id`
   )
   const wsMeta: Record<string, any> = {}
@@ -55,7 +51,7 @@ async function getFinanceSnapshot(month: string) {
   const revenueRes = await pgdb.query(
     `SELECT workspace_id, COUNT(*) as delivered, SUM(lead_price) as revenue
      FROM revenue_leads
-     WHERE date >= $1 AND date < DATE $1 + INTERVAL '1 month'
+     WHERE date::date >= $1::date AND date::date < ($1::date + INTERVAL '1 month')
      AND pv_nonlead IS NOT TRUE
      GROUP BY workspace_id`,
     [`${month}-01`]
