@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import * as Sentry from '@sentry/nextjs'
 import { q } from '@/lib/query'
 import { getCacheFreshness } from '@/lib/freshness'
+import { getActiveWorkspaceIds } from '@/lib/active-clients'
 
 export const dynamic = 'force-dynamic'
 
@@ -32,14 +33,18 @@ export async function GET() {
     )
     const fresh = await getCacheFreshness('warmup_daily_stats')
 
+    // Hide inactive clients (fails open).
+    const activeIds = await getActiveWorkspaceIds()
+    const rows2 = activeIds ? rows.filter(r => activeIds.has(r.workspace_id)) : rows
+
     const buckets = { healthy: 0, low_score: 0, bouncing: 0, disabled: 0, unknown: 0 }
-    for (const r of rows) {
+    for (const r of rows2) {
       const h = (r.health ?? 'unknown') as keyof typeof buckets
       if (h in buckets) buckets[h]++; else buckets.unknown++
     }
 
     return NextResponse.json({
-      mailboxes: rows.map(r => ({
+      mailboxes: rows2.map(r => ({
         email: r.email,
         workspace_id: r.workspace_id,
         workspace_name: r.workspace_name || r.workspace_id,

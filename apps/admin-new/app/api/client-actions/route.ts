@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import * as Sentry from '@sentry/nextjs'
 import { q } from '@/lib/query'
 import { getCacheFreshness } from '@/lib/freshness'
+import { getActiveWorkspaceIds } from '@/lib/active-clients'
 
 export const dynamic = 'force-dynamic'
 
@@ -38,8 +39,11 @@ export async function GET() {
       [], { tag: 'client-actions' },
     )
     const fresh = await getCacheFreshness('client_actions_cache')
+    // Hide inactive clients (legacy source of truth; fails open).
+    const activeIds = await getActiveWorkspaceIds()
+    const activeRows = activeIds ? rows.filter(r => activeIds.has(r.workspace_id)) : rows
     return NextResponse.json({
-      rows: rows.map(r => {
+      rows: activeRows.map(r => {
         const replyRate = r.reply_rate ?? (r.sent > 0 ? r.replies / r.sent : 0)
         const allReplyRate = r.all_reply_rate ?? (r.sent > 0 ? (r.replies + r.ooo_replies) / r.sent : 0)
         const bounceRate = r.bounce_rate ?? (r.sent > 0 ? r.bounces / r.sent : 0)
