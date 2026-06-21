@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { cn } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -193,6 +194,32 @@ export default function DataPage() {
   useEffect(() => {
     fetchContacts()
   }, [fetchContacts])
+
+  // Apollo-style bulk selection — pull up to `count` matching ids straight from
+  // the search route (optionally capped per company) and select them all,
+  // spread across companies rather than piling many from one. Mirrors the
+  // legacy "Select…" popover; the search route honours limit + maxPerCompany.
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const bulkSelect = useCallback(
+    async (count: number, maxPerCompany: number) => {
+      setBulkBusy(true)
+      try {
+        const extra: Record<string, string> = { limit: String(count), offset: '0' }
+        if (maxPerCompany > 0) extra.maxPerCompany = String(maxPerCompany)
+        const res = await fetch(`/api/data/contacts?${queryParams(extra)}`)
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || 'Selection failed')
+        const ids: string[] = (data.contacts ?? []).map((c: Contact) => c.id)
+        setSelected(new Set(ids))
+        flash(`Selected ${ids.length.toLocaleString()} contacts`, 'ok')
+      } catch (e) {
+        flash((e as Error).message, 'err')
+      } finally {
+        setBulkBusy(false)
+      }
+    },
+    [queryParams]
+  )
 
   // Sidebar facet counts (employee buckets + provider counts) — refresh with filters.
   useEffect(() => {
@@ -416,6 +443,59 @@ export default function DataPage() {
                     {c.label}
                   </DropdownMenuCheckboxItem>
                 ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            {/* Bulk select across all matches (Apollo-style) */}
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button variant="outline" disabled={bulkBusy}>
+                    {bulkBusy ? 'Selecting…' : 'Select…'}
+                  </Button>
+                }
+              />
+              <DropdownMenuContent className="w-60">
+                <DropdownMenuLabel>Select matching contacts</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {[250, 500, 1000, 1500, 5000].map((n) => (
+                  <DropdownMenuCheckboxItem
+                    key={n}
+                    checked={false}
+                    onSelect={() => bulkSelect(n, 0)}
+                  >
+                    Top {n.toLocaleString()}
+                  </DropdownMenuCheckboxItem>
+                ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel className="text-xs font-normal text-gray-500">
+                  Capped per company
+                </DropdownMenuLabel>
+                {[
+                  [1000, 1],
+                  [1500, 2],
+                  [5000, 3],
+                ].map(([n, cap]) => (
+                  <DropdownMenuCheckboxItem
+                    key={`${n}-${cap}`}
+                    checked={false}
+                    onSelect={() => bulkSelect(n, cap)}
+                  >
+                    {n.toLocaleString()} · max {cap}/company
+                  </DropdownMenuCheckboxItem>
+                ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuCheckboxItem
+                  checked={false}
+                  onSelect={() => {
+                    const n = parseInt(window.prompt('How many to select?', '2000') || '0', 10)
+                    if (n > 0) {
+                      const cap = parseInt(window.prompt('Max per company? (0 = no cap)', '0') || '0', 10)
+                      bulkSelect(n, Math.max(0, cap))
+                    }
+                  }}
+                >
+                  Custom…
+                </DropdownMenuCheckboxItem>
               </DropdownMenuContent>
             </DropdownMenu>
             <Button variant="outline" onClick={apolloExport}>
@@ -834,6 +914,154 @@ function FilterBool({
   )
 }
 
+// ── Typeahead filter ────────────────────────────────────────────────────────
+// Loads real option values from /distinct-values (or /sic-search when source=
+// 'sic') and lets the CM pick them as chips, while still accepting free text.
+// Backed by the same comma-separated filter value the legacy ILIKE semantics
+// expect, so it stays compatible with the search route.
+type TypeaheadOpt = { value: string; label: string; count?: number }
+
+function FilterTypeahead({
+  filters,
+  toggleCsv,
+  csvHas,
+  setF,
+  k,
+  label,
+  field,
+  source = 'distinct',
+  ph,
+}: {
+  filters: Filters
+  toggleCsv: (k: string, v: string) => void
+  csvHas: (k: string, v: string) => boolean
+  setF: (k: string, v: string) => void
+  k: string
+  label: string
+  field: string // distinct-values field name (or query for sic)
+  source?: 'distinct' | 'sic'
+  ph?: string
+}) {
+  const [query, setQuery] = useState('')
+  const [opts, setOpts] = useState<TypeaheadOpt[]>([])
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+
+  const selected = (filters[k] || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    const t = setTimeout(async () => {
+      setLoading(true)
+      try {
+        const url =
+          source === 'sic'
+            ? `/api/data/contacts/sic-search?q=${encodeURIComponent(query)}`
+            : `/api/data/contacts/distinct-values?field=${encodeURIComponent(field)}&limit=200`
+        const res = await fetch(url)
+        if (!res.ok) throw new Error()
+        const data = await res.json()
+        if (cancelled) return
+        const raw: TypeaheadOpt[] =
+          source === 'sic'
+            ? (data.results || data || []).map((it: { code?: string; label?: string; description?: string } | string) => {
+                const code = typeof it === 'string' ? it : it.code || ''
+                const desc = typeof it === 'string' ? '' : it.label || it.description || ''
+                return { value: code, label: desc ? `${code} — ${desc}` : code }
+              })
+            : (data.values || []).map((v: { value: string; count?: number }) => ({
+                value: v.value,
+                label: v.value,
+                count: v.count,
+              }))
+        const q = query.trim().toLowerCase()
+        setOpts(
+          (q ? raw.filter((o) => o.label.toLowerCase().includes(q)) : raw).slice(0, 50)
+        )
+      } catch {
+        if (!cancelled) setOpts([])
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }, 200)
+    return () => {
+      cancelled = true
+      clearTimeout(t)
+    }
+  }, [open, query, field, source])
+
+  return (
+    <div>
+      <Label className="text-xs text-gray-500">{label}</Label>
+      {selected.length > 0 && (
+        <div className="flex flex-wrap gap-1 mt-1">
+          {selected.map((v) => (
+            <button
+              key={v}
+              onClick={() => toggleCsv(k, v)}
+              className="inline-flex items-center gap-1 rounded bg-blue-100 px-1.5 py-0.5 text-[11px] text-blue-800 hover:bg-blue-200"
+              title="Remove"
+            >
+              {v} <span className="text-blue-500">×</span>
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="relative">
+        <Input
+          className="h-8 mt-1"
+          placeholder={ph || 'type to search…'}
+          value={query}
+          onFocus={() => setOpen(true)}
+          onChange={(e) => {
+            setQuery(e.target.value)
+            setOpen(true)
+          }}
+          onBlur={() => setTimeout(() => setOpen(false), 150)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && query.trim()) {
+              if (!csvHas(k, query.trim())) toggleCsv(k, query.trim())
+              setQuery('')
+            }
+          }}
+        />
+        {open && (opts.length > 0 || loading) && (
+          <div className="absolute z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-md border border-gray-200 bg-white shadow-lg text-sm">
+            {loading && <div className="px-2 py-1.5 text-xs text-gray-400">Loading…</div>}
+            {opts.map((o) => {
+              const on = csvHas(k, o.value)
+              return (
+                <button
+                  key={o.value}
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    toggleCsv(k, o.value)
+                  }}
+                  className={cn(
+                    'flex w-full items-center justify-between px-2 py-1.5 text-left hover:bg-gray-100',
+                    on && 'bg-blue-50'
+                  )}
+                >
+                  <span className="truncate">{o.label}</span>
+                  {o.count != null && (
+                    <span className="ml-2 shrink-0 text-xs text-gray-400">
+                      {o.count.toLocaleString()}
+                    </span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function FilterPanel({
   filters,
   setF,
@@ -856,17 +1084,9 @@ function FilterPanel({
   return (
     <>
       <Section title="Role">
-        <FilterText filters={filters} setF={setF} k="jobTitle" label="Job title (include)" />
         <FilterText filters={filters} setF={setF} k="jobTitleExclude" label="Job title (exclude)" />
-        <div>
-          <Label className="text-xs text-gray-500">Seniority</Label>
-          <Input
-            className="h-8 mt-1"
-            placeholder="e.g. owner,c_suite,vp"
-            defaultValue={filters.seniority || ''}
-            onBlur={(e) => setF('seniority', e.target.value.trim())}
-          />
-        </div>
+        <FilterTypeahead filters={filters} toggleCsv={toggleCsv} csvHas={csvHas} setF={setF} k="seniority" label="Seniority" field="seniority" ph="owner, c_suite…" />
+        <FilterTypeahead filters={filters} toggleCsv={toggleCsv} csvHas={csvHas} setF={setF} k="jobTitle" label="Job title (include)" field="jobTitle" ph="search titles…" />
         <FilterText filters={filters} setF={setF} k="department" label="Department" />
         <FilterText filters={filters} setF={setF} k="subDepartments" label="Sub-departments" />
       </Section>
@@ -894,11 +1114,11 @@ function FilterPanel({
         <FilterText filters={filters} setF={setF} k="company" label="Company name / domain" ph="substring…" />
         <FilterText filters={filters} setF={setF} k="website" label="Website (domain)" ph="substring…" />
         <FilterText filters={filters} setF={setF} k="companyLinkedin" label="Company LinkedIn" ph="substring…" />
-        <FilterText filters={filters} setF={setF} k="industry" label="Industry (include)" />
+        <FilterTypeahead filters={filters} toggleCsv={toggleCsv} csvHas={csvHas} setF={setF} k="industry" label="Industry (include)" field="industry" ph="search industries…" />
         <FilterText filters={filters} setF={setF} k="industryExclude" label="Industry (exclude)" />
-        <FilterText filters={filters} setF={setF} k="keywords" label="Keywords (include)" />
+        <FilterTypeahead filters={filters} toggleCsv={toggleCsv} csvHas={csvHas} setF={setF} k="keywords" label="Keywords (include)" field="Keywords" ph="search keywords…" />
         <FilterText filters={filters} setF={setF} k="keywordsExclude" label="Keywords (exclude)" />
-        <FilterText filters={filters} setF={setF} k="sicCodes" label="SIC codes" ph="e.g. 87100,87300" />
+        <FilterTypeahead filters={filters} toggleCsv={toggleCsv} csvHas={csvHas} setF={setF} k="sicCodes" label="SIC codes" field="sic" source="sic" ph="search SIC…" />
         <FilterText filters={filters} setF={setF} k="technologies" label="Technologies (include)" />
         <FilterText filters={filters} setF={setF} k="technologiesExclude" label="Technologies (exclude)" />
       </Section>
