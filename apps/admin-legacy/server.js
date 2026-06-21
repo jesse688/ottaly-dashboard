@@ -7031,6 +7031,96 @@ async function refreshMailboxCache() {
 setTimeout(refreshMailboxCache, 20000); // after revenue cache (5s), before performance (60s)
 setInterval(refreshMailboxCache, 30 * 60 * 1000);
 
+// ─────────────────────────────────────────────────────────────────────────────
+// admin-2.0 cache reconciler — fills client_actions_cache + warmup_daily_stats
+// in Postgres FROM THE EXISTING IN-MEMORY CACHES (campaignCache, _mailboxCache).
+// admin-new reads only these tables; it never calls PlusVibe directly.
+//
+// SAFE BY DESIGN: makes ZERO new PlusVibe calls (reuses data the existing
+// reconcilers already fetched), runs on its own interval AFTER they populate,
+// wrapped in try/catch so a failure here can never affect the legacy app.
+// REVIEW BEFORE DEPLOY (Jesse): this is the one new write-path into Postgres.
+// ─────────────────────────────────────────────────────────────────────────────
+async function syncAdmin2Caches() {
+  const pgdb = app.locals.pgDb;
+  if (!pgdb?.pool) return;
+  try {
+    // 1) client_actions_cache — per-workspace rollup from campaignCache.
+    const wsList = (campaignCache && campaignCache.workspaces) || [];
+    if (wsList.length) {
+      const clientRows = db.prepare(`SELECT workspace_id, lead_price FROM clients`).all();
+      const priceById = Object.fromEntries(clientRows.map(r => [r.workspace_id, r.lead_price]));
+      for (const w of wsList) {
+        const sent = w.totalSent || 0;
+        const replies = w.totalReplies || 0;
+        const leads = w.totalLeads || 0;
+        const bounces = (w.campaigns || []).reduce((s, c) => s + (c.bounces || 0), 0);
+        const activeCampaigns = w.activeCampaigns || 0;
+        const pausedCampaigns = (w.campaigns || []).filter(c => c.status && c.status !== 'ACTIVE').length;
+        // leads-left %: smallest remaining-data ratio across active campaigns
+        const lefts = (w.campaigns || [])
+          .filter(c => c.status === 'ACTIVE' && c.dataSize > 0)
+          .map(c => Math.max(0, 1 - (c.leadContacted || 0) / c.dataSize));
+        const leadsLeftPct = lefts.length ? Math.min(...lefts) : null;
+        // status: all paused -> not_sending; <=20% data left -> need_data; else ok
+        let status = 'ok';
+        if (activeCampaigns === 0 && pausedCampaigns > 0) status = 'not_sending';
+        else if (leadsLeftPct != null && leadsLeftPct <= 0.20) status = 'need_data';
+        const replyRate = sent > 0 ? replies / sent : null;
+        const bounceRate = sent > 0 ? bounces / sent : null;
+        await pgdb.pool.query(
+          `INSERT INTO client_actions_cache
+             (workspace_id, workspace_name, sent, replies, bounces, leads,
+              reply_rate, bounce_rate, leads_left_pct, active_campaigns,
+              paused_campaigns, status, flagged, synced_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, now())
+           ON CONFLICT (workspace_id) DO UPDATE SET
+             workspace_name=EXCLUDED.workspace_name, sent=EXCLUDED.sent,
+             replies=EXCLUDED.replies, bounces=EXCLUDED.bounces, leads=EXCLUDED.leads,
+             reply_rate=EXCLUDED.reply_rate, bounce_rate=EXCLUDED.bounce_rate,
+             leads_left_pct=EXCLUDED.leads_left_pct, active_campaigns=EXCLUDED.active_campaigns,
+             paused_campaigns=EXCLUDED.paused_campaigns, status=EXCLUDED.status,
+             flagged=EXCLUDED.flagged, synced_at=now()`,
+          [w.id, w.name || w.id, sent, replies, bounces, leads,
+           replyRate, bounceRate, leadsLeftPct, activeCampaigns,
+           pausedCampaigns, status, status !== 'ok'],
+        );
+        void priceById; // (reserved for future per-lead revenue rollup)
+      }
+    }
+
+    // 2) warmup_daily_stats — per-mailbox snapshot for today from _mailboxCache.
+    const boxes = (_mailboxCache && _mailboxCache.mailboxes) || [];
+    if (boxes.length) {
+      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' }); // YYYY-MM-DD
+      for (const m of boxes) {
+        if (!m.account_id && !m.email) continue;
+        const score = typeof m.warmup_reply_rate === 'number' ? Math.round(m.warmup_reply_rate * 100) : null;
+        let health = 'unknown';
+        const st = (m.warmup_status || '').toLowerCase();
+        if (st.includes('disab') || st === 'paused') health = 'disabled';
+        else if (score != null && score < 70) health = 'low_score';
+        else if (score != null) health = 'healthy';
+        await pgdb.pool.query(
+          `INSERT INTO warmup_daily_stats
+             (email_acc_id, workspace_id, email, snapshot_date, warmup_score, health, synced_at)
+           VALUES ($1,$2,$3,$4,$5,$6, now())
+           ON CONFLICT (email_acc_id, snapshot_date) DO UPDATE SET
+             workspace_id=EXCLUDED.workspace_id, email=EXCLUDED.email,
+             warmup_score=EXCLUDED.warmup_score, health=EXCLUDED.health, synced_at=now()`,
+          [String(m.account_id || m.email), m.workspace_id || '', m.email || null, today, score, health],
+        );
+      }
+    }
+    console.log(`[admin2 cache] synced ${wsList.length} ws actions, ${boxes.length} mailbox warmups`);
+  } catch (err) {
+    console.warn('[admin2 cache] sync failed (non-fatal):', err.message);
+  }
+}
+// Run 3min after boot (lets campaign + mailbox caches populate first), then every 15min.
+setTimeout(syncAdmin2Caches, 3 * 60 * 1000);
+setInterval(syncAdmin2Caches, 15 * 60 * 1000);
+
 function mergeMailboxesWithMeta(mailboxes, metaByEmail) {
   return mailboxes.map(m => {
     const meta = metaByEmail.get(m.email) || {};
