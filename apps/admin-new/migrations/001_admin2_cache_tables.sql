@@ -8,10 +8,12 @@ CREATE TABLE IF NOT EXISTS client_actions_cache (
   workspace_id     text PRIMARY KEY,
   workspace_name   text,
   sent             integer     NOT NULL DEFAULT 0,
-  replies          integer     NOT NULL DEFAULT 0,
+  replies          integer     NOT NULL DEFAULT 0,   -- human replies (excludes OOO + warmup)
+  ooo_replies      integer     NOT NULL DEFAULT 0,   -- OOO/automatic replies
   bounces          integer     NOT NULL DEFAULT 0,
   leads            integer     NOT NULL DEFAULT 0,
-  reply_rate       numeric,
+  reply_rate       numeric,                          -- Human RR = replies / sent
+  all_reply_rate   numeric,                          -- Reply Rate = (replies + ooo) / sent
   bounce_rate      numeric,
   leads_left_pct   numeric,                 -- % of campaign leads remaining
   active_campaigns integer     NOT NULL DEFAULT 0,

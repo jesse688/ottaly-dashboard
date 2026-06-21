@@ -7052,9 +7052,11 @@ async function syncAdmin2Caches() {
       const priceById = Object.fromEntries(clientRows.map(r => [r.workspace_id, r.lead_price]));
       for (const w of wsList) {
         const sent = w.totalSent || 0;
-        const replies = w.totalReplies || 0;
+        const replies = w.totalReplies || 0; // human replies (PV total_reply_count excludes OOO + warmup)
         const leads = w.totalLeads || 0;
         const bounces = (w.campaigns || []).reduce((s, c) => s + (c.bounces || 0), 0);
+        // OOO/automatic replies — kept separate so admin-new can show Human RR vs Reply Rate.
+        const oooReplies = (w.campaigns || []).reduce((s, c) => s + (c.oooReplies || c.total_ooo_reply_count || 0), 0);
         const activeCampaigns = w.activeCampaigns || 0;
         const pausedCampaigns = (w.campaigns || []).filter(c => c.status && c.status !== 'ACTIVE').length;
         // leads-left %: smallest remaining-data ratio across active campaigns
@@ -7066,23 +7068,26 @@ async function syncAdmin2Caches() {
         let status = 'ok';
         if (activeCampaigns === 0 && pausedCampaigns > 0) status = 'not_sending';
         else if (leadsLeftPct != null && leadsLeftPct <= 0.20) status = 'need_data';
-        const replyRate = sent > 0 ? replies / sent : null;
+        const replyRate = sent > 0 ? replies / sent : null;                  // Human RR
+        const allReplyRate = sent > 0 ? (replies + oooReplies) / sent : null; // incl. OOO/auto
         const bounceRate = sent > 0 ? bounces / sent : null;
         await pgdb.pool.query(
           `INSERT INTO client_actions_cache
-             (workspace_id, workspace_name, sent, replies, bounces, leads,
-              reply_rate, bounce_rate, leads_left_pct, active_campaigns,
+             (workspace_id, workspace_name, sent, replies, ooo_replies, bounces, leads,
+              reply_rate, all_reply_rate, bounce_rate, leads_left_pct, active_campaigns,
               paused_campaigns, status, flagged, synced_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, now())
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, now())
            ON CONFLICT (workspace_id) DO UPDATE SET
              workspace_name=EXCLUDED.workspace_name, sent=EXCLUDED.sent,
-             replies=EXCLUDED.replies, bounces=EXCLUDED.bounces, leads=EXCLUDED.leads,
-             reply_rate=EXCLUDED.reply_rate, bounce_rate=EXCLUDED.bounce_rate,
+             replies=EXCLUDED.replies, ooo_replies=EXCLUDED.ooo_replies,
+             bounces=EXCLUDED.bounces, leads=EXCLUDED.leads,
+             reply_rate=EXCLUDED.reply_rate, all_reply_rate=EXCLUDED.all_reply_rate,
+             bounce_rate=EXCLUDED.bounce_rate,
              leads_left_pct=EXCLUDED.leads_left_pct, active_campaigns=EXCLUDED.active_campaigns,
              paused_campaigns=EXCLUDED.paused_campaigns, status=EXCLUDED.status,
              flagged=EXCLUDED.flagged, synced_at=now()`,
-          [w.id, w.name || w.id, sent, replies, bounces, leads,
-           replyRate, bounceRate, leadsLeftPct, activeCampaigns,
+          [w.id, w.name || w.id, sent, replies, oooReplies, bounces, leads,
+           replyRate, allReplyRate, bounceRate, leadsLeftPct, activeCampaigns,
            pausedCampaigns, status, status !== 'ok'],
         );
         void priceById; // (reserved for future per-lead revenue rollup)

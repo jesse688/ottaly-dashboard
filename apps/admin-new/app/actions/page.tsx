@@ -15,9 +15,11 @@ interface ClientRow {
   name: string
   sent: number
   replies: number
+  oooReplies: number
   bounces: number
   leads: number
   replyRate: number
+  allReplyRate: number
   bounceRate: number
   leadsLeftPct: number | null
   activeCampaigns: number
@@ -126,8 +128,12 @@ export default function ActionsPage() {
     },
     { key: 'sent', header: 'Sent', numeric: true, sortValue: r => r.sent, cell: r => num(r.sent) },
     {
-      key: 'replyRate', header: 'Reply %', numeric: true, sortValue: r => r.replyRate,
+      key: 'humanRR', header: 'Human RR', numeric: true, sortValue: r => r.replyRate,
       cell: r => pct(r.replyRate),
+    },
+    {
+      key: 'replyRate', header: 'Reply Rate', numeric: true, sortValue: r => r.allReplyRate,
+      cell: r => <span className="text-muted-foreground">{pct(r.allReplyRate)}</span>,
     },
     {
       key: 'bounceRate', header: 'Bounce %', numeric: true, sortValue: r => r.bounceRate,
