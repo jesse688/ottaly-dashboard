@@ -36,6 +36,7 @@ interface Reply {
   lead_company: string | null
   job_title: string | null
   industry: string | null
+  address: string | null
   city: string | null
   state: string | null
   country: string | null
@@ -43,6 +44,7 @@ interface Reply {
   linkedin_url: string | null
   linkedin_company_url: string | null
   phone_number: string | null
+  custom_fields: CustomField[] | null
   is_forwarded: boolean
   sender_email: string | null
   matched_lead_email: string | null
@@ -80,6 +82,7 @@ interface PortalClientLite { id: string; company_name: string; workspace_id: str
 
 // Editable lead-details form (fill in domain/title/etc. for sparse leads). Keys
 // match the lead-details API body; blank values are left unchanged on save.
+interface CustomField { label: string; value: string }
 interface LeadForm {
   first_name: string
   last_name: string
@@ -89,10 +92,18 @@ interface LeadForm {
   phone_number: string
   linkedin_person_url: string
   linkedin_company_url: string
+  address: string
+  city: string
+  state: string
+  country: string
+  industry: string
+  // Admin-named extra fields (anything not covered above).
+  custom_fields: CustomField[]
 }
 const BLANK_LEAD_FORM: LeadForm = {
   first_name: '', last_name: '', company_name: '', job_title: '',
   company_website: '', phone_number: '', linkedin_person_url: '', linkedin_company_url: '',
+  address: '', city: '', state: '', country: '', industry: '', custom_fields: [],
 }
 // Prefill the form from a selected reply's existing enrichment.
 function leadFormFromReply(r: Reply): LeadForm {
@@ -105,6 +116,14 @@ function leadFormFromReply(r: Reply): LeadForm {
     phone_number: r.phone_number ?? '',
     linkedin_person_url: r.linkedin_url ?? '',
     linkedin_company_url: r.linkedin_company_url ?? '',
+    address: r.address ?? '',
+    city: r.city ?? '',
+    state: r.state ?? '',
+    country: r.country ?? '',
+    industry: r.industry ?? '',
+    custom_fields: Array.isArray(r.custom_fields)
+      ? r.custom_fields.map(c => ({ label: c.label ?? '', value: c.value ?? '' }))
+      : [],
   }
 }
 
@@ -256,6 +275,9 @@ export function AdminUniboxClient() {
       setMsg('Lead details saved.')
       setEditLead(false)
       // Reflect the saved values back onto the selected reply + the list row.
+      const cleanCustom = leadForm.custom_fields
+        .map(c => ({ label: c.label.trim(), value: c.value.trim() }))
+        .filter(c => c.label && c.value)
       const patch: Partial<Reply> = {
         first_name: leadForm.first_name || selected.first_name,
         last_name: leadForm.last_name || selected.last_name,
@@ -265,6 +287,12 @@ export function AdminUniboxClient() {
         phone_number: leadForm.phone_number || selected.phone_number,
         linkedin_url: leadForm.linkedin_person_url || selected.linkedin_url,
         linkedin_company_url: leadForm.linkedin_company_url || selected.linkedin_company_url,
+        address: leadForm.address || selected.address,
+        city: leadForm.city || selected.city,
+        state: leadForm.state || selected.state,
+        country: leadForm.country || selected.country,
+        industry: leadForm.industry || selected.industry,
+        custom_fields: cleanCustom.length ? cleanCustom : selected.custom_fields,
       }
       setSelected(prev => prev ? { ...prev, ...patch } : prev)
       setRows(prev => prev.map(row => row.id === selected.id ? { ...row, ...patch } : row))
@@ -757,7 +785,11 @@ export function AdminUniboxClient() {
                    {selected.linkedin_url && <ContactRow label="LinkedIn" value="View profile" href={ensureUrl(selected.linkedin_url)} />}
                    {selected.linkedin_company_url && <ContactRow label="Company LinkedIn" value="View page" href={ensureUrl(selected.linkedin_company_url)} />}
                    {selected.industry && <ContactRow label="Industry" value={selected.industry} />}
+                   {selected.address && <ContactRow label="Address" value={selected.address} />}
                    {(selected.city || selected.state || selected.country) && <ContactRow label="Location" value={[selected.city, selected.state, selected.country].filter(Boolean).join(', ')} />}
+                   {Array.isArray(selected.custom_fields) && selected.custom_fields
+                     .filter(c => c?.label && c?.value)
+                     .map((c, i) => <ContactRow key={`cf-${i}`} label={c.label} value={c.value} />)}
                  </dl>
 
                  {/* Companies House rundown — verified register data captured at
@@ -787,8 +819,35 @@ export function AdminUniboxClient() {
                        <LeadField label="Job title" value={leadForm.job_title} onChange={v => setLeadForm(f => ({ ...f, job_title: v }))} />
                        <LeadField label="Website / domain" value={leadForm.company_website} onChange={v => setLeadForm(f => ({ ...f, company_website: v }))} placeholder="company.com" />
                        <LeadField label="Phone" value={leadForm.phone_number} onChange={v => setLeadForm(f => ({ ...f, phone_number: v }))} />
+                       <LeadField label="Industry" value={leadForm.industry} onChange={v => setLeadForm(f => ({ ...f, industry: v }))} />
+                       <LeadField label="Address" value={leadForm.address} onChange={v => setLeadForm(f => ({ ...f, address: v }))} placeholder="Street address" />
+                       <div className="grid grid-cols-2 gap-2">
+                         <LeadField label="City" value={leadForm.city} onChange={v => setLeadForm(f => ({ ...f, city: v }))} />
+                         <LeadField label="State / region" value={leadForm.state} onChange={v => setLeadForm(f => ({ ...f, state: v }))} />
+                       </div>
+                       <LeadField label="Country" value={leadForm.country} onChange={v => setLeadForm(f => ({ ...f, country: v }))} />
                        <LeadField label="LinkedIn (person)" value={leadForm.linkedin_person_url} onChange={v => setLeadForm(f => ({ ...f, linkedin_person_url: v }))} />
                        <LeadField label="LinkedIn (company)" value={leadForm.linkedin_company_url} onChange={v => setLeadForm(f => ({ ...f, linkedin_company_url: v }))} />
+
+                       {/* Custom named fields — admin types their own label + value. */}
+                       <div className="pt-1 space-y-2">
+                         <p className="text-[10px] uppercase tracking-wide text-gray-400">Custom fields</p>
+                         {leadForm.custom_fields.map((cf, i) => (
+                           <div key={i} className="flex items-end gap-1.5">
+                             <div className="flex-1"><LeadField label="Field name" value={cf.label} placeholder="e.g. Fleet size"
+                               onChange={v => setLeadForm(f => ({ ...f, custom_fields: f.custom_fields.map((c, j) => j === i ? { ...c, label: v } : c) }))} /></div>
+                             <div className="flex-1"><LeadField label="Value" value={cf.value}
+                               onChange={v => setLeadForm(f => ({ ...f, custom_fields: f.custom_fields.map((c, j) => j === i ? { ...c, value: v } : c) }))} /></div>
+                             <button type="button" title="Remove field"
+                               onClick={() => setLeadForm(f => ({ ...f, custom_fields: f.custom_fields.filter((_, j) => j !== i) }))}
+                               className="mb-0.5 w-7 h-7 shrink-0 flex items-center justify-center rounded-md border border-gray-200 text-gray-400 hover:text-red-600 hover:border-red-200">×</button>
+                           </div>
+                         ))}
+                         <button type="button"
+                           onClick={() => setLeadForm(f => ({ ...f, custom_fields: [...f.custom_fields, { label: '', value: '' }] }))}
+                           className="text-xs font-medium text-indigo-600 hover:text-indigo-800">+ Add custom field</button>
+                       </div>
+
                        <div className="flex items-center gap-2 pt-1">
                          <button onClick={saveLeadDetails} disabled={busy} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium rounded-lg disabled:opacity-50">
                            {busy ? 'Saving…' : 'Save details'}

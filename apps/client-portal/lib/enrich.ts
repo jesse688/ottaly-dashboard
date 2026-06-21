@@ -1,5 +1,6 @@
 import pool from './db'
 import { resolveCompany, rundownToRawFields, type CompanyRundown } from './companies-house'
+import { extractSignatureFields, ALL_SIGNATURE_FIELDS, type SignatureField } from './signature'
 
 // When a lead becomes INTERESTED we enrich it from our OWN contacts database — the
 // full Apollo/PlusVibe record (linkedin, industry, location, address, seniority...).
@@ -202,5 +203,80 @@ export async function applyCHRundownToLead(
     )
   } catch (err) {
     console.error('[applyCHRundownToLead] failed:', err)
+  }
+}
+
+// Read the global signature-extract field list (defaults to all when unset; an
+// explicit empty string disables the feature). company_name is always included.
+async function signatureFields(): Promise<SignatureField[]> {
+  const cfg = await pool.query(`SELECT value FROM portal_settings WHERE key = 'signature_extract_fields'`)
+  const raw = cfg.rows[0]?.value
+  const fields: SignatureField[] = raw === undefined
+    ? [...ALL_SIGNATURE_FIELDS]
+    : String(raw).split(',').map(s => s.trim()).filter(Boolean) as SignatureField[]
+  if (!fields.length) return []
+  if (!fields.includes('company_name')) fields.push('company_name')
+  return fields
+}
+
+// Enrich a Unibox reply's lead from BOTH the reply's email signature AND our
+// contacts database, so the admin Unibox panel shows everything we know the
+// moment a reply lands. Ensures a lightweight esp_leads row exists (NON-interested,
+// so this never bills) for the JOIN to read. Signature wins over contacts for
+// company_name (the reply is the freshest source); contacts fill the rest.
+//
+// leadId precedence matches mark-as-lead/lead-details: lead_bison_id, else
+// `manual_<uniboxId>` — so a later mark-as-lead UPSERTs the SAME row.
+export async function enrichUniboxReply(input: {
+  uniboxId: string
+  workspaceId: string
+  email: string | null
+  leadBisonId: string | null
+  body: string | null
+}): Promise<void> {
+  const email = (input.email ?? '').trim().toLowerCase()
+  if (!email || !input.workspaceId) return
+  const leadId = input.leadBisonId || `manual_${input.uniboxId}`
+  try {
+    // 1) Ensure a lead row exists (no label/status → not billable, not on the
+    //    client dashboard, but readable by the Unibox JOIN). Idempotent.
+    // The live esp_leads table has a UNIQUE constraint on (id) — the webhook's own
+    // lead-ingest uses ON CONFLICT (id). Match it; (id, source) threw
+    // "no unique or exclusion constraint matching the ON CONFLICT specification"
+    // and 500'd the whole webhook, so the reply never stored.
+    await pool.query(
+      `INSERT INTO esp_leads (id, workspace_id, campaign_id, source, email, created_at, updated_at)
+       VALUES ($1,$2,NULL,'bison',$3,NOW(),NOW())
+       ON CONFLICT (id) DO NOTHING`,
+      [leadId, input.workspaceId, email]
+    )
+
+    // 2) Signature extraction from the reply body.
+    const fields = await signatureFields()
+    if (fields.length && input.body) {
+      const found = extractSignatureFields(input.body, fields, email) as Record<string, string>
+      const { company_name, ...rawFields } = found
+      if (Object.keys(rawFields).length) {
+        await pool.query(
+          `UPDATE esp_leads SET raw = COALESCE(raw, '{}'::jsonb) || $1::jsonb, updated_at = NOW()
+            WHERE id = $2 AND workspace_id = $3`,
+          [JSON.stringify(rawFields), leadId, input.workspaceId]
+        )
+      }
+      // company_name from the signature overrides the imported (often agency) name.
+      if (company_name) {
+        await pool.query(
+          `UPDATE esp_leads SET company_name = $1, updated_at = NOW()
+            WHERE id = $2 AND workspace_id = $3`,
+          [company_name, leadId, input.workspaceId]
+        )
+      }
+    }
+
+    // 3) Fill remaining gaps from our contacts DB (won't blank existing keys; only
+    //    sets company_name if still empty, so a signature value is preserved).
+    await enrichLeadFromContacts(leadId, input.workspaceId, email)
+  } catch (err) {
+    console.error('[enrichUniboxReply] failed:', err)
   }
 }

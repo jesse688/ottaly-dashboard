@@ -1,12 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import pool, { ready } from '@/lib/db'
-import { classifyReply, CLASSIFIER_MODEL, CLASSIFIER_VERSION, detectWarmup } from '@/lib/classify'
+import { classifyReply, CLASSIFIER_MODEL, CLASSIFIER_VERSION, detectWarmupFull } from '@/lib/classify'
 import { addToBlocklist, unsubscribeLead, bisonTeamForWorkspace } from '@/lib/bison'
-import { sendEmail } from '@/lib/email'
-
-// Who gets the internal "new interested reply" alert when one lands in Review.
-const INTERESTED_ALERT_TO = process.env.INTERESTED_ALERT_EMAIL || 'jamie@ottaly.co.uk'
-
 // Triage worker for the Master Unibox. Claims a batch of pending replies with
 // FOR UPDATE SKIP LOCKED (safe to run concurrently / overlapping), pre-filters
 // automated replies for free, and calls Claude on the rest. Authed by
@@ -23,13 +18,6 @@ export async function GET(req: NextRequest) {
   const summary = { processed: 0, interested: 0, failed: 0, unsubscribed: 0 }
   // Unsubscribe actions to run AFTER commit (network + stateful Bison switch).
   const unsubQueue: { workspaceId: string; email: string }[] = []
-  // Interested-reply alert emails to send AFTER commit.
-  interface AlertItem {
-    email: string; subject: string | null; company: string | null; body: string | null
-    leadName: string | null; title: string | null; phone: string | null
-    linkedin: string | null; website: string | null; location: string | null
-  }
-  const alertQueue: AlertItem[] = []
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
@@ -70,10 +58,17 @@ export async function GET(req: NextRequest) {
         replyObj.automated_reply === true || replyObj.automated_reply === 'true'
 
       if (automated) {
+        // Bison already identified this as automated (warm-up / OOO / auto-ack).
+        // File it to the hidden 'warmup' folder so it leaves the working queues —
+        // but never move a row already with the client or human-reviewed.
         await client.query(
           `UPDATE unibox_replies
               SET category = 'ooo_auto_reply', classify_state = 'done',
                   ai_model = 'prefilter', ai_reasoning = 'Bison automated_reply flag',
+                  folder = CASE
+                    WHEN folder IN ('inbox','review','unmapped')
+                         AND marked_as_lead = FALSE AND admin_label IS NULL
+                    THEN 'warmup' ELSE folder END,
                   updated_at = NOW()
             WHERE id = $1`,
           [id]
@@ -89,15 +84,20 @@ export async function GET(req: NextRequest) {
       // a real company website — exempts a hyphen-pair reply from warm-up. A bare
       // email / job_title is not enough (that's how "interest-advance / journey-
       // region" warm-ups were slipping through to Gemini and coming back interested).
-      const hasLeadFields = Boolean(
-        row.linkedin_url || row.company_website
-      )
-      const warmup = detectWarmup({
+      // Authoritative warm-up check: the PV/Bison per-mailbox filter tags
+      // (e.g. "removal-thirty") matched in subject/body/raw, plus the structural
+      // apple-apple token. This is what catches PV warm-ups that otherwise fool
+      // Gemini into "interested". rawText pulls the full body (body_preview is
+      // truncated at 500 chars and may cut off before the tag).
+      // Use the FULL serialized raw (capped) as the warm-up haystack so the tag is
+      // caught wherever it's stored (top-level text_body, nested reply.text_body,
+      // html_body, etc.) — body_preview is truncated at 500 chars.
+      let rawText = ''
+      try { rawText = JSON.stringify(raw).slice(0, 12000) } catch { rawText = '' }
+      const warmup = await detectWarmupFull(String(row.workspace_id ?? ''), {
         subject: (row.subject as string) ?? '',
         bodyText: (row.body_preview as string) ?? '',
-        hasLeadFields,
-        // A forwarded reply legitimately lacks lead fields — don't auto-warmup it.
-        isForwarded: Boolean(row.is_forwarded),
+        rawText,
       })
       if (warmup.isWarmup) {
         // Warmup goes to its OWN visible folder (not hidden 'rejected'), so a
@@ -150,22 +150,6 @@ export async function GET(req: NextRequest) {
         summary.processed++
         if (result.category === 'interested' || result.category === 'question') {
           summary.interested++
-          // Alert internally that a new interested/question reply landed in Review.
-          const rawObj = (row.raw ?? {}) as Record<string, unknown>
-          const fullBody = (rawObj.text_body as string) || (row.body_preview as string) || null
-          const leadName = [row.first_name, row.last_name].filter(Boolean).join(' ').trim() || null
-          alertQueue.push({
-            email: String(row.lead_email ?? ''),
-            subject: (row.subject as string) ?? null,
-            company: (row.company_name as string) ?? (row.lead_company as string) ?? null,
-            body: fullBody,
-            leadName,
-            title: (row.job_title as string) ?? null,
-            phone: (row.phone_number as string) ?? null,
-            linkedin: (row.linkedin_url as string) ?? null,
-            website: (row.company_website as string) ?? null,
-            location: [row.city, row.country].filter(Boolean).join(', ') || null,
-          })
         }
         // Queue auto-unsubscribe: AI says they want out → honour it. Only when
         // we know the client's workspace (mapped) so we hit the right Bison team.
@@ -209,40 +193,6 @@ export async function GET(req: NextRequest) {
       summary.unsubscribed++
     } catch (err) {
       console.error('[cron/classify] auto-unsub failed:', email, String(err))
-    }
-  }
-
-  // After commit: alert internally about each new interested reply. Best-effort.
-  for (const a of alertQueue) {
-    const lines = [
-      'A new interested reply just landed in the Unibox review folder.',
-      '',
-      '— LEAD —',
-      `Name:     ${a.leadName || '—'}`,
-      `Email:    ${a.email || '—'}`,
-      `Company:  ${a.company || '—'}`,
-      `Title:    ${a.title || '—'}`,
-      `Phone:    ${a.phone || '—'}`,
-      `LinkedIn: ${a.linkedin || '—'}`,
-      `Website:  ${a.website || '—'}`,
-      `Location: ${a.location || '—'}`,
-      '',
-      '— THEIR REPLY —',
-      `Subject:  ${a.subject || '(no subject)'}`,
-      '',
-      (a.body || '(no message body captured)'),
-      '',
-      'Review / reply: https://login.ottaly.co.uk/admin/unibox',
-    ]
-    try {
-      await sendEmail(
-        INTERESTED_ALERT_TO,
-        `🔥 New interested reply — ${a.leadName || a.company || a.email || 'lead'}`,
-        lines.join('\n'),
-        `interested/${a.email}/${a.subject ?? ''}`,
-      )
-    } catch (err) {
-      console.error('[cron/classify] interested alert failed:', a.email, String(err))
     }
   }
 

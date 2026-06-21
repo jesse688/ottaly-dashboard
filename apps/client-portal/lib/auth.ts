@@ -97,7 +97,9 @@ export async function validateClientCredentials(
       companyName: first.company_name,
       // Greet the actual USER by their own name; fall back to the client contact.
       contactName: first.display_name || first.contact_name || '',
-      email: first.email ?? '',
+      // Prefer the client record's email; fall back to the login identifier
+      // (which IS their email for portal_user_access logins like sam@bubblecustomised.co.uk).
+      email: first.email || id,
       workspaces,
     }
   }

@@ -9,6 +9,7 @@ export default async function UniboxPage() {
     <UniboxClient
       companyName={session.companyName}
       clientName={session.contactName}
+      clientEmail={session.email ?? ''}
       workspaces={session.workspaces ?? []}
       activeWorkspaceId={session.workspaceId}
     />

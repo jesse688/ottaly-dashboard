@@ -40,7 +40,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // why the full email + signature never pulled through.
     const sel = await client.query(
       `SELECT id, bison_reply_id, workspace_id, lead_bison_id, lead_email, subject,
-              body_preview, received_at, marked_as_lead,
+              body_preview, received_at, marked_as_lead, bison_tag_state,
               raw->>'html_body'   AS reply_html,
               raw->>'text_body'   AS reply_text
          FROM unibox_replies WHERE id = $1 FOR UPDATE`,
@@ -54,7 +54,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       id: string; bison_reply_id: string | null; workspace_id: string | null
       lead_bison_id: string | null; lead_email: string | null
       subject: string | null; body_preview: string | null; received_at: string | null; marked_as_lead: boolean
-      reply_html: string | null; reply_text: string | null
+      bison_tag_state: string | null; reply_html: string | null; reply_text: string | null
     }
 
     // Seed the client-facing thread (portal_emails) from the unibox reply so the
@@ -118,7 +118,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         [reply.workspace_id]
       ).catch(() => ({ rows: [] as { id: string }[] }))
       if (c.rows[0]?.id) await reconcileLeadCharges(c.rows[0].id).catch(() => {})
-      return NextResponse.json({ ok: true, already: true, healed: true })
+      // Retry Bison tag if it previously failed or was skipped (na).
+      let healTagState: string = reply.bison_tag_state ?? 'na'
+      if (healTagState !== 'done' && reply.workspace_id) {
+        const teamId = bisonTeamForWorkspace(reply.workspace_id)
+        if (teamId) {
+          const t = await tagInBison(teamId, reply.lead_bison_id, reply.lead_email)
+          healTagState = t.ok ? 'done' : 'failed'
+          if (t.ok) await pool.query(`UPDATE unibox_replies SET bison_tag_state='done', updated_at=NOW() WHERE id=$1`, [id]).catch(() => {})
+          if (!t.ok) console.error('[admin/unibox/mark-as-lead] heal tag failed:', t.reason)
+        }
+      }
+      return NextResponse.json({ ok: true, already: true, healed: true, bison_tag_state: healTagState })
     }
 
     // Resolve the client. Prefer a valid override, else the workspace owner.
@@ -216,11 +227,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // 'na' = nothing to tag (lead never came from Bison, so no lead_bison_id) —
     // distinct from 'failed' (a real Bison lead whose tag call errored) so the UI
     // doesn't show a scary "failed" on outside-Bison leads.
-    let tagState: 'done' | 'failed' | 'na' = reply.lead_bison_id ? 'failed' : 'na'
-    if (reply.lead_bison_id && pvWorkspaceId) {
+    // Tag in Bison: try with lead_bison_id first; if null (untracked reply), fall back
+    // to email lookup inside tagInBison. 'na' only if there's no team mapping at all.
+    let tagState: 'done' | 'failed' | 'na' = 'na'
+    if (pvWorkspaceId) {
       const teamId = bisonTeamForWorkspace(pvWorkspaceId)
       if (teamId) {
-        const t = await tagInBison(teamId, reply.lead_bison_id)
+        const t = await tagInBison(teamId, reply.lead_bison_id, reply.lead_email)
         tagState = t.ok ? 'done' : 'failed'
         if (!t.ok) console.error('[admin/unibox/mark-as-lead] tag failed:', t.reason)
 

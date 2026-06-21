@@ -183,7 +183,22 @@ async function bison<T>(
     const txt = await res.text().catch(() => '')
     throw new Error(`Bison ${method} ${path} -> ${res.status}: ${txt.slice(0, 200)}`)
   }
-  return res.json() as Promise<T>
+  // 204 No Content (common for DELETE) has an empty body — res.json() would throw.
+  // Return null in that case instead of failing an otherwise-successful call.
+  if (res.status === 204) return null as T
+  const text = await res.text()
+  return (text ? JSON.parse(text) : null) as T
+}
+
+// Low-level Bison caller for admin one-offs. Call INSIDE withTeam() so it runs on
+// the target workspace's scoped token (Bison is stateful per workspace).
+export async function bisonApi<T>(
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+  path: string,
+  params?: Record<string, string | number | boolean | undefined>,
+  body?: unknown,
+): Promise<T> {
+  return bison<T>(method, path, params, body)
 }
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -431,27 +446,37 @@ interface BisonTag { id: number; name: string }
 // mark-as-lead flow) can record bison_tag_state without rolling back billing.
 export async function tagInBison(
   teamId: string | number,
-  leadId: string | number,
+  leadId: string | number | null,
+  leadEmail?: string | null,
 ): Promise<{ ok: boolean; reason?: string }> {
-  if (teamId == null || teamId === '' || leadId == null || leadId === '') {
-    return { ok: false, reason: 'missing-team-or-lead' }
+  if (teamId == null || teamId === '') {
+    return { ok: false, reason: 'missing-team' }
   }
   try {
     return await withTeam(teamId, async () => {
-      // 1) Find or create the "lead" tag.
+      // Resolve the numeric Bison lead ID. If we don't have one (untracked reply),
+      // look it up by email — Bison stores every lead it's contacted by email.
+      let resolvedId: number | null = leadId != null && leadId !== '' ? Number(leadId) : null
+      if (!resolvedId && leadEmail) {
+        const found = await getLead(leadEmail)
+        resolvedId = found?.id ?? null
+      }
+      if (!resolvedId) return { ok: false, reason: 'lead-not-found-in-bison' }
+
+      // 1) Find or create the "Interested" tag (Bison's own signal for interested leads).
       const list = await bison<{ data?: BisonTag[] }>('GET', '/api/tags')
       const existing = (Array.isArray(list) ? (list as unknown as BisonTag[]) : list.data ?? [])
-        .find(t => (t.name ?? '').toLowerCase() === 'lead')
+        .find(t => (t.name ?? '').toLowerCase() === 'interested')
       let tagId = existing?.id
       if (!tagId) {
-        const created = await bison<{ data?: BisonTag }>('POST', '/api/tags', undefined, { name: 'lead' })
+        const created = await bison<{ data?: BisonTag }>('POST', '/api/tags', undefined, { name: 'Interested' })
         tagId = (created as { data?: BisonTag; id?: number }).data?.id
           ?? (created as { id?: number }).id
       }
       if (!tagId) return { ok: false, reason: 'tag-create-failed' }
 
-      // 2) Attach the tag to the lead.
-      await bison('POST', `/api/leads/${leadId}/tags`, undefined, { tag_ids: [tagId] })
+      // 2) Attach the tag to the lead via the bulk attach endpoint.
+      await bison('POST', '/api/tags/attach-to-leads', undefined, { tag_ids: [tagId], lead_ids: [resolvedId] })
       return { ok: true }
     })
   } catch (err) {
@@ -521,17 +546,32 @@ const WEBHOOK_EVENTS = ['lead_interested', 'lead_replied', 'untracked_reply_rece
 
 interface BisonHook { id: number; name: string; url: string; events: string[] }
 
+// Stale webhook targets to prune when (re)registering — old admin-legacy hooks
+// that double-deliver to a dead endpoint.
+const STALE_WEBHOOK_HOSTS = ['ottaly-git.oix3xv.easypanel.host']
+
 // Register the webhook in the CURRENT workspace context (the active token's
-// workspace). Idempotent — skips if the exact URL is already registered.
+// workspace). Idempotent — skips creating if the exact URL is already registered,
+// but ALWAYS prunes known-stale hooks so dead endpoints stop receiving copies.
 async function registerWebhookHere(): Promise<{ ok: boolean; reason?: string }> {
   try {
     const list = await bison<{ data?: BisonHook[] }>('GET', '/api/webhook-url').catch(() => ({ data: [] as BisonHook[] }))
-    const exact = (list.data ?? []).some(h => h.url === WEBHOOK_TARGET)
-    if (exact) return { ok: true, reason: 'already-exists' }
+    const hooks = list.data ?? []
+
+    // Prune stale admin-legacy hooks (best-effort; don't fail the whole op).
+    let pruned = 0
+    for (const h of hooks) {
+      if (STALE_WEBHOOK_HOSTS.some(host => h.url.includes(host))) {
+        await bison('DELETE', `/api/webhook-url/${h.id}`).then(() => { pruned++ }).catch(() => {})
+      }
+    }
+
+    const exact = hooks.some(h => h.url === WEBHOOK_TARGET)
+    if (exact) return { ok: true, reason: pruned ? `already-exists,pruned:${pruned}` : 'already-exists' }
     await bison('POST', '/api/webhook-url', undefined, {
       name: 'Ottaly Portal', url: WEBHOOK_TARGET, events: WEBHOOK_EVENTS,
     })
-    return { ok: true, reason: 'created' }
+    return { ok: true, reason: pruned ? `created,pruned:${pruned}` : 'created' }
   } catch (err) {
     return { ok: false, reason: String(err) }
   }
@@ -540,6 +580,26 @@ async function registerWebhookHere(): Promise<{ ok: boolean; reason?: string }> 
 export async function registerWebhook(): Promise<{ ok: boolean; reason?: string }> {
   if (!await getBisonKey()) return { ok: false, reason: 'no-api-key' }
   return registerWebhookHere()
+}
+
+// Inspect what webhooks are CURRENTLY registered in each mapped workspace — so we
+// can see whether Bison is pointed at us (and at the right URL/events) without
+// re-registering. Returns one entry per team with its registered hooks.
+export async function inspectWebhooksAllWorkspaces(): Promise<{ ok: boolean; target: string; teams: Record<string, { url: string; events: string[]; pointsAtUs: boolean }[] | string> }> {
+  if (!await getBisonKey()) return { ok: false, target: WEBHOOK_TARGET, teams: {} }
+  const teamIds = Array.from(new Set(Object.values(PV_TO_BISON_TEAM)))
+  const teams: Record<string, { url: string; events: string[]; pointsAtUs: boolean }[] | string> = {}
+  for (const teamId of teamIds) {
+    try {
+      teams[teamId] = await withTeam(teamId, async () => {
+        const list = await bison<{ data?: BisonHook[] }>('GET', '/api/webhook-url').catch(() => ({ data: [] as BisonHook[] }))
+        return (list.data ?? []).map(h => ({ url: h.url, events: h.events, pointsAtUs: h.url === WEBHOOK_TARGET }))
+      })
+    } catch (err) {
+      teams[teamId] = `error: ${String(err).slice(0, 80)}`
+    }
+  }
+  return { ok: true, target: WEBHOOK_TARGET, teams }
 }
 
 // Register the webhook in EVERY mapped workspace. Bison webhooks are

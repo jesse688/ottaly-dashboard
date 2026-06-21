@@ -28,6 +28,10 @@ export const DEFAULT_TEMPLATES = {
   reset_subject: 'Reset your Ottaly access code',
   reset_body:
     "Hi,\n\nYou asked to reset your Ottaly login code.\n\nChoose a new code here (link expires after use):\n{reset_url}\n\nIf you didn't request this, you can ignore this email.\n\nBest,\nThe Ottaly Team",
+  // Sent to the client when a lead replies AFTER the client has already sent a message.
+  lead_reply_subject: '{lead_name} replied to your message',
+  lead_reply_body:
+    'Hi {first_name},\n\n{lead_name} has replied to your message:\n\n"{lead_preview}"\n\nLog in to view the full thread and reply:\n{login_url}/leads\n\nBest,\nThe Ottaly Team',
 }
 export type TemplateKey = keyof typeof DEFAULT_TEMPLATES
 
@@ -87,6 +91,97 @@ export async function sendEmail(to: string, subject: string, text: string, idemp
   } catch (err) {
     console.error('[email] send failed:', err)
     return { ok: false, reason: 'exception' }
+  }
+}
+
+// Send a reply email via Resend with optional file attachments.
+// Used when a client replies from the portal — Bison doesn't support attachments,
+// so attached files force the send through Resend directly.
+export async function sendEmailReply(opts: {
+  to: string; cc?: string; subject: string; html: string; text: string
+  replyTo?: string
+  attachments?: { filename: string; content: Buffer }[]
+}): Promise<{ ok: boolean; reason?: string }> {
+  const key = process.env.RESEND_API_KEY
+  if (!key) { console.warn('[email] RESEND_API_KEY not set — skipping send'); return { ok: false, reason: 'no_api_key' } }
+  if (!opts.to) return { ok: false, reason: 'no_recipient' }
+  try {
+    const payload: Record<string, unknown> = {
+      from: FROM,
+      to: opts.to,
+      subject: opts.subject,
+      html: opts.html,
+      text: opts.text,
+    }
+    if (opts.cc) payload.cc = opts.cc
+    if (opts.replyTo) payload.reply_to = opts.replyTo
+    if (opts.attachments?.length) {
+      payload.attachments = opts.attachments.map(a => ({
+        filename: a.filename,
+        content: a.content.toString('base64'),
+      }))
+    }
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(15000),
+    })
+    if (!res.ok) { const body = await res.text(); console.error('[email] resend reply error:', res.status, body); return { ok: false, reason: `resend_${res.status}` } }
+    return { ok: true }
+  } catch (err) {
+    console.error('[email] sendEmailReply failed:', err)
+    return { ok: false, reason: 'exception' }
+  }
+}
+
+// Notify the client when a lead replies AFTER the client has already sent a message.
+// Only fires once per (lead_email, workspace) conversation thread — deduped via portal_meta.
+export async function notifyClientOfLeadReply(workspaceId: string, leadEmail: string, leadName: string, preview: string, replyId?: string | null): Promise<void> {
+  try {
+    // Dedup PER REPLY (not per thread) so every new reply from the lead notifies —
+    // a thread-level key would only ever fire on the first reply. Fall back to a
+    // timestamped key when we have no reply id so we still don't spam on retries.
+    const dedupKey = replyId
+      ? `lead_reply_notif_${workspaceId}_${replyId}`
+      : `lead_reply_notif_${workspaceId}_${leadEmail.toLowerCase()}_${Date.now()}`
+    const ins = await pool.query(
+      `INSERT INTO portal_meta (key) VALUES ($1) ON CONFLICT (key) DO NOTHING RETURNING key`,
+      [dedupKey]
+    )
+    if (!ins.rows.length) return // this reply already notified (webhook retry)
+
+    const tpl = await getTemplates()
+
+    const clients = await pool.query(
+      `SELECT c.email, c.contact_name, c.company_name
+         FROM portal_clients c
+        WHERE c.workspace_id = $1 AND c.active = true AND c.email IS NOT NULL AND c.email != ''`,
+      [workspaceId]
+    )
+    const extra = await pool.query(
+      `SELECT ua.identifier AS email, ua.display_name
+         FROM portal_user_access ua
+         JOIN portal_clients c ON c.id = ua.client_id
+        WHERE c.workspace_id = $1 AND ua.identifier ILIKE '%@%'`,
+      [workspaceId]
+    )
+    const allRecipients = [
+      ...clients.rows.map((r: { email: string; contact_name: string | null; company_name: string | null }) => ({ email: r.email as string, name: firstName(r.contact_name, r.company_name) })),
+      ...extra.rows.map((r: { email: string; display_name: string | null }) => ({ email: r.email as string, name: (r.display_name as string | null) || '' })),
+    ]
+    const seen = new Set<string>()
+    for (const r of allRecipients) {
+      if (seen.has(r.email.toLowerCase())) continue
+      seen.add(r.email.toLowerCase())
+      const name = r.name || 'there'
+      const vars = { first_name: name, lead_name: leadName, lead_preview: preview.slice(0, 300), login_url: BASE_URL }
+      const subject = render(tpl.lead_reply_subject, vars)
+      const body = render(tpl.lead_reply_body, vars)
+      await sendEmail(r.email, subject, body).catch(() => {})
+    }
+  } catch (err) {
+    console.error('[email] notifyClientOfLeadReply failed:', err)
   }
 }
 

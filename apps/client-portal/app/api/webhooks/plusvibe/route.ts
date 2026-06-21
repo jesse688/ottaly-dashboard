@@ -1,9 +1,9 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import pool from '@/lib/db'
 import crypto from 'crypto'
-import { notifyClientOfLead } from '@/lib/email'
+import { notifyClientOfLead, notifyClientOfLeadReply } from '@/lib/email'
 import { enrichLead, leadCompanyOrNull } from '@/lib/sync'
-import { enrichReplyWithCH } from '@/lib/enrich'
+import { enrichReplyWithCH, enrichUniboxReply } from '@/lib/enrich'
 import { ready } from '@/lib/db'
 import { bisonTeamToWorkspace } from '@/lib/bison'
 import { notifyAdmin } from '@/lib/notify'
@@ -43,21 +43,72 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
   }
 
+  // Log EVERY delivery first (best-effort) so a reply that lands in Bison but not
+  // the Unibox can be traced: did the webhook even arrive, and how did we route it?
+  let deliveryId: string | null = null
+  try {
+    const probe = JSON.parse(body) as Record<string, unknown>
+    const isBison = typeof probe.event !== 'string'
+    const evObj = probe.event as { type?: string; workspace_id?: string | number } | undefined
+    const data = probe.data as { reply?: { id?: string | number }; lead?: unknown } | undefined
+    const ins = await pool.query(
+      `INSERT INTO webhook_deliveries (provider, event_type, team_id, reply_id, signature_present, body, outcome)
+       VALUES ($1,$2,$3,$4,$5,$6,'received') RETURNING id`,
+      [
+        isBison ? 'bison' : 'plusvibe',
+        isBison ? (evObj?.type ?? null) : String(probe.event ?? ''),
+        isBison && evObj?.workspace_id != null ? String(evObj.workspace_id) : null,
+        data?.reply?.id != null ? String(data.reply.id) : null,
+        !!signature,
+        body.slice(0, 20000),
+      ]
+    )
+    deliveryId = ins.rows[0]?.id ?? null
+  } catch { /* logging must never block intake */ }
+
   try {
     const parsed = JSON.parse(body) as Record<string, unknown>
 
     // Detect payload format: PlusVibe sends event as a string, Bison as an object.
     if (typeof parsed.event === 'string') {
       await handlePlusVibe(parsed)
+      // PlusVibe path doesn't set its own outcome; mark it terminal here.
+      if (deliveryId) await markDelivery(deliveryId, 'done:plusvibe')
     } else {
-      await handleBison(parsed)
+      // handleBison sets its OWN specific outcome (stored:<folder> | skipped:<why>
+      // | error:...). Don't overwrite it with a generic 'done' — that destroyed the
+      // diagnostic. Only fall back to 'done' if the handler set nothing.
+      await handleBison(parsed, deliveryId)
+      if (deliveryId) await finalizeDelivery(deliveryId)
     }
 
     return NextResponse.json({ ok: true })
   } catch (err) {
     console.error('[webhook] error:', err)
-    return NextResponse.json({ error: 'Webhook processing failed' }, { status: 500 })
+    if (deliveryId) await markDelivery(deliveryId, `error:${String(err).slice(0, 200)}`)
+    // ALWAYS return 200. A 500 makes Bison treat the delivery as failed and, after
+    // repeated failures, auto-disable/back-off the webhook — which silently stops
+    // ALL replies. We've logged the error for ourselves; never signal failure to Bison.
+    return NextResponse.json({ ok: false, logged: true })
   }
+}
+
+// Mark 'done' only if the handler left the delivery in a non-terminal state
+// (still 'received' or just 'routed:<event>') — preserves any specific outcome.
+async function finalizeDelivery(id: string) {
+  await pool.query(
+    `UPDATE webhook_deliveries SET outcome = 'done'
+      WHERE id = $1 AND (outcome = 'received' OR outcome LIKE 'routed:%')`,
+    [id]
+  ).catch(() => {})
+}
+
+// Update a delivery's outcome (and workspace once we've mapped it). Best-effort.
+async function markDelivery(id: string, outcome: string, workspaceId?: string | null) {
+  await pool.query(
+    `UPDATE webhook_deliveries SET outcome = $2, workspace_id = COALESCE($3, workspace_id) WHERE id = $1`,
+    [id, outcome, workspaceId ?? null]
+  ).catch(() => {})
 }
 
 // ── PlusVibe payload ──────────────────────────────────────────────────────────
@@ -145,9 +196,13 @@ interface BisonPayload {
   }
 }
 
-async function handleBison(raw: Record<string, unknown>) {
+async function handleBison(raw: Record<string, unknown>, deliveryId: string | null = null) {
   const ev = raw as unknown as BisonPayload
-  const eventType = ev.event?.type ?? ''
+  // Bison sends event types in UPPERCASE (e.g. LEAD_REPLIED, LEAD_INTERESTED);
+  // every comparison below is lowercase, so normalize once here. A mismatch made
+  // LEAD_INTERESTED skip lead-ingest AND pass the reply-store guard — replies
+  // silently fell through. Lowercasing fixes both.
+  const eventType = (ev.event?.type ?? '').toLowerCase()
   // The payload carries the raw Bison team id. Reverse-map it to the PV
   // workspace_id the rest of the portal keys off (portal_clients.workspace_id).
   const rawTeamId = ev.event?.workspace_id != null ? String(ev.event.workspace_id) : ''
@@ -158,6 +213,7 @@ async function handleBison(raw: Record<string, unknown>) {
   const reply = ev.data?.reply
 
   console.log(`[webhook/bison] ${eventType} team=${rawTeamId} workspace=${mappedWorkspaceId ?? 'UNMAPPED'}`)
+  if (deliveryId) await markDelivery(deliveryId, `routed:${eventType}`, mappedWorkspaceId)
 
   // Ingest the lead record. Decoupled from billing: label stays NULL on ingest
   // (PRESERVED on conflict) — only the admin "Mark as lead" action sets
@@ -176,7 +232,7 @@ async function handleBison(raw: Record<string, unknown>) {
          lead.email, lead.first_name ?? null, lead.last_name ?? null,
          await leadCompanyOrNull(mappedWorkspaceId, lead.company_name), lead.status ?? null,
          eventType === 'lead_replied' ? new Date().toISOString() : null]
-      )
+      ).catch(err => console.error('[webhook/bison] lead ingest failed (non-fatal):', err))
     }
   }
 
@@ -185,17 +241,38 @@ async function handleBison(raw: Record<string, unknown>) {
   // (only under the CORRECT PV workspace_id) so existing thread views work.
   if (reply?.id && eventType !== 'lead_interested') {
     const leadEmail = (lead?.email ?? '').toLowerCase()
-    const direction = reply.folder?.toLowerCase() === 'sent' ? 'OUT' : 'IN'
+    const folderLc = (reply.folder ?? '').toLowerCase()
+    const direction = folderLc === 'sent' ? 'OUT' : 'IN'
     const replyId = String(reply.id)
+    const senderEmailEarly = (reply.from_email_address ?? '').toLowerCase()
+
+    // Drop obvious non-replies at intake: Spam/Bounce folders and bounce daemons
+    // (mailer-daemon/postmaster). These aren't real prospect replies and would
+    // otherwise clutter the Unibox inbox.
+    const isBounceSender = /(^|[._-])(mailer-daemon|postmaster|no-?reply|bounce|abuse)@/.test(senderEmailEarly)
+    if (folderLc === 'spam' || folderLc === 'bounce' || folderLc === 'bounced' || isBounceSender) {
+      if (deliveryId) await markDelivery(deliveryId, `skipped:${folderLc || 'bounce_sender'}`, mappedWorkspaceId)
+      return
+    }
     const leadBisonId = lead?.id ? String(lead.id) : (reply.lead_id ? String(reply.lead_id) : null)
     // Bison's reply payload puts the subject in `email_subject` (not `subject`).
     const replySubject = reply.email_subject ?? reply.subject ?? null
 
     // The address that actually SENT this reply (may differ from the campaign
     // lead, e.g. forwarded to a colleague who replies from their own address).
-    const senderEmail = (reply.from_email_address ?? '').toLowerCase()
+    const senderEmail = senderEmailEarly
     // The unibox row's primary email = the campaign lead if known, else the sender.
-    const rowEmail = leadEmail || senderEmail
+    // Last resort: if BOTH are empty (some LEAD_REPLIED payloads carry neither),
+    // resolve the lead's email from our DB via the Bison lead id — otherwise the
+    // reply would be silently dropped for having no rowEmail.
+    let rowEmail = leadEmail || senderEmail
+    if (!rowEmail && leadBisonId) {
+      const le = await pool.query(
+        `SELECT email FROM esp_leads WHERE id = $1 ORDER BY (source='bison') DESC LIMIT 1`,
+        [leadBisonId]
+      ).catch(() => ({ rows: [] as { email: string }[] }))
+      rowEmail = (le.rows[0]?.email ?? '').toLowerCase()
+    }
 
     // Cache the FULL reply (html + text body, with the lead's signature/photos) into
     // portal_emails so the client inbox can render it. Key on rowEmail (sender when
@@ -219,8 +296,35 @@ async function handleBison(raw: Record<string, unknown>) {
       if (ins) portalEmailId = replyId
     }
 
+    // When a lead replies AFTER the client has sent at least one message, notify
+    // the client so they know the conversation is live. Best-effort, non-blocking.
+    if (direction === 'IN' && rowEmail && mappedWorkspaceId) {
+      const hasClientReply = await pool.query(
+        `SELECT 1 FROM portal_emails
+          WHERE workspace_id = $1 AND lower(lead_email) = lower($2) AND direction = 'OUT' AND sent_via_portal = true
+          LIMIT 1`,
+        [mappedWorkspaceId, rowEmail]
+      ).catch(() => ({ rows: [] }))
+      if (hasClientReply.rows.length) {
+        const leadDisplayName = leadEmail
+          ? ((lead?.first_name ?? '') + ' ' + (lead?.last_name ?? '')).trim() || leadEmail
+          : senderEmail
+        notifyClientOfLeadReply(
+          mappedWorkspaceId,
+          rowEmail,
+          leadDisplayName,
+          (reply.text_body ?? '').slice(0, 300),
+          replyId,
+        ).catch(() => {})
+      }
+    }
+
     // Master Unibox row — only inbound replies are worth triaging. Idempotent on
     // (bison_team_id, bison_reply_id) so webhook retries never duplicate.
+    if (direction !== 'IN' || !rowEmail) {
+      // Not stored in the Unibox: outbound (Sent) reply, or no resolvable email.
+      if (deliveryId) await markDelivery(deliveryId, `skipped:${direction !== 'IN' ? 'direction_' + direction : 'no_email'}`, mappedWorkspaceId)
+    }
     if (direction === 'IN' && rowEmail) {
       // #2 FORWARDED / UNLINKED: if the reply isn't tied to a known lead (no
       // lead.email, or the sender differs from the lead), try to match the
@@ -248,17 +352,21 @@ async function handleBison(raw: Record<string, unknown>) {
           }
         }
       }
+      // Bison marks automated/warmup replies with automated_reply=true — drop them
+      // at intake so they never enter the classify pipeline.
+      if (reply.automated_reply === true) {
+        console.log(`[webhook/bison] skipping automated reply id=${replyId}`)
+        if (deliveryId) await markDelivery(deliveryId, 'skipped:automated_reply', mappedWorkspaceId)
+        return
+      }
       const folder = mappedWorkspaceId ? 'inbox' : 'unmapped'
-      // Bison's own classification of this reply (advisory — distinct from our AI
-      // `category` and the human `admin_label`). Coerce to a tri-state boolean so
-      // an absent field stays NULL rather than becoming a false negative.
       const bisonInterested = typeof reply.interested === 'boolean' ? reply.interested : null
       const bisonAutomated = typeof reply.automated_reply === 'boolean' ? reply.automated_reply : null
       // Resolve the owning client ONCE at intake (same precedence as mark-as-lead)
       // so the firehose can scope/zoom on a stable client_id even when a workspace
       // maps to more than one client.
       const clientId = await resolveClientId(mappedWorkspaceId)
-      const uniboxIns = await pool.query(
+      const uboxIns = await pool.query(
         // Idempotent on (bison_team_id, bison_reply_id). On a retry or a later,
         // richer delivery (e.g. an event that carries Bison's interested/automated
         // flags the first one lacked) we COALESCE-merge to backfill NULLs and
@@ -302,14 +410,28 @@ async function handleBison(raw: Record<string, unknown>) {
          (reply.primary_to_email_address ?? '').toLowerCase() || null]
       ).catch(err => { console.error('[webhook/bison] unibox_replies insert failed:', err); return null })
 
-      // Enrich the reply with verified Companies House data at intake, so the
-      // full company rundown is ready in the unibox before the admin decides
-      // Lead vs Info. Best-effort + non-blocking — never holds up the webhook
-      // ACK, and a CH failure can't lose the reply. Fire-and-forget.
-      const newId = uniboxIns?.rows?.[0]?.id as string | undefined
-      if (newId) {
-        void enrichReplyWithCH(newId, {
-          email: matchedLeadEmail || rowEmail,
+      if (deliveryId) await markDelivery(deliveryId, uboxIns ? `stored:${folder}` : 'error:unibox_insert_failed', mappedWorkspaceId)
+
+      // Enrich the lead from the reply's signature + our contacts DB so the admin
+      // Unibox panel shows everything we know the moment the reply lands. Uses the
+      // primary email (matched lead if forwarded). Best-effort, non-blocking.
+      const uboxId = uboxIns?.rows?.[0]?.id as string | undefined
+      const enrichEmail = matchedLeadEmail || rowEmail
+      if (uboxId && mappedWorkspaceId && enrichEmail) {
+        enrichUniboxReply({
+          uniboxId: uboxId,
+          workspaceId: mappedWorkspaceId,
+          email: enrichEmail,
+          leadBisonId,
+          body: reply.html_body ?? reply.text_body ?? null,
+        }).catch(() => {})
+
+        // Also enrich with verified Companies House data at intake, so the full
+        // company rundown is ready in the unibox before the admin decides Lead vs
+        // Info. Best-effort + non-blocking — never holds up the webhook ACK, and a
+        // CH failure can't lose the reply. Fire-and-forget.
+        void enrichReplyWithCH(uboxId, {
+          email: enrichEmail,
           companyName: lead?.company_name ?? null,
         }).catch(() => {})
       }

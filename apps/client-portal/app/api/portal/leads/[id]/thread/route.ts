@@ -78,13 +78,33 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     const r = await pool.query(
       `SELECT id, direction, subject, body_html, body_text, content_preview,
               from_email, to_email, eaccount, pv_label, message_id, sent_via_portal,
-              timestamp_created
+              timestamp_created, raw->'attachments' AS attachments
          FROM portal_emails
         WHERE workspace_id = $1 AND lower(lead_email) = lower($2)
         ORDER BY timestamp_created ASC NULLS FIRST`,
       [session!.workspaceId, leadEmail]
     )
-    return r.rows
+    // Dedup the SAME message stored twice: mark-as-lead seeds a row id
+    // `unibox_<replyId>` while the live Bison sync stores it as `<replyId>` — same
+    // message, different id. Collapse on a content key (direction + minute-rounded
+    // timestamp + a normalized text prefix), keeping the richer (HTML) row.
+    const contentKey = (row: typeof r.rows[number]) => {
+      const t = String(row.body_text || row.content_preview || row.body_html || '')
+        .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase().slice(0, 160)
+      const ts = row.timestamp_created ? new Date(row.timestamp_created).toISOString().slice(0, 16) : ''
+      return `${row.direction}|${ts}|${t}`
+    }
+    const byContent = new Map<string, typeof r.rows[number]>()
+    for (const row of r.rows) {
+      const key = contentKey(row)
+      const existing = byContent.get(key)
+      if (!existing || (!existing.body_html && row.body_html)) byContent.set(key, row)
+    }
+    return Array.from(byContent.values()).sort((a, b) => {
+      const ta = a.timestamp_created ? new Date(a.timestamp_created).getTime() : 0
+      const tb = b.timestamp_created ? new Date(b.timestamp_created).getTime() : 0
+      return ta - tb
+    })
   }
 
   let rows = await readCache()

@@ -15,9 +15,13 @@ import { getAdminSession } from '@/lib/auth'
 // (blank inputs are ignored so you never accidentally wipe an auto-extracted field).
 
 // Top-level esp_leads columns vs fields merged into esp_leads.raw.
-const RAW_FIELDS = ['job_title', 'company_website', 'phone_number', 'linkedin_person_url', 'linkedin_company_url'] as const
+const RAW_FIELDS = [
+  'job_title', 'company_website', 'phone_number', 'linkedin_person_url', 'linkedin_company_url',
+  'address', 'city', 'state', 'country', 'industry',
+] as const
 type RawField = typeof RAW_FIELDS[number]
 
+interface CustomField { label?: unknown; value?: unknown }
 interface Body {
   first_name?: string
   last_name?: string
@@ -27,6 +31,12 @@ interface Body {
   phone_number?: string
   linkedin_person_url?: string
   linkedin_company_url?: string
+  address?: string
+  city?: string
+  state?: string
+  country?: string
+  industry?: string
+  custom_fields?: CustomField[]
 }
 
 // Trim and treat empty string as "leave unchanged".
@@ -48,15 +58,33 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   const first_name = clean(body.first_name)
   const last_name = clean(body.last_name)
   const company_name = clean(body.company_name)
-  const raw: Partial<Record<RawField, string>> = {}
+  const raw: Record<string, string> = {}
   for (const f of RAW_FIELDS) {
     const v = clean(body[f])
     if (v !== undefined) raw[f] = v
   }
 
-  if (first_name === undefined && last_name === undefined && company_name === undefined && Object.keys(raw).length === 0) {
+  // Custom named fields → merged into esp_leads.raw under their own keys (only
+  // non-empty label+value pairs). Stored as a `custom_fields` array AND flattened
+  // so the dashboard's raw->>'<label>' lookups can find them too.
+  const customFields: { label: string; value: string }[] = []
+  if (Array.isArray(body.custom_fields)) {
+    for (const cf of body.custom_fields) {
+      const label = clean(cf?.label)
+      const value = clean(cf?.value)
+      if (label && value) customFields.push({ label, value })
+    }
+  }
+
+  if (first_name === undefined && last_name === undefined && company_name === undefined
+      && Object.keys(raw).length === 0 && customFields.length === 0) {
     return NextResponse.json({ error: 'No fields to update' }, { status: 400 })
   }
+
+  // Persist the custom fields as a structured array in raw so the admin can edit
+  // them back later, exactly as entered.
+  const rawToMerge: Record<string, unknown> = { ...raw }
+  if (customFields.length) rawToMerge.custom_fields = customFields
 
   // Resolve the unibox row → the lead id + workspace to write.
   const sel = await pool.query(
@@ -90,7 +118,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
        updated_at   = NOW()`,
     [leadId, reply.workspace_id, email,
      first_name ?? null, last_name ?? null, company_name ?? null,
-     JSON.stringify(raw)]
+     JSON.stringify(rawToMerge)]
   )
 
   return NextResponse.json({ ok: true, leadId })

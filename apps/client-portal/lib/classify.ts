@@ -35,69 +35,65 @@ export const CATEGORIES: ReplyCategory[] = [
 // "skill-champ pumped", "climate-sufficient week". (Also the literal "warmup"
 // markers + common tool names.) We allowlist genuine compounds so real replies
 // ("award-winning", "eco-friendly", "next-gen") are never mis-flagged.
-const WARMUP_PATTERNS: RegExp[] = [
-  /\bwarm[\s_-]?up\b/i,                                          // literal "warmup"/"warm up"
-  /\b(mailwarm|warmupinbox|lemwarm|warmbox|warmy)\b/i,          // warm-up tool names
-  /\bwarm-?up\s*(id|token|ref|code)\b[:#]?\s*[a-z0-9]{3,}/i,    // explicit warm-up token markers
-  /\[\s*warm-?up\s*\]/i,                                         // [warmup] tag
-  /\b([a-z]{3,})[\s_]+\1\b/i,                                    // repeated word token: "apple apple"
-]
-
-// Common real hyphenated compounds — never treated as warm-up pairs.
-const HYPHEN_ALLOW = new Set([
-  'award-winning', 'easy-to', 'eco-friendly', 'next-gen', 'real-time', 'long-term',
-  'high-quality', 'well-being', 'cost-effective', 'up-to', 'state-of', 'one-on',
-  'day-to', 'follow-up', 'check-in', 'in-person', 'full-time', 'part-time', 'end-to',
-  'go-to', 'must-have', 'data-driven', 'world-class', 'top-notch', 'on-the', 'face-to',
-  'win-win', 'co-founder', 'e-commerce', 'sign-up', 'opt-in', 'opt-out', 'time-saving',
-  'game-changer', 'game-changing', 'decision-makers', 'decision-maker', 'mid-sized',
-  'so-called', 'well-known', 'hands-on', 're-engage', 'self-service', 'all-in',
-])
-// A random injected word-pair: lowercase word-word, 4+ letters each, not allowlisted.
-const HYPHEN_PAIR = /\b([a-z]{4,})-([a-z]{4,})\b/g
+// Bison's warmup tell: a repeated word token injected into prose ("apple apple").
+// We rely on Bison to filter its own warmup emails — this is the only pattern
+// we keep so we don't mis-classify genuine replies.
+const BISON_WARMUP = /\b([a-z]{3,})[\s_]+\1\b/i
 
 export interface WarmupSignals {
   subject?: string
   bodyText?: string
-  // false when the reply has NO real lead enrichment behind it (no LinkedIn,
-  // company, title, phone). A genuine forwarded reply can also lack fields, so
-  // this only corroborates a marker match — it never flags warm-up on its own.
+  // Kept for API compatibility — unused.
   hasLeadFields?: boolean
-  // true when the reply was forwarded / domain-matched to a lead (a real person
-  // replying from a different address than the campaign lead). Such replies
-  // legitimately lack lead fields, so the no-fields warm-up heuristic must NOT
-  // fire on them — otherwise a genuine reply (e.g. "Energy savings for X") gets
-  // hidden as warm-up. (The cause of the Ian/Whitby-&-Chandler misfire.)
   isForwarded?: boolean
 }
 
-// Cheap, deterministic warm-up detector.
-//   • An EXPLICIT marker ("warmup", tool names, repeated-word token) → warm-up on its own.
-//   • A random injected hyphen-pair ("rapid-provision") → warm-up ONLY when the
-//     reply also has NO lead enrichment. Per Jesse: a warm-up has the odd word-pair
-//     AND no real data; a genuine prospect reply carries LinkedIn/company/title
-//     from the campaign, so an odd hyphenate alone never flags it — that goes to Gemini.
+// Trust Bison's warmup filtering. Only catch the repeated-word token Bison
+// injects ("apple apple") as a safety net — everything else goes to Gemini.
 export function detectWarmup(s: WarmupSignals): { isWarmup: boolean; reason: string } {
   const hay = `${s.subject ?? ''}\n${s.bodyText ?? ''}`
-  const noFields = s.hasLeadFields === false
-
-  const marker = WARMUP_PATTERNS.find(re => re.test(hay))
-  if (marker) {
-    return { isWarmup: true, reason: `warm-up marker ${String(marker)}` }
+  if (BISON_WARMUP.test(hay)) {
+    return { isWarmup: true, reason: 'bison repeated-word token' }
   }
+  return { isWarmup: false, reason: '' }
+}
 
-  // Random hyphenated word-pair(s) injected into prose — REQUIRES no lead data.
-  // A FORWARDED reply legitimately lacks lead fields (it came from a colleague's
-  // address), so the no-fields path must not fire on it — only a marker (above)
-  // can flag a forwarded reply as warm-up.
-  const pairs: string[] = []
-  for (const m of hay.toLowerCase().matchAll(HYPHEN_PAIR)) {
-    if (!HYPHEN_ALLOW.has(m[0])) pairs.push(m[0])
-  }
-  if (pairs.length > 0 && noFields && !s.isForwarded) {
-    return { isWarmup: true, reason: `warm-up word-pair(s) ${pairs.slice(0, 3).join(', ')} + no lead enrichment` }
-  }
+// ── PlusVibe / EmailBison warm-up FILTER TAGS ────────────────────────────────
+// PlusVibe injects a unique per-mailbox `warmup_custom_words` tag (e.g.
+// "removal-thirty") into every warm-up email body; EmailBison used a per-workspace
+// code. A reply containing one is a warm-up — deterministic, no AI. The FULL list
+// of ~1900 PV tags is baked in (pv-warmup-tags.ts) so there is ZERO runtime PV
+// API dependency: fetching them live timed out / silently missed tags, which let
+// warm-ups reach Gemini and come back "interested". One static regex, compiled
+// once. Tags are unique random word-pairs, so no false positives on real replies.
+import { PV_WARMUP_TAGS } from './pv-warmup-tags'
 
+const _escWarm = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const BISON_WARMUP_CODES = [
+  'tc5odbtm','sk85oa7k','0e24psnp','eucrj0hz','rndyajpa','ahy9frqv','xzvjsvdu',
+  'dvyu4kdr','uiizjrlh','d1ymr6mx','n9qrgswv','raftziqa','qlctqsof','rcduzjkl',
+  '13aqstcm','op7as3ft','ht8jbwh2','gdf6uvrl','dau5wphh','antm9hol','9jbxm636',
+  '8k5natot','sdwgchhk','ss4me0qc','oly08aoy',
+]
+const WARMUP_TAG_RE: RegExp | null = (() => {
+  const alts = PV_WARMUP_TAGS.map(t => t.split(/[\s\-_]+/).map(_escWarm).join('[\\s\\-_]+'))
+  for (const code of BISON_WARMUP_CODES) alts.push(_escWarm(code))
+  return alts.length ? new RegExp(`(?:^|[^a-z0-9])(${alts.join('|')})(?:[^a-z0-9]|$)`, 'i') : null
+})()
+
+// Full warm-up check used by the classify worker: the cheap structural token
+// first, then the authoritative static PV/Bison filter tags (matched in
+// subject + body + raw). Async signature kept for call-site compatibility.
+export async function detectWarmupFull(
+  _workspaceId: string,
+  s: { subject?: string; bodyText?: string; rawText?: string },
+): Promise<{ isWarmup: boolean; reason: string }> {
+  const base = detectWarmup(s)
+  if (base.isWarmup) return base
+  if (WARMUP_TAG_RE) {
+    const hay = `${s.subject ?? ''}\n${s.bodyText ?? ''}\n${s.rawText ?? ''}`
+    if (WARMUP_TAG_RE.test(hay)) return { isWarmup: true, reason: 'PV/Bison warmup filter tag' }
+  }
   return { isWarmup: false, reason: '' }
 }
 
