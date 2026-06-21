@@ -1,98 +1,138 @@
 'use client'
 
+import { useState } from 'react'
 import Link from 'next/link'
 import Image from 'next/image'
 import { usePathname } from 'next/navigation'
 import {
-  BarChart3, Activity, AlertTriangle, ShieldCheck, Users, Globe, Inbox,
-  Flame, Database, Target, HeartPulse, Briefcase, Wallet, PoundSterling,
-  Settings, type LucideIcon,
+  Server, BarChart3, Users, Wallet, Settings, type LucideIcon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ThemeToggle } from '@/components/ui/theme-toggle'
 
-interface NavItem { href: string; label: string; icon: LucideIcon }
-interface NavGroup { label: string; items: NavItem[] }
+interface NavItem { href: string; label: string }
+interface Category {
+  key: string
+  label: string
+  icon: LucideIcon
+  color: string // category accent (legacy palette)
+  items: NavItem[]
+}
 
-// Scope = admin 2.0 only. Dropped: Copy, Verify-split, Database-tools, etc.
-const GROUPS: NavGroup[] = [
+// Legacy category structure + colours, filled with admin-2.0 scope pages only.
+const CATEGORIES: Category[] = [
   {
-    label: 'Performance',
+    key: 'infra', label: 'Infra', icon: Server, color: '#3B82F6', // blue
     items: [
-      { href: '/stats', label: 'Stats', icon: BarChart3 },
-      { href: '/actions', label: 'Actions', icon: Activity },
-      { href: '/bounces', label: 'Bounces', icon: AlertTriangle },
-      { href: '/gateways', label: 'Gateways', icon: ShieldCheck },
-      { href: '/audience', label: 'Audience', icon: Target },
+      { href: '/domains', label: 'Domains' },
+      { href: '/mailboxes', label: 'Mailboxes' },
+      { href: '/warmup', label: 'Warmup' },
+      { href: '/apollo-prep', label: 'Apollo Prep' },
     ],
   },
   {
-    label: 'Infrastructure',
+    key: 'stats', label: 'Stats', icon: BarChart3, color: '#F59E0B', // gold
     items: [
-      { href: '/domains', label: 'Domains', icon: Globe },
-      { href: '/mailboxes', label: 'Mailboxes', icon: Inbox },
-      { href: '/warmup', label: 'Warmup', icon: Flame },
-      { href: '/apollo-prep', label: 'Apollo Prep', icon: Database },
+      { href: '/stats', label: 'Stats' },
+      { href: '/actions', label: 'Actions' },
+      { href: '/audience', label: 'Audience' },
+      { href: '/gateways', label: 'Gateways' },
+      { href: '/bounces', label: 'Bounces' },
     ],
   },
   {
-    label: 'Clients',
+    key: 'clients', label: 'Clients', icon: Users, color: '#FB923C', // orange
     items: [
-      { href: '/clients', label: 'Clients', icon: Users },
-      { href: '/health', label: 'Health', icon: HeartPulse },
-      { href: '/workload', label: 'Workload', icon: Briefcase },
-      { href: '/commission', label: 'Commission', icon: PoundSterling },
+      { href: '/clients', label: 'Clients' },
+      { href: '/health', label: 'Health' },
+      { href: '/workload', label: 'Workload' },
     ],
   },
   {
-    label: 'Finance',
+    key: 'finance', label: 'Finance', icon: Wallet, color: '#22C55E', // green
     items: [
-      { href: '/finance', label: 'Finance', icon: Wallet },
-      { href: '/revenue', label: 'Revenue', icon: PoundSterling },
+      { href: '/finance', label: 'Finance' },
+      { href: '/revenue', label: 'Revenue' },
+      { href: '/commission', label: 'Commission' },
     ],
   },
   {
-    label: 'Admin',
-    items: [{ href: '/admin', label: 'Settings', icon: Settings }],
+    key: 'admin', label: 'Admin', icon: Settings, color: '#F87171', // red
+    items: [{ href: '/admin', label: 'Settings' }],
   },
 ]
 
-/** Narrow ~84px rail — light surface, otter mark, icon + small label per item (like legacy). */
+/** Legacy-style rail: colored category groups, hover reveals a dropdown of its pages. */
 export function Sidebar() {
   const pathname = usePathname()
+  const [open, setOpen] = useState<string | null>(null)
+
   return (
     <aside className="fixed inset-y-0 left-0 z-30 flex w-[84px] flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
       <div className="flex h-14 items-center justify-center border-b border-sidebar-border">
         <Image src="/favicon.svg" alt="Ottaly" width={30} height={30} priority className="h-[30px] w-[30px]" />
       </div>
 
-      <nav className="flex-1 overflow-y-auto overflow-x-hidden py-2 [scrollbar-width:none]">
-        {GROUPS.map((group, gi) => (
-          <div key={group.label} className={cn('flex flex-col items-center gap-0.5 px-1.5', gi > 0 && 'mt-1.5 border-t border-sidebar-border/70 pt-1.5')}>
-            {group.items.map(item => {
-              const active = pathname === item.href || pathname.startsWith(item.href + '/')
-              const Icon = item.icon
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={cn(
-                    'group relative flex w-full flex-col items-center gap-1 rounded-md py-2 transition-colors',
-                    active
-                      ? 'bg-sidebar-accent text-sidebar-primary'
-                      : 'text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground',
-                  )}
+      <nav className="flex-1 overflow-y-auto overflow-x-visible py-2 [scrollbar-width:none]">
+        {CATEGORIES.map(cat => {
+          const Icon = cat.icon
+          const activeInCat = cat.items.some(i => pathname === i.href || pathname.startsWith(i.href + '/'))
+          const isOpen = open === cat.key
+          return (
+            <div
+              key={cat.key}
+              className="relative px-1.5"
+              onMouseEnter={() => setOpen(cat.key)}
+              onMouseLeave={() => setOpen(null)}
+            >
+              <button
+                type="button"
+                className={cn(
+                  'flex w-full flex-col items-center gap-1 rounded-md py-2.5 transition-colors',
+                  activeInCat ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent',
+                )}
+                style={{ color: activeInCat || isOpen ? cat.color : undefined }}
+              >
+                <Icon size={20} strokeWidth={2} style={{ color: cat.color }} />
+                <span
+                  className="text-[9px] font-bold uppercase leading-none tracking-wide"
+                  style={{ color: activeInCat || isOpen ? cat.color : undefined }}
                 >
-                  {active && (
-                    <span className="absolute left-0 top-1/2 h-7 w-[3px] -translate-y-1/2 rounded-full bg-sidebar-primary" />
-                  )}
-                  <Icon size={19} strokeWidth={active ? 2.3 : 1.9} />
-                  <span className="text-[9px] font-semibold uppercase leading-none tracking-wide">{item.label}</span>
-                </Link>
-              )
-            })}
-          </div>
-        ))}
+                  {cat.label}
+                </span>
+              </button>
+
+              {/* Hover dropdown flyout */}
+              {isOpen && (
+                <div className="absolute left-[80px] top-0 z-50 min-w-[190px] overflow-hidden rounded-lg border border-border bg-popover py-1.5 shadow-xl">
+                  <div
+                    className="px-3 pb-1.5 pt-1 text-[10px] font-bold uppercase tracking-wider"
+                    style={{ color: cat.color }}
+                  >
+                    {cat.label}
+                  </div>
+                  {cat.items.map(item => {
+                    const active = pathname === item.href || pathname.startsWith(item.href + '/')
+                    return (
+                      <Link
+                        key={item.href}
+                        href={item.href}
+                        className={cn(
+                          'block px-3 py-1.5 text-[13px] font-medium transition-colors',
+                          active
+                            ? 'bg-accent text-foreground'
+                            : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+                        )}
+                      >
+                        {item.label}
+                      </Link>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )
+        })}
       </nav>
 
       <div className="flex items-center justify-center border-t border-sidebar-border py-2">
