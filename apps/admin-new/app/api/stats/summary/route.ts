@@ -32,15 +32,22 @@ interface Workspace {
   series: DayData[]
 }
 
+// FRESH-START CUTOVER: PlusVibe-clean data begins here. The Bison→PV transition
+// (2026-06-13..18) had near-zero/mixed sends and Bison-era rows skewed the numbers,
+// so stats only count data on/after this date. Change this one constant to adjust.
+const STATS_CUTOVER = process.env.STATS_CUTOVER_DATE ?? '2026-06-19'
+
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl
-  const start = searchParams.get('start')
+  const rawStart = searchParams.get('start')
   const end = searchParams.get('end')
   const workspaceIds = searchParams.get('workspace_ids')
 
-  if (!start || !end) {
+  if (!rawStart || !end) {
     return NextResponse.json({ error: 'start and end required (YYYY-MM-DD)' }, { status: 400 })
   }
+  // Clamp the start to the cutover — never count pre-cutover (Bison-era) data.
+  const start = rawStart < STATS_CUTOVER ? STATS_CUTOVER : rawStart
 
   try {
     // Get active workspace list from workspace_stats
@@ -74,6 +81,21 @@ export async function GET(req: NextRequest) {
       perfByDateAndWs[row.ws_id][row.date] = row.data || {}
     })
 
+    // Leads come from revenue_leads (the FROZEN source of truth) — NOT the perf
+    // cache, which never carried lead data (all zeros). Shown ALL-TIME per
+    // workspace (a delivered lead counts regardless of the stats window; the
+    // cutover only applies to email-activity stats). Excludes non-leads.
+    const leadsRes = await pool.query(
+      `SELECT workspace_id, COUNT(*)::int AS n
+       FROM revenue_leads
+       WHERE pv_nonlead IS NOT TRUE
+       GROUP BY workspace_id`,
+    )
+    const leadsByWs: Record<string, number> = {}
+    ;(leadsRes.rows as Array<{ workspace_id: string; n: number }>).forEach(r => {
+      leadsByWs[r.workspace_id] = r.n
+    })
+
     // Generate date list
     const dates = []
     const current = new Date(start + 'T00:00:00Z')
@@ -98,7 +120,7 @@ export async function GET(req: NextRequest) {
           posReplies: Number(dayData.posReplies) || 0,
           oooReplies: Number(dayData.oooReplies) || 0,
           bounces: Number(dayData.bounces) || 0,
-          leads: Number(dayData.leads) || 0,
+          leads: 0, // leads filled from revenue_leads below, not the perf cache
         }
         series.push(day)
         totals.sent += day.sent
@@ -106,8 +128,9 @@ export async function GET(req: NextRequest) {
         totals.posReplies += day.posReplies
         totals.oooReplies += day.oooReplies
         totals.bounces += day.bounces
-        totals.leads += day.leads
       }
+      // Leads = frozen revenue_leads count for this workspace in-window.
+      totals.leads = leadsByWs[ws.workspace_id] || 0
 
       const days = dates.length || 1
       const w: Workspace = {
