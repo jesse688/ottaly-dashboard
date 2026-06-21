@@ -60,7 +60,7 @@ const CATEGORIES: Category[] = [
   },
   {
     key: 'admin', label: 'Admin', icon: Settings, color: '#F87171', // red
-    items: [{ href: '/admin', label: 'Settings' }],
+    items: [{ href: '/admin-settings', label: 'Settings' }],
   },
 ]
 
