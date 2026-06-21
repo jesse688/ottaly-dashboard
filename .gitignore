@@ -11,3 +11,4 @@ dist/
 
 # Local test-dashboard output (screenshots + report) — not needed in repo
 .claude/test-report/
+apps/admin-new/.port-ref/

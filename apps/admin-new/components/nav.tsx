@@ -16,11 +16,14 @@ const NAV_SECTIONS = [
     { href: '/leads-analysis',label: 'Leads Analysis' },
   ]},
   { label: 'Data', items: [
-    { href: '/contacts',      label: 'Contacts' },
-    { href: '/database',      label: 'Database' },
-    { href: '/apollo-prep',   label: 'Apollo Prep' },
-    { href: '/verify-split',  label: 'Verify Split' },
-    { href: '/combo-analysis',label: 'Combo Analysis' },
+    { href: '/data',          label: 'Contacts' },
+    { href: '/data/engine-leads', label: 'Engine Leads' },
+    { href: '/data/ch-pipeline',  label: 'CH Pipeline' },
+    { href: '/data/enrichment',   label: 'Enrichment' },
+    { href: '/data/database',     label: 'Database' },
+    { href: '/data/apollo-prep',  label: 'Apollo Prep' },
+    { href: '/data/verify-split', label: 'Verify Split' },
+    { href: '/data/combo-analysis', label: 'Combo Analysis' },
   ]},
   { label: 'Stats', items: [
     { href: '/actions',       label: 'Actions' },
@@ -64,7 +67,9 @@ export function Nav() {
                 href={item.href}
                 className={cn(
                   'flex items-center px-4 py-1.5 text-sm transition-colors',
-                  pathname.startsWith(item.href)
+                  (item.href === '/data'
+                    ? pathname === '/data'
+                    : pathname.startsWith(item.href))
                     ? 'bg-gray-800 text-white'
                     : 'text-gray-400 hover:text-white hover:bg-gray-800'
                 )}
