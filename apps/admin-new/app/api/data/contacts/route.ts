@@ -95,3 +95,68 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }
+
+// POST /api/data/contacts — create a single contact (the "+ Add" action).
+// DB-direct insert into the contacts table. Mirrors legacy POST /api/contacts.
+const CREATE_FIELDS = [
+  'email',
+  'first_name',
+  'last_name',
+  'phone',
+  'linkedin_url',
+  'job_title',
+  'seniority',
+  'department',
+  'company_name',
+  'company_domain',
+  'industry',
+  'city',
+  'state',
+  'country',
+  'status',
+] as const
+
+export async function POST(req: NextRequest) {
+  const workspaceId = req.headers.get('x-workspace-id') || DEFAULT_WORKSPACE
+  let body: Record<string, unknown>
+  try {
+    body = await req.json()
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+  }
+
+  const email = String(body.email || '').trim().toLowerCase()
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return NextResponse.json({ error: 'A valid email is required' }, { status: 400 })
+  }
+
+  const cols: string[] = ['workspace_id']
+  const vals: unknown[] = [workspaceId]
+  for (const f of CREATE_FIELDS) {
+    const v = body[f]
+    if (v !== undefined && v !== null && String(v).trim() !== '') {
+      cols.push(f)
+      vals.push(f === 'email' ? email : v)
+    }
+  }
+  if (!cols.includes('email')) {
+    cols.push('email')
+    vals.push(email)
+  }
+
+  const placeholders = vals.map((_, i) => `$${i + 1}`).join(', ')
+  try {
+    const r = await pool.query(
+      `INSERT INTO contacts (${cols.join(', ')})
+       VALUES (${placeholders})
+       ON CONFLICT (workspace_id, email) DO UPDATE SET updated_at = CURRENT_TIMESTAMP
+       RETURNING id, email`,
+      vals
+    )
+    return NextResponse.json({ contact: r.rows[0] }, { status: 201 })
+  } catch (e) {
+    const message = e instanceof Error ? e.message : 'Database error'
+    console.error('[data/contacts] create failed:', message)
+    return NextResponse.json({ error: message }, { status: 500 })
+  }
+}

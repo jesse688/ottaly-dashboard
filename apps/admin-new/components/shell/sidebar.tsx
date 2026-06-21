@@ -35,13 +35,13 @@ const CATEGORIES: Category[] = [
   {
     key: 'data', label: 'Data', icon: Database, color: '#22D3EE', // cyan
     items: [
-      { href: '/data', label: 'Contacts' },
-      { href: '/data/engine-leads', label: 'Engine Leads' },
-      { href: '/data/ch-pipeline', label: 'CH Pipeline' },
-      { href: '/data/enrichment', label: 'Enrichment' },
-      { href: '/data/database', label: 'Database' },
-      { href: '/data/verify-split', label: 'Verify Split' },
-      { href: '/data/combo-analysis', label: 'Combo Analysis' },
+      { href: '/contacts', label: 'Contacts' },
+      { href: '/engine-leads', label: 'Engine Leads' },
+      { href: '/ch-pipeline', label: 'CH Pipeline' },
+      { href: '/enrichment', label: 'Enrichment' },
+      { href: '/database', label: 'Database' },
+      { href: '/verify-split', label: 'Verify Split' },
+      { href: '/combo-analysis', label: 'Combo Analysis' },
     ],
   },
   {
