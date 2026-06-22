@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
   // 2. Leads counted in-window for this workspace
   try {
     const { rows } = await pool.query(
-      `SELECT lead_email, date, label FROM revenue_leads
+      `SELECT lead_email, date, label, pv_nonlead FROM revenue_leads
         WHERE workspace_id = $1 AND pv_nonlead IS NOT TRUE AND date >= $2 AND date <= $2`,
       [wsId, date],
     )
@@ -37,9 +37,25 @@ export async function GET(req: NextRequest) {
     out.leadsError = e instanceof Error ? e.message : String(e)
   }
 
+  // 2b. esp_leads — where the Unibox marks leads (label='INTERESTED'). PV won't
+  // show these, so this is the real lead source.
+  try {
+    const { rows } = await pool.query(
+      `SELECT email, label, source, first_replied_at, created_at, synced_at,
+              COALESCE(first_replied_at, created_at, synced_at)::date AS lead_date
+         FROM esp_leads
+        WHERE workspace_id = $1 AND label = 'INTERESTED'
+        ORDER BY COALESCE(first_replied_at, created_at, synced_at) DESC NULLS LAST LIMIT 10`,
+      [wsId],
+    )
+    out.esp_interested_leads = rows
+  } catch (e) {
+    out.espLeadsError = e instanceof Error ? e.message : String(e)
+  }
+
   // 3. Live PlusVibe email-stats for the same date
   try {
-    const key = process.env.PLUSVIBE_API_KEY || ''
+    const key = process.env.PLUSVIBE_KEY || process.env.PLUSVIBE_API_KEY || ''
     if (key) {
       const r = await fetch(
         `https://api.plusvibe.ai/api/v1/account/email-stats?workspace_id=${wsId}&start_date=${date}&end_date=${date}`,

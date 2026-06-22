@@ -93,17 +93,18 @@ export async function GET(req: NextRequest) {
       perfByDateAndWs[row.ws_id][row.date] = row.data || {}
     })
 
-    // Leads come from revenue_leads (the FROZEN source of truth) — NOT the perf
-    // Leads counted WITHIN the selected window (revenue_leads.date is a
-    // 'YYYY-MM-DD' text column, so ISO string comparison is correct). Windowing
-    // leads keeps RTL (leads/replies) and LPT (leads/sent) on the same period as
-    // their denominators — otherwise all-time leads ÷ a one-day window inflates
-    // the ratios. Excludes non-leads.
+    // Leads are counted from esp_leads (label='INTERESTED') — the table the
+    // Unibox writes to when a reply is marked as a lead. PlusVibe itself does
+    // NOT show these as leads, so the old revenue_leads (PV-sourced) count
+    // missed Unibox-marked leads (e.g. LVM showed replies but 0 leads). Window
+    // on the lead date = COALESCE(first_replied_at, created_at, synced_at), so
+    // RTL/LPT share the same period as their denominators.
     const leadsRes = await pool.query(
       `SELECT workspace_id, COUNT(*)::int AS n
-       FROM revenue_leads
-       WHERE pv_nonlead IS NOT TRUE
-         AND date >= $1 AND date <= $2
+       FROM esp_leads
+       WHERE label = 'INTERESTED'
+         AND COALESCE(first_replied_at, created_at, synced_at)::date >= $1::date
+         AND COALESCE(first_replied_at, created_at, synced_at)::date <= $2::date
        GROUP BY workspace_id`,
       [start, end],
     )
