@@ -443,3 +443,39 @@ export async function syncMailboxes(): Promise<{ ok: boolean; count: number; err
 }
 
 export { SUPPLIERS_ALLOWED }
+
+// ── Background scheduler ─────────────────────────────────────────────────────
+// Runs the mailbox sync on a 30-min interval, plus a daily 90-day backfill so
+// the trend charts build history automatically — no manual button needed. Both
+// jobs are slow (one PV call per mailbox) so they run sequentially and guard
+// against overlap. Mirrors the cache-warming interval pattern.
+let _mbSchedulerStarted = false
+let _mbJobRunning = false
+async function runSyncThenMaybeBackfill(withBackfill: boolean) {
+  if (_mbJobRunning) return
+  _mbJobRunning = true
+  try {
+    await syncMailboxes()
+    if (withBackfill) await backfillSupplierDaily(90)
+  } catch (e) {
+    console.error('[mailbox-scheduler]', e instanceof Error ? e.message : e)
+  } finally {
+    _mbJobRunning = false
+  }
+}
+export function startMailboxSyncInterval(): void {
+  if (_mbSchedulerStarted) return
+  _mbSchedulerStarted = true
+  // Initial run shortly after boot: sync + a full 90-day backfill.
+  setTimeout(() => { void runSyncThenMaybeBackfill(true) }, 15_000)
+  // Sync every 30 min (keeps mailbox_full + today's snapshot fresh).
+  setInterval(() => { void runSyncThenMaybeBackfill(false) }, 30 * 60 * 1000)
+  // Full 90-day backfill once a day (heals any gaps / supplier re-tags).
+  setInterval(() => { void runSyncThenMaybeBackfill(true) }, 24 * 60 * 60 * 1000)
+  console.log('[mailbox-scheduler] started (sync 30m, backfill daily)')
+}
+
+// Auto-start on the server only.
+if (typeof window === 'undefined' && typeof global !== 'undefined') {
+  startMailboxSyncInterval()
+}
