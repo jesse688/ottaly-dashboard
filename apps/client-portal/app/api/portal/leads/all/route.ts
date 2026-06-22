@@ -39,7 +39,22 @@ export async function GET() {
     const hiddenFields: string[] = cfg.rows[0]?.hidden_fields ?? []
 
     const res = await pool.query(
-      `SELECT l.id, l.email, l.first_name, l.last_name, l.company_name,
+      `SELECT l.id, l.email,
+              -- Name fallback: the chosen (Bison) row sometimes has a blank name
+              -- while the sibling PlusVibe row for the SAME email carries it. Fill
+              -- first/last name from any same-email row in the workspace when this
+              -- row's is empty, so the dashboard + CSV show a real name.
+              COALESCE(NULLIF(btrim(l.first_name),''),
+                       (SELECT NULLIF(btrim(s.first_name),'') FROM esp_leads s
+                         WHERE s.workspace_id = l.workspace_id AND lower(s.email)=lower(l.email)
+                           AND NULLIF(btrim(s.first_name),'') IS NOT NULL
+                         ORDER BY s.updated_at DESC LIMIT 1)) AS first_name,
+              COALESCE(NULLIF(btrim(l.last_name),''),
+                       (SELECT NULLIF(btrim(s.last_name),'') FROM esp_leads s
+                         WHERE s.workspace_id = l.workspace_id AND lower(s.email)=lower(l.email)
+                           AND NULLIF(btrim(s.last_name),'') IS NOT NULL
+                         ORDER BY s.updated_at DESC LIMIT 1)) AS last_name,
+              l.company_name,
               l.status, l.label, l.first_replied_at, l.created_at,
               l.raw->>'camp_name'            AS campaign_name,
               l.raw->>'job_title'            AS job_title,

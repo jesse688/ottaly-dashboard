@@ -140,9 +140,27 @@ function csvCell(v: string | null | undefined): string {
 // contact + company + Companies House + deal stage/value.
 function downloadLeadsCsv(leads: Lead[], companyName: string) {
   const exportable = leads.filter(l => !l.locked)
+  // Name fallback: some leads arrive with no first/last name (only the email).
+  // Derive a readable name from the email local-part so no row is blank.
+  const nameFromEmail = (l: Lead): { first: string; last: string } => {
+    const local = (l.email ?? '').split('@')[0] ?? ''
+    const parts = local.split(/[._-]+/).filter(Boolean)
+      .map(p => p.charAt(0).toUpperCase() + p.slice(1))
+    return { first: parts[0] ?? '', last: parts.slice(1).join(' ') }
+  }
+  const firstName = (l: Lead) => (l.first_name?.trim() || nameFromEmail(l).first) || null
+  const lastName  = (l: Lead) => (l.last_name?.trim()  || nameFromEmail(l).last)  || null
+  // The lead's contact address only when it DIFFERS from the CH registered
+  // address (CH enrichment copies the registered address into address_line, so
+  // showing both just duplicated the column).
+  const contactAddress = (l: Lead) => {
+    const a = (l.address_line ?? '').trim()
+    if (!a || a === (l.ch_registered_address ?? '').trim()) return null
+    return a
+  }
   const columns: { header: string; get: (l: Lead) => string | null }[] = [
-    { header: 'First name', get: l => l.first_name },
-    { header: 'Last name', get: l => l.last_name },
+    { header: 'First name', get: firstName },
+    { header: 'Last name', get: lastName },
     { header: 'Email', get: l => l.email },
     { header: 'Phone', get: l => l.phone_number },
     { header: 'Job title', get: l => l.job_title },
@@ -153,7 +171,7 @@ function downloadLeadsCsv(leads: Lead[], companyName: string) {
     { header: 'Industry', get: l => l.industry },
     { header: 'City', get: l => l.city },
     { header: 'Country', get: l => l.country },
-    { header: 'Address', get: l => l.address_line },
+    { header: 'Contact address', get: contactAddress },
     { header: 'CH company number', get: l => l.ch_company_number },
     { header: 'CH status', get: l => l.ch_company_status },
     { header: 'CH type', get: l => l.ch_company_type },
