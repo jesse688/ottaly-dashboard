@@ -32,6 +32,20 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 
+// Progress numerator for a push/verify job. The legacy worker emits `processed`
+// (skipped + verified). Fall back to verified+skipped for older server builds
+// that haven't been redeployed yet. Guard `skipped`: the worker reassigns it to
+// a filter-reason object at completion, so only add it when it's a number.
+function jobProcessed(j: {
+  processed?: number
+  verified?: number
+  skipped?: number
+}): number {
+  if (typeof j.processed === 'number') return j.processed
+  const skipped = typeof j.skipped === 'number' ? j.skipped : 0
+  return (j.verified ?? 0) + skipped
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────
 type Contact = {
   id: string
@@ -253,7 +267,7 @@ export default function DataPage() {
   // another page load) can be reconnected to. The job runs on the server queue
   // regardless of whether this page is open.
   const [activeJobs, setActiveJobs] = useState<
-    { id: string; status?: string; processed?: number; total?: number }[]
+    { id: string; status?: string; processed?: number; verified?: number; skipped?: number; total?: number }[]
   >([])
   const [reconnectJob, setReconnectJob] = useState<string | null>(null)
   const [engineStaging, setEngineStaging] = useState(false)
@@ -1357,7 +1371,7 @@ export default function DataPage() {
                 className="rounded border border-amber-300 bg-white px-2 py-0.5 text-xs hover:bg-amber-100"
                 onClick={() => { setReconnectJob(j.id); setPushOpen('pv') }}
               >
-                #{String(j.id).slice(-6)} · {j.status} {j.total ? `(${j.processed ?? 0}/${j.total})` : ''} — view
+                #{String(j.id).slice(-6)} · {j.status} {j.total ? `(${jobProcessed(j)}/${j.total})` : ''} — view
               </button>
             ))}
           </div>
@@ -2562,7 +2576,10 @@ function PushModal({
   const [wsId, setWsId] = useState('')
   const [campId, setCampId] = useState('')
   const [busy, setBusy] = useState(false)
-  const [job, setJob] = useState<{ status?: string; processed?: number; total?: number } | null>(null)
+  const [job, setJob] = useState<{
+    status?: string; processed?: number; verified?: number; skipped?: number; total?: number
+    safe?: number; risky?: number; invalid?: number; pushed?: number
+  } | null>(null)
   const jobIdRef = useRef<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -2725,9 +2742,17 @@ function PushModal({
           <div className="rounded border border-gray-200 bg-gray-50 p-3 text-sm">
             <div>Status: {job.status}</div>
             {job.total ? (
-              <div className="text-xs text-gray-500">
-                {job.processed ?? 0} / {job.total}
-              </div>
+              <>
+                <div className="text-xs text-gray-500">
+                  {jobProcessed(job)} / {job.total} verified
+                </div>
+                <div className="mt-1 text-[11px] text-gray-500">
+                  {typeof job.safe === 'number' ? `${job.safe} safe · ` : ''}
+                  {typeof job.risky === 'number' ? `${job.risky} risky · ` : ''}
+                  {typeof job.invalid === 'number' ? `${job.invalid} invalid · ` : ''}
+                  {typeof job.pushed === 'number' ? `${job.pushed} pushed` : ''}
+                </div>
+              </>
             ) : null}
             <div className="mt-2 flex gap-2">
               <Button size="sm" variant="outline" onClick={() => control('pause')}>
