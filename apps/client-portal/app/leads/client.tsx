@@ -29,6 +29,12 @@ interface Lead {
   linkedin_url: string | null
   linkedin_company_url: string | null
   phone_number: string | null
+  ch_company_number: string | null
+  ch_company_status: string | null
+  ch_company_type: string | null
+  ch_incorporated_on: string | null
+  ch_registered_address: string | null
+  ch_sic_codes: string | null
   custom_fields: { label: string; value: string }[] | null
   deal_value: string | null
   deal_notes: string | null
@@ -119,6 +125,58 @@ function fmtDate(d: string | null) {
 function fmtFull(d: string | null) {
   if (!d) return ''
   return new Date(d).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+// Escape one value for CSV: wrap in quotes and double any internal quotes, so
+// commas/newlines/quotes inside a field never break the columns. Excel/Sheets-safe.
+function csvCell(v: string | null | undefined): string {
+  const s = (v ?? '').toString().replace(/\r?\n/g, ' ').trim()
+  return `"${s.replace(/"/g, '""')}"`
+}
+
+// Build a CSV from the leads the client can see and trigger a download. Locked
+// leads (delivered while out of credit) are EXCLUDED — they're not paid for, so
+// their details never leave in the export. Columns mirror the lead detail panel:
+// contact + company + Companies House + deal stage/value.
+function downloadLeadsCsv(leads: Lead[], companyName: string) {
+  const exportable = leads.filter(l => !l.locked)
+  const columns: { header: string; get: (l: Lead) => string | null }[] = [
+    { header: 'First name', get: l => l.first_name },
+    { header: 'Last name', get: l => l.last_name },
+    { header: 'Email', get: l => l.email },
+    { header: 'Phone', get: l => l.phone_number },
+    { header: 'Job title', get: l => l.job_title },
+    { header: 'Company', get: l => l.company_name },
+    { header: 'Website', get: l => l.company_website },
+    { header: 'LinkedIn', get: l => l.linkedin_url },
+    { header: 'Company LinkedIn', get: l => l.linkedin_company_url },
+    { header: 'Industry', get: l => l.industry },
+    { header: 'City', get: l => l.city },
+    { header: 'Country', get: l => l.country },
+    { header: 'Address', get: l => l.address_line },
+    { header: 'CH company number', get: l => l.ch_company_number },
+    { header: 'CH status', get: l => l.ch_company_status },
+    { header: 'CH type', get: l => l.ch_company_type },
+    { header: 'CH incorporated', get: l => l.ch_incorporated_on },
+    { header: 'CH registered address', get: l => l.ch_registered_address },
+    { header: 'CH SIC codes', get: l => l.ch_sic_codes },
+    { header: 'Stage', get: l => l.client_label },
+    { header: 'Deal value', get: l => l.deal_value },
+    { header: 'Campaign', get: l => l.campaign_name },
+    { header: 'First replied', get: l => l.first_replied_at },
+  ]
+  const header = columns.map(c => csvCell(c.header)).join(',')
+  const rows = exportable.map(l => columns.map(c => csvCell(c.get(l))).join(','))
+  // Prepend a BOM so Excel opens UTF-8 (accents, £) correctly.
+  const csv = '﻿' + [header, ...rows].join('\r\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  const date = new Date().toISOString().slice(0, 10)
+  a.href = url
+  a.download = `${(companyName || 'leads').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-leads-${date}.csv`
+  document.body.appendChild(a); a.click(); a.remove()
+  URL.revokeObjectURL(url)
 }
 // Split an email body into the new reply vs the quoted history below it, so the
 // client reads the actual reply and our earlier email tucks into a fold.
@@ -638,6 +696,18 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
           <div className="px-4 py-3 border-b border-gray-100">
             <div className="flex items-center justify-between mb-2">
               <h2 className="text-sm font-semibold text-[#050c29]">Your Leads <span className="text-gray-400 font-normal">({filtered.length})</span></h2>
+              {/* Download all visible (unlocked) leads as a CSV the client can open
+                  in Excel/Google Sheets — replaces the "save as spreadsheet" they
+                  had in their old system. */}
+              <button
+                onClick={() => downloadLeadsCsv(leads ?? [], companyName)}
+                disabled={!leads || leads.filter(l => !l.locked).length === 0}
+                title="Download your leads as a CSV spreadsheet"
+                className="flex items-center gap-1.5 text-xs font-medium text-[#224388] hover:text-[#050c29] disabled:opacity-40"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Download
+              </button>
             </div>
             <div className="relative">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="absolute left-2.5 top-2.5 text-gray-400"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
