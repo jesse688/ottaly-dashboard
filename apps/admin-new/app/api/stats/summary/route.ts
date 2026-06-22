@@ -163,8 +163,14 @@ export async function GET(req: NextRequest) {
           // (do NOT add oooReplies again — it is already part of `replies`).
           allReplyRate: totals.sent > 0 ? totals.replies / totals.sent : 0,
           bounceRate: totals.sent > 0 ? totals.bounces / totals.sent : 0,
-          // RTL = leads per 1,000 REPLIES (plain number, not %).
-          rtl: totals.replies > 0 ? (totals.leads / totals.replies) * 1000 : 0,
+          // RTL = Replies-To-Lead: how many replies it took to land one lead
+          // (replies ÷ leads). Lower is better. 0 leads → no ratio yet.
+          rtl: totals.leads > 0 ? totals.replies / totals.leads : 0,
+          // TODO LPT should be Contacts-To-Lead (contacted ÷ leads) — "how many
+          // people contacted per lead". The 'contacted' count is NOT yet stored
+          // in perf_cache_daily, so this is still leads-per-1k-SENT as a stand-in
+          // and is WRONG by the intended definition. Needs the legacy perf cache
+          // to carry total_contacted_count before LPT can be corrected.
           // LPT = leads per 1,000 SENT (plain number, not %).
           lpt: totals.sent > 0 ? (totals.leads / totals.sent) * 1000 : 0,
           sendsPerDay: totals.sent / days,

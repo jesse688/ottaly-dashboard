@@ -101,8 +101,8 @@ function seriesValue(s: SeriesKey, d: DayData): number | null {
     case 'bounceRate':
       return sent > 0 ? +(((d.bounces || 0) / sent) * 100).toFixed(2) : null
     case 'rtl':
-      // leads per 1,000 replies (count, not %)
-      return replies > 0 ? +(((d.leads || 0) / replies) * 1000).toFixed(1) : null
+      // Replies-To-Lead: replies needed per lead (replies ÷ leads). Lower = better.
+      return (d.leads || 0) > 0 ? +((replies / (d.leads || 1))).toFixed(1) : null
     case 'sent':
       return sent
     case 'leads':
@@ -172,7 +172,10 @@ function buildAllWorkspaces(list: Workspace[]): Workspace | null {
       // Reply Rate (all) = total replies / sent (replies already includes OOO).
       allReplyRate: t.sent > 0 ? t.replies / t.sent : 0,
       bounceRate: t.sent > 0 ? t.bounces / t.sent : 0,
-      rtl: t.replies > 0 ? (t.leads / t.replies) * 1000 : 0,
+      // RTL = Replies-To-Lead: replies needed per lead (replies ÷ leads).
+      rtl: t.leads > 0 ? t.replies / t.leads : 0,
+      // LPT: intended Contacts-To-Lead, but 'contacted' isn't cached yet —
+      // still leads-per-1k-sent as a placeholder. See summary route TODO.
       lpt: t.sent > 0 ? (t.leads / t.sent) * 1000 : 0,
       sendsPerDay: t.sent / days,
       repliesPerDay: t.replies / days,
@@ -283,10 +286,10 @@ function ClientCard({
           <Lbl>Bounce</Lbl>
         </Cell>
         <Cell>
-          <span className={cn('text-sm font-bold', t.rtl >= 100 ? 'text-emerald-500' : 'text-foreground')}>
-            {dec(t.rtl, 0)}
+          <span className={cn('text-sm font-bold', t.rtl > 0 && t.rtl <= 20 ? 'text-emerald-500' : 'text-foreground')}>
+            {t.leads > 0 ? dec(t.rtl, 1) : '—'}
           </span>
-          <Lbl>RTL /1k repl</Lbl>
+          <Lbl>RTL · repl/lead</Lbl>
         </Cell>
         <Cell>
           <span className="text-sm font-bold text-foreground">{dec(t.lpt, 1)}</span>
@@ -512,7 +515,7 @@ export default function StatsPage() {
         />
         <KpiCard label="Bounce Rate" value={pct(agg?.totals.bounceRate ?? 0)} tone="red" loading={loading} />
         <KpiCard label="Leads" value={num(agg?.totals.leads ?? 0)} sub="in range" tone="green" loading={loading} />
-        <KpiCard label="RTL" value={dec(agg?.totals.rtl ?? 0, 0)} sub="leads / 1k replies" tone="yellow" loading={loading} />
+        <KpiCard label="RTL" value={agg && agg.totals.leads > 0 ? dec(agg.totals.rtl, 1) : '—'} sub="replies / lead" tone="yellow" loading={loading} />
         <KpiCard label="LPT" value={dec(agg?.totals.lpt ?? 0, 1)} sub="leads / 1k sent" tone="green" loading={loading} />
       </div>
 
