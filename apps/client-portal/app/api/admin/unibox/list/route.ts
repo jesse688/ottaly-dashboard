@@ -105,11 +105,14 @@ export async function GET(req: NextRequest) {
               l.raw->>'linkedin_company_url' AS linkedin_company_url,
               l.raw->>'phone_number'         AS phone_number,
               l.raw->'custom_fields'         AS custom_fields,
-              -- Full HTML body (with the lead's signature/photos): prefer the cached
-              -- portal_emails row, else read it straight from the reply's raw payload
-              -- (unattached replies have no portal_emails row but DO have raw.html_body).
-              COALESCE(pe.body_html, u.raw->>'html_body') AS body_html,
-              COALESCE(pe.body_text, u.raw->>'text_body') AS body_text
+              -- Full HTML body (with the lead's signature/photos): prefer the reply's
+              -- own raw payload, else the cached portal_emails row. PlusVibe-reconciler
+              -- rows store only a 500-char body_preview (no raw html/text and a NULL
+              -- portal_email_id), but the FULL body + signature lives in portal_emails
+              -- keyed by (workspace_id, lead_email) — so pe is matched by id OR by
+              -- workspace+email (see the LATERAL join below) to recover it.
+              COALESCE(NULLIF(u.raw->>'html_body',''), pe.body_html) AS body_html,
+              COALESCE(NULLIF(u.raw->>'text_body',''), pe.body_text) AS body_text
          FROM unibox_replies u
          -- Resolve the owning client WITHOUT fan-out: prefer the row's resolved
          -- client_id (unique), else fall back to the same active-most precedence
@@ -131,7 +134,20 @@ export async function GET(req: NextRequest) {
            ORDER BY (e.source = 'bison') DESC, e.updated_at DESC
            LIMIT 1
          ) l ON TRUE
-         LEFT JOIN portal_emails pe ON pe.id = u.portal_email_id
+         -- Match the cached full body: by the linked id when present, else (PV-
+         -- reconciler rows, where portal_email_id is NULL) by the newest INBOUND
+         -- portal_emails row for the same workspace + lead email.
+         LEFT JOIN LATERAL (
+           SELECT body_html, body_text
+           FROM portal_emails pem
+           WHERE pem.id = u.portal_email_id
+              OR (u.portal_email_id IS NULL
+                  AND pem.workspace_id = u.workspace_id
+                  AND lower(pem.lead_email) = lower(u.lead_email)
+                  AND pem.direction = 'IN')
+           ORDER BY (pem.id = u.portal_email_id) DESC, pem.timestamp_created DESC
+           LIMIT 1
+         ) pe ON TRUE
         WHERE ${folderFilter} ${clientFilter} ${categoryFilter} ${search} ${cursor}
         ORDER BY u.received_at DESC
         LIMIT $${params.length}`,
