@@ -267,6 +267,8 @@ export default function DataPage() {
         if (engineHasEmail) p.set('has_email', 'true')
         if (engineMinProducts) p.set('min_products', engineMinProducts)
         if (engineMinPages) p.set('min_pages', engineMinPages)
+        // Client exclusions: apply the selected client's master exclusion lists.
+        if (filters.cooldownWorkspace) p.set('cooldownWorkspace', filters.cooldownWorkspace)
         Object.entries(extra).forEach(([k, v]) => p.set(k, v))
         return p
       }
@@ -789,6 +791,30 @@ export default function DataPage() {
           </div>
           {dataset === 'engine' ? (
             <div className="p-3 space-y-4">
+              {/* Filter for Client — applies the client's master exclusions */}
+              <div className="rounded-md border border-blue-200 bg-blue-50/40 p-2.5 space-y-2">
+                <Label className="text-xs font-semibold text-blue-600">Filter for Client</Label>
+                <Select
+                  value={filters.cooldownWorkspace || '__none'}
+                  onValueChange={(v) => { applyClientFilter(v && v !== '__none' ? v : ''); setPage(0) }}
+                >
+                  <SelectTrigger className="h-8"><SelectValue placeholder="— Select a client —" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none">— Select a client —</SelectItem>
+                    {clients.map((c) => (
+                      <SelectItem key={c.workspace_id} value={c.workspace_id}>
+                        {c.workspace_name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {filters.cooldownWorkspace && (
+                  <div className="rounded bg-blue-100/60 px-2 py-1.5 text-[11px] leading-relaxed text-blue-800">
+                    Excluding this client&apos;s blocked industries / sizes / regions
+                    {clientInfo && (<><br />{clientInfo}</>)}
+                  </div>
+                )}
+              </div>
               <EngineMultiSelect
                 field="industry"
                 label="Industry"
@@ -2319,11 +2345,20 @@ function PushModal({
   const jobIdRef = useRef<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
+  const [wsError, setWsError] = useState('')
   useEffect(() => {
     fetch(`${base}/workspaces`)
-      .then((r) => r.json())
-      .then((d) => setWorkspaces(Array.isArray(d) ? d : d.workspaces || []))
-      .catch(() => {})
+      .then(async (r) => {
+        const d = await r.json().catch(() => ({}))
+        if (!r.ok) throw new Error(d.error || `Workspaces failed (${r.status})`)
+        return d
+      })
+      .then((d) => {
+        const ws = Array.isArray(d) ? d : d.workspaces || []
+        setWorkspaces(ws)
+        if (!ws.length) setWsError('No PlusVibe workspaces returned (check LEGACY_API_URL / PlusVibe key)')
+      })
+      .catch((e) => setWsError(e.message || 'Could not load workspaces'))
     return () => {
       if (pollRef.current) clearInterval(pollRef.current)
     }
@@ -2422,6 +2457,7 @@ function PushModal({
               ))}
             </SelectContent>
           </Select>
+          {wsError && <div className="mt-1 text-xs text-red-600">{wsError}</div>}
         </div>
 
         <div>

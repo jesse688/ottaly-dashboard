@@ -13,19 +13,55 @@ import { buildEngineLeadsFilter } from '@/app/api/data/engine-leads/route'
 // the contacts pool. Engine rows are mapped to the Contact shape so the grid,
 // pagination and detail panel render unchanged. Read-only — engine rows have a
 // synthetic id (the domain PK) and status 'engine'.
+// Load a client's master exclusion lists (client_verticals) from the legacy
+// API and turn them into engine-leads WHERE conditions, so a client's excluded
+// industries / company sizes / counties / regions are filtered out live.
+async function clientExclusionClauses(
+  workspaceId: string,
+  startIdx: number,
+): Promise<{ sql: string; params: unknown[] }> {
+  try {
+    const base = process.env.LEGACY_API_URL ?? 'http://localhost:3000'
+    const res = await fetch(`${base}/api/client-rules/${encodeURIComponent(workspaceId)}`)
+    if (!res.ok) return { sql: '', params: [] }
+    const data = await res.json()
+    const rules = data.rules || data || {}
+    const split = (v: unknown) =>
+      String(v || '').split(',').map((s) => s.trim()).filter(Boolean)
+    const inds = split(rules.excluded_industries)
+    const sizes = split(rules.excluded_company_sizes)
+    const regions = split([rules.excluded_counties, rules.excluded_cities].filter(Boolean).join(','))
+
+    const clauses: string[] = []
+    const params: unknown[] = []
+    let i = startIdx
+    if (inds.length) { clauses.push(`(industry IS NULL OR NOT (LOWER(industry) = ANY($${i})))`); params.push(inds.map((s) => s.toLowerCase())); i++ }
+    if (sizes.length) { clauses.push(`(company_size IS NULL OR NOT (company_size = ANY($${i})))`); params.push(sizes); i++ }
+    if (regions.length) { clauses.push(`(region IS NULL OR NOT (LOWER(region) = ANY($${i})))`); params.push(regions.map((s) => s.toLowerCase())); i++ }
+    return { sql: clauses.length ? ' AND ' + clauses.join(' AND ') : '', params }
+  } catch {
+    return { sql: '', params: [] }
+  }
+}
+
 async function engineLeadsAsContacts(sp: URLSearchParams, limit: number, offset: number) {
   const { where, params } = buildEngineLeadsFilter(sp)
+  // Apply the selected client's master exclusions, if any.
+  const client = sp.get('cooldownWorkspace')
+  const excl = client ? await clientExclusionClauses(client, params.length + 1) : { sql: '', params: [] }
+  const fullWhere = where + excl.sql
+  const allParams = [...params, ...excl.params]
   const [countRes, rowsRes] = await Promise.all([
-    pool.query(`SELECT COUNT(*)::int AS count FROM ottaly_engine_leads ${where}`, params),
+    pool.query(`SELECT COUNT(*)::int AS count FROM ottaly_engine_leads ${fullWhere}`, allParams),
     pool.query(
       `SELECT domain, company_name, company_number, email_primary, emails, phones,
               director_name, address, postcode, sic_code, industry, region,
               company_size, linkedin_url, has_products, product_count, platform,
               source, show, promoted_at
-       FROM ottaly_engine_leads ${where}
+       FROM ottaly_engine_leads ${fullWhere}
        ORDER BY promoted_at DESC NULLS LAST
-       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-      [...params, limit, offset],
+       LIMIT $${allParams.length + 1} OFFSET $${allParams.length + 2}`,
+      [...allParams, limit, offset],
     ),
   ])
 
