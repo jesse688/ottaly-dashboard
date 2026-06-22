@@ -29,6 +29,8 @@ interface Lead {
   linkedin_url: string | null
   linkedin_company_url: string | null
   phone_number: string | null
+  mobile_phone: string | null
+  office_phone: string | null
   ch_company_number: string | null
   ch_company_status: string | null
   ch_company_type: string | null
@@ -162,7 +164,8 @@ function downloadLeadsCsv(leads: Lead[], companyName: string) {
     { header: 'First name', get: firstName },
     { header: 'Last name', get: lastName },
     { header: 'Email', get: l => l.email },
-    { header: 'Phone', get: l => l.phone_number },
+    { header: 'Mobile', get: l => l.mobile_phone ?? l.phone_number },
+    { header: 'Office', get: l => l.office_phone },
     { header: 'Job title', get: l => l.job_title },
     { header: 'Company', get: l => l.company_name },
     { header: 'Website', get: l => l.company_website },
@@ -980,10 +983,13 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
               {selected.client_label && <span className={`inline-flex ml-1.5 text-xs font-medium px-2 py-1 rounded-full ${COLOR_BADGE[labelMeta(selected.client_label)?.color ?? 'purple'] ?? 'bg-purple-100 text-purple-700'}`}>{selected.client_label}</span>}
             </Section>
 
-            {(selected.email || selected.phone_number || selected.linkedin_url) && (
+            {(selected.email || selected.mobile_phone || selected.office_phone || selected.phone_number || selected.linkedin_url) && (
               <Section title="Contact">
                 {selected.email && <Row icon="mail" label={selected.email} />}
-                {selected.phone_number && <Row icon="phone" label={selected.phone_number} />}
+                {/* Mobile and office shown separately + labelled. Fall back to the
+                    legacy single phone_number as a mobile when the split isn't set. */}
+                {(selected.mobile_phone || selected.phone_number) && <Row icon="phone" label={`Mobile: ${selected.mobile_phone ?? selected.phone_number}`} />}
+                {selected.office_phone && <Row icon="phone" label={`Office: ${selected.office_phone}`} />}
                 {selected.linkedin_url && <Row icon="link" label="LinkedIn profile" href={selected.linkedin_url} />}
               </Section>
             )}

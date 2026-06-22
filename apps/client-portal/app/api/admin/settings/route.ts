@@ -9,7 +9,7 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   ...DEFAULT_TEMPLATES,
   // Which contact fields to extract from a lead's email signature and override
   // their stored value with (comma-separated raw keys). Empty = feature off.
-  signature_extract_fields: 'phone_number,company_website,linkedin_person_url,linkedin_company_url,job_title',
+  signature_extract_fields: 'phone_number,mobile_phone,office_phone,company_website,linkedin_person_url,linkedin_company_url,job_title',
 }
 
 // GET — current settings (defaults merged with any saved overrides).

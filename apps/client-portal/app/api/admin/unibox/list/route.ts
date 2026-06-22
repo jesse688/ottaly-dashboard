@@ -104,6 +104,8 @@ export async function GET(req: NextRequest) {
               l.raw->>'linkedin_person_url'  AS linkedin_url,
               l.raw->>'linkedin_company_url' AS linkedin_company_url,
               l.raw->>'phone_number'         AS phone_number,
+              l.raw->>'mobile_phone'         AS mobile_phone,
+              l.raw->>'office_phone'         AS office_phone,
               l.raw->'custom_fields'         AS custom_fields,
               -- Full HTML body (with the lead's signature/image). Sources, in order:
               --   1. PlusVibe-reconciler rows nest the full message at
