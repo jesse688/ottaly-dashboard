@@ -82,16 +82,47 @@ function toText(input: string): string {
 // --- Phone -------------------------------------------------------------------
 // Prefer a number explicitly labelled M:/Mob/Tel/T:/Phone/Direct. Fall back to a
 // UK-style or international number anywhere. Reject things that look like dates,
-// VAT/company numbers, or zip-only digits by requiring 9+ digits.
-function extractPhone(text: string): string | null {
-  const labelled = text.match(/(?:\bM(?:ob(?:ile)?)?|\bT(?:el)?|\bP(?:hone)?|\bDirect|\bDDI|\bCall)\s*[:.]?\s*(\+?[\d][\d\s().\-]{7,}\d)/i)
-  const generic = text.match(/(\+?\d[\d\s().\-]{8,}\d)/)
-  const raw = (labelled?.[1] ?? generic?.[1] ?? '').trim()
-  if (!raw) return null
+// VAT/company numbers, or zip-only digits by requiring 9–15 digits.
+//
+// We scan for ALL candidate numbers and pick the first VALID one, rather than a
+// single greedy match. A greedy `[\d\s().-]+` run merges two adjacent numbers in
+// a signature (e.g. "07875686108 0208 1029102") into one 19-digit string that
+// then fails the length check — so an unlabelled mobile on its own line was lost.
+function isValidPhone(raw: string): boolean {
   const digits = raw.replace(/\D/g, '')
-  if (digits.length < 9 || digits.length > 15) return null
-  // Tidy spacing but keep a leading + if present.
-  return raw.replace(/\s{2,}/g, ' ').trim()
+  return digits.length >= 9 && digits.length <= 15
+}
+function tidyPhone(raw: string): string {
+  return raw.replace(/\s{2,}/g, ' ').trim().replace(/[.\-\s]+$/, '')
+}
+// A phone number may sit unlabelled on its own line, OR several numbers can be
+// adjacent ("07875686108 0208 1029102"). A single greedy run merges them into a
+// 22-digit string that fails the length check, so an unlabelled mobile was lost.
+// Strategy: pull maximal digit/space runs, then for each run try the whole then
+// every contiguous space-joined sub-sequence of tokens, returning the first one
+// with a valid (9–15) digit count. Verified against real UK mobiles, spaced
+// landlines, +intl, and date/time false-positives.
+function extractPhone(text: string): string | null {
+  // 1) Labelled number wins (M:/Mob/Tel/T:/Phone/Direct/DDI/Call).
+  const labelled = text.match(/(?:\bM(?:ob(?:ile)?)?|\bT(?:el)?|\bP(?:hone)?|\bDirect|\bDDI|\bCall)\s*[:.]?\s*(\+?\d[\d().\-]*(?:\s\d[\d().\-]*){0,3})/i)
+  if (labelled?.[1]) {
+    const t = tidyPhone(labelled[1])
+    if (isValidPhone(t)) return t
+    const parts = t.split(/\s+/)
+    for (let i = parts.length; i > 0; i--) { const j = parts.slice(0, i).join(' '); if (isValidPhone(j)) return tidyPhone(j) }
+  }
+  // 2) Unlabelled: scan runs and split merged ones.
+  const runs = text.match(/\+?\d[\d().\-]*(?:\s\d[\d().\-]*){0,4}/g) ?? []
+  for (const run of runs) {
+    if (isValidPhone(run)) return tidyPhone(run)
+    const parts = run.trim().split(/\s+/)
+    for (let s = 0; s < parts.length; s++)
+      for (let e = s + 1; e <= parts.length; e++) {
+        const cand = parts.slice(s, e).join(' ')
+        if (isValidPhone(cand)) return tidyPhone(cand)
+      }
+  }
+  return null
 }
 
 // --- URLs --------------------------------------------------------------------
