@@ -736,6 +736,33 @@ export default function DataPage() {
             <div className="text-sm font-semibold text-gray-900">Filters</div>
             <div className="text-xs text-gray-400">Filter &amp; search</div>
           </div>
+          {dataset === 'engine' ? (
+            <div className="p-3 space-y-4">
+              <div>
+                <Label className="text-xs text-gray-500">Industry</Label>
+                <Input
+                  className="h-8 mt-1"
+                  placeholder="contains…"
+                  value={filters.industry || ''}
+                  onChange={(e) => { setFilters((f) => ({ ...f, industry: e.target.value })); setPage(0) }}
+                />
+              </div>
+              <div>
+                <Label className="text-xs text-gray-500">Region</Label>
+                <Input
+                  className="h-8 mt-1"
+                  placeholder="e.g. england, wales…"
+                  value={filters.companyRegion || ''}
+                  onChange={(e) => { setFilters((f) => ({ ...f, companyRegion: e.target.value })); setPage(0) }}
+                />
+              </div>
+              <p className="text-[11px] leading-relaxed text-gray-400">
+                Engine leads are scraped, unverified prospects — kept separate from
+                the verified Contacts pool. Use the Source and Show filters above,
+                then export to CSV for PlusVibe.
+              </p>
+            </div>
+          ) : (
           <div className="p-3 space-y-1.5">
             {/* Client selector (sets cooldownWorkspace server-side) */}
             <div className="rounded-md border border-blue-200 bg-blue-50/40 p-2.5 space-y-2">
@@ -809,6 +836,7 @@ export default function DataPage() {
               onBackfillEmployees={backfillEmployees}
             />
           </div>
+          )}
         </aside>
       )}
 
@@ -990,7 +1018,8 @@ export default function DataPage() {
             )}
           </div>
 
-          {/* Verification stats strip */}
+          {/* Verification stats strip (contacts pool only) */}
+          {dataset === 'contacts' && (
           <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
             <span className="font-semibold text-gray-700">Verified today:</span>
             <span className="text-gray-700">
@@ -1029,8 +1058,10 @@ export default function DataPage() {
               </>
             )}
           </div>
+          )}
 
-          {/* Saved views */}
+          {/* Saved views (contacts pool only) */}
+          {dataset === 'contacts' && (
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs font-medium text-gray-500">Saved views:</span>
             {savedViews.length === 0 && (
@@ -1067,6 +1098,7 @@ export default function DataPage() {
               </Button>
             )}
           </div>
+          )}
         </div>
 
         {/* Selection action bar */}
