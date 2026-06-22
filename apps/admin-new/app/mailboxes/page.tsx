@@ -25,7 +25,8 @@ const ACCENT: Record<string, string> = {
   Unassigned: '#9CA3AF', google: '#EA4335', microsoft: '#0078D4', smtp: '#475569',
 }
 
-interface HistoryResponse { days: string[]; series: Record<string, { sent: number[]; reply_rate: number[]; bounce_rate: number[] }> }
+interface DaySeries { sent: number[]; replies: number[]; ooo: number[]; bounces: number[]; contacted: number[] }
+interface HistoryResponse { dimension: string; days: string[]; series: Record<string, DaySeries> }
 
 // ── Legacy pill ──────────────────────────────────────────────────────────────
 function Pill({ tone, children }: { tone: 'good' | 'warn' | 'bad' | 'gray' | 'google' | 'microsoft' | 'smtp'; children: React.ReactNode }) {
@@ -378,36 +379,24 @@ export default function MailboxesPage() {
 
         {tab === 'performance' && status !== 'error' && data && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', marginTop: '.5rem' }}>
-            {/* By-supplier cards */}
+            {/* Period toggle */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
+              {PERIODS.map(p => <button key={p.key} onClick={() => setPeriodDays(p.key)} style={{ padding: '4px 10px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', border: `1px solid ${C.border}`, background: periodDays === p.key ? C.navy : '#fff', color: periodDays === p.key ? '#fff' : C.muted }}>{p.label}</button>)}
+            </div>
+
+            {/* By provider type — combined stat + chart cards */}
             <div>
-              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: C.muted, margin: '0 0 .5rem' }}>By supplier — who performs best</div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: '1rem' }}>
-                {data.stats.bySupplier.map(g => <GroupCard key={g.key} g={g} accent={ACCENT[g.key] || C.navy} />)}
+              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: C.muted, margin: '0 0 .5rem' }}>By provider type (Google / Microsoft / SMTP)</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: '1rem' }}>
+                {data.stats.byType.map(g => <ProviderCard key={g.key} g={g} accent={ACCENT[g.key] || C.navy} days={typeHistory?.days ?? []} ds={typeHistory?.series[g.key]} />)}
               </div>
             </div>
 
-            {/* Trend charts */}
+            {/* By supplier — combined stat + chart cards */}
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '.25rem 0 .5rem' }}>
-                <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: C.muted }}>Performance trends</div>
-                <div style={{ display: 'flex', gap: 4 }}>
-                  {PERIODS.map(p => <button key={p.key} onClick={() => setPeriodDays(p.key)} style={{ padding: '4px 10px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', border: `1px solid ${C.border}`, background: periodDays === p.key ? C.navy : '#fff', color: periodDays === p.key ? '#fff' : C.muted }}>{p.label}</button>)}
-                </div>
-              </div>
-              <TrendCharts history={history} border={C.border} />
-            </div>
-
-            {/* Provider-type trends (Google / Microsoft / SMTP split) */}
-            <div>
-              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: C.muted, margin: '.25rem 0 .5rem' }}>Provider type trends — Google vs Microsoft vs SMTP</div>
-              <TrendCharts history={typeHistory} border={C.border} />
-            </div>
-
-            {/* By-type cards */}
-            <div>
-              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: C.muted, margin: '0 0 .5rem' }}>By type — Google vs Microsoft vs SMTP</div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: '1rem' }}>
-                {data.stats.byType.map(g => <GroupCard key={g.key} g={g} accent={ACCENT[g.key] || C.navy} />)}
+              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: C.muted, margin: '0 0 .5rem' }}>By supplier (Winnr / Maildoso / Mithun)</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: '1rem' }}>
+                {data.stats.bySupplier.map(g => <ProviderCard key={g.key} g={g} accent={ACCENT[g.key] || C.navy} days={history?.days ?? []} ds={history?.series[g.key]} />)}
               </div>
             </div>
 
@@ -585,26 +574,6 @@ function StatCard({ accent, label, val }: { accent: string; label: string; val: 
   )
 }
 
-function GroupCard({ g, accent }: { g: MailboxGroupStats; accent: string }) {
-  const total = g.count || 1
-  return (
-    <div style={{ background: '#fff', border: '1px solid #E2E6F0', borderRadius: 10, padding: '1rem 1.25rem', borderTop: `3px solid ${accent}` }}>
-      <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.5px', color: '#6B7280' }}>{g.key}</div>
-      <div style={{ fontSize: '1.5rem', fontWeight: 700, marginTop: 4 }}>{g.count.toLocaleString()}</div>
-      <div style={{ fontSize: 11, color: '#6B7280', marginTop: 6, lineHeight: 1.5 }}>
-        {g.active} active · {g.warmup_pct}% warming<br />
-        Reply {(g.reply_rate * 100).toFixed(1)}% · Bounce {(g.bounce_rate * 100).toFixed(1)}%<br />
-        Auth clean {g.auth_clean_pct}% · ${g.total_monthly_cost.toFixed(0)}/mo
-      </div>
-      <div style={{ display: 'flex', height: 6, borderRadius: 3, background: '#F3F4F6', overflow: 'hidden', marginTop: 8 }}>
-        <div style={{ height: '100%', width: `${(g.active / total) * 100}%`, background: '#16A34A' }} />
-        <div style={{ height: '100%', width: `${(g.paused / total) * 100}%`, background: '#D97706' }} />
-        <div style={{ height: '100%', width: `${(g.disconnected / total) * 100}%`, background: '#DC2626' }} />
-      </div>
-    </div>
-  )
-}
-
 function DnsCol({ title, present, raw, extra }: { title: string; present: boolean; raw: string | null; extra?: string | null }) {
   return (
     <div>
@@ -615,25 +584,58 @@ function DnsCol({ title, present, raw, extra }: { title: string; present: boolea
   )
 }
 
-function TrendCharts({ history, border }: { history: HistoryResponse | null; border: string }) {
-  if (!(history && Object.keys(history.series).length > 0 && history.days.length > 1)) {
-    return <div style={{ background: '#fff', border: `1px solid ${border}`, borderRadius: 10, padding: '2rem', textAlign: 'center', fontSize: 13, color: '#6B7280' }}>Trend charts fill in as daily snapshots accumulate — or run a backfill.</div>
-  }
-  const entries = Object.entries(history.series)
-  return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: '1rem' }}>
-      <ChartCard title="Reply rate %"><LineChart labels={history.days} series={entries.map(([k, s], i) => ({ label: k, data: s.reply_rate.map(v => v * 100), tone: ((i % 5 + 1) as 1 | 2 | 3 | 4 | 5), percent: true }))} /></ChartCard>
-      <ChartCard title="Bounce rate %"><LineChart labels={history.days} series={entries.map(([k, s], i) => ({ label: k, data: s.bounce_rate.map(v => v * 100), tone: ((i % 5 + 1) as 1 | 2 | 3 | 4 | 5), percent: true }))} /></ChartCard>
-      <ChartCard title="Total sent"><LineChart labels={history.days} series={entries.map(([k, s], i) => ({ label: k, data: s.sent, tone: ((i % 5 + 1) as 1 | 2 | 3 | 4 | 5) }))} /></ChartCard>
-    </div>
-  )
-}
+const sum = (a: number[] | undefined) => (a ?? []).reduce((s, v) => s + v, 0)
 
-function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
+// Combined per-group card: window-total stats (SENT, human RR, RR+OOO, bounce)
+// + a toggleable daily multi-line chart (Sent / RR human / RR+OOO). Click a
+// legend item to hide/show that series — see results per day for what's left.
+function ProviderCard({ g, accent, days, ds }: { g: MailboxGroupStats; accent: string; days: string[]; ds?: DaySeries }) {
+  const [hidden, setHidden] = useState<Set<string>>(new Set())
+  const toggle = (k: string) => setHidden(p => { const n = new Set(p); n.has(k) ? n.delete(k) : n.add(k); return n })
+
+  // Window totals (from the daily series if present, else the point-in-time agg).
+  const tSent = ds ? sum(ds.sent) : g.total_sent
+  const tReplies = ds ? sum(ds.replies) : 0
+  const tOoo = ds ? sum(ds.ooo) : 0
+  const tBounces = ds ? sum(ds.bounces) : 0
+  const tContacted = ds ? sum(ds.contacted) || tSent : tSent
+  const human = tContacted > 0 ? (tReplies - tOoo) / tContacted : 0
+  const withOoo = tContacted > 0 ? tReplies / tContacted : (ds ? 0 : g.reply_rate)
+  const bounceRate = tSent > 0 ? tBounces / tSent : g.bounce_rate
+
+  // Daily series for the chart (percentages computed per-day).
+  const dailyHuman = days.map((_, i) => { const c = ds?.contacted[i] || ds?.sent[i] || 0; return c > 0 ? ((ds!.replies[i] - ds!.ooo[i]) / c) * 100 : 0 })
+  const dailyWithOoo = days.map((_, i) => { const c = ds?.contacted[i] || ds?.sent[i] || 0; return c > 0 ? (ds!.replies[i] / c) * 100 : 0 })
+  const series = [
+    { key: 'Sent', label: 'Sent', data: (ds?.sent ?? []).map(Number), color: accent, percent: false },
+    { key: 'RR human', label: 'RR human', data: dailyHuman, color: '#16A34A', percent: true },
+    { key: 'RR+OOO', label: 'RR+OOO', data: dailyWithOoo, color: '#3B82F6', percent: true },
+  ].filter(s => !hidden.has(s.key))
+
+  const Stat = ({ v, l, color }: { v: string; l: string; color?: string }) => (
+    <div><div style={{ fontSize: 18, fontWeight: 700, color: color || '#050C29' }}>{v}</div><div style={{ fontSize: 10, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '.3px', lineHeight: 1.2 }}>{l}</div></div>
+  )
   return (
-    <div style={{ background: '#fff', border: '1px solid #E2E6F0', borderRadius: 10, padding: '.75rem' }}>
-      <div style={{ fontSize: 11, fontWeight: 600, color: '#6B7280', marginBottom: 4 }}>{title}</div>
-      {children}
+    <div style={{ background: '#fff', border: '1px solid #E2E6F0', borderRadius: 10, padding: '1rem 1.1rem', borderTop: `3px solid ${accent}` }}>
+      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>{g.key} · <span style={{ color: '#6B7280', fontWeight: 500 }}>{g.count} mailboxes</span></div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8, marginBottom: 10 }}>
+        <Stat v={tSent.toLocaleString()} l="Sent" />
+        <Stat v={(human * 100).toFixed(2) + '%'} l="RR (human)" color="#16A34A" />
+        <Stat v={(withOoo * 100).toFixed(2) + '%'} l="RR incl. OOO" color="#3B82F6" />
+        <Stat v={(bounceRate * 100).toFixed(2) + '%'} l="Bounce" />
+      </div>
+      {days.length > 1 ? (
+        <>
+          <LineChart labels={days} series={series.length ? series : [{ label: '', data: days.map(() => 0) }]} height={150} />
+          <div style={{ display: 'flex', gap: 12, marginTop: 6, flexWrap: 'wrap' }}>
+            {['Sent', 'RR human', 'RR+OOO'].map(k => (
+              <button key={k} onClick={() => toggle(k)} style={{ fontSize: 11, cursor: 'pointer', background: 'none', border: 'none', color: hidden.has(k) ? '#9CA3AF' : '#374151', textDecoration: hidden.has(k) ? 'line-through' : 'none' }}>
+                {k}
+              </button>
+            ))}
+          </div>
+        </>
+      ) : <div style={{ fontSize: 12, color: '#9CA3AF', padding: '1rem 0', textAlign: 'center' }}>Chart fills in after a backfill / daily syncs.</div>}
     </div>
   )
 }

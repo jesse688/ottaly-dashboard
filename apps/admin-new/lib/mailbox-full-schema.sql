@@ -80,7 +80,16 @@ CREATE TABLE IF NOT EXISTS mailbox_supplier_daily (
   reply_rate  NUMERIC DEFAULT 0,
   bounce_rate NUMERIC DEFAULT 0,
   warmup_pct  INTEGER DEFAULT 0,
+  -- raw daily counts so cards can show RR-human vs RR+OOO and recompute rates
+  total_replies   INTEGER DEFAULT 0,   -- all replies (incl. OOO/auto)
+  total_ooo       INTEGER DEFAULT 0,   -- OOO / automatic replies
+  total_bounces   INTEGER DEFAULT 0,
+  total_contacted INTEGER DEFAULT 0,
   PRIMARY KEY (day, dimension, key)
 );
+ALTER TABLE mailbox_supplier_daily ADD COLUMN IF NOT EXISTS total_replies   INTEGER DEFAULT 0;
+ALTER TABLE mailbox_supplier_daily ADD COLUMN IF NOT EXISTS total_ooo       INTEGER DEFAULT 0;
+ALTER TABLE mailbox_supplier_daily ADD COLUMN IF NOT EXISTS total_bounces   INTEGER DEFAULT 0;
+ALTER TABLE mailbox_supplier_daily ADD COLUMN IF NOT EXISTS total_contacted INTEGER DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_mbsd_dim_key_day ON mailbox_supplier_daily (dimension, key, day);
 
