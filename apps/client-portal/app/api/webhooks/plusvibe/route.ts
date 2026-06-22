@@ -5,7 +5,7 @@ import { notifyClientOfLead, notifyClientOfLeadReply } from '@/lib/email'
 import { enrichLead, leadCompanyOrNull } from '@/lib/sync'
 import { enrichUniboxReply } from '@/lib/enrich'
 import { ready } from '@/lib/db'
-import { bisonTeamToWorkspace } from '@/lib/bison'
+import { bisonTeamToWorkspace, BISON_INGEST_ENABLED } from '@/lib/bison'
 import { notifyAdmin } from '@/lib/notify'
 import { resolveClientId } from '@/lib/clients'
 
@@ -74,6 +74,11 @@ export async function POST(req: NextRequest) {
       await handlePlusVibe(parsed)
       // PlusVibe path doesn't set its own outcome; mark it terminal here.
       if (deliveryId) await markDelivery(deliveryId, 'done:plusvibe')
+    } else if (!BISON_INGEST_ENABLED) {
+      // We've migrated to PlusVibe — replies arrive via the external pv-reconciler.
+      // Bison still POSTs (until its webhooks are deregistered on its side), but
+      // ingesting them just produces DUPLICATE unibox rows. Acknowledge + ignore.
+      if (deliveryId) await markDelivery(deliveryId, 'skipped:bison_ingest_disabled')
     } else {
       // handleBison sets its OWN specific outcome (stored:<folder> | skipped:<why>
       // | error:...). Don't overwrite it with a generic 'done' — that destroyed the

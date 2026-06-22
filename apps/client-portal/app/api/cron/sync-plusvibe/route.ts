@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import pool from '@/lib/db'
-import { getLeads, BISON_CONFIGURED } from '@/lib/bison'
+import { getLeads, BISON_CONFIGURED, BISON_INGEST_ENABLED } from '@/lib/bison'
 import { ready } from '@/lib/db'
 import { leadCompanyOrNull } from '@/lib/sync'
 
@@ -9,6 +9,12 @@ export async function GET(req: NextRequest) {
   const expectedSecret = process.env.CRON_SECRET
   if (!secret || !expectedSecret || secret !== expectedSecret) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+  // Migrated to PlusVibe — this cron pulls Bison leads into esp_leads (source=
+  // 'bison'), which now only duplicates what PlusVibe ingests. Disabled unless
+  // BISON_INGEST_ENABLED is set. (Body is Bison despite the 'plusvibe' route name.)
+  if (!BISON_INGEST_ENABLED) {
+    return NextResponse.json({ ok: true, skipped: 'bison_ingest_disabled' })
   }
   if (!BISON_CONFIGURED) return NextResponse.json({ error: 'BISON_API_KEY not configured' }, { status: 500 })
 
