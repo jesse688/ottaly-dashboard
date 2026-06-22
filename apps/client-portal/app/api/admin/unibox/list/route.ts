@@ -108,14 +108,16 @@ export async function GET(req: NextRequest) {
               l.raw->>'linkedin_company_url' AS linkedin_company_url,
               l.raw->>'phone_number'         AS phone_number,
               l.raw->'custom_fields'         AS custom_fields,
-              -- Full HTML body (with the lead's signature/photos): prefer the reply's
-              -- own raw payload, else the cached portal_emails row. PlusVibe-reconciler
-              -- rows store only a 500-char body_preview (no raw html/text and a NULL
-              -- portal_email_id), but the FULL body + signature lives in portal_emails
-              -- keyed by (workspace_id, lead_email) — so pe is matched by id OR by
-              -- workspace+email (see the LATERAL join below) to recover it.
-              COALESCE(NULLIF(u.raw->>'html_body',''), pe.body_html) AS body_html,
-              COALESCE(NULLIF(u.raw->>'text_body',''), pe.body_text) AS body_text
+              -- Full HTML body (with the lead's signature/image). Sources, in order:
+              --   1. PlusVibe-reconciler rows nest the full message at
+              --      raw.body.html / raw.body.text (the rich HTML incl. embedded
+              --      signature image). body_preview is only the truncated 500-char
+              --      text, which is why signatures showed as "[signatureImage]".
+              --   2. Bison webhook rows put it at raw.html_body / raw.text_body.
+              --   3. Else the cached portal_emails row (matched by id OR workspace+
+              --      email in the LATERAL join below).
+              COALESCE(NULLIF(u.raw->'body'->>'html',''), NULLIF(u.raw->>'html_body',''), pe.body_html) AS body_html,
+              COALESCE(NULLIF(u.raw->'body'->>'text',''), NULLIF(u.raw->>'text_body',''), pe.body_text) AS body_text
          FROM unibox_replies u
          -- Resolve the owning client WITHOUT fan-out: prefer the row's resolved
          -- client_id (unique), else fall back to the same active-most precedence

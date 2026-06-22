@@ -35,11 +35,16 @@ const ALLOWED_ATTRS: Record<string, Set<string>> = {
 }
 const DEFAULT_ATTRS = new Set(['style', 'class', 'align'])
 
-// A URL is safe only if http(s), mailto, tel, or a relative path. Blocks
-// javascript:, data:, vbscript:, etc.
+// A URL is safe only if http(s), mailto, tel, a base64 IMAGE data URI, or a
+// relative path. Blocks javascript:, vbscript:, file:, and non-image data: URIs.
 function safeUrl(v: string): string | null {
   const t = v.trim()
   if (/^(https?:|mailto:|tel:)/i.test(t)) return t
+  // Allow inline base64 images (data:image/png;base64,…) — standard in email
+  // signatures (e.g. an embedded logo). RASTER formats only; SVG is excluded
+  // because data:image/svg+xml can embed <script> (XSS). data:text/html and
+  // other data: payloads are still blocked below.
+  if (/^data:image\/(png|jpe?g|gif|webp|bmp);base64,/i.test(t)) return t
   if (/^(javascript|data|vbscript|file):/i.test(t)) return null
   if (/^[#/.]/.test(t) || /^[\w.-]+@/.test(t)) return t
   // Bare domain like www.einhell.co.uk → make it absolute so the link works.
