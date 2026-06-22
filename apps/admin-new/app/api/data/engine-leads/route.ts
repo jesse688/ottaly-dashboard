@@ -17,6 +17,7 @@ export function buildEngineLeadsFilter(p: URLSearchParams) {
   const region = list('region')
   const platform = list('platform')
   const companySize = list('company_size')
+  const sic = list('sic') // SIC codes to match against sic_code
   const search = (p.get('search') || '').trim() || null
 
   // has_products: 'true' | 'false' | anything-else => no filter (null)
@@ -44,12 +45,16 @@ export function buildEngineLeadsFilter(p: URLSearchParams) {
       AND ($8::text[] IS NULL OR company_size = ANY($8))
       AND ($9::int  IS NULL OR product_count >= $9)
       AND ($10::int IS NULL OR page_count    >= $10)
-      AND ($11::bool IS NULL OR (email_primary IS NOT NULL AND email_primary <> ''))`
+      AND ($11::bool IS NULL OR (email_primary IS NOT NULL AND email_primary <> ''))
+      AND ($12::text[] IS NULL OR EXISTS (
+            SELECT 1 FROM unnest($12::text[]) code
+             WHERE sic_code = code OR sic_code ILIKE '%'||code||'%'
+          ))`
 
   return {
     where,
     params: [source, show, industry, region, hasProducts, platform, search,
-             companySize, minProductCount, minPageCount, hasEmail],
+             companySize, minProductCount, minPageCount, hasEmail, sic],
   }
 }
 

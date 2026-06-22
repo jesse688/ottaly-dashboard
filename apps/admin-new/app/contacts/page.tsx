@@ -202,6 +202,7 @@ export default function DataPage() {
   const [engineRegion, setEngineRegion] = useState('')
   const [enginePlatform, setEnginePlatform] = useState('')
   const [engineSize, setEngineSize] = useState('')
+  const [engineSic, setEngineSic] = useState('') // comma-separated SIC codes
   const [engineHasProducts, setEngineHasProducts] = useState('') // '' | 'true' | 'false'
   const [engineHasEmail, setEngineHasEmail] = useState(false)
   const [engineMinProducts, setEngineMinProducts] = useState('')
@@ -263,6 +264,7 @@ export default function DataPage() {
         if (engineRegion) p.set('region', engineRegion)
         if (enginePlatform) p.set('platform', enginePlatform)
         if (engineSize) p.set('company_size', engineSize)
+        if (engineSic) p.set('sic', engineSic)
         if (engineHasProducts) p.set('has_products', engineHasProducts)
         if (engineHasEmail) p.set('has_email', 'true')
         if (engineMinProducts) p.set('min_products', engineMinProducts)
@@ -282,7 +284,7 @@ export default function DataPage() {
       return p
     },
     [dataset, searchText, engineSource, engineShow, engineIndustry, engineRegion, enginePlatform,
-     engineSize, engineHasProducts, engineHasEmail, engineMinProducts, engineMinPages, filters, sortBy, sortDir]
+     engineSize, engineSic, engineHasProducts, engineHasEmail, engineMinProducts, engineMinPages, filters, sortBy, sortDir]
   )
 
   // ── Fetch contacts ────────────────────────────────────────────────────────
@@ -820,6 +822,10 @@ export default function DataPage() {
                 label="Industry"
                 value={engineIndustry}
                 onChange={(v) => { setEngineIndustry(v); setPage(0) }}
+              />
+              <EngineSicSelect
+                value={engineSic}
+                onChange={(v) => { setEngineSic(v); setPage(0) }}
               />
               <EngineMultiSelect
                 field="region"
@@ -1685,6 +1691,103 @@ function EngineMultiSelect({
               >
                 <span className="truncate">{o.value}</span>
                 <span className="shrink-0 text-xs text-gray-400">{o.count.toLocaleString()}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// SIC-code multi-select for engine leads: searches the full UK SIC list by
+// code/name/alias (via sic-search) and shows "code — description". Stores the
+// selected CODES (comma-separated) which the engine API matches on sic_code.
+function EngineSicSelect({
+  value,
+  onChange,
+}: {
+  value: string
+  onChange: (v: string) => void
+}) {
+  const [query, setQuery] = useState('')
+  const [opts, setOpts] = useState<{ code: string; label: string }[]>([])
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+
+  const selected = value.split(',').map((s) => s.trim()).filter(Boolean)
+  const has = (c: string) => selected.includes(c)
+  const toggle = (c: string) =>
+    onChange((has(c) ? selected.filter((x) => x !== c) : [...selected, c]).join(','))
+
+  useEffect(() => {
+    if (!open || !query.trim()) { setOpts([]); return }
+    let cancelled = false
+    const t = setTimeout(async () => {
+      setLoading(true)
+      try {
+        const res = await fetch(`/api/data/contacts/sic-search?q=${encodeURIComponent(query)}`)
+        const data = await res.json()
+        const raw = data.results || data.list || data || []
+        if (!cancelled)
+          setOpts(
+            raw.slice(0, 50).map((it: { code?: string; label?: string; description?: string } | string) => {
+              const code = typeof it === 'string' ? it : it.code || ''
+              const desc = typeof it === 'string' ? '' : it.label || it.description || ''
+              return { code, label: desc ? `${code} — ${desc}` : code }
+            }),
+          )
+      } catch {
+        if (!cancelled) setOpts([])
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }, 200)
+    return () => { cancelled = true; clearTimeout(t) }
+  }, [open, query])
+
+  return (
+    <div>
+      <Label className="text-xs text-gray-500">SIC code</Label>
+      {selected.length > 0 && (
+        <div className="mt-1 flex flex-wrap gap-1">
+          {selected.map((c) => (
+            <button
+              key={c}
+              onClick={() => toggle(c)}
+              className="inline-flex items-center gap-1 rounded bg-blue-100 px-1.5 py-0.5 text-[11px] text-blue-800 hover:bg-blue-200"
+              title="Remove"
+            >
+              {c} <span className="text-blue-500">×</span>
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="relative">
+        <Input
+          className="h-8 mt-1"
+          placeholder="Search SIC code or name…"
+          value={query}
+          onFocus={() => setOpen(true)}
+          onChange={(e) => { setQuery(e.target.value); setOpen(true) }}
+          onBlur={() => setTimeout(() => setOpen(false), 150)}
+        />
+        {open && query.trim() && (
+          <div className="absolute z-30 mt-1 max-h-64 w-full overflow-y-auto rounded-md border border-gray-200 bg-white text-sm shadow-lg">
+            {loading && <div className="px-2 py-1.5 text-xs text-gray-400">Searching…</div>}
+            {!loading && opts.length === 0 && (
+              <div className="px-2 py-1.5 text-xs text-gray-400">No matches</div>
+            )}
+            {opts.map((o) => (
+              <button
+                key={o.code}
+                onMouseDown={(e) => { e.preventDefault(); toggle(o.code) }}
+                className={cn(
+                  'block w-full px-2 py-1.5 text-left hover:bg-gray-100',
+                  has(o.code) && 'bg-blue-50',
+                )}
+              >
+                <span className="truncate">{o.label}</span>
               </button>
             ))}
           </div>
