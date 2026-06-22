@@ -40,22 +40,31 @@ export async function GET() {
 
     const res = await pool.query(
       `SELECT l.id, l.email,
-              -- Name fallback: the chosen (Bison) row sometimes has a blank name
-              -- while the sibling PlusVibe row for the SAME email carries it. The
-              -- sibling can live under a DIFFERENT workspace_id (a lead migrated
-              -- PV→Bison keeps its old PV workspace), so match on EMAIL ONLY — not
-              -- workspace — or the name is never found. Fill first/last name from
-              -- any same-email row when this row's is empty.
-              COALESCE(NULLIF(btrim(l.first_name),''),
-                       (SELECT NULLIF(btrim(s.first_name),'') FROM esp_leads s
-                         WHERE lower(s.email)=lower(l.email)
-                           AND NULLIF(btrim(s.first_name),'') IS NOT NULL
-                         ORDER BY s.updated_at DESC LIMIT 1)) AS first_name,
-              COALESCE(NULLIF(btrim(l.last_name),''),
-                       (SELECT NULLIF(btrim(s.last_name),'') FROM esp_leads s
-                         WHERE lower(s.email)=lower(l.email)
-                           AND NULLIF(btrim(s.last_name),'') IS NOT NULL
-                         ORDER BY s.updated_at DESC LIMIT 1)) AS last_name,
+              -- ── Name resolution with a FALLBACK CHAIN ──────────────────────
+              -- A lead's name may be missing on its own row, so we try, in order:
+              --   1. the row's own first/last name
+              --   2. a sibling row's name (SAME email — matched on email ONLY, since
+              --      a PV→Bison-migrated lead keeps its old PV workspace_id)
+              --   3. the LinkedIn URL slug: /in/danny-attwater-a182b1296 →
+              --      "Danny Attwater" (strip the trailing random id segment, split
+              --      the rest on '-'). Gives BOTH first and last name.
+              --   4. the email local-part (danny@… → "Danny") — first name only.
+              COALESCE(
+                NULLIF(btrim(l.first_name),''),
+                (SELECT NULLIF(btrim(s.first_name),'') FROM esp_leads s
+                  WHERE lower(s.email)=lower(l.email) AND NULLIF(btrim(s.first_name),'') IS NOT NULL
+                  ORDER BY s.updated_at DESC LIMIT 1),
+                NULLIF(split_part(li_name.full,' ',1),''),
+                NULLIF(initcap(split_part(regexp_replace(split_part(l.email,'@',1),'[._-]+',' ','g'),' ',1)),'')
+              ) AS first_name,
+              COALESCE(
+                NULLIF(btrim(l.last_name),''),
+                (SELECT NULLIF(btrim(s.last_name),'') FROM esp_leads s
+                  WHERE lower(s.email)=lower(l.email) AND NULLIF(btrim(s.last_name),'') IS NOT NULL
+                  ORDER BY s.updated_at DESC LIMIT 1),
+                -- everything after the first word of the LinkedIn-derived name
+                NULLIF(btrim(substr(li_name.full, strpos(li_name.full,' ')+1)), li_name.full)
+              ) AS last_name,
               l.company_name,
               l.status, l.label, l.first_replied_at, l.created_at,
               l.raw->>'camp_name'            AS campaign_name,
@@ -142,6 +151,28 @@ export async function GET() {
                 )
               ) AS has_outbound
        FROM esp_leads l
+       -- Derive a name from the LinkedIn person URL slug as a name fallback.
+       -- /in/danny-attwater-a182b1296 → strip the trailing -<alnum id>, split the
+       -- rest on '-', initcap each word → "Danny Attwater". Sourced from the lead's
+       -- own row or a sibling row (same email). NULL when there's no usable slug.
+       LEFT JOIN LATERAL (
+         SELECT (
+           SELECT btrim(regexp_replace(
+                    initcap(replace(
+                      -- slug = path after /in/, minus a trailing -<id> segment and any trailing slash
+                      regexp_replace(
+                        regexp_replace(lower(split_part(split_part(s.raw->>'linkedin_person_url','/in/',2),'?',1)), '/+$',''),
+                        -- strip a trailing LinkedIn id segment ONLY when it contains a
+                        -- digit (e.g. -a182b1296), so an all-letter surname is kept.
+                        '-[a-z0-9]*[0-9][a-z0-9]*$',''),
+                      '-',' ')),
+                    '\s+',' ','g'))
+             FROM esp_leads s
+            WHERE lower(s.email)=lower(l.email)
+              AND s.raw->>'linkedin_person_url' ILIKE '%/in/%'
+            ORDER BY s.updated_at DESC LIMIT 1
+         ) AS full
+       ) li_name ON TRUE
        LEFT JOIN portal_lead_data ld     ON ld.lead_id = l.id AND ld.client_id = $3
        LEFT JOIN portal_lead_disputes pd ON pd.lead_id = l.id AND pd.client_id = $3
        WHERE l.workspace_id = $1
