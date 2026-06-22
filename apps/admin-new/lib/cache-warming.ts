@@ -1,4 +1,5 @@
 import pool from './db'
+import { getActiveWorkspaceIds } from './active-clients'
 
 const PV_BASE = 'https://api.plusvibe.ai/api/v1'
 const PV_KEY = process.env.PLUSVIBE_KEY ?? ''
@@ -7,12 +8,24 @@ const PV_KEY = process.env.PLUSVIBE_KEY ?? ''
 const TTL_TODAY_MS = 5 * 60 * 1000
 const TTL_OLD_MS = 12 * 60 * 60 * 1000
 
+// Workspaces PlusVibe returns 400 for (deleted/unknown). Skipped on subsequent
+// passes so we don't repeatedly fail+retry them and stall the warm.
+const deadWorkspaces = new Set<string>()
+
+// Only warm workspaces that are ACTIVE clients (legacy /api/client-status) AND
+// not already known-dead in PlusVibe. workspace_stats is polluted with stale/
+// test/deleted workspaces that 400 or return all-zeros, which spammed PV and
+// wasted the warm pass. Intersect with the active-client list (fails open: if
+// the status list is unavailable, fall back to all of workspace_stats).
 async function getActiveWorkspaces(): Promise<string[]> {
   try {
     const res = await pool.query(
       `SELECT DISTINCT workspace_id FROM workspace_stats WHERE workspace_id IS NOT NULL AND workspace_id != ''`
     )
-    return res.rows.map(r => r.workspace_id)
+    let ids = res.rows.map((r) => r.workspace_id as string)
+    const active = await getActiveWorkspaceIds().catch(() => null)
+    if (active) ids = ids.filter((id) => active.has(id))
+    return ids.filter((id) => !deadWorkspaces.has(id))
   } catch (err) {
     console.error('[cache-warming] getActiveWorkspaces failed:', err)
     return []
@@ -36,10 +49,6 @@ function lastNDates(n: number): string[] {
   }
   return dates
 }
-
-// Workspaces PlusVibe returns 400 for (deleted/unknown). Skipped on subsequent
-// passes so we don't repeatedly fail+retry them and stall the warm.
-const deadWorkspaces = new Set<string>()
 
 async function pvFetch(path: string): Promise<any> {
   const url = `${PV_BASE}${path}`
