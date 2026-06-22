@@ -45,11 +45,8 @@ export function buildEngineLeadsFilter(p: URLSearchParams) {
       AND ($8::text[] IS NULL OR company_size = ANY($8))
       AND ($9::int  IS NULL OR product_count >= $9)
       AND ($10::int IS NULL OR page_count    >= $10)
-      AND ($11::bool IS NULL OR (email_primary IS NOT NULL AND email_primary <> ''))
-      AND ($12::text[] IS NULL OR EXISTS (
-            SELECT 1 FROM unnest($12::text[]) code
-             WHERE sic_code = code OR sic_code ILIKE '%'||code||'%'
-          ))`
+      AND ($11::bool IS NULL OR (COALESCE(NULLIF(email_primary,''), emails[1]) IS NOT NULL AND COALESCE(NULLIF(email_primary,''), emails[1]) <> ''))
+      AND ($12::text[] IS NULL OR sic_code = ANY($12))`
 
   return {
     where,

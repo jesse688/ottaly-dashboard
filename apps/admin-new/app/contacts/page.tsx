@@ -436,8 +436,14 @@ export default function DataPage() {
       }
       setEngineStagedIds(data.contact_ids)
       setPushOpen('pv')
+      const extra = [
+        data.skipped ? `${data.skipped} without email` : '',
+        data.skipped_existing_contacts
+          ? `${data.skipped_existing_contacts} already in Contacts`
+          : '',
+      ].filter(Boolean).join(', ')
       flash(
-        `Staged ${data.staged} lead(s)${data.skipped ? `, skipped ${data.skipped} without email` : ''} — verifying & pushing`,
+        `Staged ${data.staged} lead(s)${extra ? ` (skipped ${extra})` : ''} — verifying & pushing`,
         'ok',
       )
     } catch (e) {
@@ -2464,6 +2470,9 @@ function ContactDetailSheet({
   const [form, setForm] = useState<Record<string, string>>({})
   const [remote, setRemote] = useState(false)
   const [dnc, setDnc] = useState(false)
+  // Engine-browse rows are scraped, read-only, and have a synthetic id; never
+  // editable (and the route rejects writes to them).
+  const isEngineRow = !!contact && String(contact.id).startsWith('engine:')
 
   useEffect(() => {
     if (!contact) return
@@ -2481,25 +2490,35 @@ function ContactDetailSheet({
       <SheetContent className="w-[460px] sm:max-w-[460px] overflow-y-auto">
         <SheetHeader>
           <SheetTitle>{contact?.email}</SheetTitle>
-          <SheetDescription>Edit contact fields and save.</SheetDescription>
+          <SheetDescription>
+            {isEngineRow ? 'Engine lead (read-only)' : 'Edit contact fields and save.'}
+          </SheetDescription>
         </SheetHeader>
         <div className="space-y-3 py-4">
+          {isEngineRow && (
+            <div className="rounded bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">
+              Scraped engine lead — read-only. Push it via Verify &amp; Push to add it
+              to a campaign.
+            </div>
+          )}
           {EDITABLE_FIELDS.map(({ key, label }) => (
             <div key={key}>
               <Label className="text-xs text-gray-500">{label}</Label>
               <Input
                 className="h-8 mt-1"
                 value={form[key] ?? ''}
+                readOnly={isEngineRow}
+                disabled={isEngineRow}
                 onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
               />
             </div>
           ))}
           <label className="flex items-center gap-2 cursor-pointer">
-            <Checkbox checked={remote} onCheckedChange={(v) => setRemote(!!v)} />
+            <Checkbox checked={remote} disabled={isEngineRow} onCheckedChange={(v) => setRemote(!!v)} />
             <span className="text-sm">Works remote</span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer">
-            <Checkbox checked={dnc} onCheckedChange={(v) => setDnc(!!v)} />
+            <Checkbox checked={dnc} disabled={isEngineRow} onCheckedChange={(v) => setDnc(!!v)} />
             <span className="text-sm">Do not contact</span>
           </label>
 
@@ -2525,15 +2544,17 @@ function ContactDetailSheet({
         </div>
         <SheetFooter>
           <Button variant="outline" onClick={onClose}>
-            Cancel
+            {isEngineRow ? 'Close' : 'Cancel'}
           </Button>
-          <Button
-            onClick={() =>
-              onSave({ ...form, works_remote: remote, do_not_contact: dnc })
-            }
-          >
-            Save
-          </Button>
+          {!isEngineRow && (
+            <Button
+              onClick={() =>
+                onSave({ ...form, works_remote: remote, do_not_contact: dnc })
+              }
+            >
+              Save
+            </Button>
+          )}
         </SheetFooter>
       </SheetContent>
     </Sheet>

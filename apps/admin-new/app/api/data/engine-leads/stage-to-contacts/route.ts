@@ -25,24 +25,34 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    // Pull the selected engine leads.
+    // Pull the selected engine leads. "Has an email" = email_primary OR the
+    // first of emails[] — the SAME definition the list filter and browse view
+    // use, so leads shown with an email are never silently dropped here.
     const { rows } = await pool.query(
       `SELECT domain, company_name, email_primary, emails, phones, director_name,
               industry, region, company_size, linkedin_url, postcode
          FROM ottaly_engine_leads
-        WHERE domain = ANY($1) AND email_primary IS NOT NULL AND email_primary <> ''`,
+        WHERE domain = ANY($1)
+          AND (COALESCE(NULLIF(email_primary,''), emails[1]) IS NOT NULL
+               AND COALESCE(NULLIF(email_primary,''), emails[1]) <> '')`,
       [domains],
     )
 
     const ids: string[] = []
     let skipped = 0
+    let collidedExisting = 0 // emails that already exist as NON-engine contacts
     for (const r of rows) {
-      const email = String(r.email_primary || '').trim().toLowerCase()
+      const rawEmail = r.email_primary || (Array.isArray(r.emails) ? r.emails[0] : '')
+      const email = String(rawEmail || '').trim().toLowerCase()
       if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { skipped++; continue }
       const [first, ...rest] = String(r.director_name || '').trim().split(/\s+/)
       // company_size is a text bucket ("11-50"), so it does NOT map to the
       // INT num_employees column — store the company region instead and leave
       // size out to avoid a type error.
+      // RETURNING source + xmax: xmax=0 means a fresh INSERT (a real engine
+      // lead); xmax<>0 means it CONFLICTED with an existing row, whose `source`
+      // we get back. We must NOT push an existing VERIFIED (apollo/plusvibe)
+      // contact just because a scraped email matched it.
       const res = await pool.query(
         `INSERT INTO contacts
            (workspace_id, email, first_name, last_name, phone, company_name,
@@ -50,7 +60,7 @@ export async function POST(req: NextRequest) {
             job_title, status, source, imported_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'new','engine',NOW())
          ON CONFLICT (workspace_id, email) DO UPDATE SET source = contacts.source
-         RETURNING id`,
+         RETURNING id, source, (xmax = 0) AS inserted`,
         [
           workspaceId, email, first || null, rest.join(' ') || null,
           Array.isArray(r.phones) ? r.phones[0] ?? null : null,
@@ -59,10 +69,24 @@ export async function POST(req: NextRequest) {
           r.director_name ? 'Director' : null,
         ],
       )
-      if (res.rows[0]?.id) ids.push(res.rows[0].id)
+      const row = res.rows[0]
+      if (!row?.id) continue
+      // Only stage/push rows that are genuinely engine leads (freshly inserted,
+      // or an existing row already tagged 'engine'). Skip emails that collide
+      // with a real verified contact — don't re-push someone already in a campaign.
+      if (row.inserted || row.source === 'engine') {
+        ids.push(row.id)
+      } else {
+        collidedExisting++
+      }
     }
 
-    return NextResponse.json({ staged: ids.length, skipped, contact_ids: ids })
+    return NextResponse.json({
+      staged: ids.length,
+      skipped,
+      skipped_existing_contacts: collidedExisting,
+      contact_ids: ids,
+    })
   } catch (e) {
     const message = e instanceof Error ? e.message : 'Database error'
     console.error('[engine-leads/stage-to-contacts] failed:', message)
