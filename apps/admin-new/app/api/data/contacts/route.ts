@@ -22,7 +22,9 @@ async function clientExclusionClauses(
 ): Promise<{ sql: string; params: unknown[] }> {
   try {
     const base = process.env.LEGACY_API_URL ?? 'http://localhost:3000'
-    const res = await fetch(`${base}/api/client-rules/${encodeURIComponent(workspaceId)}`)
+    const res = await fetch(`${base}/api/client-rules/${encodeURIComponent(workspaceId)}`, {
+      headers: process.env.ADMIN_KEY ? { 'x-admin-key': process.env.ADMIN_KEY } : {},
+    })
     if (!res.ok) return { sql: '', params: [] }
     const data = await res.json()
     const rules = data.rules || data || {}

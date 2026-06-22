@@ -2,6 +2,10 @@ import { NextResponse } from 'next/server'
 import { cookies } from 'next/headers'
 
 const LEGACY_API = process.env.LEGACY_API_URL ?? 'http://localhost:3000'
+// Legacy authorizes requests via `x-admin-key: ADMIN_KEY` (both apps share the
+// same ADMIN_KEY env). admin-new's own session cookie is signed differently, so
+// legacy can't verify it — without this header every proxied call 401s.
+const ADMIN_KEY = process.env.ADMIN_KEY ?? ''
 
 /**
  * Proxy a request to the legacy Ottaly server, forwarding the caller's method,
@@ -33,6 +37,7 @@ export async function proxyToLegacy(
       headers: {
         'Content-Type': 'application/json',
         ...(cookieHeader ? { cookie: cookieHeader } : {}),
+        ...(ADMIN_KEY ? { 'x-admin-key': ADMIN_KEY } : {}),
       },
       body,
     })
