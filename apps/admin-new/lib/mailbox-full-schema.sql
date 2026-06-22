@@ -66,3 +66,21 @@ CREATE TABLE IF NOT EXISTS mailbox_sync_state (
   CHECK (id = 1)
 );
 INSERT INTO mailbox_sync_state (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
+-- Daily per-group (supplier or type) snapshot for trend charts. One row per
+-- (dimension, key, day); the sync upserts so multiple syncs in a day just
+-- refresh today's row. History accumulates one day at a time.
+CREATE TABLE IF NOT EXISTS mailbox_supplier_daily (
+  day         DATE NOT NULL,
+  dimension   TEXT NOT NULL,         -- 'supplier' | 'type'
+  key         TEXT NOT NULL,         -- e.g. 'Maildoso' / 'google' / 'Unassigned'
+  count       INTEGER DEFAULT 0,
+  active      INTEGER DEFAULT 0,
+  total_sent  INTEGER DEFAULT 0,
+  reply_rate  NUMERIC DEFAULT 0,
+  bounce_rate NUMERIC DEFAULT 0,
+  warmup_pct  INTEGER DEFAULT 0,
+  PRIMARY KEY (day, dimension, key)
+);
+CREATE INDEX IF NOT EXISTS idx_mbsd_dim_key_day ON mailbox_supplier_daily (dimension, key, day);
+

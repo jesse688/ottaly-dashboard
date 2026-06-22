@@ -5,7 +5,17 @@ import { PageShell } from '@/components/shell/page-shell'
 import { KpiCard } from '@/components/ui/kpi-card'
 import { DataTable, type Column } from '@/components/ui/data-table'
 import { StatusBadge, type StatusTone } from '@/components/ui/status-badge'
+import { LineChart } from '@/components/ui/themed-chart'
+import { PeriodFilter, type PeriodKey } from '@/components/ui/period-filter'
 import type { Mailbox, MailboxGroupStats, MailboxesResponse } from '@/types/mailbox'
+
+interface HistoryResponse {
+  dimension: string
+  days: string[]
+  series: Record<string, { sent: number[]; reply_rate: number[]; bounce_rate: number[] }>
+}
+const PERIOD_DAYS: Partial<Record<PeriodKey, number>> = { today: 1, '7d': 7, '14d': 14, '30d': 30 }
+const periodDays = (p: PeriodKey): number => PERIOD_DAYS[p] ?? 30
 
 const SUPPLIERS = ['Maildoso', 'Mithun', 'Winnr', 'Inboxing'] as const
 const TYPES = ['google', 'microsoft', 'smtp'] as const
@@ -44,6 +54,8 @@ export default function MailboxesPage() {
   const [err, setErr] = useState('')
   const [syncing, setSyncing] = useState(false)
   const [msg, setMsg] = useState('')
+  const [period, setPeriod] = useState<PeriodKey>('30d')
+  const [history, setHistory] = useState<HistoryResponse | null>(null)
 
   // Filters
   const [search, setSearch] = useState('')
@@ -73,6 +85,13 @@ export default function MailboxesPage() {
     }
   }, [])
   useEffect(() => { load() }, [load])
+
+  // Load supplier trend history when on the Performance tab / period changes.
+  useEffect(() => {
+    if (tab !== 'performance') return
+    fetch(`/api/mailboxes/history?dimension=supplier&days=${periodDays(period)}`)
+      .then(r => r.json()).then((d: HistoryResponse) => setHistory(d)).catch(() => setHistory(null))
+  }, [tab, period])
 
   const runSync = useCallback(async () => {
     setSyncing(true); setMsg('')
@@ -277,6 +296,34 @@ export default function MailboxesPage() {
 
       {tab === 'performance' && status !== 'error' && data && (
         <div className="space-y-6">
+          {/* Trend charts (fill in as daily snapshots accumulate) */}
+          <section>
+            <div className="mb-2 flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-foreground">Trends by supplier</h2>
+              <PeriodFilter value={period} onChange={setPeriod} />
+            </div>
+            {history && Object.keys(history.series).length > 0 && history.days.length > 1 ? (
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                <div className="rounded-lg border border-border bg-card p-3">
+                  <div className="mb-1 text-xs font-medium text-muted-foreground">Reply rate %</div>
+                  <LineChart labels={history.days} series={Object.entries(history.series).map(([k, s], i) => ({ label: k, data: s.reply_rate.map(v => v * 100), tone: (((i % 5) + 1) as 1 | 2 | 3 | 4 | 5), percent: true }))} />
+                </div>
+                <div className="rounded-lg border border-border bg-card p-3">
+                  <div className="mb-1 text-xs font-medium text-muted-foreground">Bounce rate %</div>
+                  <LineChart labels={history.days} series={Object.entries(history.series).map(([k, s], i) => ({ label: k, data: s.bounce_rate.map(v => v * 100), tone: (((i % 5) + 1) as 1 | 2 | 3 | 4 | 5), percent: true }))} />
+                </div>
+                <div className="rounded-lg border border-border bg-card p-3 lg:col-span-2">
+                  <div className="mb-1 text-xs font-medium text-muted-foreground">Total sent</div>
+                  <LineChart labels={history.days} series={Object.entries(history.series).map(([k, s], i) => ({ label: k, data: s.sent, tone: (((i % 5) + 1) as 1 | 2 | 3 | 4 | 5) }))} />
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-lg border border-border bg-card p-8 text-center text-sm text-muted-foreground">
+                Trend charts fill in as daily snapshots accumulate — check back after a few days of syncs.
+              </div>
+            )}
+          </section>
+
           <section>
             <h2 className="mb-2 text-sm font-semibold text-foreground">By supplier</h2>
             <DataTable columns={statCols} rows={data.stats.bySupplier} getRowKey={g => g.key} empty="No data." />
