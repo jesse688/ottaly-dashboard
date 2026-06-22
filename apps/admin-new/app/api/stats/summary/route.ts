@@ -92,14 +92,18 @@ export async function GET(req: NextRequest) {
     })
 
     // Leads come from revenue_leads (the FROZEN source of truth) — NOT the perf
-    // cache, which never carried lead data (all zeros). Shown ALL-TIME per
-    // workspace (a delivered lead counts regardless of the stats window; the
-    // cutover only applies to email-activity stats). Excludes non-leads.
+    // Leads counted WITHIN the selected window (revenue_leads.date is a
+    // 'YYYY-MM-DD' text column, so ISO string comparison is correct). Windowing
+    // leads keeps RTL (leads/replies) and LPT (leads/sent) on the same period as
+    // their denominators — otherwise all-time leads ÷ a one-day window inflates
+    // the ratios. Excludes non-leads.
     const leadsRes = await pool.query(
       `SELECT workspace_id, COUNT(*)::int AS n
        FROM revenue_leads
        WHERE pv_nonlead IS NOT TRUE
+         AND date >= $1 AND date <= $2
        GROUP BY workspace_id`,
+      [start, end],
     )
     const leadsByWs: Record<string, number> = {}
     ;(leadsRes.rows as Array<{ workspace_id: string; n: number }>).forEach(r => {

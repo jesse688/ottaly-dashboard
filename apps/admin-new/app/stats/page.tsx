@@ -511,7 +511,7 @@ export default function StatsPage() {
           loading={loading}
         />
         <KpiCard label="Bounce Rate" value={pct(agg?.totals.bounceRate ?? 0)} tone="red" loading={loading} />
-        <KpiCard label="Leads" value={num(agg?.totals.leads ?? 0)} sub="all-time" tone="green" loading={loading} />
+        <KpiCard label="Leads" value={num(agg?.totals.leads ?? 0)} sub="in range" tone="green" loading={loading} />
         <KpiCard label="RTL" value={dec(agg?.totals.rtl ?? 0, 0)} sub="leads / 1k replies" tone="yellow" loading={loading} />
         <KpiCard label="LPT" value={dec(agg?.totals.lpt ?? 0, 1)} sub="leads / 1k sent" tone="green" loading={loading} />
       </div>
