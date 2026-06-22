@@ -108,6 +108,9 @@ export async function GET(req: NextRequest) {
 
   try {
     const { clauses, params } = buildFilterClauses(filters)
+    // Keep scraped engine leads (staged for verify+push) OUT of the verified
+    // contacts view unless the user explicitly filters source='engine'.
+    if (!filters.source) clauses.push(`(source IS DISTINCT FROM 'engine')`)
     const where = clauses.length ? ' AND ' + clauses.join(' AND ') : ''
     const p = params.length + 2
 

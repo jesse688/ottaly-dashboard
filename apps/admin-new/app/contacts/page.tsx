@@ -217,6 +217,10 @@ export default function DataPage() {
   const [savedViews, setSavedViews] = useState<SavedView[]>([])
   const [detail, setDetail] = useState<Contact | null>(null)
   const [pushOpen, setPushOpen] = useState<null | 'pv' | 'bison'>(null)
+  // When pushing engine leads, we first stage them into contacts (source=
+  // 'engine') and push THOSE ids — engine rows aren't in the contacts table.
+  const [engineStagedIds, setEngineStagedIds] = useState<string[] | null>(null)
+  const [engineStaging, setEngineStaging] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [message, setMessage] = useState<{ text: string; kind: 'ok' | 'err' } | null>(null)
@@ -326,6 +330,39 @@ export default function DataPage() {
     },
     [queryParams]
   )
+
+  // Stage selected engine leads into contacts (source='engine'), then open the
+  // PlusVibe push modal on the returned contact ids — verify-and-push runs there.
+  const verifyAndPushEngine = useCallback(async () => {
+    const domains = [...selected]
+      .filter((id) => id.startsWith('engine:'))
+      .map((id) => id.slice('engine:'.length))
+    if (!domains.length) return
+    setEngineStaging(true)
+    try {
+      const res = await fetch('/api/data/engine-leads/stage-to-contacts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domains }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Staging failed')
+      if (!data.contact_ids?.length) {
+        flash('No engine leads with a valid email to push', 'err')
+        return
+      }
+      setEngineStagedIds(data.contact_ids)
+      setPushOpen('pv')
+      flash(
+        `Staged ${data.staged} lead(s)${data.skipped ? `, skipped ${data.skipped} without email` : ''} — verifying & pushing`,
+        'ok',
+      )
+    } catch (e) {
+      flash((e as Error).message, 'err')
+    } finally {
+      setEngineStaging(false)
+    }
+  }, [selected])
 
   // Sidebar facet counts (employee buckets + provider counts) — refresh with filters.
   useEffect(() => {
@@ -1180,9 +1217,14 @@ export default function DataPage() {
                 </Button>
               </>
             ) : (
-              <span className="text-xs text-gray-500">
-                Engine leads are read-only — export to CSV, then import to PlusVibe.
-              </span>
+              <Button
+                size="sm"
+                disabled={engineStaging}
+                className="bg-violet-600 text-white hover:bg-violet-700"
+                onClick={verifyAndPushEngine}
+              >
+                {engineStaging ? 'Staging…' : '🚀 Verify & Push to PlusVibe'}
+              </Button>
             )}
           </div>
         )}
@@ -1293,11 +1335,12 @@ export default function DataPage() {
       {pushOpen && (
         <PushModal
           mode={pushOpen}
-          contactIds={[...selected]}
+          contactIds={dataset === 'engine' ? (engineStagedIds ?? []) : [...selected]}
           excludeMicrosoft={filters.excludeMicrosoft === 'true'}
-          onClose={() => setPushOpen(null)}
+          onClose={() => { setPushOpen(null); setEngineStagedIds(null) }}
           onDone={() => {
             setPushOpen(null)
+            setEngineStagedIds(null)
             setSelected(new Set())
           }}
           flash={flash}
