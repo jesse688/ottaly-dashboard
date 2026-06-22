@@ -1110,7 +1110,17 @@ export default function DataPage() {
               }
               className="w-60"
             >
-              <div className="px-2 py-1 text-xs font-semibold text-gray-500">Select matching contacts</div>
+              <div className="px-2 py-1 text-xs font-semibold text-gray-500">
+                Select matching {dataset === 'engine' ? 'leads' : 'contacts'}
+              </div>
+              <div className="my-1 border-t border-gray-100" />
+              {/* Select all matching the current filters */}
+              <button
+                className="block w-full rounded px-2 py-1 text-left text-sm font-medium text-blue-700 hover:bg-blue-50"
+                onClick={() => bulkSelect(total, 0)}
+              >
+                Select all {total.toLocaleString()}
+              </button>
               <div className="my-1 border-t border-gray-100" />
               {[250, 500, 1000, 1500, 5000].map((n) => (
                 <button
@@ -1121,24 +1131,30 @@ export default function DataPage() {
                   Top {n.toLocaleString()}
                 </button>
               ))}
-              <div className="my-1 border-t border-gray-100" />
-              <div className="px-2 py-1 text-[11px] text-gray-500">Capped per company</div>
-              {([[1000, 1], [1500, 2], [5000, 3]] as [number, number][]).map(([n, cap]) => (
-                <button
-                  key={`${n}-${cap}`}
-                  className="block w-full rounded px-2 py-1 text-left text-sm hover:bg-gray-100"
-                  onClick={() => bulkSelect(n, cap)}
-                >
-                  {n.toLocaleString()} · max {cap}/company
-                </button>
-              ))}
+              {dataset === 'contacts' && (
+                <>
+                  <div className="my-1 border-t border-gray-100" />
+                  <div className="px-2 py-1 text-[11px] text-gray-500">Capped per company</div>
+                  {([[1000, 1], [1500, 2], [5000, 3]] as [number, number][]).map(([n, cap]) => (
+                    <button
+                      key={`${n}-${cap}`}
+                      className="block w-full rounded px-2 py-1 text-left text-sm hover:bg-gray-100"
+                      onClick={() => bulkSelect(n, cap)}
+                    >
+                      {n.toLocaleString()} · max {cap}/company
+                    </button>
+                  ))}
+                </>
+              )}
               <div className="my-1 border-t border-gray-100" />
               <button
                 className="block w-full rounded px-2 py-1 text-left text-sm hover:bg-gray-100"
                 onClick={() => {
                   const n = parseInt(window.prompt('How many to select?', '2000') || '0', 10)
                   if (n > 0) {
-                    const cap = parseInt(window.prompt('Max per company? (0 = no cap)', '0') || '0', 10)
+                    const cap = dataset === 'contacts'
+                      ? parseInt(window.prompt('Max per company? (0 = no cap)', '0') || '0', 10)
+                      : 0
                     bulkSelect(n, Math.max(0, cap))
                   }
                 }}

@@ -131,7 +131,8 @@ export async function GET(req: NextRequest) {
   // Engine-leads dataset: browse ottaly_engine_leads in the Contacts UI.
   if (sp.get('dataset') === 'engine') {
     try {
-      const { contacts, total } = await engineLeadsAsContacts(sp, Math.min(limit, 200), offset)
+      // Allow large limits for bulk-select (Select all/N); default page is 50.
+      const { contacts, total } = await engineLeadsAsContacts(sp, Math.min(limit, 50000), offset)
       return NextResponse.json({ contacts, total, limit, offset })
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Database error'
