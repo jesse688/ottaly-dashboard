@@ -49,7 +49,11 @@ export async function POST(req: NextRequest) {
     // Join it so the CH lookup can use a company-name fallback when no number.
     `SELECT u.id, u.workspace_id, u.lead_email, u.matched_lead_email, u.lead_bison_id,
             l.company_name AS reply_company,
-            COALESCE(u.raw->>'html_body', u.raw->>'text_body') AS body
+            -- PV-reconciler rows nest the body at raw.body.html/.text; Bison rows
+            -- use raw.html_body/.text_body. (enrichUniboxReply also falls back to
+            -- portal_emails when this is empty, so signatures are never missed.)
+            COALESCE(NULLIF(u.raw->'body'->>'html',''), NULLIF(u.raw->'body'->>'text',''),
+                     u.raw->>'html_body', u.raw->>'text_body') AS body
        FROM unibox_replies u
        LEFT JOIN LATERAL (
          SELECT company_name FROM esp_leads e
