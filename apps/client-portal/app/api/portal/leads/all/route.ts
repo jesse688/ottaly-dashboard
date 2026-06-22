@@ -41,17 +41,19 @@ export async function GET() {
     const res = await pool.query(
       `SELECT l.id, l.email,
               -- Name fallback: the chosen (Bison) row sometimes has a blank name
-              -- while the sibling PlusVibe row for the SAME email carries it. Fill
-              -- first/last name from any same-email row in the workspace when this
-              -- row's is empty, so the dashboard + CSV show a real name.
+              -- while the sibling PlusVibe row for the SAME email carries it. The
+              -- sibling can live under a DIFFERENT workspace_id (a lead migrated
+              -- PV→Bison keeps its old PV workspace), so match on EMAIL ONLY — not
+              -- workspace — or the name is never found. Fill first/last name from
+              -- any same-email row when this row's is empty.
               COALESCE(NULLIF(btrim(l.first_name),''),
                        (SELECT NULLIF(btrim(s.first_name),'') FROM esp_leads s
-                         WHERE s.workspace_id = l.workspace_id AND lower(s.email)=lower(l.email)
+                         WHERE lower(s.email)=lower(l.email)
                            AND NULLIF(btrim(s.first_name),'') IS NOT NULL
                          ORDER BY s.updated_at DESC LIMIT 1)) AS first_name,
               COALESCE(NULLIF(btrim(l.last_name),''),
                        (SELECT NULLIF(btrim(s.last_name),'') FROM esp_leads s
-                         WHERE s.workspace_id = l.workspace_id AND lower(s.email)=lower(l.email)
+                         WHERE lower(s.email)=lower(l.email)
                            AND NULLIF(btrim(s.last_name),'') IS NOT NULL
                          ORDER BY s.updated_at DESC LIMIT 1)) AS last_name,
               l.company_name,
