@@ -5,12 +5,17 @@ import pool from '@/lib/db'
 // data engine promotes into prod. Table grows 24/7, so always paginate.
 // Shared helper kept in sync with the export route.
 export function buildEngineLeadsFilter(p: URLSearchParams) {
-  // source/show are exact-match (drop-down values); the rest are ILIKE.
-  const source = (p.get('source') || '').trim() || null
-  const show = (p.get('show') || '').trim() || null
-  const industry = (p.get('industry') || '').trim() || null
-  const region = (p.get('region') || '').trim() || null
-  const platform = (p.get('platform') || '').trim() || null
+  // source/show/industry/region/platform are multi-select dropdown values:
+  // comma-separated → exact match against ANY of the selected values.
+  const list = (key: string): string[] | null => {
+    const v = (p.get(key) || '').split(',').map((s) => s.trim()).filter(Boolean)
+    return v.length ? v : null
+  }
+  const source = list('source')
+  const show = list('show')
+  const industry = list('industry')
+  const region = list('region')
+  const platform = list('platform')
   const search = (p.get('search') || '').trim() || null
 
   // has_products: 'true' | 'false' | anything-else => no filter (null)
@@ -19,12 +24,12 @@ export function buildEngineLeadsFilter(p: URLSearchParams) {
   if (p.get('has_products') === 'false') hasProducts = false
 
   const where = `
-    WHERE ($1::text IS NULL OR source = $1)
-      AND ($2::text IS NULL OR show = $2)
-      AND ($3::text IS NULL OR industry ILIKE '%'||$3||'%')
-      AND ($4::text IS NULL OR region   ILIKE '%'||$4||'%')
-      AND ($5::bool IS NULL OR has_products = $5)
-      AND ($6::text IS NULL OR platform ILIKE '%'||$6||'%')
+    WHERE ($1::text[] IS NULL OR source   = ANY($1))
+      AND ($2::text[] IS NULL OR show     = ANY($2))
+      AND ($3::text[] IS NULL OR industry = ANY($3))
+      AND ($4::text[] IS NULL OR region   = ANY($4))
+      AND ($5::bool  IS NULL OR has_products = $5)
+      AND ($6::text[] IS NULL OR platform = ANY($6))
       AND ($7::text IS NULL OR domain ILIKE '%'||$7||'%' OR company_name ILIKE '%'||$7||'%')`
 
   return { where, params: [source, show, industry, region, hasProducts, platform, search] }

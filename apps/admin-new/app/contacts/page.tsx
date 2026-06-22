@@ -741,19 +741,19 @@ export default function DataPage() {
           </div>
           {dataset === 'engine' ? (
             <div className="p-3 space-y-4">
-              <EngineSelect
+              <EngineMultiSelect
                 field="industry"
                 label="Industry"
                 value={engineIndustry}
                 onChange={(v) => { setEngineIndustry(v); setPage(0) }}
               />
-              <EngineSelect
+              <EngineMultiSelect
                 field="region"
                 label="Region"
                 value={engineRegion}
                 onChange={(v) => { setEngineRegion(v); setPage(0) }}
               />
-              <EngineSelect
+              <EngineMultiSelect
                 field="platform"
                 label="Platform"
                 value={enginePlatform}
@@ -871,18 +871,16 @@ export default function DataPage() {
             <Badge variant="secondary">{total.toLocaleString()} total</Badge>
             {dataset === 'engine' && (
               <>
-                <Select value={engineSource || 'any'} onValueChange={(v) => { setEngineSource(v && v !== 'any' ? v : ''); setPage(0) }}>
-                  <SelectTrigger className="h-8 w-44"><SelectValue placeholder="Source" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="any">All sources</SelectItem>
-                    <SelectItem value="exhibition">Exhibition</SelectItem>
-                    <SelectItem value="cqc_care">CQC Care</SelectItem>
-                    <SelectItem value="school">School</SelectItem>
-                    <SelectItem value="companies_house">Companies House</SelectItem>
-                  </SelectContent>
-                </Select>
+                <div className="w-44">
+                  <EngineMultiSelect
+                    field="source"
+                    label="Source"
+                    value={engineSource}
+                    onChange={(v) => { setEngineSource(v); setPage(0) }}
+                  />
+                </div>
                 <div className="w-48">
-                  <EngineSelect
+                  <EngineMultiSelect
                     field="show"
                     label="Show"
                     value={engineShow}
@@ -1482,9 +1480,10 @@ function Popover({
   )
 }
 
-// Dropdown whose options are the real distinct values of an engine-leads
-// column (industry/region/platform/show), loaded with counts on first open.
-function EngineSelect({
+// Searchable, multi-select dropdown over the real distinct values of an
+// engine-leads column (industry/region/platform/show), with counts. The
+// selection is a comma-separated string; the engine API matches ANY of them.
+function EngineMultiSelect({
   field,
   label,
   value,
@@ -1492,11 +1491,18 @@ function EngineSelect({
 }: {
   field: string
   label: string
-  value: string
+  value: string // comma-separated
   onChange: (v: string) => void
 }) {
   const [opts, setOpts] = useState<{ value: string; count: number }[]>([])
   const [loaded, setLoaded] = useState(false)
+  const [query, setQuery] = useState('')
+  const [open, setOpen] = useState(false)
+
+  const selected = value.split(',').map((s) => s.trim()).filter(Boolean)
+  const has = (v: string) => selected.includes(v)
+  const toggle = (v: string) =>
+    onChange((has(v) ? selected.filter((x) => x !== v) : [...selected, v]).join(','))
 
   const load = useCallback(async () => {
     if (loaded) return
@@ -1511,27 +1517,57 @@ function EngineSelect({
     }
   }, [field, loaded])
 
+  const q = query.trim().toLowerCase()
+  const shown = (q ? opts.filter((o) => o.value.toLowerCase().includes(q)) : opts).slice(0, 100)
+
   return (
     <div>
       <Label className="text-xs text-gray-500">{label}</Label>
-      <Select
-        value={value || '__any'}
-        onOpenChange={(open) => open && load()}
-        onValueChange={(v) => onChange(v && v !== '__any' ? v : '')}
-      >
-        <SelectTrigger className="h-8 mt-1">
-          <SelectValue placeholder={`Any ${label.toLowerCase()}`} />
-        </SelectTrigger>
-        <SelectContent className="max-h-72">
-          <SelectItem value="__any">Any {label.toLowerCase()}</SelectItem>
-          {opts.map((o) => (
-            <SelectItem key={o.value} value={o.value}>
-              {o.value}{' '}
-              <span className="text-gray-400">· {o.count.toLocaleString()}</span>
-            </SelectItem>
+      {selected.length > 0 && (
+        <div className="mt-1 flex flex-wrap gap-1">
+          {selected.map((v) => (
+            <button
+              key={v}
+              onClick={() => toggle(v)}
+              className="inline-flex items-center gap-1 rounded bg-blue-100 px-1.5 py-0.5 text-[11px] text-blue-800 hover:bg-blue-200"
+              title="Remove"
+            >
+              {v} <span className="text-blue-500">×</span>
+            </button>
           ))}
-        </SelectContent>
-      </Select>
+        </div>
+      )}
+      <div className="relative">
+        <Input
+          className="h-8 mt-1"
+          placeholder={`Search ${label.toLowerCase()}…`}
+          value={query}
+          onFocus={() => { setOpen(true); load() }}
+          onChange={(e) => { setQuery(e.target.value); setOpen(true); load() }}
+          onBlur={() => setTimeout(() => setOpen(false), 150)}
+        />
+        {open && (
+          <div className="absolute z-30 mt-1 max-h-64 w-full overflow-y-auto rounded-md border border-gray-200 bg-white text-sm shadow-lg">
+            {!loaded && <div className="px-2 py-1.5 text-xs text-gray-400">Loading…</div>}
+            {loaded && shown.length === 0 && (
+              <div className="px-2 py-1.5 text-xs text-gray-400">No matches</div>
+            )}
+            {shown.map((o) => (
+              <button
+                key={o.value}
+                onMouseDown={(e) => { e.preventDefault(); toggle(o.value) }}
+                className={cn(
+                  'flex w-full items-center justify-between gap-2 px-2 py-1.5 text-left hover:bg-gray-100',
+                  has(o.value) && 'bg-blue-50',
+                )}
+              >
+                <span className="truncate">{o.value}</span>
+                <span className="shrink-0 text-xs text-gray-400">{o.count.toLocaleString()}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
