@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import pool, { ready } from '@/lib/db'
 import { getAdminSession } from '@/lib/auth'
-import { enrichLeadFromContacts, applyCHRundownToLead } from '@/lib/enrich'
+import { enrichLeadFromContacts, applyCHRundownToLead, enrichUniboxReply } from '@/lib/enrich'
 
 // Admin marks a Unibox reply as an "Info" lead: a near-lead that's worth showing
 // the client but that we CANNOT charge for. It is pushed to the client dashboard
@@ -128,6 +128,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // CH rundown so the Info lead shows full company data to the client. NO
     // billing, NO Bison tag, NO blocklist — Info is not a conversion.
     if (leadRowId && reply.lead_email) {
+      // Extract everything from the lead's own signature (phone, title, website,
+      // LinkedIn, company) first, then fill gaps from contacts + CH.
+      await enrichUniboxReply({
+        uniboxId: reply.id, workspaceId: reply.workspace_id, email: reply.lead_email,
+        leadBisonId: leadRowId, body: reply.reply_html ?? reply.reply_text,
+      }).catch(() => {})
       await enrichLeadFromContacts(leadRowId, reply.workspace_id, reply.lead_email).catch(() => {})
       await applyCHRundownToLead(leadRowId, reply.workspace_id, id).catch(() => {})
     }

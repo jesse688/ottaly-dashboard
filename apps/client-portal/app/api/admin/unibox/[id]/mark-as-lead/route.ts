@@ -4,7 +4,7 @@ import { getAdminSession } from '@/lib/auth'
 import { reconcileLeadCharges } from '@/lib/balance'
 import { addToBlocklist, bisonTeamForWorkspace, tagInBison } from '@/lib/bison'
 import { notifyClientOfLead } from '@/lib/email'
-import { enrichLeadFromContacts, applyCHRundownToLead } from '@/lib/enrich'
+import { enrichLeadFromContacts, applyCHRundownToLead, enrichUniboxReply } from '@/lib/enrich'
 
 // Admin marks a Unibox reply as a real lead. This is the ONLY path that sets
 // esp_leads.label='INTERESTED' (which reconcileLeadCharges keys on to bill the
@@ -114,7 +114,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       // Enrich from our contacts DB (linkedin/industry/location/etc. we never sent to
       // Bison) now that it's a lead. Best-effort, after commit.
       if (reply.workspace_id && reply.lead_email) {
-        await enrichLeadFromContacts(reply.lead_bison_id || `manual_${reply.id}`, reply.workspace_id, reply.lead_email).catch(() => {})
+        const healLeadId = reply.lead_bison_id || `manual_${reply.id}`
+        await enrichUniboxReply({
+          uniboxId: reply.id, workspaceId: reply.workspace_id, email: reply.lead_email,
+          leadBisonId: healLeadId, body: reply.reply_html ?? reply.reply_text,
+        }).catch(() => {})
+        await enrichLeadFromContacts(healLeadId, reply.workspace_id, reply.lead_email).catch(() => {})
+        await applyCHRundownToLead(healLeadId, reply.workspace_id, id).catch(() => {})
       }
       // Re-bill in case the original mark predated cost_per_lead / the lead row.
       const c = await pool.query(
@@ -210,9 +216,19 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // address, seniority, phone) we have on this email but never pushed to Bison, now
     // that it's an interested lead. Best-effort, after commit.
     if (leadRowId && pvWorkspaceId && reply.lead_email) {
+      // 1) Extract everything from the lead's OWN signature (phone, title,
+      //    website, LinkedIn, company) — the freshest source. PV-reconciler leads
+      //    never hit the webhook intake that normally does this, so run it here.
+      await enrichUniboxReply({
+        uniboxId: reply.id,
+        workspaceId: pvWorkspaceId,
+        email: reply.lead_email,
+        leadBisonId: leadRowId,
+        body: reply.reply_html ?? reply.reply_text,
+      }).catch(() => {})
+      // 2) Fill any remaining gaps from our contacts DB.
       await enrichLeadFromContacts(leadRowId, pvWorkspaceId, reply.lead_email).catch(() => {})
-      // Push the verified Companies House rundown (captured at intake) onto the
-      // lead so the client sees the full company breakdown.
+      // 3) Push the verified Companies House rundown onto the lead.
       await applyCHRundownToLead(leadRowId, pvWorkspaceId, id).catch(() => {})
     }
 
