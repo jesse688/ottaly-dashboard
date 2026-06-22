@@ -31,14 +31,6 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
-import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 
 // ── Types ─────────────────────────────────────────────────────────────────
 type Contact = {
@@ -835,14 +827,15 @@ export default function DataPage() {
               Filters{activeFilterCount ? ` (${activeFilterCount})` : ''}
             </Button>
             {/* Column picker */}
-            <DropdownMenu>
-              <DropdownMenuTrigger render={<Button variant="outline">Columns</Button>} />
-              <DropdownMenuContent className="max-h-80 overflow-y-auto w-56">
-                <DropdownMenuLabel>Columns</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {ALL_COLUMNS.map((c) => (
-                  <DropdownMenuCheckboxItem
-                    key={c.key}
+            <Popover trigger={<Button variant="outline">Columns</Button>} className="max-h-80 w-56 overflow-y-auto">
+              <div className="px-2 py-1 text-xs font-semibold text-gray-500">Columns</div>
+              <div className="my-1 border-t border-gray-100" />
+              {ALL_COLUMNS.map((c) => (
+                <label
+                  key={c.key}
+                  className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm hover:bg-gray-100"
+                >
+                  <Checkbox
                     checked={visibleCols.has(c.key)}
                     onCheckedChange={() =>
                       setVisibleCols((prev) => {
@@ -851,66 +844,56 @@ export default function DataPage() {
                         return next
                       })
                     }
-                    onSelect={(e) => e.preventDefault()}
-                  >
-                    {c.label}
-                  </DropdownMenuCheckboxItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
+                  />
+                  {c.label}
+                </label>
+              ))}
+            </Popover>
             {/* Bulk select across all matches (Apollo-style) */}
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                render={
-                  <Button variant="outline" disabled={bulkBusy}>
-                    {bulkBusy ? 'Selecting…' : `Select… (of ${total.toLocaleString()})`}
-                  </Button>
-                }
-              />
-              <DropdownMenuContent className="w-60">
-                <DropdownMenuLabel>Select matching contacts</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {[250, 500, 1000, 1500, 5000].map((n) => (
-                  <DropdownMenuCheckboxItem
-                    key={n}
-                    checked={false}
-                    onSelect={() => bulkSelect(n, 0)}
-                  >
-                    Top {n.toLocaleString()}
-                  </DropdownMenuCheckboxItem>
-                ))}
-                <DropdownMenuSeparator />
-                <DropdownMenuLabel className="text-xs font-normal text-gray-500">
-                  Capped per company
-                </DropdownMenuLabel>
-                {[
-                  [1000, 1],
-                  [1500, 2],
-                  [5000, 3],
-                ].map(([n, cap]) => (
-                  <DropdownMenuCheckboxItem
-                    key={`${n}-${cap}`}
-                    checked={false}
-                    onSelect={() => bulkSelect(n, cap)}
-                  >
-                    {n.toLocaleString()} · max {cap}/company
-                  </DropdownMenuCheckboxItem>
-                ))}
-                <DropdownMenuSeparator />
-                <DropdownMenuCheckboxItem
-                  checked={false}
-                  onSelect={() => {
-                    const n = parseInt(window.prompt('How many to select?', '2000') || '0', 10)
-                    if (n > 0) {
-                      const cap = parseInt(window.prompt('Max per company? (0 = no cap)', '0') || '0', 10)
-                      bulkSelect(n, Math.max(0, cap))
-                    }
-                  }}
+            <Popover
+              trigger={
+                <Button variant="outline" disabled={bulkBusy}>
+                  {bulkBusy ? 'Selecting…' : `Select… (of ${total.toLocaleString()})`}
+                </Button>
+              }
+              className="w-60"
+            >
+              <div className="px-2 py-1 text-xs font-semibold text-gray-500">Select matching contacts</div>
+              <div className="my-1 border-t border-gray-100" />
+              {[250, 500, 1000, 1500, 5000].map((n) => (
+                <button
+                  key={n}
+                  className="block w-full rounded px-2 py-1 text-left text-sm hover:bg-gray-100"
+                  onClick={() => bulkSelect(n, 0)}
                 >
-                  Custom…
-                </DropdownMenuCheckboxItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+                  Top {n.toLocaleString()}
+                </button>
+              ))}
+              <div className="my-1 border-t border-gray-100" />
+              <div className="px-2 py-1 text-[11px] text-gray-500">Capped per company</div>
+              {([[1000, 1], [1500, 2], [5000, 3]] as [number, number][]).map(([n, cap]) => (
+                <button
+                  key={`${n}-${cap}`}
+                  className="block w-full rounded px-2 py-1 text-left text-sm hover:bg-gray-100"
+                  onClick={() => bulkSelect(n, cap)}
+                >
+                  {n.toLocaleString()} · max {cap}/company
+                </button>
+              ))}
+              <div className="my-1 border-t border-gray-100" />
+              <button
+                className="block w-full rounded px-2 py-1 text-left text-sm hover:bg-gray-100"
+                onClick={() => {
+                  const n = parseInt(window.prompt('How many to select?', '2000') || '0', 10)
+                  if (n > 0) {
+                    const cap = parseInt(window.prompt('Max per company? (0 = no cap)', '0') || '0', 10)
+                    bulkSelect(n, Math.max(0, cap))
+                  }
+                }}
+              >
+                Custom…
+              </button>
+            </Popover>
             {/* MX provider verification */}
             <Button variant="outline" disabled={mxRunning} onClick={startMxScan}>
               {mxRunning ? '🔍 Verifying…' : '🔍 Verify Providers'}
@@ -1339,6 +1322,47 @@ function safeParse(s: string): any[] {
 // ── Filter panel ────────────────────────────────────────────────────────────
 // Free-text comma-separated filter input. Uncontrolled (defaultValue + onBlur)
 // so typing never re-runs a search until you leave the field / press Enter.
+// Lightweight click-outside popover — replaces the Base UI DropdownMenu, which
+// crashed on open (Radix-style onSelect props aren't supported by Base UI's
+// menu). Self-contained: a trigger button + an absolutely-positioned panel.
+function Popover({
+  trigger,
+  children,
+  className,
+}: {
+  trigger: React.ReactNode
+  children: React.ReactNode
+  className?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [open])
+
+  return (
+    <div className="relative inline-block" ref={ref}>
+      <div onClick={() => setOpen((o) => !o)}>{trigger}</div>
+      {open && (
+        <div
+          className={cn(
+            'absolute left-0 top-full z-50 mt-1 rounded-lg border border-gray-200 bg-white p-1 shadow-lg',
+            className,
+          )}
+        >
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function FilterText({
   filters,
   setF,
