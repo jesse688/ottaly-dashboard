@@ -2,7 +2,7 @@ import { type NextRequest, NextResponse } from 'next/server'
 import * as Sentry from '@sentry/nextjs'
 import pool from '@/lib/db'
 import { getActiveWorkspaceIds } from '@/lib/active-clients'
-import '@/lib/cache-warming' // Initialize cache warming on first import
+import { warmDates } from '@/lib/cache-warming' // on-demand fresh cache per view
 
 interface DayData {
   date: string
@@ -76,6 +76,21 @@ export async function GET(req: NextRequest) {
     const activeIds = await getActiveWorkspaceIds()
     if (activeIds) {
       workspaceList = workspaceList.filter(w => activeIds.has(w.workspace_id))
+    }
+
+    // Freshen the cache for the requested window before reading it. TTL-guarded
+    // (today = 5 min), so this only calls PlusVibe when a row is actually stale.
+    // Capped at 31 days so huge ranges don't fan out to hundreds of PV calls in
+    // one request (older rows have a 12h TTL and warm via the background pass).
+    {
+      const warmList: string[] = []
+      const c = new Date(start + 'T00:00:00Z')
+      const e = new Date(end + 'T00:00:00Z')
+      while (c <= e && warmList.length < 31) {
+        warmList.push(c.toISOString().slice(0, 10))
+        c.setUTCDate(c.getUTCDate() + 1)
+      }
+      await warmDates(warmList)
     }
 
     // Query perf_cache_daily for the date range

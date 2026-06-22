@@ -138,6 +138,19 @@ async function ensurePerfCacheDaily(wsIds: string[], dates: string[]): Promise<v
   }
 }
 
+// On-demand warm for a specific set of dates (TTL-guarded inside
+// ensurePerfCacheDaily, so calling it per stats request is cheap and only hits
+// PlusVibe when a row is stale). Used by the summary route so stats are fresh
+// even if the background interval doesn't survive the serverless runtime.
+export async function warmDates(dates: string[]): Promise<void> {
+  try {
+    const wsIds = await getActiveWorkspaces()
+    if (wsIds.length) await ensurePerfCacheDaily(wsIds, dates)
+  } catch (err) {
+    console.error('[cache-warming] warmDates failed:', err instanceof Error ? err.message : err)
+  }
+}
+
 export async function warmPerformanceCache(): Promise<void> {
   try {
     const wsIds = await getActiveWorkspaces()
