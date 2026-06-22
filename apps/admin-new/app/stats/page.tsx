@@ -90,14 +90,13 @@ const isPercent = (s: SeriesKey) =>
 
 function seriesValue(s: SeriesKey, d: DayData): number | null {
   const sent = d.sent || 0
-  // `replies` is PV's total_reply_count (ALL replies, INCLUDING OOO).
-  // `ooo` is the OOO subset. Human replies = total − OOO.
+  // Legacy convention: `replies` (total_reply_count) is the HUMAN/non-OOO count;
+  // `ooo` is a separate additive bucket. Human RR = replies/sent.
   const replies = d.replies || 0
   const ooo = d.oooReplies || 0
-  const human = Math.max(0, replies - ooo)
   switch (s) {
     case 'humanRR':
-      return sent > 0 ? +((human / sent) * 100).toFixed(2) : null
+      return sent > 0 ? +((replies / sent) * 100).toFixed(2) : null
     case 'oooRR':
       return sent > 0 ? +((ooo / sent) * 100).toFixed(2) : null
     case 'bounceRate':
@@ -172,10 +171,10 @@ function buildAllWorkspaces(list: Workspace[]): Workspace | null {
     name: `All Workspaces (${list.length})`,
     totals: {
       ...t,
-      // Human RR = (total replies − OOO) / sent; OOO is a subset of t.replies.
-      replyRate: t.sent > 0 ? Math.max(0, t.replies - t.oooReplies) / t.sent : 0,
-      // Reply Rate (all) = total replies / sent (replies already includes OOO).
-      allReplyRate: t.sent > 0 ? t.replies / t.sent : 0,
+      // Human RR = replies/sent (replies is the human/non-OOO count); Reply Rate
+      // (all) adds the separate OOO bucket. Matches legacy stats/performance.
+      replyRate: t.sent > 0 ? t.replies / t.sent : 0,
+      allReplyRate: t.sent > 0 ? (t.replies + t.oooReplies) / t.sent : 0,
       bounceRate: t.sent > 0 ? t.bounces / t.sent : 0,
       // RTL = Replies-To-Lead: replies needed per lead (replies ÷ leads).
       rtl: t.leads > 0 ? t.replies / t.leads : 0,

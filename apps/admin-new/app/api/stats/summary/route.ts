@@ -158,16 +158,14 @@ export async function GET(req: NextRequest) {
         name: ws.workspace_name || ws.workspace_id,
         totals: {
           ...totals,
-          // PV's `replies` (total_reply_count) is ALL replies INCLUDING OOO;
-          // `oooReplies` (total_ooo_reply_count) is the OOO subset of that total.
-          // Human Reply Rate = genuine human replies = (total − OOO) / sent.
-          replyRate:
-            totals.sent > 0
-              ? Math.max(0, totals.replies - totals.oooReplies) / totals.sent
-              : 0,
-          // Reply Rate (all): human + OOO. That is simply PV's total reply count
-          // (do NOT add oooReplies again — it is already part of `replies`).
-          allReplyRate: totals.sent > 0 ? totals.replies / totals.sent : 0,
+          // Legacy convention (stats.html / performance.html, in prod for ages):
+          // PV's `replies` (total_reply_count) is the HUMAN / non-OOO count;
+          // `oooReplies` is a SEPARATE additive bucket. So:
+          //   Human RR        = replies / sent
+          //   Reply Rate(all) = (replies + ooo) / sent
+          replyRate: totals.sent > 0 ? totals.replies / totals.sent : 0,
+          allReplyRate:
+            totals.sent > 0 ? (totals.replies + totals.oooReplies) / totals.sent : 0,
           bounceRate: totals.sent > 0 ? totals.bounces / totals.sent : 0,
           // RTL = Replies-To-Lead: how many replies it took to land one lead
           // (replies ÷ leads). Lower is better. 0 leads → no ratio yet.
