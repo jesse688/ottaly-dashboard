@@ -29,21 +29,32 @@ export const CATEGORIES: ReplyCategory[] = [
 
 // Warm-up emails are sent automatically between inboxes to build sending
 // reputation. They are NOT real prospect replies — they must never reach the
-// inbox or cost a Gemini call. The tell-tale signature in OUR data is a RANDOM
-// HYPHENATED WORD-PAIR injected into otherwise-normal prose — two unrelated words
-// joined by a hyphen, e.g. "rapid-provision survived", "genuine-bright awesome",
-// "skill-champ pumped", "climate-sufficient week". (Also the literal "warmup"
-// markers + common tool names.) We allowlist genuine compounds so real replies
-// ("award-winning", "eco-friendly", "next-gen") are never mis-flagged.
-// Bison's warmup tell: a repeated word token injected INLINE into prose
-// ("apple apple"). Must be SAME-LINE (a single space/tab/underscore between the
-// two copies) — earlier this allowed any whitespace incl. newlines, which matched
-// ordinary sign-offs that put a first name then a full name on separate lines
-// ("Simon\n\nSimon Cook") and buried real interested replies in the warm-up
-// folder. We rely on Bison to filter its own warmup; this is only a safety net,
-// so keeping it strict is correct — the authoritative filter is the PV/Bison
-// warmup TAGS below (unique random word-pairs, zero false positives).
-const BISON_WARMUP = /\b([a-z]{3,})[ \t_]+\1\b/i
+// inbox or cost a Gemini call.
+//
+// We are PlusVibe-only now (EmailBison is retired). The ONLY warm-up signal we
+// trust is PlusVibe's injected `warmup_custom_words` TAG (a unique random
+// word-pair, e.g. "removal-thirty") baked into every warm-up body — see the tag
+// regex below. It cannot collide with real prose, so it has zero false positives.
+//
+// We DELIBERATELY no longer use the old Bison "repeated word token" heuristic
+// (`/\b(word)\s+\1\b/`): it matched ordinary sign-offs that repeat a name across
+// lines ("Simon\n\nSimon Cook") and silently buried genuine interested replies in
+// the warm-up folder. A heuristic that loses real leads is worse than no
+// heuristic — anything without a PV tag now goes to the AI classifier instead.
+
+// ── PlusVibe warm-up FILTER TAGS ─────────────────────────────────────────────
+// PlusVibe injects a unique per-mailbox `warmup_custom_words` tag into every
+// warm-up email body. A reply containing one is warm-up — deterministic, no AI.
+// The FULL list of ~1900 PV tags is baked in (pv-warmup-tags.ts) so there is ZERO
+// runtime PV API dependency. One static regex, compiled once. Tags are unique
+// random word-pairs, so no false positives on real replies.
+import { PV_WARMUP_TAGS } from './pv-warmup-tags'
+
+const _escWarm = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const WARMUP_TAG_RE: RegExp | null = (() => {
+  const alts = PV_WARMUP_TAGS.map(t => t.split(/[\s\-_]+/).map(_escWarm).join('[\\s\\-_]+'))
+  return alts.length ? new RegExp(`(?:^|[^a-z0-9])(${alts.join('|')})(?:[^a-z0-9]|$)`, 'i') : null
+})()
 
 export interface WarmupSignals {
   subject?: string
@@ -53,53 +64,27 @@ export interface WarmupSignals {
   isForwarded?: boolean
 }
 
-// Trust Bison's warmup filtering. Only catch the repeated-word token Bison
-// injects ("apple apple") as a safety net — everything else goes to Gemini.
-export function detectWarmup(s: WarmupSignals): { isWarmup: boolean; reason: string } {
-  const hay = `${s.subject ?? ''}\n${s.bodyText ?? ''}`
-  if (BISON_WARMUP.test(hay)) {
-    return { isWarmup: true, reason: 'bison repeated-word token' }
+function matchWarmupTag(hay: string): { isWarmup: boolean; reason: string } {
+  if (WARMUP_TAG_RE && WARMUP_TAG_RE.test(hay)) {
+    return { isWarmup: true, reason: 'PV warmup filter tag' }
   }
   return { isWarmup: false, reason: '' }
 }
 
-// ── PlusVibe / EmailBison warm-up FILTER TAGS ────────────────────────────────
-// PlusVibe injects a unique per-mailbox `warmup_custom_words` tag (e.g.
-// "removal-thirty") into every warm-up email body; EmailBison used a per-workspace
-// code. A reply containing one is a warm-up — deterministic, no AI. The FULL list
-// of ~1900 PV tags is baked in (pv-warmup-tags.ts) so there is ZERO runtime PV
-// API dependency: fetching them live timed out / silently missed tags, which let
-// warm-ups reach Gemini and come back "interested". One static regex, compiled
-// once. Tags are unique random word-pairs, so no false positives on real replies.
-import { PV_WARMUP_TAGS } from './pv-warmup-tags'
+// Warm-up detection = PV tag match ONLY. No heuristics. Anything else is a real
+// reply and goes to the AI classifier.
+export function detectWarmup(s: WarmupSignals): { isWarmup: boolean; reason: string } {
+  return matchWarmupTag(`${s.subject ?? ''}\n${s.bodyText ?? ''}`)
+}
 
-const _escWarm = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-const BISON_WARMUP_CODES = [
-  'tc5odbtm','sk85oa7k','0e24psnp','eucrj0hz','rndyajpa','ahy9frqv','xzvjsvdu',
-  'dvyu4kdr','uiizjrlh','d1ymr6mx','n9qrgswv','raftziqa','qlctqsof','rcduzjkl',
-  '13aqstcm','op7as3ft','ht8jbwh2','gdf6uvrl','dau5wphh','antm9hol','9jbxm636',
-  '8k5natot','sdwgchhk','ss4me0qc','oly08aoy',
-]
-const WARMUP_TAG_RE: RegExp | null = (() => {
-  const alts = PV_WARMUP_TAGS.map(t => t.split(/[\s\-_]+/).map(_escWarm).join('[\\s\\-_]+'))
-  for (const code of BISON_WARMUP_CODES) alts.push(_escWarm(code))
-  return alts.length ? new RegExp(`(?:^|[^a-z0-9])(${alts.join('|')})(?:[^a-z0-9]|$)`, 'i') : null
-})()
-
-// Full warm-up check used by the classify worker: the cheap structural token
-// first, then the authoritative static PV/Bison filter tags (matched in
-// subject + body + raw). Async signature kept for call-site compatibility.
+// Full warm-up check used by the classify worker: same PV tag match, but over the
+// full raw payload too (the tag can live in nested text/html bodies that
+// body_preview truncates). Async signature kept for call-site compatibility.
 export async function detectWarmupFull(
   _workspaceId: string,
   s: { subject?: string; bodyText?: string; rawText?: string },
 ): Promise<{ isWarmup: boolean; reason: string }> {
-  const base = detectWarmup(s)
-  if (base.isWarmup) return base
-  if (WARMUP_TAG_RE) {
-    const hay = `${s.subject ?? ''}\n${s.bodyText ?? ''}\n${s.rawText ?? ''}`
-    if (WARMUP_TAG_RE.test(hay)) return { isWarmup: true, reason: 'PV/Bison warmup filter tag' }
-  }
-  return { isWarmup: false, reason: '' }
+  return matchWarmupTag(`${s.subject ?? ''}\n${s.bodyText ?? ''}\n${s.rawText ?? ''}`)
 }
 
 export interface Classification {
