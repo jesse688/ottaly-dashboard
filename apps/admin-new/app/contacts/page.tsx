@@ -192,6 +192,12 @@ export default function DataPage() {
   const [searchText, setSearchText] = useState('')
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS)
   const [showFilters, setShowFilters] = useState(false)
+  // 'contacts' = the master pool; 'engine' = browse ottaly_engine_leads
+  // (autonomous engine output) in this same table UI, read-only.
+  const [dataset, setDataset] = useState<'contacts' | 'engine'>('contacts')
+  // Engine-only filters (only used when dataset==='engine').
+  const [engineSource, setEngineSource] = useState('')
+  const [engineShow, setEngineShow] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [visibleCols, setVisibleCols] = useState<Set<string>>(
     () => new Set(ALL_COLUMNS.filter((c) => c.defaultOn).map((c) => c.key))
@@ -233,6 +239,20 @@ export default function DataPage() {
   const queryParams = useCallback(
     (extra: Record<string, string> = {}) => {
       const p = new URLSearchParams()
+      if (dataset === 'engine') {
+        // The engine-leads dataset reads ottaly_engine_leads; it uses `search`
+        // (domain/company) and its own source/show filters, plus the shared
+        // industry/region/platform fields from the filter panel.
+        p.set('dataset', 'engine')
+        if (searchText.trim()) p.set('search', searchText.trim())
+        if (engineSource) p.set('source', engineSource)
+        if (engineShow.trim()) p.set('show', engineShow.trim())
+        if (filters.industry) p.set('industry', filters.industry)
+        if (filters.companyRegion || filters.country)
+          p.set('region', filters.companyRegion || filters.country || '')
+        Object.entries(extra).forEach(([k, v]) => p.set(k, v))
+        return p
+      }
       if (searchText.trim()) p.set('q', searchText.trim())
       Object.entries(filters).forEach(([k, v]) => {
         if (v !== undefined && v !== '') p.set(k, v)
@@ -242,7 +262,7 @@ export default function DataPage() {
       Object.entries(extra).forEach(([k, v]) => p.set(k, v))
       return p
     },
-    [searchText, filters, sortBy, sortDir]
+    [dataset, searchText, engineSource, engineShow, filters, sortBy, sortDir]
   )
 
   // ── Fetch contacts ────────────────────────────────────────────────────────
@@ -798,7 +818,46 @@ export default function DataPage() {
         <div className="border-b border-gray-200 bg-white px-5 py-3 space-y-3">
           <div className="flex items-center gap-3 flex-wrap">
             <h1 className="text-lg font-semibold text-gray-900">Contacts</h1>
+            {/* Dataset toggle: master contacts pool vs the autonomous engine's leads */}
+            <div className="inline-flex overflow-hidden rounded-md border border-gray-200 text-sm">
+              {(['contacts', 'engine'] as const).map((d) => (
+                <button
+                  key={d}
+                  onClick={() => {
+                    setDataset(d)
+                    setPage(0)
+                    setSelected(new Set())
+                  }}
+                  className={cn(
+                    'px-3 py-1',
+                    dataset === d ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-100',
+                  )}
+                >
+                  {d === 'contacts' ? 'Contacts' : 'Engine Leads'}
+                </button>
+              ))}
+            </div>
             <Badge variant="secondary">{total.toLocaleString()} total</Badge>
+            {dataset === 'engine' && (
+              <>
+                <Select value={engineSource || 'any'} onValueChange={(v) => { setEngineSource(v && v !== 'any' ? v : ''); setPage(0) }}>
+                  <SelectTrigger className="h-8 w-44"><SelectValue placeholder="Source" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="any">All sources</SelectItem>
+                    <SelectItem value="exhibition">Exhibition</SelectItem>
+                    <SelectItem value="cqc_care">CQC Care</SelectItem>
+                    <SelectItem value="school">School</SelectItem>
+                    <SelectItem value="companies_house">Companies House</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Input
+                  className="h-8 w-40"
+                  placeholder="Show (e.g. Spring Fair)"
+                  value={engineShow}
+                  onChange={(e) => { setEngineShow(e.target.value); setPage(0) }}
+                />
+              </>
+            )}
             <div className="flex-1 min-w-[260px]">
               <Input
                 placeholder="Search email, name, company — or paste an Apollo URL"
@@ -894,26 +953,41 @@ export default function DataPage() {
                 Custom…
               </button>
             </Popover>
-            {/* MX provider verification */}
-            <Button variant="outline" disabled={mxRunning} onClick={startMxScan}>
-              {mxRunning ? '🔍 Verifying…' : '🔍 Verify Providers'}
-            </Button>
-            <label className="flex items-center gap-1 text-[11px] text-gray-500 cursor-pointer">
-              <Checkbox checked={mxReverify} onCheckedChange={(v) => setMxReverify(!!v)} />
-              re-verify all
-            </label>
-            <Button variant="outline" onClick={apolloExport}>
-              Apollo Export
-            </Button>
-            <Button variant="outline" onClick={resetExports}>
-              Reset Exports
-            </Button>
-            <Button variant="outline" onClick={() => setImportOpen(true)}>
-              Import / Delete CSV
-            </Button>
-            <Button variant="outline" onClick={() => setCreateOpen(true)}>
-              + Add
-            </Button>
+            {/* Contacts-pool-only actions — hidden when browsing engine leads,
+                which are a separate read-only dataset (no verify/import/push). */}
+            {dataset === 'contacts' ? (
+              <>
+                {/* MX provider verification */}
+                <Button variant="outline" disabled={mxRunning} onClick={startMxScan}>
+                  {mxRunning ? '🔍 Verifying…' : '🔍 Verify Providers'}
+                </Button>
+                <label className="flex items-center gap-1 text-[11px] text-gray-500 cursor-pointer">
+                  <Checkbox checked={mxReverify} onCheckedChange={(v) => setMxReverify(!!v)} />
+                  re-verify all
+                </label>
+                <Button variant="outline" onClick={apolloExport}>
+                  Apollo Export
+                </Button>
+                <Button variant="outline" onClick={resetExports}>
+                  Reset Exports
+                </Button>
+                <Button variant="outline" onClick={() => setImportOpen(true)}>
+                  Import / Delete CSV
+                </Button>
+                <Button variant="outline" onClick={() => setCreateOpen(true)}>
+                  + Add
+                </Button>
+              </>
+            ) : (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  window.location.href = `/api/data/engine-leads/export?${queryParams()}`
+                }}
+              >
+                Export CSV (PlusVibe)
+              </Button>
+            )}
           </div>
 
           {/* Verification stats strip */}
@@ -1004,16 +1078,24 @@ export default function DataPage() {
               Deselect All
             </Button>
             <div className="flex-1" />
-            <Button size="sm" variant="outline" onClick={() => setPushOpen('bison')}>
-              Push to Bison
-            </Button>
-            <Button
-              size="sm"
-              className="bg-violet-600 text-white hover:bg-violet-700"
-              onClick={() => setPushOpen('pv')}
-            >
-              🚀 Verify &amp; Push to PlusVibe
-            </Button>
+            {dataset === 'contacts' ? (
+              <>
+                <Button size="sm" variant="outline" onClick={() => setPushOpen('bison')}>
+                  Push to Bison
+                </Button>
+                <Button
+                  size="sm"
+                  className="bg-violet-600 text-white hover:bg-violet-700"
+                  onClick={() => setPushOpen('pv')}
+                >
+                  🚀 Verify &amp; Push to PlusVibe
+                </Button>
+              </>
+            ) : (
+              <span className="text-xs text-gray-500">
+                Engine leads are read-only — export to CSV, then import to PlusVibe.
+              </span>
+            )}
           </div>
         )}
 

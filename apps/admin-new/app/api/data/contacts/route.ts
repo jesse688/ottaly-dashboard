@@ -6,6 +6,59 @@ import {
   ALLOWED_SORT,
   DEFAULT_WORKSPACE,
 } from '@/lib/contacts-filter'
+import { buildEngineLeadsFilter } from '@/app/api/data/engine-leads/route'
+
+// When dataset=engine, the Contacts page browses the autonomous engine's
+// output (ottaly_engine_leads) in the same table UI, without copying rows into
+// the contacts pool. Engine rows are mapped to the Contact shape so the grid,
+// pagination and detail panel render unchanged. Read-only — engine rows have a
+// synthetic id (the domain PK) and status 'engine'.
+async function engineLeadsAsContacts(sp: URLSearchParams, limit: number, offset: number) {
+  const { where, params } = buildEngineLeadsFilter(sp)
+  const [countRes, rowsRes] = await Promise.all([
+    pool.query(`SELECT COUNT(*)::int AS count FROM ottaly_engine_leads ${where}`, params),
+    pool.query(
+      `SELECT domain, company_name, company_number, email_primary, emails, phones,
+              director_name, address, postcode, sic_code, industry, region,
+              company_size, linkedin_url, has_products, product_count, platform,
+              source, show, promoted_at
+       FROM ottaly_engine_leads ${where}
+       ORDER BY promoted_at DESC NULLS LAST
+       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, limit, offset],
+    ),
+  ])
+
+  const contacts = rowsRes.rows.map((r) => {
+    const [first, ...rest] = String(r.director_name || '').trim().split(/\s+/)
+    return {
+      id: `engine:${r.domain}`,
+      workspace_id: 'engine',
+      email: r.email_primary || (Array.isArray(r.emails) ? r.emails[0] : '') || '',
+      first_name: first || null,
+      last_name: rest.join(' ') || null,
+      phone: Array.isArray(r.phones) ? r.phones[0] ?? null : null,
+      company_name: r.company_name || null,
+      company_domain: r.domain || null,
+      job_title: r.director_name ? 'Director' : null,
+      linkedin_url: r.linkedin_url || null,
+      industry: r.industry || null,
+      num_employees: r.company_size || null,
+      company_country: r.region || null,
+      company_region: r.region || null,
+      status: 'engine',
+      source: r.source || null,
+      // engine-only extras surfaced in the detail panel / raw view
+      raw_data: {
+        show: r.show, platform: r.platform, has_products: r.has_products,
+        product_count: r.product_count, company_number: r.company_number,
+        sic_code: r.sic_code, postcode: r.postcode, address: r.address,
+        all_emails: r.emails, all_phones: r.phones, promoted_at: r.promoted_at,
+      },
+    }
+  })
+  return { contacts, total: countRes.rows[0].count }
+}
 
 // GET /api/data/contacts — DB-direct port of legacy /contacts/search
 // + searchContacts() / getContactsCount() in db-postgres.js.
@@ -35,6 +88,18 @@ export async function GET(req: NextRequest) {
   const filters = filtersFromParams(sp)
   const limit = Math.min(parseInt(sp.get('limit') || '50', 10) || 50, 200000)
   const offset = Math.max(parseInt(sp.get('offset') || '0', 10) || 0, 0)
+
+  // Engine-leads dataset: browse ottaly_engine_leads in the Contacts UI.
+  if (sp.get('dataset') === 'engine') {
+    try {
+      const { contacts, total } = await engineLeadsAsContacts(sp, Math.min(limit, 200), offset)
+      return NextResponse.json({ contacts, total, limit, offset })
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Database error'
+      console.error('[data/contacts] engine dataset failed:', message)
+      return NextResponse.json({ error: message }, { status: 500 })
+    }
+  }
 
   const sortField = ALLOWED_SORT.includes(filters.sortBy || '')
     ? (filters.sortBy as string)
