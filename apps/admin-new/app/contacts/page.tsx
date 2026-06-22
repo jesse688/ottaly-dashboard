@@ -2346,6 +2346,7 @@ function PushModal({
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const [wsError, setWsError] = useState('')
+  const [campError, setCampError] = useState('')
   useEffect(() => {
     fetch(`${base}/workspaces`)
       .then(async (r) => {
@@ -2370,10 +2371,19 @@ function PushModal({
       mode === 'pv'
         ? `${base}/campaigns?workspace_id=${encodeURIComponent(wsId)}`
         : `${base}/campaigns?ws_id=${encodeURIComponent(wsId)}`
+    setCampError('')
     fetch(url)
-      .then((r) => r.json())
-      .then((d) => setCampaigns(Array.isArray(d) ? d : d.campaigns || []))
-      .catch(() => {})
+      .then(async (r) => {
+        const d = await r.json().catch(() => ({}))
+        if (!r.ok) throw new Error(d.error || `Campaigns failed (${r.status})`)
+        return d
+      })
+      .then((d) => {
+        const c = Array.isArray(d) ? d : d.campaigns || []
+        setCampaigns(c)
+        if (!c.length) setCampError('No campaigns in this workspace')
+      })
+      .catch((e) => setCampError(e.message || 'Could not load campaigns'))
   }, [wsId, base, mode])
 
   const idOf = (x: WS | Camp) => x._id || x.id || ''
@@ -2474,6 +2484,7 @@ function PushModal({
               ))}
             </SelectContent>
           </Select>
+          {campError && <div className="mt-1 text-xs text-red-600">{campError}</div>}
         </div>
 
         {job && (
