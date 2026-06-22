@@ -106,15 +106,16 @@ function tidyPhone(raw: string): string {
 // landlines, +intl, and date/time false-positives.
 function extractPhone(text: string): string | null {
   // 1) Labelled number wins (M:/Mob/Tel/T:/Phone/Direct/DDI/Call).
-  const labelled = text.match(/(?:\bM(?:ob(?:ile)?)?|\bT(?:el)?|\bP(?:hone)?|\bDirect|\bDDI|\bCall)\s*[:.]?\s*(\+?\d[\d().\-]*(?:\s\d[\d().\-]*){0,3})/i)
+  const labelled = text.match(/(?:\bM(?:ob(?:ile)?)?|\bT(?:el)?|\bP(?:hone)?|\bDirect|\bDDI|\bCall)\s*[:.]?\s*(\+?\d[\d().\-]*(?:\s+[\d(][\d().\-]*){0,3})/i)
   if (labelled?.[1]) {
     const t = tidyPhone(labelled[1])
     if (isValidPhone(t)) return t
     const parts = t.split(/\s+/)
     for (let i = parts.length; i > 0; i--) { const j = parts.slice(0, i).join(' '); if (isValidPhone(j)) return tidyPhone(j) }
   }
-  // 2) Unlabelled: scan runs and split merged ones.
-  const runs = text.match(/\+?\d[\d().\-]*(?:\s\d[\d().\-]*){0,4}/g) ?? []
+  // 2) Unlabelled: scan runs and split merged ones. Allow MULTIPLE spaces between
+  //    groups ("+44 (0)  7413" has a double space) so a number isn't cut short.
+  const runs = text.match(/\+?\d[\d().\-]*(?:\s+[\d(][\d().\-]*){0,4}/g) ?? []
   for (const run of runs) {
     if (isValidPhone(run)) return tidyPhone(run)
     const parts = run.trim().split(/\s+/)
@@ -275,15 +276,16 @@ function firstValidFromRun(run: string): string | null {
 function extractLabelled(text: string, labels: string): string | null {
   // Allow (), spaces and a leading +/(0) in the run after the label — a single
   // space group may be followed by '(' (e.g. "+44 (0) 7413"), not just a digit.
-  const re = new RegExp(`(?:${labels})\\s*[:.)]?\\s*(\\+?[\\d(][\\d().\\-]*(?:\\s[\\d(][\\d().\\-]*){0,4})`, 'i')
+  const re = new RegExp(`(?:${labels})\\s*[:.)]?\\s*(\\+?[\\d(][\\d().\\-]*(?:\\s+[\\d(][\\d().\\-]*){0,4})`, 'i')
   const m = text.match(re)
   return m?.[1] ? firstValidFromRun(m[1]) : null
 }
 function extractMobile(text: string): string | null {
-  // Mobile labels, OR an unlabelled UK mobile (07… / +447…) anywhere.
+  // Mobile labels, OR an unlabelled UK mobile (07… / +447…) anywhere. Allow
+  // MULTIPLE spaces between groups ("+44 (0)  7413").
   const labelled = extractLabelled(text, 'M|Mob|Mobile|Cell')
   if (labelled) return labelled
-  const m = text.match(/(\+?(?:44\s?\(?0?\)?\s?|0)7[\d().\-]*(?:\s[\d(][\d().\-]*){0,3})/)
+  const m = text.match(/(\+?(?:44\s*\(?0?\)?\s*|0)7[\d().\-]*(?:\s+[\d(][\d().\-]*){0,3})/)
   return m?.[1] ? firstValidFromRun(m[1]) : null
 }
 function extractOffice(text: string): string | null {
