@@ -16,6 +16,7 @@ interface DayData {
   posReplies: number
   oooReplies: number
   bounces: number
+  contacted: number
   leads: number
 }
 interface WsTotals {
@@ -24,12 +25,13 @@ interface WsTotals {
   posReplies: number
   oooReplies: number
   bounces: number
+  contacted: number
   leads: number
   replyRate: number
   allReplyRate: number
   bounceRate: number
-  rtl: number  // leads per 1,000 replies (plain number)
-  lpt: number  // leads per 1,000 sent (plain number)
+  rtl: number  // RTL = replies per lead (replies ÷ leads)
+  lpt: number  // LPT = contacts per lead (contacted ÷ leads)
   sendsPerDay: number
   repliesPerDay: number
 }
@@ -129,7 +131,7 @@ const brTone = (br: number): 'ok' | 'warn' | 'error' => (br >= 0.05 ? 'error' : 
 // Build the synthetic "All Workspaces" aggregate row (legacy buildAllWorkspaces).
 function buildAllWorkspaces(list: Workspace[]): Workspace | null {
   if (!list.length) return null
-  const t = { sent: 0, replies: 0, posReplies: 0, oooReplies: 0, bounces: 0, leads: 0 }
+  const t = { sent: 0, replies: 0, posReplies: 0, oooReplies: 0, bounces: 0, contacted: 0, leads: 0 }
   const byDate: Record<string, DayData> = {}
   let nDays = 0
   for (const w of list) {
@@ -138,6 +140,7 @@ function buildAllWorkspaces(list: Workspace[]): Workspace | null {
     t.posReplies += w.totals.posReplies
     t.oooReplies += w.totals.oooReplies
     t.bounces += w.totals.bounces
+    t.contacted += w.totals.contacted
     t.leads += w.totals.leads
     nDays = Math.max(nDays, w.series.length)
     for (const d of w.series) {
@@ -150,6 +153,7 @@ function buildAllWorkspaces(list: Workspace[]): Workspace | null {
           posReplies: 0,
           oooReplies: 0,
           bounces: 0,
+          contacted: 0,
           leads: 0,
         })
       e.sent += d.sent
@@ -157,6 +161,7 @@ function buildAllWorkspaces(list: Workspace[]): Workspace | null {
       e.posReplies += d.posReplies
       e.oooReplies += d.oooReplies
       e.bounces += d.bounces
+      e.contacted += d.contacted
       e.leads += d.leads
     }
   }
@@ -174,9 +179,8 @@ function buildAllWorkspaces(list: Workspace[]): Workspace | null {
       bounceRate: t.sent > 0 ? t.bounces / t.sent : 0,
       // RTL = Replies-To-Lead: replies needed per lead (replies ÷ leads).
       rtl: t.leads > 0 ? t.replies / t.leads : 0,
-      // LPT: intended Contacts-To-Lead, but 'contacted' isn't cached yet —
-      // still leads-per-1k-sent as a placeholder. See summary route TODO.
-      lpt: t.sent > 0 ? (t.leads / t.sent) * 1000 : 0,
+      // LPT = Contacts-To-Lead: people contacted per lead (contacted ÷ leads).
+      lpt: t.leads > 0 ? t.contacted / t.leads : 0,
       sendsPerDay: t.sent / days,
       repliesPerDay: t.replies / days,
     },
@@ -292,8 +296,8 @@ function ClientCard({
           <Lbl>RTL · repl/lead</Lbl>
         </Cell>
         <Cell>
-          <span className="text-sm font-bold text-foreground">{dec(t.lpt, 1)}</span>
-          <Lbl>LPT /1k sent</Lbl>
+          <span className="text-sm font-bold text-foreground">{t.leads > 0 ? dec(t.lpt, 0) : '—'}</span>
+          <Lbl>LPT · contacts/lead</Lbl>
         </Cell>
         <Cell>
           <span className={cn('text-sm font-bold', t.leads > 0 ? 'text-emerald-500' : 'text-foreground')}>
@@ -516,7 +520,7 @@ export default function StatsPage() {
         <KpiCard label="Bounce Rate" value={pct(agg?.totals.bounceRate ?? 0)} tone="red" loading={loading} />
         <KpiCard label="Leads" value={num(agg?.totals.leads ?? 0)} sub="in range" tone="green" loading={loading} />
         <KpiCard label="RTL" value={agg && agg.totals.leads > 0 ? dec(agg.totals.rtl, 1) : '—'} sub="replies / lead" tone="yellow" loading={loading} />
-        <KpiCard label="LPT" value={dec(agg?.totals.lpt ?? 0, 1)} sub="leads / 1k sent" tone="green" loading={loading} />
+        <KpiCard label="LPT" value={agg && agg.totals.leads > 0 ? dec(agg.totals.lpt, 0) : '—'} sub="contacts / lead" tone="green" loading={loading} />
       </div>
 
       {status === 'error' && (

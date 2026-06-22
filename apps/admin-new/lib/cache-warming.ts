@@ -54,7 +54,7 @@ function aggregatePvEmailStats(raw: any): Record<string, number> {
   const header = raw?.header
   if (!header) {
     console.warn('[cache-warming] no header in PV response:', JSON.stringify(raw).slice(0, 100))
-    return { sent: 0, replies: 0, bounces: 0, posReplies: 0, oooReplies: 0, leads: 0 }
+    return { sent: 0, replies: 0, bounces: 0, posReplies: 0, oooReplies: 0, contacted: 0, leads: 0 }
   }
 
   const agg = {
@@ -63,6 +63,9 @@ function aggregatePvEmailStats(raw: any): Record<string, number> {
     bounces: header.total_bounce_count ?? 0,
     posReplies: header.total_pos_reply_count ?? 0,
     oooReplies: header.total_ooo_reply_count ?? 0,
+    // People contacted (distinct leads emailed), NOT total emails sent — this is
+    // the denominator for LPT (Contacts-To-Lead). Falls back to sent if PV omits it.
+    contacted: header.total_contacted_count ?? header.total_sent_count ?? 0,
     leads: 0, // Not available from email-stats, loaded separately
   }
   console.log(`[cache-warming] aggregated: sent=${agg.sent} replies=${agg.replies} ooo=${agg.oooReplies}`)
@@ -119,7 +122,7 @@ async function ensurePerfCacheDaily(wsIds: string[], dates: string[]): Promise<v
         } catch (err) {
           console.error(`[cache-warming] fetch failed for ${wsId} ${date}:`, err instanceof Error ? err.message : err)
           // Insert stale placeholder (savedAt = 0) so we retry next time
-          const empty = { sent: 0, replies: 0, bounces: 0, posReplies: 0, oooReplies: 0, leads: 0 }
+          const empty = { sent: 0, replies: 0, bounces: 0, posReplies: 0, oooReplies: 0, contacted: 0, leads: 0 }
           await pool.query(
             `INSERT INTO perf_cache_daily (ws_id, date, data, saved_at)
              VALUES ($1, $2, $3, 0)

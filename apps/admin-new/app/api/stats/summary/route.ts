@@ -11,6 +11,7 @@ interface DayData {
   posReplies: number
   oooReplies: number
   bounces: number
+  contacted: number
   leads: number
 }
 
@@ -23,6 +24,7 @@ interface Workspace {
     posReplies: number
     oooReplies: number
     bounces: number
+    contacted: number
     leads: number
     replyRate: number
     allReplyRate: number
@@ -123,7 +125,7 @@ export async function GET(req: NextRequest) {
     const workspaces: Workspace[] = []
     for (const ws of workspaceList) {
       const series: DayData[] = []
-      const totals = { sent: 0, replies: 0, posReplies: 0, oooReplies: 0, bounces: 0, leads: 0 }
+      const totals = { sent: 0, replies: 0, posReplies: 0, oooReplies: 0, bounces: 0, contacted: 0, leads: 0 }
 
       for (const date of dates) {
         const dayData = perfByDateAndWs[ws.workspace_id]?.[date] || {}
@@ -134,6 +136,9 @@ export async function GET(req: NextRequest) {
           posReplies: Number(dayData.posReplies) || 0,
           oooReplies: Number(dayData.oooReplies) || 0,
           bounces: Number(dayData.bounces) || 0,
+          // People contacted (LPT denominator). Older cache rows predate this
+          // field; fall back to sent so LPT degrades gracefully, not to 0.
+          contacted: Number(dayData.contacted ?? dayData.sent) || 0,
           leads: 0, // leads filled from revenue_leads below, not the perf cache
         }
         series.push(day)
@@ -142,6 +147,7 @@ export async function GET(req: NextRequest) {
         totals.posReplies += day.posReplies
         totals.oooReplies += day.oooReplies
         totals.bounces += day.bounces
+        totals.contacted += day.contacted
       }
       // Leads = frozen revenue_leads count for this workspace in-window.
       totals.leads = leadsByWs[ws.workspace_id] || 0
@@ -166,13 +172,10 @@ export async function GET(req: NextRequest) {
           // RTL = Replies-To-Lead: how many replies it took to land one lead
           // (replies ÷ leads). Lower is better. 0 leads → no ratio yet.
           rtl: totals.leads > 0 ? totals.replies / totals.leads : 0,
-          // TODO LPT should be Contacts-To-Lead (contacted ÷ leads) — "how many
-          // people contacted per lead". The 'contacted' count is NOT yet stored
-          // in perf_cache_daily, so this is still leads-per-1k-SENT as a stand-in
-          // and is WRONG by the intended definition. Needs the legacy perf cache
-          // to carry total_contacted_count before LPT can be corrected.
-          // LPT = leads per 1,000 SENT (plain number, not %).
-          lpt: totals.sent > 0 ? (totals.leads / totals.sent) * 1000 : 0,
+          // LPT = Contacts-To-Lead: how many people contacted per lead
+          // (contacted ÷ leads). Lower is better. 'contacted' is people emailed
+          // (PV total_contacted_count), NOT total emails sent.
+          lpt: totals.leads > 0 ? totals.contacted / totals.leads : 0,
           sendsPerDay: totals.sent / days,
           repliesPerDay: totals.replies / days,
         },
