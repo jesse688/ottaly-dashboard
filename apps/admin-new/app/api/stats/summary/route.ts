@@ -148,10 +148,16 @@ export async function GET(req: NextRequest) {
         name: ws.workspace_name || ws.workspace_id,
         totals: {
           ...totals,
-          // Human Reply Rate: genuine human replies only (warmup + OOO excluded).
-          replyRate: totals.sent > 0 ? totals.replies / totals.sent : 0,
-          // Reply Rate (all): human + OOO/automatic. Warmup never counted.
-          allReplyRate: totals.sent > 0 ? (totals.replies + totals.oooReplies) / totals.sent : 0,
+          // PV's `replies` (total_reply_count) is ALL replies INCLUDING OOO;
+          // `oooReplies` (total_ooo_reply_count) is the OOO subset of that total.
+          // Human Reply Rate = genuine human replies = (total − OOO) / sent.
+          replyRate:
+            totals.sent > 0
+              ? Math.max(0, totals.replies - totals.oooReplies) / totals.sent
+              : 0,
+          // Reply Rate (all): human + OOO. That is simply PV's total reply count
+          // (do NOT add oooReplies again — it is already part of `replies`).
+          allReplyRate: totals.sent > 0 ? totals.replies / totals.sent : 0,
           bounceRate: totals.sent > 0 ? totals.bounces / totals.sent : 0,
           // RTL = leads per 1,000 REPLIES (plain number, not %).
           rtl: totals.replies > 0 ? (totals.leads / totals.replies) * 1000 : 0,

@@ -88,11 +88,14 @@ const isPercent = (s: SeriesKey) =>
 
 function seriesValue(s: SeriesKey, d: DayData): number | null {
   const sent = d.sent || 0
+  // `replies` is PV's total_reply_count (ALL replies, INCLUDING OOO).
+  // `ooo` is the OOO subset. Human replies = total − OOO.
   const replies = d.replies || 0
   const ooo = d.oooReplies || 0
+  const human = Math.max(0, replies - ooo)
   switch (s) {
     case 'humanRR':
-      return sent > 0 ? +((replies / sent) * 100).toFixed(2) : null
+      return sent > 0 ? +((human / sent) * 100).toFixed(2) : null
     case 'oooRR':
       return sent > 0 ? +((ooo / sent) * 100).toFixed(2) : null
     case 'bounceRate':
@@ -164,8 +167,10 @@ function buildAllWorkspaces(list: Workspace[]): Workspace | null {
     name: `All Workspaces (${list.length})`,
     totals: {
       ...t,
-      replyRate: t.sent > 0 ? t.replies / t.sent : 0,
-      allReplyRate: t.sent > 0 ? (t.replies + t.oooReplies) / t.sent : 0,
+      // Human RR = (total replies − OOO) / sent; OOO is a subset of t.replies.
+      replyRate: t.sent > 0 ? Math.max(0, t.replies - t.oooReplies) / t.sent : 0,
+      // Reply Rate (all) = total replies / sent (replies already includes OOO).
+      allReplyRate: t.sent > 0 ? t.replies / t.sent : 0,
       bounceRate: t.sent > 0 ? t.bounces / t.sent : 0,
       rtl: t.replies > 0 ? (t.leads / t.replies) * 1000 : 0,
       lpt: t.sent > 0 ? (t.leads / t.sent) * 1000 : 0,
@@ -253,7 +258,7 @@ function ClientCard({
         onClick={() => setOpen(o => !o)}
         className={cn(
           'grid w-full cursor-pointer items-center gap-2 px-4 py-3 text-left',
-          'grid-cols-[minmax(0,1.6fr)_repeat(7,minmax(0,1fr))_24px]',
+          'grid-cols-[minmax(0,1.6fr)_repeat(8,minmax(0,1fr))_24px]',
           isAll && 'bg-accent/40',
         )}
       >
@@ -540,12 +545,13 @@ export default function StatsPage() {
       {status === 'ok' && (
         <div className="flex flex-col gap-2">
           {/* Column legend (mirrors the per-card cells) */}
-          <div className="grid grid-cols-[minmax(0,1.6fr)_repeat(7,minmax(0,1fr))_24px] items-center gap-2 px-4 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <div className="grid grid-cols-[minmax(0,1.6fr)_repeat(8,minmax(0,1fr))_24px] items-center gap-2 px-4 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             <div>Client</div>
             <div className="text-right">Human RR</div>
             <div className="text-right">Reply Rate</div>
             <div className="text-right">Bounce</div>
             <div className="text-right">RTL</div>
+            <div className="text-right">LPT</div>
             <div className="text-right">Leads</div>
             <div className="text-right">Sends/Day</div>
             <div className="text-right">Provider</div>
