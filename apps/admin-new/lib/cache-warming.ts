@@ -95,6 +95,43 @@ function aggregatePvEmailStats(raw: any): Record<string, number> {
   return agg
 }
 
+// Fetch ONE workspace+date directly from PlusVibe and return the aggregated
+// stats (or null on failure). Exported so the stats summary route can LIVE-FILL
+// any cache row that is missing / seeded-zero / stale — guaranteeing the
+// dashboard equals live PV even when the background warm hasn't run. Reuses the
+// exact same field mapping as the warmer so the numbers can never fork.
+export async function fetchPvDay(
+  wsId: string,
+  date: string,
+): Promise<Record<string, number> | null> {
+  if (!PV_KEY || deadWorkspaces.has(wsId)) return null
+  try {
+    const raw = await pvFetch(
+      `/account/email-stats?workspace_id=${wsId}&start_date=${date}&end_date=${date}`,
+    )
+    return aggregatePvEmailStats(raw)
+  } catch {
+    return null
+  }
+}
+
+// Best-effort upsert of a freshly-fetched day into the cache (so the next read
+// is warm). Never throws.
+export async function upsertPerfDay(
+  wsId: string,
+  date: string,
+  data: Record<string, number>,
+): Promise<void> {
+  await pool
+    .query(
+      `INSERT INTO perf_cache_daily (ws_id, date, data, saved_at)
+       VALUES ($1,$2,$3,$4)
+       ON CONFLICT (ws_id, date) DO UPDATE SET data = $3, saved_at = $4`,
+      [wsId, date, JSON.stringify(data), Date.now()],
+    )
+    .catch(() => {})
+}
+
 async function ensurePerfCacheDaily(wsIds: string[], dates: string[]): Promise<void> {
   const today = dateStr(new Date())
 

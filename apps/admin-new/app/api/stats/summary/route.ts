@@ -2,7 +2,7 @@ import { type NextRequest, NextResponse } from 'next/server'
 import * as Sentry from '@sentry/nextjs'
 import pool from '@/lib/db'
 import { getActiveWorkspaceIds } from '@/lib/active-clients'
-import { warmDates } from '@/lib/cache-warming' // on-demand fresh cache per view
+import { fetchPvDay, upsertPerfDay } from '@/lib/cache-warming' // live-fill missing/stale cache cells
 
 interface DayData {
   date: string
@@ -93,27 +93,15 @@ export async function GET(req: NextRequest) {
       workspaceList = workspaceList.filter(w => activeIds.has(w.workspace_id))
     }
 
-    // Freshen the cache for the requested window before reading it. TTL-guarded
-    // (today = 5 min), so this only calls PlusVibe when a row is actually stale.
-    // Capped at 31 days so huge ranges don't fan out to hundreds of PV calls in
-    // one request (older rows have a 12h TTL and warm via the background pass).
-    {
-      // Iterate the London YYYY-MM-DD strings DIRECTLY (no UTC reinterpretation)
-      // so the warm window, the SQL text window, and the cache keys all use the
-      // same date authority. Reusing UTC here re-created the cross-tz duplicate.
-      const warmList = enumerateDates(start, end, 31)
-      // TIME-BOXED: never block the page on warming. Dead workspaces 400 + retry
-      // and could hang the request for many seconds. Wait at most ~3.5s, then
-      // serve whatever's cached; the warm finishes in the background.
-      await Promise.race([
-        warmDates(warmList),
-        new Promise((r) => setTimeout(r, 3500)),
-      ])
-    }
+    // The inclusive list of YYYY-MM-DD strings in the requested window. Defined
+    // up front so the live-fill below knows exactly which cells to check.
+    const dates = enumerateDates(start, end, 400)
 
-    // Query perf_cache_daily for the date range
+    // Query perf_cache_daily for the date range. Read saved_at so we can tell a
+    // REAL fetched row from a seeded-zero placeholder (saved_at=0) or a stale
+    // 'today' row — those must be live-filled from PV, not trusted.
     const perfRes = await pool.query(
-      `SELECT ws_id, date, data
+      `SELECT ws_id, date, data, saved_at
        FROM perf_cache_daily
        WHERE date >= $1 AND date <= $2
        ORDER BY date ASC`,
@@ -121,10 +109,45 @@ export async function GET(req: NextRequest) {
     )
 
     const perfByDateAndWs: Record<string, Record<string, Record<string, number>>> = {}
-    ;(perfRes.rows as Array<{ ws_id: string; date: string; data: Record<string, number> | null }>).forEach(row => {
-      if (!perfByDateAndWs[row.ws_id]) perfByDateAndWs[row.ws_id] = {}
+    const savedAt: Record<string, Record<string, number>> = {}
+    ;(perfRes.rows as Array<{ ws_id: string; date: string; data: Record<string, number> | null; saved_at: string | number | null }>).forEach(row => {
+      if (!perfByDateAndWs[row.ws_id]) { perfByDateAndWs[row.ws_id] = {}; savedAt[row.ws_id] = {} }
       perfByDateAndWs[row.ws_id][row.date] = row.data || {}
+      savedAt[row.ws_id][row.date] = Number(row.saved_at) || 0
     })
+
+    // LIVE-FILL: for every active workspace×date whose row is MISSING, seeded-
+    // zero (saved_at=0), or a STALE 'today' row, fetch it directly from PlusVibe
+    // now. This is the correctness guarantee: the dashboard equals live PV even
+    // if the background warm hasn't run / lost the race. Bounded + time-boxed.
+    {
+      const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London' }).format(new Date())
+      const TODAY_TTL = 5 * 60 * 1000
+      const gaps: { ws: string; date: string }[] = []
+      for (const ws of workspaceList) {
+        for (const date of dates) {
+          const sa = savedAt[ws.workspace_id]?.[date]
+          const missing = perfByDateAndWs[ws.workspace_id]?.[date] === undefined
+          const seeded = sa === 0
+          const staleToday = date === todayStr && sa && Date.now() - sa > TODAY_TTL
+          if (missing || seeded || staleToday) gaps.push({ ws: ws.workspace_id, date })
+        }
+      }
+      if (gaps.length) {
+        const CONC = 8
+        for (let i = 0; i < gaps.length; i += CONC) {
+          await Promise.allSettled(
+            gaps.slice(i, i + CONC).map(async ({ ws, date }) => {
+              const data = await fetchPvDay(ws, date)
+              if (!data) return
+              if (!perfByDateAndWs[ws]) perfByDateAndWs[ws] = {}
+              perfByDateAndWs[ws][date] = data
+              void upsertPerfDay(ws, date, data) // warm the cache for next read
+            }),
+          )
+        }
+      }
+    }
 
     // Leads are counted from esp_leads (label='INTERESTED') — the table the
     // Unibox writes to when a reply is marked as a lead. PlusVibe itself does
@@ -145,9 +168,6 @@ export async function GET(req: NextRequest) {
     ;(leadsRes.rows as Array<{ workspace_id: string; n: number }>).forEach(r => {
       leadsByWs[r.workspace_id] = r.n
     })
-
-    // Generate date list (same string-based enumeration as the warm window).
-    const dates = enumerateDates(start, end, 400)
 
     // Build per-workspace stats
     const workspaces: Workspace[] = []
