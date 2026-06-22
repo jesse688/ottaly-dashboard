@@ -51,6 +51,35 @@ export async function GET(req: NextRequest) {
     const rev: Record<string, number> = {}
     for (const r of revRes.rows) rev[r.workspace_id] = r.n
 
+    // Optional: pull LIVE PlusVibe email-stats for the same date, so cached can
+    // be compared to what PV reports right now. Off by default (one PV call per
+    // workspace); enable with ?live=1.
+    const wantLive = req.nextUrl.searchParams.get('live') === '1'
+    const pvKey = process.env.PLUSVIBE_KEY || process.env.PLUSVIBE_API_KEY || ''
+    const live: Record<string, Record<string, number> | string> = {}
+    if (wantLive && pvKey) {
+      await Promise.all(
+        wsRes.rows.map(async (w: { workspace_id: string }) => {
+          try {
+            const r = await fetch(
+              `https://api.plusvibe.ai/api/v1/account/email-stats?workspace_id=${w.workspace_id}&start_date=${date}&end_date=${date}`,
+              { headers: { 'x-api-key': pvKey } },
+            )
+            const raw = await r.json().catch(() => ({}))
+            const h = raw?.header || {}
+            live[w.workspace_id] = {
+              sent: h.total_sent_count ?? 0,
+              replies: h.total_reply_count ?? 0,
+              ooo: h.total_ooo_reply_count ?? 0,
+              pos: h.total_pos_reply_count ?? 0,
+            }
+          } catch (e) {
+            live[w.workspace_id] = e instanceof Error ? e.message : 'pv error'
+          }
+        }),
+      )
+    }
+
     const rows = wsRes.rows
       .map((w: { workspace_id: string; workspace_name: string }) => {
         const d = perf[w.workspace_id] || {}
@@ -73,6 +102,7 @@ export async function GET(req: NextRequest) {
           leads_esp_today: esp[w.workspace_id]?.today ?? 0,
           leads_esp_all_time: esp[w.workspace_id]?.all_time ?? 0,
           leads_revenue_today: rev[w.workspace_id] ?? 0,
+          live_pv: live[w.workspace_id],
         }
       })
       .filter((r) => r.sent > 0 || r.replies > 0 || r.leads_esp_today > 0 || r.leads_revenue_today > 0)
