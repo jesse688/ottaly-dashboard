@@ -2959,8 +2959,13 @@ async function warmPerformanceCache() {
       performanceCache.labeledLeads = nextLabeledLeads;
       performanceCache.version++;
       console.log(`[performance cache] version ${performanceCache.version} ready — ${wsIds.length} workspaces`);
-      // Persist to DB so next restart loads instantly
-      savePerfCacheToDb().catch(() => {});
+      // Persist to DB so next restart loads instantly.
+      // DISABLED by default: admin-new is now the single writer of
+      // perf_cache_daily (shared PK ws_id,date). Both apps warming on 2-min
+      // intervals overwrote each other with different-time snapshots of PV's
+      // climbing counters, making Stats flip-flop (e.g. LVM 331<->381). Legacy
+      // keeps its in-memory cache for its own pages but must not clobber the row.
+      if (process.env.LEGACY_PERSIST_PERF_CACHE === '1') savePerfCacheToDb().catch(() => {});
     } catch (err) {
       console.error('[performance cache] warm failed:', err.message);
     } finally {

@@ -19,8 +19,12 @@ async function getActiveWorkspaces(): Promise<string[]> {
   }
 }
 
+// Europe/London — MUST match the dashboard's period-filter (which resolves
+// "today"/ranges in London). Previously this was UTC, so the warmer's "today"
+// key and TTL disagreed with the date the dashboard reads near day boundaries,
+// leaving the live row stale (wrong TTL) and creating duplicate UTC/London rows.
 function dateStr(d: Date): string {
-  return d.toISOString().slice(0, 10)
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London' }).format(d)
 }
 
 function lastNDates(n: number): string[] {

@@ -42,6 +42,21 @@ interface Workspace {
 // so stats only count data on/after this date. Change this one constant to adjust.
 const STATS_CUTOVER = process.env.STATS_CUTOVER_DATE ?? '2026-06-19'
 
+// Enumerate inclusive YYYY-MM-DD strings from start..end, purely lexically (no
+// Date/timezone math) so it never re-introduces a UTC/London divergence.
+function enumerateDates(start: string, end: string, cap: number): string[] {
+  const out: string[] = []
+  // Use UTC noon to step days safely without DST/tz drift, but only to ADVANCE;
+  // the emitted strings come from slicing, anchored on the input strings.
+  let cur = new Date(`${start}T12:00:00Z`)
+  const last = new Date(`${end}T12:00:00Z`)
+  while (cur <= last && out.length < cap) {
+    out.push(cur.toISOString().slice(0, 10))
+    cur = new Date(cur.getTime() + 86400000)
+  }
+  return out
+}
+
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl
   const rawStart = searchParams.get('start')
@@ -83,13 +98,10 @@ export async function GET(req: NextRequest) {
     // Capped at 31 days so huge ranges don't fan out to hundreds of PV calls in
     // one request (older rows have a 12h TTL and warm via the background pass).
     {
-      const warmList: string[] = []
-      const c = new Date(start + 'T00:00:00Z')
-      const e = new Date(end + 'T00:00:00Z')
-      while (c <= e && warmList.length < 31) {
-        warmList.push(c.toISOString().slice(0, 10))
-        c.setUTCDate(c.getUTCDate() + 1)
-      }
+      // Iterate the London YYYY-MM-DD strings DIRECTLY (no UTC reinterpretation)
+      // so the warm window, the SQL text window, and the cache keys all use the
+      // same date authority. Reusing UTC here re-created the cross-tz duplicate.
+      const warmList = enumerateDates(start, end, 31)
       await warmDates(warmList)
     }
 
@@ -128,14 +140,8 @@ export async function GET(req: NextRequest) {
       leadsByWs[r.workspace_id] = r.n
     })
 
-    // Generate date list
-    const dates = []
-    const current = new Date(start + 'T00:00:00Z')
-    const endDate = new Date(end + 'T00:00:00Z')
-    while (current <= endDate) {
-      dates.push(current.toISOString().slice(0, 10))
-      current.setDate(current.getDate() + 1)
-    }
+    // Generate date list (same string-based enumeration as the warm window).
+    const dates = enumerateDates(start, end, 400)
 
     // Build per-workspace stats
     const workspaces: Workspace[] = []
