@@ -177,22 +177,6 @@ function buildRange(
   }
 }
 
-function fmtZar(
-  gbpAmount: number,
-  zarRate: number | null
-): string {
-  if (zarRate && zarRate > 0) {
-    return (
-      'R' +
-      (gbpAmount * zarRate).toLocaleString('en-ZA', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      })
-    )
-  }
-  return '£' + gbpAmount.toFixed(2)
-}
-
 function fmtZarDirect(zarAmount: number): string {
   return (
     'R' +
@@ -215,7 +199,7 @@ export default function CommissionPage() {
   const [allLeads, setAllLeads] = useState<Lead[]>([])
   const [prices, setPrices] = useState<WorkspacePrice[]>([])
   const [workload, setWorkload] = useState<WorkloadData | null>(null)
-  const [managers, setManagers] = useState<Manager[]>([])
+  const [, setManagers] = useState<Manager[]>([])
   const [avgLeadPrice, setAvgLeadPrice] = useState<number>(0)
   const [zarRate, setZarRate] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
@@ -481,8 +465,7 @@ export default function CommissionPage() {
       leads: Lead[],
       rates: Record<string, Record<string, number>>,
       avgLead: number,
-      managerStartMap: Record<string, string | null>,
-      salaryMap: Record<string, number>
+      managerStartMap: Record<string, string | null>
     ) => {
       const range = buildRange(p, cStart, cEnd)
       setAdminPeriodLabel(range.label)
@@ -624,8 +607,7 @@ export default function CommissionPage() {
             parsedLeads,
             rates,
             avg,
-            managerStartMap,
-            Object.fromEntries(mgrData.map((m) => [m.name.trim(), m.base_salary ?? 0]))
+            managerStartMap
           )
         } else {
           const [zarData, mgrRateData] = await Promise.all([
@@ -717,8 +699,7 @@ export default function CommissionPage() {
         allLeads,
         effectiveRates,
         avgLeadPrice,
-        managerStartMap,
-        managerSalaryMap
+        managerStartMap
       )
     }
   }
@@ -735,8 +716,7 @@ export default function CommissionPage() {
       allLeads,
       effectiveRates,
       avgLeadPrice,
-      managerStartMap,
-      managerSalaryMap
+      managerStartMap
     )
   }
 
@@ -1145,51 +1125,6 @@ export default function CommissionPage() {
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
-
-function SumCard({
-  label,
-  value,
-  color,
-  smallValue,
-}: {
-  label: string
-  value: string
-  color?: 'green' | 'amber' | 'teal'
-  smallValue?: boolean
-}) {
-  const borderColor =
-    color === 'green'
-      ? '#16A34A'
-      : color === 'amber'
-      ? '#D97706'
-      : color === 'teal'
-      ? '#1F6F78'
-      : '#1F6F78'
-
-  const valueColor =
-    color === 'green'
-      ? '#16A34A'
-      : color === 'amber'
-      ? '#D97706'
-      : color === 'teal'
-      ? '#1F6F78'
-      : undefined
-
-  return (
-    <div className="o-metric" style={{ borderTopColor: borderColor }}>
-      <div className="o-metric-label">{label}</div>
-      <div
-        className="o-metric-val"
-        style={{
-          fontSize: smallValue ? '1.1rem' : undefined,
-          color: valueColor,
-        }}
-      >
-        {value}
-      </div>
-    </div>
-  )
-}
 
 interface EarnerClientStats {
   leads: number

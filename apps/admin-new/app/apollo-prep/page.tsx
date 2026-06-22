@@ -1,6 +1,19 @@
 'use client'
 
 import { useEffect, useRef, useState, useCallback } from 'react'
+import { PageShell } from '@/components/shell/page-shell'
+import { KpiCard } from '@/components/ui/kpi-card'
+import { DataTable, type Column } from '@/components/ui/data-table'
+import { StatusBadge, type StatusTone } from '@/components/ui/status-badge'
+import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -208,6 +221,73 @@ function formatEta(domainMs: number[], remaining: number): string {
   return `${(secs / 3600).toFixed(1)}h`
 }
 
+// ── Small presentational helpers ───────────────────────────────────────────────
+
+function Card({ title, subtitle, actions, children }: {
+  title: string
+  subtitle?: React.ReactNode
+  actions?: React.ReactNode
+  children: React.ReactNode
+}) {
+  return (
+    <section className="mb-5 rounded-lg border border-border bg-card shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-2 border-b border-border px-5 py-3.5">
+        <div className="min-w-0">
+          <div className="font-[family-name:var(--font-display)] text-[15px] font-bold text-foreground">{title}</div>
+          {subtitle && <div className="mt-0.5 text-xs text-muted-foreground">{subtitle}</div>}
+        </div>
+        {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+      </div>
+      <div className="p-5">{children}</div>
+    </section>
+  )
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+      {children}
+    </div>
+  )
+}
+
+function LogBox({ logRef, lines }: {
+  logRef: React.RefObject<HTMLDivElement | null>
+  lines: Array<{ text: string; type: 'ok' | 'warn' | 'err' | '' }>
+}) {
+  return (
+    <div
+      ref={logRef}
+      className="mt-3 max-h-40 overflow-y-auto rounded-md border border-border bg-muted/40 px-3 py-2 font-mono text-[11px] leading-relaxed"
+    >
+      {lines.map((l, i) => (
+        <div
+          key={i}
+          className={
+            l.type === 'ok' ? 'text-emerald-600 dark:text-emerald-400'
+              : l.type === 'err' ? 'text-destructive'
+                : l.type === 'warn' ? 'text-amber-600 dark:text-amber-400'
+                  : 'text-muted-foreground'
+          }
+        >
+          {l.text}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ProgressBar({ pct }: { pct: number }) {
+  return (
+    <div className="my-3 h-1.5 overflow-hidden rounded-full bg-muted">
+      <div
+        className="h-full rounded-full bg-[var(--chart-1)] transition-[width] duration-300"
+        style={{ width: `${pct}%` }}
+      />
+    </div>
+  )
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function ApolloPrep() {
@@ -273,13 +353,14 @@ export default function ApolloPrep() {
     return () => {
       if (pollTimerRef.current) clearInterval(pollTimerRef.current)
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const startPoll = useCallback(() => {
     if (pollTimerRef.current) clearInterval(pollTimerRef.current)
     pollTimerRef.current = setInterval(pollEnrichStatus, 2000)
     void pollEnrichStatus()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [])
 
   async function pollEnrichStatus() {
     try {
@@ -669,503 +750,332 @@ export default function ApolloPrep() {
   const isEnrichActive = isEnrichRunning || isEnrichPaused
   const showEnrichProgress = isEnrichRunning || isEnrichPaused || enrichPhase === 'completed' || enrichPhase === 'stopped'
 
+  const enrichJobTone: StatusTone =
+    enrichPhase === 'running' ? 'ok'
+      : enrichPhase === 'paused' ? 'paused'
+        : enrichPhase === 'scanning' ? 'info'
+          : enrichPhase === 'completed' ? 'ok'
+            : enrichPhase === 'stopped' ? 'error'
+              : enrichPhase === 'scan-ready' ? 'info'
+                : 'neutral'
+
+  const resultColumns: Column<EnrichResult>[] = [
+    {
+      key: 'domain', header: 'Domain', sortValue: r => r.domain.toLowerCase(),
+      cell: r => <span className="font-medium text-foreground">{r.domain}</span>,
+    },
+    { key: 'industry', header: 'Industry', sortValue: r => r.industry ?? '', cell: r => r.industry ?? '—' },
+    {
+      key: 'keywords', header: 'Keywords',
+      cell: r => {
+        const kwArr = r.keywords ? r.keywords.split(',') : []
+        const kw = kwArr.length ? kwArr.slice(0, 4).join(', ') + (kwArr.length > 4 ? '…' : '') : '—'
+        return (
+          <span className="block max-w-[200px] truncate text-muted-foreground" title={r.keywords ?? ''}>{kw}</span>
+        )
+      },
+    },
+    {
+      key: 'num_employees', header: 'Employees', numeric: true, sortValue: r => r.num_employees ?? -1,
+      cell: r => (r.num_employees != null ? r.num_employees.toLocaleString() : '—'),
+    },
+    { key: 'contacts', header: 'Contacts', numeric: true, sortValue: r => r.contacts, cell: r => r.contacts },
+    {
+      key: 'status', header: 'Status', sortValue: r => r.status,
+      cell: r => (
+        <StatusBadge status={r.status === 'updated' ? 'ok' : r.status === 'failed' ? 'error' : 'neutral'}>
+          {r.status}
+        </StatusBadge>
+      ),
+    },
+  ]
+
   // ── Render ──────────────────────────────────────────────────────
 
   return (
-    <div className="o-page">
-
+    <PageShell
+      title="Apollo Prep"
+      subtitle="Split your database by account, prep CSVs for Apollo import, and enrich contacts with AI."
+    >
       {/* Apollo Account Split */}
-      <div className="o-card" style={{ marginBottom: '1.25rem' }}>
-        <div className="o-card-header">
-          <div className="o-card-title">Apollo Account Split — UK</div>
-        </div>
-        <div className="o-card-body">
-          <p style={{ fontSize: 13, color: '#6B7280', marginBottom: '1.5rem' }}>
-            Export your existing database contacts split by account, or find net-new contacts in Apollo.
-            Account 1 = London + South East; Account 2 = rest of the UK. No duplicates between accounts.
-          </p>
+      <Card
+        title="Apollo Account Split — UK"
+        subtitle="Account 1 = London + South East · Account 2 = rest of the UK · no duplicates between accounts."
+      >
+        <p className="mb-6 text-[13px] text-muted-foreground">
+          Export your existing database contacts split by account, or find net-new contacts in Apollo.
+        </p>
 
-          <div style={{ marginBottom: '1.5rem' }}>
-            <div className="o-section-h">Export from your database</div>
-            <div style={{ display: 'flex', gap: '.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
-              <button
-                className="o-btn o-btn-primary"
-                disabled={exportingAccount !== null}
-                onClick={() => void exportSplit(1)}
-              >
-                {exportingAccount === 1 ? 'Exporting…' : '↓ Export Account 1 — London + South East'}
-              </button>
-              <button
-                className="o-btn o-btn-teal"
-                disabled={exportingAccount !== null}
-                onClick={() => void exportSplit(2)}
-              >
-                {exportingAccount === 2 ? 'Exporting…' : '↓ Export Account 2 — Rest of UK'}
-              </button>
-            </div>
-            {exportStatus && (
-              <div style={{ fontSize: 12, color: '#6B7280', marginTop: '.5rem' }}>{exportStatus}</div>
-            )}
+        <div className="mb-6">
+          <SectionLabel>Export from your database</SectionLabel>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button disabled={exportingAccount !== null} onClick={() => void exportSplit(1)}>
+              {exportingAccount === 1 ? 'Exporting…' : '↓ Export Account 1 — London + South East'}
+            </Button>
+            <Button variant="secondary" disabled={exportingAccount !== null} onClick={() => void exportSplit(2)}>
+              {exportingAccount === 2 ? 'Exporting…' : '↓ Export Account 2 — Rest of UK'}
+            </Button>
           </div>
+          {exportStatus && <div className="mt-2 text-xs text-muted-foreground">{exportStatus}</div>}
+        </div>
 
-          <div>
-            <div className="o-section-h">Find net-new contacts in Apollo</div>
-            <div style={{ display: 'flex', gap: '.75rem', flexWrap: 'wrap' }}>
-              <a
-                href={APOLLO_URL_ACCOUNT1}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="o-btn o-btn-primary"
-                style={{ textDecoration: 'none' }}
-              >
-                &#x2197; Account 1 — London + South East
-              </a>
-              <a
-                href={APOLLO_URL_ACCOUNT2}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="o-btn o-btn-teal"
-                style={{ textDecoration: 'none' }}
-              >
-                &#x2197; Account 2 — Rest of UK
-              </a>
-            </div>
+        <div>
+          <SectionLabel>Find net-new contacts in Apollo</SectionLabel>
+          <div className="flex flex-wrap gap-2">
+            <Button render={<a href={APOLLO_URL_ACCOUNT1} target="_blank" rel="noopener noreferrer" />}>
+              ↗ Account 1 — London + South East
+            </Button>
+            <Button variant="secondary" render={<a href={APOLLO_URL_ACCOUNT2} target="_blank" rel="noopener noreferrer" />}>
+              ↗ Account 2 — Rest of UK
+            </Button>
           </div>
         </div>
-      </div>
+      </Card>
 
       {/* Apollo Upload Prep */}
-      <div className="o-card" style={{ marginBottom: '1.25rem' }}>
-        <div className="o-card-header">
-          <div className="o-card-title">Apollo Upload Prep</div>
-        </div>
-        <div className="o-card-body">
-          <p style={{ fontSize: 13, color: '#6B7280', marginBottom: '1.5rem' }}>
-            Drop any number of CSVs. Emails are extracted, deduplicated, stripped of all other columns,
-            and split into chunks ≤ 45 MB / 100,000 rows — ready to import straight into Apollo.
-          </p>
-
-          {/* Drop zone */}
-          <div
-            onClick={() => fileInputRef.current?.click()}
-            onDragOver={e => { e.preventDefault(); setIsDragging(true) }}
-            onDragLeave={() => setIsDragging(false)}
-            onDrop={e => { e.preventDefault(); setIsDragging(false); addFiles(e.dataTransfer.files) }}
-            style={{
-              border: `2px dashed ${isDragging ? '#1F6F78' : '#E2E6F0'}`,
-              borderRadius: 12,
-              padding: '3rem 2rem',
-              textAlign: 'center',
-              cursor: 'pointer',
-              background: isDragging ? '#EEF9FA' : '#FAFBFF',
-              transition: 'all .2s',
-            }}
-          >
-            <div style={{ fontSize: '2.5rem', marginBottom: '.75rem' }}>📂</div>
-            <div style={{ fontSize: 15, fontWeight: 600 }}>Drop CSV files here, or click to browse</div>
-            <div style={{ fontSize: 12, color: '#6B7280', marginTop: '.4rem' }}>
-              Any column named Email / email / Email Address / email_address / E-mail will be detected automatically
-            </div>
+      <Card
+        title="Apollo Upload Prep"
+        subtitle="Drop CSVs — emails are extracted, deduplicated, and split into chunks ≤ 45 MB / 100,000 rows."
+      >
+        {/* Drop zone */}
+        <div
+          onClick={() => fileInputRef.current?.click()}
+          onDragOver={e => { e.preventDefault(); setIsDragging(true) }}
+          onDragLeave={() => setIsDragging(false)}
+          onDrop={e => { e.preventDefault(); setIsDragging(false); addFiles(e.dataTransfer.files) }}
+          className={`cursor-pointer rounded-xl border-2 border-dashed px-8 py-12 text-center transition-colors ${
+            isDragging ? 'border-primary bg-accent/50' : 'border-border bg-muted/30 hover:bg-muted/50'
+          }`}
+        >
+          <div className="mb-3 text-4xl">📂</div>
+          <div className="text-[15px] font-semibold text-foreground">Drop CSV files here, or click to browse</div>
+          <div className="mt-1 text-xs text-muted-foreground">
+            Any column named Email / email / Email Address / email_address / E-mail will be detected automatically
           </div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".csv"
-            multiple
-            style={{ display: 'none' }}
-            onChange={e => { if (e.target.files) addFiles(e.target.files) }}
-          />
-
-          {/* File list */}
-          {pendingFiles.length > 0 && (
-            <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '.5rem' }}>
-              {pendingFiles.map((p, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '.75rem', padding: '.6rem .9rem', background: '#F8F9FC', borderRadius: 8, border: '1px solid #E2E6F0' }}>
-                  <span style={{ fontSize: 16 }}>📄</span>
-                  <span style={{ flex: 1, fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {p.name}
-                  </span>
-                  <span style={{ fontSize: 11, color: '#6B7280' }}>{(p.file.size / 1024).toFixed(0)} KB</span>
-                  <button
-                    onClick={() => removeFile(i)}
-                    title="Remove"
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6B7280', fontSize: 16, padding: '2px 6px', borderRadius: 4 }}
-                    onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#FEE2E2'; (e.currentTarget as HTMLButtonElement).style.color = '#DC2626' }}
-                    onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'none'; (e.currentTarget as HTMLButtonElement).style.color = '#6B7280' }}
-                  >
-                    &times;
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {pendingFiles.length > 0 && (
-            <div style={{ display: 'flex', gap: '.75rem', flexWrap: 'wrap', alignItems: 'center', marginTop: '1rem' }}>
-              <button
-                className="o-btn o-btn-primary"
-                disabled={processing}
-                onClick={() => void processCsvFiles()}
-              >
-                {processing ? <><span className="o-spin" /> Processing…</> : '⚡ Process files'}
-              </button>
-              <button
-                className="o-btn o-btn-ghost"
-                disabled={processing}
-                onClick={clearAll}
-              >
-                ✕ Clear all
-              </button>
-            </div>
-          )}
         </div>
-      </div>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".csv"
+          multiple
+          className="hidden"
+          onChange={e => { if (e.target.files) addFiles(e.target.files) }}
+        />
+
+        {/* File list */}
+        {pendingFiles.length > 0 && (
+          <div className="mt-4 flex flex-col gap-2">
+            {pendingFiles.map((p, i) => (
+              <div key={i} className="flex items-center gap-3 rounded-md border border-border bg-muted/30 px-3.5 py-2.5">
+                <span className="text-base">📄</span>
+                <span className="flex-1 truncate text-[13px] font-medium text-foreground">{p.name}</span>
+                <span className="text-[11px] text-muted-foreground">{(p.file.size / 1024).toFixed(0)} KB</span>
+                <Button variant="ghost" size="icon-sm" title="Remove" onClick={() => removeFile(i)}>×</Button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {pendingFiles.length > 0 && (
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <Button disabled={processing} onClick={() => void processCsvFiles()}>
+              {processing ? 'Processing…' : '⚡ Process files'}
+            </Button>
+            <Button variant="ghost" disabled={processing} onClick={clearAll}>✕ Clear all</Button>
+          </div>
+        )}
+      </Card>
 
       {/* Results */}
       {showResults && (
-        <div className="o-card" style={{ marginBottom: '1.25rem' }}>
-          <div className="o-card-header">
-            <div>
-              <div className="o-card-title">Results</div>
-              {resultStats && (
-                <div style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>
-                  {resultStats.chunkCount} chunk{resultStats.chunkCount !== 1 ? 's' : ''} ready to download
-                </div>
-              )}
+        <Card
+          title="Results"
+          subtitle={resultStats ? `${resultStats.chunkCount} chunk${resultStats.chunkCount !== 1 ? 's' : ''} ready to download` : undefined}
+          actions={
+            <div className="flex items-center gap-2">
+              <Button variant="secondary" size="sm" onClick={downloadAll} disabled={!chunks.length}>⬇ Download all</Button>
+              <span className="text-[11px] text-muted-foreground">If Chrome asks &ldquo;allow multiple downloads&rdquo; — click Allow</span>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
-              <button
-                className="o-btn o-btn-teal o-btn-sm"
-                onClick={downloadAll}
-                disabled={!chunks.length}
-              >
-                ⬇ Download all
-              </button>
-              <span style={{ fontSize: 11, color: '#6B7280' }}>
-                If Chrome asks &ldquo;allow multiple downloads&rdquo; — click Allow
-              </span>
+          }
+        >
+          {resultStats && (
+            <div className="mb-6 grid grid-cols-2 gap-4 md:grid-cols-4">
+              <KpiCard label="Unique emails" value={resultStats.uniqueEmails.toLocaleString()} tone="teal" />
+              <KpiCard label="Output chunks" value={String(resultStats.chunkCount)} tone="green" />
+              <KpiCard label="Duplicates removed" value={resultStats.dupes.toLocaleString()} tone="yellow" />
+              <KpiCard label="Files skipped" value={String(resultStats.skipped)} tone="navy" />
             </div>
-          </div>
-          <div className="o-card-body">
-            {resultStats && (
-              <div className="o-metrics o-metrics-4" style={{ marginBottom: '1.5rem' }}>
-                <div className="o-metric" style={{ borderTopColor: '#1F6F78' }}>
-                  <div className="o-metric-label">Unique emails</div>
-                  <div className="o-metric-val" style={{ color: '#1F6F78' }}>{resultStats.uniqueEmails.toLocaleString()}</div>
-                </div>
-                <div className="o-metric" style={{ borderTopColor: '#16A34A' }}>
-                  <div className="o-metric-label">Output chunks</div>
-                  <div className="o-metric-val" style={{ color: '#16A34A' }}>{String(resultStats.chunkCount)}</div>
-                </div>
-                <div className="o-metric" style={{ borderTopColor: '#D97706' }}>
-                  <div className="o-metric-label">Duplicates removed</div>
-                  <div className="o-metric-val" style={{ color: '#D97706' }}>{resultStats.dupes.toLocaleString()}</div>
-                </div>
-                <div className="o-metric" style={{ borderTopColor: '#224388' }}>
-                  <div className="o-metric-label">Files skipped</div>
-                  <div className="o-metric-val" style={{ color: '#224388' }}>{String(resultStats.skipped)}</div>
-                </div>
+          )}
+
+          <ProgressBar pct={progress} />
+
+          {/* Chunk list */}
+          <div className="flex flex-col gap-2">
+            {chunks.map((c, i) => (
+              <div key={i} className="flex items-center gap-4 rounded-lg border border-border bg-muted/30 px-4 py-3">
+                <span className="text-lg">📦</span>
+                <span className="flex-1 text-[13px] font-semibold text-foreground">{c.name}</span>
+                <span className="text-xs text-muted-foreground">{c.rows.toLocaleString()} rows · {c.sizeMB} MB</span>
+                <Button variant="secondary" size="sm" onClick={() => downloadChunk(i)}>⬇ Download</Button>
               </div>
-            )}
-
-            {/* Progress bar */}
-            <div style={{ height: 6, background: '#E5E7EB', borderRadius: 3, overflow: 'hidden', margin: '.75rem 0' }}>
-              <div style={{ height: '100%', background: '#1F6F78', borderRadius: 3, width: `${progress}%`, transition: 'width .3s' }} />
-            </div>
-
-            {/* Chunk list */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '.6rem' }}>
-              {chunks.map((c, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '.75rem 1rem', background: '#F8F9FC', borderRadius: 10, border: '1px solid #E2E6F0' }}>
-                  <span style={{ fontSize: 18 }}>📦</span>
-                  <span style={{ fontWeight: 600, fontSize: 13, flex: 1 }}>{c.name}</span>
-                  <span style={{ fontSize: 12, color: '#6B7280' }}>{c.rows.toLocaleString()} rows · {c.sizeMB} MB</span>
-                  <button
-                    className="o-btn o-btn-teal o-btn-sm"
-                    onClick={() => downloadChunk(i)}
-                  >
-                    ⬇ Download
-                  </button>
-                </div>
-              ))}
-            </div>
-
-            {/* Log */}
-            {logLines.length > 0 && (
-              <div
-                ref={logRef}
-                style={{ fontFamily: '\'SF Mono\', ui-monospace, monospace', fontSize: 11, color: '#6B7280', background: '#F8F9FC', border: '1px solid #E2E6F0', borderRadius: 8, padding: '.75rem 1rem', maxHeight: 140, overflowY: 'auto', marginTop: '1rem', lineHeight: 1.6 }}
-              >
-                {logLines.map((l, i) => (
-                  <div key={i} style={{ color: l.type === 'ok' ? '#16A34A' : l.type === 'err' ? '#DC2626' : l.type === 'warn' ? '#D97706' : '#6B7280' }}>
-                    {l.text}
-                  </div>
-                ))}
-              </div>
-            )}
+            ))}
           </div>
-        </div>
+
+          {logLines.length > 0 && <LogBox logRef={logRef} lines={logLines} />}
+        </Card>
       )}
 
       {/* AI Enrichment */}
-      <div className="o-card" style={{ marginBottom: '1.25rem' }}>
-        <div className="o-card-header">
-          <div className="o-card-title">AI Enrichment</div>
+      <Card
+        title="AI Enrichment"
+        subtitle="Scans the database for contacts missing data, searches the web with AI, and fills the gaps — grouped by company domain."
+        actions={<StatusBadge status={enrichJobTone}>{enrichPhase}</StatusBadge>}
+      >
+        {/* Field selection */}
+        <div className="mb-5">
+          <SectionLabel>Claude fields (fills blanks only)</SectionLabel>
+          <div className="mb-3 flex flex-wrap gap-4">
+            <label className="flex cursor-pointer items-center gap-2 text-[13px] font-medium text-foreground">
+              <Checkbox checked={enrichKeywords} onCheckedChange={v => setEnrichKeywords(Boolean(v))} />
+              Keywords
+            </label>
+            <label className="flex cursor-pointer items-center gap-2 text-[13px] font-medium text-foreground">
+              <Checkbox checked={enrichIndustry} onCheckedChange={v => setEnrichIndustry(Boolean(v))} />
+              Industry
+            </label>
+            <label className="flex cursor-pointer items-center gap-2 text-[13px] font-medium text-foreground">
+              <Checkbox checked={enrichEmployees} onCheckedChange={v => setEnrichEmployees(Boolean(v))} />
+              Company Size
+            </label>
+          </div>
+          <SectionLabel>Companies House (always updated — live gov data)</SectionLabel>
+          <div className="text-xs leading-relaxed text-muted-foreground">
+            Company status · Company type · Founded year · Postcode · Full address · SIC codes · Jurisdiction · Active &amp; resigned officers · Last accounts date · Insolvency history · Charges · Accounts overdue · Cessation date
+          </div>
         </div>
-        <div className="o-card-body">
-          <p style={{ fontSize: 13, color: '#6B7280', marginBottom: '1.5rem' }}>
-            Scans the database for contacts missing data, searches the web using AI, and fills in the gaps.
-            Groups by company domain — one search enriches all contacts from the same company.
-          </p>
 
-          {/* Field selection */}
-          <div style={{ marginBottom: '1.25rem' }}>
-            <div className="o-section-h">Claude fields (fills blanks only)</div>
-            <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '.75rem' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>
-                <input type="checkbox" checked={enrichKeywords} onChange={e => setEnrichKeywords(e.target.checked)} style={{ accentColor: '#1F6F78', width: 15, height: 15 }} />
-                Keywords
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>
-                <input type="checkbox" checked={enrichIndustry} onChange={e => setEnrichIndustry(e.target.checked)} style={{ accentColor: '#1F6F78', width: 15, height: 15 }} />
-                Industry
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>
-                <input type="checkbox" checked={enrichEmployees} onChange={e => setEnrichEmployees(e.target.checked)} style={{ accentColor: '#1F6F78', width: 15, height: 15 }} />
-                Company Size
-              </label>
-            </div>
-            <div className="o-section-h">Companies House (always updated — live gov data)</div>
-            <div style={{ fontSize: 12, color: '#6B7280', lineHeight: 1.6 }}>
-              Company status · Company type · Founded year · Postcode · Full address · SIC codes · Jurisdiction · Active &amp; resigned officers · Last accounts date · Insolvency history · Charges · Accounts overdue · Cessation date
-            </div>
+        {/* Batch size + concurrency */}
+        <div className="mb-5 flex flex-wrap items-center gap-6">
+          <div className="flex items-center gap-3">
+            <SectionLabel>Batch size</SectionLabel>
+            <Select value={enrichLimit} onValueChange={v => setEnrichLimit(v ?? '100')} disabled={isEnrichActive}>
+              <SelectTrigger className="min-w-[180px]"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="100">100 domains (test)</SelectItem>
+                <SelectItem value="500">500 domains</SelectItem>
+                <SelectItem value="1000">1,000 domains</SelectItem>
+                <SelectItem value="5000">5,000 domains</SelectItem>
+                <SelectItem value="0">Full database</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
-
-          {/* Batch size + concurrency */}
-          <div style={{ marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '1.5rem', flexWrap: 'wrap' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '.75rem' }}>
-              <div className="o-section-h" style={{ marginBottom: 0 }}>Batch size</div>
-              <select
-                className="o-select"
-                value={enrichLimit}
-                onChange={e => setEnrichLimit(e.target.value)}
-                disabled={isEnrichActive}
-              >
-                <option value="100">100 domains (test)</option>
-                <option value="500">500 domains</option>
-                <option value="1000">1,000 domains</option>
-                <option value="5000">5,000 domains</option>
-                <option value="0">Full database</option>
-              </select>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '.75rem' }}>
-              <div className="o-section-h" style={{ marginBottom: 0 }}>Speed</div>
-              <select
-                className="o-select"
-                value={enrichConcurrency}
-                onChange={e => setEnrichConcurrency(e.target.value)}
-                disabled={isEnrichActive}
-              >
-                <option value="1">1 — safe</option>
-                <option value="3">3 — normal</option>
-                <option value="5">5 — fast (recommended)</option>
-                <option value="10">10 — max</option>
-              </select>
-            </div>
+          <div className="flex items-center gap-3">
+            <SectionLabel>Speed</SectionLabel>
+            <Select value={enrichConcurrency} onValueChange={v => setEnrichConcurrency(v ?? '5')} disabled={isEnrichActive}>
+              <SelectTrigger className="min-w-[180px]"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="1">1 — safe</SelectItem>
+                <SelectItem value="3">3 — normal</SelectItem>
+                <SelectItem value="5">5 — fast (recommended)</SelectItem>
+                <SelectItem value="10">10 — max</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
+        </div>
 
-          {/* Controls */}
-          <div style={{ display: 'flex', gap: '.75rem', flexWrap: 'wrap', alignItems: 'center', marginBottom: '1rem' }}>
-            {(enrichPhase === 'idle' || enrichPhase === 'completed' || enrichPhase === 'stopped') && (
-              <button
-                className="o-btn o-btn-teal"
-                onClick={() => void scanEnrichment()}
-              >
-                Scan Database
-              </button>
-            )}
-
-            {enrichPhase === 'scanning' && (
-              <button className="o-btn o-btn-teal" disabled style={{ opacity: 0.5 }}>
-                <span className="o-spin" /> Scanning…
-              </button>
-            )}
-
-            {enrichPhase === 'scan-ready' && (
-              <>
-                <button
-                  className="o-btn"
-                  style={{ background: '#16A34A', color: '#fff' }}
-                  onClick={() => void startEnrichment()}
-                >
-                  Confirm &amp; Start
-                </button>
-                <button
-                  className="o-btn o-btn-ghost"
-                  onClick={cancelScan}
-                >
-                  Cancel
-                </button>
-              </>
-            )}
-
-            {isEnrichRunning && (
-              <>
-                <button className="o-btn o-btn-ghost" onClick={() => void pauseEnrichment()}>⏸ Pause</button>
-                <button className="o-btn o-btn-ghost" onClick={() => void stopEnrichment()}>■ Stop</button>
-              </>
-            )}
-
-            {isEnrichPaused && (
-              <>
-                <button className="o-btn o-btn-ghost" onClick={() => void resumeEnrichment()}>▶ Resume</button>
-                <button className="o-btn o-btn-ghost" onClick={() => void stopEnrichment()}>■ Stop</button>
-              </>
-            )}
-
-            {enrichStatusMsg && (
-              <span style={{ fontSize: 12, color: '#6B7280' }}>{enrichStatusMsg}</span>
-            )}
-          </div>
-
-          {/* Scan result confirmation box */}
-          {enrichPhase === 'scan-ready' && enrichScanData && (
-            <div style={{ background: '#F0FDF4', border: '1px solid #86EFAC', borderRadius: 10, padding: '1rem 1.25rem', marginBottom: '1rem' }}>
-              <div style={{ fontSize: 14, fontWeight: 600, color: '#15803D', marginBottom: '.4rem' }}>Ready to enrich</div>
-              <div style={{ fontSize: 13, color: '#166534' }}>
-                <strong>{enrichScanData.domains.toLocaleString()} domains</strong> need enrichment &nbsp;·&nbsp;{' '}
-                {enrichScanData.contacts.toLocaleString()} contacts affected &nbsp;·&nbsp;{' '}
-                Est. cost: <strong>${enrichScanData.cost_usd.toFixed(4)}</strong>
-              </div>
-            </div>
+        {/* Controls */}
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          {(enrichPhase === 'idle' || enrichPhase === 'completed' || enrichPhase === 'stopped') && (
+            <Button variant="secondary" onClick={() => void scanEnrichment()}>Scan Database</Button>
           )}
 
-          {/* Progress section */}
-          {showEnrichProgress && (
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#6B7280', marginBottom: 4 }}>
-                <span>{enrichProgressLabel}</span>
-                <span style={{ fontStyle: 'italic' }}>{enrichCurrentDomain}</span>
-              </div>
-              <div style={{ height: 6, background: '#E5E7EB', borderRadius: 3, overflow: 'hidden', margin: '.75rem 0' }}>
-                <div style={{ height: '100%', background: '#1F6F78', borderRadius: 3, width: `${enrichProgress}%`, transition: 'width .3s' }} />
-              </div>
-
-              {/* Stats row */}
-              <div className="o-metrics o-metrics-auto" style={{ marginTop: '1rem' }}>
-                <div className="o-metric" style={{ borderTopColor: '#1F6F78' }}>
-                  <div className="o-metric-label">Updated</div>
-                  <div className="o-metric-val" style={{ color: '#1F6F78' }}>{enrichStats.updated.toLocaleString()}</div>
-                </div>
-                <div className="o-metric" style={{ borderTopColor: '#224388' }}>
-                  <div className="o-metric-label">Skipped</div>
-                  <div className="o-metric-val" style={{ color: '#224388' }}>{enrichStats.skipped.toLocaleString()}</div>
-                </div>
-                <div className="o-metric" style={{ borderTopColor: '#D97706' }}>
-                  <div className="o-metric-label">Failed</div>
-                  <div className="o-metric-val" style={{ color: '#D97706' }}>{enrichStats.failed.toLocaleString()}</div>
-                </div>
-                <div className="o-metric" style={{ borderTopColor: '#16A34A' }}>
-                  <div className="o-metric-label">Domains</div>
-                  <div className="o-metric-val" style={{ color: '#16A34A' }}>{enrichStats.total.toLocaleString()}</div>
-                </div>
-                <div className="o-metric" style={{ borderTopColor: '#7C89CD' }}>
-                  <div className="o-metric-label">Cost (USD)</div>
-                  <div className="o-metric-val" style={{ color: '#7C89CD' }}>{`$${enrichStats.cost.toFixed(4)}`}</div>
-                </div>
-                <div className="o-metric" style={{ borderTopColor: '#D97706' }}>
-                  <div className="o-metric-label">Est. Time Left</div>
-                  <div className="o-metric-val" style={{ color: '#D97706' }}>{enrichEta}</div>
-                </div>
-              </div>
-
-              {/* Enrich log */}
-              {enrichLog.length > 0 && (
-                <div
-                  ref={enrichLogRef}
-                  style={{ fontFamily: '\'SF Mono\', ui-monospace, monospace', fontSize: 11, color: '#6B7280', background: '#F8F9FC', border: '1px solid #E2E6F0', borderRadius: 8, padding: '.75rem 1rem', maxHeight: 150, overflowY: 'auto', marginTop: '.75rem', lineHeight: 1.6 }}
-                >
-                  {enrichLog.map((l, i) => (
-                    <div key={i} style={{ color: l.type === 'ok' ? '#16A34A' : l.type === 'err' ? '#DC2626' : '#D97706' }}>
-                      {l.text}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Sample CSV export */}
-              <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid #E2E6F0' }}>
-                <div className="o-section-h">Sample Export</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '.75rem', flexWrap: 'wrap' }}>
-                  <button
-                    className="o-btn o-btn-ghost"
-                    disabled={sampleCsvLoading}
-                    onClick={() => void downloadSampleCsv()}
-                  >
-                    {sampleCsvLoading ? <><span className="o-spin" /> Working…</> : 'Download 100 contact sample (original + enriched)'}
-                  </button>
-                  {sampleCsvStatus && (
-                    <span style={{ fontSize: 12, color: '#6B7280' }}>{sampleCsvStatus}</span>
-                  )}
-                </div>
-              </div>
-
-              {/* Results table */}
-              {showEnrichResults && enrichResults.length > 0 && (
-                <div style={{ marginTop: '1.25rem' }}>
-                  <div className="o-section-h">Results</div>
-                  <div className="o-table-wrap">
-                    <table className="o-table">
-                      <thead>
-                        <tr>
-                          <th>Domain</th>
-                          <th>Industry</th>
-                          <th>Keywords</th>
-                          <th>Employees</th>
-                          <th>Contacts</th>
-                          <th>Status</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {enrichResults.map((r, i) => {
-                          const kwArr = r.keywords ? r.keywords.split(',') : []
-                          const kw = kwArr.length ? kwArr.slice(0, 4).join(', ') + (kwArr.length > 4 ? '…' : '') : '—'
-                          return (
-                            <tr key={i}>
-                              <td><span style={{ fontWeight: 500 }}>{r.domain}</span></td>
-                              <td>{r.industry ?? '—'}</td>
-                              <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#6B7280' }} title={r.keywords ?? ''}>{kw}</td>
-                              <td>{r.num_employees != null ? r.num_employees.toLocaleString() : '—'}</td>
-                              <td>{r.contacts}</td>
-                              <td>
-                                {r.status === 'updated' && <span className="o-status o-status-good">{r.status}</span>}
-                                {r.status === 'failed' && <span className="o-status o-status-critical">{r.status}</span>}
-                                {r.status !== 'updated' && r.status !== 'failed' && <span className="o-status o-status-unknown">{r.status}</span>}
-                              </td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-            </div>
+          {enrichPhase === 'scanning' && (
+            <Button variant="secondary" disabled>Scanning…</Button>
           )}
+
+          {enrichPhase === 'scan-ready' && (
+            <>
+              <Button onClick={() => void startEnrichment()}>Confirm &amp; Start</Button>
+              <Button variant="ghost" onClick={cancelScan}>Cancel</Button>
+            </>
+          )}
+
+          {isEnrichRunning && (
+            <>
+              <Button variant="ghost" onClick={() => void pauseEnrichment()}>⏸ Pause</Button>
+              <Button variant="destructive" onClick={() => void stopEnrichment()}>■ Stop</Button>
+            </>
+          )}
+
+          {isEnrichPaused && (
+            <>
+              <Button variant="ghost" onClick={() => void resumeEnrichment()}>▶ Resume</Button>
+              <Button variant="destructive" onClick={() => void stopEnrichment()}>■ Stop</Button>
+            </>
+          )}
+
+          {enrichStatusMsg && <span className="text-xs text-muted-foreground">{enrichStatusMsg}</span>}
         </div>
-      </div>
 
-    </div>
-  )
-}
+        {/* Scan result confirmation box */}
+        {enrichPhase === 'scan-ready' && enrichScanData && (
+          <div className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-5 py-4">
+            <div className="mb-1 text-sm font-semibold text-emerald-700 dark:text-emerald-400">Ready to enrich</div>
+            <div className="text-[13px] text-foreground">
+              <strong>{enrichScanData.domains.toLocaleString()} domains</strong> need enrichment &nbsp;·&nbsp;{' '}
+              {enrichScanData.contacts.toLocaleString()} contacts affected &nbsp;·&nbsp;{' '}
+              Est. cost: <strong>${enrichScanData.cost_usd.toFixed(4)}</strong>
+            </div>
+          </div>
+        )}
 
-// ── Sub-components ────────────────────────────────────────────────────────────
+        {/* Progress section */}
+        {showEnrichProgress && (
+          <div>
+            <div className="mb-1 flex justify-between text-xs text-muted-foreground">
+              <span>{enrichProgressLabel}</span>
+              <span className="italic">{enrichCurrentDomain}</span>
+            </div>
+            <ProgressBar pct={enrichProgress} />
 
-function StatCard({ label, value, color }: { label: string; value: string; color: string }) {
-  return (
-    <div className="o-metric" style={{ borderTopColor: color }}>
-      <div className="o-metric-label">{label}</div>
-      <div className="o-metric-val" style={{ color }}>{value}</div>
-    </div>
+            {/* Stats row */}
+            <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
+              <KpiCard label="Updated" value={enrichStats.updated.toLocaleString()} tone="teal" />
+              <KpiCard label="Skipped" value={enrichStats.skipped.toLocaleString()} tone="navy" />
+              <KpiCard label="Failed" value={enrichStats.failed.toLocaleString()} tone="yellow" />
+              <KpiCard label="Domains" value={enrichStats.total.toLocaleString()} tone="green" />
+              <KpiCard label="Cost (USD)" value={`$${enrichStats.cost.toFixed(4)}`} tone="purple" />
+              <KpiCard label="Est. Time Left" value={enrichEta} tone="yellow" />
+            </div>
+
+            {/* Enrich log */}
+            {enrichLog.length > 0 && <LogBox logRef={enrichLogRef} lines={enrichLog} />}
+
+            {/* Sample CSV export */}
+            <div className="mt-4 border-t border-border pt-4">
+              <SectionLabel>Sample Export</SectionLabel>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button variant="ghost" disabled={sampleCsvLoading} onClick={() => void downloadSampleCsv()}>
+                  {sampleCsvLoading ? 'Working…' : 'Download 100 contact sample (original + enriched)'}
+                </Button>
+                {sampleCsvStatus && <span className="text-xs text-muted-foreground">{sampleCsvStatus}</span>}
+              </div>
+            </div>
+
+            {/* Results table */}
+            {showEnrichResults && enrichResults.length > 0 && (
+              <div className="mt-5">
+                <SectionLabel>Results</SectionLabel>
+                <DataTable
+                  columns={resultColumns}
+                  rows={enrichResults}
+                  getRowKey={(r, i) => `${r.domain}-${i}`}
+                />
+              </div>
+            )}
+          </div>
+        )}
+      </Card>
+    </PageShell>
   )
 }

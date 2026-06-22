@@ -6,7 +6,7 @@ const SECRET = new TextEncoder().encode(
 )
 const COOKIE = 'ottaly_session'
 
-const PUBLIC_PATHS = ['/login', '/api/auth']
+const PUBLIC_PATHS = ['/login', '/api/auth', '/api/healthz']
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl

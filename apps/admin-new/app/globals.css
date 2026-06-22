@@ -7,9 +7,10 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-sans);
-  --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-sans);
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-display: var(--font-genos), var(--font-inter), sans-serif;
+  --font-heading: var(--font-genos), var(--font-inter), sans-serif;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -48,73 +49,82 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/* ── Ottaly brand palette (verified against apps/admin-legacy/ottaly.css) ──
+   teal  #1F6F78   navy #050C29 / #224388   purple #7C89CD
+   yellow #FFB700  green #16A34A  red #DC2626
+   Light + dark themes. Dark is the default (set on <html> server-side). */
+
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  /* Light theme */
+  --background: oklch(0.965 0.004 271);     /* #F0F2F8 */
+  --foreground: oklch(0.18 0.07 273);       /* #050C29 navy */
+  --card: oklch(1 0 0);                      /* #FFFFFF */
+  --card-foreground: oklch(0.18 0.07 273);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --popover-foreground: oklch(0.18 0.07 273);
+  --primary: oklch(0.52 0.075 197);          /* #1F6F78 teal */
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.95 0.006 271);        /* #F0F2F8-ish */
+  --secondary-foreground: oklch(0.28 0.06 273);
+  --muted: oklch(0.96 0.004 271);
+  --muted-foreground: oklch(0.5 0.02 268);   /* #6B7280 */
+  --accent: oklch(0.95 0.006 271);
+  --accent-foreground: oklch(0.28 0.06 273);
+  --destructive: oklch(0.58 0.22 27);        /* #DC2626 */
+  --border: oklch(0.91 0.01 268);            /* #E2E6F0 */
+  --input: oklch(0.91 0.01 268);
+  --ring: oklch(0.52 0.075 197);             /* teal */
+  --chart-1: oklch(0.52 0.075 197);          /* teal */
+  --chart-2: oklch(0.42 0.13 268);           /* #224388 navy-blue */
+  --chart-3: oklch(0.64 0.1 280);            /* #7C89CD purple */
+  --chart-4: oklch(0.81 0.16 84);            /* #FFB700 yellow */
+  --chart-5: oklch(0.63 0.17 149);           /* #16A34A green */
+  --radius: 0.375rem;                        /* 6px */
+  /* Light sidebar: white surface, navy text, teal active highlight. */
+  --sidebar: #FFFFFF;
+  --sidebar-foreground: #050C29;             /* navy text */
+  --sidebar-primary: #1F6F78;                /* teal */
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #EAF0FB;                 /* soft tint for hover/active row */
+  --sidebar-accent-foreground: #050C29;
+  --sidebar-border: #E2E6F0;
+  --sidebar-ring: #1F6F78;
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  /* Dark theme (default) */
+  --background: oklch(0.16 0.045 272);       /* #050C29 deep navy */
+  --foreground: oklch(0.96 0.008 268);
+  --card: oklch(0.21 0.05 272);              /* #0A1538-range raised navy */
+  --card-foreground: oklch(0.96 0.008 268);
+  --popover: oklch(0.21 0.05 272);
+  --popover-foreground: oklch(0.96 0.008 268);
+  --primary: #2A8A95;                        /* brand teal #1F6F78, brightened for dark */
+  --primary-foreground: #04261B;
+  --secondary: #1A2E5A;
+  --secondary-foreground: #EAF0FF;
+  --muted: #16264A;
+  --muted-foreground: #9FB0D4;               /* readable muted text on navy */
+  --accent: #1F3360;
+  --accent-foreground: #EAF0FF;
+  --destructive: #EF4444;
+  --border: rgba(255,255,255,0.12);
+  --input: rgba(255,255,255,0.16);
+  --ring: #2A8A95;
+  --chart-1: #2FA0AC;                         /* teal */
+  --chart-2: #5B82D8;                         /* navy-blue, lifted for dark */
+  --chart-3: #9AA6E0;                         /* purple */
+  --chart-4: #FFB700;                         /* yellow (brand exact) */
+  --chart-5: #22C55E;                         /* green */
+  /* Dark theme: sidebar is a raised dark surface (not pure light) with bright text. */
+  --sidebar: #0E1B3D;                        /* slightly raised navy panel */
+  --sidebar-foreground: #EAF0FF;
+  --sidebar-primary: #2FA0AC;                /* teal, brightened for dark */
+  --sidebar-primary-foreground: #04261B;
+  --sidebar-accent: #1E3160;                 /* hover/active row */
+  --sidebar-accent-foreground: #FFFFFF;
+  --sidebar-border: rgba(255,255,255,0.12);
+  --sidebar-ring: #2FA0AC;
 }
 
 @layer base {
@@ -126,6 +136,13 @@
   }
   html {
     @apply font-sans;
+    /* Tabular numbers everywhere — figures line up digit-for-digit (the
+       single biggest "this looks professional" tell for a money/stats UI). */
+    font-feature-settings: "tnum" 1, "cv01" 1, "ss01" 1;
+  }
+  /* Numeric cells/values get explicit tabular alignment too. */
+  .tnum, td.num, th.num, .o-metric-val, .o-table td.num {
+    font-variant-numeric: tabular-nums;
   }
 }
 

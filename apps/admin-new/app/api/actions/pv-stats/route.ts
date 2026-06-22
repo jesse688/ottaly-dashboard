@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 
 const PV_BASE = 'https://api.plusvibe.ai/api/v1'
-const PV_KEY = process.env.PLUSVIBE_KEY ?? '6425e882-f33fb46a-2837ff5a-eb535a60'
+const PV_KEY = process.env.PLUSVIBE_KEY ?? ''
 
 export interface PvEmailStatsRow {
   total_sent_count: number

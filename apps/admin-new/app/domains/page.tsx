@@ -1,84 +1,92 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { RefreshCw, Search, X } from 'lucide-react'
+import { PageShell } from '@/components/shell/page-shell'
+import { KpiCard } from '@/components/ui/kpi-card'
+import { DataTable, type Column } from '@/components/ui/data-table'
+import { StatusBadge, type StatusTone } from '@/components/ui/status-badge'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from '@/components/ui/sheet'
 
-interface SpfCheck {
-  present?: boolean
-  strict?: boolean
-  valid?: boolean
-  raw?: string
-}
+// ── Types (match GET /api/domains → domain_health rows) ──────────────────────
+interface SpfCheck { present?: boolean; strict?: boolean; valid?: boolean; raw?: string }
+interface DkimCheck { present?: boolean; selector?: string; raw?: string }
+interface DmarcCheck { present?: boolean; policy?: string; raw?: string }
+interface MxCheck { present?: boolean; top?: string; hosts?: string[]; ips?: string[] }
+interface Blacklist { list: string; response?: string | number; target?: string; ip?: string }
 
-interface DkimCheck {
-  present?: boolean
-  selector?: string
-  raw?: string
-}
+type DomainStatus = 'good' | 'warning' | 'critical' | 'unknown'
 
-interface DmarcCheck {
-  present?: boolean
-  policy?: string
-  raw?: string
-}
-
-interface MxCheck {
-  present?: boolean
-  top?: string
-  hosts?: string[]
-  ips?: string[]
-}
-
-interface Blacklist {
-  list: string
-  response?: string
-  target?: string
-  ip?: string
-}
-
-interface Domain {
+interface DomainRow {
   domain: string
-  workspace_name: string
-  score: number
-  status: 'good' | 'warning' | 'critical'
+  workspace_id: string | null
+  workspace_name: string | null
+  score: number | null
+  status: DomainStatus
   spf: SpfCheck | null
   dkim: DkimCheck | null
   dmarc: DmarcCheck | null
   mx: MxCheck | null
-  blacklists: Blacklist[]
+  blacklists: Blacklist[] | null
   last_checked: string | null
   notes: string | null
 }
 
-interface DomainsResponse {
-  rows: Domain[]
-  lastRun?: string
-  running?: boolean
+// /api/domains returns a bare array on success or { error } on failure.
+type DomainsApiResponse = DomainRow[] | { error: string }
+
+interface CheckResult { score: number; status: DomainStatus; notes?: string; error?: string }
+
+// /api/domains/health → legacy { rows, lastRun, running } — used to poll refresh.
+interface HealthResponse { rows?: DomainRow[]; lastRun?: string | null; running?: boolean }
+
+type TabKey = 'all' | 'critical' | 'warning' | 'good'
+
+// ── JSONB columns can arrive as string or object depending on driver path ─────
+function parseJson<T>(v: T | string | null | undefined, fallback: T): T {
+  if (v == null) return fallback
+  if (typeof v === 'string') {
+    try { return JSON.parse(v) as T } catch { return fallback }
+  }
+  return v
 }
 
-interface CheckResult {
-  score: number
-  status: 'good' | 'warning' | 'critical'
-  notes?: string
+// ── Format / tone helpers ─────────────────────────────────────────────────────
+const num = (n: number) => (n || 0).toLocaleString()
+
+function statusTone(s: DomainStatus): StatusTone {
+  return s === 'good' ? 'ok' : s === 'warning' ? 'warn' : s === 'critical' ? 'error' : 'neutral'
 }
 
-function CheckIcon({ state, title }: { state: boolean | 'warn' | null, title: string }) {
-  if (state === null) return <span className="o-chk o-chk-none" title={title}>—</span>
-  if (state === true) return <span className="o-chk o-chk-ok" title={title}>✓</span>
-  if (state === 'warn') return <span className="o-chk o-chk-warn" title={title}>!</span>
-  return <span className="o-chk o-chk-bad" title={title}>✕</span>
+function spfTone(spf: SpfCheck): { tone: StatusTone; label: string } {
+  if (!spf.present) return { tone: 'error', label: 'MISSING' }
+  if (spf.valid && spf.strict) return { tone: 'ok', label: 'PASS' }
+  if (spf.valid) return { tone: 'warn', label: 'SOFT' }
+  return { tone: 'error', label: 'FAIL' }
 }
 
-function spfState(spf: SpfCheck | null): boolean | 'warn' | null {
-  if (!spf || !spf.present) return null
-  if (spf.valid && spf.strict) return true
-  if (spf.valid) return 'warn'
-  return false
+function dkimTone(dkim: DkimCheck): { tone: StatusTone; label: string } {
+  if (!dkim.present) return { tone: 'error', label: 'MISSING' }
+  return { tone: 'ok', label: 'PASS' }
 }
 
-function dmarcState(dmarc: DmarcCheck | null): boolean | 'warn' | null {
-  if (!dmarc || !dmarc.present) return null
-  if (dmarc.policy === 'reject' || dmarc.policy === 'quarantine') return true
-  return 'warn'
+function dmarcTone(dmarc: DmarcCheck): { tone: StatusTone; label: string } {
+  if (!dmarc.present) return { tone: 'error', label: 'MISSING' }
+  if (dmarc.policy === 'reject' || dmarc.policy === 'quarantine') return { tone: 'ok', label: 'PASS' }
+  return { tone: 'warn', label: 'NONE' }
+}
+
+function mxTone(mx: MxCheck): { tone: StatusTone; label: string } {
+  if (!mx.present) return { tone: 'error', label: 'MISSING' }
+  return { tone: 'ok', label: 'PASS' }
 }
 
 function formatAgo(ts: string | null): string {
@@ -90,363 +98,450 @@ function formatAgo(ts: string | null): string {
   return `${Math.floor(h / 24)}d ago`
 }
 
-function StatusPill({ status }: { status: string }) {
-  const cls: Record<string, string> = {
-    good: 'o-status-good', warning: 'o-status-warning', critical: 'o-status-critical',
-  }
-  return <span className={`o-status ${cls[status] ?? 'o-status-unknown'}`}>{status}</span>
-}
+const TABS: { key: TabKey; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'critical', label: 'Critical' },
+  { key: 'warning', label: 'Warning' },
+  { key: 'good', label: 'Good' },
+]
 
-function DetailModal({ domain, onClose }: { domain: Domain | null, onClose: () => void }) {
-  if (!domain) return null
-  const spf = domain.spf ?? {}
-  const dkim = domain.dkim ?? {}
-  const dmarc = domain.dmarc ?? {}
-  const mx = domain.mx ?? {}
-  const bl = domain.blacklists ?? []
-
+// ── Detail sheet sub-components ───────────────────────────────────────────────
+function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="o-modal-overlay" onClick={onClose}>
-      <div className="o-modal" onClick={e => e.stopPropagation()}>
-        <div className="o-modal-header">
-          <div>
-            <div className="o-modal-title">{domain.domain}</div>
-            <div style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>{domain.workspace_name || 'Unassigned'} · score {domain.score}</div>
-          </div>
-          <button className="o-modal-close" onClick={onClose}>×</button>
-        </div>
-        <div className="o-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-          {[
-            { label: 'SPF', rows: [['Present', spf.present ? 'Yes' : 'No'], ['Strict (-all)', spf.strict ? 'Yes' : 'No'], spf.raw ? ['Record', spf.raw, true] : null] },
-            { label: 'DKIM', rows: [['Present', dkim.present ? `Yes (selector: ${dkim.selector})` : 'No DKIM found on common selectors'], dkim.raw ? ['Record', dkim.raw, true] : null] },
-            { label: 'DMARC', rows: [['Present', dmarc.present ? 'Yes' : 'No'], ['Policy', dmarc.policy || '—'], dmarc.raw ? ['Record', dmarc.raw, true] : null] },
-            { label: 'MX', rows: [['Present', mx.present ? 'Yes' : 'No'], mx.top ? ['Top MX', mx.top] : null, mx.hosts?.length ? ['All hosts', mx.hosts!.join(', '), true] : null, mx.ips?.length ? ['IPs', mx.ips!.join(', '), true] : null] },
-          ].map(section => (
-            <div key={section.label}>
-              <div className="o-section-h" style={{ marginTop: 0 }}>{section.label}</div>
-              <div className="o-detail-grid">
-                {section.rows.filter(Boolean).map((row, i) => (
-                  row && <><label key={`k${i}`} className="o-detail-label">{row[0]}</label><div key={`v${i}`}>{row[2] ? <code className="o-raw">{row[1]}</code> : row[1]}</div></>
-                ))}
-              </div>
-            </div>
-          ))}
-          <div>
-            <div className="o-section-h" style={{ marginTop: 0 }}>Domain Blacklists</div>
-            {bl.length > 0 ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {bl.map((b, i) => (
-                  <div key={i} style={{ fontSize: 13, paddingBottom: 8, borderBottom: i < bl.length - 1 ? '1px solid #E2E6F0' : 'none' }}>
-                    <span style={{ fontWeight: 700, color: '#DC2626' }}>{b.list}</span>
-                    <span style={{ color: '#6B7280' }}> — {b.target || b.ip || ''} (code {b.response || '?'})</span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div style={{ fontSize: 13, color: '#16A34A', fontWeight: 600 }}>Clean on all domain blacklists.</div>
-            )}
-          </div>
-          {domain.notes && (
-            <div>
-              <div className="o-section-h" style={{ marginTop: 0 }}>Notes</div>
-              <div style={{ fontSize: 13 }}>{domain.notes}</div>
-            </div>
-          )}
-        </div>
-      </div>
+    <div className="grid grid-cols-[100px_1fr] gap-x-3 gap-y-1 py-1 text-[13px]">
+      <span className="font-medium text-muted-foreground">{label}</span>
+      <span className="min-w-0 break-words text-foreground">{children}</span>
     </div>
   )
 }
 
-function CheckDomainModal({ onClose, onSuccess }: { onClose: () => void, onSuccess: () => void }) {
-  const [domain, setDomain] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [result, setResult] = useState<CheckResult | null>(null)
-  const [error, setError] = useState('')
-
-  const handleCheck = async () => {
-    if (!domain.trim()) { setError('Enter a domain.'); return }
-    setLoading(true); setError(''); setResult(null)
-    try {
-      const res = await fetch('/api/domains/check', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ domain: domain.trim().toLowerCase() }),
-      })
-      const data: CheckResult & { error?: string } = await res.json()
-      if (!res.ok) { setError(data.error || 'Check failed') }
-      else {
-        setResult(data)
-        await new Promise(r => setTimeout(r, 1000))
-        onSuccess(); onClose()
-      }
-    } catch (err) {
-      setError((err as Error).message)
-    } finally {
-      setLoading(false)
-    }
-  }
-
+function Raw({ children }: { children: React.ReactNode }) {
   return (
-    <div className="o-modal-overlay" onClick={onClose}>
-      <div className="o-modal o-modal-sm" onClick={e => e.stopPropagation()}>
-        <div className="o-modal-header">
-          <div className="o-modal-title">Check a domain now</div>
-          <button className="o-modal-close" onClick={onClose}>×</button>
-        </div>
-        <div className="o-modal-body">
-          <p style={{ fontSize: 13, color: '#6B7280', marginBottom: '0.75rem' }}>
-            Runs SPF, DKIM, DMARC, MX and DNS-blacklist checks. Saved to the table.
-          </p>
-          <input
-            className="o-input"
-            type="text"
-            placeholder="example.com"
-            value={domain}
-            onChange={e => setDomain(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && !loading && handleCheck()}
-            disabled={loading}
-          />
-          {error && <div style={{ marginTop: 10, fontSize: 13, color: '#DC2626' }}>{error}</div>}
-          {result && (
-            <div style={{ marginTop: 10, fontSize: 13 }}>
-              Score: <strong>{result.score}</strong> — <StatusPill status={result.status} />
-              <div style={{ color: '#6B7280', marginTop: 4 }}>{result.notes || 'All checks passed.'}</div>
-            </div>
-          )}
-        </div>
-        <div className="o-modal-footer">
-          <button className="o-btn o-btn-ghost" onClick={onClose}>Close</button>
-          <button className="o-btn o-btn-primary" onClick={handleCheck} disabled={loading}>
-            {loading ? <><span className="o-spin" /> Checking…</> : 'Run check'}
-          </button>
-        </div>
-      </div>
+    <code className="block whitespace-pre-wrap break-all rounded-md border border-border bg-muted/40 px-2 py-1 font-mono text-[11px] text-foreground">
+      {children}
+    </code>
+  )
+}
+
+function SectionHead({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mt-4 mb-1 text-[11px] font-bold uppercase tracking-wide text-muted-foreground first:mt-0">
+      {children}
     </div>
   )
 }
 
 export default function DomainsPage() {
-  const [domains, setDomains] = useState<Domain[]>([])
-  const [loading, setLoading] = useState(true)
+  const [rows, setRows] = useState<DomainRow[]>([])
+  const [status, setStatus] = useState<'loading' | 'ok' | 'empty' | 'error'>('loading')
+  const [errMsg, setErrMsg] = useState('')
+  const [updatedAt, setUpdatedAt] = useState<string | null>(null)
+
   const [search, setSearch] = useState('')
   const [wsFilter, setWsFilter] = useState('')
-  const [statusFilter, setStatusFilter] = useState('')
-  const [lastRun, setLastRun] = useState<string | null>(null)
-  const [refreshing, setRefreshing] = useState(false)
-  const [detailDomain, setDetailDomain] = useState<Domain | null>(null)
-  const [showCheckModal, setShowCheckModal] = useState(false)
-  const [toast, setToast] = useState('')
+  const [tab, setTab] = useState<TabKey>('all')
 
-  const showToast = (msg: string) => {
-    setToast(msg)
-    setTimeout(() => setToast(''), 2400)
-  }
+  const [busy, setBusy] = useState(false)
+  const [checkDomain, setCheckDomain] = useState('')
+  const [checkResult, setCheckResult] = useState<CheckResult | null>(null)
+  const [checkErr, setCheckErr] = useState('')
 
-  const loadData = async () => {
+  const [selected, setSelected] = useState<DomainRow | null>(null)
+
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const load = useCallback(async () => {
+    setStatus('loading'); setErrMsg('')
     try {
-      const res = await fetch('/api/domains/health')
-      const data: DomainsResponse = await res.json()
-      setDomains(data.rows || [])
-      if (data.lastRun) setLastRun(new Date(data.lastRun).toLocaleString())
-      setRefreshing(data.running || false)
-    } catch (err) {
-      showToast('Failed to load: ' + (err as Error).message)
+      const r = await fetch('/api/domains')
+      if (!r.ok) {
+        let msg = `Server returned ${r.status}`
+        try {
+          const j = (await r.json()) as { error?: string }
+          if (j.error) msg = j.error
+        } catch { /* non-JSON body */ }
+        throw new Error(msg)
+      }
+      const data: DomainsApiResponse = await r.json()
+      if (!Array.isArray(data)) throw new Error(data.error || 'Unexpected response')
+      const freshest = data.reduce<string | null>((acc, d) => {
+        if (!d.last_checked) return acc
+        return !acc || d.last_checked > acc ? d.last_checked : acc
+      }, null)
+      setUpdatedAt(freshest)
+      if (!data.length) { setRows([]); setStatus('empty'); return }
+      setRows(data); setStatus('ok')
+    } catch (e) {
+      setStatus('error')
+      setErrMsg(e instanceof Error ? e.message : String(e))
+    }
+  }, [])
+
+  useEffect(() => {
+    load()
+    return () => { if (pollRef.current) clearInterval(pollRef.current) }
+  }, [load])
+
+  const workspaces = useMemo(
+    () => Array.from(new Set(rows.map(d => d.workspace_name).filter((w): w is string => !!w))).sort(),
+    [rows],
+  )
+
+  const summary = useMemo(() => ({
+    total: rows.length,
+    good: rows.filter(d => d.status === 'good').length,
+    warning: rows.filter(d => d.status === 'warning').length,
+    critical: rows.filter(d => d.status === 'critical').length,
+    blacklisted: rows.filter(d => (parseJson<Blacklist[]>(d.blacklists, []).length) > 0).length,
+  }), [rows])
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return rows.filter(d => {
+      if (q && !d.domain.toLowerCase().includes(q) && !(d.workspace_name?.toLowerCase().includes(q))) return false
+      if (wsFilter && d.workspace_name !== wsFilter) return false
+      if (tab !== 'all' && d.status !== tab) return false
+      return true
+    })
+  }, [rows, search, wsFilter, tab])
+
+  const handleCheck = useCallback(async () => {
+    const dom = checkDomain.trim().toLowerCase()
+    if (!dom || busy) return
+    setBusy(true); setCheckErr(''); setCheckResult(null)
+    try {
+      const r = await fetch('/api/domains/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domain: dom }),
+      })
+      const data: CheckResult = await r.json()
+      if (!r.ok || data.error) throw new Error(data.error || `Check failed (${r.status})`)
+      setCheckResult(data)
+      await load()
+    } catch (e) {
+      setCheckErr(e instanceof Error ? e.message : String(e))
     } finally {
-      setLoading(false)
+      setBusy(false)
     }
-  }
+  }, [checkDomain, busy, load])
 
-  useEffect(() => { loadData() }, [])
-
-  const workspaces = Array.from(new Set(domains.map(d => d.workspace_name).filter(Boolean))).sort()
-
-  const filtered = domains.filter(d => {
-    const q = search.toLowerCase()
-    if (search && !d.domain.includes(q) && !d.workspace_name?.toLowerCase().includes(q)) return false
-    if (wsFilter && d.workspace_name !== wsFilter) return false
-    if (statusFilter && d.status !== statusFilter) return false
-    return true
-  })
-
-  const summary = {
-    total: domains.length,
-    good: domains.filter(d => d.status === 'good').length,
-    warning: domains.filter(d => d.status === 'warning').length,
-    critical: domains.filter(d => d.status === 'critical').length,
-    blacklisted: domains.filter(d => d.blacklists?.length > 0).length,
-  }
-
-  const handleRefresh = async () => {
-    setRefreshing(true)
+  // Refresh-all kicks off the legacy sweep, then polls /health for `running`.
+  const handleRefreshAll = useCallback(async () => {
+    if (busy) return
+    setBusy(true); setErrMsg('')
     try {
-      await fetch('/api/domains/refresh', { method: 'POST' })
-      showToast('Refresh started')
-      const poll = setInterval(async () => {
-        const res = await fetch('/api/domains/health')
-        const data: DomainsResponse = await res.json()
-        setDomains(data.rows || [])
-        if (data.lastRun) setLastRun(new Date(data.lastRun).toLocaleString())
-        if (!data.running) { clearInterval(poll); setRefreshing(false) }
+      const r = await fetch('/api/domains/refresh', { method: 'POST' })
+      if (!r.ok) throw new Error(`Refresh failed (${r.status})`)
+      if (pollRef.current) clearInterval(pollRef.current)
+      pollRef.current = setInterval(async () => {
+        try {
+          const hr = await fetch('/api/domains/health')
+          const hj: HealthResponse = await hr.json()
+          if (Array.isArray(hj.rows)) {
+            setRows(hj.rows)
+            setStatus(hj.rows.length ? 'ok' : 'empty')
+          }
+          if (hj.lastRun) setUpdatedAt(hj.lastRun)
+          if (!hj.running && pollRef.current) {
+            clearInterval(pollRef.current)
+            pollRef.current = null
+            setBusy(false)
+          }
+        } catch {
+          if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
+          setBusy(false)
+        }
       }, 8000)
-    } catch (err) {
-      showToast('Refresh failed: ' + (err as Error).message)
-      setRefreshing(false)
+    } catch (e) {
+      setErrMsg(e instanceof Error ? e.message : String(e))
+      setStatus('error')
+      setBusy(false)
     }
-  }
+  }, [busy])
 
-  const handleRemove = async (domain: string) => {
-    if (!confirm(`Remove ${domain} from the dashboard?`)) return
+  const handleRemove = useCallback(async (domain: string) => {
+    if (!window.confirm(`Remove ${domain} from the dashboard?\n\nThe domain stays in the ESP, but it won't show here and won't be re-added on the next auto-refresh.`)) return
     try {
-      const res = await fetch('/api/domains/' + encodeURIComponent(domain), { method: 'DELETE' })
-      if (!res.ok) { showToast('Remove failed'); return }
-      setDomains(domains.filter(d => d.domain !== domain))
-      showToast(domain + ' removed')
-    } catch (err) {
-      showToast('Error: ' + (err as Error).message)
+      const r = await fetch('/api/domains/' + encodeURIComponent(domain), { method: 'DELETE' })
+      if (!r.ok) throw new Error(`Remove failed (${r.status})`)
+      setRows(prev => prev.filter(d => d.domain !== domain))
+      setSelected(prev => (prev?.domain === domain ? null : prev))
+    } catch (e) {
+      setErrMsg(e instanceof Error ? e.message : String(e))
+      setStatus('error')
     }
-  }
+  }, [])
+
+  const columns: Column<DomainRow>[] = [
+    {
+      key: 'domain', header: 'Domain', sortValue: d => d.domain.toLowerCase(),
+      cell: d => (
+        <div className="min-w-0">
+          <div className="truncate font-semibold text-foreground">{d.domain}</div>
+          <div className="text-[11px] text-muted-foreground">{d.workspace_name || 'Unassigned'}</div>
+        </div>
+      ),
+    },
+    {
+      key: 'spf', header: 'SPF',
+      cell: d => { const s = spfTone(parseJson<SpfCheck>(d.spf, {})); return <StatusBadge status={s.tone}>{s.label}</StatusBadge> },
+    },
+    {
+      key: 'dkim', header: 'DKIM',
+      cell: d => { const s = dkimTone(parseJson<DkimCheck>(d.dkim, {})); return <StatusBadge status={s.tone}>{s.label}</StatusBadge> },
+    },
+    {
+      key: 'dmarc', header: 'DMARC',
+      cell: d => { const s = dmarcTone(parseJson<DmarcCheck>(d.dmarc, {})); return <StatusBadge status={s.tone}>{s.label}</StatusBadge> },
+    },
+    {
+      key: 'mx', header: 'MX',
+      cell: d => { const s = mxTone(parseJson<MxCheck>(d.mx, {})); return <StatusBadge status={s.tone}>{s.label}</StatusBadge> },
+    },
+    {
+      key: 'blacklists', header: 'Blacklists',
+      sortValue: d => parseJson<Blacklist[]>(d.blacklists, []).length,
+      cell: d => {
+        const bl = parseJson<Blacklist[]>(d.blacklists, [])
+        if (!bl.length) return <StatusBadge status="ok">Clean</StatusBadge>
+        const names = bl.map(b => b.list).slice(0, 2).join(', ')
+        return (
+          <div className="flex items-center gap-1.5">
+            <StatusBadge status="error">{bl.length} listing{bl.length > 1 ? 's' : ''}</StatusBadge>
+            <span className="text-[11px] text-muted-foreground">{names}{bl.length > 2 ? '…' : ''}</span>
+          </div>
+        )
+      },
+    },
+    {
+      key: 'score', header: 'Score', numeric: true, sortValue: d => d.score ?? -1,
+      cell: d => <span className="font-semibold text-foreground">{d.score ?? '—'}</span>,
+    },
+    {
+      key: 'status', header: 'Status', sortValue: d => d.status,
+      cell: d => <StatusBadge status={statusTone(d.status)}>{d.status}</StatusBadge>,
+    },
+    {
+      key: 'last_checked', header: 'Checked', numeric: true,
+      sortValue: d => (d.last_checked ? new Date(d.last_checked).getTime() : 0),
+      cell: d => <span className="text-muted-foreground">{formatAgo(d.last_checked)}</span>,
+    },
+    {
+      key: 'actions', header: '',
+      cell: d => (
+        <Button
+          variant="ghost"
+          size="xs"
+          onClick={(e) => { e.stopPropagation(); void handleRemove(d.domain) }}
+          className="text-muted-foreground hover:text-destructive"
+        >
+          <X size={14} />
+        </Button>
+      ),
+    },
+  ]
+
+  // Parsed views for the detail sheet.
+  const sel = selected
+  const selSpf = sel ? parseJson<SpfCheck>(sel.spf, {}) : {}
+  const selDkim = sel ? parseJson<DkimCheck>(sel.dkim, {}) : {}
+  const selDmarc = sel ? parseJson<DmarcCheck>(sel.dmarc, {}) : {}
+  const selMx = sel ? parseJson<MxCheck>(sel.mx, {}) : {}
+  const selBl = sel ? parseJson<Blacklist[]>(sel.blacklists, []) : []
 
   return (
-    <div className="o-page">
-      {/* Page header */}
-      <div className="o-page-header">
-        <div>
-          <div className="o-page-title">Domain Health</div>
-          <div className="o-page-sub">SPF · DKIM · DMARC · MX · domain blacklists (Spamhaus DBL, SURBL, URIBL) — across all sending domains. Auto-refreshed every 6 hours.</div>
+    <PageShell
+      title="Domains"
+      subtitle="SPF · DKIM · DMARC · MX · domain blacklists (Spamhaus DBL, SURBL, URIBL) across all sending domains. Auto-refreshed every 6 hours."
+      freshness={{ table: 'domain_health', syncedAt: updatedAt }}
+      actions={
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1.5">
+            <Input
+              value={checkDomain}
+              onChange={(e) => { setCheckDomain(e.target.value); setCheckResult(null); setCheckErr('') }}
+              onKeyDown={(e) => e.key === 'Enter' && handleCheck()}
+              placeholder="example.com"
+              className="h-8 w-40"
+              disabled={busy}
+            />
+            <Button variant="outline" size="sm" onClick={handleCheck} disabled={busy || !checkDomain.trim()}>
+              Check domain
+            </Button>
+          </div>
+          <Button size="sm" onClick={handleRefreshAll} disabled={busy}>
+            <RefreshCw size={14} className={busy ? 'animate-spin' : undefined} />
+            {busy ? 'Refreshing…' : 'Refresh all'}
+          </Button>
         </div>
-        <div className="o-page-actions">
-          {lastRun && <span style={{ fontSize: 12, color: '#6B7280' }}>Last refresh: {lastRun}</span>}
-          <button className="o-btn o-btn-ghost" onClick={() => setShowCheckModal(true)}>+ Check domain</button>
-          <button className="o-btn o-btn-primary" onClick={handleRefresh} disabled={refreshing}>
-            {refreshing ? <><span className="o-spin" /> Refreshing…</> : '↻ Refresh all'}
-          </button>
+      }
+    >
+      {/* Inline single-domain check feedback */}
+      {(checkResult || checkErr) && (
+        <div className="mb-4 rounded-lg border border-border bg-card p-3 text-sm">
+          {checkErr ? (
+            <span className="text-destructive">{checkErr}</span>
+          ) : checkResult ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-foreground">Score: <b>{checkResult.score}</b></span>
+              <StatusBadge status={statusTone(checkResult.status)}>{checkResult.status}</StatusBadge>
+              <span className="text-muted-foreground">{checkResult.notes || 'All checks passed.'}</span>
+            </div>
+          ) : null}
         </div>
+      )}
+
+      {/* KPIs */}
+      <div className="mb-5 grid grid-cols-2 gap-4 xl:grid-cols-5">
+        <KpiCard label="Total Domains" value={num(summary.total)} tone="navy" loading={status === 'loading'} />
+        <KpiCard label="Good" value={num(summary.good)} tone="teal" loading={status === 'loading'} />
+        <KpiCard label="Warning" value={num(summary.warning)} tone="yellow" loading={status === 'loading'} />
+        <KpiCard label="Critical" value={num(summary.critical)} tone="red" loading={status === 'loading'} />
+        <KpiCard label="Blacklisted" value={num(summary.blacklisted)} tone="red" loading={status === 'loading'} />
       </div>
 
-      {/* Summary cards */}
-      <div className="o-metrics o-metrics-5">
-        <div className="o-metric">
-          <div className="o-metric-label">Total domains</div>
-          <div className="o-metric-val">{summary.total}</div>
-        </div>
-        <div className="o-metric" style={{ borderTopColor: '#16A34A' }}>
-          <div className="o-metric-label">Good</div>
-          <div className="o-metric-val" style={{ color: '#16A34A' }}>{summary.good}</div>
-        </div>
-        <div className="o-metric" style={{ borderTopColor: '#D97706' }}>
-          <div className="o-metric-label">Warning</div>
-          <div className="o-metric-val" style={{ color: '#D97706' }}>{summary.warning}</div>
-        </div>
-        <div className="o-metric" style={{ borderTopColor: '#DC2626' }}>
-          <div className="o-metric-label">Critical</div>
-          <div className="o-metric-val" style={{ color: '#DC2626' }}>{summary.critical}</div>
-        </div>
-        <div className="o-metric" style={{ borderTopColor: '#DC2626' }}>
-          <div className="o-metric-label">Blacklisted</div>
-          <div className="o-metric-val" style={{ color: '#DC2626' }}>{summary.blacklisted}</div>
-        </div>
-      </div>
-
-      {/* Toolbar */}
-      <div className="o-toolbar">
-        <div className="o-search-wrap">
-          <span className="o-search-icon">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-            </svg>
-          </span>
-          <input
-            type="text"
-            placeholder='Search domain or client (e.g. "FAIT", "ottaly.co.uk")…'
+      {/* Toolbar: search + client filter + tabs */}
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <div className="relative">
+          <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+          <Input
             value={search}
-            onChange={e => setSearch(e.target.value)}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search domain or client…"
+            className="h-8 w-64 pl-8"
           />
         </div>
-        <select className="o-select" value={wsFilter} onChange={e => setWsFilter(e.target.value)}>
+        <select
+          value={wsFilter}
+          onChange={(e) => setWsFilter(e.target.value)}
+          className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-[13px] text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+        >
           <option value="">All clients</option>
           {workspaces.map(w => <option key={w} value={w}>{w}</option>)}
         </select>
-        <div style={{ display: 'flex', gap: 6 }}>
-          {['All', 'Critical', 'Warning', 'Good'].map(s => (
-            <button
-              key={s}
-              onClick={() => setStatusFilter(s === 'All' ? '' : s.toLowerCase())}
-              className={`o-pill ${(s === 'All' ? statusFilter === '' : statusFilter === s.toLowerCase()) ? 'o-pill-active' : ''}`}
-            >{s}</button>
+        <div className="ml-auto flex items-center gap-1">
+          {TABS.map(t => (
+            <Button
+              key={t.key}
+              variant={tab === t.key ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={() => setTab(t.key)}
+            >
+              {t.label}
+            </Button>
           ))}
         </div>
       </div>
 
-      {/* Table */}
-      <div className="o-table-wrap">
-        {loading ? (
-          <div className="o-empty"><span className="o-spin" /> Loading…</div>
-        ) : filtered.length === 0 ? (
-          <div className="o-empty">No domains yet. Click ↻ Refresh all to scan, or + Check domain to add one.</div>
-        ) : (
-          <table className="o-table">
-            <thead>
-              <tr>
-                <th>Domain</th>
-                <th style={{ textAlign: 'center' }}>SPF</th>
-                <th style={{ textAlign: 'center' }}>DKIM</th>
-                <th style={{ textAlign: 'center' }}>DMARC</th>
-                <th style={{ textAlign: 'center' }}>MX</th>
-                <th>Blacklists</th>
-                <th style={{ textAlign: 'right' }}>Score</th>
-                <th>Status</th>
-                <th>Last checked</th>
-                <th style={{ width: 40 }}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map(d => (
-                <tr key={d.domain} onClick={() => setDetailDomain(d)}>
-                  <td>
-                    <div style={{ fontWeight: 600 }}>{d.domain}</div>
-                    <div style={{ fontSize: 11, color: '#6B7280', marginTop: 1 }}>{d.workspace_name || '—'}</div>
-                  </td>
-                  <td style={{ textAlign: 'center' }}>
-                    <CheckIcon state={spfState(d.spf)} title={d.spf?.raw || 'Missing'} />
-                  </td>
-                  <td style={{ textAlign: 'center' }}>
-                    <CheckIcon state={d.dkim?.present ? true : false} title={d.dkim?.selector ? `selector: ${d.dkim.selector}` : 'No DKIM record found'} />
-                  </td>
-                  <td style={{ textAlign: 'center' }}>
-                    <CheckIcon state={dmarcState(d.dmarc)} title={d.dmarc?.policy ? `p=${d.dmarc.policy}` : 'Missing'} />
-                  </td>
-                  <td style={{ textAlign: 'center' }}>
-                    <CheckIcon state={d.mx?.present ? true : false} title={(d.mx?.hosts || []).join(', ')} />
-                  </td>
-                  <td>
-                    {d.blacklists.length > 0
-                      ? <span style={{ fontWeight: 600, color: '#DC2626' }}>{d.blacklists.length} listing{d.blacklists.length > 1 ? 's' : ''}</span>
-                      : <span style={{ fontWeight: 600, color: '#16A34A' }}>Clean</span>
-                    }
-                  </td>
-                  <td style={{ textAlign: 'right', fontWeight: 700, fontSize: 14 }}>{d.score}</td>
-                  <td><StatusPill status={d.status} /></td>
-                  <td style={{ fontSize: 12, color: '#6B7280' }}>{formatAgo(d.last_checked)}</td>
-                  <td onClick={e => e.stopPropagation()} className="no-hover">
-                    <button
-                      onClick={() => handleRemove(d.domain)}
-                      title="Remove"
-                      style={{ background: 'none', border: 'none', color: '#6B7280', cursor: 'pointer', padding: '4px 8px', borderRadius: 6, fontSize: 15, fontFamily: 'inherit' }}
-                      onMouseEnter={e => { e.currentTarget.style.color = '#DC2626'; e.currentTarget.style.background = '#FEE2E2' }}
-                      onMouseLeave={e => { e.currentTarget.style.color = '#6B7280'; e.currentTarget.style.background = 'none' }}
-                    >✕</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      {status === 'error' && (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+          <div className="font-semibold">Couldn’t load domains</div>
+          <div className="mt-0.5 opacity-90">{errMsg}</div>
+          <button onClick={() => load()} className="mt-2 rounded-md border border-destructive/30 px-2.5 py-1 text-xs font-medium hover:bg-destructive/10">
+            Retry
+          </button>
+        </div>
+      )}
 
-      {toast && <div className="o-toast">{toast}</div>}
-      <DetailModal domain={detailDomain} onClose={() => setDetailDomain(null)} />
-      {showCheckModal && <CheckDomainModal onClose={() => setShowCheckModal(false)} onSuccess={loadData} />}
-    </div>
+      {status === 'empty' && (
+        <div className="rounded-lg border border-border bg-card p-12 text-center text-sm text-muted-foreground">
+          No domains tracked yet. Use “Check domain” to scan one, or “Refresh all” to run a full sweep.
+        </div>
+      )}
+
+      {(status === 'ok' || status === 'loading') && (
+        <DataTable
+          columns={columns}
+          rows={filtered}
+          getRowKey={d => d.domain}
+          onRowClick={d => setSelected(d)}
+          empty={status === 'loading' ? 'Loading…' : 'No domains match your filters.'}
+        />
+      )}
+
+      {/* Per-domain detail sheet */}
+      <Sheet open={!!sel} onOpenChange={(o) => { if (!o) setSelected(null) }}>
+        <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-md">
+          {sel && (
+            <>
+              <SheetHeader>
+                <SheetTitle>{sel.domain}</SheetTitle>
+                <SheetDescription>
+                  {(sel.workspace_name || 'Unassigned workspace')} · score {sel.score ?? '—'} ·{' '}
+                  <StatusBadge status={statusTone(sel.status)}>{sel.status}</StatusBadge>
+                </SheetDescription>
+              </SheetHeader>
+
+              <div className="px-4 pb-6">
+                <SectionHead>SPF</SectionHead>
+                <DetailRow label="Present">{selSpf.present ? 'Yes' : 'No'}</DetailRow>
+                <DetailRow label="Strict (-all)">{selSpf.strict ? 'Yes' : 'No'}</DetailRow>
+                {selSpf.raw && <DetailRow label="Record"><Raw>{selSpf.raw}</Raw></DetailRow>}
+
+                <SectionHead>DKIM</SectionHead>
+                <DetailRow label="Present">
+                  {selDkim.present
+                    ? `Yes${selDkim.selector ? ` (selector: ${selDkim.selector})` : ''}`
+                    : 'No DKIM record found on common selectors'}
+                </DetailRow>
+                {selDkim.raw && <DetailRow label="Record"><Raw>{selDkim.raw}</Raw></DetailRow>}
+
+                <SectionHead>DMARC</SectionHead>
+                <DetailRow label="Present">{selDmarc.present ? 'Yes' : 'No'}</DetailRow>
+                <DetailRow label="Policy">{selDmarc.policy || '—'}</DetailRow>
+                {selDmarc.raw && <DetailRow label="Record"><Raw>{selDmarc.raw}</Raw></DetailRow>}
+
+                <SectionHead>MX</SectionHead>
+                <DetailRow label="Present">{selMx.present ? 'Yes' : 'No'}</DetailRow>
+                {selMx.top && <DetailRow label="Top MX">{selMx.top}</DetailRow>}
+                {(selMx.hosts?.length ?? 0) > 0 && (
+                  <DetailRow label="All"><Raw>{(selMx.hosts ?? []).join('\n')}</Raw></DetailRow>
+                )}
+                {(selMx.ips?.length ?? 0) > 0 && (
+                  <DetailRow label="IPs"><Raw>{(selMx.ips ?? []).join(', ')}</Raw></DetailRow>
+                )}
+
+                <SectionHead>Domain blacklists</SectionHead>
+                {selBl.length ? (
+                  <div className="space-y-1.5">
+                    {selBl.map((b, i) => (
+                      <div key={`${b.list}-${i}`} className="flex flex-wrap items-baseline gap-1.5 border-b border-border pb-1.5 text-[13px] last:border-0">
+                        <StatusBadge status="error">{b.list}</StatusBadge>
+                        <span className="text-muted-foreground">
+                          — {b.target || b.ip || ''} (code {b.response ?? '?'})
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-[13px] text-emerald-600 dark:text-emerald-400">
+                    Clean on all domain blacklists.
+                  </div>
+                )}
+
+                {sel.notes && (
+                  <>
+                    <SectionHead>Notes</SectionHead>
+                    <div className="text-[13px] text-foreground">{sel.notes}</div>
+                  </>
+                )}
+
+                <div className="mt-5 flex justify-end">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-destructive hover:bg-destructive/10"
+                    onClick={() => void handleRemove(sel.domain)}
+                  >
+                    Remove domain
+                  </Button>
+                </div>
+              </div>
+            </>
+          )}
+        </SheetContent>
+      </Sheet>
+    </PageShell>
   )
 }

@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/favicon.svg">
+<meta name="theme-color" content="#050C29">
+<title>Ottaly — Engine Leads</title>
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@400;500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<script src="/splash.js?v=el1"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--purple:#7C89CD;
+  --yellow:#FFB700;--bg:#F0F2F8;--card:#fff;--border:#E2E6F0;
+  --text:#050C29;--muted:#6B7280;
+  --green:#059669;--amber:#D97706;--red:#DC2626;--blue:#2563EB;
+}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+.page{max-width:1500px;margin:0 auto;padding:1.5rem 2rem}
+.page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem;flex-wrap:wrap;gap:.75rem}
+.page-title{font-family:'Genos',sans-serif;font-size:1.5rem;font-weight:700;letter-spacing:.5px}
+.page-sub{font-size:12px;color:var(--muted);margin-top:3px}
+
+/* Toolbar / filters */
+.toolbar{display:flex;align-items:flex-end;gap:.6rem;flex-wrap:wrap;margin-bottom:1rem;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:.9rem 1rem}
+.field{display:flex;flex-direction:column;gap:3px}
+.field label{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
+.field input,.field select{padding:7px 10px;border:1px solid var(--border);border-radius:7px;font-size:13px;font-family:inherit;outline:none;background:#fff;min-width:140px}
+.field input:focus,.field select:focus{border-color:var(--navy)}
+.btn{padding:8px 16px;border:none;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:all .15s}
+.btn-primary{background:var(--navy-dark);color:#fff}
+.btn-primary:hover{background:var(--navy)}
+.btn-ghost{background:#fff;color:var(--navy-dark);border:1px solid var(--border)}
+.btn-ghost:hover{background:var(--bg)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.spacer{flex:1}
+
+.count-bar{display:flex;align-items:center;gap:1rem;margin-bottom:.75rem;font-size:13px;color:var(--muted)}
+.count-bar strong{color:var(--text)}
+
+/* Table */
+.table-wrap{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:auto}
+table{width:100%;border-collapse:collapse;font-size:13px;min-width:1100px}
+thead th{position:sticky;top:0;background:var(--navy-dark);color:#fff;text-align:left;padding:10px 12px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;white-space:nowrap}
+tbody td{padding:9px 12px;border-bottom:1px solid var(--border);vertical-align:top;white-space:nowrap;max-width:280px;overflow:hidden;text-overflow:ellipsis}
+tbody tr:hover{background:#F7F9FE}
+tbody a{color:var(--blue);text-decoration:none}
+tbody a:hover{text-decoration:underline}
+.pill{display:inline-block;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600}
+.pill.yes{background:#DCFCE7;color:var(--green)}
+.pill.no{background:#F1F5F9;color:var(--muted)}
+.muted{color:var(--muted)}
+
+/* Pagination */
+.pager{display:flex;align-items:center;justify-content:center;gap:.75rem;margin-top:1rem;font-size:13px}
+.pager .info{color:var(--muted)}
+
+.empty,.spinner{padding:2.5rem;text-align:center;color:var(--muted);font-size:14px}
+
+@media(max-width:768px){.page{padding:1rem}.field input,.field select{min-width:120px}}
+</style>
+<script src="/nav.js" defer></script>
+</head>
+<body>
+
+<div class="page">
+  <div class="page-header">
+    <div>
+      <div class="page-title">Engine Leads</div>
+      <div class="page-sub">Clean B2B leads promoted by the autonomous data engine — read-only</div>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <div class="field">
+      <label>Search</label>
+      <input type="text" id="f-search" placeholder="domain or company…">
+    </div>
+    <div class="field">
+      <label>Industry</label>
+      <input type="text" id="f-industry" placeholder="e.g. dental">
+    </div>
+    <div class="field">
+      <label>Region</label>
+      <input type="text" id="f-region" placeholder="e.g. London">
+    </div>
+    <div class="field">
+      <label>Platform</label>
+      <input type="text" id="f-platform" placeholder="e.g. shopify">
+    </div>
+    <div class="field">
+      <label>Has Products</label>
+      <select id="f-products">
+        <option value="">Any</option>
+        <option value="true">Yes</option>
+        <option value="false">No</option>
+      </select>
+    </div>
+    <button class="btn btn-primary" id="btn-apply">Apply</button>
+    <button class="btn btn-ghost" id="btn-reset">Reset</button>
+    <div class="spacer"></div>
+    <button class="btn btn-ghost" id="btn-export">⬇ Export CSV</button>
+  </div>
+
+  <div class="count-bar">
+    <span id="count">Loading…</span>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Domain</th>
+          <th>Company</th>
+          <th>Email</th>
+          <th>Director</th>
+          <th>Industry</th>
+          <th>Region</th>
+          <th>Size</th>
+          <th>Platform</th>
+          <th>Products</th>
+          <th>Pages</th>
+          <th>Postcode</th>
+          <th>LinkedIn</th>
+          <th>Promoted</th>
+        </tr>
+      </thead>
+      <tbody id="rows">
+        <tr><td colspan="13"><div class="spinner">Loading…</div></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="pager">
+    <button class="btn btn-ghost" id="prev">← Prev</button>
+    <span class="info" id="page-info">—</span>
+    <button class="btn btn-ghost" id="next">Next →</button>
+  </div>
+</div>
+
+<script>
+const PAGE_SIZE = 50;
+let offset = 0;
+let total = 0;
+
+function filters() {
+  return {
+    search:       document.getElementById('f-search').value.trim(),
+    industry:     document.getElementById('f-industry').value.trim(),
+    region:       document.getElementById('f-region').value.trim(),
+    platform:     document.getElementById('f-platform').value.trim(),
+    has_products: document.getElementById('f-products').value,
+  };
+}
+
+function queryString(extra) {
+  const p = new URLSearchParams();
+  const f = filters();
+  Object.entries(f).forEach(([k, v]) => { if (v !== '') p.set(k, v); });
+  Object.entries(extra || {}).forEach(([k, v]) => p.set(k, v));
+  return p.toString();
+}
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+function fmtDate(d) {
+  if (!d) return '<span class="muted">—</span>';
+  try { return new Date(d).toISOString().slice(0, 10); } catch { return esc(d); }
+}
+
+function cell(v) {
+  return v == null || v === '' ? '<span class="muted">—</span>' : esc(v);
+}
+
+function renderRows(leads) {
+  if (!leads.length) {
+    return '<tr><td colspan="13"><div class="empty">No leads match these filters.</div></td></tr>';
+  }
+  return leads.map(l => `
+    <tr>
+      <td><a href="https://${esc(l.domain)}" target="_blank" rel="noopener">${esc(l.domain)}</a></td>
+      <td>${cell(l.company_name)}</td>
+      <td>${l.email_primary ? `<a href="mailto:${esc(l.email_primary)}">${esc(l.email_primary)}</a>` : '<span class="muted">—</span>'}</td>
+      <td>${cell(l.director_name)}</td>
+      <td>${cell(l.industry)}</td>
+      <td>${cell(l.region)}</td>
+      <td>${cell(l.company_size)}</td>
+      <td>${cell(l.platform)}</td>
+      <td>${l.has_products ? `<span class="pill yes">${esc(l.product_count ?? 0)}</span>` : '<span class="pill no">no</span>'}</td>
+      <td>${cell(l.page_count)}</td>
+      <td>${cell(l.postcode)}</td>
+      <td>${l.linkedin_url ? `<a href="${esc(l.linkedin_url)}" target="_blank" rel="noopener">view</a>` : '<span class="muted">—</span>'}</td>
+      <td>${fmtDate(l.promoted_at)}</td>
+    </tr>`).join('');
+}
+
+async function load() {
+  const tbody = document.getElementById('rows');
+  tbody.innerHTML = '<tr><td colspan="13"><div class="spinner">Loading…</div></td></tr>';
+  document.getElementById('count').textContent = 'Loading…';
+  try {
+    const res = await fetch(`/api/engine-leads?${queryString({ limit: PAGE_SIZE, offset })}`, { credentials: 'include' });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+    const data = await res.json();
+    total = data.total;
+    tbody.innerHTML = renderRows(data.leads || []);
+
+    document.getElementById('count').innerHTML =
+      `<strong>${total.toLocaleString()}</strong> lead${total === 1 ? '' : 's'} match`;
+
+    const from = total === 0 ? 0 : offset + 1;
+    const to   = Math.min(offset + PAGE_SIZE, total);
+    document.getElementById('page-info').textContent = `${from.toLocaleString()}–${to.toLocaleString()} of ${total.toLocaleString()}`;
+    document.getElementById('prev').disabled = offset <= 0;
+    document.getElementById('next').disabled = offset + PAGE_SIZE >= total;
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="13"><div class="empty">Error: ${esc(e.message)}</div></td></tr>`;
+    document.getElementById('count').textContent = '—';
+  }
+}
+
+document.getElementById('btn-apply').addEventListener('click', () => { offset = 0; load(); });
+document.getElementById('btn-reset').addEventListener('click', () => {
+  ['f-search', 'f-industry', 'f-region', 'f-platform'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('f-products').value = '';
+  offset = 0; load();
+});
+document.getElementById('prev').addEventListener('click', () => { if (offset > 0) { offset -= PAGE_SIZE; load(); } });
+document.getElementById('next').addEventListener('click', () => { if (offset + PAGE_SIZE < total) { offset += PAGE_SIZE; load(); } });
+document.getElementById('btn-export').addEventListener('click', () => {
+  window.location.href = `/api/engine-leads/export?${queryString({})}`;
+});
+['f-search', 'f-industry', 'f-region', 'f-platform'].forEach(id =>
+  document.getElementById(id).addEventListener('keydown', e => { if (e.key === 'Enter') { offset = 0; load(); } }));
+
+load();
+</script>
+</body>
+</html>

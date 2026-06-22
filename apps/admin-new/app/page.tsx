@@ -2,264 +2,134 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { ArrowRight } from 'lucide-react'
+import { PageShell } from '@/components/shell/page-shell'
+import { KpiCard } from '@/components/ui/kpi-card'
+import { DataTable, type Column } from '@/components/ui/data-table'
+import { StatusBadge } from '@/components/ui/status-badge'
 
 interface WorkspaceRow {
   workspace_id: string
   workspace_name: string
-  client_status: string | null
-  sent_30d: number | null
-  replied_30d: number | null
-  reply_rate_30d: number | null
-  leads_30d: number | null
+  status: string
+  sent: number
+  replyRate: number
+  leads: number
 }
 
-interface StatsData {
-  rows: WorkspaceRow[]
-  totals: { sent: number; replies: number; leads: number }
-}
-
-interface HealthRow {
-  workspace_id: string
-  workspace_name: string | null
-  health_score: number
-  health_band: string
-  reply_rate_30d: number | null
-  sent_30d: number
-  leads_30d: number
-  mailbox_total: number
-  mailbox_unhealthy: number
-}
+const num = (n: number) => (n || 0).toLocaleString()
+const pct = (n: number) => (isNaN(n) ? '—' : (n * 100).toFixed(1) + '%')
+function rrTone(rr: number) { return rr >= 0.025 ? 'ok' : rr >= 0.01 ? 'warn' : 'error' as const }
 
 export default function Home() {
-  const [stats, setStats] = useState<StatsData | null>(null)
-  const [health, setHealth] = useState<HealthRow[]>([])
-  const [loading, setLoading] = useState(true)
+  const [rows, setRows] = useState<WorkspaceRow[]>([])
+  const [totals, setTotals] = useState({ sent: 0, replies: 0, oooReplies: 0, leads: 0 })
+  const [status, setStatus] = useState<'loading' | 'ok' | 'error'>('loading')
+  const [updatedAt, setUpdatedAt] = useState<string | null>(null)
 
   useEffect(() => {
     const end = new Date().toISOString().slice(0, 10)
-    const start = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-    Promise.all([
-      fetch(`/api/stats/summary?start=${start}&end=${end}`).then(r => r.json()).then(d => ({ rows: d.workspaces || [], totals: { sent: 0, replies: 0, leads: 0 } })),
-      fetch('/api/health').then(r => r.json()),
-    ])
-      .then(([s, h]) => {
-        // Calculate totals from workspaces
-        const totals = s.rows.reduce((acc: any, w: any) => ({
-          sent: acc.sent + (w.totals?.sent || 0),
-          replies: acc.replies + (w.totals?.replies || 0),
-          leads: acc.leads + (w.totals?.leads || 0),
-        }), { sent: 0, replies: 0, leads: 0 })
-
-        setStats({
-          rows: s.rows.map((w: any) => ({
-            workspace_id: w.workspace_id,
-            workspace_name: w.name,
-            client_status: 'active',
-            sent_30d: w.totals?.sent || 0,
-            replied_30d: w.totals?.replies || 0,
-            reply_rate_30d: w.totals?.sent > 0 ? w.totals.replies / w.totals.sent : 0,
-            leads_30d: w.totals?.leads || 0,
-          })),
-          totals,
-        })
-        setHealth(Array.isArray(h) ? h : [])
+    const start = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10)
+    fetch(`/api/stats/summary?start=${start}&end=${end}`)
+      .then(r => r.json())
+      .then((s) => {
+        if (s.error) throw new Error(s.error)
+        const ws = (s.workspaces || []) as Array<{ workspace_id: string; name: string; totals: { sent: number; replies: number; oooReplies: number; leads: number } }>
+        const t = ws.reduce((a, w) => ({
+          sent: a.sent + (w.totals?.sent || 0),
+          replies: a.replies + (w.totals?.replies || 0),
+          oooReplies: a.oooReplies + (w.totals?.oooReplies || 0),
+          leads: a.leads + (w.totals?.leads || 0),
+        }), { sent: 0, replies: 0, oooReplies: 0, leads: 0 })
+        setTotals(t)
+        setRows(ws.map(w => ({
+          workspace_id: w.workspace_id,
+          workspace_name: w.name,
+          status: 'active',
+          sent: w.totals?.sent || 0,
+          replyRate: w.totals?.sent > 0 ? w.totals.replies / w.totals.sent : 0,
+          leads: w.totals?.leads || 0,
+        })))
+        setUpdatedAt(s.updatedAt ?? null)
+        setStatus('ok')
       })
-      .catch(() => {})
-      .finally(() => setLoading(false))
+      .catch(() => setStatus('error'))
   }, [])
 
-  const totals = stats?.totals
-  const replyRate =
-    totals && totals.sent > 0
-      ? ((totals.replies / totals.sent) * 100).toFixed(2) + '%'
-      : '—'
-  const activeClients = stats?.rows.filter(r => r.client_status === 'active').length ?? 0
-  const greenCount = health.filter(h => h.health_band === 'green').length
-  const yellowCount = health.filter(h => h.health_band === 'yellow').length
-  const redCount = health.filter(h => h.health_band === 'red').length
+  const replyRate = totals.sent > 0 ? totals.replies / totals.sent : 0 // Human RR
+  const allReplyRate = totals.sent > 0 ? (totals.replies + totals.oooReplies) / totals.sent : 0 // incl. OOO/auto
+  const activeClients = rows.length
+
+  const columns: Column<WorkspaceRow>[] = [
+    { key: 'name', header: 'Workspace', sortValue: w => w.workspace_name.toLowerCase(), cell: w => <span className="font-semibold text-foreground">{w.workspace_name}</span> },
+    { key: 'status', header: 'Status', cell: () => <StatusBadge status="info">Active</StatusBadge> },
+    { key: 'sent', header: 'Sent', numeric: true, sortValue: w => w.sent, cell: w => num(w.sent) },
+    { key: 'rr', header: 'Reply Rate', numeric: true, sortValue: w => w.replyRate, cell: w => <StatusBadge status={rrTone(w.replyRate)}>{pct(w.replyRate)}</StatusBadge> },
+    { key: 'leads', header: 'Leads', numeric: true, sortValue: w => w.leads, cell: w => num(w.leads) },
+  ]
 
   return (
-    <div className="o-page">
-
-      {/* Header */}
-      <div className="o-page-header">
-        <div>
-          <div className="o-page-title">Agency Dashboard</div>
-          <div className="o-page-sub">
-            Last 30 days · {loading ? '…' : `${health.length} workspaces`}
-          </div>
-        </div>
+    <PageShell
+      title="Agency Dashboard"
+      subtitle={`Last 30 days · ${status === 'loading' ? '…' : `${rows.length} workspaces`}`}
+      freshness={{ table: 'workspace_stats', syncedAt: updatedAt }}
+    >
+      {/* Human RR (real replies) + Reply Rate (incl. OOO/auto); warmup excluded. */}
+      <div className="mb-5 grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
+        <KpiCard label="Emails Sent" value={num(totals.sent)} tone="navy" loading={status === 'loading'} />
+        <KpiCard label="Human RR" value={pct(replyRate)} sub="real replies" tone="teal" loading={status === 'loading'} />
+        <KpiCard label="Reply Rate" value={pct(allReplyRate)} sub="incl. OOO/auto" tone="purple" loading={status === 'loading'} />
+        <KpiCard label="Leads Generated" value={num(totals.leads)} tone="green" loading={status === 'loading'} />
+        <KpiCard label="Active Clients" value={activeClients} tone="yellow" loading={status === 'loading'} />
       </div>
 
-      {/* Summary stat cards */}
-      <div className="o-metrics o-metrics-4" style={{ marginBottom: '1.5rem' }}>
-        <div className="o-metric" style={{ borderTopColor: '#224388' }}>
-          <div className="o-metric-label">Emails Sent</div>
-          <div className="o-metric-val" style={{ color: '#224388' }}>
-            {loading ? '—' : (totals?.sent ?? 0).toLocaleString()}
-          </div>
+      {status === 'error' && (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+          Couldn’t load the dashboard. Check the data sync and try again.
         </div>
-        <div className="o-metric" style={{ borderTopColor: '#1F6F78' }}>
-          <div className="o-metric-label">Reply Rate</div>
-          <div className="o-metric-val" style={{ color: '#1F6F78' }}>
-            {loading ? '—' : replyRate}
-          </div>
-        </div>
-        <div className="o-metric" style={{ borderTopColor: '#16A34A' }}>
-          <div className="o-metric-label">Leads Generated</div>
-          <div className="o-metric-val" style={{ color: '#16A34A' }}>
-            {loading ? '—' : (totals?.leads ?? 0).toLocaleString()}
-          </div>
-        </div>
-        <div className="o-metric" style={{ borderTopColor: '#7C89CD' }}>
-          <div className="o-metric-label">Active Clients</div>
-          <div className="o-metric-val" style={{ color: '#7C89CD' }}>
-            {loading ? '—' : String(activeClients)}
-          </div>
-        </div>
-      </div>
+      )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 280px', gap: '1.25rem' }}>
-
-        {/* Workspace table */}
-        <div className="o-card">
-          <div className="o-card-header">
-            <div>
-              <div className="o-card-title">Workspaces</div>
-              <div style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>Sorted by sends (30 days)</div>
-            </div>
-            <Link href="/stats" style={{ fontSize: 12, color: '#1F6F78', fontWeight: 600, textDecoration: 'none' }}>Full stats →</Link>
-          </div>
-          <div className="o-card-body" style={{ padding: 0 }}>
-            <div className="o-table-wrap">
-              <table className="o-table">
-                <thead>
-                  <tr>
-                    <th>Workspace</th>
-                    <th>Status</th>
-                    <th>Sent</th>
-                    <th>Reply Rate</th>
-                    <th>Leads</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {loading ? (
-                    <tr>
-                      <td colSpan={5} style={{ textAlign: 'center', padding: '2.5rem 1rem' }}>
-                        <span className="o-spin" />
-                      </td>
-                    </tr>
-                  ) : (
-                    (stats?.rows ?? []).map(ws => {
-                      const rr =
-                        ws.reply_rate_30d != null
-                          ? (Number(ws.reply_rate_30d) * 100).toFixed(2) + '%'
-                          : '—'
-                      const rrColor =
-                        ws.reply_rate_30d == null
-                          ? '#6B7280'
-                          : ws.reply_rate_30d >= 0.025
-                          ? '#16A34A'
-                          : ws.reply_rate_30d >= 0.01
-                          ? '#D97706'
-                          : '#DC2626'
-                      const statusCls =
-                        ws.client_status === 'active'
-                          ? 'o-status o-status-active'
-                          : ws.client_status === 'paused'
-                          ? 'o-status o-status-warning'
-                          : 'o-status o-status-unknown'
-                      return (
-                        <tr key={ws.workspace_id}>
-                          <td style={{ fontWeight: 500 }}>{ws.workspace_name}</td>
-                          <td>
-                            <span className={statusCls}>
-                              {ws.client_status ?? '—'}
-                            </span>
-                          </td>
-                          <td>{(ws.sent_30d ?? 0).toLocaleString()}</td>
-                          <td style={{ fontWeight: 700, color: rrColor }}>{rr}</td>
-                          <td>{ws.leads_30d ?? 0}</td>
-                        </tr>
-                      )
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-
-        {/* Right column */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-
-          {/* Health panel */}
-          <div className="o-card">
-            <div className="o-card-header">
-              <div className="o-card-title">Client Health</div>
-            </div>
-            <div className="o-card-body">
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 16 }}>
-                {[
-                  { label: 'Healthy', count: greenCount, color: '#16A34A', bg: '#D1FAE5' },
-                  { label: 'Warning', count: yellowCount, color: '#D97706', bg: '#FEF3C7' },
-                  { label: 'At Risk', count: redCount, color: '#DC2626', bg: '#FEE2E2' },
-                ].map(b => (
-                  <div
-                    key={b.label}
-                    style={{ background: b.bg, borderRadius: 8, textAlign: 'center', padding: '12px 4px' }}
-                  >
-                    <div style={{ fontSize: 24, fontWeight: 700, color: b.color }}>
-                      {loading ? '—' : b.count}
-                    </div>
-                    <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 2, color: b.color }}>
-                      {b.label}
-                    </div>
-                  </div>
-                ))}
+      {status !== 'error' && (
+        <div className="grid gap-5 lg:grid-cols-[1fr_300px]">
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <div>
+                <h2 className="text-sm font-bold text-foreground">Workspaces</h2>
+                <p className="text-xs text-muted-foreground">Sorted by sends (30 days)</p>
               </div>
-              <Link href="/health" style={{ fontSize: 12, color: '#1F6F78', fontWeight: 600, textDecoration: 'none' }}>
-                View health report →
+              <Link href="/stats" className="flex items-center gap-1 text-xs font-semibold text-primary hover:underline">
+                Full stats <ArrowRight size={12} />
               </Link>
             </div>
+            <DataTable
+              columns={columns}
+              rows={[...rows].sort((a, b) => b.sent - a.sent)}
+              getRowKey={w => w.workspace_id}
+              empty={status === 'loading' ? 'Loading…' : 'No workspaces.'}
+            />
           </div>
 
-          {/* Quick links */}
-          <div className="o-card">
-            <div className="o-card-header">
-              <div className="o-card-title">Quick Links</div>
-            </div>
-            <div className="o-card-body" style={{ padding: 0 }}>
+          <div className="flex flex-col gap-4">
+            <div className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+              <div className="border-b border-border px-4 py-2.5">
+                <h2 className="text-sm font-bold text-foreground">Quick Links</h2>
+              </div>
               {[
-                { href: '/campaigns', label: 'Campaign Intelligence' },
+                { href: '/actions', label: 'Actions' },
                 { href: '/finance', label: 'Finance' },
                 { href: '/clients', label: 'Clients' },
-                { href: '/diagnostics', label: 'Diagnostics' },
                 { href: '/mailboxes', label: 'Mailboxes' },
                 { href: '/domains', label: 'Domains' },
-              ].map((link, i, arr) => (
-                <Link
-                  key={link.href}
-                  href={link.href}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    padding: '10px 20px',
-                    borderBottom: i < arr.length - 1 ? '1px solid #F3F4F6' : 'none',
-                    fontSize: 13,
-                    color: '#050C29',
-                    textDecoration: 'none',
-                  }}
-                >
-                  {link.label}
-                  <span style={{ color: '#9CA3AF', fontSize: 11 }}>→</span>
+              ].map((l, i, arr) => (
+                <Link key={l.href} href={l.href} className={`flex items-center justify-between px-4 py-2.5 text-[13px] text-foreground transition-colors hover:bg-accent ${i < arr.length - 1 ? 'border-b border-border/60' : ''}`}>
+                  {l.label}
+                  <ArrowRight size={12} className="text-muted-foreground" />
                 </Link>
               ))}
             </div>
           </div>
         </div>
-      </div>
-    </div>
+      )}
+    </PageShell>
   )
 }

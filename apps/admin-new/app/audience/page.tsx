@@ -1,6 +1,23 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import { Button } from '@/components/ui/button'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from '@/components/ui/table'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -89,12 +106,16 @@ type TableId = 'tblIndustry' | 'tblCity' | 'tblCounty' | 'tblSize' | 'tblSeniori
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function fmt(n: number | undefined | null): string {
+function num(n: number | undefined | null): string {
   return (n ?? 0).toLocaleString()
 }
 
 function pct(v: number): string {
   return (v * 100).toFixed(1) + '%'
+}
+
+function dec(n: number | null, places = 1): string {
+  return n != null ? n.toFixed(places) : '—'
 }
 
 function withMetrics(r: IcpSegmentRow): RowWithMetrics {
@@ -126,24 +147,38 @@ function scoreRows(rows: RowWithMetrics[]): RowWithMetrics[] {
   })
 }
 
-function scoreColor(s: number): string {
-  if (s >= 70) return '#22c55e'
-  if (s >= 40) return '#f59e0b'
-  return '#ef4444'
+function scoreTone(s: number): string {
+  if (s >= 70) return 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+  if (s >= 40) return 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+  return 'bg-red-500/15 text-red-600 dark:text-red-400'
 }
 
-function rateClass(rate: number): string {
-  if (rate <= 0) return 'zero'
-  if (rate >= 0.05) return 'high'
-  if (rate >= 0.02) return 'mid'
-  return 'low'
+function rrTone(rate: number): string {
+  if (rate <= 0) return 'text-muted-foreground'
+  if (rate >= 0.05) return 'text-emerald-600 dark:text-emerald-400'
+  if (rate >= 0.02) return 'text-amber-600 dark:text-amber-400'
+  return 'text-red-600 dark:text-red-400'
+}
+
+function confTone(c: Recommendation['confidence']): string {
+  if (c === 'high') return 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+  if (c === 'low') return 'bg-red-500/15 text-red-600 dark:text-red-400'
+  return 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
 }
 
 function sortRows(rows: RowWithMetrics[], state: SortState): RowWithMetrics[] {
   return [...rows].sort((a, b) => {
     const colKey = state.col as keyof RowWithMetrics
-    let va: number | string | null | undefined = a[colKey] as number | string | null | undefined
-    let vb: number | string | null | undefined = b[colKey] as number | string | null | undefined
+    let va: number | string | null | undefined = a[colKey] as
+      | number
+      | string
+      | null
+      | undefined
+    let vb: number | string | null | undefined = b[colKey] as
+      | number
+      | string
+      | null
+      | undefined
     if (va == null) va = -Infinity
     if (vb == null) vb = -Infinity
     if (state.col === 'segment') {
@@ -155,66 +190,18 @@ function sortRows(rows: RowWithMetrics[], state: SortState): RowWithMetrics[] {
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
-function ScoreBadge({ score }: { score: number }) {
-  const c = scoreColor(score)
-  return (
-    <span
-      style={{
-        display: 'inline-block',
-        minWidth: 42,
-        padding: '2px 8px',
-        borderRadius: 12,
-        fontSize: 12,
-        fontWeight: 700,
-        background: `${c}22`,
-        color: c,
-        textAlign: 'center',
-      }}
-    >
-      {score}
-    </span>
-  )
-}
-
-function RatePill({ rate }: { rate: number }) {
-  if (rate <= 0) return <span style={{ color: '#6B7280' }}>—</span>
-  const cls = rateClass(rate)
-  const styles: Record<string, { bg: string; color: string }> = {
-    high: { bg: '#DCFCE7', color: '#16a34a' },
-    mid: { bg: '#FEF3C7', color: '#d97706' },
-    low: { bg: '#FEE2E2', color: '#dc2626' },
-    zero: { bg: '#F3F4F6', color: '#6B7280' },
-  }
-  const s = styles[cls]
-  return (
-    <span
-      style={{
-        display: 'inline-block',
-        padding: '2px 8px',
-        borderRadius: 20,
-        fontSize: 12,
-        fontWeight: 700,
-        background: s.bg,
-        color: s.color,
-      }}
-    >
-      {pct(rate)}
-    </span>
-  )
-}
-
 const COLS = [
-  { key: 'score', label: 'Score' },
-  { key: 'segment', label: 'Segment' },
-  { key: 'total', label: 'Contacts' },
-  { key: 'sent', label: 'Sent' },
-  { key: 'leads', label: 'Leads' },
-  { key: 'replied', label: 'Replied' },
-  { key: 'not_interested', label: 'Not Int.' },
-  { key: 'lpt', label: 'LPT' },
-  { key: 'rtl', label: 'RTL' },
-  { key: 'rate', label: 'Reply Rate' },
-]
+  { key: 'score', label: 'Score', numeric: false },
+  { key: 'segment', label: 'Segment', numeric: false },
+  { key: 'total', label: 'Contacts', numeric: true },
+  { key: 'sent', label: 'Sent', numeric: true },
+  { key: 'leads', label: 'Leads', numeric: true },
+  { key: 'replied', label: 'Replied', numeric: true },
+  { key: 'not_interested', label: 'Not Int.', numeric: true },
+  { key: 'lpt', label: 'LPT', numeric: true },
+  { key: 'rtl', label: 'RTL', numeric: true },
+  { key: 'rate', label: 'Reply Rate', numeric: true },
+] as const
 
 interface AudienceTableProps {
   title: string
@@ -225,332 +212,257 @@ interface AudienceTableProps {
   onSort: (col: string) => void
 }
 
-function AudienceTable({ title, subtitle, rows, loading, sortState, onSort }: AudienceTableProps) {
+function AudienceTable({
+  title,
+  subtitle,
+  rows,
+  loading,
+  sortState,
+  onSort,
+}: AudienceTableProps) {
   const scored = scoreRows(rows.map(withMetrics))
   const sorted = sortRows(scored, sortState)
 
   function renderCell(r: RowWithMetrics, key: string) {
     switch (key) {
       case 'score':
-        return <ScoreBadge score={r.score} />
+        return (
+          <span
+            className={`inline-block min-w-[42px] rounded-full px-2 py-0.5 text-center text-xs font-bold ${scoreTone(
+              r.score
+            )}`}
+          >
+            {r.score}
+          </span>
+        )
       case 'segment':
         return (
           <span
             title={r.segment}
-            style={{
-              fontWeight: 600,
-              color: '#050C29',
-              maxWidth: 200,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              display: 'inline-block',
-            }}
+            className="block max-w-[200px] truncate font-semibold text-foreground"
           >
             {r.segment}
           </span>
         )
       case 'total':
-        return <span>{fmt(r.total)}</span>
+        return <span className="tabular-nums">{num(r.total)}</span>
       case 'sent':
-        return <span>{r.sent > 0 ? fmt(r.sent) : '—'}</span>
+        return (
+          <span className="tabular-nums">{r.sent > 0 ? num(r.sent) : '—'}</span>
+        )
       case 'leads':
         return r.leads > 0 ? (
-          <b style={{ color: '#16a34a' }}>{r.leads}</b>
+          <b className="tabular-nums text-emerald-600 dark:text-emerald-400">
+            {r.leads}
+          </b>
         ) : (
-          <span>—</span>
+          <span className="text-muted-foreground">—</span>
         )
       case 'replied':
-        return <span>{r.replied > 0 ? r.replied : '—'}</span>
+        return (
+          <span className="tabular-nums">{r.replied > 0 ? r.replied : '—'}</span>
+        )
       case 'not_interested':
         return (
-          <span style={{ color: '#6B7280' }}>
+          <span className="tabular-nums text-muted-foreground">
             {r.not_interested > 0 ? r.not_interested : '—'}
           </span>
         )
       case 'lpt':
-        return r.lpt != null ? <b>{r.lpt.toFixed(1)}</b> : <span>—</span>
+        return r.lpt != null ? (
+          <b className="tabular-nums">{r.lpt.toFixed(1)}</b>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        )
       case 'rtl':
-        return <span>{r.rtl != null ? r.rtl.toFixed(1) : '—'}</span>
+        return (
+          <span className="tabular-nums">
+            {r.rtl != null ? r.rtl.toFixed(1) : '—'}
+          </span>
+        )
       case 'rate':
-        return <RatePill rate={r.rate} />
+        return (
+          <span className={`tabular-nums font-semibold ${rrTone(r.rate)}`}>
+            {r.rate > 0 ? pct(r.rate) : '—'}
+          </span>
+        )
       default:
         return null
     }
   }
 
   return (
-    <div className="o-card" style={{ overflow: 'hidden' }}>
-      <div className="o-card-header">
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: '.5rem' }}>
-          <div className="o-card-title">{title}</div>
-          {subtitle && (
-            <span style={{ fontSize: 12, color: '#6B7280' }}>{subtitle}</span>
-          )}
-        </div>
-      </div>
-      <div className="o-card-body" style={{ padding: 0 }}>
-        {loading ? (
-          <div className="o-empty">
-            <span className="o-spin" />
-          </div>
-        ) : rows.length === 0 ? (
-          <div className="o-empty">No contacts found for this client.</div>
-        ) : (
-          <div className="o-table-wrap">
-            <table className="o-table" style={{ minWidth: 600 }}>
-              <thead>
-                <tr>
-                  {COLS.map((c) => (
-                    <th
-                      key={c.key}
-                      onClick={() => onSort(c.key)}
-                      style={{
-                        color: c.key === sortState.col ? '#050C29' : '#6B7280',
-                        textAlign: c.key === 'segment' ? 'left' : 'right',
-                        cursor: 'pointer',
-                        userSelect: 'none',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {c.label}
-                      {c.key === sortState.col && (
-                        <span style={{ marginLeft: 4, fontSize: 10, color: '#1F6F78' }}>
-                          {sortState.dir === 1 ? ' ▲' : ' ▼'}
-                        </span>
-                      )}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {sorted.map((r, i) => (
-                  <tr key={i}>
-                    {COLS.map((c) => (
-                      <td
-                        key={c.key}
-                        style={{
-                          verticalAlign: 'middle',
-                          textAlign: c.key === 'segment' ? 'left' : 'right',
-                          fontWeight: 600,
-                        }}
-                      >
-                        {renderCell(r, c.key)}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+    <div className="overflow-hidden rounded-lg border border-border bg-card">
+      <div className="flex items-baseline gap-2 border-b border-border px-4 py-3">
+        <div className="text-sm font-semibold text-foreground">{title}</div>
+        {subtitle && (
+          <span className="text-xs text-muted-foreground">{subtitle}</span>
         )}
       </div>
+      {loading ? (
+        <div className="py-10 text-center text-sm text-muted-foreground">
+          Loading…
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="py-10 text-center text-sm text-muted-foreground">
+          No contacts found for this client.
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <Table className="min-w-[640px]">
+            <TableHeader>
+              <TableRow>
+                {COLS.map((c) => (
+                  <TableHead
+                    key={c.key}
+                    onClick={() => onSort(c.key)}
+                    className={`cursor-pointer select-none whitespace-nowrap ${
+                      c.numeric ? 'text-right' : 'text-left'
+                    } ${
+                      c.key === sortState.col
+                        ? 'text-foreground'
+                        : 'text-muted-foreground'
+                    }`}
+                  >
+                    {c.label}
+                    {c.key === sortState.col && (
+                      <span className="ml-1 text-[10px] text-primary">
+                        {sortState.dir === 1 ? '▲' : '▼'}
+                      </span>
+                    )}
+                  </TableHead>
+                ))}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {sorted.map((r, i) => (
+                <TableRow key={i}>
+                  {COLS.map((c) => (
+                    <TableCell
+                      key={c.key}
+                      className={`align-middle font-medium ${
+                        c.numeric ? 'text-right' : 'text-left'
+                      }`}
+                    >
+                      {renderCell(r, c.key)}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
     </div>
   )
 }
 
 // ── Recommendation card ─────────────────────────────────────────────────────
 
-function RecCard({ rec }: { rec: Recommendation }) {
-  function confStyle() {
-    if (rec.confidence === 'high') return { bg: '#DCFCE7', color: '#16a34a' }
-    if (rec.confidence === 'low') return { bg: '#FEE2E2', color: '#dc2626' }
-    return { bg: '#FEF3C7', color: '#d97706' }
-  }
-  const cs = confStyle()
-
-  function copyText(s: string) {
-    navigator.clipboard.writeText(s).catch(() => {})
-  }
-
+function RecLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div
-      style={{
-        border: '1px solid #E2E6F0',
-        borderLeft: '3px solid #224388',
-        borderRadius: 8,
-        padding: '1rem 1.25rem',
-        marginBottom: '.85rem',
-        background: '#FFFFFF',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'flex-start',
-          gap: '1rem',
-          marginBottom: '.4rem',
-        }}
+    <span className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+      {children}
+    </span>
+  )
+}
+
+function CopyLine({ text }: { text: string }) {
+  return (
+    <li>
+      {text}{' '}
+      <Button
+        variant="ghost"
+        size="sm"
+        className="ml-1 h-5 px-1.5 text-[11px]"
+        onClick={() => navigator.clipboard.writeText(text).catch(() => {})}
       >
-        <div
-          style={{
-            fontFamily: 'Genos, sans-serif',
-            fontSize: '1.05rem',
-            fontWeight: 800,
-            color: '#050C29',
-          }}
-        >
+        copy
+      </Button>
+    </li>
+  )
+}
+
+function RecCard({ rec }: { rec: Recommendation }) {
+  return (
+    <div className="mb-3.5 rounded-lg border border-border border-l-[3px] border-l-primary bg-card p-4">
+      <div className="mb-1.5 flex items-start justify-between gap-4">
+        <div className="text-base font-extrabold text-foreground">
           {rec.title || 'Recommendation'}
         </div>
         <span
-          style={{
-            display: 'inline-block',
-            padding: '2px 8px',
-            borderRadius: 20,
-            fontSize: 11,
-            fontWeight: 700,
-            textTransform: 'uppercase',
-            letterSpacing: '.3px',
-            background: cs.bg,
-            color: cs.color,
-            whiteSpace: 'nowrap',
-          }}
+          className={`inline-block whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide ${confTone(
+            rec.confidence
+          )}`}
         >
           {rec.confidence || 'medium'}
         </span>
       </div>
-      <div
-        style={{
-          fontSize: 13,
-          color: '#1F6F78',
-          fontWeight: 600,
-          marginBottom: '.75rem',
-        }}
-      >
+      <div className="mb-3 text-[13px] font-semibold text-primary">
         🎯 {rec.target}
       </div>
-      <div style={{ fontSize: 13, lineHeight: 1.5, marginBottom: '.6rem' }}>
-        <span
-          style={{
-            fontSize: 10,
-            fontWeight: 700,
-            textTransform: 'uppercase',
-            letterSpacing: '.5px',
-            color: '#6B7280',
-            display: 'block',
-            marginBottom: '.25rem',
-          }}
-        >
-          Why
-        </span>
+      <div className="mb-2.5 text-[13px] leading-relaxed text-foreground">
+        <RecLabel>Why</RecLabel>
         {rec.rationale}
       </div>
       {rec.split_80_winner && (
-        <div style={{ fontSize: 13, lineHeight: 1.5, marginBottom: '.6rem' }}>
-          <span
-            style={{
-              fontSize: 10,
-              fontWeight: 700,
-              textTransform: 'uppercase',
-              letterSpacing: '.5px',
-              color: '#6B7280',
-              display: 'block',
-              marginBottom: '.25rem',
-            }}
-          >
+        <div className="mb-2.5 text-[13px] leading-relaxed">
+          <RecLabel>
             Keep 80% → {rec.split_80_winner.campaign_name}
+          </RecLabel>
+          <span className="text-muted-foreground">
+            {rec.split_80_winner.reason}
           </span>
-          <span style={{ color: '#6B7280' }}>{rec.split_80_winner.reason}</span>
         </div>
       )}
       {rec.split_20_test && (
-        <div style={{ fontSize: 13, lineHeight: 1.5, marginBottom: '.6rem' }}>
-          <span
-            style={{
-              fontSize: 10,
-              fontWeight: 700,
-              textTransform: 'uppercase',
-              letterSpacing: '.5px',
-              color: '#6B7280',
-              display: 'block',
-              marginBottom: '.25rem',
-            }}
-          >
-            Test 20% → {rec.split_20_test.angle}
-          </span>
-          {rec.split_20_test.subject_lines && rec.split_20_test.subject_lines.length > 0 && (
-            <div style={{ marginTop: '.5rem' }}>
-              <span
-                style={{
-                  fontSize: 10,
-                  fontWeight: 700,
-                  textTransform: 'uppercase',
-                  letterSpacing: '.5px',
-                  color: '#6B7280',
-                  display: 'block',
-                  marginBottom: '.25rem',
-                }}
-              >
-                Subject lines
-              </span>
-              <ul style={{ margin: 0, paddingLeft: '1.25rem', fontSize: 13, lineHeight: 1.6 }}>
-                {rec.split_20_test.subject_lines.map((s, i) => (
-                  <li key={i}>
-                    {s}{' '}
-                    <button
-                      onClick={() => copyText(s)}
-                      className="o-btn o-btn-ghost o-btn-sm"
-                      style={{ marginLeft: 6 }}
-                    >
-                      copy
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {rec.split_20_test.opening_lines && rec.split_20_test.opening_lines.length > 0 && (
-            <div style={{ marginTop: '.5rem' }}>
-              <span
-                style={{
-                  fontSize: 10,
-                  fontWeight: 700,
-                  textTransform: 'uppercase',
-                  letterSpacing: '.5px',
-                  color: '#6B7280',
-                  display: 'block',
-                  marginBottom: '.25rem',
-                }}
-              >
-                Opening lines
-              </span>
-              <ul style={{ margin: 0, paddingLeft: '1.25rem', fontSize: 13, lineHeight: 1.6 }}>
-                {rec.split_20_test.opening_lines.map((s, i) => (
-                  <li key={i}>
-                    {s}{' '}
-                    <button
-                      onClick={() => copyText(s)}
-                      className="o-btn o-btn-ghost o-btn-sm"
-                      style={{ marginLeft: 6 }}
-                    >
-                      copy
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+        <div className="mb-2.5 text-[13px] leading-relaxed">
+          <RecLabel>Test 20% → {rec.split_20_test.angle}</RecLabel>
+          {rec.split_20_test.subject_lines &&
+            rec.split_20_test.subject_lines.length > 0 && (
+              <div className="mt-2">
+                <RecLabel>Subject lines</RecLabel>
+                <ul className="m-0 list-disc pl-5 text-[13px] leading-relaxed">
+                  {rec.split_20_test.subject_lines.map((s, i) => (
+                    <CopyLine key={i} text={s} />
+                  ))}
+                </ul>
+              </div>
+            )}
+          {rec.split_20_test.opening_lines &&
+            rec.split_20_test.opening_lines.length > 0 && (
+              <div className="mt-2">
+                <RecLabel>Opening lines</RecLabel>
+                <ul className="m-0 list-disc pl-5 text-[13px] leading-relaxed">
+                  {rec.split_20_test.opening_lines.map((s, i) => (
+                    <CopyLine key={i} text={s} />
+                  ))}
+                </ul>
+              </div>
+            )}
         </div>
       )}
       {rec.data_gaps && (
-        <div style={{ fontSize: 12, color: '#6B7280', lineHeight: 1.5 }}>
-          <span
-            style={{
-              fontSize: 10,
-              fontWeight: 700,
-              textTransform: 'uppercase',
-              letterSpacing: '.5px',
-              color: '#6B7280',
-              display: 'block',
-              marginBottom: '.25rem',
-            }}
-          >
-            Data gaps
-          </span>
+        <div className="text-xs leading-relaxed text-muted-foreground">
+          <RecLabel>Data gaps</RecLabel>
           {rec.data_gaps}
         </div>
       )}
+    </div>
+  )
+}
+
+// ── KPI card ─────────────────────────────────────────────────────────────────
+
+function KpiCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-border border-t-[3px] border-t-primary bg-card px-4 py-3">
+      <div className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+        {label}
+      </div>
+      <div className="mt-1 text-2xl font-bold tabular-nums text-foreground">
+        {value}
+      </div>
     </div>
   )
 }
@@ -561,9 +473,11 @@ export default function AudiencePage() {
   const [clients, setClients] = useState<Client[]>([])
   const [selectedWsId, setSelectedWsId] = useState<string>('')
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
-  const [selectedCampaignId, setSelectedCampaignId] = useState<string>('')
+  const [selectedCampaignId, setSelectedCampaignId] = useState<string>('all')
   const [icpData, setIcpData] = useState<IcpData | null>(null)
-  const [loadingIcp, setLoadingIcp] = useState(false)
+  const [status, setStatus] = useState<'loading' | 'ok' | 'empty' | 'error'>(
+    'empty'
+  )
   const [icpError, setIcpError] = useState<string | null>(null)
   const [refreshStatus, setRefreshStatus] = useState<string>('')
 
@@ -579,14 +493,22 @@ export default function AudiencePage() {
   const [showPasteArea, setShowPasteArea] = useState(false)
   const [pasteText, setPasteText] = useState<string>('')
   const [pasteStatus, setPasteStatus] = useState<string>('')
-  const [pasteStatusColor, setPasteStatusColor] = useState<string>('#6B7280')
 
   // Sort state per table
-  const [sortIndustry, setSortIndustry] = useState<SortState>({ col: 'total', dir: -1 })
+  const [sortIndustry, setSortIndustry] = useState<SortState>({
+    col: 'total',
+    dir: -1,
+  })
   const [sortCity, setSortCity] = useState<SortState>({ col: 'total', dir: -1 })
-  const [sortCounty, setSortCounty] = useState<SortState>({ col: 'total', dir: -1 })
+  const [sortCounty, setSortCounty] = useState<SortState>({
+    col: 'total',
+    dir: -1,
+  })
   const [sortSize, setSortSize] = useState<SortState>({ col: 'total', dir: -1 })
-  const [sortSeniority, setSortSeniority] = useState<SortState>({ col: 'total', dir: -1 })
+  const [sortSeniority, setSortSeniority] = useState<SortState>({
+    col: 'total',
+    dir: -1,
+  })
 
   const tableSortMap: Record<TableId, [SortState, (s: SortState) => void]> = {
     tblIndustry: [sortIndustry, setSortIndustry],
@@ -625,27 +547,28 @@ export default function AudiencePage() {
   useEffect(() => {
     if (!selectedWsId || selectedWsId === 'all') {
       setCampaigns([])
-      setSelectedCampaignId('')
+      setSelectedCampaignId('all')
       return
     }
     fetch(`/api/audience/campaigns/${selectedWsId}`)
       .then((r) => r.json())
       .then((r: unknown) => {
         setCampaigns(Array.isArray(r) ? (r as Campaign[]) : [])
-        setSelectedCampaignId('')
+        setSelectedCampaignId('all')
       })
       .catch(() => {
         setCampaigns([])
-        setSelectedCampaignId('')
+        setSelectedCampaignId('all')
       })
   }, [selectedWsId])
 
   const loadIcp = useCallback(async () => {
     if (!selectedWsId) {
       setIcpData(null)
+      setStatus('empty')
       return
     }
-    setLoadingIcp(true)
+    setStatus('loading')
     setIcpError(null)
     setAiRecs(null)
     setAiError(null)
@@ -654,23 +577,25 @@ export default function AudiencePage() {
     setPasteText('')
     setPasteStatus('')
 
-    const qs = selectedCampaignId
-      ? `?campaign_id=${encodeURIComponent(selectedCampaignId)}`
-      : ''
+    const qs =
+      selectedCampaignId && selectedCampaignId !== 'all'
+        ? `?campaign_id=${encodeURIComponent(selectedCampaignId)}`
+        : ''
     try {
       const r = await fetch(`/api/audience/icp/${selectedWsId}${qs}`)
       const data = (await r.json()) as IcpData & { error?: string }
       if (!r.ok || data.error) {
         setIcpError(data.error ?? `HTTP ${r.status}`)
         setIcpData(null)
+        setStatus('error')
       } else {
         setIcpData(data)
+        setStatus(data.totals && data.totals.total > 0 ? 'ok' : 'ok')
       }
     } catch (e) {
       setIcpError(e instanceof Error ? e.message : 'Unknown error')
       setIcpData(null)
-    } finally {
-      setLoadingIcp(false)
+      setStatus('error')
     }
   }, [selectedWsId, selectedCampaignId])
 
@@ -680,11 +605,11 @@ export default function AudiencePage() {
 
   async function runRefresh() {
     setRefreshing(true)
-    setRefreshStatus('Pulling replies from PlusVibe for all clients...')
+    setRefreshStatus('Pulling replies from PlusVibe for all clients…')
     try {
-      const r = (await fetch('/api/audience/refresh-all', { method: 'POST' }).then(
-        (res) => res.json()
-      )) as { clients: number; error?: string }
+      const r = (await fetch('/api/audience/refresh-all', {
+        method: 'POST',
+      }).then((res) => res.json())) as { clients: number; error?: string }
       setRefreshStatus(`Done — ${r.clients} clients refreshed.`)
       if (selectedWsId) loadIcp()
     } catch {
@@ -698,8 +623,8 @@ export default function AudiencePage() {
     setBackfilling(true)
     setRefreshStatus(
       selectedWsId
-        ? 'Spreading known industry/city/state across same-domain contacts...'
-        : 'Running domain backfill across all clients...'
+        ? 'Spreading known industry/city/state across same-domain contacts…'
+        : 'Running domain backfill across all clients…'
     )
     try {
       const body = selectedWsId ? { workspace_id: selectedWsId } : {}
@@ -720,18 +645,27 @@ export default function AudiencePage() {
         const t = r.totals ?? {}
         const total = Object.values(t).reduce((s, n) => s + n, 0)
         setRefreshStatus(
-          `Done — updated ${total} contacts (industry:${t.industry ?? 0} city:${t.city ?? 0} state:${t.state ?? 0} country:${t.country ?? 0} employees:${t.num_employees ?? 0}).`
+          `Done — updated ${total} contacts (industry:${t.industry ?? 0} city:${
+            t.city ?? 0
+          } state:${t.state ?? 0} country:${t.country ?? 0} employees:${
+            t.num_employees ?? 0
+          }).`
         )
         loadIcp()
       } else {
         const total = (r.results ?? []).reduce(
-          (s, c) => s + Object.values(c.totals ?? {}).reduce((a, n) => a + n, 0),
+          (s, c) =>
+            s + Object.values(c.totals ?? {}).reduce((a, n) => a + n, 0),
           0
         )
-        setRefreshStatus(`Done — ${r.clients} clients, ${total} contacts updated.`)
+        setRefreshStatus(
+          `Done — ${r.clients} clients, ${total} contacts updated.`
+        )
       }
     } catch (e) {
-      setRefreshStatus(`Failed: ${e instanceof Error ? e.message : 'Unknown error'}`)
+      setRefreshStatus(
+        `Failed: ${e instanceof Error ? e.message : 'Unknown error'}`
+      )
     } finally {
       setBackfilling(false)
     }
@@ -740,7 +674,7 @@ export default function AudiencePage() {
   async function runEmpSizeBackfill() {
     setEmpSizing(true)
     setRefreshStatus(
-      'Fetching employee size from PlusVibe for all clients — may take 1–2 min...'
+      'Fetching employee size from PlusVibe for all clients — may take 1–2 min…'
     )
     try {
       const r = (await fetch('/api/audience/backfill-employee-size', {
@@ -749,11 +683,15 @@ export default function AudiencePage() {
       if (r.error) {
         setRefreshStatus(`Failed: ${r.error}`)
       } else {
-        setRefreshStatus(`Done — ${r.totalUpdated} contacts updated with company size.`)
+        setRefreshStatus(
+          `Done — ${r.totalUpdated} contacts updated with company size.`
+        )
         if (selectedWsId) loadIcp()
       }
     } catch (e) {
-      setRefreshStatus(`Failed: ${e instanceof Error ? e.message : 'Unknown error'}`)
+      setRefreshStatus(
+        `Failed: ${e instanceof Error ? e.message : 'Unknown error'}`
+      )
     } finally {
       setEmpSizing(false)
     }
@@ -771,7 +709,9 @@ export default function AudiencePage() {
       try {
         r = JSON.parse(text) as RecommendationsResponse & { error?: string }
       } catch {
-        setAiError(`Non-JSON response (HTTP ${resp.status}): ${text.slice(0, 200)}`)
+        setAiError(
+          `Non-JSON response (HTTP ${resp.status}): ${text.slice(0, 200)}`
+        )
         return
       }
       if (!resp.ok || r.error || !r.recommendations) {
@@ -792,8 +732,14 @@ export default function AudiencePage() {
     setAiLoading(true)
     setAiError(null)
     try {
-      const resp = await fetch(`/api/audience/recommendations/${selectedWsId}/prompt`)
-      const r = (await resp.json()) as { prompt?: string; error?: string; char_count?: number }
+      const resp = await fetch(
+        `/api/audience/recommendations/${selectedWsId}/prompt`
+      )
+      const r = (await resp.json()) as {
+        prompt?: string
+        error?: string
+        char_count?: number
+      }
       if (!resp.ok || !r.prompt) {
         setAiError(r.error ?? `HTTP ${resp.status}`)
         return
@@ -802,7 +748,9 @@ export default function AudiencePage() {
         await navigator.clipboard.writeText(r.prompt)
       } catch {
         setPasteText(r.prompt)
-        alert('Clipboard blocked — prompt loaded into the paste box below. Cut from there.')
+        alert(
+          'Clipboard blocked — prompt loaded into the paste box below. Cut from there.'
+        )
       }
       setPasteText('')
       setPasteStatus('')
@@ -810,7 +758,9 @@ export default function AudiencePage() {
       setAiError(null)
       setAiRecs(null)
       setAiSource(
-        `Prompt copied (${(r.char_count ?? 0).toLocaleString()} chars). Paste Claude's response below.`
+        `Prompt copied (${(
+          r.char_count ?? 0
+        ).toLocaleString()} chars). Paste Claude's response below.`
       )
     } catch (e) {
       setAiError(`Network error: ${e instanceof Error ? e.message : String(e)}`)
@@ -833,7 +783,6 @@ export default function AudiencePage() {
       }
       if (!text || !text.trim()) {
         setPasteStatus('Clipboard is empty.')
-        setPasteStatusColor('#dc2626')
         setShowPasteArea(true)
         return
       }
@@ -842,7 +791,6 @@ export default function AudiencePage() {
       renderPasted(text)
     } catch (e) {
       setPasteStatus(`Error: ${e instanceof Error ? e.message : String(e)}`)
-      setPasteStatusColor('#dc2626')
     }
   }
 
@@ -850,7 +798,6 @@ export default function AudiencePage() {
     const src = raw ?? pasteText
     if (!src.trim()) {
       setPasteStatus('Paste box is empty.')
-      setPasteStatusColor('#dc2626')
       return
     }
     let text = src
@@ -865,8 +812,9 @@ export default function AudiencePage() {
     }
     try {
       const parsed = JSON.parse(text) as RecommendationsResponse
-      setPasteStatus(`Rendered ${parsed.recommendations?.length ?? 0} recommendations.`)
-      setPasteStatusColor('#16a34a')
+      setPasteStatus(
+        `Rendered ${parsed.recommendations?.length ?? 0} recommendations.`
+      )
       setAiRecs(parsed)
       setAiSource('from Claude.ai')
       setAiError(null)
@@ -874,7 +822,6 @@ export default function AudiencePage() {
       setPasteStatus(
         `JSON parse failed: ${e instanceof Error ? e.message : String(e)}`
       )
-      setPasteStatusColor('#dc2626')
     }
   }
 
@@ -901,8 +848,9 @@ export default function AudiencePage() {
       return `${when} · ${aiRecs.recommendations.length} recommendations · ${aiSource}`
     }
     if (aiSource) return aiSource
-    if (selectedWsId === 'all') return 'Aggregated audience data across all active clients'
-    if (selectedCampaignId) {
+    if (selectedWsId === 'all')
+      return 'Aggregated audience data across all active clients'
+    if (selectedCampaignId && selectedCampaignId !== 'all') {
       const camp = campaigns.find((c) => c.campaign_id === selectedCampaignId)
       return `Filtered to campaign: ${camp?.campaign_name ?? selectedCampaignId}`
     }
@@ -910,158 +858,151 @@ export default function AudiencePage() {
   }
 
   return (
-    <div className="o-page">
-      {/* Top bar */}
-      <div className="o-page-header">
+    <div className="mx-auto max-w-[1600px] px-8 py-5">
+      {/* Header */}
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="o-page-title">Audience Profiles</div>
+          <h1 className="text-xl font-bold text-foreground">
+            Audience Profiles
+          </h1>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            ICP breakdown · reply rate · 80/20 campaign intelligence
+          </p>
         </div>
-        <div className="o-page-actions">
-          <select
-            className="o-select"
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Select
             value={selectedWsId}
-            onChange={(e) => setSelectedWsId(e.target.value)}
-            style={{ minWidth: 220 }}
+            onValueChange={(v) => setSelectedWsId(v ?? '')}
           >
-            <option value="">— Select client —</option>
-            <option value="all">— Show All Clients —</option>
-            {clients.map((c) => (
-              <option key={c.workspace_id} value={c.workspace_id}>
-                {c.workspace_name || c.username}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger className="min-w-[220px]">
+              <SelectValue placeholder="— Select client —" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">— Show All Clients —</SelectItem>
+              {clients.map((c) => (
+                <SelectItem key={c.workspace_id} value={c.workspace_id}>
+                  {c.workspace_name || c.username}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
 
           {hasClient && selectedWsId !== 'all' && hasCampaigns && (
-            <select
-              className="o-select"
+            <Select
               value={selectedCampaignId}
-              onChange={(e) => setSelectedCampaignId(e.target.value)}
-              style={{ minWidth: 260 }}
+              onValueChange={(v) => setSelectedCampaignId(v ?? 'all')}
             >
-              <option value="">— All campaigns —</option>
-              {campaigns.map((c) => (
-                <option key={c.campaign_id} value={c.campaign_id}>
-                  {c.campaign_name || c.campaign_id}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger className="min-w-[260px]">
+                <SelectValue placeholder="— All campaigns —" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">— All campaigns —</SelectItem>
+                {campaigns.map((c) => (
+                  <SelectItem key={c.campaign_id} value={c.campaign_id}>
+                    {c.campaign_name || c.campaign_id}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           )}
 
-          <button
-            className="o-btn o-btn-primary"
-            onClick={runRefresh}
-            disabled={refreshing}
-          >
-            {refreshing ? <><span className="o-spin" /> Running...</> : '↻ Refresh All'}
-          </button>
-
-          <button
-            className="o-btn o-btn-ghost"
+          <Button onClick={runRefresh} disabled={refreshing}>
+            {refreshing ? 'Running…' : '↻ Refresh All'}
+          </Button>
+          <Button
+            variant="outline"
             onClick={runBackfill}
             disabled={backfilling}
-            title="Spread known industry/city/state across contacts at the same domain — fast, no PV walk"
+            title="Spread known industry/city/state across contacts at the same domain"
           >
-            {backfilling ? <><span className="o-spin" /> Filling...</> : '↺ Fill Unknowns'}
-          </button>
-
-          <button
-            className="o-btn o-btn-teal"
+            {backfilling ? 'Filling…' : '↺ Fill Unknowns'}
+          </Button>
+          <Button
+            variant="secondary"
             onClick={runEmpSizeBackfill}
             disabled={empSizing}
-            title="Pull company size from PlusVibe enrichment data (all workspaces, ~1–2 min)"
+            title="Pull company size from PlusVibe enrichment data (all workspaces)"
           >
-            {empSizing ? <><span className="o-spin" /> Syncing...</> : '⬇ Sync Company Size'}
-          </button>
-
-          {refreshStatus && (
-            <span style={{ fontSize: 13, color: '#6B7280' }}>{refreshStatus}</span>
-          )}
+            {empSizing ? 'Syncing…' : '⬇ Sync Company Size'}
+          </Button>
         </div>
       </div>
 
-      {/* Summary strip */}
-      {hasClient && icpData && (
-        <div className="o-metrics o-metrics-auto" style={{ marginBottom: '2rem' }}>
-          {(
-            [
-              { val: fmt(t.total), label: 'Contacts' },
-              { val: fmt(t.sent), label: 'Total Sent' },
-              { val: fmt(t.replied), label: 'Replied' },
-              { val: fmt(t.leads), label: 'Leads (Interested)' },
-              { val: fmt(t.not_interested), label: 'Not Interested' },
-              { val: pct(rate), label: 'Reply Rate' },
-              { val: lpt != null ? lpt.toFixed(1) : '—', label: 'LPT (leads/1k sent)' },
-              { val: rtl != null ? rtl.toFixed(1) : '—', label: 'RTL (responses/lead)' },
-            ] as const
-          ).map((card) => (
-            <div className="o-metric" key={card.label} style={{ borderTopColor: '#224388' }}>
-              <div className="o-metric-label">{card.label}</div>
-              <div className="o-metric-val" style={{ color: '#224388' }}>{card.val}</div>
-            </div>
-          ))}
+      {refreshStatus && (
+        <div className="mb-4 text-xs text-muted-foreground">{refreshStatus}</div>
+      )}
+
+      {/* No client selected */}
+      {!hasClient && (
+        <div className="rounded-lg border border-border bg-card py-12 text-center text-sm text-muted-foreground">
+          Select a client above to view their audience breakdown.
+        </div>
+      )}
+
+      {/* KPI strip */}
+      {hasClient && icpData && status !== 'error' && (
+        <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
+          <KpiCard label="Contacts" value={num(t.total)} />
+          <KpiCard label="Total Sent" value={num(t.sent)} />
+          <KpiCard label="Replied" value={num(t.replied)} />
+          <KpiCard label="Leads" value={num(t.leads)} />
+          <KpiCard label="Not Interested" value={num(t.not_interested)} />
+          <KpiCard label="Reply Rate" value={pct(rate)} />
+          <KpiCard label="LPT / 1k" value={dec(lpt)} />
+          <KpiCard label="RTL" value={dec(rtl)} />
         </div>
       )}
 
       {/* AI Recommendations panel */}
       {hasClient && (
-        <div
-          className="o-card"
-          style={{ borderLeft: '3px solid #1F6F78', marginBottom: '1.5rem' }}
-        >
-          <div className="o-card-header">
+        <div className="mb-6 overflow-hidden rounded-lg border border-border border-l-[3px] border-l-primary bg-card">
+          <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-4 py-3">
             <div>
-              <div className="o-card-title">AI Campaign Recommendations</div>
-              <div style={{ fontSize: 12, color: '#6B7280' }}>{aiSubtitle()}</div>
+              <div className="text-sm font-semibold text-foreground">
+                AI Campaign Recommendations
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {aiSubtitle()}
+              </div>
             </div>
-            <div style={{ display: 'flex', gap: '.5rem', flexWrap: 'wrap' }}>
-              <button
-                className="o-btn o-btn-ghost"
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={copyPromptForClaudeAi}
                 disabled={aiLoading}
               >
                 📋 Copy prompt
-              </button>
-              <button
-                className="o-btn o-btn-teal"
-                onClick={pasteAndRender}
-              >
+              </Button>
+              <Button variant="secondary" size="sm" onClick={pasteAndRender}>
                 📥 Paste response
-              </button>
-              <button
-                className="o-btn o-btn-ghost"
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={getRecommendations}
                 disabled={aiLoading}
                 title="Direct API call — costs ~$0.01"
               >
-                {aiLoading ? <><span className="o-spin" /> Analyzing...</> : '⚡ Via API'}
-              </button>
+                {aiLoading ? 'Analyzing…' : '⚡ Via API'}
+              </Button>
             </div>
           </div>
 
-          <div className="o-card-body">
+          <div className="p-4">
             {aiLoading && (
-              <div style={{ color: '#6B7280', fontSize: 13 }}>
-                Analyzing audience + past campaigns via API...
+              <div className="text-[13px] text-muted-foreground">
+                Analyzing audience + past campaigns via API…
               </div>
             )}
             {aiError && (
-              <div className="o-empty" style={{ color: '#6B7280' }}>
+              <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-[13px] text-destructive">
                 {aiError}
               </div>
             )}
             {!aiLoading && !aiError && !aiRecs && aiSource && (
-              <div
-                style={{
-                  background: '#F8F9FC',
-                  borderLeft: '3px solid #1F6F78',
-                  padding: '.85rem 1.1rem',
-                  borderRadius: 8,
-                  fontSize: 13,
-                  lineHeight: 1.6,
-                  color: '#050C29',
-                }}
-              >
+              <div className="rounded-lg border-l-[3px] border-l-primary bg-muted/40 px-4 py-3 text-[13px] leading-relaxed text-foreground">
                 <b>Prompt copied. Paste box cleared.</b>
                 <br />
                 1. Open{' '}
@@ -1069,7 +1010,7 @@ export default function AudiencePage() {
                   href="https://claude.ai/new"
                   target="_blank"
                   rel="noreferrer"
-                  style={{ color: '#1F6F78', fontWeight: 600 }}
+                  className="font-semibold text-primary underline"
                 >
                   Claude.ai →
                 </a>{' '}
@@ -1083,17 +1024,7 @@ export default function AudiencePage() {
             {aiRecs && (
               <div>
                 {aiRecs.summary && (
-                  <div
-                    style={{
-                      background: '#F8F9FC',
-                      borderRadius: 8,
-                      padding: '.85rem 1.1rem',
-                      fontSize: 13,
-                      color: '#050C29',
-                      marginBottom: '1rem',
-                      borderLeft: '3px solid #1F6F78',
-                    }}
-                  >
+                  <div className="mb-4 rounded-lg border-l-[3px] border-l-primary bg-muted/40 px-4 py-3 text-[13px] text-foreground">
                     {aiRecs.summary}
                   </div>
                 )}
@@ -1105,48 +1036,37 @@ export default function AudiencePage() {
           </div>
 
           {showPasteArea && (
-            <div style={{ padding: '0 1.25rem 1.25rem' }}>
-              <label className="o-label" style={{ display: 'block', marginBottom: '.5rem' }}>
+            <div className="px-4 pb-4">
+              <Label className="mb-2 block">
                 Paste Claude.ai&apos;s JSON response here
-              </label>
+              </Label>
               <textarea
-                className="o-input"
                 value={pasteText}
                 onChange={(e) => setPasteText(e.target.value)}
                 placeholder='{ "summary": "...", "recommendations": [...] }'
                 rows={5}
-                style={{
-                  width: '100%',
-                  minHeight: 120,
-                  font: "13px/1.5 'SF Mono', 'Menlo', monospace",
-                  resize: 'vertical',
-                }}
+                className="min-h-[120px] w-full resize-y rounded-md border border-border bg-background p-2 font-mono text-[13px] text-foreground outline-none focus:border-primary"
               />
-              <div
-                style={{
-                  display: 'flex',
-                  gap: '.5rem',
-                  marginTop: '.5rem',
-                  alignItems: 'center',
-                }}
-              >
-                <button
-                  className="o-btn o-btn-teal"
+              <div className="mt-2 flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
                   onClick={() => renderPasted()}
                 >
                   Render response
-                </button>
-                <button
-                  className="o-btn o-btn-ghost"
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() => {
                     setPasteText('')
                     setPasteStatus('')
                   }}
                 >
                   Clear
-                </button>
+                </Button>
                 {pasteStatus && (
-                  <span style={{ fontSize: 12, color: pasteStatusColor }}>
+                  <span className="text-xs text-muted-foreground">
                     {pasteStatus}
                   </span>
                 )}
@@ -1156,38 +1076,21 @@ export default function AudiencePage() {
         </div>
       )}
 
-      {/* No client selected */}
-      {!hasClient && (
-        <div className="o-empty">
-          Select a client above to view their audience breakdown.
-        </div>
-      )}
-
       {/* ICP error */}
-      {hasClient && icpError && (
-        <div
-          style={{
-            textAlign: 'center',
-            padding: '2rem',
-            color: '#DC2626',
-            fontSize: 14,
-            background: '#FEE2E2',
-            borderRadius: 12,
-            marginBottom: '1.5rem',
-          }}
-        >
+      {hasClient && status === 'error' && (
+        <div className="mb-6 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-6 text-center text-sm text-destructive">
           Failed to load data: {icpError}
         </div>
       )}
 
       {/* Tables grid */}
-      {hasClient && !icpError && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1.5rem' }}>
+      {hasClient && status !== 'error' && (
+        <div className="grid grid-cols-1 gap-6">
           <AudienceTable
             title="Industry"
             subtitle="Top 25"
             rows={icpData?.industry ?? []}
-            loading={loadingIcp}
+            loading={status === 'loading'}
             sortState={sortIndustry}
             onSort={makeToggleSort('tblIndustry')}
           />
@@ -1195,7 +1098,7 @@ export default function AudiencePage() {
             title="City"
             subtitle="Top 25"
             rows={icpData?.city ?? []}
-            loading={loadingIcp}
+            loading={status === 'loading'}
             sortState={sortCity}
             onSort={makeToggleSort('tblCity')}
           />
@@ -1203,7 +1106,7 @@ export default function AudiencePage() {
             title="County / State"
             subtitle="Top 25"
             rows={icpData?.county ?? []}
-            loading={loadingIcp}
+            loading={status === 'loading'}
             sortState={sortCounty}
             onSort={makeToggleSort('tblCounty')}
           />
@@ -1211,14 +1114,14 @@ export default function AudiencePage() {
             title="Company Size"
             subtitle="Employees"
             rows={icpData?.size ?? []}
-            loading={loadingIcp}
+            loading={status === 'loading'}
             sortState={sortSize}
             onSort={makeToggleSort('tblSize')}
           />
           <AudienceTable
             title="Seniority"
             rows={icpData?.seniority ?? []}
-            loading={loadingIcp}
+            loading={status === 'loading'}
             sortState={sortSeniority}
             onSort={makeToggleSort('tblSeniority')}
           />

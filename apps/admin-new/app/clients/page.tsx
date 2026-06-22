@@ -1,6 +1,13 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Users } from 'lucide-react'
+import { PageShell } from '@/components/shell/page-shell'
+import { KpiCard } from '@/components/ui/kpi-card'
+import { DataTable, type Column } from '@/components/ui/data-table'
+import { StatusBadge } from '@/components/ui/status-badge'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -44,6 +51,18 @@ interface Vertical {
   excluded_job_titles: string
 }
 
+interface Manager {
+  id: number
+  name: string
+  commission_rate: number
+}
+
+interface Assignment {
+  client_workspace_id: string
+  manager_name: string
+  commission_rate: number
+}
+
 interface ModalForm {
   editId: number | null
   workspaceName: string
@@ -63,7 +82,6 @@ interface ModalForm {
   campaignManager: string
   campaignManager2: string
   managerStartDate: string
-  // targeting
   vertical: string
   snoozeMonths: string
   excludeRemote: boolean
@@ -109,7 +127,11 @@ const EMPTY_FORM: ModalForm = {
   excSizes: new Set(),
 }
 
-// ── Tag input component ───────────────────────────────────────────────────────
+function csvToArr(csv: string): string[] {
+  return csv ? csv.split(',').map(s => s.trim()).filter(Boolean) : []
+}
+
+// ── Tag input ─────────────────────────────────────────────────────────────────
 
 function TagInput({
   tags,
@@ -129,13 +151,11 @@ function TagInput({
     vals.forEach(v => { if (!next.includes(v)) next.push(v) })
     onChange(next)
   }
-
   function removeTag(idx: number) {
     const next = [...tags]
     next.splice(idx, 1)
     onChange(next)
   }
-
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === 'Enter' || e.key === ',') {
       e.preventDefault()
@@ -147,31 +167,31 @@ function TagInput({
       onChange(next)
     }
   }
-
   function handleBlur() {
     const v = inputVal.trim().replace(/,$/, '')
     if (v) { addTag(v); setInputVal('') }
   }
-
   function handlePaste(e: React.ClipboardEvent<HTMLInputElement>) {
     e.preventDefault()
-    const text = e.clipboardData.getData('text')
-    addTag(text)
+    addTag(e.clipboardData.getData('text'))
     setInputVal('')
   }
 
   return (
     <div
-      style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: '6px', border: '1px solid #E2E6F0', borderRadius: 7, background: '#fff', minHeight: 34, cursor: 'text' }}
+      className="flex min-h-[34px] cursor-text flex-wrap items-start gap-1 rounded-md border border-input bg-background p-1.5 focus-within:border-ring"
       onClick={() => inputRef.current?.focus()}
     >
       {tags.map((tag, i) => (
-        <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#FEE2E2', color: '#991B1B', padding: '2px 6px', borderRadius: 4, fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap' }}>
+        <span
+          key={i}
+          className="inline-flex items-center gap-1 whitespace-nowrap rounded bg-red-500/15 px-1.5 py-0.5 text-[11px] font-semibold text-red-600 dark:text-red-400"
+        >
           {tag}
           <button
             type="button"
             onClick={e => { e.stopPropagation(); removeTag(i) }}
-            style={{ color: '#991B1B', background: 'none', border: 'none', cursor: 'pointer', width: 14, height: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 3, padding: 0, lineHeight: 1 }}
+            className="flex h-3.5 w-3.5 items-center justify-center rounded leading-none hover:bg-red-500/25"
           >
             ×
           </button>
@@ -185,19 +205,122 @@ function TagInput({
         onBlur={handleBlur}
         onPaste={handlePaste}
         placeholder={tags.length === 0 ? placeholder : ''}
-        style={{ border: 'none', outline: 'none', fontSize: 12, flex: 1, minWidth: 80, paddingTop: 2, paddingBottom: 2, background: 'transparent', color: '#050C29' }}
+        className="min-w-[80px] flex-1 border-none bg-transparent py-0.5 text-xs outline-none placeholder:text-muted-foreground"
       />
     </div>
   )
 }
 
-// ── Main page ─────────────────────────────────────────────────────────────────
+// ── CM assignment cell (the green/red toggle) ──────────────────────────────────
+
+function CmAssignCell({
+  client,
+  managers,
+  assignedNames,
+  onToggle,
+}: {
+  client: Client
+  managers: Manager[]
+  assignedNames: string[]
+  onToggle: (client: Client, managerName: string, assign: boolean) => void
+}) {
+  const [open, setOpen] = useState(false)
+
+  if (managers.length === 0) {
+    return <span className="text-xs text-muted-foreground">No managers</span>
+  }
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-xs font-medium hover:bg-accent/50"
+      >
+        <Users size={13} className="text-muted-foreground" />
+        {assignedNames.length
+          ? assignedNames.join(', ')
+          : <span className="text-muted-foreground">Unassigned</span>}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 z-50 mt-1 min-w-[160px] rounded-lg border border-border bg-popover p-1 shadow-lg">
+            {managers.map(m => {
+              const isAssigned = assignedNames.includes(m.name)
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => onToggle(client, m.name, !isAssigned)}
+                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent/50"
+                  title={isAssigned ? `Click to unassign ${m.name}` : `Click to assign ${m.name}`}
+                >
+                  <span
+                    className={`h-2.5 w-2.5 shrink-0 rounded-full ${isAssigned ? 'bg-emerald-500' : 'bg-red-500'}`}
+                  />
+                  <span className="font-medium">{m.name}</span>
+                  <span className="ml-auto text-[10px] uppercase tracking-wide text-muted-foreground">
+                    {isAssigned ? 'On' : 'Off'}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ── Status toggle switch ────────────────────────────────────────────────────────
+
+function ToggleSwitch({ checked, onChange, title }: { checked: boolean; onChange: (v: boolean) => void; title: string }) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={() => onChange(!checked)}
+      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${checked ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'}`}
+    >
+      <span
+        className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${checked ? 'translate-x-[18px]' : 'translate-x-0.5'}`}
+      />
+    </button>
+  )
+}
+
+// ── Form chrome ──────────────────────────────────────────────────────────────
+
+function SectionLabel({ children, tone }: { children: React.ReactNode; tone?: 'teal' | 'red' }) {
+  const color = tone === 'teal' ? 'text-[var(--chart-1)]' : tone === 'red' ? 'text-destructive' : 'text-muted-foreground'
+  return <div className={`mb-2 mt-4 text-[11px] font-bold uppercase tracking-wide ${color}`}>{children}</div>
+}
+
+function FormGrid({ children, className }: { children: React.ReactNode; className?: string }) {
+  return <div className={`mb-3 grid grid-cols-2 gap-3 ${className ?? ''}`}>{children}</div>
+}
+
+function Field({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <label className="text-xs font-semibold text-foreground">{label}</label>
+      {children}
+    </div>
+  )
+}
+
+// ── Main page ───────────────────────────────────────────────────────────────
 
 export default function ClientsPage() {
   const [clients, setClients] = useState<Client[]>([])
   const [statsMap, setStatsMap] = useState<Record<string, WorkspaceStats>>({})
   const [verticals, setVerticals] = useState<Vertical[]>([])
+  const [managers, setManagers] = useState<Manager[]>([])
+  const [assignments, setAssignments] = useState<Assignment[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [authNeeded, setAuthNeeded] = useState(false)
   const [search, setSearch] = useState('')
   const [role, setRole] = useState<'admin' | 'manager' | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
@@ -209,7 +332,12 @@ export default function ClientsPage() {
   const isAdmin = role === 'admin'
   const isManager = role === 'manager'
 
-  // ── Data loading ────────────────────────────────────────────────────────────
+  function showToast(msg: string, type?: 'error') {
+    setToast({ msg, type })
+    setToastVisible(true)
+    if (toastTimer.current) clearTimeout(toastTimer.current)
+    toastTimer.current = setTimeout(() => setToastVisible(false), 3000)
+  }
 
   const loadVerticals = useCallback(async () => {
     try {
@@ -221,7 +349,19 @@ export default function ClientsPage() {
     } catch {}
   }, [])
 
+  const loadAssignments = useCallback(async () => {
+    try {
+      const r = await fetch('/api/workload/assignments')
+      if (r.ok) {
+        const d = await r.json()
+        setManagers(Array.isArray(d.managers) ? d.managers : [])
+        setAssignments(Array.isArray(d.assignments) ? d.assignments : [])
+      }
+    } catch {}
+  }, [])
+
   const load = useCallback(async () => {
+    setError(null)
     try {
       const sess = await fetch('/api/session').then(r => r.json()).catch(() => ({}))
       const sessionRole: 'admin' | 'manager' | null =
@@ -231,6 +371,7 @@ export default function ClientsPage() {
       const [c, s] = await Promise.all([
         fetch('/api/admin/clients').then(r => {
           if (r.status === 401) throw new Error('auth')
+          if (!r.ok) throw new Error(`HTTP ${r.status}`)
           return r.json()
         }),
         sessionRole === 'manager'
@@ -239,30 +380,23 @@ export default function ClientsPage() {
       ])
 
       setClients(Array.isArray(c) ? c : [])
-      setStatsMap(s || {})
+      setStatsMap(s && typeof s === 'object' && !('error' in s) ? s : {})
+      loadVerticals()
+      if (sessionRole !== 'manager') loadAssignments()
     } catch (e) {
-      if ((e as Error).message !== 'auth') {
-        showToast(`Failed to load clients: ${(e as Error).message}`, 'error')
+      if ((e as Error).message === 'auth') {
+        setAuthNeeded(true)
+      } else {
+        setError((e as Error).message)
       }
     } finally {
       setLoading(false)
     }
-
-    loadVerticals()
-  }, [loadVerticals])
+  }, [loadVerticals, loadAssignments])
 
   useEffect(() => { void load() }, [load])
 
-  // ── Toast ────────────────────────────────────────────────────────────────────
-
-  function showToast(msg: string, type?: 'error') {
-    setToast({ msg, type })
-    setToastVisible(true)
-    if (toastTimer.current) clearTimeout(toastTimer.current)
-    toastTimer.current = setTimeout(() => setToastVisible(false), 3000)
-  }
-
-  // ── Filtering ────────────────────────────────────────────────────────────────
+  // ── Derived ──────────────────────────────────────────────────────────────────
 
   const filtered = clients.filter(c => {
     if (!search) return true
@@ -271,13 +405,39 @@ export default function ClientsPage() {
       .some(v => (v || '').toLowerCase().includes(q))
   })
 
-  // ── Summary stats ────────────────────────────────────────────────────────────
-
   const totalDelivered = Object.values(statsMap).reduce((s, v) => s + v.delivered, 0)
   const totalRevenue = Object.values(statsMap).reduce((s, v) => s + v.revenue, 0)
   const totalBought = clients.reduce((s, c) => s + (c.plan_leads || 0), 0)
 
-  // ── Modal helpers ─────────────────────────────────────────────────────────────
+  function assignedFor(wsId: string): string[] {
+    return assignments.filter(a => a.client_workspace_id === wsId).map(a => a.manager_name)
+  }
+
+  // ── CM assign toggle ───────────────────────────────────────────────────────────
+
+  async function toggleAssign(client: Client, managerName: string, assign: boolean) {
+    // optimistic update
+    setAssignments(prev =>
+      assign
+        ? [...prev, { client_workspace_id: client.workspace_id, manager_name: managerName, commission_rate: 0 }]
+        : prev.filter(a => !(a.client_workspace_id === client.workspace_id && a.manager_name === managerName)),
+    )
+    try {
+      const r = await fetch('/api/workload/assign', {
+        method: assign ? 'POST' : 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_workspace_id: client.workspace_id, manager_name: managerName }),
+      })
+      if (!r.ok) throw new Error('save failed')
+      showToast(assign ? `${managerName} assigned to ${client.workspace_name}` : `${managerName} unassigned`)
+      loadAssignments() // resync (split rates recalculated server-side)
+    } catch {
+      showToast('Failed to update assignment', 'error')
+      loadAssignments() // roll back to server truth
+    }
+  }
+
+  // ── Modal ────────────────────────────────────────────────────────────────────
 
   function openModal(id?: number) {
     if (id) {
@@ -320,13 +480,7 @@ export default function ClientsPage() {
     setModalOpen(true)
   }
 
-  function closeModal() {
-    setModalOpen(false)
-  }
-
-  function csvToArr(csv: string): string[] {
-    return csv ? csv.split(',').map(s => s.trim()).filter(Boolean) : []
-  }
+  function closeModal() { setModalOpen(false) }
 
   function setField<K extends keyof ModalForm>(key: K, value: ModalForm[K]) {
     setForm(f => ({ ...f, [key]: value }))
@@ -340,8 +494,6 @@ export default function ClientsPage() {
       return { ...f, excSizes: next }
     })
   }
-
-  // ── Save ──────────────────────────────────────────────────────────────────────
 
   async function saveClient() {
     const { editId } = form
@@ -435,8 +587,6 @@ export default function ClientsPage() {
     load()
   }
 
-  // ── Toggle status ─────────────────────────────────────────────────────────────
-
   async function toggleStatus(id: number, makeActive: boolean) {
     const status = makeActive ? 'active' : 'inactive'
     let restart_date: string | null = null
@@ -455,8 +605,6 @@ export default function ClientsPage() {
     load()
   }
 
-  // ── Delete ───────────────────────────────────────────────────────────────────
-
   async function deleteClient(id: number, name: string) {
     if (!confirm(`Delete "${name}"? This cannot be undone.`)) return
     await fetch(`/api/admin/clients/${id}`, { method: 'DELETE' })
@@ -464,381 +612,342 @@ export default function ClientsPage() {
     load()
   }
 
-  // ── Render ────────────────────────────────────────────────────────────────────
+  // ── Columns ──────────────────────────────────────────────────────────────────
+
+  const columns: Column<Client>[] = [
+    {
+      key: 'client',
+      header: 'Client',
+      sortValue: c => (c.workspace_name || c.username || '').toLowerCase(),
+      cell: c => {
+        const inactive = c.client_status === 'inactive'
+        const initial = (c.workspace_name || c.username || '?')[0].toUpperCase()
+        return (
+          <div className={`flex items-center gap-2.5 ${inactive ? 'opacity-45' : ''}`}>
+            <div
+              className={`flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-lg text-sm font-bold text-white ${inactive ? 'bg-slate-400' : 'bg-[var(--chart-2)]'}`}
+            >
+              {initial}
+            </div>
+            <div className="min-w-0">
+              <div className="truncate font-semibold text-foreground">{c.workspace_name || c.username}</div>
+              <div className="truncate text-[11px] text-muted-foreground">{c.username}</div>
+            </div>
+          </div>
+        )
+      },
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      cell: c => {
+        const inactive = c.client_status === 'inactive'
+        if (isManager) {
+          return <StatusBadge status={inactive ? 'paused' : 'ok'}>{inactive ? 'Inactive' : 'Active'}</StatusBadge>
+        }
+        return (
+          <div className="flex items-center gap-2">
+            <ToggleSwitch
+              checked={!inactive}
+              title={inactive ? 'Click to activate' : 'Click to deactivate'}
+              onChange={checked => toggleStatus(c.id, checked)}
+            />
+            <StatusBadge status={inactive ? 'paused' : 'ok'}>{inactive ? 'Inactive' : 'Active'}</StatusBadge>
+            {inactive && c.restart_date && (
+              <span className="text-[11px] text-muted-foreground">resumes {c.restart_date}</span>
+            )}
+          </div>
+        )
+      },
+    },
+    ...(isManager
+      ? []
+      : [{
+          key: 'manager',
+          header: 'Manager',
+          cell: (c: Client) => (
+            <CmAssignCell
+              client={c}
+              managers={managers}
+              assignedNames={assignedFor(c.workspace_id)}
+              onToggle={toggleAssign}
+            />
+          ),
+        } as Column<Client>]),
+    {
+      key: 'contact',
+      header: 'Contact',
+      cell: c => (
+        <div className="text-xs leading-relaxed">
+          {c.contact_name && <div className="text-foreground">{c.contact_name}</div>}
+          {c.contact_email && (
+            <div><a href={`mailto:${c.contact_email}`} className="text-[var(--chart-2)] hover:underline">{c.contact_email}</a></div>
+          )}
+          {c.contact_phone && (
+            <div><a href={`tel:${c.contact_phone}`} className="text-[var(--chart-2)] hover:underline">{c.contact_phone}</a></div>
+          )}
+          {!c.contact_name && !c.contact_email && !c.contact_phone && <span className="text-muted-foreground">—</span>}
+        </div>
+      ),
+    },
+    {
+      key: 'website',
+      header: 'Website',
+      cell: c => {
+        const display = (c.website || '').replace(/^https?:\/\//, '').replace(/\/$/, '')
+        return c.website
+          ? <a href={c.website} target="_blank" rel="noreferrer" className="text-xs text-[var(--chart-2)] hover:underline">{display}</a>
+          : <span className="text-muted-foreground">—</span>
+      },
+    },
+    ...(isAdmin
+      ? ([
+          {
+            key: 'price',
+            header: 'Lead Price',
+            sortValue: (c: Client) => c.price_per_lead || 0,
+            cell: (c: Client) => (
+              <StatusBadge status="ok">£{(c.price_per_lead || 0).toFixed(0)}</StatusBadge>
+            ),
+          },
+          {
+            key: 'delivered',
+            header: 'Delivered',
+            numeric: true,
+            sortValue: (c: Client) => statsMap[c.workspace_id]?.delivered || 0,
+            cell: (c: Client) => <span className="font-bold">{statsMap[c.workspace_id]?.delivered || 0}</span>,
+          },
+          {
+            key: 'bought',
+            header: 'Bought',
+            numeric: true,
+            sortValue: (c: Client) => c.plan_leads || 0,
+            cell: (c: Client) => <span className="font-bold">{c.plan_leads || 0}</span>,
+          },
+          {
+            key: 'revenue',
+            header: 'Revenue',
+            numeric: true,
+            sortValue: (c: Client) => statsMap[c.workspace_id]?.revenue || 0,
+            cell: (c: Client) => (
+              <span className="font-bold">£{Math.round(statsMap[c.workspace_id]?.revenue || 0).toLocaleString('en-GB')}</span>
+            ),
+          },
+        ] as Column<Client>[])
+      : []),
+    {
+      key: 'notes',
+      header: 'Notes',
+      cell: c => (
+        <div className="max-w-[180px] truncate text-xs text-muted-foreground" title={c.notes || ''}>
+          {c.notes || <span className="text-muted-foreground">—</span>}
+        </div>
+      ),
+    },
+    {
+      key: 'actions',
+      header: '',
+      cell: c => (
+        <div className="flex justify-end gap-1.5">
+          <Button size="sm" variant="outline" onClick={() => openModal(c.id)}>
+            {isManager ? 'Notes / Exclusions' : 'Edit'}
+          </Button>
+          {!isManager && (
+            <Button size="sm" variant="destructive" onClick={() => deleteClient(c.id, c.workspace_name || c.username)}>
+              Delete
+            </Button>
+          )}
+        </div>
+      ),
+    },
+  ]
+
+  // ── Render ───────────────────────────────────────────────────────────────────
+
+  if (authNeeded) {
+    return (
+      <PageShell title="Client Management" freshness={null}>
+        <div className="rounded-lg border border-border bg-card p-10 text-center text-sm text-muted-foreground">
+          Not signed in. Sign in with an admin key to manage clients.
+        </div>
+      </PageShell>
+    )
+  }
 
   return (
-    <div className="o-page">
-      {/* Page header */}
-      <div className="o-page-header">
-        <div>
-          <div className="o-page-title">Client Management</div>
-          <div className="o-page-sub">
-            {loading ? 'Loading…' : `${clients.length} clients`}
-          </div>
+    <PageShell
+      title="Client Management"
+      subtitle={loading ? 'Loading…' : `${clients.length} clients`}
+      freshness={null}
+      actions={
+        isAdmin ? (
+          <Button onClick={() => openModal()}>+ Add Client</Button>
+        ) : undefined
+      }
+    >
+      {error && (
+        <div className="mb-4 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          Failed to load clients: {error}
         </div>
-        {isAdmin && (
-          <div className="o-page-actions">
-            <button className="o-btn o-btn-primary" onClick={() => openModal()}>
-              + Add Client
-            </button>
-          </div>
-        )}
-      </div>
+      )}
 
-      {/* Summary cards */}
-      <div className={isAdmin ? 'o-metrics o-metrics-4' : 'o-metrics o-metrics-auto'} style={{ marginBottom: '1.5rem' }}>
-        <div className="o-metric" style={{ borderTopColor: '#224388' }}>
-          <div className="o-metric-label">Total Clients</div>
-          <div className="o-metric-val" style={{ color: '#224388' }}>{loading ? '—' : String(clients.length)}</div>
-        </div>
+      {/* Summary KPIs */}
+      <div className={`mb-5 grid gap-4 ${isAdmin ? 'grid-cols-2 lg:grid-cols-4' : 'grid-cols-1'}`}>
+        <KpiCard label="Total Clients" value={loading ? '—' : clients.length} tone="navy" loading={loading} />
         {isAdmin && (
           <>
-            <div className="o-metric" style={{ borderTopColor: '#1F6F78' }}>
-              <div className="o-metric-label">Leads Delivered</div>
-              <div className="o-metric-val" style={{ color: '#1F6F78' }}>{loading ? '—' : totalDelivered.toLocaleString()}</div>
-            </div>
-            <div className="o-metric" style={{ borderTopColor: '#D97706' }}>
-              <div className="o-metric-label">Total Revenue</div>
-              <div className="o-metric-val" style={{ color: '#D97706' }}>{loading ? '—' : '£' + Math.round(totalRevenue).toLocaleString('en-GB')}</div>
-            </div>
-            <div className="o-metric" style={{ borderTopColor: '#7C89CD' }}>
-              <div className="o-metric-label">Leads Bought</div>
-              <div className="o-metric-val" style={{ color: '#7C89CD' }}>{loading ? '—' : totalBought.toLocaleString()}</div>
-            </div>
+            <KpiCard label="Leads Delivered" value={loading ? '—' : totalDelivered.toLocaleString()} tone="teal" loading={loading} />
+            <KpiCard label="Total Revenue" value={loading ? '—' : '£' + Math.round(totalRevenue).toLocaleString('en-GB')} tone="yellow" loading={loading} />
+            <KpiCard label="Leads Bought" value={loading ? '—' : totalBought.toLocaleString()} tone="purple" loading={loading} />
           </>
         )}
       </div>
 
       {/* Toolbar */}
-      <div className="o-toolbar">
-        <div className="o-search-wrap">
-          <span className="o-search-icon">
-            <svg width="15" height="15" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M10 6.5C10 8.433 8.433 10 6.5 10C4.567 10 3 8.433 3 6.5C3 4.567 4.567 3 6.5 3C8.433 3 10 4.567 10 6.5ZM9.34 10.4C8.523 11.01 7.554 11.375 6.5 11.375C3.808 11.375 1.625 9.192 1.625 6.5C1.625 3.808 3.808 1.625 6.5 1.625C9.192 1.625 11.375 3.808 11.375 6.5C11.375 7.554 11.01 8.523 10.4 9.34L13.28 12.22C13.548 12.488 13.548 12.922 13.28 13.19C13.012 13.458 12.578 13.458 12.31 13.19L9.34 10.4Z" fill="currentColor" fillRule="evenodd" clipRule="evenodd"/>
-            </svg>
-          </span>
-          <input
-            type="text"
-            placeholder="Search clients…"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-          />
-        </div>
+      <div className="mb-4 max-w-sm">
+        <Input
+          type="text"
+          placeholder="Search clients…"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+        />
       </div>
 
       {/* Table */}
-      <div className="o-table-wrap">
-        <table className="o-table">
-          <thead>
-            <tr>
-              <th>Client</th>
-              <th>Status</th>
-              <th>Contact</th>
-              <th>Website</th>
-              {isAdmin && (
-                <>
-                  <th>Lead Price</th>
-                  <th style={{ textAlign: 'right' }}>Delivered</th>
-                  <th style={{ textAlign: 'right' }}>Bought</th>
-                  <th style={{ textAlign: 'right' }}>Revenue</th>
-                </>
-              )}
-              <th>Notes</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr>
-                <td colSpan={isAdmin ? 10 : 6} style={{ textAlign: 'center', padding: '3rem 0' }}>
-                  <span className="o-spin" />
-                </td>
-              </tr>
-            ) : filtered.length === 0 ? (
-              <tr>
-                <td colSpan={isAdmin ? 10 : 6}>
-                  <div className="o-empty">No clients found</div>
-                </td>
-              </tr>
-            ) : (
-              filtered.map(c => {
-                const st = statsMap[c.workspace_id] || { delivered: 0, revenue: 0 }
-                const initial = (c.workspace_name || c.username || '?')[0].toUpperCase()
-                const websiteDisplay = (c.website || '').replace(/^https?:\/\//, '').replace(/\/$/, '')
-                const inactive = c.client_status === 'inactive'
-                return (
-                  <tr key={c.id} style={{ opacity: inactive ? 0.45 : 1 }}>
-                    {/* Client */}
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <div
-                          style={{ width: 34, height: 34, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 14, flexShrink: 0, background: inactive ? '#9CA3AF' : '#224388' }}
-                        >
-                          {initial}
-                        </div>
-                        <div>
-                          <div style={{ fontWeight: 600, fontSize: 13, color: '#050C29' }}>{c.workspace_name || c.username}</div>
-                          <div style={{ fontSize: 11, color: '#6B7280', marginTop: 1 }}>{c.username}</div>
-                        </div>
-                      </div>
-                    </td>
-
-                    {/* Status */}
-                    <td>
-                      {isManager ? (
-                        <span className={inactive ? 'o-status o-status-inactive' : 'o-status o-status-active'}>
-                          {inactive ? 'Inactive' : 'Active'}
-                        </span>
-                      ) : (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <ToggleSwitch
-                            checked={!inactive}
-                            title={inactive ? 'Click to activate' : 'Click to deactivate'}
-                            onChange={checked => toggleStatus(c.id, checked)}
-                          />
-                          <span className={inactive ? 'o-status o-status-inactive' : 'o-status o-status-active'}>
-                            {inactive ? 'Inactive' : 'Active'}
-                          </span>
-                          {inactive && c.restart_date && (
-                            <span style={{ fontSize: 11, color: '#6B7280' }}>resumes {c.restart_date}</span>
-                          )}
-                        </div>
-                      )}
-                    </td>
-
-                    {/* Contact */}
-                    <td>
-                      <div style={{ fontSize: 12, lineHeight: 1.6, color: '#050C29' }}>
-                        {c.contact_name && <div>{c.contact_name}</div>}
-                        {c.contact_email && (
-                          <div>
-                            <a href={`mailto:${c.contact_email}`} style={{ color: '#224388' }}>
-                              {c.contact_email}
-                            </a>
-                          </div>
-                        )}
-                        {c.contact_phone && (
-                          <div>
-                            <a href={`tel:${c.contact_phone}`} style={{ color: '#224388' }}>
-                              {c.contact_phone}
-                            </a>
-                          </div>
-                        )}
-                        {!c.contact_name && !c.contact_email && !c.contact_phone && (
-                          <span style={{ color: '#6B7280' }}>—</span>
-                        )}
-                      </div>
-                    </td>
-
-                    {/* Website */}
-                    <td>
-                      {c.website ? (
-                        <a
-                          href={c.website}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{ color: '#224388', fontSize: 12, textDecoration: 'none' }}
-                        >
-                          {websiteDisplay}
-                        </a>
-                      ) : (
-                        <span style={{ color: '#6B7280' }}>—</span>
-                      )}
-                    </td>
-
-                    {/* Financial columns (admin only) */}
-                    {isAdmin && (
-                      <>
-                        <td>
-                          <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: '#D1FAE5', color: '#065F46' }}>
-                            £{(c.price_per_lead || 0).toFixed(0)}
-                          </span>
-                        </td>
-                        <td style={{ textAlign: 'right' }}>
-                          <span style={{ fontWeight: 700, fontSize: 14 }}>{st.delivered}</span>
-                        </td>
-                        <td style={{ textAlign: 'right' }}>
-                          <span style={{ fontWeight: 700, fontSize: 14 }}>{c.plan_leads || 0}</span>
-                        </td>
-                        <td style={{ textAlign: 'right' }}>
-                          <span style={{ fontWeight: 700, fontSize: 14 }}>£{Math.round(st.revenue).toLocaleString('en-GB')}</span>
-                        </td>
-                      </>
-                    )}
-
-                    {/* Notes */}
-                    <td>
-                      <div
-                        style={{ fontSize: 12, color: '#6B7280', maxWidth: 180, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
-                        title={c.notes || ''}
-                      >
-                        {c.notes || <span style={{ color: '#6B7280' }}>—</span>}
-                      </div>
-                    </td>
-
-                    {/* Actions */}
-                    <td>
-                      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                        <button
-                          className="o-btn o-btn-ghost o-btn-sm"
-                          onClick={() => openModal(c.id)}
-                        >
-                          {isManager ? 'Notes / Exclusions' : 'Edit'}
-                        </button>
-                        {!isManager && (
-                          <button
-                            className="o-btn o-btn-danger o-btn-sm"
-                            onClick={() => deleteClient(c.id, c.workspace_name || c.username)}
-                          >
-                            Delete
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
+      {loading ? (
+        <div className="rounded-lg border border-border bg-card p-12 text-center text-sm text-muted-foreground">
+          Loading clients…
+        </div>
+      ) : (
+        <DataTable
+          columns={columns}
+          rows={filtered}
+          getRowKey={c => String(c.id)}
+          empty="No clients found"
+        />
+      )}
 
       {/* Modal */}
       {modalOpen && (
-        <div className="o-modal-overlay" onClick={e => { if (e.target === e.currentTarget) closeModal() }}>
-          <div className="o-modal" onClick={e => e.stopPropagation()}>
-            {/* Modal header */}
-            <div className="o-modal-header">
-              <div className="o-modal-title">
+        <div
+          className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/50 p-4"
+          onClick={e => { if (e.target === e.currentTarget) closeModal() }}
+        >
+          <div className="flex max-h-[90vh] w-[640px] max-w-[95vw] flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
+            <div className="flex items-center justify-between border-b border-border px-6 py-4">
+              <div className="text-base font-bold text-foreground">
                 {!form.editId ? 'Add Client' : isManager ? 'Notes & Exclusions' : 'Edit Client'}
               </div>
-              <button className="o-modal-close" onClick={closeModal}>×</button>
+              <button className="text-xl leading-none text-muted-foreground hover:text-foreground" onClick={closeModal}>×</button>
             </div>
 
-            {/* Modal body */}
-            <div className="o-modal-body">
-
-              {/* Account — admin only */}
+            <div className="flex-1 overflow-y-auto px-6 py-5">
               {isAdmin && (
                 <>
                   <SectionLabel>Account</SectionLabel>
                   <FormGrid>
-                    <div className="o-field">
-                      <label className="o-label">Client Name (workspace)</label>
-                      <input className="o-input" value={form.workspaceName} onChange={e => setField('workspaceName', e.target.value)} placeholder="e.g. Hydration Co" />
-                    </div>
-                    <div className="o-field">
-                      <label className="o-label">PlusVibe Workspace ID</label>
-                      <input className="o-input" value={form.workspaceId} onChange={e => setField('workspaceId', e.target.value)} placeholder="e.g. 69525a0e…" />
-                    </div>
-                    <div className="o-field">
-                      <label className="o-label">Login Username</label>
-                      <input className="o-input" value={form.username} onChange={e => setField('username', e.target.value)} placeholder="username" />
-                    </div>
-                    <div className="o-field">
-                      <label className="o-label">Password {form.editId && <span style={{ fontWeight: 400, color: '#6B7280' }}>(leave blank to keep)</span>}</label>
-                      <input className="o-input" type="password" value={form.password} onChange={e => setField('password', e.target.value)} placeholder="••••••••" />
-                    </div>
+                    <Field label="Client Name (workspace)">
+                      <Input value={form.workspaceName} onChange={e => setField('workspaceName', e.target.value)} placeholder="e.g. Hydration Co" />
+                    </Field>
+                    <Field label="PlusVibe Workspace ID">
+                      <Input value={form.workspaceId} onChange={e => setField('workspaceId', e.target.value)} placeholder="e.g. 69525a0e…" />
+                    </Field>
+                    <Field label="Login Username">
+                      <Input value={form.username} onChange={e => setField('username', e.target.value)} placeholder="username" />
+                    </Field>
+                    <Field label={<>Password {form.editId && <span className="font-normal text-muted-foreground">(leave blank to keep)</span>}</>}>
+                      <Input type="password" value={form.password} onChange={e => setField('password', e.target.value)} placeholder="••••••••" />
+                    </Field>
                   </FormGrid>
 
                   <SectionLabel>Campaign Manager</SectionLabel>
                   <FormGrid>
-                    <div className="o-field">
-                      <label className="o-label">Primary Manager</label>
-                      <input className="o-input" value={form.campaignManager} onChange={e => setField('campaignManager', e.target.value)} placeholder="e.g. Joey" />
-                    </div>
-                    <div className="o-field">
-                      <label className="o-label">Managing Since <span style={{ fontWeight: 400, color: '#6B7280' }}>(commission counts from this date)</span></label>
-                      <input className="o-input" type="date" value={form.managerStartDate} onChange={e => setField('managerStartDate', e.target.value)} />
-                    </div>
+                    <Field label="Primary Manager">
+                      <Input value={form.campaignManager} onChange={e => setField('campaignManager', e.target.value)} placeholder="e.g. Joey" />
+                    </Field>
+                    <Field label={<>Managing Since <span className="font-normal text-muted-foreground">(commission counts from this date)</span></>}>
+                      <Input type="date" value={form.managerStartDate} onChange={e => setField('managerStartDate', e.target.value)} />
+                    </Field>
                   </FormGrid>
                   <FormGrid>
-                    <div className="o-field">
-                      <label className="o-label">Second Manager <span style={{ fontWeight: 400, color: '#6B7280' }}>(splits commission 50/50 with primary)</span></label>
-                      <input className="o-input" value={form.campaignManager2} onChange={e => setField('campaignManager2', e.target.value)} placeholder="e.g. Jordy" />
-                    </div>
+                    <Field label={<>Second Manager <span className="font-normal text-muted-foreground">(splits commission 50/50 with primary)</span></>}>
+                      <Input value={form.campaignManager2} onChange={e => setField('campaignManager2', e.target.value)} placeholder="e.g. Jordy" />
+                    </Field>
                   </FormGrid>
 
                   <SectionLabel>Client Contact Details</SectionLabel>
                   <FormGrid>
-                    <div className="o-field">
-                      <label className="o-label">Contact Name</label>
-                      <input className="o-input" value={form.contactName} onChange={e => setField('contactName', e.target.value)} placeholder="John Smith" />
-                    </div>
-                    <div className="o-field">
-                      <label className="o-label">Contact Email</label>
-                      <input className="o-input" type="email" value={form.contactEmail} onChange={e => setField('contactEmail', e.target.value)} placeholder="john@company.com" />
-                    </div>
-                    <div className="o-field">
-                      <label className="o-label">Phone</label>
-                      <input className="o-input" type="tel" value={form.contactPhone} onChange={e => setField('contactPhone', e.target.value)} placeholder="+44 7700 000000" />
-                    </div>
-                    <div className="o-field">
-                      <label className="o-label">Website</label>
-                      <input className="o-input" value={form.website} onChange={e => setField('website', e.target.value)} placeholder="https://example.com" />
-                    </div>
+                    <Field label="Contact Name">
+                      <Input value={form.contactName} onChange={e => setField('contactName', e.target.value)} placeholder="John Smith" />
+                    </Field>
+                    <Field label="Contact Email">
+                      <Input type="email" value={form.contactEmail} onChange={e => setField('contactEmail', e.target.value)} placeholder="john@company.com" />
+                    </Field>
+                    <Field label="Phone">
+                      <Input type="tel" value={form.contactPhone} onChange={e => setField('contactPhone', e.target.value)} placeholder="+44 7700 000000" />
+                    </Field>
+                    <Field label="Website">
+                      <Input value={form.website} onChange={e => setField('website', e.target.value)} placeholder="https://example.com" />
+                    </Field>
                   </FormGrid>
 
                   <SectionLabel>Pricing &amp; Plan</SectionLabel>
                   <FormGrid>
-                    <div className="o-field">
-                      <label className="o-label">Price Per Lead (£)</label>
-                      <input className="o-input" type="number" value={form.pricePerLead} onChange={e => setField('pricePerLead', e.target.value)} placeholder="0.00" min="0" step="0.01" />
-                    </div>
-                    <div className="o-field">
-                      <label className="o-label">Leads Bought</label>
-                      <input className="o-input" type="number" value={form.planLeads} onChange={e => setField('planLeads', e.target.value)} placeholder="0" min="0" />
-                    </div>
+                    <Field label="Price Per Lead (£)">
+                      <Input type="number" value={form.pricePerLead} onChange={e => setField('pricePerLead', e.target.value)} placeholder="0.00" min="0" step="0.01" />
+                    </Field>
+                    <Field label="Leads Bought">
+                      <Input type="number" value={form.planLeads} onChange={e => setField('planLeads', e.target.value)} placeholder="0" min="0" />
+                    </Field>
                   </FormGrid>
 
                   <SectionLabel>Lead Target</SectionLabel>
                   <FormGrid>
-                    <div className="o-field">
-                      <label className="o-label">Monthly Target (leads/month)</label>
-                      <input className="o-input" type="number" value={form.leadTargetMonthly} onChange={e => setField('leadTargetMonthly', e.target.value)} placeholder="0" min="0" />
-                      <span style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>Drives &quot;behind pace&quot; detection on the Client Health page. Leave 0 to skip.</span>
-                    </div>
+                    <Field label="Monthly Target (leads/month)">
+                      <Input type="number" value={form.leadTargetMonthly} onChange={e => setField('leadTargetMonthly', e.target.value)} placeholder="0" min="0" />
+                      <span className="mt-0.5 text-[11px] text-muted-foreground">Drives &quot;behind pace&quot; detection on the Client Health page. Leave 0 to skip.</span>
+                    </Field>
                   </FormGrid>
 
                   <SectionLabel>Status</SectionLabel>
                   <FormGrid>
-                    <div className="o-field">
-                      <label className="o-label">Client Status</label>
-                      <select className="o-select" value={form.clientStatus} onChange={e => setField('clientStatus', e.target.value)}>
+                    <Field label="Client Status">
+                      <select
+                        className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                        value={form.clientStatus}
+                        onChange={e => setField('clientStatus', e.target.value)}
+                      >
                         <option value="active">Active</option>
                         <option value="inactive">Inactive</option>
                       </select>
-                    </div>
-                    <div className="o-field">
-                      <label className="o-label">Restart Date <span style={{ fontWeight: 400, color: '#6B7280' }}>(if inactive — auto-activates on this date)</span></label>
-                      <input className="o-input" type="date" value={form.restartDate} onChange={e => setField('restartDate', e.target.value)} />
-                    </div>
+                    </Field>
+                    <Field label={<>Restart Date <span className="font-normal text-muted-foreground">(if inactive — auto-activates on this date)</span></>}>
+                      <Input type="date" value={form.restartDate} onChange={e => setField('restartDate', e.target.value)} />
+                    </Field>
                   </FormGrid>
                 </>
               )}
 
-              {/* Notes — everyone */}
               <SectionLabel>Notes</SectionLabel>
-              <div className="o-field" style={{ marginBottom: 12 }}>
-                <textarea
-                  className="o-input"
-                  rows={3}
-                  value={form.notes}
-                  onChange={e => setField('notes', e.target.value)}
-                  placeholder="Internal notes about this client…"
-                  style={{ resize: 'vertical', minHeight: 70 }}
-                />
-              </div>
+              <textarea
+                className="mb-3 min-h-[70px] w-full resize-y rounded-md border border-input bg-background p-2.5 text-sm outline-none focus:border-ring"
+                rows={3}
+                value={form.notes}
+                onChange={e => setField('notes', e.target.value)}
+                placeholder="Internal notes about this client…"
+              />
 
-              {/* Database Targeting Rules — admin only */}
               {isAdmin && (
-                <div style={{ marginTop: 24 }}>
-                  <SectionLabel color="teal">DataBase Targeting Rules</SectionLabel>
-                  <p style={{ fontSize: 12, color: '#6B7280', marginTop: -8, marginBottom: 16 }}>Controls which contacts are shown and pushed for this client.</p>
+                <div className="mt-6">
+                  <SectionLabel tone="teal">DataBase Targeting Rules</SectionLabel>
+                  <p className="-mt-1 mb-4 text-xs text-muted-foreground">Controls which contacts are shown and pushed for this client.</p>
                   <FormGrid>
-                    <div className="o-field">
-                      <label className="o-label">Vertical / Industry</label>
-                      <select className="o-select" value={form.vertical} onChange={e => setField('vertical', e.target.value)}>
+                    <Field label="Vertical / Industry">
+                      <select
+                        className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                        value={form.vertical}
+                        onChange={e => setField('vertical', e.target.value)}
+                      >
                         <option value="">— Not set (auto-detect) —</option>
                         <option value="solar">Solar / Energy</option>
                         <option value="office_furniture">Office Furniture / Fitout</option>
@@ -851,107 +960,96 @@ export default function ClientsPage() {
                         <option value="software">Software / SaaS</option>
                         <option value="other">Other</option>
                       </select>
-                    </div>
-                    <div className="o-field">
-                      <label className="o-label">Snooze Duration (months)</label>
-                      <select className="o-select" value={form.snoozeMonths} onChange={e => setField('snoozeMonths', e.target.value)}>
+                    </Field>
+                    <Field label="Snooze Duration (months)">
+                      <select
+                        className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                        value={form.snoozeMonths}
+                        onChange={e => setField('snoozeMonths', e.target.value)}
+                      >
                         <option value="3">3 months</option>
                         <option value="6">6 months</option>
                         <option value="12">12 months</option>
                         <option value="24">24 months</option>
                       </select>
-                    </div>
+                    </Field>
                   </FormGrid>
-                  <FormGrid cols={2} className="mt-3">
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                  <FormGrid className="mt-3">
+                    <label className="flex cursor-pointer items-center gap-2">
                       <input
                         type="checkbox"
                         checked={form.excludeRemote}
                         onChange={e => setField('excludeRemote', e.target.checked)}
-                        style={{ accentColor: '#1F6F78', width: 15, height: 15, flexShrink: 0 }}
+                        className="h-4 w-4 shrink-0 accent-[var(--chart-1)]"
                       />
-                      <span style={{ fontSize: 12, fontWeight: 600 }}>
+                      <span className="text-xs font-semibold">
                         Exclude remote workers
-                        <span style={{ display: 'block', fontSize: 11, color: '#6B7280', fontWeight: 400 }}>Can&apos;t use office furniture, on-site services etc</span>
+                        <span className="block font-normal text-muted-foreground">Can&apos;t use office furniture, on-site services etc</span>
                       </span>
                     </label>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                    <label className="flex cursor-pointer items-center gap-2">
                       <input
                         type="checkbox"
                         checked={form.requireOwnsBuilding}
                         onChange={e => setField('requireOwnsBuilding', e.target.checked)}
-                        style={{ accentColor: '#1F6F78', width: 15, height: 15, flexShrink: 0 }}
+                        className="h-4 w-4 shrink-0 accent-[var(--chart-1)]"
                       />
-                      <span style={{ fontSize: 12, fontWeight: 600 }}>
+                      <span className="text-xs font-semibold">
                         Requires building ownership
-                        <span style={{ display: 'block', fontSize: 11, color: '#6B7280', fontWeight: 400 }}>Solar, flooring, major fit-outs etc</span>
+                        <span className="block font-normal text-muted-foreground">Solar, flooring, major fit-outs etc</span>
                       </span>
                     </label>
                   </FormGrid>
                 </div>
               )}
 
-              {/* Master Exclusions — everyone */}
-              <div style={{ marginTop: 24 }}>
-                <SectionLabel color="red">Master Exclusions</SectionLabel>
-                <p style={{ fontSize: 12, color: '#6B7280', marginTop: -8, marginBottom: 16 }}>
+              <div className="mt-6">
+                <SectionLabel tone="red">Master Exclusions</SectionLabel>
+                <p className="-mt-1 mb-4 text-xs text-muted-foreground">
                   Always-on exclusions for this client. Applied automatically on the contacts page whenever this client is the selected filter target.
                   Type and press <strong>Enter</strong> or <strong>,</strong> to add. Click a tag to remove.
                 </p>
                 <FormGrid>
-                  <div className="o-field">
-                    <label className="o-label">Industries</label>
+                  <Field label="Industries">
                     <TagInput tags={form.excIndustries} placeholder="e.g. Tobacco, Gambling…" onChange={v => setField('excIndustries', v)} />
-                  </div>
-                  <div className="o-field">
-                    <label className="o-label">Company Sizes</label>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingTop: 4 }}>
-                      {SIZE_BUCKETS.map(val => (
-                        <button
-                          key={val}
-                          type="button"
-                          onClick={() => toggleExcSize(val)}
-                          style={{
-                            padding: '4px 10px',
-                            border: `1.5px solid ${form.excSizes.has(val) ? '#f87171' : '#E2E6F0'}`,
-                            borderRadius: 6,
-                            fontSize: 12,
-                            fontWeight: 600,
-                            cursor: 'pointer',
-                            background: form.excSizes.has(val) ? '#FEE2E2' : '#fff',
-                            color: form.excSizes.has(val) ? '#991B1B' : '#6B7280',
-                            fontFamily: 'inherit',
-                          }}
-                        >
-                          {val === '1-10' ? '1–10' : val === '11-50' ? '11–50' : val === '51-200' ? '51–200' : val === '201-500' ? '201–500' : val === '501-1000' ? '501–1000' : val}
-                        </button>
-                      ))}
+                  </Field>
+                  <Field label="Company Sizes">
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {SIZE_BUCKETS.map(val => {
+                        const on = form.excSizes.has(val)
+                        const label = val === '1-10' ? '1–10' : val === '11-50' ? '11–50' : val === '51-200' ? '51–200' : val === '201-500' ? '201–500' : val === '501-1000' ? '501–1000' : val
+                        return (
+                          <button
+                            key={val}
+                            type="button"
+                            onClick={() => toggleExcSize(val)}
+                            className={`rounded-md border-[1.5px] px-2.5 py-1 text-xs font-semibold ${on ? 'border-red-400 bg-red-500/15 text-red-600 dark:text-red-400' : 'border-input text-muted-foreground hover:border-red-400'}`}
+                          >
+                            {label}
+                          </button>
+                        )
+                      })}
                     </div>
-                  </div>
-                  <div className="o-field">
-                    <label className="o-label">Keywords</label>
+                  </Field>
+                  <Field label="Keywords">
                     <TagInput tags={form.excKeywords} placeholder="e.g. crypto, NSFW, MLM…" onChange={v => setField('excKeywords', v)} />
-                  </div>
-                  <div className="o-field">
-                    <label className="o-label">Counties / States</label>
+                  </Field>
+                  <Field label="Counties / States">
                     <TagInput tags={form.excCounties} placeholder="e.g. Greater London, Manchester…" onChange={v => setField('excCounties', v)} />
-                  </div>
-                  <div className="o-field">
-                    <label className="o-label">Cities</label>
+                  </Field>
+                  <Field label="Cities">
                     <TagInput tags={form.excCities} placeholder="e.g. London, Birmingham…" onChange={v => setField('excCities', v)} />
-                  </div>
-                  <div className="o-field">
-                    <label className="o-label">Job Titles</label>
+                  </Field>
+                  <Field label="Job Titles">
                     <TagInput tags={form.excJobTitles} placeholder="e.g. Intern, Student, Trainee…" onChange={v => setField('excJobTitles', v)} />
-                  </div>
+                  </Field>
                 </FormGrid>
               </div>
             </div>
 
-            {/* Modal footer */}
-            <div className="o-modal-footer">
-              <button className="o-btn o-btn-ghost" onClick={closeModal}>Cancel</button>
-              <button className="o-btn o-btn-primary" onClick={saveClient}>Save</button>
+            <div className="flex justify-end gap-3 border-t border-border px-6 py-4">
+              <Button variant="outline" onClick={closeModal}>Cancel</Button>
+              <Button onClick={saveClient}>Save</Button>
             </div>
           </div>
         </div>
@@ -959,17 +1057,8 @@ export default function ClientsPage() {
 
       {/* Toast */}
       <div
+        className="fixed bottom-6 right-6 z-[9999] rounded-lg px-4 py-2.5 text-sm font-medium text-white transition-all"
         style={{
-          position: 'fixed',
-          bottom: 24,
-          right: 24,
-          padding: '10px 18px',
-          borderRadius: 8,
-          fontSize: 13,
-          fontWeight: 500,
-          color: '#fff',
-          zIndex: 9999,
-          transition: 'opacity 0.3s, transform 0.3s',
           opacity: toastVisible ? 1 : 0,
           transform: toastVisible ? 'translateY(0)' : 'translateY(10px)',
           pointerEvents: toastVisible ? 'auto' : 'none',
@@ -978,59 +1067,6 @@ export default function ClientsPage() {
       >
         {toast?.msg}
       </div>
-    </div>
-  )
-}
-
-// ── Small helper components ───────────────────────────────────────────────────
-
-function SumCard({ label, value, accent }: { label: string; value: string; accent: 'navy' | 'teal' | 'yellow' | 'purple' }) {
-  const colors = { navy: '#224388', teal: '#1F6F78', yellow: '#FFB700', purple: '#7C89CD' }
-  return (
-    <div className="o-metric" style={{ borderTopColor: colors[accent] }}>
-      <div className="o-metric-label">{label}</div>
-      <div className="o-metric-val" style={{ color: colors[accent] }}>{value}</div>
-    </div>
-  )
-}
-
-function SectionLabel({ children, color }: { children: React.ReactNode; color?: 'teal' | 'red' }) {
-  const textColor = color === 'teal' ? '#1F6F78' : color === 'red' ? '#B91C1C' : '#6B7280'
-  return (
-    <div
-      style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 16, marginBottom: 8, color: textColor }}
-    >
-      {children}
-    </div>
-  )
-}
-
-function FormGrid({ children, cols, className }: { children: React.ReactNode; cols?: number; className?: string }) {
-  return (
-    <div
-      className={className}
-      style={{ display: 'grid', gap: 12, marginBottom: 12, gridTemplateColumns: cols === 1 ? '1fr' : 'repeat(2, 1fr)' }}
-    >
-      {children}
-    </div>
-  )
-}
-
-function ToggleSwitch({ checked, onChange, title }: { checked: boolean; onChange: (v: boolean) => void; title: string }) {
-  return (
-    <label style={{ position: 'relative', display: 'inline-block', width: 36, height: 20, cursor: 'pointer', flexShrink: 0 }} title={title}>
-      <input
-        type="checkbox"
-        style={{ opacity: 0, width: 0, height: 0, position: 'absolute' }}
-        checked={checked}
-        onChange={e => onChange(e.target.checked)}
-      />
-      <span
-        style={{ position: 'absolute', inset: 0, borderRadius: 20, transition: 'background 0.2s', background: checked ? '#22c55e' : '#D1D5DB' }}
-      />
-      <span
-        style={{ position: 'absolute', width: 14, height: 14, background: '#fff', borderRadius: '50%', top: 3, transition: 'left 0.2s', left: checked ? 'calc(100% - 17px)' : 3 }}
-      />
-    </label>
+    </PageShell>
   )
 }

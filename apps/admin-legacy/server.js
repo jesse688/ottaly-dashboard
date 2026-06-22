@@ -697,6 +697,102 @@ app.get('/api/contacts/export', requireSession, async (req, res) => {
   res.send(csv);
 });
 
+// ── Engine Leads ──────────────────────────────────────────
+// Read-only view over ottaly_engine_leads — clean B2B leads the autonomous
+// data engine promotes into prod. Table grows 24/7, so always paginate.
+// Shared helper: build the WHERE clause + params from query filters so the
+// list and export endpoints stay in sync.
+function buildEngineLeadsFilter(q) {
+  const industry    = (q.industry  || '').trim() || null;
+  const region      = (q.region    || '').trim() || null;
+  const platform    = (q.platform  || '').trim() || null;
+  const search      = (q.search    || '').trim() || null;
+  // has_products: 'true' | 'false' | anything-else => no filter (null)
+  let hasProducts = null;
+  if (q.has_products === 'true')  hasProducts = true;
+  if (q.has_products === 'false') hasProducts = false;
+
+  const where = `
+    WHERE ($1::text IS NULL OR industry ILIKE '%'||$1||'%')
+      AND ($2::text IS NULL OR region   ILIKE '%'||$2||'%')
+      AND ($3::bool IS NULL OR has_products = $3)
+      AND ($4::text IS NULL OR platform ILIKE '%'||$4||'%')
+      AND ($5::text IS NULL OR domain ILIKE '%'||$5||'%' OR company_name ILIKE '%'||$5||'%')`;
+
+  return { where, params: [industry, region, hasProducts, platform, search] };
+}
+
+app.get('/api/engine-leads', requireSession, async (req, res) => {
+  const pgdb = req.app.locals.pgDb;
+  if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
+
+  const limit  = Math.min(parseInt(req.query.limit || '50', 10) || 50, 200);
+  const offset = Math.max(parseInt(req.query.offset || '0', 10) || 0, 0);
+
+  const { where, params } = buildEngineLeadsFilter(req.query);
+
+  try {
+    const countRes = await pgdb.query(
+      `SELECT COUNT(*)::int AS n FROM ottaly_engine_leads ${where}`,
+      params
+    );
+    const total = countRes.rows[0].n;
+
+    const { rows } = await pgdb.query(
+      `SELECT * FROM ottaly_engine_leads ${where}
+       ORDER BY promoted_at DESC NULLS LAST
+       LIMIT $6 OFFSET $7`,
+      [...params, limit, offset]
+    );
+
+    res.json({ total, limit, offset, count: rows.length, leads: rows });
+  } catch (e) {
+    console.error('[engine-leads] query failed:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/engine-leads/export', requireSession, async (req, res) => {
+  const pgdb = req.app.locals.pgDb;
+  if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
+
+  const { where, params } = buildEngineLeadsFilter(req.query);
+
+  try {
+    const { rows } = await pgdb.query(
+      `SELECT domain, company_name, company_number, email_primary, emails,
+              phones, director_name, address, postcode, sic_code, industry,
+              region, company_size, linkedin_url, has_products, product_count,
+              page_count, platform, promoted_at
+       FROM ottaly_engine_leads ${where}
+       ORDER BY promoted_at DESC NULLS LAST`,
+      params
+    );
+
+    const cols = [
+      'Domain', 'Company Name', 'Company Number', 'Email', 'All Emails',
+      'Phones', 'Director', 'Address', 'Postcode', 'SIC Code', 'Industry',
+      'Region', 'Company Size', 'LinkedIn', 'Has Products', 'Product Count',
+      'Page Count', 'Platform', 'Promoted At',
+    ];
+    const arr = v => Array.isArray(v) ? v.join('; ') : (v == null ? '' : v);
+    const esc = v => v == null ? '' : `"${String(v).replace(/"/g, '""')}"`;
+    const csv = [cols.join(','), ...rows.map(r => [
+      r.domain, r.company_name, r.company_number, r.email_primary, arr(r.emails),
+      arr(r.phones), r.director_name, r.address, r.postcode, r.sic_code, r.industry,
+      r.region, r.company_size, r.linkedin_url, r.has_products, r.product_count,
+      r.page_count, r.platform, r.promoted_at,
+    ].map(esc).join(','))].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="engine-leads.csv"`);
+    res.send(csv);
+  } catch (e) {
+    console.error('[engine-leads/export] query failed:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/admin/export-missing-enrichment', requireAdmin, async (req, res) => {
   const pgdb = app.locals.pgDb;
   if (!pgdb) return res.status(503).json({ error: 'Database not available' });
@@ -7030,6 +7126,101 @@ async function refreshMailboxCache() {
 // First run 30s after startup, then every 30 minutes.
 setTimeout(refreshMailboxCache, 20000); // after revenue cache (5s), before performance (60s)
 setInterval(refreshMailboxCache, 30 * 60 * 1000);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// admin-2.0 cache reconciler — fills client_actions_cache + warmup_daily_stats
+// in Postgres FROM THE EXISTING IN-MEMORY CACHES (campaignCache, _mailboxCache).
+// admin-new reads only these tables; it never calls PlusVibe directly.
+//
+// SAFE BY DESIGN: makes ZERO new PlusVibe calls (reuses data the existing
+// reconcilers already fetched), runs on its own interval AFTER they populate,
+// wrapped in try/catch so a failure here can never affect the legacy app.
+// REVIEW BEFORE DEPLOY (Jesse): this is the one new write-path into Postgres.
+// ─────────────────────────────────────────────────────────────────────────────
+async function syncAdmin2Caches() {
+  const pgdb = app.locals.pgDb;
+  if (!pgdb?.pool) return;
+  try {
+    // 1) client_actions_cache — per-workspace rollup from campaignCache.
+    const wsList = (campaignCache && campaignCache.workspaces) || [];
+    if (wsList.length) {
+      const clientRows = db.prepare(`SELECT workspace_id, lead_price FROM clients`).all();
+      const priceById = Object.fromEntries(clientRows.map(r => [r.workspace_id, r.lead_price]));
+      for (const w of wsList) {
+        const sent = w.totalSent || 0;
+        const replies = w.totalReplies || 0; // human replies (PV total_reply_count excludes OOO + warmup)
+        const leads = w.totalLeads || 0;
+        const bounces = (w.campaigns || []).reduce((s, c) => s + (c.bounces || 0), 0);
+        // OOO/automatic replies — kept separate so admin-new can show Human RR vs Reply Rate.
+        const oooReplies = (w.campaigns || []).reduce((s, c) => s + (c.oooReplies || c.total_ooo_reply_count || 0), 0);
+        const activeCampaigns = w.activeCampaigns || 0;
+        const pausedCampaigns = (w.campaigns || []).filter(c => c.status && c.status !== 'ACTIVE').length;
+        // leads-left %: smallest remaining-data ratio across active campaigns
+        const lefts = (w.campaigns || [])
+          .filter(c => c.status === 'ACTIVE' && c.dataSize > 0)
+          .map(c => Math.max(0, 1 - (c.leadContacted || 0) / c.dataSize));
+        const leadsLeftPct = lefts.length ? Math.min(...lefts) : null;
+        // status: all paused -> not_sending; <=20% data left -> need_data; else ok
+        let status = 'ok';
+        if (activeCampaigns === 0 && pausedCampaigns > 0) status = 'not_sending';
+        else if (leadsLeftPct != null && leadsLeftPct <= 0.20) status = 'need_data';
+        const replyRate = sent > 0 ? replies / sent : null;                  // Human RR
+        const allReplyRate = sent > 0 ? (replies + oooReplies) / sent : null; // incl. OOO/auto
+        const bounceRate = sent > 0 ? bounces / sent : null;
+        await pgdb.pool.query(
+          `INSERT INTO client_actions_cache
+             (workspace_id, workspace_name, sent, replies, ooo_replies, bounces, leads,
+              reply_rate, all_reply_rate, bounce_rate, leads_left_pct, active_campaigns,
+              paused_campaigns, status, flagged, synced_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, now())
+           ON CONFLICT (workspace_id) DO UPDATE SET
+             workspace_name=EXCLUDED.workspace_name, sent=EXCLUDED.sent,
+             replies=EXCLUDED.replies, ooo_replies=EXCLUDED.ooo_replies,
+             bounces=EXCLUDED.bounces, leads=EXCLUDED.leads,
+             reply_rate=EXCLUDED.reply_rate, all_reply_rate=EXCLUDED.all_reply_rate,
+             bounce_rate=EXCLUDED.bounce_rate,
+             leads_left_pct=EXCLUDED.leads_left_pct, active_campaigns=EXCLUDED.active_campaigns,
+             paused_campaigns=EXCLUDED.paused_campaigns, status=EXCLUDED.status,
+             flagged=EXCLUDED.flagged, synced_at=now()`,
+          [w.id, w.name || w.id, sent, replies, oooReplies, bounces, leads,
+           replyRate, allReplyRate, bounceRate, leadsLeftPct, activeCampaigns,
+           pausedCampaigns, status, status !== 'ok'],
+        );
+        void priceById; // (reserved for future per-lead revenue rollup)
+      }
+    }
+
+    // 2) warmup_daily_stats — per-mailbox snapshot for today from _mailboxCache.
+    const boxes = (_mailboxCache && _mailboxCache.mailboxes) || [];
+    if (boxes.length) {
+      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' }); // YYYY-MM-DD
+      for (const m of boxes) {
+        if (!m.account_id && !m.email) continue;
+        const score = typeof m.warmup_reply_rate === 'number' ? Math.round(m.warmup_reply_rate * 100) : null;
+        let health = 'unknown';
+        const st = (m.warmup_status || '').toLowerCase();
+        if (st.includes('disab') || st === 'paused') health = 'disabled';
+        else if (score != null && score < 70) health = 'low_score';
+        else if (score != null) health = 'healthy';
+        await pgdb.pool.query(
+          `INSERT INTO warmup_daily_stats
+             (email_acc_id, workspace_id, email, snapshot_date, warmup_score, health, synced_at)
+           VALUES ($1,$2,$3,$4,$5,$6, now())
+           ON CONFLICT (email_acc_id, snapshot_date) DO UPDATE SET
+             workspace_id=EXCLUDED.workspace_id, email=EXCLUDED.email,
+             warmup_score=EXCLUDED.warmup_score, health=EXCLUDED.health, synced_at=now()`,
+          [String(m.account_id || m.email), m.workspace_id || '', m.email || null, today, score, health],
+        );
+      }
+    }
+    console.log(`[admin2 cache] synced ${wsList.length} ws actions, ${boxes.length} mailbox warmups`);
+  } catch (err) {
+    console.warn('[admin2 cache] sync failed (non-fatal):', err.message);
+  }
+}
+// Run 3min after boot (lets campaign + mailbox caches populate first), then every 15min.
+setTimeout(syncAdmin2Caches, 3 * 60 * 1000);
+setInterval(syncAdmin2Caches, 15 * 60 * 1000);
 
 function mergeMailboxesWithMeta(mailboxes, metaByEmail) {
   return mailboxes.map(m => {

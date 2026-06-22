@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 
 const PV_BASE = 'https://api.plusvibe.ai/api/v1'
-const PV_KEY = process.env.PLUSVIBE_KEY ?? '6425e882-f33fb46a-2837ff5a-eb535a60'
+const PV_KEY = process.env.PLUSVIBE_KEY ?? ''
 
 export async function GET(req: NextRequest) {
   const wsId = req.nextUrl.searchParams.get('wsId') || '69a9db307af7ef2854f57637'

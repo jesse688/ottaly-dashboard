@@ -1,143 +1,279 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState, useCallback } from 'react'
+import { PageShell } from '@/components/shell/page-shell'
+import { KpiCard } from '@/components/ui/kpi-card'
+import { DataTable, type Column } from '@/components/ui/data-table'
+import { PeriodFilter, periodRange, type PeriodKey } from '@/components/ui/period-filter'
+import { StatusBadge } from '@/components/ui/status-badge'
 
-interface Lead { workspace_name: string; lead_email: string; first_name: string; last_name: string; campaign: string; lead_price: number; date: string; label: string }
-interface Summary { workspace_id: string; name: string; leads: number; revenue: number }
+// ── Types (match /api/revenue contract — FROZEN revenue_leads) ─────────────────
+interface Lead {
+  workspace_id: string
+  workspace_name: string
+  lead_email: string
+  first_name: string
+  last_name: string
+  campaign: string
+  lead_price: number | string
+  date: string
+  label: string
+  is_nonlead: boolean
+  updated_at: string | null
+}
+interface RevenueResponse {
+  leads: Lead[]
+  period?: string
+  error?: string
+}
+interface WsSummary {
+  workspace_id: string
+  name: string
+  leads: number
+  revenue: number
+}
+
+// ── Format helpers ─────────────────────────────────────────────────────────────
+const num = (n: number) => (n || 0).toLocaleString('en-GB')
+const gbp = (n: number) =>
+  '£' + (n || 0).toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 2 })
+const gbp0 = (n: number) =>
+  '£' + (n || 0).toLocaleString('en-GB', { maximumFractionDigits: 0 })
+const priceOf = (l: Lead) => {
+  const p = typeof l.lead_price === 'number' ? l.lead_price : parseFloat(l.lead_price)
+  return isNaN(p) ? 0 : p
+}
+const dateOf = (l: Lead) => (l.date ? l.date.slice(0, 10) : '')
 
 export default function RevenuePage() {
+  const [period, setPeriod] = useState<PeriodKey>('all_time')
   const [leads, setLeads] = useState<Lead[]>([])
-  const [summary, setSummary] = useState<Summary[]>([])
-  const [filtered, setFiltered] = useState<Lead[]>([])
+  const [status, setStatus] = useState<'loading' | 'ok' | 'empty' | 'error'>('loading')
+  const [errMsg, setErrMsg] = useState('')
+  const [syncedAt, setSyncedAt] = useState<string | null>(null)
   const [search, setSearch] = useState('')
-  const [loading, setLoading] = useState(true)
-  const [tab, setTab] = useState<'leads' | 'summary'>('summary')
+  const [includeNonLeads, setIncludeNonLeads] = useState(false)
 
-  useEffect(() => {
-    fetch('/api/revenue').then(r => r.json()).then(d => { setLeads(d.leads ?? []); setSummary(d.summary ?? []) }).catch(() => {}).finally(() => setLoading(false))
+  const load = useCallback(async () => {
+    setStatus('loading'); setErrMsg('')
+    try {
+      const r = await fetch('/api/revenue')
+      const data: RevenueResponse = await r.json()
+      if (!r.ok || data.error) throw new Error(data.error || `Server returned ${r.status}`)
+      const rows = data.leads || []
+      const latest = rows.reduce<string | null>((acc, l) => {
+        if (!l.updated_at) return acc
+        return !acc || l.updated_at > acc ? l.updated_at : acc
+      }, null)
+      setSyncedAt(latest)
+      setLeads(rows)
+      setStatus(rows.length ? 'ok' : 'empty')
+    } catch (e) {
+      setStatus('error')
+      setErrMsg(e instanceof Error ? e.message : String(e))
+    }
   }, [])
 
-  useEffect(() => {
-    if (!search) { setFiltered(leads); return }
+  useEffect(() => { load() }, [load])
+
+  // Period filter (client-side; data is frozen so range-filter by lead date).
+  const periodLeads = useMemo(() => {
+    if (period === 'all_time') return leads
+    const { start, end } = periodRange(period)
+    return leads.filter(l => {
+      const d = dateOf(l)
+      return d >= start && d <= end
+    })
+  }, [leads, period])
+
+  // Counted leads exclude non-leads unless the toggle is on (legacy revenue rule).
+  const countedLeads = useMemo(
+    () => (includeNonLeads ? periodLeads : periodLeads.filter(l => !l.is_nonlead)),
+    [periodLeads, includeNonLeads],
+  )
+  const nonLeadCount = useMemo(
+    () => periodLeads.filter(l => l.is_nonlead).length,
+    [periodLeads],
+  )
+
+  // Per-workspace summary recomputed for the active period (real leads only).
+  const summary = useMemo<WsSummary[]>(() => {
+    const by: Record<string, WsSummary> = {}
+    for (const l of periodLeads) {
+      if (l.is_nonlead) continue
+      const k = l.workspace_id
+      if (!by[k]) by[k] = { workspace_id: k, name: l.workspace_name, leads: 0, revenue: 0 }
+      by[k].leads++
+      by[k].revenue += priceOf(l)
+    }
+    return Object.values(by).sort((a, b) => b.revenue - a.revenue)
+  }, [periodLeads])
+
+  // Lead table with search (operates on the counted set).
+  const filtered = useMemo(() => {
+    if (!search) return countedLeads
     const q = search.toLowerCase()
-    setFiltered(leads.filter(l => l.lead_email?.toLowerCase().includes(q) || l.workspace_name?.toLowerCase().includes(q) || l.campaign?.toLowerCase().includes(q)))
-  }, [leads, search])
+    return countedLeads.filter(l =>
+      l.lead_email?.toLowerCase().includes(q) ||
+      l.workspace_name?.toLowerCase().includes(q) ||
+      l.campaign?.toLowerCase().includes(q) ||
+      `${l.first_name} ${l.last_name}`.toLowerCase().includes(q),
+    )
+  }, [countedLeads, search])
 
   const totalRevenue = summary.reduce((s, r) => s + r.revenue, 0)
   const totalLeads = summary.reduce((s, r) => s + r.leads, 0)
+  const avgPerLead = totalLeads > 0 ? totalRevenue / totalLeads : 0
+  const filteredRevenue = filtered.reduce((s, l) => s + (l.is_nonlead ? 0 : priceOf(l)), 0)
+  const loading = status === 'loading'
+
+  const summaryColumns: Column<WsSummary>[] = [
+    {
+      key: 'name', header: 'Workspace',
+      sortValue: w => w.name?.toLowerCase() ?? '',
+      cell: w => <span className="font-semibold text-foreground">{w.name}</span>,
+    },
+    { key: 'leads', header: 'Leads', numeric: true, sortValue: w => w.leads, cell: w => num(w.leads) },
+    {
+      key: 'revenue', header: 'Revenue', numeric: true, sortValue: w => w.revenue,
+      cell: w => <span className="font-semibold text-primary">{gbp(w.revenue)}</span>,
+    },
+    {
+      key: 'avg', header: 'Avg / Lead', numeric: true,
+      sortValue: w => (w.leads > 0 ? w.revenue / w.leads : 0),
+      cell: w => <span className="text-muted-foreground">{gbp(w.leads > 0 ? w.revenue / w.leads : 0)}</span>,
+    },
+  ]
+
+  const leadColumns: Column<Lead>[] = [
+    {
+      key: 'date', header: 'Date', sortValue: l => dateOf(l),
+      cell: l => <span className="text-muted-foreground">{l.date ? new Date(l.date).toLocaleDateString('en-GB') : '—'}</span>,
+    },
+    {
+      key: 'workspace', header: 'Workspace', sortValue: l => l.workspace_name?.toLowerCase() ?? '',
+      cell: l => <span className="text-foreground">{l.workspace_name}</span>,
+    },
+    {
+      key: 'email', header: 'Email', sortValue: l => l.lead_email?.toLowerCase() ?? '',
+      cell: l => (
+        <span className="flex items-center gap-2">
+          <span className="font-mono text-[12px] text-muted-foreground">{l.lead_email || '—'}</span>
+          {l.is_nonlead && <StatusBadge status="neutral">non-lead</StatusBadge>}
+        </span>
+      ),
+    },
+    {
+      key: 'campaign', header: 'Campaign', sortValue: l => l.campaign?.toLowerCase() ?? '',
+      cell: l => <span className="block max-w-[16rem] truncate text-foreground" title={l.campaign}>{l.campaign || '—'}</span>,
+    },
+    {
+      key: 'label', header: 'Label',
+      cell: l => (l.label
+        ? <StatusBadge status={l.is_nonlead ? 'neutral' : 'ok'}>{l.label}</StatusBadge>
+        : <span className="text-muted-foreground">—</span>),
+    },
+    {
+      key: 'price', header: 'Price', numeric: true, sortValue: l => priceOf(l),
+      cell: l => (
+        <span className={l.is_nonlead ? 'text-muted-foreground line-through' : 'font-medium text-foreground'}>
+          {gbp(priceOf(l))}
+        </span>
+      ),
+    },
+  ]
 
   return (
-    <div className="o-page">
-      <div className="o-page-header">
-        <div>
-          <div className="o-page-title">Revenue</div>
-          <div className="o-page-sub">{totalLeads} leads · £{totalRevenue.toLocaleString('en-GB', { maximumFractionDigits: 0 })} total</div>
-        </div>
+    <PageShell
+      title="Revenue"
+      subtitle="Frozen pay-per-lead revenue from revenue_leads · all-time · never live"
+      freshness={{ table: 'revenue_leads', syncedAt }}
+      actions={<PeriodFilter value={period} onChange={setPeriod} />}
+    >
+      {/* KPIs */}
+      <div className="mb-5 grid grid-cols-2 gap-4 md:grid-cols-4">
+        <KpiCard label="Revenue" value={gbp0(totalRevenue)} tone="green" loading={loading} />
+        <KpiCard label="Leads delivered" value={num(totalLeads)} tone="teal" loading={loading} />
+        <KpiCard label="Avg / Lead" value={gbp(avgPerLead)} tone="purple" loading={loading} />
+        <KpiCard label="Workspaces" value={num(summary.length)} tone="navy" loading={loading} />
       </div>
 
-      <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid #E2E6F0', marginBottom: '1.25rem' }}>
-        {(['summary', 'leads'] as const).map(t => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            style={{
-              padding: '0.625rem 1rem',
-              fontSize: '0.875rem',
-              fontWeight: 500,
-              border: 'none',
-              borderBottom: tab === t ? '2px solid #224388' : '2px solid transparent',
-              background: 'none',
-              color: tab === t ? '#224388' : '#6B7280',
-              cursor: 'pointer',
-              textTransform: 'capitalize',
-              marginBottom: '-1px',
-            }}
-          >{t}</button>
-        ))}
-      </div>
-
-      {tab === 'leads' && (
-        <div className="o-toolbar" style={{ marginBottom: '1rem' }}>
-          <div className="o-search-wrap">
-            <span className="o-search-icon">
-              <svg width="15" height="15" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M10 6.5a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Zm-.747 3.56a4.5 4.5 0 1 1 .707-.707l2.844 2.843a.5.5 0 1 1-.708.708L9.253 10.06Z" fill="currentColor" fillRule="evenodd" clipRule="evenodd"/>
-              </svg>
-            </span>
-            <input type="text" placeholder="Search email, workspace, campaign..." value={search} onChange={e => setSearch(e.target.value)} />
-          </div>
+      {status === 'error' && (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+          <div className="font-semibold">Couldn’t load revenue</div>
+          <div className="mt-0.5 opacity-90">{errMsg}</div>
+          <button onClick={() => load()} className="mt-2 rounded-md border border-destructive/30 px-2.5 py-1 text-xs font-medium hover:bg-destructive/10">
+            Retry
+          </button>
         </div>
       )}
 
-      <div className="o-card">
-        <div className="o-table-wrap">
-          {tab === 'summary' ? (
-            <table className="o-table">
-              <thead>
-                <tr>
-                  <th>Workspace</th>
-                  <th>Leads</th>
-                  <th>Revenue</th>
-                  <th>Avg / Lead</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading
-                  ? Array.from({ length: 5 }).map((_, i) => (
-                    <tr key={i}>
-                      {Array.from({ length: 4 }).map((_, j) => (
-                        <td key={j}><span className="o-spin" /></td>
-                      ))}
-                    </tr>
-                  ))
-                  : summary.sort((a, b) => b.revenue - a.revenue).map(s => (
-                    <tr key={s.workspace_id}>
-                      <td style={{ fontWeight: 500 }}>{s.name}</td>
-                      <td>{s.leads}</td>
-                      <td style={{ fontWeight: 600, color: '#16A34A' }}>£{s.revenue.toLocaleString('en-GB', { maximumFractionDigits: 0 })}</td>
-                      <td style={{ color: '#6B7280' }}>£{s.leads > 0 ? (s.revenue / s.leads).toFixed(0) : 0}</td>
-                    </tr>
-                  ))
-                }
-              </tbody>
-            </table>
-          ) : (
-            <table className="o-table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Workspace</th>
-                  <th>Email</th>
-                  <th>Campaign</th>
-                  <th>Label</th>
-                  <th>Price</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading
-                  ? Array.from({ length: 8 }).map((_, i) => (
-                    <tr key={i}>
-                      {Array.from({ length: 6 }).map((_, j) => (
-                        <td key={j}><span className="o-spin" /></td>
-                      ))}
-                    </tr>
-                  ))
-                  : filtered.map((l, i) => (
-                    <tr key={i}>
-                      <td style={{ color: '#6B7280' }}>{new Date(l.date).toLocaleDateString('en-GB')}</td>
-                      <td>{l.workspace_name}</td>
-                      <td><code style={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>{l.lead_email}</code></td>
-                      <td style={{ color: '#374151', maxWidth: '16rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.campaign}</td>
-                      <td><span className="o-status o-status-active">{l.label}</span></td>
-                      <td style={{ fontWeight: 500 }}>£{parseFloat(String(l.lead_price)).toFixed(0)}</td>
-                    </tr>
-                  ))
-                }
-              </tbody>
-            </table>
-          )}
+      {status === 'empty' && (
+        <div className="rounded-lg border border-border bg-card p-12 text-center text-sm text-muted-foreground">
+          No revenue recorded in revenue_leads.
         </div>
-      </div>
-    </div>
+      )}
+
+      {(status === 'ok' || status === 'loading') && (
+        <div className="space-y-6">
+          <section>
+            <h2 className="mb-2 text-sm font-semibold text-foreground">By workspace</h2>
+            <DataTable
+              columns={summaryColumns}
+              rows={summary}
+              getRowKey={w => w.workspace_id}
+              empty={loading ? 'Loading…' : 'No revenue for this period.'}
+            />
+            {/* Totals row */}
+            <div className="mt-2 flex items-center justify-end gap-6 rounded-md border border-border bg-card px-4 py-2 text-sm">
+              <span className="text-muted-foreground">Totals</span>
+              <span className="text-foreground">{num(totalLeads)} leads</span>
+              <span className="font-semibold text-primary">{gbp(totalRevenue)}</span>
+            </div>
+          </section>
+
+          <section>
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold text-foreground">
+                Leads detail
+                <span className="ml-2 font-normal text-muted-foreground">{num(filtered.length)} shown</span>
+              </h2>
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={includeNonLeads}
+                    onChange={e => setIncludeNonLeads(e.target.checked)}
+                    className="accent-primary"
+                  />
+                  Show non-leads
+                  {nonLeadCount > 0 && <span className="text-foreground">({nonLeadCount})</span>}
+                </label>
+                <input
+                  type="text"
+                  placeholder="Search email, name, workspace, campaign…"
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  className="w-full max-w-xs rounded-md border border-border bg-card px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
+              </div>
+            </div>
+            <DataTable
+              columns={leadColumns}
+              rows={filtered}
+              getRowKey={(l, i) => `${l.workspace_id}:${l.lead_email}:${i}`}
+              empty={loading ? 'Loading…' : 'No leads match.'}
+            />
+            {/* Totals row */}
+            <div className="mt-2 flex items-center justify-end gap-6 rounded-md border border-border bg-card px-4 py-2 text-sm">
+              <span className="text-muted-foreground">
+                {num(filtered.length)} rows{includeNonLeads ? ` · ${num(nonLeadCount)} non-leads (£0)` : ''}
+              </span>
+              <span className="font-semibold text-primary">{gbp(filteredRevenue)}</span>
+            </div>
+          </section>
+        </div>
+      )}
+    </PageShell>
   )
 }
