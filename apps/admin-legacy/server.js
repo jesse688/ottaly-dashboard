@@ -4707,8 +4707,14 @@ async function warmPerformanceCache() {
       performanceCache.labeledLeads = nextLabeledLeads;
       performanceCache.version++;
       console.log(`[performance cache] version ${performanceCache.version} ready — ${wsIds.length} workspaces`);
-      // Persist to DB so next restart loads instantly
-      savePerfCacheToDb().catch(() => {});
+      // Persist to DB so next restart loads instantly.
+      // DISABLED by default: admin-new is now the SOLE writer of
+      // perf_cache_daily (shared PK ws_id,date). Legacy aggregates from PV's
+      // `chart` array (aggPvEmailStats) while admin-new reads `header` — for a
+      // single day these DIFFER (e.g. Enviro chart-sum 74 vs header 18), so the
+      // two writers flip-flopped the row and corrupted Stats. Legacy keeps its
+      // in-memory cache for its own pages but must NOT write the shared row.
+      if (process.env.LEGACY_PERSIST_PERF_CACHE === '1') savePerfCacheToDb().catch(() => {});
     } catch (err) {
       console.error('[performance cache] warm failed:', err.message);
     } finally {
