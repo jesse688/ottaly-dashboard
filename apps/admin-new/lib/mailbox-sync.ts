@@ -40,6 +40,33 @@ async function pvFetch<T>(path: string): Promise<T | null> {
   return null
 }
 
+// Per-mailbox real stats from PlusVibe email-stats (filtered by email_acc_id).
+// One call per mailbox, so we run them with bounded concurrency. 30-day window.
+interface MbStats { sent: number; replies: number; bounces: number; contacted: number }
+async function fetchMailboxStats(workspaceId: string, accountId: string, start: string, end: string): Promise<MbStats | null> {
+  const data = await pvFetch<{ header?: { total_sent_count?: number; total_reply_count?: number; total_bounce_count?: number; total_contacted_count?: number } }>(
+    `/account/email-stats?workspace_id=${encodeURIComponent(workspaceId)}&email_acc_id=${encodeURIComponent(accountId)}&start_date=${start}&end_date=${end}`
+  )
+  const h = data?.header
+  if (!h) return null
+  const sent = h.total_sent_count ?? 0
+  return { sent, replies: h.total_reply_count ?? 0, bounces: h.total_bounce_count ?? 0, contacted: h.total_contacted_count ?? sent }
+}
+
+// Run an async mapper over items with a concurrency cap.
+async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length)
+  let i = 0
+  async function worker() {
+    while (i < items.length) {
+      const idx = i++
+      out[idx] = await fn(items[idx])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return out
+}
+
 function detectMailboxType(provider: string | null): string | null {
   const p = (provider || '').toUpperCase()
   if (/GOOGLE|GMAIL|GWORKSPACE|GSUITE/.test(p)) return 'google'
@@ -182,6 +209,18 @@ export async function syncMailboxes(): Promise<{ ok: boolean; count: number; err
     const dhByDomain = new Map(dhRes.rows.map(r => [r.domain as string, r]))
     const parseJsonb = (v: unknown) => (typeof v === 'string' ? JSON.parse((v as string) || 'null') : v)
 
+    // Real per-mailbox sent/reply/bounce from PlusVibe (last 30 days), fetched
+    // with bounded concurrency. One call per mailbox that has an account_id +
+    // workspace. Falls back to email_events sent/bounce when PV has no data.
+    const end = new Date().toISOString().slice(0, 10)
+    const start = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
+    const withAcc = raw.filter(m => m.account_id && m.workspace_id)
+    const statsList = await mapPool(withAcc, 8, m =>
+      fetchMailboxStats(m.workspace_id as string, m.account_id as string, start, end).catch(() => null)
+    )
+    const statsByEmail = new Map<string, MbStats>()
+    withAcc.forEach((m, i) => { const s = statsList[i]; if (s) statsByEmail.set(m.email, s) })
+
     const full: FullMailbox[] = raw.map(m => {
       const meta = metaByEmail.get(m.email) ?? {}
       const typeAuto = detectMailboxType(m.provider)
@@ -189,11 +228,16 @@ export async function syncMailboxes(): Promise<{ ok: boolean; count: number; err
       const supplier = meta.supplier || null
       const unitCost = supplier ? (priceByKey.get(`${supplier}|${type}`) ?? null) : null
 
-      // performance
+      // performance — prefer real per-mailbox PlusVibe stats; fall back to
+      // email_events (sent/bounce only) when PV returned nothing.
+      const pv = statsByEmail.get(m.email)
       const ev = evByEmail.get(m.email)
-      const sent = ev?.sent ?? 0
-      const bounces = ev?.bounces ?? 0
-      const reply_rate = 0 // reply attribution needs campaign cache; refined later
+      const sent = pv?.sent ?? ev?.sent ?? 0
+      const replies = pv?.replies ?? 0
+      const bounces = pv?.bounces ?? ev?.bounces ?? 0
+      // reply rate is over CONTACTED (matches the pv-stats route); bounce over sent.
+      const contacted = pv?.contacted ?? sent
+      const reply_rate = contacted > 0 ? replies / contacted : 0
       const bounce_rate = sent > 0 ? bounces / sent : 0
 
       // auth / domain health
@@ -224,7 +268,7 @@ export async function syncMailboxes(): Promise<{ ok: boolean; count: number; err
         billing_day: meta.billing_day || null,
         ignored_at: meta.ignored_at || null,
         unit_cost: unitCost,
-        attributed_sent: sent, attributed_replies: 0, attributed_bounces: bounces,
+        attributed_sent: sent, attributed_replies: replies, attributed_bounces: bounces,
         reply_rate, bounce_rate,
         auth, blacklist_count, domain_score, domain_notes, domain_status,
         attention: [],
