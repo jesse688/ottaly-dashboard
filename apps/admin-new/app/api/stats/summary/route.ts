@@ -102,7 +102,13 @@ export async function GET(req: NextRequest) {
       // so the warm window, the SQL text window, and the cache keys all use the
       // same date authority. Reusing UTC here re-created the cross-tz duplicate.
       const warmList = enumerateDates(start, end, 31)
-      await warmDates(warmList)
+      // TIME-BOXED: never block the page on warming. Dead workspaces 400 + retry
+      // and could hang the request for many seconds. Wait at most ~3.5s, then
+      // serve whatever's cached; the warm finishes in the background.
+      await Promise.race([
+        warmDates(warmList),
+        new Promise((r) => setTimeout(r, 3500)),
+      ])
     }
 
     // Query perf_cache_daily for the date range

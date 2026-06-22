@@ -37,6 +37,10 @@ function lastNDates(n: number): string[] {
   return dates
 }
 
+// Workspaces PlusVibe returns 400 for (deleted/unknown). Skipped on subsequent
+// passes so we don't repeatedly fail+retry them and stall the warm.
+const deadWorkspaces = new Set<string>()
+
 async function pvFetch(path: string): Promise<any> {
   const url = `${PV_BASE}${path}`
   console.log(`[cache-warming] fetching ${url}`)
@@ -45,6 +49,12 @@ async function pvFetch(path: string): Promise<any> {
     signal: AbortSignal.timeout(15000),
   })
   if (!res.ok) {
+    // 400 here means PV doesn't recognise the workspace — mark it dead so we
+    // stop retrying it. Extract workspace_id from the query string.
+    if (res.status === 400) {
+      const m = path.match(/workspace_id=([^&]+)/)
+      if (m) deadWorkspaces.add(m[1])
+    }
     const err = `PlusVibe ${res.status}`
     console.error(`[cache-warming] ${err}`)
     throw new Error(err)
@@ -83,6 +93,9 @@ async function ensurePerfCacheDaily(wsIds: string[], dates: string[]): Promise<v
   const needsFetch: Array<{ wsId: string; date: string }> = []
 
   for (const wsId of wsIds) {
+    // Skip workspaces PlusVibe rejects (400 = dead/unknown). Avoids hammering
+    // PV with dozens of failing+retrying requests that hang the warm pass.
+    if (deadWorkspaces.has(wsId)) continue
     for (const date of dates) {
       // Check if we have fresh cached data
       const ttl = date === today ? TTL_TODAY_MS : TTL_OLD_MS
@@ -125,13 +138,16 @@ async function ensurePerfCacheDaily(wsIds: string[], dates: string[]): Promise<v
           )
         } catch (err) {
           console.error(`[cache-warming] fetch failed for ${wsId} ${date}:`, err instanceof Error ? err.message : err)
-          // Insert stale placeholder (savedAt = 0) so we retry next time
-          const empty = { sent: 0, replies: 0, bounces: 0, posReplies: 0, oooReplies: 0, contacted: 0, leads: 0 }
+          // DO NOT overwrite a previously-good row on failure. The old behavior
+          // wrote an all-zero placeholder, which on a transient/auth failure
+          // (e.g. PlusVibe 400) WIPED real stats for every workspace. Only seed
+          // a zero row if NONE exists yet (so the page isn't blank), and never
+          // clobber existing data.
           await pool.query(
             `INSERT INTO perf_cache_daily (ws_id, date, data, saved_at)
              VALUES ($1, $2, $3, 0)
-             ON CONFLICT (ws_id, date) DO UPDATE SET data = $3, saved_at = 0`,
-            [wsId, date, JSON.stringify(empty)]
+             ON CONFLICT (ws_id, date) DO NOTHING`,
+            [wsId, date, JSON.stringify({ sent: 0, replies: 0, bounces: 0, posReplies: 0, oooReplies: 0, contacted: 0, leads: 0 })]
           ).catch(() => {})
         }
       })
