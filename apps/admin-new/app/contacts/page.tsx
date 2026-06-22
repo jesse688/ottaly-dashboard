@@ -198,6 +198,9 @@ export default function DataPage() {
   // Engine-only filters (only used when dataset==='engine').
   const [engineSource, setEngineSource] = useState('')
   const [engineShow, setEngineShow] = useState('')
+  const [engineIndustry, setEngineIndustry] = useState('')
+  const [engineRegion, setEngineRegion] = useState('')
+  const [enginePlatform, setEnginePlatform] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [visibleCols, setVisibleCols] = useState<Set<string>>(
     () => new Set(ALL_COLUMNS.filter((c) => c.defaultOn).map((c) => c.key))
@@ -246,10 +249,10 @@ export default function DataPage() {
         p.set('dataset', 'engine')
         if (searchText.trim()) p.set('search', searchText.trim())
         if (engineSource) p.set('source', engineSource)
-        if (engineShow.trim()) p.set('show', engineShow.trim())
-        if (filters.industry) p.set('industry', filters.industry)
-        if (filters.companyRegion || filters.country)
-          p.set('region', filters.companyRegion || filters.country || '')
+        if (engineShow) p.set('show', engineShow)
+        if (engineIndustry) p.set('industry', engineIndustry)
+        if (engineRegion) p.set('region', engineRegion)
+        if (enginePlatform) p.set('platform', enginePlatform)
         Object.entries(extra).forEach(([k, v]) => p.set(k, v))
         return p
       }
@@ -262,7 +265,7 @@ export default function DataPage() {
       Object.entries(extra).forEach(([k, v]) => p.set(k, v))
       return p
     },
-    [dataset, searchText, engineSource, engineShow, filters, sortBy, sortDir]
+    [dataset, searchText, engineSource, engineShow, engineIndustry, engineRegion, enginePlatform, filters, sortBy, sortDir]
   )
 
   // ── Fetch contacts ────────────────────────────────────────────────────────
@@ -738,24 +741,24 @@ export default function DataPage() {
           </div>
           {dataset === 'engine' ? (
             <div className="p-3 space-y-4">
-              <div>
-                <Label className="text-xs text-gray-500">Industry</Label>
-                <Input
-                  className="h-8 mt-1"
-                  placeholder="contains…"
-                  value={filters.industry || ''}
-                  onChange={(e) => { setFilters((f) => ({ ...f, industry: e.target.value })); setPage(0) }}
-                />
-              </div>
-              <div>
-                <Label className="text-xs text-gray-500">Region</Label>
-                <Input
-                  className="h-8 mt-1"
-                  placeholder="e.g. england, wales…"
-                  value={filters.companyRegion || ''}
-                  onChange={(e) => { setFilters((f) => ({ ...f, companyRegion: e.target.value })); setPage(0) }}
-                />
-              </div>
+              <EngineSelect
+                field="industry"
+                label="Industry"
+                value={engineIndustry}
+                onChange={(v) => { setEngineIndustry(v); setPage(0) }}
+              />
+              <EngineSelect
+                field="region"
+                label="Region"
+                value={engineRegion}
+                onChange={(v) => { setEngineRegion(v); setPage(0) }}
+              />
+              <EngineSelect
+                field="platform"
+                label="Platform"
+                value={enginePlatform}
+                onChange={(v) => { setEnginePlatform(v); setPage(0) }}
+              />
               <p className="text-[11px] leading-relaxed text-gray-400">
                 Engine leads are scraped, unverified prospects — kept separate from
                 the verified Contacts pool. Use the Source and Show filters above,
@@ -878,12 +881,14 @@ export default function DataPage() {
                     <SelectItem value="companies_house">Companies House</SelectItem>
                   </SelectContent>
                 </Select>
-                <Input
-                  className="h-8 w-40"
-                  placeholder="Show (e.g. Spring Fair)"
-                  value={engineShow}
-                  onChange={(e) => { setEngineShow(e.target.value); setPage(0) }}
-                />
+                <div className="w-48">
+                  <EngineSelect
+                    field="show"
+                    label="Show"
+                    value={engineShow}
+                    onChange={(v) => { setEngineShow(v); setPage(0) }}
+                  />
+                </div>
               </>
             )}
             <div className="flex-1 min-w-[260px]">
@@ -1473,6 +1478,60 @@ function Popover({
           {children}
         </div>
       )}
+    </div>
+  )
+}
+
+// Dropdown whose options are the real distinct values of an engine-leads
+// column (industry/region/platform/show), loaded with counts on first open.
+function EngineSelect({
+  field,
+  label,
+  value,
+  onChange,
+}: {
+  field: string
+  label: string
+  value: string
+  onChange: (v: string) => void
+}) {
+  const [opts, setOpts] = useState<{ value: string; count: number }[]>([])
+  const [loaded, setLoaded] = useState(false)
+
+  const load = useCallback(async () => {
+    if (loaded) return
+    try {
+      const res = await fetch(`/api/data/engine-leads/distinct-values?field=${field}`)
+      const data = await res.json()
+      if (res.ok) setOpts(data.values || [])
+    } catch {
+      /* ignore */
+    } finally {
+      setLoaded(true)
+    }
+  }, [field, loaded])
+
+  return (
+    <div>
+      <Label className="text-xs text-gray-500">{label}</Label>
+      <Select
+        value={value || '__any'}
+        onOpenChange={(open) => open && load()}
+        onValueChange={(v) => onChange(v && v !== '__any' ? v : '')}
+      >
+        <SelectTrigger className="h-8 mt-1">
+          <SelectValue placeholder={`Any ${label.toLowerCase()}`} />
+        </SelectTrigger>
+        <SelectContent className="max-h-72">
+          <SelectItem value="__any">Any {label.toLowerCase()}</SelectItem>
+          {opts.map((o) => (
+            <SelectItem key={o.value} value={o.value}>
+              {o.value}{' '}
+              <span className="text-gray-400">· {o.count.toLocaleString()}</span>
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   )
 }
