@@ -54,16 +54,18 @@ async function fetchMailboxStats(workspaceId: string, accountId: string, start: 
 }
 
 // Per-mailbox DAILY chart series (each row has .date) for backfilling history.
-interface DayRow { date: string; sent: number; replies: number; bounces: number }
+interface DayRow { date: string; sent: number; replies: number; ooo: number; bounces: number; contacted: number }
+type ChartRow = { date?: string; total_sent_count?: number; total_reply_count?: number; total_ooo_reply_count?: number; total_bounce_count?: number; total_contacted_count?: number }
 async function fetchMailboxDailyChart(workspaceId: string, accountId: string, start: string, end: string): Promise<DayRow[]> {
-  const data = await pvFetch<{ chart?: Array<{ date?: string; total_sent_count?: number; total_reply_count?: number; total_bounce_count?: number }> } | Array<{ date?: string; total_sent_count?: number; total_reply_count?: number; total_bounce_count?: number }>>(
+  const data = await pvFetch<{ chart?: ChartRow[] } | ChartRow[]>(
     `/account/email-stats?workspace_id=${encodeURIComponent(workspaceId)}&email_acc_id=${encodeURIComponent(accountId)}&start_date=${start}&end_date=${end}`
   )
   const chart = Array.isArray(data) ? data : (data?.chart ?? [])
   const out: DayRow[] = []
   for (const r of chart) {
     if (!r.date) continue
-    out.push({ date: r.date.slice(0, 10), sent: r.total_sent_count ?? 0, replies: r.total_reply_count ?? 0, bounces: r.total_bounce_count ?? 0 })
+    const sent = r.total_sent_count ?? 0
+    out.push({ date: r.date.slice(0, 10), sent, replies: r.total_reply_count ?? 0, ooo: r.total_ooo_reply_count ?? 0, bounces: r.total_bounce_count ?? 0, contacted: r.total_contacted_count ?? sent })
   }
   return out
 }
@@ -80,12 +82,12 @@ export async function backfillSupplierDaily(days = 30): Promise<{ ok: boolean; m
 
     // acc { dimension|key|day : {count, active, sent, replies, bounces} }. count/active
     // are point-in-time (today's group sizes) so we only set sent/replies/bounces here.
-    type Cell = { sent: number; replies: number; bounces: number }
+    type Cell = { sent: number; replies: number; ooo: number; bounces: number; contacted: number }
     const agg = new Map<string, Cell>()
     const add = (dim: string, key: string, day: string, r: DayRow) => {
       const k = `${dim}|${key}|${day}`
-      const c = agg.get(k) ?? { sent: 0, replies: 0, bounces: 0 }
-      c.sent += r.sent; c.replies += r.replies; c.bounces += r.bounces
+      const c = agg.get(k) ?? { sent: 0, replies: 0, ooo: 0, bounces: 0, contacted: 0 }
+      c.sent += r.sent; c.replies += r.replies; c.ooo += r.ooo; c.bounces += r.bounces; c.contacted += r.contacted
       agg.set(k, c)
     }
     const charts = await mapPool(rows, 8, m => fetchMailboxDailyChart(m.workspace_id, m.account_id, start, end).catch(() => [] as DayRow[]))
@@ -103,12 +105,16 @@ export async function backfillSupplierDaily(days = 30): Promise<{ ok: boolean; m
       await client.query('BEGIN')
       for (const [k, c] of agg) {
         const [dimension, key, day] = k.split('|')
+        // reply_rate here = RR including OOO (replies/contacted) — the card
+        // recomputes human RR from the raw counts. bounce over sent.
+        const base = c.contacted || c.sent
         await client.query(
-          `INSERT INTO mailbox_supplier_daily (day, dimension, key, total_sent, reply_rate, bounce_rate)
-           VALUES ($1::date, $2, $3, $4, $5, $6)
+          `INSERT INTO mailbox_supplier_daily (day, dimension, key, total_sent, reply_rate, bounce_rate, total_replies, total_ooo, total_bounces, total_contacted)
+           VALUES ($1::date, $2, $3, $4, $5, $6, $7, $8, $9, $10)
            ON CONFLICT (day, dimension, key) DO UPDATE SET
-             total_sent = EXCLUDED.total_sent, reply_rate = EXCLUDED.reply_rate, bounce_rate = EXCLUDED.bounce_rate`,
-          [day, dimension, key, c.sent, c.sent > 0 ? c.replies / c.sent : 0, c.sent > 0 ? c.bounces / c.sent : 0]
+             total_sent = EXCLUDED.total_sent, reply_rate = EXCLUDED.reply_rate, bounce_rate = EXCLUDED.bounce_rate,
+             total_replies = EXCLUDED.total_replies, total_ooo = EXCLUDED.total_ooo, total_bounces = EXCLUDED.total_bounces, total_contacted = EXCLUDED.total_contacted`,
+          [day, dimension, key, c.sent, base > 0 ? c.replies / base : 0, c.sent > 0 ? c.bounces / c.sent : 0, c.replies, c.ooo, c.bounces, c.contacted]
         )
         written++
       }
