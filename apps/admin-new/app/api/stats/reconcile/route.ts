@@ -113,7 +113,8 @@ export async function GET(req: NextRequest) {
         const replies = Number(d.replies) || 0
         const ooo = Number(d.oooReplies) || 0
         const pos = Number(d.posReplies) || 0
-        const human = Math.max(0, replies - ooo)
+        // total_reply_count IS the human/non-OOO count (proven via live PV).
+        const human = replies
         const pct = (n: number) => (sent > 0 ? +((n / sent) * 100).toFixed(2) : 0)
         return {
           name: w.workspace_name || w.workspace_id,

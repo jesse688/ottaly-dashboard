@@ -84,6 +84,7 @@ async function engineLeadsAsContacts(sp: URLSearchParams, limit: number, offset:
       num_employees: r.company_size || null,
       company_country: r.region || null,
       company_region: r.region || null,
+      sic_code: r.sic_code || null, // surfaced for the SIC column in engine view
       status: 'engine',
       source: r.source || null,
       // engine-only extras surfaced in the detail panel / raw view

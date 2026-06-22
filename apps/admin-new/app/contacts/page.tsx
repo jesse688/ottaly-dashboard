@@ -48,6 +48,7 @@ type Contact = {
   seniority?: string | null
   department?: string | null
   industry?: string | null
+  sic_code?: string | null
   keywords?: string | null
   technologies?: string | null
   num_employees?: number | null
@@ -88,6 +89,7 @@ const ALL_COLUMNS: ColDef[] = [
   { key: 'linkedin_url', label: 'LinkedIn', sortKey: null, defaultOn: false },
   { key: 'company_domain', label: 'Website', sortKey: 'company_domain', defaultOn: false },
   { key: 'industry', label: 'Industry', sortKey: null, defaultOn: false },
+  { key: 'sic', label: 'SIC code', sortKey: null, defaultOn: false },
   { key: 'technologies', label: 'Technologies', sortKey: null, defaultOn: false },
   { key: 'keywords', label: 'Keywords', sortKey: null, defaultOn: false },
   { key: 'num_employees', label: 'Employees', sortKey: null, defaultOn: false },
@@ -121,6 +123,31 @@ const GATEWAYS = [
   'Microsoft 365', 'Google Workspace', 'NO MX / unresolved',
 ]
 const PAGE_SIZE = 50
+
+// Module-level cache of SIC code → description, filled lazily as codes appear in
+// the table (resolveSicNames). Lets renderCell show "code — name" synchronously.
+const SIC_NAMES: Record<string, string> = {}
+async function resolveSicNames(codes: string[]): Promise<boolean> {
+  const missing = [...new Set(codes)].filter((c) => c && !(c in SIC_NAMES))
+  if (!missing.length) return false
+  // sic-search matches by code too; query each missing code (cap to keep it light).
+  await Promise.all(
+    missing.slice(0, 80).map(async (code) => {
+      try {
+        const res = await fetch(`/api/data/contacts/sic-search?q=${encodeURIComponent(code)}`)
+        const data = await res.json()
+        const raw = data.results || data.list || data || []
+        const hit = raw.find(
+          (it: { code?: string; label?: string; description?: string }) => it.code === code,
+        )
+        SIC_NAMES[code] = hit ? hit.label || hit.description || '' : ''
+      } catch {
+        SIC_NAMES[code] = ''
+      }
+    }),
+  )
+  return true
+}
 
 // ── Apollo URL → local filters mapping (ported from contacts.html) ──────────
 const APOLLO_FILTER_MAP: Record<string, { key: string; bucket: 'inc' | 'exc' }> = {
@@ -184,6 +211,7 @@ const SECTION_KEYS: Record<string, string[]> = {
 
 export default function DataPage() {
   const [contacts, setContacts] = useState<Contact[]>([])
+  const [, setSicTick] = useState(0) // bump to re-render once SIC names resolve
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [page, setPage] = useState(0)
@@ -308,6 +336,15 @@ export default function DataPage() {
   useEffect(() => {
     fetchContacts()
   }, [fetchContacts])
+
+  // Resolve SIC code → name for any codes in the current rows, then re-render
+  // so the SIC column shows "code — description".
+  useEffect(() => {
+    const codes = contacts.flatMap((c) =>
+      (c.sic_code || '').split(/[,;]/).map((s) => s.trim()).filter(Boolean),
+    )
+    if (codes.length) resolveSicNames(codes).then((changed) => changed && setSicTick((n) => n + 1))
+  }, [contacts])
 
   // Apollo-style bulk selection — pull up to `count` matching ids straight from
   // the search route (optionally capped per company) and select them all,
@@ -980,6 +1017,9 @@ export default function DataPage() {
                     setDataset(d)
                     setPage(0)
                     setSelected(new Set())
+                    // Show the SIC column by default in engine mode.
+                    if (d === 'engine')
+                      setVisibleCols((prev) => new Set(prev).add('sic'))
                   }}
                   className={cn(
                     'px-3 py-1',
@@ -1456,6 +1496,18 @@ function CellValue({ c, colKey }: { c: Contact; colKey: string }) {
       )
     case 'industry':
       return <span className="text-xs">{c.industry || '—'}</span>
+    case 'sic': {
+      if (!c.sic_code) return <span className="text-xs">—</span>
+      const codes = c.sic_code.split(/[,;]/).map((s) => s.trim()).filter(Boolean)
+      const text = codes
+        .map((code) => (SIC_NAMES[code] ? `${code} — ${SIC_NAMES[code]}` : code))
+        .join(', ')
+      return (
+        <span className="block max-w-[220px] truncate text-xs" title={text}>
+          {text}
+        </span>
+      )
+    }
     case 'technologies':
       return (
         <span className="block max-w-[160px] truncate text-xs" title={c.technologies || ''}>
