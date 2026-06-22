@@ -53,6 +53,74 @@ async function fetchMailboxStats(workspaceId: string, accountId: string, start: 
   return { sent, replies: h.total_reply_count ?? 0, bounces: h.total_bounce_count ?? 0, contacted: h.total_contacted_count ?? sent }
 }
 
+// Per-mailbox DAILY chart series (each row has .date) for backfilling history.
+interface DayRow { date: string; sent: number; replies: number; bounces: number }
+async function fetchMailboxDailyChart(workspaceId: string, accountId: string, start: string, end: string): Promise<DayRow[]> {
+  const data = await pvFetch<{ chart?: Array<{ date?: string; total_sent_count?: number; total_reply_count?: number; total_bounce_count?: number }> } | Array<{ date?: string; total_sent_count?: number; total_reply_count?: number; total_bounce_count?: number }>>(
+    `/account/email-stats?workspace_id=${encodeURIComponent(workspaceId)}&email_acc_id=${encodeURIComponent(accountId)}&start_date=${start}&end_date=${end}`
+  )
+  const chart = Array.isArray(data) ? data : (data?.chart ?? [])
+  const out: DayRow[] = []
+  for (const r of chart) {
+    if (!r.date) continue
+    out.push({ date: r.date.slice(0, 10), sent: r.total_sent_count ?? 0, replies: r.total_reply_count ?? 0, bounces: r.total_bounce_count ?? 0 })
+  }
+  return out
+}
+
+// Backfill mailbox_supplier_daily history: pull each mailbox's daily chart over
+// the window, aggregate per (day, supplier) and (day, type) using CURRENT
+// supplier/type tags, and upsert. One-time-ish; slow (one PV call per mailbox).
+export async function backfillSupplierDaily(days = 30): Promise<{ ok: boolean; mailboxes: number; rows: number; error?: string }> {
+  try {
+    const end = new Date().toISOString().slice(0, 10)
+    const start = new Date(Date.now() - (days - 1) * 86400000).toISOString().slice(0, 10)
+    const mb = await pool.query(`SELECT email, account_id, workspace_id, supplier, type FROM mailbox_full WHERE ignored_at IS NULL AND account_id IS NOT NULL AND workspace_id IS NOT NULL`)
+    const rows = mb.rows as { email: string; account_id: string; workspace_id: string; supplier: string | null; type: string }[]
+
+    // acc { dimension|key|day : {count, active, sent, replies, bounces} }. count/active
+    // are point-in-time (today's group sizes) so we only set sent/replies/bounces here.
+    type Cell = { sent: number; replies: number; bounces: number }
+    const agg = new Map<string, Cell>()
+    const add = (dim: string, key: string, day: string, r: DayRow) => {
+      const k = `${dim}|${key}|${day}`
+      const c = agg.get(k) ?? { sent: 0, replies: 0, bounces: 0 }
+      c.sent += r.sent; c.replies += r.replies; c.bounces += r.bounces
+      agg.set(k, c)
+    }
+    const charts = await mapPool(rows, 8, m => fetchMailboxDailyChart(m.workspace_id, m.account_id, start, end).catch(() => [] as DayRow[]))
+    rows.forEach((m, i) => {
+      for (const day of charts[i]) {
+        if (!day.sent && !day.replies && !day.bounces) continue
+        add('supplier', m.supplier || 'Unassigned', day.date, day)
+        add('type', m.type || 'smtp', day.date, day)
+      }
+    })
+
+    let written = 0
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      for (const [k, c] of agg) {
+        const [dimension, key, day] = k.split('|')
+        await client.query(
+          `INSERT INTO mailbox_supplier_daily (day, dimension, key, total_sent, reply_rate, bounce_rate)
+           VALUES ($1::date, $2, $3, $4, $5, $6)
+           ON CONFLICT (day, dimension, key) DO UPDATE SET
+             total_sent = EXCLUDED.total_sent, reply_rate = EXCLUDED.reply_rate, bounce_rate = EXCLUDED.bounce_rate`,
+          [day, dimension, key, c.sent, c.sent > 0 ? c.replies / c.sent : 0, c.sent > 0 ? c.bounces / c.sent : 0]
+        )
+        written++
+      }
+      await client.query('COMMIT')
+    } catch (e) { await client.query('ROLLBACK').catch(() => {}); throw e } finally { client.release() }
+
+    return { ok: true, mailboxes: rows.length, rows: written }
+  } catch (err) {
+    return { ok: false, mailboxes: 0, rows: 0, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
 // Run an async mapper over items with a concurrency cap.
 async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length)

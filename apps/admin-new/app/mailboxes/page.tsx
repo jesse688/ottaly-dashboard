@@ -73,6 +73,7 @@ export default function MailboxesPage() {
   const [msg, setMsg] = useState('')
   const [periodDays, setPeriodDays] = useState(30)
   const [history, setHistory] = useState<HistoryResponse | null>(null)
+  const [typeHistory, setTypeHistory] = useState<HistoryResponse | null>(null)
 
   const [search, setSearch] = useState('')
   const [fClient, setFClient] = useState('')
@@ -100,6 +101,7 @@ export default function MailboxesPage() {
   useEffect(() => {
     if (tab !== 'performance') return
     fetch(`/api/mailboxes/history?dimension=supplier&days=${periodDays}`).then(r => r.json()).then(setHistory).catch(() => setHistory(null))
+    fetch(`/api/mailboxes/history?dimension=type&days=${periodDays}`).then(r => r.json()).then(setTypeHistory).catch(() => setTypeHistory(null))
   }, [tab, periodDays])
 
   const runSync = useCallback(async () => {
@@ -111,6 +113,19 @@ export default function MailboxesPage() {
       if (d.ok) await load()
     } catch (e) { setMsg(e instanceof Error ? e.message : String(e)) } finally { setSyncing(false) }
   }, [load])
+
+  const runBackfill = useCallback(async () => {
+    setSyncing(true); setMsg('Backfilling chart history… (a few minutes)')
+    try {
+      const r = await fetch(`/api/mailboxes/backfill?days=${periodDays}`, { method: 'POST' })
+      const d = await r.json()
+      setMsg(d.ok ? `Backfilled ${d.rows} trend rows from ${d.mailboxes} mailboxes.` : `Backfill failed: ${d.error}`)
+      if (d.ok && tab === 'performance') {
+        fetch(`/api/mailboxes/history?dimension=supplier&days=${periodDays}`).then(r => r.json()).then(setHistory).catch(() => {})
+        fetch(`/api/mailboxes/history?dimension=type&days=${periodDays}`).then(r => r.json()).then(setTypeHistory).catch(() => {})
+      }
+    } catch (e) { setMsg(e instanceof Error ? e.message : String(e)) } finally { setSyncing(false) }
+  }, [periodDays, tab])
 
   const mailboxes = data?.mailboxes ?? []
   const clients = useMemo(() => Array.from(new Set(mailboxes.map(m => m.workspace_name).filter(Boolean))).sort() as string[], [mailboxes])
@@ -162,7 +177,10 @@ export default function MailboxesPage() {
             <div style={{ fontSize: '1.4rem', fontWeight: 700, fontFamily: 'Genos, Inter, sans-serif' }}>Mailboxes</div>
             <div style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>Every sending mailbox across all clients — assign suppliers and compare performance · last synced {lastRun}</div>
           </div>
-          <button onClick={runSync} disabled={syncing} style={{ padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', background: C.navy, color: '#fff', border: 'none', opacity: syncing ? 0.6 : 1 }}>{syncing ? 'Syncing…' : '↻ Refresh'}</button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={runBackfill} disabled={syncing} style={{ padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', background: 'transparent', color: C.muted, border: `1px solid ${C.border}`, opacity: syncing ? 0.6 : 1 }}>Backfill charts</button>
+            <button onClick={runSync} disabled={syncing} style={{ padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', background: C.navy, color: '#fff', border: 'none', opacity: syncing ? 0.6 : 1 }}>{syncing ? 'Syncing…' : '↻ Refresh'}</button>
+          </div>
         </div>
 
         {/* KPI cards */}
@@ -266,13 +284,13 @@ export default function MailboxesPage() {
                   {PERIODS.map(p => <button key={p.key} onClick={() => setPeriodDays(p.key)} style={{ padding: '4px 10px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', border: `1px solid ${C.border}`, background: periodDays === p.key ? C.navy : '#fff', color: periodDays === p.key ? '#fff' : C.muted }}>{p.label}</button>)}
                 </div>
               </div>
-              {history && Object.keys(history.series).length > 0 && history.days.length > 1 ? (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: '1rem' }}>
-                  <ChartCard title="Reply rate %"><LineChart labels={history.days} series={Object.entries(history.series).map(([k, s], i) => ({ label: k, data: s.reply_rate.map(v => v * 100), tone: ((i % 5 + 1) as 1 | 2 | 3 | 4 | 5), percent: true }))} /></ChartCard>
-                  <ChartCard title="Bounce rate %"><LineChart labels={history.days} series={Object.entries(history.series).map(([k, s], i) => ({ label: k, data: s.bounce_rate.map(v => v * 100), tone: ((i % 5 + 1) as 1 | 2 | 3 | 4 | 5), percent: true }))} /></ChartCard>
-                  <ChartCard title="Total sent"><LineChart labels={history.days} series={Object.entries(history.series).map(([k, s], i) => ({ label: k, data: s.sent, tone: ((i % 5 + 1) as 1 | 2 | 3 | 4 | 5) }))} /></ChartCard>
-                </div>
-              ) : <div style={{ background: '#fff', border: `1px solid ${C.border}`, borderRadius: 10, padding: '2rem', textAlign: 'center', fontSize: 13, color: C.muted }}>Trend charts fill in as daily snapshots accumulate.</div>}
+              <TrendCharts history={history} border={C.border} />
+            </div>
+
+            {/* Provider-type trends (Google / Microsoft / SMTP split) */}
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: C.muted, margin: '.25rem 0 .5rem' }}>Provider type trends — Google vs Microsoft vs SMTP</div>
+              <TrendCharts history={typeHistory} border={C.border} />
             </div>
 
             {/* By-type cards */}
@@ -336,6 +354,20 @@ function GroupCard({ g, accent }: { g: MailboxGroupStats; accent: string }) {
         <div style={{ height: '100%', width: `${(g.paused / total) * 100}%`, background: '#D97706' }} />
         <div style={{ height: '100%', width: `${(g.disconnected / total) * 100}%`, background: '#DC2626' }} />
       </div>
+    </div>
+  )
+}
+
+function TrendCharts({ history, border }: { history: HistoryResponse | null; border: string }) {
+  if (!(history && Object.keys(history.series).length > 0 && history.days.length > 1)) {
+    return <div style={{ background: '#fff', border: `1px solid ${border}`, borderRadius: 10, padding: '2rem', textAlign: 'center', fontSize: 13, color: '#6B7280' }}>Trend charts fill in as daily snapshots accumulate — or run a backfill.</div>
+  }
+  const entries = Object.entries(history.series)
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: '1rem' }}>
+      <ChartCard title="Reply rate %"><LineChart labels={history.days} series={entries.map(([k, s], i) => ({ label: k, data: s.reply_rate.map(v => v * 100), tone: ((i % 5 + 1) as 1 | 2 | 3 | 4 | 5), percent: true }))} /></ChartCard>
+      <ChartCard title="Bounce rate %"><LineChart labels={history.days} series={entries.map(([k, s], i) => ({ label: k, data: s.bounce_rate.map(v => v * 100), tone: ((i % 5 + 1) as 1 | 2 | 3 | 4 | 5), percent: true }))} /></ChartCard>
+      <ChartCard title="Total sent"><LineChart labels={history.days} series={entries.map(([k, s], i) => ({ label: k, data: s.sent, tone: ((i % 5 + 1) as 1 | 2 | 3 | 4 | 5) }))} /></ChartCard>
     </div>
   )
 }
