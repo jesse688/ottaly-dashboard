@@ -31,28 +31,35 @@ export const CATEGORIES: ReplyCategory[] = [
 // reputation. They are NOT real prospect replies — they must never reach the
 // inbox or cost a Gemini call.
 //
-// We are PlusVibe-only now (EmailBison is retired). The ONLY warm-up signal we
-// trust is PlusVibe's injected `warmup_custom_words` TAG (a unique random
-// word-pair, e.g. "removal-thirty") baked into every warm-up body — see the tag
-// regex below. It cannot collide with real prose, so it has zero false positives.
+// Warm-up is detected ONLY by UNIQUE-TOKEN warm-up TAGS — never by heuristics:
+//   • PlusVibe's injected `warmup_custom_words` tag (a random word-pair, e.g.
+//     "removal-thirty"), and
+//   • EmailBison's per-workspace warm-up codes (8-char random tokens). Sending
+//     moved to PlusVibe, BUT our mailboxes are still ON Bison and still receive
+//     Bison warm-up traffic, so we MUST keep catching those Bison codes too.
+// Both are random tokens matched on a word boundary, so they cannot collide with
+// real prose — zero false positives.
 //
-// We DELIBERATELY no longer use the old Bison "repeated word token" heuristic
+// We DELIBERATELY do NOT use the old Bison "repeated word token" heuristic
 // (`/\b(word)\s+\1\b/`): it matched ordinary sign-offs that repeat a name across
 // lines ("Simon\n\nSimon Cook") and silently buried genuine interested replies in
-// the warm-up folder. A heuristic that loses real leads is worse than no
-// heuristic — anything without a PV tag now goes to the AI classifier instead.
-
-// ── PlusVibe warm-up FILTER TAGS ─────────────────────────────────────────────
-// PlusVibe injects a unique per-mailbox `warmup_custom_words` tag into every
-// warm-up email body. A reply containing one is warm-up — deterministic, no AI.
-// The FULL list of ~1900 PV tags is baked in (pv-warmup-tags.ts) so there is ZERO
-// runtime PV API dependency. One static regex, compiled once. Tags are unique
-// random word-pairs, so no false positives on real replies.
+// the warm-up folder. A heuristic that loses real leads is worse than none —
+// anything without a warm-up TAG now goes to the AI classifier instead.
 import { PV_WARMUP_TAGS } from './pv-warmup-tags'
+
+// EmailBison per-workspace warm-up codes. Mailboxes still live on Bison, so these
+// still arrive. 8-char random tokens, exact word-boundary match — no false positives.
+const BISON_WARMUP_CODES = [
+  'tc5odbtm','sk85oa7k','0e24psnp','eucrj0hz','rndyajpa','ahy9frqv','xzvjsvdu',
+  'dvyu4kdr','uiizjrlh','d1ymr6mx','n9qrgswv','raftziqa','qlctqsof','rcduzjkl',
+  '13aqstcm','op7as3ft','ht8jbwh2','gdf6uvrl','dau5wphh','antm9hol','9jbxm636',
+  '8k5natot','sdwgchhk','ss4me0qc','oly08aoy',
+]
 
 const _escWarm = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const WARMUP_TAG_RE: RegExp | null = (() => {
   const alts = PV_WARMUP_TAGS.map(t => t.split(/[\s\-_]+/).map(_escWarm).join('[\\s\\-_]+'))
+  for (const code of BISON_WARMUP_CODES) alts.push(_escWarm(code))
   return alts.length ? new RegExp(`(?:^|[^a-z0-9])(${alts.join('|')})(?:[^a-z0-9]|$)`, 'i') : null
 })()
 
@@ -66,7 +73,7 @@ export interface WarmupSignals {
 
 function matchWarmupTag(hay: string): { isWarmup: boolean; reason: string } {
   if (WARMUP_TAG_RE && WARMUP_TAG_RE.test(hay)) {
-    return { isWarmup: true, reason: 'PV warmup filter tag' }
+    return { isWarmup: true, reason: 'PV/Bison warmup filter tag' }
   }
   return { isWarmup: false, reason: '' }
 }

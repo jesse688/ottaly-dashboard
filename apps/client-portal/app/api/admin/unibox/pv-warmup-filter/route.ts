@@ -18,10 +18,18 @@ import { getAdminSession } from '@/lib/auth'
 // POST ?secret=CRON_SECRET → apply (move matches to the warmup folder)
 const PV_BASE = 'https://api.plusvibe.ai/api/v1'
 
-// EmailBison single-token warm-up codes REMOVED. Bison is retired; matching a bare
-// 8-char token against full reply bodies false-positives on any tracking ref / URL
-// slug / hex in a genuine reply and buries it as warm-up. We now match ONLY real
-// multi-word PlusVibe warmup_custom_words tags (guarded, no false positives).
+// EmailBison per-workspace warm-up codes. Sending moved to PlusVibe, but our
+// mailboxes are STILL on Bison and still receive Bison warm-up traffic, so we must
+// keep filtering these. 8-char random tokens matched on a word boundary — they
+// can't collide with real prose, so no false positives. (NOTE: it was the old
+// repeated-word REGEX, not these codes, that buried real replies — that regex is
+// gone; these deterministic codes are safe and necessary.)
+const BISON_WARMUP_CODES = [
+  'tc5odbtm','sk85oa7k','0e24psnp','eucrj0hz','rndyajpa','ahy9frqv','xzvjsvdu',
+  'dvyu4kdr','uiizjrlh','d1ymr6mx','n9qrgswv','raftziqa','qlctqsof','rcduzjkl',
+  '13aqstcm','op7as3ft','ht8jbwh2','gdf6uvrl','dau5wphh','antm9hol','9jbxm636',
+  '8k5natot','sdwgchhk','ss4me0qc','oly08aoy',
+]
 
 interface PvWorkspace { id: string; name?: string }
 interface PvAccount { payload?: { warmup?: { warmup_custom_words?: string } } }
@@ -73,6 +81,8 @@ function buildTagRegex(tags: Set<string>): RegExp | null {
   const alts = [...tags].map(t =>
     t.split(/[\s\-_]+/).map(escapeRe).join('[\\s\\-_]+')
   )
+  // Bison single-token codes: exact match (escaped), no inner-word splitting.
+  for (const code of BISON_WARMUP_CODES) alts.push(escapeRe(code))
   if (alts.length === 0) return null
   return new RegExp(`(?:^|[^a-z0-9])(${alts.join('|')})(?:[^a-z0-9]|$)`, 'i')
 }

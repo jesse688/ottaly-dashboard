@@ -52,14 +52,34 @@ export async function GET(req: NextRequest) {
     for (const row of claimed.rows) {
       const id = row.id as string
       const raw = (row.raw ?? {}) as Record<string, unknown>
-      // NOTE: we deliberately NO LONGER pre-filter on Bison's `raw.automated_reply`
-      // flag. EmailBison is retired, so that field is stale/untrusted — and it was
-      // filing rows straight to the HIDDEN warmup folder with no AI review, which
-      // silently buried genuine replies (the Simon Cook / Brett Ewen failures).
-      // Every row now flows to the PV-tag warmup check then the AI classifier;
-      // real OOO/auto-acks come back as 'ooo_auto_reply' into a VISIBLE folder, so
-      // nothing is lost by removing the shortcut. Warmup is reachable ONLY via a
-      // positive PlusVibe warmup_custom_words tag match (detectWarmupFull below).
+      // Bison pre-filter. Our mailboxes are STILL on Bison, so Bison still flags its
+      // own warm-up / OOO / auto-acks with automated_reply=true — a real, wanted
+      // signal we must keep to hide that traffic. (It did NOT cause the Simon Cook /
+      // Brett Ewen losses — those were the repeated-word REGEX, now removed. This
+      // explicit flag is reliable.) Safety net: matched rows go to the 'warmup'
+      // folder, which is VISIBLE in the warm-up tab — so anything mis-flagged stays
+      // findable and correctable, never silently deleted.
+      const replyObj = (raw.reply ?? {}) as Record<string, unknown>
+      const automated =
+        raw.automated_reply === true || raw.automated_reply === 'true' ||
+        replyObj.automated_reply === true || replyObj.automated_reply === 'true'
+
+      if (automated) {
+        await client.query(
+          `UPDATE unibox_replies
+              SET category = 'ooo_auto_reply', classify_state = 'done',
+                  ai_model = 'prefilter', ai_reasoning = 'Bison automated_reply flag',
+                  folder = CASE
+                    WHEN folder IN ('inbox','review','unmapped')
+                         AND marked_as_lead = FALSE AND admin_label IS NULL
+                    THEN 'warmup' ELSE folder END,
+                  updated_at = NOW()
+            WHERE id = $1`,
+          [id]
+        )
+        summary.processed++
+        continue
+      }
 
       // Free pre-filter: warm-up emails (apple-apple etc.) are inbox-reputation
       // traffic, not real replies. The tell is a random hyphenated word-pair
