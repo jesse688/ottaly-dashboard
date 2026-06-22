@@ -80,7 +80,11 @@ export default function MailboxesPage() {
   const [fSupplier, setFSupplier] = useState('')
   const [fType, setFType] = useState('')
   const [fStatus, setFStatus] = useState('')
+  const [fDmarc, setFDmarc] = useState('')
   const [attentionOnly, setAttentionOnly] = useState(false)
+  const [brokenDnsOnly, setBrokenDnsOnly] = useState(false)
+  const [sortKey, setSortKey] = useState<string>('')
+  const [sortDir, setSortDir] = useState<1 | -1>(1)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [assignTo, setAssignTo] = useState('')
   const [assignField, setAssignField] = useState<'supplier' | 'mailbox_type'>('supplier')
@@ -132,16 +136,50 @@ export default function MailboxesPage() {
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase()
-    return mailboxes.filter(m => {
+    const filtered = mailboxes.filter(m => {
       if (q && !(m.email.toLowerCase().includes(q) || (m.domain || '').toLowerCase().includes(q) || (m.workspace_name || '').toLowerCase().includes(q))) return false
       if (fClient && m.workspace_name !== fClient) return false
       if (fSupplier && (fSupplier === '__unassigned' ? !!m.supplier : m.supplier !== fSupplier)) return false
       if (fType && m.type !== fType) return false
       if (fStatus && (m.status || '').toUpperCase() !== fStatus) return false
+      if (fDmarc) {
+        const pol = m.auth?.dmarc_present ? (m.auth.dmarc_policy || 'none') : '__missing'
+        if (fDmarc === '__missing' ? pol !== '__missing' : pol !== fDmarc) return false
+      }
+      if (brokenDnsOnly) {
+        const a = m.auth
+        const broken = !a || !a.spf_present || !a.dkim_present || !a.dmarc_present
+        if (!broken) return false
+      }
       if (attentionOnly && m.attention.length === 0) return false
       return true
     })
-  }, [mailboxes, search, fClient, fSupplier, fType, fStatus, attentionOnly])
+    if (!sortKey) return filtered
+    const val = (m: Mailbox): number | string => {
+      switch (sortKey) {
+        case 'renewal': return m.billing_day ?? 99
+        case 'sent': return m.attributed_sent
+        case 'reply': return m.reply_rate
+        case 'bounce': return m.bounce_rate
+        case 'score': return m.domain_score ?? -1
+        case 'bl': return m.blacklist_count
+        case 'cost': return m.unit_cost ?? -1
+        case 'email': return m.email.toLowerCase()
+        case 'client': return (m.workspace_name || '').toLowerCase()
+        case 'supplier': return (m.supplier || '').toLowerCase()
+        default: return 0
+      }
+    }
+    return [...filtered].sort((a, b) => {
+      const av = val(a), bv = val(b)
+      if (av < bv) return -1 * sortDir
+      if (av > bv) return 1 * sortDir
+      return 0
+    })
+  }, [mailboxes, search, fClient, fSupplier, fType, fStatus, fDmarc, brokenDnsOnly, attentionOnly, sortKey, sortDir])
+
+  const toggleSort = (k: string) => { if (sortKey === k) setSortDir(d => (d === 1 ? -1 : 1)); else { setSortKey(k); setSortDir(1) } }
+  const sortInd = (k: string) => sortKey === k ? (sortDir === 1 ? ' ↑' : ' ↓') : ''
 
   const allSel = rows.length > 0 && rows.every(m => selected.has(m.email))
   const toggleAll = () => setSelected(prev => { const n = new Set(prev); allSel ? rows.forEach(m => n.delete(m.email)) : rows.forEach(m => n.add(m.email)); return n })
@@ -209,7 +247,9 @@ export default function MailboxesPage() {
               <select value={fSupplier} onChange={e => setFSupplier(e.target.value)} style={selStyle}><option value="">All suppliers</option>{SUPPLIERS.map(s => <option key={s} value={s}>{s}</option>)}<option value="__unassigned">Unassigned</option></select>
               <select value={fType} onChange={e => setFType(e.target.value)} style={selStyle}><option value="">All types</option>{TYPES.map(t => <option key={t} value={t}>{t}</option>)}</select>
               <select value={fStatus} onChange={e => setFStatus(e.target.value)} style={selStyle}><option value="">All statuses</option><option value="ACTIVE">Active</option><option value="PAUSED">Paused</option></select>
+              <select value={fDmarc} onChange={e => setFDmarc(e.target.value)} style={selStyle}><option value="">All DMARC</option><option value="none">p=none</option><option value="quarantine">p=quarantine</option><option value="reject">p=reject</option><option value="__missing">Missing</option></select>
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: C.muted }}><input type="checkbox" checked={attentionOnly} onChange={e => setAttentionOnly(e.target.checked)} /> Needs attention only</label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: C.muted }}><input type="checkbox" checked={brokenDnsOnly} onChange={e => setBrokenDnsOnly(e.target.checked)} /> Broken DNS only</label>
             </div>
 
             {/* Bulk bar */}
@@ -230,8 +270,18 @@ export default function MailboxesPage() {
                 <thead style={{ background: '#F8F9FC' }}>
                   <tr>
                     <th style={{ ...th, width: 34 }}></th>
-                    <th style={th}>Mailbox</th><th style={th}>Client</th><th style={th}>Renewal</th><th style={th}>Supplier</th><th style={th}>Type</th><th style={th}>Status</th><th style={th}>Warmup</th><th style={th}>Auth</th>
-                    <th style={{ ...th, textAlign: 'right' }}>BL</th><th style={{ ...th, textAlign: 'right' }}>Score</th><th style={{ ...th, textAlign: 'right' }}>Sent</th><th style={{ ...th, textAlign: 'right' }}>Reply</th><th style={{ ...th, textAlign: 'right' }}>Bounce</th><th style={{ ...th, textAlign: 'right' }}>Daily</th><th style={{ ...th, textAlign: 'right' }}>$/mo</th><th style={th}>Attn</th>
+                    <th style={{ ...th, cursor: 'pointer' }} onClick={() => toggleSort('email')}>Mailbox{sortInd('email')}</th>
+                    <th style={{ ...th, cursor: 'pointer' }} onClick={() => toggleSort('client')}>Client{sortInd('client')}</th>
+                    <th style={{ ...th, cursor: 'pointer' }} onClick={() => toggleSort('renewal')}>Renewal{sortInd('renewal')}</th>
+                    <th style={{ ...th, cursor: 'pointer' }} onClick={() => toggleSort('supplier')}>Supplier{sortInd('supplier')}</th>
+                    <th style={th}>Type</th><th style={th}>Status</th><th style={th}>Warmup</th><th style={th}>Auth</th>
+                    <th style={{ ...th, textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('bl')}>BL{sortInd('bl')}</th>
+                    <th style={{ ...th, textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('score')}>Score{sortInd('score')}</th>
+                    <th style={{ ...th, textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('sent')}>Sent{sortInd('sent')}</th>
+                    <th style={{ ...th, textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('reply')}>Reply{sortInd('reply')}</th>
+                    <th style={{ ...th, textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('bounce')}>Bounce{sortInd('bounce')}</th>
+                    <th style={{ ...th, textAlign: 'right' }}>Daily</th>
+                    <th style={{ ...th, textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('cost')}>$/mo{sortInd('cost')}</th><th style={th}>Attn</th>
                   </tr>
                 </thead>
                 <tbody>
