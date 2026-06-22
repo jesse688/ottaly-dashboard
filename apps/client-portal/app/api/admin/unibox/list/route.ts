@@ -25,13 +25,16 @@ export async function GET(req: NextRequest) {
   const catParam = url.searchParams.get('category') ?? ''
   const category = (CATEGORIES as readonly string[]).includes(catParam) ? catParam : ''
 
-  // Firehose: folder=all (or free-text searching) looks ACROSS all folders.
+  // Firehose: folder=all (or free-text searching) looks ACROSS all folders, but
+  // EXCLUDES warm-up — warm-up is auto-generated noise quarantined in its own tab
+  // (tens of thousands of rows) and would otherwise swamp every real reply, making
+  // "All replies" look like it does nothing. Searching still skips warm-up too.
   // Category filtering stays scoped to the current folder so chips act as
   // sub-filters within the tab, not cross-folder searches.
   const params: unknown[] = []
   let folderFilter: string
   if (q || folderParam === 'all') {
-    folderFilter = 'TRUE'
+    folderFilter = `u.folder <> 'warmup'`
   } else {
     params.push(folder)
     folderFilter = `u.folder = $${params.length}`
@@ -164,6 +167,10 @@ export async function GET(req: NextRequest) {
     )
     const countsByFolder: Record<string, number> = {}
     for (const row of counts.rows) countsByFolder[row.folder as string] = row.n as number
+    // "All replies" badge = every folder except warm-up (mirrors the firehose filter).
+    countsByFolder.all = Object.entries(countsByFolder)
+      .filter(([f]) => f !== 'warmup')
+      .reduce((sum, [, n]) => sum + n, 0)
 
     // Effective-category counts for the label filter chips.
     const catCounts = await pool.query(
