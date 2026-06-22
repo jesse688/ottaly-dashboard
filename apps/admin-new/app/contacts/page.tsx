@@ -249,6 +249,13 @@ export default function DataPage() {
   // When pushing engine leads, we first stage them into contacts (source=
   // 'engine') and push THOSE ids — engine rows aren't in the contacts table.
   const [engineStagedIds, setEngineStagedIds] = useState<string[] | null>(null)
+  // Active server-side push/verify jobs — so a job started earlier (even on
+  // another page load) can be reconnected to. The job runs on the server queue
+  // regardless of whether this page is open.
+  const [activeJobs, setActiveJobs] = useState<
+    { id: string; status?: string; processed?: number; total?: number }[]
+  >([])
+  const [reconnectJob, setReconnectJob] = useState<string | null>(null)
   const [engineStaging, setEngineStaging] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
@@ -336,6 +343,27 @@ export default function DataPage() {
   useEffect(() => {
     fetchContacts()
   }, [fetchContacts])
+
+  // Poll for active server-side push jobs so we can offer to reconnect.
+  useEffect(() => {
+    let stop = false
+    const check = async () => {
+      try {
+        const r = await fetch('/api/data/contacts/push-jobs')
+        const d = await r.json()
+        const jobs = (Array.isArray(d) ? d : d.jobs || []).filter(
+          (j: { status?: string }) =>
+            j.status && !['done', 'cancelled', 'failed', 'completed'].includes(j.status),
+        )
+        if (!stop) setActiveJobs(jobs)
+      } catch {
+        /* ignore */
+      }
+    }
+    check()
+    const t = setInterval(check, 10000)
+    return () => { stop = true; clearInterval(t) }
+  }, [])
 
   // Resolve SIC code → name for any codes in the current rows, then re-render
   // so the SIC column shows "code — description".
@@ -1317,6 +1345,24 @@ export default function DataPage() {
           </div>
         )}
 
+        {/* Reconnect to running server-side push jobs */}
+        {activeJobs.length > 0 && (
+          <div className="flex items-center gap-3 border-b border-amber-200 bg-amber-50 px-5 py-2 text-sm text-amber-900">
+            <span className="font-medium">
+              {activeJobs.length} push job{activeJobs.length > 1 ? 's' : ''} running
+            </span>
+            {activeJobs.slice(0, 3).map((j) => (
+              <button
+                key={j.id}
+                className="rounded border border-amber-300 bg-white px-2 py-0.5 text-xs hover:bg-amber-100"
+                onClick={() => { setReconnectJob(j.id); setPushOpen('pv') }}
+              >
+                #{String(j.id).slice(-6)} · {j.status} {j.total ? `(${j.processed ?? 0}/${j.total})` : ''} — view
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* Message toast */}
         {message && (
           <div
@@ -1425,10 +1471,12 @@ export default function DataPage() {
           mode={pushOpen}
           contactIds={dataset === 'engine' ? (engineStagedIds ?? []) : [...selected]}
           excludeMicrosoft={filters.excludeMicrosoft === 'true'}
-          onClose={() => { setPushOpen(null); setEngineStagedIds(null) }}
+          reconnectJobId={reconnectJob}
+          onClose={() => { setPushOpen(null); setEngineStagedIds(null); setReconnectJob(null) }}
           onDone={() => {
             setPushOpen(null)
             setEngineStagedIds(null)
+            setReconnectJob(null)
             setSelected(new Set())
           }}
           flash={flash}
@@ -2495,6 +2543,7 @@ function PushModal({
   mode,
   contactIds,
   excludeMicrosoft,
+  reconnectJobId,
   onClose,
   onDone,
   flash,
@@ -2502,6 +2551,7 @@ function PushModal({
   mode: 'pv' | 'bison'
   contactIds: string[]
   excludeMicrosoft: boolean
+  reconnectJobId?: string | null
   onClose: () => void
   onDone: () => void
   flash: (t: string, k?: 'ok' | 'err') => void
@@ -2599,15 +2649,26 @@ function PushModal({
     const r = await fetch(`/api/data/contacts/push-jobs/${jobIdRef.current}`)
     const j = await r.json()
     setJob(j)
-    if (['completed', 'failed', 'cancelled'].includes(j.status)) {
+    if (['completed', 'done', 'failed', 'cancelled'].includes(j.status)) {
       if (pollRef.current) clearInterval(pollRef.current)
       setBusy(false)
-      if (j.status === 'completed') {
+      if (j.status === 'completed' || j.status === 'done') {
         flash('Push complete')
         onDone()
       } else flash(`Push ${j.status}`, 'err')
     }
   }
+
+  // Reconnect to an already-running server-side job (opened from the banner).
+  useEffect(() => {
+    if (!reconnectJobId) return
+    jobIdRef.current = reconnectJobId
+    setBusy(true)
+    pollJob()
+    pollRef.current = setInterval(pollJob, 3000)
+    return () => { if (pollRef.current) clearInterval(pollRef.current) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reconnectJobId])
 
   const control = async (action: 'pause' | 'resume' | 'cancel') => {
     if (!jobIdRef.current) return
@@ -2678,6 +2739,10 @@ function PushModal({
               <Button size="sm" variant="outline" onClick={() => control('cancel')}>
                 Cancel
               </Button>
+            </div>
+            <div className="mt-2 text-[11px] text-gray-500">
+              This runs on the server — you can safely close this page and the
+              job keeps verifying &amp; pushing. Reopen Contacts to reconnect.
             </div>
           </div>
         )}
