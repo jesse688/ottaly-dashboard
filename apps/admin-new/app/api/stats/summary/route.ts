@@ -159,25 +159,19 @@ export async function GET(req: NextRequest) {
         name: ws.workspace_name || ws.workspace_id,
         totals: {
           ...totals,
-          // PV exposes 3 reply columns: "Reply Rate (w/OOO)", "Reply Rate"
-          // (human), "Positive Replies". Mapping to PV's fields:
-          //   total_reply_count      = ALL replies incl OOO  → "w/OOO"
-          //   total_ooo_reply_count  = the OOO subset
-          //   human = total_reply_count − total_ooo_reply_count
-          // Verified vs AccrueAccounting (PV w/OOO 3.4%, human 1.4%, sent 295):
-          //   replies≈10 → 10/295=3.4% ✓ ; human=10−6=4 → 4/295=1.4% ✓
-          //   Human RR           = (replies − ooo) / sent
-          //   Reply Rate (w/OOO) = replies / sent
-          replyRate:
-            totals.sent > 0 ? Math.max(0, totals.replies - totals.oooReplies) / totals.sent : 0,
-          allReplyRate: totals.sent > 0 ? totals.replies / totals.sent : 0,
+          // PROVEN via live PlusVibe (reconcile ?live=1): total_reply_count is
+          // the HUMAN/non-OOO count and total_ooo_reply_count is a SEPARATE
+          // bucket — live shows replies(6) < ooo(34), impossible if it included
+          // OOO. So:
+          //   Human RR           = replies / sent
+          //   Reply Rate (w/OOO) = (replies + ooo) / sent
+          replyRate: totals.sent > 0 ? totals.replies / totals.sent : 0,
+          allReplyRate:
+            totals.sent > 0 ? (totals.replies + totals.oooReplies) / totals.sent : 0,
           bounceRate: totals.sent > 0 ? totals.bounces / totals.sent : 0,
-          // RTL = Replies-To-Lead: human replies it took to land one lead
-          // (human replies ÷ leads, OOO excluded). Lower is better.
-          rtl:
-            totals.leads > 0
-              ? Math.max(0, totals.replies - totals.oooReplies) / totals.leads
-              : 0,
+          // RTL = Replies-To-Lead: human replies per lead. `replies` is already
+          // the human count (OOO is separate), so RTL = replies / leads.
+          rtl: totals.leads > 0 ? totals.replies / totals.leads : 0,
           // LPT = Contacts-To-Lead: how many people contacted per lead
           // (contacted ÷ leads). Lower is better. 'contacted' is people emailed
           // (PV total_contacted_count), NOT total emails sent.

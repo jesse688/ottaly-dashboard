@@ -90,11 +90,11 @@ const isPercent = (s: SeriesKey) =>
 
 function seriesValue(s: SeriesKey, d: DayData): number | null {
   const sent = d.sent || 0
-  // PV's total_reply_count INCLUDES OOO; human = total − ooo (verified vs PV's
-  // "Reply Rate (w/OOO)" vs "Reply Rate" columns).
+  // PROVEN vs live PV: total_reply_count IS the human/non-OOO count; OOO is a
+  // separate bucket. Human RR = replies/sent.
   const replies = d.replies || 0
   const ooo = d.oooReplies || 0
-  const human = Math.max(0, replies - ooo)
+  const human = replies
   switch (s) {
     case 'humanRR':
       return sent > 0 ? +((human / sent) * 100).toFixed(2) : null
@@ -172,13 +172,13 @@ function buildAllWorkspaces(list: Workspace[]): Workspace | null {
     name: `All Workspaces (${list.length})`,
     totals: {
       ...t,
-      // total_reply_count INCLUDES OOO; human = total − ooo. Verified vs PV.
-      replyRate: t.sent > 0 ? Math.max(0, t.replies - t.oooReplies) / t.sent : 0,
-      allReplyRate: t.sent > 0 ? t.replies / t.sent : 0,
+      // replies = human (OOO separate). Human RR = replies/sent; w/OOO adds ooo.
+      replyRate: t.sent > 0 ? t.replies / t.sent : 0,
+      allReplyRate: t.sent > 0 ? (t.replies + t.oooReplies) / t.sent : 0,
       bounceRate: t.sent > 0 ? t.bounces / t.sent : 0,
       // RTL = Replies-To-Lead: replies needed per lead (replies ÷ leads).
-      // RTL uses HUMAN replies (OOO excluded) per lead.
-      rtl: t.leads > 0 ? Math.max(0, t.replies - t.oooReplies) / t.leads : 0,
+      // RTL = human replies per lead; replies is already human.
+      rtl: t.leads > 0 ? t.replies / t.leads : 0,
       // LPT = Contacts-To-Lead: people contacted per lead (contacted ÷ leads).
       lpt: t.leads > 0 ? t.contacted / t.leads : 0,
       sendsPerDay: t.sent / days,
