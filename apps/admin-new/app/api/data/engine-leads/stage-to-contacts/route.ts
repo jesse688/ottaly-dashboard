@@ -46,9 +46,12 @@ export async function POST(req: NextRequest) {
       const email = String(rawEmail || '').trim().toLowerCase()
       if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { skipped++; continue }
       const [first, ...rest] = String(r.director_name || '').trim().split(/\s+/)
-      // company_size is a text bucket ("11-50"), so it does NOT map to the
-      // INT num_employees column — store the company region instead and leave
-      // size out to avoid a type error.
+      // company_size is a text bucket ("11-50", "1-10"); num_employees is INT.
+      // Parse the lower bound so the size isn't lost on push (e.g. "11-50" → 11).
+      const sizeLow = (() => {
+        const m = String(r.company_size || '').match(/\d+/)
+        return m ? parseInt(m[0], 10) : null
+      })()
       // RETURNING source + xmax: xmax=0 means a fresh INSERT (a real engine
       // lead); xmax<>0 means it CONFLICTED with an existing row, whose `source`
       // we get back. We must NOT push an existing VERIFIED (apollo/plusvibe)
@@ -56,16 +59,16 @@ export async function POST(req: NextRequest) {
       const res = await pool.query(
         `INSERT INTO contacts
            (workspace_id, email, first_name, last_name, phone, company_name,
-            company_domain, linkedin_url, industry, company_region,
+            company_domain, linkedin_url, industry, company_region, num_employees,
             job_title, status, source, imported_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'new','engine',NOW())
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'new','engine',NOW())
          ON CONFLICT (workspace_id, email) DO UPDATE SET source = contacts.source
          RETURNING id, source, (xmax = 0) AS inserted`,
         [
           workspaceId, email, first || null, rest.join(' ') || null,
           Array.isArray(r.phones) ? r.phones[0] ?? null : null,
           r.company_name || null, r.domain || null, r.linkedin_url || null,
-          r.industry || null, r.region || null,
+          r.industry || null, r.region || null, sizeLow,
           r.director_name ? 'Director' : null,
         ],
       )

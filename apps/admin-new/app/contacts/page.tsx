@@ -404,14 +404,24 @@ export default function DataPage() {
         if (!res.ok) throw new Error(data.error || 'Selection failed')
         const ids: string[] = (data.contacts ?? []).map((c: Contact) => c.id)
         setSelected(new Set(ids))
-        flash(`Selected ${ids.length.toLocaleString()} contacts`, 'ok')
+        // If we asked for "all" but the server capped the result, say so —
+        // otherwise the CM thinks they selected every match.
+        const wantedAll = count >= total
+        if (wantedAll && ids.length < total) {
+          flash(
+            `Selected first ${ids.length.toLocaleString()} of ${total.toLocaleString()} — refine filters to push the rest`,
+            'err',
+          )
+        } else {
+          flash(`Selected ${ids.length.toLocaleString()} ${dataset === 'engine' ? 'leads' : 'contacts'}`, 'ok')
+        }
       } catch (e) {
         flash((e as Error).message, 'err')
       } finally {
         setBulkBusy(false)
       }
     },
-    [queryParams]
+    [queryParams, total, dataset]
   )
 
   // Stage selected engine leads into contacts (source='engine'), then open the
@@ -1402,16 +1412,22 @@ export default function DataPage() {
                 <TableHead className="w-10">
                   <Checkbox checked={allOnPageSelected} onCheckedChange={toggleAll} />
                 </TableHead>
-                {cols.map((c) => (
-                  <TableHead
-                    key={c.key}
-                    className={c.sortKey ? 'cursor-pointer select-none' : ''}
-                    onClick={() => c.sortKey && setSort(c.sortKey)}
-                  >
-                    {c.label}
-                    {c.sortKey === sortBy ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
-                  </TableHead>
-                ))}
+                {cols.map((c) => {
+                  // Engine leads are always ordered by promoted_at DESC; column
+                  // sort isn't supported there, so don't render sortable headers
+                  // (they used to show ▲/▼ and refetch but do nothing).
+                  const sortable = !!c.sortKey && dataset === 'contacts'
+                  return (
+                    <TableHead
+                      key={c.key}
+                      className={sortable ? 'cursor-pointer select-none' : ''}
+                      onClick={() => sortable && setSort(c.sortKey!)}
+                    >
+                      {c.label}
+                      {sortable && c.sortKey === sortBy ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+                    </TableHead>
+                  )
+                })}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -2602,6 +2618,7 @@ function PushModal({
     safe?: number; risky?: number; invalid?: number; pushed?: number
   } | null>(null)
   const jobIdRef = useRef<string | null>(null)
+  const startingRef = useRef(false) // synchronous guard against double-submit
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const [wsError, setWsError] = useState('')
@@ -2651,6 +2668,11 @@ function PushModal({
 
   const startPush = async () => {
     if (!wsId || !campId) return flash('Pick a workspace and campaign', 'err')
+    // Synchronous guard: setBusy is async, so two fast clicks both pass the
+    // state check and fire two jobs (same contacts → two campaigns). The ref
+    // blocks the second immediately.
+    if (startingRef.current || jobIdRef.current) return
+    startingRef.current = true
     setBusy(true)
     try {
       const res = await fetch('/api/data/contacts/verify-and-push', {
@@ -2671,6 +2693,7 @@ function PushModal({
       if (!res.ok || !d.jobId) {
         flash(d.error || 'Failed to start push', 'err')
         setBusy(false)
+        startingRef.current = false
         return
       }
       jobIdRef.current = d.jobId
@@ -2679,6 +2702,7 @@ function PushModal({
     } catch (e) {
       flash((e as Error).message, 'err')
       setBusy(false)
+      startingRef.current = false
     }
   }
 

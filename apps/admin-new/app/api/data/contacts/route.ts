@@ -37,9 +37,26 @@ async function clientExclusionClauses(
     const clauses: string[] = []
     const params: unknown[] = []
     let i = startIdx
-    if (inds.length) { clauses.push(`(industry IS NULL OR NOT (LOWER(industry) = ANY($${i})))`); params.push(inds.map((s) => s.toLowerCase())); i++ }
-    if (sizes.length) { clauses.push(`(company_size IS NULL OR NOT (company_size = ANY($${i})))`); params.push(sizes); i++ }
-    if (regions.length) { clauses.push(`(region IS NULL OR NOT (LOWER(region) = ANY($${i})))`); params.push(regions.map((s) => s.toLowerCase())); i++ }
+    // Industry: scraped values rarely match the client vocabulary exactly, so
+    // exclude if the engine industry CONTAINS any excluded term (case-insens).
+    if (inds.length) {
+      clauses.push(`(industry IS NULL OR NOT EXISTS (SELECT 1 FROM unnest($${i}::text[]) x WHERE industry ILIKE '%'||x||'%'))`)
+      params.push(inds); i++
+    }
+    // Company size: exact-match the bucket strings.
+    if (sizes.length) {
+      clauses.push(`(company_size IS NULL OR NOT (company_size = ANY($${i})))`)
+      params.push(sizes); i++
+    }
+    // Location: client excludes counties/cities, but engine only has a coarse
+    // `region`. Match by CONTAINMENT both ways so excluding a city/county/region
+    // still drops the matching region (e.g. exclude "London" → drops region
+    // "London"; exclude region "South East" → drops it). Exact-equality here
+    // (the old behaviour) never matched and silently let excluded areas through.
+    if (regions.length) {
+      clauses.push(`(region IS NULL OR NOT EXISTS (SELECT 1 FROM unnest($${i}::text[]) x WHERE region ILIKE '%'||x||'%' OR x ILIKE '%'||region||'%'))`)
+      params.push(regions); i++
+    }
     return { sql: clauses.length ? ' AND ' + clauses.join(' AND ') : '', params }
   } catch {
     return { sql: '', params: [] }
@@ -81,8 +98,14 @@ async function engineLeadsAsContacts(sp: URLSearchParams, limit: number, offset:
       job_title: r.director_name ? 'Director' : null,
       linkedin_url: r.linkedin_url || null,
       industry: r.industry || null,
+      // company_size is a text bucket ("11-50") — surface it as a string for the
+      // engine grid's Employees column (display only; not the INT contacts col).
       num_employees: r.company_size || null,
-      company_country: r.region || null,
+      company_size: r.company_size || null,
+      // Engine `region` is a UK region ("South East"), NOT a country. Map it to
+      // company_region only — putting it in company_country showed a region
+      // under the Country column.
+      company_country: null,
       company_region: r.region || null,
       sic_code: r.sic_code || null, // surfaced for the SIC column in engine view
       status: 'engine',
@@ -92,6 +115,7 @@ async function engineLeadsAsContacts(sp: URLSearchParams, limit: number, offset:
         show: r.show, platform: r.platform, has_products: r.has_products,
         product_count: r.product_count, company_number: r.company_number,
         sic_code: r.sic_code, postcode: r.postcode, address: r.address,
+        company_size: r.company_size,
         all_emails: r.emails, all_phones: r.phones, promoted_at: r.promoted_at,
       },
     }
