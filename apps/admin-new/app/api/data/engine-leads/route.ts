@@ -5,6 +5,9 @@ import pool from '@/lib/db'
 // data engine promotes into prod. Table grows 24/7, so always paginate.
 // Shared helper kept in sync with the export route.
 export function buildEngineLeadsFilter(p: URLSearchParams) {
+  // source/show are exact-match (drop-down values); the rest are ILIKE.
+  const source = (p.get('source') || '').trim() || null
+  const show = (p.get('show') || '').trim() || null
   const industry = (p.get('industry') || '').trim() || null
   const region = (p.get('region') || '').trim() || null
   const platform = (p.get('platform') || '').trim() || null
@@ -16,13 +19,15 @@ export function buildEngineLeadsFilter(p: URLSearchParams) {
   if (p.get('has_products') === 'false') hasProducts = false
 
   const where = `
-    WHERE ($1::text IS NULL OR industry ILIKE '%'||$1||'%')
-      AND ($2::text IS NULL OR region   ILIKE '%'||$2||'%')
-      AND ($3::bool IS NULL OR has_products = $3)
-      AND ($4::text IS NULL OR platform ILIKE '%'||$4||'%')
-      AND ($5::text IS NULL OR domain ILIKE '%'||$5||'%' OR company_name ILIKE '%'||$5||'%')`
+    WHERE ($1::text IS NULL OR source = $1)
+      AND ($2::text IS NULL OR show = $2)
+      AND ($3::text IS NULL OR industry ILIKE '%'||$3||'%')
+      AND ($4::text IS NULL OR region   ILIKE '%'||$4||'%')
+      AND ($5::bool IS NULL OR has_products = $5)
+      AND ($6::text IS NULL OR platform ILIKE '%'||$6||'%')
+      AND ($7::text IS NULL OR domain ILIKE '%'||$7||'%' OR company_name ILIKE '%'||$7||'%')`
 
-  return { where, params: [industry, region, hasProducts, platform, search] }
+  return { where, params: [source, show, industry, region, hasProducts, platform, search] }
 }
 
 export async function GET(req: NextRequest) {
@@ -42,7 +47,7 @@ export async function GET(req: NextRequest) {
     const { rows } = await pool.query(
       `SELECT * FROM ottaly_engine_leads ${where}
        ORDER BY promoted_at DESC NULLS LAST
-       LIMIT $6 OFFSET $7`,
+       LIMIT $8 OFFSET $9`,
       [...params, limit, offset]
     )
 
