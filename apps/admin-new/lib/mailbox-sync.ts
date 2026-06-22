@@ -319,6 +319,44 @@ export async function syncMailboxes(): Promise<{ ok: boolean; count: number; err
       }
       // Drop rows for mailboxes that no longer exist in PlusVibe.
       await client.query(`DELETE FROM mailbox_full WHERE synced_at < now() - interval '1 minute'`)
+
+      // Daily trend snapshot: aggregate by supplier and by type, upsert today's
+      // row per group so multiple syncs in a day just refresh it. History grows
+      // one day per day for the trend charts.
+      type Agg = { count: number; active: number; sent: number; replies: number; bounces: number; warm: number }
+      const roll = (keyFn: (m: FullMailbox) => string | null) => {
+        const g = new Map<string, Agg>()
+        for (const m of full) {
+          const k = keyFn(m); if (!k) continue
+          const a = g.get(k) ?? { count: 0, active: 0, sent: 0, replies: 0, bounces: 0, warm: 0 }
+          a.count++
+          if ((m.status || '').toUpperCase() === 'ACTIVE') a.active++
+          if ((m.warmup_status || '').toUpperCase() === 'ACTIVE') a.warm++
+          a.sent += m.attributed_sent; a.replies += m.attributed_replies; a.bounces += m.attributed_bounces
+          g.set(k, a)
+        }
+        return g
+      }
+      const dims: Array<[string, Map<string, Agg>]> = [
+        ['supplier', roll(m => m.supplier || 'Unassigned')],
+        ['type', roll(m => m.type || null)],
+      ]
+      for (const [dimension, groups] of dims) {
+        for (const [key, a] of groups) {
+          await client.query(
+            `INSERT INTO mailbox_supplier_daily (day, dimension, key, count, active, total_sent, reply_rate, bounce_rate, warmup_pct)
+             VALUES (CURRENT_DATE, $1, $2, $3, $4, $5, $6, $7, $8)
+             ON CONFLICT (day, dimension, key) DO UPDATE SET
+               count=EXCLUDED.count, active=EXCLUDED.active, total_sent=EXCLUDED.total_sent,
+               reply_rate=EXCLUDED.reply_rate, bounce_rate=EXCLUDED.bounce_rate, warmup_pct=EXCLUDED.warmup_pct`,
+            [dimension, key, a.count, a.active, a.sent,
+             a.sent > 0 ? a.replies / a.sent : 0,
+             a.sent > 0 ? a.bounces / a.sent : 0,
+             a.count > 0 ? Math.round((a.warm / a.count) * 100) : 0]
+          )
+        }
+      }
+
       await client.query('COMMIT')
     } catch (e) {
       await client.query('ROLLBACK').catch(() => {})
