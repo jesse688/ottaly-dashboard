@@ -6,7 +6,7 @@ import { getLockedLeadIds, reconcileLeadCharges } from '@/lib/balance'
 // Fields hidden on a locked lead (delivered while out of credit) — everything
 // identifying stays server-side until the client tops up. first/last name remain
 // so we can show a "New lead from Ken — top up to unlock" teaser.
-const LOCKED_SUPPRESS = ['email', 'company_name', 'company_website', 'phone_number',
+const LOCKED_SUPPRESS = ['email', 'company_name', 'company_website', 'phone_number', 'mobile_phone', 'office_phone',
   'job_title', 'department', 'industry', 'city', 'state', 'country', 'address_line',
   'linkedin_url', 'linkedin_company_url', 'campaign_name']
 
@@ -14,7 +14,7 @@ const LOCKED_SUPPRESS = ['email', 'company_name', 'company_website', 'phone_numb
 // hidden data never reaches the browser).
 const FIELD_SUPPRESS: Record<string, string[]> = {
   email: ['email'],
-  phone: ['phone_number'],
+  phone: ['phone_number', 'mobile_phone', 'office_phone'],
   job_title: ['job_title'],
   department: ['department'],
   industry: ['industry'],
@@ -79,6 +79,8 @@ export async function GET() {
               l.raw->>'linkedin_person_url'  AS linkedin_url,
               l.raw->>'linkedin_company_url' AS linkedin_company_url,
               l.raw->>'phone_number'         AS phone_number,
+              l.raw->>'mobile_phone'         AS mobile_phone,
+              l.raw->>'office_phone'         AS office_phone,
               l.raw->>'ch_company_number'    AS ch_company_number,
               l.raw->>'ch_company_status'    AS ch_company_status,
               l.raw->>'ch_company_type'      AS ch_company_type,

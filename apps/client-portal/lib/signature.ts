@@ -9,10 +9,12 @@
 // key the sidebar already reads, so a successful extraction shows up with no
 // extra display wiring.
 
-export type SignatureField = 'phone_number' | 'company_website' | 'linkedin_person_url' | 'linkedin_company_url' | 'job_title' | 'company_name'
+export type SignatureField = 'phone_number' | 'mobile_phone' | 'office_phone' | 'company_website' | 'linkedin_person_url' | 'linkedin_company_url' | 'job_title' | 'company_name'
 
 export const SIGNATURE_FIELD_LABELS: Record<SignatureField, string> = {
-  phone_number: 'Phone / mobile',
+  phone_number: 'Phone',
+  mobile_phone: 'Mobile',
+  office_phone: 'Office / landline',
   company_website: 'Website',
   linkedin_person_url: 'LinkedIn (person)',
   linkedin_company_url: 'LinkedIn (company)',
@@ -21,7 +23,7 @@ export const SIGNATURE_FIELD_LABELS: Record<SignatureField, string> = {
 }
 
 export const ALL_SIGNATURE_FIELDS: SignatureField[] = [
-  'phone_number', 'company_website', 'linkedin_person_url', 'linkedin_company_url', 'job_title', 'company_name',
+  'phone_number', 'mobile_phone', 'office_phone', 'company_website', 'linkedin_person_url', 'linkedin_company_url', 'job_title', 'company_name',
 ]
 
 // Common job titles — used to spot a title line in a signature. Kept broad but
@@ -239,7 +241,9 @@ export function extractSignatureFields(
 
   for (const f of fields) {
     let v: string | null = null
-    if (f === 'phone_number') v = extractPhone(text)
+    if (f === 'phone_number') v = extractMobile(text) ?? extractPhone(text)
+    else if (f === 'mobile_phone') v = extractMobile(text)
+    else if (f === 'office_phone') v = extractOffice(text)
     else if (f === 'linkedin_person_url') v = extractPersonLinkedIn(text)
     else if (f === 'linkedin_company_url') v = extractCompanyLinkedIn(text)
     else if (f === 'company_website') v = website
@@ -248,4 +252,41 @@ export function extractSignatureFields(
     if (v) out[f] = v
   }
   return out
+}
+
+// Extract a number labelled as a MOBILE (M:/Mob/Mobile/Cell). Signatures often
+// list two numbers — a mobile and an office/landline — each with its own label
+// (e.g. "M: +44 (0) 7413 786773" / "O: +44 (0) 843 886 8408"), so we capture
+// them separately and tag which is which.
+// Pick the first valid phone out of a (possibly merged) captured run: try the
+// whole, then every contiguous space-joined sub-sequence of tokens. Handles
+// "+44 (0) 7413 786773" (spaces + parens) and two numbers run together.
+function firstValidFromRun(run: string): string | null {
+  const t = tidyPhone(run)
+  if (isValidPhone(t)) return t
+  const parts = t.split(/\s+/)
+  for (let s = 0; s < parts.length; s++)
+    for (let e = s + 1; e <= parts.length; e++) {
+      const cand = parts.slice(s, e).join(' ')
+      if (isValidPhone(cand)) return tidyPhone(cand)
+    }
+  return null
+}
+function extractLabelled(text: string, labels: string): string | null {
+  // Allow (), spaces and a leading +/(0) in the run after the label — a single
+  // space group may be followed by '(' (e.g. "+44 (0) 7413"), not just a digit.
+  const re = new RegExp(`(?:${labels})\\s*[:.)]?\\s*(\\+?[\\d(][\\d().\\-]*(?:\\s[\\d(][\\d().\\-]*){0,4})`, 'i')
+  const m = text.match(re)
+  return m?.[1] ? firstValidFromRun(m[1]) : null
+}
+function extractMobile(text: string): string | null {
+  // Mobile labels, OR an unlabelled UK mobile (07… / +447…) anywhere.
+  const labelled = extractLabelled(text, 'M|Mob|Mobile|Cell')
+  if (labelled) return labelled
+  const m = text.match(/(\+?(?:44\s?\(?0?\)?\s?|0)7[\d().\-]*(?:\s[\d(][\d().\-]*){0,3})/)
+  return m?.[1] ? firstValidFromRun(m[1]) : null
+}
+function extractOffice(text: string): string | null {
+  // Office / landline / direct labels.
+  return extractLabelled(text, 'O|Off|Office|T|Tel|Telephone|D|Direct|DDI|Landline|L')
 }

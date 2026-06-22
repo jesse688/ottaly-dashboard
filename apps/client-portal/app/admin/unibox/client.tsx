@@ -44,6 +44,8 @@ interface Reply {
   linkedin_url: string | null
   linkedin_company_url: string | null
   phone_number: string | null
+  mobile_phone: string | null
+  office_phone: string | null
   custom_fields: CustomField[] | null
   is_forwarded: boolean
   sender_email: string | null
@@ -824,7 +826,8 @@ export function AdminUniboxClient() {
                  </div>
                  <dl className="space-y-2 text-xs">
                    <ContactRow label="Email" value={selected.lead_email} href={`mailto:${selected.lead_email}`} />
-                   {selected.phone_number && <ContactRow label="Phone" value={selected.phone_number} href={`tel:${selected.phone_number}`} />}
+                   {(selected.mobile_phone || selected.phone_number) && <ContactRow label="Mobile" value={(selected.mobile_phone ?? selected.phone_number)!} href={`tel:${selected.mobile_phone ?? selected.phone_number}`} />}
+                   {selected.office_phone && <ContactRow label="Office" value={selected.office_phone} href={`tel:${selected.office_phone}`} />}
                    {(selected.lead_company || selected.company_website) && <ContactRow label="Company" value={selected.lead_company ?? selected.company_website ?? ''} href={selected.company_website ? ensureUrl(selected.company_website) : undefined} />}
                    {selected.linkedin_url && <ContactRow label="LinkedIn" value="View profile" href={ensureUrl(selected.linkedin_url)} />}
                    {selected.linkedin_company_url && <ContactRow label="Company LinkedIn" value="View page" href={ensureUrl(selected.linkedin_company_url)} />}
