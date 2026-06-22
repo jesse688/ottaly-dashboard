@@ -122,24 +122,31 @@ export async function GET(req: NextRequest) {
     // if the background warm hasn't run / lost the race. Bounded + time-boxed.
     {
       const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London' }).format(new Date())
-      const gaps: { ws: string; date: string }[] = []
+      // PRIORITY 1: TODAY for every active workspace — the contested, climbing
+      // day that other writers corrupt. Always refetched (never trust cache).
+      // PRIORITY 2: missing/seeded PAST days — but only a small cap, so a wide
+      // 30D/90D range doesn't fan out to hundreds of blocking PV calls (which
+      // made the page hang / time out). Remaining gaps warm in the background.
+      const todayGaps: { ws: string; date: string }[] = []
+      const pastGaps: { ws: string; date: string }[] = []
       for (const ws of workspaceList) {
         for (const date of dates) {
+          if (date === todayStr) { todayGaps.push({ ws: ws.workspace_id, date }); continue }
           const sa = savedAt[ws.workspace_id]?.[date]
           const missing = perfByDateAndWs[ws.workspace_id]?.[date] === undefined
           const seeded = sa === 0
-          // ALWAYS live-fill TODAY from PV's header. Today is the contested,
-          // still-climbing day and other writers (legacy, which sums the PV
-          // `chart` and disagrees with `header`) may have corrupted the cached
-          // row. We never trust a cached 'today' value — only past days are
-          // trusted once written. This guarantees the dashboard == live PV.
-          const isToday = date === todayStr
-          if (missing || seeded || isToday) gaps.push({ ws: ws.workspace_id, date })
+          if (missing || seeded) pastGaps.push({ ws: ws.workspace_id, date })
         }
       }
+      // Cap total inline fetches and time-box the whole pass so the request
+      // always returns quickly. Today first; backfill past days with the budget.
+      const MAX_INLINE = 64
+      const gaps = [...todayGaps, ...pastGaps].slice(0, MAX_INLINE)
+      const deadline = Date.now() + 4000 // hard wall: never block the page > ~4s
       if (gaps.length) {
         const CONC = 8
         for (let i = 0; i < gaps.length; i += CONC) {
+          if (Date.now() > deadline) break
           await Promise.allSettled(
             gaps.slice(i, i + CONC).map(async ({ ws, date }) => {
               const data = await fetchPvDay(ws, date)
