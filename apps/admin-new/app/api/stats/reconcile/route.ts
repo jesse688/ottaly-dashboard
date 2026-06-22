@@ -125,7 +125,7 @@ export async function GET(req: NextRequest) {
           pos,
           human,
           humanRR: pct(human),
-          replyRateWithOoo: pct(replies),
+          replyRateWithOoo: pct(human + ooo),
           leads_esp_today: esp[w.workspace_id]?.today ?? 0,
           leads_esp_all_time: esp[w.workspace_id]?.all_time ?? 0,
           leads_revenue_today: rev[w.workspace_id] ?? 0,
