@@ -122,15 +122,19 @@ export async function GET(req: NextRequest) {
     // if the background warm hasn't run / lost the race. Bounded + time-boxed.
     {
       const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London' }).format(new Date())
-      const TODAY_TTL = 5 * 60 * 1000
       const gaps: { ws: string; date: string }[] = []
       for (const ws of workspaceList) {
         for (const date of dates) {
           const sa = savedAt[ws.workspace_id]?.[date]
           const missing = perfByDateAndWs[ws.workspace_id]?.[date] === undefined
           const seeded = sa === 0
-          const staleToday = date === todayStr && sa && Date.now() - sa > TODAY_TTL
-          if (missing || seeded || staleToday) gaps.push({ ws: ws.workspace_id, date })
+          // ALWAYS live-fill TODAY from PV's header. Today is the contested,
+          // still-climbing day and other writers (legacy, which sums the PV
+          // `chart` and disagrees with `header`) may have corrupted the cached
+          // row. We never trust a cached 'today' value — only past days are
+          // trusted once written. This guarantees the dashboard == live PV.
+          const isToday = date === todayStr
+          if (missing || seeded || isToday) gaps.push({ ws: ws.workspace_id, date })
         }
       }
       if (gaps.length) {

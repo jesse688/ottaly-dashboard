@@ -131,6 +131,17 @@ export async function GET(req: NextRequest) {
           leads_revenue_today: rev[w.workspace_id] ?? 0,
           cache_age_min: perfAge[w.workspace_id] ?? -1,
           live_pv: live[w.workspace_id],
+          // The dashboard ALWAYS live-fills 'today' from PV's header, so the
+          // EFFECTIVE value it displays = live_pv (not the cached row). match
+          // confirms cached vs live; effective_replies = what the page shows.
+          effective_replies:
+            live[w.workspace_id] && typeof live[w.workspace_id] !== 'string'
+              ? (live[w.workspace_id] as Record<string, number>).replies
+              : replies,
+          match:
+            live[w.workspace_id] && typeof live[w.workspace_id] !== 'string'
+              ? (live[w.workspace_id] as Record<string, number>).replies === replies
+              : null,
         }
       })
       .filter((r) => r.sent > 0 || r.replies > 0 || r.leads_esp_today > 0 || r.leads_revenue_today > 0)
