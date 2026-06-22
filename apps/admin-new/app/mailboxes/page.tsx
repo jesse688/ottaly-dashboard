@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { LineChart } from '@/components/ui/themed-chart'
 import type { Mailbox, MailboxGroupStats, MailboxesResponse } from '@/types/mailbox'
 
@@ -73,13 +73,18 @@ export default function MailboxesPage() {
   const [msg, setMsg] = useState('')
   const [periodDays, setPeriodDays] = useState(30)
   const [history, setHistory] = useState<HistoryResponse | null>(null)
+  const [typeHistory, setTypeHistory] = useState<HistoryResponse | null>(null)
 
   const [search, setSearch] = useState('')
   const [fClient, setFClient] = useState('')
   const [fSupplier, setFSupplier] = useState('')
   const [fType, setFType] = useState('')
   const [fStatus, setFStatus] = useState('')
+  const [fDmarc, setFDmarc] = useState('')
   const [attentionOnly, setAttentionOnly] = useState(false)
+  const [brokenDnsOnly, setBrokenDnsOnly] = useState(false)
+  const [sortKey, setSortKey] = useState<string>('')
+  const [sortDir, setSortDir] = useState<1 | -1>(1)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [assignTo, setAssignTo] = useState('')
   const [assignField, setAssignField] = useState<'supplier' | 'mailbox_type'>('supplier')
@@ -100,6 +105,7 @@ export default function MailboxesPage() {
   useEffect(() => {
     if (tab !== 'performance') return
     fetch(`/api/mailboxes/history?dimension=supplier&days=${periodDays}`).then(r => r.json()).then(setHistory).catch(() => setHistory(null))
+    fetch(`/api/mailboxes/history?dimension=type&days=${periodDays}`).then(r => r.json()).then(setTypeHistory).catch(() => setTypeHistory(null))
   }, [tab, periodDays])
 
   const runSync = useCallback(async () => {
@@ -112,21 +118,92 @@ export default function MailboxesPage() {
     } catch (e) { setMsg(e instanceof Error ? e.message : String(e)) } finally { setSyncing(false) }
   }, [load])
 
+  const runBackfill = useCallback(async () => {
+    setSyncing(true); setMsg('Backfilling chart history… (a few minutes)')
+    try {
+      const r = await fetch(`/api/mailboxes/backfill?days=${periodDays}`, { method: 'POST' })
+      const d = await r.json()
+      setMsg(d.ok ? `Backfilled ${d.rows} trend rows from ${d.mailboxes} mailboxes.` : `Backfill failed: ${d.error}`)
+      if (d.ok && tab === 'performance') {
+        fetch(`/api/mailboxes/history?dimension=supplier&days=${periodDays}`).then(r => r.json()).then(setHistory).catch(() => {})
+        fetch(`/api/mailboxes/history?dimension=type&days=${periodDays}`).then(r => r.json()).then(setTypeHistory).catch(() => {})
+      }
+    } catch (e) { setMsg(e instanceof Error ? e.message : String(e)) } finally { setSyncing(false) }
+  }, [periodDays, tab])
+
   const mailboxes = data?.mailboxes ?? []
   const clients = useMemo(() => Array.from(new Set(mailboxes.map(m => m.workspace_name).filter(Boolean))).sort() as string[], [mailboxes])
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase()
-    return mailboxes.filter(m => {
+    const filtered = mailboxes.filter(m => {
       if (q && !(m.email.toLowerCase().includes(q) || (m.domain || '').toLowerCase().includes(q) || (m.workspace_name || '').toLowerCase().includes(q))) return false
       if (fClient && m.workspace_name !== fClient) return false
       if (fSupplier && (fSupplier === '__unassigned' ? !!m.supplier : m.supplier !== fSupplier)) return false
       if (fType && m.type !== fType) return false
       if (fStatus && (m.status || '').toUpperCase() !== fStatus) return false
+      if (fDmarc) {
+        const pol = m.auth?.dmarc_present ? (m.auth.dmarc_policy || 'none') : '__missing'
+        if (fDmarc === '__missing' ? pol !== '__missing' : pol !== fDmarc) return false
+      }
+      if (brokenDnsOnly) {
+        const a = m.auth
+        const broken = !a || !a.spf_present || !a.dkim_present || !a.dmarc_present
+        if (!broken) return false
+      }
       if (attentionOnly && m.attention.length === 0) return false
       return true
     })
-  }, [mailboxes, search, fClient, fSupplier, fType, fStatus, attentionOnly])
+    if (!sortKey) return filtered
+    const val = (m: Mailbox): number | string => {
+      switch (sortKey) {
+        case 'renewal': return m.billing_day ?? 99
+        case 'sent': return m.attributed_sent
+        case 'reply': return m.reply_rate
+        case 'bounce': return m.bounce_rate
+        case 'score': return m.domain_score ?? -1
+        case 'bl': return m.blacklist_count
+        case 'cost': return m.unit_cost ?? -1
+        case 'email': return m.email.toLowerCase()
+        case 'client': return (m.workspace_name || '').toLowerCase()
+        case 'supplier': return (m.supplier || '').toLowerCase()
+        default: return 0
+      }
+    }
+    return [...filtered].sort((a, b) => {
+      const av = val(a), bv = val(b)
+      if (av < bv) return -1 * sortDir
+      if (av > bv) return 1 * sortDir
+      return 0
+    })
+  }, [mailboxes, search, fClient, fSupplier, fType, fStatus, fDmarc, brokenDnsOnly, attentionOnly, sortKey, sortDir])
+
+  const toggleSort = (k: string) => { if (sortKey === k) setSortDir(d => (d === 1 ? -1 : 1)); else { setSortKey(k); setSortDir(1) } }
+  const sortInd = (k: string) => sortKey === k ? (sortDir === 1 ? ' ↑' : ' ↓') : ''
+
+  const [billingOpen, setBillingOpen] = useState(false)
+  const [assignOpen, setAssignOpen] = useState(false)
+  const [pricingOpen, setPricingOpen] = useState(false)
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const toggleExpand = (e: string) => setExpanded(prev => { const n = new Set(prev); n.has(e) ? n.delete(e) : n.add(e); return n })
+
+  // Inline per-row field edit → PUT /meta; optimistic local update.
+  const setField = useCallback(async (email: string, field: 'supplier' | 'mailbox_type', value: string) => {
+    setData(prev => prev ? { ...prev, mailboxes: prev.mailboxes.map(m => m.email === email ? { ...m, [field === 'mailbox_type' ? 'type' : 'supplier']: value || null } : m) } : prev)
+    await fetch('/api/mailboxes/meta', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, field, value: value || null }) }).catch(() => {})
+  }, [])
+
+  const enableWarmup = useCallback(async (emails: string[]) => {
+    setMsg('Enabling warmup…')
+    try {
+      const r = await fetch('/api/mailboxes/enable-warmup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ emails }) })
+      const d = await r.json()
+      setMsg(d.ok ? `Warmup enabled on ${d.enabled} mailbox(es).` : `Failed: ${d.error}`)
+      if (d.ok) await load()
+    } catch (e) { setMsg(e instanceof Error ? e.message : String(e)) }
+  }, [load])
+
+  const notWarming = useMemo(() => mailboxes.filter(m => (m.status || '').toUpperCase() === 'ACTIVE' && (m.warmup_status || '').toUpperCase() !== 'ACTIVE'), [mailboxes])
 
   const allSel = rows.length > 0 && rows.every(m => selected.has(m.email))
   const toggleAll = () => setSelected(prev => { const n = new Set(prev); allSel ? rows.forEach(m => n.delete(m.email)) : rows.forEach(m => n.add(m.email)); return n })
@@ -162,7 +239,13 @@ export default function MailboxesPage() {
             <div style={{ fontSize: '1.4rem', fontWeight: 700, fontFamily: 'Genos, Inter, sans-serif' }}>Mailboxes</div>
             <div style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>Every sending mailbox across all clients — assign suppliers and compare performance · last synced {lastRun}</div>
           </div>
-          <button onClick={runSync} disabled={syncing} style={{ padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', background: C.navy, color: '#fff', border: 'none', opacity: syncing ? 0.6 : 1 }}>{syncing ? 'Syncing…' : '↻ Refresh'}</button>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button onClick={() => setAssignOpen(true)} style={{ padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', background: 'transparent', color: C.muted, border: `1px solid ${C.border}` }}>⇪ Bulk assign</button>
+            <button onClick={() => setBillingOpen(true)} style={{ padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', background: 'transparent', color: C.muted, border: `1px solid ${C.border}` }}>📅 Set billing</button>
+            <button onClick={() => setPricingOpen(true)} style={{ padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', background: 'transparent', color: C.muted, border: `1px solid ${C.border}` }}>$ Pricing</button>
+            <button onClick={runBackfill} disabled={syncing} style={{ padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', background: 'transparent', color: C.muted, border: `1px solid ${C.border}`, opacity: syncing ? 0.6 : 1 }}>Backfill charts</button>
+            <button onClick={runSync} disabled={syncing} style={{ padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', background: C.navy, color: '#fff', border: 'none', opacity: syncing ? 0.6 : 1 }}>{syncing ? 'Syncing…' : '↻ Refresh'}</button>
+          </div>
         </div>
 
         {/* KPI cards */}
@@ -180,6 +263,14 @@ export default function MailboxesPage() {
         </div>
 
         {msg && <div style={{ marginBottom: 12, background: '#EEF2FF', border: '1px solid #C7D2FE', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: C.navy }}>{msg}</div>}
+
+        {/* Not-on-warmup alert banner */}
+        {notWarming.length > 0 && (
+          <div style={{ marginBottom: 12, background: '#FEF3C7', border: '1px solid #FDE68A', borderRadius: 10, padding: '.7rem 1rem', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 13, color: '#92400E', fontWeight: 600 }}>⚠ {notWarming.length} active mailbox{notWarming.length === 1 ? '' : 'es'} not running warmup</span>
+            <button onClick={() => enableWarmup(notWarming.map(m => m.email))} style={{ marginLeft: 'auto', padding: '6px 14px', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer', background: '#D97706', color: '#fff', border: 'none' }}>Enable warmup for all</button>
+          </div>
+        )}
         {status === 'error' && <div style={{ background: '#FEE2E2', border: '1px solid #FECACA', borderRadius: 8, padding: 16, fontSize: 13, color: '#991B1B' }}>Couldn’t load mailboxes: {err} <button onClick={load} style={{ marginLeft: 8, textDecoration: 'underline' }}>Retry</button></div>}
 
         {tab === 'inventory' && status !== 'error' && (
@@ -191,7 +282,9 @@ export default function MailboxesPage() {
               <select value={fSupplier} onChange={e => setFSupplier(e.target.value)} style={selStyle}><option value="">All suppliers</option>{SUPPLIERS.map(s => <option key={s} value={s}>{s}</option>)}<option value="__unassigned">Unassigned</option></select>
               <select value={fType} onChange={e => setFType(e.target.value)} style={selStyle}><option value="">All types</option>{TYPES.map(t => <option key={t} value={t}>{t}</option>)}</select>
               <select value={fStatus} onChange={e => setFStatus(e.target.value)} style={selStyle}><option value="">All statuses</option><option value="ACTIVE">Active</option><option value="PAUSED">Paused</option></select>
+              <select value={fDmarc} onChange={e => setFDmarc(e.target.value)} style={selStyle}><option value="">All DMARC</option><option value="none">p=none</option><option value="quarantine">p=quarantine</option><option value="reject">p=reject</option><option value="__missing">Missing</option></select>
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: C.muted }}><input type="checkbox" checked={attentionOnly} onChange={e => setAttentionOnly(e.target.checked)} /> Needs attention only</label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: C.muted }}><input type="checkbox" checked={brokenDnsOnly} onChange={e => setBrokenDnsOnly(e.target.checked)} /> Broken DNS only</label>
             </div>
 
             {/* Bulk bar */}
@@ -203,6 +296,8 @@ export default function MailboxesPage() {
                 <select value={assignField} onChange={e => setAssignField(e.target.value as 'supplier' | 'mailbox_type')} style={selStyle}><option value="supplier">Supplier</option><option value="mailbox_type">Type</option></select>
                 <select value={assignTo} onChange={e => setAssignTo(e.target.value)} disabled={!selected.size} style={selStyle}><option value="">Assign…</option>{(assignField === 'supplier' ? SUPPLIERS : TYPES).map(s => <option key={s} value={s}>{s}</option>)}</select>
                 <button onClick={doBulkAssign} disabled={!assignTo || !selected.size || assigning} style={{ padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', background: C.navy, color: '#fff', border: 'none', opacity: (!assignTo || !selected.size) ? 0.6 : 1 }}>{assigning ? 'Applying…' : 'Apply'}</button>
+                <button onClick={async () => { if (!selected.size || !confirm(`Remove ${selected.size} mailbox(es) from the dashboard?`)) return; await fetch('/api/mailboxes/bulk-remove', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ emails: Array.from(selected) }) }); setSelected(new Set()); await load() }} disabled={!selected.size} style={{ padding: '8px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', background: 'transparent', color: '#DC2626', border: '1px solid #FECACA', opacity: !selected.size ? 0.5 : 1 }}>Remove</button>
+                <button onClick={() => setBillingOpen(true)} style={{ padding: '8px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', background: 'transparent', color: C.muted, border: `1px solid ${C.border}` }}>Set billing</button>
               </div>
             </div>
 
@@ -212,24 +307,44 @@ export default function MailboxesPage() {
                 <thead style={{ background: '#F8F9FC' }}>
                   <tr>
                     <th style={{ ...th, width: 34 }}></th>
-                    <th style={th}>Mailbox</th><th style={th}>Client</th><th style={th}>Renewal</th><th style={th}>Supplier</th><th style={th}>Type</th><th style={th}>Status</th><th style={th}>Warmup</th><th style={th}>Auth</th>
-                    <th style={{ ...th, textAlign: 'right' }}>BL</th><th style={{ ...th, textAlign: 'right' }}>Score</th><th style={{ ...th, textAlign: 'right' }}>Sent</th><th style={{ ...th, textAlign: 'right' }}>Reply</th><th style={{ ...th, textAlign: 'right' }}>Bounce</th><th style={{ ...th, textAlign: 'right' }}>Daily</th><th style={{ ...th, textAlign: 'right' }}>$/mo</th><th style={th}>Attn</th>
+                    <th style={{ ...th, cursor: 'pointer' }} onClick={() => toggleSort('email')}>Mailbox{sortInd('email')}</th>
+                    <th style={{ ...th, cursor: 'pointer' }} onClick={() => toggleSort('client')}>Client{sortInd('client')}</th>
+                    <th style={{ ...th, cursor: 'pointer' }} onClick={() => toggleSort('renewal')}>Renewal{sortInd('renewal')}</th>
+                    <th style={{ ...th, cursor: 'pointer' }} onClick={() => toggleSort('supplier')}>Supplier{sortInd('supplier')}</th>
+                    <th style={th}>Type</th><th style={th}>Status</th><th style={th}>Warmup</th><th style={th}>Auth</th>
+                    <th style={{ ...th, textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('bl')}>BL{sortInd('bl')}</th>
+                    <th style={{ ...th, textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('score')}>Score{sortInd('score')}</th>
+                    <th style={{ ...th, textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('sent')}>Sent{sortInd('sent')}</th>
+                    <th style={{ ...th, textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('reply')}>Reply{sortInd('reply')}</th>
+                    <th style={{ ...th, textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('bounce')}>Bounce{sortInd('bounce')}</th>
+                    <th style={{ ...th, textAlign: 'right' }}>Daily</th>
+                    <th style={{ ...th, textAlign: 'right', cursor: 'pointer' }} onClick={() => toggleSort('cost')}>$/mo{sortInd('cost')}</th><th style={th}>Attn</th>
                   </tr>
                 </thead>
                 <tbody>
                   {rows.map(m => {
                     const r = renewalInfo(m)
                     return (
-                      <tr key={m.email} style={{ background: '#fff' }} onMouseEnter={e => (e.currentTarget.style.background = '#FAFBFF')} onMouseLeave={e => (e.currentTarget.style.background = '#fff')}>
+                    <React.Fragment key={m.email}>
+                      <tr style={{ background: '#fff' }} onMouseEnter={e => (e.currentTarget.style.background = '#FAFBFF')} onMouseLeave={e => (e.currentTarget.style.background = '#fff')}>
                         <td style={td}><input type="checkbox" checked={selected.has(m.email)} onChange={() => toggleOne(m.email)} /></td>
                         <td style={td}><div style={{ fontWeight: 600 }}>{m.email}</div>{m.name && <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{m.name}</div>}</td>
                         <td style={{ ...td, color: C.muted }}>{m.workspace_name || '—'}</td>
                         <td style={td}>{r ? <span style={{ color: r.urgent ? '#D97706' : C.muted, fontWeight: r.urgent ? 600 : 400 }}>{r.label}</span> : <span style={{ color: C.muted }}>—</span>}</td>
-                        <td style={td}>{m.supplier ? <Pill tone="gray">{m.supplier}</Pill> : <span style={{ color: C.muted }}>—</span>}</td>
-                        <td style={td}>{typePill(m.type)}</td>
+                        <td style={td}>
+                          <select value={m.supplier || ''} onChange={e => setField(m.email, 'supplier', e.target.value)} style={{ padding: '3px 4px', border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, background: '#fff', minWidth: 90 }}>
+                            <option value="">—</option>{SUPPLIERS.map(s => <option key={s} value={s}>{s}</option>)}
+                          </select>
+                        </td>
+                        <td style={td}>
+                          <select value={m.type} onChange={e => setField(m.email, 'mailbox_type', e.target.value)} style={{ padding: '3px 4px', border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 11, background: '#fff', minWidth: 90 }}>
+                            {TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                          </select>
+                          {m.type_auto && m.type_auto !== m.type && <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>auto: {m.type_auto}</div>}
+                        </td>
                         <td style={td}>{statusPill(m.status)}</td>
                         <td style={td}>{(m.warmup_status || '').toUpperCase() === 'ACTIVE' ? <Pill tone="good">on</Pill> : <Pill tone="gray">off</Pill>}</td>
-                        <td style={td}>{m.auth ? <span><AuthBadge ok={m.auth.spf_present} label="S" /><AuthBadge ok={m.auth.dkim_present} label="K" /><AuthBadge ok={m.auth.dmarc_present} label={m.auth.dmarc_policy ? `p=${m.auth.dmarc_policy}` : 'D'} /></span> : <span style={{ color: C.muted }}>—</span>}</td>
+                        <td style={{ ...td, cursor: m.auth ? 'pointer' : 'default' }} onClick={() => m.auth && toggleExpand(m.email)} title="Click for DNS detail">{m.auth ? <span><AuthBadge ok={m.auth.spf_present} label="S" /><AuthBadge ok={m.auth.dkim_present} label="K" /><AuthBadge ok={m.auth.dmarc_present} label={m.auth.dmarc_policy ? `p=${m.auth.dmarc_policy}` : 'D'} /></span> : <span style={{ color: C.muted }}>—</span>}</td>
                         <td style={tdNum}><span style={{ color: m.blacklist_count ? '#DC2626' : '#16A34A', fontWeight: 600 }}>{m.blacklist_count}</span></td>
                         <td style={tdNum}>{m.domain_score == null ? <span style={{ color: C.muted }}>—</span> : <span style={{ color: m.domain_score >= 80 ? '#16A34A' : m.domain_score >= 50 ? '#D97706' : '#DC2626' }}>{m.domain_score}</span>}</td>
                         <td style={tdNum}>{num(m.attributed_sent)}</td>
@@ -239,6 +354,19 @@ export default function MailboxesPage() {
                         <td style={{ ...tdNum, color: C.muted }}>{money(m.unit_cost)}</td>
                         <td style={td}>{m.attention.length === 0 ? <span style={{ color: '#16A34A' }}>✓</span> : <span style={{ color: '#DC2626', fontWeight: 600 }} title={m.attention.map(a => a.msg).join(', ')}>● {m.attention.length}</span>}</td>
                       </tr>
+                      {expanded.has(m.email) && m.auth && (
+                        <tr style={{ background: '#F8F9FC' }}>
+                          <td colSpan={17} style={{ padding: '10px 16px', borderBottom: `1px solid ${C.border}` }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(280px,1fr))', gap: 16, fontSize: 11 }}>
+                              <DnsCol title="SPF" present={m.auth.spf_present} raw={m.auth.spf_raw} />
+                              <DnsCol title="DKIM" present={m.auth.dkim_present} raw={m.auth.dkim_raw} extra={m.auth.dkim_selector ? `selector: ${m.auth.dkim_selector}` : null} />
+                              <DnsCol title="DMARC" present={m.auth.dmarc_present} raw={m.auth.dmarc_raw} extra={m.auth.dmarc_policy ? `policy: p=${m.auth.dmarc_policy}` : null} />
+                            </div>
+                            {m.domain_notes && <div style={{ marginTop: 8, color: C.muted }}>Notes: {m.domain_notes}</div>}
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                     )
                   })}
                   {rows.length === 0 && <tr><td colSpan={17} style={{ textAlign: 'center', padding: '3rem', color: C.muted }}>{status === 'loading' ? 'Loading…' : 'No mailboxes match these filters.'}</td></tr>}
@@ -266,13 +394,13 @@ export default function MailboxesPage() {
                   {PERIODS.map(p => <button key={p.key} onClick={() => setPeriodDays(p.key)} style={{ padding: '4px 10px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', border: `1px solid ${C.border}`, background: periodDays === p.key ? C.navy : '#fff', color: periodDays === p.key ? '#fff' : C.muted }}>{p.label}</button>)}
                 </div>
               </div>
-              {history && Object.keys(history.series).length > 0 && history.days.length > 1 ? (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: '1rem' }}>
-                  <ChartCard title="Reply rate %"><LineChart labels={history.days} series={Object.entries(history.series).map(([k, s], i) => ({ label: k, data: s.reply_rate.map(v => v * 100), tone: ((i % 5 + 1) as 1 | 2 | 3 | 4 | 5), percent: true }))} /></ChartCard>
-                  <ChartCard title="Bounce rate %"><LineChart labels={history.days} series={Object.entries(history.series).map(([k, s], i) => ({ label: k, data: s.bounce_rate.map(v => v * 100), tone: ((i % 5 + 1) as 1 | 2 | 3 | 4 | 5), percent: true }))} /></ChartCard>
-                  <ChartCard title="Total sent"><LineChart labels={history.days} series={Object.entries(history.series).map(([k, s], i) => ({ label: k, data: s.sent, tone: ((i % 5 + 1) as 1 | 2 | 3 | 4 | 5) }))} /></ChartCard>
-                </div>
-              ) : <div style={{ background: '#fff', border: `1px solid ${C.border}`, borderRadius: 10, padding: '2rem', textAlign: 'center', fontSize: 13, color: C.muted }}>Trend charts fill in as daily snapshots accumulate.</div>}
+              <TrendCharts history={history} border={C.border} />
+            </div>
+
+            {/* Provider-type trends (Google / Microsoft / SMTP split) */}
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: C.muted, margin: '.25rem 0 .5rem' }}>Provider type trends — Google vs Microsoft vs SMTP</div>
+              <TrendCharts history={typeHistory} border={C.border} />
             </div>
 
             {/* By-type cards */}
@@ -306,8 +434,145 @@ export default function MailboxesPage() {
             </div>
           </div>
         )}
+
+        {billingOpen && <BillingModal selectedCount={selected.size} onClose={() => setBillingOpen(false)} onDone={async () => { setBillingOpen(false); await load() }} emails={Array.from(selected)} />}
+        {assignOpen && <AssignModal onClose={() => setAssignOpen(false)} onDone={async () => { setAssignOpen(false); await load() }} />}
+        {pricingOpen && <PricingModal onClose={() => setPricingOpen(false)} />}
       </div>
     </div>
+  )
+}
+
+// ── Modals ───────────────────────────────────────────────────────────────────
+function Overlay({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(5,12,41,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 12, padding: 24, maxWidth: 640, width: '100%', maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 10px 40px rgba(0,0,0,.2)' }}>{children}</div>
+    </div>
+  )
+}
+
+function BillingModal({ selectedCount, emails, onClose, onDone }: { selectedCount: number; emails: string[]; onClose: () => void; onDone: () => void }) {
+  const [target, setTarget] = useState<'selected' | 'supplier' | 'all'>(selectedCount ? 'selected' : 'all')
+  const [supplier, setSupplier] = useState('Maildoso')
+  const [start, setStart] = useState('')
+  const [day, setDay] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const apply = async () => {
+    if (!start) { setErr('Start date required'); return }
+    setBusy(true); setErr('')
+    const body: Record<string, unknown> = { billing_start_date: start }
+    if (day) body.billing_day = Number(day)
+    if (target === 'selected') body.emails = emails
+    else if (target === 'supplier') body.supplier = supplier
+    const r = await fetch('/api/mailboxes/bulk-billing', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    const d = await r.json(); setBusy(false)
+    if (!r.ok) { setErr(d.error || 'Failed'); return }
+    onDone()
+  }
+  return (
+    <Overlay onClose={onClose}>
+      <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Set billing dates</h3>
+      <p style={{ fontSize: 13, color: '#6B7280', marginBottom: 16 }}>Set the purchase/renewal date for mailboxes.</p>
+      <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Apply to</label>
+      <select value={target} onChange={e => setTarget(e.target.value as 'selected' | 'supplier' | 'all')} style={{ width: '100%', padding: 8, border: '1px solid #E2E6F0', borderRadius: 8, marginBottom: 12 }}>
+        {selectedCount > 0 && <option value="selected">Selected mailboxes ({selectedCount})</option>}
+        <option value="supplier">All mailboxes for a supplier</option>
+        <option value="all">All mailboxes</option>
+      </select>
+      {target === 'supplier' && <select value={supplier} onChange={e => setSupplier(e.target.value)} style={{ width: '100%', padding: 8, border: '1px solid #E2E6F0', borderRadius: 8, marginBottom: 12 }}>{SUPPLIERS.map(s => <option key={s} value={s}>{s}</option>)}</select>}
+      <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Purchase / start date</label>
+      <input type="date" value={start} onChange={e => setStart(e.target.value)} style={{ width: '100%', padding: 8, border: '1px solid #E2E6F0', borderRadius: 8, marginBottom: 12 }} />
+      <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Billing day (optional, 1–31)</label>
+      <input type="number" min={1} max={31} value={day} onChange={e => setDay(e.target.value)} placeholder="defaults to start date's day" style={{ width: '100%', padding: 8, border: '1px solid #E2E6F0', borderRadius: 8, marginBottom: 12 }} />
+      {err && <div style={{ color: '#DC2626', fontSize: 13, marginBottom: 8 }}>{err}</div>}
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <button onClick={onClose} style={{ padding: '8px 16px', borderRadius: 8, fontSize: 13, border: '1px solid #E2E6F0', background: '#fff', cursor: 'pointer' }}>Cancel</button>
+        <button onClick={apply} disabled={busy} style={{ padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600, background: '#224388', color: '#fff', border: 'none', cursor: 'pointer', opacity: busy ? 0.6 : 1 }}>{busy ? 'Applying…' : 'Set billing dates'}</button>
+      </div>
+    </Overlay>
+  )
+}
+
+function AssignModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const [blocks, setBlocks] = useState<{ supplier: string; entries: string }[]>([{ supplier: 'Maildoso', entries: '' }])
+  const [def, setDef] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const apply = async () => {
+    setBusy(true); setErr('')
+    const supplierDomains: Record<string, string[]> = {}, supplierEmails: Record<string, string[]> = {}
+    for (const b of blocks) {
+      const lines = b.entries.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean)
+      for (const l of lines) {
+        if (l.includes('@')) (supplierEmails[b.supplier] ||= []).push(l)
+        else (supplierDomains[b.supplier] ||= []).push(l)
+      }
+    }
+    const r = await fetch('/api/mailboxes/assign-suppliers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ supplierDomains, supplierEmails, defaultSupplier: def ? 'Mithun' : null }) })
+    const d = await r.json(); setBusy(false)
+    if (!r.ok) { setErr(d.error || 'Failed'); return }
+    onDone()
+  }
+  return (
+    <Overlay onClose={onClose}>
+      <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Bulk assign suppliers</h3>
+      <p style={{ fontSize: 13, color: '#6B7280', marginBottom: 16 }}>Paste domains or emails (one per line) for each supplier. Domains match a mailbox’s domain; emails match exactly.</p>
+      {blocks.map((b, i) => (
+        <div key={i} style={{ border: '1px solid #E2E6F0', borderRadius: 8, padding: 10, marginBottom: 8 }}>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+            <select value={b.supplier} onChange={e => setBlocks(bs => bs.map((x, j) => j === i ? { ...x, supplier: e.target.value } : x))} style={{ padding: 6, border: '1px solid #E2E6F0', borderRadius: 6 }}>{SUPPLIERS.map(s => <option key={s} value={s}>{s}</option>)}</select>
+            {blocks.length > 1 && <button onClick={() => setBlocks(bs => bs.filter((_, j) => j !== i))} style={{ marginLeft: 'auto', color: '#DC2626', background: 'none', border: 'none', cursor: 'pointer' }}>×</button>}
+          </div>
+          <textarea value={b.entries} onChange={e => setBlocks(bs => bs.map((x, j) => j === i ? { ...x, entries: e.target.value } : x))} rows={4} placeholder="example.com&#10;jane@example.com" style={{ width: '100%', padding: 8, border: '1px solid #E2E6F0', borderRadius: 6, fontSize: 12, fontFamily: 'monospace' }} />
+        </div>
+      ))}
+      <button onClick={() => setBlocks(bs => [...bs, { supplier: 'Winnr', entries: '' }])} style={{ fontSize: 12, color: '#224388', background: 'none', border: 'none', cursor: 'pointer', marginBottom: 12 }}>+ Add supplier block</button>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, marginBottom: 12 }}><input type="checkbox" checked={def} onChange={e => setDef(e.target.checked)} /> Default everything else to Mithun</label>
+      {err && <div style={{ color: '#DC2626', fontSize: 13, marginBottom: 8 }}>{err}</div>}
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <button onClick={onClose} style={{ padding: '8px 16px', borderRadius: 8, fontSize: 13, border: '1px solid #E2E6F0', background: '#fff', cursor: 'pointer' }}>Cancel</button>
+        <button onClick={apply} disabled={busy} style={{ padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600, background: '#224388', color: '#fff', border: 'none', cursor: 'pointer', opacity: busy ? 0.6 : 1 }}>{busy ? 'Applying…' : 'Apply assignments'}</button>
+      </div>
+    </Overlay>
+  )
+}
+
+interface PriceRow { supplier: string; mailbox_type: string; unit_cost: number | null; notes?: string }
+function PricingModal({ onClose }: { onClose: () => void }) {
+  const [rows, setRows] = useState<PriceRow[]>([])
+  const [msg, setMsg] = useState('')
+  useEffect(() => { fetch('/api/mailboxes/pricing').then(r => r.json()).then(setRows).catch(() => {}) }, [])
+  const save = async (r: PriceRow) => {
+    const res = await fetch('/api/mailboxes/pricing', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(r) })
+    setMsg(res.ok ? `Saved ${r.supplier} · ${r.mailbox_type}` : 'Save failed')
+  }
+  const del = async (r: PriceRow) => {
+    await fetch('/api/mailboxes/pricing', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ supplier: r.supplier, mailbox_type: r.mailbox_type }) })
+    setRows(rs => rs.filter(x => !(x.supplier === r.supplier && x.mailbox_type === r.mailbox_type)))
+  }
+  return (
+    <Overlay onClose={onClose}>
+      <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Mailbox pricing</h3>
+      <p style={{ fontSize: 13, color: '#6B7280', marginBottom: 16 }}>$/mailbox/month per supplier × type. Drives the $/mo column on the next sync.</p>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+        <thead><tr><th style={{ textAlign: 'left', padding: 6 }}>Supplier</th><th style={{ textAlign: 'left', padding: 6 }}>Type</th><th style={{ textAlign: 'left', padding: 6 }}>$/mo</th><th></th></tr></thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i}>
+              <td style={{ padding: 4 }}><select value={r.supplier} onChange={e => setRows(rs => rs.map((x, j) => j === i ? { ...x, supplier: e.target.value } : x))} style={{ padding: 4, border: '1px solid #E2E6F0', borderRadius: 6 }}>{SUPPLIERS.map(s => <option key={s} value={s}>{s}</option>)}</select></td>
+              <td style={{ padding: 4 }}><select value={r.mailbox_type} onChange={e => setRows(rs => rs.map((x, j) => j === i ? { ...x, mailbox_type: e.target.value } : x))} style={{ padding: 4, border: '1px solid #E2E6F0', borderRadius: 6 }}>{TYPES.map(t => <option key={t} value={t}>{t}</option>)}</select></td>
+              <td style={{ padding: 4 }}><input type="number" step="0.01" value={r.unit_cost ?? ''} onChange={e => setRows(rs => rs.map((x, j) => j === i ? { ...x, unit_cost: e.target.value === '' ? null : Number(e.target.value) } : x))} style={{ width: 80, padding: 4, border: '1px solid #E2E6F0', borderRadius: 6 }} /></td>
+              <td style={{ padding: 4 }}><button onClick={() => save(r)} style={{ fontSize: 11, color: '#224388', background: 'none', border: 'none', cursor: 'pointer' }}>Save</button> <button onClick={() => del(r)} style={{ fontSize: 11, color: '#DC2626', background: 'none', border: 'none', cursor: 'pointer' }}>Del</button></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <button onClick={() => setRows(rs => [...rs, { supplier: 'Maildoso', mailbox_type: 'google', unit_cost: null }])} style={{ fontSize: 12, color: '#224388', background: 'none', border: 'none', cursor: 'pointer', marginTop: 8 }}>+ Add row</button>
+      {msg && <div style={{ fontSize: 12, color: '#6B7280', marginTop: 8 }}>{msg}</div>}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}><button onClick={onClose} style={{ padding: '8px 16px', borderRadius: 8, fontSize: 13, border: '1px solid #E2E6F0', background: '#fff', cursor: 'pointer' }}>Close</button></div>
+    </Overlay>
   )
 }
 
@@ -336,6 +601,30 @@ function GroupCard({ g, accent }: { g: MailboxGroupStats; accent: string }) {
         <div style={{ height: '100%', width: `${(g.paused / total) * 100}%`, background: '#D97706' }} />
         <div style={{ height: '100%', width: `${(g.disconnected / total) * 100}%`, background: '#DC2626' }} />
       </div>
+    </div>
+  )
+}
+
+function DnsCol({ title, present, raw, extra }: { title: string; present: boolean; raw: string | null; extra?: string | null }) {
+  return (
+    <div>
+      <div style={{ fontWeight: 700, marginBottom: 2 }}>{title} {present ? <span style={{ color: '#16A34A' }}>✓ present</span> : <span style={{ color: '#DC2626' }}>✕ missing</span>}</div>
+      {extra && <div style={{ color: '#6B7280' }}>{extra}</div>}
+      {raw && <div style={{ fontFamily: 'monospace', fontSize: 10, color: '#374151', wordBreak: 'break-all', marginTop: 2 }}>{raw}</div>}
+    </div>
+  )
+}
+
+function TrendCharts({ history, border }: { history: HistoryResponse | null; border: string }) {
+  if (!(history && Object.keys(history.series).length > 0 && history.days.length > 1)) {
+    return <div style={{ background: '#fff', border: `1px solid ${border}`, borderRadius: 10, padding: '2rem', textAlign: 'center', fontSize: 13, color: '#6B7280' }}>Trend charts fill in as daily snapshots accumulate — or run a backfill.</div>
+  }
+  const entries = Object.entries(history.series)
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: '1rem' }}>
+      <ChartCard title="Reply rate %"><LineChart labels={history.days} series={entries.map(([k, s], i) => ({ label: k, data: s.reply_rate.map(v => v * 100), tone: ((i % 5 + 1) as 1 | 2 | 3 | 4 | 5), percent: true }))} /></ChartCard>
+      <ChartCard title="Bounce rate %"><LineChart labels={history.days} series={entries.map(([k, s], i) => ({ label: k, data: s.bounce_rate.map(v => v * 100), tone: ((i % 5 + 1) as 1 | 2 | 3 | 4 | 5), percent: true }))} /></ChartCard>
+      <ChartCard title="Total sent"><LineChart labels={history.days} series={entries.map(([k, s], i) => ({ label: k, data: s.sent, tone: ((i % 5 + 1) as 1 | 2 | 3 | 4 | 5) }))} /></ChartCard>
     </div>
   )
 }
