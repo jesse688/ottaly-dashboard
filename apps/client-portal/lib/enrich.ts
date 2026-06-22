@@ -251,10 +251,24 @@ export async function enrichUniboxReply(input: {
       [leadId, input.workspaceId, email]
     )
 
-    // 2) Signature extraction from the reply body.
+    // 2) Signature extraction from the reply body. If no body was passed (e.g.
+    //    PlusVibe-reconciler rows store the full signature in portal_emails, not
+    //    on the unibox row), fall back to the cached portal_emails HTML/text — the
+    //    freshest INBOUND message for this email — so the signature is never missed.
+    let body = input.body
+    if (!body || !body.trim()) {
+      const pe = await pool.query(
+        `SELECT COALESCE(body_html, body_text) AS b FROM portal_emails
+          WHERE workspace_id = $1 AND lower(lead_email) = $2 AND direction = 'IN'
+            AND COALESCE(body_html, body_text) IS NOT NULL
+          ORDER BY timestamp_created DESC NULLS LAST LIMIT 1`,
+        [input.workspaceId, email]
+      ).catch(() => ({ rows: [] as { b: string | null }[] }))
+      body = pe.rows[0]?.b ?? null
+    }
     const fields = await signatureFields()
-    if (fields.length && input.body) {
-      const found = extractSignatureFields(input.body, fields, email) as Record<string, string>
+    if (fields.length && body) {
+      const found = extractSignatureFields(body, fields, email) as Record<string, string>
       const { company_name, ...rawFields } = found
       if (Object.keys(rawFields).length) {
         await pool.query(
