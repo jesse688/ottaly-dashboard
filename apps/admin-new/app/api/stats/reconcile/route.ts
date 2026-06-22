@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
           WHERE workspace_id IS NOT NULL AND workspace_id <> ''`,
       ),
       pool.query(
-        `SELECT ws_id, data FROM perf_cache_daily WHERE date = $1`,
+        `SELECT ws_id, data, saved_at FROM perf_cache_daily WHERE date = $1`,
         [date],
       ),
       pool.query(
@@ -45,7 +45,11 @@ export async function GET(req: NextRequest) {
     ])
 
     const perf: Record<string, Record<string, number>> = {}
-    for (const r of perfRes.rows) perf[r.ws_id] = r.data || {}
+    const perfAge: Record<string, number> = {}
+    for (const r of perfRes.rows) {
+      perf[r.ws_id] = r.data || {}
+      perfAge[r.ws_id] = r.saved_at ? Math.round((Date.now() - Number(r.saved_at)) / 60000) : -1
+    }
     const esp: Record<string, { today: number; all_time: number }> = {}
     for (const r of espRes.rows) esp[r.workspace_id] = { today: r.today, all_time: r.all_time }
     const rev: Record<string, number> = {}
@@ -80,6 +84,28 @@ export async function GET(req: NextRequest) {
       )
     }
 
+    // ?refresh=1 (with ?live=1): overwrite the cache row for this date with the
+    // live PV values, so a stale/wrong cache is corrected on the spot.
+    let refreshed = 0
+    if (req.nextUrl.searchParams.get('refresh') === '1' && wantLive) {
+      for (const [wsId, v] of Object.entries(live)) {
+        if (typeof v === 'string') continue
+        const merged = {
+          sent: v.sent, replies: v.replies, oooReplies: v.ooo, posReplies: v.pos,
+          bounces: Number(perf[wsId]?.bounces) || 0,
+          contacted: Number(perf[wsId]?.contacted) || v.sent, leads: 0,
+        }
+        await pool.query(
+          `INSERT INTO perf_cache_daily (ws_id, date, data, saved_at)
+           VALUES ($1,$2,$3,$4)
+           ON CONFLICT (ws_id, date) DO UPDATE SET data = $3, saved_at = $4`,
+          [wsId, date, JSON.stringify(merged), Date.now()],
+        )
+        perf[wsId] = merged
+        refreshed++
+      }
+    }
+
     const rows = wsRes.rows
       .map((w: { workspace_id: string; workspace_name: string }) => {
         const d = perf[w.workspace_id] || {}
@@ -102,6 +128,7 @@ export async function GET(req: NextRequest) {
           leads_esp_today: esp[w.workspace_id]?.today ?? 0,
           leads_esp_all_time: esp[w.workspace_id]?.all_time ?? 0,
           leads_revenue_today: rev[w.workspace_id] ?? 0,
+          cache_age_min: perfAge[w.workspace_id] ?? -1,
           live_pv: live[w.workspace_id],
         }
       })
@@ -111,6 +138,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       date,
       pvKeyConfigured: !!(process.env.PLUSVIBE_KEY || process.env.PLUSVIBE_API_KEY),
+      refreshed,
       count: rows.length,
       rows,
     })
