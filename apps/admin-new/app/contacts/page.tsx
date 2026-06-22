@@ -2379,7 +2379,9 @@ function PushModal({
         return d
       })
       .then((d) => {
-        const c = Array.isArray(d) ? d : d.campaigns || []
+        // Legacy PV returns campaigns under `list`; Bison/others may use
+        // `campaigns` or a bare array. Accept all shapes.
+        const c = Array.isArray(d) ? d : d.list || d.campaigns || d.data || []
         setCampaigns(c)
         if (!c.length) setCampError('No campaigns in this workspace')
       })
