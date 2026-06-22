@@ -29,6 +29,13 @@ async function handle(req: NextRequest) {
   if (!authed) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   await ready()
 
+  // DISABLED. This route re-pended rows using a coarse `[a-z]{3,}-[a-z]{3,}` hyphen
+  // regex that matches ordinary words ("follow-up", "e-commerce") — it churned real
+  // replies, and its premise (a "tightened" warm-up rule) is obsolete now that
+  // warm-up is PV-tag-only. Kept as a no-op so any existing bookmark/cron call is
+  // harmless rather than 404. Re-classification is handled by the normal cron.
+  return NextResponse.json({ ok: true, requeued: 0, disabled: true })
+
   // A "hyphen-pair" warm-up tell: a lowercase word-hyphen-word token in the body.
   // This is a coarse SQL approximation of the detector's HYPHEN_PAIR — good enough
   // to SELECT candidates; the cron's detectWarmup makes the final call on re-run.

@@ -40,15 +40,14 @@ const SAFE = `
   AND folder <> 'replies'
 `
 
-// Bison-confirmed automated, sitting in a working queue → hide.
-const HIDE = `
-  (
-    bison_automated_reply = TRUE
-    OR (category = 'ooo_auto_reply' AND ai_model = 'prefilter')
-  )
-  AND folder IN ('inbox', 'review', 'unmapped')
-  AND ${SAFE}
-`
+// HIDE neutralized: the old criteria keyed off Bison's `bison_automated_reply`
+// column and the retired prefilter verdict (ai_model='prefilter'), both of which
+// silently buried genuine replies (the Simon Cook / Brett Ewen failures). Bison is
+// retired, so there is nothing safe left to auto-hide here. Match nothing — real
+// OOO/auto-acks are handled by the AI classifier into a VISIBLE folder, and any
+// historical cleanup must be an explicit, reviewed SQL migration, never this bulk
+// route. Use ?mode=full REQUEUE to hand suspected rows back to the AI instead.
+const HIDE = `FALSE`
 
 // Warm-up WE tagged that Bison did not confirm → hand back to the AI.
 const REQUEUE = `

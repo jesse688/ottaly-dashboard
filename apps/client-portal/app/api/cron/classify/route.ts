@@ -52,31 +52,14 @@ export async function GET(req: NextRequest) {
     for (const row of claimed.rows) {
       const id = row.id as string
       const raw = (row.raw ?? {}) as Record<string, unknown>
-      // Free pre-filter: Bison flags out-of-office / auto-acks as automated_reply.
-      const replyObj = (raw.reply ?? {}) as Record<string, unknown>
-      const automated =
-        raw.automated_reply === true || raw.automated_reply === 'true' ||
-        replyObj.automated_reply === true || replyObj.automated_reply === 'true'
-
-      if (automated) {
-        // Bison already identified this as automated (warm-up / OOO / auto-ack).
-        // File it to the hidden 'warmup' folder so it leaves the working queues —
-        // but never move a row already with the client or human-reviewed.
-        await client.query(
-          `UPDATE unibox_replies
-              SET category = 'ooo_auto_reply', classify_state = 'done',
-                  ai_model = 'prefilter', ai_reasoning = 'Bison automated_reply flag',
-                  folder = CASE
-                    WHEN folder IN ('inbox','review','unmapped')
-                         AND marked_as_lead = FALSE AND admin_label IS NULL
-                    THEN 'warmup' ELSE folder END,
-                  updated_at = NOW()
-            WHERE id = $1`,
-          [id]
-        )
-        summary.processed++
-        continue
-      }
+      // NOTE: we deliberately NO LONGER pre-filter on Bison's `raw.automated_reply`
+      // flag. EmailBison is retired, so that field is stale/untrusted — and it was
+      // filing rows straight to the HIDDEN warmup folder with no AI review, which
+      // silently buried genuine replies (the Simon Cook / Brett Ewen failures).
+      // Every row now flows to the PV-tag warmup check then the AI classifier;
+      // real OOO/auto-acks come back as 'ooo_auto_reply' into a VISIBLE folder, so
+      // nothing is lost by removing the shortcut. Warmup is reachable ONLY via a
+      // positive PlusVibe warmup_custom_words tag match (detectWarmupFull below).
 
       // Free pre-filter: warm-up emails (apple-apple etc.) are inbox-reputation
       // traffic, not real replies. The tell is a random hyphenated word-pair
