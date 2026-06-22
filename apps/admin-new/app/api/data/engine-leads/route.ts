@@ -16,12 +16,22 @@ export function buildEngineLeadsFilter(p: URLSearchParams) {
   const industry = list('industry')
   const region = list('region')
   const platform = list('platform')
+  const companySize = list('company_size')
   const search = (p.get('search') || '').trim() || null
 
   // has_products: 'true' | 'false' | anything-else => no filter (null)
   let hasProducts: boolean | null = null
   if (p.get('has_products') === 'true') hasProducts = true
   if (p.get('has_products') === 'false') hasProducts = false
+
+  // Numeric minimums (e.g. product_count >= N, page_count >= N).
+  const minProducts = parseInt(p.get('min_products') || '', 10)
+  const minPages = parseInt(p.get('min_pages') || '', 10)
+  const minProductCount = Number.isFinite(minProducts) ? minProducts : null
+  const minPageCount = Number.isFinite(minPages) ? minPages : null
+
+  // has_email: only rows with at least one email.
+  const hasEmail = p.get('has_email') === 'true' ? true : null
 
   const where = `
     WHERE ($1::text[] IS NULL OR source   = ANY($1))
@@ -30,9 +40,17 @@ export function buildEngineLeadsFilter(p: URLSearchParams) {
       AND ($4::text[] IS NULL OR region   = ANY($4))
       AND ($5::bool  IS NULL OR has_products = $5)
       AND ($6::text[] IS NULL OR platform = ANY($6))
-      AND ($7::text IS NULL OR domain ILIKE '%'||$7||'%' OR company_name ILIKE '%'||$7||'%')`
+      AND ($7::text IS NULL OR domain ILIKE '%'||$7||'%' OR company_name ILIKE '%'||$7||'%')
+      AND ($8::text[] IS NULL OR company_size = ANY($8))
+      AND ($9::int  IS NULL OR product_count >= $9)
+      AND ($10::int IS NULL OR page_count    >= $10)
+      AND ($11::bool IS NULL OR (email_primary IS NOT NULL AND email_primary <> ''))`
 
-  return { where, params: [source, show, industry, region, hasProducts, platform, search] }
+  return {
+    where,
+    params: [source, show, industry, region, hasProducts, platform, search,
+             companySize, minProductCount, minPageCount, hasEmail],
+  }
 }
 
 export async function GET(req: NextRequest) {
@@ -52,7 +70,7 @@ export async function GET(req: NextRequest) {
     const { rows } = await pool.query(
       `SELECT * FROM ottaly_engine_leads ${where}
        ORDER BY promoted_at DESC NULLS LAST
-       LIMIT $8 OFFSET $9`,
+       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
       [...params, limit, offset]
     )
 

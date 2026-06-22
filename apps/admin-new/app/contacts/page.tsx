@@ -201,6 +201,11 @@ export default function DataPage() {
   const [engineIndustry, setEngineIndustry] = useState('')
   const [engineRegion, setEngineRegion] = useState('')
   const [enginePlatform, setEnginePlatform] = useState('')
+  const [engineSize, setEngineSize] = useState('')
+  const [engineHasProducts, setEngineHasProducts] = useState('') // '' | 'true' | 'false'
+  const [engineHasEmail, setEngineHasEmail] = useState(false)
+  const [engineMinProducts, setEngineMinProducts] = useState('')
+  const [engineMinPages, setEngineMinPages] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [visibleCols, setVisibleCols] = useState<Set<string>>(
     () => new Set(ALL_COLUMNS.filter((c) => c.defaultOn).map((c) => c.key))
@@ -253,6 +258,11 @@ export default function DataPage() {
         if (engineIndustry) p.set('industry', engineIndustry)
         if (engineRegion) p.set('region', engineRegion)
         if (enginePlatform) p.set('platform', enginePlatform)
+        if (engineSize) p.set('company_size', engineSize)
+        if (engineHasProducts) p.set('has_products', engineHasProducts)
+        if (engineHasEmail) p.set('has_email', 'true')
+        if (engineMinProducts) p.set('min_products', engineMinProducts)
+        if (engineMinPages) p.set('min_pages', engineMinPages)
         Object.entries(extra).forEach(([k, v]) => p.set(k, v))
         return p
       }
@@ -265,7 +275,8 @@ export default function DataPage() {
       Object.entries(extra).forEach(([k, v]) => p.set(k, v))
       return p
     },
-    [dataset, searchText, engineSource, engineShow, engineIndustry, engineRegion, enginePlatform, filters, sortBy, sortDir]
+    [dataset, searchText, engineSource, engineShow, engineIndustry, engineRegion, enginePlatform,
+     engineSize, engineHasProducts, engineHasEmail, engineMinProducts, engineMinPages, filters, sortBy, sortDir]
   )
 
   // ── Fetch contacts ────────────────────────────────────────────────────────
@@ -759,6 +770,48 @@ export default function DataPage() {
                 value={enginePlatform}
                 onChange={(v) => { setEnginePlatform(v); setPage(0) }}
               />
+              <EngineMultiSelect
+                field="company_size"
+                label="Company size"
+                value={engineSize}
+                onChange={(v) => { setEngineSize(v); setPage(0) }}
+              />
+              <div>
+                <Label className="text-xs text-gray-500">Has products</Label>
+                <Select
+                  value={engineHasProducts || '__any'}
+                  onValueChange={(v) => { setEngineHasProducts(v && v !== '__any' ? v : ''); setPage(0) }}
+                >
+                  <SelectTrigger className="h-8 mt-1"><SelectValue placeholder="Any" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__any">Any</SelectItem>
+                    <SelectItem value="true">Yes</SelectItem>
+                    <SelectItem value="false">No</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <Label className="text-xs text-gray-500">Min products</Label>
+                  <Input
+                    type="number" min={0} className="h-8 mt-1" placeholder="0"
+                    value={engineMinProducts}
+                    onChange={(e) => { setEngineMinProducts(e.target.value); setPage(0) }}
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs text-gray-500">Min pages</Label>
+                  <Input
+                    type="number" min={0} className="h-8 mt-1" placeholder="0"
+                    value={engineMinPages}
+                    onChange={(e) => { setEngineMinPages(e.target.value); setPage(0) }}
+                  />
+                </div>
+              </div>
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <Checkbox checked={engineHasEmail} onCheckedChange={(v) => { setEngineHasEmail(!!v); setPage(0) }} />
+                Has email only
+              </label>
               <p className="text-[11px] leading-relaxed text-gray-400">
                 Engine leads are scraped, unverified prospects — kept separate from
                 the verified Contacts pool. Use the Source and Show filters above,
