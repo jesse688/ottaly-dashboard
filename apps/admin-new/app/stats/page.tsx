@@ -90,20 +90,21 @@ const isPercent = (s: SeriesKey) =>
 
 function seriesValue(s: SeriesKey, d: DayData): number | null {
   const sent = d.sent || 0
-  // Legacy convention: `replies` (total_reply_count) is the HUMAN/non-OOO count;
-  // `ooo` is a separate additive bucket. Human RR = replies/sent.
+  // PV's total_reply_count INCLUDES OOO; human = total − ooo (verified vs PV's
+  // "Reply Rate (w/OOO)" vs "Reply Rate" columns).
   const replies = d.replies || 0
   const ooo = d.oooReplies || 0
+  const human = Math.max(0, replies - ooo)
   switch (s) {
     case 'humanRR':
-      return sent > 0 ? +((replies / sent) * 100).toFixed(2) : null
+      return sent > 0 ? +((human / sent) * 100).toFixed(2) : null
     case 'oooRR':
       return sent > 0 ? +((ooo / sent) * 100).toFixed(2) : null
     case 'bounceRate':
       return sent > 0 ? +(((d.bounces || 0) / sent) * 100).toFixed(2) : null
     case 'rtl':
-      // Replies-To-Lead: replies needed per lead (replies ÷ leads). Lower = better.
-      return (d.leads || 0) > 0 ? +((replies / (d.leads || 1))).toFixed(1) : null
+      // Replies-To-Lead: HUMAN replies needed per lead (human ÷ leads, OOO excl).
+      return (d.leads || 0) > 0 ? +((human / (d.leads || 1))).toFixed(1) : null
     case 'sent':
       return sent
     case 'leads':
@@ -171,13 +172,13 @@ function buildAllWorkspaces(list: Workspace[]): Workspace | null {
     name: `All Workspaces (${list.length})`,
     totals: {
       ...t,
-      // Human RR = replies/sent (replies is the human/non-OOO count); Reply Rate
-      // (all) adds the separate OOO bucket. Matches legacy stats/performance.
-      replyRate: t.sent > 0 ? t.replies / t.sent : 0,
-      allReplyRate: t.sent > 0 ? (t.replies + t.oooReplies) / t.sent : 0,
+      // total_reply_count INCLUDES OOO; human = total − ooo. Verified vs PV.
+      replyRate: t.sent > 0 ? Math.max(0, t.replies - t.oooReplies) / t.sent : 0,
+      allReplyRate: t.sent > 0 ? t.replies / t.sent : 0,
       bounceRate: t.sent > 0 ? t.bounces / t.sent : 0,
       // RTL = Replies-To-Lead: replies needed per lead (replies ÷ leads).
-      rtl: t.leads > 0 ? t.replies / t.leads : 0,
+      // RTL uses HUMAN replies (OOO excluded) per lead.
+      rtl: t.leads > 0 ? Math.max(0, t.replies - t.oooReplies) / t.leads : 0,
       // LPT = Contacts-To-Lead: people contacted per lead (contacted ÷ leads).
       lpt: t.leads > 0 ? t.contacted / t.leads : 0,
       sendsPerDay: t.sent / days,
