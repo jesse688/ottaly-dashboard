@@ -35,10 +35,15 @@ export const CATEGORIES: ReplyCategory[] = [
 // "skill-champ pumped", "climate-sufficient week". (Also the literal "warmup"
 // markers + common tool names.) We allowlist genuine compounds so real replies
 // ("award-winning", "eco-friendly", "next-gen") are never mis-flagged.
-// Bison's warmup tell: a repeated word token injected into prose ("apple apple").
-// We rely on Bison to filter its own warmup emails — this is the only pattern
-// we keep so we don't mis-classify genuine replies.
-const BISON_WARMUP = /\b([a-z]{3,})[\s_]+\1\b/i
+// Bison's warmup tell: a repeated word token injected INLINE into prose
+// ("apple apple"). Must be SAME-LINE (a single space/tab/underscore between the
+// two copies) — earlier this allowed any whitespace incl. newlines, which matched
+// ordinary sign-offs that put a first name then a full name on separate lines
+// ("Simon\n\nSimon Cook") and buried real interested replies in the warm-up
+// folder. We rely on Bison to filter its own warmup; this is only a safety net,
+// so keeping it strict is correct — the authoritative filter is the PV/Bison
+// warmup TAGS below (unique random word-pairs, zero false positives).
+const BISON_WARMUP = /\b([a-z]{3,})[ \t_]+\1\b/i
 
 export interface WarmupSignals {
   subject?: string
