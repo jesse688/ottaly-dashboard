@@ -30,8 +30,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const sel = await client.query(
       `SELECT id, bison_reply_id, workspace_id, lead_bison_id, lead_email, subject,
               body_preview, received_at, marked_as_lead, label_type,
-              raw->>'html_body'   AS reply_html,
-              raw->>'text_body'   AS reply_text
+              -- Full body with signature/image. PV-reconciler rows nest it at
+              -- raw.body.html/.text; Bison rows use raw.html_body/.text_body.
+              COALESCE(NULLIF(raw->'body'->>'html',''), NULLIF(raw->>'html_body','')) AS reply_html,
+              COALESCE(NULLIF(raw->'body'->>'text',''), NULLIF(raw->>'text_body','')) AS reply_text
          FROM unibox_replies WHERE id = $1 FOR UPDATE`,
       [id]
     )
@@ -75,8 +77,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
             body_html, body_text, content_preview, from_email, is_unread, timestamp_created, raw)
          VALUES ($1,$2,$3,$4,'IN',$5,$6,$7,$8,$9,1,$10,'{}'::jsonb)
          ON CONFLICT (id) DO UPDATE SET
-           body_html       = COALESCE(EXCLUDED.body_html, portal_emails.body_html),
-           body_text       = COALESCE(EXCLUDED.body_text, portal_emails.body_text),
+           -- Keep whichever HTML/text is longer so a re-mark upgrades a lossy row
+           -- to the full body+signature.
+           body_html       = CASE WHEN length(COALESCE(EXCLUDED.body_html,'')) > length(COALESCE(portal_emails.body_html,''))
+                                  THEN EXCLUDED.body_html ELSE COALESCE(portal_emails.body_html, EXCLUDED.body_html) END,
+           body_text       = CASE WHEN length(COALESCE(EXCLUDED.body_text,'')) > length(COALESCE(portal_emails.body_text,''))
+                                  THEN EXCLUDED.body_text ELSE COALESCE(portal_emails.body_text, EXCLUDED.body_text) END,
            content_preview = COALESCE(EXCLUDED.content_preview, portal_emails.content_preview),
            subject         = COALESCE(portal_emails.subject, EXCLUDED.subject)`,
         [msgId, ws, reply.lead_bison_id, email, reply.subject,
