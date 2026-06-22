@@ -6,6 +6,7 @@ import {
   getCampaigns,
   getCampaignReplies,
   registerWebhookAllWorkspaces,
+  BISON_INGEST_ENABLED,
   type BisonReply,
 } from '@/lib/bison'
 import { resolveClientId } from '@/lib/clients'
@@ -39,6 +40,13 @@ export async function GET(req: NextRequest) {
   }
 
   await ready()
+
+  // Migrated to PlusVibe: replies arrive via the external pv-reconciler. The Bison
+  // reconcile only re-pulls Bison replies → duplicate unibox rows. Disabled unless
+  // BISON_INGEST_ENABLED is set. Returns 200 so any scheduler treats it as success.
+  if (!BISON_INGEST_ENABLED) {
+    return NextResponse.json({ ok: true, skipped: 'bison_ingest_disabled' })
+  }
 
   // Window: only consider replies received within the last N days (default 3).
   // Bison's list isn't date-filterable server-side, so we filter client-side on

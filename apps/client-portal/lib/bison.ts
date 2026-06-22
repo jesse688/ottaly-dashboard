@@ -625,6 +625,15 @@ export async function registerWebhookAllWorkspaces(): Promise<{ ok: boolean; res
 // Settings override — use getBisonKey() when correctness matters.
 export const BISON_CONFIGURED = ENV_KEY.length > 0
 
+// Master switch for Bison REPLY INGESTION into the unibox. We've migrated to
+// PlusVibe (replies arrive via the external pv-reconciler), so Bison's webhook +
+// reconcile pipeline now only produces DUPLICATE unibox rows. Default OFF; set
+// BISON_INGEST_ENABLED=true to re-enable (reversible, no code change). This gates
+// ONLY ingestion (webhook handling, webhook registration, the reconcile cron) —
+// it does NOT touch outbound Bison API use or PlusVibe ingestion.
+export const BISON_INGEST_ENABLED =
+  /^(1|true|yes|on)$/i.test(process.env.BISON_INGEST_ENABLED ?? '')
+
 // Mint a per-workspace (user) Bison token for one team, using the SUPER-ADMIN
 // key. POST /api/workspaces/v1.1/{team_id}/api-tokens → plain_text_token.
 // Returns the token, or null on failure. Goes through the lock with NO ws-token

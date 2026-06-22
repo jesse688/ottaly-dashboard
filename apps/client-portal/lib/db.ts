@@ -495,7 +495,14 @@ export function ready(): Promise<void> {
 
 // Kick off migration immediately; auto-register Bison webhook once DB is ready.
 ready().then(() => {
-  import('./bison').then(({ registerWebhookAllWorkspaces }) => {
+  import('./bison').then(({ registerWebhookAllWorkspaces, BISON_INGEST_ENABLED }) => {
+    // Migrated to PlusVibe: replies arrive via the external pv-reconciler. Don't
+    // (re-)register Bison webhooks — that only revives the duplicate firehose.
+    // Re-enable with BISON_INGEST_ENABLED=true.
+    if (!BISON_INGEST_ENABLED) {
+      console.log('[bison] ingestion disabled (BISON_INGEST_ENABLED off) — skipping webhook registration')
+      return
+    }
     // Register in EVERY workspace (Bison webhooks are per-workspace).
     registerWebhookAllWorkspaces().then(r => {
       console.log('[bison] webhooks registered:', JSON.stringify(r.results))
