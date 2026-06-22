@@ -12184,7 +12184,7 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
     workspace_id, campaign_id,
     allowedProviders,
     total: contact_ids.length,
-    skipped: 0, verified: 0, safe: 0, risky: 0, invalid: 0, unknown: 0,
+    skipped: 0, verified: 0, processed: 0, safe: 0, risky: 0, invalid: 0, unknown: 0,
     pushed: 0, progress: 0,
     created_at: Date.now(),
     error: null
@@ -12483,6 +12483,10 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
         }
         doneCount++;
         job.verified  = doneCount;
+        // processed = everything the user sees as "done" out of total: the
+        // contacts we re-verified this run PLUS the ones we skipped because
+        // they already had a fresh verdict. This is the numerator the UI reads.
+        job.processed = (job.skipped || 0) + doneCount;
         job.safe         = Object.values(verifyResults).filter(s => s === 'safe').length;
         job.safe_catchall= Object.values(verifyResults).filter(s => s === 'safe_catchall').length;
         job.risky        = Object.values(verifyResults).filter(s => s === 'risky').length;
@@ -12641,6 +12645,10 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
         if (sq) { try { sq.prepare(`DELETE FROM paused_push_jobs WHERE id = ?`).run(job.id); } catch {} }
         job.status = job.cancelled ? 'cancelled' : 'completed';
         job.progress = 100;
+        // On a clean completion every contact has been accounted for, so the
+        // numerator should read the full total (avoids an off-by-skipped after
+        // job.skipped is reassigned to the filter-reason breakdown object above).
+        if (!job.cancelled) job.processed = job.total;
       }
     } catch (err) {
       job.status = 'failed';
