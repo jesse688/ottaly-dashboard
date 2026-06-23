@@ -199,6 +199,52 @@ function downloadLeadsCsv(leads: Lead[], companyName: string) {
   document.body.appendChild(a); a.click(); a.remove()
   URL.revokeObjectURL(url)
 }
+
+// Download ONE lead — richer than the bulk export (every field), written as a
+// Field,Value sheet so it's readable for a single record.
+function downloadLeadCsv(l: Lead) {
+  const emailLocal = (l.email ?? '').split('@')[0] ?? ''
+  const guessFirst = emailLocal.split(/[._-]+/).filter(Boolean).map(p => p.charAt(0).toUpperCase() + p.slice(1))[0] ?? ''
+  const fields: [string, string | null][] = [
+    ['First name', l.first_name?.trim() || guessFirst || null],
+    ['Last name', l.last_name],
+    ['Email', l.email],
+    ['Mobile', l.mobile_phone ?? l.phone_number],
+    ['Office', l.office_phone],
+    ['Job title', l.job_title],
+    ['Department', l.department],
+    ['Company', l.company_name],
+    ['Website', l.company_website],
+    ['LinkedIn', l.linkedin_url],
+    ['Company LinkedIn', l.linkedin_company_url],
+    ['Industry', l.industry],
+    ['City', l.city],
+    ['State', l.state],
+    ['Country', l.country],
+    ['Address', l.address_line],
+    ['CH company number', l.ch_company_number],
+    ['CH status', l.ch_company_status],
+    ['CH type', l.ch_company_type],
+    ['CH incorporated', l.ch_incorporated_on],
+    ['CH registered address', l.ch_registered_address],
+    ['CH SIC codes', l.ch_sic_codes],
+    ['Stage', l.client_label],
+    ['Deal value', l.deal_value],
+    ['Deal notes', l.deal_notes],
+    ['Campaign', l.campaign_name],
+    ['First replied', l.first_replied_at],
+    ['Last reply', l.last_reply_at],
+  ]
+  const csv = '﻿' + [['Field', 'Value'], ...fields.map(([k, v]) => [k, v])].map(r => r.map(csvCell).join(',')).join('\r\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  const who = (l.first_name && l.last_name) ? `${l.first_name}-${l.last_name}` : (l.email?.split('@')[0] ?? 'lead')
+  a.href = url
+  a.download = `lead-${who.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.csv`
+  document.body.appendChild(a); a.click(); a.remove()
+  URL.revokeObjectURL(url)
+}
 // Split an email body into the new reply vs the quoted history below it, so the
 // client reads the actual reply and our earlier email tucks into a fold.
 // Some messages (esp. received mail) arrive with ONLY an HTML body and no
@@ -293,6 +339,28 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
   const [notesSaving, setNotesSaving] = useState(false)
   const notesLoadedFor = useRef<string | null>(null)
 
+  // On-demand "find phone from website" scrape for the selected lead.
+  const [scraping, setScraping] = useState(false)
+  const [scrapeMsg, setScrapeMsg] = useState('')
+  const scrapePhone = async () => {
+    if (!selected) return
+    setScraping(true); setScrapeMsg('')
+    try {
+      const r = await fetch(`/api/portal/leads/${selected.id}/scrape-enrich`, { method: 'POST' })
+      const d = await r.json() as { ok?: boolean; phone?: string; message?: string }
+      if (d.ok && d.phone) {
+        setScrapeMsg(`Found: ${d.phone}`)
+        // reflect immediately in the panel + the list
+        setSelected(prev => prev ? { ...prev, phone_number: prev.phone_number ?? d.phone!, mobile_phone: prev.mobile_phone ?? d.phone! } : prev)
+        setLeads(prev => prev?.map(l => l.id === selected.id ? { ...l, phone_number: l.phone_number ?? d.phone!, mobile_phone: l.mobile_phone ?? d.phone! } : l) ?? null)
+      } else {
+        setScrapeMsg(d.message || 'No phone found on the website.')
+      }
+    } catch {
+      setScrapeMsg('Scrape failed — try again.')
+    } finally { setScraping(false) }
+  }
+
   const [showDispute, setShowDispute] = useState(false)
   const [disputeType, setDisputeType] = useState<'non_lead' | 'icp_mismatch'>('non_lead')
   const [disputeReason, setDisputeReason] = useState('')
@@ -360,6 +428,7 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
   function openLead(lead: Lead) {
     setSelected(lead)
     setReplyMsg('')
+    setScrapeMsg(''); setScraping(false)
     setShowDispute(false); setThread(null); setShowDetails(false)
     // Load this lead's saved notes (current value from the server, not the list's
     // possibly-suppressed copy). Reset saved-state for the new lead.
@@ -818,6 +887,10 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
                     Mark as replied
                   </button>
                 )}
+                <button onClick={() => downloadLeadCsv(selected)} title="Download this lead as a CSV" className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-600 hover:bg-gray-50">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  Download
+                </button>
                 <button onClick={() => toggleArchive(selected)} title={selected.archived ? 'Unarchive' : 'Archive'} className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-600 hover:bg-gray-50">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4"/></svg>
                   {selected.archived ? 'Unarchive' : 'Archive'}
@@ -991,6 +1064,19 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
                 {(selected.mobile_phone || selected.phone_number) && <Row icon="phone" label={`Mobile: ${selected.mobile_phone ?? selected.phone_number}`} />}
                 {selected.office_phone && <Row icon="phone" label={`Office: ${selected.office_phone}`} />}
                 {selected.linkedin_url && <Row icon="link" label="LinkedIn profile" href={selected.linkedin_url} />}
+                {/* No phone on file → offer to scrape the company website for one. */}
+                {!selected.mobile_phone && !selected.phone_number && !selected.office_phone && (
+                  <div className="mt-1.5">
+                    <button
+                      onClick={scrapePhone}
+                      disabled={scraping}
+                      className="text-xs font-medium text-brand-600 hover:text-brand-800 disabled:opacity-50"
+                    >
+                      {scraping ? 'Searching website…' : '🔍 Find phone from website'}
+                    </button>
+                    {scrapeMsg && <div className="mt-1 text-[11px] text-muted-foreground">{scrapeMsg}</div>}
+                  </div>
+                )}
               </Section>
             )}
 
