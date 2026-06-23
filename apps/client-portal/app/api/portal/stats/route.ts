@@ -9,7 +9,7 @@ export async function GET() {
   const { workspaceId } = session
 
   try {
-    const [statsRes, campaignRes, leadsRes] = await Promise.all([
+    const [statsRes, campaignRes, leadsRes, repliesRes] = await Promise.all([
       pool.query(
         `SELECT
            COALESCE(SUM((data->>'sent_count')::int), 0)          AS total_sent,
@@ -41,6 +41,19 @@ export async function GET() {
          ) d`,
         [workspaceId]
       ),
+      // Human replies captured in OUR unibox over the last 30 days — distinct
+      // leads who actually replied, EXCLUDING warm-up + OOO/automated. This is our
+      // source of truth: a genuine human reply PlusVibe tagged "other" still counts,
+      // even if it was never marked a lead.
+      pool.query(
+        `SELECT COUNT(DISTINCT lower(lead_email)) AS human_replies
+           FROM unibox_replies
+          WHERE workspace_id = $1
+            AND received_at >= CURRENT_DATE - INTERVAL '30 days'
+            AND folder NOT IN ('warmup', 'ooo')
+            AND COALESCE(admin_label, category, '') NOT IN ('warmup', 'ooo_auto_reply')`,
+        [workspaceId]
+      ),
     ])
 
     const stats = statsRes.rows[0]
@@ -48,7 +61,11 @@ export async function GET() {
     const leads = leadsRes.rows[0]
 
     const sent = parseInt(stats.total_sent)
-    const replied = parseInt(stats.total_replied)
+    // Use the GREATER of PlusVibe's count and our unibox human-reply count, so a
+    // reply PV didn't record (e.g. tagged "other") still shows in the stats.
+    const pvReplied = parseInt(stats.total_replied)
+    const uniboxReplied = parseInt(repliesRes.rows[0]?.human_replies ?? '0')
+    const replied = Math.max(pvReplied, uniboxReplied)
 
     return NextResponse.json({
       sent,
