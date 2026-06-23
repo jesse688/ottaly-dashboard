@@ -5,9 +5,10 @@ export const dynamic = 'force-dynamic'
 
 // GET /api/mailboxes/history?dimension=supplier|type&days=30
 // Per-group daily series for the provider/supplier performance cards. Returns
-// raw daily counts so the cards can show SENT, human RR ((replies-ooo)/
-// contacted), RR+OOO (replies/contacted), and bounce rate — and a toggleable
-// multi-line chart.
+// raw daily counts so the cards can show SENT, human RR (replies/contacted),
+// RR+OOO ((replies+ooo)/contacted), and bounce rate — and a toggleable
+// multi-line chart. NOTE: total_replies is PV's total_reply_count, which is
+// ALREADY the human/non-OOO count; total_ooo is a SEPARATE additive bucket.
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url)

@@ -394,19 +394,27 @@ export async function syncMailboxes(): Promise<{ ok: boolean; count: number; err
       // Drop rows for mailboxes that no longer exist in PlusVibe.
       await client.query(`DELETE FROM mailbox_full WHERE synced_at < now() - interval '1 minute'`)
 
-      // Daily trend snapshot: aggregate by supplier and by type, upsert today's
-      // row per group so multiple syncs in a day just refresh it. History grows
-      // one day per day for the trend charts.
-      type Agg = { count: number; active: number; sent: number; replies: number; bounces: number; warm: number }
+      // Daily trend snapshot: ONLY point-in-time GROUP METADATA (count / active /
+      // warmup_pct) for today's row per group. It MUST NOT touch the per-day
+      // count columns (total_sent / total_replies / total_ooo / total_contacted /
+      // total_bounces) or the rates — those share this PK and are OWNED by
+      // backfillSupplierDaily, which sets them from each mailbox's DAILY chart.
+      //
+      // BUG THIS FIXES: the snapshot used to write `attributed_sent` (a 30-DAY
+      // total) into today's `total_sent` and leave total_replies/ooo/contacted
+      // unset. On a fresh day (before the daily backfill ran) that made today's
+      // row show 30 days of sends with zero replies → INFLATED SENT + BROKEN RR.
+      // By only upserting metadata here, the daily counts stay 0 until backfill
+      // fills them with the real per-day numbers.
+      type Agg = { count: number; active: number; warm: number }
       const roll = (keyFn: (m: FullMailbox) => string | null) => {
         const g = new Map<string, Agg>()
         for (const m of full) {
           const k = keyFn(m); if (!k) continue
-          const a = g.get(k) ?? { count: 0, active: 0, sent: 0, replies: 0, bounces: 0, warm: 0 }
+          const a = g.get(k) ?? { count: 0, active: 0, warm: 0 }
           a.count++
           if ((m.status || '').toUpperCase() === 'ACTIVE') a.active++
           if ((m.warmup_status || '').toUpperCase() === 'ACTIVE') a.warm++
-          a.sent += m.attributed_sent; a.replies += m.attributed_replies; a.bounces += m.attributed_bounces
           g.set(k, a)
         }
         return g
@@ -418,14 +426,11 @@ export async function syncMailboxes(): Promise<{ ok: boolean; count: number; err
       for (const [dimension, groups] of dims) {
         for (const [key, a] of groups) {
           await client.query(
-            `INSERT INTO mailbox_supplier_daily (day, dimension, key, count, active, total_sent, reply_rate, bounce_rate, warmup_pct)
-             VALUES (CURRENT_DATE, $1, $2, $3, $4, $5, $6, $7, $8)
+            `INSERT INTO mailbox_supplier_daily (day, dimension, key, count, active, warmup_pct)
+             VALUES (CURRENT_DATE, $1, $2, $3, $4, $5)
              ON CONFLICT (day, dimension, key) DO UPDATE SET
-               count=EXCLUDED.count, active=EXCLUDED.active, total_sent=EXCLUDED.total_sent,
-               reply_rate=EXCLUDED.reply_rate, bounce_rate=EXCLUDED.bounce_rate, warmup_pct=EXCLUDED.warmup_pct`,
-            [dimension, key, a.count, a.active, a.sent,
-             a.sent > 0 ? a.replies / a.sent : 0,
-             a.sent > 0 ? a.bounces / a.sent : 0,
+               count=EXCLUDED.count, active=EXCLUDED.active, warmup_pct=EXCLUDED.warmup_pct`,
+            [dimension, key, a.count, a.active,
              a.count > 0 ? Math.round((a.warm / a.count) * 100) : 0]
           )
         }
@@ -457,12 +462,17 @@ export { SUPPLIERS_ALLOWED }
 // against overlap. Mirrors the cache-warming interval pattern.
 let _mbSchedulerStarted = false
 let _mbJobRunning = false
-async function runSyncThenMaybeBackfill(withBackfill: boolean) {
+// backfillDays: how many trailing days to refresh the daily counts for. A small
+// window (2) is cheap enough to run every cycle and keeps TODAY's per-day
+// sent/replies/ooo/contacted live; the full 90-day pass heals history once a day.
+async function runSyncThenMaybeBackfill(backfillDays: number) {
   if (_mbJobRunning) return
   _mbJobRunning = true
   try {
     await syncMailboxes()
-    if (withBackfill) await backfillSupplierDaily(90)
+    // ALWAYS refresh today (+yesterday) so today's daily counts are real, not 0.
+    // The 30-min snapshot only writes metadata now — backfill OWNS the counts.
+    await backfillSupplierDaily(backfillDays)
   } catch (e) {
     console.error('[mailbox-scheduler]', e instanceof Error ? e.message : e)
   } finally {
@@ -473,12 +483,13 @@ export function startMailboxSyncInterval(): void {
   if (_mbSchedulerStarted) return
   _mbSchedulerStarted = true
   // Initial run shortly after boot: sync + a full 90-day backfill.
-  setTimeout(() => { void runSyncThenMaybeBackfill(true) }, 15_000)
-  // Sync every 30 min (keeps mailbox_full + today's snapshot fresh).
-  setInterval(() => { void runSyncThenMaybeBackfill(false) }, 30 * 60 * 1000)
+  setTimeout(() => { void runSyncThenMaybeBackfill(90) }, 15_000)
+  // Every 30 min: sync + a SHORT 2-day backfill so today's per-day counts stay
+  // live (sent/replies/ooo/contacted), not stuck at 0 until the daily pass.
+  setInterval(() => { void runSyncThenMaybeBackfill(2) }, 30 * 60 * 1000)
   // Full 90-day backfill once a day (heals any gaps / supplier re-tags).
-  setInterval(() => { void runSyncThenMaybeBackfill(true) }, 24 * 60 * 60 * 1000)
-  console.log('[mailbox-scheduler] started (sync 30m, backfill daily)')
+  setInterval(() => { void runSyncThenMaybeBackfill(90) }, 24 * 60 * 60 * 1000)
+  console.log('[mailbox-scheduler] started (sync+2d backfill 30m, full 90d daily)')
 }
 
 // Auto-start on the server only.
