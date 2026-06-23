@@ -406,29 +406,50 @@ export async function getLeadRepliesByEmail(
 // are reached, so genuine leads are never ingested. Instead we page by the DATE
 // window — keep going until a page's newest reply is older than `sinceMs` — with
 // a high safety cap. Warm-up volume no longer crowds out real replies.
-const MAX_UNTRACKED_PAGES = 400  // safety backstop only; the date window is the real bound
+const MAX_UNTRACKED_PAGES = 400   // safety backstop only; the date window is the real bound
+const PAGE_CONCURRENCY = 8        // fetch this many pages at once (same team token, all GETs)
 export async function getUntrackedReplies(sinceMs?: number): Promise<BisonReply[]> {
-  const out: BisonReply[] = []
-  for (let p = 1; p <= MAX_UNTRACKED_PAGES; p++) {
-    const data = await bison<{ data?: BisonReply[]; meta?: { last_page?: number } }>(
+  const fetchPage = (p: number) =>
+    bison<{ data?: BisonReply[]; meta?: { last_page?: number } }>(
       'GET', '/api/replies', { folder: 'inbox', page: p }
     )
-    const batch = Array.isArray(data) ? (data as unknown as BisonReply[]) : data.data ?? []
-    if (!batch.length) break
-    out.push(...batch.filter(r => r.tracked_reply === false))
-    const lastPage = (data as { meta?: { last_page?: number } }).meta?.last_page ?? 1
-    if (p >= lastPage) break
-    // Stop once we've paged past the requested window. Newest-first ordering means
-    // the newest item on a page is its upper bound — if even that is older than the
-    // window, every later page is older too. Guard on a parseable date so a missing
-    // timestamp never ends the loop early.
-    if (sinceMs != null) {
-      const newest = batch.reduce((max, r) => {
-        const t = r.date_received ? Date.parse(r.date_received) : NaN
-        return Number.isNaN(t) ? max : Math.max(max, t)
-      }, -Infinity)
-      if (newest !== -Infinity && newest < sinceMs) break
+      .then(d => ({
+        batch: (Array.isArray(d) ? (d as unknown as BisonReply[]) : d.data ?? []),
+        lastPage: (d as { meta?: { last_page?: number } }).meta?.last_page ?? 1,
+      }))
+      .catch(() => ({ batch: [] as BisonReply[], lastPage: 1 }))
+
+  // Newest received timestamp on a page; -Infinity if none parse. Bison returns
+  // newest-first, so once a page's newest item is older than the window, every
+  // later page is too — we can stop.
+  const newestOf = (b: BisonReply[]) => b.reduce((max, r) => {
+    const t = r.date_received ? Date.parse(r.date_received) : NaN
+    return Number.isNaN(t) ? max : Math.max(max, t)
+  }, -Infinity)
+  const pastWindow = (b: BisonReply[]) => {
+    if (sinceMs == null) return false
+    const n = newestOf(b)
+    return n !== -Infinity && n < sinceMs
+  }
+
+  const first = await fetchPage(1)
+  const out: BisonReply[] = first.batch.filter(r => r.tracked_reply === false)
+  const lastPage = Math.min(first.lastPage, MAX_UNTRACKED_PAGES)
+  if (pastWindow(first.batch)) return out
+
+  // Page the rest in parallel blocks (the team token is already set by withTeam,
+  // and these are all plain GETs, so concurrent calls don't trip Bison's session
+  // guard). Stop after a block that crosses the date boundary.
+  for (let start = 2; start <= lastPage; start += PAGE_CONCURRENCY) {
+    const pages: number[] = []
+    for (let p = start; p < start + PAGE_CONCURRENCY && p <= lastPage; p++) pages.push(p)
+    const results = await Promise.all(pages.map(fetchPage))
+    let stop = false
+    for (const { batch } of results) {
+      out.push(...batch.filter(r => r.tracked_reply === false))
+      if (pastWindow(batch)) stop = true
     }
+    if (stop) break
   }
   return out
 }

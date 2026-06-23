@@ -50,6 +50,9 @@ export async function GET(req: NextRequest) {
 
   const days = Math.min(Math.max(parseInt(url.searchParams.get('days') || '3', 10) || 3, 1), 90)
   const sinceMs = Date.now() - days * 86400_000
+  // ?team=5 restricts the run to one Bison team (much faster when chasing a
+  // specific workspace's backlog instead of sweeping all 21).
+  const onlyTeam = url.searchParams.get('team')
 
   const summary = {
     teams: 0, seen: 0, inserted: 0, healed: 0,
@@ -58,6 +61,7 @@ export async function GET(req: NextRequest) {
   }
 
   for (const [workspaceId, teamId] of Object.entries(PV_TO_BISON_TEAM)) {
+    if (onlyTeam && teamId !== onlyTeam) continue
     summary.teams++
     const clientId = await resolveClientId(workspaceId)
 
