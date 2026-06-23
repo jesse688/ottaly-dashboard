@@ -40,7 +40,12 @@ interface Workspace {
 // FRESH-START CUTOVER: PlusVibe-clean data begins here. The Bison→PV transition
 // (2026-06-13..18) had near-zero/mixed sends and Bison-era rows skewed the numbers,
 // so stats only count data on/after this date. Change this one constant to adjust.
-const STATS_CUTOVER = process.env.STATS_CUTOVER_DATE ?? '2026-06-19'
+//
+// 2026-06-23: lowered 19→17 so "Last 7 Days" is a TRUE 7-day window that aligns
+// with PV's own Last-7-Days view (which we reconcile against). With ~all sends
+// now PV-native, 17–18 Jun no longer carry meaningful Bison noise. Override per
+// env if a future window needs a different floor.
+const STATS_CUTOVER = process.env.STATS_CUTOVER_DATE ?? '2026-06-17'
 
 // Enumerate inclusive YYYY-MM-DD strings from start..end, purely lexically (no
 // Date/timezone math) so it never re-introduces a UTC/London divergence.
