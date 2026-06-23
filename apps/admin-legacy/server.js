@@ -17278,7 +17278,13 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
         if (job.excludeMicrosoft && (c.mx_provider === 'email_outlook' || !c.mx_provider)) {
           skipped.wrongProvider++; return false;
         }
-        if ((!c.keywords || c.keywords.trim() === '') || (!c.industry || c.industry.trim() === '')) {
+        // Enrichment gate is for Apollo-sourced contacts (which carry keywords +
+        // industry). Engine-scraped leads are intentionally lighter-weight and
+        // structurally lack `keywords`, so applying this gate dropped EVERY
+        // engine lead as missingEnrichment → nothing reached PV. Skip the gate
+        // for source='engine'; still require it for verified Apollo data.
+        if (c.source !== 'engine'
+            && ((!c.keywords || c.keywords.trim() === '') || (!c.industry || c.industry.trim() === ''))) {
           skipped.missingEnrichment++; return false;
         }
         // Bulletproof per-campaign dedup: check the full pushed_campaigns
