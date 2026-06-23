@@ -934,8 +934,9 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
                         <div className="ml-auto flex items-center gap-2 shrink-0">
                           {m.pv_label && m.pv_label !== 'INTERESTED' && <span className="text-[10px] bg-white border border-gray-200 text-gray-500 px-1.5 py-0.5 rounded capitalize">{m.pv_label.replace(/_/g,' ').toLowerCase()}</span>}
                           <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${out ? 'bg-brand-100 text-brand-700' : 'bg-gray-200 text-gray-600'}`}>{out ? 'Sent' : 'Received'}</span>
-                          <button onClick={() => handleForward(m)} title="Forward" className="text-gray-400 hover:text-brand-600">
-                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 17 20 12 15 7"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/></svg>
+                          <button onClick={() => handleForward(m)} title="Forward this email to someone else" className="flex items-center gap-1 text-[11px] font-medium text-gray-500 hover:text-brand-600 border border-gray-200 hover:border-brand-300 rounded px-1.5 py-0.5">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 17 20 12 15 7"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/></svg>
+                            Forward
                           </button>
                           <span className="text-[11px] text-gray-400 hidden sm:inline">{fmtFull(m.timestamp_created)}</span>
                         </div>
