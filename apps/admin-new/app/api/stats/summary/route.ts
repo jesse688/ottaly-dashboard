@@ -185,15 +185,14 @@ export async function GET(req: NextRequest) {
       leadsByWs[r.workspace_id] = r.n
     })
 
-    // REPLIES from OUR unibox (not PlusVibe): distinct leads who sent a genuine
-    // human reply in-window, excluding warm-up + OOO/automated. PV doesn't count
-    // replies it tagged "other" — the unibox does, so this is the truer number.
+    // REPLIES from OUR unibox (not PlusVibe): distinct leads who replied in-window.
+    // A reply is ANY inbound EXCEPT warm-up — OOO and automatic replies DO count.
     const uniRepliesRes = await pool.query(
       `SELECT workspace_id, COUNT(DISTINCT lower(lead_email))::int AS n
          FROM unibox_replies
         WHERE received_at::date >= $1::date AND received_at::date <= $2::date
-          AND folder NOT IN ('warmup','ooo')
-          AND COALESCE(admin_label, category, '') NOT IN ('warmup','ooo_auto_reply')
+          AND folder <> 'warmup'
+          AND COALESCE(admin_label, category, '') <> 'warmup'
         GROUP BY workspace_id`,
       [start, end],
     )

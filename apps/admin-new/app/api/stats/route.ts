@@ -24,16 +24,16 @@ export async function GET() {
     )
 
     // REPLIES come from OUR unibox, not PlusVibe — PV doesn't count replies it
-    // tagged "other", but a genuine human reply is still a reply. Count distinct
-    // leads who replied per workspace (excluding warm-up + OOO/automated). Sent
+    // tagged "other". A reply is ANY inbound response EXCEPT warm-up (OOO and
+    // automatic replies DO count as replies). Distinct leads per workspace. Sent
     // volume stays PlusVibe-sourced.
     const uniRes = await pool.query(
       `SELECT workspace_id,
               COUNT(DISTINCT lower(lead_email)) FILTER (WHERE received_at >= CURRENT_DATE - INTERVAL '30 days') AS r30,
               COUNT(DISTINCT lower(lead_email)) FILTER (WHERE received_at >= CURRENT_DATE - INTERVAL '90 days') AS r90
          FROM unibox_replies
-        WHERE folder NOT IN ('warmup','ooo')
-          AND COALESCE(admin_label, category, '') NOT IN ('warmup','ooo_auto_reply')
+        WHERE folder <> 'warmup'
+          AND COALESCE(admin_label, category, '') <> 'warmup'
         GROUP BY workspace_id`
     )
     const uni = new Map<string, { r30: number; r90: number }>()
