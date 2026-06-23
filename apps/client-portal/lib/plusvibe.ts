@@ -83,7 +83,7 @@ export async function sendPlusVibeReply(opts: {
     if (!res.ok) {
       const text = await res.text()
       console.error('[sendPlusVibeReply] error:', res.status, text)
-      return { ok: false, reason: `pv_${res.status}` }
+      return { ok: false, reason: `pv_${res.status}: ${text.slice(0, 200)}` }
     }
     return { ok: true }
   } catch (err) {
