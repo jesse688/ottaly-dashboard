@@ -41,17 +41,18 @@ export async function GET() {
          ) d`,
         [workspaceId]
       ),
-      // Human replies captured in OUR unibox over the last 30 days — distinct
-      // leads who actually replied, EXCLUDING warm-up + OOO/automated. This is our
-      // source of truth: a genuine human reply PlusVibe tagged "other" still counts,
-      // even if it was never marked a lead.
+      // Replies captured in OUR unibox over the last 30 days — counted by WHAT the
+      // reply IS: genuine responses (interested/question/not_interested/unsubscribe)
+      // plus OOO/auto. 'other' (inbound spam-to-mailbox / junk) and warm-up never
+      // count, or the number inflates. A reply PV tagged "other" but WE classified
+      // as a real category still counts.
       pool.query(
         `SELECT COUNT(DISTINCT lower(lead_email)) AS human_replies
            FROM unibox_replies
           WHERE workspace_id = $1
             AND received_at >= CURRENT_DATE - INTERVAL '30 days'
-            AND folder NOT IN ('warmup', 'ooo', 'done')
-            AND COALESCE(admin_label, category, '') NOT IN ('warmup', 'ooo_auto_reply')`,
+            AND COALESCE(admin_label, category) IN
+                ('interested','question','not_interested','unsubscribe','ooo_auto_reply')`,
         [workspaceId]
       ),
     ])
