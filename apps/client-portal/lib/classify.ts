@@ -183,10 +183,10 @@ async function postOnce(subject: string, bodyText: string, apiKey: string, examp
       contents: [{ role: 'user', parts: [{ text: userContent }] }],
       generationConfig: {
         temperature: 0,
-        // gemini-2.5-flash is a thinking model — give it room so reasoning
-        // tokens don't truncate the JSON, and force a strict schema so it can't
-        // wrap the object in prose like "Here is the JSON".
-        maxOutputTokens: 800,
+        // 2.5 models are thinking models — give room so reasoning tokens (which
+        // count toward this budget) don't truncate the JSON. Pro thinks more than
+        // flash, so keep this generous. Strict schema forces a bare JSON object.
+        maxOutputTokens: 2048,
         responseMimeType: 'application/json',
         responseSchema: {
           type: 'OBJECT',
@@ -197,8 +197,12 @@ async function postOnce(subject: string, bodyText: string, apiKey: string, examp
           },
           required: ['category', 'confidence', 'reasoning'],
         },
-        // Disable extended thinking for this cheap classification task.
-        thinkingConfig: { thinkingBudget: 0 },
+        // Flash supports disabling thinking (budget 0); pro REQUIRES a positive
+        // budget and 400s on 0. Give pro a small budget — enough to reason, cheap
+        // and fast. Override via GEMINI_THINKING_BUDGET if needed.
+        thinkingConfig: {
+          thinkingBudget: Number(process.env.GEMINI_THINKING_BUDGET ?? (MODEL.includes('pro') ? 1024 : 0)),
+        },
       },
     }),
     signal: AbortSignal.timeout(15000),
