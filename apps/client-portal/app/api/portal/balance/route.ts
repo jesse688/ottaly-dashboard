@@ -62,13 +62,17 @@ export async function GET() {
     // the running balance correct, then only EXPOSE topup / lead_charge /
     // dispute_refund rows (adding leads, lead delivered, non-lead credited).
     const HIDDEN_TYPES = new Set(['adjustment', 'set'])
+    // Compute running balance using VISIBLE rows only. Hidden adjustments move
+    // the true balance but must not cause jumps in the client-facing "X left"
+    // column — the client only sees topups and lead charges, so the running
+    // total should reflect only those movements.
     let running = balance
     const ledger: Array<{ id: string; type: string; amount: number; description: string | null; created_at: string; balance_after: number }> = []
     for (const l of ledgerAll) {
+      if (HIDDEN_TYPES.has(l.type)) continue
       const amount = Number(l.amount)
       const balance_after = running
       running -= amount
-      if (HIDDEN_TYPES.has(l.type)) continue
       ledger.push({ id: l.id, type: l.type, amount, description: l.description, created_at: l.created_at, balance_after })
     }
 
