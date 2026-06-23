@@ -74,17 +74,23 @@ export async function POST(req: NextRequest) {
       await handlePlusVibe(parsed)
       // PlusVibe path doesn't set its own outcome; mark it terminal here.
       if (deliveryId) await markDelivery(deliveryId, 'done:plusvibe')
-    } else if (!BISON_INGEST_ENABLED) {
-      // We've migrated to PlusVibe — replies arrive via the external pv-reconciler.
-      // Bison still POSTs (until its webhooks are deregistered on its side), but
-      // ingesting them just produces DUPLICATE unibox rows. Acknowledge + ignore.
-      if (deliveryId) await markDelivery(deliveryId, 'skipped:bison_ingest_disabled')
     } else {
-      // handleBison sets its OWN specific outcome (stored:<folder> | skipped:<why>
-      // | error:...). Don't overwrite it with a generic 'done' — that destroyed the
-      // diagnostic. Only fall back to 'done' if the handler set nothing.
-      await handleBison(parsed, deliveryId)
-      if (deliveryId) await finalizeDelivery(deliveryId)
+      // Bison path. Full ingest stays gated behind BISON_INGEST_ENABLED to avoid
+      // re-duplicating campaign (tracked) replies that PlusVibe already delivers.
+      // BUT untracked "Other" replies arrive ONLY via this Bison webhook — PlusVibe
+      // never delivers them — so they MUST be ingested in real time regardless, or
+      // genuine leads (e.g. Scalford Court) are silently dropped. Idempotent on
+      // (bison_team_id, bison_reply_id), so no duplicates with the backfill cron.
+      const bisonEventType = String((parsed.event as { type?: string } | undefined)?.type ?? '').toLowerCase()
+      const isUntracked = bisonEventType === 'untracked_reply_received'
+      if (!BISON_INGEST_ENABLED && !isUntracked) {
+        if (deliveryId) await markDelivery(deliveryId, 'skipped:bison_ingest_disabled')
+      } else {
+        // handleBison sets its OWN specific outcome (stored:<folder> | skipped:<why>
+        // | error:...). Don't overwrite it; finalizeDelivery only fills a blank.
+        await handleBison(parsed, deliveryId)
+        if (deliveryId) await finalizeDelivery(deliveryId)
+      }
     }
 
     return NextResponse.json({ ok: true })
