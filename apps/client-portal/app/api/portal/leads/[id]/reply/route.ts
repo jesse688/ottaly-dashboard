@@ -69,17 +69,20 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const ccList = parseAddrs(cc).join(', ')
   const toAddr = toAddrs[0] || lead.email
 
-  // Find the latest inbound message for threading context (subject, Bison reply ID)
+  // Find the latest inbound message for threading context.
+  // Prefer a unibox_ (PlusVibe) ID when one exists so the reply stays in PV thread.
   const ctx = await pool.query(
-    `SELECT id, subject, eaccount, message_id, provider FROM portal_emails
+    `SELECT id, subject, eaccount, to_email, message_id FROM portal_emails
       WHERE workspace_id = $1 AND lower(lead_email) = lower($2) AND direction = 'IN'
-      ORDER BY timestamp_created DESC LIMIT 1`,
+      ORDER BY (id LIKE 'unibox_%') DESC, timestamp_created DESC LIMIT 1`,
     [session.workspaceId, lead.email]
   )
   const subject = ctx.rows[0]?.subject ?? 'Re: your enquiry'
-  const eaccount = ctx.rows[0]?.eaccount ?? undefined
-  // Bison stores integer reply IDs; portal_emails.id holds the stringified integer.
-  const latestReplyId = ctx.rows[0]?.id ? parseInt(ctx.rows[0].id, 10) : null
+  const eaccount = ctx.rows[0]?.eaccount ?? ctx.rows[0]?.to_email ?? undefined
+  const inboundId: string | null = ctx.rows[0]?.id ?? null
+  // Detect provider by ID prefix — unibox_ = PlusVibe, pure numeric = Bison.
+  const isPlusVibe = inboundId?.startsWith('unibox_') ?? false
+  const latestReplyId = !isPlusVibe && inboundId ? parseInt(inboundId, 10) : null
 
   // 1. Persist outgoing message (synthetic id so it's stable + idempotent-ish).
   const outId = `portal-${id}-${Date.now()}`
@@ -128,12 +131,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       attachments,
     })
     if (!send.ok) console.error('[reply] resend-with-attachments failed:', send.reason)
-  } else if (ctx.rows[0]?.provider === 'plusvibe' && ctx.rows[0]?.id) {
+  } else if (isPlusVibe && inboundId) {
     send = await sendPlusVibeReply({
       workspaceId: session.workspaceId,
-      replyToId: ctx.rows[0].id,
+      replyToId: inboundId,
       subject: subject,
-      from: eaccount ?? '',
+      from: eaccount,
       to: toList,
       body: html,
       cc: ccList || undefined,
