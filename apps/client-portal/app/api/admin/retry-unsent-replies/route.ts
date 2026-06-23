@@ -6,7 +6,7 @@ import { sendPlusVibeReply } from '@/lib/plusvibe'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
-// Fetch the first active email account address for a PlusVibe workspace.
+// Fetch the first email account address for a PlusVibe workspace.
 // Cached per workspace for the lifetime of this request.
 async function getWorkspaceFrom(workspaceId: string, cache: Map<string, string>): Promise<string | null> {
   if (cache.has(workspaceId)) return cache.get(workspaceId)!
@@ -14,13 +14,13 @@ async function getWorkspaceFrom(workspaceId: string, cache: Map<string, string>)
   if (!key) return null
   try {
     const res = await fetch(
-      `https://api.plusvibe.ai/api/v1/email-accounts?workspace_id=${encodeURIComponent(workspaceId)}&limit=1`,
-      { headers: { 'x-api-key': key }, signal: AbortSignal.timeout(8000) }
+      `https://api.plusvibe.ai/api/v1/account/list?workspace_id=${encodeURIComponent(workspaceId)}&skip=0&limit=1`,
+      { headers: { 'x-api-key': key, 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(8000) }
     )
     if (!res.ok) return null
-    const data = await res.json() as { data?: { from_name?: string; from_email?: string; email?: string }[] }
-    const account = data?.data?.[0]
-    const from = account?.from_email ?? account?.email ?? null
+    const data = await res.json() as { accounts?: { email?: string; from_email?: string }[] }
+    const account = data?.accounts?.[0]
+    const from = account?.email ?? account?.from_email ?? null
     if (from) cache.set(workspaceId, from)
     return from
   } catch {
