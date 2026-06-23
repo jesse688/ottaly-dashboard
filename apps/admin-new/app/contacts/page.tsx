@@ -1369,7 +1369,7 @@ export default function DataPage() {
                 className="bg-violet-600 text-white hover:bg-violet-700"
                 onClick={verifyAndPushEngine}
               >
-                {engineStaging ? 'Staging…' : '🚀 Verify & Push to PlusVibe'}
+                {engineStaging ? 'Staging… (one moment)' : '🚀 Verify & Push to PlusVibe'}
               </Button>
             )}
           </div>

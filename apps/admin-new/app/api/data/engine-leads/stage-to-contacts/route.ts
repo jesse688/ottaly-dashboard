@@ -38,13 +38,23 @@ export async function POST(req: NextRequest) {
       [domains],
     )
 
-    const ids: string[] = []
     let skipped = 0
-    let collidedExisting = 0 // emails that already exist as NON-engine contacts
+    // Build the parameter rows once, in JS, then insert them in ONE bulk query.
+    // Per-row sequential INSERTs (the old approach) made staging crawl and
+    // "stick" while the DB was busy with a running verify job — one round-trip
+    // per lead. A single multi-row INSERT is one round-trip total.
+    const params: unknown[] = []
+    const valueRows: string[] = []
+    // A bulk upsert throws if the SAME email appears twice in one statement
+    // ("cannot affect row a second time"). Engine rows are keyed by domain, so
+    // two domains can share an email — dedupe within the batch, first wins.
+    const seenEmails = new Set<string>()
     for (const r of rows) {
       const rawEmail = r.email_primary || (Array.isArray(r.emails) ? r.emails[0] : '')
       const email = String(rawEmail || '').trim().toLowerCase()
       if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { skipped++; continue }
+      if (seenEmails.has(email)) { skipped++; continue }
+      seenEmails.add(email)
       const [first, ...rest] = String(r.director_name || '').trim().split(/\s+/)
       // company_size is a text bucket ("11-50", "1-10"); num_employees is INT.
       // Parse the lower bound so the size isn't lost on push (e.g. "11-50" → 11).
@@ -52,36 +62,49 @@ export async function POST(req: NextRequest) {
         const m = String(r.company_size || '').match(/\d+/)
         return m ? parseInt(m[0], 10) : null
       })()
-      // RETURNING source + xmax: xmax=0 means a fresh INSERT (a real engine
-      // lead); xmax<>0 means it CONFLICTED with an existing row, whose `source`
-      // we get back. We must NOT push an existing VERIFIED (apollo/plusvibe)
-      // contact just because a scraped email matched it.
-      const res = await pool.query(
-        `INSERT INTO contacts
-           (workspace_id, email, first_name, last_name, phone, company_name,
-            company_domain, linkedin_url, industry, company_region, num_employees,
-            job_title, status, source, imported_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'new','engine',NOW())
-         ON CONFLICT (workspace_id, email) DO UPDATE SET source = contacts.source
-         RETURNING id, source, (xmax = 0) AS inserted`,
-        [
-          workspaceId, email, first || null, rest.join(' ') || null,
-          Array.isArray(r.phones) ? r.phones[0] ?? null : null,
-          r.company_name || null, r.domain || null, r.linkedin_url || null,
-          r.industry || null, r.region || null, sizeLow,
-          r.director_name ? 'Director' : null,
-        ],
+      const vals = [
+        workspaceId, email, first || null, rest.join(' ') || null,
+        Array.isArray(r.phones) ? r.phones[0] ?? null : null,
+        r.company_name || null, r.domain || null, r.linkedin_url || null,
+        r.industry || null, r.region || null, sizeLow,
+        r.director_name ? 'Director' : null,
+      ]
+      const base = params.length
+      // 12 bound params per row; the trailing 'new','engine',NOW() are literals.
+      valueRows.push(
+        `($${base + 1},$${base + 2},$${base + 3},$${base + 4},$${base + 5},$${base + 6},$${base + 7},$${base + 8},$${base + 9},$${base + 10},$${base + 11},$${base + 12},'new','engine',NOW())`,
       )
-      const row = res.rows[0]
+      params.push(...vals)
+    }
+
+    if (!valueRows.length) {
+      return NextResponse.json({ staged: 0, skipped, skipped_existing_contacts: 0, contact_ids: [] })
+    }
+
+    // RETURNING source + xmax: xmax=0 means a fresh INSERT (a real engine lead);
+    // xmax<>0 means it CONFLICTED with an existing row, whose `source` we get
+    // back. We must NOT push an existing VERIFIED (apollo/plusvibe) contact just
+    // because a scraped email matched it.
+    const res = await pool.query(
+      `INSERT INTO contacts
+         (workspace_id, email, first_name, last_name, phone, company_name,
+          company_domain, linkedin_url, industry, company_region, num_employees,
+          job_title, status, source, imported_at)
+       VALUES ${valueRows.join(',')}
+       ON CONFLICT (workspace_id, email) DO UPDATE SET source = contacts.source
+       RETURNING id, source, (xmax = 0) AS inserted`,
+      params,
+    )
+
+    const ids: string[] = []
+    let collidedExisting = 0 // emails that already exist as NON-engine contacts
+    for (const row of res.rows as Array<{ id: string; source: string; inserted: boolean }>) {
       if (!row?.id) continue
       // Only stage/push rows that are genuinely engine leads (freshly inserted,
       // or an existing row already tagged 'engine'). Skip emails that collide
       // with a real verified contact — don't re-push someone already in a campaign.
-      if (row.inserted || row.source === 'engine') {
-        ids.push(row.id)
-      } else {
-        collidedExisting++
-      }
+      if (row.inserted || row.source === 'engine') ids.push(row.id)
+      else collidedExisting++
     }
 
     return NextResponse.json({
