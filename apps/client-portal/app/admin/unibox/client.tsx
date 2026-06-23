@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Logo } from '@/app/components/Logo'
 
-type Folder = 'review' | 'replies' | 'inbox' | 'done' | 'unmapped' | 'rejected' | 'warmup' | 'all'
+type Folder = 'review' | 'lead' | 'lead_replies' | 'not_interested' | 'warmup' | 'unsubscribe' | 'ooo' | 'done' | 'all'
 
 interface Reply {
   id: string
@@ -131,13 +131,14 @@ function leadFormFromReply(r: Reply): LeadForm {
 
 const FOLDERS: { key: Folder; label: string }[] = [
   { key: 'review', label: 'Review' },
-  { key: 'replies', label: 'Replies' },
-  { key: 'all', label: 'All replies' },
-  { key: 'inbox', label: 'Inbox' },
-  { key: 'done', label: 'Done' },
+  { key: 'lead', label: 'Lead' },
+  { key: 'lead_replies', label: 'Lead Replies' },
+  { key: 'not_interested', label: 'Not Interested' },
   { key: 'warmup', label: 'Warm-up' },
-  { key: 'unmapped', label: 'Unmapped' },
-  { key: 'rejected', label: 'Rejected' },
+  { key: 'unsubscribe', label: 'Unsubscribe' },
+  { key: 'ooo', label: 'OOO & Auto' },
+  { key: 'done', label: 'Done' },
+  { key: 'all', label: 'All' },
 ]
 
 const CATEGORIES = ['interested', 'not_interested', 'ooo_auto_reply', 'question', 'unsubscribe', 'warmup', 'other']

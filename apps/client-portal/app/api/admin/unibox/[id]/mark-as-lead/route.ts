@@ -202,11 +202,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       await seedThread(pvWorkspaceId)
     }
 
-    // Mark the reply done before charging so the row reflects the decision even
-    // if reconcile is a no-op (e.g. cost_per_lead not set yet).
+    // Move the reply into the LEAD folder (out of Review) and record the decision.
     await client.query(
       `UPDATE unibox_replies
-          SET marked_as_lead = TRUE, label_type = 'lead', folder = 'done', marked_by = 'admin',
+          SET marked_as_lead = TRUE, label_type = 'lead', folder = 'lead', marked_by = 'admin',
               marked_at = NOW(), bison_tag_state = 'pending', updated_at = NOW()
         WHERE id = $1`,
       [id]

@@ -77,6 +77,31 @@ export function setCustomWarmupTerms(terms: string[]): void {
   _customWarmupRe = buildWarmupRegex(terms)
 }
 
+// Confidence threshold above which a NEGATIVE auto-label (not_interested) is
+// trusted enough to leave Review. Below it, we keep it in Review so a human can
+// rescue a mislabelled positive. Tunable.
+export const NEGATIVE_CONFIDENCE_MIN = 0.9
+
+// Canonical folder routing for the simplified unibox. The guiding rule: only
+// file OUT of Review when we're confident it's noise (warm-up / unsubscribe /
+// OOO) or a confident not-interested. EVERYTHING else — interested, question,
+// "other", low-confidence anything, unknown — defaults to Review so a possible
+// lead is never hidden. Lead / lead_replies are workflow states handled by the
+// caller (they depend on marked_as_lead), not the AI category.
+export function defaultFolderForCategory(
+  category: string | null,
+  confidence: number | null,
+): 'review' | 'not_interested' | 'warmup' | 'unsubscribe' | 'ooo' {
+  const conf = typeof confidence === 'number' ? confidence : 0
+  switch (category) {
+    case 'warmup': return 'warmup'
+    case 'unsubscribe': return 'unsubscribe'
+    case 'ooo_auto_reply': return 'ooo'
+    case 'not_interested': return conf >= NEGATIVE_CONFIDENCE_MIN ? 'not_interested' : 'review'
+    default: return 'review' // interested, question, other, null, anything else
+  }
+}
+
 export interface WarmupSignals {
   subject?: string
   bodyText?: string

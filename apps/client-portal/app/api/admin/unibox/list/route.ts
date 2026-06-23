@@ -4,7 +4,12 @@ import { getAdminSession } from '@/lib/auth'
 import { CATEGORIES } from '@/lib/classify'
 import { sanitizeEmailHtml } from '@/lib/sanitize-html'
 
-const FOLDERS = ['inbox', 'review', 'replies', 'done', 'unmapped', 'rejected', 'warmup'] as const
+// New simplified taxonomy first; legacy values kept so pre-migration rows still
+// resolve until the one-time re-file moves them over.
+const FOLDERS = [
+  'review', 'lead', 'lead_replies', 'not_interested', 'warmup', 'unsubscribe', 'ooo', 'done',
+  'inbox', 'replies', 'unmapped', 'rejected',
+] as const
 type Folder = (typeof FOLDERS)[number]
 
 // Admin-only list of Master Unibox replies, one folder at a time, newest-first,

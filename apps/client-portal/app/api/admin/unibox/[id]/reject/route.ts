@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import pool, { ready } from '@/lib/db'
 import { getAdminSession } from '@/lib/auth'
 
-// Admin dismisses a reply — moves it to the "rejected" folder. Does not touch
+// Admin dismisses a reply — moves it to the hidden "done" archive. Does not touch
 // billing or esp_leads. Refuses to reject a reply already marked as a lead.
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   if (!await getAdminSession()) {
@@ -12,7 +12,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   const { id } = await params
 
   const r = await pool.query(
-    `UPDATE unibox_replies SET folder = 'rejected', updated_at = NOW()
+    `UPDATE unibox_replies SET folder = 'done', updated_at = NOW()
       WHERE id = $1 AND marked_as_lead = FALSE
       RETURNING id`,
     [id]

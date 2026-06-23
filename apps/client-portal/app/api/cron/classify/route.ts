@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import pool, { ready } from '@/lib/db'
-import { classifyReply, CLASSIFIER_MODEL, CLASSIFIER_VERSION, detectWarmupFull, setCustomWarmupTerms } from '@/lib/classify'
+import { classifyReply, CLASSIFIER_MODEL, CLASSIFIER_VERSION, detectWarmupFull, setCustomWarmupTerms, defaultFolderForCategory } from '@/lib/classify'
 import { addToBlocklist, unsubscribeLead, bisonTeamForWorkspace } from '@/lib/bison'
 import { enrichReplyWithCH } from '@/lib/enrich'
 // Triage worker for the Master Unibox. Claims a batch of pending replies with
@@ -130,33 +130,28 @@ export async function GET(req: NextRequest) {
           subject: (row.subject as string) ?? '',
           bodyText: (row.body_preview as string) ?? '',
         })
-        // interested + question → Review for manual decision (a pricing/clarifying
-        // question is a hot lead). unsubscribe → auto-actioned, filed 'rejected'.
-        // BUT if this lead was ALREADY marked as a lead (an earlier reply), this is a
-        // follow-up to the CLIENT — it must NOT clutter Review. Route to 'replies'.
-        let alreadyLead = false
-        if (result.category === 'interested' || result.category === 'question') {
-          const m = await client.query(
-            `SELECT 1 FROM unibox_replies
-              WHERE workspace_id = $1 AND lower(lead_email) = lower($2)
-                AND marked_as_lead = TRUE AND id <> $3 LIMIT 1`,
-            [row.workspace_id, row.lead_email, id]
-          ).catch(() => ({ rows: [] as unknown[] }))
-          alreadyLead = m.rows.length > 0
-        }
-        const folder = alreadyLead ? 'replies'
-                     : (result.category === 'interested' || result.category === 'question') ? 'review'
-                     : result.category === 'unsubscribe' ? 'rejected'
-                     : undefined
+        // SIMPLIFIED ROUTING (never hide a possible lead):
+        //   • a reply from an ALREADY-marked lead → 'lead_replies' (client follow-up)
+        //   • else folder = defaultFolderForCategory(): confident noise goes to its
+        //     own folder (warmup/unsubscribe/ooo) or confident not_interested; and
+        //     EVERYTHING else — interested, question, "other", low-confidence — → Review.
+        const m = await client.query(
+          `SELECT 1 FROM unibox_replies
+            WHERE workspace_id = $1 AND lower(lead_email) = lower($2)
+              AND marked_as_lead = TRUE AND id <> $3 LIMIT 1`,
+          [row.workspace_id, row.lead_email, id]
+        ).catch(() => ({ rows: [] as unknown[] }))
+        const alreadyLead = m.rows.length > 0
+        const folder = alreadyLead ? 'lead_replies' : defaultFolderForCategory(result.category, result.confidence)
         await client.query(
           `UPDATE unibox_replies
               SET category = $2, confidence = $3, ai_model = $4, ai_reasoning = $5,
                   classify_state = 'done', classifier_version = $7,
-                  folder = CASE WHEN $6::text IS NOT NULL AND folder IN ('inbox','review') THEN $6 ELSE folder END,
+                  folder = CASE WHEN folder IN ('inbox','review','unmapped') THEN $6 ELSE folder END,
                   updated_at = NOW()
             WHERE id = $1`,
           [id, result.category, result.confidence, CLASSIFIER_MODEL,
-           result.reasoning, folder ?? null, CLASSIFIER_VERSION]
+           result.reasoning, folder, CLASSIFIER_VERSION]
         )
         summary.processed++
         if (result.category === 'interested' || result.category === 'question') {
