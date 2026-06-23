@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getSession } from '@/lib/auth'
 import pool from '@/lib/db'
-import { getBalance, getLedger, reconcileLeadCharges } from '@/lib/balance'
+import { getBalance, getLedger, reconcileLeadCharges, billingClientId } from '@/lib/balance'
 
 // GET — lead-credit balance + outcome metrics + ledger.
 // Spend & ROI are computed server-side and only included when the client's
@@ -12,6 +12,7 @@ export async function GET() {
 
   try {
     await reconcileLeadCharges(session.clientId)
+    const billingId = await billingClientId(session.clientId)
 
     const [balance, ledgerAll, client, pipe] = await Promise.all([
       getBalance(session.clientId),
@@ -42,7 +43,7 @@ export async function GET() {
       `SELECT COALESCE(SUM(amount) FILTER (WHERE amount > 0), 0) AS added,
               ABS(COALESCE(SUM(amount) FILTER (WHERE amount < 0), 0)) AS used
          FROM portal_ledger WHERE client_id = $1`,
-      [session.clientId]
+      [billingId]
     )
 
     const spent = leadsDelivered * costPerLead

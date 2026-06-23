@@ -28,6 +28,11 @@ async function runMigration() {
   try {
     const statements = [
       `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS hidden_fields TEXT[] DEFAULT '{}'`,
+      // Billing redirect: pool one balance across clients that keep separate
+      // workspaces. NULL = bill self (default). When set, this client's lead
+      // charges + balance resolve to the target (e.g. ButterflyEco SOP →
+      // ButterflyEco). See lib/balance.ts billingClientId().
+      `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS billing_client_id UUID REFERENCES portal_clients(id) ON DELETE SET NULL`,
       // Contact/person name for a personal greeting ("Welcome back, Gareth").
       `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS contact_name TEXT`,
       // Username login (+ access code stored in password_hash). Email becomes optional.
