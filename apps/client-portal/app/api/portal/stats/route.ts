@@ -50,7 +50,7 @@ export async function GET() {
            FROM unibox_replies
           WHERE workspace_id = $1
             AND received_at >= CURRENT_DATE - INTERVAL '30 days'
-            AND folder NOT IN ('warmup', 'ooo')
+            AND folder NOT IN ('warmup', 'ooo', 'done')
             AND COALESCE(admin_label, category, '') NOT IN ('warmup', 'ooo_auto_reply')`,
         [workspaceId]
       ),
