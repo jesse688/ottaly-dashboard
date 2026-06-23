@@ -57,6 +57,8 @@ export async function POST(req: NextRequest) {
     WHERE pe_out.direction = 'OUT'
       AND pe_out.sent_via_portal = TRUE
       AND (pe_out.sent_live IS NULL OR pe_out.sent_live = FALSE)
+      AND pe_out.lead_email NOT LIKE 'test+%'
+      AND pe_out.lead_email NOT LIKE '%@demo-co.example'
     ORDER BY pe_out.timestamp_created DESC
     LIMIT 100
   `)
