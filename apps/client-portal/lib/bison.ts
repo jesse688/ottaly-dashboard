@@ -408,7 +408,11 @@ export async function getLeadRepliesByEmail(
 // a high safety cap. Warm-up volume no longer crowds out real replies.
 const MAX_UNTRACKED_PAGES = 400   // safety backstop only; the date window is the real bound
 const PAGE_CONCURRENCY = 8        // fetch this many pages at once (same team token, all GETs)
-export async function getUntrackedReplies(sinceMs?: number): Promise<BisonReply[]> {
+// includeTracked: by default we only return untracked ("Other") replies, since
+// tracked campaign replies normally flow in via lead events. Pass true to return
+// ALL inbox replies — needed to recover tracked replies Bison flagged
+// not-interested (which the lead-event path skips) so our own classifier can judge them.
+export async function getUntrackedReplies(sinceMs?: number, includeTracked = false): Promise<BisonReply[]> {
   const fetchPage = (p: number) =>
     bison<{ data?: BisonReply[]; meta?: { last_page?: number } }>(
       'GET', '/api/replies', { folder: 'inbox', page: p }
@@ -432,8 +436,9 @@ export async function getUntrackedReplies(sinceMs?: number): Promise<BisonReply[
     return n !== -Infinity && n < sinceMs
   }
 
+  const keep = (b: BisonReply[]) => includeTracked ? b : b.filter(r => r.tracked_reply === false)
   const first = await fetchPage(1)
-  const out: BisonReply[] = first.batch.filter(r => r.tracked_reply === false)
+  const out: BisonReply[] = keep(first.batch)
   const lastPage = Math.min(first.lastPage, MAX_UNTRACKED_PAGES)
   if (pastWindow(first.batch)) return out
 
@@ -446,7 +451,7 @@ export async function getUntrackedReplies(sinceMs?: number): Promise<BisonReply[
     const results = await Promise.all(pages.map(fetchPage))
     let stop = false
     for (const { batch } of results) {
-      out.push(...batch.filter(r => r.tracked_reply === false))
+      out.push(...keep(batch))
       if (pastWindow(batch)) stop = true
     }
     if (stop) break

@@ -53,6 +53,10 @@ export async function GET(req: NextRequest) {
   // ?team=5 restricts the run to one Bison team (much faster when chasing a
   // specific workspace's backlog instead of sweeping all 21).
   const onlyTeam = url.searchParams.get('team')
+  // ?include_tracked=1 also pulls TRACKED replies (campaign replies Bison may have
+  // flagged not-interested) so our own classifier judges them — recovers leads
+  // Bison's flag would otherwise hide. Default false (untracked-only, as before).
+  const includeTracked = url.searchParams.get('include_tracked') === '1'
 
   const summary = {
     teams: 0, seen: 0, inserted: 0, healed: 0,
@@ -67,7 +71,7 @@ export async function GET(req: NextRequest) {
 
     let replies: BisonReply[] = []
     try {
-      replies = await withTeam(teamId, () => getUntrackedReplies(sinceMs))
+      replies = await withTeam(teamId, () => getUntrackedReplies(sinceMs, includeTracked))
     } catch (err) {
       summary.errors.push(`team ${teamId}: ${String(err).slice(0, 120)}`)
       continue

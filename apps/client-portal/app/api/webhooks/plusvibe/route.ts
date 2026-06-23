@@ -75,15 +75,16 @@ export async function POST(req: NextRequest) {
       // PlusVibe path doesn't set its own outcome; mark it terminal here.
       if (deliveryId) await markDelivery(deliveryId, 'done:plusvibe')
     } else {
-      // Bison path. Full ingest stays gated behind BISON_INGEST_ENABLED to avoid
-      // re-duplicating campaign (tracked) replies that PlusVibe already delivers.
-      // BUT untracked "Other" replies arrive ONLY via this Bison webhook — PlusVibe
-      // never delivers them — so they MUST be ingested in real time regardless, or
-      // genuine leads (e.g. Scalford Court) are silently dropped. Idempotent on
-      // (bison_team_id, bison_reply_id), so no duplicates with the backfill cron.
+      // Bison path. We ingest every REPLY/LEAD event even with full Bison ingest
+      // disabled, because relying on Bison's "interested" flag loses leads: a
+      // TRACKED reply Bison marks not-interested (e.g. Scalford Court — a clear
+      // "we'd be interested" that Bison flagged interested:false) never reaches our
+      // unibox, so OUR classifier never sees it. Ingesting these lets us decide.
+      // All are idempotent on (bison_team_id, bison_reply_id), so re-ingest via the
+      // backfill cron can't duplicate. Non-reply Bison events stay gated.
       const bisonEventType = String((parsed.event as { type?: string } | undefined)?.type ?? '').toLowerCase()
-      const isUntracked = bisonEventType === 'untracked_reply_received'
-      if (!BISON_INGEST_ENABLED && !isUntracked) {
+      const REPLY_EVENTS = new Set(['untracked_reply_received', 'lead_replied', 'lead_interested'])
+      if (!BISON_INGEST_ENABLED && !REPLY_EVENTS.has(bisonEventType)) {
         if (deliveryId) await markDelivery(deliveryId, 'skipped:bison_ingest_disabled')
       } else {
         // handleBison sets its OWN specific outcome (stored:<folder> | skipped:<why>
