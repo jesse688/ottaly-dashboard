@@ -82,11 +82,12 @@ export async function getLockedLeadIds(clientId: string): Promise<Set<string>> {
 }
 
 export async function getLedger(clientId: string, limit = 100) {
+  const target = await billingClientId(clientId)
   const r = await pool.query(
     `SELECT id, type, amount, lead_id, description, created_by, created_at
        FROM portal_ledger WHERE client_id = $1
       ORDER BY created_at DESC LIMIT $2`,
-    [clientId, limit]
+    [target, limit]
   )
   return r.rows
 }
