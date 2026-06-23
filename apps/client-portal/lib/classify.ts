@@ -49,7 +49,7 @@ import { PV_WARMUP_TAGS } from './pv-warmup-tags'
 
 // EmailBison per-workspace warm-up codes. Mailboxes still live on Bison, so these
 // still arrive. 8-char random tokens, exact word-boundary match — no false positives.
-const BISON_WARMUP_CODES = [
+export const BISON_WARMUP_CODES = [
   'tc5odbtm','sk85oa7k','0e24psnp','eucrj0hz','rndyajpa','ahy9frqv','xzvjsvdu',
   'dvyu4kdr','uiizjrlh','d1ymr6mx','n9qrgswv','raftziqa','qlctqsof','rcduzjkl',
   '13aqstcm','op7as3ft','ht8jbwh2','gdf6uvrl','dau5wphh','antm9hol','9jbxm636',
@@ -57,11 +57,25 @@ const BISON_WARMUP_CODES = [
 ]
 
 const _escWarm = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-const WARMUP_TAG_RE: RegExp | null = (() => {
-  const alts = PV_WARMUP_TAGS.map(t => t.split(/[\s\-_]+/).map(_escWarm).join('[\\s\\-_]+'))
-  for (const code of BISON_WARMUP_CODES) alts.push(_escWarm(code))
+
+// Build a word-boundary regex matching any term. Multi-word terms match across
+// whitespace/-/_ so "azure-silent" matches "azure silent" etc. Returns null for
+// an empty list. Exported so the admin custom-term filter reuses the exact logic.
+export function buildWarmupRegex(terms: string[]): RegExp | null {
+  const alts = terms.map(t => t.trim()).filter(Boolean)
+    .map(t => t.split(/[\s\-_]+/).map(_escWarm).join('[\\s\\-_]+'))
   return alts.length ? new RegExp(`(?:^|[^a-z0-9])(${alts.join('|')})(?:[^a-z0-9]|$)`, 'i') : null
-})()
+}
+
+const WARMUP_TAG_RE: RegExp | null = buildWarmupRegex([...PV_WARMUP_TAGS, ...BISON_WARMUP_CODES])
+
+// Admin-added custom warm-up terms, layered ON TOP of the built-in defaults.
+// Set once per classify run via setCustomWarmupTerms() so the worker doesn't hit
+// the DB per row. Checked by matchWarmupTag alongside the built-in regex.
+let _customWarmupRe: RegExp | null = null
+export function setCustomWarmupTerms(terms: string[]): void {
+  _customWarmupRe = buildWarmupRegex(terms)
+}
 
 export interface WarmupSignals {
   subject?: string
@@ -74,6 +88,9 @@ export interface WarmupSignals {
 function matchWarmupTag(hay: string): { isWarmup: boolean; reason: string } {
   if (WARMUP_TAG_RE && WARMUP_TAG_RE.test(hay)) {
     return { isWarmup: true, reason: 'PV/Bison warmup filter tag' }
+  }
+  if (_customWarmupRe && _customWarmupRe.test(hay)) {
+    return { isWarmup: true, reason: 'admin custom warmup tag' }
   }
   return { isWarmup: false, reason: '' }
 }

@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import pool, { ready } from '@/lib/db'
-import { classifyReply, CLASSIFIER_MODEL, CLASSIFIER_VERSION, detectWarmupFull } from '@/lib/classify'
+import { classifyReply, CLASSIFIER_MODEL, CLASSIFIER_VERSION, detectWarmupFull, setCustomWarmupTerms } from '@/lib/classify'
 import { addToBlocklist, unsubscribeLead, bisonTeamForWorkspace } from '@/lib/bison'
 import { enrichReplyWithCH } from '@/lib/enrich'
 // Triage worker for the Master Unibox. Claims a batch of pending replies with
@@ -15,6 +15,13 @@ export async function GET(req: NextRequest) {
   }
 
   await ready()
+
+  // Load admin custom warm-up terms ONCE per run (built-in defaults are always
+  // on; these extend them). detectWarmupFull/matchWarmupTag then check both.
+  try {
+    const ct = await pool.query(`SELECT term FROM unibox_warmup_terms WHERE source = 'custom'`)
+    setCustomWarmupTerms(ct.rows.map(r => r.term as string))
+  } catch { setCustomWarmupTerms([]) }
 
   const summary = { processed: 0, interested: 0, failed: 0, unsubscribed: 0 }
   // Unsubscribe actions to run AFTER commit (network + stateful Bison switch).

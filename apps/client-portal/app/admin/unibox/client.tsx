@@ -207,6 +207,29 @@ export function AdminUniboxClient() {
   const [assocPick, setAssocPick] = useState<string>('')
   const [assocSuggest, setAssocSuggest] = useState<{ id: number | null; reason: string }>({ id: null, reason: '' })
 
+  // Warm-up tag filter panel
+  const [showWarmup, setShowWarmup] = useState(false)
+  const [warmup, setWarmup] = useState<{ counts: { bison: number; plusvibe: number; custom: number; total: number; builtin_available: number }; custom: string[] } | null>(null)
+  const [warmupAdd, setWarmupAdd] = useState('')
+  const [warmupBusy, setWarmupBusy] = useState(false)
+  const [warmupMsg, setWarmupMsg] = useState('')
+
+  const loadWarmup = useCallback(async () => {
+    const d = await fetch('/api/admin/unibox/warmup-terms').then(r => r.json()).catch(() => null)
+    if (d && d.counts) setWarmup(d)
+  }, [])
+  async function warmupAction(fn: () => Promise<Response>, successMsg: (j: Record<string, unknown>) => string) {
+    setWarmupBusy(true); setWarmupMsg('')
+    try {
+      const j = await fn().then(r => r.json())
+      setWarmupMsg(successMsg(j))
+      await loadWarmup()
+      await load(folder, undefined, activeQuery, category, zoomClient)
+    } catch { setWarmupMsg('Something went wrong — try again.') }
+    finally { setWarmupBusy(false) }
+  }
+  function openWarmup() { setShowWarmup(true); setWarmupMsg(''); loadWarmup() }
+
   const load = useCallback(async (f: Folder, cursor?: string, q?: string, cat?: string, clientZoom?: string) => {
     setLoading(true)
     try {
@@ -474,12 +497,91 @@ export function AdminUniboxClient() {
           >
             {chBackfill.running ? '⏳ Backfilling…' : '🏛 Backfill Companies House'}
           </button>
+          <button
+            onClick={openWarmup}
+            title="Manage the warm-up tag filter — replies containing these tags are removed from the review unibox"
+            className="text-xs font-medium text-slate-300 hover:text-white"
+          >
+            🔥 Warm-up filter
+          </button>
           <a href="/admin/clients" className="text-slate-400 hover:text-white text-xs">Clients</a>
           <a href="/admin/unibox" className="text-white text-xs font-medium">Unibox</a>
         </div>
       </header>
       {chBackfill.status && (
         <div className="bg-sky-50 border-b border-sky-100 text-sky-800 text-xs px-6 py-1.5">{chBackfill.status}</div>
+      )}
+
+      {showWarmup && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setShowWarmup(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100">
+              <h2 className="text-sm font-semibold text-gray-900">🔥 Warm-up tag filter</h2>
+              <button onClick={() => setShowWarmup(false)} className="text-gray-400 hover:text-gray-600 text-lg leading-none">×</button>
+            </div>
+            <div className="p-5 space-y-4">
+              <p className="text-xs text-gray-500">
+                Any reply containing one of these tags is treated as warm-up and removed from the review unibox (moved to the Warm-up folder). Everything else stays for manual review.
+              </p>
+
+              {/* Active built-in tags */}
+              <div className="flex gap-2 text-xs">
+                <span className="px-2 py-1 rounded-lg bg-gray-100 text-gray-700">Bison: <b>{warmup?.counts.bison ?? 0}</b></span>
+                <span className="px-2 py-1 rounded-lg bg-gray-100 text-gray-700">PlusVibe: <b>{warmup?.counts.plusvibe ?? 0}</b></span>
+                <span className="px-2 py-1 rounded-lg bg-indigo-50 text-indigo-700">Custom: <b>{warmup?.counts.custom ?? 0}</b></span>
+              </div>
+
+              {warmup && warmup.counts.bison + warmup.counts.plusvibe === 0 && (
+                <button disabled={warmupBusy}
+                  onClick={() => warmupAction(() => fetch('/api/admin/unibox/warmup-terms?seed=1', { method: 'POST' }), j => `Loaded ${j.seeded ?? 0} built-in Bison + PlusVibe tags.`)}
+                  className="w-full text-xs font-medium bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg py-2 disabled:opacity-50">
+                  Load built-in Bison + PlusVibe tags ({warmup.counts.builtin_available})
+                </button>
+              )}
+
+              {/* Add custom terms */}
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Add tags (one per line or comma-separated)</label>
+                <textarea value={warmupAdd} onChange={e => setWarmupAdd(e.target.value)} rows={3}
+                  placeholder="e.g. azure-silent&#10;quick-question-token" className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-indigo-400" />
+                <button disabled={warmupBusy || !warmupAdd.trim()}
+                  onClick={() => warmupAction(() => fetch('/api/admin/unibox/warmup-terms', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ add: warmupAdd }) }), j => { setWarmupAdd(''); return `Added ${j.added ?? 0} tag(s).` })}
+                  className="mt-2 text-xs font-medium bg-gray-900 hover:bg-black text-white rounded-lg px-3 py-1.5 disabled:opacity-50">
+                  Add tags
+                </button>
+              </div>
+
+              {/* Custom term list */}
+              {warmup && warmup.custom.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-gray-700 mb-1">Custom tags</p>
+                  <div className="flex flex-wrap gap-1.5 max-h-40 overflow-y-auto">
+                    {warmup.custom.map(t => (
+                      <span key={t} className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-50 border border-indigo-100 rounded-full text-xs text-indigo-700">
+                        {t}
+                        <button disabled={warmupBusy}
+                          onClick={() => warmupAction(() => fetch(`/api/admin/unibox/warmup-terms?term=${encodeURIComponent(t)}`, { method: 'DELETE' }), () => `Removed "${t}".`)}
+                          className="text-indigo-400 hover:text-red-500">×</button>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Apply to existing */}
+              <div className="border-t border-gray-100 pt-3">
+                <button disabled={warmupBusy}
+                  onClick={() => warmupAction(() => fetch('/api/admin/unibox/warmup-terms?apply=1', { method: 'POST' }), j => `Swept ${j.scanned ?? 0} replies — moved ${j.moved ?? 0} to Warm-up.`)}
+                  className="w-full text-xs font-medium bg-amber-500 hover:bg-amber-600 text-white rounded-lg py-2 disabled:opacity-50">
+                  {warmupBusy ? 'Working…' : 'Apply to existing unibox (move matches to Warm-up)'}
+                </button>
+                <p className="text-[11px] text-gray-400 mt-1">Scans the Inbox/Review folders only — never touches replies you’ve already actioned.</p>
+              </div>
+
+              {warmupMsg && <p className="text-xs font-medium text-emerald-700">{warmupMsg}</p>}
+            </div>
+          </div>
+        </div>
       )}
 
       <div className="flex" style={{ height: 'calc(100vh - 3rem)' }}>

@@ -375,6 +375,17 @@ async function runMigration() {
       `ALTER TABLE unibox_replies ADD COLUMN IF NOT EXISTS client_id UUID`,
       `CREATE INDEX IF NOT EXISTS idx_unibox_client_received ON unibox_replies (client_id, received_at DESC)`,
 
+      // ── Admin-managed warm-up tag list ──
+      // Terms that mark a reply as warm-up so it's stripped from the review unibox.
+      // source: 'bison' | 'plusvibe' (seeded defaults, shown for transparency) or
+      // 'custom' (admin-added). The classifier checks built-in defaults ALWAYS, plus
+      // any 'custom' terms here, so admins can extend the filter without a deploy.
+      `CREATE TABLE IF NOT EXISTS unibox_warmup_terms (
+        term TEXT PRIMARY KEY,
+        source TEXT NOT NULL DEFAULT 'custom',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+
       // ── Phase 2: classifier feedback log (training corpus + accuracy ledger) ──
       // Append-only. One row per admin label action on a unibox reply. A frozen
       // snapshot of the reply (full body, not the 200-char preview) + both the AI
