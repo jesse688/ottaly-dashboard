@@ -63,7 +63,7 @@ export async function GET(req: NextRequest) {
 
     let replies: BisonReply[] = []
     try {
-      replies = await withTeam(teamId, () => getUntrackedReplies())
+      replies = await withTeam(teamId, () => getUntrackedReplies(sinceMs))
     } catch (err) {
       summary.errors.push(`team ${teamId}: ${String(err).slice(0, 120)}`)
       continue

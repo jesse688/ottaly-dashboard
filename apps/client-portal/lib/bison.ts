@@ -400,9 +400,14 @@ export async function getLeadRepliesByEmail(
 // campaign sequence — Bison sets tracked_reply:false on them. They land in
 // PlusVibe's "Other" folder and are NOT returned by getCampaignReplies().
 // Caller wraps this in withTeam() so it runs on the team's scoped token.
-// Pages until empty (uses standard Laravel meta.last_page pagination).
-const MAX_UNTRACKED_PAGES = 50  // safety cap (~750 replies/run)
-export async function getUntrackedReplies(): Promise<BisonReply[]> {
+//
+// Bison returns the inbox newest-first. A flat page cap was the bug: a mailbox
+// flooded with warm-up/OOO traffic exhausts the cap before older REAL replies
+// are reached, so genuine leads are never ingested. Instead we page by the DATE
+// window — keep going until a page's newest reply is older than `sinceMs` — with
+// a high safety cap. Warm-up volume no longer crowds out real replies.
+const MAX_UNTRACKED_PAGES = 400  // safety backstop only; the date window is the real bound
+export async function getUntrackedReplies(sinceMs?: number): Promise<BisonReply[]> {
   const out: BisonReply[] = []
   for (let p = 1; p <= MAX_UNTRACKED_PAGES; p++) {
     const data = await bison<{ data?: BisonReply[]; meta?: { last_page?: number } }>(
@@ -413,6 +418,17 @@ export async function getUntrackedReplies(): Promise<BisonReply[]> {
     out.push(...batch.filter(r => r.tracked_reply === false))
     const lastPage = (data as { meta?: { last_page?: number } }).meta?.last_page ?? 1
     if (p >= lastPage) break
+    // Stop once we've paged past the requested window. Newest-first ordering means
+    // the newest item on a page is its upper bound — if even that is older than the
+    // window, every later page is older too. Guard on a parseable date so a missing
+    // timestamp never ends the loop early.
+    if (sinceMs != null) {
+      const newest = batch.reduce((max, r) => {
+        const t = r.date_received ? Date.parse(r.date_received) : NaN
+        return Number.isNaN(t) ? max : Math.max(max, t)
+      }, -Infinity)
+      if (newest !== -Infinity && newest < sinceMs) break
+    }
   }
   return out
 }
