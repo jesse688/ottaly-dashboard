@@ -599,13 +599,17 @@ function ProviderCard({ g, accent, days, ds }: { g: MailboxGroupStats; accent: s
   const tOoo = ds ? sum(ds.ooo) : 0
   const tBounces = ds ? sum(ds.bounces) : 0
   const tContacted = ds ? sum(ds.contacted) || tSent : tSent
-  const human = tContacted > 0 ? (tReplies - tOoo) / tContacted : 0
-  const withOoo = tContacted > 0 ? tReplies / tContacted : (ds ? 0 : g.reply_rate)
+  // PV's total_reply_count (stored as `replies`) is ALREADY the human/non-OOO
+  // count; total_ooo (`ooo`) is a SEPARATE additive bucket. So:
+  //   Human RR     = replies / contacted        (do NOT subtract ooo → went negative)
+  //   RR incl OOO  = (replies + ooo) / contacted
+  const human = tContacted > 0 ? tReplies / tContacted : 0
+  const withOoo = tContacted > 0 ? (tReplies + tOoo) / tContacted : (ds ? 0 : g.reply_rate)
   const bounceRate = tSent > 0 ? tBounces / tSent : g.bounce_rate
 
   // Daily series for the chart (percentages computed per-day).
-  const dailyHuman = days.map((_, i) => { const c = ds?.contacted[i] || ds?.sent[i] || 0; return c > 0 ? ((ds!.replies[i] - ds!.ooo[i]) / c) * 100 : 0 })
-  const dailyWithOoo = days.map((_, i) => { const c = ds?.contacted[i] || ds?.sent[i] || 0; return c > 0 ? (ds!.replies[i] / c) * 100 : 0 })
+  const dailyHuman = days.map((_, i) => { const c = ds?.contacted[i] || ds?.sent[i] || 0; return c > 0 ? (ds!.replies[i] / c) * 100 : 0 })
+  const dailyWithOoo = days.map((_, i) => { const c = ds?.contacted[i] || ds?.sent[i] || 0; return c > 0 ? ((ds!.replies[i] + ds!.ooo[i]) / c) * 100 : 0 })
   const series = [
     { key: 'Sent', label: 'Sent', data: (ds?.sent ?? []).map(Number), color: accent, percent: false },
     { key: 'RR human', label: 'RR human', data: dailyHuman, color: '#16A34A', percent: true },
