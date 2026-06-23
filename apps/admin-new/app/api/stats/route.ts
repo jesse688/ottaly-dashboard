@@ -23,15 +23,42 @@ export async function GET() {
        ORDER BY (stats->>'sent_30d')::int DESC NULLS LAST`
     )
 
-    const rows = res.rows
+    // REPLIES come from OUR unibox, not PlusVibe — PV doesn't count replies it
+    // tagged "other", but a genuine human reply is still a reply. Count distinct
+    // leads who replied per workspace (excluding warm-up + OOO/automated). Sent
+    // volume stays PlusVibe-sourced.
+    const uniRes = await pool.query(
+      `SELECT workspace_id,
+              COUNT(DISTINCT lower(lead_email)) FILTER (WHERE received_at >= CURRENT_DATE - INTERVAL '30 days') AS r30,
+              COUNT(DISTINCT lower(lead_email)) FILTER (WHERE received_at >= CURRENT_DATE - INTERVAL '90 days') AS r90
+         FROM unibox_replies
+        WHERE folder NOT IN ('warmup','ooo')
+          AND COALESCE(admin_label, category, '') NOT IN ('warmup','ooo_auto_reply')
+        GROUP BY workspace_id`
+    )
+    const uni = new Map<string, { r30: number; r90: number }>()
+    for (const u of uniRes.rows) uni.set(String(u.workspace_id), { r30: Number(u.r30) || 0, r90: Number(u.r90) || 0 })
+
+    // Override reply counts with the GREATER of PV vs unibox so we never under-report,
+    // and recompute reply rate against PV's sent volume.
+    const rows = res.rows.map(r => {
+      const u = uni.get(String(r.workspace_id))
+      const replied_30d = Math.max(r.replied_30d ?? 0, u?.r30 ?? 0)
+      const replied_90d = Math.max(r.replied_90d ?? 0, u?.r90 ?? 0)
+      return {
+        ...r,
+        replied_30d,
+        replied_90d,
+        reply_rate_30d: (r.sent_30d ?? 0) > 0 ? replied_30d / r.sent_30d : 0,
+        reply_rate_90d: (r.sent_90d ?? 0) > 0 ? replied_90d / r.sent_90d : 0,
+      }
+    })
     const totals = rows.reduce((acc, r) => ({
       sent: acc.sent + (r.sent_30d ?? 0),
       replies: acc.replies + (r.replied_30d ?? 0),
       leads: acc.leads + (r.leads_30d ?? 0),
-      // Weighted average reply rate using PlusVibe's own stored rate × sent volume
-      weightedRateSum: acc.weightedRateSum + ((r.reply_rate_30d ?? 0) * (r.sent_30d ?? 0)),
-    }), { sent: 0, replies: 0, leads: 0, weightedRateSum: 0 })
-    const replyRate = totals.sent > 0 ? totals.weightedRateSum / totals.sent : 0
+    }), { sent: 0, replies: 0, leads: 0 })
+    const replyRate = totals.sent > 0 ? totals.replies / totals.sent : 0
 
     return NextResponse.json({ rows, totals: { ...totals, replyRate }, period: '30d' })
   } catch (err) {
