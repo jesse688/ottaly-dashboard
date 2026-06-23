@@ -5,6 +5,7 @@ import { reconcileLeadCharges } from '@/lib/balance'
 import { addToBlocklist, bisonTeamForWorkspace, tagInBison } from '@/lib/bison'
 import { notifyClientOfLead } from '@/lib/email'
 import { enrichLeadFromContacts, applyCHRundownToLead, enrichUniboxReply } from '@/lib/enrich'
+import { enrichPhoneFromWebsite } from '@/lib/scrape-phone'
 
 // Admin marks a Unibox reply as a real lead. This is the ONLY path that sets
 // esp_leads.label='INTERESTED' (which reconcileLeadCharges keys on to bill the
@@ -121,6 +122,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         }).catch(() => {})
         await enrichLeadFromContacts(healLeadId, reply.workspace_id, reply.lead_email).catch(() => {})
         await applyCHRundownToLead(healLeadId, reply.workspace_id, id).catch(() => {})
+        void enrichPhoneFromWebsite(healLeadId, reply.workspace_id).catch(() => {})
       }
       // Re-bill in case the original mark predated cost_per_lead / the lead row.
       const c = await pool.query(
@@ -230,6 +232,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       await enrichLeadFromContacts(leadRowId, pvWorkspaceId, reply.lead_email).catch(() => {})
       // 3) Push the verified Companies House rundown onto the lead.
       await applyCHRundownToLead(leadRowId, pvWorkspaceId, id).catch(() => {})
+      void enrichPhoneFromWebsite(leadRowId, pvWorkspaceId).catch(() => {})
     }
 
     // reconcileLeadCharges is idempotent (uq_ledger_lead_charge). Run ONCE, after

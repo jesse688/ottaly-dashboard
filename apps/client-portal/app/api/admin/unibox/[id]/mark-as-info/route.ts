@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import pool, { ready } from '@/lib/db'
 import { getAdminSession } from '@/lib/auth'
 import { enrichLeadFromContacts, applyCHRundownToLead, enrichUniboxReply } from '@/lib/enrich'
+import { enrichPhoneFromWebsite } from '@/lib/scrape-phone'
 
 // Admin marks a Unibox reply as an "Info" lead: a near-lead that's worth showing
 // the client but that we CANNOT charge for. It is pushed to the client dashboard
@@ -136,6 +137,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       }).catch(() => {})
       await enrichLeadFromContacts(leadRowId, reply.workspace_id, reply.lead_email).catch(() => {})
       await applyCHRundownToLead(leadRowId, reply.workspace_id, id).catch(() => {})
+      void enrichPhoneFromWebsite(leadRowId, reply.workspace_id).catch(() => {})
     }
 
     return NextResponse.json({ ok: true, label_type: 'info', leadId: leadRowId })
