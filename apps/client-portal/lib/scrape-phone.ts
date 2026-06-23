@@ -33,10 +33,13 @@ function phoneFromHtml(html: string): string | null {
 async function fetchPage(url: string): Promise<string | null> {
   try {
     const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; OttalyBot/1.0)' }, signal: AbortSignal.timeout(10000), redirect: 'follow' })
-    if (!res.ok) return null
+    // NOTE: don't bail on non-2xx. Some sites (e.g. misconfigured WordPress
+    // behind a proxy) return the FULL, correct HTML body with a 500/503 status.
+    // We still want to scrape that body. Only skip clearly-empty responses.
     const ct = res.headers.get('content-type') || ''
-    if (!ct.includes('html') && !ct.includes('text')) return null
-    return (await res.text()).slice(0, 500_000)
+    if (ct && !ct.includes('html') && !ct.includes('text')) return null
+    const body = (await res.text()).slice(0, 500_000)
+    return body.length > 100 ? body : null
   } catch { return null }
 }
 
