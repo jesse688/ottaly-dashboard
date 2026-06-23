@@ -50,6 +50,48 @@ export async function sendReply(_input: {
   return { ok: false, reason: 'use-bison-direct' }
 }
 
+// Reply to a PlusVibe unibox email. POST /unibox/emails/reply?workspace_id=...
+export async function sendPlusVibeReply(opts: {
+  workspaceId: string
+  replyToId: string
+  subject: string
+  from: string
+  to: string
+  body: string
+  cc?: string
+}): Promise<{ ok: boolean; reason?: string }> {
+  const key = process.env.PLUSVIBE_KEY
+  if (!key) return { ok: false, reason: 'no_pv_key' }
+  if (!opts.from) return { ok: false, reason: 'no_from_account' }
+  try {
+    const res = await fetch(
+      `https://api.plusvibe.ai/api/v1/unibox/emails/reply?workspace_id=${encodeURIComponent(opts.workspaceId)}`,
+      {
+        method: 'POST',
+        headers: { 'x-api-key': key, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reply_to_id: opts.replyToId,
+          subject: opts.subject.startsWith('Re:') ? opts.subject : `Re: ${opts.subject}`,
+          from: opts.from,
+          to: opts.to,
+          body: opts.body,
+          ...(opts.cc ? { cc: opts.cc } : {}),
+        }),
+        signal: AbortSignal.timeout(15000),
+      }
+    )
+    if (!res.ok) {
+      const text = await res.text()
+      console.error('[sendPlusVibeReply] error:', res.status, text)
+      return { ok: false, reason: `pv_${res.status}` }
+    }
+    return { ok: true }
+  } catch (err) {
+    console.error('[sendPlusVibeReply] failed:', err)
+    return { ok: false, reason: String(err) }
+  }
+}
+
 export async function registerWebhook(_workspaceId?: string): Promise<{ ok: boolean; reason?: string }> {
   return bisonRegisterWebhook()
 }

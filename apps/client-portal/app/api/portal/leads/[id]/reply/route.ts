@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { getSession } from '@/lib/auth'
 import pool, { ready } from '@/lib/db'
 import { sendReply } from '@/lib/bison'
+import { sendPlusVibeReply } from '@/lib/plusvibe'
 import { notifyAdmin } from '@/lib/notify'
 import { getLockedLeadIds } from '@/lib/balance'
 import { sendEmailReply } from '@/lib/email'
@@ -70,7 +71,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   // Find the latest inbound message for threading context (subject, Bison reply ID)
   const ctx = await pool.query(
-    `SELECT id, subject, eaccount, message_id FROM portal_emails
+    `SELECT id, subject, eaccount, message_id, provider FROM portal_emails
       WHERE workspace_id = $1 AND lower(lead_email) = lower($2) AND direction = 'IN'
       ORDER BY timestamp_created DESC LIMIT 1`,
     [session.workspaceId, lead.email]
@@ -127,6 +128,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       attachments,
     })
     if (!send.ok) console.error('[reply] resend-with-attachments failed:', send.reason)
+  } else if (ctx.rows[0]?.provider === 'plusvibe' && ctx.rows[0]?.id) {
+    send = await sendPlusVibeReply({
+      workspaceId: session.workspaceId,
+      replyToId: ctx.rows[0].id,
+      subject: subject,
+      from: eaccount ?? '',
+      to: toList,
+      body: html,
+      cc: ccList || undefined,
+    })
   } else if (latestReplyId && !isNaN(latestReplyId)) {
     send = await sendReply({
       replyId: latestReplyId,
