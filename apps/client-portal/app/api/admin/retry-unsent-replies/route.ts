@@ -6,23 +6,30 @@ import { sendPlusVibeReply } from '@/lib/plusvibe'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
-// Fetch the first email account address for a PlusVibe workspace.
-// Cached per workspace for the lifetime of this request.
-async function getWorkspaceFrom(workspaceId: string, cache: Map<string, string>): Promise<string | null> {
-  if (cache.has(workspaceId)) return cache.get(workspaceId)!
+// Look up the real PlusVibe inbound email ID + recipient address for a lead.
+// Our DB stores Bison-generated unibox_ IDs which are NOT valid PlusVibe reply IDs.
+async function getPlusVibeInbound(
+  workspaceId: string,
+  leadEmail: string,
+): Promise<{ id: string; to: string } | null> {
   const key = process.env.PLUSVIBE_API_KEY ?? process.env.PLUSVIBE_KEY
   if (!key) return null
   try {
+    const qs = new URLSearchParams({ workspace_id: workspaceId, email: leadEmail, type: '1', limit: '1' })
     const res = await fetch(
-      `https://api.plusvibe.ai/api/v1/account/list?workspace_id=${encodeURIComponent(workspaceId)}&skip=0&limit=1`,
+      `https://api.plusvibe.ai/api/v1/unibox/emails?${qs}`,
       { headers: { 'x-api-key': key, 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(8000) }
     )
     if (!res.ok) return null
-    const data = await res.json() as { accounts?: { email?: string; from_email?: string }[] }
-    const account = data?.accounts?.[0]
-    const from = account?.email ?? account?.from_email ?? null
-    if (from) cache.set(workspaceId, from)
-    return from
+    const data = await res.json() as {
+      data?: { id?: string; email_id?: string; to_address_email_list?: string; to?: string }[]
+    }
+    const email = data?.data?.[0]
+    if (!email) return null
+    const id = email.id ?? email.email_id ?? null
+    const to = email.to_address_email_list ?? email.to ?? null
+    if (!id) return null
+    return { id, to: to ?? '' }
   } catch {
     return null
   }
@@ -98,20 +105,28 @@ export async function POST(req: NextRequest) {
       continue
     }
 
-    // Resolve from address: DB value → PlusVibe workspace account lookup
-    const from = row.eaccount || await getWorkspaceFrom(row.workspace_id, fromCache) || ''
+    // Get the real PlusVibe email ID — our DB stores Bison-generated IDs which PV rejects.
+    const pvInbound = await getPlusVibeInbound(row.workspace_id, row.lead_email)
+    const replyToId = pvInbound?.id ?? row.reply_to_id
+    const from = pvInbound?.to || row.eaccount || ''
+    const toAddr = row.to_email || row.lead_email
 
     if (dryRun) {
-      results.push({ out_id: row.out_id, company: row.company_name, lead: row.lead_email, subject: row.subject, sent_at: row.timestamp_created, status: 'would_send', reason: from ? `from:${from}` : 'no_from_unknown' })
+      results.push({ out_id: row.out_id, company: row.company_name, lead: row.lead_email, subject: row.subject, sent_at: row.timestamp_created, status: 'would_send', reason: `reply_to:${replyToId ?? 'none'} from:${from || 'unknown'}` })
+      continue
+    }
+
+    if (!replyToId) {
+      results.push({ out_id: row.out_id, company: row.company_name, lead: row.lead_email, subject: row.subject, sent_at: row.timestamp_created, status: 'skipped', reason: 'no_pv_email_id' })
       continue
     }
 
     const send = await sendPlusVibeReply({
       workspaceId: row.workspace_id,
-      replyToId: row.reply_to_id,
+      replyToId,
       subject: row.subject,
       from: from || undefined,
-      to: row.to_email || row.lead_email,
+      to: toAddr,
       body: row.body_html || `<p>${(row.body_text || '').replace(/\n/g, '<br/>')}</p>`,
     })
 
