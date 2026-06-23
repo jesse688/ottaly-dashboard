@@ -17,9 +17,9 @@ export async function POST(req: NextRequest) {
   const dryRun = url.searchParams.get('dry') === '1'
 
   // Find outbound portal replies that haven't been sent live.
-  // sent_live IS NULL = pre-flag era (assumed unsent for PlusVibe era).
-  // sent_live = FALSE = known failure.
-  // Join to the latest inbound email for that lead to get the reply_to_id.
+  // For the reply_to_id we prefer unibox_ prefixed IDs (PlusVibe) over bare numeric
+  // (Bison) IDs since the retry always goes through PlusVibe.
+  // For eaccount we cascade: outbound row → inbound row eaccount → inbound row to_email.
   const r = await pool.query(`
     SELECT
       pe_out.id          AS out_id,
@@ -29,20 +29,31 @@ export async function POST(req: NextRequest) {
       pe_out.body_html,
       pe_out.body_text,
       pe_out.to_email,
-      pe_out.eaccount,
+      COALESCE(pe_out.eaccount, pe_in.eaccount, pe_in.to_email) AS eaccount,
       pe_out.timestamp_created,
       pc.company_name,
-      (
-        SELECT pe_in.id FROM portal_emails pe_in
-         WHERE pe_in.workspace_id = pe_out.workspace_id
-           AND lower(pe_in.lead_email) = lower(pe_out.lead_email)
-           AND pe_in.direction = 'IN'
-           AND pe_in.timestamp_created < pe_out.timestamp_created
-         ORDER BY pe_in.timestamp_created DESC
-         LIMIT 1
+      -- Prefer unibox_ ID (PlusVibe) over bare numeric (Bison)
+      COALESCE(
+        (SELECT pe_in2.id FROM portal_emails pe_in2
+          WHERE pe_in2.workspace_id = pe_out.workspace_id
+            AND lower(pe_in2.lead_email) = lower(pe_out.lead_email)
+            AND pe_in2.direction = 'IN'
+            AND pe_in2.id LIKE 'unibox_%'
+            AND pe_in2.timestamp_created <= pe_out.timestamp_created
+          ORDER BY pe_in2.timestamp_created DESC LIMIT 1),
+        pe_in.id
       ) AS reply_to_id
     FROM portal_emails pe_out
     JOIN portal_clients pc ON pc.workspace_id = pe_out.workspace_id
+    LEFT JOIN LATERAL (
+      SELECT id, eaccount, to_email FROM portal_emails
+       WHERE workspace_id = pe_out.workspace_id
+         AND lower(lead_email) = lower(pe_out.lead_email)
+         AND direction = 'IN'
+         AND timestamp_created <= pe_out.timestamp_created
+       ORDER BY timestamp_created DESC
+       LIMIT 1
+    ) pe_in ON true
     WHERE pe_out.direction = 'OUT'
       AND pe_out.sent_via_portal = TRUE
       AND (pe_out.sent_live IS NULL OR pe_out.sent_live = FALSE)
@@ -57,20 +68,16 @@ export async function POST(req: NextRequest) {
     timestamp_created: string; company_name: string; reply_to_id: string | null
   }[]
 
-  const results: { out_id: string; company: string; lead: string; subject: string; status: string; reason?: string }[] = []
+  const results: { out_id: string; company: string; lead: string; subject: string; sent_at: string; status: string; reason?: string }[] = []
 
   for (const row of rows) {
     if (!row.reply_to_id) {
-      results.push({ out_id: row.out_id, company: row.company_name, lead: row.lead_email, subject: row.subject, status: 'skipped', reason: 'no_inbound_email_found' })
-      continue
-    }
-    if (!row.eaccount) {
-      results.push({ out_id: row.out_id, company: row.company_name, lead: row.lead_email, subject: row.subject, status: 'skipped', reason: 'no_from_account' })
+      results.push({ out_id: row.out_id, company: row.company_name, lead: row.lead_email, subject: row.subject, sent_at: row.timestamp_created, status: 'skipped', reason: 'no_inbound_email_found' })
       continue
     }
 
     if (dryRun) {
-      results.push({ out_id: row.out_id, company: row.company_name, lead: row.lead_email, subject: row.subject, status: 'would_send' })
+      results.push({ out_id: row.out_id, company: row.company_name, lead: row.lead_email, subject: row.subject, sent_at: row.timestamp_created, status: 'would_send', reason: row.eaccount ? `from:${row.eaccount}` : 'no_from_pv_will_infer' })
       continue
     }
 
@@ -78,7 +85,7 @@ export async function POST(req: NextRequest) {
       workspaceId: row.workspace_id,
       replyToId: row.reply_to_id,
       subject: row.subject,
-      from: row.eaccount,
+      from: row.eaccount ?? '',
       to: row.to_email || row.lead_email,
       body: row.body_html || `<p>${(row.body_text || '').replace(/\n/g, '<br/>')}</p>`,
     })
@@ -88,7 +95,7 @@ export async function POST(req: NextRequest) {
       [send.ok, row.out_id]
     ).catch(() => {})
 
-    results.push({ out_id: row.out_id, company: row.company_name, lead: row.lead_email, subject: row.subject, status: send.ok ? 'sent' : 'failed', reason: send.reason })
+    results.push({ out_id: row.out_id, company: row.company_name, lead: row.lead_email, subject: row.subject, sent_at: row.timestamp_created, status: send.ok ? 'sent' : 'failed', reason: send.reason })
   }
 
   const sent = results.filter(r => r.status === 'sent').length

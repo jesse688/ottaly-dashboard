@@ -51,18 +51,18 @@ export async function sendReply(_input: {
 }
 
 // Reply to a PlusVibe unibox email. POST /unibox/emails/reply?workspace_id=...
+// `from` is optional — if omitted PlusVibe infers the sender from the reply_to_id.
 export async function sendPlusVibeReply(opts: {
   workspaceId: string
   replyToId: string
   subject: string
-  from: string
+  from?: string
   to: string
   body: string
   cc?: string
 }): Promise<{ ok: boolean; reason?: string }> {
   const key = process.env.PLUSVIBE_KEY
   if (!key) return { ok: false, reason: 'no_pv_key' }
-  if (!opts.from) return { ok: false, reason: 'no_from_account' }
   try {
     const res = await fetch(
       `https://api.plusvibe.ai/api/v1/unibox/emails/reply?workspace_id=${encodeURIComponent(opts.workspaceId)}`,
@@ -72,7 +72,7 @@ export async function sendPlusVibeReply(opts: {
         body: JSON.stringify({
           reply_to_id: opts.replyToId,
           subject: opts.subject.startsWith('Re:') ? opts.subject : `Re: ${opts.subject}`,
-          from: opts.from,
+          ...(opts.from ? { from: opts.from } : {}),
           to: opts.to,
           body: opts.body,
           ...(opts.cc ? { cc: opts.cc } : {}),
