@@ -1611,14 +1611,18 @@ class PostgresDatabase {
     // signal. Apollo keywords tag any company *adjacent* to a sector (brokers,
     // suppliers, recruiters), so SIC is how you isolate e.g. real care homes
     // (87100/87300/87900) from companies that merely mention them.
-    // ch_sic_codes is a comma-joined string like "87300,88100"; we match each
-    // requested code as a whole token so "8730" can't match "87300".
+    // ch_sic_codes is a comma-joined string like "87300,88100". Each requested
+    // code matches HIERARCHICALLY: it anchors at a token boundary and then any
+    // remaining digits of the full code may follow, so "43" matches 43, 431,
+    // 43100, 43210… (the whole SIC division), while a full "87300" still only
+    // matches 87300 (the trailing-digits group can be empty). This lets you
+    // enter a division/group prefix and pull everything beneath it.
     safe('sicCodes', () => {
       if (!filters.sicCodes) return;
       const codes = filters.sicCodes.split(',').map(c => c.trim()).filter(Boolean);
       if (!codes.length) return;
       clauses.push(`ch_sic_codes ~* $${p}`);
-      params.push(`(^|,)(${codes.map(c => c.replace(/[^0-9]/g,'')).join('|')})(,|$)`); p++;
+      params.push(`(^|,)(${codes.map(c => c.replace(/[^0-9]/g,'')).join('|')})[0-9]*(,|$)`); p++;
     });
     safe('website',             () => { if (filters.website)             like('company_domain', filters.website); });
     safe('companyLinkedin',     () => { if (filters.companyLinkedin)     like('company_linkedin_url', filters.companyLinkedin); });
