@@ -111,10 +111,13 @@ function seriesValue(s: SeriesKey, d: DayData): number | null {
       return d.leads || 0
   }
 }
-// 3-day rolling average (nulls skipped), matching legacy rolling3().
-function rolling3(arr: (number | null)[]): (number | null)[] {
+// Trailing rolling average over `window` days (nulls skipped). window=1 returns
+// the raw series unsmoothed. Default smoothing is 3 (matching legacy rolling3()).
+function rollingAvg(arr: (number | null)[], window: number): (number | null)[] {
+  const w = Math.max(1, Math.floor(window) || 1)
+  if (w <= 1) return arr
   return arr.map((_, i) => {
-    const slice = arr.slice(Math.max(0, i - 2), i + 1).filter((v): v is number => v != null)
+    const slice = arr.slice(Math.max(0, i - (w - 1)), i + 1).filter((v): v is number => v != null)
     if (!slice.length) return null
     return +(slice.reduce((a, b) => a + b, 0) / slice.length).toFixed(2)
   })
@@ -241,6 +244,8 @@ function ClientCard({
   const [toggles, setToggles] = useState<Record<SeriesKey, boolean>>(() =>
     Object.fromEntries(ALL_SERIES.map(s => [s, true])) as Record<SeriesKey, boolean>,
   )
+  // Rolling-average smoothing window in days. Default 3; 1 = raw (no smoothing).
+  const [smooth, setSmooth] = useState(3)
   const t = w.totals
   const hrr = t.replyRate
   const allrr = t.allReplyRate
@@ -248,7 +253,7 @@ function ClientCard({
   const labels = w.series.map(d => d.date.slice(5))
   const chartSeries: LineSeries[] = ALL_SERIES.filter(s => toggles[s]).map(s => ({
     label: SERIES_LABEL[s],
-    data: rolling3(w.series.map(d => seriesValue(s, d))),
+    data: rollingAvg(w.series.map(d => seriesValue(s, d)), smooth),
     color: SERIES_COLOR[s],
     percent: isPercent(s),
   }))
@@ -345,12 +350,24 @@ function ClientCard({
                 </button>
               )
             })}
-            <span
-              className="ml-auto text-[11px] font-medium text-muted-foreground"
-              title="Each point averages that day and the previous two. Header totals are not smoothed."
+            <label
+              className="ml-auto flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground"
+              title="Rolling-average smoothing window. Each point averages that day and the previous N−1 days. 1 = raw (no smoothing). Header totals are never smoothed."
             >
-              3-day rolling avg
-            </span>
+              <span>Smoothing</span>
+              <input
+                type="number"
+                min={1}
+                max={Math.max(1, w.series.length)}
+                value={smooth}
+                onChange={e => {
+                  const v = Number(e.target.value)
+                  setSmooth(Number.isFinite(v) ? Math.min(Math.max(1, Math.round(v)), Math.max(1, w.series.length)) : 3)
+                }}
+                className="w-12 rounded border border-border bg-background px-1.5 py-0.5 text-center text-[11px] font-semibold tabular-nums"
+              />
+              <span>{smooth <= 1 ? 'days (raw)' : 'day avg'}</span>
+            </label>
           </div>
           {chartSeries.length ? (
             <LineChart labels={labels} series={chartSeries} height={220} />
