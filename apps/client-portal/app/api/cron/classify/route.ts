@@ -7,6 +7,8 @@ import { enrichReplyWithCH } from '@/lib/enrich'
 // FOR UPDATE SKIP LOCKED (safe to run concurrently / overlapping), pre-filters
 // automated replies for free, and calls Claude on the rest. Authed by
 // ?secret=CRON_SECRET like the other crons.
+export const dynamic = 'force-dynamic'
+export const maxDuration = 300
 export async function GET(req: NextRequest) {
   const secret = new URL(req.url).searchParams.get('secret')
   const expectedSecret = process.env.CRON_SECRET

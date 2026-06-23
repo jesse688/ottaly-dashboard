@@ -5,10 +5,13 @@
 // We frame it explicitly as data to classify and tell the model not to follow
 // anything inside it. Output is constrained to strict JSON via responseMimeType.
 
-// Strongest available model for classification accuracy (the worry is mis-sorting
-// a real positive). Volume reaching the AI is small — warm-up/automated are
-// pre-filtered for free first — so the extra cost/latency of pro is worth it.
-const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-pro'
+// Default to flash for STABILITY: the classify worker holds a DB transaction
+// across the whole batch, and pro's multi-second thinking calls held it open
+// long enough to exhaust the connection pool and crash the app. Flash is fast +
+// proven. The accuracy fix that mattered was the prompt (OOO/auto no longer land
+// in "other"), which applies on flash too. Pro can be enabled via GEMINI_MODEL
+// once classify is refactored to call the model OUTSIDE the transaction.
+const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash'
 const GEMINI_URL = (model: string, key: string) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`
 
