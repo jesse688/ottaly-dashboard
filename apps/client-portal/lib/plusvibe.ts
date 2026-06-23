@@ -61,7 +61,7 @@ export async function sendPlusVibeReply(opts: {
   body: string
   cc?: string
 }): Promise<{ ok: boolean; reason?: string }> {
-  const key = process.env.PLUSVIBE_KEY
+  const key = process.env.PLUSVIBE_API_KEY ?? process.env.PLUSVIBE_KEY
   if (!key) return { ok: false, reason: 'no_pv_key' }
   try {
     const res = await fetch(
