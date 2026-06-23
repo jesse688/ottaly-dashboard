@@ -1,18 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import pool, { ready } from '@/lib/db'
 import { getAdminSession } from '@/lib/auth'
-import { CATEGORIES, CLASSIFIER_VERSION } from '@/lib/classify'
-
-// Where a human-corrected category routes the reply. Mirrors the classify cron's
-// routing so a correction lands the reply in the right place — but NEVER moves a
-// row out of unmapped/rejected (those are deliberate end-states); only inbox/review
-// rows get re-filed. interested + question → review (a question is a hot lead).
-function folderForCategory(cat: string): 'review' | 'warmup' | 'done' | null {
-  if (cat === 'interested' || cat === 'question') return 'review'
-  if (cat === 'warmup') return 'warmup'      // visible warmup folder (Phase 2)
-  if (cat === 'unsubscribe') return 'done'   // actioned end-state
-  return 'done'                              // not_interested / ooo / other → done
-}
+import { CATEGORIES, CLASSIFIER_VERSION, defaultFolderForCategory } from '@/lib/classify'
 
 // Admin overrides the AI classification by setting admin_label. Stored ALONGSIDE
 // (not over) the AI category so the model's original call is preserved — and that
@@ -54,10 +43,14 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       folder: string; subject: string | null; body_text: string | null; had_lead_fields: boolean
     }
 
-    // Re-file the row — but only out of inbox/review (never incinerate a
-    // deliberate unmapped/rejected end-state).
-    const target = folderForCategory(adminLabel)
-    const newFolder = (target && (row.folder === 'inbox' || row.folder === 'review')) ? target : row.folder
+    // Re-file the row into the folder its new label belongs to, using the SAME
+    // routing the classifier uses (human label = full confidence). So assigning
+    // "not interested" / "ooo auto reply" / "warmup" / "unsubscribe" from Review
+    // moves it straight to that tab; interested/question/other stay in Review.
+    // Only re-file from the working folders — never disturb a deliberate end-state.
+    const target = defaultFolderForCategory(adminLabel, 1)
+    const newFolder = (row.folder === 'inbox' || row.folder === 'review' || row.folder === 'unmapped')
+      ? target : row.folder
 
     await client.query(
       `UPDATE unibox_replies

@@ -467,10 +467,19 @@ export function AdminUniboxClient() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ admin_label: label }),
       })
-      const d = await r.json() as { ok?: boolean; error?: string; admin_label?: string }
+      const d = await r.json() as { ok?: boolean; error?: string; admin_label?: string; folder?: string }
       if (!r.ok || !d.ok) { setMsg(d.error ?? 'Failed to set label'); return }
-      setSelected({ ...selected, admin_label: d.admin_label ?? label })
-      setRows(rows.map(x => x.id === selected.id ? { ...x, admin_label: d.admin_label ?? label } : x))
+      // If the label re-filed the row out of the folder you're viewing, drop it
+      // from the list and clear the detail — it's now in its labelled tab.
+      if (d.folder && d.folder !== folder && folder !== 'all') {
+        setRows(rows.filter(x => x.id !== selected.id))
+        setSelected(null)
+        setMsg(`Moved to ${d.folder.replace('_', ' ')}`)
+      } else {
+        setSelected({ ...selected, admin_label: d.admin_label ?? label })
+        setRows(rows.map(x => x.id === selected.id ? { ...x, admin_label: d.admin_label ?? label } : x))
+      }
+      load(folder, undefined, activeQuery, category, zoomClient) // refresh folder counts
     } finally {
       setBusy(false)
     }
@@ -753,11 +762,11 @@ export function AdminUniboxClient() {
                 </div>
               )}
 
-              {/* Classification — correct the AI's category (does NOT take an action) */}
+              {/* Assign category — re-files the reply into the matching folder */}
               <div className="mt-5 rounded-lg border border-gray-100 bg-gray-50/60 p-3">
                 <div className="flex items-center justify-between">
-                  <label className="text-xs font-semibold text-gray-600">Correct category</label>
-                  <span className="text-[11px] text-gray-400">Classification only — doesn&apos;t mark or reject</span>
+                  <label className="text-xs font-semibold text-gray-600">Assign category</label>
+                  <span className="text-[11px] text-gray-400">Moves it to that folder (Not Interested / OOO &amp; Auto / Warm-up / Unsubscribe)</span>
                 </div>
                 <div className="flex flex-wrap gap-1.5 mt-2">
                   {CATEGORIES.map(c => (
