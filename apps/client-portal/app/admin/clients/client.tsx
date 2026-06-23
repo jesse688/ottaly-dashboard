@@ -99,6 +99,11 @@ export function AdminClientsClient() {
   const [unread, setUnread]                   = useState(0)
   const [showNotifs, setShowNotifs]           = useState(false)
 
+  // Unibox send-failure alert (red banner)
+  const [unsent, setUnsent]                   = useState<{ count: number; items: { company: string | null; lead: string; subject: string | null; at: string }[] }>({ count: 0, items: [] })
+  const [bannerDismissed, setBannerDismissed] = useState(false)
+  const [testAlert, setTestAlert]             = useState(false)
+
   // Sync status
   const [syncStatus, setSyncStatus]           = useState<{ status: { webhook: string; polling: string; alert: string } } | null>(null)
 
@@ -206,6 +211,10 @@ export function AdminClientsClient() {
     fetch('/api/admin/workspaces').then(r => r.json()).then(d => { if (Array.isArray(d)) setWorkspaces(d) }).catch(() => {})
     fetch('/api/admin/sync-status').then(r => r.json()).then(d => !d.error && setSyncStatus(d)).catch(() => {})
     loadNotifs()
+    loadUnsent()
+    // Re-poll unibox send health every 60s so failures surface without a refresh.
+    const t = setInterval(loadUnsent, 60_000)
+    return () => clearInterval(t)
   }, [])
 
   useEffect(() => {
@@ -230,6 +239,21 @@ export function AdminClientsClient() {
     fetch('/api/admin/notifications').then(r => r.json()).then((d: { notifications: Notification[]; unread: number } | { error: string }) => {
       if ('notifications' in d) { setNotifs(d.notifications); setUnread(d.unread) }
     }).catch(() => {})
+  }
+
+  function loadUnsent() {
+    fetch('/api/admin/unsent-replies').then(r => r.json()).then((d: { count: number; items: { company: string | null; lead: string; subject: string | null; at: string }[] } | { error: string }) => {
+      if ('count' in d) { setUnsent(d); if (d.count > 0) setBannerDismissed(false) }
+    }).catch(() => {})
+  }
+
+  // "Done" on the red banner: mark the failed sends as resolved so the banner
+  // clears for good. The test alert is purely client-side, so just hide it.
+  async function resolveUnsentAlert() {
+    if (testAlert) { setTestAlert(false); return }
+    await fetch('/api/admin/unsent-replies', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) }).catch(() => {})
+    setUnsent({ count: 0, items: [] })
+    loadUnsent()
   }
 
   // ── Clients ──
@@ -539,10 +563,10 @@ export function AdminClientsClient() {
         })()}
         <div className="ml-auto flex items-center flex-wrap gap-2 sm:gap-4">
           <div className="relative">
-            <button onClick={() => setShowNotifs(v => !v)} className="relative text-slate-400 hover:text-white text-base px-1" aria-label="Notifications">
+            <button onClick={() => setShowNotifs(v => !v)} className="relative text-slate-300 hover:text-white text-2xl px-1 leading-none" aria-label="Notifications">
               <span>🔔</span>
               {unread > 0 && (
-                <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-semibold flex items-center justify-center">{unread}</span>
+                <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[11px] font-bold flex items-center justify-center ring-2 ring-[#1a2332]">{unread}</span>
               )}
             </button>
             {showNotifs && (
@@ -592,9 +616,43 @@ export function AdminClientsClient() {
             Backfill Leads
           </button>
           <a href="/admin/unibox" className="text-slate-400 hover:text-white text-xs">Unibox</a>
+          <button onClick={() => setTestAlert(true)} className="text-slate-400 hover:text-white text-xs border border-slate-600 px-2 py-1 rounded" title="Show a test unibox error banner">
+            Test alert
+          </button>
           <button onClick={handleLogout} className="text-slate-400 hover:text-white text-xs">Sign out</button>
         </div>
       </header>
+
+      {/* Unibox send-failure banner — surfaces ANY reply that failed to send live. */}
+      {(testAlert || (unsent.count > 0 && !bannerDismissed)) && (
+        <div className="bg-red-600 text-white px-4 sm:px-6 py-3 flex items-start sm:items-center justify-between gap-3 flex-wrap shadow-md">
+          <div className="flex items-start sm:items-center gap-3 min-w-0">
+            <span className="text-xl leading-none mt-0.5 sm:mt-0">⚠️</span>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold">
+                {testAlert
+                  ? 'TEST: simulated unibox send error'
+                  : `Unibox: ${unsent.count} repl${unsent.count === 1 ? 'y' : 'ies'} failed to send`}
+              </p>
+              <p className="text-xs text-red-100 truncate">
+                {testAlert
+                  ? 'This is a test. Click “Done” to clear it.'
+                  : unsent.items.slice(0, 3).map(i => `${i.company ?? i.lead}${i.subject ? ` — ${i.subject}` : ''}`).join('  ·  ') + (unsent.count > 3 ? `  ·  +${unsent.count - 3} more` : '')}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {!testAlert && (
+              <button onClick={() => { setShowNotifs(true) }} className="text-xs font-medium bg-red-700/60 hover:bg-red-700 px-3 py-1.5 rounded">
+                View
+              </button>
+            )}
+            <button onClick={resolveUnsentAlert} className="text-xs font-semibold bg-white text-red-700 hover:bg-red-50 px-3 py-1.5 rounded">
+              Done
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="border-b border-gray-200 bg-white px-6">
