@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { getSession } from '@/lib/auth'
 import pool, { ready } from '@/lib/db'
 import { sendReply } from '@/lib/bison'
-import { sendPlusVibeReply } from '@/lib/plusvibe'
+import { sendPlusVibeReply, getPlusVibeInbound } from '@/lib/plusvibe'
 import { notifyAdmin } from '@/lib/notify'
 import { getLockedLeadIds } from '@/lib/balance'
 import { sendEmailReply } from '@/lib/email'
@@ -132,11 +132,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     })
     if (!send.ok) console.error('[reply] resend-with-attachments failed:', send.reason)
   } else if (isPlusVibe && inboundId) {
+    // Resolve the REAL PlusVibe email id + sending mailbox from the unibox API —
+    // our DB stores `unibox_<id>` (which PV rejects) and a NULL eaccount.
+    const pv = await getPlusVibeInbound(session.workspaceId, lead.email)
     send = await sendPlusVibeReply({
       workspaceId: session.workspaceId,
-      replyToId: inboundId,
+      replyToId: pv?.id ?? inboundId.replace(/^unibox_/, ''),
       subject: subject,
-      from: eaccount,
+      from: pv?.from || eaccount,
       to: toList,
       body: html,
       cc: ccList || undefined,

@@ -1,39 +1,10 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { getAdminSession } from '@/lib/auth'
 import pool from '@/lib/db'
-import { sendPlusVibeReply } from '@/lib/plusvibe'
+import { sendPlusVibeReply, getPlusVibeInbound } from '@/lib/plusvibe'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
-
-// Look up the real PlusVibe inbound email ID + recipient address for a lead.
-// Our DB stores Bison-generated unibox_ IDs which are NOT valid PlusVibe reply IDs.
-async function getPlusVibeInbound(
-  workspaceId: string,
-  leadEmail: string,
-): Promise<{ id: string; to: string } | null> {
-  const key = process.env.PLUSVIBE_API_KEY ?? process.env.PLUSVIBE_KEY
-  if (!key) return null
-  try {
-    const qs = new URLSearchParams({ workspace_id: workspaceId, email: leadEmail, type: '1', limit: '1' })
-    const res = await fetch(
-      `https://api.plusvibe.ai/api/v1/unibox/emails?${qs}`,
-      { headers: { 'x-api-key': key, 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(8000) }
-    )
-    if (!res.ok) return null
-    const data = await res.json() as {
-      data?: { id?: string; email_id?: string; to_address_email_list?: string; to?: string }[]
-    }
-    const email = data?.data?.[0]
-    if (!email) return null
-    const id = email.id ?? email.email_id ?? null
-    const to = email.to_address_email_list ?? email.to ?? null
-    if (!id) return null
-    return { id, to: to ?? '' }
-  } catch {
-    return null
-  }
-}
 
 // POST /api/admin/retry-unsent-replies
 // Re-sends portal replies that never went out (sent_live IS NULL or FALSE).
@@ -105,19 +76,24 @@ export async function POST(req: NextRequest) {
       continue
     }
 
-    // Get the real PlusVibe email ID — our DB stores Bison-generated IDs which PV rejects.
+    // Get the real PlusVibe email + correct from/to — our DB stores unibox_ IDs PV rejects
+    // and NULL eaccount. Fall back to stripping the unibox_ prefix if the API lookup fails.
     const pvInbound = await getPlusVibeInbound(row.workspace_id, row.lead_email)
-    const replyToId = pvInbound?.id ?? row.reply_to_id
-    const from = pvInbound?.to || row.eaccount || ''
-    const toAddr = row.to_email || row.lead_email
+    const replyToId = pvInbound?.id ?? row.reply_to_id?.replace(/^unibox_/, '') ?? null
+    const from = pvInbound?.from || row.eaccount || ''
+    const toAddr = pvInbound?.to || row.to_email || row.lead_email
 
     if (dryRun) {
-      results.push({ out_id: row.out_id, company: row.company_name, lead: row.lead_email, subject: row.subject, sent_at: row.timestamp_created, status: 'would_send', reason: `reply_to:${replyToId ?? 'none'} from:${from || 'unknown'}` })
+      results.push({ out_id: row.out_id, company: row.company_name, lead: row.lead_email, subject: row.subject, sent_at: row.timestamp_created, status: 'would_send', reason: `reply_to:${replyToId ?? 'none'} from:${from || 'unknown'} to:${toAddr}` })
       continue
     }
 
     if (!replyToId) {
       results.push({ out_id: row.out_id, company: row.company_name, lead: row.lead_email, subject: row.subject, sent_at: row.timestamp_created, status: 'skipped', reason: 'no_pv_email_id' })
+      continue
+    }
+    if (!from) {
+      results.push({ out_id: row.out_id, company: row.company_name, lead: row.lead_email, subject: row.subject, sent_at: row.timestamp_created, status: 'skipped', reason: 'no_from_account' })
       continue
     }
 

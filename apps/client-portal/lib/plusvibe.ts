@@ -50,6 +50,33 @@ export async function sendReply(_input: {
   return { ok: false, reason: 'use-bison-direct' }
 }
 
+// Look up the real PlusVibe inbound email for a lead via the unibox API.
+// Our DB stores `unibox_<id>` (from the Bison webhook) but PlusVibe's reply API
+// wants the bare id. `eaccount` is the sending mailbox (reply FROM);
+// `from_address_email` is the lead (reply TO).
+export async function getPlusVibeInbound(
+  workspaceId: string,
+  leadEmail: string,
+): Promise<{ id: string; from: string; to: string } | null> {
+  const key = process.env.PLUSVIBE_API_KEY ?? process.env.PLUSVIBE_KEY
+  if (!key) return null
+  try {
+    const res = await fetch(
+      `https://api.plusvibe.ai/api/v1/unibox/emails?workspace_id=${encodeURIComponent(workspaceId)}&lead=${encodeURIComponent(leadEmail)}&email_type=received`,
+      { headers: { 'x-api-key': key, 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(8000) }
+    )
+    if (!res.ok) return null
+    const data = await res.json() as {
+      data?: { id?: string; eaccount?: string; from_address_email?: string }[]
+    }
+    const email = data?.data?.[0]
+    if (!email?.id) return null
+    return { id: email.id, from: email.eaccount ?? '', to: email.from_address_email ?? leadEmail }
+  } catch {
+    return null
+  }
+}
+
 // Reply to a PlusVibe unibox email. POST /unibox/emails/reply?workspace_id=...
 // `from` is optional — if omitted PlusVibe infers the sender from the reply_to_id.
 export async function sendPlusVibeReply(opts: {
