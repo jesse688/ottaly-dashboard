@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { getAdminSession } from '@/lib/auth'
 import pool, { ready } from '@/lib/db'
-import { BISON_WARMUP_CODES, buildWarmupRegex } from '@/lib/classify'
+import { BISON_WARMUP_CODES } from '@/lib/classify'
 import { PV_WARMUP_TAGS } from '@/lib/pv-warmup-tags'
 
 export const dynamic = 'force-dynamic'
@@ -61,35 +61,23 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, seeded: r.rowCount })
   }
 
-  // Apply: move existing review rows that match ANY warm-up term into the warmup folder.
+  // Apply: move review rows whose subject/preview contains ANY warm-up term into
+  // the warm-up folder. Done ENTIRELY in Postgres (EXISTS against the terms table)
+  // — no rows are pulled into Node, so it can't blow memory or exhaust the pool.
+  // Substring match is fine here: the tags are distinctive tokens (8-char codes /
+  // hyphenated word-pairs), not common words.
   if (url.searchParams.get('apply') === '1') {
-    const custom = (await pool.query(`SELECT term FROM unibox_warmup_terms WHERE source = 'custom'`)).rows.map(x => x.term as string)
-    const re = buildWarmupRegex([...PV_WARMUP_TAGS, ...BISON_WARMUP_CODES, ...custom])
-    if (!re) return NextResponse.json({ ok: true, moved: 0, reason: 'no_terms' })
-    // Only sweep rows still in the active review surface — never touch done/replies.
-    const rows = (await pool.query(
-      `SELECT id, subject, body_preview, raw FROM unibox_replies
-        WHERE folder IN ('inbox','review','unmapped') LIMIT 20000`
-    )).rows
-    const hits: string[] = []
-    for (const row of rows) {
-      let raw = ''
-      try { raw = JSON.stringify(row.raw).slice(0, 12000) } catch { /* ignore */ }
-      const hay = `${row.subject ?? ''}\n${row.body_preview ?? ''}\n${raw}`
-      if (re.test(hay)) hits.push(row.id as string)
-    }
-    let moved = 0
-    for (let i = 0; i < hits.length; i += 200) {
-      const chunk = hits.slice(i, i + 200)
-      const res = await pool.query(
-        `UPDATE unibox_replies SET category='warmup', folder='warmup', classify_state='done',
-                ai_model='admin-filter', ai_reasoning='admin warmup tag', updated_at=NOW()
-          WHERE id::text = ANY($1::text[])`,
-        [chunk]
-      )
-      moved += res.rowCount ?? 0
-    }
-    return NextResponse.json({ ok: true, scanned: rows.length, moved })
+    const res = await pool.query(
+      `UPDATE unibox_replies u
+          SET category='warmup', folder='warmup', classify_state='done',
+              ai_model='admin-filter', ai_reasoning='admin warmup tag', updated_at=NOW()
+        WHERE u.folder IN ('inbox','review','unmapped')
+          AND EXISTS (
+            SELECT 1 FROM unibox_warmup_terms t
+             WHERE position(t.term in lower(coalesce(u.subject,'') || ' ' || coalesce(u.body_preview,''))) > 0
+          )`
+    )
+    return NextResponse.json({ ok: true, moved: res.rowCount })
   }
 
   // Add custom terms.
