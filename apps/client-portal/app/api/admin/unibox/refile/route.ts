@@ -55,6 +55,14 @@ export async function POST(req: NextRequest) {
     //    low-confidence not_interested, null/unknown). Never hide a possible lead.
     await run('review', `UPDATE unibox_replies SET folder='review', updated_at=NOW()
                           WHERE folder IN ('inbox','unmapped') AND marked_as_lead=FALSE`)
+    // 6. Re-judge 'other' replies now sitting in Review with the improved
+    //    body-recovery classifier: it pulls real text from the raw payload (many
+    //    had an empty preview) so genuine replies classify correctly, and archives
+    //    truly-empty inbound spam to 'done'. Resets them to pending for the cron.
+    await run('rejudge_other', `UPDATE unibox_replies
+       SET classify_state='pending', classify_next_at=NOW(), updated_at=NOW()
+     WHERE folder='review' AND marked_as_lead=FALSE
+       AND COALESCE(admin_label, category) = 'other'`)
 
     // Final tally per folder so the result is verifiable at a glance.
     const tally = await pool.query(`SELECT folder, COUNT(*)::int AS n FROM unibox_replies GROUP BY folder ORDER BY n DESC`)

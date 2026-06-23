@@ -126,10 +126,33 @@ export async function GET(req: NextRequest) {
       }
 
       try {
-        const result = await classifyReply({
-          subject: (row.subject as string) ?? '',
-          bodyText: (row.body_preview as string) ?? '',
-        })
+        // Recover the body: body_preview is null for many ingested replies (the
+        // Bison list endpoint and inbound spam-to-mailbox often carry only an html
+        // body). Pull text from the raw payload so the classifier judges real
+        // content instead of returning "other — empty body" and flooding Review.
+        const rawObj = (raw ?? {}) as { text_body?: string; html_body?: string; body?: { text?: string; html?: string } }
+        const fromRaw = (rawObj.text_body || rawObj.body?.text
+          || (rawObj.html_body || rawObj.body?.html || '').replace(/<[^>]+>/g, ' '))
+          .replace(/\s+/g, ' ').trim()
+        const subject = (row.subject as string) ?? ''
+        const bodyText = ((row.body_preview as string) ?? '').trim() || fromRaw
+
+        // No body at all → unjudgeable noise (mostly inbound spam/marketing sent TO
+        // the mailbox). Archive to 'done' so it never clutters Review. Recoverable,
+        // and a later re-ingest that carries a body will re-classify it properly.
+        if (!bodyText) {
+          await client.query(
+            `UPDATE unibox_replies SET category='other', classify_state='done', folder='done',
+                    ai_model='prefilter', ai_reasoning='empty body — archived',
+                    classifier_version=$2, updated_at=NOW()
+              WHERE id=$1`,
+            [id, CLASSIFIER_VERSION]
+          )
+          summary.processed++
+          continue
+        }
+
+        const result = await classifyReply({ subject, bodyText })
         // SIMPLIFIED ROUTING (never hide a possible lead):
         //   • a reply from an ALREADY-marked lead → 'lead_replies' (client follow-up)
         //   • else folder = defaultFolderForCategory(): confident noise goes to its
