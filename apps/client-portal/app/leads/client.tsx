@@ -339,27 +339,6 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
   const [notesSaving, setNotesSaving] = useState(false)
   const notesLoadedFor = useRef<string | null>(null)
 
-  // On-demand "find phone from website" scrape for the selected lead.
-  const [scraping, setScraping] = useState(false)
-  const [scrapeMsg, setScrapeMsg] = useState('')
-  const scrapePhone = async () => {
-    if (!selected) return
-    setScraping(true); setScrapeMsg('')
-    try {
-      const r = await fetch(`/api/portal/leads/${selected.id}/scrape-enrich`, { method: 'POST' })
-      const d = await r.json() as { ok?: boolean; phone?: string; message?: string }
-      if (d.ok && d.phone) {
-        setScrapeMsg(`Found: ${d.phone}`)
-        // reflect immediately in the panel + the list
-        setSelected(prev => prev ? { ...prev, phone_number: prev.phone_number ?? d.phone!, mobile_phone: prev.mobile_phone ?? d.phone! } : prev)
-        setLeads(prev => prev?.map(l => l.id === selected.id ? { ...l, phone_number: l.phone_number ?? d.phone!, mobile_phone: l.mobile_phone ?? d.phone! } : l) ?? null)
-      } else {
-        setScrapeMsg(d.message || 'No phone found on the website.')
-      }
-    } catch {
-      setScrapeMsg('Scrape failed — try again.')
-    } finally { setScraping(false) }
-  }
 
   const [showDispute, setShowDispute] = useState(false)
   const [disputeType, setDisputeType] = useState<'non_lead' | 'icp_mismatch'>('non_lead')
@@ -428,7 +407,6 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
   function openLead(lead: Lead) {
     setSelected(lead)
     setReplyMsg('')
-    setScrapeMsg(''); setScraping(false)
     setShowDispute(false); setThread(null); setShowDetails(false)
     // Load this lead's saved notes (current value from the server, not the list's
     // possibly-suppressed copy). Reset saved-state for the new lead.
@@ -1064,19 +1042,6 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
                 {(selected.mobile_phone || selected.phone_number) && <Row icon="phone" label={`Mobile: ${selected.mobile_phone ?? selected.phone_number}`} />}
                 {selected.office_phone && <Row icon="phone" label={`Office: ${selected.office_phone}`} />}
                 {selected.linkedin_url && <Row icon="link" label="LinkedIn profile" href={selected.linkedin_url} />}
-                {/* No phone on file → offer to scrape the company website for one. */}
-                {!selected.mobile_phone && !selected.phone_number && !selected.office_phone && (
-                  <div className="mt-1.5">
-                    <button
-                      onClick={scrapePhone}
-                      disabled={scraping}
-                      className="text-xs font-medium text-brand-600 hover:text-brand-800 disabled:opacity-50"
-                    >
-                      {scraping ? 'Searching website…' : '🔍 Find phone from website'}
-                    </button>
-                    {scrapeMsg && <div className="mt-1 text-[11px] text-muted-foreground">{scrapeMsg}</div>}
-                  </div>
-                )}
               </Section>
             )}
 
