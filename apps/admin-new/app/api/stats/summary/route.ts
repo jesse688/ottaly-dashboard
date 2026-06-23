@@ -185,20 +185,26 @@ export async function GET(req: NextRequest) {
       leadsByWs[r.workspace_id] = r.n
     })
 
-    // REPLIES from OUR unibox (not PlusVibe): distinct leads who replied in-window.
-    // A reply is ANY inbound EXCEPT warm-up — OOO and automatic replies DO count.
+    // REPLIES from OUR unibox, counted by WHAT THE REPLY IS — not just "not warm-up"
+    // (that swept in inbound spam-to-mailbox / junk filed as 'other' and inflated
+    // the numbers). HUMAN = a genuine response (interested/question/not_interested/
+    // unsubscribe). OOO = ooo_auto_reply. 'other' and warm-up never count.
     const uniRepliesRes = await pool.query(
-      `SELECT workspace_id, COUNT(DISTINCT lower(lead_email))::int AS n
+      `SELECT workspace_id,
+              COUNT(DISTINCT lower(lead_email)) FILTER (
+                WHERE COALESCE(admin_label, category) IN ('interested','question','not_interested','unsubscribe')
+              )::int AS human,
+              COUNT(DISTINCT lower(lead_email)) FILTER (
+                WHERE COALESCE(admin_label, category) = 'ooo_auto_reply'
+              )::int AS ooo
          FROM unibox_replies
         WHERE received_at::date >= $1::date AND received_at::date <= $2::date
-          AND folder <> 'warmup'
-          AND COALESCE(admin_label, category, '') <> 'warmup'
         GROUP BY workspace_id`,
       [start, end],
     )
-    const uniRepliesByWs: Record<string, number> = {}
-    ;(uniRepliesRes.rows as Array<{ workspace_id: string; n: number }>).forEach(r => {
-      uniRepliesByWs[r.workspace_id] = r.n
+    const uniByWs: Record<string, { human: number; ooo: number }> = {}
+    ;(uniRepliesRes.rows as Array<{ workspace_id: string; human: number; ooo: number }>).forEach(r => {
+      uniByWs[r.workspace_id] = { human: Number(r.human) || 0, ooo: Number(r.ooo) || 0 }
     })
 
     // Build per-workspace stats
@@ -231,10 +237,14 @@ export async function GET(req: NextRequest) {
       }
       // Leads = frozen revenue_leads count for this workspace in-window.
       totals.leads = leadsByWs[ws.workspace_id] || 0
-      // Replies = our unibox human-reply count (GREATER of PV vs unibox so we never
-      // under-report). Drives the headline reply count + reply-derived rates. The
-      // daily series stays PV-sourced for the trend shape.
-      totals.replies = Math.max(totals.replies, uniRepliesByWs[ws.workspace_id] || 0)
+      // Replies (Human RR) = genuine human responses from the unibox; OOO is its
+      // own bucket (feeds Reply Rate w/OOO). GREATER of PV vs unibox so we never
+      // under-report. 'other'/spam excluded — that was the inflation.
+      const u = uniByWs[ws.workspace_id]
+      if (u) {
+        totals.replies = Math.max(totals.replies, u.human)
+        totals.oooReplies = Math.max(totals.oooReplies, u.ooo)
+      }
 
       const days = dates.length || 1
       const w: Workspace = {
