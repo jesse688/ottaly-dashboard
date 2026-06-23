@@ -256,6 +256,8 @@ export interface BisonReply {
   cc?: Array<{ name: string | null; address: string }> | null
   bcc?: Array<{ name: string | null; address: string }> | null
   parent_id?: number | null
+  tracked_reply?: boolean
+  type?: string
   created_at?: string
   updated_at?: string
 }
@@ -391,6 +393,28 @@ export async function getLeadRepliesByEmail(
     if (!lead?.id) return []
     return getLeadReplies(lead.id)
   })
+}
+
+// Fetch all untracked inbox replies for the current workspace context.
+// These are replies that arrived on a connected mailbox but don't match any
+// campaign sequence — Bison sets tracked_reply:false on them. They land in
+// PlusVibe's "Other" folder and are NOT returned by getCampaignReplies().
+// Caller wraps this in withTeam() so it runs on the team's scoped token.
+// Pages until empty (uses standard Laravel meta.last_page pagination).
+const MAX_UNTRACKED_PAGES = 50  // safety cap (~750 replies/run)
+export async function getUntrackedReplies(): Promise<BisonReply[]> {
+  const out: BisonReply[] = []
+  for (let p = 1; p <= MAX_UNTRACKED_PAGES; p++) {
+    const data = await bison<{ data?: BisonReply[]; meta?: { last_page?: number } }>(
+      'GET', '/api/replies', { folder: 'inbox', page: p }
+    )
+    const batch = Array.isArray(data) ? (data as unknown as BisonReply[]) : data.data ?? []
+    if (!batch.length) break
+    out.push(...batch.filter(r => r.tracked_reply === false))
+    const lastPage = (data as { meta?: { last_page?: number } }).meta?.last_page ?? 1
+    if (p >= lastPage) break
+  }
+  return out
 }
 
 // ── Replies / sending ────────────────────────────────────────────────────────

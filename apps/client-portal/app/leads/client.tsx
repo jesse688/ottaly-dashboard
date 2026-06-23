@@ -1219,6 +1219,7 @@ function RichReply({ toEmail, ccEmail = '', placeholderName, sending, statusMsg,
   const ref = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const attachRef = useRef<HTMLInputElement>(null)
+  const appliedSeedId = useRef<number | null>(null)
   const [attachedFiles, setAttachedFiles] = useState<File[]>([])
   const [empty, setEmpty] = useState(true)
   const [chars, setChars] = useState(0)
@@ -1235,17 +1236,28 @@ function RichReply({ toEmail, ccEmail = '', placeholderName, sending, statusMsg,
     setTimeout(() => ref.current?.focus(), 0)
   }
 
-  // Forward seed: prefill the editor with quoted content and clear the recipient.
+  // Forward seed, step 1: when a forward arrives, EXPAND the composer and clear
+  // the recipient. The editor only mounts when expanded, so we can't touch
+  // ref.current here — that happens in step 2 once it's in the DOM.
   useEffect(() => {
-    if (seed && ref.current) {
-      setExpanded(true)
+    if (!seed) return
+    setExpanded(true)
+    setTo([])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seed?.id])
+
+  // Forward seed, step 2: once the editor is mounted (expanded === true),
+  // prefill it with the quoted content — exactly once per seed, so a later
+  // collapse/expand can't wipe what the client has typed.
+  useEffect(() => {
+    if (seed && expanded && ref.current && appliedSeedId.current !== seed.id) {
+      appliedSeedId.current = seed.id
       ref.current.innerHTML = seed.html
       syncState()
-      setTo([])
       ref.current.focus()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seed?.id])
+  }, [seed?.id, expanded])
 
   function syncState() {
     // Drop zero-width spaces seeded for empty-editor list commands so they don't
