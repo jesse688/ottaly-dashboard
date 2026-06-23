@@ -24,24 +24,21 @@ export async function GET(req: NextRequest) {
   const key = process.env.PLUSVIBE_API_KEY ?? process.env.PLUSVIBE_KEY
   if (!key) return NextResponse.json({ error: 'no api key' }, { status: 500 })
 
-  // Try the unibox emails endpoint with the lead filter. Return raw status + body.
-  const attempts: { url: string; status: number; body: string }[] = []
-  const urls = [
-    `https://api.plusvibe.ai/api/v1/unibox/emails?workspace_id=${workspaceId}&lead=${encodeURIComponent(lead)}&email_type=received`,
-    `https://api.plusvibe.ai/api/v1/unibox/emails?workspace_id=${workspaceId}&lead=${encodeURIComponent(lead)}`,
-  ]
-  for (const url of urls) {
-    try {
-      const res = await fetch(url, {
-        headers: { 'x-api-key': key, 'User-Agent': 'Mozilla/5.0' },
-        signal: AbortSignal.timeout(10000),
-      })
-      const body = await res.text()
-      attempts.push({ url, status: res.status, body: body.slice(0, 2000) })
-    } catch (err) {
-      attempts.push({ url, status: -1, body: String(err) })
-    }
+  // Fetch received emails for the lead, strip the huge body, show all other fields.
+  const url = `https://api.plusvibe.ai/api/v1/unibox/emails?workspace_id=${workspaceId}&lead=${encodeURIComponent(lead)}&email_type=received`
+  try {
+    const res = await fetch(url, {
+      headers: { 'x-api-key': key, 'User-Agent': 'Mozilla/5.0' },
+      signal: AbortSignal.timeout(10000),
+    })
+    const json = await res.json() as { data?: Record<string, unknown>[] }
+    // Strip body from each row so the ID/address fields are visible.
+    const rows = (json.data ?? []).map(r => {
+      const { body, ...rest } = r
+      return { ...rest, _bodyKeys: body && typeof body === 'object' ? Object.keys(body) : typeof body }
+    })
+    return NextResponse.json({ lead, workspaceId, status: res.status, count: rows.length, rows })
+  } catch (err) {
+    return NextResponse.json({ lead, workspaceId, error: String(err) }, { status: 500 })
   }
-
-  return NextResponse.json({ lead, workspaceId, attempts })
 }
