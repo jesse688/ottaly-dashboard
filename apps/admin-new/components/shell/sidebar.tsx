@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import Image from 'next/image'
 import { usePathname } from 'next/navigation'
@@ -78,13 +78,33 @@ const CATEGORIES: Category[] = [
 /** Legacy-style rail: colored category groups, hover reveals a dropdown of its pages.
  *  The dropdown is rendered as a fixed-position layer so the rail's scroll/overflow
  *  can never clip it (the bug where the flyout was hidden). */
+// CMs cannot see Finance + Revenue (they keep Commission). Hide those items.
+const CM_HIDDEN_HREFS = new Set(['/finance', '/revenue'])
+
 export function Sidebar() {
   const pathname = usePathname()
   const { hidden, toggle } = useSidebar()
   const [open, setOpen] = useState<string | null>(null)
   const [flyTop, setFlyTop] = useState(0)
+  const [role, setRole] = useState<'admin' | 'cm' | null>(null)
 
-  const openCat = CATEGORIES.find(c => c.key === open) ?? null
+  useEffect(() => {
+    fetch('/api/auth/role')
+      .then(r => r.json())
+      .then(d => setRole(d.role ?? 'admin'))
+      .catch(() => setRole('admin'))
+  }, [])
+
+  // For CMs, strip Finance/Revenue from each category and drop any category
+  // left with no items. Admin (and the brief pre-load null) sees everything.
+  const categories =
+    role === 'cm'
+      ? CATEGORIES.map(c => ({ ...c, items: c.items.filter(i => !CM_HIDDEN_HREFS.has(i.href)) })).filter(
+          c => c.items.length > 0,
+        )
+      : CATEGORIES
+
+  const openCat = categories.find(c => c.key === open) ?? null
 
   // When hidden, show only a floating button to bring the rail back.
   if (hidden) {
@@ -115,7 +135,7 @@ export function Sidebar() {
         </div>
 
         <nav className="flex-1 overflow-y-auto py-2 [scrollbar-width:none]">
-          {CATEGORIES.map(cat => {
+          {categories.map(cat => {
             const Icon = cat.icon
             const activeInCat = cat.items.some(i => pathname === i.href || pathname.startsWith(i.href + '/'))
             const isOpen = open === cat.key
