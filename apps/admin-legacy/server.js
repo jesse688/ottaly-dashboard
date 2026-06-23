@@ -478,6 +478,10 @@ db.exec(`CREATE TABLE IF NOT EXISTS client_managers (
   assigned_at         TEXT DEFAULT (datetime('now')),
   UNIQUE(client_workspace_id, manager_name)
 )`);
+// end_date: when set, the assignment is ENDED on that date but the row is kept
+// so commission history up to end_date is preserved (the "Set End Date" flow in
+// workload.html). NULL = still active. Migration is idempotent.
+try { db.exec(`ALTER TABLE client_managers ADD COLUMN end_date TEXT`); } catch { /* column already exists */ }
 
 // Backfill client_managers from existing campaign_manager / campaign_manager_2 columns
 try {
@@ -14419,7 +14423,9 @@ app.get('/api/admin/workload', requireSession, (req, res) => {
   const s = decodeSession(req);
   const managers = db.prepare('SELECT id, name, commission_rate FROM managers ORDER BY name').all();
   const clients  = db.prepare('SELECT workspace_id, workspace_name, price_per_lead, client_status, manager_start_date FROM clients ORDER BY workspace_name').all();
-  const assignments = db.prepare('SELECT client_workspace_id, manager_name, commission_rate FROM client_managers').all();
+  // Only ACTIVE assignments (end_date IS NULL) drive the live workload grid;
+  // ended ones are kept for commission history but must not show as active.
+  const assignments = db.prepare('SELECT client_workspace_id, manager_name, commission_rate FROM client_managers WHERE end_date IS NULL').all();
   const defaultRateRow = db.prepare("SELECT value FROM app_meta WHERE key = 'default_commission_rate'").get();
   const defaultRate = defaultRateRow ? parseFloat(defaultRateRow.value) : 5;
 
@@ -14438,15 +14444,21 @@ app.get('/api/admin/workload', requireSession, (req, res) => {
 function recalcSplitRates(client_workspace_id) {
   const defaultRateRow = db.prepare("SELECT value FROM app_meta WHERE key = 'default_commission_rate'").get();
   const defaultRate = defaultRateRow ? parseFloat(defaultRateRow.value) : 5;
-  const cms = db.prepare('SELECT manager_name FROM client_managers WHERE client_workspace_id = ?').all(client_workspace_id);
+  // Split only across ACTIVE CMs (end_date IS NULL) — an ended assignment must
+  // not dilute the rate of those still working the client.
+  const cms = db.prepare('SELECT manager_name FROM client_managers WHERE client_workspace_id = ? AND end_date IS NULL').all(client_workspace_id);
   const splitRate = cms.length ? defaultRate / cms.length : defaultRate;
-  db.prepare('UPDATE client_managers SET commission_rate = ? WHERE client_workspace_id = ?').run(splitRate, client_workspace_id);
+  db.prepare('UPDATE client_managers SET commission_rate = ? WHERE client_workspace_id = ? AND end_date IS NULL').run(splitRate, client_workspace_id);
 }
 
 app.post('/api/admin/workload/assign', requireAdmin, (req, res) => {
   const { client_workspace_id, manager_name } = req.body || {};
   if (!client_workspace_id || !manager_name) return res.status(400).json({ error: 'client_workspace_id and manager_name required' });
   db.prepare(`INSERT OR IGNORE INTO client_managers (client_workspace_id, manager_name, commission_rate) VALUES (?, ?, 0)`)
+    .run(client_workspace_id, manager_name);
+  // If this CM was previously ENDED on this client, re-assigning reactivates
+  // them (clear end_date) — otherwise the ignored insert would leave them ended.
+  db.prepare('UPDATE client_managers SET end_date = NULL WHERE client_workspace_id = ? AND manager_name = ?')
     .run(client_workspace_id, manager_name);
   recalcSplitRates(client_workspace_id);
   const splitRate = db.prepare('SELECT commission_rate FROM client_managers WHERE client_workspace_id = ? AND manager_name = ?').get(client_workspace_id, manager_name)?.commission_rate ?? 0;
@@ -14457,6 +14469,21 @@ app.delete('/api/admin/workload/assign', requireAdmin, (req, res) => {
   const { client_workspace_id, manager_name } = req.body || {};
   if (!client_workspace_id || !manager_name) return res.status(400).json({ error: 'client_workspace_id and manager_name required' });
   db.prepare('DELETE FROM client_managers WHERE client_workspace_id = ? AND manager_name = ?').run(client_workspace_id, manager_name);
+  recalcSplitRates(client_workspace_id);
+  res.json({ ok: true });
+});
+
+// End an assignment WITHOUT deleting it: stamp end_date so commission history up
+// to that date is preserved, then drop it from the active split. This is the
+// "Set End Date" button in workload.html — previously the frontend PUT here had
+// no matching route, so it 404'd silently and nothing happened.
+app.put('/api/admin/workload/assign/end-date', requireAdmin, (req, res) => {
+  const { client_workspace_id, manager_name, end_date } = req.body || {};
+  if (!client_workspace_id || !manager_name) return res.status(400).json({ error: 'client_workspace_id and manager_name required' });
+  const info = db.prepare('UPDATE client_managers SET end_date = ? WHERE client_workspace_id = ? AND manager_name = ?')
+    .run(end_date || null, client_workspace_id, manager_name);
+  if (!info.changes) return res.status(404).json({ error: 'assignment not found' });
+  // Recompute the split across the REMAINING active CMs for this client.
   recalcSplitRates(client_workspace_id);
   res.json({ ok: true });
 });
