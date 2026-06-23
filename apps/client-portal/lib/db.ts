@@ -125,6 +125,7 @@ async function runMigration() {
       // bills leads delivered AFTER this timestamp — pre-reset/backfilled leads
       // are never re-billed. Auto-charging stays ON for new leads going forward.
       `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS charges_reset_at TIMESTAMPTZ`,
+      `ALTER TABLE portal_emails ADD COLUMN IF NOT EXISTS sent_live BOOLEAN`,
       // Email-warmup window shown to the client as a progress bar ("how much
       // longer until leads start?"). Admin sets the start date + duration; when
       // start is null the bar is hidden. Default 14-day warmup.
@@ -183,6 +184,7 @@ async function runMigration() {
         is_unread INTEGER DEFAULT 0,
         message_id TEXT,                           -- RFC Message-ID (for live reply threading)
         sent_via_portal BOOLEAN DEFAULT FALSE,     -- true if composed in our portal
+        sent_live BOOLEAN,                         -- true=sent ok, false=failed, null=pre-flag era
         timestamp_created TIMESTAMPTZ,
         raw JSONB,
         synced_at TIMESTAMPTZ DEFAULT NOW()

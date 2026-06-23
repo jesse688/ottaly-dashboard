@@ -148,6 +148,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     })
   }
 
+  // Stamp sent_live so the retry endpoint can skip already-sent replies.
+  await pool.query(
+    `UPDATE portal_emails SET sent_live = $1 WHERE id = $2`,
+    [send.ok, outId]
+  ).catch(() => {})
+
   // 3. Notify team (always — guarantees the reply is actioned)
   // Stamp the client's first response time (for Speed to Lead) — once per lead.
   await pool.query(
