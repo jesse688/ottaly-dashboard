@@ -6,6 +6,18 @@ import pool from './db'
 const PAY_PER_LEAD_WORKSPACES = new Set(['6a0e29d0d004be93be3f33f2']) // Bubble
 const PAY_PER_LEAD_COMPANIES = new Set(['bubble'])
 
+// Billing redirect: a client may point at ANOTHER client to pool one balance.
+// SOP keeps its own workspace + leads, but its charges/balance resolve to the
+// target (ButterflyEco SOP → ButterflyEco). Returns the client's own id when
+// there is no redirect. Single hop only — chains are not followed.
+export async function billingClientId(clientId: string): Promise<string> {
+  const r = await pool.query(
+    `SELECT billing_client_id FROM portal_clients WHERE id = $1`,
+    [clientId]
+  )
+  return (r.rows[0]?.billing_client_id as string | null) ?? clientId
+}
+
 export async function isPayPerLead(clientId: string): Promise<boolean> {
   const r = await pool.query(
     `SELECT workspace_id, company_name FROM portal_clients WHERE id = $1`,
@@ -22,9 +34,10 @@ export async function isPayPerLead(clientId: string): Promise<boolean> {
 //   topup (+N leads) · dispute_refund (+1) · adjustment (+/-) · lead_charge (-1)
 // cost_per_lead (£) is only used to value top-ups / show £ alongside — never the unit.
 export async function getBalance(clientId: string): Promise<number> {
+  const target = await billingClientId(clientId)
   const r = await pool.query(
     `SELECT COALESCE(SUM(amount), 0) AS balance FROM portal_ledger WHERE client_id = $1`,
-    [clientId]
+    [target]
   )
   return Number(r.rows[0]?.balance ?? 0)
 }
@@ -37,11 +50,15 @@ export async function getBalance(clientId: string): Promise<number> {
 export async function getLockedLeadIds(clientId: string): Promise<Set<string>> {
   // Pay-per-lead clients never run out of credit → nothing ever locks.
   if (await isPayPerLead(clientId)) return new Set<string>()
+  // Locking is computed on the SHARED pool. For a redirected client (SOP), this
+  // sums credits + ALL charges across the billing group, so locks reflect the
+  // pooled balance — not SOP's own (now empty) ledger.
+  const target = await billingClientId(clientId)
   const r = await pool.query(
     `SELECT COALESCE(SUM(amount) FILTER (WHERE type <> 'lead_charge'), 0) AS credits,
             COUNT(*) FILTER (WHERE type = 'lead_charge')                  AS delivered
        FROM portal_ledger WHERE client_id = $1`,
-    [clientId]
+    [target]
   )
   const credits = Number(r.rows[0]?.credits ?? 0)
   const delivered = Number(r.rows[0]?.delivered ?? 0)
@@ -59,7 +76,7 @@ export async function getLockedLeadIds(clientId: string): Promise<Set<string>> {
       WHERE pl.client_id = $1 AND pl.type = 'lead_charge' AND pl.lead_id IS NOT NULL
       ORDER BY COALESCE(l.first_replied_at, l.created_at) DESC NULLS LAST, l.id DESC
       LIMIT $2`,
-    [clientId, lockedCount]
+    [target, lockedCount]
   )
   return new Set<string>(locked.rows.map(x => x.lead_id as string))
 }
@@ -87,6 +104,13 @@ export async function reconcileLeadCharges(clientId: string): Promise<number> {
   if (!row) return 0
   if (Number(row.cost_per_lead ?? 0) <= 0) return 0
 
+  // Charges are written against the BILLING target, not necessarily this client.
+  // A redirected client (SOP) scans ITS OWN workspace for delivered leads, but
+  // the -1 lead_charge rows land on the target's ledger (ButterflyEco) so both
+  // workspaces draw down one shared balance. Dedup key (client_id, lead_id) is
+  // safe: the grouped clients have disjoint workspaces → disjoint lead ids.
+  const chargeClientId = await billingClientId(clientId)
+
   // -1 lead for every INTERESTED lead in the workspace without a charge. If a
   // charges_reset_at is set (a one-off "start from scratch"), only charge leads
   // delivered AFTER that point — pre-reset/backfilled leads are never re-billed.
@@ -107,7 +131,7 @@ export async function reconcileLeadCharges(clientId: string): Promise<number> {
            WHERE pl.client_id = $1 AND pl.lead_id = l.id AND pl.type = 'lead_charge'
         )
      ON CONFLICT (client_id, lead_id) WHERE type = 'lead_charge' DO NOTHING`,
-    [clientId, row.workspace_id, row.charges_reset_at ?? null]
+    [chargeClientId, row.workspace_id, row.charges_reset_at ?? null]
   )
   return res.rowCount ?? 0
 }
