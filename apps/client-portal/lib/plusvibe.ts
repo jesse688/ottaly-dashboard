@@ -71,6 +71,10 @@ export async function getPlusVibeInbound(
     }
     const email = data?.data?.[0]
     if (!email?.id) return null
+    // SAFETY: PlusVibe ignores an unmatched `lead` filter and returns the
+    // workspace's latest email instead. If the returned email isn't actually
+    // FROM the lead we asked about, it's the wrong thread — refuse it.
+    if ((email.from_address_email ?? '').toLowerCase() !== leadEmail.toLowerCase()) return null
     return { id: email.id, from: email.eaccount ?? '', to: email.from_address_email ?? leadEmail }
   } catch {
     return null
