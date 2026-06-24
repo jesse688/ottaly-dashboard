@@ -1,1 +1,1 @@
-redeploy: 2026-06-24 audit fixes batch 1 — notif gaps (MEETING_BOOKED, reply-engaged, notify opt-out) + billing redirect (topup/adjustment/refund)
+redeploy: 2026-06-24 sweeper MEETING_BOOKED 48h fresh-guard + suppress_lead action (stop ButterflyEco 2 leads)

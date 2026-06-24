@@ -277,11 +277,32 @@ export async function POST(req: NextRequest) {
   }
   const action = url.searchParams.get('action')
   const freshHours = Math.min(Math.max(parseInt(url.searchParams.get('fresh_hours') || '24', 10) || 24, 1), 720)
-  if (action !== 'send_genuine' && action !== 'skip_stale') {
-    return NextResponse.json({ error: 'action must be send_genuine or skip_stale' }, { status: 400 })
+  if (action !== 'send_genuine' && action !== 'skip_stale' && action !== 'suppress_lead') {
+    return NextResponse.json({ error: 'action must be send_genuine, skip_stale, or suppress_lead' }, { status: 400 })
   }
 
   try {
+    if (action === 'suppress_lead') {
+      // Suppress notifications for ONE specific lead (by email), optionally scoped
+      // to one workspace. Writes a 'sent' claim row for every (active client, lead)
+      // pair so the sweeper permanently skips it — NO email goes out. Used to stop a
+      // pending lead from notifying without affecting that client's other leads.
+      const leadEmail = (url.searchParams.get('lead') || '').trim().toLowerCase()
+      const onlyWs = url.searchParams.get('ws')
+      if (!leadEmail) return NextResponse.json({ error: 'lead=<email> required' }, { status: 400 })
+      const r = await pool.query(
+        `INSERT INTO portal_lead_notifications (client_id, lead_id, status, attempts, sent_at)
+         SELECT c.id, l.id, 'sent', 0, NOW()
+           FROM esp_leads l
+           JOIN portal_clients c ON c.workspace_id = l.workspace_id AND c.active = true
+          WHERE lower(l.email) = $1
+            ${onlyWs ? 'AND c.workspace_id = $2' : ''}
+         ON CONFLICT (client_id, lead_id) DO UPDATE SET status = 'sent', sent_at = NOW()`,
+        onlyWs ? [leadEmail, onlyWs] : [leadEmail]
+      )
+      return NextResponse.json({ ok: true, action, lead: leadEmail, suppressed: r.rowCount })
+    }
+
     if (action === 'skip_stale') {
       // Neutralise the STALE backlog: rows whose lead arrived before the cutoff.
       // Set to 'sent' (no email) so the sweeper's failed-row re-claim skips them.

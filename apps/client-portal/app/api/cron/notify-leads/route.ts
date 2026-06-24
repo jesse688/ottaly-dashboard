@@ -19,9 +19,15 @@ export async function GET(req: NextRequest) {
        JOIN portal_clients pc ON pc.workspace_id = l.workspace_id AND pc.active = true
        LEFT JOIN portal_lead_notifications n ON n.client_id = pc.id AND n.lead_id = l.id
       WHERE l.source IN ('plusvibe', 'bison')
-        -- Include MEETING_BOOKED (the hottest lead) — it shows in the client
-        -- dashboard but the old INTERESTED-only filter never auto-notified it.
-        AND (l.status IN ('INTERESTED','MEETING_BOOKED') OR l.label = 'INTERESTED')
+        AND (
+          -- Existing behavior unchanged: INTERESTED notifies regardless of age.
+          (l.label = 'INTERESTED' OR l.status = 'INTERESTED')
+          -- NEWLY added: MEETING_BOOKED (the hottest lead) — previously never
+          -- auto-notified. Gate it to the last 48h so flipping this on can't dump a
+          -- backlog of pre-existing booked leads; only fresh ones notify going fwd.
+          OR (l.status = 'MEETING_BOOKED'
+              AND COALESCE(l.first_replied_at, l.created_at) >= NOW() - interval '48 hours')
+        )
         -- never email a client about leads that predate their account (blast guard)
         AND COALESCE(l.first_replied_at, l.created_at) >= pc.created_at
         AND (n.id IS NULL OR (n.status = 'failed' AND n.attempts < 5 AND n.next_retry_at <= NOW()))
