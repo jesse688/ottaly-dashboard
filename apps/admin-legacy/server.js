@@ -2636,6 +2636,13 @@ app.get('/api/build-version', (req, res) => {
 
 // Liveness/readiness probe for Easypanel/uptime monitoring. No auth — 200 when
 // the process is up and Postgres answers SELECT 1, else 503.
+// Deploy marker — bump `build` on each change that needs verifying live, so
+// "is the fix deployed?" is a 2-second curl instead of a guess. No auth needed.
+app.get('/api/version', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ build: 'engine-loose-push-2026-06-24', uptime: Math.round(process.uptime()) });
+});
+
 app.get('/healthz', async (req, res) => {
   res.set('Cache-Control', 'no-store');
   const health = { status: 'ok', uptime: Math.round(process.uptime()), db: 'unknown' };
@@ -16995,6 +17002,8 @@ function initPausedJobsTable(sq) {
   // resume_on_boot: 1 only for jobs interrupted by a deploy (set by the SIGTERM
   // handler). Manually-paused jobs are 0 and must NOT auto-resume on next boot.
   try { sq.exec(`ALTER TABLE paused_push_jobs ADD COLUMN resume_on_boot INTEGER DEFAULT 0`); } catch {}
+  // loose: 1 for engine/loose pushes, so a resumed job keeps the looser gate.
+  try { sq.exec(`ALTER TABLE paused_push_jobs ADD COLUMN loose INTEGER DEFAULT 0`); } catch {}
 }
 
 // On boot, restore paused jobs into the in-memory map so the UI shows them.
@@ -17015,6 +17024,7 @@ function restorePausedJobs(sq) {
         total: contactIds.length,
         verified: row.verified_count || 0,
         pushed: row.pushed_count || 0,
+        loose: !!row.loose, // engine/loose pushes keep the looser gate on resume
         resumeOnBoot: row.resume_on_boot === 1, // only deploy-interrupted jobs auto-resume
         skipped: 0, safe: 0, risky: 0, invalid: 0, unknown: 0, safe_catchall: 0,
         progress: 0,
@@ -17160,10 +17170,16 @@ app.get('/api/contacts/push-jobs/:id', requireSession, (req, res) => {
 
 // POST starts job immediately, returns job ID — processing runs in background
 app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
-  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 90, emailProviders, excludeMicrosoft } = req.body;
+  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 90, emailProviders, excludeMicrosoft, loose } = req.body;
   if (!workspace_id || !campaign_id || !Array.isArray(contact_ids) || !contact_ids.length) {
     return res.status(400).json({ error: 'workspace_id, campaign_id and contact_ids required' });
   }
+  // LOOSE mode: the engine-leads push sends this. It applies the looser gate
+  // (push anything not hard-'invalid'; block free/trap domains; skip the
+  // name requirement) to EVERY contact in the job, independent of the stored
+  // `source` column — staging's ON CONFLICT can leave a pre-existing row's
+  // source non-engine, which would otherwise fall back to the strict gate.
+  const looseMode = loose === true || loose === 'true' || loose === 1 || loose === '1';
 
   const db = req.app.locals.pgDb;
   if (!db) return res.status(500).json({ error: 'Database not available' });
@@ -17184,6 +17200,7 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
     campaign_name: campaign_name || campaign_id,
     workspace_id, campaign_id,
     allowedProviders,
+    loose: looseMode,
     excludeMicrosoft: excludeMicrosoft === 'true' || excludeMicrosoft === true,
     total: contact_ids.length,
     skipped: 0, verified: 0, safe: 0, risky: 0, invalid: 0, unknown: 0,
@@ -17198,11 +17215,11 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
     try {
       initPausedJobsTable(sq);
       sq.prepare(`INSERT OR REPLACE INTO paused_push_jobs
-        (id, workspace_id, campaign_id, workspace_name, campaign_name, contact_ids, include_risky, max_age_days)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        (id, workspace_id, campaign_id, workspace_name, campaign_name, contact_ids, include_risky, max_age_days, loose)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         jobId, workspace_id, campaign_id,
         workspace_name || workspace_id, campaign_name || campaign_id,
-        JSON.stringify(contact_ids), include_risky ? 1 : 0, max_age_days
+        JSON.stringify(contact_ids), include_risky ? 1 : 0, max_age_days, looseMode ? 1 : 0
       );
     } catch (e) { console.warn('[push] Could not persist job to SQLite:', e.message); }
   }
@@ -17287,7 +17304,12 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
         // consumer domains are blocked (isFreeDomain) and do_not_contact (set by
         // the free-domain sweep on known trap domains) is enforced below. Apollo
         // data stays strict: safe / safe_catchall only.
-        if (c.source === 'engine') {
+        // `looseHere` = this job is an engine/loose push OR the row is tagged
+        // engine. Driven by the explicit job.loose flag (sent by the engine-leads
+        // push) so it does NOT depend on the stored source column, which staging
+        // may have left non-engine on a pre-existing row.
+        const looseHere = job.loose || c.source === 'engine';
+        if (looseHere) {
           if (verifyResults[c.id] === 'invalid')        { skipped.unsafe++; return false; }
           if (isFreeDomain(c.email))                    { skipped.unsafe++; return false; }
         } else {
@@ -17297,9 +17319,9 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
         // Name requirement is a STALE Bison rule (Bison 422'd on empty names).
         // We send via PlusVibe now, which accepts nameless leads — engine leads
         // are company inboxes (info@, admin@) with no person, so requiring a
-        // name dropped nearly all of them. Skip the name gate for engine leads;
+        // name dropped nearly all of them. Skip the name gate in loose mode;
         // keep it for Apollo (person-level) data, which should have names.
-        if (c.source !== 'engine'
+        if (!looseHere
             && (!(c.first_name && c.first_name.trim()) || !(c.last_name && c.last_name.trim()))) {
           skipped.missingName++; return false;
         }
@@ -17744,6 +17766,9 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
   job.cancelled = false;
   job.resumeOnBoot = false;
   job.status = 'verifying';
+  // Restore loose mode from the persisted row (survives a deploy that rebuilt
+  // the in-memory job), so a resumed engine push keeps the looser gate.
+  job.loose = job.loose || !!row.loose;
   // Clear the deploy-resume flag now it's running again — a later manual pause
   // must not be auto-resumed by the next deploy.
   try { sq && sq.prepare(`UPDATE paused_push_jobs SET resume_on_boot = 0 WHERE id = ?`).run(job.id); } catch {}
@@ -17792,7 +17817,8 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
         // Engine leads: looser gate (push anything not hard-'invalid'; block
         // free/disposable/trap domains). Apollo stays strict. Mirrors the main
         // verify-and-push gate so a resumed job behaves identically.
-        if (c.source === 'engine') {
+        const looseHere = job.loose || c.source === 'engine';
+        if (looseHere) {
           if (verifyResults[c.id] === 'invalid')        { skipped.unsafe++; return false; }
           if (isFreeDomain(c.email))                    { skipped.unsafe++; return false; }
         } else {
