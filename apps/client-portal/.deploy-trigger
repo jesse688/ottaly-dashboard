@@ -1,2 +1,2 @@
-redeploy: 2026-06-24 notif-audit pending-backlog tooling (93ae052) — pending mode + send_genuine/skip_stale live
-push: force rebuild to pull latest main, deploys kept landing one commit short
+redeploy: 2026-06-24 unnotified-leads mode + send_genuine covers silent misses (Indigo)
+push: find/send interested leads that never got a notification row

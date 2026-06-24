@@ -77,6 +77,47 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // ── UNNOTIFIED-LEADS MODE ?unnotified=1 ────────────────────────────────────
+  // The pending mode only sees rows that EXIST in portal_lead_notifications. But a
+  // genuine lead from the quiet window may have NO notification row at all (never
+  // queued), so it would silently never notify. This mode finds recent INTERESTED
+  // leads with no 'sent' notification — the true "missed, still needs sending"
+  // list — using the SAME eligibility as the notify-leads sweeper (>= client
+  // signup, source plusvibe/bison). Read-only. ?hours=N window (default 24).
+  if (url.searchParams.get('unnotified') === '1') {
+    const hours = Math.min(Math.max(parseInt(url.searchParams.get('hours') || '24', 10) || 24, 1), 720)
+    try {
+      const q = await pool.query(
+        `SELECT l.id AS lead_id, l.email AS lead_email, l.first_name, l.company_name AS lead_company,
+                COALESCE(l.first_replied_at, l.created_at) AS lead_at,
+                c.company_name AS client, c.workspace_id,
+                n.status AS notif_status
+           FROM esp_leads l
+           JOIN portal_clients c ON c.workspace_id = l.workspace_id AND c.active = true
+           LEFT JOIN portal_lead_notifications n ON n.client_id = c.id AND n.lead_id = l.id
+          WHERE l.source IN ('plusvibe','bison')
+            AND (l.label = 'INTERESTED' OR l.status = 'INTERESTED')
+            AND COALESCE(l.first_replied_at, l.created_at) >= c.created_at
+            AND COALESCE(l.first_replied_at, l.created_at) >= NOW() - ($1 || ' hours')::interval
+            AND (n.id IS NULL OR n.status <> 'sent')
+          ORDER BY lead_at DESC NULLS LAST`,
+        [String(hours)]
+      )
+      const items = q.rows.map(r => ({
+        client: r.client as string | null,
+        workspace_id: r.workspace_id as string,
+        lead: r.lead_email as string | null,
+        lead_name: [r.first_name, r.lead_company].filter(Boolean).join(' · ') || null,
+        lead_at: r.lead_at as string | null,
+        notif_status: (r.notif_status as string | null) ?? 'none',
+      }))
+      return NextResponse.json({ mode: 'unnotified', hours, total: items.length, items })
+    } catch (err) {
+      console.error('[notif-audit unnotified]', err)
+      return NextResponse.json({ error: 'Database error', detail: String(err).slice(0, 200) }, { status: 500 })
+    }
+  }
+
   try {
     // Every reply-notification marker, newest first. portal_meta carries a created_at
     // (the moment the notification fired). The key encodes workspace + reply id.
@@ -252,18 +293,28 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, action, neutralised: r.rowCount })
     }
 
-    // send_genuine: pull the FRESH pending leads and notify each via the normal
-    // path (which claims + sends + BCCs the agency). Stale rows are left alone.
+    // send_genuine: notify every FRESH interested lead that hasn't been delivered,
+    // via the normal path (claims + sends + BCCs the agency). Covers BOTH:
+    //   (a) failed/sending backlog rows, AND
+    //   (b) interested leads with NO notification row at all (silent misses from
+    //       the Resend-off window — e.g. Indigo's lead). The pending view missed (b).
+    // Same sweeper eligibility (>= client signup, source plusvibe/bison). Stale
+    // leads (older than fresh_hours) are excluded.
+    const onlyWs = url.searchParams.get('ws')
     const fresh = await pool.query(
-      `SELECT DISTINCT n.lead_id, c.workspace_id
-         FROM portal_lead_notifications n
-         JOIN portal_clients c ON c.id = n.client_id AND c.active = true
-         JOIN esp_leads l ON l.id = n.lead_id
-        WHERE n.status IN ('failed','sending') AND n.attempts < 5
+      `SELECT DISTINCT l.id AS lead_id, c.workspace_id
+         FROM esp_leads l
+         JOIN portal_clients c ON c.workspace_id = l.workspace_id AND c.active = true
+         LEFT JOIN portal_lead_notifications n ON n.client_id = c.id AND n.lead_id = l.id
+        WHERE l.source IN ('plusvibe','bison')
+          AND (l.label = 'INTERESTED' OR l.status = 'INTERESTED')
+          AND COALESCE(l.first_replied_at, l.created_at) >= c.created_at
           AND COALESCE(l.first_replied_at, l.created_at) >= NOW() - ($1 || ' hours')::interval
-        ORDER BY n.lead_id
+          AND (n.id IS NULL OR (n.status <> 'sent' AND n.attempts < 5))
+          ${onlyWs ? 'AND c.workspace_id = $2' : ''}
+        ORDER BY l.id
         LIMIT 200`,
-      [String(freshHours)]
+      onlyWs ? [String(freshHours), onlyWs] : [String(freshHours)]
     )
     const { notifyClientOfLead } = await import('@/lib/email')
     let sent = 0
