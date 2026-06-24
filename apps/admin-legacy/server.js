@@ -2640,7 +2640,7 @@ app.get('/api/build-version', (req, res) => {
 // "is the fix deployed?" is a 2-second curl instead of a guess. No auth needed.
 app.get('/api/version', (req, res) => {
   res.set('Cache-Control', 'no-store');
-  res.json({ build: 'engine-loose-push-2026-06-24b-debug', uptime: Math.round(process.uptime()) });
+  res.json({ build: 'engine-loose-push-2026-06-24c-namefilter', uptime: Math.round(process.uptime()) });
 });
 
 app.get('/healthz', async (req, res) => {
@@ -17383,11 +17383,12 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
           skipped.wrongProvider++; return false;
         }
         // Enrichment gate is for Apollo-sourced contacts (which carry keywords +
-        // industry). Engine-scraped leads are intentionally lighter-weight and
-        // structurally lack `keywords`, so applying this gate dropped EVERY
-        // engine lead as missingEnrichment → nothing reached PV. Skip the gate
-        // for source='engine'; still require it for verified Apollo data.
-        if (c.source !== 'engine'
+        // industry). Engine-scraped leads lack `keywords`. Gate on !looseHere
+        // (NOT just source) — staging's ON CONFLICT can leave an engine lead's
+        // source non-engine, and keying only on c.source !== 'engine' let this
+        // gate silently drop loose engine pushes. looseHere already covers both
+        // the loose flag and source='engine'.
+        if (!looseHere
             && ((!c.keywords || c.keywords.trim() === '') || (!c.industry || c.industry.trim() === ''))) {
           skipped.missingEnrichment++; return false;
         }
@@ -17494,10 +17495,14 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
           const slice = batch.slice(i, i + 100);
           let r;
           // PlusVibe wants top-level native fields (toLead already returns them).
-          // Require non-empty first+last name. Batch add + campaign assignment in
-          // one /lead/add call: { workspace_id, campaign_id, leads }.
+          // Batch add + campaign assignment in one /lead/add call.
+          // NAME FILTER: this was a Bison-era rule (Bison 422'd on empty names).
+          // It is a SECOND name gate, separate from passesFilter, and it silently
+          // stripped every nameless company inbox here — the cause of "only the 1
+          // contact with a real name pushed". PlusVibe accepts nameless leads, so
+          // skip this filter for loose/engine pushes; keep it for strict Apollo.
           var pvLeadPayload = slice.map(toLead)
-            .filter(function(l){ return l.first_name && String(l.first_name).trim() && l.last_name && String(l.last_name).trim(); });
+            .filter(function(l){ return job.loose || (l.first_name && String(l.first_name).trim() && l.last_name && String(l.last_name).trim()); });
           if (!pvLeadPayload.length) { continue; }
           await pvApi('/lead/add', { method: 'POST', wsId: workspace_id, body: { workspace_id, campaign_id, leads: pvLeadPayload } });
           r = { ok: true };
@@ -17523,7 +17528,9 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
               console.warn('[push] cleanedNames backfill failed:', err.message));
           }
 
-          job.pushed += Math.min(100, batch.length - i);
+          // Count what was ACTUALLY sent to PV (post name-filter), not the raw
+          // slice size — otherwise job.pushed overstated when leads were filtered.
+          job.pushed += pvLeadPayload.length;
           job.progress = Math.min(99, job.progress + 1);
         }
       };
@@ -17938,8 +17945,10 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
           if (job.cancelled || job.paused) return;
           const slice = batch.slice(i, i + 100);
           // PlusVibe: top-level native fields (no custom_variables pre-step).
+          // Name filter is a Bison-era rule; skip it for loose pushes (PV accepts
+          // nameless leads) — mirrors the main verify-and-push path.
           var pvPayload = slice.map(toLead)
-            .filter(function(l){ return l.first_name && String(l.first_name).trim() && l.last_name && String(l.last_name).trim(); })
+            .filter(function(l){ return job.loose || (l.first_name && String(l.first_name).trim() && l.last_name && String(l.last_name).trim()); })
             .map(function(l) {
               return {
                 email:               l.email,
@@ -17974,7 +17983,7 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
             const toFlush = cleaningBackfills.splice(0, cleaningBackfills.length);
             db.bulkUpdateCleanedNames(toFlush).catch(err => console.warn('[push] cleanedNames backfill failed:', err.message));
           }
-          job.pushed += Math.min(100, batch.length - i);
+          job.pushed += pvPayload.length; // actual sent count (post name-filter)
           job.progress = Math.min(99, job.progress + 1);
         }
       };
