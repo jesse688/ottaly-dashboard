@@ -634,6 +634,7 @@
                     <option value="lastWeek">Last Week</option>
                     <option value="month">This Month</option>
                     <option value="lastMonth">Last Month</option>
+                    <option value="last30">Last 30 Days</option>
                     <option value="all" selected>All Time</option>
                     <option value="custom">Custom Range...</option>
                 </select>
@@ -914,7 +915,12 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
                     const lastMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
                     const lastMonthEnd = new Date(today.getFullYear(), today.getMonth(), 1);
                     return { start: lastMonthStart, end: lastMonthEnd };
-                
+
+                case 'last30':
+                    // Rolling 30-day window: 29 days back + today, through end of today.
+                    const last30Start = new Date(today.getTime() - 29 * 86400000);
+                    return { start: last30Start, end: new Date(now.getTime() + 86400000) };
+
                 case 'custom':
                     const startInput = document.getElementById('startDate').value;
                     const endInput = document.getElementById('endDate').value;
