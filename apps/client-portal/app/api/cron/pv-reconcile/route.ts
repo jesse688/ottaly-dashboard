@@ -50,6 +50,11 @@ export async function GET(req: NextRequest) {
   const days = Math.min(Math.max(parseInt(url.searchParams.get('days') || '3', 10) || 3, 1), 90)
   const sinceMs = Date.now() - days * 86400_000
   const onlyWs = url.searchParams.get('ws')
+  // EXPLICIT, CONFIRMED opt-in only. By default we NEVER touch the client side for
+  // historical replies — the automatic run only seeds the client thread + notifies
+  // for replies that JUST arrived. ?backfill=1 seeds the client thread for ALL
+  // fetched replies (historical), and NEVER sends an email even then.
+  const backfill = url.searchParams.get('backfill') === '1'
 
   // Active client workspaces (PlusVibe workspace_id lives on portal_clients).
   const wsRows = await pool.query(
@@ -59,8 +64,8 @@ export async function GET(req: NextRequest) {
     .map(r => r.workspace_id)
     .filter(w => !onlyWs || w === onlyWs)
 
-  type Counts = { seen: number; inserted: number; healed: number; ooo: number; skipped_warmup: number; skipped_bounce: number; skipped_old: number }
-  const zero = (): Counts => ({ seen: 0, inserted: 0, healed: 0, ooo: 0, skipped_warmup: 0, skipped_bounce: 0, skipped_old: 0 })
+  type Counts = { seen: number; inserted: number; healed: number; ooo: number; skipped_warmup: number; skipped_bounce: number; skipped_old: number; skipped_outbound: number }
+  const zero = (): Counts => ({ seen: 0, inserted: 0, healed: 0, ooo: 0, skipped_warmup: 0, skipped_bounce: 0, skipped_old: 0, skipped_outbound: 0 })
   const errors: string[] = []
 
   // Process ONE workspace: fetch its PlusVibe received emails and upsert them.
@@ -80,7 +85,29 @@ export async function GET(req: NextRequest) {
       if (!Number.isNaN(received) && received < sinceMs) { c.skipped_old++; continue }
       c.seen++
 
-      const lead = (e.lead || e.from_address_email || '').toLowerCase()
+      // DIRECTION GUARD. The PV "received" feed can surface our OWN outbound
+      // messages (PlusVibe threads the conversation, so a reply WE sent to a lead
+      // comes back tagged with that lead). `e.lead` is the campaign lead's address
+      // regardless of who authored this specific message, so keying off it alone
+      // misattributes our reply as an inbound "lead replied" — which fired a bogus
+      // notification (e.g. Sam→Jonathan re-ingested as "Jonathan replied").
+      //
+      // The real author is `from_address_email`. A GENUINE inbound reply has the
+      // prospect as author (from == e.lead) — the same canonical test
+      // getPlusVibeInbound uses (from_address_email === leadEmail). Skip as outbound
+      // when EITHER: the author is our receiving mailbox (`eaccount`), OR the author
+      // is NOT the campaign lead (it's us or a teammate). Two independent signals,
+      // so an empty/garbled `eaccount` can't let an outbound echo slip through.
+      const sender = (e.from_address_email || '').toLowerCase()
+      const ourMailbox = (e.eaccount || '').toLowerCase()
+      const campaignLead = (e.lead || '').toLowerCase()
+      const authoredByUs = !!sender && !!ourMailbox && sender === ourMailbox
+      const authoredByNonLead = !!sender && !!campaignLead && sender !== campaignLead
+      if (authoredByUs || authoredByNonLead) { c.skipped_outbound++; continue }
+
+      // The lead = the actual author (proven to be the prospect by the guard above),
+      // falling back to the campaign lead. They're the same for a genuine reply.
+      const lead = (sender || campaignLead || '').toLowerCase()
       if (!lead || BOUNCE_RE.test(lead)) { c.skipped_bounce++; continue }
 
       const warm = await detectWarmupFull(ws, { subject: e.subject ?? '', bodyText: e.content_preview ?? '' })
@@ -121,39 +148,46 @@ export async function GET(req: NextRequest) {
       const isNew = ins.rows[0]?.inserted === true
       if (isNew) { c.inserted++; if (isOoo) c.ooo++ } else c.healed++
 
-      // ALWAYS ensure the CLIENT-FACING thread (portal_emails) has this reply —
-      // idempotent (ON CONFLICT DO NOTHING), keyed on the Message-ID so it can't
-      // duplicate. Running every time also BACKFILLS replies ingested before this
-      // seeding existed. So the lead's reply shows in the client dashboard and the
-      // lead surfaces as "needs reply".
-      const bodyHtml = e.body?.html ?? e.html_body ?? null
-      const bodyText = e.body?.text ?? e.text_body ?? e.content_preview ?? null
-      await pool.query(
-        `INSERT INTO portal_emails
-           (id, workspace_id, lead_email, direction, subject, body_html, body_text,
-            content_preview, from_email, to_email, is_unread, message_id, timestamp_created, raw)
-         VALUES ($1,$2,$3,'IN',$4,$5,$6,$7,$8,$9,1,$10,$11,$12::jsonb)
-         ON CONFLICT (id) DO NOTHING`,
-        [dedupeKey, ws, lead, e.subject ?? null, bodyHtml, bodyText,
-         (bodyText ?? '').slice(0, 200) || null, e.from_address_email ?? lead, e.eaccount ?? null,
-         e.message_id ?? null, e.timestamp_created ?? new Date().toISOString(), JSON.stringify(e)]
-      ).catch(err => console.error('[pv-reconcile] portal_emails insert failed:', err))
-
-      // Notify the client — but ONLY for a reply that ACTUALLY ARRIVED in the last
-      // 15 minutes. `isNew` alone is unsafe: re-keying (Message-ID) made already-
-      // ingested historical replies look "new" and spammed clients with
-      // notifications for OLD replies. The recency guard means a historical
-      // re-ingest can never notify; only a genuinely-fresh reply does, once.
+      // How old is this reply? Everything client-facing is gated on this so we NEVER
+      // touch the client side for HISTORICAL replies automatically.
       const recvMs = e.timestamp_created ? Date.parse(e.timestamp_created) : NaN
-      const isFresh = !Number.isNaN(recvMs) && recvMs >= Date.now() - 15 * 60_000
-      if (isNew && isFresh && !isOoo) {
-        const had = await pool.query(
-          `SELECT 1 FROM portal_emails WHERE workspace_id=$1 AND lower(lead_email)=lower($2)
-             AND direction='OUT' AND sent_via_portal=true LIMIT 1`,
-          [ws, lead]
-        ).catch(() => ({ rows: [] as unknown[] }))
-        if (had.rows.length) {
-          void notifyClientOfLeadReply(ws, lead, lead, (bodyText ?? '').slice(0, 300), dedupeKey)
+      const ageMs = Number.isNaN(recvMs) ? Infinity : Date.now() - recvMs
+      const isFreshSeed = ageMs <= 60 * 60_000     // arrived in last hour (covers cron gaps)
+      const isFreshNotify = ageMs <= 15 * 60_000   // arrived in last 15 min (notify only)
+
+      // CLIENT THREAD: seed portal_emails ONLY for genuinely-fresh replies, or when
+      // an admin EXPLICITLY runs ?backfill=1. Historical replies are NEVER
+      // auto-backfilled into client dashboards — that's opt-in + confirmed only.
+      if (isFreshSeed || backfill) {
+        const bodyHtml = e.body?.html ?? e.html_body ?? null
+        const bodyText = e.body?.text ?? e.text_body ?? e.content_preview ?? null
+        await pool.query(
+          `INSERT INTO portal_emails
+             (id, workspace_id, lead_email, direction, subject, body_html, body_text,
+              content_preview, from_email, to_email, is_unread, message_id, timestamp_created, raw)
+           VALUES ($1,$2,$3,'IN',$4,$5,$6,$7,$8,$9,1,$10,$11,$12::jsonb)
+           ON CONFLICT (id) DO NOTHING`,
+          [dedupeKey, ws, lead, e.subject ?? null, bodyHtml, bodyText,
+           (bodyText ?? '').slice(0, 200) || null, e.from_address_email ?? lead, e.eaccount ?? null,
+           e.message_id ?? null, e.timestamp_created ?? new Date().toISOString(), JSON.stringify(e)]
+        ).catch(err => console.error('[pv-reconcile] portal_emails insert failed:', err))
+
+        // NOTIFY: only a first-ingest, just-arrived (<15 min) human reply where the
+        // client is in conversation. NEVER on a backfill run, NEVER for historical.
+        if (isNew && isFreshNotify && !isOoo && !backfill) {
+          const had = await pool.query(
+            `SELECT 1 FROM portal_emails WHERE workspace_id=$1 AND lower(lead_email)=lower($2)
+               AND direction='OUT' AND sent_via_portal=true LIMIT 1`,
+            [ws, lead]
+          ).catch(() => ({ rows: [] as unknown[] }))
+          if (had.rows.length) {
+            const bodyText = e.body?.text ?? e.text_body ?? e.content_preview ?? ''
+            // Notify about the ACTUAL sender of this reply (falls back to the lead
+            // key only if the feed gave no from address). The outbound guard above
+            // already ensured this isn't our own mailbox.
+            const replier = sender || lead
+            void notifyClientOfLeadReply(ws, replier, replier, bodyText.slice(0, 300), dedupeKey)
+          }
         }
       }
     }
@@ -169,6 +203,7 @@ export async function GET(req: NextRequest) {
     for (const c of results) {
       totals.seen += c.seen; totals.inserted += c.inserted; totals.healed += c.healed; totals.ooo += c.ooo
       totals.skipped_warmup += c.skipped_warmup; totals.skipped_bounce += c.skipped_bounce; totals.skipped_old += c.skipped_old
+      totals.skipped_outbound += c.skipped_outbound
     }
   }
   const summary = { workspaces: workspaces.length, ...totals, errors }
