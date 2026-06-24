@@ -96,7 +96,11 @@ export async function GET(req: NextRequest) {
            JOIN portal_clients c ON c.workspace_id = l.workspace_id AND c.active = true
            LEFT JOIN portal_lead_notifications n ON n.client_id = c.id AND n.lead_id = l.id
           WHERE l.source IN ('plusvibe','bison')
-            AND (l.label = 'INTERESTED' OR l.status = 'INTERESTED')
+            -- Match the CLIENT DASHBOARD's definition of a lead (portal/leads),
+            -- not just INTERESTED. A MEETING_BOOKED lead (e.g. Indigo's Nic) shows
+            -- in the client view but the narrow INTERESTED-only filter missed it —
+            -- which is why this returned 0 while the lead is plainly in the inbox.
+            AND (l.status IN ('INTERESTED','MEETING_BOOKED','INFO') OR l.label = 'INTERESTED')
             AND COALESCE(l.first_replied_at, l.created_at) >= c.created_at
             AND COALESCE(l.first_replied_at, l.created_at) >= NOW() - ($1 || ' hours')::interval
             AND (n.id IS NULL OR n.status <> 'sent')
@@ -307,7 +311,8 @@ export async function POST(req: NextRequest) {
          JOIN portal_clients c ON c.workspace_id = l.workspace_id AND c.active = true
          LEFT JOIN portal_lead_notifications n ON n.client_id = c.id AND n.lead_id = l.id
         WHERE l.source IN ('plusvibe','bison')
-          AND (l.label = 'INTERESTED' OR l.status = 'INTERESTED')
+          -- Same lead definition as the client dashboard (incl. MEETING_BOOKED/INFO).
+          AND (l.status IN ('INTERESTED','MEETING_BOOKED','INFO') OR l.label = 'INTERESTED')
           AND COALESCE(l.first_replied_at, l.created_at) >= c.created_at
           AND COALESCE(l.first_replied_at, l.created_at) >= NOW() - ($1 || ' hours')::interval
           AND (n.id IS NULL OR (n.status <> 'sent' AND n.attempts < 5))
