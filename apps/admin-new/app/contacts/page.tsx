@@ -1506,6 +1506,7 @@ export default function DataPage() {
         <PushModal
           mode={pushOpen}
           contactIds={dataset === 'engine' ? (engineStagedIds ?? []) : [...selected]}
+          loose={dataset === 'engine'}
           excludeMicrosoft={filters.excludeMicrosoft === 'true'}
           reconnectJobId={reconnectJob}
           onClose={() => { setPushOpen(null); setEngineStagedIds(null); setReconnectJob(null) }}
@@ -2593,6 +2594,7 @@ type Camp = { _id?: string; id?: string; name?: string }
 function PushModal({
   mode,
   contactIds,
+  loose,
   excludeMicrosoft,
   reconnectJobId,
   onClose,
@@ -2601,6 +2603,7 @@ function PushModal({
 }: {
   mode: 'pv' | 'bison'
   contactIds: string[]
+  loose?: boolean
   excludeMicrosoft: boolean
   reconnectJobId?: string | null
   onClose: () => void
@@ -2683,6 +2686,7 @@ function PushModal({
           workspace_id: wsId,
           campaign_id: campId,
           contact_ids: contactIds,
+          loose: loose === true,
           include_risky: false,
           max_age_days: 90,
           excludeMicrosoft: excludeMicrosoft ? 'true' : '',
