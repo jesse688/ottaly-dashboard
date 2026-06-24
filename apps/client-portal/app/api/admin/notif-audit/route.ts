@@ -63,10 +63,21 @@ export async function GET(req: NextRequest) {
       const workspaceId = us === -1 ? rest : rest.slice(0, us)
       const replyId = us === -1 ? '' : rest.slice(us + 1)
 
+      // Resolve the actual NOTIFY recipients exactly as notifyClientOfLeadReply
+      // does: portal_clients.email (often null in this setup) PLUS every
+      // portal_user_access identifier granted to this workspace. The latter is
+      // where the real login emails live, so that's who got the bogus message.
       const client = await pool.query(
-        `SELECT company_name, email FROM portal_clients
-          WHERE workspace_id = $1 AND active = true
-          ORDER BY created_at ASC LIMIT 1`,
+        `SELECT c.company_name,
+                COALESCE(
+                  NULLIF(c.email, ''),
+                  string_agg(DISTINCT ua.identifier, ', ') FILTER (WHERE ua.identifier ILIKE '%@%')
+                ) AS email
+           FROM portal_clients c
+           LEFT JOIN portal_user_access ua ON ua.client_id = c.id
+          WHERE c.workspace_id = $1 AND c.active = true
+          GROUP BY c.id, c.company_name, c.email, c.created_at
+          ORDER BY c.created_at ASC LIMIT 1`,
         [workspaceId]
       ).catch(() => ({ rows: [] as { company_name: string | null; email: string | null }[] }))
 
