@@ -38,30 +38,32 @@ export async function GET(req: NextRequest) {
     .map(r => r.workspace_id)
     .filter(w => !onlyWs || w === onlyWs)
 
-  const summary = { workspaces: 0, seen: 0, inserted: 0, healed: 0, ooo: 0, skipped_warmup: 0, skipped_bounce: 0, skipped_old: 0, errors: [] as string[] }
+  type Counts = { seen: number; inserted: number; healed: number; ooo: number; skipped_warmup: number; skipped_bounce: number; skipped_old: number }
+  const zero = (): Counts => ({ seen: 0, inserted: 0, healed: 0, ooo: 0, skipped_warmup: 0, skipped_bounce: 0, skipped_old: 0 })
+  const errors: string[] = []
 
-  for (const ws of workspaces) {
-    summary.workspaces++
+  // Process ONE workspace: fetch its PlusVibe received emails and upsert them.
+  async function processWs(ws: string): Promise<Counts> {
+    const c = zero()
     const clientId = await resolveClientId(ws)
     let emails: PVReceivedEmail[] = []
     try {
       emails = await getPlusVibeReceived(ws, { sinceMs })
     } catch (err) {
-      summary.errors.push(`${ws}: ${String(err).slice(0, 100)}`)
-      continue
+      errors.push(`${ws}: ${String(err).slice(0, 100)}`)
+      return c
     }
 
     for (const e of emails) {
       const received = e.timestamp_created ? Date.parse(e.timestamp_created) : NaN
-      if (!Number.isNaN(received) && received < sinceMs) { summary.skipped_old++; continue }
-      summary.seen++
+      if (!Number.isNaN(received) && received < sinceMs) { c.skipped_old++; continue }
+      c.seen++
 
       const lead = (e.lead || e.from_address_email || '').toLowerCase()
-      if (!lead || BOUNCE_RE.test(lead)) { summary.skipped_bounce++; continue }
+      if (!lead || BOUNCE_RE.test(lead)) { c.skipped_bounce++; continue }
 
-      // Warm-up filter (our tags) — defensive; PV usually keeps warm-up out of received.
       const warm = await detectWarmupFull(ws, { subject: e.subject ?? '', bodyText: e.content_preview ?? '' })
-      if (warm.isWarmup) { summary.skipped_warmup++; continue }
+      if (warm.isWarmup) { c.skipped_warmup++; continue }
 
       // Trust PV's OOO/automatic label → file straight to the OOO folder (no AI).
       // Everything else lands in REVIEW as pending so it's VISIBLE immediately; the
@@ -95,10 +97,24 @@ export async function GET(req: NextRequest) {
       ).catch(err => { console.error(`[pv-reconcile] upsert failed ws=${ws} id=${e.id}:`, err); return null })
 
       if (!ins) continue
-      if (ins.rows[0]?.inserted === true) { summary.inserted++; if (isOoo) summary.ooo++ }
-      else summary.healed++
+      if (ins.rows[0]?.inserted === true) { c.inserted++; if (isOoo) c.ooo++ }
+      else c.healed++
+    }
+    return c
+  }
+
+  // Run workspaces in PARALLEL batches so the whole sweep finishes in seconds
+  // (sequential 20-workspace runs were blowing past cron-job.org's 30s timeout).
+  const CONC = 6
+  const totals = zero()
+  for (let i = 0; i < workspaces.length; i += CONC) {
+    const results = await Promise.all(workspaces.slice(i, i + CONC).map(processWs))
+    for (const c of results) {
+      totals.seen += c.seen; totals.inserted += c.inserted; totals.healed += c.healed; totals.ooo += c.ooo
+      totals.skipped_warmup += c.skipped_warmup; totals.skipped_bounce += c.skipped_bounce; totals.skipped_old += c.skipped_old
     }
   }
+  const summary = { workspaces: workspaces.length, ...totals, errors }
 
   await pool.query(
     `INSERT INTO esp_sync_log (source, status, leads_synced, finished_at) VALUES ($1,$2,$3,NOW())`,
