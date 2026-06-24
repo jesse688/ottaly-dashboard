@@ -17170,7 +17170,7 @@ app.get('/api/contacts/push-jobs/:id', requireSession, (req, res) => {
 
 // POST starts job immediately, returns job ID — processing runs in background
 app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
-  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 90, emailProviders, excludeMicrosoft, loose } = req.body;
+  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 90, emailProviders, excludeMicrosoft, loose, skipVerify } = req.body;
   if (!workspace_id || !campaign_id || !Array.isArray(contact_ids) || !contact_ids.length) {
     return res.status(400).json({ error: 'workspace_id, campaign_id and contact_ids required' });
   }
@@ -17180,6 +17180,12 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
   // `source` column — staging's ON CONFLICT can leave a pre-existing row's
   // source non-engine, which would otherwise fall back to the strict gate.
   const looseMode = loose === true || loose === 'true' || loose === 1 || loose === '1';
+  // SKIP-VERIFY: push straight to PV with NO Reacher / No2Bounce step. Uses each
+  // contact's already-stored email_status (so anything previously marked invalid
+  // is still dropped) plus the free-domain + do_not_contact gates. Near-instant.
+  // Implies loose (no fresh verdicts, so we can't require 'safe').
+  const skipVerifyMode = skipVerify === true || skipVerify === 'true' || skipVerify === 1 || skipVerify === '1';
+  const looseEffective = looseMode || skipVerifyMode;
 
   const db = req.app.locals.pgDb;
   if (!db) return res.status(500).json({ error: 'Database not available' });
@@ -17200,7 +17206,8 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
     campaign_name: campaign_name || campaign_id,
     workspace_id, campaign_id,
     allowedProviders,
-    loose: looseMode,
+    loose: looseEffective,
+    skipVerify: skipVerifyMode,
     excludeMicrosoft: excludeMicrosoft === 'true' || excludeMicrosoft === true,
     total: contact_ids.length,
     skipped: 0, verified: 0, safe: 0, risky: 0, invalid: 0, unknown: 0,
@@ -17263,8 +17270,12 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
       // contacts whose previous result was 'unknown' (usually transient
       // Reacher failures — timeout / SMTP refused — not a real permanent
       // verdict) so they get a second shot at a real answer.
+      // skipVerify: treat EVERY contact as already-verified using its stored
+      // email_status (null/unknown stays pushable in loose mode), so the Reacher
+      // loop below runs zero times and the push starts immediately.
       const isFreshVerdict = c =>
-        c.email_verified_at && c.email_verified_at >= cutoff && c.email_status && c.email_status !== 'unknown';
+        job.skipVerify ||
+        (c.email_verified_at && c.email_verified_at >= cutoff && c.email_status && c.email_status !== 'unknown');
       const needsVerify     = contacts.filter(c => !isFreshVerdict(c));
       const alreadyVerified = contacts.filter(isFreshVerdict);
 
@@ -17284,7 +17295,13 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
       // Reacher author (Jon) recommends concurrency 5 — going higher gets
       // SMTP servers to throttle/block parallel probes from one source IP.
       // Env-overridable for experimentation, default stays at 5.
+      // Concurrency stays at 5 (Reacher author Jon's recommended max — higher
+      // gets SMTP servers to throttle/block parallel probes from one IP). Speed
+      // for loose/engine pushes comes from a SHORT per-email timeout: a hanging
+      // SMTP probe falls through to 'unknown' (which pushes in loose mode) in
+      // seconds instead of stalling on the generous 65s strict pushes keep.
       const CONCURRENCY = Math.max(1, parseInt(process.env.PUSH_VERIFY_CONCURRENCY || '5', 10));
+      const VERIFY_TIMEOUT_MS = parseInt(process.env.PUSH_VERIFY_TIMEOUT_MS || (job.loose ? '10000' : '65000'), 10);
       const VERIFY_THEN_PUSH = Math.max(20, parseInt(process.env.VERIFY_THEN_PUSH || '100', 10));
       let doneCount = 0;
       const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, snoozed: 0, missingEnrichment: 0, wrongProvider: 0, missingName: 0 };
@@ -17495,7 +17512,7 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
           const r = await fetch(`http://127.0.0.1:${finderPort}/api/verify-email`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email: c.email, verifier: 'reacher' }),
-            signal: AbortSignal.timeout(65000)
+            signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS)
           });
           const d = await r.json();
           const smtp = d.result?.raw?.smtp || d.result?.smtp || {};
@@ -17642,7 +17659,9 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
       // ── Phase 3: No2Bounce deeper validation of catch-all contacts ──
       const riskyContacts = contacts.filter(c => verifyResults[c.id] === 'risky');
       console.log(`[No2Bounce] Risky contacts found: ${riskyContacts.length} of ${contacts.length}`);
-      if (riskyContacts.length && !job.cancelled) {
+      // Skip the slow No2Bounce catch-all stage for loose/engine pushes — risky
+      // contacts push anyway in loose mode, so validating them just adds latency.
+      if (riskyContacts.length && !job.cancelled && !job.loose) {
         job.status = 'n2b_verifying';
         job.n2bTotal = riskyContacts.length;
         job.n2bDone  = 0;
@@ -17789,8 +17808,12 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
       if (!contacts.length) { job.status = 'failed'; job.error = 'No contacts found'; return; }
 
       const cutoff = new Date(Date.now() - max_age_days * 24 * 60 * 60 * 1000).toISOString();
+      // skipVerify: treat EVERY contact as already-verified using its stored
+      // email_status (null/unknown stays pushable in loose mode), so the Reacher
+      // loop below runs zero times and the push starts immediately.
       const isFreshVerdict = c =>
-        c.email_verified_at && c.email_verified_at >= cutoff && c.email_status && c.email_status !== 'unknown';
+        job.skipVerify ||
+        (c.email_verified_at && c.email_verified_at >= cutoff && c.email_status && c.email_status !== 'unknown');
       const needsVerify     = contacts.filter(c => !isFreshVerdict(c));
       const alreadyVerified = contacts.filter(isFreshVerdict);
 
@@ -17803,7 +17826,13 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
       alreadyVerified.forEach(c => { verifyResults[c.id] = c.email_status; });
 
       const finderPort = process.env.EMAIL_FINDER_INTERNAL_PORT || '5055';
+      // Concurrency stays at 5 (Reacher author Jon's recommended max — higher
+      // gets SMTP servers to throttle/block parallel probes from one IP). Speed
+      // for loose/engine pushes comes from a SHORT per-email timeout: a hanging
+      // SMTP probe falls through to 'unknown' (which pushes in loose mode) in
+      // seconds instead of stalling on the generous 65s strict pushes keep.
       const CONCURRENCY = Math.max(1, parseInt(process.env.PUSH_VERIFY_CONCURRENCY || '5', 10));
+      const VERIFY_TIMEOUT_MS = parseInt(process.env.PUSH_VERIFY_TIMEOUT_MS || (job.loose ? '10000' : '65000'), 10);
       const VERIFY_THEN_PUSH = Math.max(20, parseInt(process.env.VERIFY_THEN_PUSH || '100', 10));
       let doneCount = 0;
       const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, snoozed: 0 };
@@ -17934,7 +17963,7 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
           const r = await fetch(`http://127.0.0.1:${finderPort}/api/verify-email`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email: c.email, verifier: 'reacher' }),
-            signal: AbortSignal.timeout(65000)
+            signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS)
           });
           const d = await r.json();
           const smtp = d.result?.raw?.smtp || d.result?.smtp || {};
@@ -18037,7 +18066,7 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
         } catch (err) { console.warn('[verify] final catch-all propagation failed:', err.message); }
 
         const riskyContacts = contacts.filter(c => verifyResults[c.id] === 'risky');
-        if (riskyContacts.length) {
+        if (riskyContacts.length && !job.loose) {
           job.status = 'n2b_verifying';
           job.n2bTotal = riskyContacts.length;
           job.n2bDone  = 0;
