@@ -95,6 +95,11 @@ export interface PVReceivedEmail {
   label?: string                    // PV's own classification: INTERESTED / OUT_OF_OFFICE / AUTOMATIC_REPLY / ...
   lead?: string                     // the lead's email address
   message_id?: string
+  // Full body (with signature). PV nests it under body.{html,text}; some payloads
+  // use html_body/text_body. Needed to seed the client-facing thread.
+  body?: { html?: string; text?: string } | null
+  html_body?: string | null
+  text_body?: string | null
 }
 
 // Page the PlusVibe unibox "received" emails for a whole workspace (newest-first).

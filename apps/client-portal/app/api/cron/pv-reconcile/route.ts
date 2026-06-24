@@ -3,6 +3,7 @@ import pool, { ready } from '@/lib/db'
 import { getPlusVibeReceived, type PVReceivedEmail } from '@/lib/plusvibe'
 import { detectWarmupFull } from '@/lib/classify'
 import { resolveClientId } from '@/lib/clients'
+import { notifyClientOfLeadReply } from '@/lib/email'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
@@ -117,8 +118,39 @@ export async function GET(req: NextRequest) {
       ).catch(err => { console.error(`[pv-reconcile] upsert failed ws=${ws} id=${e.id}:`, err); return null })
 
       if (!ins) continue
-      if (ins.rows[0]?.inserted === true) { c.inserted++; if (isOoo) c.ooo++ }
-      else c.healed++
+      const isNew = ins.rows[0]?.inserted === true
+      if (isNew) { c.inserted++; if (isOoo) c.ooo++ } else { c.healed++; continue }
+
+      // FIRST INGEST ONLY (the cron re-runs every minute — never re-seed/re-notify):
+      // 1) Seed the CLIENT-FACING thread (portal_emails) so the lead's reply shows
+      //    in the client dashboard and the lead surfaces as "needs reply".
+      // 2) Notify the client if they were already in conversation with this lead.
+      // Keyed on the Message-ID so it can never duplicate in the client thread.
+      const bodyHtml = e.body?.html ?? e.html_body ?? null
+      const bodyText = e.body?.text ?? e.text_body ?? e.content_preview ?? null
+      await pool.query(
+        `INSERT INTO portal_emails
+           (id, workspace_id, lead_email, direction, subject, body_html, body_text,
+            content_preview, from_email, to_email, is_unread, message_id, timestamp_created, raw)
+         VALUES ($1,$2,$3,'IN',$4,$5,$6,$7,$8,$9,1,$10,$11,$12::jsonb)
+         ON CONFLICT (id) DO NOTHING`,
+        [dedupeKey, ws, lead, e.subject ?? null, bodyHtml, bodyText,
+         (bodyText ?? '').slice(0, 200) || null, e.from_address_email ?? lead, e.eaccount ?? null,
+         e.message_id ?? null, e.timestamp_created ?? new Date().toISOString(), JSON.stringify(e)]
+      ).catch(err => console.error('[pv-reconcile] portal_emails insert failed:', err))
+
+      // Notify only for genuine human replies (not OOO/auto) where the client has
+      // already sent at least one message to this lead — a live conversation.
+      if (!isOoo) {
+        const had = await pool.query(
+          `SELECT 1 FROM portal_emails WHERE workspace_id=$1 AND lower(lead_email)=lower($2)
+             AND direction='OUT' AND sent_via_portal=true LIMIT 1`,
+          [ws, lead]
+        ).catch(() => ({ rows: [] as unknown[] }))
+        if (had.rows.length) {
+          void notifyClientOfLeadReply(ws, lead, lead, (bodyText ?? '').slice(0, 300), dedupeKey)
+        }
+      }
     }
     return c
   }
