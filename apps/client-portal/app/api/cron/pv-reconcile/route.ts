@@ -139,9 +139,14 @@ export async function GET(req: NextRequest) {
          e.message_id ?? null, e.timestamp_created ?? new Date().toISOString(), JSON.stringify(e)]
       ).catch(err => console.error('[pv-reconcile] portal_emails insert failed:', err))
 
-      // Notify the client ONCE (first ingest only — never re-notify on re-runs) for a
-      // genuine human reply (not OOO/auto) where they're already in conversation.
-      if (isNew && !isOoo) {
+      // Notify the client — but ONLY for a reply that ACTUALLY ARRIVED in the last
+      // 15 minutes. `isNew` alone is unsafe: re-keying (Message-ID) made already-
+      // ingested historical replies look "new" and spammed clients with
+      // notifications for OLD replies. The recency guard means a historical
+      // re-ingest can never notify; only a genuinely-fresh reply does, once.
+      const recvMs = e.timestamp_created ? Date.parse(e.timestamp_created) : NaN
+      const isFresh = !Number.isNaN(recvMs) && recvMs >= Date.now() - 15 * 60_000
+      if (isNew && isFresh && !isOoo) {
         const had = await pool.query(
           `SELECT 1 FROM portal_emails WHERE workspace_id=$1 AND lower(lead_email)=lower($2)
              AND direction='OUT' AND sent_via_portal=true LIMIT 1`,
