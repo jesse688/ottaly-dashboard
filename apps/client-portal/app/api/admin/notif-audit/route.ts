@@ -29,6 +29,54 @@ export async function GET(req: NextRequest) {
 
   const days = Math.min(Math.max(parseInt(url.searchParams.get('days') || '30', 10) || 30, 1), 365)
 
+  // ── PENDING-BACKLOG MODE ?pending=1 ────────────────────────────────────────
+  // While Resend was OFF, notifyClientOfLead set every claim to status='failed'
+  // (the send returned not-ok). The notify-leads sweeper RE-CLAIMS failed rows,
+  // so the instant Resend turns back on it will fire the ENTIRE backlog at once.
+  // Some of those are GENUINE leads from the quiet window the client still needs;
+  // some may be stale. This mode shows the backlog labelled, WITHOUT sending,
+  // so an admin can decide. ?fresh_hours=N (default 24) = the genuine cutoff.
+  if (url.searchParams.get('pending') === '1') {
+    const freshHours = Math.min(Math.max(parseInt(url.searchParams.get('fresh_hours') || '24', 10) || 24, 1), 720)
+    try {
+      const q = await pool.query(
+        `SELECT n.client_id, n.lead_id, n.status, n.attempts, n.next_retry_at,
+                l.email AS lead_email, l.first_name, l.company_name AS lead_company,
+                COALESCE(l.first_replied_at, l.created_at) AS lead_at,
+                c.company_name AS client, c.workspace_id,
+                (COALESCE(l.first_replied_at, l.created_at) >= NOW() - ($1 || ' hours')::interval) AS is_fresh
+           FROM portal_lead_notifications n
+           JOIN portal_clients c ON c.id = n.client_id AND c.active = true
+           LEFT JOIN esp_leads l ON l.id = n.lead_id
+          WHERE n.status IN ('failed','sending')
+            AND n.attempts < 5
+          ORDER BY lead_at DESC NULLS LAST`,
+        [String(freshHours)]
+      )
+      const items = q.rows.map(r => ({
+        client: r.client as string | null,
+        workspace_id: r.workspace_id as string,
+        lead: r.lead_email as string | null,
+        lead_name: [r.first_name, r.lead_company].filter(Boolean).join(' · ') || null,
+        lead_at: r.lead_at as string | null,
+        status: r.status as string,
+        attempts: r.attempts as number,
+        verdict: r.is_fresh ? 'genuine_send' : 'stale_skip',
+      }))
+      return NextResponse.json({
+        mode: 'pending',
+        fresh_hours: freshHours,
+        total_pending: items.length,
+        genuine_send: items.filter(i => i.verdict === 'genuine_send').length,
+        stale_skip: items.filter(i => i.verdict === 'stale_skip').length,
+        items,
+      })
+    } catch (err) {
+      console.error('[notif-audit pending]', err)
+      return NextResponse.json({ error: 'Database error', detail: String(err).slice(0, 200) }, { status: 500 })
+    }
+  }
+
   try {
     // Every reply-notification marker, newest first. portal_meta carries a created_at
     // (the moment the notification fired). The key encodes workspace + reply id.
@@ -164,6 +212,74 @@ export async function GET(req: NextRequest) {
     })
   } catch (err) {
     console.error('[notif-audit]', err)
+    return NextResponse.json({ error: 'Database error', detail: String(err).slice(0, 200) }, { status: 500 })
+  }
+}
+
+// POST — act on the pending backlog WITHOUT the all-or-nothing sweeper.
+//   ?action=send_genuine  → send only leads fresher than fresh_hours (default 24);
+//                           leaves stale rows untouched.
+//   ?action=skip_stale    → mark stale rows (older than fresh_hours) as 'sent' so
+//                           the notify-leads sweeper can NEVER fire them. No email.
+// Admin session OR ?secret=CRON_SECRET. Idempotent: send_genuine reuses
+// notifyClientOfLead's per-(client,lead) claim, so re-running can't double-send.
+export async function POST(req: NextRequest) {
+  const url = new URL(req.url)
+  const secret = url.searchParams.get('secret')
+  const viaSecret = !!secret && !!process.env.CRON_SECRET && secret === process.env.CRON_SECRET
+  if (!viaSecret && !(await getAdminSession())) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+  const action = url.searchParams.get('action')
+  const freshHours = Math.min(Math.max(parseInt(url.searchParams.get('fresh_hours') || '24', 10) || 24, 1), 720)
+  if (action !== 'send_genuine' && action !== 'skip_stale') {
+    return NextResponse.json({ error: 'action must be send_genuine or skip_stale' }, { status: 400 })
+  }
+
+  try {
+    if (action === 'skip_stale') {
+      // Neutralise the STALE backlog: rows whose lead arrived before the cutoff.
+      // Set to 'sent' (no email) so the sweeper's failed-row re-claim skips them.
+      const r = await pool.query(
+        `UPDATE portal_lead_notifications n
+            SET status = 'sent', sent_at = NOW()
+           FROM esp_leads l
+          WHERE l.id = n.lead_id
+            AND n.status IN ('failed','sending') AND n.attempts < 5
+            AND COALESCE(l.first_replied_at, l.created_at) < NOW() - ($1 || ' hours')::interval`,
+        [String(freshHours)]
+      )
+      return NextResponse.json({ ok: true, action, neutralised: r.rowCount })
+    }
+
+    // send_genuine: pull the FRESH pending leads and notify each via the normal
+    // path (which claims + sends + BCCs the agency). Stale rows are left alone.
+    const fresh = await pool.query(
+      `SELECT DISTINCT n.lead_id, c.workspace_id
+         FROM portal_lead_notifications n
+         JOIN portal_clients c ON c.id = n.client_id AND c.active = true
+         JOIN esp_leads l ON l.id = n.lead_id
+        WHERE n.status IN ('failed','sending') AND n.attempts < 5
+          AND COALESCE(l.first_replied_at, l.created_at) >= NOW() - ($1 || ' hours')::interval
+        ORDER BY n.lead_id
+        LIMIT 200`,
+      [String(freshHours)]
+    )
+    const { notifyClientOfLead } = await import('@/lib/email')
+    let sent = 0
+    const results: Array<{ lead_id: string; sent: boolean; reason?: string }> = []
+    for (const row of fresh.rows as { lead_id: string; workspace_id: string }[]) {
+      try {
+        const r = await notifyClientOfLead(row.workspace_id, row.lead_id)
+        if (r.sent) sent++
+        results.push({ lead_id: row.lead_id, sent: r.sent, reason: r.reason })
+      } catch (e) {
+        results.push({ lead_id: row.lead_id, sent: false, reason: String(e).slice(0, 80) })
+      }
+    }
+    return NextResponse.json({ ok: true, action, fresh_hours: freshHours, candidates: fresh.rows.length, sent, results })
+  } catch (err) {
+    console.error('[notif-audit POST]', err)
     return NextResponse.json({ error: 'Database error', detail: String(err).slice(0, 200) }, { status: 500 })
   }
 }
