@@ -138,7 +138,12 @@ export async function reconcileLeadCharges(clientId: string): Promise<number> {
 }
 
 // Credit +1 lead back when a non-lead dispute is approved. Idempotent.
+// Resolves the billing redirect: the charge lives under billingClientId (see
+// reconcileLeadCharges:113), so the refund (and its EXISTS guard) MUST key on the
+// same target — else a redirected client wins the dispute but the credit lands on
+// an unread ledger and is silently lost.
 export async function refundLead(clientId: string, leadId: string): Promise<void> {
+  const target = await billingClientId(clientId)
   // Only refund a lead that was actually charged — never mint credits.
   await pool.query(
     `INSERT INTO portal_ledger (client_id, type, amount, lead_id, description, created_by)
@@ -147,24 +152,29 @@ export async function refundLead(clientId: string, leadId: string): Promise<void
         SELECT 1 FROM portal_ledger WHERE client_id = $1 AND lead_id = $2 AND type = 'lead_charge'
       )
      ON CONFLICT (client_id, lead_id) WHERE type = 'dispute_refund' DO NOTHING`,
-    [clientId, leadId]
+    [target, leadId]
   )
 }
 
 // amount = number of LEADS to add to the balance.
+// Resolves the billing redirect so the credit lands on the SAME ledger every
+// read/charge path uses (getBalance/reconcile resolve billingClientId). Without
+// this, a top-up for a redirected client never moves their balance.
 export async function addTopup(clientId: string, leads: number, note?: string): Promise<void> {
   if (!Number.isFinite(leads) || leads <= 0) throw new Error(`addTopup: invalid lead count ${leads}`)
+  const target = await billingClientId(clientId)
   await pool.query(
     `INSERT INTO portal_ledger (client_id, type, amount, description, created_by)
      VALUES ($1, 'topup', $2, $3, 'admin')`,
-    [clientId, Math.floor(leads), note ?? 'Top-up']
+    [target, Math.floor(leads), note ?? 'Top-up']
   )
 }
 
 export async function addAdjustment(clientId: string, amount: number, note: string): Promise<void> {
+  const target = await billingClientId(clientId)
   await pool.query(
     `INSERT INTO portal_ledger (client_id, type, amount, description, created_by)
      VALUES ($1, 'adjustment', $2, $3, 'admin')`,
-    [clientId, amount, note]
+    [target, amount, note]
   )
 }

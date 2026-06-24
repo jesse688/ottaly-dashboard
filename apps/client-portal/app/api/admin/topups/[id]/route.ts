@@ -27,10 +27,19 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         return NextResponse.json({ error: 'Already resolved' }, { status: 409 })
       }
       const r = upd.rows[0]
+      // Resolve the billing redirect IN-TRANSACTION: every balance read/charge path
+      // resolves billing_client_id, so the credit must land on that same target —
+      // else a redirected client pays but their balance never moves (credit lost on
+      // an unread ledger). Mirrors lib/balance.billingClientId.
+      const billed = await client.query(
+        `SELECT COALESCE(billing_client_id, id) AS target FROM portal_clients WHERE id = $1`,
+        [r.client_id]
+      )
+      const ledgerClientId = billed.rows[0]?.target ?? r.client_id
       await client.query(
         `INSERT INTO portal_ledger (client_id, type, amount, description, created_by)
          VALUES ($1, 'topup', $2, 'Top-up confirmed', 'admin')`,
-        [r.client_id, Math.floor(Number(r.amount))]
+        [ledgerClientId, Math.floor(Number(r.amount))]
       )
       if (r.invoice_id) {
         await client.query(

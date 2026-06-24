@@ -163,7 +163,8 @@ export async function notifyClientOfLeadReply(workspaceId: string, leadEmail: st
       `SELECT ua.identifier AS email, ua.display_name
          FROM portal_user_access ua
          JOIN portal_clients c ON c.id = ua.client_id
-        WHERE c.workspace_id = $1 AND ua.identifier ILIKE '%@%'`,
+        WHERE c.workspace_id = $1 AND ua.identifier ILIKE '%@%'
+          AND ua.notify = TRUE`,
       [workspaceId]
     )
     const allRecipients = [

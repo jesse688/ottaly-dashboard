@@ -179,10 +179,13 @@ export async function GET() {
        LEFT JOIN portal_lead_disputes pd ON pd.lead_id = l.id AND pd.client_id = $3
        WHERE l.workspace_id = $1
          AND l.source IN ('plusvibe', 'bison')
-         -- INTERESTED = billable leads; INFO = near-leads shown to the client but
-         -- never charged (label='INFO' keeps them out of reconcileLeadCharges).
-         AND l.label IN ('INTERESTED', 'INFO')
-         AND ($2::text[] = '{}' OR l.label != ALL($2::text[]))
+         -- INTERESTED = billable leads; INFO = near-leads shown but never charged
+         -- (label='INFO' keeps them out of reconcileLeadCharges). ALSO surface
+         -- MEETING_BOOKED leads (the hottest type) — they carry status, not label,
+         -- so the label-only filter hid them from the inbox while the dashboard
+         -- tiles (which count by status) still showed them → an unreachable lead.
+         AND (l.label IN ('INTERESTED', 'INFO') OR l.status = 'MEETING_BOOKED')
+         AND ($2::text[] = '{}' OR l.label IS NULL OR l.label != ALL($2::text[]))
          -- Dedup PV/Bison: drop a frozen PV row when a Bison row exists for the
          -- same email (Bison wins), so migrated clients aren't double-counted.
          AND NOT (l.source = 'plusvibe' AND EXISTS (

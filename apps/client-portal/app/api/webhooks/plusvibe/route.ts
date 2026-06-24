@@ -189,7 +189,7 @@ async function handlePlusVibe(raw: Record<string, unknown>) {
     ['plusvibe-webhook', workspaceId, 'success', 1]
   ).catch(() => {})
 
-  const becameLead = d.status === 'INTERESTED' || d.label === 'INTERESTED'
+  const becameLead = d.status === 'INTERESTED' || d.status === 'MEETING_BOOKED' || d.label === 'INTERESTED'
   if (becameLead && d.email) {
     try {
       await enrichLead(workspaceId, d.email as string)

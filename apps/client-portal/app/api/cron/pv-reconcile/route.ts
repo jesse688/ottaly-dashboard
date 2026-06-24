@@ -172,15 +172,30 @@ export async function GET(req: NextRequest) {
            e.message_id ?? null, e.timestamp_created ?? new Date().toISOString(), JSON.stringify(e)]
         ).catch(err => console.error('[pv-reconcile] portal_emails insert failed:', err))
 
-        // NOTIFY: only a first-ingest, just-arrived (<15 min) human reply where the
-        // client is in conversation. NEVER on a backfill run, NEVER for historical.
+        // NOTIFY: a first-ingest, just-arrived (<15 min) human reply where the
+        // client is already ENGAGED with this lead. NEVER on backfill / historical.
+        //
+        // "Engaged" used to require a portal OUT message (sent_via_portal=true).
+        // That suppressed the alert whenever the client hadn't yet replied FROM the
+        // portal — so a lead replying to the original campaign email (the common
+        // case, e.g. the Ottaly test) never notified. Widen "engaged" to ALSO count
+        // an established lead: one that's INTERESTED/MEETING_BOOKED, or already has a
+        // lead-notification record. The very first cold reply that turns a prospect
+        // INTO a lead is still covered by the separate new-lead notification, so this
+        // can't double-fire on the initial contact.
         if (isNew && isFreshNotify && !isOoo && !backfill) {
-          const had = await pool.query(
-            `SELECT 1 FROM portal_emails WHERE workspace_id=$1 AND lower(lead_email)=lower($2)
-               AND direction='OUT' AND sent_via_portal=true LIMIT 1`,
+          const engaged = await pool.query(
+            `SELECT 1 WHERE
+               EXISTS (SELECT 1 FROM portal_emails
+                        WHERE workspace_id=$1 AND lower(lead_email)=lower($2)
+                          AND direction='OUT' AND sent_via_portal=true)
+               OR EXISTS (SELECT 1 FROM esp_leads
+                        WHERE workspace_id=$1 AND lower(email)=lower($2)
+                          AND (status IN ('INTERESTED','MEETING_BOOKED') OR label='INTERESTED'))
+               LIMIT 1`,
             [ws, lead]
           ).catch(() => ({ rows: [] as unknown[] }))
-          if (had.rows.length) {
+          if (engaged.rows.length) {
             const bodyText = e.body?.text ?? e.text_body ?? e.content_preview ?? ''
             // Notify about the ACTUAL sender of this reply (falls back to the lead
             // key only if the feed gave no from address). The outbound guard above

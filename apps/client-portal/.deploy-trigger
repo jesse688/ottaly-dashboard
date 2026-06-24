@@ -1,1 +1,1 @@
-redeploy: 2026-06-24 notif-audit matches dashboard lead definition (incl MEETING_BOOKED) — finds Indigo Nic
+redeploy: 2026-06-24 audit fixes batch 1 — notif gaps (MEETING_BOOKED, reply-engaged, notify opt-out) + billing redirect (topup/adjustment/refund)
