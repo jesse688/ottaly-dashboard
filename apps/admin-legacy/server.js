@@ -2640,7 +2640,7 @@ app.get('/api/build-version', (req, res) => {
 // "is the fix deployed?" is a 2-second curl instead of a guess. No auth needed.
 app.get('/api/version', (req, res) => {
   res.set('Cache-Control', 'no-store');
-  res.json({ build: 'engine-loose-push-2026-06-24', uptime: Math.round(process.uptime()) });
+  res.json({ build: 'engine-loose-push-2026-06-24b-debug', uptime: Math.round(process.uptime()) });
 });
 
 app.get('/healthz', async (req, res) => {
@@ -17168,6 +17168,26 @@ app.get('/api/contacts/push-jobs/:id', requireSession, (req, res) => {
   res.json(job);
 });
 
+// DEBUG (no auth) — last ~15 push jobs with the full skip breakdown + error, so
+// "why didn't these push?" is a curl, not a guess. Returns the gate that dropped
+// each contact (job.skipped becomes the breakdown object once a job finishes).
+app.get('/api/debug/push-jobs', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const jobs = [...pushJobs.values()]
+    .sort((a, b) => (b.created_at || 0) - (a.created_at || 0))
+    .slice(0, 15)
+    .map(j => ({
+      id: j.id, status: j.status, loose: !!j.loose, skipVerify: !!j.skipVerify,
+      excludeMicrosoft: !!j.excludeMicrosoft, allowedProviders: j.allowedProviders || [],
+      total: j.total, pushed: j.pushed,
+      safe: j.safe, risky: j.risky, invalid: j.invalid, unknown: j.unknown, safe_catchall: j.safe_catchall,
+      skipDetail: (j.skipped && typeof j.skipped === 'object') ? j.skipped : undefined,
+      error: j.error || null, n2bWarning: j.n2bWarning || null,
+      workspace_id: j.workspace_id, campaign_id: j.campaign_id,
+    }));
+  res.json({ count: jobs.length, jobs });
+});
+
 // POST starts job immediately, returns job ID — processing runs in background
 app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
   const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 90, emailProviders, excludeMicrosoft, loose, skipVerify } = req.body;
@@ -17349,15 +17369,17 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
         // "Google + Other" push. A still-null mx_provider means the verifier
         // couldn't resolve MX; exclude it rather than guess (safer than leaking
         // a possibly-wrong provider into the campaign).
-        if (allowedProviders.length && !allowedProviders.includes(c.mx_provider)) {
+        // In loose mode a null mx_provider must NOT be dropped: skipVerify never
+        // resolves MX (no Reacher), so EVERY contact has mx_provider=null and
+        // these gates would drop the entire job. Only enforce the provider filter
+        // when the provider is actually known; loose pushes accept unresolved.
+        if (allowedProviders.length && c.mx_provider && !allowedProviders.includes(c.mx_provider)) {
           skipped.wrongProvider++; return false;
         }
-        // Default-ON Microsoft guard (authoritative, server-side). Even if the
-        // caller's allowedProviders is empty, when excludeMicrosoft is set we
-        // drop any contact whose resolved provider is Microsoft, or whose MX is
-        // still unresolved (could be MS behind a gateway). This is the final gate
-        // that stops Microsoft leaking into Bison regardless of UI state.
-        if (job.excludeMicrosoft && (c.mx_provider === 'email_outlook' || !c.mx_provider)) {
+        // Default-ON Microsoft guard. Drop confirmed-Microsoft always; drop
+        // UNRESOLVED (null) MX only in strict mode — in loose mode an unresolved
+        // provider is accepted (we can't resolve it without verifying).
+        if (job.excludeMicrosoft && (c.mx_provider === 'email_outlook' || (!c.mx_provider && !job.loose))) {
           skipped.wrongProvider++; return false;
         }
         // Enrichment gate is for Apollo-sourced contacts (which carry keywords +
