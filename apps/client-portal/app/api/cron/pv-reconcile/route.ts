@@ -119,13 +119,13 @@ export async function GET(req: NextRequest) {
 
       if (!ins) continue
       const isNew = ins.rows[0]?.inserted === true
-      if (isNew) { c.inserted++; if (isOoo) c.ooo++ } else { c.healed++; continue }
+      if (isNew) { c.inserted++; if (isOoo) c.ooo++ } else c.healed++
 
-      // FIRST INGEST ONLY (the cron re-runs every minute — never re-seed/re-notify):
-      // 1) Seed the CLIENT-FACING thread (portal_emails) so the lead's reply shows
-      //    in the client dashboard and the lead surfaces as "needs reply".
-      // 2) Notify the client if they were already in conversation with this lead.
-      // Keyed on the Message-ID so it can never duplicate in the client thread.
+      // ALWAYS ensure the CLIENT-FACING thread (portal_emails) has this reply —
+      // idempotent (ON CONFLICT DO NOTHING), keyed on the Message-ID so it can't
+      // duplicate. Running every time also BACKFILLS replies ingested before this
+      // seeding existed. So the lead's reply shows in the client dashboard and the
+      // lead surfaces as "needs reply".
       const bodyHtml = e.body?.html ?? e.html_body ?? null
       const bodyText = e.body?.text ?? e.text_body ?? e.content_preview ?? null
       await pool.query(
@@ -139,9 +139,9 @@ export async function GET(req: NextRequest) {
          e.message_id ?? null, e.timestamp_created ?? new Date().toISOString(), JSON.stringify(e)]
       ).catch(err => console.error('[pv-reconcile] portal_emails insert failed:', err))
 
-      // Notify only for genuine human replies (not OOO/auto) where the client has
-      // already sent at least one message to this lead — a live conversation.
-      if (!isOoo) {
+      // Notify the client ONCE (first ingest only — never re-notify on re-runs) for a
+      // genuine human reply (not OOO/auto) where they're already in conversation.
+      if (isNew && !isOoo) {
         const had = await pool.query(
           `SELECT 1 FROM portal_emails WHERE workspace_id=$1 AND lower(lead_email)=lower($2)
              AND direction='OUT' AND sent_via_portal=true LIMIT 1`,
