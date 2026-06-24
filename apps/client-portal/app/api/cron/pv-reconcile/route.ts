@@ -15,8 +15,28 @@ export const maxDuration = 300
 //
 // Auth ?secret=CRON_SECRET. ?days=N window (default 3, max 90). ?ws=<id> one workspace.
 const BOUNCE_RE = /(^|[._-])(mailer-daemon|postmaster|no-?reply|bounce|abuse)@/
-// PlusVibe's own labels that mean "automated, not a human reply".
-const PV_OOO_LABELS = new Set(['OUT_OF_OFFICE', 'AUTOMATIC_REPLY', 'AUTO_REPLY'])
+
+// PlusVibe classifies every reply itself (label). We TRUST that label to route at
+// ingest — so classification never depends on Gemini (which 429s/503s). Gemini is
+// only a fallback refinement for replies PV left unlabelled.
+//   done  = trust PV, no AI needed.   pending = let the classify worker refine.
+function routeFromPvLabel(label: string): { category: string | null; folder: string; state: 'done' | 'pending' } {
+  switch (label) {
+    case 'INTERESTED':
+    case 'MEETING_BOOKED':      return { category: 'interested',     folder: 'review',         state: 'done' }
+    case 'QUESTION':            return { category: 'question',       folder: 'review',         state: 'done' }
+    case 'NOT_INTERESTED':      return { category: 'not_interested', folder: 'not_interested', state: 'done' }
+    case 'UNSUBSCRIBE':
+    case 'UNSUBSCRIBED':
+    case 'DO_NOT_CONTACT':      return { category: 'unsubscribe',    folder: 'unsubscribe',    state: 'done' }
+    case 'OUT_OF_OFFICE':
+    case 'AUTOMATIC_REPLY':
+    case 'AUTO_REPLY':          return { category: 'ooo_auto_reply', folder: 'ooo',            state: 'done' }
+    // Unknown / no PV label → Review as pending so it's VISIBLE now; the AI refines
+    // it later if/when Gemini is available. Never hidden, never Gemini-blocked.
+    default:                    return { category: null,            folder: 'review',         state: 'pending' }
+  }
+}
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url)
@@ -65,14 +85,14 @@ export async function GET(req: NextRequest) {
       const warm = await detectWarmupFull(ws, { subject: e.subject ?? '', bodyText: e.content_preview ?? '' })
       if (warm.isWarmup) { c.skipped_warmup++; continue }
 
-      // Trust PV's OOO/automatic label → file straight to the OOO folder (no AI).
-      // Everything else lands in REVIEW as pending so it's VISIBLE immediately; the
-      // classify worker then refines it (interested stays, not_interested/other move).
-      const label = (e.label ?? '').toUpperCase()
-      const isOoo = PV_OOO_LABELS.has(label)
-      const category = isOoo ? 'ooo_auto_reply' : null
-      const folder = isOoo ? 'ooo' : 'review'
-      const state = isOoo ? 'done' : 'pending'
+      // Route by PV's own label (no Gemini dependency). Unlabelled → Review pending.
+      const { category, folder, state } = routeFromPvLabel((e.label ?? '').toUpperCase())
+      const isOoo = folder === 'ooo'
+
+      // Key on the RFC Message-ID when present (stable per email) so PlusVibe
+      // returning the same reply under two internal ids can't create a duplicate;
+      // fall back to PV's id.
+      const dedupeKey = `pv_${e.message_id || e.id}`
 
       const ins = await pool.query(
         `INSERT INTO unibox_replies
@@ -88,7 +108,7 @@ export async function GET(req: NextRequest) {
            updated_at    = NOW()
          RETURNING (xmax = 0) AS inserted`,
         [
-          ws, `pv_${e.id}`, ws, clientId, lead,
+          ws, dedupeKey, ws, clientId, lead,
           e.subject ?? null, e.content_preview?.slice(0, 500) ?? null,
           state, folder, category, JSON.stringify(e),
           e.timestamp_created ?? new Date().toISOString(),
