@@ -17280,11 +17280,27 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
       const targetCampLc = (job.campaign_name || '').trim().toLowerCase();
 
       const passesFilter = (c) => {
-        if (verifyResults[c.id] !== 'safe' && verifyResults[c.id] !== 'safe_catchall') { skipped.unsafe++; return false; }
+        // Deliverability gate. Engine-scraped leads use a LOOSER rule: push
+        // anything that isn't a hard 'invalid' (so safe / catch-all / risky /
+        // unknown all go through), because requiring 'safe' lost the majority of
+        // engine leads. Spam-trap risk is still covered — free/disposable/
+        // consumer domains are blocked (isFreeDomain) and do_not_contact (set by
+        // the free-domain sweep on known trap domains) is enforced below. Apollo
+        // data stays strict: safe / safe_catchall only.
+        if (c.source === 'engine') {
+          if (verifyResults[c.id] === 'invalid')        { skipped.unsafe++; return false; }
+          if (isFreeDomain(c.email))                    { skipped.unsafe++; return false; }
+        } else {
+          if (verifyResults[c.id] !== 'safe' && verifyResults[c.id] !== 'safe_catchall') { skipped.unsafe++; return false; }
+        }
         if (c.do_not_contact)               { skipped.dnc++; return false; }
-        // Bison requires non-empty first_name AND last_name (422s otherwise), and a
-        // nameless contact shouldn't be cold-emailed anyway — skip and report.
-        if (!(c.first_name && c.first_name.trim()) || !(c.last_name && c.last_name.trim())) {
+        // Name requirement is a STALE Bison rule (Bison 422'd on empty names).
+        // We send via PlusVibe now, which accepts nameless leads — engine leads
+        // are company inboxes (info@, admin@) with no person, so requiring a
+        // name dropped nearly all of them. Skip the name gate for engine leads;
+        // keep it for Apollo (person-level) data, which should have names.
+        if (c.source !== 'engine'
+            && (!(c.first_name && c.first_name.trim()) || !(c.last_name && c.last_name.trim()))) {
           skipped.missingName++; return false;
         }
         // True-MX provider gate. By the time a contact reaches here it has been
@@ -17773,7 +17789,15 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
       const targetCampLc = (job.campaign_name || '').trim().toLowerCase();
 
       const passesFilter = (c) => {
-        if (verifyResults[c.id] !== 'safe' && verifyResults[c.id] !== 'safe_catchall') { skipped.unsafe++; return false; }
+        // Engine leads: looser gate (push anything not hard-'invalid'; block
+        // free/disposable/trap domains). Apollo stays strict. Mirrors the main
+        // verify-and-push gate so a resumed job behaves identically.
+        if (c.source === 'engine') {
+          if (verifyResults[c.id] === 'invalid')        { skipped.unsafe++; return false; }
+          if (isFreeDomain(c.email))                    { skipped.unsafe++; return false; }
+        } else {
+          if (verifyResults[c.id] !== 'safe' && verifyResults[c.id] !== 'safe_catchall') { skipped.unsafe++; return false; }
+        }
         if (c.do_not_contact) { skipped.dnc++; return false; }
         const pushed = Array.isArray(c.pushed_campaigns)
           ? c.pushed_campaigns
