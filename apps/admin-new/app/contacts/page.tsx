@@ -2615,6 +2615,7 @@ function PushModal({
   const [campaigns, setCampaigns] = useState<Camp[]>([])
   const [wsId, setWsId] = useState('')
   const [campId, setCampId] = useState('')
+  const [skipVerify, setSkipVerify] = useState(false)
   const [busy, setBusy] = useState(false)
   const [job, setJob] = useState<{
     status?: string; processed?: number; verified?: number; skipped?: number; total?: number
@@ -2687,6 +2688,7 @@ function PushModal({
           campaign_id: campId,
           contact_ids: contactIds,
           loose: loose === true,
+          skipVerify: skipVerify === true,
           include_risky: false,
           max_age_days: 90,
           excludeMicrosoft: excludeMicrosoft ? 'true' : '',
@@ -2786,6 +2788,20 @@ function PushModal({
           </Select>
           {campError && <div className="mt-1 text-xs text-red-600">{campError}</div>}
         </div>
+
+        <label className="flex items-start gap-2 text-xs text-gray-600">
+          <input
+            type="checkbox"
+            checked={skipVerify}
+            onChange={(e) => setSkipVerify(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            <span className="font-medium text-gray-800">Skip verification (fast)</span> — push straight to
+            PlusVibe with no Reacher/No2Bounce step. Near-instant; only already-known-invalid and
+            free/disposable domains are filtered. Higher bounce risk.
+          </span>
+        </label>
 
         {job && (
           <div className="rounded border border-gray-200 bg-gray-50 p-3 text-sm">
