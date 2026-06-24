@@ -51,6 +51,7 @@ interface Lead {
   has_outbound: boolean
   replied_off: boolean
   locked: boolean
+  is_info: boolean   // near-lead shown to the client but NOT billed (label='INFO')
 }
 // A lead "needs reply" until our most recent response is NEWER than the prospect's
 // most recent inbound. has_outbound is that time-aware signal (computed server-side:
@@ -807,8 +808,9 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
                       {l.locked
                         ? <p className="text-xs text-[#b8860b] font-medium truncate">🔒 Top up to unlock</p>
                         : <p className="text-xs text-gray-500 truncate">{l.company_name ?? l.email}</p>}
-                      {(cl || l.dispute_status === 'pending' || isReplied(l)) && !l.locked && (
+                      {(cl || l.dispute_status === 'pending' || isReplied(l) || l.is_info) && !l.locked && (
                         <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                        {l.is_info && <span className="inline-flex text-[10px] font-medium bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded" title="Shared for info — not charged as a lead">Info · not billed</span>}
                         {cl && <span className={`inline-flex text-[10px] font-medium px-1.5 py-0.5 rounded ${COLOR_BADGE[cl.color] ?? 'bg-purple-100 text-purple-700'}`}>{cl.name}</span>}
                         {isReplied(l) && <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-green-100 text-green-700 px-1.5 py-0.5 rounded"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>Replied</span>}
                         {l.dispute_status === 'pending' && <span className="inline-flex text-[10px] font-medium bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">Dispute</span>}
@@ -852,6 +854,7 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <p className="font-heading text-base font-semibold text-[#050c29] truncate tracking-tight">{fullName(selected)}</p>
+                    {selected.is_info && <span className="inline-flex text-[10px] font-medium bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded shrink-0" title="Shared for info — not charged as a lead">Info · not billed</span>}
                   </div>
                   {selected.email && <p className="text-xs text-gray-500 truncate">{selected.email}</p>}
                 </div>
