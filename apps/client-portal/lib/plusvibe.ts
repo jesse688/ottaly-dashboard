@@ -81,6 +81,68 @@ export async function getPlusVibeInbound(
   }
 }
 
+// A received email from the PlusVibe unibox.
+export interface PVReceivedEmail {
+  id: string
+  lead_id?: string
+  campaign_id?: string
+  from_address_email?: string
+  subject?: string
+  content_preview?: string
+  timestamp_created?: string
+  eaccount?: string                 // the mailbox that received it (our sending account)
+  to_address_email_list?: string
+  label?: string                    // PV's own classification: INTERESTED / OUT_OF_OFFICE / AUTOMATIC_REPLY / ...
+  lead?: string                     // the lead's email address
+  message_id?: string
+}
+
+// Page the PlusVibe unibox "received" emails for a whole workspace (newest-first).
+// THIS is where replies live — Bison/EmailBison is retired and returns nothing.
+// Stops when a page is older than sinceMs, when there are no new ids (param
+// ignored / end), or at the page cap. Paginates via the `page_trail` cursor.
+export async function getPlusVibeReceived(
+  workspaceId: string,
+  opts: { sinceMs?: number; maxPages?: number } = {},
+): Promise<PVReceivedEmail[]> {
+  const key = process.env.PLUSVIBE_API_KEY ?? process.env.PLUSVIBE_KEY
+  if (!key) return []
+  const maxPages = opts.maxPages ?? 30
+  const out: PVReceivedEmail[] = []
+  const seen = new Set<string>()
+  let pageTrail: string | undefined
+  for (let p = 0; p < maxPages; p++) {
+    const url = new URL('https://api.plusvibe.ai/api/v1/unibox/emails')
+    url.searchParams.set('workspace_id', workspaceId)
+    url.searchParams.set('email_type', 'received')
+    if (pageTrail) url.searchParams.set('page_trail', pageTrail)
+    let res: Response
+    try {
+      res = await fetch(url, { headers: { 'x-api-key': key, 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(15000) })
+    } catch { break }
+    if (!res.ok) break
+    const data = await res.json() as { page_trail?: string; data?: PVReceivedEmail[] }
+    const batch = data.data ?? []
+    if (!batch.length) break
+    // Add only new ids; if a page brings nothing new, the cursor isn't advancing — stop.
+    let added = 0
+    for (const e of batch) {
+      if (e.id && !seen.has(e.id)) { seen.add(e.id); out.push(e); added++ }
+    }
+    if (added === 0) break
+    if (opts.sinceMs != null) {
+      const oldest = batch.reduce((min, e) => {
+        const t = e.timestamp_created ? Date.parse(e.timestamp_created) : NaN
+        return Number.isNaN(t) ? min : Math.min(min, t)
+      }, Infinity)
+      if (oldest !== Infinity && oldest < opts.sinceMs) break
+    }
+    if (!data.page_trail) break
+    pageTrail = data.page_trail
+  }
+  return out
+}
+
 // Reply to a PlusVibe unibox email. POST /unibox/emails/reply?workspace_id=...
 // `from` is optional — if omitted PlusVibe infers the sender from the reply_to_id.
 export async function sendPlusVibeReply(opts: {
