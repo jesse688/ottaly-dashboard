@@ -29,6 +29,8 @@ const GROUP_SQL = `
            'id', id, 'team', bison_team_id, 'reply_id', bison_reply_id,
            'source', ingest_source, 'folder', folder, 'category', category,
            'campaign_id', campaign_id, 'portal_email_id', portal_email_id,
+           'enriched', (ch_data IS NOT NULL OR enrich_state = 'matched'),
+           'confidence', confidence, 'marked_as_lead', marked_as_lead,
            'created_at', created_at
          ) ORDER BY created_at) AS rows
     FROM unibox_replies
@@ -60,10 +62,19 @@ export async function POST(req: NextRequest) {
     type Row = {
       id: string; source: string | null; folder: string | null; category: string | null
       campaign_id: string | null; portal_email_id: string | null; created_at: string
+      enriched?: boolean; confidence?: number | null; marked_as_lead?: boolean
     }
+    // Keep the MOST COMPLETE row. Priority (high → low): a marked lead, then a
+    // Companies-House-enriched row, then a real (non-pending) classification, then
+    // higher confidence, then campaign/portal links, then the earliest. This makes
+    // the dedup keep e.g. the "interested · 100% + Companies House" copy over a bare
+    // duplicate that errored during an outage.
     const score = (x: Row) =>
-      (x.campaign_id ? 8 : 0) + (x.portal_email_id ? 4 : 0) +
-      (x.category && x.category !== 'pending' ? 2 : 0) + (x.source !== 'pv-other' ? 1 : 0)
+      (x.marked_as_lead ? 100 : 0) +
+      (x.enriched ? 40 : 0) +
+      (x.category && x.category !== 'pending' && x.category !== 'other' ? 16 : 0) +
+      Math.round((typeof x.confidence === 'number' ? x.confidence : 0) * 8) +
+      (x.campaign_id ? 4 : 0) + (x.portal_email_id ? 2 : 0) + (x.source !== 'pv-other' ? 1 : 0)
 
     const toDelete: string[] = []
     const plan: { lead: string; keep: string; drop: string[] }[] = []
