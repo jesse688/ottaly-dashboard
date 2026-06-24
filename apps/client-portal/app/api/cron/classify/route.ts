@@ -18,6 +18,11 @@ export async function GET(req: NextRequest) {
 
   await ready()
 
+  // ?force=1 ignores the retry-backoff window so rows that failed during an
+  // outage (e.g. Gemini out of credit) reclassify immediately instead of waiting
+  // out their exponential backoff.
+  const force = new URL(req.url).searchParams.get('force') === '1'
+
   // Load admin custom warm-up terms ONCE per run (built-in defaults are always
   // on; these extend them). detectWarmupFull/matchWarmupTag then check both.
   try {
@@ -52,7 +57,7 @@ export async function GET(req: NextRequest) {
            ORDER BY (e.source = 'bison') DESC, e.updated_at DESC LIMIT 1
          ) l ON TRUE
         WHERE u.classify_state = 'pending'
-          AND (u.classify_next_at IS NULL OR u.classify_next_at <= NOW())
+          AND (${force ? 'TRUE' : '(u.classify_next_at IS NULL OR u.classify_next_at <= NOW())'})
         ORDER BY u.received_at ASC
         LIMIT 50
         FOR UPDATE OF u SKIP LOCKED`
