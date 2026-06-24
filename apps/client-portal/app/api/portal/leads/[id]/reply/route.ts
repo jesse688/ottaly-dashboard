@@ -70,18 +70,19 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const toAddr = toAddrs[0] || lead.email
 
   // Find the latest inbound message for threading context.
-  // Prefer a unibox_ (PlusVibe) ID when one exists so the reply stays in PV thread.
+  // Prefer a PlusVibe ID (unibox_ or pv_) when one exists so the reply threads in PV.
   const ctx = await pool.query(
     `SELECT id, subject, eaccount, to_email, message_id FROM portal_emails
       WHERE workspace_id = $1 AND lower(lead_email) = lower($2) AND direction = 'IN'
-      ORDER BY (id LIKE 'unibox_%') DESC, timestamp_created DESC LIMIT 1`,
+      ORDER BY (id LIKE 'unibox_%' OR id LIKE 'pv_%') DESC, timestamp_created DESC LIMIT 1`,
     [session.workspaceId, lead.email]
   )
   const subject = ctx.rows[0]?.subject ?? 'Re: your enquiry'
   const eaccount = ctx.rows[0]?.eaccount ?? ctx.rows[0]?.to_email ?? undefined
   const inboundId: string | null = ctx.rows[0]?.id ?? null
-  // Detect provider by ID prefix — unibox_ = PlusVibe, pure numeric = Bison.
-  const isPlusVibe = inboundId?.startsWith('unibox_') ?? false
+  // Detect provider by ID prefix — unibox_/pv_ = PlusVibe, pure numeric = Bison.
+  // (PlusVibe is the live source now; pv_ rows come from the pv-reconcile cron.)
+  const isPlusVibe = /^(unibox_|pv_)/.test(inboundId ?? '')
   const latestReplyId = !isPlusVibe && inboundId ? parseInt(inboundId, 10) : null
 
   // 1. Persist outgoing message (synthetic id so it's stable + idempotent-ish).
@@ -132,12 +133,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     })
     if (!send.ok) console.error('[reply] resend-with-attachments failed:', send.reason)
   } else if (isPlusVibe && inboundId) {
-    // Resolve the REAL PlusVibe email id + sending mailbox from the unibox API —
-    // our DB stores `unibox_<id>` (which PV rejects) and a NULL eaccount.
+    // Resolve the REAL PlusVibe email id + sending mailbox from the unibox API by
+    // lead email — our DB stores a synthetic id (unibox_<id> / pv_<message_id>) that
+    // PV's reply API rejects, plus a possibly-NULL eaccount.
     const pv = await getPlusVibeInbound(session.workspaceId, lead.email)
     send = await sendPlusVibeReply({
       workspaceId: session.workspaceId,
-      replyToId: pv?.id ?? inboundId.replace(/^unibox_/, ''),
+      replyToId: pv?.id ?? inboundId.replace(/^(unibox_|pv_)/, ''),
       subject: subject,
       from: pv?.from || eaccount,
       to: toList,
