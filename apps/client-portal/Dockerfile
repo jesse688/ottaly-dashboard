@@ -9,6 +9,15 @@ RUN npm install
 FROM base AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
+# Cache-bust: copy the deploy-trigger FIRST and stamp it into an ARG so every
+# deploy whose trigger changed invalidates the source COPY + build below. Without
+# this, EasyPanel's Docker layer cache served a stale `COPY apps/client-portal .`
+# and `npm run build` — deploys "succeeded" in ~2s but ran OLD code (every fix
+# landed one commit behind). Bump apps/client-portal/.deploy-trigger to force a
+# real rebuild.
+COPY apps/client-portal/.deploy-trigger ./.deploy-trigger
+ARG CACHE_BUST=unset
+RUN echo "build for: ${CACHE_BUST}" && cat ./.deploy-trigger
 COPY apps/client-portal .
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
