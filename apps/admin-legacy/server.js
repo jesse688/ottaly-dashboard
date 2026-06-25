@@ -9327,12 +9327,28 @@ app.get('/api/pv/workspace-leads', async (req, res) => {
 });
 
 // ── Admin — workspaces ─────────────────────────────────────
+// Returns the LIVE PlusVibe workspace list so the admin "PlusVibe Workspaces"
+// grid always reflects PV (new workspaces appear automatically). Normalizes every
+// shape PV may return — bare array, { workspaces: [...] }, or { data: [...] } —
+// and every id/name field variant, to a flat [{ id, name }]. Previously this piped
+// the raw PV response straight through; when PV wraps the list in an object the
+// frontend's `Array.isArray(ws) ? ws : []` collapsed to empty / stale, so newly
+// added workspaces never showed up.
 app.get('/api/admin/workspaces', requireAdmin, async (req, res) => {
   try {
     const r = await fetch('https://api.plusvibe.ai/api/v1/workspaces', {
       headers: { 'x-api-key': PLUSVIBE_KEY }
     });
-    res.json(await r.json());
+    const data = await r.json();
+    if (!r.ok) return res.status(r.status).json({ error: data?.error || 'Failed to fetch workspaces' });
+    const list = Array.isArray(data) ? data
+               : Array.isArray(data?.workspaces) ? data.workspaces
+               : Array.isArray(data?.data) ? data.data
+               : [];
+    const workspaces = list
+      .map(w => ({ id: w.id || w._id || w.workspace_id, name: w.name || w.workspace_name || w.title }))
+      .filter(w => w.id);
+    res.json(workspaces);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
