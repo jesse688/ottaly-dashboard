@@ -78,7 +78,22 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     [session.workspaceId, lead.email]
   )
   const subject = ctx.rows[0]?.subject ?? 'Re: your enquiry'
-  const eaccount = ctx.rows[0]?.eaccount ?? ctx.rows[0]?.to_email ?? undefined
+  // Sending mailbox (the reply FROM). portal_emails.eaccount can be NULL for
+  // PV-ingested rows, which made PlusVibe reject the reply with
+  // pv_400 "from is required". Fall back to unibox_replies.mailbox_email — the
+  // mailbox that RECEIVED the lead's reply (set by both ingest paths from
+  // primary_to_email_address), i.e. exactly the address we should reply from.
+  let eaccount = ctx.rows[0]?.eaccount ?? ctx.rows[0]?.to_email ?? undefined
+  if (!eaccount) {
+    const mb = await pool.query(
+      `SELECT mailbox_email, sender_email FROM unibox_replies
+        WHERE workspace_id = $1 AND lower(lead_email) = lower($2)
+          AND mailbox_email IS NOT NULL AND mailbox_email <> ''
+        ORDER BY received_at DESC LIMIT 1`,
+      [session.workspaceId, lead.email]
+    ).catch(() => ({ rows: [] as { mailbox_email?: string; sender_email?: string }[] }))
+    eaccount = mb.rows[0]?.mailbox_email || undefined
+  }
   const inboundId: string | null = ctx.rows[0]?.id ?? null
   // Detect provider by ID prefix — unibox_/pv_ = PlusVibe, pure numeric = Bison.
   // (PlusVibe is the live source now; pv_ rows come from the pv-reconcile cron.)
@@ -137,15 +152,23 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // lead email — our DB stores a synthetic id (unibox_<id> / pv_<message_id>) that
     // PV's reply API rejects, plus a possibly-NULL eaccount.
     const pv = await getPlusVibeInbound(session.workspaceId, lead.email)
-    send = await sendPlusVibeReply({
-      workspaceId: session.workspaceId,
-      replyToId: pv?.id ?? inboundId.replace(/^(unibox_|pv_)/, ''),
-      subject: subject,
-      from: pv?.from || eaccount,
-      to: toList,
-      body: html,
-      cc: ccList || undefined,
-    })
+    const fromMailbox = pv?.from || eaccount
+    if (!fromMailbox) {
+      // No resolvable sending mailbox anywhere → PlusVibe would reject with
+      // pv_400 "from is required". Don't attempt; surface a clear reason so the
+      // reply is flagged for manual send instead of a cryptic validation error.
+      send = { ok: false, reason: 'no-sending-mailbox-resolved' }
+    } else {
+      send = await sendPlusVibeReply({
+        workspaceId: session.workspaceId,
+        replyToId: pv?.id ?? inboundId.replace(/^(unibox_|pv_)/, ''),
+        subject: subject,
+        from: fromMailbox,
+        to: toList,
+        body: html,
+        cc: ccList || undefined,
+      })
+    }
   } else if (latestReplyId && !isNaN(latestReplyId)) {
     send = await sendReply({
       replyId: latestReplyId,
