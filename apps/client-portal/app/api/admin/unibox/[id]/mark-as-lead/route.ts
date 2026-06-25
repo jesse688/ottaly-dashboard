@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import pool, { ready } from '@/lib/db'
 import { getAdminSession } from '@/lib/auth'
 import { reconcileLeadCharges } from '@/lib/balance'
-import { addToBlocklist, bisonTeamForWorkspace, tagInBison } from '@/lib/bison'
+import { addToBlocklist, bisonTeamForWorkspace, tagInBison, BISON_INGEST_ENABLED } from '@/lib/bison'
 import { notifyClientOfLead } from '@/lib/email'
 import { enrichLeadFromContacts, applyCHRundownToLead, enrichUniboxReply } from '@/lib/enrich'
 import { enrichPhoneFromWebsite } from '@/lib/scrape-phone'
@@ -251,8 +251,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // doesn't show a scary "failed" on outside-Bison leads.
     // Tag in Bison: try with lead_bison_id first; if null (untracked reply), fall back
     // to email lookup inside tagInBison. 'na' only if there's no team mapping at all.
+    // Bison is retired (BISON_INGEST_ENABLED off) — its API 503s. Skip the tag +
+    // blocklist calls entirely when it's disabled so mark-as-lead doesn't spew
+    // 503/lead-not-found errors on every click. Suppression on PlusVibe is handled
+    // separately; nothing here depended on the Bison side succeeding.
     let tagState: 'done' | 'failed' | 'na' = 'na'
-    if (pvWorkspaceId) {
+    if (BISON_INGEST_ENABLED && pvWorkspaceId) {
       const teamId = bisonTeamForWorkspace(pvWorkspaceId)
       if (teamId) {
         const t = await tagInBison(teamId, reply.lead_bison_id, reply.lead_email)

@@ -10,9 +10,15 @@ declare global {
 function createPool() {
   const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    max: 5,
+    // pv-reconcile runs CONC=6 workspaces in parallel, each firing several queries
+    // (+ enrichReplyWithCH concurrently), so max:5 starved the pool and callers
+    // hit connectionTimeout → "timeout exceeded when trying to connect". Give more
+    // headroom; override via PG_POOL_MAX if the Postgres server's connection cap
+    // is tight.
+    max: Number(process.env.PG_POOL_MAX) || 10,
     idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000,
+    // Ride out brief contention before failing the acquire (was 5s).
+    connectionTimeoutMillis: 10000,
   })
   // A dropped idle connection (DB restart / network blip) emits 'error' on the
   // pool; without a listener Node kills the process. Log and let pg recover.
@@ -20,8 +26,12 @@ function createPool() {
   return pool
 }
 
+// ALWAYS reuse one pool per process (prod included). Previously the global was
+// only set off-prod, so each route/lambda instance could spin up its own pool of
+// N and multiply connections against the same Postgres — another path to
+// exhaustion. One shared pool per process is correct in all envs.
 const pool = globalThis._portalPgPool ?? createPool()
-if (process.env.NODE_ENV !== 'production') globalThis._portalPgPool = pool
+globalThis._portalPgPool = pool
 
 // Run migration once per process start
 async function runMigration() {

@@ -184,18 +184,35 @@ export async function GET(req: NextRequest) {
         // INTO a lead is still covered by the separate new-lead notification, so this
         // can't double-fire on the initial contact.
         if (isNew && isFreshNotify && !isOoo && !backfill) {
+          // "Engaged" = the client has ALREADY been told about this lead, so a NEW
+          // inbound reply is a genuine follow-up worth alerting on. Two signals:
+          //   (a) the client sent this lead a portal message, OR
+          //   (b) the lead is an established INTERESTED/MEETING_BOOKED lead.
+          // BUT: the reply that FIRST made them a lead must NOT re-notify here — the
+          // separate new-lead notification already covered it. That false re-fire
+          // happened when a delayed ingest (DB timeout) inserted the ORIGINAL reply
+          // late, still inside the 15-min window, as isNew → "Liam replied" when
+          // Liam's only message was the one that made him a lead. So require this
+          // reply to be NEWER than when the lead was established.
           const engaged = await pool.query(
-            `SELECT 1 WHERE
+            `SELECT
                EXISTS (SELECT 1 FROM portal_emails
                         WHERE workspace_id=$1 AND lower(lead_email)=lower($2)
-                          AND direction='OUT' AND sent_via_portal=true)
-               OR EXISTS (SELECT 1 FROM esp_leads
-                        WHERE workspace_id=$1 AND lower(email)=lower($2)
-                          AND (status IN ('INTERESTED','MEETING_BOOKED') OR label='INTERESTED'))
-               LIMIT 1`,
+                          AND direction='OUT' AND sent_via_portal=true) AS client_replied,
+               (SELECT MIN(COALESCE(first_replied_at, created_at)) FROM esp_leads
+                  WHERE workspace_id=$1 AND lower(email)=lower($2)
+                    AND (status IN ('INTERESTED','MEETING_BOOKED') OR label='INTERESTED')) AS lead_since`,
             [ws, lead]
-          ).catch(() => ({ rows: [] as unknown[] }))
-          if (engaged.rows.length) {
+          ).catch(() => ({ rows: [{ client_replied: false, lead_since: null }] }))
+          const row = (engaged.rows[0] ?? {}) as { client_replied?: boolean; lead_since?: string | null }
+          const leadSinceMs = row.lead_since ? Date.parse(row.lead_since) : NaN
+          // This reply post-dates the lead being established (a real follow-up)?
+          // Give a 2-min grace so the original reply + its own lead-stamp (which can
+          // land seconds apart) aren't treated as a follow-up of themselves.
+          const isFollowUp = !Number.isNaN(recvMs) && !Number.isNaN(leadSinceMs)
+            && recvMs > leadSinceMs + 2 * 60_000
+          const shouldNotify = row.client_replied === true || isFollowUp
+          if (shouldNotify) {
             const bodyText = e.body?.text ?? e.text_body ?? e.content_preview ?? ''
             // Notify about the ACTUAL sender of this reply (falls back to the lead
             // key only if the feed gave no from address). The outbound guard above
