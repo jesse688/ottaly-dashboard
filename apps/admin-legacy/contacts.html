@@ -1709,24 +1709,29 @@
         <!-- Which verification results to push -->
         <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:14px;margin-top:10px;">
           <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:8px;">Push these verification results</div>
-          <div style="display:flex;flex-direction:column;gap:7px;">
-            <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;color:#374151;">
-              <input type="checkbox" class="pushStatus" value="safe" checked style="accent-color:#10b981;width:15px;height:15px;"> ✅ Safe
+          <div style="display:flex;flex-direction:column;gap:11px;">
+            <label style="display:flex;align-items:flex-start;gap:9px;cursor:pointer;font-size:13px;color:#374151;">
+              <input type="checkbox" class="pushStatus" value="safe" checked style="accent-color:#10b981;width:15px;height:15px;margin-top:2px;">
+              <span>✅ Safe<br><span style="font-size:11px;color:#9ca3af;">Mailbox confirmed to exist — safe to send.</span></span>
             </label>
-            <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;color:#374151;">
-              <input type="checkbox" class="pushStatus" value="safe_catchall" checked style="accent-color:#10b981;width:15px;height:15px;"> 🪤 Safe (catch-all)
+            <label style="display:flex;align-items:flex-start;gap:9px;cursor:pointer;font-size:13px;color:#374151;">
+              <input type="checkbox" class="pushStatus" value="safe_catchall" checked style="accent-color:#10b981;width:15px;height:15px;margin-top:2px;">
+              <span>🪤 Safe (catch-all)<br><span style="font-size:11px;color:#9ca3af;">Domain accepts all mail, so the exact mailbox can't be confirmed — usually deliverable, slightly higher bounce risk.</span></span>
             </label>
-            <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;color:#374151;">
-              <input type="checkbox" class="pushStatus" value="unknown" style="accent-color:#6b7280;width:15px;height:15px;"> ❓ Unknown
+            <label style="display:flex;align-items:flex-start;gap:9px;cursor:pointer;font-size:13px;color:#374151;">
+              <input type="checkbox" class="pushStatus" value="unknown" style="accent-color:#6b7280;width:15px;height:15px;margin-top:2px;">
+              <span>❓ Unknown<br><span style="font-size:11px;color:#9ca3af;">Server didn't give a clear answer (timeout/greylist) — deliverability unverified.</span></span>
             </label>
-            <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;color:#374151;">
-              <input type="checkbox" class="pushStatus" value="risky" style="accent-color:#f59e0b;width:15px;height:15px;"> ⚠️ Risky
+            <label style="display:flex;align-items:flex-start;gap:9px;cursor:pointer;font-size:13px;color:#374151;">
+              <input type="checkbox" class="pushStatus" value="risky" style="accent-color:#f59e0b;width:15px;height:15px;margin-top:2px;">
+              <span>⚠️ Risky<br><span style="font-size:11px;color:#9ca3af;">Reachable but flagged (full inbox, role/disposable address) — higher bounce/complaint risk.</span></span>
             </label>
-            <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;color:#374151;">
-              <input type="checkbox" class="pushStatus" value="invalid" style="accent-color:#dc2626;width:15px;height:15px;"> ❌ Invalid
+            <label style="display:flex;align-items:flex-start;gap:9px;cursor:pointer;font-size:13px;color:#374151;">
+              <input type="checkbox" class="pushStatus" value="invalid" style="accent-color:#dc2626;width:15px;height:15px;margin-top:2px;">
+              <span>❌ Invalid<br><span style="font-size:11px;color:#9ca3af;">Mailbox does not exist — will hard-bounce. Pushing these hurts sender reputation.</span></span>
             </label>
           </div>
-          <p style="font-size:11px;color:#9ca3af;margin:8px 0 0 0;">Only contacts whose verification result is ticked will be pushed. Default is Safe + Safe (catch-all). Selecting Risky/Invalid/Unknown pushes lower-quality emails — use with care.</p>
+          <p style="font-size:11px;color:#9ca3af;margin:10px 0 0 0;">Only contacts whose verification result is ticked will be pushed. Default is Safe + Safe (catch-all). Selecting Risky/Invalid/Unknown pushes lower-quality emails — use with care.</p>
         </div>
 
         <!-- Enrichment rule notice -->
