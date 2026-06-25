@@ -15088,10 +15088,15 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
     const cooloffDate = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const campaignNameLc = (req.body.campaign_name || '').toString().trim().toLowerCase();
     const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, missingEnrichment: 0, missingName: 0 };
-    // Hard status gate — only verified-deliverable contacts may reach PlusVibe,
-    // even on this "push without verify" path. Anything unknown/risky/invalid/
-    // NULL is rejected so unsafe contacts can never leak into a campaign.
-    const PUSHABLE_STATUSES = new Set(['safe', 'safe_catchall']);
+    // Status gate. The user picks which verification-result buckets to push via
+    // the modal (allowed_statuses). Validate against the known vocabulary; default
+    // to the safe pair when absent so existing callers are unchanged. NULL/empty
+    // email_status is never pushable regardless of selection.
+    const KNOWN_STATUSES = ['safe', 'safe_catchall', 'unknown', 'risky', 'invalid'];
+    const reqStatuses = Array.isArray(req.body.allowed_statuses)
+      ? req.body.allowed_statuses.map(s => String(s).toLowerCase()).filter(s => KNOWN_STATUSES.includes(s))
+      : [];
+    const PUSHABLE_STATUSES = new Set(reqStatuses.length ? reqStatuses : ['safe', 'safe_catchall']);
     const contacts = allContacts.filter(c => {
       if (!PUSHABLE_STATUSES.has((c.email_status || '').toLowerCase())) { skipped.unsafe++; return false; }
       if (c.do_not_contact) { skipped.dnc++; return false; }
@@ -15283,11 +15288,16 @@ app.post('/api/admin/flag-free-domain-contacts', requireAdmin, async (req, res) 
 });
 
 // Shared contact→pushable filter (same rules as the PV path). Pure function.
-function filterPushableContacts(allContacts, { cooldownWorkspaceId, campaignName }) {
+function filterPushableContacts(allContacts, { cooldownWorkspaceId, campaignName, allowedStatuses }) {
   const cooloffDate = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const campaignNameLc = (campaignName || '').toString().trim().toLowerCase();
   const skipped = { unsafe: 0, dnc: 0, freeDomain: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, missingEnrichment: 0, missingName: 0 };
-  const PUSHABLE_STATUSES = new Set(['safe', 'safe_catchall']);
+  // Caller-chosen verification buckets; default to the safe pair when absent.
+  const KNOWN_STATUSES = ['safe', 'safe_catchall', 'unknown', 'risky', 'invalid'];
+  const validStatuses = Array.isArray(allowedStatuses)
+    ? allowedStatuses.map(s => String(s).toLowerCase()).filter(s => KNOWN_STATUSES.includes(s))
+    : [];
+  const PUSHABLE_STATUSES = new Set(validStatuses.length ? validStatuses : ['safe', 'safe_catchall']);
   const contacts = allContacts.filter(c => {
     if (isFreeDomain(c.email)) { skipped.freeDomain++; return false; }
     if (!PUSHABLE_STATUSES.has((c.email_status || '').toLowerCase())) { skipped.unsafe++; return false; }
@@ -15391,6 +15401,7 @@ app.post('/api/bison/push-contacts', requireSession, async (req, res) => {
     const cooldownWorkspaceId = req.body.cooldown_workspace_id || null;
     const { contacts, skipped } = filterPushableContacts(allContacts, {
       cooldownWorkspaceId, campaignName: req.body.campaign_name,
+      allowedStatuses: req.body.allowed_statuses,
     });
     console.log(`[pv-push] filtered ${allContacts.length} → ${contacts.length}`, skipped);
     if (contacts.length === 0) return res.json({ success: true, pushed: 0, total: 0, skipped });
@@ -17022,6 +17033,9 @@ function initPausedJobsTable(sq) {
   try { sq.exec(`ALTER TABLE paused_push_jobs ADD COLUMN resume_on_boot INTEGER DEFAULT 0`); } catch {}
   // loose: 1 for engine/loose pushes, so a resumed job keeps the looser gate.
   try { sq.exec(`ALTER TABLE paused_push_jobs ADD COLUMN loose INTEGER DEFAULT 0`); } catch {}
+  // allowed_statuses: JSON array of verification buckets the user chose to push,
+  // so a resumed job keeps the selection.
+  try { sq.exec(`ALTER TABLE paused_push_jobs ADD COLUMN allowed_statuses TEXT`); } catch {}
 }
 
 // On boot, restore paused jobs into the in-memory map so the UI shows them.
@@ -17032,6 +17046,8 @@ function restorePausedJobs(sq) {
     const rows = sq.prepare('SELECT * FROM paused_push_jobs').all();
     for (const row of rows) {
       const contactIds = JSON.parse(row.contact_ids || '[]');
+      let allowedStatuses;
+      try { allowedStatuses = row.allowed_statuses ? JSON.parse(row.allowed_statuses) : undefined; } catch { allowedStatuses = undefined; }
       pushJobs.set(row.id, {
         id: row.id,
         status: 'paused',
@@ -17039,6 +17055,7 @@ function restorePausedJobs(sq) {
         campaign_id: row.campaign_id,
         workspace_name: row.workspace_name || row.workspace_id,
         campaign_name: row.campaign_name || row.campaign_id,
+        allowedStatuses,
         total: contactIds.length,
         verified: row.verified_count || 0,
         pushed: row.pushed_count || 0,
@@ -17235,6 +17252,14 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
   const allowedProviders = (typeof emailProviders === 'string' ? emailProviders : '')
     .split(',').map(s => s.trim()).filter(p => p && p !== 'unknown');
 
+  // Which verification-result buckets to push (from the modal). Validate against
+  // the known vocabulary; default to the safe pair so older callers are unchanged.
+  const KNOWN_STATUSES = ['safe', 'safe_catchall', 'unknown', 'risky', 'invalid'];
+  const reqStatuses = Array.isArray(req.body.allowed_statuses)
+    ? req.body.allowed_statuses.map(s => String(s).toLowerCase()).filter(s => KNOWN_STATUSES.includes(s))
+    : [];
+  const allowedStatuses = reqStatuses.length ? reqStatuses : ['safe', 'safe_catchall'];
+
   const sq = req.app.locals.sqliteDb;
   const jobId = require('crypto').randomUUID();
   const job = {
@@ -17244,6 +17269,7 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
     campaign_name: campaign_name || campaign_id,
     workspace_id, campaign_id,
     allowedProviders,
+    allowedStatuses,
     loose: looseEffective,
     skipVerify: skipVerifyMode,
     excludeMicrosoft: excludeMicrosoft === 'true' || excludeMicrosoft === true,
@@ -17260,11 +17286,12 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
     try {
       initPausedJobsTable(sq);
       sq.prepare(`INSERT OR REPLACE INTO paused_push_jobs
-        (id, workspace_id, campaign_id, workspace_name, campaign_name, contact_ids, include_risky, max_age_days, loose)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        (id, workspace_id, campaign_id, workspace_name, campaign_name, contact_ids, include_risky, max_age_days, loose, allowed_statuses)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         jobId, workspace_id, campaign_id,
         workspace_name || workspace_id, campaign_name || campaign_id,
-        JSON.stringify(contact_ids), include_risky ? 1 : 0, max_age_days, looseMode ? 1 : 0
+        JSON.stringify(contact_ids), include_risky ? 1 : 0, max_age_days, looseMode ? 1 : 0,
+        JSON.stringify(allowedStatuses)
       );
     } catch (e) { console.warn('[push] Could not persist job to SQLite:', e.message); }
   }
@@ -17368,7 +17395,10 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
           if (verifyResults[c.id] === 'invalid')        { skipped.unsafe++; return false; }
           if (isFreeDomain(c.email))                    { skipped.unsafe++; return false; }
         } else {
-          if (verifyResults[c.id] !== 'safe' && verifyResults[c.id] !== 'safe_catchall') { skipped.unsafe++; return false; }
+          // User-chosen verification buckets (push modal). Default safe pair.
+          const allowedSet = (Array.isArray(job.allowedStatuses) && job.allowedStatuses.length)
+            ? job.allowedStatuses : ['safe', 'safe_catchall'];
+          if (!allowedSet.includes(verifyResults[c.id])) { skipped.unsafe++; return false; }
         }
         if (c.do_not_contact)               { skipped.dnc++; return false; }
         // Name requirement is a STALE Bison rule (Bison 422'd on empty names).
@@ -17898,7 +17928,10 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
           if (verifyResults[c.id] === 'invalid')        { skipped.unsafe++; return false; }
           if (isFreeDomain(c.email))                    { skipped.unsafe++; return false; }
         } else {
-          if (verifyResults[c.id] !== 'safe' && verifyResults[c.id] !== 'safe_catchall') { skipped.unsafe++; return false; }
+          // User-chosen verification buckets (push modal). Default safe pair.
+          const allowedSet = (Array.isArray(job.allowedStatuses) && job.allowedStatuses.length)
+            ? job.allowedStatuses : ['safe', 'safe_catchall'];
+          if (!allowedSet.includes(verifyResults[c.id])) { skipped.unsafe++; return false; }
         }
         if (c.do_not_contact) { skipped.dnc++; return false; }
         const pushed = Array.isArray(c.pushed_campaigns)

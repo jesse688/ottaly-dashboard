@@ -1706,6 +1706,29 @@
           </div>
         </div>
 
+        <!-- Which verification results to push -->
+        <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:14px;margin-top:10px;">
+          <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:8px;">Push these verification results</div>
+          <div style="display:flex;flex-direction:column;gap:7px;">
+            <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;color:#374151;">
+              <input type="checkbox" class="pushStatus" value="safe" checked style="accent-color:#10b981;width:15px;height:15px;"> ✅ Safe
+            </label>
+            <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;color:#374151;">
+              <input type="checkbox" class="pushStatus" value="safe_catchall" checked style="accent-color:#10b981;width:15px;height:15px;"> 🪤 Safe (catch-all)
+            </label>
+            <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;color:#374151;">
+              <input type="checkbox" class="pushStatus" value="unknown" style="accent-color:#6b7280;width:15px;height:15px;"> ❓ Unknown
+            </label>
+            <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;color:#374151;">
+              <input type="checkbox" class="pushStatus" value="risky" style="accent-color:#f59e0b;width:15px;height:15px;"> ⚠️ Risky
+            </label>
+            <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;color:#374151;">
+              <input type="checkbox" class="pushStatus" value="invalid" style="accent-color:#dc2626;width:15px;height:15px;"> ❌ Invalid
+            </label>
+          </div>
+          <p style="font-size:11px;color:#9ca3af;margin:8px 0 0 0;">Only contacts whose verification result is ticked will be pushed. Default is Safe + Safe (catch-all). Selecting Risky/Invalid/Unknown pushes lower-quality emails — use with care.</p>
+        </div>
+
         <!-- Enrichment rule notice -->
         <div style="background:#fefce8;border:1px solid #fde047;border-radius:8px;padding:14px;margin-top:10px;">
           <p style="font-size:12px;color:#854d0e;margin:0;">Contacts missing keywords or industry are always skipped.</p>
@@ -3638,8 +3661,12 @@
       const useN2b      = verifyFirst && document.getElementById('useN2b').checked;
       const saveFilter  = document.getElementById('saveFilterToCampaign').checked;
       const campMode    = (document.querySelector('input[name="pushCampMode"]:checked') || {}).value || 'existing';
+      // Which verification-result buckets to push (safe, safe_catchall, unknown,
+      // risky, invalid). Drives the backend status gate on both push paths.
+      const allowedStatuses = [...document.querySelectorAll('.pushStatus:checked')].map(el => el.value);
 
       if (!wsId) { errEl.textContent = 'Please select a workspace.'; errEl.style.display = ''; return; }
+      if (!allowedStatuses.length) { errEl.textContent = 'Select at least one verification result to push.'; errEl.style.display = ''; return; }
 
       const contactIds = [..._selectedIds];
       const wsName = pvWorkspaces.find(w => w._id === wsId)?.name || wsId;
@@ -3696,8 +3723,8 @@
       try {
         const endpoint = verifyFirst ? '/api/contacts/verify-and-push' : '/api/pv/push-contacts';
         const body = verifyFirst
-          ? { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, workspace_name: wsName, campaign_name: campName, include_risky: false, max_age_days: 90, emailProviders: pushProviders.join(','), excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '', use_n2b: useN2b }
-          : { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, campaign_name: campName, excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '' };
+          ? { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, workspace_name: wsName, campaign_name: campName, include_risky: false, max_age_days: 90, emailProviders: pushProviders.join(','), excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '', use_n2b: useN2b, allowed_statuses: allowedStatuses }
+          : { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, campaign_name: campName, excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '', allowed_statuses: allowedStatuses };
 
         const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         const data = await r.json();
@@ -4153,6 +4180,7 @@
       if (document.getElementById('emailGoogle').checked)  pushProviders.push('email_google');
       if (document.getElementById('emailOutlook').checked) pushProviders.push('email_outlook');
       if (document.getElementById('emailOther').checked)   pushProviders.push('email_other');
+      const allowedStatuses = [...document.querySelectorAll('.pushStatus:checked')].map(el => el.value);
 
       // Start a verify-only job (no push to PlusVibe)
       let jobId;
@@ -4167,6 +4195,7 @@
             emailProviders: pushProviders.join(','),
             excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '',
             use_n2b: useN2b,
+            allowed_statuses: allowedStatuses,
             verify_only: true,
           })
         });
