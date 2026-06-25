@@ -80,7 +80,21 @@ export async function POST(req: NextRequest) {
     // and NULL eaccount. Fall back to stripping the unibox_ prefix if the API lookup fails.
     const pvInbound = await getPlusVibeInbound(row.workspace_id, row.lead_email)
     const replyToId = pvInbound?.id ?? row.reply_to_id?.replace(/^unibox_/, '') ?? null
-    const from = pvInbound?.from || row.eaccount || ''
+    let from = pvInbound?.from || row.eaccount || ''
+    // Same fallback as the live reply route: recover the sending mailbox from
+    // unibox_replies.mailbox_email (the address that RECEIVED the lead's reply)
+    // when the inbound lookup + portal_emails.eaccount are both empty. Without
+    // this, the retry skips with 'no_from_account' — the exact pv_400 cause.
+    if (!from) {
+      const mb = await pool.query(
+        `SELECT mailbox_email FROM unibox_replies
+          WHERE workspace_id = $1 AND lower(lead_email) = lower($2)
+            AND mailbox_email IS NOT NULL AND mailbox_email <> ''
+          ORDER BY received_at DESC LIMIT 1`,
+        [row.workspace_id, row.lead_email]
+      ).catch(() => ({ rows: [] as { mailbox_email?: string }[] }))
+      from = mb.rows[0]?.mailbox_email || ''
+    }
     const toAddr = pvInbound?.to || row.to_email || row.lead_email
 
     if (dryRun) {
