@@ -1579,7 +1579,30 @@
             <input type="checkbox" id="verifyBeforePush" style="accent-color:#3b82f6;width:16px;height:16px;">
             Verify emails before pushing <span style="font-size:10px;background:#dbeafe;color:#1d4ed8;padding:1px 5px;border-radius:4px;margin-left:4px;">Recommended</span>
           </label>
-          <p style="font-size:11px;color:#9ca3af;margin:4px 0 0 26px;">Only safe/valid emails pushed. Runs in background — you can keep browsing. Skips emails verified in the last 90 days.</p>
+          <p style="font-size:11px;color:#9ca3af;margin:4px 0 0 26px;">Runs in background — you can keep browsing. Skips emails verified in the last 90 days.</p>
+        </div>
+
+        <!-- Which verification results to push -->
+        <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:14px;margin-top:10px;">
+          <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:8px;">Push these verification results</div>
+          <div style="display:flex;flex-direction:column;gap:7px;">
+            <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;color:#374151;">
+              <input type="checkbox" class="pushStatus" value="safe" checked style="accent-color:#10b981;width:15px;height:15px;"> ✅ Safe
+            </label>
+            <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;color:#374151;">
+              <input type="checkbox" class="pushStatus" value="safe_catchall" checked style="accent-color:#10b981;width:15px;height:15px;"> 🪤 Safe (catch-all)
+            </label>
+            <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;color:#374151;">
+              <input type="checkbox" class="pushStatus" value="unknown" style="accent-color:#6b7280;width:15px;height:15px;"> ❓ Unknown
+            </label>
+            <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;color:#374151;">
+              <input type="checkbox" class="pushStatus" value="risky" style="accent-color:#f59e0b;width:15px;height:15px;"> ⚠️ Risky
+            </label>
+            <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;color:#374151;">
+              <input type="checkbox" class="pushStatus" value="invalid" style="accent-color:#dc2626;width:15px;height:15px;"> ❌ Invalid
+            </label>
+          </div>
+          <p style="font-size:11px;color:#9ca3af;margin:8px 0 0 0;">Only contacts whose verification result is ticked will be pushed. Default is Safe + Safe (catch-all). Selecting Risky/Invalid/Unknown will push lower-quality emails — use with care.</p>
         </div>
 
         <!-- Enrichment rule notice -->
@@ -3297,9 +3320,13 @@
       const errEl = document.getElementById('pushError');
       const verifyFirst = document.getElementById('verifyBeforePush').checked;
       const saveFilter  = document.getElementById('saveFilterToCampaign').checked;
+      // Which verification-result buckets the user wants pushed (safe, safe_catchall,
+      // unknown, risky, invalid). Drives the backend status gate on BOTH paths.
+      const allowedStatuses = [...document.querySelectorAll('.pushStatus:checked')].map(el => el.value);
 
       if (!wsId) { errEl.textContent = 'Please select a workspace.'; errEl.style.display = ''; return; }
       if (!campId) { errEl.textContent = 'Please select a campaign.'; errEl.style.display = ''; return; }
+      if (!allowedStatuses.length) { errEl.textContent = 'Select at least one verification result to push.'; errEl.style.display = ''; return; }
 
       const contactIds = [..._selectedIds];
       const wsName = pvWorkspaces.find(w => w._id === wsId)?.name || wsId;
@@ -3308,8 +3335,8 @@
       try {
         const endpoint = verifyFirst ? '/api/contacts/verify-and-push' : '/api/pv/push-contacts';
         const body = verifyFirst
-          ? { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, workspace_name: wsName, campaign_name: campName, include_risky: false, max_age_days: 90 }
-          : { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, campaign_name: campName };
+          ? { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, workspace_name: wsName, campaign_name: campName, include_risky: false, max_age_days: 90, allowed_statuses: allowedStatuses }
+          : { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, campaign_name: campName, allowed_statuses: allowedStatuses };
 
         const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         const data = await r.json();

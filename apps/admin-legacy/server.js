@@ -10459,10 +10459,15 @@ app.post('/api/pv/push-contacts', async (req, res) => {
     const cooloffDate = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const campaignNameLc = (req.body.campaign_name || '').toString().trim().toLowerCase();
     const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, missingEnrichment: 0 };
-    // Hard status gate — only verified-deliverable contacts may reach PlusVibe,
-    // even on this "push without verify" path. Anything unknown/risky/invalid/
-    // NULL is rejected so unsafe contacts can never leak into a campaign.
-    const PUSHABLE_STATUSES = new Set(['safe', 'safe_catchall']);
+    // Status gate. The user picks which verification-result buckets to push via
+    // the modal (allowed_statuses). Validate against the known vocabulary and
+    // default to the safe pair when absent, so existing callers are unchanged.
+    // NULL/empty email_status is never pushable regardless of selection.
+    const KNOWN_STATUSES = ['safe', 'safe_catchall', 'unknown', 'risky', 'invalid'];
+    const reqStatuses = Array.isArray(req.body.allowed_statuses)
+      ? req.body.allowed_statuses.map(s => String(s).toLowerCase()).filter(s => KNOWN_STATUSES.includes(s))
+      : [];
+    const PUSHABLE_STATUSES = new Set(reqStatuses.length ? reqStatuses : ['safe', 'safe_catchall']);
     const contacts = allContacts.filter(c => {
       if (!PUSHABLE_STATUSES.has((c.email_status || '').toLowerCase())) { skipped.unsafe++; return false; }
       if (c.do_not_contact) { skipped.dnc++; return false; }
@@ -12075,6 +12080,9 @@ function initPausedJobsTable(sq) {
     verified_count INTEGER DEFAULT 0,
     pushed_count INTEGER DEFAULT 0
   )`);
+  // allowed_statuses (JSON array of verification buckets to push) — added later;
+  // ALTER is idempotent-guarded so existing DBs upgrade in place.
+  try { sq.exec(`ALTER TABLE paused_push_jobs ADD COLUMN allowed_statuses TEXT`); } catch {}
 }
 
 // On boot, restore paused jobs into the in-memory map so the UI shows them.
@@ -12085,6 +12093,8 @@ function restorePausedJobs(sq) {
     const rows = sq.prepare('SELECT * FROM paused_push_jobs').all();
     for (const row of rows) {
       const contactIds = JSON.parse(row.contact_ids || '[]');
+      let allowedStatuses;
+      try { allowedStatuses = row.allowed_statuses ? JSON.parse(row.allowed_statuses) : undefined; } catch { allowedStatuses = undefined; }
       pushJobs.set(row.id, {
         id: row.id,
         status: 'paused',
@@ -12092,6 +12102,7 @@ function restorePausedJobs(sq) {
         campaign_id: row.campaign_id,
         workspace_name: row.workspace_name || row.workspace_id,
         campaign_name: row.campaign_name || row.campaign_id,
+        allowedStatuses,
         total: contactIds.length,
         verified: row.verified_count || 0,
         pushed: row.pushed_count || 0,
@@ -12185,6 +12196,14 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
   const allowedProviders = (typeof emailProviders === 'string' ? emailProviders : '')
     .split(',').map(s => s.trim()).filter(p => p && p !== 'unknown');
 
+  // Which verification-result buckets to push (from the modal). Validate against
+  // the known vocabulary; default to the safe pair so older callers are unchanged.
+  const KNOWN_STATUSES = ['safe', 'safe_catchall', 'unknown', 'risky', 'invalid'];
+  const reqStatuses = Array.isArray(req.body.allowed_statuses)
+    ? req.body.allowed_statuses.map(s => String(s).toLowerCase()).filter(s => KNOWN_STATUSES.includes(s))
+    : [];
+  const allowedStatuses = reqStatuses.length ? reqStatuses : ['safe', 'safe_catchall'];
+
   const sq = req.app.locals.sqliteDb;
   const jobId = require('crypto').randomUUID();
   const job = {
@@ -12194,6 +12213,7 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
     campaign_name: campaign_name || campaign_id,
     workspace_id, campaign_id,
     allowedProviders,
+    allowedStatuses,
     total: contact_ids.length,
     skipped: 0, verified: 0, safe: 0, risky: 0, invalid: 0, unknown: 0,
     pushed: 0, progress: 0,
@@ -12207,11 +12227,12 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
     try {
       initPausedJobsTable(sq);
       sq.prepare(`INSERT OR REPLACE INTO paused_push_jobs
-        (id, workspace_id, campaign_id, workspace_name, campaign_name, contact_ids, include_risky, max_age_days)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        (id, workspace_id, campaign_id, workspace_name, campaign_name, contact_ids, include_risky, max_age_days, allowed_statuses)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         jobId, workspace_id, campaign_id,
         workspace_name || workspace_id, campaign_name || campaign_id,
-        JSON.stringify(contact_ids), include_risky ? 1 : 0, max_age_days
+        JSON.stringify(contact_ids), include_risky ? 1 : 0, max_age_days,
+        JSON.stringify(allowedStatuses)
       );
     } catch (e) { console.warn('[push] Could not persist job to SQLite:', e.message); }
   }
@@ -12286,8 +12307,15 @@ app.post('/api/contacts/verify-and-push', (req, res) => {
       const cooloffDate  = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
       const targetCampLc = (job.campaign_name || '').trim().toLowerCase();
 
+      // Which verification results the user chose to push (from the modal).
+      // Falls back to the safe pair for older/resumed jobs without a selection.
+      const allowedStatusSet = new Set(
+        Array.isArray(job.allowedStatuses) && job.allowedStatuses.length
+          ? job.allowedStatuses
+          : ['safe', 'safe_catchall']
+      );
       const passesFilter = (c) => {
-        if (verifyResults[c.id] !== 'safe' && verifyResults[c.id] !== 'safe_catchall') { skipped.unsafe++; return false; }
+        if (!allowedStatusSet.has(verifyResults[c.id])) { skipped.unsafe++; return false; }
         if (c.do_not_contact)               { skipped.dnc++; return false; }
         // True-MX provider gate. By the time a contact reaches here it has been
         // verified, so c.mx_provider is its real provider (set by verifyOne /
@@ -12744,8 +12772,15 @@ app.post('/api/contacts/push-jobs/:id/resume', async (req, res) => {
       const cooloffDate = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
       const targetCampLc = (job.campaign_name || '').trim().toLowerCase();
 
+      // Which verification results the user chose to push (from the modal).
+      // Falls back to the safe pair for older/resumed jobs without a selection.
+      const allowedStatusSet = new Set(
+        Array.isArray(job.allowedStatuses) && job.allowedStatuses.length
+          ? job.allowedStatuses
+          : ['safe', 'safe_catchall']
+      );
       const passesFilter = (c) => {
-        if (verifyResults[c.id] !== 'safe' && verifyResults[c.id] !== 'safe_catchall') { skipped.unsafe++; return false; }
+        if (!allowedStatusSet.has(verifyResults[c.id])) { skipped.unsafe++; return false; }
         if (c.do_not_contact) { skipped.dnc++; return false; }
         const pushed = Array.isArray(c.pushed_campaigns)
           ? c.pushed_campaigns
