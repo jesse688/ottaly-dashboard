@@ -13733,16 +13733,34 @@ app.get('/api/pv/workspace-leads', requireSession, async (req, res) => {
 });
 
 // ── Admin — workspaces ─────────────────────────────────────
+// Returns the LIVE PlusVibe workspace list so the admin "PlusVibe Workspaces"
+// grid always reflects PV (new workspaces appear automatically). Normalizes every
+// shape PV may return — bare array, { workspaces: [...] }, or { data: [...] } —
+// and every id/name field variant, to a flat [{ id, name }]. Previously this piped
+// the raw PV response straight through; when PV wraps the list in an object the
+// frontend's `Array.isArray(ws) ? ws : []` collapsed to empty / stale, so newly
+// added workspaces never showed up.
 app.get('/api/admin/workspaces', requireAdmin, async (req, res) => {
   try {
-    // Pull in any workspaces created directly in Bison before listing, so the
-    // grid always reflects reality (new workspaces appear without a code change).
-    await syncBisonTeamsFromLive();
-    // admin.html expects a bare array of {id,name}, so unwrap + normalise.
-    const raw = listBisonWorkspaces();
-    const list = Array.isArray(raw) ? raw : (raw?.data || []);
-    res.json(list.map(w => ({ id: String(w.id), name: w.name })));
-  } catch (err) { res.status(502).json({ error: err.message }); }
+    // Pull the LIVE PlusVibe workspace list (Bison is retired). admin.html expects
+    // a bare array of {id,name}; PV may return a bare array, { workspaces: [...] },
+    // or { data: [...] } with id/_id/workspace_id — normalise every shape so new PV
+    // workspaces appear automatically. (Replaces the old Bison-team sync, which is
+    // why new PV workspaces never showed on the grid.)
+    const r = await fetch('https://api.plusvibe.ai/api/v1/workspaces', {
+      headers: { 'x-api-key': PLUSVIBE_KEY }
+    });
+    const data = await r.json();
+    if (!r.ok) return res.status(r.status).json({ error: data?.error || 'Failed to fetch workspaces' });
+    const list = Array.isArray(data) ? data
+               : Array.isArray(data?.workspaces) ? data.workspaces
+               : Array.isArray(data?.data) ? data.data
+               : [];
+    const workspaces = list
+      .map(w => ({ id: w.id || w._id || w.workspace_id, name: w.name || w.workspace_name || w.title }))
+      .filter(w => w.id);
+    res.json(workspaces);
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ── Admin — clients ────────────────────────────────────────
