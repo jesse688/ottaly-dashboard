@@ -207,6 +207,12 @@ export function AdminUniboxClient() {
   const [campaigns, setCampaigns] = useState<{ id: number; name: string; status?: string | null }[]>([])
   const [assocPick, setAssocPick] = useState<string>('')
   const [assocSuggest, setAssocSuggest] = useState<{ id: number | null; reason: string }>({ id: null, reason: '' })
+  // Assign-to-lead: re-key a reply onto an EXISTING lead (colleague replied from
+  // a different address than the original lead).
+  const [assignOpen, setAssignOpen] = useState(false)
+  const [assignLoading, setAssignLoading] = useState(false)
+  const [assignLeads, setAssignLeads] = useState<{ id: string; email: string; first_name?: string; last_name?: string; company_name?: string }[]>([])
+  const [assignPick, setAssignPick] = useState<string>('')
 
   // Warm-up tag filter panel
   const [showWarmup, setShowWarmup] = useState(false)
@@ -439,6 +445,39 @@ export function AdminUniboxClient() {
       const name = campaigns.find(c => String(c.id) === assocPick)?.name ?? assocPick
       setMsg(`Associated with campaign "${name}".`)
       setAssocOpen(false)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // Open the assign-to-lead panel: load candidate leads in this workspace.
+  async function openAssign() {
+    if (!selected) return
+    setAssignOpen(true); setAssignLoading(true); setMsg(''); setAssignLeads([]); setAssignPick('')
+    try {
+      const r = await fetch(`/api/admin/unibox/${selected.id}/assign-to-lead`)
+      const d = await r.json() as { ok?: boolean; error?: string; leads?: { id: string; email: string; first_name?: string; last_name?: string; company_name?: string }[] }
+      if (!r.ok || !d.ok) { setMsg(d.error ?? 'Could not load leads'); setAssignOpen(false); return }
+      setAssignLeads(d.leads ?? [])
+    } finally {
+      setAssignLoading(false)
+    }
+  }
+
+  async function saveAssign() {
+    if (!selected || !assignPick) return
+    setBusy(true); setMsg('')
+    try {
+      const r = await fetch(`/api/admin/unibox/${selected.id}/assign-to-lead`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetEmail: assignPick }),
+      })
+      const d = await r.json() as { ok?: boolean; error?: string }
+      if (!r.ok || !d.ok) { setMsg(d.error ?? 'Could not assign'); return }
+      setMsg(`Assigned to ${assignPick} — it now threads under that lead on the client dashboard.`)
+      setAssignOpen(false)
+      await load(folder, undefined, activeQuery, category, zoomClient)
     } finally {
       setBusy(false)
     }
@@ -866,7 +905,61 @@ export function AdminUniboxClient() {
                       >
                         Associate to campaign
                       </button>
+                      <button
+                        onClick={openAssign}
+                        disabled={busy}
+                        title="Thread this reply under an existing lead (a colleague replied from a different address than the original lead)"
+                        className="px-4 py-2 border border-indigo-200 text-indigo-700 text-sm font-medium rounded-lg hover:bg-indigo-50 disabled:opacity-50"
+                      >
+                        Assign to lead
+                      </button>
                     </div>
+
+                    {/* Assign-to-lead panel — re-key onto an existing lead's email */}
+                    {assignOpen && (
+                      <div className="mt-4 rounded-xl border border-indigo-200 bg-indigo-50/40 p-4">
+                        <p className="text-sm font-semibold text-gray-900">Assign to existing lead</p>
+                        <p className="text-xs text-gray-500 mt-0.5">
+                          Threads this reply (from <span className="font-medium">{selected.lead_email}</span>) under the lead you pick, so it shows on the client dashboard. Same-company leads are listed first.
+                        </p>
+                        {assignLoading ? (
+                          <p className="text-xs text-gray-500 mt-3">Loading leads…</p>
+                        ) : assignLeads.length === 0 ? (
+                          <p className="text-xs text-gray-500 mt-3">No leads found in this workspace.</p>
+                        ) : (
+                          <>
+                            <select
+                              value={assignPick}
+                              onChange={e => setAssignPick(e.target.value)}
+                              className="block w-full mt-2 border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white"
+                            >
+                              <option value="">Choose a lead…</option>
+                              {assignLeads.map(l => (
+                                <option key={l.id} value={l.email}>
+                                  {[l.first_name, l.last_name].filter(Boolean).join(' ') || l.email}{l.company_name ? ` · ${l.company_name}` : ''} — {l.email}
+                                </option>
+                              ))}
+                            </select>
+                            <div className="flex items-center gap-2 mt-3">
+                              <button
+                                onClick={saveAssign}
+                                disabled={busy || !assignPick}
+                                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg disabled:opacity-50"
+                              >
+                                {busy ? 'Assigning…' : 'Assign to lead'}
+                              </button>
+                              <button
+                                onClick={() => setAssignOpen(false)}
+                                disabled={busy}
+                                className="px-4 py-2 border border-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 disabled:opacity-50"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )}
 
                     {/* Associate-to-campaign panel */}
                     {assocOpen && (
