@@ -258,9 +258,12 @@ export function AdminClientsClient() {
 
   // ── Clients ──
   async function handleCreate(e: FormEvent) {
-    e.preventDefault(); setSaving(true); setError('')
+    e.preventDefault(); setError('')
+    // workspaceId can come from the dropdown OR the manual paste field — require one.
+    if (!form.workspaceId.trim()) { setError('Pick a workspace or paste a PlusVibe workspace ID.'); return }
+    setSaving(true)
     try {
-      const res = await fetch('/api/admin/clients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyName: form.companyName, workspaceId: form.workspaceId, costPerLead: Number(form.costPerLead) || 0, lowLeadsThreshold: Number(form.lowLeadsThreshold) || 5 }) })
+      const res = await fetch('/api/admin/clients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyName: form.companyName, workspaceId: form.workspaceId.trim(), costPerLead: Number(form.costPerLead) || 0, lowLeadsThreshold: Number(form.lowLeadsThreshold) || 5 }) })
       const data = await res.json() as { error?: string }
       if (!res.ok) { setError(data.error ?? 'Error'); return }
       setForm({ username:'', code:'', email:'', workspaceId:'', companyName:'', contactName:'', costPerLead:'', lowLeadsThreshold:'5' }); setShowForm(false)
@@ -876,10 +879,16 @@ export function AdminClientsClient() {
                 <p className="text-xs text-gray-500 mb-4">A client is a workspace. Add the people who log in afterwards with the <span className="font-medium">Users</span> button.</p>
                 <form onSubmit={handleCreate} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div><label className="block text-xs text-gray-500 mb-1">Workspace</label>
-                    <select required value={form.workspaceId} onChange={e => { const ws=workspaces.find(w=>w.id===e.target.value); setForm(f=>({...f,workspaceId:e.target.value,companyName:f.companyName||(ws?.name??'')})) }} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 bg-white">
+                    <select value={form.workspaceId} onChange={e => { const ws=workspaces.find(w=>w.id===e.target.value); setForm(f=>({...f,workspaceId:e.target.value,companyName:f.companyName||(ws?.name??'')})) }} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 bg-white">
                       <option value="">Select workspace…</option>
                       {workspaces.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
                     </select>
+                    {/* Manual fallback: a brand-new PlusVibe workspace with no data
+                        yet won't appear in the dropdown, so let the admin paste its
+                        ID directly. Either field satisfies the required workspaceId. */}
+                    <input value={form.workspaceId} onChange={e => setForm(f => ({...f, workspaceId: e.target.value.trim()}))}
+                      placeholder="…or paste a PlusVibe workspace ID"
+                      className="w-full mt-2 px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400 font-mono" />
                   </div>
                   <div><label className="block text-xs text-gray-500 mb-1">Company name</label><input required value={form.companyName} onChange={e => setForm(f => ({...f,companyName:e.target.value}))} placeholder="Acme Corp" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
                   <div><label className="block text-xs text-gray-500 mb-1">Cost per lead (£)</label><input type="number" min="0" step="0.01" value={form.costPerLead} onChange={e => setForm(f=>({...f,costPerLead:e.target.value}))} placeholder="0" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm outline-none focus:border-indigo-400" /></div>
