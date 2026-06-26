@@ -4,7 +4,6 @@ import pool, { ready } from '@/lib/db'
 import { sendPlusVibeReply, getPlusVibeInbound } from '@/lib/plusvibe'
 import { notifyAdmin } from '@/lib/notify'
 import { getLockedLeadIds } from '@/lib/balance'
-import { sendEmailReply } from '@/lib/email'
 
 // POST — client replies to a lead.
 // 1. Persist the outgoing message to portal_emails (so it shows in the thread immediately)
@@ -129,37 +128,19 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   ).catch(err => console.error('[reply] persist failed:', err))
 
   // 2. Attempt live send.
-  // PlusVibe is the ONLY send path now — Bison/EmailBison is fully retired (its
-  // API returns 503). We do NOT branch on the inbound id prefix any more: older
-  // replies have a plain-numeric Bison-era id, and routing those to Bison was
-  // exactly what made client replies fail with "Bison POST .../reply -> 503".
-  // Every live send goes through PlusVibe; attachments still go via Resend
-  // (PlusVibe's reply API doesn't carry attachments).
+  // PlusVibe is the ONLY send path for a client reply. Resend is NOT used to send
+  // mail to leads — it leaked Ottaly's identity (a lead saw "Ottaly" reply to
+  // their cold email) and is now strictly for internal/notification email.
+  // Bison/EmailBison is fully retired. We do NOT branch on the inbound id prefix.
+  //
+  // ATTACHMENTS: PlusVibe's reply API doesn't carry attachments in our current
+  // integration, so a reply WITH an attachment does NOT auto-send — it's flagged
+  // for manual send (the team gets notified with the full content). Better to send
+  // it by hand from the client's mailbox than to auto-send from the wrong identity.
   let send: { ok: boolean; reason?: string } = { ok: false, reason: 'no-reply-id-in-cache' }
   if (attachments.length > 0) {
-    // Attachments can't go through PlusVibe's reply API, so they send via Resend.
-    // CRITICAL: send from the CLIENT'S mailbox (the address the lead was contacted
-    // from), never Ottaly's info@ — a lead must never see "Ottaly" reply to their
-    // cold email. Resolve the freshest mailbox: the PV inbound, else the eaccount
-    // we already looked up. If NONE resolves, refuse to send (flag for manual)
-    // rather than leak Ottaly's identity.
-    const pv = await getPlusVibeInbound(session.workspaceId, lead.email)
-    const fromMailbox = pv?.from || eaccount
-    if (!fromMailbox) {
-      send = { ok: false, reason: 'no-client-mailbox-resolved' }
-      console.error('[reply] refusing attachment send — no client mailbox to send AS (would leak Ottaly identity)')
-    } else {
-      send = await sendEmailReply({
-        to: toList,
-        cc: ccList || undefined,
-        subject: subject.startsWith('Re:') ? subject : `Re: ${subject}`,
-        html,
-        text: body,
-        from: fromMailbox,
-        attachments,
-      })
-      if (!send.ok) console.error('[reply] resend-with-attachments failed:', send.reason)
-    }
+    send = { ok: false, reason: 'has-attachment-send-manually' }
+    console.warn('[reply] attachment reply — not auto-sent (PlusVibe has no attachment path); flagged for manual send')
   } else {
     // Resolve the REAL PlusVibe email id + sending mailbox from the unibox API by
     // lead email. Our DB id may be synthetic (unibox_/pv_) or a stale numeric
