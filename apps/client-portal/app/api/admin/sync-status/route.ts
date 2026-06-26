@@ -46,7 +46,12 @@ export async function GET() {
     // data flowing" signal) OR a logged webhook event, whichever is newer.
     // Polling is SCHEDULED, so a long gap there IS a real problem.
     const lastWebhookLog = lastSyncs.rows.find(r => r.source === 'plusvibe-webhook' || r.source === 'bison-webhook')
-    const lastPolling = lastSyncs.rows.find(r => r.source === 'bison-polling' || r.source === 'plusvibe-polling')
+    // The REAL ingest path is the pv-reconcile cron (source='pv-reconcile'), which
+    // should run every ~1 min. The old names ('plusvibe-polling'/'bison-polling')
+    // never matched, so polling always showed "unknown" and a stalled ingest was
+    // invisible. Track pv-reconcile (plus legacy names) as the polling signal.
+    const lastPolling = lastSyncs.rows.find(r =>
+      r.source === 'pv-reconcile' || r.source === 'bison-polling' || r.source === 'plusvibe-polling')
 
     const lastInbound = await pool.query(
       `SELECT MAX(COALESCE(timestamp_created, synced_at)) AS last_in FROM portal_emails WHERE direction = 'IN'`
@@ -66,15 +71,22 @@ export async function GET() {
       webhookStatus = ageHrs < 24 ? 'healthy' : ageHrs < 72 ? 'idle' : 'stale'
     }
 
+    // pv-reconcile runs every ~1 min, so anything over 30 min silent is a real
+    // problem — replies are piling up in PlusVibe and not reaching the unibox.
+    let pollingAgeMin: number | null = null
     if (lastPolling?.last_finished) {
-      const age = (now.getTime() - new Date(lastPolling.last_finished).getTime()) / 1000 / 60
-      pollingStatus = age < 60 ? 'healthy' : age < 180 ? 'stale' : 'down'
+      pollingAgeMin = (now.getTime() - new Date(lastPolling.last_finished).getTime()) / 1000 / 60
+      pollingStatus = pollingAgeMin < 30 ? 'healthy' : pollingAgeMin < 120 ? 'stale' : 'down'
+    } else {
+      // Never logged at all → treat as down so a broken cron can't hide as "unknown".
+      pollingStatus = 'down'
     }
 
-    if (pollingStatus === 'down') {
-      alert = '⚠️ Polling hasn’t run recently — check the sync cron'
-    } else if (webhookStatus === 'stale' && pollingStatus !== 'healthy') {
-      alert = '⚠️ No replies have synced in days — verify the Bison webhook'
+    if (pollingStatus === 'down' || pollingStatus === 'stale') {
+      const mins = pollingAgeMin == null ? 'a while' : `${Math.round(pollingAgeMin)} min`
+      alert = `⚠️ Reply ingest hasn’t run in ${mins} — replies may be delayed. Check the pv-reconcile cron (cron-job.org).`
+    } else if (webhookStatus === 'stale') {
+      alert = '⚠️ No replies have synced in days — verify the PlusVibe ingest.'
     }
 
     return NextResponse.json({

@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
     // Join the lead record (esp_leads + its raw) for the alert's contact details.
     const claimed = await client.query(
       `SELECT u.id, u.subject, u.body_preview, u.raw, u.workspace_id, u.lead_email, u.bison_team_id,
-              u.is_forwarded,
+              u.is_forwarded, u.classify_attempts,
               c.company_name,
               l.first_name, l.last_name, l.company_name AS lead_company,
               l.raw->>'job_title'           AS job_title,
@@ -56,7 +56,7 @@ export async function GET(req: NextRequest) {
            WHERE e.workspace_id = u.workspace_id AND lower(e.email) = lower(u.lead_email)
            ORDER BY (e.source = 'bison') DESC, e.updated_at DESC LIMIT 1
          ) l ON TRUE
-        WHERE u.classify_state = 'pending'
+        WHERE u.classify_state IN ('pending', 'failed')
           AND (${force ? 'TRUE' : '(u.classify_next_at IS NULL OR u.classify_next_at <= NOW())'})
         ORDER BY u.received_at ASC
         LIMIT 50
@@ -204,16 +204,24 @@ export async function GET(req: NextRequest) {
           unsubQueue.push({ workspaceId: String(row.workspace_id), email: String(row.lead_email) })
         }
       } catch (err) {
-        // Backoff; give up after 3 attempts.
+        // NEVER permanently give up on a reply — that left replies stuck invisible
+        // when Gemini had an outage. Two guarantees here:
+        //  1. The row stays 'pending' (retryable) forever, with an escalating
+        //     backoff CAPPED at 6h, so it keeps retrying slowly until Gemini
+        //     recovers — instead of dying at 3 attempts.
+        //  2. A reply in a hidden intake folder is surfaced to Review, so even if
+        //     it never classifies, an operator still SEES it.
         await client.query(
           `UPDATE unibox_replies
               SET classify_attempts = classify_attempts + 1,
-                  classify_next_at = NOW() + (interval '5 minutes' * (classify_attempts + 1)),
-                  classify_state = CASE WHEN classify_attempts + 1 >= 3 THEN 'failed' ELSE 'pending' END,
+                  classify_next_at = NOW() + LEAST(interval '6 hours',
+                                                   interval '5 minutes' * (classify_attempts + 1)),
+                  classify_state = 'pending',
+                  folder = CASE WHEN folder IN ('inbox','unmapped') THEN 'review' ELSE folder END,
                   ai_reasoning = $2,
                   updated_at = NOW()
             WHERE id = $1`,
-          [id, `classify error: ${String(err).slice(0, 300)}`]
+          [id, `classify error (attempt ${(row.classify_attempts ?? 0) + 1}): ${String(err).slice(0, 280)}`]
         )
         summary.failed++
       }

@@ -560,7 +560,7 @@ export function AdminClientsClient() {
               <span className="text-slate-400">Webhook: {syncStatus.status.webhook}</span>
               <span className="text-slate-500">·</span>
               <span className={`w-2 h-2 rounded-full ${dot(syncStatus.status.polling)}`}></span>
-              <span className="text-slate-400">Polling: {syncStatus.status.polling}</span>
+              <span className="text-slate-400">Ingest: {syncStatus.status.polling}</span>
             </div>
           )
         })()}
@@ -625,6 +625,15 @@ export function AdminClientsClient() {
           <button onClick={handleLogout} className="text-slate-400 hover:text-white text-xs">Sign out</button>
         </div>
       </header>
+
+      {/* Ingest-stall banner — the pv-reconcile cron should run every ~1 min. If it
+          hasn't logged a success recently, replies are piling up in PlusVibe and
+          NOT reaching the unibox. Surface it loudly so it's never silent. */}
+      {syncStatus?.status?.alert && (
+        <div className="bg-red-600 text-white text-sm px-4 py-2.5 flex items-center gap-2">
+          <span className="font-semibold">{syncStatus.status.alert}</span>
+        </div>
+      )}
 
       {/* Unibox send-failure banner — surfaces ANY reply that failed to send live. */}
       {(testAlert || (unsent.count > 0 && !bannerDismissed)) && (
