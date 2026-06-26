@@ -1,7 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { getSession } from '@/lib/auth'
 import pool, { ready } from '@/lib/db'
-import { sendReply } from '@/lib/bison'
 import { sendPlusVibeReply, getPlusVibeInbound } from '@/lib/plusvibe'
 import { notifyAdmin } from '@/lib/notify'
 import { getLockedLeadIds } from '@/lib/balance'
@@ -95,10 +94,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     eaccount = mb.rows[0]?.mailbox_email || undefined
   }
   const inboundId: string | null = ctx.rows[0]?.id ?? null
-  // Detect provider by ID prefix — unibox_/pv_ = PlusVibe, pure numeric = Bison.
-  // (PlusVibe is the live source now; pv_ rows come from the pv-reconcile cron.)
-  const isPlusVibe = /^(unibox_|pv_)/.test(inboundId ?? '')
-  const latestReplyId = !isPlusVibe && inboundId ? parseInt(inboundId, 10) : null
 
   // 1. Persist outgoing message (synthetic id so it's stable + idempotent-ish).
   const outId = `portal-${id}-${Date.now()}`
@@ -134,8 +129,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   ).catch(err => console.error('[reply] persist failed:', err))
 
   // 2. Attempt live send.
-  // With attachments → Bison doesn't support them, so send directly via Resend.
-  // Without attachments → prefer Bison (stays in the same email thread).
+  // PlusVibe is the ONLY send path now — Bison/EmailBison is fully retired (its
+  // API returns 503). We do NOT branch on the inbound id prefix any more: older
+  // replies have a plain-numeric Bison-era id, and routing those to Bison was
+  // exactly what made client replies fail with "Bison POST .../reply -> 503".
+  // Every live send goes through PlusVibe; attachments still go via Resend
+  // (PlusVibe's reply API doesn't carry attachments).
   let send: { ok: boolean; reason?: string } = { ok: false, reason: 'no-reply-id-in-cache' }
   if (attachments.length > 0) {
     send = await sendEmailReply({
@@ -147,21 +146,26 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       attachments,
     })
     if (!send.ok) console.error('[reply] resend-with-attachments failed:', send.reason)
-  } else if (isPlusVibe && inboundId) {
+  } else {
     // Resolve the REAL PlusVibe email id + sending mailbox from the unibox API by
-    // lead email — our DB stores a synthetic id (unibox_<id> / pv_<message_id>) that
-    // PV's reply API rejects, plus a possibly-NULL eaccount.
+    // lead email. Our DB id may be synthetic (unibox_/pv_) or a stale numeric
+    // Bison id — neither is what PV's reply API wants, so we always look up the
+    // live PV id by the lead's address.
     const pv = await getPlusVibeInbound(session.workspaceId, lead.email)
     const fromMailbox = pv?.from || eaccount
-    if (!fromMailbox) {
-      // No resolvable sending mailbox anywhere → PlusVibe would reject with
-      // pv_400 "from is required". Don't attempt; surface a clear reason so the
-      // reply is flagged for manual send instead of a cryptic validation error.
-      send = { ok: false, reason: 'no-sending-mailbox-resolved' }
+    // Strip any known prefix; if it's a plain-numeric Bison id we can't use it as
+    // a PV reply_to_id, so prefer the freshly-resolved PV id.
+    const strippedId = (inboundId ?? '').replace(/^(unibox_|pv_)/, '')
+    const replyToId = pv?.id || (/^[a-f0-9]{8,}$/i.test(strippedId) ? strippedId : '')
+    if (!fromMailbox || !replyToId) {
+      // Couldn't resolve a PV thread to reply to (no live PV email for this lead,
+      // or no sending mailbox). Surface a clear reason so it's flagged for manual
+      // send instead of a cryptic error or a dead-Bison attempt.
+      send = { ok: false, reason: !replyToId ? 'no-plusvibe-thread-resolved' : 'no-sending-mailbox-resolved' }
     } else {
       send = await sendPlusVibeReply({
         workspaceId: session.workspaceId,
-        replyToId: pv?.id ?? inboundId.replace(/^(unibox_|pv_)/, ''),
+        replyToId,
         subject: subject,
         from: fromMailbox,
         to: toList,
@@ -169,14 +173,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         cc: ccList || undefined,
       })
     }
-  } else if (latestReplyId && !isNaN(latestReplyId)) {
-    send = await sendReply({
-      replyId: latestReplyId,
-      bodyText: body,
-      bodyHtml: html,
-      replyAll: true,
-      ccEmails: ccList ? ccList.split(',').map(s => s.trim()).filter(Boolean) : undefined,
-    })
   }
 
   // Stamp sent_live so the retry endpoint can skip already-sent replies.
@@ -200,7 +196,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     clientId: session.clientId,
     kind: 'reply_sent',
     title: `${session.companyName} replied re: ${who}`,
-    body: `${send.ok ? '✅ Sent live via EmailBison' : '⚠️ NOT auto-sent (' + send.reason + ') — please send manually'}\nTo: ${toList}${ccList ? `\nCc: ${ccList}` : ''}\nSubject: ${subject}\n\n${body}`,
+    body: `${send.ok ? '✅ Sent live via PlusVibe' : '⚠️ NOT auto-sent (' + send.reason + ') — please send manually'}\nTo: ${toList}${ccList ? `\nCc: ${ccList}` : ''}\nSubject: ${subject}\n\n${body}`,
   })
 
   return NextResponse.json({ ok: true, sentLive: send.ok })
