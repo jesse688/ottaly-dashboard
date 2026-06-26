@@ -144,9 +144,13 @@ export async function GET(req: NextRequest) {
       // recent top of it to catch the occasional colleague/forwarded reply; the
       // date window bounds the rest. The tracked feed (real campaign replies) is
       // small, so it keeps a normal page budget.
+      // Page caps kept LOW so the whole sweep (×23 workspaces, 2 feeds each) stays
+      // under cron-job.org's 30s kill. The date window + per-minute rotation cover
+      // anything beyond the cap across runs. (Now that the Others endpoint actually
+      // returns data, pulling many pages of it was blowing the timeout.)
       const [tracked, untracked] = await Promise.all([
-        getPlusVibeReceived(ws, { sinceMs, emailType: 'received', maxPages: 10 }),
-        getPlusVibeReceived(ws, { sinceMs, emailType: 'untracked', maxPages: 2 }),
+        getPlusVibeReceived(ws, { sinceMs, emailType: 'received', maxPages: 4 }),
+        getPlusVibeReceived(ws, { sinceMs, emailType: 'untracked', maxPages: 1 }),
       ])
       // Tag each email with the feed it came from. The direction guard treats the
       // two differently: in 'untracked' (Others), PV's `lead` field is unreliable
@@ -380,7 +384,7 @@ export async function GET(req: NextRequest) {
   // pipeline is fine. Stop launching new batches at 22s and return what we've
   // done as a PARTIAL success; the next minute's run continues. A complete run
   // that just covers fewer workspaces beats a 30s hard-kill that logs nothing.
-  const DEADLINE = Date.now() + 22_000
+  const DEADLINE = Date.now() + 18_000
   const totals = zero()
   let processedWs = 0
   for (let i = 0; i < workspaces.length; i += CONC) {
@@ -432,9 +436,14 @@ export async function GET(req: NextRequest) {
   // the real Message-ID can't merge two genuinely-different emails.)
   const MID = `lower(COALESCE(NULLIF(raw->>'message_id',''), NULLIF(raw->>'raw_message_id','')))`
   const SCOPE = `${MID} IS NOT NULL AND received_at > NOW() - INTERVAL '14 days'`
+  // Throttle: now that the Bison webhook is off (the dupe source is gone) and keys
+  // are message-id-stable, dupes are rare — so run this heavier MERGE+DELETE only
+  // ~every 10 min instead of every minute, to keep the per-run time under the 30s
+  // cron limit. ?dedup=1 forces it.
   let deduped = 0
-  const ddClient = await pool.connect()
-  try {
+  const runDedup = url.searchParams.get('dedup') === '1' || Math.floor(Date.now() / 60_000) % 10 === 0
+  const ddClient = runDedup ? await pool.connect() : null
+  if (ddClient) try {
     await ddClient.query('BEGIN')
     // 1. Keeper absorbs the best available data from its duplicate group.
     await ddClient.query(`
