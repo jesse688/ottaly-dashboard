@@ -59,11 +59,17 @@ export async function GET(req: NextRequest) {
         WHERE u.classify_state IN ('pending', 'failed')
           AND (${force ? 'TRUE' : '(u.classify_next_at IS NULL OR u.classify_next_at <= NOW())'})
         ORDER BY u.received_at ASC
-        LIMIT 50
+        LIMIT 25
         FOR UPDATE OF u SKIP LOCKED`
     )
 
+    // HARD TIME BUDGET. Each row does a Gemini call (~1-2s) inside this open
+    // transaction; 25-50 of them blew past cron-job.org's 30s kill, which logged
+    // nothing and tripped the failure alarm. Stop at ~22s and COMMIT what's done;
+    // the rest stay pending/claimable for the next minute's run.
+    const DEADLINE = Date.now() + 22_000
     for (const row of claimed.rows) {
+      if (Date.now() > DEADLINE) break
       const id = row.id as string
       const raw = (row.raw ?? {}) as Record<string, unknown>
       // Bison pre-filter. Our mailboxes are STILL on Bison, so Bison still flags its

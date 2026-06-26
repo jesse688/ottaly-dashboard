@@ -79,9 +79,14 @@ export async function GET(req: NextRequest) {
       // and is invisible to the received feed — that's the bug where a reply
       // shows in PlusVibe but never reaches the client dashboard. Merge + dedupe
       // by id so an email appearing in both feeds is processed once.
+      // The "Others" folder is HUGE (thousands of cold-inbound items) and was
+      // blowing the 30s cron timeout. Cap its paging hard — we only need the
+      // recent top of it to catch the occasional colleague/forwarded reply; the
+      // date window bounds the rest. The tracked feed (real campaign replies) is
+      // small, so it keeps a normal page budget.
       const [tracked, untracked] = await Promise.all([
-        getPlusVibeReceived(ws, { sinceMs, emailType: 'received' }),
-        getPlusVibeReceived(ws, { sinceMs, emailType: 'untracked' }),
+        getPlusVibeReceived(ws, { sinceMs, emailType: 'received', maxPages: 10 }),
+        getPlusVibeReceived(ws, { sinceMs, emailType: 'untracked', maxPages: 2 }),
       ])
       // Tag each email with the feed it came from. The direction guard treats the
       // two differently: in 'untracked' (Others), PV's `lead` field is unreliable
@@ -276,16 +281,25 @@ export async function GET(req: NextRequest) {
   // Run workspaces in PARALLEL batches so the whole sweep finishes in seconds
   // (sequential 20-workspace runs were blowing past cron-job.org's 30s timeout).
   const CONC = 6
+  // HARD TIME BUDGET. cron-job.org kills the request at 30s and marks the run
+  // "failed (timeout)" — which then trips the ingest-down alarm even though the
+  // pipeline is fine. Stop launching new batches at 22s and return what we've
+  // done as a PARTIAL success; the next minute's run continues. A complete run
+  // that just covers fewer workspaces beats a 30s hard-kill that logs nothing.
+  const DEADLINE = Date.now() + 22_000
   const totals = zero()
+  let processedWs = 0
   for (let i = 0; i < workspaces.length; i += CONC) {
+    if (Date.now() > DEADLINE) { errors.push(`time-budget hit after ${processedWs}/${workspaces.length} workspaces`); break }
     const results = await Promise.all(workspaces.slice(i, i + CONC).map(processWs))
+    processedWs += results.length
     for (const c of results) {
       totals.seen += c.seen; totals.inserted += c.inserted; totals.healed += c.healed; totals.ooo += c.ooo
       totals.skipped_warmup += c.skipped_warmup; totals.skipped_bounce += c.skipped_bounce; totals.skipped_old += c.skipped_old
       totals.skipped_outbound += c.skipped_outbound
     }
   }
-  const summary = { workspaces: workspaces.length, ...totals, errors }
+  const summary = { workspaces: processedWs, totalWorkspaces: workspaces.length, ...totals, errors }
 
   await pool.query(
     `INSERT INTO esp_sync_log (source, status, leads_synced, finished_at) VALUES ($1,$2,$3,NOW())`,
