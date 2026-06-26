@@ -128,9 +128,15 @@ export async function getPlusVibeReceived(
   const seen = new Set<string>()
   let pageTrail: string | undefined
   for (let p = 0; p < maxPages; p++) {
-    const url = new URL('https://api.plusvibe.ai/api/v1/unibox/emails')
+    // The "Others" folder (replies PV couldn't link to a campaign/lead) is a
+    // DEDICATED PlusVibe endpoint — /unibox/other-emails — NOT email_type=untracked
+    // (that was a Bison concept and returns nothing on PV). The tracked feed is
+    // /unibox/emails?email_type=received.
+    const url = emailType === 'untracked'
+      ? new URL('https://api.plusvibe.ai/api/v1/unibox/other-emails')
+      : new URL('https://api.plusvibe.ai/api/v1/unibox/emails')
     url.searchParams.set('workspace_id', workspaceId)
-    url.searchParams.set('email_type', emailType)
+    if (emailType !== 'untracked') url.searchParams.set('email_type', emailType)
     if (pageTrail) url.searchParams.set('page_trail', pageTrail)
     let res: Response
     try {

@@ -16,6 +16,14 @@ export const maxDuration = 300
 //
 // Auth ?secret=CRON_SECRET. ?days=N window (default 3, max 90). ?ws=<id> one workspace.
 const BOUNCE_RE = /(^|[._-])(mailer-daemon|postmaster|no-?reply|bounce|abuse)@/
+// Free/consumer email domains — a domain match against these is NOT a reliable
+// "same company" signal (anyone can have a gmail), so colleague-matching for the
+// Others folder ignores them and requires an exact lead-email match instead.
+const GENERIC_DOMAINS = new Set([
+  'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'hotmail.co.uk',
+  'live.com', 'live.co.uk', 'msn.com', 'yahoo.com', 'yahoo.co.uk', 'icloud.com',
+  'me.com', 'aol.com', 'protonmail.com', 'proton.me', 'gmx.com', 'mail.com',
+])
 
 // PlusVibe classifies every reply itself (label). We TRUST that label to route at
 // ingest — so classification never depends on Gemini (which 429s/503s). Gemini is
@@ -86,14 +94,35 @@ export async function GET(req: NextRequest) {
   const rot = allWorkspaces.length ? Math.floor(Date.now() / 60_000) % allWorkspaces.length : 0
   const workspaces = [...allWorkspaces.slice(rot), ...allWorkspaces.slice(0, rot)]
 
-  type Counts = { seen: number; inserted: number; healed: number; ooo: number; skipped_warmup: number; skipped_bounce: number; skipped_old: number; skipped_outbound: number }
-  const zero = (): Counts => ({ seen: 0, inserted: 0, healed: 0, ooo: 0, skipped_warmup: 0, skipped_bounce: 0, skipped_old: 0, skipped_outbound: 0 })
+  type Counts = { seen: number; inserted: number; healed: number; ooo: number; skipped_warmup: number; skipped_bounce: number; skipped_old: number; skipped_outbound: number; skipped_unrelated: number }
+  const zero = (): Counts => ({ seen: 0, inserted: 0, healed: 0, ooo: 0, skipped_warmup: 0, skipped_bounce: 0, skipped_old: 0, skipped_outbound: 0, skipped_unrelated: 0 })
   const errors: string[] = []
 
   // Process ONE workspace: fetch its PlusVibe received emails and upsert them.
   async function processWs(ws: string): Promise<Counts> {
     const c = zero()
     const clientId = await resolveClientId(ws)
+
+    // Known leads for this workspace — used to match "Others" folder replies
+    // (which carry NO lead link) to the right lead. exactLeads = the lead's own
+    // address; leadByDomain = one lead per CORPORATE domain (so a colleague
+    // replying from a different address at the same company is linked to that
+    // lead). The Others folder is mostly cold-inbound spam, so anything that
+    // matches NEITHER is skipped — we never flood the unibox with it.
+    const exactLeads = new Set<string>()
+    const leadByDomain = new Map<string, string>()
+    try {
+      const lr = await pool.query(
+        `SELECT DISTINCT lower(email) AS email FROM esp_leads
+          WHERE workspace_id = $1 AND email IS NOT NULL AND email <> ''`, [ws])
+      for (const row of lr.rows as { email: string }[]) {
+        const em = row.email
+        exactLeads.add(em)
+        const dom = em.split('@')[1] || ''
+        if (dom && !GENERIC_DOMAINS.has(dom) && !leadByDomain.has(dom)) leadByDomain.set(dom, em)
+      }
+    } catch { /* if leads can't load, untracked matching just no-ops (skips Others) */ }
+
     let emails: PVReceivedEmail[] = []
     try {
       // Pull BOTH the tracked "received" feed AND the "untracked" Others folder.
@@ -173,6 +202,23 @@ export async function GET(req: NextRequest) {
         && sender !== campaignLead && !sameCompanyColleague
       if (authoredByUs || authoredByNonLead) { c.skipped_outbound++; continue }
 
+      // OTHERS-FOLDER MATCHING. Others emails carry NO lead link (e.lead is null)
+      // and the folder is mostly cold-inbound spam. Match the sender to a known
+      // lead: exact address (the lead replied on a thread PV filed under Others),
+      // or a same-CORPORATE-domain colleague (e.g. kong@thisisnq.com replying on
+      // the thread to shannon@thisisnq.com). No match → unrelated noise → SKIP, so
+      // the unibox is never flooded with the thousands of junk items in Others.
+      let untrackedMatch: string | null = null
+      if (feed === 'untracked') {
+        if (exactLeads.has(sender)) {
+          untrackedMatch = null // it IS the lead — key under sender, no colleague hint
+        } else {
+          const m = (senderDomain && !GENERIC_DOMAINS.has(senderDomain)) ? leadByDomain.get(senderDomain) : undefined
+          if (m && m !== sender) untrackedMatch = m            // colleague of a known lead
+          else { c.skipped_unrelated++; continue }             // unrelated → skip
+        }
+      }
+
       // The lead = the actual author (proven to be the prospect by the guard above),
       // falling back to the campaign lead. They're the same for a genuine reply.
       const lead = (sender || campaignLead || '').toLowerCase()
@@ -187,8 +233,12 @@ export async function GET(req: NextRequest) {
       // won't thread under the original lead on the client dashboard. Force it into
       // Review and stamp matched_lead_email so the operator sees the hint and can
       // "Assign to lead" (per the chosen workflow: surface, don't auto-attach).
-      const matchedLeadEmail = sameCompanyColleague ? campaignLead : null
-      if (sameCompanyColleague) { folder = 'review'; state = 'done' }
+      // A colleague reply (received-feed same-domain, OR an Others-folder
+      // domain match) is keyed under the COLLEAGUE's email, so stamp
+      // matched_lead_email and force it into Review so the operator can
+      // "Assign to lead" and thread it to the real lead's dashboard.
+      const matchedLeadEmail = sameCompanyColleague ? campaignLead : untrackedMatch
+      if (sameCompanyColleague || untrackedMatch) { folder = 'review'; state = 'done' }
       const isOoo = folder === 'ooo'
 
       // Content-stable key (Message-ID, else sender+minute+subject) so the same
@@ -217,7 +267,7 @@ export async function GET(req: NextRequest) {
           state, folder, category, JSON.stringify(e),
           e.timestamp_created ?? new Date().toISOString(),
           e.eaccount ?? null, e.campaign_id ?? null,
-          sameCompanyColleague, matchedLeadEmail, sameCompanyColleague ? 'domain' : null,
+          !!matchedLeadEmail, matchedLeadEmail, matchedLeadEmail ? 'domain' : null,
         ]
       ).catch(err => { console.error(`[pv-reconcile] upsert failed ws=${ws} id=${e.id}:`, err); return null })
 
@@ -321,7 +371,7 @@ export async function GET(req: NextRequest) {
     for (const c of results) {
       totals.seen += c.seen; totals.inserted += c.inserted; totals.healed += c.healed; totals.ooo += c.ooo
       totals.skipped_warmup += c.skipped_warmup; totals.skipped_bounce += c.skipped_bounce; totals.skipped_old += c.skipped_old
-      totals.skipped_outbound += c.skipped_outbound
+      totals.skipped_outbound += c.skipped_outbound; totals.skipped_unrelated += c.skipped_unrelated
     }
   }
   // ── CONTINUOUS AUTO-DEDUP ──────────────────────────────────────────────────
