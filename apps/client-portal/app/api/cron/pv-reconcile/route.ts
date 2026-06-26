@@ -94,8 +94,8 @@ export async function GET(req: NextRequest) {
   const rot = allWorkspaces.length ? Math.floor(Date.now() / 60_000) % allWorkspaces.length : 0
   const workspaces = [...allWorkspaces.slice(rot), ...allWorkspaces.slice(0, rot)]
 
-  type Counts = { seen: number; inserted: number; healed: number; ooo: number; skipped_warmup: number; skipped_bounce: number; skipped_old: number; skipped_outbound: number; skipped_unrelated: number }
-  const zero = (): Counts => ({ seen: 0, inserted: 0, healed: 0, ooo: 0, skipped_warmup: 0, skipped_bounce: 0, skipped_old: 0, skipped_outbound: 0, skipped_unrelated: 0 })
+  type Counts = { seen: number; inserted: number; healed: number; ooo: number; skipped_warmup: number; skipped_bounce: number; skipped_old: number; skipped_outbound: number }
+  const zero = (): Counts => ({ seen: 0, inserted: 0, healed: 0, ooo: 0, skipped_warmup: 0, skipped_bounce: 0, skipped_old: 0, skipped_outbound: 0 })
   const errors: string[] = []
 
   // Process ONE workspace: fetch its PlusVibe received emails and upsert them.
@@ -202,21 +202,18 @@ export async function GET(req: NextRequest) {
         && sender !== campaignLead && !sameCompanyColleague
       if (authoredByUs || authoredByNonLead) { c.skipped_outbound++; continue }
 
-      // OTHERS-FOLDER MATCHING. Others emails carry NO lead link (e.lead is null)
-      // and the folder is mostly cold-inbound spam. Match the sender to a known
-      // lead: exact address (the lead replied on a thread PV filed under Others),
-      // or a same-CORPORATE-domain colleague (e.g. kong@thisisnq.com replying on
-      // the thread to shannon@thisisnq.com). No match → unrelated noise → SKIP, so
-      // the unibox is never flooded with the thousands of junk items in Others.
+      // OTHERS-FOLDER POLICY: ACCEPT EVERYTHING except the deterministic noise that
+      // is filtered elsewhere — warm-up (tag-based, below), bounces (BOUNCE_RE,
+      // below) and our own outbound (guard above). We do NOT drop "unmatched"
+      // senders: a REFERRAL from a company we never emailed has no lead/domain
+      // trace, so skipping unmatched would lose it. Everything that isn't known
+      // noise flows in and lands in Review for a human. We still try to MATCH the
+      // sender to a known lead (exact, or same corporate domain) so colleague
+      // replies get linked — but a miss just means it's keyed under the sender.
       let untrackedMatch: string | null = null
-      if (feed === 'untracked') {
-        if (exactLeads.has(sender)) {
-          untrackedMatch = null // it IS the lead — key under sender, no colleague hint
-        } else {
-          const m = (senderDomain && !GENERIC_DOMAINS.has(senderDomain)) ? leadByDomain.get(senderDomain) : undefined
-          if (m && m !== sender) untrackedMatch = m            // colleague of a known lead
-          else { c.skipped_unrelated++; continue }             // unrelated → skip
-        }
+      if (feed === 'untracked' && !exactLeads.has(sender)) {
+        const m = (senderDomain && !GENERIC_DOMAINS.has(senderDomain)) ? leadByDomain.get(senderDomain) : undefined
+        if (m && m !== sender) untrackedMatch = m              // colleague of a known lead
       }
 
       // The lead = the actual author (proven to be the prospect by the guard above),
@@ -371,7 +368,7 @@ export async function GET(req: NextRequest) {
     for (const c of results) {
       totals.seen += c.seen; totals.inserted += c.inserted; totals.healed += c.healed; totals.ooo += c.ooo
       totals.skipped_warmup += c.skipped_warmup; totals.skipped_bounce += c.skipped_bounce; totals.skipped_old += c.skipped_old
-      totals.skipped_outbound += c.skipped_outbound; totals.skipped_unrelated += c.skipped_unrelated
+      totals.skipped_outbound += c.skipped_outbound
     }
   }
   // ── CONTINUOUS AUTO-DEDUP ──────────────────────────────────────────────────
