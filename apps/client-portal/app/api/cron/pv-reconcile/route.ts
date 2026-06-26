@@ -221,7 +221,14 @@ export async function GET(req: NextRequest) {
       const lead = (sender || campaignLead || '').toLowerCase()
       if (!lead || BOUNCE_RE.test(lead)) { c.skipped_bounce++; continue }
 
-      const warm = await detectWarmupFull(ws, { subject: e.subject ?? '', bodyText: e.content_preview ?? '' })
+      // Scan the FULL body, not just the 200-char preview — a warm-up tag often
+      // sits deep in the body, so preview-only detection let warm-up traffic leak
+      // into the unibox.
+      const warm = await detectWarmupFull(ws, {
+        subject: e.subject ?? '',
+        bodyText: e.content_preview ?? '',
+        rawText: `${e.body?.text ?? e.text_body ?? ''}\n${e.body?.html ?? e.html_body ?? ''}`,
+      })
       if (warm.isWarmup) { c.skipped_warmup++; continue }
 
       // Route by PV's own label (no Gemini dependency). Unlabelled → Review pending.

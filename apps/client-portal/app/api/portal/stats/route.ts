@@ -28,15 +28,19 @@ export async function GET() {
          WHERE workspace_id = $1 AND source = 'plusvibe'`,
         [workspaceId]
       ),
+      // The "leads" stat = BILLABLE leads only. Billing keys on label='INTERESTED'
+      // (set by mark-as-lead); an INFO lead is label='INFO' and is NEVER charged —
+      // so it must NOT count here. (It still counts as a REPLY below, which is what
+      // it is.) MEETING_BOOKED carries status, not label, so include it explicitly.
       pool.query(
         `SELECT
            COUNT(*) AS total_leads,
            COUNT(*) FILTER (WHERE status = 'MEETING_BOOKED') AS total_meetings
          FROM (
-           SELECT DISTINCT ON (lower(email)) status
+           SELECT DISTINCT ON (lower(email)) status, label
            FROM esp_leads
            WHERE workspace_id = $1 AND source IN ('plusvibe', 'bison')
-             AND status IN ('INTERESTED', 'MEETING_BOOKED')
+             AND (label = 'INTERESTED' OR status = 'MEETING_BOOKED')
            ORDER BY lower(email), (source = 'bison') DESC, created_at DESC
          ) d`,
         [workspaceId]
