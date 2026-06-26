@@ -64,20 +64,26 @@ export async function POST(req: NextRequest) {
       campaign_id: string | null; portal_email_id: string | null; created_at: string
       enriched?: boolean; confidence?: number | null; marked_as_lead?: boolean
     }
-    // Keep the MOST COMPLETE row. Priority (high → low): a marked lead, then the
-    // PlusVibe-sourced row (pv-api is the live source of truth — Bison is retired,
-    // so a legacy Bison/pv-other copy must always lose), then a Companies-House-
-    // enriched row, a real classification, higher confidence, campaign/portal
-    // links, then the earliest. Keeps the "interested · 100% + Companies House"
-    // PlusVibe copy over a bare/legacy duplicate.
+    // Keep the MOST COMPLETE row ("the correct one should have all the data").
+    // Priority (high → low):
+    //   1. a human-marked lead (never delete a billed/triaged decision)
+    //   2. Companies-House enriched (the row that actually has the data)
+    //   3. a real, settled classification (not pending/other)
+    //   4. confidence, then campaign/portal links
+    //   5. PlusVibe API source as a gentle tiebreaker between two PV copies
+    //   6. clearly-legacy imports (winnr one-offs, retired Bison, dead pv-other)
+    //      are penalised so they always lose to a live PlusVibe row.
+    // NOTE: the deeper cause is TWO reconcilers writing this table (pv-api +
+    // an external 'pv-reconciler'); this scoring only cleans the symptom.
+    const LEGACY = new Set(['winnr', 'bison', 'bison-webhook', 'pv-other'])
     const score = (x: Row) =>
-      (x.marked_as_lead ? 100 : 0) +
-      (x.source === 'pv-api' ? 50 : 0) +          // PlusVibe wins over any Bison-era row
-      (x.source === 'pv-other' || x.source === 'bison' || x.source === 'bison-webhook' ? -20 : 0) +
-      (x.enriched ? 40 : 0) +
-      (x.category && x.category !== 'pending' && x.category !== 'other' ? 16 : 0) +
+      (x.marked_as_lead ? 1000 : 0) +
+      (x.enriched ? 80 : 0) +
+      (x.category && x.category !== 'pending' && x.category !== 'other' ? 30 : 0) +
       Math.round((typeof x.confidence === 'number' ? x.confidence : 0) * 8) +
-      (x.campaign_id ? 4 : 0) + (x.portal_email_id ? 2 : 0)
+      (x.campaign_id ? 4 : 0) + (x.portal_email_id ? 2 : 0) +
+      (x.source === 'pv-api' ? 5 : 0) +
+      (x.source && LEGACY.has(x.source) ? -60 : 0)
 
     const toDelete: string[] = []
     const plan: { lead: string; keep: string; drop: string[] }[] = []
