@@ -64,17 +64,20 @@ export async function POST(req: NextRequest) {
       campaign_id: string | null; portal_email_id: string | null; created_at: string
       enriched?: boolean; confidence?: number | null; marked_as_lead?: boolean
     }
-    // Keep the MOST COMPLETE row. Priority (high → low): a marked lead, then a
-    // Companies-House-enriched row, then a real (non-pending) classification, then
-    // higher confidence, then campaign/portal links, then the earliest. This makes
-    // the dedup keep e.g. the "interested · 100% + Companies House" copy over a bare
-    // duplicate that errored during an outage.
+    // Keep the MOST COMPLETE row. Priority (high → low): a marked lead, then the
+    // PlusVibe-sourced row (pv-api is the live source of truth — Bison is retired,
+    // so a legacy Bison/pv-other copy must always lose), then a Companies-House-
+    // enriched row, a real classification, higher confidence, campaign/portal
+    // links, then the earliest. Keeps the "interested · 100% + Companies House"
+    // PlusVibe copy over a bare/legacy duplicate.
     const score = (x: Row) =>
       (x.marked_as_lead ? 100 : 0) +
+      (x.source === 'pv-api' ? 50 : 0) +          // PlusVibe wins over any Bison-era row
+      (x.source === 'pv-other' || x.source === 'bison' || x.source === 'bison-webhook' ? -20 : 0) +
       (x.enriched ? 40 : 0) +
       (x.category && x.category !== 'pending' && x.category !== 'other' ? 16 : 0) +
       Math.round((typeof x.confidence === 'number' ? x.confidence : 0) * 8) +
-      (x.campaign_id ? 4 : 0) + (x.portal_email_id ? 2 : 0) + (x.source !== 'pv-other' ? 1 : 0)
+      (x.campaign_id ? 4 : 0) + (x.portal_email_id ? 2 : 0)
 
     const toDelete: string[] = []
     const plan: { lead: string; keep: string; drop: string[] }[] = []
