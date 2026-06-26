@@ -330,11 +330,17 @@ export async function GET(req: NextRequest) {
   // then the most-enriched/classified copy; deletes only the redundant rest.
   // Clients read leads/threads, not raw unibox rows, so collapsing a duplicate
   // here changes nothing they see. Bounded to recent rows so it's cheap.
+  // NO-DATA-LOSS RULE: only ever delete a duplicate that is genuinely EMPTY — no
+  // Companies-House data, not enriched, not a marked lead, no real classification.
+  // If a duplicate carries ANY data we leave it untouched (better a rare visible
+  // dup than losing an enriched/marked row). So a bare fresh copy is removed while
+  // its enriched twin always survives — never the other way round.
   let deduped = 0
   try {
     const dd = await pool.query(`
       WITH ranked AS (
-        SELECT id,
+        SELECT id, ch_data, enrich_state, category, marked_as_lead,
+          COUNT(*) OVER (PARTITION BY workspace_id, lower(raw->>'message_id')) AS grp_n,
           ROW_NUMBER() OVER (
             PARTITION BY workspace_id, lower(raw->>'message_id')
             ORDER BY
@@ -350,8 +356,12 @@ export async function GET(req: NextRequest) {
            AND received_at > NOW() - INTERVAL '14 days'
       )
       DELETE FROM unibox_replies u USING ranked r
-       WHERE u.id = r.id AND r.rn > 1
-         AND u.marked_as_lead = FALSE`)
+       WHERE u.id = r.id
+         AND r.grp_n > 1            -- there is a duplicate to fall back on
+         AND r.rn > 1               -- this is NOT the chosen keeper
+         AND r.marked_as_lead = FALSE                                   -- never a lead
+         AND r.ch_data IS NULL AND COALESCE(r.enrich_state,'') <> 'matched'  -- no enrichment
+         AND (r.category IS NULL OR r.category IN ('pending','other'))  -- no real classification`)
     deduped = dd.rowCount ?? 0
   } catch (err) {
     errors.push(`dedup: ${String(err).slice(0, 80)}`)
