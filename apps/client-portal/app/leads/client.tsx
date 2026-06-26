@@ -488,7 +488,27 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
       // "Needs reply" immediately; has_sent kept for the Sent view filter.
       setLeads(prev => prev?.map(l => l.id === selected.id ? { ...l, has_sent: true, has_outbound: true } : l) ?? null)
       setSelected(prev => prev ? { ...prev, has_sent: true, has_outbound: true } : prev)
-      openLead({ ...selected, has_sent: true, has_outbound: true })
+      // OPTIMISTIC INSERT: show the just-sent message in the thread IMMEDIATELY,
+      // instead of blanking the thread and waiting on the /thread refetch (which is
+      // slow for attachment sends — base64 + a 30s-timeout PlusVibe call). The
+      // server already persisted this row, and the thread route content-dedups, so
+      // the next refetch won't duplicate it. This fixes "I clicked send but can't
+      // see my sent email with attachment".
+      const optimistic: ThreadMsg = {
+        id: `optimistic-${Date.now()}`,
+        direction: 'OUT',
+        subject: null,
+        body_html: html, body_html_safe: html,
+        body_text: text, content_preview: text.slice(0, 200),
+        from_email: null, to_email: to, eaccount: null, pv_label: null,
+        sent_via_portal: true,
+        timestamp_created: new Date().toISOString(),
+        attachments: files.length ? files.map(f => ({ filename: f.name, size: f.size, content_type: f.type })) : null,
+      }
+      setThread(prev => [...(prev ?? []), optimistic])
+      // Reconcile with the server copy shortly after (replaces the optimistic row
+      // with the real persisted one, incl. attachment download ids).
+      setTimeout(() => { if (selected) openLead({ ...selected, has_sent: true, has_outbound: true }) }, 1200)
       setTimeout(() => setReplyMsg(''), 4000)
     } else {
       setReplyMsg('Could not send. Please try again.')
