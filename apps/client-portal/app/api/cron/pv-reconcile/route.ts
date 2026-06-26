@@ -74,7 +74,29 @@ export async function GET(req: NextRequest) {
     const clientId = await resolveClientId(ws)
     let emails: PVReceivedEmail[] = []
     try {
-      emails = await getPlusVibeReceived(ws, { sinceMs })
+      // Pull BOTH the tracked "received" feed AND the "untracked" Others folder.
+      // A lead's follow-up whose threading headers don't match lands in Others
+      // and is invisible to the received feed — that's the bug where a reply
+      // shows in PlusVibe but never reaches the client dashboard. Merge + dedupe
+      // by id so an email appearing in both feeds is processed once.
+      const [tracked, untracked] = await Promise.all([
+        getPlusVibeReceived(ws, { sinceMs, emailType: 'received' }),
+        getPlusVibeReceived(ws, { sinceMs, emailType: 'untracked' }),
+      ])
+      // Tag each email with the feed it came from. The direction guard treats the
+      // two differently: in 'untracked' (Others), PV's `lead` field is unreliable
+      // (that's WHY it's untracked), so we must not use the sender≠lead test there
+      // or we'd drop genuine replies like the one this fix recovers.
+      const byId = new Map<string, PVReceivedEmail & { _feed: 'received' | 'untracked' }>()
+      for (const e of tracked) {
+        const k = e.message_id || e.id
+        if (k && !byId.has(k)) byId.set(k, { ...e, _feed: 'received' })
+      }
+      for (const e of untracked) {
+        const k = e.message_id || e.id
+        if (k && !byId.has(k)) byId.set(k, { ...e, _feed: 'untracked' })
+      }
+      emails = [...byId.values()]
     } catch (err) {
       errors.push(`${ws}: ${String(err).slice(0, 100)}`)
       return c
@@ -98,11 +120,15 @@ export async function GET(req: NextRequest) {
       // when EITHER: the author is our receiving mailbox (`eaccount`), OR the author
       // is NOT the campaign lead (it's us or a teammate). Two independent signals,
       // so an empty/garbled `eaccount` can't let an outbound echo slip through.
+      const feed = (e as PVReceivedEmail & { _feed?: 'received' | 'untracked' })._feed ?? 'received'
       const sender = (e.from_address_email || '').toLowerCase()
       const ourMailbox = (e.eaccount || '').toLowerCase()
       const campaignLead = (e.lead || '').toLowerCase()
       const authoredByUs = !!sender && !!ourMailbox && sender === ourMailbox
-      const authoredByNonLead = !!sender && !!campaignLead && sender !== campaignLead
+      // sender≠lead only proves "outbound" when `lead` is trustworthy — i.e. the
+      // tracked 'received' feed. In 'untracked' (Others) PV's lead field is
+      // unreliable, so rely on the authored-by-our-mailbox signal alone there.
+      const authoredByNonLead = feed === 'received' && !!sender && !!campaignLead && sender !== campaignLead
       if (authoredByUs || authoredByNonLead) { c.skipped_outbound++; continue }
 
       // The lead = the actual author (proven to be the prospect by the guard above),

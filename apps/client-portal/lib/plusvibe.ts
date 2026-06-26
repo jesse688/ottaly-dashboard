@@ -102,24 +102,35 @@ export interface PVReceivedEmail {
   text_body?: string | null
 }
 
-// Page the PlusVibe unibox "received" emails for a whole workspace (newest-first).
+// Page the PlusVibe unibox emails for a whole workspace (newest-first).
 // THIS is where replies live — Bison/EmailBison is retired and returns nothing.
 // Stops when a page is older than sinceMs, when there are no new ids (param
 // ignored / end), or at the page cap. Paginates via the `page_trail` cursor.
+//
+// `emailType` selects the FOLDER:
+//   'received'  — campaign-tracked replies (the main feed).
+//   'untracked' — PlusVibe's "Others" folder: replies that arrived on a
+//                 connected mailbox but PV couldn't link to a campaign sequence
+//                 (e.g. a follow-up whose threading headers didn't match). These
+//                 are missed by the 'received' feed entirely, yet they're real
+//                 lead replies — so we ingest them too. (This is the bug where a
+//                 lead's 2nd message lands in Others and never reaches the client
+//                 dashboard.)
 export async function getPlusVibeReceived(
   workspaceId: string,
-  opts: { sinceMs?: number; maxPages?: number } = {},
+  opts: { sinceMs?: number; maxPages?: number; emailType?: 'received' | 'untracked' } = {},
 ): Promise<PVReceivedEmail[]> {
   const key = process.env.PLUSVIBE_API_KEY ?? process.env.PLUSVIBE_KEY
   if (!key) return []
   const maxPages = opts.maxPages ?? 30
+  const emailType = opts.emailType ?? 'received'
   const out: PVReceivedEmail[] = []
   const seen = new Set<string>()
   let pageTrail: string | undefined
   for (let p = 0; p < maxPages; p++) {
     const url = new URL('https://api.plusvibe.ai/api/v1/unibox/emails')
     url.searchParams.set('workspace_id', workspaceId)
-    url.searchParams.set('email_type', 'received')
+    url.searchParams.set('email_type', emailType)
     if (pageTrail) url.searchParams.set('page_trail', pageTrail)
     let res: Response
     try {
