@@ -75,9 +75,16 @@ export async function GET(req: NextRequest) {
   const wsRows = await pool.query(
     `SELECT DISTINCT workspace_id FROM portal_clients WHERE workspace_id IS NOT NULL AND workspace_id <> ''`
   )
-  const workspaces = (wsRows.rows as { workspace_id: string }[])
+  const allWorkspaces = (wsRows.rows as { workspace_id: string }[])
     .map(r => r.workspace_id)
     .filter(w => !onlyWs || w === onlyWs)
+  // ROTATE the start each minute. The 22s time budget can stop mid-sweep, and with
+  // a FIXED order the same trailing workspaces were starved every run — their
+  // replies never reached the unibox. Rotating by a per-minute offset guarantees
+  // every workspace leads the queue periodically, so all get covered within a few
+  // runs instead of some being permanently skipped.
+  const rot = allWorkspaces.length ? Math.floor(Date.now() / 60_000) % allWorkspaces.length : 0
+  const workspaces = [...allWorkspaces.slice(rot), ...allWorkspaces.slice(0, rot)]
 
   type Counts = { seen: number; inserted: number; healed: number; ooo: number; skipped_warmup: number; skipped_bounce: number; skipped_old: number; skipped_outbound: number }
   const zero = (): Counts => ({ seen: 0, inserted: 0, healed: 0, ooo: 0, skipped_warmup: 0, skipped_bounce: 0, skipped_old: 0, skipped_outbound: 0 })
