@@ -50,3 +50,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: String(err) }, { status: 500 })
   }
 }
+
+// Also accept GET — cron-job.org defaults to GET, and a POST-only route returned
+// 405 "HTTP error" on every scheduled run. The action is an idempotent requeue,
+// so GET is safe here (still secret-authed inside POST).
+export async function GET(req: NextRequest) {
+  return POST(req)
+}
