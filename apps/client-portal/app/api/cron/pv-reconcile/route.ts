@@ -244,7 +244,11 @@ export async function GET(req: NextRequest) {
       // confirm and Assign to lead." Keeps it out of Review (genuine new leads)
       // until a human links it. state='done' so the classifier leaves it put.
       const matchedLeadEmail = sameCompanyColleague ? campaignLead : untrackedMatch
-      if (matchedLeadEmail) { folder = 'needs_associating'; state = 'done' }
+      // ONLY a genuine reply (PV routed it to Review — interested/question/
+      // unlabelled) goes to Needs Associating. A colleague-domain reply that's
+      // actually OOO / unsubscribe / not-interested stays in ITS folder — there's
+      // nothing to "associate" about noise, and it was wrongly landing here.
+      if (matchedLeadEmail && folder === 'review') { folder = 'needs_associating'; state = 'done' }
       const isOoo = folder === 'ooo'
 
       // Content-stable key (Message-ID, else sender+minute+subject) so the same

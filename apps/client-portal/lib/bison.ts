@@ -7,6 +7,9 @@ import pool from './db'
 
 const BASE = (process.env.BISON_API_URL || 'https://send.ottaly.co.uk').replace(/\/$/, '')
 const ENV_KEY = process.env.BISON_API_KEY || ''
+// Bison/EmailBison is RETIRED. This kills ALL outbound Bison API traffic at the
+// single choke point (the bison() caller). Flip to false only to revive Bison.
+const BISON_RETIRED = true
 
 // Bison key resolution: a key saved in the admin Settings UI (portal_settings
 // 'bison_api_key') OVERRIDES the BISON_API_KEY env var, which is the fallback.
@@ -165,6 +168,10 @@ async function bison<T>(
   params?: Record<string, string | number | boolean | undefined>,
   body?: unknown,
 ): Promise<T> {
+  // BISON IS RETIRED. Fail fast instead of waiting on the dead API
+  // (send.ottaly.co.uk 503s). Live callers (tag/blocklist/unsubscribe) catch this
+  // and return {ok:false}; replies come from PlusVibe now.
+  if (BISON_RETIRED) throw new Error('Bison is retired — call ignored')
   const url = new URL(`${BASE}${path}`)
   if (params && method === 'GET') {
     for (const [k, v] of Object.entries(params)) {
