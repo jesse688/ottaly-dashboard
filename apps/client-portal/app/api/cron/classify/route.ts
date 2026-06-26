@@ -90,7 +90,7 @@ export async function GET(req: NextRequest) {
               SET category = 'ooo_auto_reply', classify_state = 'done',
                   ai_model = 'prefilter', ai_reasoning = 'Bison automated_reply flag',
                   folder = CASE
-                    WHEN folder IN ('inbox','review','unmapped')
+                    WHEN folder IN ('inbox','review','unmapped','other')
                          AND marked_as_lead = FALSE AND admin_label IS NULL
                     THEN 'warmup' ELSE folder END,
                   updated_at = NOW()
@@ -183,7 +183,7 @@ export async function GET(req: NextRequest) {
           `UPDATE unibox_replies
               SET category = $2, confidence = $3, ai_model = $4, ai_reasoning = $5,
                   classify_state = 'done', classifier_version = $7,
-                  folder = CASE WHEN folder IN ('inbox','review','unmapped') THEN $6 ELSE folder END,
+                  folder = CASE WHEN folder IN ('inbox','review','unmapped','other') THEN $6 ELSE folder END,
                   updated_at = NOW()
             WHERE id = $1`,
           [id, result.category, result.confidence, CLASSIFIER_MODEL,

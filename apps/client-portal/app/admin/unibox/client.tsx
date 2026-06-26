@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Logo } from '@/app/components/Logo'
 
-type Folder = 'review' | 'lead' | 'lead_replies' | 'not_interested' | 'warmup' | 'unsubscribe' | 'ooo' | 'done' | 'all'
+type Folder = 'review' | 'lead' | 'lead_replies' | 'not_interested' | 'other' | 'warmup' | 'unsubscribe' | 'ooo' | 'done' | 'all'
 
 interface Reply {
   id: string
@@ -134,6 +134,7 @@ const FOLDERS: { key: Folder; label: string }[] = [
   { key: 'lead', label: 'Lead' },
   { key: 'lead_replies', label: 'Lead Replies' },
   { key: 'not_interested', label: 'Not Interested' },
+  { key: 'other', label: 'Other' },
   { key: 'warmup', label: 'Warm-up' },
   { key: 'unsubscribe', label: 'Unsubscribe' },
   { key: 'ooo', label: 'OOO & Auto' },

@@ -88,23 +88,28 @@ export function setCustomWarmupTerms(terms: string[]): void {
 // rescue a mislabelled positive. Tunable.
 export const NEGATIVE_CONFIDENCE_MIN = 0.9
 
-// Canonical folder routing for the simplified unibox. The guiding rule: only
-// file OUT of Review when we're confident it's noise (warm-up / unsubscribe /
-// OOO) or a confident not-interested. EVERYTHING else — interested, question,
-// "other", low-confidence anything, unknown — defaults to Review so a possible
-// lead is never hidden. Lead / lead_replies are workflow states handled by the
-// caller (they depend on marked_as_lead), not the AI category.
+// Canonical folder routing for the simplified unibox. The guiding rule:
+//  • genuine, needs-a-human  → Review (interested / question / low-confidence /
+//    unknown) — a possible lead is NEVER hidden.
+//  • confident noise → its own folder (warm-up / unsubscribe / OOO / confident
+//    not-interested).
+//  • the AI's "not sure / unclassifiable" bucket ('other') → the OTHER folder:
+//    visible and scannable, but kept OUT of Review so the lead view stays clean
+//    now that the whole PlusVibe "Others" feed flows in.
+// Lead / lead_replies are workflow states handled by the caller (they depend on
+// marked_as_lead), not the AI category.
 export function defaultFolderForCategory(
   category: string | null,
   confidence: number | null,
-): 'review' | 'not_interested' | 'warmup' | 'unsubscribe' | 'ooo' {
+): 'review' | 'not_interested' | 'warmup' | 'unsubscribe' | 'ooo' | 'other' {
   const conf = typeof confidence === 'number' ? confidence : 0
   switch (category) {
     case 'warmup': return 'warmup'
     case 'unsubscribe': return 'unsubscribe'
     case 'ooo_auto_reply': return 'ooo'
     case 'not_interested': return conf >= NEGATIVE_CONFIDENCE_MIN ? 'not_interested' : 'review'
-    default: return 'review' // interested, question, other, null, anything else
+    case 'other': return 'other'    // "not sure" → Other folder (visible, not in Review)
+    default: return 'review'         // interested, question, null, unknown → Review
   }
 }
 
