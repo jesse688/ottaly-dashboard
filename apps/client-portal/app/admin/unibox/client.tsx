@@ -215,6 +215,7 @@ export function AdminUniboxClient() {
   const [assignLoading, setAssignLoading] = useState(false)
   const [assignLeads, setAssignLeads] = useState<{ id: string; email: string; first_name?: string; last_name?: string; company_name?: string }[]>([])
   const [assignPick, setAssignPick] = useState<string>('')
+  const [assignSuggest, setAssignSuggest] = useState<{ email: string | null; reason: string }>({ email: null, reason: '' })
 
   // Warm-up tag filter panel
   const [showWarmup, setShowWarmup] = useState(false)
@@ -455,12 +456,15 @@ export function AdminUniboxClient() {
   // Open the assign-to-lead panel: load candidate leads in this workspace.
   async function openAssign() {
     if (!selected) return
-    setAssignOpen(true); setAssignLoading(true); setMsg(''); setAssignLeads([]); setAssignPick('')
+    setAssignOpen(true); setAssignLoading(true); setMsg(''); setAssignLeads([]); setAssignPick(''); setAssignSuggest({ email: null, reason: '' })
     try {
       const r = await fetch(`/api/admin/unibox/${selected.id}/assign-to-lead`)
-      const d = await r.json() as { ok?: boolean; error?: string; leads?: { id: string; email: string; first_name?: string; last_name?: string; company_name?: string }[] }
+      const d = await r.json() as { ok?: boolean; error?: string; suggested?: string | null; suggestedReason?: string; leads?: { id: string; email: string; first_name?: string; last_name?: string; company_name?: string }[] }
       if (!r.ok || !d.ok) { setMsg(d.error ?? 'Could not load leads'); setAssignOpen(false); return }
       setAssignLeads(d.leads ?? [])
+      // Pre-select the recommended lead so the operator just reviews + accepts.
+      setAssignSuggest({ email: d.suggested ?? null, reason: d.suggestedReason ?? '' })
+      if (d.suggested) setAssignPick(d.suggested)
     } finally {
       setAssignLoading(false)
     }
@@ -930,6 +934,11 @@ export function AdminUniboxClient() {
                           <p className="text-xs text-gray-500 mt-3">No leads found in this workspace.</p>
                         ) : (
                           <>
+                            {assignSuggest.email && (
+                              <p className="text-xs text-indigo-700 mt-3">
+                                💡 Recommended: <span className="font-medium">{assignLeads.find(l => l.email === assignSuggest.email)?.first_name || ''} {assignLeads.find(l => l.email === assignSuggest.email)?.last_name || ''}</span> ({assignSuggest.email}){assignSuggest.reason ? ` — ${assignSuggest.reason}` : ''}. Review and accept, or pick another below.
+                              </p>
+                            )}
                             <select
                               value={assignPick}
                               onChange={e => setAssignPick(e.target.value)}

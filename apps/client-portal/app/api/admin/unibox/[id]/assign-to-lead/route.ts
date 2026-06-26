@@ -23,6 +23,7 @@ interface ReplyRow {
   id: string
   workspace_id: string | null
   lead_email: string | null
+  matched_lead_email: string | null
   subject: string | null
   body_preview: string | null
   received_at: string | null
@@ -32,7 +33,7 @@ interface ReplyRow {
 
 async function loadReply(id: string): Promise<ReplyRow | null> {
   const r = await pool.query(
-    `SELECT id, workspace_id, lead_email, subject, body_preview, received_at,
+    `SELECT id, workspace_id, lead_email, matched_lead_email, subject, body_preview, received_at,
             COALESCE(NULLIF(raw->'body'->>'html',''), NULLIF(raw->>'html_body','')) AS reply_html,
             COALESCE(NULLIF(raw->'body'->>'text',''), NULLIF(raw->>'text_body','')) AS reply_text
        FROM unibox_replies WHERE id = $1`,
@@ -72,7 +73,23 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       LIMIT 50`,
     [reply.workspace_id, domain]
   )
-  return NextResponse.json({ ok: true, currentEmail: reply.lead_email, sameDomain: domain, leads: res.rows })
+  const leads = res.rows as { id: string; email: string; first_name?: string; last_name?: string; company_name?: string }[]
+
+  // RECOMMENDATION: the lead we matched at ingest (matched_lead_email, set by the
+  // same-company domain match) — else the top same-domain candidate. The operator
+  // just reviews + accepts instead of hunting the list.
+  let suggested: string | null = null
+  let suggestedReason = ''
+  const matched = (reply.matched_lead_email ?? '').toLowerCase()
+  if (matched && leads.some(l => l.email.toLowerCase() === matched)) {
+    suggested = matched
+    suggestedReason = `same company as ${reply.lead_email} (matched on ingest)`
+  } else if (domain) {
+    const dm = leads.find(l => (l.email.split('@')[1] ?? '').toLowerCase() === domain && l.email.toLowerCase() !== (reply.lead_email ?? '').toLowerCase())
+    if (dm) { suggested = dm.email; suggestedReason = `same company domain (${domain})` }
+  }
+
+  return NextResponse.json({ ok: true, currentEmail: reply.lead_email, sameDomain: domain, suggested, suggestedReason, leads })
 }
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
