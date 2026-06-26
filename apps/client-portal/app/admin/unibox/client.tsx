@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Logo } from '@/app/components/Logo'
 
-type Folder = 'review' | 'lead' | 'lead_replies' | 'not_interested' | 'other' | 'warmup' | 'unsubscribe' | 'ooo' | 'done' | 'all'
+type Folder = 'review' | 'needs_associating' | 'lead' | 'lead_replies' | 'not_interested' | 'other' | 'warmup' | 'unsubscribe' | 'ooo' | 'done' | 'all'
 
 interface Reply {
   id: string
@@ -131,6 +131,7 @@ function leadFormFromReply(r: Reply): LeadForm {
 
 const FOLDERS: { key: Folder; label: string }[] = [
   { key: 'review', label: 'Review' },
+  { key: 'needs_associating', label: 'Needs Associating' },
   { key: 'lead', label: 'Lead' },
   { key: 'lead_replies', label: 'Lead Replies' },
   { key: 'not_interested', label: 'Not Interested' },

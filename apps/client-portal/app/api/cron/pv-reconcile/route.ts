@@ -231,11 +231,13 @@ export async function GET(req: NextRequest) {
       // Review and stamp matched_lead_email so the operator sees the hint and can
       // "Assign to lead" (per the chosen workflow: surface, don't auto-attach).
       // A colleague reply (received-feed same-domain, OR an Others-folder
-      // domain match) is keyed under the COLLEAGUE's email, so stamp
-      // matched_lead_email and force it into Review so the operator can
-      // "Assign to lead" and thread it to the real lead's dashboard.
+      // domain match) is keyed under the COLLEAGUE's email — it can't auto-thread
+      // to the real lead. Stamp matched_lead_email and file it in NEEDS
+      // ASSOCIATING: a dedicated queue of "this probably belongs to lead X —
+      // confirm and Assign to lead." Keeps it out of Review (genuine new leads)
+      // until a human links it. state='done' so the classifier leaves it put.
       const matchedLeadEmail = sameCompanyColleague ? campaignLead : untrackedMatch
-      if (sameCompanyColleague || untrackedMatch) { folder = 'review'; state = 'done' }
+      if (matchedLeadEmail) { folder = 'needs_associating'; state = 'done' }
       const isOoo = folder === 'ooo'
 
       // Content-stable key (Message-ID, else sender+minute+subject) so the same

@@ -7,7 +7,7 @@ import { sanitizeEmailHtml } from '@/lib/sanitize-html'
 // New simplified taxonomy first; legacy values kept so pre-migration rows still
 // resolve until the one-time re-file moves them over.
 const FOLDERS = [
-  'review', 'lead', 'lead_replies', 'not_interested', 'other', 'warmup', 'unsubscribe', 'ooo', 'done',
+  'review', 'needs_associating', 'lead', 'lead_replies', 'not_interested', 'other', 'warmup', 'unsubscribe', 'ooo', 'done',
   'inbox', 'replies', 'unmapped', 'rejected',
 ] as const
 type Folder = (typeof FOLDERS)[number]
