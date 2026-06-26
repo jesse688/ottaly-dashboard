@@ -137,15 +137,29 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   // (PlusVibe's reply API doesn't carry attachments).
   let send: { ok: boolean; reason?: string } = { ok: false, reason: 'no-reply-id-in-cache' }
   if (attachments.length > 0) {
-    send = await sendEmailReply({
-      to: toList,
-      cc: ccList || undefined,
-      subject: subject.startsWith('Re:') ? subject : `Re: ${subject}`,
-      html,
-      text: body,
-      attachments,
-    })
-    if (!send.ok) console.error('[reply] resend-with-attachments failed:', send.reason)
+    // Attachments can't go through PlusVibe's reply API, so they send via Resend.
+    // CRITICAL: send from the CLIENT'S mailbox (the address the lead was contacted
+    // from), never Ottaly's info@ — a lead must never see "Ottaly" reply to their
+    // cold email. Resolve the freshest mailbox: the PV inbound, else the eaccount
+    // we already looked up. If NONE resolves, refuse to send (flag for manual)
+    // rather than leak Ottaly's identity.
+    const pv = await getPlusVibeInbound(session.workspaceId, lead.email)
+    const fromMailbox = pv?.from || eaccount
+    if (!fromMailbox) {
+      send = { ok: false, reason: 'no-client-mailbox-resolved' }
+      console.error('[reply] refusing attachment send — no client mailbox to send AS (would leak Ottaly identity)')
+    } else {
+      send = await sendEmailReply({
+        to: toList,
+        cc: ccList || undefined,
+        subject: subject.startsWith('Re:') ? subject : `Re: ${subject}`,
+        html,
+        text: body,
+        from: fromMailbox,
+        attachments,
+      })
+      if (!send.ok) console.error('[reply] resend-with-attachments failed:', send.reason)
+    }
   } else {
     // Resolve the REAL PlusVibe email id + sending mailbox from the unibox API by
     // lead email. Our DB id may be synthetic (unibox_/pv_) or a stale numeric

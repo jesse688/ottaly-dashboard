@@ -100,6 +100,11 @@ export async function sendEmail(to: string, subject: string, text: string, idemp
 export async function sendEmailReply(opts: {
   to: string; cc?: string; subject: string; html: string; text: string
   replyTo?: string
+  // The mailbox the lead was contacted from. A client reply MUST go out from the
+  // client's own identity (white-label), NEVER from Ottaly's info@ address — a
+  // lead seeing "Ottaly <info@ottaly.co.uk>" reply to their cold email exposes the
+  // backend and breaks the thread. When set, this overrides the default From.
+  from?: string
   attachments?: { filename: string; content: Buffer }[]
 }): Promise<{ ok: boolean; reason?: string }> {
   const key = process.env.RESEND_API_KEY
@@ -107,7 +112,7 @@ export async function sendEmailReply(opts: {
   if (!opts.to) return { ok: false, reason: 'no_recipient' }
   try {
     const payload: Record<string, unknown> = {
-      from: FROM,
+      from: opts.from || FROM,
       to: opts.to,
       subject: opts.subject,
       html: opts.html,
