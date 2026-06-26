@@ -335,36 +335,71 @@ export async function GET(req: NextRequest) {
   // If a duplicate carries ANY data we leave it untouched (better a rare visible
   // dup than losing an enriched/marked row). So a bare fresh copy is removed while
   // its enriched twin always survives — never the other way round.
+  // MERGE-THEN-DELETE (no data loss, and it actually collapses dupes). The keeper
+  // first ABSORBS every non-null field its duplicates have that it lacks (CH data,
+  // enrichment, classification, confidence, links, lead/info status). Only THEN are
+  // the now-redundant copies deleted. So a lead can never lose its data, and dupes
+  // — even when both copies are classified — collapse to one. Marked leads are
+  // never deleted. Ordering = merge first, delete second, so a failed delete can't
+  // lose data. ORDER defines the keeper consistently in both steps.
+  const RANK_ORDER = `
+    marked_as_lead DESC,
+    (ch_data IS NOT NULL OR enrich_state = 'matched') DESC,
+    (category IS NOT NULL AND category NOT IN ('pending','other')) DESC,
+    COALESCE(confidence, 0) DESC,
+    (ingest_source = 'pv-api') DESC,
+    created_at ASC`
+  const SCOPE = `COALESCE(raw->>'message_id','') <> '' AND received_at > NOW() - INTERVAL '14 days'`
   let deduped = 0
+  const ddClient = await pool.connect()
   try {
-    const dd = await pool.query(`
+    await ddClient.query('BEGIN')
+    // 1. Keeper absorbs the best available data from its duplicate group.
+    await ddClient.query(`
       WITH ranked AS (
-        SELECT id, ch_data, enrich_state, category, marked_as_lead,
-          COUNT(*) OVER (PARTITION BY workspace_id, lower(raw->>'message_id')) AS grp_n,
-          ROW_NUMBER() OVER (
-            PARTITION BY workspace_id, lower(raw->>'message_id')
-            ORDER BY
-              marked_as_lead DESC,
-              (ch_data IS NOT NULL OR enrich_state = 'matched') DESC,
-              (category IS NOT NULL AND category NOT IN ('pending','other')) DESC,
-              COALESCE(confidence, 0) DESC,
-              (ingest_source = 'pv-api') DESC,
-              created_at ASC
-          ) AS rn
-          FROM unibox_replies
-         WHERE COALESCE(raw->>'message_id','') <> ''
-           AND received_at > NOW() - INTERVAL '14 days'
+        SELECT id, workspace_id, lower(raw->>'message_id') AS mid,
+          ROW_NUMBER() OVER (PARTITION BY workspace_id, lower(raw->>'message_id') ORDER BY ${RANK_ORDER}) AS rn,
+          COUNT(*) OVER (PARTITION BY workspace_id, lower(raw->>'message_id')) AS grp_n
+          FROM unibox_replies WHERE ${SCOPE}
+      ),
+      agg AS (
+        SELECT r.workspace_id, r.mid,
+          (array_agg(u.ch_data)      FILTER (WHERE u.ch_data IS NOT NULL))[1] AS ch_data,
+          bool_or(u.enrich_state = 'matched')                                 AS matched,
+          max(u.confidence)                                                   AS confidence,
+          (array_agg(u.category)     FILTER (WHERE u.category IS NOT NULL AND u.category NOT IN ('pending','other')))[1] AS category,
+          (array_agg(u.campaign_id)  FILTER (WHERE u.campaign_id IS NOT NULL))[1]     AS campaign_id,
+          (array_agg(u.portal_email_id) FILTER (WHERE u.portal_email_id IS NOT NULL))[1] AS portal_email_id
+        FROM ranked r JOIN unibox_replies u ON u.id = r.id
+        WHERE r.grp_n > 1
+        GROUP BY r.workspace_id, r.mid
+      )
+      UPDATE unibox_replies k SET
+        ch_data         = COALESCE(k.ch_data, a.ch_data),
+        enrich_state    = CASE WHEN k.enrich_state = 'matched' OR a.matched THEN 'matched' ELSE k.enrich_state END,
+        confidence      = GREATEST(COALESCE(k.confidence, 0), COALESCE(a.confidence, 0)),
+        category        = CASE WHEN k.category IS NULL OR k.category IN ('pending','other') THEN COALESCE(a.category, k.category) ELSE k.category END,
+        campaign_id     = COALESCE(k.campaign_id, a.campaign_id),
+        portal_email_id = COALESCE(k.portal_email_id, a.portal_email_id),
+        updated_at      = NOW()
+      FROM ranked r JOIN agg a ON a.workspace_id = r.workspace_id AND a.mid = r.mid
+      WHERE k.id = r.id AND r.rn = 1`)
+    // 2. Delete the redundant copies (keeper now has their data). Never a marked lead.
+    const dd = await ddClient.query(`
+      WITH ranked AS (
+        SELECT id, marked_as_lead,
+          ROW_NUMBER() OVER (PARTITION BY workspace_id, lower(raw->>'message_id') ORDER BY ${RANK_ORDER}) AS rn
+          FROM unibox_replies WHERE ${SCOPE}
       )
       DELETE FROM unibox_replies u USING ranked r
-       WHERE u.id = r.id
-         AND r.grp_n > 1            -- there is a duplicate to fall back on
-         AND r.rn > 1               -- this is NOT the chosen keeper
-         AND r.marked_as_lead = FALSE                                   -- never a lead
-         AND r.ch_data IS NULL AND COALESCE(r.enrich_state,'') <> 'matched'  -- no enrichment
-         AND (r.category IS NULL OR r.category IN ('pending','other'))  -- no real classification`)
+       WHERE u.id = r.id AND r.rn > 1 AND r.marked_as_lead = FALSE`)
     deduped = dd.rowCount ?? 0
+    await ddClient.query('COMMIT')
   } catch (err) {
+    await ddClient.query('ROLLBACK').catch(() => {})
     errors.push(`dedup: ${String(err).slice(0, 80)}`)
+  } finally {
+    ddClient.release()
   }
 
   const summary = { workspaces: processedWs, totalWorkspaces: workspaces.length, ...totals, deduped, errors }
