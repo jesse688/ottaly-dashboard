@@ -161,6 +161,9 @@ export async function getPlusVibeReceived(
 
 // Reply to a PlusVibe unibox email. POST /unibox/emails/reply?workspace_id=...
 // `from` is optional — if omitted PlusVibe infers the sender from the reply_to_id.
+// Attachments are supported natively: PV takes an array of { file_name, content }
+// where content is base64 — so a client reply WITH a file still sends from the
+// client's own mailbox (no Resend, no Ottaly-identity leak).
 export async function sendPlusVibeReply(opts: {
   workspaceId: string
   replyToId: string
@@ -169,6 +172,7 @@ export async function sendPlusVibeReply(opts: {
   to: string
   body: string
   cc?: string
+  attachments?: { filename: string; content: Buffer }[]
 }): Promise<{ ok: boolean; reason?: string }> {
   const key = process.env.PLUSVIBE_API_KEY ?? process.env.PLUSVIBE_KEY
   if (!key) return { ok: false, reason: 'no_pv_key' }
@@ -185,8 +189,11 @@ export async function sendPlusVibeReply(opts: {
           to: opts.to,
           body: opts.body,
           ...(opts.cc ? { cc: opts.cc } : {}),
+          ...(opts.attachments?.length
+            ? { attachments: opts.attachments.map(a => ({ file_name: a.filename, content: a.content.toString('base64') })) }
+            : {}),
         }),
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(30000),
       }
     )
     if (!res.ok) {

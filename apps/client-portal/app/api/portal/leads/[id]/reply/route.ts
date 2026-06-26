@@ -128,20 +128,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   ).catch(err => console.error('[reply] persist failed:', err))
 
   // 2. Attempt live send.
-  // PlusVibe is the ONLY send path for a client reply. Resend is NOT used to send
-  // mail to leads — it leaked Ottaly's identity (a lead saw "Ottaly" reply to
-  // their cold email) and is now strictly for internal/notification email.
-  // Bison/EmailBison is fully retired. We do NOT branch on the inbound id prefix.
-  //
-  // ATTACHMENTS: PlusVibe's reply API doesn't carry attachments in our current
-  // integration, so a reply WITH an attachment does NOT auto-send — it's flagged
-  // for manual send (the team gets notified with the full content). Better to send
-  // it by hand from the client's mailbox than to auto-send from the wrong identity.
+  // PlusVibe is the ONLY send path for a client reply — always from the CLIENT'S
+  // mailbox. Resend is NEVER used to send mail to a lead (it leaked Ottaly's
+  // identity); it's strictly notifications now. Bison/EmailBison is retired, and we
+  // do NOT branch on the inbound id prefix. Attachments are sent natively by PV
+  // (file_name + base64), so a reply with a file still goes from the client.
   let send: { ok: boolean; reason?: string } = { ok: false, reason: 'no-reply-id-in-cache' }
-  if (attachments.length > 0) {
-    send = { ok: false, reason: 'has-attachment-send-manually' }
-    console.warn('[reply] attachment reply — not auto-sent (PlusVibe has no attachment path); flagged for manual send')
-  } else {
+  {
     // Resolve the REAL PlusVibe email id + sending mailbox from the unibox API by
     // lead email. Our DB id may be synthetic (unibox_/pv_) or a stale numeric
     // Bison id — neither is what PV's reply API wants, so we always look up the
@@ -166,6 +159,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         to: toList,
         body: html,
         cc: ccList || undefined,
+        attachments: attachments.length ? attachments : undefined,
       })
     }
   }
