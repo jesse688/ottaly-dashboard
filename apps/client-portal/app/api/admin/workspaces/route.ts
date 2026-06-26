@@ -30,6 +30,10 @@ export async function GET() {
       SELECT workspace_id, NULL FROM esp_leads WHERE workspace_id IS NOT NULL AND workspace_id <> ''
       UNION ALL
       SELECT workspace_id, NULL FROM unibox_replies WHERE workspace_id IS NOT NULL AND workspace_id <> ''
+      UNION ALL
+      -- Workspaces that only have ingested email threads yet (no campaigns/leads
+      -- synced) would otherwise be invisible.
+      SELECT workspace_id, NULL FROM portal_emails WHERE workspace_id IS NOT NULL AND workspace_id <> ''
     ),
     named AS (
       SELECT workspace_id,
