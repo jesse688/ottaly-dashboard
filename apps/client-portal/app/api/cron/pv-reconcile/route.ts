@@ -125,10 +125,23 @@ export async function GET(req: NextRequest) {
       const ourMailbox = (e.eaccount || '').toLowerCase()
       const campaignLead = (e.lead || '').toLowerCase()
       const authoredByUs = !!sender && !!ourMailbox && sender === ourMailbox
+
+      // COLLEAGUE DETECTION. A reply can come from a DIFFERENT person at the lead's
+      // company (e.g. lee@einhell.com replies on the thread to rebecca@einhell.com).
+      // That sender ≠ the campaign lead, but it's a GENUINE inbound reply — it must
+      // NOT be dropped as "outbound". Our own mailboxes live on OUR sending domains,
+      // never the lead's domain, so "sender domain == lead domain AND sender ≠ lead"
+      // cleanly identifies a same-company colleague and never our own echo.
+      const senderDomain = sender.split('@')[1] || ''
+      const leadDomain = campaignLead.split('@')[1] || ''
+      const sameCompanyColleague = !!senderDomain && senderDomain === leadDomain && sender !== campaignLead
+
       // sender≠lead only proves "outbound" when `lead` is trustworthy — i.e. the
       // tracked 'received' feed. In 'untracked' (Others) PV's lead field is
       // unreliable, so rely on the authored-by-our-mailbox signal alone there.
-      const authoredByNonLead = feed === 'received' && !!sender && !!campaignLead && sender !== campaignLead
+      // EXCEPTION: never treat a same-company colleague as outbound — surface it.
+      const authoredByNonLead = feed === 'received' && !!sender && !!campaignLead
+        && sender !== campaignLead && !sameCompanyColleague
       if (authoredByUs || authoredByNonLead) { c.skipped_outbound++; continue }
 
       // The lead = the actual author (proven to be the prospect by the guard above),
@@ -140,7 +153,13 @@ export async function GET(req: NextRequest) {
       if (warm.isWarmup) { c.skipped_warmup++; continue }
 
       // Route by PV's own label (no Gemini dependency). Unlabelled → Review pending.
-      const { category, folder, state } = routeFromPvLabel((e.label ?? '').toUpperCase())
+      let { category, folder, state } = routeFromPvLabel((e.label ?? '').toUpperCase())
+      // A same-company colleague reply is keyed under the COLLEAGUE's email, so it
+      // won't thread under the original lead on the client dashboard. Force it into
+      // Review and stamp matched_lead_email so the operator sees the hint and can
+      // "Assign to lead" (per the chosen workflow: surface, don't auto-attach).
+      const matchedLeadEmail = sameCompanyColleague ? campaignLead : null
+      if (sameCompanyColleague) { folder = 'review'; state = 'done' }
       const isOoo = folder === 'ooo'
 
       // Key on the RFC Message-ID when present (stable per email) so PlusVibe
@@ -152,13 +171,14 @@ export async function GET(req: NextRequest) {
         `INSERT INTO unibox_replies
            (bison_team_id, bison_reply_id, workspace_id, client_id, lead_email, sender_email,
             subject, body_preview, classify_state, folder, category, raw, received_at,
-            ingest_source, mailbox_email, campaign_id, last_seen_at)
-         VALUES ($1,$2,$3,$4,$5,$5,$6,$7,$8,$9,$10,$11,$12,'pv-api',$13,$14,NOW())
+            ingest_source, mailbox_email, campaign_id, is_forwarded, matched_lead_email, matched_by, last_seen_at)
+         VALUES ($1,$2,$3,$4,$5,$5,$6,$7,$8,$9,$10,$11,$12,'pv-api',$13,$14,$15,$16,$17,NOW())
          ON CONFLICT (bison_team_id, bison_reply_id) DO UPDATE SET
            last_seen_at  = NOW(),
            workspace_id  = COALESCE(unibox_replies.workspace_id, EXCLUDED.workspace_id),
            client_id     = COALESCE(unibox_replies.client_id, EXCLUDED.client_id),
            mailbox_email = COALESCE(unibox_replies.mailbox_email, EXCLUDED.mailbox_email),
+           matched_lead_email = COALESCE(unibox_replies.matched_lead_email, EXCLUDED.matched_lead_email),
            updated_at    = NOW()
          RETURNING (xmax = 0) AS inserted`,
         [
@@ -167,6 +187,7 @@ export async function GET(req: NextRequest) {
           state, folder, category, JSON.stringify(e),
           e.timestamp_created ?? new Date().toISOString(),
           e.eaccount ?? null, e.campaign_id ?? null,
+          sameCompanyColleague, matchedLeadEmail, sameCompanyColleague ? 'domain' : null,
         ]
       ).catch(err => { console.error(`[pv-reconcile] upsert failed ws=${ws} id=${e.id}:`, err); return null })
 

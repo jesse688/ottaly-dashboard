@@ -482,7 +482,10 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
     const d = await res.json().catch(() => ({})) as { ok?: boolean; sentLive?: boolean }
     setReplying(false)
     if (d.ok) {
-      setReplyMsg(d.sentLive ? 'Reply sent.' : 'Reply received — our team will send it shortly.')
+      // Always tell the client it sent — even if live-send didn't go through, the
+      // team is notified (with the To/Cc) and sends it manually behind the scenes.
+      // The client should never see a hitch.
+      setReplyMsg('Reply sent.')
       // Replying on the dashboard moves the lead out of Unread.
       // Set has_outbound too (that's what isReplied reads now) so the lead leaves
       // "Needs reply" immediately; has_sent kept for the Sent view filter.

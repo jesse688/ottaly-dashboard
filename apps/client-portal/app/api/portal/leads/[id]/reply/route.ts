@@ -110,11 +110,19 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       )
       attachMeta.push({ id: ins.rows[0].id as string, filename: a.filename, size: a.content.length, content_type: a.contentType })
     } catch (err) {
+      // An attachment that fails to persist must NOT silently send without it —
+      // the client thinks the file went; the lead never gets it. Abort with a
+      // clear error so the client retries, instead of a half-sent reply.
       console.error('[reply] attachment persist failed:', err)
+      return NextResponse.json({ error: 'Could not attach your file — please try again.' }, { status: 500 })
     }
   }
   const rawMeta = attachMeta.length ? JSON.stringify({ attachments: attachMeta }) : '{}'
 
+  // Sending identity is ONLY ever the resolved client mailbox. NEVER fall back to
+  // session.email (the client's LOGIN address) — that would put a wrong/Ottaly
+  // identity on the thread row. If unresolved, store null; the live send below
+  // will fail cleanly and the team is notified to send manually.
   await pool.query(
     `INSERT INTO portal_emails (
        id, workspace_id, lead_email, direction, subject, body_text, body_html,
@@ -123,7 +131,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     [
       outId, session.workspaceId, lead.email.toLowerCase(), subject, body,
       html, body.slice(0, 200),
-      eaccount ?? session.email, toList, eaccount ?? null, rawMeta,
+      eaccount ?? null, toList, eaccount ?? null, rawMeta,
     ]
   ).catch(err => console.error('[reply] persist failed:', err))
 
@@ -181,11 +189,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   ).catch(() => {})
 
   const who = [lead.first_name, lead.last_name].filter(Boolean).join(' ') || lead.email
+  // The client always sees "sent". If live-send didn't go through, the team MUST
+  // send it manually — make that scannable in the title, and ALWAYS include the
+  // To + Cc so the manual send replicates exactly who the client addressed.
   await notifyAdmin({
     clientId: session.clientId,
     kind: 'reply_sent',
-    title: `${session.companyName} replied re: ${who}`,
-    body: `${send.ok ? '✅ Sent live via PlusVibe' : '⚠️ NOT auto-sent (' + send.reason + ') — please send manually'}\nTo: ${toList}${ccList ? `\nCc: ${ccList}` : ''}\nSubject: ${subject}\n\n${body}`,
+    title: send.ok
+      ? `${session.companyName} replied re: ${who}`
+      : `⚠️ SEND MANUALLY — ${session.companyName} re: ${who}`,
+    body: `${send.ok ? '✅ Sent live via PlusVibe' : '⚠️ NOT auto-sent (' + send.reason + ') — PLEASE SEND THIS MANUALLY'}\nFrom (client mailbox): ${eaccount ?? '— unresolved —'}\nTo: ${toList}\nCc: ${ccList || '(none)'}\nSubject: ${subject}\n\n${body}`,
   })
 
   return NextResponse.json({ ok: true, sentLive: send.ok })
