@@ -102,6 +102,29 @@ export interface PVReceivedEmail {
   text_body?: string | null
 }
 
+// Live list of ALL PlusVibe workspaces (id + name) for this API key. Used to
+// populate the admin "add client" picker from the SOURCE OF TRUTH, so a client
+// is always attached to a real workspace by name — never a free-typed id (that's
+// how an API key once got pasted into the workspace field).
+export async function getPlusVibeWorkspaces(): Promise<{ id: string; name: string }[]> {
+  const key = process.env.PLUSVIBE_API_KEY ?? process.env.PLUSVIBE_KEY
+  if (!key) return []
+  try {
+    const res = await fetch('https://api.plusvibe.ai/api/v1/workspaces', {
+      headers: { 'x-api-key': key, 'User-Agent': 'Mozilla/5.0' },
+      signal: AbortSignal.timeout(10000),
+    })
+    if (!res.ok) return []
+    const json = await res.json() as unknown
+    const arr = Array.isArray(json) ? json : ((json as { data?: unknown[] }).data ?? [])
+    return (arr as { id?: string; name?: string }[])
+      .filter(w => !!w.id)
+      .map(w => ({ id: w.id as string, name: (w.name || w.id) as string }))
+  } catch {
+    return []
+  }
+}
+
 // Page the PlusVibe unibox emails for a whole workspace (newest-first).
 // THIS is where replies live — Bison/EmailBison is retired and returns nothing.
 // Stops when a page is older than sinceMs, when there are no new ids (param

@@ -1,25 +1,38 @@
 import { NextResponse } from 'next/server'
 import { getAdminSession } from '@/lib/auth'
+import { getPlusVibeWorkspaces } from '@/lib/plusvibe'
 import pool from '@/lib/db'
 
 // Workspaces available to attach a new client to.
 //
-// We are on PlusVibe ONLY now. The old version read esp_workspaces WHERE
-// source='plusvibe' — but nothing populates that table for PV, so the dropdown
-// was empty and new clients couldn't be created. PlusVibe has no clean
-// "list workspaces" API either.
+// PRIMARY SOURCE = the live PlusVibe workspaces API (the source of truth). This
+// lists every REAL workspace by name, so the admin picks "BlueHawk" and gets the
+// correct id automatically — a free-typed/wrong id (how an API key once got
+// pasted into the workspace field) becomes impossible. Workspaces already
+// attached to a client are excluded.
 //
-// Fix: derive the list from EVERY workspace_id that actually appears in our own
-// data — campaigns, leads, the unibox reply feed, and esp_workspaces if it
-// happens to have rows. Pick the best human name we can find. This is
-// dependency-free (no external call) and self-heals as PV data flows in.
-//
-// Workspaces already attached to a client are excluded so the dropdown only
-// offers ones you can still add. A brand-new workspace with no data yet won't
-// appear here — the form also accepts a manually-typed workspace_id for that.
+// FALLBACK (PV API unreachable) = derive from workspace_ids that appear in our
+// own data so the dropdown is never empty.
 export async function GET() {
   if (!await getAdminSession()) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+  // Already-attached workspaces — excluded from the picker either way.
+  const takenRes = await pool.query(
+    `SELECT DISTINCT workspace_id FROM portal_clients WHERE workspace_id IS NOT NULL AND workspace_id <> ''`
+  ).catch(() => ({ rows: [] as { workspace_id: string }[] }))
+  const taken = new Set((takenRes.rows as { workspace_id: string }[]).map(r => r.workspace_id))
+
+  // Live PlusVibe workspaces (source of truth).
+  const pv = await getPlusVibeWorkspaces()
+  if (pv.length) {
+    const rows = pv
+      .filter(w => !taken.has(w.id))
+      .map(w => ({ id: w.id, name: w.name, active_campaigns: 0 }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+    return NextResponse.json(rows)
+  }
+
+  // Fallback: derive from our own data if PV is unreachable.
   const res = await pool.query(`
     WITH ws AS (
       -- esp_workspaces (if/when populated) — best source of a real name.
