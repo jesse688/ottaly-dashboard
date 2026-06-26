@@ -109,15 +109,24 @@ export async function GET(req: NextRequest) {
     // replying from a different address at the same company is linked to that
     // lead). The Others folder is mostly cold-inbound spam, so anything that
     // matches NEITHER is skipped — we never flood the unibox with it.
-    const exactLeads = new Set<string>()
-    const leadByDomain = new Map<string, string>()
+    const exactLeads = new Set<string>()      // ANY address in our system (exact sender match)
+    const leadByDomain = new Map<string, string>()  // CONFIRMED leads only, by corporate domain
     try {
       const lr = await pool.query(
-        `SELECT DISTINCT lower(email) AS email FROM esp_leads
-          WHERE workspace_id = $1 AND email IS NOT NULL AND email <> ''`, [ws])
-      for (const row of lr.rows as { email: string }[]) {
+        `SELECT DISTINCT lower(email) AS email,
+                bool_or(label IN ('INTERESTED','INFO') OR status = 'MEETING_BOOKED') AS confirmed
+           FROM esp_leads
+          WHERE workspace_id = $1 AND email IS NOT NULL AND email <> ''
+          GROUP BY lower(email)`, [ws])
+      for (const row of lr.rows as { email: string; confirmed: boolean }[]) {
         const em = row.email
         exactLeads.add(em)
+        // Colleague domain-matching ONLY targets CONFIRMED leads (marked
+        // Interested/Info or meeting-booked) — NOT raw cold prospects, and NOT
+        // unsubscribes / not-interested / OOO. Matching a colleague reply to an
+        // unsubscribed or never-qualified contact produced confusing "Needs
+        // Associating" entries (e.g. sue.bryce → matthew.ward who had unsubscribed).
+        if (!row.confirmed) continue
         const dom = em.split('@')[1] || ''
         if (dom && !GENERIC_DOMAINS.has(dom) && !leadByDomain.has(dom)) leadByDomain.set(dom, em)
       }

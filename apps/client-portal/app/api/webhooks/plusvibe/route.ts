@@ -75,23 +75,12 @@ export async function POST(req: NextRequest) {
       // PlusVibe path doesn't set its own outcome; mark it terminal here.
       if (deliveryId) await markDelivery(deliveryId, 'done:plusvibe')
     } else {
-      // Bison path. We ingest every REPLY/LEAD event even with full Bison ingest
-      // disabled, because relying on Bison's "interested" flag loses leads: a
-      // TRACKED reply Bison marks not-interested (e.g. Scalford Court — a clear
-      // "we'd be interested" that Bison flagged interested:false) never reaches our
-      // unibox, so OUR classifier never sees it. Ingesting these lets us decide.
-      // All are idempotent on (bison_team_id, bison_reply_id), so re-ingest via the
-      // backfill cron can't duplicate. Non-reply Bison events stay gated.
-      const bisonEventType = String((parsed.event as { type?: string } | undefined)?.type ?? '').toLowerCase()
-      const REPLY_EVENTS = new Set(['untracked_reply_received', 'lead_replied', 'lead_interested'])
-      if (!BISON_INGEST_ENABLED && !REPLY_EVENTS.has(bisonEventType)) {
-        if (deliveryId) await markDelivery(deliveryId, 'skipped:bison_ingest_disabled')
-      } else {
-        // handleBison sets its OWN specific outcome (stored:<folder> | skipped:<why>
-        // | error:...). Don't overwrite it; finalizeDelivery only fills a blank.
-        await handleBison(parsed, deliveryId)
-        if (deliveryId) await finalizeDelivery(deliveryId)
-      }
+      // BISON IS RETIRED. We no longer ingest Bison webhook deliveries — replies
+      // now come from the PlusVibe cron (/unibox/emails + /unibox/other-emails).
+      // Ingesting Bison events too created DUPLICATE rows (raw_message_id, no PV
+      // message_id) that fought the PV copies in the unibox and made items flicker
+      // in/out. Log + acknowledge only; never ingest.
+      if (deliveryId) await markDelivery(deliveryId, 'skipped:bison_retired')
     }
 
     return NextResponse.json({ ok: true })
