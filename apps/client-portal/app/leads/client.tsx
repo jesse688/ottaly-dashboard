@@ -1359,6 +1359,16 @@ function RichReply({ toEmail, ccEmail = '', placeholderName, sending, statusMsg,
   function onPickAttachment(e: ChangeEvent<HTMLInputElement>) {
     const picked = Array.from(e.target.files ?? [])
     if (!picked.length) return
+
+    const MAX_FILE_SIZE = 25 * 1024 * 1024 // 25MB
+    const oversized = picked.filter(f => f.size > MAX_FILE_SIZE)
+    if (oversized.length > 0) {
+      const names = oversized.map(f => f.name).join(', ')
+      alert(`File too large: ${names}\n\nLimit: 25MB per file`)
+      e.target.value = ''
+      return
+    }
+
     setAttachedFiles(prev => [...prev, ...picked])
     e.target.value = ''
   }
