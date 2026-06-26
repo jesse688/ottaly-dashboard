@@ -391,10 +391,16 @@ export async function GET(req: NextRequest) {
       FROM ranked r JOIN agg a ON a.workspace_id = r.workspace_id AND a.mid = r.mid
       WHERE k.id = r.id AND r.rn = 1`)
     // 2. Delete the redundant copies (keeper now has their data). Never a marked lead.
+    // CRITICAL: partition by the SAME ${MID} as the merge above — NOT
+    // lower(raw->>'message_id'). Using message_id alone put every reply that has
+    // only a raw_message_id (webhook path / no PV message_id) into one shared
+    // NULL partition and deleted all but one — destroying genuinely-distinct
+    // replies. That made real replies vanish from the unibox. Same identity in
+    // both steps = only true same-Message-ID duplicates ever collapse.
     const dd = await ddClient.query(`
       WITH ranked AS (
         SELECT id, marked_as_lead,
-          ROW_NUMBER() OVER (PARTITION BY workspace_id, lower(raw->>'message_id') ORDER BY ${RANK_ORDER}) AS rn
+          ROW_NUMBER() OVER (PARTITION BY workspace_id, ${MID} ORDER BY ${RANK_ORDER}) AS rn
           FROM unibox_replies WHERE ${SCOPE}
       )
       DELETE FROM unibox_replies u USING ranked r
