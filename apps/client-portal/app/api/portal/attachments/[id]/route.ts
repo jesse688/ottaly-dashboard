@@ -30,11 +30,29 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   const download = req.nextUrl.searchParams.get('download') === '1'
   // Quote the filename so spaces/special chars don't break the header.
   const safeName = a.filename.replace(/"/g, '')
+
+  // XSS HARDENING. The stored content_type comes from the uploader (or an inbound
+  // email) and is otherwise trusted verbatim. An "active" type — SVG, HTML, XML,
+  // JS — served inline on our own origin can run script (steal the session). So:
+  //  • only PREVIEW (inline) a small allowlist of inert types; everything else
+  //    downloads.
+  //  • for active types, override the Content-Type to octet-stream so the browser
+  //    can't be tricked into executing it even on download.
+  //  • X-Content-Type-Options: nosniff stops MIME-sniffing past our decision.
+  const rawType = (a.content_type || 'application/octet-stream').toLowerCase()
+  const INLINE_SAFE = new Set([
+    'application/pdf', 'text/plain',
+    'image/png', 'image/jpeg', 'image/gif', 'image/webp',
+  ])
+  const ACTIVE = /(svg|html|xml|javascript|ecmascript)/i.test(rawType)
+  const serveType = ACTIVE ? 'application/octet-stream' : rawType
+  const inline = !download && INLINE_SAFE.has(rawType)
   return new NextResponse(bytes, {
     headers: {
-      'Content-Type': a.content_type || 'application/octet-stream',
-      'Content-Disposition': `${download ? 'attachment' : 'inline'}; filename="${safeName}"`,
+      'Content-Type': serveType,
+      'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename="${safeName}"`,
       'Content-Length': String(bytes.length),
+      'X-Content-Type-Options': 'nosniff',
       'Cache-Control': 'private, max-age=3600',
     },
   })

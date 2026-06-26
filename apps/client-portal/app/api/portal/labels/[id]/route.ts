@@ -15,7 +15,9 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   )
   if (!check.rows.length) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
-  await pool.query('DELETE FROM portal_client_labels WHERE id = $1', [id])
+  // Scope the DELETE to the client too (not just the prior check) so the mutation
+  // itself can never touch another client's label.
+  await pool.query('DELETE FROM portal_client_labels WHERE id = $1 AND client_id = $2', [id, session.clientId])
 
   return NextResponse.json({ ok: true })
 }

@@ -32,8 +32,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   if (upd.rows[0].invoice_id) {
     await pool.query(
-      `UPDATE portal_invoices SET amount = $1, description = $2 WHERE id = $3 AND status = 'unpaid'`,
-      [priced.total, `Lead top-up — ${amt} leads`, upd.rows[0].invoice_id]
+      `UPDATE portal_invoices SET amount = $1, description = $2 WHERE id = $3 AND client_id = $4 AND status = 'unpaid'`,
+      [priced.total, `Lead top-up — ${amt} leads`, upd.rows[0].invoice_id, session.clientId]
     )
   }
   return NextResponse.json({ ok: true })
@@ -55,7 +55,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   if (!upd.rows.length) return NextResponse.json({ error: 'This request has already been processed.' }, { status: 409 })
 
   if (upd.rows[0].invoice_id) {
-    await pool.query(`DELETE FROM portal_invoices WHERE id = $1 AND status = 'unpaid'`, [upd.rows[0].invoice_id])
+    await pool.query(`DELETE FROM portal_invoices WHERE id = $1 AND client_id = $2 AND status = 'unpaid'`, [upd.rows[0].invoice_id, session.clientId])
   }
   return NextResponse.json({ ok: true })
 }
