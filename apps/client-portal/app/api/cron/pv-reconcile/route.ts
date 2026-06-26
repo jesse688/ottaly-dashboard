@@ -39,6 +39,21 @@ function routeFromPvLabel(label: string): { category: string | null; folder: str
   }
 }
 
+// STABLE per-email identity for dedup. The RFC Message-ID is best (identical no
+// matter which feed/run surfaces the email). When it's absent, PV's internal
+// `id` DIFFERS between the 'received' and 'untracked' feeds and across runs — so
+// keying on it created TWO rows for one email (it then showed in both Review and
+// Leads). Fall back to a CONTENT signature (sender + minute + subject) that is
+// identical for the same email everywhere, so ON CONFLICT collapses them to one.
+function stableEmailKey(e: PVReceivedEmail): string {
+  if (e.message_id) return `pv_${e.message_id}`
+  const sender = (e.from_address_email || e.lead || '').toLowerCase()
+  // Round the timestamp to the minute so tiny per-feed jitter can't split it.
+  const minute = (e.timestamp_created || '').slice(0, 16)
+  const subj = (e.subject || '').trim().slice(0, 120).toLowerCase()
+  return `pvc_${sender}|${minute}|${subj}`
+}
+
 export async function GET(req: NextRequest) {
   const url = new URL(req.url)
   const secret = url.searchParams.get('secret')
@@ -92,14 +107,16 @@ export async function GET(req: NextRequest) {
       // two differently: in 'untracked' (Others), PV's `lead` field is unreliable
       // (that's WHY it's untracked), so we must not use the sender≠lead test there
       // or we'd drop genuine replies like the one this fix recovers.
+      // Dedup across BOTH feeds by the stable content identity (not PV's per-feed
+      // id) so the same email surfacing in received AND untracked is one row.
       const byId = new Map<string, PVReceivedEmail & { _feed: 'received' | 'untracked' }>()
       for (const e of tracked) {
-        const k = e.message_id || e.id
-        if (k && !byId.has(k)) byId.set(k, { ...e, _feed: 'received' })
+        const k = stableEmailKey(e)
+        if (!byId.has(k)) byId.set(k, { ...e, _feed: 'received' })
       }
       for (const e of untracked) {
-        const k = e.message_id || e.id
-        if (k && !byId.has(k)) byId.set(k, { ...e, _feed: 'untracked' })
+        const k = stableEmailKey(e)
+        if (!byId.has(k)) byId.set(k, { ...e, _feed: 'untracked' })
       }
       emails = [...byId.values()]
     } catch (err) {
@@ -167,10 +184,11 @@ export async function GET(req: NextRequest) {
       if (sameCompanyColleague) { folder = 'review'; state = 'done' }
       const isOoo = folder === 'ooo'
 
-      // Key on the RFC Message-ID when present (stable per email) so PlusVibe
-      // returning the same reply under two internal ids can't create a duplicate;
-      // fall back to PV's id.
-      const dedupeKey = `pv_${e.message_id || e.id}`
+      // Content-stable key (Message-ID, else sender+minute+subject) so the same
+      // email never creates two rows across feeds/runs. THIS is the dup fix: the
+      // old `message_id || id` split into two rows when message_id was absent and
+      // the two feeds gave different ids — the email then showed in Review AND Leads.
+      const dedupeKey = stableEmailKey(e)
 
       const ins = await pool.query(
         `INSERT INTO unibox_replies
