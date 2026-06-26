@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
     setCustomWarmupTerms(ct.rows.map(r => r.term as string))
   } catch { setCustomWarmupTerms([]) }
 
-  const summary = { processed: 0, interested: 0, failed: 0, unsubscribed: 0 }
+  const summary = { processed: 0, interested: 0, failed: 0, unsubscribed: 0, enriched: 0 }
   // Unsubscribe actions to run AFTER commit (network + stateful Bison switch).
   const unsubQueue: { workspaceId: string; email: string }[] = []
   const client = await pool.connect()
@@ -255,6 +255,39 @@ export async function GET(req: NextRequest) {
     } catch (err) {
       console.error('[cron/classify] auto-unsub failed:', email, String(err))
     }
+  }
+
+  // ── ENRICHMENT PASS ─────────────────────────────────────────────────────────
+  // Companies-House enrichment used to run ONLY for rows this classify loop
+  // processed (pending→done). But the ingest cron routes PV-labelled
+  // interested/question replies STRAIGHT to 'done', so they skipped classify and
+  // never got a CH lookup — new leads showed with just an email, no company panel
+  // (the "replies don't have data anymore" regression). Fill them here: recent
+  // positive replies that were never enriched (enrich_state IS NULL). Idempotent
+  // (enrichReplyWithCH skips already-matched), bounded, and time-budgeted — CH is
+  // rate-limited (~1-2s each) and classify's maxDuration is 300s.
+  const ENRICH_DEADLINE = Date.now() + 120_000
+  try {
+    const pending = await pool.query(
+      `SELECT u.id, u.lead_email,
+              (SELECT company_name FROM esp_leads e
+                WHERE e.workspace_id = u.workspace_id AND lower(e.email) = lower(u.lead_email)
+                ORDER BY updated_at DESC NULLS LAST LIMIT 1) AS company_name
+         FROM unibox_replies u
+        WHERE COALESCE(u.admin_label, u.category) IN ('interested','question')
+          AND u.enrich_state IS NULL
+          AND u.lead_email IS NOT NULL AND u.lead_email <> ''
+          AND u.received_at > NOW() - INTERVAL '14 days'
+        ORDER BY u.received_at DESC
+        LIMIT 60`
+    )
+    for (const r of pending.rows as { id: string; lead_email: string; company_name: string | null }[]) {
+      if (Date.now() > ENRICH_DEADLINE) break
+      await enrichReplyWithCH(r.id, { email: r.lead_email, companyName: r.company_name }).catch(() => {})
+      summary.enriched++
+    }
+  } catch (err) {
+    console.error('[cron/classify] enrichment pass failed:', String(err))
   }
 
   return NextResponse.json(summary)

@@ -115,9 +115,17 @@ export async function reconcileLeadCharges(clientId: string): Promise<number> {
   // -1 lead for every INTERESTED lead in the workspace without a charge. If a
   // charges_reset_at is set (a one-off "start from scratch"), only charge leads
   // delivered AFTER that point — pre-reset/backfilled leads are never re-billed.
+  // -1 ONCE PER EMAIL, not once per esp_leads row. Duplicate ingest paths can
+  // create TWO esp_leads rows for the same person (different synthetic ids) — the
+  // (client_id, lead_id) unique index wouldn't stop that becoming two charges. So
+  // we collapse to one lead per email: DISTINCT ON picks a single lead per email
+  // per run, and the email-level NOT EXISTS blocks re-charging across runs when a
+  // sibling row for the same email was already billed. NULL emails stay distinct
+  // (keyed by id) so they can't wrongly collapse together.
   const res = await pool.query(
     `INSERT INTO portal_ledger (client_id, type, amount, lead_id, description, created_by)
-     SELECT $1, 'lead_charge', -1, l.id,
+     SELECT DISTINCT ON (COALESCE(lower(l.email), l.id::text))
+            $1, 'lead_charge', -1, l.id,
             'Lead delivered: ' || COALESCE(l.first_name,'') || ' ' || COALESCE(l.last_name,'') ||
             CASE WHEN l.company_name IS NOT NULL THEN ' (' || l.company_name || ')' ELSE '' END,
             'system'
@@ -131,6 +139,15 @@ export async function reconcileLeadCharges(clientId: string): Promise<number> {
           SELECT 1 FROM portal_ledger pl
            WHERE pl.client_id = $1 AND pl.lead_id = l.id AND pl.type = 'lead_charge'
         )
+        AND NOT EXISTS (
+          -- already charged a SIBLING lead with the same email? then skip.
+          SELECT 1 FROM portal_ledger pl2
+            JOIN esp_leads l2 ON l2.id = pl2.lead_id
+           WHERE pl2.client_id = $1 AND pl2.type = 'lead_charge'
+             AND l.email IS NOT NULL AND lower(l2.email) = lower(l.email)
+        )
+      ORDER BY COALESCE(lower(l.email), l.id::text),
+               COALESCE(l.first_replied_at, l.created_at, l.synced_at) ASC NULLS LAST
      ON CONFLICT (client_id, lead_id) WHERE type = 'lead_charge' DO NOTHING`,
     [chargeClientId, row.workspace_id, row.charges_reset_at ?? null]
   )

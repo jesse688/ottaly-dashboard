@@ -349,7 +349,13 @@ export async function GET(req: NextRequest) {
     COALESCE(confidence, 0) DESC,
     (ingest_source = 'pv-api') DESC,
     created_at ASC`
-  const SCOPE = `COALESCE(raw->>'message_id','') <> '' AND received_at > NOW() - INTERVAL '14 days'`
+  // The SAME email carries ONE RFC Message-ID, but each ingest path stores it
+  // under a different JSON key: pv-api → raw.message_id, the Bison webhook →
+  // raw.raw_message_id. Coalesce them so a webhook copy and a pv-api copy of the
+  // same email share one identity and collapse. (No content fallback — matching
+  // the real Message-ID can't merge two genuinely-different emails.)
+  const MID = `lower(COALESCE(NULLIF(raw->>'message_id',''), NULLIF(raw->>'raw_message_id','')))`
+  const SCOPE = `${MID} IS NOT NULL AND received_at > NOW() - INTERVAL '14 days'`
   let deduped = 0
   const ddClient = await pool.connect()
   try {
@@ -357,9 +363,9 @@ export async function GET(req: NextRequest) {
     // 1. Keeper absorbs the best available data from its duplicate group.
     await ddClient.query(`
       WITH ranked AS (
-        SELECT id, workspace_id, lower(raw->>'message_id') AS mid,
-          ROW_NUMBER() OVER (PARTITION BY workspace_id, lower(raw->>'message_id') ORDER BY ${RANK_ORDER}) AS rn,
-          COUNT(*) OVER (PARTITION BY workspace_id, lower(raw->>'message_id')) AS grp_n
+        SELECT id, workspace_id, ${MID} AS mid,
+          ROW_NUMBER() OVER (PARTITION BY workspace_id, ${MID} ORDER BY ${RANK_ORDER}) AS rn,
+          COUNT(*) OVER (PARTITION BY workspace_id, ${MID}) AS grp_n
           FROM unibox_replies WHERE ${SCOPE}
       ),
       agg AS (
