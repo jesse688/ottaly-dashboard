@@ -317,7 +317,47 @@ export async function GET(req: NextRequest) {
       totals.skipped_outbound += c.skipped_outbound
     }
   }
-  const summary = { workspaces: processedWs, totalWorkspaces: workspaces.length, ...totals, errors }
+  // ── CONTINUOUS AUTO-DEDUP ──────────────────────────────────────────────────
+  // ROOT-CAUSE GUARD. TWO reconcilers write this table — this one (source
+  // 'pv-api', key pv_<message-id>) and an EXTERNAL one (source 'pv-reconciler',
+  // raw-id key). Their keys can't collide, so the same email lands twice and the
+  // scheduled dedup cron only cleaned it hours later. Instead, collapse true
+  // duplicates HERE every minute so they never surface.
+  //
+  // Identity = the RFC Message-ID (in raw for BOTH sources, so it's exact and
+  // source-agnostic) — NOT subject, so genuine same-subject follow-ups are safe.
+  // CLIENT-SAFE: keeps a marked lead first (never deletes a billed/triaged row),
+  // then the most-enriched/classified copy; deletes only the redundant rest.
+  // Clients read leads/threads, not raw unibox rows, so collapsing a duplicate
+  // here changes nothing they see. Bounded to recent rows so it's cheap.
+  let deduped = 0
+  try {
+    const dd = await pool.query(`
+      WITH ranked AS (
+        SELECT id,
+          ROW_NUMBER() OVER (
+            PARTITION BY workspace_id, lower(raw->>'message_id')
+            ORDER BY
+              marked_as_lead DESC,
+              (ch_data IS NOT NULL OR enrich_state = 'matched') DESC,
+              (category IS NOT NULL AND category NOT IN ('pending','other')) DESC,
+              COALESCE(confidence, 0) DESC,
+              (ingest_source = 'pv-api') DESC,
+              created_at ASC
+          ) AS rn
+          FROM unibox_replies
+         WHERE COALESCE(raw->>'message_id','') <> ''
+           AND received_at > NOW() - INTERVAL '14 days'
+      )
+      DELETE FROM unibox_replies u USING ranked r
+       WHERE u.id = r.id AND r.rn > 1
+         AND u.marked_as_lead = FALSE`)
+    deduped = dd.rowCount ?? 0
+  } catch (err) {
+    errors.push(`dedup: ${String(err).slice(0, 80)}`)
+  }
+
+  const summary = { workspaces: processedWs, totalWorkspaces: workspaces.length, ...totals, deduped, errors }
 
   await pool.query(
     `INSERT INTO esp_sync_log (source, status, leads_synced, finished_at) VALUES ($1,$2,$3,NOW())`,
