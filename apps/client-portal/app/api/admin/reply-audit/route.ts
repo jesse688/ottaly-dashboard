@@ -44,6 +44,11 @@ export async function GET(req: NextRequest) {
 
   type WsResult = {
     workspace_id: string; company: string | null
+    // GENUINE campaign replies (the "received" feed) — the number that matters.
+    genuine_replies: number; genuine_in_unibox: number; genuine_missing: number
+    // Others/spam feed — cold-inbound junk we DON'T fully ingest by design. Informational only.
+    other_replies: number; other_in_unibox: number; other_missing: number
+    // Legacy combined totals (kept so old dashboards don't break).
     pv_replies: number; in_unibox: number; missing_inbound: number
     client_sent: number; sent_live: number; unsent_outbound: number
     missing?: { from: string; subject: string | null; at: string | null }[]
@@ -57,32 +62,47 @@ export async function GET(req: NextRequest) {
     const ws = w.workspace_id
     const r: WsResult = {
       workspace_id: ws, company: w.company,
+      genuine_replies: 0, genuine_in_unibox: 0, genuine_missing: 0,
+      other_replies: 0, other_in_unibox: 0, other_missing: 0,
       pv_replies: 0, in_unibox: 0, missing_inbound: 0,
       client_sent: 0, sent_live: 0, unsent_outbound: 0,
     }
     try {
-      // 1. INBOUND — PV's replies (both feeds), keyed by RFC Message-ID.
+      // 1. INBOUND — PV's two feeds, keyed by RFC Message-ID and audited SEPARATELY.
+      //    "received" = genuine campaign-tracked replies (the real signal).
+      //    "other"    = the Others folder, ~99% cold-inbound spam we don't ingest by
+      //                 design (only colleague replies matched to a confirmed lead).
+      //    Mixing them makes "missing" look catastrophic when it's just spam — so we
+      //    report genuine_missing (act on this) apart from other_missing (ignore).
       const [received, others] = await Promise.all([
         getPlusVibeReceived(ws, { sinceMs, emailType: 'received', maxPages: 10 }),
         getPlusVibeReceived(ws, { sinceMs, emailType: 'untracked', maxPages: 5 }),
       ])
-      const pvByMid = new Map<string, { from: string; subject: string | null; at: string | null }>()
-      for (const e of [...received, ...others]) {
-        const mid = (e.message_id || e.id || '').toLowerCase()
-        if (!mid) continue
-        // Only count genuine inbound (skip our own outbound echoes the feed surfaces).
-        const sender = (e.from_address_email || '').toLowerCase()
-        const ourMailbox = (e.eaccount || '').toLowerCase()
-        if (sender && ourMailbox && sender === ourMailbox) continue
-        if (!pvByMid.has(mid)) pvByMid.set(mid, {
-          from: e.from_address_email || '', subject: e.subject ?? null, at: e.timestamp_created ?? null,
-        })
-      }
-      r.pv_replies = pvByMid.size
 
-      // Which of those Message-IDs do we already have in unibox_replies?
-      const mids = [...pvByMid.keys()]
-      if (mids.length) {
+      // Build a deduped Message-ID map per feed (skip our own outbound echoes).
+      const mapFeed = (feed: typeof received) => {
+        const m = new Map<string, { from: string; subject: string | null; at: string | null }>()
+        for (const e of feed) {
+          const mid = (e.message_id || e.id || '').toLowerCase()
+          if (!mid) continue
+          const sender = (e.from_address_email || '').toLowerCase()
+          const ourMailbox = (e.eaccount || '').toLowerCase()
+          if (sender && ourMailbox && sender === ourMailbox) continue
+          if (!m.has(mid)) m.set(mid, {
+            from: e.from_address_email || '', subject: e.subject ?? null, at: e.timestamp_created ?? null,
+          })
+        }
+        return m
+      }
+      const genuineMap = mapFeed(received)
+      // An item can appear in BOTH feeds; don't double-count it as "other".
+      const otherMap = mapFeed(others)
+      for (const mid of genuineMap.keys()) otherMap.delete(mid)
+
+      // Look up which Message-IDs we already hold in unibox_replies, in ONE query.
+      const allMids = [...new Set([...genuineMap.keys(), ...otherMap.keys()])]
+      const haveSet = new Set<string>()
+      if (allMids.length) {
         const have = await pool.query(
           `SELECT DISTINCT lower(COALESCE(NULLIF(raw->>'message_id',''), NULLIF(raw->>'raw_message_id',''),
                                           regexp_replace(bison_reply_id, '^pv_', ''))) AS mid
@@ -90,14 +110,31 @@ export async function GET(req: NextRequest) {
             WHERE workspace_id = $1 AND received_at >= $2
               AND lower(COALESCE(NULLIF(raw->>'message_id',''), NULLIF(raw->>'raw_message_id',''),
                                  regexp_replace(bison_reply_id, '^pv_', ''))) = ANY($3::text[])`,
-          [ws, sinceIso, mids]
+          [ws, sinceIso, allMids]
         )
-        const haveSet = new Set((have.rows as { mid: string }[]).map(x => x.mid))
-        r.in_unibox = haveSet.size
-        const missing = mids.filter(m => !haveSet.has(m)).map(m => pvByMid.get(m)!)
-        r.missing_inbound = missing.length
-        if (detail) r.missing = missing.slice(0, 50)
+        for (const x of have.rows as { mid: string }[]) haveSet.add(x.mid)
       }
+
+      const genuineMissing: { from: string; subject: string | null; at: string | null }[] = []
+      for (const [mid, info] of genuineMap) {
+        if (haveSet.has(mid)) r.genuine_in_unibox++
+        else genuineMissing.push(info)
+      }
+      r.genuine_replies = genuineMap.size
+      r.genuine_missing = genuineMissing.length
+
+      for (const mid of otherMap.keys()) {
+        if (haveSet.has(mid)) r.other_in_unibox++
+        else r.other_missing++
+      }
+      r.other_replies = otherMap.size
+
+      // Legacy combined fields.
+      r.pv_replies = r.genuine_replies + r.other_replies
+      r.in_unibox = r.genuine_in_unibox + r.other_in_unibox
+      r.missing_inbound = r.genuine_missing + r.other_missing
+      // detail now shows the GENUINE misses — the ones worth chasing.
+      if (detail) r.missing = genuineMissing.slice(0, 50)
 
       // 2. OUTBOUND — client replies sent from the portal + their live-send status.
       const out = await pool.query(
@@ -124,19 +161,31 @@ export async function GET(req: NextRequest) {
   }
 
   const totals = results.reduce((t, r) => ({
+    genuine_replies: t.genuine_replies + r.genuine_replies,
+    genuine_in_unibox: t.genuine_in_unibox + r.genuine_in_unibox,
+    genuine_missing: t.genuine_missing + r.genuine_missing,
+    other_replies: t.other_replies + r.other_replies,
+    other_missing: t.other_missing + r.other_missing,
     pv_replies: t.pv_replies + r.pv_replies,
     in_unibox: t.in_unibox + r.in_unibox,
     missing_inbound: t.missing_inbound + r.missing_inbound,
     client_sent: t.client_sent + r.client_sent,
     sent_live: t.sent_live + r.sent_live,
     unsent_outbound: t.unsent_outbound + r.unsent_outbound,
-  }), { pv_replies: 0, in_unibox: 0, missing_inbound: 0, client_sent: 0, sent_live: 0, unsent_outbound: 0 })
+  }), {
+    genuine_replies: 0, genuine_in_unibox: 0, genuine_missing: 0, other_replies: 0, other_missing: 0,
+    pv_replies: 0, in_unibox: 0, missing_inbound: 0, client_sent: 0, sent_live: 0, unsent_outbound: 0,
+  })
 
   return NextResponse.json({
     ok: true, days, workspaces: results.length,
+    // headline: the ONLY inbound number to act on is genuine_missing. other_* is spam.
+    summary: `${totals.genuine_in_unibox}/${totals.genuine_replies} genuine replies captured · `
+      + `${totals.genuine_missing} genuine missed · ${totals.other_missing} spam/Others ignored · `
+      + `${totals.sent_live}/${totals.client_sent} client replies sent live`,
     totals,
-    // Workspaces with a problem first, so issues are obvious at a glance.
+    // Workspaces with a GENUINE problem first (missed real replies or unsent outbound).
     results: results.sort((a, b) =>
-      (b.missing_inbound + b.unsent_outbound) - (a.missing_inbound + a.unsent_outbound)),
+      (b.genuine_missing + b.unsent_outbound) - (a.genuine_missing + a.unsent_outbound)),
   })
 }
