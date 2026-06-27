@@ -52,7 +52,7 @@ export async function GET(req: NextRequest) {
     pv_replies: number; in_unibox: number; missing_inbound: number
     client_sent: number; sent_live: number; unsent_outbound: number
     missing?: { from: string; subject: string | null; at: string | null }[]
-    unsent?: { lead_email: string; subject: string | null; at: string | null; reason: string | null }[]
+    unsent?: { lead_email: string; subject: string | null; at: string | null; reason: string | null; body_text?: string | null; body_html?: string | null }[]
     error?: string
   }
 
@@ -140,19 +140,21 @@ export async function GET(req: NextRequest) {
       const out = await pool.query(
         `SELECT lead_email, subject, timestamp_created,
                 (sent_live IS TRUE) AS live,
-                raw->>'send_reason' AS reason
+                raw->>'send_reason' AS reason,
+                body_text, body_html
            FROM portal_emails
           WHERE workspace_id = $1 AND direction = 'OUT' AND sent_via_portal = true
             AND COALESCE(timestamp_created, NOW()) >= $2`,
         [ws, sinceIso]
       )
-      const outRows = out.rows as { lead_email: string; subject: string | null; timestamp_created: string | null; live: boolean; reason: string | null }[]
+      const outRows = out.rows as { lead_email: string; subject: string | null; timestamp_created: string | null; live: boolean; reason: string | null; body_text: string | null; body_html: string | null }[]
       r.client_sent = outRows.length
       r.sent_live = outRows.filter(x => x.live).length
       const unsent = outRows.filter(x => !x.live)
       r.unsent_outbound = unsent.length
       if (detail) r.unsent = unsent.slice(0, 50).map(x => ({
         lead_email: x.lead_email, subject: x.subject, at: x.timestamp_created, reason: x.reason,
+        body_text: x.body_text, body_html: x.body_html,
       }))
     } catch (err) {
       r.error = String(err).slice(0, 150)
