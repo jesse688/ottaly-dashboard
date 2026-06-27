@@ -6549,9 +6549,21 @@ async function listSendingDomains() {
 }
 
 let _domainHealthRunning = false;
+let _domainHealthStartedAt = 0;
+// Per-domain hard cap so one unresponsive DNS lookup can't freeze the whole
+// refresh (which left the button stuck "Refreshing…" forever).
+async function checkDomainWithTimeout(domain, ws, ms = 25000) {
+  return Promise.race([
+    checkDomain(domain, ws),
+    new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms)),
+  ]);
+}
 async function refreshDomainHealth() {
-  if (_domainHealthRunning) return;
+  // STALE-RESET: if a previous run has been "running" for >10 min it has hung
+  // (or the process state is stale) — take over instead of blocking forever.
+  if (_domainHealthRunning && Date.now() - _domainHealthStartedAt < 10 * 60 * 1000) return;
   _domainHealthRunning = true;
+  _domainHealthStartedAt = Date.now();
   const t0 = Date.now();
   try {
     const pgdb = app.locals.pgDb;
@@ -6569,7 +6581,7 @@ async function refreshDomainHealth() {
       const batch = domains.slice(i, i + CONCURRENCY);
       await Promise.all(batch.map(async ({ domain, ws }) => {
         try {
-          const row = await checkDomain(domain, ws);
+          const row = await checkDomainWithTimeout(domain, ws);
           await pgdb.upsertDomainHealth(row);
           done++;
         } catch (err) {
