@@ -124,6 +124,37 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (ccList) rawObj.cc = ccList
   const rawMeta = JSON.stringify(rawObj)
 
+  // Reply signature: if this client has it enabled, append their signature. We build
+  // TWO versions: one for the live SEND (keeps the {{sender_signature}} token so
+  // PlusVibe expands it to the mailbox's real signature) and one for the STORED thread
+  // copy (any {{...}} tokens stripped, so the client SEES their custom signature in the
+  // thread but never a raw token). A literal/custom signature shows in both.
+  let outboundHtml = html
+  let storedHtml = html
+  let storedBody = body
+  try {
+    const sig = await pool.query(
+      `SELECT reply_signature_enabled, reply_signature FROM portal_clients WHERE id = $1`,
+      [session.clientId]
+    )
+    const row = sig.rows[0]
+    const sigText = (row?.reply_signature ?? '').toString().trim()
+    if (row?.reply_signature_enabled && sigText) {
+      const isHtml = /<[a-z][\s\S]*>/i.test(sigText)
+      // SEND copy keeps the token; convert newlines only for plain-text signatures.
+      const sigHtmlSend = isHtml || sigText.includes('{{') ? sigText : sigText.replace(/\n/g, '<br/>')
+      outboundHtml = `${html}<br/><br/>${sigHtmlSend}`
+      // STORED/DISPLAY copy drops {{...}} tokens (we can't render what PV will inject).
+      const sigSansTokens = sigText.replace(/\{\{[^}]*\}\}/g, '').trim()
+      if (sigSansTokens) {
+        storedHtml = `${html}<br/><br/>${isHtml ? sigSansTokens : sigSansTokens.replace(/\n/g, '<br/>')}`
+        storedBody = `${body}\n\n${sigSansTokens}`
+      }
+    }
+  } catch (err) {
+    console.error('[reply] signature lookup failed:', err)
+  }
+
   // Sending identity is ONLY ever the resolved client mailbox. NEVER fall back to
   // session.email (the client's LOGIN address) — that would put a wrong/Ottaly
   // identity on the thread row. If unresolved, store null; the live send below
@@ -134,8 +165,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
        content_preview, from_email, to_email, eaccount, sent_via_portal, timestamp_created, raw
      ) VALUES ($1,$2,$3,'OUT',$4,$5,$6,$7,$8,$9,$10,TRUE,NOW(),$11::jsonb)`,
     [
-      outId, session.workspaceId, lead.email.toLowerCase(), subject, body,
-      html, body.slice(0, 200),
+      outId, session.workspaceId, lead.email.toLowerCase(), subject, storedBody,
+      storedHtml, storedBody.slice(0, 200),
       eaccount ?? null, toList, eaccount ?? null, rawMeta,
     ]
   ).catch(err => console.error('[reply] persist failed:', err))
@@ -146,29 +177,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   // identity); it's strictly notifications now. Bison/EmailBison is retired, and we
   // do NOT branch on the inbound id prefix. Attachments are sent natively by PV
   // (file_name + base64), so a reply with a file still goes from the client.
-  // Reply signature: if this client has it enabled, append their signature to the
-  // body we SEND (not the stored thread copy, so the thread stays clean and never
-  // shows a raw {{sender_signature}} token). The signature text is admin-configured
-  // per client and may be literal HTML/plain OR the PV token {{sender_signature}},
-  // which PlusVibe expands to the sending mailbox's signature at send time.
-  let outboundHtml = html
-  try {
-    const sig = await pool.query(
-      `SELECT reply_signature_enabled, reply_signature FROM portal_clients WHERE id = $1`,
-      [session.clientId]
-    )
-    const row = sig.rows[0]
-    const sigText = (row?.reply_signature ?? '').toString().trim()
-    if (row?.reply_signature_enabled && sigText) {
-      // Plain-text signatures get minimal HTML so line breaks survive in the email.
-      const sigHtml = /<[a-z][\s\S]*>/i.test(sigText) || sigText.includes('{{')
-        ? sigText
-        : sigText.replace(/\n/g, '<br/>')
-      outboundHtml = `${html}<br/><br/>${sigHtml}`
-    }
-  } catch (err) {
-    console.error('[reply] signature lookup failed:', err)
-  }
 
   let send: { ok: boolean; reason?: string } = { ok: false, reason: 'no-reply-id-in-cache' }
   {
