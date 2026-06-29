@@ -1186,14 +1186,25 @@ function buildEngineLeadsFilter(q) {
   if (q.has_products === 'true')  hasProducts = true;
   if (q.has_products === 'false') hasProducts = false;
 
+  // SIC filter — the sidebar sends SIC chips but the engine-leads endpoint
+  // never read them, so a SIC filter silently matched nothing. Accept either
+  // `sic_code`/`sic_codes` or the contacts-page `sicCodes` param, comma-sep,
+  // and match any against the single `sic_code` column on the leads table.
+  const sicRaw = (q.sic_code || q.sic_codes || q.sicCodes || '').trim();
+  // Chips may arrive as "87100|Label" pairs — keep just the leading code.
+  const sicCodes = sicRaw
+    ? sicRaw.split(',').map(s => s.split('|')[0].trim()).filter(Boolean)
+    : null;
+
   const where = `
     WHERE ($1::text IS NULL OR industry ILIKE '%'||$1||'%')
       AND ($2::text IS NULL OR region   ILIKE '%'||$2||'%')
       AND ($3::bool IS NULL OR has_products = $3)
       AND ($4::text IS NULL OR platform ILIKE '%'||$4||'%')
-      AND ($5::text IS NULL OR domain ILIKE '%'||$5||'%' OR company_name ILIKE '%'||$5||'%')`;
+      AND ($5::text IS NULL OR domain ILIKE '%'||$5||'%' OR company_name ILIKE '%'||$5||'%')
+      AND ($6::text[] IS NULL OR sic_code = ANY($6))`;
 
-  return { where, params: [industry, region, hasProducts, platform, search] };
+  return { where, params: [industry, region, hasProducts, platform, search, sicCodes] };
 }
 
 app.get('/api/engine-leads', requireSession, async (req, res) => {
@@ -1215,7 +1226,7 @@ app.get('/api/engine-leads', requireSession, async (req, res) => {
     const { rows } = await pgdb.query(
       `SELECT * FROM ottaly_engine_leads ${where}
        ORDER BY promoted_at DESC NULLS LAST
-       LIMIT $6 OFFSET $7`,
+       LIMIT $7 OFFSET $8`,
       [...params, limit, offset]
     );
 
