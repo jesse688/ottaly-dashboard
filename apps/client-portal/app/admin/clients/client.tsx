@@ -15,6 +15,8 @@ interface PortalClient {
   min_topup?: number
   warmup_start_date?: string | null
   warmup_days?: number | null
+  reply_signature_enabled?: boolean
+  reply_signature?: string | null
 }
 interface Workspace { id: string; name: string; active_campaigns: number }
 interface Dispute {
@@ -90,6 +92,8 @@ export function AdminClientsClient() {
   const [fieldData, setFieldData]             = useState<{ hiddenFields: string[] } | null>(null)
   const [ledgerData, setLedgerData]           = useState<{ balance: number; ledger: LedgerEntry[] } | null>(null)
   const [cplEdit, setCplEdit]                 = useState('')
+  const [sigEnabled, setSigEnabled]           = useState(false)
+  const [sigEdit, setSigEdit]                 = useState('')
   const [warmStart, setWarmStart]             = useState('')
   const [warmDays, setWarmDays]               = useState('14')
   const [entryForm, setEntryForm]             = useState({ type: 'topup', amount: '', note: '' })
@@ -342,6 +346,7 @@ export function AdminClientsClient() {
   async function openSettings(c: PortalClient) {
     setSettingsClient(c); setSettingsTab('labels'); setLabelData(null); setFieldData(null); setLedgerData(null)
     setCplEdit(String(Number(c.cost_per_lead ?? 0))); setEntryForm({ type: 'topup', amount: '', note: '' })
+    setSigEnabled(!!c.reply_signature_enabled); setSigEdit(c.reply_signature ?? '')
     setWarmStart(c.warmup_start_date ? String(c.warmup_start_date).slice(0, 10) : '')
     setWarmDays(String(c.warmup_days ?? 14))
     setBucketEdit(Array.isArray(c.topup_buckets) ? c.topup_buckets : [])
@@ -394,6 +399,13 @@ export function AdminClientsClient() {
     if (!settingsClient) return
     setSettingsClient({ ...settingsClient, spend_visibility: mode })
     await fetch(`/api/admin/clients/${settingsClient.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ spendVisibility: mode }) })
+  }
+  async function saveReplySignature() {
+    if (!settingsClient) return
+    const sig = sigEdit.trim()
+    await fetch(`/api/admin/clients/${settingsClient.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ replySignatureEnabled: sigEnabled, replySignature: sig || null }) })
+    setSettingsClient({ ...settingsClient, reply_signature_enabled: sigEnabled, reply_signature: sig || null })
+    alert('Reply signature saved.')
   }
   async function addLedgerEntry() {
     if (!settingsClient) return
@@ -1259,6 +1271,24 @@ export function AdminClientsClient() {
                           <option value="always">Always — full transparency</option>
                         </select>
                         <p className="text-[11px] text-gray-400 mt-1">Auto keeps a struggling client focused on leads &amp; pipeline; the £ spend and ROI only appear once they&apos;re in profit.</p>
+                      </div>
+
+                      {/* Reply signature — appended to every reply this client sends from the portal */}
+                      <div className="mb-4 p-3 rounded-lg border border-gray-100">
+                        <label className="flex items-center gap-2 mb-2">
+                          <input type="checkbox" checked={sigEnabled} onChange={e => setSigEnabled(e.target.checked)} className="rounded" />
+                          <span className="text-xs font-medium text-gray-700">Add signature to this client&apos;s replies</span>
+                        </label>
+                        <textarea
+                          value={sigEdit}
+                          onChange={e => setSigEdit(e.target.value)}
+                          rows={4}
+                          placeholder={'Paste a signature, or use {{sender_signature}} to insert the mailbox\'s PlusVibe signature.'}
+                          className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm font-mono outline-none focus:border-indigo-400" />
+                        <div className="flex items-center justify-between mt-1">
+                          <p className="text-[11px] text-gray-400">Use <code className="bg-gray-100 px-1 rounded">{'{{sender_signature}}'}</code> for the sending mailbox&apos;s own PlusVibe signature, or paste custom HTML/text. Appended at send only — the client&apos;s thread stays clean.</p>
+                          <button onClick={saveReplySignature} className="shrink-0 ml-2 px-3 py-1.5 bg-indigo-600 text-white text-xs font-medium rounded-lg">Save</button>
+                        </div>
                       </div>
 
                       <div className="mb-4 p-3 rounded-lg border border-gray-100">

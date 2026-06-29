@@ -22,6 +22,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     minTopup?: number
     warmupStartDate?: string | null
     warmupDays?: number
+    replySignatureEnabled?: boolean
+    replySignature?: string | null
   }
 
   const sets: string[] = []
@@ -50,6 +52,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     values.push(JSON.stringify(clean)); sets.push(`topup_buckets = $${values.length}`)
   }
   if (body.minTopup !== undefined) { values.push(Math.max(1, Math.floor(Number(body.minTopup)))); sets.push(`min_topup = $${values.length}`) }
+  if (body.replySignatureEnabled !== undefined) { values.push(!!body.replySignatureEnabled); sets.push(`reply_signature_enabled = $${values.length}`) }
+  if (body.replySignature !== undefined) { values.push((body.replySignature ?? '').trim() || null); sets.push(`reply_signature = $${values.length}`) }
 
   if (!sets.length) return NextResponse.json({ error: 'Nothing to update' }, { status: 400 })
 

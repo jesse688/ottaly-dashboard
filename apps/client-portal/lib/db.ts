@@ -142,6 +142,12 @@ async function runMigration() {
       `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS warmup_start_date DATE`,
       `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS warmup_days INTEGER NOT NULL DEFAULT 14`,
       `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFAULT 'GBP'`,
+      // Reply signature: when enabled, the signature text is appended to every reply
+      // the client sends from the portal. The text can be literal HTML/plain OR the
+      // PlusVibe token {{sender_signature}} (PV expands it to that mailbox's signature
+      // at send; confirmed it's processed-not-literal on the reply endpoint).
+      `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS reply_signature_enabled BOOLEAN NOT NULL DEFAULT FALSE`,
+      `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS reply_signature TEXT`,
       // Spend visibility to the client: 'auto' (reveal spend+ROI only when ROI>0),
       // 'hidden' (never show money/ROI — outcomes only), 'always' (full transparency).
       `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS spend_visibility TEXT NOT NULL DEFAULT 'auto'`,

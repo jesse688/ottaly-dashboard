@@ -146,6 +146,30 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   // identity); it's strictly notifications now. Bison/EmailBison is retired, and we
   // do NOT branch on the inbound id prefix. Attachments are sent natively by PV
   // (file_name + base64), so a reply with a file still goes from the client.
+  // Reply signature: if this client has it enabled, append their signature to the
+  // body we SEND (not the stored thread copy, so the thread stays clean and never
+  // shows a raw {{sender_signature}} token). The signature text is admin-configured
+  // per client and may be literal HTML/plain OR the PV token {{sender_signature}},
+  // which PlusVibe expands to the sending mailbox's signature at send time.
+  let outboundHtml = html
+  try {
+    const sig = await pool.query(
+      `SELECT reply_signature_enabled, reply_signature FROM portal_clients WHERE id = $1`,
+      [session.clientId]
+    )
+    const row = sig.rows[0]
+    const sigText = (row?.reply_signature ?? '').toString().trim()
+    if (row?.reply_signature_enabled && sigText) {
+      // Plain-text signatures get minimal HTML so line breaks survive in the email.
+      const sigHtml = /<[a-z][\s\S]*>/i.test(sigText) || sigText.includes('{{')
+        ? sigText
+        : sigText.replace(/\n/g, '<br/>')
+      outboundHtml = `${html}<br/><br/>${sigHtml}`
+    }
+  } catch (err) {
+    console.error('[reply] signature lookup failed:', err)
+  }
+
   let send: { ok: boolean; reason?: string } = { ok: false, reason: 'no-reply-id-in-cache' }
   {
     // Resolve the REAL PlusVibe email id + sending mailbox from the unibox API by
@@ -170,7 +194,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         subject: subject,
         from: fromMailbox,
         to: toList,
-        body: html,
+        body: outboundHtml,
         cc: ccList || undefined,
         attachments: attachments.length ? attachments : undefined,
       })

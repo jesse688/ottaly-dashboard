@@ -11,6 +11,7 @@ export async function GET() {
     SELECT pc.id, pc.username, pc.email, pc.company_name, pc.contact_name, pc.workspace_id, pc.active, pc.created_at, pc.topup_buckets, pc.min_topup,
            pc.cost_per_lead, pc.spend_visibility,
            pc.warmup_start_date, pc.warmup_days,
+           pc.reply_signature_enabled, pc.reply_signature,
            w.name AS workspace_name
     FROM portal_clients pc
     LEFT JOIN esp_workspaces w ON w.id = pc.workspace_id AND w.source = 'plusvibe'
