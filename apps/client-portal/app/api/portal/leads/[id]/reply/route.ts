@@ -117,7 +117,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ error: 'Could not attach your file — please try again.' }, { status: 500 })
     }
   }
-  const rawMeta = attachMeta.length ? JSON.stringify({ attachments: attachMeta }) : '{}'
+  // Persist into raw: attachment metadata AND the Cc list, so the client thread
+  // can SHOW who was cc'd (it's otherwise only in the live-send + admin notify).
+  const rawObj: Record<string, unknown> = {}
+  if (attachMeta.length) rawObj.attachments = attachMeta
+  if (ccList) rawObj.cc = ccList
+  const rawMeta = JSON.stringify(rawObj)
 
   // Sending identity is ONLY ever the resolved client mailbox. NEVER fall back to
   // session.email (the client's LOGIN address) — that would put a wrong/Ottaly

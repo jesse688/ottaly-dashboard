@@ -76,6 +76,7 @@ interface ThreadMsg {
   content_preview: string | null
   from_email: string | null
   to_email: string | null
+  cc: string | null
   eaccount: string | null
   pv_label: string | null
   sent_via_portal: boolean
@@ -503,7 +504,7 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
         subject: null,
         body_html: html, body_html_safe: html,
         body_text: text, content_preview: text.slice(0, 200),
-        from_email: null, to_email: to, eaccount: null, pv_label: null,
+        from_email: null, to_email: to, cc: cc || null, eaccount: null, pv_label: null,
         sent_via_portal: true,
         timestamp_created: new Date().toISOString(),
         attachments: files.length ? files.map(f => ({ filename: f.name, size: f.size, content_type: f.type })) : null,
@@ -955,7 +956,8 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
                         <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-semibold shrink-0 ${out ? 'bg-brand-600 text-white' : av(selected.id)}`}>{out ? 'O' : initials(selected)}</div>
                         <div className="min-w-0">
                           <p className="text-sm font-semibold text-[#050c29] leading-tight truncate">{out ? (m.sent_via_portal ? `${companyName} (you)` : 'Ottaly') : fullName(selected)}</p>
-                          <p className="text-[11px] text-gray-500 truncate">{out ? `to: ${selected.email}` : (m.from_email ?? selected.email)}</p>
+                          <p className="text-[11px] text-gray-500 truncate">{out ? `to: ${m.to_email || selected.email}` : (m.from_email ?? selected.email)}</p>
+                          {m.cc && <p className="text-[11px] text-gray-400 truncate">cc: {m.cc}</p>}
                         </div>
                         <div className="ml-auto flex items-center gap-2 shrink-0">
                           {m.pv_label && m.pv_label !== 'INTERESTED' && <span className="text-[10px] bg-white border border-gray-200 text-gray-500 px-1.5 py-0.5 rounded capitalize">{m.pv_label.replace(/_/g,' ').toLowerCase()}</span>}
