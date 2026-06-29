@@ -518,6 +518,10 @@ db.exec(`CREATE TABLE IF NOT EXISTS client_managers (
   assigned_at         TEXT DEFAULT (datetime('now')),
   UNIQUE(client_workspace_id, manager_name)
 )`);
+// end_date: when set, the assignment is ENDED on that date but the row is kept
+// so commission history up to end_date is preserved (the "Set End Date" flow in
+// workload.html). NULL = still active. Migration is idempotent.
+try { db.exec(`ALTER TABLE client_managers ADD COLUMN end_date TEXT`); } catch { /* column already exists */ }
 
 // Backfill client_managers from existing campaign_manager / campaign_manager_2 columns
 try {
@@ -2672,6 +2676,13 @@ app.get('/api/build-version', (req, res) => {
 
 // Liveness/readiness probe for Easypanel/uptime monitoring. No auth — 200 when
 // the process is up and Postgres answers SELECT 1, else 503.
+// Deploy marker — bump `build` on each change that needs verifying live, so
+// "is the fix deployed?" is a 2-second curl instead of a guess. No auth needed.
+app.get('/api/version', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ build: 'engine-loose-push-2026-06-24c-namefilter', uptime: Math.round(process.uptime()) });
+});
+
 app.get('/healthz', async (req, res) => {
   res.set('Cache-Control', 'no-store');
   const health = { status: 'ok', uptime: Math.round(process.uptime()), db: 'unknown' };
@@ -4747,8 +4758,14 @@ async function warmPerformanceCache() {
       performanceCache.labeledLeads = nextLabeledLeads;
       performanceCache.version++;
       console.log(`[performance cache] version ${performanceCache.version} ready — ${wsIds.length} workspaces`);
-      // Persist to DB so next restart loads instantly
-      savePerfCacheToDb().catch(() => {});
+      // Persist to DB so next restart loads instantly.
+      // DISABLED by default: admin-new is now the SOLE writer of
+      // perf_cache_daily (shared PK ws_id,date). Legacy aggregates from PV's
+      // `chart` array (aggPvEmailStats) while admin-new reads `header` — for a
+      // single day these DIFFER (e.g. Enviro chart-sum 74 vs header 18), so the
+      // two writers flip-flopped the row and corrupted Stats. Legacy keeps its
+      // in-memory cache for its own pages but must NOT write the shared row.
+      if (process.env.LEGACY_PERSIST_PERF_CACHE === '1') savePerfCacheToDb().catch(() => {});
     } catch (err) {
       console.error('[performance cache] warm failed:', err.message);
     } finally {
@@ -8661,9 +8678,21 @@ async function listSendingDomains() {
 }
 
 let _domainHealthRunning = false;
+let _domainHealthStartedAt = 0;
+// Per-domain hard cap so one unresponsive DNS lookup can't freeze the whole
+// refresh (which left the button stuck "Refreshing…" forever).
+async function checkDomainWithTimeout(domain, ws, ms = 25000) {
+  return Promise.race([
+    checkDomain(domain, ws),
+    new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms)),
+  ]);
+}
 async function refreshDomainHealth() {
-  if (_domainHealthRunning) return;
+  // STALE-RESET: if a previous run has been "running" for >10 min it has hung
+  // (or the process state is stale) — take over instead of blocking forever.
+  if (_domainHealthRunning && Date.now() - _domainHealthStartedAt < 10 * 60 * 1000) return;
   _domainHealthRunning = true;
+  _domainHealthStartedAt = Date.now();
   const t0 = Date.now();
   try {
     const pgdb = app.locals.pgDb;
@@ -8681,7 +8710,7 @@ async function refreshDomainHealth() {
       const batch = domains.slice(i, i + CONCURRENCY);
       await Promise.all(batch.map(async ({ domain, ws }) => {
         try {
-          const row = await checkDomain(domain, ws);
+          const row = await checkDomainWithTimeout(domain, ws);
           await pgdb.upsertDomainHealth(row);
           done++;
         } catch (err) {
@@ -13756,16 +13785,34 @@ app.get('/api/pv/workspace-leads', requireSession, async (req, res) => {
 });
 
 // ── Admin — workspaces ─────────────────────────────────────
+// Returns the LIVE PlusVibe workspace list so the admin "PlusVibe Workspaces"
+// grid always reflects PV (new workspaces appear automatically). Normalizes every
+// shape PV may return — bare array, { workspaces: [...] }, or { data: [...] } —
+// and every id/name field variant, to a flat [{ id, name }]. Previously this piped
+// the raw PV response straight through; when PV wraps the list in an object the
+// frontend's `Array.isArray(ws) ? ws : []` collapsed to empty / stale, so newly
+// added workspaces never showed up.
 app.get('/api/admin/workspaces', requireAdmin, async (req, res) => {
   try {
-    // Pull in any workspaces created directly in Bison before listing, so the
-    // grid always reflects reality (new workspaces appear without a code change).
-    await syncBisonTeamsFromLive();
-    // admin.html expects a bare array of {id,name}, so unwrap + normalise.
-    const raw = listBisonWorkspaces();
-    const list = Array.isArray(raw) ? raw : (raw?.data || []);
-    res.json(list.map(w => ({ id: String(w.id), name: w.name })));
-  } catch (err) { res.status(502).json({ error: err.message }); }
+    // Pull the LIVE PlusVibe workspace list (Bison is retired). admin.html expects
+    // a bare array of {id,name}; PV may return a bare array, { workspaces: [...] },
+    // or { data: [...] } with id/_id/workspace_id — normalise every shape so new PV
+    // workspaces appear automatically. (Replaces the old Bison-team sync, which is
+    // why new PV workspaces never showed on the grid.)
+    const r = await fetch('https://api.plusvibe.ai/api/v1/workspaces', {
+      headers: { 'x-api-key': PLUSVIBE_KEY }
+    });
+    const data = await r.json();
+    if (!r.ok) return res.status(r.status).json({ error: data?.error || 'Failed to fetch workspaces' });
+    const list = Array.isArray(data) ? data
+               : Array.isArray(data?.workspaces) ? data.workspaces
+               : Array.isArray(data?.data) ? data.data
+               : [];
+    const workspaces = list
+      .map(w => ({ id: w.id || w._id || w.workspace_id, name: w.name || w.workspace_name || w.title }))
+      .filter(w => w.id);
+    res.json(workspaces);
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ── Admin — clients ────────────────────────────────────────
@@ -14453,7 +14500,9 @@ app.get('/api/admin/workload', requireSession, (req, res) => {
   const s = decodeSession(req);
   const managers = db.prepare('SELECT id, name, commission_rate FROM managers ORDER BY name').all();
   const clients  = db.prepare('SELECT workspace_id, workspace_name, price_per_lead, client_status, manager_start_date FROM clients ORDER BY workspace_name').all();
-  const assignments = db.prepare('SELECT client_workspace_id, manager_name, commission_rate FROM client_managers').all();
+  // Only ACTIVE assignments (end_date IS NULL) drive the live workload grid;
+  // ended ones are kept for commission history but must not show as active.
+  const assignments = db.prepare('SELECT client_workspace_id, manager_name, commission_rate FROM client_managers WHERE end_date IS NULL').all();
   const defaultRateRow = db.prepare("SELECT value FROM app_meta WHERE key = 'default_commission_rate'").get();
   const defaultRate = defaultRateRow ? parseFloat(defaultRateRow.value) : 5;
 
@@ -14472,15 +14521,21 @@ app.get('/api/admin/workload', requireSession, (req, res) => {
 function recalcSplitRates(client_workspace_id) {
   const defaultRateRow = db.prepare("SELECT value FROM app_meta WHERE key = 'default_commission_rate'").get();
   const defaultRate = defaultRateRow ? parseFloat(defaultRateRow.value) : 5;
-  const cms = db.prepare('SELECT manager_name FROM client_managers WHERE client_workspace_id = ?').all(client_workspace_id);
+  // Split only across ACTIVE CMs (end_date IS NULL) — an ended assignment must
+  // not dilute the rate of those still working the client.
+  const cms = db.prepare('SELECT manager_name FROM client_managers WHERE client_workspace_id = ? AND end_date IS NULL').all(client_workspace_id);
   const splitRate = cms.length ? defaultRate / cms.length : defaultRate;
-  db.prepare('UPDATE client_managers SET commission_rate = ? WHERE client_workspace_id = ?').run(splitRate, client_workspace_id);
+  db.prepare('UPDATE client_managers SET commission_rate = ? WHERE client_workspace_id = ? AND end_date IS NULL').run(splitRate, client_workspace_id);
 }
 
 app.post('/api/admin/workload/assign', requireAdmin, (req, res) => {
   const { client_workspace_id, manager_name } = req.body || {};
   if (!client_workspace_id || !manager_name) return res.status(400).json({ error: 'client_workspace_id and manager_name required' });
   db.prepare(`INSERT OR IGNORE INTO client_managers (client_workspace_id, manager_name, commission_rate) VALUES (?, ?, 0)`)
+    .run(client_workspace_id, manager_name);
+  // If this CM was previously ENDED on this client, re-assigning reactivates
+  // them (clear end_date) — otherwise the ignored insert would leave them ended.
+  db.prepare('UPDATE client_managers SET end_date = NULL WHERE client_workspace_id = ? AND manager_name = ?')
     .run(client_workspace_id, manager_name);
   recalcSplitRates(client_workspace_id);
   const splitRate = db.prepare('SELECT commission_rate FROM client_managers WHERE client_workspace_id = ? AND manager_name = ?').get(client_workspace_id, manager_name)?.commission_rate ?? 0;
@@ -14491,6 +14546,21 @@ app.delete('/api/admin/workload/assign', requireAdmin, (req, res) => {
   const { client_workspace_id, manager_name } = req.body || {};
   if (!client_workspace_id || !manager_name) return res.status(400).json({ error: 'client_workspace_id and manager_name required' });
   db.prepare('DELETE FROM client_managers WHERE client_workspace_id = ? AND manager_name = ?').run(client_workspace_id, manager_name);
+  recalcSplitRates(client_workspace_id);
+  res.json({ ok: true });
+});
+
+// End an assignment WITHOUT deleting it: stamp end_date so commission history up
+// to that date is preserved, then drop it from the active split. This is the
+// "Set End Date" button in workload.html — previously the frontend PUT here had
+// no matching route, so it 404'd silently and nothing happened.
+app.put('/api/admin/workload/assign/end-date', requireAdmin, (req, res) => {
+  const { client_workspace_id, manager_name, end_date } = req.body || {};
+  if (!client_workspace_id || !manager_name) return res.status(400).json({ error: 'client_workspace_id and manager_name required' });
+  const info = db.prepare('UPDATE client_managers SET end_date = ? WHERE client_workspace_id = ? AND manager_name = ?')
+    .run(end_date || null, client_workspace_id, manager_name);
+  if (!info.changes) return res.status(404).json({ error: 'assignment not found' });
+  // Recompute the split across the REMAINING active CMs for this client.
   recalcSplitRates(client_workspace_id);
   res.json({ ok: true });
 });
@@ -15070,10 +15140,15 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
     const cooloffDate = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const campaignNameLc = (req.body.campaign_name || '').toString().trim().toLowerCase();
     const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, missingEnrichment: 0, missingName: 0 };
-    // Hard status gate — only verified-deliverable contacts may reach PlusVibe,
-    // even on this "push without verify" path. Anything unknown/risky/invalid/
-    // NULL is rejected so unsafe contacts can never leak into a campaign.
-    const PUSHABLE_STATUSES = new Set(['safe', 'safe_catchall']);
+    // Status gate. The user picks which verification-result buckets to push via
+    // the modal (allowed_statuses). Validate against the known vocabulary; default
+    // to the safe pair when absent so existing callers are unchanged. NULL/empty
+    // email_status is never pushable regardless of selection.
+    const KNOWN_STATUSES = ['safe', 'safe_catchall', 'unknown', 'risky', 'invalid'];
+    const reqStatuses = Array.isArray(req.body.allowed_statuses)
+      ? req.body.allowed_statuses.map(s => String(s).toLowerCase()).filter(s => KNOWN_STATUSES.includes(s))
+      : [];
+    const PUSHABLE_STATUSES = new Set(reqStatuses.length ? reqStatuses : ['safe', 'safe_catchall']);
     const contacts = allContacts.filter(c => {
       if (!PUSHABLE_STATUSES.has((c.email_status || '').toLowerCase())) { skipped.unsafe++; return false; }
       if (c.do_not_contact) { skipped.dnc++; return false; }
@@ -15270,11 +15345,16 @@ app.post('/api/admin/flag-free-domain-contacts', requireAdmin, async (req, res) 
 });
 
 // Shared contact→pushable filter (same rules as the PV path). Pure function.
-function filterPushableContacts(allContacts, { cooldownWorkspaceId, campaignName }) {
+function filterPushableContacts(allContacts, { cooldownWorkspaceId, campaignName, allowedStatuses }) {
   const cooloffDate = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const campaignNameLc = (campaignName || '').toString().trim().toLowerCase();
   const skipped = { unsafe: 0, dnc: 0, freeDomain: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, missingEnrichment: 0, missingName: 0 };
-  const PUSHABLE_STATUSES = new Set(['safe', 'safe_catchall']);
+  // Caller-chosen verification buckets; default to the safe pair when absent.
+  const KNOWN_STATUSES = ['safe', 'safe_catchall', 'unknown', 'risky', 'invalid'];
+  const validStatuses = Array.isArray(allowedStatuses)
+    ? allowedStatuses.map(s => String(s).toLowerCase()).filter(s => KNOWN_STATUSES.includes(s))
+    : [];
+  const PUSHABLE_STATUSES = new Set(validStatuses.length ? validStatuses : ['safe', 'safe_catchall']);
   const contacts = allContacts.filter(c => {
     if (isFreeDomain(c.email)) { skipped.freeDomain++; return false; }
     if (!PUSHABLE_STATUSES.has((c.email_status || '').toLowerCase())) { skipped.unsafe++; return false; }
@@ -15378,6 +15458,7 @@ app.post('/api/bison/push-contacts', requireSession, async (req, res) => {
     const cooldownWorkspaceId = req.body.cooldown_workspace_id || null;
     const { contacts, skipped } = filterPushableContacts(allContacts, {
       cooldownWorkspaceId, campaignName: req.body.campaign_name,
+      allowedStatuses: req.body.allowed_statuses,
     });
     console.log(`[pv-push] filtered ${allContacts.length} → ${contacts.length}`, skipped);
     if (contacts.length === 0) return res.json({ success: true, pushed: 0, total: 0, skipped });
@@ -17007,6 +17088,11 @@ function initPausedJobsTable(sq) {
   // resume_on_boot: 1 only for jobs interrupted by a deploy (set by the SIGTERM
   // handler). Manually-paused jobs are 0 and must NOT auto-resume on next boot.
   try { sq.exec(`ALTER TABLE paused_push_jobs ADD COLUMN resume_on_boot INTEGER DEFAULT 0`); } catch {}
+  // loose: 1 for engine/loose pushes, so a resumed job keeps the looser gate.
+  try { sq.exec(`ALTER TABLE paused_push_jobs ADD COLUMN loose INTEGER DEFAULT 0`); } catch {}
+  // allowed_statuses: JSON array of verification buckets the user chose to push,
+  // so a resumed job keeps the selection.
+  try { sq.exec(`ALTER TABLE paused_push_jobs ADD COLUMN allowed_statuses TEXT`); } catch {}
 }
 
 // On boot, restore paused jobs into the in-memory map so the UI shows them.
@@ -17017,6 +17103,8 @@ function restorePausedJobs(sq) {
     const rows = sq.prepare('SELECT * FROM paused_push_jobs').all();
     for (const row of rows) {
       const contactIds = JSON.parse(row.contact_ids || '[]');
+      let allowedStatuses;
+      try { allowedStatuses = row.allowed_statuses ? JSON.parse(row.allowed_statuses) : undefined; } catch { allowedStatuses = undefined; }
       pushJobs.set(row.id, {
         id: row.id,
         status: 'paused',
@@ -17024,9 +17112,11 @@ function restorePausedJobs(sq) {
         campaign_id: row.campaign_id,
         workspace_name: row.workspace_name || row.workspace_id,
         campaign_name: row.campaign_name || row.campaign_id,
+        allowedStatuses,
         total: contactIds.length,
         verified: row.verified_count || 0,
         pushed: row.pushed_count || 0,
+        loose: !!row.loose, // engine/loose pushes keep the looser gate on resume
         resumeOnBoot: row.resume_on_boot === 1, // only deploy-interrupted jobs auto-resume
         skipped: 0, safe: 0, risky: 0, invalid: 0, unknown: 0, safe_catchall: 0,
         progress: 0,
@@ -17170,12 +17260,44 @@ app.get('/api/contacts/push-jobs/:id', requireSession, (req, res) => {
   res.json(job);
 });
 
+// DEBUG (no auth) — last ~15 push jobs with the full skip breakdown + error, so
+// "why didn't these push?" is a curl, not a guess. Returns the gate that dropped
+// each contact (job.skipped becomes the breakdown object once a job finishes).
+app.get('/api/debug/push-jobs', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const jobs = [...pushJobs.values()]
+    .sort((a, b) => (b.created_at || 0) - (a.created_at || 0))
+    .slice(0, 15)
+    .map(j => ({
+      id: j.id, status: j.status, loose: !!j.loose, skipVerify: !!j.skipVerify,
+      excludeMicrosoft: !!j.excludeMicrosoft, allowedProviders: j.allowedProviders || [],
+      total: j.total, pushed: j.pushed,
+      safe: j.safe, risky: j.risky, invalid: j.invalid, unknown: j.unknown, safe_catchall: j.safe_catchall,
+      skipDetail: (j.skipped && typeof j.skipped === 'object') ? j.skipped : undefined,
+      error: j.error || null, n2bWarning: j.n2bWarning || null,
+      workspace_id: j.workspace_id, campaign_id: j.campaign_id,
+    }));
+  res.json({ count: jobs.length, jobs });
+});
+
 // POST starts job immediately, returns job ID — processing runs in background
 app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
-  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 90, emailProviders, excludeMicrosoft } = req.body;
+  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 90, emailProviders, excludeMicrosoft, loose, skipVerify } = req.body;
   if (!workspace_id || !campaign_id || !Array.isArray(contact_ids) || !contact_ids.length) {
     return res.status(400).json({ error: 'workspace_id, campaign_id and contact_ids required' });
   }
+  // LOOSE mode: the engine-leads push sends this. It applies the looser gate
+  // (push anything not hard-'invalid'; block free/trap domains; skip the
+  // name requirement) to EVERY contact in the job, independent of the stored
+  // `source` column — staging's ON CONFLICT can leave a pre-existing row's
+  // source non-engine, which would otherwise fall back to the strict gate.
+  const looseMode = loose === true || loose === 'true' || loose === 1 || loose === '1';
+  // SKIP-VERIFY: push straight to PV with NO Reacher / No2Bounce step. Uses each
+  // contact's already-stored email_status (so anything previously marked invalid
+  // is still dropped) plus the free-domain + do_not_contact gates. Near-instant.
+  // Implies loose (no fresh verdicts, so we can't require 'safe').
+  const skipVerifyMode = skipVerify === true || skipVerify === 'true' || skipVerify === 1 || skipVerify === '1';
+  const looseEffective = looseMode || skipVerifyMode;
 
   const db = req.app.locals.pgDb;
   if (!db) return res.status(500).json({ error: 'Database not available' });
@@ -17187,6 +17309,14 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
   const allowedProviders = (typeof emailProviders === 'string' ? emailProviders : '')
     .split(',').map(s => s.trim()).filter(p => p && p !== 'unknown');
 
+  // Which verification-result buckets to push (from the modal). Validate against
+  // the known vocabulary; default to the safe pair so older callers are unchanged.
+  const KNOWN_STATUSES = ['safe', 'safe_catchall', 'unknown', 'risky', 'invalid'];
+  const reqStatuses = Array.isArray(req.body.allowed_statuses)
+    ? req.body.allowed_statuses.map(s => String(s).toLowerCase()).filter(s => KNOWN_STATUSES.includes(s))
+    : [];
+  const allowedStatuses = reqStatuses.length ? reqStatuses : ['safe', 'safe_catchall'];
+
   const sq = req.app.locals.sqliteDb;
   const jobId = require('crypto').randomUUID();
   const job = {
@@ -17196,6 +17326,9 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
     campaign_name: campaign_name || campaign_id,
     workspace_id, campaign_id,
     allowedProviders,
+    allowedStatuses,
+    loose: looseEffective,
+    skipVerify: skipVerifyMode,
     excludeMicrosoft: excludeMicrosoft === 'true' || excludeMicrosoft === true,
     total: contact_ids.length,
     skipped: 0, verified: 0, safe: 0, risky: 0, invalid: 0, unknown: 0,
@@ -17210,11 +17343,12 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
     try {
       initPausedJobsTable(sq);
       sq.prepare(`INSERT OR REPLACE INTO paused_push_jobs
-        (id, workspace_id, campaign_id, workspace_name, campaign_name, contact_ids, include_risky, max_age_days)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        (id, workspace_id, campaign_id, workspace_name, campaign_name, contact_ids, include_risky, max_age_days, loose, allowed_statuses)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         jobId, workspace_id, campaign_id,
         workspace_name || workspace_id, campaign_name || campaign_id,
-        JSON.stringify(contact_ids), include_risky ? 1 : 0, max_age_days
+        JSON.stringify(contact_ids), include_risky ? 1 : 0, max_age_days, looseMode ? 1 : 0,
+        JSON.stringify(allowedStatuses)
       );
     } catch (e) { console.warn('[push] Could not persist job to SQLite:', e.message); }
   }
@@ -17258,8 +17392,12 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
       // contacts whose previous result was 'unknown' (usually transient
       // Reacher failures — timeout / SMTP refused — not a real permanent
       // verdict) so they get a second shot at a real answer.
+      // skipVerify: treat EVERY contact as already-verified using its stored
+      // email_status (null/unknown stays pushable in loose mode), so the Reacher
+      // loop below runs zero times and the push starts immediately.
       const isFreshVerdict = c =>
-        c.email_verified_at && c.email_verified_at >= cutoff && c.email_status && c.email_status !== 'unknown';
+        job.skipVerify ||
+        (c.email_verified_at && c.email_verified_at >= cutoff && c.email_status && c.email_status !== 'unknown');
       const needsVerify     = contacts.filter(c => !isFreshVerdict(c));
       const alreadyVerified = contacts.filter(isFreshVerdict);
 
@@ -17279,7 +17417,13 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
       // Reacher author (Jon) recommends concurrency 5 — going higher gets
       // SMTP servers to throttle/block parallel probes from one source IP.
       // Env-overridable for experimentation, default stays at 5.
+      // Concurrency stays at 5 (Reacher author Jon's recommended max — higher
+      // gets SMTP servers to throttle/block parallel probes from one IP). Speed
+      // for loose/engine pushes comes from a SHORT per-email timeout: a hanging
+      // SMTP probe falls through to 'unknown' (which pushes in loose mode) in
+      // seconds instead of stalling on the generous 65s strict pushes keep.
       const CONCURRENCY = Math.max(1, parseInt(process.env.PUSH_VERIFY_CONCURRENCY || '5', 10));
+      const VERIFY_TIMEOUT_MS = parseInt(process.env.PUSH_VERIFY_TIMEOUT_MS || (job.loose ? '10000' : '65000'), 10);
       const VERIFY_THEN_PUSH = Math.max(20, parseInt(process.env.VERIFY_THEN_PUSH || '100', 10));
       let doneCount = 0;
       const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, snoozed: 0, missingEnrichment: 0, wrongProvider: 0, missingName: 0 };
@@ -17292,11 +17436,35 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
       const targetCampLc = (job.campaign_name || '').trim().toLowerCase();
 
       const passesFilter = (c) => {
-        if (verifyResults[c.id] !== 'safe' && verifyResults[c.id] !== 'safe_catchall') { skipped.unsafe++; return false; }
+        // Deliverability gate. Engine-scraped leads use a LOOSER rule: push
+        // anything that isn't a hard 'invalid' (so safe / catch-all / risky /
+        // unknown all go through), because requiring 'safe' lost the majority of
+        // engine leads. Spam-trap risk is still covered — free/disposable/
+        // consumer domains are blocked (isFreeDomain) and do_not_contact (set by
+        // the free-domain sweep on known trap domains) is enforced below. Apollo
+        // data stays strict: safe / safe_catchall only.
+        // `looseHere` = this job is an engine/loose push OR the row is tagged
+        // engine. Driven by the explicit job.loose flag (sent by the engine-leads
+        // push) so it does NOT depend on the stored source column, which staging
+        // may have left non-engine on a pre-existing row.
+        const looseHere = job.loose || c.source === 'engine';
+        if (looseHere) {
+          if (verifyResults[c.id] === 'invalid')        { skipped.unsafe++; return false; }
+          if (isFreeDomain(c.email))                    { skipped.unsafe++; return false; }
+        } else {
+          // User-chosen verification buckets (push modal). Default safe pair.
+          const allowedSet = (Array.isArray(job.allowedStatuses) && job.allowedStatuses.length)
+            ? job.allowedStatuses : ['safe', 'safe_catchall'];
+          if (!allowedSet.includes(verifyResults[c.id])) { skipped.unsafe++; return false; }
+        }
         if (c.do_not_contact)               { skipped.dnc++; return false; }
-        // Bison requires non-empty first_name AND last_name (422s otherwise), and a
-        // nameless contact shouldn't be cold-emailed anyway — skip and report.
-        if (!(c.first_name && c.first_name.trim()) || !(c.last_name && c.last_name.trim())) {
+        // Name requirement is a STALE Bison rule (Bison 422'd on empty names).
+        // We send via PlusVibe now, which accepts nameless leads — engine leads
+        // are company inboxes (info@, admin@) with no person, so requiring a
+        // name dropped nearly all of them. Skip the name gate in loose mode;
+        // keep it for Apollo (person-level) data, which should have names.
+        if (!looseHere
+            && (!(c.first_name && c.first_name.trim()) || !(c.last_name && c.last_name.trim()))) {
           skipped.missingName++; return false;
         }
         // True-MX provider gate. By the time a contact reaches here it has been
@@ -17306,18 +17474,27 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
         // "Google + Other" push. A still-null mx_provider means the verifier
         // couldn't resolve MX; exclude it rather than guess (safer than leaking
         // a possibly-wrong provider into the campaign).
-        if (allowedProviders.length && !allowedProviders.includes(c.mx_provider)) {
+        // In loose mode a null mx_provider must NOT be dropped: skipVerify never
+        // resolves MX (no Reacher), so EVERY contact has mx_provider=null and
+        // these gates would drop the entire job. Only enforce the provider filter
+        // when the provider is actually known; loose pushes accept unresolved.
+        if (allowedProviders.length && c.mx_provider && !allowedProviders.includes(c.mx_provider)) {
           skipped.wrongProvider++; return false;
         }
-        // Default-ON Microsoft guard (authoritative, server-side). Even if the
-        // caller's allowedProviders is empty, when excludeMicrosoft is set we
-        // drop any contact whose resolved provider is Microsoft, or whose MX is
-        // still unresolved (could be MS behind a gateway). This is the final gate
-        // that stops Microsoft leaking into Bison regardless of UI state.
-        if (job.excludeMicrosoft && (c.mx_provider === 'email_outlook' || !c.mx_provider)) {
+        // Default-ON Microsoft guard. Drop confirmed-Microsoft always; drop
+        // UNRESOLVED (null) MX only in strict mode — in loose mode an unresolved
+        // provider is accepted (we can't resolve it without verifying).
+        if (job.excludeMicrosoft && (c.mx_provider === 'email_outlook' || (!c.mx_provider && !job.loose))) {
           skipped.wrongProvider++; return false;
         }
-        if ((!c.keywords || c.keywords.trim() === '') || (!c.industry || c.industry.trim() === '')) {
+        // Enrichment gate is for Apollo-sourced contacts (which carry keywords +
+        // industry). Engine-scraped leads lack `keywords`. Gate on !looseHere
+        // (NOT just source) — staging's ON CONFLICT can leave an engine lead's
+        // source non-engine, and keying only on c.source !== 'engine' let this
+        // gate silently drop loose engine pushes. looseHere already covers both
+        // the loose flag and source='engine'.
+        if (!looseHere
+            && ((!c.keywords || c.keywords.trim() === '') || (!c.industry || c.industry.trim() === ''))) {
           skipped.missingEnrichment++; return false;
         }
         // Bulletproof per-campaign dedup: check the full pushed_campaigns
@@ -17423,10 +17600,14 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
           const slice = batch.slice(i, i + 100);
           let r;
           // PlusVibe wants top-level native fields (toLead already returns them).
-          // Require non-empty first+last name. Batch add + campaign assignment in
-          // one /lead/add call: { workspace_id, campaign_id, leads }.
+          // Batch add + campaign assignment in one /lead/add call.
+          // NAME FILTER: this was a Bison-era rule (Bison 422'd on empty names).
+          // It is a SECOND name gate, separate from passesFilter, and it silently
+          // stripped every nameless company inbox here — the cause of "only the 1
+          // contact with a real name pushed". PlusVibe accepts nameless leads, so
+          // skip this filter for loose/engine pushes; keep it for strict Apollo.
           var pvLeadPayload = slice.map(toLead)
-            .filter(function(l){ return l.first_name && String(l.first_name).trim() && l.last_name && String(l.last_name).trim(); })
+            .filter(function(l){ return job.loose || (l.first_name && String(l.first_name).trim() && l.last_name && String(l.last_name).trim()); })
             .map(function(l){
               var s = sanitizePvLead(l);
               if (s.reason) console.warn('[pv-push] ' + s.reason);
@@ -17464,7 +17645,9 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
               console.warn('[push] cleanedNames backfill failed:', err.message));
           }
 
-          job.pushed += Math.min(100, batch.length - i);
+          // Count what was ACTUALLY sent to PV (post name-filter), not the raw
+          // slice size — otherwise job.pushed overstated when leads were filtered.
+          job.pushed += pvLeadPayload.length;
           job.progress = Math.min(99, job.progress + 1);
         }
       };
@@ -17475,7 +17658,7 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
           const r = await fetch(`http://127.0.0.1:${finderPort}/api/verify-email`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email: c.email, verifier: 'reacher' }),
-            signal: AbortSignal.timeout(65000)
+            signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS)
           });
           const d = await r.json();
           const smtp = d.result?.raw?.smtp || d.result?.smtp || {};
@@ -17622,7 +17805,9 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
       // ── Phase 3: No2Bounce deeper validation of catch-all contacts ──
       const riskyContacts = contacts.filter(c => verifyResults[c.id] === 'risky');
       console.log(`[No2Bounce] Risky contacts found: ${riskyContacts.length} of ${contacts.length}`);
-      if (riskyContacts.length && !job.cancelled) {
+      // Skip the slow No2Bounce catch-all stage for loose/engine pushes — risky
+      // contacts push anyway in loose mode, so validating them just adds latency.
+      if (riskyContacts.length && !job.cancelled && !job.loose) {
         job.status = 'n2b_verifying';
         job.n2bTotal = riskyContacts.length;
         job.n2bDone  = 0;
@@ -17746,6 +17931,9 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
   job.cancelled = false;
   job.resumeOnBoot = false;
   job.status = 'verifying';
+  // Restore loose mode from the persisted row (survives a deploy that rebuilt
+  // the in-memory job), so a resumed engine push keeps the looser gate.
+  job.loose = job.loose || !!row.loose;
   // Clear the deploy-resume flag now it's running again — a later manual pause
   // must not be auto-resumed by the next deploy.
   try { sq && sq.prepare(`UPDATE paused_push_jobs SET resume_on_boot = 0 WHERE id = ?`).run(job.id); } catch {}
@@ -17766,8 +17954,12 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
       if (!contacts.length) { job.status = 'failed'; job.error = 'No contacts found'; return; }
 
       const cutoff = new Date(Date.now() - max_age_days * 24 * 60 * 60 * 1000).toISOString();
+      // skipVerify: treat EVERY contact as already-verified using its stored
+      // email_status (null/unknown stays pushable in loose mode), so the Reacher
+      // loop below runs zero times and the push starts immediately.
       const isFreshVerdict = c =>
-        c.email_verified_at && c.email_verified_at >= cutoff && c.email_status && c.email_status !== 'unknown';
+        job.skipVerify ||
+        (c.email_verified_at && c.email_verified_at >= cutoff && c.email_status && c.email_status !== 'unknown');
       const needsVerify     = contacts.filter(c => !isFreshVerdict(c));
       const alreadyVerified = contacts.filter(isFreshVerdict);
 
@@ -17780,7 +17972,13 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
       alreadyVerified.forEach(c => { verifyResults[c.id] = c.email_status; });
 
       const finderPort = process.env.EMAIL_FINDER_INTERNAL_PORT || '5055';
+      // Concurrency stays at 5 (Reacher author Jon's recommended max — higher
+      // gets SMTP servers to throttle/block parallel probes from one IP). Speed
+      // for loose/engine pushes comes from a SHORT per-email timeout: a hanging
+      // SMTP probe falls through to 'unknown' (which pushes in loose mode) in
+      // seconds instead of stalling on the generous 65s strict pushes keep.
       const CONCURRENCY = Math.max(1, parseInt(process.env.PUSH_VERIFY_CONCURRENCY || '5', 10));
+      const VERIFY_TIMEOUT_MS = parseInt(process.env.PUSH_VERIFY_TIMEOUT_MS || (job.loose ? '10000' : '65000'), 10);
       const VERIFY_THEN_PUSH = Math.max(20, parseInt(process.env.VERIFY_THEN_PUSH || '100', 10));
       let doneCount = 0;
       const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, snoozed: 0 };
@@ -17791,7 +17989,19 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
       const targetCampLc = (job.campaign_name || '').trim().toLowerCase();
 
       const passesFilter = (c) => {
-        if (verifyResults[c.id] !== 'safe' && verifyResults[c.id] !== 'safe_catchall') { skipped.unsafe++; return false; }
+        // Engine leads: looser gate (push anything not hard-'invalid'; block
+        // free/disposable/trap domains). Apollo stays strict. Mirrors the main
+        // verify-and-push gate so a resumed job behaves identically.
+        const looseHere = job.loose || c.source === 'engine';
+        if (looseHere) {
+          if (verifyResults[c.id] === 'invalid')        { skipped.unsafe++; return false; }
+          if (isFreeDomain(c.email))                    { skipped.unsafe++; return false; }
+        } else {
+          // User-chosen verification buckets (push modal). Default safe pair.
+          const allowedSet = (Array.isArray(job.allowedStatuses) && job.allowedStatuses.length)
+            ? job.allowedStatuses : ['safe', 'safe_catchall'];
+          if (!allowedSet.includes(verifyResults[c.id])) { skipped.unsafe++; return false; }
+        }
         if (c.do_not_contact) { skipped.dnc++; return false; }
         const pushed = Array.isArray(c.pushed_campaigns)
           ? c.pushed_campaigns
@@ -17855,8 +18065,10 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
           if (job.cancelled || job.paused) return;
           const slice = batch.slice(i, i + 100);
           // PlusVibe: top-level native fields (no custom_variables pre-step).
+          // Name filter is a Bison-era rule; skip it for loose pushes (PV accepts
+          // nameless leads) — mirrors the main verify-and-push path.
           var pvPayload = slice.map(toLead)
-            .filter(function(l){ return l.first_name && String(l.first_name).trim() && l.last_name && String(l.last_name).trim(); })
+            .filter(function(l){ return job.loose || (l.first_name && String(l.first_name).trim() && l.last_name && String(l.last_name).trim()); })
             .map(function(l) {
               return {
                 email:               l.email,
@@ -17896,7 +18108,7 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
             const toFlush = cleaningBackfills.splice(0, cleaningBackfills.length);
             db.bulkUpdateCleanedNames(toFlush).catch(err => console.warn('[push] cleanedNames backfill failed:', err.message));
           }
-          job.pushed += Math.min(100, batch.length - i);
+          job.pushed += pvPayload.length; // actual sent count (post name-filter)
           job.progress = Math.min(99, job.progress + 1);
         }
       };
@@ -17907,7 +18119,7 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
           const r = await fetch(`http://127.0.0.1:${finderPort}/api/verify-email`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email: c.email, verifier: 'reacher' }),
-            signal: AbortSignal.timeout(65000)
+            signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS)
           });
           const d = await r.json();
           const smtp = d.result?.raw?.smtp || d.result?.smtp || {};
@@ -18010,7 +18222,7 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
         } catch (err) { console.warn('[verify] final catch-all propagation failed:', err.message); }
 
         const riskyContacts = contacts.filter(c => verifyResults[c.id] === 'risky');
-        if (riskyContacts.length) {
+        if (riskyContacts.length && !job.loose) {
           job.status = 'n2b_verifying';
           job.n2bTotal = riskyContacts.length;
           job.n2bDone  = 0;
