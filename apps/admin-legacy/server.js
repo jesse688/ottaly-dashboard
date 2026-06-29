@@ -260,12 +260,52 @@ async function pvWorkspaceLeads(wsId, opts = {}) {
   const label = opts.label || 'INTERESTED';
   const limit = opts.perPage || 100;
   const page  = opts.page  || 1;
-  const resp = await pvApi('/lead/workspace-leads', { wsId, params: { label, limit, skip: (page - 1) * limit } });
+  // PlusVibe deprecated the `skip` param (now 400s: "skip is not allowed");
+  // pagination is `page`-based. See the page= call sites elsewhere in this file.
+  const resp = await pvApi('/lead/workspace-leads', { wsId, params: { label, limit, page } });
   const list = Array.isArray(resp) ? resp : (resp?.leads || resp?.data || []);
   return list.map(l => Object.assign({}, l, {
     _id: l._id || l.id || null,
     email: l.email || null,
   }));
+}
+
+// PlusVibe /lead/add validates each lead with a strict schema and rejects the
+// WHOLE batch on the first bad one. Two known triggers: (1) email local-parts
+// with apostrophes etc. — PV's regex is /^[a-z0-9...]/ and excludes them, so
+// O'Sullivan-style addresses 400; (2) phone_number that isn't a string. This
+// normalises a single lead in place so one bad row can't poison a 100-lead
+// batch. Returns { lead, changed, reason } — `changed` flags an email rewrite
+// so the caller can stamp the DB; the cleaned address should be re-verified.
+const PV_EMAIL_LOCAL_OK = /^[a-z0-9._%+\-]+$/i;
+function sanitizePvLead(lead) {
+  const out = { ...lead };
+  let changed = false;
+  let reason = null;
+
+  // phone_number must be a string — coerce null/number → string.
+  if (out.phone_number != null && typeof out.phone_number !== 'string') {
+    out.phone_number = String(out.phone_number);
+  }
+
+  const email = (out.email || '').trim();
+  const at = email.lastIndexOf('@');
+  if (at > 0) {
+    const local = email.slice(0, at);
+    const domain = email.slice(at + 1);
+    if (!PV_EMAIL_LOCAL_OK.test(local)) {
+      // Strip every char PlusVibe's regex won't accept (apostrophes, spaces…).
+      const cleanedLocal = local.replace(/[^a-z0-9._%+\-]/gi, '');
+      if (cleanedLocal && cleanedLocal !== local) {
+        out.email = `${cleanedLocal}@${domain}`;
+        changed = true;
+        reason = `email local-part sanitised: "${email}" → "${out.email}"`;
+      } else {
+        reason = `email rejected by PlusVibe pattern, unrecoverable: "${email}"`;
+      }
+    }
+  }
+  return { lead: out, changed, reason };
 }
 
 // Alias used by legacy code (bisonWorkspaceLeads callers)
@@ -15133,6 +15173,11 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
             department:          l.department           || null,
             address_line:        l.address_line         || null,
           };
+        })
+        .map(function(l){
+          var s = sanitizePvLead(l);
+          if (s.reason) console.warn('[pv-push] ' + s.reason);
+          return s.lead;
         });
       if (!pvLeadPayload.length) { continue; }
       // PlusVibe batch add + campaign assignment in one call.
@@ -17381,9 +17426,21 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
           // Require non-empty first+last name. Batch add + campaign assignment in
           // one /lead/add call: { workspace_id, campaign_id, leads }.
           var pvLeadPayload = slice.map(toLead)
-            .filter(function(l){ return l.first_name && String(l.first_name).trim() && l.last_name && String(l.last_name).trim(); });
+            .filter(function(l){ return l.first_name && String(l.first_name).trim() && l.last_name && String(l.last_name).trim(); })
+            .map(function(l){
+              var s = sanitizePvLead(l);
+              if (s.reason) console.warn('[pv-push] ' + s.reason);
+              return s.lead;
+            });
           if (!pvLeadPayload.length) { continue; }
-          await pvApi('/lead/add', { method: 'POST', wsId: workspace_id, body: { workspace_id, campaign_id, leads: pvLeadPayload } });
+          try {
+            await pvApi('/lead/add', { method: 'POST', wsId: workspace_id, body: { workspace_id, campaign_id, leads: pvLeadPayload } });
+          } catch (e) {
+            // One bad lead must not abort the whole job — log this slice and
+            // continue to the next batch instead of throwing out of pushLeads.
+            console.warn('[pv-push] batch /lead/add failed (slice ' + i + ', ' + pvLeadPayload.length + ' leads), skipping: ' + e.message);
+            continue;
+          }
           r = { ok: true };
           // Stamp pushed_campaigns so future verify-and-push runs against
           // this same campaign skip these contacts cleanly. Fire-and-forget
@@ -17818,6 +17875,11 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
                 department:          l.department           || null,
                 address_line:        l.address_line         || null,
               };
+            })
+            .map(function(l){
+              var s = sanitizePvLead(l);
+              if (s.reason) console.warn('[pv-push] ' + s.reason);
+              return s.lead;
             });
           if (!pvPayload.length) { continue; }
           // Batch add + campaign assignment in one call.
@@ -19906,7 +19968,11 @@ function scheduleAudienceScoring(pgdb) {
     let pushed = 0;
     // PlusVibe batch add + campaign assignment: { workspace_id, campaign_id, leads }.
     for (let i = 0; i < leads.length; i += 100) {
-      const slice = leads.slice(i, i + 100);
+      const slice = leads.slice(i, i + 100).map(function(l){
+        var s = sanitizePvLead(l);
+        if (s.reason) console.warn('[pv-push] ' + s.reason);
+        return s.lead;
+      });
       try {
         await pvApi('/lead/add', { method: 'POST', wsId: workspace_id, body: { workspace_id, campaign_id, leads: slice } });
         pushed += slice.length;
