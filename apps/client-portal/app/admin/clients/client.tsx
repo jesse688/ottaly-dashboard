@@ -403,8 +403,16 @@ export function AdminClientsClient() {
   async function saveReplySignature() {
     if (!settingsClient) return
     const sig = sigEdit.trim()
-    await fetch(`/api/admin/clients/${settingsClient.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ replySignatureEnabled: sigEnabled, replySignature: sig || null }) })
+    const res = await fetch(`/api/admin/clients/${settingsClient.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ replySignatureEnabled: sigEnabled, replySignature: sig || null }) })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({})) as { error?: string }
+      alert(`Could not save signature: ${err.error || res.status}`)
+      return
+    }
+    // Keep both the open panel AND the cached client list in sync, so reopening
+    // the panel shows the saved value instead of a stale (empty) copy.
     setSettingsClient({ ...settingsClient, reply_signature_enabled: sigEnabled, reply_signature: sig || null })
+    fetch('/api/admin/clients').then(r => r.json()).then(d => { if (Array.isArray(d)) setClients(d) }).catch(() => {})
     alert('Reply signature saved.')
   }
   async function addLedgerEntry() {
