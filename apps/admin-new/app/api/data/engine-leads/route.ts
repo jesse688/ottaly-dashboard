@@ -17,7 +17,11 @@ export function buildEngineLeadsFilter(p: URLSearchParams) {
   const region = list('region')
   const platform = list('platform')
   const companySize = list('company_size')
-  const sic = list('sic') // SIC codes to match against sic_code
+  // SIC chips send the bare code (e.g. "87100"), but sic_code in the table is
+  // inconsistent — most rows store "87100 - Residential nursing care…", some
+  // store just "85100". Match on the leading code (split_part) so both forms
+  // hit. Exact equality silently matched 0 rows for the labelled majority.
+  const sic = list('sic')
   const search = (p.get('search') || '').trim() || null
 
   // has_products: 'true' | 'false' | anything-else => no filter (null)
@@ -46,7 +50,7 @@ export function buildEngineLeadsFilter(p: URLSearchParams) {
       AND ($9::int  IS NULL OR product_count >= $9)
       AND ($10::int IS NULL OR page_count    >= $10)
       AND ($11::bool IS NULL OR (COALESCE(NULLIF(email_primary,''), emails[1]) IS NOT NULL AND COALESCE(NULLIF(email_primary,''), emails[1]) <> ''))
-      AND ($12::text[] IS NULL OR sic_code = ANY($12))`
+      AND ($12::text[] IS NULL OR split_part(sic_code, ' ', 1) = ANY($12))`
 
   return {
     where,
