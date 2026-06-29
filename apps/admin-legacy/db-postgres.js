@@ -2371,6 +2371,37 @@ class PostgresDatabase {
   }
 
   async getDistinctValues(workspaceId, field, limit = 100) {
+    // Filter dropdowns (Industry, Keywords, Role, Company, Location…) all call
+    // this. On the 590k-row contacts table the unnest+group can exceed the
+    // statement timeout — intermittently, depending on workspace size and DB
+    // load — and the catch below returns [] → the dropdown shows "No results".
+    // That's the "sometimes they show, sometimes not" symptom.
+    //
+    // Cache results per (workspace, field, limit) with a TTL so repeat opens are
+    // instant and never re-run the heavy query. On a timeout/error we fall back
+    // to the last good cached value (stale-but-useful) rather than blanking the
+    // dropdown. These distinct sets change slowly, so a few minutes is fine.
+    this._distinctCache = this._distinctCache || new Map();
+    const cacheKey = `${workspaceId}:${field}:${limit}`;
+    const TTL_MS = 10 * 60 * 1000;
+    const cached = this._distinctCache.get(cacheKey);
+    if (cached && (Date.now() - cached.at) < TTL_MS) return cached.values;
+
+    let values;
+    try {
+      values = await this._getDistinctValuesUncached(workspaceId, field, limit);
+    } catch (err) {
+      console.error(`getDistinctValues failed for ${field}:`, err.message);
+      values = null;
+    }
+    // A timeout returns [] (or null) — don't cache an empty result over a good
+    // one; serve the prior cached value if we have it.
+    if ((!values || values.length === 0) && cached) return cached.values;
+    if (values) this._distinctCache.set(cacheKey, { values, at: Date.now() });
+    return values || [];
+  }
+
+  async _getDistinctValuesUncached(workspaceId, field, limit = 100) {
     // Map of table columns (fast query)
     const tableColumns = {
       'job_title':      'job_title',
@@ -2433,15 +2464,21 @@ class PostgresDatabase {
       `;
       const client = await this.pool.connect();
       try {
-        await client.query(`SET statement_timeout = '120s'`);
+        // Fail fast: with caching in front, a slow cold query should bail in
+        // ~30s and let the wrapper serve the last good value, not hang 2 min.
+        await client.query(`SET statement_timeout = '30s'`);
         const result = await client.query(sql, [limit, workspaceId]);
         return result.rows.filter(r => r.value).map(r => ({
           value: r.value.trim(),
           count: parseInt(r.count, 10)
         }));
       } catch (err) {
-        console.error(`Error extracting ${field}:`, err);
-        return [];
+        // Reset the pooled connection's timeout so this 30s cap can't leak to
+        // the next query that reuses this connection.
+        try { await client.query(`SET statement_timeout = 45000`); } catch { /* connection may be dead */ }
+        // Re-throw so the caching wrapper can fall back to a prior cached value
+        // instead of caching an empty result over a good one.
+        throw err;
       } finally {
         client.release();
       }
@@ -2466,8 +2503,10 @@ class PostgresDatabase {
         count: parseInt(r.count, 10)
       }));
     } catch (err) {
-      console.error(`Error extracting ${field} from raw_data:`, err);
-      return [];
+      // Re-throw so getDistinctValues can fall back to the last cached value
+      // rather than blanking the dropdown on a transient timeout.
+      console.error(`Error extracting ${field} from raw_data:`, err.message);
+      throw err;
     }
   }
 
