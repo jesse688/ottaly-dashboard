@@ -561,6 +561,25 @@ export default function CommissionPage() {
           window.location.href = '/login'
           return
         }
+
+        // SECURITY: the agency-wide admin view shows revenue + every earner's
+        // commission. A Content Manager (CM) must NEVER see agency finances/revenue,
+        // even if the legacy commission session resolves to 'admin'. Gate the admin
+        // view on the admin-new role too, and FAIL CLOSED — anything but a confirmed
+        // admin is downgraded to the personal "My Commission" view (scoped to their
+        // own name via renderManager).
+        let adminNewRole: 'admin' | 'cm' = 'cm'
+        try {
+          const rr = await fetch('/api/auth/role')
+          const rd = await rr.json()
+          adminNewRole = rd?.role === 'admin' ? 'admin' : 'cm'
+        } catch {
+          adminNewRole = 'cm'
+        }
+        if (adminNewRole !== 'admin' && sess.role === 'admin') {
+          sess.role = 'manager'
+        }
+
         setSession(sess)
 
         const [priceData, mgrData, leadsData, wkldData] = await Promise.all([
