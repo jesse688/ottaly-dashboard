@@ -12,6 +12,42 @@ const CM_KEY = process.env.CM_KEY ?? 'OttalyCM345$'
 
 export type Role = 'admin' | 'cm'
 
+// ── Finance lock (Model B) ───────────────────────────────────────────────────
+// Finance + Revenue are gated by a SEPARATE passphrase held only in env, on top
+// of the normal login. Anyone (even an admin) must enter FINANCE_KEY once to
+// unlock; it sets a short-lived signed cookie. No fallback: if FINANCE_KEY is
+// unset, finance stays locked for everyone (fail closed).
+const FIN_COOKIE = 'ottaly_fin'
+const FINANCE_KEY = process.env.FINANCE_KEY
+
+export function checkFinanceKey(key: string): boolean {
+  return !!FINANCE_KEY && key === FINANCE_KEY
+}
+
+// Mint a finance-unlock token (12h). Signed with the same secret so the Edge
+// middleware can verify it without a DB/network call.
+export async function createFinanceToken() {
+  return new SignJWT({ fin: true })
+    .setProtectedHeader({ alg: 'HS256' })
+    .setIssuedAt()
+    .setExpirationTime('12h')
+    .sign(SECRET)
+}
+
+export async function isFinanceUnlocked(): Promise<boolean> {
+  const store = await cookies()
+  const token = store.get(FIN_COOKIE)?.value
+  if (!token) return false
+  try {
+    const { payload } = await jwtVerify(token, SECRET)
+    return payload.fin === true
+  } catch {
+    return false
+  }
+}
+
+export { FIN_COOKIE }
+
 export async function createSession(role: Role = 'admin') {
   const token = await new SignJWT({ role })
     .setProtectedHeader({ alg: 'HS256' })
