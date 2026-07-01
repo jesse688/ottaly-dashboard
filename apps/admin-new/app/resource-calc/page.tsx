@@ -11,14 +11,15 @@ type Client = {
   target: number | null
   mailboxes: number
   capacityPerDay: number
-  capacity30d: number
+  capacityWindow: number
   avgLimit: number
-  sent30d: number
-  humanReplies30d: number
-  leads30d: number
+  sent: number
+  avgDailySend: number
+  humanReplies: number
+  leads: number
   responseRate: number | null
   rtl: number | null
-  rtlWindow: '30d' | '90d' | null
+  rtlWindow: 'window' | '90d' | null
   utilisation: number | null
   expectedLeads: number | null
   projectedLeads: number | null
@@ -31,25 +32,34 @@ type Client = {
   }
 }
 
+const WINDOWS = [7, 30, 60, 90] as const
+type Win = (typeof WINDOWS)[number]
+
 const num = (n: number) => n.toLocaleString('en-GB')
+const dec = (n: number) => n.toLocaleString('en-GB', { maximumFractionDigits: 0 })
 const pct = (n: number | null) => (n === null ? '—' : `${(n * 100).toFixed(n < 0.1 ? 2 : 1)}%`)
 const one = (n: number | null) => (n === null ? '—' : n.toFixed(1))
 const int = (n: number | null) => (n === null ? '—' : Math.round(n).toLocaleString('en-GB'))
 
 export default function ResourceCalcPage() {
   const [clients, setClients] = useState<Client[]>([])
+  const [days, setDays] = useState<Win>(30)
+  const [sendDataDays, setSendDataDays] = useState(30)
+  const [sendLimited, setSendLimited] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [syncing, setSyncing] = useState(false)
   const [syncMsg, setSyncMsg] = useState<string | null>(null)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (windowDays: Win) => {
     setLoading(true)
     try {
-      const res = await fetch('/api/resource-calc')
+      const res = await fetch(`/api/resource-calc?days=${windowDays}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
       setClients(data.clients ?? [])
+      setSendDataDays(data.sendDataDays ?? 30)
+      setSendLimited(Boolean(data.sendDataLimited))
       setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load')
@@ -59,8 +69,8 @@ export default function ResourceCalcPage() {
   }, [])
 
   useEffect(() => {
-    load()
-  }, [load])
+    load(days)
+  }, [load, days])
 
   // Full PlusVibe → mailbox_full sync, then reload. Slow (~minutes at ~2.8k
   // mailboxes) so it's a separate button from the fast cache Refresh — use it
@@ -73,7 +83,7 @@ export default function ResourceCalcPage() {
       const d = await r.json()
       if (d.ok) {
         setSyncMsg(`Synced ${d.count ?? ''} mailboxes.`)
-        await load()
+        await load(days)
       } else {
         setSyncMsg(`Sync failed: ${d.error ?? 'unknown error'}`)
       }
@@ -82,11 +92,9 @@ export default function ResourceCalcPage() {
     } finally {
       setSyncing(false)
     }
-  }, [load])
+  }, [load, days])
 
   const saveTarget = useCallback(async (workspaceId: string, value: number | null) => {
-    // optimistic: update the row locally, then recompute would need server —
-    // simplest correct path is to persist then refetch the affected numbers.
     setClients((prev) =>
       prev.map((c) => (c.workspaceId === workspaceId ? { ...c, target: value } : c)),
     )
@@ -95,24 +103,18 @@ export default function ResourceCalcPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ workspace_id: workspaceId, monthly_lead_target: value }),
     })
-    // refetch so verdict / mailboxes-needed reflect the new target
-    load()
-  }, [load])
+    // refetch so verdict / mailboxes-needed reflect the new target (windowed)
+    load(days)
+  }, [load, days])
 
   const totals = useMemo(() => {
-    const t = {
-      mailboxes: 0,
-      capacityPerDay: 0,
-      sent: 0,
-      leads: 0,
-      needMore: 0,
-      underUsed: 0,
-    }
+    const t = { mailboxes: 0, capacityPerDay: 0, avgDailySend: 0, sent: 0, leads: 0, needMore: 0, underUsed: 0 }
     for (const c of clients) {
       t.mailboxes += c.mailboxes
       t.capacityPerDay += c.capacityPerDay
-      t.sent += c.sent30d
-      t.leads += c.leads30d
+      t.avgDailySend += c.avgDailySend
+      t.sent += c.sent
+      t.leads += c.leads
       if (c.verdict.code === 'needs_more') t.needMore++
       if (c.verdict.code === 'under_utilised') t.underUsed++
     }
@@ -125,6 +127,7 @@ export default function ResourceCalcPage() {
       subtitle="Per-client sending capacity vs. lead target — who's under-using resource and who needs more."
       actions={
         <div className="flex items-center gap-2">
+          <WindowToggle value={days} onChange={setDays} disabled={syncing} />
           {syncMsg && <span className="text-xs text-muted-foreground">{syncMsg}</span>}
           <button
             onClick={syncMailboxes}
@@ -135,7 +138,7 @@ export default function ResourceCalcPage() {
             {syncing ? 'Syncing…' : '↻ Sync mailboxes'}
           </button>
           <button
-            onClick={load}
+            onClick={() => load(days)}
             disabled={syncing}
             className="rounded-lg border border-border bg-background px-3 py-1.5 text-sm font-medium hover:bg-muted disabled:opacity-60"
             title="Recompute from the current cached data (fast)"
@@ -148,7 +151,7 @@ export default function ResourceCalcPage() {
       <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
         <KpiCard label="Active clients" value={loading ? '—' : clients.length} tone="navy" loading={loading} />
         <KpiCard label="Mailboxes" value={loading ? '—' : num(totals.mailboxes)} sub="total across clients" tone="teal" loading={loading} />
-        <KpiCard label="Capacity / day" value={loading ? '—' : num(totals.capacityPerDay)} sub="max emails/day" tone="purple" loading={loading} />
+        <KpiCard label="Capacity / day" value={loading ? '—' : num(totals.capacityPerDay)} sub={`sending ${dec(totals.avgDailySend)}/day avg`} tone="purple" loading={loading} />
         <KpiCard label="Under-utilised" value={loading ? '—' : totals.underUsed} sub="have resource, not sending" tone="yellow" loading={loading} />
         <KpiCard label="Need more" value={loading ? '—' : totals.needMore} sub="can't hit target" tone="red" loading={loading} />
       </div>
@@ -159,25 +162,35 @@ export default function ResourceCalcPage() {
         </div>
       )}
 
+      {sendLimited && (
+        <div className="mb-4 rounded-lg border border-[var(--chart-4)]/40 bg-[var(--chart-4)]/10 px-3 py-2 text-xs text-[var(--chart-4)]">
+          Send &amp; reply history only goes back ~{sendDataDays} days, so over this {days}-day window
+          the <strong>Sent</strong>, <strong>Avg/day</strong>, <strong>Utilisation</strong> and{' '}
+          <strong>Response rate</strong> figures cover the available data only (leads go back further).
+          These fill in as more history accumulates.
+        </div>
+      )}
+
       <div className="overflow-x-auto rounded-lg border border-border bg-card">
-        <table className="w-full min-w-[1100px] border-collapse text-sm">
+        <table className="w-full min-w-[1200px] border-collapse text-sm">
           <thead>
             <tr className="border-b border-border text-[11px] uppercase tracking-wide text-muted-foreground">
               <Th className="text-left">Client</Th>
               <Th title="Mailboxes × their configured daily send limit">Max speed<br />/day</Th>
-              <Th title="Emails actually sent in last 30 days">Sent 30d</Th>
-              <Th title="Sent ÷ (max speed × 30). How much of capacity they're using.">Utilisation</Th>
-              <Th title="Human replies ÷ sent, last 30 days">Resp. rate</Th>
+              <Th title={`Emails actually sent in the last ${days} days`}>Sent {days}d</Th>
+              <Th title={`Average emails sent per day over the ${days}-day window`}>Avg /day</Th>
+              <Th title={`Sent ÷ (max speed × ${days}). How much of capacity they're using.`}>Utilisation</Th>
+              <Th title={`Human replies ÷ sent, last ${days} days`}>Resp. rate</Th>
               <Th title="Replies per lead — measured from real data">RTL</Th>
-              <Th title="Leads (INTERESTED) in last 30 days">Leads 30d</Th>
-              <Th title="Editable — monthly lead target">Target</Th>
-              <Th title="Leads they'd get at FULL capacity with current rate & RTL">Exp. @ full</Th>
+              <Th title={`Leads (INTERESTED) in the last ${days} days`}>Leads {days}d</Th>
+              <Th title="Editable — monthly lead target (verdict scales it to the window)">Target /mo</Th>
+              <Th title="Leads they'd get at FULL capacity over this window, at current rate & RTL">Exp. @ full</Th>
               <Th className="text-left" title="Recommendation">Verdict</Th>
             </tr>
           </thead>
           <tbody>
             {loading && clients.length === 0 ? (
-              <tr><td colSpan={10} className="px-4 py-10 text-center text-muted-foreground">Loading…</td></tr>
+              <tr><td colSpan={11} className="px-4 py-10 text-center text-muted-foreground">Loading…</td></tr>
             ) : (
               clients.map((c) => <Row key={c.workspaceId} c={c} onSaveTarget={saveTarget} />)
             )}
@@ -186,11 +199,34 @@ export default function ResourceCalcPage() {
       </div>
 
       <p className="mt-3 text-xs text-muted-foreground">
-        Max speed = Σ per-mailbox daily limit (PlusVibe). Response rate & RTL measured from the last 30 days
-        (RTL widens to 90 days when a client has too few leads for a reliable ratio). Expected leads assume
-        sending at full capacity. Set a target to get a verdict.
+        Max speed = Σ per-mailbox daily limit (PlusVibe). Sent, avg/day, response rate, RTL and leads are
+        measured over the selected window (RTL widens to 90 days when a client has too few leads for a
+        reliable ratio). Utilisation and expected leads scale capacity to the window. The monthly target is
+        scaled to the window when producing the verdict.
       </p>
     </PageShell>
+  )
+}
+
+function WindowToggle({ value, onChange, disabled }: { value: Win; onChange: (w: Win) => void; disabled?: boolean }) {
+  return (
+    <div className="inline-flex overflow-hidden rounded-lg border border-border">
+      {WINDOWS.map((w) => (
+        <button
+          key={w}
+          onClick={() => onChange(w)}
+          disabled={disabled}
+          className={cn(
+            'px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-60',
+            w === value
+              ? 'bg-[var(--chart-1)] text-white'
+              : 'bg-background text-muted-foreground hover:bg-muted',
+          )}
+        >
+          {w}d
+        </button>
+      ))}
+    </div>
   )
 }
 
@@ -231,7 +267,8 @@ function Row({ c, onSaveTarget }: { c: Client; onSaveTarget: (ws: string, v: num
         {num(c.capacityPerDay)}
         <span className="ml-1 text-[11px] text-muted-foreground">({c.mailboxes}mb)</span>
       </td>
-      <td className="px-3 py-2.5 text-right tabular-nums">{num(c.sent30d)}</td>
+      <td className="px-3 py-2.5 text-right tabular-nums">{num(c.sent)}</td>
+      <td className="px-3 py-2.5 text-right tabular-nums font-medium">{dec(c.avgDailySend)}</td>
       <td className={cn('px-3 py-2.5 text-right tabular-nums', utilLow && 'text-[var(--chart-4)]')}>
         {pct(c.utilisation)}
       </td>
@@ -240,7 +277,7 @@ function Row({ c, onSaveTarget }: { c: Client; onSaveTarget: (ws: string, v: num
         {one(c.rtl)}
         {c.rtlWindow === '90d' && <span className="ml-1 text-[10px] text-muted-foreground">90d</span>}
       </td>
-      <td className="px-3 py-2.5 text-right tabular-nums">{c.leads30d}</td>
+      <td className="px-3 py-2.5 text-right tabular-nums">{c.leads}</td>
       <td className="px-3 py-2.5 text-right">
         <input
           value={draft}
