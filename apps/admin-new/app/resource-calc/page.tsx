@@ -40,6 +40,8 @@ export default function ResourceCalcPage() {
   const [clients, setClients] = useState<Client[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [syncing, setSyncing] = useState(false)
+  const [syncMsg, setSyncMsg] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -58,6 +60,28 @@ export default function ResourceCalcPage() {
 
   useEffect(() => {
     load()
+  }, [load])
+
+  // Full PlusVibe → mailbox_full sync, then reload. Slow (~minutes at ~2.8k
+  // mailboxes) so it's a separate button from the fast cache Refresh — use it
+  // after changing mailboxes in PlusVibe to pull the latest capacity.
+  const syncMailboxes = useCallback(async () => {
+    setSyncing(true)
+    setSyncMsg('Syncing mailboxes from PlusVibe… this can take a few minutes.')
+    try {
+      const r = await fetch('/api/mailboxes/sync', { method: 'POST' })
+      const d = await r.json()
+      if (d.ok) {
+        setSyncMsg(`Synced ${d.count ?? ''} mailboxes.`)
+        await load()
+      } else {
+        setSyncMsg(`Sync failed: ${d.error ?? 'unknown error'}`)
+      }
+    } catch (e) {
+      setSyncMsg(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSyncing(false)
+    }
   }, [load])
 
   const saveTarget = useCallback(async (workspaceId: string, value: number | null) => {
@@ -100,12 +124,25 @@ export default function ResourceCalcPage() {
       title="Resource Calc"
       subtitle="Per-client sending capacity vs. lead target — who's under-using resource and who needs more."
       actions={
-        <button
-          onClick={load}
-          className="rounded-lg border border-border bg-background px-3 py-1.5 text-sm font-medium hover:bg-muted"
-        >
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          {syncMsg && <span className="text-xs text-muted-foreground">{syncMsg}</span>}
+          <button
+            onClick={syncMailboxes}
+            disabled={syncing}
+            className="rounded-lg bg-[var(--chart-2)] px-3 py-1.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-60"
+            title="Pull the latest mailbox settings from PlusVibe (slow — a few minutes), then reload"
+          >
+            {syncing ? 'Syncing…' : '↻ Sync mailboxes'}
+          </button>
+          <button
+            onClick={load}
+            disabled={syncing}
+            className="rounded-lg border border-border bg-background px-3 py-1.5 text-sm font-medium hover:bg-muted disabled:opacity-60"
+            title="Recompute from the current cached data (fast)"
+          >
+            Refresh
+          </button>
+        </div>
       }
     >
       <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
