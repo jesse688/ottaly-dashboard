@@ -8,7 +8,7 @@ import type { Mailbox, MailboxGroupStats, MailboxesResponse } from '@/types/mail
 // pills, colored stat-cards, dense table) — deliberately distinct from the rest
 // of admin-new's component look. All styling is scoped to this page.
 
-const SUPPLIERS = ['Maildoso', 'Mithun', 'Winnr', 'Inboxing'] as const
+const SUPPLIERS = ['Maildoso', 'Mithun', 'Winnr', 'Inboxing', 'Google Generic'] as const
 const TYPES = ['google', 'microsoft', 'smtp'] as const
 const PERIODS: { key: number; label: string }[] = [{ key: 1, label: 'Today' }, { key: 7, label: '7d' }, { key: 14, label: '14d' }, { key: 30, label: '30d' }]
 
@@ -22,6 +22,7 @@ const money = (n: number | null) => (n == null ? '—' : '$' + n.toFixed(2))
 // Top-border color per supplier/type (legacy stat-card accents).
 const ACCENT: Record<string, string> = {
   Maildoso: '#10B981', Mithun: '#F59E0B', Winnr: '#6366F1', Inboxing: '#7C89CD',
+  'Google Generic': '#4285F4',
   Unassigned: '#9CA3AF', google: '#EA4335', microsoft: '#0078D4', smtp: '#475569',
 }
 
