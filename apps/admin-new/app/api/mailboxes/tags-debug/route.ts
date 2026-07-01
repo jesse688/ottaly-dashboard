@@ -45,38 +45,49 @@ export async function GET() {
     out.workspaceCount = workspaces.length
     out.workspacesSample = workspaces.slice(0, 5)
 
-    // 2. Scan accounts from the first few workspaces for tag-like fields.
-    const accountKeys = new Set<string>()
-    const tagLike: Record<string, unknown> = {}
-    let sampleAccount: Record<string, unknown> | null = null
-    let scanned = 0
-    for (const w of workspaces.slice(0, 4)) {
+    // 2. Scan accounts across workspaces, digging into payload.tags specifically
+    //    (that's where PV keeps them). Collect the raw value SHAPE + distinct tag
+    //    strings, and a few emails per tag so we can see the "google generic" set.
+    const rawTagSamples: unknown[] = []              // first few raw payload.tags arrays, verbatim
+    const distinctTags = new Map<string, number>()   // normalized-name → count
+    const emailsByTag = new Map<string, string[]>()  // tag → sample emails
+    let scanned = 0, withTags = 0
+    for (const w of workspaces.slice(0, 20)) {        // cap for time; enough to find the batch
       let list: Record<string, unknown>[] = []
-      try { list = asArray(await pv(`/account/list?workspace_id=${encodeURIComponent(w.id!)}&skip=0&limit=100`)) }
-      catch (e) { out[`ws_${w.id}_error`] = e instanceof Error ? e.message : String(e); continue }
+      try { list = asArray(await pv(`/account/list?workspace_id=${encodeURIComponent(w.id!)}&skip=0&limit=200`)) }
+      catch (e) { out[`ws_${w.name}_error`] = e instanceof Error ? e.message : String(e); continue }
       for (const a of list) {
         scanned++
-        for (const k of Object.keys(a)) accountKeys.add(k)
-        for (const [k, v] of Object.entries(a)) {
-          if (v == null) continue
-          if (/tag|label/i.test(k)) tagLike[k] = v
-          // Any array field that isn't the known campaigns list is a tag candidate.
-          if (Array.isArray(v) && v.length && !/cmps|campaign/i.test(k)) {
-            tagLike[`array:${k}`] = (v as unknown[]).slice(0, 5)
+        const email = String(a.email ?? '')
+        const payload = (a.payload as Record<string, unknown> | null) || {}
+        const t = payload.tags
+        if (!Array.isArray(t) || !t.length) continue
+        withTags++
+        if (rawTagSamples.length < 6) rawTagSamples.push({ email, tags: t })
+        for (const x of t as unknown[]) {
+          let name: string | null = null
+          if (typeof x === 'string') name = x
+          else if (x && typeof x === 'object') {
+            const o = x as Record<string, unknown>
+            const n = o.name ?? o.tag ?? o.label ?? o.title ?? o.value
+            if (n != null) name = String(n)
           }
-        }
-        if (!sampleAccount) {
-          // Truncate the payload so the dump stays readable.
-          const { payload, ...rest } = a as Record<string, unknown>
-          sampleAccount = { ...rest, payload: payload && typeof payload === 'object' ? Object.keys(payload as object) : payload }
+          if (!name) continue
+          distinctTags.set(name, (distinctTags.get(name) ?? 0) + 1)
+          const arr = emailsByTag.get(name) ?? []
+          if (arr.length < 3) { arr.push(email); emailsByTag.set(name, arr) }
         }
       }
-      if (Object.keys(tagLike).length) break
+      // Stop early once we've clearly found the google-generic batch.
+      if ([...distinctTags.keys()].some(k => /generic/i.test(k))) break
     }
     out.accountsScanned = scanned
-    out.accountKeys = [...accountKeys].sort()
-    out.tagLike = tagLike
-    out.sampleAccount = sampleAccount
+    out.accountsWithTags = withTags
+    out.rawTagSamples = rawTagSamples
+    out.distinctTags = Object.fromEntries([...distinctTags.entries()].slice(0, 60))
+    out.genericTagEmails = Object.fromEntries(
+      [...emailsByTag.entries()].filter(([k]) => /generic/i.test(k))
+    )
 
     // 3. Is there a separate PV tags resource? (assign uses bulk_assign_tags, so
     //    tags may live outside the account object.)
