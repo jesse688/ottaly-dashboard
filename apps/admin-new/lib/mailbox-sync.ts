@@ -167,14 +167,41 @@ function extractTags(a: Record<string, unknown>): string[] {
 // "GoogleGeneric", "google generic", "Google-Generic" all collapse to the same key.
 const normTag = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
 
-// Tag → supplier rules. Add a line here to auto-group another tag under a supplier.
-const TAG_SUPPLIER_RULES: { match: string; supplier: string }[] = [
-  { match: 'googlegeneric', supplier: 'Google Generic' },
+// Tag → supplier rules. A tag matches a rule when its normalized form contains
+// ALL of the rule's words — so "GoogleGeneric", "google generic", "Google-Generic",
+// "generic google" all map to Google Generic. Add a line to group another tag.
+const TAG_SUPPLIER_RULES: { needs: string[]; supplier: string }[] = [
+  { needs: ['google', 'generic'], supplier: 'Google Generic' },
 ]
 function supplierFromTags(tags: string[]): string | null {
-  const norm = new Set(tags.map(normTag))
-  for (const r of TAG_SUPPLIER_RULES) if (norm.has(r.match)) return r.supplier
+  const norm = tags.map(normTag)
+  for (const r of TAG_SUPPLIER_RULES) {
+    if (norm.some(t => r.needs.every(w => t.includes(w)))) return r.supplier
+  }
   return null
+}
+
+// PlusVibe stores tag _IDs on the account (payload.tags), not names. The names
+// live in the workspace tag list: GET /api/v1/tags/list?workspace_id=X → [{_id,name}].
+interface PvTag { _id?: string; id?: string; name?: string }
+async function fetchWorkspaceTagMap(wsId: string): Promise<Map<string, string>> {
+  const resp = await pvFetch<PvTag[] | { data?: PvTag[]; tags?: PvTag[] }>(
+    `/tags/list?workspace_id=${encodeURIComponent(wsId)}&skip=0&limit=500`
+  )
+  const list: PvTag[] = Array.isArray(resp) ? resp : (resp?.data ?? resp?.tags ?? [])
+  const map = new Map<string, string>()
+  for (const t of list) {
+    const id = t._id ?? t.id
+    if (id && t.name) map.set(String(id), t.name)
+  }
+  return map
+}
+
+// Resolve a mailbox's raw tag tokens → human names via the workspace tag map.
+// Tokens are usually tag _ids; anything not in the map passes through unchanged
+// (in case a name ever comes through directly).
+function resolveTags(rawTokens: string[], tagMap: Map<string, string>): string[] {
+  return [...new Set(rawTokens.map(t => tagMap.get(t) ?? t).map(s => s.trim()).filter(Boolean))]
 }
 
 function detectMailboxType(provider: string | null): string | null {
@@ -219,6 +246,9 @@ async function listSendingMailboxes(): Promise<RawMailbox[]> {
   for (const ws of workspaces) {
     const wsId = ws.id ?? ws._id
     if (!wsId) continue
+    // Tag id→name map for THIS workspace (tags are per-workspace), so we can turn
+    // the account's payload.tags ids into names for tag→supplier rules. Best-effort.
+    const tagMap = await fetchWorkspaceTagMap(wsId).catch(() => new Map<string, string>())
     const resp = await pvFetch<PvAccount[] | { accounts?: PvAccount[]; data?: PvAccount[]; email_accounts?: PvAccount[] }>(
       `/account/list?workspace_id=${encodeURIComponent(wsId)}&skip=0&limit=500`
     )
@@ -251,7 +281,7 @@ async function listSendingMailboxes(): Promise<RawMailbox[]> {
         campaign_ids: Array.isArray(payload.cmps) ? payload.cmps.map(c => c.id).filter(Boolean) as string[] : [],
         created_at: a.timestamp_created || null,
         updated_at: a.timestamp_updated || null,
-        tags: extractTags(a as unknown as Record<string, unknown>),
+        tags: resolveTags(extractTags(a as unknown as Record<string, unknown>), tagMap),
       })
     }
   }

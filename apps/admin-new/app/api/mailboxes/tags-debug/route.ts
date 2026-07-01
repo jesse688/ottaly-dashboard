@@ -53,6 +53,14 @@ export async function GET() {
     const emailsByTag = new Map<string, string[]>()  // tag → sample emails
     let scanned = 0, withTags = 0
     for (const w of workspaces.slice(0, 20)) {        // cap for time; enough to find the batch
+      // Real endpoint (from PV docs): GET /tags/list → [{_id,name}]. Build id→name.
+      const tagMap = new Map<string, string>()
+      try {
+        for (const t of asArray(await pv(`/tags/list?workspace_id=${encodeURIComponent(w.id!)}&skip=0&limit=500`))) {
+          const id = (t._id ?? t.id) as string | undefined
+          if (id && typeof t.name === 'string') tagMap.set(String(id), t.name)
+        }
+      } catch (e) { out[`ws_${w.name}_tags_error`] = e instanceof Error ? e.message : String(e) }
       let list: Record<string, unknown>[] = []
       try { list = asArray(await pv(`/account/list?workspace_id=${encodeURIComponent(w.id!)}&skip=0&limit=200`)) }
       catch (e) { out[`ws_${w.name}_error`] = e instanceof Error ? e.message : String(e); continue }
@@ -63,16 +71,9 @@ export async function GET() {
         const t = payload.tags
         if (!Array.isArray(t) || !t.length) continue
         withTags++
-        if (rawTagSamples.length < 6) rawTagSamples.push({ email, tags: t })
+        if (rawTagSamples.length < 6) rawTagSamples.push({ email, tags: t, resolved: (t as unknown[]).map(x => tagMap.get(String(x)) ?? x) })
         for (const x of t as unknown[]) {
-          let name: string | null = null
-          if (typeof x === 'string') name = x
-          else if (x && typeof x === 'object') {
-            const o = x as Record<string, unknown>
-            const n = o.name ?? o.tag ?? o.label ?? o.title ?? o.value
-            if (n != null) name = String(n)
-          }
-          if (!name) continue
+          const name = typeof x === 'string' ? (tagMap.get(x) ?? x) : String(x)
           distinctTags.set(name, (distinctTags.get(name) ?? 0) + 1)
           const arr = emailsByTag.get(name) ?? []
           if (arr.length < 3) { arr.push(email); emailsByTag.set(name, arr) }
@@ -89,13 +90,28 @@ export async function GET() {
       [...emailsByTag.entries()].filter(([k]) => /generic/i.test(k))
     )
 
-    // 3. Is there a separate PV tags resource? (assign uses bulk_assign_tags, so
-    //    tags may live outside the account object.)
+    // 3. Find the tag ID→name endpoint. payload.tags holds Mongo-style IDs, so we
+    //    need the resource that lists {id,name}. Probe many candidate paths.
     const wsId = workspaces[0]?.id ?? ''
-    for (const p of [`/tag/list?workspace_id=${wsId}`, `/tags?workspace_id=${wsId}`, `/account/tags?workspace_id=${wsId}`]) {
-      try { out.tagsResource = { endpoint: p.split('?')[0], data: await pv(p) }; break }
-      catch (e) { out[`tagsEndpoint_${p.split('?')[0]}`] = e instanceof Error ? e.message : String(e) }
+    const q = `?workspace_id=${wsId}`
+    const candidates = [
+      `/tag/list${q}`, `/tags${q}`, `/tag${q}`, `/tags/list${q}`,
+      `/label/list${q}`, `/labels${q}`, `/account/tag/list${q}`, `/account/tags/list${q}`,
+      `/tag/all${q}`, `/workspace/tag/list${q}`, `/email-account/tags${q}`,
+      `/tag/list`, `/tags`, `/campaign/tags${q}`,
+    ]
+    const probes: Record<string, string> = {}
+    for (const p of candidates) {
+      try {
+        const data = await pv(p)
+        out.tagsResource = { endpoint: p, data }
+        probes[p] = 'OK 200'
+        break
+      } catch (e) {
+        probes[p] = e instanceof Error ? e.message.replace(/^.*→ /, '') : 'err'
+      }
     }
+    out.tagEndpointProbes = probes
 
     return NextResponse.json(out)
   } catch (e) {
