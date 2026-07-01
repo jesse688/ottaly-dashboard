@@ -72,24 +72,47 @@ export default function ResourceCalcPage() {
     load(days)
   }, [load, days])
 
-  // Full PlusVibe → mailbox_full sync, then reload. Slow (~minutes at ~2.8k
-  // mailboxes) so it's a separate button from the fast cache Refresh — use it
-  // after changing mailboxes in PlusVibe to pull the latest capacity.
+  // Full PlusVibe → mailbox_full sync. It fetches per-mailbox stats for ~2.8k
+  // mailboxes (~6 min), so we DON'T hold the request: POST kicks it off in the
+  // background, then we poll mailbox_sync_state until it's done and reload.
   const syncMailboxes = useCallback(async () => {
     setSyncing(true)
-    setSyncMsg('Syncing mailboxes from PlusVibe… this can take a few minutes.')
+    setSyncMsg('Syncing mailboxes from PlusVibe… this runs in the background (a few minutes).')
     try {
-      const r = await fetch('/api/mailboxes/sync', { method: 'POST' })
+      const r = await fetch('/api/resource-calc/sync', { method: 'POST' })
       const d = await r.json()
-      if (d.ok) {
-        setSyncMsg(`Synced ${d.count ?? ''} mailboxes.`)
-        await load(days)
-      } else {
-        setSyncMsg(`Sync failed: ${d.error ?? 'unknown error'}`)
+      if (!d.ok) {
+        setSyncMsg(`Could not start sync: ${d.error ?? 'unknown error'}`)
+        setSyncing(false)
+        return
       }
+
+      // Poll status until running flips false (or we give up after ~10 min).
+      const startedAt = Date.now()
+      const poll = async (): Promise<void> => {
+        const s = await fetch('/api/resource-calc/sync').then((res) => res.json())
+        if (!s.running) {
+          if (s.lastError) {
+            setSyncMsg(`Sync failed: ${s.lastError}`)
+          } else {
+            setSyncMsg(`Synced ${s.count ?? ''} mailboxes.`)
+            await load(days)
+          }
+          setSyncing(false)
+          return
+        }
+        if (Date.now() - startedAt > 10 * 60 * 1000) {
+          setSyncMsg('Sync is taking longer than expected — it will keep running; hit Refresh shortly.')
+          setSyncing(false)
+          return
+        }
+        const elapsed = Math.round((Date.now() - startedAt) / 1000)
+        setSyncMsg(`Syncing mailboxes from PlusVibe… ${elapsed}s elapsed.`)
+        setTimeout(poll, 4000)
+      }
+      setTimeout(poll, 4000)
     } catch (e) {
       setSyncMsg(e instanceof Error ? e.message : String(e))
-    } finally {
       setSyncing(false)
     }
   }, [load, days])
