@@ -203,7 +203,7 @@ export default function ResourceCalcPage() {
               <Th title={`Emails actually sent in the last ${days} days`}>Sent {days}d</Th>
               <Th title={`Average emails sent per day over the ${days}-day window`}>Avg /day</Th>
               <Th title={`Sent ÷ (max speed × ${days}). How much of capacity they're using.`}>Utilisation</Th>
-              <Th title={`Human replies ÷ sent, last ${days} days`}>Resp. rate</Th>
+              <Th title={`Human replies ÷ sent, last ${days} days (out-of-office auto-replies excluded)`}>Resp. rate</Th>
               <Th title="Replies per lead — measured from real data">RTL</Th>
               <Th title={`Leads (INTERESTED) in the last ${days} days`}>Leads {days}d</Th>
               <Th title="Editable — monthly lead target (verdict scales it to the window)">Target /mo</Th>

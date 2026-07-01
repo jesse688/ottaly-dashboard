@@ -239,8 +239,10 @@ repl AS (
          COUNT(DISTINCT lower(lead_email)) AS human_replies
   FROM unibox_replies
   WHERE received_at >= CURRENT_DATE - INTERVAL '${days} days'
+    -- Human replies only: OOO auto-replies are excluded on purpose. They were
+    -- 57-88% of counted replies and 3-5x inflated response rate & RTL.
     AND COALESCE(admin_label, category) IN
-        ('interested','question','not_interested','unsubscribe','ooo_auto_reply')
+        ('interested','question','not_interested','unsubscribe')
   GROUP BY workspace_id
 ),
 repl_wide AS (
@@ -249,7 +251,7 @@ repl_wide AS (
   FROM unibox_replies
   WHERE received_at >= CURRENT_DATE - INTERVAL '90 days'
     AND COALESCE(admin_label, category) IN
-        ('interested','question','not_interested','unsubscribe','ooo_auto_reply')
+        ('interested','question','not_interested','unsubscribe')
   GROUP BY workspace_id
 ),
 leads AS (
