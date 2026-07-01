@@ -101,7 +101,8 @@ const SECTIONS: Section[] = [
       </svg>
     ),
     pages: [
-      { href: '/clients', label: 'Clients' },
+      { href: '/clients',       label: 'Clients' },
+      { href: '/resource-calc', label: 'Resource Calc' },
     ],
   },
   {
