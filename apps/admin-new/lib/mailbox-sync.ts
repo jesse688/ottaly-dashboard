@@ -141,6 +141,42 @@ async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise
   return out
 }
 
+// Pull tag NAMES off a PlusVibe account object, wherever PV puts them. Accepts
+// arrays of strings, or of objects carrying a name/tag/label/title. Raw tag IDs
+// (numbers/hex) simply won't match a rule below — harmless. Defensive because
+// PV's exact field is unverified; we capture from every plausible location.
+function extractTags(a: Record<string, unknown>): string[] {
+  const payload = (a.payload as Record<string, unknown> | null) || {}
+  const candidates = [a.tags, a.labels, a.tag_names, a.tagNames, payload.tags, payload.labels]
+  const out: string[] = []
+  for (const c of candidates) {
+    if (!Array.isArray(c)) continue
+    for (const t of c) {
+      if (typeof t === 'string') out.push(t)
+      else if (t && typeof t === 'object') {
+        const o = t as Record<string, unknown>
+        const name = o.name ?? o.tag ?? o.label ?? o.title
+        if (typeof name === 'string') out.push(name)
+      }
+    }
+  }
+  return [...new Set(out.map(s => s.trim()).filter(Boolean))]
+}
+
+// Normalize a tag for FUZZY matching: lowercase + strip all non-alphanumerics, so
+// "GoogleGeneric", "google generic", "Google-Generic" all collapse to the same key.
+const normTag = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
+
+// Tag → supplier rules. Add a line here to auto-group another tag under a supplier.
+const TAG_SUPPLIER_RULES: { match: string; supplier: string }[] = [
+  { match: 'googlegeneric', supplier: 'Google Generic' },
+]
+function supplierFromTags(tags: string[]): string | null {
+  const norm = new Set(tags.map(normTag))
+  for (const r of TAG_SUPPLIER_RULES) if (norm.has(r.match)) return r.supplier
+  return null
+}
+
 function detectMailboxType(provider: string | null): string | null {
   const p = (provider || '').toUpperCase()
   if (/GOOGLE|GMAIL|GWORKSPACE|GSUITE/.test(p)) return 'google'
@@ -170,6 +206,7 @@ interface RawMailbox {
   warmup_limit: number | null; warmup_reply_rate: number | null; warmup_enabled_at: string | null
   campaigns_count: number; campaign_ids: string[]
   created_at: string | null; updated_at: string | null
+  tags: string[]                    // PlusVibe account tags (names), for tag→supplier rules
 }
 
 // Fetch all sending mailboxes across all workspaces (mirror of legacy's
@@ -214,6 +251,7 @@ async function listSendingMailboxes(): Promise<RawMailbox[]> {
         campaign_ids: Array.isArray(payload.cmps) ? payload.cmps.map(c => c.id).filter(Boolean) as string[] : [],
         created_at: a.timestamp_created || null,
         updated_at: a.timestamp_updated || null,
+        tags: extractTags(a as unknown as Record<string, unknown>),
       })
     }
   }
@@ -258,12 +296,19 @@ function computeAttention(m: FullMailbox): Array<{ level: string; msg: string }>
 export async function syncMailboxes(): Promise<{ ok: boolean; count: number; error?: string }> {
   // mark running
   await pool.query(`UPDATE mailbox_sync_state SET running = TRUE WHERE id = 1`).catch(() => {})
+  // Self-heal the tags column (schema is applied manually; this avoids a psql step).
+  await pool.query(`ALTER TABLE mailbox_full ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}'`).catch(() => {})
   try {
     const raw = await listSendingMailboxes()
     if (!raw.length) {
       await pool.query(`UPDATE mailbox_sync_state SET running=FALSE, last_error=$1 WHERE id=1`, ['PlusVibe returned no mailboxes']).catch(() => {})
       return { ok: false, count: 0, error: 'PlusVibe returned no mailboxes' }
     }
+    // Diagnostic: log the distinct tags PlusVibe actually returned this run, so we
+    // can confirm tag capture is working (and see the real tag strings) without a
+    // manual DB query. If this is empty, PV isn't returning tags on /account/list.
+    const distinctTags = [...new Set(raw.flatMap(m => m.tags))].slice(0, 100)
+    console.log(`[mailbox-sync] tags seen (${distinctTags.length}):`, distinctTags.join(', ') || '(none)')
 
     // Postgres side-tables (all in the shared ottaly DB).
     const [metaRes, priceRes, evRes] = await Promise.all([
@@ -299,7 +344,11 @@ export async function syncMailboxes(): Promise<{ ok: boolean; count: number; err
       const meta = metaByEmail.get(m.email) ?? {}
       const typeAuto = detectMailboxType(m.provider)
       const type = meta.mailbox_type || typeAuto || 'smtp'
-      const supplier = meta.supplier || null
+      // Supplier precedence: a MANUAL override (mailbox_meta) always wins; otherwise
+      // derive it from the mailbox's PlusVibe tags (e.g. any "google generic" tag →
+      // "Google Generic"). So auto-tagging fills the gap without ever clobbering a
+      // manual choice, and re-runs pick up newly-tagged mailboxes each sync.
+      const supplier = meta.supplier || supplierFromTags(m.tags) || null
       const unitCost = supplier ? (priceByKey.get(`${supplier}|${type}`) ?? null) : null
 
       // performance — prefer real per-mailbox PlusVibe stats; fall back to
@@ -363,10 +412,10 @@ export async function syncMailboxes(): Promise<{ ok: boolean; count: number; err
              warmup_limit, warmup_reply_rate, warmup_enabled_at, campaigns_count, campaign_ids,
              type, type_auto, supplier, notes, billing_start_date, billing_day, ignored_at, unit_cost,
              attributed_sent, attributed_replies, attributed_bounces, reply_rate, bounce_rate,
-             auth, blacklist_count, domain_score, domain_notes, domain_status, attention, synced_at
+             auth, blacklist_count, domain_score, domain_notes, domain_status, attention, tags, synced_at
            ) VALUES (
              $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,
-             $17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30::jsonb,$31,$32,$33,$34,$35::jsonb, now()
+             $17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30::jsonb,$31,$32,$33,$34,$35::jsonb,$36::text[], now()
            )
            ON CONFLICT (email) DO UPDATE SET
              account_id=EXCLUDED.account_id, domain=EXCLUDED.domain, workspace_id=EXCLUDED.workspace_id,
@@ -379,7 +428,8 @@ export async function syncMailboxes(): Promise<{ ok: boolean; count: number; err
              unit_cost=EXCLUDED.unit_cost, attributed_sent=EXCLUDED.attributed_sent, attributed_replies=EXCLUDED.attributed_replies,
              attributed_bounces=EXCLUDED.attributed_bounces, reply_rate=EXCLUDED.reply_rate, bounce_rate=EXCLUDED.bounce_rate,
              auth=EXCLUDED.auth, blacklist_count=EXCLUDED.blacklist_count, domain_score=EXCLUDED.domain_score,
-             domain_notes=EXCLUDED.domain_notes, domain_status=EXCLUDED.domain_status, attention=EXCLUDED.attention, synced_at=now()`,
+             domain_notes=EXCLUDED.domain_notes, domain_status=EXCLUDED.domain_status, attention=EXCLUDED.attention,
+             tags=EXCLUDED.tags, synced_at=now()`,
           [
             m.email, m.account_id, m.domain, m.workspace_id, m.workspace_name,
             m.status, m.warmup_status, m.provider, m.name, m.daily_limit, m.sending_gap,
@@ -387,7 +437,7 @@ export async function syncMailboxes(): Promise<{ ok: boolean; count: number; err
             m.type, m.type_auto, m.supplier, m.notes, m.billing_start_date, m.billing_day, m.ignored_at, m.unit_cost,
             m.attributed_sent, m.attributed_replies, m.attributed_bounces, m.reply_rate, m.bounce_rate,
             m.auth ? JSON.stringify(m.auth) : null, m.blacklist_count, m.domain_score, m.domain_notes, m.domain_status,
-            JSON.stringify(m.attention),
+            JSON.stringify(m.attention), m.tags,
           ]
         )
       }

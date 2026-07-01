@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS mailbox_full (
   domain_status       TEXT,
   -- computed
   attention           JSONB DEFAULT '[]',  -- [{ level, msg }]
+  tags                TEXT[]  DEFAULT '{}', -- PlusVibe account tags (names); drive tag→supplier rules
   synced_at           TIMESTAMPTZ DEFAULT now()
 );
 
