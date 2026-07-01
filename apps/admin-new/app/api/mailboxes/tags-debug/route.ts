@@ -56,7 +56,7 @@ export async function GET() {
       // Real endpoint (from PV docs): GET /tags/list → [{_id,name}]. Build id→name.
       const tagMap = new Map<string, string>()
       try {
-        for (const t of asArray(await pv(`/tags/list?workspace_id=${encodeURIComponent(w.id!)}&skip=0&limit=500`))) {
+        for (const t of asArray(await pv(`/tags/list?workspace_id=${encodeURIComponent(w.id!)}&skip=0&limit=100`))) {
           const id = (t._id ?? t.id) as string | undefined
           if (id && typeof t.name === 'string') tagMap.set(String(id), t.name)
         }

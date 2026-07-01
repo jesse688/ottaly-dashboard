@@ -186,7 +186,7 @@ function supplierFromTags(tags: string[]): string | null {
 interface PvTag { _id?: string; id?: string; name?: string }
 async function fetchWorkspaceTagMap(wsId: string): Promise<Map<string, string>> {
   const resp = await pvFetch<PvTag[] | { data?: PvTag[]; tags?: PvTag[] }>(
-    `/tags/list?workspace_id=${encodeURIComponent(wsId)}&skip=0&limit=500`
+    `/tags/list?workspace_id=${encodeURIComponent(wsId)}&skip=0&limit=100`
   )
   const list: PvTag[] = Array.isArray(resp) ? resp : (resp?.data ?? resp?.tags ?? [])
   const map = new Map<string, string>()
