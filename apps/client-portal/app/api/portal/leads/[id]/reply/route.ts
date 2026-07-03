@@ -184,7 +184,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // lead email. Our DB id may be synthetic (unibox_/pv_) or a stale numeric
     // Bison id — neither is what PV's reply API wants, so we always look up the
     // live PV id by the lead's address.
-    const pv = await getPlusVibeInbound(session.workspaceId, lead.email)
+    // Also pass any ALTERNATE addresses the lead replied from (a colleague's
+    // mailbox), recorded at ingest, so a colleague-address reply still resolves
+    // instead of flipping to "send manually".
+    const alt = await pool.query(
+      `SELECT DISTINCT sender_email FROM unibox_replies
+        WHERE workspace_id = $1
+          AND (lower(lead_email) = lower($2) OR lower(matched_lead_email) = lower($2))
+          AND sender_email IS NOT NULL AND sender_email <> '' AND lower(sender_email) <> lower($2)`,
+      [session.workspaceId, lead.email]
+    ).catch(() => ({ rows: [] as { sender_email?: string }[] }))
+    const acceptFrom = alt.rows.map(r => r.sender_email!).filter(Boolean)
+    const pv = await getPlusVibeInbound(session.workspaceId, lead.email, acceptFrom)
     const fromMailbox = pv?.from || eaccount
     // Strip any known prefix; if it's a plain-numeric Bison id we can't use it as
     // a PV reply_to_id, so prefer the freshly-resolved PV id.

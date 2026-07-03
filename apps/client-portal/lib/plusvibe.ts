@@ -57,28 +57,52 @@ export async function sendReply(_input: {
 export async function getPlusVibeInbound(
   workspaceId: string,
   leadEmail: string,
+  // Other addresses the lead may have replied FROM (e.g. a colleague's mailbox).
+  // Recorded at ingest; pass them so a colleague-address reply still resolves.
+  acceptFrom: string[] = [],
 ): Promise<{ id: string; from: string; to: string } | null> {
   const key = process.env.PLUSVIBE_API_KEY ?? process.env.PLUSVIBE_KEY
   if (!key) return null
-  try {
+
+  // Senders we accept as "this lead's thread": the lead address + any alternates.
+  const accepted = new Set(
+    [leadEmail, ...acceptFrom].map(a => (a || '').toLowerCase().trim()).filter(Boolean)
+  )
+
+  // One lookup by a given `lead` query value. SAFETY: PlusVibe ignores an
+  // unmatched `lead` filter and returns the workspace's latest email instead, so
+  // we accept the result ONLY if it's actually FROM one of our accepted senders.
+  const tryLead = async (q: string): Promise<{ id: string; from: string; to: string } | null> => {
     const res = await fetch(
-      `https://api.plusvibe.ai/api/v1/unibox/emails?workspace_id=${encodeURIComponent(workspaceId)}&lead=${encodeURIComponent(leadEmail)}&email_type=received`,
+      `https://api.plusvibe.ai/api/v1/unibox/emails?workspace_id=${encodeURIComponent(workspaceId)}&lead=${encodeURIComponent(q)}&email_type=received`,
       { headers: { 'x-api-key': key, 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(8000) }
     )
-    if (!res.ok) return null
+    if (!res.ok) throw new Error(`pv_${res.status}`)   // treat non-200 as retryable
     const data = await res.json() as {
       data?: { id?: string; eaccount?: string; from_address_email?: string }[]
     }
     const email = data?.data?.[0]
     if (!email?.id) return null
-    // SAFETY: PlusVibe ignores an unmatched `lead` filter and returns the
-    // workspace's latest email instead. If the returned email isn't actually
-    // FROM the lead we asked about, it's the wrong thread — refuse it.
-    if ((email.from_address_email ?? '').toLowerCase() !== leadEmail.toLowerCase()) return null
-    return { id: email.id, from: email.eaccount ?? '', to: email.from_address_email ?? leadEmail }
-  } catch {
-    return null
+    if (!accepted.has((email.from_address_email ?? '').toLowerCase())) return null
+    return { id: email.id, from: email.eaccount ?? '', to: email.from_address_email ?? q }
   }
+
+  // Query by the lead address first, then each alternate. Retry each ONCE on a
+  // transient failure (timeout / 5xx / network) — a single slow PV call is what
+  // was silently flipping genuine replies to "send manually".
+  for (const q of [leadEmail, ...acceptFrom]) {
+    if (!q) continue
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const hit = await tryLead(q)
+        if (hit) return hit
+        break   // valid response, just not a match for this q — move to next q
+      } catch {
+        if (attempt === 0) await new Promise(r => setTimeout(r, 600))  // brief backoff, then retry
+      }
+    }
+  }
+  return null
 }
 
 // A received email from the PlusVibe unibox.
