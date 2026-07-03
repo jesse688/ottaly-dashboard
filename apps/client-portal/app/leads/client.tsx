@@ -326,6 +326,10 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
   // Mobile drawers: left sidebar (views/stages) and right contact panel.
   const [showSidebar, setShowSidebar] = useState(false)
   const [showDetails, setShowDetails] = useState(false)
+  // Desktop manual collapse (on top of the responsive auto-collapse): lets the
+  // client hide the left menu and/or the leads list to give the email full width.
+  const [hideNav, setHideNav] = useState(false)
+  const [hideList, setHideList] = useState(false)
   // Forward: seeds the composer with quoted content + an empty recipient.
   const [forwardSeed, setForwardSeed] = useState<{ id: number; html: string } | null>(null)
 
@@ -714,8 +718,22 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
       <div className="flex-1 flex overflow-hidden relative">
         {/* Mobile backdrop for the sidebar drawer */}
         {showSidebar && <div className="md:hidden fixed inset-0 top-14 bg-black/30 z-30" onClick={() => setShowSidebar(false)} />}
-        {/* Column 1 — sidebar (drawer on mobile) */}
-        <aside className={`${showSidebar ? 'flex' : 'hidden'} md:flex fixed md:static top-14 md:top-auto bottom-0 left-0 z-40 w-64 md:w-56 bg-white border-r border-gray-200 flex-col shrink-0 shadow-xl md:shadow-none`}>
+        {/* "Show menu" tab — appears at the far left when the menu is hidden (desktop). */}
+        {hideNav && (
+          <button onClick={() => setHideNav(false)} title="Show the menu"
+            className="hidden md:flex items-center gap-1.5 shrink-0 self-start mt-3 ml-0 pl-2 pr-3 py-2 bg-white border border-l-0 border-gray-200 rounded-r-lg shadow-sm text-sm font-medium text-gray-600 hover:text-brand-700 hover:border-brand-300">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+            Menu
+          </button>
+        )}
+        {/* Column 1 — sidebar (drawer on mobile; manually hideable on desktop) */}
+        <aside className={`${showSidebar ? 'flex' : 'hidden'} ${hideNav ? 'md:hidden' : 'md:flex'} fixed md:static top-14 md:top-auto bottom-0 left-0 z-40 w-64 md:w-56 bg-white border-r border-gray-200 flex-col shrink-0 shadow-xl md:shadow-none`}>
+          {/* Hide-menu button (desktop only — mobile uses the drawer backdrop). */}
+          <button onClick={() => setHideNav(true)} title="Hide the menu for more space"
+            className="hidden md:flex items-center gap-1.5 mx-3 mt-3 mb-1 px-2.5 py-1.5 rounded-lg border border-gray-200 text-xs font-medium text-gray-500 hover:text-gray-800 hover:border-gray-300 self-start">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+            Hide menu
+          </button>
           <div className="p-3 space-y-0.5">
             {([
               { key: 'inbox', label: 'All leads', icon: <path d="M22 12h-6l-2 3h-4l-2-3H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/> },
@@ -785,10 +803,18 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
         </aside>
 
         {/* Column 2 — lead list (full width on mobile; hidden once a lead is open) */}
-        <section className={`${selected ? 'hidden lg:flex' : 'flex'} w-full lg:w-[380px] bg-white border-r border-gray-200 flex-col shrink-0`}>
+        <section className={`${selected ? (hideList ? 'hidden' : 'hidden lg:flex') : 'flex'} w-full lg:w-[380px] bg-white border-r border-gray-200 flex-col shrink-0`}>
           <div className="px-4 py-3 border-b border-gray-100">
             <div className="flex items-center justify-between mb-2">
               <h2 className="text-sm font-semibold text-[#050c29]">Your Leads <span className="text-gray-400 font-normal">({filtered.length})</span></h2>
+              {/* Hide-list button — only useful when an email is open (desktop). */}
+              {selected && (
+                <button onClick={() => setHideList(true)} title="Hide this list for a bigger email view"
+                  className="hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-gray-200 text-xs font-medium text-gray-500 hover:text-gray-800 hover:border-gray-300">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+                  Hide list
+                </button>
+              )}
               {/* Download all visible (unlocked) leads as a CSV the client can open
                   in Excel/Google Sheets — replaces the "save as spreadsheet" they
                   had in their old system. */}
@@ -848,6 +874,14 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
           </div>
         </section>
 
+        {/* "Show leads" tab — appears at the left of the email when the list is hidden (desktop). */}
+        {selected && hideList && (
+          <button onClick={() => setHideList(false)} title="Show your leads list"
+            className="hidden lg:flex items-center gap-1.5 shrink-0 self-start mt-3 pl-2 pr-3 py-2 bg-white border border-l-0 border-gray-200 rounded-r-lg shadow-sm text-sm font-medium text-gray-600 hover:text-brand-700 hover:border-brand-300">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+            Leads
+          </button>
+        )}
         {/* Column 3 — thread (full screen on mobile when a lead is open) */}
         <section className={`${selected ? 'flex' : 'hidden lg:flex'} flex-1 flex-col min-w-0 bg-white`}>
           {!selected ? (
