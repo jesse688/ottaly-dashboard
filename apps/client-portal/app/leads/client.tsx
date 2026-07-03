@@ -785,7 +785,7 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
         </aside>
 
         {/* Column 2 — lead list (full width on mobile; hidden once a lead is open) */}
-        <section className={`${selected ? 'hidden md:flex' : 'flex'} w-full md:w-[380px] bg-white border-r border-gray-200 flex-col shrink-0`}>
+        <section className={`${selected ? 'hidden lg:flex' : 'flex'} w-full lg:w-[380px] bg-white border-r border-gray-200 flex-col shrink-0`}>
           <div className="px-4 py-3 border-b border-gray-100">
             <div className="flex items-center justify-between mb-2">
               <h2 className="text-sm font-semibold text-[#050c29]">Your Leads <span className="text-gray-400 font-normal">({filtered.length})</span></h2>
@@ -849,7 +849,7 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
         </section>
 
         {/* Column 3 — thread (full screen on mobile when a lead is open) */}
-        <section className={`${selected ? 'flex' : 'hidden md:flex'} flex-1 flex-col min-w-0 bg-white`}>
+        <section className={`${selected ? 'flex' : 'hidden lg:flex'} flex-1 flex-col min-w-0 bg-white`}>
           {!selected ? (
             <div className="flex-1 flex flex-col items-center justify-center text-gray-400">
               <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mb-3 text-gray-300"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 5L2 7"/></svg>
@@ -857,7 +857,7 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
             </div>
           ) : selected.locked ? (
             <div className="flex-1 flex flex-col items-center justify-center text-center px-8 bg-[#fafbfd] relative">
-              <button onClick={() => { setSelected(null); setThread(null) }} className="md:hidden absolute top-3 left-3 text-gray-500 hover:text-gray-800 p-1" aria-label="Back to leads">
+              <button onClick={() => { setSelected(null); setThread(null) }} className="lg:hidden absolute top-3 left-3 text-gray-500 hover:text-gray-800 p-1" aria-label="Back to leads">
                 <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
               </button>
               <div className="w-16 h-16 rounded-full bg-[#fff4d6] text-[#b8860b] flex items-center justify-center mb-5">
@@ -871,7 +871,7 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
             <>
               {/* thread header */}
               <div className="px-3 md:px-5 py-3 border-b border-gray-100 flex items-center gap-2 md:gap-3 shrink-0">
-                <button onClick={() => { setSelected(null); setThread(null) }} className="md:hidden text-gray-500 hover:text-gray-800 p-1 -ml-1" aria-label="Back to leads">
+                <button onClick={() => { setSelected(null); setThread(null) }} className="lg:hidden text-gray-500 hover:text-gray-800 p-1 -ml-1" aria-label="Back to leads">
                   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
                 </button>
                 <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 ${av(selected.id)}`}>{initials(selected)}</div>
