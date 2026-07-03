@@ -918,8 +918,9 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
                     </div>
                   )}
                 </div>
-                {/* Contact details toggle (drawer below lg) */}
-                <button onClick={() => setShowDetails(true)} className="lg:hidden inline-flex items-center px-2 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50" aria-label="Lead details">
+                {/* Contact details toggle (drawer below xl — keeps the reply
+                    composer usable when the window/zoom leaves little room). */}
+                <button onClick={() => setShowDetails(true)} className="xl:hidden inline-flex items-center px-2 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50" aria-label="Lead details">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
                 </button>
               </div>
@@ -1044,11 +1045,11 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
         </section>
 
         {/* Mobile/tablet backdrop for the details drawer */}
-        {showDetails && selected && !selected.locked && <div className="lg:hidden fixed inset-0 top-14 bg-black/30 z-30" onClick={() => setShowDetails(false)} />}
-        {/* Column 4 — lead details (inline at lg+, drawer below; hidden while locked) */}
+        {showDetails && selected && !selected.locked && <div className="xl:hidden fixed inset-0 top-14 bg-black/30 z-30" onClick={() => setShowDetails(false)} />}
+        {/* Column 4 — lead details (inline at xl+, drawer below; hidden while locked) */}
         {selected && !selected.locked && (
-          <aside className={`${showDetails ? 'flex' : 'hidden'} lg:flex fixed lg:static top-14 lg:top-auto bottom-0 right-0 z-40 w-80 lg:w-72 bg-white border-l border-gray-200 flex-col shrink-0 overflow-y-auto shadow-xl lg:shadow-none`}>
-            <button onClick={() => setShowDetails(false)} className="lg:hidden absolute top-3 right-3 text-gray-400 hover:text-gray-700 p-1" aria-label="Close details">
+          <aside className={`${showDetails ? 'flex' : 'hidden'} xl:flex fixed xl:static top-14 xl:top-auto bottom-0 right-0 z-40 w-80 xl:w-72 bg-white border-l border-gray-200 flex-col shrink-0 overflow-y-auto shadow-xl xl:shadow-none`}>
+            <button onClick={() => setShowDetails(false)} className="xl:hidden absolute top-3 right-3 text-gray-400 hover:text-gray-700 p-1" aria-label="Close details">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
             <div className="p-5 text-center border-b border-gray-100">
@@ -1224,8 +1225,8 @@ function RecipientInput({ value, onChange, placeholder }: {
   return (
     <div className="flex-1 flex flex-wrap items-center gap-1">
       {value.map((a, i) => (
-        <span key={i} className={`inline-flex items-center gap-1 text-xs pl-2 pr-1 py-0.5 rounded-full ${isValid(a) ? 'bg-brand-50 text-brand-700' : 'bg-red-50 text-red-600'}`} title={isValid(a) ? '' : 'This doesn’t look like a valid email'}>
-          {a}
+        <span key={i} className={`inline-flex items-center gap-1 max-w-full text-xs pl-2 pr-1 py-0.5 rounded-full ${isValid(a) ? 'bg-brand-50 text-brand-700' : 'bg-red-50 text-red-600'}`} title={a}>
+          <span className="truncate">{a}</span>
           <button type="button" onClick={() => onChange(value.filter((_, j) => j !== i))} className="w-4 h-4 flex items-center justify-center rounded-full hover:bg-black/10">×</button>
         </span>
       ))}
@@ -1259,10 +1260,27 @@ function RichReply({ toEmail, ccEmail = '', placeholderName, sending, statusMsg,
   // Collapsed by default — a slim bar that reclaims reading space. Clicking it
   // (or a forward seed arriving) expands the full composer and focuses it.
   const [expanded, setExpanded] = useState(false)
+  // Draft is kept HERE across collapse/expand: the editor unmounts when
+  // collapsed, so we stash its HTML and restore it on re-expand — the client can
+  // minimise to read the email behind it WITHOUT losing what they've typed.
+  const draftHtml = useRef('')
   function expand() {
     setExpanded(true)
     setTimeout(() => ref.current?.focus(), 0)
   }
+  function collapse() {
+    if (ref.current) draftHtml.current = ref.current.innerHTML
+    setExpanded(false)
+  }
+  // Restore the stashed draft once the editor re-mounts on expand (unless a fresh
+  // forward seed is being applied — that's handled by the seed effect below).
+  useEffect(() => {
+    if (expanded && ref.current && draftHtml.current && !ref.current.innerHTML.trim()) {
+      ref.current.innerHTML = draftHtml.current
+      syncState()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expanded])
 
   // Forward seed, step 1: when a forward arrives, EXPAND the composer and clear
   // the recipient. The editor only mounts when expanded, so we can't touch
@@ -1408,6 +1426,7 @@ function RichReply({ toEmail, ccEmail = '', placeholderName, sending, statusMsg,
     if (!text || !to.length) return
     onSend(text, el.innerHTML, to.join(', '), cc.join(', '), attachedFiles)
     el.innerHTML = ''
+    draftHtml.current = ''
     setEmpty(true); setChars(0); setCc(ccEmail ? [ccEmail] : []); setShowCc(!!ccEmail); setTo(toEmail ? [toEmail] : []); setExpanded(false); setAttachedFiles([])
   }
 
@@ -1438,7 +1457,11 @@ function RichReply({ toEmail, ccEmail = '', placeholderName, sending, statusMsg,
         <span className="text-xs font-medium text-gray-500 w-7 shrink-0">To:</span>
         <RecipientInput value={to} onChange={setTo} placeholder="add recipients…" />
         {!showCc && <button type="button" onClick={() => setShowCc(true)} className="text-xs font-medium text-brand-600 hover:text-brand-800 shrink-0">Cc</button>}
-        <button type="button" onClick={() => setExpanded(false)} title="Collapse" className="text-gray-400 hover:text-gray-600 text-sm leading-none shrink-0 ml-1">▾</button>
+        <button type="button" onClick={collapse} title="Minimise — your draft is kept"
+          className="inline-flex items-center gap-1 text-xs font-medium text-gray-500 hover:text-gray-800 border border-gray-200 hover:border-gray-300 rounded-md px-2 py-1 shrink-0 ml-1">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Minimise
+        </button>
       </div>
       {showCc && (
         <div className="px-3 py-1.5 border-b border-gray-100 flex items-center gap-2">
