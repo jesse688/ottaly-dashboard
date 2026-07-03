@@ -2448,25 +2448,29 @@ class PostgresDatabase {
     };
     if (commaSeparatedFields[field]) {
       const { col, raw } = commaSeparatedFields[field];
+      // Speed: filter to rows that actually HAVE the value in the dedicated column
+      // FIRST (so Postgres prunes ~half the 590k table before the unnest), and read
+      // only the column — the per-row raw_data->>'...' JSONB access on every row was
+      // what pushed the old query past its 30s timeout so it returned nothing.
+      // (Keywords/technologies live in the column now; legacy raw_data-only rows are
+      // rare and still fully searchable — this only feeds the autocomplete list.)
       const sql = `
-        SELECT trim(val) AS value, COUNT(*) AS count
-        FROM contacts,
-          unnest(string_to_array(
-            COALESCE(NULLIF(${col}, ''), raw_data->>'${raw}'),
-            ','
-          )) AS val
-        WHERE workspace_id = $2
-          AND COALESCE(NULLIF(${col}, ''), raw_data->>'${raw}') IS NOT NULL
-          AND trim(val) != ''
+        SELECT trim(val) AS value, COUNT(*)::int AS count
+        FROM contacts c
+        CROSS JOIN LATERAL unnest(string_to_array(c.${col}, ',')) AS val
+        WHERE c.workspace_id = $2
+          AND c.${col} IS NOT NULL AND c.${col} <> ''
+          AND trim(val) <> ''
         GROUP BY trim(val)
         ORDER BY count DESC
         LIMIT $1;
       `;
       const client = await this.pool.connect();
       try {
-        // Fail fast: with caching in front, a slow cold query should bail in
-        // ~30s and let the wrapper serve the last good value, not hang 2 min.
-        await client.query(`SET statement_timeout = '30s'`);
+        // Give the (now-pruned) query room to complete once; the cache then serves
+        // it instantly for the TTL. A completed query caches even if the HTTP client
+        // already timed out, so the next open is fast.
+        await client.query(`SET statement_timeout = '90s'`);
         const result = await client.query(sql, [limit, workspaceId]);
         return result.rows.filter(r => r.value).map(r => ({
           value: r.value.trim(),
