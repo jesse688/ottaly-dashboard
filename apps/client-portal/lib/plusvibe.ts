@@ -229,36 +229,66 @@ export async function sendPlusVibeReply(opts: {
 }): Promise<{ ok: boolean; reason?: string }> {
   const key = process.env.PLUSVIBE_API_KEY ?? process.env.PLUSVIBE_KEY
   if (!key) return { ok: false, reason: 'no_pv_key' }
-  try {
-    const res = await fetch(
-      `https://api.plusvibe.ai/api/v1/unibox/emails/reply?workspace_id=${encodeURIComponent(opts.workspaceId)}`,
-      {
-        method: 'POST',
-        headers: { 'x-api-key': key, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          reply_to_id: opts.replyToId,
-          subject: opts.subject.startsWith('Re:') ? opts.subject : `Re: ${opts.subject}`,
-          ...(opts.from ? { from: opts.from } : {}),
-          to: opts.to,
-          body: opts.body,
-          ...(opts.cc ? { cc: opts.cc } : {}),
-          ...(opts.attachments?.length
-            ? { attachments: opts.attachments.map(a => ({ file_name: a.filename, content: a.content.toString('base64') })) }
-            : {}),
-        }),
-        signal: AbortSignal.timeout(30000),
-      }
-    )
-    if (!res.ok) {
+
+  const payload = JSON.stringify({
+    reply_to_id: opts.replyToId,
+    subject: opts.subject.startsWith('Re:') ? opts.subject : `Re: ${opts.subject}`,
+    ...(opts.from ? { from: opts.from } : {}),
+    to: opts.to,
+    body: opts.body,
+    ...(opts.cc ? { cc: opts.cc } : {}),
+    ...(opts.attachments?.length
+      ? { attachments: opts.attachments.map(a => ({ file_name: a.filename, content: a.content.toString('base64') })) }
+      : {}),
+  })
+
+  // PlusVibe rate-limits sends with a 429 (and occasionally 5xx / gateway HTML
+  // error pages). Those are transient — a client reply that hit one used to fall
+  // straight to "SEND MANUALLY". Retry transient failures with backoff (honoring
+  // Retry-After) before giving up. 4xx other than 429 (e.g. pv_400 "from is
+  // required") are permanent, so fail fast — retrying can't fix them.
+  const MAX_ATTEMPTS = 4
+  const TRANSIENT = new Set([429, 500, 502, 503, 504])
+  let lastReason = 'send_failed'
+
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetch(
+        `https://api.plusvibe.ai/api/v1/unibox/emails/reply?workspace_id=${encodeURIComponent(opts.workspaceId)}`,
+        {
+          method: 'POST',
+          headers: { 'x-api-key': key, 'Content-Type': 'application/json' },
+          body: payload,
+          signal: AbortSignal.timeout(30000),
+        }
+      )
+      if (res.ok) return { ok: true }
+
       const text = await res.text()
-      console.error('[sendPlusVibeReply] error:', res.status, text)
-      return { ok: false, reason: `pv_${res.status}: ${text.slice(0, 200)}` }
+      lastReason = `pv_${res.status}: ${text.slice(0, 200)}`
+
+      if (!TRANSIENT.has(res.status) || attempt === MAX_ATTEMPTS - 1) {
+        console.error('[sendPlusVibeReply] error:', res.status, text)
+        return { ok: false, reason: lastReason }
+      }
+      // Transient — back off (Retry-After header if given, else exponential) then retry.
+      const ra = Number(res.headers.get('retry-after'))
+      const waitMs = Number.isFinite(ra) && ra > 0 ? Math.min(ra * 1000, 10_000) : 800 * 2 ** attempt
+      console.warn(`[sendPlusVibeReply] transient ${res.status}, retry ${attempt + 1}/${MAX_ATTEMPTS - 1} in ${waitMs}ms`)
+      await new Promise(r => setTimeout(r, waitMs))
+    } catch (err) {
+      // Network error / timeout — also transient. Retry unless we're out of attempts.
+      lastReason = String(err)
+      if (attempt === MAX_ATTEMPTS - 1) {
+        console.error('[sendPlusVibeReply] failed:', err)
+        return { ok: false, reason: lastReason }
+      }
+      const waitMs = 800 * 2 ** attempt
+      console.warn(`[sendPlusVibeReply] network error, retry ${attempt + 1}/${MAX_ATTEMPTS - 1} in ${waitMs}ms:`, lastReason)
+      await new Promise(r => setTimeout(r, waitMs))
     }
-    return { ok: true }
-  } catch (err) {
-    console.error('[sendPlusVibeReply] failed:', err)
-    return { ok: false, reason: String(err) }
   }
+  return { ok: false, reason: lastReason }
 }
 
 export async function registerWebhook(_workspaceId?: string): Promise<{ ok: boolean; reason?: string }> {
