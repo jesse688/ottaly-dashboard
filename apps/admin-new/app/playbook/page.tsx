@@ -4,11 +4,12 @@ import { useCallback, useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
 
 // ── Types (mirror /api/playbook) ─────────────────────────────────────────────
-interface Combo { sender: string; recipient: string; sent: number; leads: number; lpk: number; low_volume: boolean }
+interface SenderCombo { sender: string; sent: number; leads: number; lpk: number; low_volume: boolean }
+interface RecipRow { recipient: string; leads: number }
 interface ClientRow {
   workspace_id: string; client: string
   totalSent: number; totalLeads: number; lpk: number
-  best: Combo | null; worst: Combo | null; combos: Combo[]
+  best: SenderCombo | null; worst: SenderCombo | null; senders: SenderCombo[]; recipients: RecipRow[]
 }
 interface SenderRow { sender: string; label: string; sent: number; leads: number; lpk: number }
 interface Playbook { days: number; min_sent: number; globalSenders: SenderRow[]; perClient: ClientRow[]; error?: string }
@@ -87,7 +88,7 @@ export default function PlaybookPage() {
                   {digest.laggard.sender !== digest.winner.sender && <> — <b style={{ color: lpkTone(digest.laggard.lpk) }}>{digest.laggard.label}</b> is lagging at {lpkStr(digest.laggard.lpk)}/1k, so shift volume away from it.</>}
                   {digest.topClients.length > 0 && (
                     <> <br />Push hardest on: {digest.topClients.map((c, i) => (
-                      <span key={c.workspace_id}>{i > 0 ? ', ' : ''}<b>{c.client}</b> → {c.best!.sender}→{c.best!.recipient} ({lpkStr(c.best!.lpk)}/1k)</span>
+                      <span key={c.workspace_id}>{i > 0 ? ', ' : ''}<b>{c.client}</b> → {c.best!.sender} ({lpkStr(c.best!.lpk)}/1k)</span>
                     ))}.</>
                   )}
                   {digest.weak.length > 0 && (
@@ -137,41 +138,56 @@ export default function PlaybookPage() {
                       </div>
                       <div>
                         <div style={{ fontSize: 10, fontWeight: 700, color: '#16A34A', textTransform: 'uppercase', letterSpacing: '.3px' }}>✓ Do more of</div>
-                        {c.best ? <div style={{ fontSize: 13, fontWeight: 600 }}>{c.best.sender} → {c.best.recipient} <span style={{ color: lpkTone(c.best.lpk) }}>({lpkStr(c.best.lpk)}/1k)</span></div>
-                          : <div style={{ fontSize: 13, color: C.muted }}>No lead-winning setup yet</div>}
+                        {c.best ? <div style={{ fontSize: 13, fontWeight: 600 }}>{c.best.sender} <span style={{ color: lpkTone(c.best.lpk) }}>({lpkStr(c.best.lpk)}/1k)</span></div>
+                          : <div style={{ fontSize: 13, color: C.muted }}>No lead-winning sender yet</div>}
                       </div>
                       <div>
                         <div style={{ fontSize: 10, fontWeight: 700, color: '#DC2626', textTransform: 'uppercase', letterSpacing: '.3px' }}>✕ Shift away from</div>
-                        {c.worst && c.worst.sender !== c.best?.sender ? <div style={{ fontSize: 13, fontWeight: 600 }}>{c.worst.sender} → {c.worst.recipient} <span style={{ color: lpkTone(c.worst.lpk) }}>({lpkStr(c.worst.lpk)}/1k)</span></div>
+                        {c.worst && c.worst.sender !== c.best?.sender ? <div style={{ fontSize: 13, fontWeight: 600 }}>{c.worst.sender} <span style={{ color: lpkTone(c.worst.lpk) }}>({lpkStr(c.worst.lpk)}/1k)</span></div>
                           : <div style={{ fontSize: 13, color: C.muted }}>—</div>}
                       </div>
                       <div style={{ fontSize: 13, color: C.muted, transform: isOpen ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }}>▶</div>
                     </div>
 
-                    {/* Expanded combo breakdown */}
+                    {/* Expanded breakdown: sender types + recipient split (where available) */}
                     {isOpen && (
-                      <div style={{ borderTop: `1px solid ${C.border}`, background: '#F8F9FC', padding: '.5rem 0' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                          <thead>
-                            <tr>
-                              {['Sender', 'Recipient', 'Sent', 'Leads', 'Leads / 1k', ''].map((h, i) => (
-                                <th key={h + i} style={{ textAlign: i >= 2 && i <= 4 ? 'right' : 'left', padding: '6px 16px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', color: C.muted }}>{h}</th>
+                      <div style={{ borderTop: `1px solid ${C.border}`, background: '#F8F9FC', padding: '.75rem 1.1rem', display: 'grid', gridTemplateColumns: c.recipients.length ? '1.4fr 1fr' : '1fr', gap: 24 }}>
+                        <div>
+                          <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', color: C.muted, marginBottom: 4 }}>By sender type</div>
+                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                            <thead><tr>
+                              {['Sender', 'Sent', 'Leads', 'Leads / 1k', ''].map((h, i) => (
+                                <th key={h + i} style={{ textAlign: i >= 1 && i <= 3 ? 'right' : 'left', padding: '5px 10px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', color: C.muted }}>{h}</th>
                               ))}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {c.combos.map((k, i) => (
-                              <tr key={i}>
-                                <td style={{ padding: '6px 16px', fontWeight: 600 }}>{k.sender}</td>
-                                <td style={{ padding: '6px 16px' }}>{k.recipient}</td>
-                                <td style={{ padding: '6px 16px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{num(k.sent)}</td>
-                                <td style={{ padding: '6px 16px', textAlign: 'right', fontWeight: 600 }}>{k.leads}</td>
-                                <td style={{ padding: '6px 16px', textAlign: 'right', fontWeight: 700, color: lpkTone(k.lpk) }}>{lpkStr(k.lpk)}</td>
-                                <td style={{ padding: '6px 16px', fontSize: 10, color: C.muted }}>{k.low_volume ? 'low volume' : ''}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                            </tr></thead>
+                            <tbody>
+                              {c.senders.map((k, i) => (
+                                <tr key={i}>
+                                  <td style={{ padding: '5px 10px', fontWeight: 600 }}>{k.sender}</td>
+                                  <td style={{ padding: '5px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{num(k.sent)}</td>
+                                  <td style={{ padding: '5px 10px', textAlign: 'right', fontWeight: 600 }}>{k.leads}</td>
+                                  <td style={{ padding: '5px 10px', textAlign: 'right', fontWeight: 700, color: lpkTone(k.lpk) }}>{lpkStr(k.lpk)}</td>
+                                  <td style={{ padding: '5px 10px', fontSize: 10, color: C.muted }}>{k.low_volume ? 'low volume' : ''}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        {c.recipients.length > 0 && (
+                          <div>
+                            <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', color: C.muted, marginBottom: 4 }}>Leads by recipient inbox</div>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                              <tbody>
+                                {c.recipients.map((r, i) => (
+                                  <tr key={i}>
+                                    <td style={{ padding: '5px 10px' }}>{r.recipient}</td>
+                                    <td style={{ padding: '5px 10px', textAlign: 'right', fontWeight: 700 }}>{r.leads}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -180,8 +196,8 @@ export default function PlaybookPage() {
               {data.perClient.length === 0 && <div style={{ padding: '2rem', textAlign: 'center', color: C.muted }}>No clients with enough volume ({data.min_sent}+ sent) in this window.</div>}
             </div>
 
-            <div style={{ fontSize: 11, color: C.muted, marginTop: 16 }}>
-              Leads = billable leads (unibox marked leads). Setups with under {data.min_sent} sent are flagged “low volume” — their conversion is noisy, so they can’t be a client’s best/worst pick. Recipient provider from MX records (99% enriched).
+            <div style={{ fontSize: 11, color: C.muted, marginTop: 16, lineHeight: 1.5 }}>
+              Leads = billable leads (unibox marked leads). Sent volume is per client × sender type (all active clients). Sender types with under {data.min_sent} sent are flagged “low volume” — their conversion is noisy, so they can’t be a client’s best/worst pick. Expand a client to see the recipient-inbox split (Google/Microsoft) where that data is available.
             </div>
           </>
         )}
