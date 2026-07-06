@@ -23,7 +23,7 @@ const money = (n: number | null) => (n == null ? '—' : '$' + n.toFixed(2))
 const ACCENT: Record<string, string> = {
   Maildoso: '#10B981', Mithun: '#F59E0B', Winnr: '#6366F1', Inboxing: '#7C89CD',
   'Winnr Generic': '#8B5CF6', 'Google Generic': '#4285F4',
-  Unassigned: '#9CA3AF', google: '#EA4335', microsoft: '#0078D4', smtp: '#475569',
+  Unassigned: '#9CA3AF', google: '#EA4335', 'google generic': '#FBBC04', microsoft: '#0078D4', smtp: '#475569',
 }
 
 interface DaySeries { sent: number[]; replies: number[]; ooo: number[]; bounces: number[]; contacted: number[] }

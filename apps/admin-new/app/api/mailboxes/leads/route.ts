@@ -29,12 +29,24 @@ export async function GET(req: Request) {
       `SELECT
          mf.supplier AS supplier,
          mf.type     AS type,
+         mf.tags     AS tags,
          (ur.mailbox_email IS NOT NULL AND mf.email IS NOT NULL) AS matched
        FROM unibox_replies ur
        LEFT JOIN mailbox_full mf ON lower(mf.email) = lower(ur.mailbox_email)
        WHERE ur.marked_as_lead = TRUE ${windowClause}`,
       params
     )
+
+    // "Google Generic" is a google TIER (tag-flagged), not a real type — split the
+    // type key the same way the performance cards do so leads line up per card.
+    const effType = (type: string | null, tags: unknown): string => {
+      const t = type || 'unknown'
+      if (t === 'google' && Array.isArray(tags) &&
+        tags.some((x: string) => { const n = (x || '').toLowerCase().replace(/[^a-z0-9]/g, ''); return n.includes('google') && n.includes('generic') })) {
+        return 'google generic'
+      }
+      return t
+    }
 
     const bySupplier: Record<string, number> = {}
     const byType: Record<string, number> = {}
@@ -48,7 +60,7 @@ export async function GET(req: Request) {
       if (!r.matched) { unmatched++; continue }
       matched++
       const sup = (r.supplier as string | null) || 'Unassigned'
-      const typ = (r.type as string | null) || 'unknown'
+      const typ = effType(r.type as string | null, r.tags)
       bySupplier[sup] = (bySupplier[sup] || 0) + 1
       byType[typ] = (byType[typ] || 0) + 1
       // Key matches the comparison table's group key: "Supplier · type".

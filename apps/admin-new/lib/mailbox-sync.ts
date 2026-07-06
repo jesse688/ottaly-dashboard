@@ -77,8 +77,8 @@ export async function backfillSupplierDaily(days = 30): Promise<{ ok: boolean; m
   try {
     const end = new Date().toISOString().slice(0, 10)
     const start = new Date(Date.now() - (days - 1) * 86400000).toISOString().slice(0, 10)
-    const mb = await pool.query(`SELECT email, account_id, workspace_id, supplier, type FROM mailbox_full WHERE ignored_at IS NULL AND account_id IS NOT NULL AND workspace_id IS NOT NULL`)
-    const rows = mb.rows as { email: string; account_id: string; workspace_id: string; supplier: string | null; type: string }[]
+    const mb = await pool.query(`SELECT email, account_id, workspace_id, supplier, type, tags FROM mailbox_full WHERE ignored_at IS NULL AND account_id IS NOT NULL AND workspace_id IS NOT NULL`)
+    const rows = mb.rows as { email: string; account_id: string; workspace_id: string; supplier: string | null; type: string; tags: string[] | null }[]
 
     // acc { dimension|key|day : {count, active, sent, replies, bounces} }. count/active
     // are point-in-time (today's group sizes) so we only set sent/replies/bounces here.
@@ -95,7 +95,7 @@ export async function backfillSupplierDaily(days = 30): Promise<{ ok: boolean; m
       for (const day of charts[i]) {
         if (!day.sent && !day.replies && !day.bounces) continue
         add('supplier', m.supplier || 'Unassigned', day.date, day)
-        add('type', m.type || 'smtp', day.date, day)
+        add('type', typeDimKey(m.type, m.tags), day.date, day)
       }
     })
 
@@ -198,6 +198,18 @@ const WINNR_GENERIC_DOMAINS = new Set([
   'saleslytalents.biz', 'saleslytalents.org', 'sokinfinancial.org', 'springavenue.org',
   'springdrivepro.com', 'springdrives.net', 'thereportspro.com',
 ])
+// Is this a generic-google mailbox? Flagged by a PlusVibe tag ("Google generic"
+// / "GenericGoogle"). Used to split the TYPE dimension into 'google' vs
+// 'google generic' on the performance cards — type stays 'google' in the data.
+function isGenericGoogleTags(type: string | null | undefined, tags: string[] | null | undefined): boolean {
+  if (type !== 'google' || !Array.isArray(tags)) return false
+  return tags.some(t => { const n = normTag(t || ''); return n.includes('google') && n.includes('generic') })
+}
+// Effective type key for aggregation: generic-tagged google → 'google generic'.
+function typeDimKey(type: string | null | undefined, tags: string[] | null | undefined): string {
+  return isGenericGoogleTags(type, tags) ? 'google generic' : (type || 'smtp')
+}
+
 function supplierFromDomain(email: string): string | null {
   const domain = (email.split('@')[1] || '').toLowerCase()
   if (!domain) return null
@@ -528,7 +540,7 @@ export async function syncMailboxes(): Promise<{ ok: boolean; count: number; err
       }
       const dims: Array<[string, Map<string, Agg>]> = [
         ['supplier', roll(m => m.supplier || 'Unassigned')],
-        ['type', roll(m => m.type || null)],
+        ['type', roll(m => typeDimKey(m.type, m.tags))],
       ]
       for (const [dimension, groups] of dims) {
         for (const [key, a] of groups) {

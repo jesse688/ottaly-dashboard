@@ -102,10 +102,23 @@ export async function GET() {
       needs_attention: mailboxes.filter(m => m.attention.length > 0).length,
     }
 
+    // "Google Generic" is a TIER of google mailbox, not a supplier — flagged by a
+    // PlusVibe tag ("Google generic" / "GenericGoogle"). We keep type='google' in
+    // the data (so pricing/filters/enums don't break) but split the type dimension
+    // into 'google' (standard) vs 'google generic' for the performance cards.
+    const isGenericGoogle = new Set(
+      mbRes.rows
+        .filter(r => (r.type === 'google') && Array.isArray(r.tags) &&
+          r.tags.some((t: string) => { const n = (t || '').toLowerCase().replace(/[^a-z0-9]/g, ''); return n.includes('google') && n.includes('generic') }))
+        .map(r => r.email as string)
+    )
+    // Effective type key: generic-tagged google → 'google generic', else the raw type.
+    const typeKey = (m: Mailbox) => (m.type === 'google' && isGenericGoogle.has(m.email)) ? 'google generic' : (m.type || null)
+
     const stats = {
       bySupplier: groupStats(mailboxes, m => m.supplier || 'Unassigned'),
-      byType: groupStats(mailboxes, m => m.type || null),
-      bySupplierType: groupStats(mailboxes, m => (m.supplier ? `${m.supplier} · ${m.type}` : null)),
+      byType: groupStats(mailboxes, m => typeKey(m)),
+      bySupplierType: groupStats(mailboxes, m => (m.supplier ? `${m.supplier} · ${typeKey(m)}` : null)),
       byClient: groupStats(mailboxes, m => m.workspace_name || null),
     }
 
