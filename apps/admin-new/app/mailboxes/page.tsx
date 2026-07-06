@@ -27,6 +27,10 @@ const ACCENT: Record<string, string> = {
 
 interface DaySeries { sent: number[]; replies: number[]; ooo: number[]; bounces: number[]; contacted: number[] }
 interface HistoryResponse { dimension: string; days: string[]; series: Record<string, DaySeries> }
+// Billable leads (revenue leads) attributed to each supplier / provider type by
+// the mailbox that received the reply. total = all marked leads in window;
+// matched = those we could tie to a mailbox; unmatched = pre-portal / no mailbox.
+interface LeadsResponse { days: number; total: number; matched: number; unmatched: number; bySupplier: Record<string, number>; byType: Record<string, number> }
 
 // ── Legacy pill ──────────────────────────────────────────────────────────────
 function Pill({ tone, children }: { tone: 'good' | 'warn' | 'bad' | 'gray' | 'google' | 'microsoft' | 'smtp'; children: React.ReactNode }) {
@@ -75,6 +79,7 @@ export default function MailboxesPage() {
   const [periodDays, setPeriodDays] = useState(30)
   const [history, setHistory] = useState<HistoryResponse | null>(null)
   const [typeHistory, setTypeHistory] = useState<HistoryResponse | null>(null)
+  const [leads, setLeads] = useState<LeadsResponse | null>(null)
 
   const [search, setSearch] = useState('')
   const [fClient, setFClient] = useState('')
@@ -107,6 +112,7 @@ export default function MailboxesPage() {
     if (tab !== 'performance') return
     fetch(`/api/mailboxes/history?dimension=supplier&days=${periodDays}`).then(r => r.json()).then(setHistory).catch(() => setHistory(null))
     fetch(`/api/mailboxes/history?dimension=type&days=${periodDays}`).then(r => r.json()).then(setTypeHistory).catch(() => setTypeHistory(null))
+    fetch(`/api/mailboxes/leads?days=${periodDays}`).then(r => r.json()).then(setLeads).catch(() => setLeads(null))
   }, [tab, periodDays])
 
   const runSync = useCallback(async () => {
@@ -384,11 +390,19 @@ export default function MailboxesPage() {
               {PERIODS.map(p => <button key={p.key} onClick={() => setPeriodDays(p.key)} style={{ padding: '4px 10px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', border: `1px solid ${C.border}`, background: periodDays === p.key ? C.navy : '#fff', color: periodDays === p.key ? '#fff' : C.muted }}>{p.label}</button>)}
             </div>
 
+            {/* Leads attribution note */}
+            {leads && (
+              <div style={{ fontSize: 12, color: C.muted, background: '#F5F3FF', border: '1px solid #E9E4FF', borderRadius: 8, padding: '.5rem .75rem' }}>
+                <span style={{ color: '#7C3AED', fontWeight: 600 }}>Leads</span> = billable leads (the ones counted in revenue), attributed to the supplier / provider of the mailbox that got the reply.{' '}
+                <b>{leads.matched.toLocaleString()}</b> of {leads.total.toLocaleString()} leads in this window are tied to a mailbox{leads.unmatched > 0 ? <> · <b>{leads.unmatched.toLocaleString()}</b> can’t be attributed (marked before the client portal / mailbox removed) and aren’t shown per-provider</> : null}.
+              </div>
+            )}
+
             {/* By provider type — combined stat + chart cards */}
             <div>
               <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: C.muted, margin: '0 0 .5rem' }}>By provider type (Google / Microsoft / SMTP)</div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: '1rem' }}>
-                {data.stats.byType.map(g => <ProviderCard key={g.key} g={g} accent={ACCENT[g.key] || C.navy} days={typeHistory?.days ?? []} ds={typeHistory?.series[g.key]} />)}
+                {data.stats.byType.map(g => <ProviderCard key={g.key} g={g} accent={ACCENT[g.key] || C.navy} days={typeHistory?.days ?? []} ds={typeHistory?.series[g.key]} leads={leads?.byType[g.key]} />)}
               </div>
             </div>
 
@@ -396,7 +410,7 @@ export default function MailboxesPage() {
             <div>
               <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: C.muted, margin: '0 0 .5rem' }}>By supplier (Winnr / Maildoso / Mithun)</div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: '1rem' }}>
-                {data.stats.bySupplier.map(g => <ProviderCard key={g.key} g={g} accent={ACCENT[g.key] || C.navy} days={history?.days ?? []} ds={history?.series[g.key]} />)}
+                {data.stats.bySupplier.map(g => <ProviderCard key={g.key} g={g} accent={ACCENT[g.key] || C.navy} days={history?.days ?? []} ds={history?.series[g.key]} leads={leads?.bySupplier[g.key]} />)}
               </div>
             </div>
 
@@ -405,14 +419,16 @@ export default function MailboxesPage() {
               <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: C.muted, margin: '0 0 .5rem' }}>Comparison · supplier × type</div>
               <div style={{ background: C.card, borderRadius: 12, border: `1px solid ${C.border}`, overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                  <thead style={{ background: '#F8F9FC' }}><tr><th style={th}>Supplier · Type</th><th style={{ ...th, textAlign: 'right' }}>Mailboxes</th><th style={{ ...th, textAlign: 'right' }}>Active</th><th style={{ ...th, textAlign: 'right' }}>Auth clean</th><th style={{ ...th, textAlign: 'right' }}>BL</th><th style={{ ...th, textAlign: 'right' }}>Sent</th><th style={{ ...th, textAlign: 'right' }}>Reply</th><th style={{ ...th, textAlign: 'right' }}>Bounce</th><th style={{ ...th, textAlign: 'right' }}>Avg daily</th><th style={{ ...th, textAlign: 'right' }}>$/mo</th><th style={{ ...th, textAlign: 'right' }}>Attn</th></tr></thead>
+                  <thead style={{ background: '#F8F9FC' }}><tr><th style={th}>Supplier · Type</th><th style={{ ...th, textAlign: 'right' }}>Mailboxes</th><th style={{ ...th, textAlign: 'right' }}>Active</th><th style={{ ...th, textAlign: 'right' }}>Auth clean</th><th style={{ ...th, textAlign: 'right' }}>BL</th><th style={{ ...th, textAlign: 'right' }}>Sent</th><th style={{ ...th, textAlign: 'right' }}>Leads</th><th style={{ ...th, textAlign: 'right' }}>Reply</th><th style={{ ...th, textAlign: 'right' }}>Bounce</th><th style={{ ...th, textAlign: 'right' }}>Avg daily</th><th style={{ ...th, textAlign: 'right' }}>$/mo</th><th style={{ ...th, textAlign: 'right' }}>Attn</th></tr></thead>
                   <tbody>
                     {data.stats.bySupplierType.map(g => (
                       <tr key={g.key} style={{ background: '#fff' }}>
                         <td style={{ ...td, fontWeight: 600 }}>{g.key}</td>
                         <td style={tdNum}>{num(g.count)}</td><td style={{ ...tdNum, color: '#16A34A' }}>{num(g.active)}</td><td style={tdNum}>{g.auth_clean_pct}%</td>
                         <td style={{ ...tdNum, color: g.blacklist_listed ? '#DC2626' : C.muted }}>{num(g.blacklist_listed)}</td>
-                        <td style={tdNum}>{num(g.total_sent)}</td><td style={tdNum}>{pct(g.reply_rate)}</td><td style={tdNum}>{pct(g.bounce_rate)}</td>
+                        <td style={tdNum}>{num(g.total_sent)}</td>
+                        <td style={{ ...tdNum, color: leads?.bySupplierType[g.key] ? '#7C3AED' : C.muted, fontWeight: leads?.bySupplierType[g.key] ? 600 : 400 }}>{leads ? num(leads.bySupplierType[g.key] || 0) : '—'}</td>
+                        <td style={tdNum}>{pct(g.reply_rate)}</td><td style={tdNum}>{pct(g.bounce_rate)}</td>
                         <td style={tdNum}>{num(g.avg_daily_limit)}</td><td style={tdNum}>{money(g.total_monthly_cost)}</td>
                         <td style={{ ...tdNum, color: g.attention_count ? '#DC2626' : C.muted }}>{num(g.attention_count)}</td>
                       </tr>
@@ -589,7 +605,7 @@ const sum = (a: number[] | undefined) => (a ?? []).reduce((s, v) => s + v, 0)
 // Combined per-group card: window-total stats (SENT, human RR, RR+OOO, bounce)
 // + a toggleable daily multi-line chart (Sent / RR human / RR+OOO). Click a
 // legend item to hide/show that series — see results per day for what's left.
-function ProviderCard({ g, accent, days, ds }: { g: MailboxGroupStats; accent: string; days: string[]; ds?: DaySeries }) {
+function ProviderCard({ g, accent, days, ds, leads }: { g: MailboxGroupStats; accent: string; days: string[]; ds?: DaySeries; leads?: number }) {
   const [hidden, setHidden] = useState<Set<string>>(new Set())
   const toggle = (k: string) => setHidden(p => { const n = new Set(p); n.has(k) ? n.delete(k) : n.add(k); return n })
 
@@ -622,8 +638,9 @@ function ProviderCard({ g, accent, days, ds }: { g: MailboxGroupStats; accent: s
   return (
     <div style={{ background: '#fff', border: '1px solid #E2E6F0', borderRadius: 10, padding: '1rem 1.1rem', borderTop: `3px solid ${accent}` }}>
       <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>{g.key} · <span style={{ color: '#6B7280', fontWeight: 500 }}>{g.count} mailboxes</span></div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8, marginBottom: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 8, marginBottom: 10 }}>
         <Stat v={tSent.toLocaleString()} l="Sent" />
+        <Stat v={leads == null ? '—' : leads.toLocaleString()} l="Leads" color="#7C3AED" />
         <Stat v={(human * 100).toFixed(2) + '%'} l="RR (human)" color="#16A34A" />
         <Stat v={(withOoo * 100).toFixed(2) + '%'} l="RR incl. OOO" color="#3B82F6" />
         <Stat v={(bounceRate * 100).toFixed(2) + '%'} l="Bounce" />
