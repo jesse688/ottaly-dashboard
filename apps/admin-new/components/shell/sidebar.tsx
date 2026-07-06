@@ -48,6 +48,7 @@ const CATEGORIES: Category[] = [
     key: 'stats', label: 'Stats', icon: BarChart3, color: '#F59E0B', // gold
     items: [
       { href: '/stats', label: 'Stats' },
+      { href: '/playbook', label: 'Playbook' },
       { href: '/actions', label: 'Actions' },
       { href: '/audience', label: 'Audience' },
       { href: '/gateways', label: 'Gateways' },
