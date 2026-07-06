@@ -31,7 +31,7 @@ interface HistoryResponse { dimension: string; days: string[]; series: Record<st
 // Billable leads (revenue leads) attributed to each supplier / provider type by
 // the mailbox that received the reply. total = all marked leads in window;
 // matched = those we could tie to a mailbox; unmatched = pre-portal / no mailbox.
-interface LeadsResponse { days: number; total: number; matched: number; unmatched: number; bySupplier: Record<string, number>; byType: Record<string, number> }
+interface LeadsResponse { days: number; total: number; matched: number; unmatched: number; bySupplier: Record<string, number>; byType: Record<string, number>; bySupplierType: Record<string, number> }
 
 // ── Legacy pill ──────────────────────────────────────────────────────────────
 function Pill({ tone, children }: { tone: 'good' | 'warn' | 'bad' | 'gray' | 'google' | 'microsoft' | 'smtp'; children: React.ReactNode }) {
