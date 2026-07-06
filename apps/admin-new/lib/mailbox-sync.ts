@@ -181,6 +181,33 @@ function supplierFromTags(tags: string[]): string | null {
   return null
 }
 
+// Domain → supplier rules. Winnr's GENERIC mailbox pool lives on a fixed set of
+// base domains (from the winnr_bison_export). Any mailbox on one of these
+// domains — or a subdomain of it (hq./info./mail./team./uk.) — is "Winnr
+// Generic"; every other Winnr mailbox is plain "Winnr" (Standard). Matching by
+// domain (not tag) means new mailboxes on these domains auto-classify on sync
+// without needing a per-box tag or a manual override.
+const WINNR_GENERIC_DOMAINS = new Set([
+  'azurianstudio.biz', 'consultantscenter.org', 'consultantssystems.com', 'consultantstech.org',
+  'findsolarsupportdept.net', 'getmktresearch.com', 'getprovenreports.com', 'getsolarsupportdept.com',
+  'getsumterreports.com', 'gohoponstage.biz', 'goprovenresearch.com', 'juriscales.com',
+  'juriscales.net', 'juriscales.org', 'marketresearchtech.org', 'mktanalyze.com', 'mktstudy.com',
+  'nelsonrecords.com', 'radcliffeinquiry.com', 'radclifferesearchcenter.com', 'radcliffestudy.com',
+  'realsolarsupportdept.net', 'redwoodcomplianceadvisor.com', 'redwoodcomplianceadvisors.com',
+  'redwoodcomplianceconsultant.com', 'redwoodcompliancegroup.com', 'redwoodcomplianceservices.com',
+  'saleslytalents.biz', 'saleslytalents.org', 'sokinfinancial.org', 'springavenue.org',
+  'springdrivepro.com', 'springdrives.net', 'thereportspro.com',
+])
+function supplierFromDomain(email: string): string | null {
+  const domain = (email.split('@')[1] || '').toLowerCase()
+  if (!domain) return null
+  // Strip the sending subdomain (hq./info./mail./team./uk.) down to the base,
+  // then match. Also handles an exact base-domain address.
+  const base = domain.replace(/^[^.]+\.(?=[^.]+\.[^.]+$)/, '')
+  if (WINNR_GENERIC_DOMAINS.has(domain) || WINNR_GENERIC_DOMAINS.has(base)) return 'Winnr Generic'
+  return null
+}
+
 // PlusVibe stores tag _IDs on the account (payload.tags), not names. The names
 // live in the workspace tag list: GET /api/v1/tags/list?workspace_id=X → [{_id,name}].
 interface PvTag { _id?: string; id?: string; name?: string }
@@ -378,7 +405,7 @@ export async function syncMailboxes(): Promise<{ ok: boolean; count: number; err
       // derive it from the mailbox's PlusVibe tags (e.g. any "google generic" tag →
       // "Google Generic"). So auto-tagging fills the gap without ever clobbering a
       // manual choice, and re-runs pick up newly-tagged mailboxes each sync.
-      const supplier = meta.supplier || supplierFromTags(m.tags) || null
+      const supplier = meta.supplier || supplierFromDomain(m.email) || supplierFromTags(m.tags) || null
       const unitCost = supplier ? (priceByKey.get(`${supplier}|${type}`) ?? null) : null
 
       // performance — prefer real per-mailbox PlusVibe stats; fall back to
