@@ -97,20 +97,49 @@ export async function GET(req: NextRequest) {
           AND lower(e.lead_email) = s.le
           AND e.event_type = 'bounce'
       ) THEN s.le END)::int                        AS bounces,
-      COUNT(DISTINCT CASE WHEN EXISTS (
-        SELECT 1 FROM email_events e
-        WHERE e.workspace_id = s.workspace_id
-          AND lower(e.lead_email) = s.le
-          AND e.event_type = 'lead'
-      ) THEN s.le END)::int                        AS leads,
+      0::int                                       AS leads, -- filled lead-anchored below
       COUNT(DISTINCT s.le)::int                    AS unique_contacts,
       FALSE                                        AS is_approx
     FROM sends s
     GROUP BY s.from_type, s.to_type
   `
 
+  // Leads are counted LEAD-ANCHORED (every unibox_replies.marked_as_lead in the
+  // window), NOT send-anchored — a lead's original send often falls outside the
+  // window or isn't in email_events, so send-anchoring silently drops most leads
+  // (matches the Stats page's direct lead count, not the old always-0 column).
+  // Sender type ← the receiving mailbox (mailbox_meta); recipient type ←
+  // contacts.mx_provider, same buckets as the send cohort.
+  const leadsQ = `
+    WITH sender_types AS (
+      SELECT DISTINCT ON (lower(email)) lower(email) AS email_lower,
+        COALESCE(mailbox_type, 'smtp') AS sender_type
+      FROM mailbox_meta ORDER BY lower(email)
+    ),
+    recipient_types AS (
+      SELECT DISTINCT ON (lower(email)) lower(email) AS email_lower, mx_provider AS recipient_type
+      FROM contacts WHERE mx_provider IS NOT NULL ORDER BY lower(email)
+    )
+    SELECT
+      COALESCE(st.sender_type, 'smtp') AS from_type,
+      COALESCE(rt.recipient_type, 'unknown') AS to_type,
+      COUNT(*)::int AS leads
+    FROM unibox_replies ur
+    LEFT JOIN sender_types    st ON st.email_lower = lower(ur.mailbox_email)
+    LEFT JOIN recipient_types rt ON rt.email_lower = lower(COALESCE(ur.matched_lead_email, ur.lead_email))
+    WHERE ur.marked_as_lead = TRUE
+      AND ur.marked_at >= $1 AND ur.marked_at < ($2::date + interval '1 day')
+    GROUP BY 1, 2
+  `
+
   try {
-    const { rows: exact } = await pool.query(exactQ, [start, end])
+    const [{ rows: exact }, { rows: leadRows }] = await Promise.all([
+      pool.query(exactQ, [start, end]),
+      pool.query(leadsQ, [start, end]),
+    ])
+    const leadByCombo = new Map<string, number>()
+    for (const l of leadRows) leadByCombo.set(`${l.from_type}|${l.to_type}`, +l.leads || 0)
+
     const rows = exact
       .map((r) => ({
         from_type: r.from_type as string,
@@ -119,11 +148,20 @@ export async function GET(req: NextRequest) {
         replies: +r.replies || 0,
         pos_replies: +r.pos_replies || 0,
         bounces: +r.bounces || 0,
-        leads: +r.leads || 0,
+        leads: leadByCombo.get(`${r.from_type}|${r.to_type}`) || 0,
         unique_contacts: +r.unique_contacts || 0,
         is_approx: false,
       }))
       .sort((a, b) => b.sent - a.sent)
+
+    // A lead combo may have NO matching send row (send outside window / not in
+    // email_events). Surface those as their own rows so the lead total is honest.
+    for (const [key, n] of leadByCombo) {
+      const [from_type, to_type] = key.split('|')
+      if (!rows.some((r) => r.from_type === from_type && r.to_type === to_type)) {
+        rows.push({ from_type, to_type, sent: 0, replies: 0, pos_replies: 0, bounces: 0, leads: n, unique_contacts: 0, is_approx: false })
+      }
+    }
     const hasApprox = rows.some((r) => r.is_approx)
 
     // Coverage: how many non-seeded events have sender_email populated
