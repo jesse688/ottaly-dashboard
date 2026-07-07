@@ -853,18 +853,54 @@ export default function DataPage() {
 
   // ── Apollo export / reset ─────────────────────────────────────────────────
   const apolloExport = async () => {
+    // Loop every batch (50k rows/file) using the X-Has-More / X-Next-Offset
+    // headers, downloading each CSV. Uses the SAME filters as the list, so
+    // "filter first, then export" gives exactly what you're looking at.
     flash('Building Apollo export…')
-    const p = queryParams()
-    const res = await fetch(`/api/data/contacts/export?${p}`)
-    if (!res.ok) return flash('Export failed', 'err')
-    const blob = await res.blob()
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `apollo-export-${Date.now()}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
-    flash('Apollo CSV downloaded')
+    let offset = 0
+    let fileNo = 0
+    let totalRows = 0
+    let grandTotal: number | null = null
+    try {
+      // Safety cap so a runaway loop can't spin forever (250 files = 12.5M rows).
+      for (let guard = 0; guard < 250; guard++) {
+        const p = queryParams({ offset: String(offset) })
+        const res = await fetch(`/api/data/contacts/export?${p}`)
+        if (!res.ok) {
+          const msg = await res.json().catch(() => ({}))
+          return flash(msg.error || 'Export failed', 'err')
+        }
+        const total = Number(res.headers.get('X-Total-Records') || '0')
+        const rowsInFile = Number(res.headers.get('X-Rows-In-File') || '0')
+        const hasMore = res.headers.get('X-Has-More') === 'true'
+        const nextOffset = Number(res.headers.get('X-Next-Offset') || '0')
+        if (grandTotal == null) grandTotal = total
+
+        // Nothing at all matched — tell the user honestly and why.
+        if (grandTotal === 0) {
+          return flash('No contacts to export — only verified-clean emails (safe/safe_catchall) export. Verify contacts first, or adjust your filters.', 'err')
+        }
+        if (rowsInFile > 0) {
+          const blob = await res.blob()
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = `apollo-export-${fileNo + 1}.csv`
+          a.click()
+          URL.revokeObjectURL(url)
+          fileNo++
+          totalRows += rowsInFile
+          flash(`Downloaded batch ${fileNo} · ${totalRows.toLocaleString()} / ${grandTotal.toLocaleString()} rows…`)
+        }
+        if (!hasMore || rowsInFile === 0 || nextOffset <= offset) break
+        offset = nextOffset
+        // Small gap so the browser processes each download before the next.
+        await new Promise((r) => setTimeout(r, 400))
+      }
+      flash(`Apollo export complete — ${totalRows.toLocaleString()} rows in ${fileNo} file${fileNo === 1 ? '' : 's'}.`)
+    } catch (e) {
+      flash(e instanceof Error ? e.message : 'Export failed', 'err')
+    }
   }
   const resetExports = async () => {
     if (!window.confirm('Clear all "exported to Apollo" stamps?')) return
