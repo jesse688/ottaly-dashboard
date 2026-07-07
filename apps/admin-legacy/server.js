@@ -1119,57 +1119,12 @@ app.get('/api/email-finder/config', requireSession, (req, res) => {
 // Diagnostic: which one-shot migrations have been recorded as run, plus
 // a sample of company_name values to spot-check cleaning state.
 // Apollo account split export — filters contacts by company_region
-app.get('/api/contacts/export', requireSession, async (req, res) => {
-  const pgdb = req.app.locals.pgDb;
-  if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
-
-  const regions = (req.query.companyRegion || '').split(',').map(r => r.trim()).filter(Boolean);
-  const offset  = parseInt(req.query.offset || '0', 10);
-  const limit   = 50000; // 50k rows per file
-
-  if (!regions.length) return res.status(400).json({ error: 'companyRegion required' });
-
-  // Same non-negotiable cleanliness guard as db.exportContacts — only verified-
-  // clean, not-opted-out, non-hard-bounced addresses ever leave in a CSV.
-  const CLEAN = `
-    AND LOWER(COALESCE(email_status,'')) IN ('safe','safe_catchall')
-    AND COALESCE(do_not_contact, false) = false
-    AND COALESCE(LOWER(bounce_type),'') <> 'hard'`;
-  const placeholders = regions.map((_, i) => `$${i + 1}`).join(',');
-  const countRes = await pgdb.query(
-    `SELECT COUNT(*) AS n FROM contacts WHERE company_region = ANY(ARRAY[${placeholders}]::text[]) AND email IS NOT NULL${CLEAN}`,
-    regions
-  );
-  const total = parseInt(countRes.rows[0].n, 10);
-
-  const params = [...regions, limit, offset];
-  const { rows } = await pgdb.query(
-    `SELECT email, first_name, last_name, company_name, company_domain, apollo_id
-     FROM contacts
-     WHERE company_region = ANY(ARRAY[${placeholders}]::text[]) AND email IS NOT NULL${CLEAN}
-     ORDER BY company_domain, email
-     LIMIT $${regions.length + 1} OFFSET $${regions.length + 2}`,
-    params
-  );
-
-  // Minimal upload: give Apollo just enough to identify the contact and company.
-  // Phone, LinkedIn, title, industry, location are intentionally omitted so
-  // Apollo fills them from its own live database (paid enrichment fields).
-  const cols = ['First Name', 'Last Name', 'Email', 'Company Name', 'Website', 'Apollo Contact Id'];
-  const esc  = v => v == null ? '' : `"${String(v).replace(/"/g,'""')}"`;
-  const csv  = [cols.join(','), ...rows.map(r => [
-    r.first_name, r.last_name, r.email, r.company_name, r.company_domain, r.apollo_id
-  ].map(esc).join(','))].join('\n');
-
-  const hasMore   = offset + rows.length < total;
-  const nextOffset = offset + rows.length;
-  res.setHeader('Content-Type', 'text/csv');
-  res.setHeader('Content-Disposition', `attachment; filename="export-${offset}.csv"`);
-  res.setHeader('X-Has-More', hasMore ? 'true' : 'false');
-  res.setHeader('X-Next-Offset', String(nextOffset));
-  res.setHeader('X-Rows-In-File', String(rows.length));
-  res.send(csv);
-});
+// NOTE: /api/contacts/export is handled by the contacts router (api-contacts.js,
+// mounted via app.use('/api', contactsAPI) below). An earlier inline handler
+// here shadowed it (Express = first match wins) and only supported a
+// companyRegion-anchored dump — it REQUIRED a region and ignored every other
+// filter, so "filter first, then Apollo Export" always returned
+// "No contacts to export". Removed so the filter-aware router route runs.
 
 // ── Engine Leads ──────────────────────────────────────────
 // Read-only view over ottaly_engine_leads — clean B2B leads the autonomous

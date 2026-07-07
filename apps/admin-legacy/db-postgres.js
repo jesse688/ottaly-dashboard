@@ -1956,6 +1956,19 @@ class PostgresDatabase {
     return count;
   }
 
+  // Count of EXPORTABLE contacts (same filters + the export cleanliness guard as
+  // exportContacts). The Apollo export paginates over this clean set, so the loop
+  // MUST count against the same guard — using getContactsCount (no guard) inflated
+  // the total and made X-Has-More loop past the real end into empty/wrong pages.
+  async getExportableCount(workspaceId, filters = {}) {
+    const { clauses, params } = this._buildFilterClauses(filters);
+    const where = clauses.length ? ' AND ' + clauses.join(' AND ') : '';
+    const sql = `SELECT COUNT(*) as count FROM contacts
+      WHERE workspace_id = $1${where}${PostgresDatabase.EXPORT_CLEAN_SQL}`;
+    const result = await this.query(sql, [workspaceId, ...params]);
+    return parseInt(result.rows[0].count, 10);
+  }
+
   async bulkCreateContacts(workspaceId, contacts) {
     // Postgres rejects ON CONFLICT DO UPDATE if the same target row is hit
     // twice in one statement, so we must dedupe by email before batching.

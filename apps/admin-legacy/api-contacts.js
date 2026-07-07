@@ -734,18 +734,31 @@ module.exports = (db) => {
       // Whitelist the filters that are safe to use in an export context.
       const exportFilters = {};
       if (req.query.notExportedOnly === 'true') exportFilters.notExportedToApollo = 'true';
+      // Honor EVERY filter the contacts search understands, so "filter first,
+      // then Apollo Export" gives exactly the rows you're looking at. (Keys must
+      // match _buildFilterClauses in db-postgres.js.)
       const EXPORT_FILTER_KEYS = [
-        'companyRegion','companyCounty','companyTown','companyCity','companyCountry',
-        'personRegion','personCounty','personTown','city','country',
-        'industry','seniority','department','numEmployeesRanges',
-        'jobTitle','keywords','technologies',
+        'status','source','tags','company','website','email','phone','linkedinUrl','companyLinkedin',
+        'firstName','lastName','jobTitle','jobTitleExclude','seniority','department','subDepartments',
+        'industry','industryExclude','keywords','keywordsExclude','technologies','technologiesExclude',
+        'sicCodes','numEmployeesRanges','emailProviders','excludeMicrosoft','gateway','gatewayExclude',
+        'emailStatus','locationNeedsReview',
+        'city','cityExclude','state','stateExclude','country','countryExclude',
+        'companyCity','companyState','companyCountry','companyCounty','companyRegion','companyTown',
+        'personRegion','personCounty','personTown',
       ];
       for (const key of EXPORT_FILTER_KEYS) {
         if (req.query[key]) exportFilters[key] = req.query[key];
       }
+      // The search box param is `q` on the wire but `search` in the filter builder.
+      if (req.query.q) exportFilters.search = req.query.q;
 
-      const total = await db.getContactsCount(req.workspaceId, exportFilters);
-      console.log(`[Export] workspaceId=${req.workspaceId} total=${total} notExportedOnly=${req.query.notExportedOnly}`);
+      // Count against the SAME clean guard the export paginates over, else
+      // X-Has-More overshoots the real end and loops empty/wrong files.
+      const total = db.getExportableCount
+        ? await db.getExportableCount(req.workspaceId, exportFilters)
+        : await db.getContactsCount(req.workspaceId, exportFilters);
+      console.log(`[Export] workspaceId=${req.workspaceId} exportable=${total} notExportedOnly=${req.query.notExportedOnly}`);
 
       // Minimal Apollo upload — Apollo enriches the rest from its own
       // database (title, seniority, industry, location, LinkedIn, phone,

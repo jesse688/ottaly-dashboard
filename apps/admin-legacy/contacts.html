@@ -5175,7 +5175,11 @@
         while (true) {
           btn.textContent = `⬇ Exporting file ${fileNum}...`;
 
-          const params = new URLSearchParams({ offset });
+          // Send the SAME filters as the visible list so "filter first, then
+          // export" gives exactly what you're looking at (was: offset only, which
+          // ignored every filter and dumped/failed the whole workspace).
+          const params = new URLSearchParams(getFilterValues(0));
+          params.set('offset', offset);
           if (notExportedOnly) params.set('notExportedOnly', 'true');
           const r = await fetch(`/api/contacts/export?${params}`);
           if (!r.ok) {
