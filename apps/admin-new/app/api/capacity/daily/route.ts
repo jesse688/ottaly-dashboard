@@ -34,6 +34,10 @@ function ukDayFraction(): { fraction: number; ukTime: string } {
 export async function GET() {
   try {
     const days = 14
+    // Winnr Generic is a paused pool (0 daily_limit, warmup off) — its idle
+    // capacity is deliberate, not a CM oversight, so it's excluded everywhere
+    // (capacity, sent, and the chart) to keep utilisation honest.
+    const EXCL_WG = `supplier IS DISTINCT FROM 'Winnr Generic'`
     const [capRes, sentRes, histRes] = await Promise.all([
       pool.query(`
         SELECT workspace_id,
@@ -42,14 +46,14 @@ export async function GET() {
           COUNT(*) FILTER (WHERE status = 'ACTIVE')::int AS active_mailboxes,
           COALESCE(SUM(daily_limit) FILTER (WHERE status = 'ACTIVE'), 0)::int AS capacity
         FROM mailbox_full
-        WHERE ignored_at IS NULL AND workspace_id IS NOT NULL
+        WHERE ignored_at IS NULL AND workspace_id IS NOT NULL AND ${EXCL_WG}
         GROUP BY workspace_id`),
       pool.query(`
         SELECT workspace_id, COALESCE(SUM(sent),0)::int AS sent
-        FROM mailbox_daily_stats WHERE date = CURRENT_DATE GROUP BY workspace_id`),
+        FROM mailbox_daily_stats WHERE date = CURRENT_DATE AND ${EXCL_WG} GROUP BY workspace_id`),
       pool.query(`
         SELECT date, COALESCE(SUM(sent),0)::int AS sent
-        FROM mailbox_daily_stats WHERE date >= CURRENT_DATE - ($1::int - 1)
+        FROM mailbox_daily_stats WHERE date >= CURRENT_DATE - ($1::int - 1) AND ${EXCL_WG}
         GROUP BY date ORDER BY date`, [days]),
     ])
 
