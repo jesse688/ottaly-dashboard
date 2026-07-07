@@ -787,50 +787,49 @@ module.exports = (db) => {
         ].map(esc).join(',');
       };
 
-      // Build CSV until we hit the size limit
+      // KEYSET pagination by id cursor (`after`). One query pulls up to a whole
+      // file's worth of rows in a single ~1.8s scan — the old code re-ran a
+      // 1000-row OFFSET query per chunk (dozens of scans on big filters), which
+      // blew past the 60s request timeout and returned nothing. `after` is the
+      // last id of the previous file; absent on the first file.
+      const after = req.query.after || null;
       const lines = ['﻿' + cols.join(',')]; // BOM + header
       let sizeBytes = Buffer.byteLength(lines[0], 'utf8');
-      let currentOffset = offset;
       let rowsExported = 0;
+      let lastId = after;
       const exportedIds = [];
 
-      while (true) {
-        const batch = await db.exportContacts(req.workspaceId, exportFilters, CHUNK, currentOffset);
-        if (!batch.length) break;
+      // Fetch up to one file's worth (+1 to detect whether more remain after it).
+      const page = db.exportContactsPage
+        ? await db.exportContactsPage(req.workspaceId, exportFilters, MAX_ROWS + 1, after)
+        : await db.exportContacts(req.workspaceId, exportFilters, MAX_ROWS + 1, offset);
 
-        for (const c of batch) {
-          const line = rowToCsv(c);
-          const lineBytes = Buffer.byteLength(line, 'utf8') + 2; // +2 for \r\n
-          const sizeFull  = sizeBytes + lineBytes > MAX_BYTES;
-          const countFull = rowsExported >= MAX_ROWS;
-          if ((sizeFull || countFull) && rowsExported > 0) {
-            // File is full — stamp what we have and stop here
-            if (db.stampExportedToApollo) await db.stampExportedToApollo(req.workspaceId, exportedIds);
-            const nextOffset = offset + rowsExported;
-            res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-            res.setHeader('Content-Disposition', `attachment; filename="apollo-export-offset-${offset}.csv"`);
-            res.setHeader('X-Total-Records', String(total));
-            res.setHeader('X-Has-More', String(nextOffset < total));
-            res.setHeader('X-Next-Offset', String(nextOffset));
-            res.setHeader('X-Rows-In-File', String(rowsExported));
-            return res.send(lines.join('\r\n'));
-          }
-          lines.push(line);
-          sizeBytes += lineBytes;
-          rowsExported++;
-          if (c.id) exportedIds.push(c.id);
-        }
-        currentOffset += batch.length;
-        if (batch.length < CHUNK) break; // last page
+      let sizeCut = false;
+      for (const c of page) {
+        if (rowsExported >= MAX_ROWS) break; // hard row cap for this file
+        const line = rowToCsv(c);
+        const lineBytes = Buffer.byteLength(line, 'utf8') + 2; // +2 for \r\n
+        if (sizeBytes + lineBytes > MAX_BYTES && rowsExported > 0) { sizeCut = true; break; }
+        lines.push(line);
+        sizeBytes += lineBytes;
+        rowsExported++;
+        lastId = c.id || lastId;
+        if (c.id) exportedIds.push(c.id);
       }
 
-      if (db.stampExportedToApollo) await db.stampExportedToApollo(req.workspaceId, exportedIds);
-      const nextOffset = offset + rowsExported;
+      // More files remain if the size/row cap cut us short, or the page came back
+      // fuller than what we wrote (the +1 probe row, or leftover beyond MAX_ROWS).
+      const hasMore = sizeCut || page.length > rowsExported;
+
+      if (db.stampExportedToApollo && exportedIds.length) {
+        await db.stampExportedToApollo(req.workspaceId, exportedIds);
+      }
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-      res.setHeader('Content-Disposition', `attachment; filename="apollo-export-offset-${offset}.csv"`);
+      res.setHeader('Content-Disposition', `attachment; filename="apollo-export-${lastId || offset}.csv"`);
       res.setHeader('X-Total-Records', String(total));
-      res.setHeader('X-Has-More', String(nextOffset < total));
-      res.setHeader('X-Next-Offset', String(nextOffset));
+      res.setHeader('X-Has-More', String(hasMore));
+      res.setHeader('X-Next-After', String(lastId || ''));
+      res.setHeader('X-Next-Offset', String(offset + rowsExported)); // legacy compat
       res.setHeader('X-Rows-In-File', String(rowsExported));
       res.send(lines.join('\r\n'));
     } catch (err) {

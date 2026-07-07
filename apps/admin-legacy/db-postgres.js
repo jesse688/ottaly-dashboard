@@ -1934,6 +1934,26 @@ class PostgresDatabase {
     return result.rows;
   }
 
+  // Keyset-paginated export page: fetch up to `limit` exportable rows with id >
+  // afterId in id order. The predicate is a full scan, but running it ONCE per
+  // file (limit = whole file) is ~1.8s even for 60k rows — vs the old loop that
+  // re-ran a 1000-row OFFSET query per chunk (dozens of scans → 60s timeout).
+  // Chaining files by last id (keyset) avoids OFFSET's skip cost entirely.
+  async exportContactsPage(workspaceId, filters = {}, limit = 100000, afterId = null) {
+    const { clauses, params } = this._buildFilterClauses(filters);
+    const where = clauses.length ? ' AND ' + clauses.join(' AND ') : '';
+    let sql = `
+      SELECT id, first_name, last_name, email, company_name, company_domain, apollo_id, raw_data
+      FROM contacts
+      WHERE workspace_id = $1${where}${PostgresDatabase.EXPORT_CLEAN_SQL}`;
+    const args = [workspaceId, ...params];
+    if (afterId) { sql += ` AND id > $${args.length + 1}`; args.push(afterId); }
+    sql += ` ORDER BY id LIMIT $${args.length + 1}`;
+    args.push(limit);
+    const result = await this.query(sql, args);
+    return result.rows;
+  }
+
   async getContactsCount(workspaceId, filters = {}) {
     const { clauses, params } = this._buildFilterClauses(filters);
     const where = clauses.length ? ' AND ' + clauses.join(' AND ') : '';

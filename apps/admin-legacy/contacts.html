@@ -5170,16 +5170,17 @@
 
       const notExportedOnly = document.getElementById('filterNotExported')?.checked;
 
-      let offset = 0, fileNum = 1, totalExported = 0;
+      let after = '', fileNum = 1, totalExported = 0;
       try {
         while (true) {
           btn.textContent = `⬇ Exporting file ${fileNum}...`;
 
           // Send the SAME filters as the visible list so "filter first, then
-          // export" gives exactly what you're looking at (was: offset only, which
-          // ignored every filter and dumped/failed the whole workspace).
+          // export" gives exactly what you're looking at, and page by the `after`
+          // id cursor (keyset) — each file is one fast query, no OFFSET skip cost
+          // that used to time the whole export out on big filters.
           const params = new URLSearchParams(getFilterValues(0));
-          params.set('offset', offset);
+          if (after) params.set('after', after);
           if (notExportedOnly) params.set('notExportedOnly', 'true');
           const r = await fetch(`/api/contacts/export?${params}`);
           if (!r.ok) {
@@ -5189,30 +5190,31 @@
           }
 
           const hasMore = r.headers.get('X-Has-More') === 'true';
-          const nextOffset = parseInt(r.headers.get('X-Next-Offset') || '0');
+          const nextAfter = r.headers.get('X-Next-After') || '';
           const rowsInFile = parseInt(r.headers.get('X-Rows-In-File') || '0');
           const total = parseInt(r.headers.get('X-Total-Records') || '0');
-          const fileSizeMB = Math.round((await r.clone().blob()).size / 1024 / 1024 * 10) / 10;
 
-          // Trigger download
-          const blob = await r.blob();
-          const filename = `apollo-export-${fileNum}.csv`;
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url; a.download = filename;
-          document.body.appendChild(a); a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
+          // Trigger download (skip empty files)
+          if (rowsInFile > 0) {
+            const blob = await r.blob();
+            const filename = `apollo-export-${fileNum}.csv`;
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = filename;
+            document.body.appendChild(a); a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            totalExported += rowsInFile;
+            fileNum++;
+            btn.textContent = `⬇ ${totalExported.toLocaleString()} / ${total.toLocaleString()}...`;
+          }
 
-          totalExported += rowsInFile;
-          fileNum++;
-
-          if (!hasMore) break;
-          offset = nextOffset;
-          await new Promise(r => setTimeout(r, 1000)); // gap between downloads
+          if (!hasMore || rowsInFile === 0 || !nextAfter || nextAfter === after) break;
+          after = nextAfter;
+          await new Promise(r => setTimeout(r, 800)); // gap between downloads
         }
         if (totalExported === 0) {
-          showMessage('No contacts to export — try unchecking "Not exported to Apollo" or check your filters.', 'error');
+          showMessage('No contacts to export. Only verified-clean emails (safe/safe_catchall) export — verify contacts first, or uncheck "Not exported to Apollo" / widen your filters.', 'error');
         } else {
           showMessage(`Exported ${totalExported.toLocaleString()} contacts in ${fileNum - 1} file${fileNum > 2 ? 's' : ''} (max 45MB each)`, 'success');
         }
