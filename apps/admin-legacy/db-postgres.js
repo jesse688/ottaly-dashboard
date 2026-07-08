@@ -2457,11 +2457,13 @@ class PostgresDatabase {
       console.error(`getDistinctValues failed for ${field}:`, err.message);
       values = null;
     }
-    // A timeout returns [] (or null) — don't cache an empty result over a good
-    // one; serve the prior cached value if we have it.
-    if ((!values || values.length === 0) && cached) return cached.values;
-    if (values) this._distinctCache.set(cacheKey, { values, at: Date.now() });
-    return values || [];
+    // A timeout / cold cache returns [] (or null) — NEVER cache an empty result
+    // (it would blank the dropdown for the whole TTL even after data lands). Only
+    // cache non-empty results; serve a prior cached value if this run came back
+    // empty but we had one.
+    if (!values || values.length === 0) return cached ? cached.values : [];
+    this._distinctCache.set(cacheKey, { values, at: Date.now() });
+    return values;
   }
 
   async _getDistinctValuesUncached(workspaceId, field, limit = 100) {
@@ -2572,23 +2574,30 @@ class PostgresDatabase {
       for (const [field, col] of Object.entries(targets)) {
         if (!col) continue;
         const t0 = Date.now();
-        await client.query(
+        // Stamp every row this run writes with the SAME timestamp, captured
+        // before the INSERT, so the prune below can safely delete only rows this
+        // run did NOT refresh — never the whole field on a partial/slow run.
+        const { rows: [{ now: runTs }] } = await client.query(`SELECT NOW() AS now`);
+        const ins = await client.query(
           `INSERT INTO contacts_distinct_cache (workspace_id, field, value, count, refreshed_at)
-           SELECT $1, $2, trim(val), COUNT(*)::int, NOW()
+           SELECT $1, $2, trim(val), COUNT(*)::int, $3::timestamptz
            FROM contacts c CROSS JOIN LATERAL unnest(string_to_array(c.${col}, ',')) AS val
            WHERE c.workspace_id = $1 AND c.${col} IS NOT NULL AND c.${col} <> '' AND trim(val) <> ''
            GROUP BY trim(val) ORDER BY COUNT(*) DESC LIMIT 10000
            ON CONFLICT (workspace_id, field, value)
-           DO UPDATE SET count = EXCLUDED.count, refreshed_at = NOW()`,
-          [workspaceId, field]
+           DO UPDATE SET count = EXCLUDED.count, refreshed_at = $3::timestamptz`,
+          [workspaceId, field, runTs]
         );
-        // Drop stale values that fell out of the top 10k / no longer exist.
-        await client.query(
-          `DELETE FROM contacts_distinct_cache
-           WHERE workspace_id = $1 AND field = $2 AND refreshed_at < NOW() - interval '1 minute'`,
-          [workspaceId, field]
-        );
-        console.log(`[distinct-cache] refreshed ${field} in ${Date.now() - t0}ms`);
+        // Only prune if the INSERT actually wrote rows — otherwise leave the
+        // existing cache intact (a failed/empty run must never blank the field).
+        if (ins.rowCount > 0) {
+          await client.query(
+            `DELETE FROM contacts_distinct_cache
+             WHERE workspace_id = $1 AND field = $2 AND refreshed_at < $3::timestamptz`,
+            [workspaceId, field, runTs]
+          );
+        }
+        console.log(`[distinct-cache] refreshed ${field}: ${ins.rowCount} rows in ${Date.now() - t0}ms`);
       }
     } catch (err) {
       console.error('[distinct-cache] refresh failed:', err.message);
