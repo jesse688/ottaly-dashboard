@@ -44,7 +44,8 @@ export async function GET() {
           MAX(workspace_name) AS workspace_name,
           COUNT(*)::int AS mailboxes,
           COUNT(*) FILTER (WHERE status = 'ACTIVE')::int AS active_mailboxes,
-          COALESCE(SUM(daily_limit) FILTER (WHERE status = 'ACTIVE'), 0)::int AS capacity
+          COALESCE(SUM(daily_limit) FILTER (WHERE status = 'ACTIVE'), 0)::int AS capacity,
+          AVG(sending_gap) FILTER (WHERE status = 'ACTIVE' AND sending_gap > 0) AS avg_gap_min
         FROM mailbox_full
         WHERE ignored_at IS NULL AND workspace_id IS NOT NULL AND ${EXCL_WG}
         GROUP BY workspace_id`),
@@ -67,24 +68,64 @@ export async function GET() {
     const hasTodayData = (todayRes.rows[0]?.n ?? 0) > 0
     const { fraction, ukTime } = ukDayFraction()
 
+    // Hours left in the 08:00–17:00 window (min 0). Used for pace/interval math.
+    const WINDOW_H = 9
+    const hoursLeft = Math.max(0, WINDOW_H * (1 - fraction))
+
     const clients = capRes.rows
       .map(r => {
         const capacity = r.capacity as number
+        const activeBoxes = r.active_mailboxes as number
+        const avgGapMin = r.avg_gap_min != null ? Number(r.avg_gap_min) : null
         const sentToday = sentByWs.get(r.workspace_id) ?? 0
+
+        // ── 1. LIVE utilisation (now) — independent of projection ──
+        // pace% = sent ÷ expected-by-now (100 = exactly on pace, >100 ahead).
+        // done% = sent ÷ full capacity (how much of today's total is done).
+        const expectedByNow = capacity * fraction
+        const pacePct = expectedByNow > 0 ? Math.round((sentToday / expectedByNow) * 100)
+          : (sentToday > 0 ? 999 : 0)
+        const donePct = capacity > 0 ? Math.round((sentToday / capacity) * 100) : 0
+        // ahead / on / behind (10% band around 100 = "on").
+        const paceState: 'ahead' | 'on' | 'behind' =
+          fraction < 0.05 ? 'on' // too early to judge — treat as on-pace
+          : pacePct >= 110 ? 'ahead' : pacePct >= 90 ? 'on' : 'behind'
+
+        // ── 2. Projection — will they hit capacity at the current rate? ──
         const raw = fraction > 0 ? sentToday / fraction : sentToday
         const projected = capacity > 0 ? Math.min(Math.round(raw), capacity) : Math.round(raw)
-        const usedPct = capacity > 0 ? Math.round((projected / capacity) * 100) : 0
+        const onTarget = capacity > 0 && projected >= capacity * 0.95
+
+        // ── 3. Speed-to-fix — for BEHIND clients, the interval they'd need ──
+        // Current implied rate (sends/hr) from what's actually gone out.
+        const elapsedH = WINDOW_H * fraction
+        const currentRate = elapsedH > 0 ? sentToday / elapsedH : 0
+        const remaining = Math.max(0, capacity - sentToday)
+        const neededRate = hoursLeft > 0 ? remaining / hoursLeft : Infinity // sends/hr to finish
+        // Interval per box = activeBoxes × 60 ÷ rate(sends/hr). Lower = faster.
+        const rateToInterval = (rate: number) => (rate > 0 && activeBoxes > 0) ? Math.round((activeBoxes * 60) / rate) : null
+        const currentIntervalMin = avgGapMin != null ? Math.round(avgGapMin) : rateToInterval(currentRate)
+        const neededIntervalMin = Number.isFinite(neededRate) ? rateToInterval(neededRate) : 0
         const wasted = Math.max(0, capacity - projected)
+
         return {
           workspace_id: r.workspace_id,
           client: r.workspace_name || r.workspace_id,
-          capacity, mailboxes: r.mailboxes, activeMailboxes: r.active_mailboxes,
-          sentToday, projected, usedPct, wasted,
+          capacity, mailboxes: r.mailboxes, activeMailboxes: activeBoxes,
+          sentToday,
+          // live utilisation
+          pacePct, donePct, paceState,
+          // projection
+          projected, onTarget, wasted,
+          // speed-to-fix
+          currentIntervalMin, neededIntervalMin,
+          needsSpeedUp: paceState === 'behind' && !onTarget && hoursLeft > 0 && remaining > 0,
           paused: pausedSet.has(r.workspace_id),
         }
       })
       .filter(c => c.capacity > 0 || c.sentToday > 0)
-      .sort((a, b) => b.wasted - a.wasted) // biggest wasted capacity first — the CMs' problem
+      // Behind-and-fixable first, then most wasted — the CMs' action list.
+      .sort((a, b) => (Number(b.needsSpeedUp) - Number(a.needsSpeedUp)) || (b.wasted - a.wasted))
 
     // Totals count only NON-paused clients — a paused client's idle capacity is
     // intentional, so it shouldn't inflate "wasted" or drag utilisation down.
@@ -107,7 +148,13 @@ export async function GET() {
       summary: {
         totalCapacity, totalSentToday, totalProjected,
         totalWasted: Math.max(0, totalCapacity - totalProjected),
+        // Projected utilisation (end-of-day forecast).
         usedPct: totalCapacity > 0 ? Math.round((totalProjected / totalCapacity) * 100) : 0,
+        // LIVE pace right now: sent vs where they should be by this hour.
+        livePacePct: totalCapacity > 0 && fraction > 0
+          ? Math.round((totalSentToday / (totalCapacity * fraction)) * 100) : 0,
+        // % of the full day's capacity actually sent so far.
+        donePct: totalCapacity > 0 ? Math.round((totalSentToday / totalCapacity) * 100) : 0,
       },
       clients,
       history,

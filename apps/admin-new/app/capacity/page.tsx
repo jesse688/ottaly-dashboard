@@ -7,20 +7,27 @@ import { BarChart } from '@/components/ui/themed-chart'
 interface ClientRow {
   workspace_id: string; client: string
   capacity: number; mailboxes: number; activeMailboxes: number
-  sentToday: number; projected: number; usedPct: number; wasted: number
+  sentToday: number
+  pacePct: number; donePct: number; paceState: 'ahead' | 'on' | 'behind'
+  projected: number; onTarget: boolean; wasted: number
+  currentIntervalMin: number | null; neededIntervalMin: number
+  needsSpeedUp: boolean
   paused: boolean
 }
 interface Capacity {
   ukTime: string; dayFraction: number; hasTodayData: boolean; pausedCount: number
-  summary: { totalCapacity: number; totalSentToday: number; totalProjected: number; totalWasted: number; usedPct: number }
+  summary: { totalCapacity: number; totalSentToday: number; totalProjected: number; totalWasted: number; usedPct: number; livePacePct: number; donePct: number }
   clients: ClientRow[]
   history: { date: string; sent: number; wasted: number }[]
   error?: string
 }
 
 const num = (n: number) => (n || 0).toLocaleString()
-// Utilisation colour: green healthy, amber slipping, red wasting a lot.
+// Projected-utilisation colour: green healthy, amber slipping, red wasting a lot.
 const utilTone = (p: number) => p >= 85 ? '#16A34A' : p >= 60 ? '#D97706' : '#DC2626'
+// Live-pace colour by state.
+const paceTone = (s: 'ahead' | 'on' | 'behind') => s === 'ahead' ? '#16A34A' : s === 'on' ? '#16A34A' : '#DC2626'
+const paceLabel = (s: 'ahead' | 'on' | 'behind') => s === 'ahead' ? 'ahead' : s === 'on' ? 'on pace' : 'behind'
 
 export default function CapacityPage() {
   const [data, setData] = useState<Capacity | null>(null)
@@ -97,10 +104,10 @@ export default function CapacityPage() {
             {/* Summary */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: '1rem', marginBottom: '1.25rem' }}>
               <StatCard label="Daily capacity" val={num(data.summary.totalCapacity)} sub="max sends/day (active boxes)" accent={C.navy} />
-              <StatCard label="Sent so far today" val={num(data.summary.totalSentToday)} sub={`${data.dayFraction}% of sending day done`} accent="#0EA5E9" />
-              <StatCard label="Projected today" val={num(data.summary.totalProjected)} sub="at the current pace" accent="#6366F1" />
-              <StatCard label="Utilisation" val={data.summary.usedPct + '%'} sub="projected ÷ capacity" accent={utilTone(data.summary.usedPct)} />
-              <StatCard label="Wasted today" val={num(data.summary.totalWasted)} sub="capacity that won’t be used" accent="#DC2626" />
+              <StatCard label="Sent so far today" val={num(data.summary.totalSentToday)} sub={`${data.summary.donePct}% of today’s capacity`} accent="#0EA5E9" />
+              <StatCard label="Live pace (now)" val={data.summary.livePacePct + '%'} sub={`vs expected by ${data.ukTime} · ${data.summary.livePacePct >= 90 ? 'on/ahead' : 'behind'}`} accent={data.summary.livePacePct >= 90 ? '#16A34A' : '#DC2626'} />
+              <StatCard label="Projected today" val={num(data.summary.totalProjected)} sub={`${data.summary.usedPct}% of capacity end-of-day`} accent={utilTone(data.summary.usedPct)} />
+              <StatCard label="Wasted (projected)" val={num(data.summary.totalWasted)} sub="capacity that won’t be used" accent="#DC2626" />
             </div>
 
             {/* Daily sent vs wasted chart */}
@@ -126,8 +133,9 @@ export default function CapacityPage() {
                     <th style={{ ...th, textAlign: 'right' }}>Active boxes</th>
                     <th style={{ ...th, textAlign: 'right' }}>Daily capacity</th>
                     <th style={{ ...th, textAlign: 'right' }}>Sent so far</th>
-                    <th style={{ ...th, textAlign: 'right' }}>Projected today</th>
-                    <th style={{ ...th, textAlign: 'right' }}>Utilisation</th>
+                    <th style={{ ...th, textAlign: 'right' }} title="Sent vs where they should be by now (live). 100% = on pace.">Live pace</th>
+                    <th style={{ ...th, textAlign: 'center' }} title="On track to fill capacity by end of day at the current rate?">On target</th>
+                    <th style={th} title="For behind clients: the per-mailbox sending interval needed to still hit capacity.">Speed to fix</th>
                     <th style={{ ...th, textAlign: 'right' }}>Wasted</th>
                     <th style={{ ...th, textAlign: 'center' }}>Pause</th>
                   </tr>
@@ -141,15 +149,29 @@ export default function CapacityPage() {
                       </td>
                       <td style={{ ...tdN, color: C.muted }}>{num(c.activeMailboxes)}{c.activeMailboxes !== c.mailboxes ? ` / ${num(c.mailboxes)}` : ''}</td>
                       <td style={tdN}>{num(c.capacity)}</td>
-                      <td style={tdN}>{c.paused ? '—' : num(c.sentToday)}</td>
-                      <td style={tdN}>{c.paused ? '—' : num(c.projected)}</td>
+                      <td style={tdN}>{c.paused ? '—' : <>{num(c.sentToday)}<div style={{ fontSize: 10, color: C.muted }}>{c.donePct}% of cap</div></>}</td>
+                      {/* Live pace (now) */}
                       <td style={tdN}>
                         {c.paused ? <span style={{ color: C.muted }}>—</span> : <>
-                          <span style={{ fontWeight: 700, color: utilTone(c.usedPct) }}>{c.usedPct}%</span>
-                          <div style={{ height: 5, background: '#EEF0F5', borderRadius: 3, marginTop: 3, overflow: 'hidden', minWidth: 60 }}>
-                            <div style={{ height: '100%', width: Math.min(c.usedPct, 100) + '%', background: utilTone(c.usedPct) }} />
-                          </div>
+                          <span style={{ fontWeight: 700, color: paceTone(c.paceState) }}>{c.pacePct > 300 ? '300%+' : c.pacePct + '%'}</span>
+                          <div style={{ fontSize: 10, color: paceTone(c.paceState), fontWeight: 600 }}>{paceLabel(c.paceState)}</div>
                         </>}
+                      </td>
+                      {/* On target */}
+                      <td style={{ ...td, textAlign: 'center' }}>
+                        {c.paused ? <span style={{ color: C.muted }}>—</span>
+                          : c.onTarget ? <span style={{ color: '#16A34A', fontWeight: 700 }}>✓</span>
+                          : <span style={{ color: '#DC2626', fontWeight: 700 }} title="Won't fill capacity at current rate">✕</span>}
+                      </td>
+                      {/* Speed to fix */}
+                      <td style={td}>
+                        {c.paused ? <span style={{ color: C.muted }}>—</span>
+                          : c.needsSpeedUp && c.neededIntervalMin ? (
+                            <span style={{ fontSize: 12, color: '#B45309' }}>
+                              interval {c.currentIntervalMin ? `${c.currentIntervalMin}→` : ''}<b>{c.neededIntervalMin}m</b>
+                            </span>
+                          ) : c.onTarget ? <span style={{ fontSize: 12, color: '#16A34A' }}>on track</span>
+                          : <span style={{ color: C.muted }}>—</span>}
                       </td>
                       <td style={{ ...tdN, color: c.paused ? C.muted : (c.wasted > 0 ? '#DC2626' : C.muted), fontWeight: !c.paused && c.wasted > 0 ? 700 : 400 }}>{c.paused ? '—' : num(c.wasted)}</td>
                       <td style={{ ...td, textAlign: 'center' }}>
@@ -166,13 +188,13 @@ export default function CapacityPage() {
                       </td>
                     </tr>
                   ))}
-                  {data.clients.length === 0 && <tr><td colSpan={8} style={{ textAlign: 'center', padding: '2.5rem', color: C.muted }}>No clients with capacity right now.</td></tr>}
+                  {data.clients.length === 0 && <tr><td colSpan={9} style={{ textAlign: 'center', padding: '2.5rem', color: C.muted }}>No clients with capacity right now.</td></tr>}
                 </tbody>
               </table>
             </div>
 
             <div style={{ fontSize: 11, color: C.muted, marginTop: 14, lineHeight: 1.5 }}>
-              Capacity = sum of each ACTIVE mailbox’s daily limit (paused / 0-limit boxes don’t count). Projected = today’s sent extrapolated at the current pace across the 08:00–17:00 UK sending window, capped at capacity. Wasted = capacity the projection won’t reach — the resource the CMs should be filling. Sent figures update through the day. The <b>Pause</b> toggle excludes a client from the totals when they’re deliberately not sending — it’s a dashboard flag only and does NOT change anything on PlusVibe.
+              <b>Live pace</b> = sent so far ÷ where they should be by now (100% = exactly on pace right now — this is the real-time signal, not a forecast). <b>On target</b> = will they fill capacity by end of day at the current rate. <b>Speed to fix</b> = for behind clients, the per-mailbox sending interval needed to still hit capacity (e.g. 26→11m means tighten the gap between sends). Capacity = Σ each ACTIVE mailbox’s daily limit (08:00–17:00 UK window). The <b>Pause</b> toggle excludes a client from the totals — a dashboard flag only, it does NOT change anything on PlusVibe.
             </div>
           </>
         )}
