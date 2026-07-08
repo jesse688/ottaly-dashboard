@@ -2510,45 +2510,26 @@ class PostgresDatabase {
       'Technologies': { col: 'technologies', raw: 'Technologies' },
     };
     if (commaSeparatedFields[field]) {
-      const { col, raw } = commaSeparatedFields[field];
-      // Speed: filter to rows that actually HAVE the value in the dedicated column
-      // FIRST (so Postgres prunes ~half the 590k table before the unnest), and read
-      // only the column — the per-row raw_data->>'...' JSONB access on every row was
-      // what pushed the old query past its 30s timeout so it returned nothing.
-      // (Keywords/technologies live in the column now; legacy raw_data-only rows are
-      // rare and still fully searchable — this only feeds the autocomplete list.)
-      const sql = `
-        SELECT trim(val) AS value, COUNT(*)::int AS count
-        FROM contacts c
-        CROSS JOIN LATERAL unnest(string_to_array(c.${col}, ',')) AS val
-        WHERE c.workspace_id = $2
-          AND c.${col} IS NOT NULL AND c.${col} <> ''
-          AND trim(val) <> ''
-        GROUP BY trim(val)
-        ORDER BY count DESC
-        LIMIT $1;
-      `;
-      const client = await this.pool.connect();
-      try {
-        // Give the (now-pruned) query room to complete once; the cache then serves
-        // it instantly for the TTL. A completed query caches even if the HTTP client
-        // already timed out, so the next open is fast.
-        await client.query(`SET statement_timeout = '90s'`);
-        const result = await client.query(sql, [limit, workspaceId]);
-        return result.rows.filter(r => r.value).map(r => ({
-          value: r.value.trim(),
-          count: parseInt(r.count, 10)
-        }));
-      } catch (err) {
-        // Reset the pooled connection's timeout so this 30s cap can't leak to
-        // the next query that reuses this connection.
-        try { await client.query(`SET statement_timeout = 45000`); } catch { /* connection may be dead */ }
-        // Re-throw so the caching wrapper can fall back to a prior cached value
-        // instead of caching an empty result over a good one.
-        throw err;
-      } finally {
-        client.release();
+      const { col } = commaSeparatedFields[field];
+      // The live unnest+GROUP over ~590k comma-list rows takes ~90s (Keywords),
+      // so it blew the HTTP timeout and the dropdown showed nothing. We now serve
+      // these from a precomputed table (contacts_distinct_cache), refreshed
+      // periodically by refreshDistinctCache(). That read is a fast indexed scan.
+      const cached = await this.query(
+        `SELECT value, count FROM contacts_distinct_cache
+         WHERE workspace_id = $1 AND field = $2
+         ORDER BY count DESC LIMIT $3`,
+        [workspaceId, field, limit]
+      );
+      if (cached.rows.length) {
+        return cached.rows.map(r => ({ value: r.value, count: parseInt(r.count, 10) }));
       }
+      // Cold cache (never refreshed yet): kick off a refresh in the background so
+      // the NEXT open is populated, and return empty for now rather than hanging
+      // the request on the 90s live query.
+      this.refreshDistinctCache(workspaceId, field).catch(e =>
+        console.error(`[distinct-cache] background refresh ${field} failed:`, e.message));
+      return [];
     }
 
     // Extract from JSONB raw_data for any CSV column
@@ -2574,6 +2555,46 @@ class PostgresDatabase {
       // rather than blanking the dropdown on a transient timeout.
       console.error(`Error extracting ${field} from raw_data:`, err.message);
       throw err;
+    }
+  }
+
+  // Recompute the distinct-value cache for the heavy comma-list fields
+  // (Keywords / Technologies). The live unnest+GROUP is ~90s, so we run it on a
+  // raised-timeout client, in the background, and refresh the cache table the
+  // dropdown reads from. Called on startup + on an interval, and lazily when a
+  // field's cache is empty. Top 10k values per field is plenty for autocomplete.
+  async refreshDistinctCache(workspaceId = 'ottaly-global', onlyField = null) {
+    const fields = { Keywords: 'keywords', Technologies: 'technologies' };
+    const targets = onlyField ? { [onlyField]: fields[onlyField] } : fields;
+    const client = await this.pool.connect();
+    try {
+      await client.query(`SET statement_timeout = '300000'`); // 5 min for the heavy scan
+      for (const [field, col] of Object.entries(targets)) {
+        if (!col) continue;
+        const t0 = Date.now();
+        await client.query(
+          `INSERT INTO contacts_distinct_cache (workspace_id, field, value, count, refreshed_at)
+           SELECT $1, $2, trim(val), COUNT(*)::int, NOW()
+           FROM contacts c CROSS JOIN LATERAL unnest(string_to_array(c.${col}, ',')) AS val
+           WHERE c.workspace_id = $1 AND c.${col} IS NOT NULL AND c.${col} <> '' AND trim(val) <> ''
+           GROUP BY trim(val) ORDER BY COUNT(*) DESC LIMIT 10000
+           ON CONFLICT (workspace_id, field, value)
+           DO UPDATE SET count = EXCLUDED.count, refreshed_at = NOW()`,
+          [workspaceId, field]
+        );
+        // Drop stale values that fell out of the top 10k / no longer exist.
+        await client.query(
+          `DELETE FROM contacts_distinct_cache
+           WHERE workspace_id = $1 AND field = $2 AND refreshed_at < NOW() - interval '1 minute'`,
+          [workspaceId, field]
+        );
+        console.log(`[distinct-cache] refreshed ${field} in ${Date.now() - t0}ms`);
+      }
+    } catch (err) {
+      console.error('[distinct-cache] refresh failed:', err.message);
+    } finally {
+      try { await client.query(`SET statement_timeout = 45000`); } catch { /* dead */ }
+      client.release();
     }
   }
 

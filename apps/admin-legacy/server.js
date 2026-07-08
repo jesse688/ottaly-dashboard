@@ -2635,7 +2635,7 @@ app.get('/api/build-version', (req, res) => {
 // "is the fix deployed?" is a 2-second curl instead of a guess. No auth needed.
 app.get('/api/version', (req, res) => {
   res.set('Cache-Control', 'no-store');
-  res.json({ build: 'apollo-export-fix-2026-07-08c', uptime: Math.round(process.uptime()) });
+  res.json({ build: 'apollo-export-fix-2026-07-08d', uptime: Math.round(process.uptime()) });
 });
 
 app.get('/healthz', async (req, res) => {
@@ -19577,6 +19577,12 @@ function scheduleAudienceScoring(pgdb) {
     app.locals.pgDb = pgdb;
     app.locals.sqliteDb = db;
     restorePausedJobs(db);
+
+    // Keep the Keywords/Technologies filter dropdowns instant: their live
+    // unnest+GROUP over ~590k rows is ~90s, so we precompute distinct values into
+    // contacts_distinct_cache. Refresh shortly after boot, then every 6h.
+    setTimeout(() => pgdb.refreshDistinctCache().catch(() => {}), 60 * 1000);
+    setInterval(() => pgdb.refreshDistinctCache().catch(() => {}), 6 * 60 * 60 * 1000);
 
     // Hydrate dashboard-set PlusVibe API key (pv_api_key setting takes precedence over env).
     pgdb.getSetting('pv_api_key', null).then((saved) => {
