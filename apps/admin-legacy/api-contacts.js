@@ -720,7 +720,7 @@ module.exports = (db) => {
   });
 
   // GET /api/contacts/export — size + count capped CSV export
-  // Each file is at most 45MB OR 100,000 contacts, whichever hits first.
+  // Each file is at most 45MB OR 50,000 contacts, whichever hits first.
   // Apollo's bulk-import has its own ceilings around 50MB / 100k rows so
   // staying under both keeps every file ingestible.
   router.get('/contacts/export', async (req, res) => {
@@ -730,7 +730,7 @@ module.exports = (db) => {
       // contacts (any status) so Apollo can enrich/verify them, then send back.
       const includeUnverified = req.query.includeUnverified === '1' || req.query.includeUnverified === 'true';
       const MAX_BYTES = 45 * 1024 * 1024; // 45MB target per file (under Apollo's 50MB ceiling)
-      const MAX_ROWS  = 100000;            // hard cap per file regardless of size
+      const MAX_ROWS  = 50000;             // hard cap per file regardless of size
       const CHUNK = 1000; // rows fetched per DB call
 
       // Build filters from query params — same keys as the contacts search.

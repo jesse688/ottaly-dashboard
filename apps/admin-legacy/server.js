@@ -2635,7 +2635,7 @@ app.get('/api/build-version', (req, res) => {
 // "is the fix deployed?" is a 2-second curl instead of a guess. No auth needed.
 app.get('/api/version', (req, res) => {
   res.set('Cache-Control', 'no-store');
-  res.json({ build: 'apollo-export-fix-2026-07-08b', uptime: Math.round(process.uptime()) });
+  res.json({ build: 'apollo-export-fix-2026-07-08c', uptime: Math.round(process.uptime()) });
 });
 
 app.get('/healthz', async (req, res) => {
