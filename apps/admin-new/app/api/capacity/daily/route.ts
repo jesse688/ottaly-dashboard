@@ -34,10 +34,14 @@ function ukDayFraction(): { fraction: number; ukTime: string } {
 export async function GET() {
   try {
     const days = 14
-    // Winnr Generic is a paused pool (0 daily_limit, warmup off) — its idle
-    // capacity is deliberate, not a CM oversight, so it's excluded everywhere
-    // (capacity, sent, and the chart) to keep utilisation honest.
-    const EXCL_WG = `supplier IS DISTINCT FROM 'Winnr Generic'`
+    // Rule: a mailbox counts toward capacity only if it's ALLOWED to send
+    // (daily_limit > 0). A paused pool like Winnr Generic (daily_limit 0) is
+    // therefore excluded from capacity automatically — and if it's ever given a
+    // limit again, it counts again. No hard-coded supplier name.
+    // On the SENT side we DON'T filter by limit: if a box actually sent (it won't
+    // while paused at 0), that send is real and counts — "if it's sending,
+    // include it". This keeps the page total in step with PV.
+    const CAN_SEND = `daily_limit > 0`
     const [capRes, sentRes, capProvRes, sentProvRes, histRes, pausedRes, todayRes] = await Promise.all([
       pool.query(`
         SELECT workspace_id,
@@ -47,11 +51,11 @@ export async function GET() {
           COALESCE(SUM(daily_limit) FILTER (WHERE status = 'ACTIVE'), 0)::int AS capacity,
           AVG(sending_gap) FILTER (WHERE status = 'ACTIVE' AND sending_gap > 0) AS avg_gap_min
         FROM mailbox_full
-        WHERE ignored_at IS NULL AND workspace_id IS NOT NULL AND ${EXCL_WG}
+        WHERE ignored_at IS NULL AND workspace_id IS NOT NULL AND status = 'ACTIVE' AND ${CAN_SEND}
         GROUP BY workspace_id`),
       pool.query(`
         SELECT workspace_id, COALESCE(SUM(sent),0)::int AS sent
-        FROM mailbox_daily_stats WHERE date = CURRENT_DATE AND ${EXCL_WG} GROUP BY workspace_id`),
+        FROM mailbox_daily_stats WHERE date = CURRENT_DATE GROUP BY workspace_id`),
       // PER PROVIDER capacity + configured interval — SMTP / Google / Microsoft
       // each send on their own limit + gap, so the fix must be per provider.
       pool.query(`
@@ -60,16 +64,16 @@ export async function GET() {
           COALESCE(SUM(daily_limit) FILTER (WHERE status = 'ACTIVE'), 0)::int AS capacity,
           AVG(sending_gap) FILTER (WHERE status = 'ACTIVE' AND sending_gap > 0) AS avg_gap_min
         FROM mailbox_full
-        WHERE ignored_at IS NULL AND workspace_id IS NOT NULL AND ${EXCL_WG}
+        WHERE ignored_at IS NULL AND workspace_id IS NOT NULL AND status = 'ACTIVE' AND ${CAN_SEND}
         GROUP BY workspace_id, type`),
-      // PER PROVIDER sent today.
+      // PER PROVIDER sent today (all real sends count).
       pool.query(`
         SELECT workspace_id, provider, COALESCE(SUM(sent),0)::int AS sent
-        FROM mailbox_daily_stats WHERE date = CURRENT_DATE AND ${EXCL_WG}
+        FROM mailbox_daily_stats WHERE date = CURRENT_DATE
         GROUP BY workspace_id, provider`),
       pool.query(`
         SELECT date, COALESCE(SUM(sent),0)::int AS sent
-        FROM mailbox_daily_stats WHERE date >= CURRENT_DATE - ($1::int - 1) AND ${EXCL_WG}
+        FROM mailbox_daily_stats WHERE date >= CURRENT_DATE - ($1::int - 1)
         GROUP BY date ORDER BY date`, [days]),
       // Dashboard-only per-client pause flag (excludes them from the totals).
       pool.query(`SELECT workspace_id FROM capacity_paused_clients`).catch(() => ({ rows: [] as { workspace_id: string }[] })),

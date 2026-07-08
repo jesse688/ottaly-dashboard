@@ -43,19 +43,27 @@ export async function POST() {
     // daily-stats table keys its rows — so our upsert updates the same rows the
     // sync writes rather than creating parallel (duplicate) rows that would
     // double-count when summed. NULL supplier normalises to '' (table default).
+    //
+    // We carry each bucket's total daily_limit (capacity) and apportion the
+    // workspace's PV total by CAPACITY, not box count. This is the correct rule:
+    // sends flow proportional to how much a bucket is ALLOWED to send. A paused
+    // bucket (e.g. Winnr Generic at daily_limit 0) therefore receives 0 sends —
+    // it can't have sent, and PV confirmed none did. (Box-count apportionment
+    // wrongly dumped ~1,600 real sends onto 773 idle WG boxes.)
     const bucketsRes = await pool.query(`
       SELECT workspace_id, type AS provider, COALESCE(supplier, '') AS supplier,
-        COUNT(*) FILTER (WHERE status = 'ACTIVE')::int AS boxes
+        COUNT(*) FILTER (WHERE status = 'ACTIVE')::int AS boxes,
+        COALESCE(SUM(daily_limit) FILTER (WHERE status = 'ACTIVE'), 0)::int AS cap
       FROM mailbox_full
       WHERE ignored_at IS NULL AND workspace_id IS NOT NULL
       GROUP BY workspace_id, type, COALESCE(supplier, '')
       HAVING COUNT(*) FILTER (WHERE status = 'ACTIVE') > 0`)
 
-    type Bucket = { provider: string; supplier: string; boxes: number }
+    type Bucket = { provider: string; supplier: string; boxes: number; cap: number }
     const byWs = new Map<string, Bucket[]>()
     for (const r of bucketsRes.rows) {
       const arr = byWs.get(r.workspace_id) ?? []
-      arr.push({ provider: r.provider, supplier: r.supplier, boxes: r.boxes })
+      arr.push({ provider: r.provider, supplier: r.supplier, boxes: r.boxes, cap: r.cap })
       byWs.set(r.workspace_id, arr)
     }
     const workspaceIds = [...byWs.keys()]
@@ -82,9 +90,14 @@ export async function POST() {
         if (sent == null) { failed++; continue }
         totalSent += sent
         const buckets = byWs.get(ws) ?? []
-        const totalBoxes = buckets.reduce((s, b) => s + b.boxes, 0) || 1
+        // Weight by capacity (daily_limit); a 0-limit/paused bucket gets 0. If a
+        // workspace somehow has no capacity at all, fall back to box share so we
+        // don't drop the sends entirely.
+        const totalCap = buckets.reduce((s, b) => s + b.cap, 0)
+        const weight = (b: Bucket) => totalCap > 0 ? b.cap : b.boxes
+        const totalWeight = buckets.reduce((s, b) => s + weight(b), 0) || 1
         // Largest-remainder apportionment so the parts sum exactly to `sent`.
-        const raw = buckets.map(b => (sent * b.boxes) / totalBoxes)
+        const raw = buckets.map(b => (sent * weight(b)) / totalWeight)
         const floors = raw.map(Math.floor)
         let rem = sent - floors.reduce((s, v) => s + v, 0)
         const order = raw.map((v, i) => [v - floors[i], i] as [number, number]).sort((a, b) => b[0] - a[0])
