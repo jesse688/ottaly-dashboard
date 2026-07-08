@@ -306,6 +306,13 @@ export default function ApolloPrep() {
   // ── Split export state ──────────────────────────────────────────
   const [exportStatus, setExportStatus] = useState('')
   const [exportingAccount, setExportingAccount] = useState<1 | 2 | null>(null)
+  // Custom-filter export state.
+  const [exportingCustom, setExportingCustom] = useState(false)
+  const [fltRegions, setFltRegions] = useState<string[]>([])
+  const [fltSizes, setFltSizes] = useState<string[]>([])
+  const [fltIndustry, setFltIndustry] = useState('')
+  const [fltSic, setFltSic] = useState('')
+  const [fltIncludeUnverified, setFltIncludeUnverified] = useState(false)
 
   // ── Enrichment state ────────────────────────────────────────────
   const [enrichKeywords, setEnrichKeywords] = useState(true)
@@ -567,55 +574,74 @@ export default function ApolloPrep() {
     })
   }
 
-  // ── Split export ────────────────────────────────────────────────
+  // ── Export (shared keyset batch loop) ───────────────────────────
+  // baseParams carries the filters; we page by the `after` id cursor (legacy is
+  // keyset now) and download each ≤45MB/100k-row file. Used by the region-preset
+  // buttons and the custom-filter export.
+  async function runExport(baseParams: URLSearchParams, label: string, filePrefix: string) {
+    let after = ''
+    let fileNum = 1
+    let totalExported = 0
+    let grandTotal: number | null = null
+    try {
+      for (let guard = 0; guard < 250; guard++) {
+        setExportStatus(`Exporting ${label} — file ${fileNum}${totalExported ? `, ${totalExported.toLocaleString()} rows so far` : ''}...`)
+        const p = new URLSearchParams(baseParams)
+        if (after) p.set('after', after)
+        const r = await fetch(`/api/apollo-prep/contacts/export?${p}`)
+        if (!r.ok) {
+          const msg = await r.json().catch(() => ({}))
+          setExportStatus(`Export failed: ${msg.error || r.status}`)
+          return
+        }
+        const hasMore = r.headers.get('X-Has-More') === 'true'
+        const nextAfter = r.headers.get('X-Next-After') ?? ''
+        const rowsInFile = parseInt(r.headers.get('X-Rows-In-File') ?? '0')
+        const total = parseInt(r.headers.get('X-Total-Records') ?? '0')
+        if (grandTotal === null) grandTotal = total
+
+        if (rowsInFile > 0) {
+          const blob = await r.blob()
+          const url = URL.createObjectURL(blob)
+          const a = Object.assign(document.createElement('a'), { href: url, download: `${filePrefix}-${fileNum}.csv` })
+          document.body.appendChild(a); a.click(); document.body.removeChild(a)
+          setTimeout(() => URL.revokeObjectURL(url), 5000)
+          totalExported += rowsInFile
+          fileNum++
+        }
+        if (!hasMore || rowsInFile === 0 || !nextAfter || nextAfter === after) break
+        after = nextAfter
+        await new Promise(res => setTimeout(res, 400))
+      }
+      setExportStatus(totalExported === 0
+        ? 'No contacts matched — tick “Include unverified” to export all, or widen the filters.'
+        : `Done — ${label}: ${totalExported.toLocaleString()} rows in ${fileNum - 1} file${fileNum > 2 ? 's' : ''}.`)
+    } catch (err) {
+      setExportStatus(`Error: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
 
   async function exportSplit(account: 1 | 2) {
     setExportingAccount(account)
     const regions = account === 1 ? ACCT1_REGIONS : ACCT2_REGIONS
-    let offset = 0
-    let fileNum = 1
-    let totalExported = 0
+    await runExport(
+      new URLSearchParams({ companyRegion: regions.join(',') }),
+      `Account ${account}`, `apollo-account${account}-export`,
+    )
+    setExportingAccount(null)
+  }
 
-    try {
-      while (true) {
-        setExportStatus(
-          `Exporting Account ${account} — file ${fileNum}${totalExported ? `, ${totalExported.toLocaleString()} rows so far` : ''}...`,
-        )
-        const params = new URLSearchParams({ offset: String(offset), companyRegion: regions.join(',') })
-        const r = await fetch(`/api/apollo-prep/contacts/export?${params}`)
-        if (!r.ok) {
-          setExportStatus(`Export failed (${r.status})`)
-          break
-        }
-
-        const hasMore = r.headers.get('X-Has-More') === 'true'
-        const nextOffset = parseInt(r.headers.get('X-Next-Offset') ?? '0')
-        const rowsInFile = parseInt(r.headers.get('X-Rows-In-File') ?? '0')
-
-        const blob = await r.blob()
-        const url = URL.createObjectURL(blob)
-        const a = Object.assign(document.createElement('a'), {
-          href: url,
-          download: `apollo-account${account}-export-${fileNum}.csv`,
-        })
-        document.body.appendChild(a)
-        a.click()
-        document.body.removeChild(a)
-        setTimeout(() => URL.revokeObjectURL(url), 5000)
-
-        totalExported += rowsInFile
-        fileNum++
-        offset = nextOffset
-        if (!hasMore) break
-      }
-      setExportStatus(
-        `Done — Account ${account} export complete: ${totalExported.toLocaleString()} rows in ${fileNum - 1} file${fileNum > 2 ? 's' : ''}.`,
-      )
-    } catch (err) {
-      setExportStatus(`Error: ${err instanceof Error ? err.message : String(err)}`)
-    } finally {
-      setExportingAccount(null)
-    }
+  // Custom-filter export using the on-page filter selection.
+  async function exportCustom() {
+    setExportingCustom(true)
+    const p = new URLSearchParams()
+    if (fltRegions.length) p.set('companyRegion', fltRegions.join(','))
+    if (fltSizes.length) p.set('numEmployeesRanges', fltSizes.join(','))
+    if (fltIndustry.trim()) p.set('industry', fltIndustry.trim())
+    if (fltSic.trim()) p.set('sicCodes', fltSic.trim())
+    if (fltIncludeUnverified) p.set('includeUnverified', '1')
+    await runExport(p, 'custom filters', 'apollo-custom-export')
+    setExportingCustom(false)
   }
 
   // ── Enrichment actions ──────────────────────────────────────────
@@ -817,6 +843,63 @@ export default function ApolloPrep() {
             </Button>
           </div>
           {exportStatus && <div className="mt-2 text-xs text-muted-foreground">{exportStatus}</div>}
+        </div>
+
+        {/* Custom-filter export */}
+        <div className="mb-6 rounded-lg border border-border bg-muted/30 p-4">
+          <SectionLabel>Or export with your own filters</SectionLabel>
+          <div className="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {/* Regions */}
+            <div>
+              <div className="mb-1 text-xs font-semibold text-muted-foreground">Region(s)</div>
+              <div className="max-h-32 overflow-y-auto rounded border border-border bg-background p-2 text-xs">
+                {ALL_REGIONS.map(rg => (
+                  <label key={rg} className="flex items-center gap-1.5 py-0.5 cursor-pointer">
+                    <input type="checkbox" checked={fltRegions.includes(rg)}
+                      onChange={e => setFltRegions(s => e.target.checked ? [...s, rg] : s.filter(x => x !== rg))} />
+                    {rg}
+                  </label>
+                ))}
+              </div>
+              <div className="mt-1 text-[10px] text-muted-foreground">None = all regions</div>
+            </div>
+            {/* Employee size */}
+            <div>
+              <div className="mb-1 text-xs font-semibold text-muted-foreground">Employee size</div>
+              <div className="max-h-32 overflow-y-auto rounded border border-border bg-background p-2 text-xs">
+                {['1-10','11-20','21-50','51-100','101-200','201-500','501-1000','1001-2000','2001-5000','5001-10000','10000+'].map(sz => (
+                  <label key={sz} className="flex items-center gap-1.5 py-0.5 cursor-pointer">
+                    <input type="checkbox" checked={fltSizes.includes(sz)}
+                      onChange={e => setFltSizes(s => e.target.checked ? [...s, sz] : s.filter(x => x !== sz))} />
+                    {sz}
+                  </label>
+                ))}
+              </div>
+            </div>
+            {/* Industry + SIC */}
+            <div className="flex flex-col gap-2">
+              <div>
+                <div className="mb-1 text-xs font-semibold text-muted-foreground">Industry contains</div>
+                <input value={fltIndustry} onChange={e => setFltIndustry(e.target.value)} placeholder="e.g. solar"
+                  className="w-full rounded border border-border bg-background px-2 py-1 text-xs" />
+              </div>
+              <div>
+                <div className="mb-1 text-xs font-semibold text-muted-foreground">SIC code(s)</div>
+                <input value={fltSic} onChange={e => setFltSic(e.target.value)} placeholder="e.g. 43210, 62012"
+                  className="w-full rounded border border-border bg-background px-2 py-1 text-xs" />
+              </div>
+            </div>
+            {/* Action */}
+            <div className="flex flex-col justify-end gap-2">
+              <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer" title="Export ALL matching contacts (incl. unverified/risky) so Apollo can enrich & verify them. Off = only verified-clean.">
+                <input type="checkbox" checked={fltIncludeUnverified} onChange={e => setFltIncludeUnverified(e.target.checked)} />
+                Include unverified
+              </label>
+              <Button disabled={exportingCustom || exportingAccount !== null} onClick={() => void exportCustom()}>
+                {exportingCustom ? 'Exporting…' : '↓ Export with these filters'}
+              </Button>
+            </div>
+          </div>
         </div>
 
         <div>
