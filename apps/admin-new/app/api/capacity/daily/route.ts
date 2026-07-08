@@ -38,7 +38,7 @@ export async function GET() {
     // capacity is deliberate, not a CM oversight, so it's excluded everywhere
     // (capacity, sent, and the chart) to keep utilisation honest.
     const EXCL_WG = `supplier IS DISTINCT FROM 'Winnr Generic'`
-    const [capRes, sentRes, histRes] = await Promise.all([
+    const [capRes, sentRes, histRes, pausedRes, todayRes] = await Promise.all([
       pool.query(`
         SELECT workspace_id,
           MAX(workspace_name) AS workspace_name,
@@ -55,9 +55,16 @@ export async function GET() {
         SELECT date, COALESCE(SUM(sent),0)::int AS sent
         FROM mailbox_daily_stats WHERE date >= CURRENT_DATE - ($1::int - 1) AND ${EXCL_WG}
         GROUP BY date ORDER BY date`, [days]),
+      // Dashboard-only per-client pause flag (excludes them from the totals).
+      pool.query(`SELECT workspace_id FROM capacity_paused_clients`).catch(() => ({ rows: [] as { workspace_id: string }[] })),
+      // Does today's row exist yet? Distinguishes "not synced / nothing sent yet"
+      // from a real 0 — so the page doesn't scream "100% wasted" at 8am.
+      pool.query(`SELECT COUNT(*)::int AS n FROM mailbox_daily_stats WHERE date = CURRENT_DATE`),
     ])
 
     const sentByWs = new Map<string, number>(sentRes.rows.map(r => [r.workspace_id, r.sent]))
+    const pausedSet = new Set<string>(pausedRes.rows.map((r: { workspace_id: string }) => r.workspace_id))
+    const hasTodayData = (todayRes.rows[0]?.n ?? 0) > 0
     const { fraction, ukTime } = ukDayFraction()
 
     const clients = capRes.rows
@@ -73,14 +80,18 @@ export async function GET() {
           client: r.workspace_name || r.workspace_id,
           capacity, mailboxes: r.mailboxes, activeMailboxes: r.active_mailboxes,
           sentToday, projected, usedPct, wasted,
+          paused: pausedSet.has(r.workspace_id),
         }
       })
       .filter(c => c.capacity > 0 || c.sentToday > 0)
       .sort((a, b) => b.wasted - a.wasted) // biggest wasted capacity first — the CMs' problem
 
-    const totalCapacity = clients.reduce((s, c) => s + c.capacity, 0)
-    const totalSentToday = clients.reduce((s, c) => s + c.sentToday, 0)
-    const totalProjected = clients.reduce((s, c) => s + c.projected, 0)
+    // Totals count only NON-paused clients — a paused client's idle capacity is
+    // intentional, so it shouldn't inflate "wasted" or drag utilisation down.
+    const active = clients.filter(c => !c.paused)
+    const totalCapacity = active.reduce((s, c) => s + c.capacity, 0)
+    const totalSentToday = active.reduce((s, c) => s + c.sentToday, 0)
+    const totalProjected = active.reduce((s, c) => s + c.projected, 0)
 
     const history = histRes.rows.map(r => {
       const date = new Date(r.date).toISOString().slice(0, 10)
@@ -91,6 +102,8 @@ export async function GET() {
     return NextResponse.json({
       ukTime,
       dayFraction: Math.round(fraction * 100),
+      hasTodayData,
+      pausedCount: pausedSet.size,
       summary: {
         totalCapacity, totalSentToday, totalProjected,
         totalWasted: Math.max(0, totalCapacity - totalProjected),
