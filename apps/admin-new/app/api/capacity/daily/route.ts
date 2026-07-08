@@ -38,7 +38,7 @@ export async function GET() {
     // capacity is deliberate, not a CM oversight, so it's excluded everywhere
     // (capacity, sent, and the chart) to keep utilisation honest.
     const EXCL_WG = `supplier IS DISTINCT FROM 'Winnr Generic'`
-    const [capRes, sentRes, histRes, pausedRes, todayRes] = await Promise.all([
+    const [capRes, sentRes, capProvRes, sentProvRes, histRes, pausedRes, todayRes] = await Promise.all([
       pool.query(`
         SELECT workspace_id,
           MAX(workspace_name) AS workspace_name,
@@ -52,6 +52,21 @@ export async function GET() {
       pool.query(`
         SELECT workspace_id, COALESCE(SUM(sent),0)::int AS sent
         FROM mailbox_daily_stats WHERE date = CURRENT_DATE AND ${EXCL_WG} GROUP BY workspace_id`),
+      // PER PROVIDER capacity + configured interval — SMTP / Google / Microsoft
+      // each send on their own limit + gap, so the fix must be per provider.
+      pool.query(`
+        SELECT workspace_id, type AS provider,
+          COUNT(*) FILTER (WHERE status = 'ACTIVE')::int AS active_boxes,
+          COALESCE(SUM(daily_limit) FILTER (WHERE status = 'ACTIVE'), 0)::int AS capacity,
+          AVG(sending_gap) FILTER (WHERE status = 'ACTIVE' AND sending_gap > 0) AS avg_gap_min
+        FROM mailbox_full
+        WHERE ignored_at IS NULL AND workspace_id IS NOT NULL AND ${EXCL_WG}
+        GROUP BY workspace_id, type`),
+      // PER PROVIDER sent today.
+      pool.query(`
+        SELECT workspace_id, provider, COALESCE(SUM(sent),0)::int AS sent
+        FROM mailbox_daily_stats WHERE date = CURRENT_DATE AND ${EXCL_WG}
+        GROUP BY workspace_id, provider`),
       pool.query(`
         SELECT date, COALESCE(SUM(sent),0)::int AS sent
         FROM mailbox_daily_stats WHERE date >= CURRENT_DATE - ($1::int - 1) AND ${EXCL_WG}
@@ -64,6 +79,17 @@ export async function GET() {
     ])
 
     const sentByWs = new Map<string, number>(sentRes.rows.map(r => [r.workspace_id, r.sent]))
+    // Per-provider sent, keyed "ws|provider".
+    const sentByWsProv = new Map<string, number>(
+      sentProvRes.rows.map(r => [`${r.workspace_id}|${r.provider}`, r.sent])
+    )
+    // Per-provider capacity rows grouped by workspace.
+    const provByWs = new Map<string, { provider: string; activeBoxes: number; capacity: number; avgGapMin: number | null }[]>()
+    for (const r of capProvRes.rows) {
+      const arr = provByWs.get(r.workspace_id) ?? []
+      arr.push({ provider: r.provider, activeBoxes: r.active_boxes, capacity: r.capacity, avgGapMin: r.avg_gap_min != null ? Number(r.avg_gap_min) : null })
+      provByWs.set(r.workspace_id, arr)
+    }
     const pausedSet = new Set<string>(pausedRes.rows.map((r: { workspace_id: string }) => r.workspace_id))
     const hasTodayData = (todayRes.rows[0]?.n ?? 0) > 0
     const { fraction, ukTime } = ukDayFraction()
@@ -96,39 +122,48 @@ export async function GET() {
         const projected = capacity > 0 ? Math.min(Math.round(raw), capacity) : Math.round(raw)
         const onTarget = capacity > 0 && projected >= capacity * 0.95
 
-        // ── 3. Speed-to-fix — for BEHIND clients, the interval they'd need ──
-        const remaining = Math.max(0, capacity - sentToday)
-        // Per-mailbox send interval = (minutes available × active boxes) ÷ sends.
-        // BOTH "target" and "needed" use this SAME formula so they're directly
-        // comparable and the arrow is always directionally right (behind =>
-        // needed < target, i.e. must send FASTER / smaller interval).
-        const intervalFor = (sends: number, minutesAvailable: number) =>
-          (sends > 0 && activeBoxes > 0) ? Math.round((minutesAvailable * activeBoxes) / sends) : null
-        // Target: interval to send the FULL daily_limit evenly over the 9h window.
-        const targetIntervalMin = intervalFor(capacity, WINDOW_H * 60)
-        // Needed now: interval to send the REMAINING over the REMAINING time.
-        const neededIntervalMin = hoursLeft > 0 ? intervalFor(remaining, hoursLeft * 60) : null
-        // Current configured interval (their PV sending_gap), for reference.
-        const currentIntervalMin = avgGapMin != null ? Math.round(avgGapMin) : targetIntervalMin
+        // ── 2b. Projection (unused fields kept minimal) ──
+        void avgGapMin
         const wasted = Math.max(0, capacity - projected)
+
+        // ── 3. Speed-to-fix, PER PROVIDER ──
+        // Each provider type (smtp/google/microsoft) sends on its OWN daily
+        // limit + interval, so the fix must be given per provider — a blended
+        // client-wide interval is not actionable. Per-mailbox interval =
+        // (minutes available × active boxes) ÷ sends; target and needed share
+        // the formula so "behind => needed < target" always holds.
+        const PLABEL: Record<string, string> = { smtp: 'SMTP', google: 'Google', microsoft: 'Microsoft' }
+        const provRows = provByWs.get(r.workspace_id) ?? []
+        const providers = provRows
+          .filter(p => p.capacity > 0)
+          .map(p => {
+            const pSent = sentByWsProv.get(`${r.workspace_id}|${p.provider}`) ?? 0
+            const pRemaining = Math.max(0, p.capacity - pSent)
+            const ivl = (sends: number, mins: number) =>
+              (sends > 0 && p.activeBoxes > 0) ? Math.round((mins * p.activeBoxes) / sends) : null
+            const target = ivl(p.capacity, WINDOW_H * 60)
+            const needed = hoursLeft > 0 ? ivl(pRemaining, hoursLeft * 60) : null
+            const onTgt = p.capacity > 0 && (fraction > 0 ? Math.min(pSent / fraction, p.capacity) : pSent) >= p.capacity * 0.95
+            return {
+              provider: PLABEL[p.provider] ?? p.provider,
+              activeBoxes: p.activeBoxes, capacity: p.capacity, sent: pSent,
+              currentIntervalMin: p.avgGapMin != null ? Math.round(p.avgGapMin) : target,
+              targetIntervalMin: target, neededIntervalMin: needed,
+              needsSpeedUp: !onTgt && hoursLeft > 0 && pRemaining > 0
+                && needed != null && target != null && needed < target,
+            }
+          })
+          .sort((a, b) => b.capacity - a.capacity)
 
         return {
           workspace_id: r.workspace_id,
           client: r.workspace_name || r.workspace_id,
           capacity, mailboxes: r.mailboxes, activeMailboxes: activeBoxes,
           sentToday,
-          // live utilisation
           pacePct, donePct, paceState,
-          // projection
           projected, onTarget, wasted,
-          // speed-to-fix (all comparable, per-mailbox minutes between sends)
-          currentIntervalMin, targetIntervalMin, neededIntervalMin,
-          // Genuinely needs to speed up only when the needed interval is TIGHTER
-          // than the target (i.e. they're behind enough that even normal pace
-          // won't finish) AND there's time + capacity left.
-          needsSpeedUp: !onTarget && hoursLeft > 0 && remaining > 0
-            && neededIntervalMin != null && targetIntervalMin != null
-            && neededIntervalMin < targetIntervalMin,
+          providers,
+          needsSpeedUp: providers.some(p => p.needsSpeedUp),
           paused: pausedSet.has(r.workspace_id),
         }
       })

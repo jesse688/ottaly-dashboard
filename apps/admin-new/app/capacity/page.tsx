@@ -4,13 +4,18 @@ import { useCallback, useEffect, useState } from 'react'
 import { BarChart } from '@/components/ui/themed-chart'
 
 // ── Types (mirror /api/capacity/daily) ───────────────────────────────────────
+interface ProviderRow {
+  provider: string; activeBoxes: number; capacity: number; sent: number
+  currentIntervalMin: number | null; targetIntervalMin: number | null; neededIntervalMin: number | null
+  needsSpeedUp: boolean
+}
 interface ClientRow {
   workspace_id: string; client: string
   capacity: number; mailboxes: number; activeMailboxes: number
   sentToday: number
   pacePct: number; donePct: number; paceState: 'ahead' | 'on' | 'behind'
   projected: number; onTarget: boolean; wasted: number
-  currentIntervalMin: number | null; targetIntervalMin: number | null; neededIntervalMin: number | null
+  providers: ProviderRow[]
   needsSpeedUp: boolean
   paused: boolean
 }
@@ -163,15 +168,23 @@ export default function CapacityPage() {
                           : c.onTarget ? <span style={{ color: '#16A34A', fontWeight: 700 }}>✓</span>
                           : <span style={{ color: '#DC2626', fontWeight: 700 }} title="Won't fill capacity at current rate">✕</span>}
                       </td>
-                      {/* Speed to fix — target interval → tighter needed interval */}
+                      {/* Speed to fix — PER PROVIDER (smtp/google/microsoft each have their own interval) */}
                       <td style={td}>
                         {c.paused ? <span style={{ color: C.muted }}>—</span>
-                          : c.needsSpeedUp && c.neededIntervalMin && c.targetIntervalMin ? (
-                            <span style={{ fontSize: 12, color: '#B45309' }} title="Tighten the per-mailbox send interval from its normal target to this to still hit capacity">
-                              tighten interval <b>{c.targetIntervalMin}m → {c.neededIntervalMin}m</b>
-                            </span>
-                          ) : c.onTarget ? <span style={{ fontSize: 12, color: '#16A34A' }}>on track</span>
-                          : <span style={{ color: C.muted }}>—</span>}
+                          : (() => {
+                            const fix = c.providers.filter(p => p.needsSpeedUp && p.neededIntervalMin && p.targetIntervalMin)
+                            if (fix.length === 0) return c.onTarget ? <span style={{ fontSize: 12, color: '#16A34A' }}>on track</span> : <span style={{ color: C.muted }}>—</span>
+                            return (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }} title="Tighten the sending interval per provider to still hit capacity">
+                                {fix.map(p => (
+                                  <span key={p.provider} style={{ fontSize: 11.5, color: '#B45309', whiteSpace: 'nowrap' }}>
+                                    <span style={{ display: 'inline-block', minWidth: 62, fontWeight: 600, color: C.muted }}>{p.provider}</span>
+                                    {p.targetIntervalMin}m → <b>{p.neededIntervalMin}m</b>
+                                  </span>
+                                ))}
+                              </div>
+                            )
+                          })()}
                       </td>
                       <td style={{ ...tdN, color: c.paused ? C.muted : (c.wasted > 0 ? '#DC2626' : C.muted), fontWeight: !c.paused && c.wasted > 0 ? 700 : 400 }}>{c.paused ? '—' : num(c.wasted)}</td>
                       <td style={{ ...td, textAlign: 'center' }}>
@@ -194,7 +207,7 @@ export default function CapacityPage() {
             </div>
 
             <div style={{ fontSize: 11, color: C.muted, marginTop: 14, lineHeight: 1.5 }}>
-              <b>Live pace</b> = sent so far ÷ where they should be by now (100% = exactly on pace right now — this is the real-time signal, not a forecast). <b>On target</b> = will they fill capacity by end of day at the current rate. <b>Speed to fix</b> = for behind clients, the per-mailbox sending interval needed to still hit capacity (e.g. 26→11m means tighten the gap between sends). Capacity = Σ each ACTIVE mailbox’s daily limit (08:00–17:00 UK window). The <b>Pause</b> toggle excludes a client from the totals — a dashboard flag only, it does NOT change anything on PlusVibe.
+              <b>Live pace</b> = sent so far ÷ where they should be by now (100% = exactly on pace right now — this is the real-time signal, not a forecast). <b>On target</b> = will they fill capacity by end of day at the current rate. <b>Speed to fix</b> = for behind clients, the per-mailbox sending interval needed to still hit capacity, broken down <b>per provider</b> (SMTP / Google / Microsoft each send on their own limit + interval) — e.g. “SMTP 20m → 14m” means tighten SMTP’s gap between sends. Capacity = Σ each ACTIVE mailbox’s daily limit (08:00–17:00 UK window). The <b>Pause</b> toggle excludes a client from the totals — a dashboard flag only, it does NOT change anything on PlusVibe.
             </div>
           </>
         )}
