@@ -139,6 +139,7 @@ export default function CapacityPage() {
                     <th style={{ ...th, textAlign: 'right' }}>Daily capacity</th>
                     <th style={{ ...th, textAlign: 'right' }}>Sent so far</th>
                     <th style={{ ...th, textAlign: 'right' }} title="Sent vs where they should be by now (live). 100% = on pace.">Live pace</th>
+                    <th style={{ ...th, textAlign: 'right' }} title="Forecast total by end of day at the current pace.">Projected</th>
                     <th style={{ ...th, textAlign: 'center' }} title="On track to fill capacity by end of day at the current rate?">On target</th>
                     <th style={th} title="For behind clients: the per-mailbox sending interval needed to still hit capacity.">Speed to fix</th>
                     <th style={{ ...th, textAlign: 'right' }}>Wasted</th>
@@ -161,6 +162,12 @@ export default function CapacityPage() {
                           <span style={{ fontWeight: 700, color: paceTone(c.paceState) }}>{c.pacePct > 300 ? '300%+' : c.pacePct + '%'}</span>
                           <div style={{ fontSize: 10, color: paceTone(c.paceState), fontWeight: 600 }}>{paceLabel(c.paceState)}</div>
                         </>}
+                      </td>
+                      {/* Projected today (end-of-day forecast at current pace) */}
+                      <td style={tdN}>
+                        {c.paused ? <span style={{ color: C.muted }}>—</span>
+                          : <><span style={{ fontWeight: 600, color: utilTone(c.capacity > 0 ? Math.round(c.projected / c.capacity * 100) : 0) }}>{num(c.projected)}</span>
+                            <div style={{ fontSize: 10, color: C.muted }}>{c.capacity > 0 ? Math.round(c.projected / c.capacity * 100) : 0}% of cap</div></>}
                       </td>
                       {/* On target */}
                       <td style={{ ...td, textAlign: 'center' }}>
@@ -210,7 +217,7 @@ export default function CapacityPage() {
                       </td>
                     </tr>
                   ))}
-                  {data.clients.length === 0 && <tr><td colSpan={9} style={{ textAlign: 'center', padding: '2.5rem', color: C.muted }}>No clients with capacity right now.</td></tr>}
+                  {data.clients.length === 0 && <tr><td colSpan={10} style={{ textAlign: 'center', padding: '2.5rem', color: C.muted }}>No clients with capacity right now.</td></tr>}
                 </tbody>
               </table>
             </div>
