@@ -661,7 +661,7 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
             value={activeWorkspaceId}
             onChange={(e) => switchWorkspace(e.target.value)}
             title="Switch workspace"
-            className="hidden sm:inline-block bg-white/10 text-white text-sm font-medium rounded-md px-2 py-1 border border-white/20 max-w-[180px] cursor-pointer focus:outline-none"
+            className="inline-block min-w-0 bg-white/10 text-white text-sm font-medium rounded-md px-2 py-1 border border-white/20 max-w-[120px] sm:max-w-[180px] cursor-pointer focus:outline-none"
           >
             {workspaces.map((w) => (
               <option key={w.workspaceId} value={w.workspaceId} className="text-black">{w.companyName}</option>
