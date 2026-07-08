@@ -41,6 +41,8 @@ export default function CapacityPage() {
 
   const [busy, setBusy] = useState<string | null>(null)
 
+  const [refreshing, setRefreshing] = useState(false)
+
   const load = useCallback(async () => {
     setStatus('loading'); setErr('')
     try {
@@ -51,6 +53,18 @@ export default function CapacityPage() {
     } catch (e) { setStatus('error'); setErr(e instanceof Error ? e.message : String(e)) }
   }, [])
   useEffect(() => { load() }, [load])
+
+  // Refresh pulls TODAY's sent live from PlusVibe into the stats table, then
+  // reloads — so the button actually updates the numbers (the plain read serves
+  // the periodically-synced cache, which lags PV by up to an hour).
+  const refresh = useCallback(async () => {
+    setRefreshing(true)
+    try {
+      await fetch('/api/capacity/refresh', { method: 'POST' })
+    } catch { /* fall through to reload — worst case shows cached */ }
+    await load()
+    setRefreshing(false)
+  }, [load])
 
   // Toggle a client's "paused" flag (dashboard-only — does NOT touch PlusVibe).
   // Optimistic: flip locally, POST, then reload for fresh totals.
@@ -91,7 +105,7 @@ export default function CapacityPage() {
               {data && <> · Now {data.ukTime} UK · sending day {data.dayFraction}% elapsed{data.pausedCount > 0 ? ` · ${data.pausedCount} paused (excluded)` : ''}</>}
             </div>
           </div>
-          <button onClick={load} disabled={status === 'loading'} style={{ padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', background: C.navy, color: '#fff', border: 'none', opacity: status === 'loading' ? 0.6 : 1 }}>{status === 'loading' ? 'Loading…' : '↻ Refresh'}</button>
+          <button onClick={refresh} disabled={refreshing || status === 'loading'} title="Pull today's sent live from PlusVibe (takes ~20–40s)" style={{ padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', background: C.navy, color: '#fff', border: 'none', opacity: (refreshing || status === 'loading') ? 0.6 : 1 }}>{refreshing ? 'Refreshing from PlusVibe…' : status === 'loading' ? 'Loading…' : '↻ Refresh (live)'}</button>
         </div>
 
         {status === 'error' && <div style={{ background: '#FEE2E2', border: '1px solid #FECACA', borderRadius: 8, padding: 16, fontSize: 13, color: '#991B1B' }}>Couldn’t load capacity: {err} <button onClick={load} style={{ marginLeft: 8, textDecoration: 'underline' }}>Retry</button></div>}
