@@ -225,6 +225,7 @@ const SECTION_KEYS: Record<string, string[]> = {
 
 export default function DataPage() {
   const [contacts, setContacts] = useState<Contact[]>([])
+  const [exportUnverified, setExportUnverified] = useState(false) // export ALL (Apollo enriches)
   const [, setSicTick] = useState(0) // bump to re-render once SIC names resolve
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
@@ -856,7 +857,9 @@ export default function DataPage() {
     // Loop every batch (50k rows/file) using the X-Has-More / X-Next-Offset
     // headers, downloading each CSV. Uses the SAME filters as the list, so
     // "filter first, then export" gives exactly what you're looking at.
-    flash('Building Apollo export…')
+    // When exportUnverified is on, the clean-guard is lifted server-side so ALL
+    // matching contacts export — the intended flow is push-to-Apollo-to-enrich.
+    flash(exportUnverified ? 'Building Apollo export (all contacts)…' : 'Building Apollo export…')
     let offset = 0
     let fileNo = 0
     let totalRows = 0
@@ -864,7 +867,9 @@ export default function DataPage() {
     try {
       // Safety cap so a runaway loop can't spin forever (250 files = 12.5M rows).
       for (let guard = 0; guard < 250; guard++) {
-        const p = queryParams({ offset: String(offset) })
+        const extra: Record<string, string> = { offset: String(offset) }
+        if (exportUnverified) extra.includeUnverified = '1'
+        const p = queryParams(extra)
         const res = await fetch(`/api/data/contacts/export?${p}`)
         if (!res.ok) {
           const msg = await res.json().catch(() => ({}))
@@ -878,7 +883,9 @@ export default function DataPage() {
 
         // Nothing at all matched — tell the user honestly and why.
         if (grandTotal === 0) {
-          return flash('No contacts to export — only verified-clean emails (safe/safe_catchall) export. Verify contacts first, or adjust your filters.', 'err')
+          return flash(exportUnverified
+            ? 'No contacts match your filters to export.'
+            : 'No verified-clean contacts to export. Tick “Include unverified” to export all (then Apollo enriches them), or adjust your filters.', 'err')
         }
         if (rowsInFile > 0) {
           const blob = await res.blob()
@@ -1271,6 +1278,10 @@ export default function DataPage() {
                 <Button variant="outline" onClick={apolloExport}>
                   Apollo Export
                 </Button>
+                <label className="flex items-center gap-1.5 text-xs text-gray-600 whitespace-nowrap" title="Export ALL matching contacts (incl. unverified/risky) so Apollo can enrich & verify them, then send back. Off = only verified-clean emails.">
+                  <input type="checkbox" checked={exportUnverified} onChange={e => setExportUnverified(e.target.checked)} />
+                  Include unverified
+                </label>
                 <Button variant="outline" onClick={resetExports}>
                   Reset Exports
                 </Button>
