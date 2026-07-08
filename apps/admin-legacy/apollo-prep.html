@@ -115,6 +115,38 @@ h1{font-size:1.4rem;font-weight:700;margin-bottom:4px}
       <div id="splitExportStatus" style="font-size:12px;color:var(--muted);margin-top:.5rem"></div>
     </div>
 
+    <!-- Custom-filter export -->
+    <div style="margin-bottom:1.5rem;border:1px solid var(--border,#e2e6f0);border-radius:10px;padding:1rem;background:rgba(120,120,140,0.04)">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:.75rem">Or export with your own filters</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1rem">
+        <div>
+          <div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:4px">Region(s)</div>
+          <div id="fltRegionBox" style="max-height:150px;overflow-y:auto;border:1px solid var(--border,#e2e6f0);border-radius:6px;padding:6px;font-size:12px;background:#fff"></div>
+          <div style="font-size:10px;color:var(--muted);margin-top:2px">None = all regions</div>
+        </div>
+        <div>
+          <div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:4px">Employee size</div>
+          <div id="fltSizeBox" style="max-height:150px;overflow-y:auto;border:1px solid var(--border,#e2e6f0);border-radius:6px;padding:6px;font-size:12px;background:#fff"></div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div>
+            <div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:4px">Industry contains</div>
+            <input id="fltIndustry" placeholder="e.g. solar" style="width:100%;border:1px solid var(--border,#e2e6f0);border-radius:6px;padding:5px 8px;font-size:12px">
+          </div>
+          <div>
+            <div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:4px">SIC code(s)</div>
+            <input id="fltSic" placeholder="e.g. 43210, 62012" style="width:100%;border:1px solid var(--border,#e2e6f0);border-radius:6px;padding:5px 8px;font-size:12px">
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;justify-content:flex-end;gap:8px">
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);cursor:pointer" title="Export ALL matching contacts (incl. unverified/risky) so Apollo can enrich & verify them, then send back. Off = only verified-clean (safe/safe_catchall).">
+            <input type="checkbox" id="fltIncludeUnverified" style="accent-color:#8b5cf6"> Include unverified
+          </label>
+          <button class="btn btn-primary" id="exportCustomBtn" onclick="exportCustom()">↓ Export with these filters</button>
+        </div>
+      </div>
+    </div>
+
     <div>
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:.6rem">Find net-new contacts in Apollo</div>
       <div style="display:flex;gap:.75rem;flex-wrap:wrap">
@@ -793,59 +825,93 @@ async function pollEnrichStatus() {
 }
 
 // Export contacts for a specific Apollo account split.
-// Account 1 = London + South East (company_region filter).
-// Account 2 = everything else (all other UK regions).
-async function exportSplit(account) {
-  const ACCT1_REGIONS = ['London', 'South East'];
-  const ALL_REGIONS   = ['London','South East','North West','East of England','West Midlands',
-                         'South West','Yorkshire and the Humber','East Midlands','Scotland',
-                         'North East','Northern Ireland','Wales'];
-  const ACCT2_REGIONS = ALL_REGIONS.filter(r => !ACCT1_REGIONS.includes(r));
+const ALL_REGIONS = ['London','South East','North West','East of England','West Midlands',
+                     'South West','Yorkshire and the Humber','East Midlands','Scotland',
+                     'North East','Northern Ireland','Wales'];
+const ACCT1_REGIONS = ['London', 'South East'];
+const ACCT2_REGIONS = ALL_REGIONS.filter(r => !ACCT1_REGIONS.includes(r));
 
-  const btn    = document.getElementById(`exportBtn${account}`);
-  const status = document.getElementById('splitExportStatus');
-  const regions = account === 1 ? ACCT1_REGIONS : ACCT2_REGIONS;
-
-  btn.disabled = true;
-  document.getElementById(`exportBtn${account === 1 ? 2 : 1}`).disabled = true;
-
-  let offset = 0, fileNum = 1, totalExported = 0;
+// Shared keyset batch loop — pages by the `after` id cursor (legacy export is
+// keyset now) and downloads each ≤45MB/100k-row file. baseParams carries filters.
+async function runExport(baseParams, label, filePrefix, statusEl) {
+  let after = '', fileNum = 1, totalExported = 0;
   try {
-    while (true) {
-      btn.textContent = `↓ Exporting file ${fileNum}...`;
-      status.textContent = `Exporting Account ${account} — file ${fileNum}${totalExported ? `, ${totalExported.toLocaleString()} rows so far` : ''}...`;
-
-      const params = new URLSearchParams({ offset, companyRegion: regions.join(',') });
+    for (let guard = 0; guard < 250; guard++) {
+      statusEl.textContent = `Exporting ${label} — file ${fileNum}${totalExported ? `, ${totalExported.toLocaleString()} rows so far` : ''}...`;
+      const params = new URLSearchParams(baseParams);
+      if (after) params.set('after', after);
       const r = await fetch(`/api/contacts/export?${params}`);
-      if (!r.ok) { status.textContent = `Export failed (${r.status})`; break; }
+      if (!r.ok) { const t = await r.text().catch(()=> ''); statusEl.textContent = `Export failed (${r.status}): ${t.slice(0,160)}`; return; }
 
       const hasMore    = r.headers.get('X-Has-More') === 'true';
-      const nextOffset = parseInt(r.headers.get('X-Next-Offset') || '0');
+      const nextAfter  = r.headers.get('X-Next-After') || '';
       const rowsInFile = parseInt(r.headers.get('X-Rows-In-File') || '0');
 
-      const blob = await r.blob();
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement('a');
-      a.href = url;
-      a.download = `apollo-account${account}-export-${fileNum}.csv`;
-      document.body.appendChild(a); a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
-      totalExported += rowsInFile;
-      fileNum++;
-      offset = nextOffset;
-      if (!hasMore) break;
+      if (rowsInFile > 0) {
+        const blob = await r.blob();
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href = url; a.download = `${filePrefix}-${fileNum}.csv`;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        totalExported += rowsInFile; fileNum++;
+      }
+      if (!hasMore || rowsInFile === 0 || !nextAfter || nextAfter === after) break;
+      after = nextAfter;
+      await new Promise(res => setTimeout(res, 400));
     }
-    status.textContent = `Done — Account ${account} export complete: ${totalExported.toLocaleString()} rows in ${fileNum - 1} file${fileNum > 2 ? 's' : ''}.`;
-  } catch (err) {
-    status.textContent = `Error: ${err.message}`;
-  } finally {
-    btn.textContent    = account === 1 ? '↓ Export Account 1 — London + South East' : '↓ Export Account 2 — Rest of UK';
-    btn.disabled = false;
-    document.getElementById(`exportBtn${account === 1 ? 2 : 1}`).disabled = false;
-  }
+    statusEl.textContent = totalExported === 0
+      ? 'No contacts matched — tick "Include unverified" to export all, or widen the filters.'
+      : `Done — ${label}: ${totalExported.toLocaleString()} rows in ${fileNum - 1} file${fileNum > 2 ? 's' : ''}.`;
+  } catch (err) { statusEl.textContent = `Error: ${err.message}`; }
 }
+
+async function exportSplit(account) {
+  const btn    = document.getElementById(`exportBtn${account}`);
+  const other  = document.getElementById(`exportBtn${account === 1 ? 2 : 1}`);
+  const status = document.getElementById('splitExportStatus');
+  const regions = account === 1 ? ACCT1_REGIONS : ACCT2_REGIONS;
+  btn.disabled = true; other.disabled = true;
+  const label = `Account ${account}`;
+  btn.textContent = '↓ Exporting…';
+  await runExport(new URLSearchParams({ companyRegion: regions.join(',') }), label, `apollo-account${account}-export`, status);
+  btn.textContent = account === 1 ? '↓ Export Account 1 — London + South East' : '↓ Export Account 2 — Rest of UK';
+  btn.disabled = false; other.disabled = false;
+}
+
+// Custom-filter export using the on-page filter selection.
+async function exportCustom() {
+  const btn    = document.getElementById('exportCustomBtn');
+  const status = document.getElementById('splitExportStatus');
+  const regions = Array.from(document.querySelectorAll('.fltRegion:checked')).map(c => c.value);
+  const sizes   = Array.from(document.querySelectorAll('.fltSize:checked')).map(c => c.value);
+  const industry = document.getElementById('fltIndustry').value.trim();
+  const sic      = document.getElementById('fltSic').value.trim();
+  const includeUnverified = document.getElementById('fltIncludeUnverified').checked;
+
+  const p = new URLSearchParams();
+  if (regions.length) p.set('companyRegion', regions.join(','));
+  if (sizes.length)   p.set('numEmployeesRanges', sizes.join(','));
+  if (industry)       p.set('industry', industry);
+  if (sic)            p.set('sicCodes', sic);
+  if (includeUnverified) p.set('includeUnverified', '1');
+
+  btn.disabled = true; btn.textContent = '↓ Exporting…';
+  await runExport(p, 'custom filters', 'apollo-custom-export', status);
+  btn.textContent = '↓ Export with these filters'; btn.disabled = false;
+}
+
+// Populate the custom-filter region + size checkboxes.
+(function buildFilterUI() {
+  const esc = s => String(s).replace(/"/g, '&quot;');
+  const rBox = document.getElementById('fltRegionBox');
+  if (rBox) rBox.innerHTML = ALL_REGIONS.map(rg =>
+    `<label style="display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer"><input type="checkbox" class="fltRegion" value="${esc(rg)}"> ${rg}</label>`).join('');
+  const sizes = ['1-10','11-20','21-50','51-100','101-200','201-500','501-1000','1001-2000','2001-5000','5001-10000','10000+'];
+  const sBox = document.getElementById('fltSizeBox');
+  if (sBox) sBox.innerHTML = sizes.map(sz =>
+    `<label style="display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer"><input type="checkbox" class="fltSize" value="${esc(sz)}"> ${sz}</label>`).join('');
+})();
 </script>
 </body>
 </html>
