@@ -132,6 +132,14 @@ export async function GET() {
         // client-wide interval is not actionable. Per-mailbox interval =
         // (minutes available × active boxes) ÷ sends; target and needed share
         // the formula so "behind => needed < target" always holds.
+        // The interval is only the BOTTLENECK if, at the ACTUAL configured gap,
+        // the boxes physically can't push the remaining volume in the time left.
+        // Their daily_limit is usually far tighter than the interval (e.g. 10/day
+        // at a 20m gap has huge headroom), so "behind" is normally sends-not-
+        // happening (paused campaign / no leads / warmup), NOT a slow interval.
+        // We surface the REAL interval, and only suggest tightening when it's the
+        // genuine constraint — otherwise flag the provider as "stalled".
+        const minutesLeft = hoursLeft * 60
         const PLABEL: Record<string, string> = { smtp: 'SMTP', google: 'Google', microsoft: 'Microsoft' }
         const provRows = provByWs.get(r.workspace_id) ?? []
         const providers = provRows
@@ -139,18 +147,26 @@ export async function GET() {
           .map(p => {
             const pSent = sentByWsProv.get(`${r.workspace_id}|${p.provider}`) ?? 0
             const pRemaining = Math.max(0, p.capacity - pSent)
-            const ivl = (sends: number, mins: number) =>
-              (sends > 0 && p.activeBoxes > 0) ? Math.round((mins * p.activeBoxes) / sends) : null
-            const target = ivl(p.capacity, WINDOW_H * 60)
-            const needed = hoursLeft > 0 ? ivl(pRemaining, hoursLeft * 60) : null
+            // Actual configured interval (PV sending_gap). Null if unknown.
+            const currentIntervalMin = p.avgGapMin != null ? Math.round(p.avgGapMin) : null
+            // On track by end of day at the current pace?
             const onTgt = p.capacity > 0 && (fraction > 0 ? Math.min(pSent / fraction, p.capacity) : pSent) >= p.capacity * 0.95
+            // Max sends the boxes CAN do in the time left at the current interval.
+            const maxSendsAtCurrent = (currentIntervalMin && currentIntervalMin > 0)
+              ? Math.floor(p.activeBoxes * (minutesLeft / currentIntervalMin)) : Infinity
+            // Interval IS the bottleneck only when even flat-out it can't finish.
+            const intervalIsBottleneck = pRemaining > 0 && maxSendsAtCurrent < pRemaining
+            // If it is, the interval needed to just fit the remaining in the time.
+            const neededIntervalMin = intervalIsBottleneck && pRemaining > 0
+              ? Math.max(1, Math.floor((minutesLeft * p.activeBoxes) / pRemaining)) : null
+            // Behind but interval has headroom => sending is stalled, not paced.
+            const stalled = !onTgt && !intervalIsBottleneck && pRemaining > 0 && fraction > 0.15 && pSent < p.capacity * fraction * 0.5
             return {
               provider: PLABEL[p.provider] ?? p.provider,
               activeBoxes: p.activeBoxes, capacity: p.capacity, sent: pSent,
-              currentIntervalMin: p.avgGapMin != null ? Math.round(p.avgGapMin) : target,
-              targetIntervalMin: target, neededIntervalMin: needed,
-              needsSpeedUp: !onTgt && hoursLeft > 0 && pRemaining > 0
-                && needed != null && target != null && needed < target,
+              currentIntervalMin, neededIntervalMin,
+              needsSpeedUp: intervalIsBottleneck && neededIntervalMin != null,
+              stalled,
             }
           })
           .sort((a, b) => b.capacity - a.capacity)
@@ -164,6 +180,7 @@ export async function GET() {
           projected, onTarget, wasted,
           providers,
           needsSpeedUp: providers.some(p => p.needsSpeedUp),
+          stalled: providers.some(p => p.stalled),
           paused: pausedSet.has(r.workspace_id),
         }
       })
