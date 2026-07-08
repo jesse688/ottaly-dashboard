@@ -97,15 +97,19 @@ export async function GET() {
         const onTarget = capacity > 0 && projected >= capacity * 0.95
 
         // ── 3. Speed-to-fix — for BEHIND clients, the interval they'd need ──
-        // Current implied rate (sends/hr) from what's actually gone out.
-        const elapsedH = WINDOW_H * fraction
-        const currentRate = elapsedH > 0 ? sentToday / elapsedH : 0
         const remaining = Math.max(0, capacity - sentToday)
-        const neededRate = hoursLeft > 0 ? remaining / hoursLeft : Infinity // sends/hr to finish
-        // Interval per box = activeBoxes × 60 ÷ rate(sends/hr). Lower = faster.
-        const rateToInterval = (rate: number) => (rate > 0 && activeBoxes > 0) ? Math.round((activeBoxes * 60) / rate) : null
-        const currentIntervalMin = avgGapMin != null ? Math.round(avgGapMin) : rateToInterval(currentRate)
-        const neededIntervalMin = Number.isFinite(neededRate) ? rateToInterval(neededRate) : 0
+        // Per-mailbox send interval = (minutes available × active boxes) ÷ sends.
+        // BOTH "target" and "needed" use this SAME formula so they're directly
+        // comparable and the arrow is always directionally right (behind =>
+        // needed < target, i.e. must send FASTER / smaller interval).
+        const intervalFor = (sends: number, minutesAvailable: number) =>
+          (sends > 0 && activeBoxes > 0) ? Math.round((minutesAvailable * activeBoxes) / sends) : null
+        // Target: interval to send the FULL daily_limit evenly over the 9h window.
+        const targetIntervalMin = intervalFor(capacity, WINDOW_H * 60)
+        // Needed now: interval to send the REMAINING over the REMAINING time.
+        const neededIntervalMin = hoursLeft > 0 ? intervalFor(remaining, hoursLeft * 60) : null
+        // Current configured interval (their PV sending_gap), for reference.
+        const currentIntervalMin = avgGapMin != null ? Math.round(avgGapMin) : targetIntervalMin
         const wasted = Math.max(0, capacity - projected)
 
         return {
@@ -117,9 +121,14 @@ export async function GET() {
           pacePct, donePct, paceState,
           // projection
           projected, onTarget, wasted,
-          // speed-to-fix
-          currentIntervalMin, neededIntervalMin,
-          needsSpeedUp: paceState === 'behind' && !onTarget && hoursLeft > 0 && remaining > 0,
+          // speed-to-fix (all comparable, per-mailbox minutes between sends)
+          currentIntervalMin, targetIntervalMin, neededIntervalMin,
+          // Genuinely needs to speed up only when the needed interval is TIGHTER
+          // than the target (i.e. they're behind enough that even normal pace
+          // won't finish) AND there's time + capacity left.
+          needsSpeedUp: !onTarget && hoursLeft > 0 && remaining > 0
+            && neededIntervalMin != null && targetIntervalMin != null
+            && neededIntervalMin < targetIntervalMin,
           paused: pausedSet.has(r.workspace_id),
         }
       })

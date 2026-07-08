@@ -10,7 +10,7 @@ interface ClientRow {
   sentToday: number
   pacePct: number; donePct: number; paceState: 'ahead' | 'on' | 'behind'
   projected: number; onTarget: boolean; wasted: number
-  currentIntervalMin: number | null; neededIntervalMin: number
+  currentIntervalMin: number | null; targetIntervalMin: number | null; neededIntervalMin: number | null
   needsSpeedUp: boolean
   paused: boolean
 }
@@ -163,12 +163,12 @@ export default function CapacityPage() {
                           : c.onTarget ? <span style={{ color: '#16A34A', fontWeight: 700 }}>✓</span>
                           : <span style={{ color: '#DC2626', fontWeight: 700 }} title="Won't fill capacity at current rate">✕</span>}
                       </td>
-                      {/* Speed to fix */}
+                      {/* Speed to fix — target interval → tighter needed interval */}
                       <td style={td}>
                         {c.paused ? <span style={{ color: C.muted }}>—</span>
-                          : c.needsSpeedUp && c.neededIntervalMin ? (
-                            <span style={{ fontSize: 12, color: '#B45309' }}>
-                              interval {c.currentIntervalMin ? `${c.currentIntervalMin}→` : ''}<b>{c.neededIntervalMin}m</b>
+                          : c.needsSpeedUp && c.neededIntervalMin && c.targetIntervalMin ? (
+                            <span style={{ fontSize: 12, color: '#B45309' }} title="Tighten the per-mailbox send interval from its normal target to this to still hit capacity">
+                              tighten interval <b>{c.targetIntervalMin}m → {c.neededIntervalMin}m</b>
                             </span>
                           ) : c.onTarget ? <span style={{ fontSize: 12, color: '#16A34A' }}>on track</span>
                           : <span style={{ color: C.muted }}>—</span>}
