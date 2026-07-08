@@ -164,6 +164,14 @@ async function load() {
   render();
 }
 
+// Clients disabled (Inactive) in client settings are hidden from the workload grid.
+// This is display-only: `clients` keeps the full list so assignment lookups and all
+// server-side commission / CM-performance calculations are unaffected — only what the
+// table and cards render is filtered.
+function visibleClients() {
+  return clients.filter(c => c.client_status !== 'inactive');
+}
+
 function render() {
   renderCards();
   renderTable();
@@ -172,21 +180,17 @@ function render() {
 function renderCards() {
   const el = document.getElementById('cmCards');
   if (!managers.length) { el.innerHTML = '<div style="color:var(--muted);font-size:13px">No managers yet — add them in Admin Settings</div>'; return; }
+  const shown = visibleClients();
   el.innerHTML = managers.map(m => {
-    const assigned       = clients.filter(c => assignments[c.workspace_id]?.[m.name] !== undefined);
-    const activeAssigned = assigned.filter(c => c.client_status !== 'inactive');
-    const inactive       = assigned.length - activeAssigned.length;
-    const rate           = m.commission_rate ?? defaultRate;
+    const assigned = shown.filter(c => assignments[c.workspace_id]?.[m.name] !== undefined);
     return `<div class="cm-card" style="border-top:3px solid var(--teal)">
       <div class="cm-card-name">${m.name}</div>
-      <div class="cm-card-stat">Total clients: <span>${assigned.length}</span></div>
-      <div class="cm-card-stat">Active: <span>${activeAssigned.length}</span></div>
-      ${inactive ? `<div class="cm-card-stat" style="color:var(--muted)">Inactive: <span>${inactive}</span></div>` : ''}
+      <div class="cm-card-stat">Active clients: <span>${assigned.length}</span></div>
     </div>`;
   }).join('');
 
-  // Unassigned count
-  const unassigned = clients.filter(c => !managers.some(m => assignments[c.workspace_id]?.[m.name] !== undefined));
+  // Unassigned count (active clients only)
+  const unassigned = shown.filter(c => !managers.some(m => assignments[c.workspace_id]?.[m.name] !== undefined));
   if (unassigned.length) {
     document.getElementById('cmCards').insertAdjacentHTML('beforeend',
       `<div class="cm-card" style="border-top:3px solid #d1d5db">
@@ -208,9 +212,10 @@ function renderTable() {
     ${managers.map(m => `<th class="cm-col">${m.name}</th>`).join('')}
   </tr>`;
 
-  if (!clients.length) { body.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:2rem;color:var(--muted)">No clients</td></tr>'; return; }
+  const shown = visibleClients();
+  if (!shown.length) { body.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:2rem;color:var(--muted)">No active clients</td></tr>'; return; }
 
-  body.innerHTML = clients.map(c => {
+  body.innerHTML = shown.map(c => {
     const isActive = c.client_status !== 'inactive';
     const cmCells = managers.map(m => {
       const assigned = assignments[c.workspace_id]?.[m.name] !== undefined;
