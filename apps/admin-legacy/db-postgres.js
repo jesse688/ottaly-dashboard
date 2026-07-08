@@ -3899,7 +3899,7 @@ class PostgresDatabase {
 
   async stampExportedToApollo(workspaceId, ids) {
     if (!ids || ids.length === 0) return { stamped: 0 };
-    // Use ANY($2::int[]) to avoid hitting PostgreSQL's parameter limit
+    // Use ANY($2::uuid[]) to avoid hitting PostgreSQL's parameter limit
     // (~65k positional params per statement; we may have tens of thousands of ids).
     const sql = `
       UPDATE contacts
@@ -3908,8 +3908,18 @@ class PostgresDatabase {
         AND id = ANY($2::uuid[])
         AND exported_to_apollo_at IS NULL
     `;
-    const result = await this.query(sql, [workspaceId, ids]);
-    return { stamped: result.rowCount || 0 };
+    // Stamping up to 100k rows updates every index on the table — that UPDATE was
+    // the query blowing the 45s pool timeout AFTER the CSV was already built (the
+    // SELECT is ~2s). Run it on a raised-timeout client like the export SELECTs.
+    const client = await this.pool.connect();
+    try {
+      await client.query(`SET statement_timeout = '300000'`);
+      const result = await client.query(sql, [workspaceId, ids]);
+      return { stamped: result.rowCount || 0 };
+    } finally {
+      try { await client.query(`SET statement_timeout = 45000`); } catch { /* connection may be dead */ }
+      client.release();
+    }
   }
 
   // Performance cache persistence — survive restarts without re-fetching PlusVibe
