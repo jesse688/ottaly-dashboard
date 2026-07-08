@@ -775,17 +775,18 @@ module.exports = (db) => {
           ? `"${s.replace(/"/g, '""')}"` : s;
       };
 
-      const rowToCsv = c => {
-        const raw = typeof c.raw_data === 'string' ? JSON.parse(c.raw_data || '{}') : (c.raw_data || {});
-        return [
-          c.first_name||'',
-          c.last_name||'',
-          c.email||'',
-          c.company_name||'',
-          c.company_domain||'',
-          c.apollo_id||raw['Apollo Contact Id']||'',
-        ].map(esc).join(',');
-      };
+      // apollo_id is already COALESCE'd with raw_data->>'Apollo Contact Id' in the
+      // query, so we no longer pull the heavy raw_data JSONB blob per row — that
+      // dragged a huge payload for 60k+ rows and blew the 45s statement_timeout
+      // (16s just in Postgres for London). Extracting the one field is ~1.4s.
+      const rowToCsv = c => [
+        c.first_name||'',
+        c.last_name||'',
+        c.email||'',
+        c.company_name||'',
+        c.company_domain||'',
+        c.apollo_id||'',
+      ].map(esc).join(',');
 
       // KEYSET pagination by id cursor (`after`). One query pulls up to a whole
       // file's worth of rows in a single ~1.8s scan — the old code re-ran a

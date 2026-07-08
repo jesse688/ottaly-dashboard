@@ -1925,7 +1925,8 @@ class PostgresDatabase {
     const where = clauses.length ? ' AND ' + clauses.join(' AND ') : '';
     const p = params.length + 2;
     const sql = `
-      SELECT id, first_name, last_name, email, company_name, company_domain, apollo_id, raw_data
+      SELECT id, first_name, last_name, email, company_name, company_domain,
+             COALESCE(NULLIF(apollo_id,''), raw_data->>'Apollo Contact Id') AS apollo_id
       FROM contacts
       WHERE workspace_id = $1${where}${PostgresDatabase.EXPORT_CLEAN_SQL}
       ORDER BY id
@@ -1943,7 +1944,8 @@ class PostgresDatabase {
     const { clauses, params } = this._buildFilterClauses(filters);
     const where = clauses.length ? ' AND ' + clauses.join(' AND ') : '';
     let sql = `
-      SELECT id, first_name, last_name, email, company_name, company_domain, apollo_id, raw_data
+      SELECT id, first_name, last_name, email, company_name, company_domain,
+             COALESCE(NULLIF(apollo_id,''), raw_data->>'Apollo Contact Id') AS apollo_id
       FROM contacts
       WHERE workspace_id = $1${where}${PostgresDatabase.EXPORT_CLEAN_SQL}`;
     const args = [workspaceId, ...params];
