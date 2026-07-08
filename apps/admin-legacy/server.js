@@ -509,6 +509,22 @@ try {
               WHERE workspace_id = '69c43d1e07bf312ff0026643' AND workspace_name = 'AuraaDesign'`).run();
 } catch (e) { console.warn('[migrate] AuraaDesign→GXI Furniture rename failed:', e.message); }
 
+// Seed non-login CMs: Jesse and Jamie exist purely for commission tracking on the
+// CM Workload page — commission 0, no usable login (password_hash '' can never match,
+// and manager login rejects an empty password field). Runs after the managers
+// commission_rate migration above so the column exists. Idempotent: only forces
+// commission to 0; never touches client_managers, so commission history is preserved.
+try {
+  const findMgr = db.prepare('SELECT commission_rate FROM managers WHERE name = ?');
+  const insMgr  = db.prepare("INSERT INTO managers (name, password_hash, commission_rate) VALUES (?, '', 0)");
+  const zeroMgr = db.prepare('UPDATE managers SET commission_rate = 0 WHERE name = ?');
+  for (const name of ['Jesse', 'Jamie']) {
+    const row = findMgr.get(name);
+    if (!row) insMgr.run(name);
+    else if (row.commission_rate !== 0) zeroMgr.run(name);
+  }
+} catch (e) { console.warn('[migrate] Jesse/Jamie CM seed failed:', e.message); }
+
 // CM workload — junction table for client↔manager assignments with per-assignment commission rate
 db.exec(`CREATE TABLE IF NOT EXISTS client_managers (
   id                  INTEGER PRIMARY KEY AUTOINCREMENT,
