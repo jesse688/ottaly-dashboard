@@ -1941,8 +1941,7 @@ class PostgresDatabase {
       WHERE workspace_id = $1${where}${PostgresDatabase._guard(includeUnverified)}
       ORDER BY id
       LIMIT $${p} OFFSET $${p + 1}`;
-    const result = await this.query(sql, [workspaceId, ...params, limit, offset]);
-    return result.rows;
+    return await this._runExportQuery(sql, [workspaceId, ...params, limit, offset]);
   }
 
   // Keyset-paginated export page: fetch up to `limit` exportable rows with id >
@@ -1962,8 +1961,25 @@ class PostgresDatabase {
     if (afterId) { sql += ` AND id > $${args.length + 1}`; args.push(afterId); }
     sql += ` ORDER BY id LIMIT $${args.length + 1}`;
     args.push(limit);
-    const result = await this.query(sql, args);
-    return result.rows;
+    // A large export is a big cold bitmap-heap scan — on the prod server that
+    // reads enough uncached pages to blow the pool's 45s statement_timeout
+    // (worst on includeUnverified, ~4x the rows). Run on a dedicated client with
+    // a raised timeout so the export finishes instead of 500-ing.
+    return await this._runExportQuery(sql, args);
+  }
+
+  // Run an export query on its own client with a 5-minute statement_timeout, then
+  // reset the timeout before returning the client to the pool.
+  async _runExportQuery(sql, args) {
+    const client = await this.pool.connect();
+    try {
+      await client.query(`SET statement_timeout = '300000'`);
+      const result = await client.query(sql, args);
+      return result.rows;
+    } finally {
+      try { await client.query(`SET statement_timeout = 45000`); } catch { /* connection may be dead */ }
+      client.release();
+    }
   }
 
   async getContactsCount(workspaceId, filters = {}) {
@@ -1997,8 +2013,10 @@ class PostgresDatabase {
     const where = clauses.length ? ' AND ' + clauses.join(' AND ') : '';
     const sql = `SELECT COUNT(*) as count FROM contacts
       WHERE workspace_id = $1${where}${PostgresDatabase._guard(includeUnverified)}`;
-    const result = await this.query(sql, [workspaceId, ...params]);
-    return parseInt(result.rows[0].count, 10);
+    // Raised-timeout client — a cold count over a broad unverified filter can
+    // exceed the 45s pool timeout on prod.
+    const rows = await this._runExportQuery(sql, [workspaceId, ...params]);
+    return parseInt(rows[0].count, 10);
   }
 
   async bulkCreateContacts(workspaceId, contacts) {
