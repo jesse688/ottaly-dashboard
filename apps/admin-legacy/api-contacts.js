@@ -726,6 +726,9 @@ module.exports = (db) => {
   router.get('/contacts/export', async (req, res) => {
     try {
       const offset = Math.max(0, parseInt(req.query.offset || '0'));
+      // includeUnverified lifts the verified-clean guard — export ALL matching
+      // contacts (any status) so Apollo can enrich/verify them, then send back.
+      const includeUnverified = req.query.includeUnverified === '1' || req.query.includeUnverified === 'true';
       const MAX_BYTES = 45 * 1024 * 1024; // 45MB target per file (under Apollo's 50MB ceiling)
       const MAX_ROWS  = 100000;            // hard cap per file regardless of size
       const CHUNK = 1000; // rows fetched per DB call
@@ -756,7 +759,7 @@ module.exports = (db) => {
       // Count against the SAME clean guard the export paginates over, else
       // X-Has-More overshoots the real end and loops empty/wrong files.
       const total = db.getExportableCount
-        ? await db.getExportableCount(req.workspaceId, exportFilters)
+        ? await db.getExportableCount(req.workspaceId, exportFilters, includeUnverified)
         : await db.getContactsCount(req.workspaceId, exportFilters);
       console.log(`[Export] workspaceId=${req.workspaceId} exportable=${total} notExportedOnly=${req.query.notExportedOnly}`);
 
@@ -802,7 +805,7 @@ module.exports = (db) => {
 
       // Fetch up to one file's worth (+1 to detect whether more remain after it).
       const page = db.exportContactsPage
-        ? await db.exportContactsPage(req.workspaceId, exportFilters, MAX_ROWS + 1, after)
+        ? await db.exportContactsPage(req.workspaceId, exportFilters, MAX_ROWS + 1, after, includeUnverified)
         : await db.exportContacts(req.workspaceId, exportFilters, MAX_ROWS + 1, offset);
 
       let sizeCut = false;

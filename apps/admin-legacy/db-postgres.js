@@ -1920,7 +1920,17 @@ class PostgresDatabase {
     AND COALESCE(LOWER(bounce_type),'') <> 'hard'
     AND email LIKE '%@%'`;
 
-  async exportContacts(workspaceId, filters = {}, limit = 1000, offset = 0) {
+  // When includeUnverified is set, the deliverability guard is lifted — export
+  // ALL matching contacts (any verification status) so Apollo can enrich/verify
+  // them. We still require a real address and never export opted-out contacts.
+  static EXPORT_MINIMAL_SQL = `
+    AND email LIKE '%@%'
+    AND COALESCE(do_not_contact, false) = false`;
+  static _guard(includeUnverified) {
+    return includeUnverified ? PostgresDatabase.EXPORT_MINIMAL_SQL : PostgresDatabase.EXPORT_CLEAN_SQL;
+  }
+
+  async exportContacts(workspaceId, filters = {}, limit = 1000, offset = 0, includeUnverified = false) {
     const { clauses, params } = this._buildFilterClauses(filters);
     const where = clauses.length ? ' AND ' + clauses.join(' AND ') : '';
     const p = params.length + 2;
@@ -1928,7 +1938,7 @@ class PostgresDatabase {
       SELECT id, first_name, last_name, email, company_name, company_domain,
              COALESCE(NULLIF(apollo_id,''), raw_data->>'Apollo Contact Id') AS apollo_id
       FROM contacts
-      WHERE workspace_id = $1${where}${PostgresDatabase.EXPORT_CLEAN_SQL}
+      WHERE workspace_id = $1${where}${PostgresDatabase._guard(includeUnverified)}
       ORDER BY id
       LIMIT $${p} OFFSET $${p + 1}`;
     const result = await this.query(sql, [workspaceId, ...params, limit, offset]);
@@ -1940,14 +1950,14 @@ class PostgresDatabase {
   // file (limit = whole file) is ~1.8s even for 60k rows — vs the old loop that
   // re-ran a 1000-row OFFSET query per chunk (dozens of scans → 60s timeout).
   // Chaining files by last id (keyset) avoids OFFSET's skip cost entirely.
-  async exportContactsPage(workspaceId, filters = {}, limit = 100000, afterId = null) {
+  async exportContactsPage(workspaceId, filters = {}, limit = 100000, afterId = null, includeUnverified = false) {
     const { clauses, params } = this._buildFilterClauses(filters);
     const where = clauses.length ? ' AND ' + clauses.join(' AND ') : '';
     let sql = `
       SELECT id, first_name, last_name, email, company_name, company_domain,
              COALESCE(NULLIF(apollo_id,''), raw_data->>'Apollo Contact Id') AS apollo_id
       FROM contacts
-      WHERE workspace_id = $1${where}${PostgresDatabase.EXPORT_CLEAN_SQL}`;
+      WHERE workspace_id = $1${where}${PostgresDatabase._guard(includeUnverified)}`;
     const args = [workspaceId, ...params];
     if (afterId) { sql += ` AND id > $${args.length + 1}`; args.push(afterId); }
     sql += ` ORDER BY id LIMIT $${args.length + 1}`;
@@ -1982,11 +1992,11 @@ class PostgresDatabase {
   // exportContacts). The Apollo export paginates over this clean set, so the loop
   // MUST count against the same guard — using getContactsCount (no guard) inflated
   // the total and made X-Has-More loop past the real end into empty/wrong pages.
-  async getExportableCount(workspaceId, filters = {}) {
+  async getExportableCount(workspaceId, filters = {}, includeUnverified = false) {
     const { clauses, params } = this._buildFilterClauses(filters);
     const where = clauses.length ? ' AND ' + clauses.join(' AND ') : '';
     const sql = `SELECT COUNT(*) as count FROM contacts
-      WHERE workspace_id = $1${where}${PostgresDatabase.EXPORT_CLEAN_SQL}`;
+      WHERE workspace_id = $1${where}${PostgresDatabase._guard(includeUnverified)}`;
     const result = await this.query(sql, [workspaceId, ...params]);
     return parseInt(result.rows[0].count, 10);
   }

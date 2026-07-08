@@ -1394,6 +1394,7 @@
           <button class="btn btn-primary" onclick="switchToImportTab()">Import CSV</button>
           <button class="btn" onclick="switchToImportTab(); setTimeout(() => document.getElementById('deleteCsvDropZone').scrollIntoView({behavior:'smooth'}), 100)" style="background:#dc2626;color:white;">Delete from CSV</button>
           <button class="btn btn-secondary" id="exportBtn" onclick="startApolloExport()">⬇ Apollo Export</button>
+          <label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#6b7280;cursor:pointer;" title="Export ALL matching contacts (including unverified/risky) so Apollo can enrich & verify them, then send back. Off = only verified-clean (safe/safe_catchall) emails."><input type="checkbox" id="exportIncludeUnverified" style="accent-color:#8b5cf6"> Include unverified</label>
           <button class="btn btn-secondary" id="resetExportBtn" onclick="resetApolloExports()" title="Clear all 'exported to Apollo' stamps so every contact shows as not-exported again">↺ Reset Exports</button>
           <button class="btn btn-secondary" id="mxScanBtn" onclick="classifyUnknownProviders(this)" title="Verify each contact's TRUE email provider (Google / Microsoft / Other) via a live DNS MX lookup — the most accurate method. Detects Microsoft hidden behind security gateways (Mimecast/Proofpoint) via SPF. Runs in the background; safe to re-run.">🔍 Verify Providers</button>
           <label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#6b7280;cursor:pointer;" title="Re-resolve EVERY contact (not just unverified ones) — catches domains that migrated provider, e.g. Google→Microsoft. Slower."><input type="checkbox" id="mxReverify"> re-verify all</label>
@@ -5169,6 +5170,7 @@
       btn.disabled = true;
 
       const notExportedOnly = document.getElementById('filterNotExported')?.checked;
+      const includeUnverified = document.getElementById('exportIncludeUnverified')?.checked;
 
       let after = '', fileNum = 1, totalExported = 0;
       try {
@@ -5182,6 +5184,7 @@
           const params = new URLSearchParams(getFilterValues(0));
           if (after) params.set('after', after);
           if (notExportedOnly) params.set('notExportedOnly', 'true');
+          if (includeUnverified) params.set('includeUnverified', '1');
           const r = await fetch(`/api/contacts/export?${params}`);
           if (!r.ok) {
             const errText = await r.text().catch(() => '');
@@ -5214,7 +5217,9 @@
           await new Promise(r => setTimeout(r, 800)); // gap between downloads
         }
         if (totalExported === 0) {
-          showMessage('No contacts to export. Only verified-clean emails (safe/safe_catchall) export — verify contacts first, or uncheck "Not exported to Apollo" / widen your filters.', 'error');
+          showMessage(includeUnverified
+            ? 'No contacts match your filters to export.'
+            : 'No verified-clean contacts to export. Tick “Include unverified” to export all (Apollo then enriches them), or uncheck "Not exported to Apollo" / widen your filters.', 'error');
         } else {
           showMessage(`Exported ${totalExported.toLocaleString()} contacts in ${fileNum - 1} file${fileNum > 2 ? 's' : ''} (max 45MB each)`, 'success');
         }
