@@ -240,14 +240,22 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   // The client always sees "sent". If live-send didn't go through, the team MUST
   // send it manually — make that scannable in the title, and ALWAYS include the
   // To + Cc so the manual send replicates exactly who the client addressed.
-  await notifyAdmin({
-    clientId: session.clientId,
-    kind: 'reply_sent',
-    title: send.ok
-      ? `${session.companyName} replied re: ${who}`
-      : `⚠️ SEND MANUALLY — ${session.companyName} re: ${who}`,
-    body: `${send.ok ? '✅ Sent live via PlusVibe' : '⚠️ NOT auto-sent (' + send.reason + ') — PLEASE SEND THIS MANUALLY'}\nFrom (client mailbox): ${eaccount ?? '— unresolved —'}\nTo: ${toList}\nCc: ${ccList || '(none)'}\nSubject: ${subject}\n\n${body}`,
-  })
+  // MUST be best-effort: the reply may already be sent live via PlusVibe by this
+  // point, so a notify failure must never bubble up and 500 the request —
+  // otherwise the client sees "Could not send" for a reply that DID send. The
+  // notification is a backstop; losing it is acceptable, a false failure is not.
+  try {
+    await notifyAdmin({
+      clientId: session.clientId,
+      kind: 'reply_sent',
+      title: send.ok
+        ? `${session.companyName} replied re: ${who}`
+        : `⚠️ SEND MANUALLY — ${session.companyName} re: ${who}`,
+      body: `${send.ok ? '✅ Sent live via PlusVibe' : '⚠️ NOT auto-sent (' + send.reason + ') — PLEASE SEND THIS MANUALLY'}\nFrom (client mailbox): ${eaccount ?? '— unresolved —'}\nTo: ${toList}\nCc: ${ccList || '(none)'}\nSubject: ${subject}\n\n${body}`,
+    })
+  } catch (err) {
+    console.error('[reply] notifyAdmin failed (reply already handled — not failing the request):', err)
+  }
 
   return NextResponse.json({ ok: true, sentLive: send.ok })
 }

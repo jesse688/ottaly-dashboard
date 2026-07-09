@@ -10,6 +10,10 @@ import { sanitizeEmailHtml } from '@/lib/sanitize-html'
 // fields are scanned is the global 'signature_extract_fields' setting. Best-effort.
 async function applySignatureExtraction(leadId: string, workspaceId: string, rows: Array<Record<string, unknown>>, leadEmail: string) {
   try {
+    // Nothing to extract from unless there's at least one inbound message with a
+    // body — skip the settings SELECT and all UPDATEs in that (common) case.
+    const hasInboundBody = rows.some(r => r.direction === 'IN' && (r.body_html || r.body_text))
+    if (!hasInboundBody) return
     const cfg = await pool.query(`SELECT value FROM portal_settings WHERE key = 'signature_extract_fields'`)
     const raw = cfg.rows[0]?.value
     // Default to all fields when unset; empty string = feature disabled.
@@ -112,39 +116,50 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   // fallback is gone — Bison is retired.
   const rows = await readCache()
 
-  // Mark inbound as read now the client has opened the thread.
-  await pool.query(
-    `UPDATE portal_emails SET is_unread = 0
-      WHERE workspace_id = $1 AND lower(lead_email) = lower($2) AND is_unread = 1`,
-    [session.workspaceId, leadEmail]
-  ).catch(() => {})
+  // Side effects of opening a thread — marking read, refreshing the contact
+  // signature, stamping "responded". NONE of these change the JSON we return, so
+  // they must NOT block the response: previously each open awaited a SELECT + up
+  // to two esp_leads UPDATEs (signature) + an upsert, so every click paid that
+  // round-trip latency. We fire them after the response is built and let them run
+  // in the background. Each already swallows its own errors.
+  const runOpenSideEffects = async () => {
+    // Mark inbound as read now the client has opened the thread.
+    await pool.query(
+      `UPDATE portal_emails SET is_unread = 0
+        WHERE workspace_id = $1 AND lower(lead_email) = lower($2) AND is_unread = 1`,
+      [session!.workspaceId, leadEmail]
+    ).catch(() => {})
 
-  // Refresh contact details from the latest inbound email signature.
-  await applySignatureExtraction(id, session.workspaceId, rows, leadEmail)
+    // Refresh contact details from the latest inbound email signature (skips fast
+    // internally when there's no inbound body to read).
+    await applySignatureExtraction(id, session!.workspaceId, rows, leadEmail)
 
-  // Auto-mark "responded" if the synced thread shows an OUTBOUND message after
-  // the prospect's first inbound (i.e. someone — client or agency — replied,
-  // whether in our portal OR in Bison). This moves the lead off "Needs reply"
-  // without the client clicking anything. Stamp first_responded_at once.
-  try {
-    const firstInbound = rows.find(r => r.direction === 'IN')?.timestamp_created
-    const respondedOut = rows.some(r =>
-      r.direction === 'OUT' &&
-      (r.sent_via_portal ||
-        (firstInbound && r.timestamp_created && new Date(r.timestamp_created) > new Date(firstInbound)))
-    )
-    if (respondedOut) {
-      await pool.query(
-        `INSERT INTO portal_lead_data (lead_id, client_id, first_responded_at)
-         VALUES ($1, $2, NOW())
-         ON CONFLICT (lead_id, client_id) DO UPDATE
-           SET first_responded_at = COALESCE(portal_lead_data.first_responded_at, NOW())`,
-        [id, session.clientId]
+    // Auto-mark "responded" if the synced thread shows an OUTBOUND message after
+    // the prospect's first inbound (i.e. someone — client or agency — replied,
+    // whether in our portal OR in Bison). This moves the lead off "Needs reply"
+    // without the client clicking anything. Stamp first_responded_at once.
+    try {
+      const firstInbound = rows.find(r => r.direction === 'IN')?.timestamp_created
+      const respondedOut = rows.some(r =>
+        r.direction === 'OUT' &&
+        (r.sent_via_portal ||
+          (firstInbound && r.timestamp_created && new Date(r.timestamp_created) > new Date(firstInbound)))
       )
+      if (respondedOut) {
+        await pool.query(
+          `INSERT INTO portal_lead_data (lead_id, client_id, first_responded_at)
+           VALUES ($1, $2, NOW())
+           ON CONFLICT (lead_id, client_id) DO UPDATE
+             SET first_responded_at = COALESCE(portal_lead_data.first_responded_at, NOW())`,
+          [id, session!.clientId]
+        )
+      }
+    } catch (err) {
+      console.error('[thread] responded-stamp failed:', err)
     }
-  } catch (err) {
-    console.error('[thread] responded-stamp failed:', err)
   }
+  // Kick it off but don't await — the thread renders from `rows` regardless.
+  void runOpenSideEffects()
 
   // Sanitize body_html for rendering. Messages WE composed in the portal are
   // already trusted; INBOUND mail is untrusted, so scrub it (strip scripts, neutralise
