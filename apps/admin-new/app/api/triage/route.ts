@@ -20,6 +20,8 @@ interface StatsRow {
   lpt_30d: number | null
   lpt_90d: number | null
   lpt_365d: number | null
+  reply_rate_30d: number | null
+  reply_rate_90d: number | null
   mailbox_count: number | null
   avg_daily_per_mailbox: number | null
   contacts_total: number | null
@@ -51,6 +53,8 @@ export async function GET() {
          (ws.stats->>'lpt_30d')::numeric                          AS lpt_30d,
          (ws.stats->>'lpt_90d')::numeric                          AS lpt_90d,
          (ws.stats->>'lpt_365d')::numeric                         AS lpt_365d,
+         (ws.stats->>'reply_rate_30d')::numeric                   AS reply_rate_30d,
+         (ws.stats->>'reply_rate_90d')::numeric                   AS reply_rate_90d,
          (ws.stats->>'mailbox_count')::int                        AS mailbox_count,
          (ws.stats->>'avg_daily_per_mailbox')::numeric            AS avg_daily_per_mailbox,
          (ws.stats->>'contacts_total')::int                       AS contacts_total,
@@ -111,6 +115,10 @@ export async function GET() {
               ? Number(s.lpt_365d)
               : null
 
+      // Reply rate: current (30d) vs the client's own trailing baseline (90d).
+      const replyRateNow = s.reply_rate_30d != null ? Number(s.reply_rate_30d) : null
+      const replyRateBaseline = s.reply_rate_90d != null ? Number(s.reply_rate_90d) : null
+
       const input: TriageInput = {
         workspaceId: s.workspace_id,
         workspaceName: s.workspace_name || s.workspace_id,
@@ -118,6 +126,8 @@ export async function GET() {
         target: s.lead_target_monthly ?? 0,
         deliveredMtd: mtd.get(s.workspace_id) ?? 0,
         lpt,
+        replyRateNow,
+        replyRateBaseline,
         dailyCapacity,
         dataOnHand,
         lastSentAt: s.last_sent_at,

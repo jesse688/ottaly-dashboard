@@ -30,7 +30,8 @@ interface Client {
   dataOnHand: number
   isSending: boolean
   daysLeft: number
-  projectedMonthEnd: number
+  workingDaysLeft: number
+  expectedByNow: number
   gap: number
   paceRatio: number
   reason: ReasonCode
@@ -38,6 +39,9 @@ interface Client {
   priority: number
   action: string
   lowConfidence: boolean
+  replyRateNow: number | null
+  replyRateBaseline: number | null
+  replyRateDropped: boolean
 }
 interface TriageData {
   generatedAt: string
@@ -90,7 +94,7 @@ const SECTIONS: { key: Bucket; title: string; blurb: string; open: boolean }[] =
   {
     key: 'structural',
     title: '🟠 Structurally behind',
-    blurb: 'Projected to miss on capacity or reply rate — slower fixes',
+    blurb: 'Behind pace on capacity or reply rate — slower fixes',
     open: true,
   },
   {
@@ -161,10 +165,12 @@ export default function TriagePage() {
     const needsWork = byBucket.needs_work.length
     const structural = byBucket.structural.length
     const onTrack = byBucket.leave_alone.length
-    const projShortfall = clients
+    // Total leads behind pace right now across every flagged client (gap = how
+    // far below where they should be by today). No projection.
+    const behindPace = clients
       .filter((c) => c.bucket === 'needs_work' || c.bucket === 'structural')
       .reduce((s, c) => s + Math.max(0, c.gap), 0)
-    return { needsWork, structural, onTrack, projShortfall }
+    return { needsWork, structural, onTrack, behindPace }
   }, [byBucket, clients])
 
   const columns: Column<Client>[] = [
@@ -190,7 +196,7 @@ export default function TriagePage() {
           <StatusBadge status={reasonTone(c.reason)}>{REASON_LABEL[c.reason]}</StatusBadge>
           {c.lowConfidence && (
             <span
-              title="Thin sending data — projection is low-confidence"
+              title="Thin sending history — reply-rate signal is low-confidence"
               className="text-[11px] text-muted-foreground"
             >
               ⚠︎
@@ -218,12 +224,17 @@ export default function TriagePage() {
       ),
     },
     {
-      key: 'projected',
-      header: 'Projected',
+      key: 'expected',
+      header: 'Expected by now',
       numeric: true,
-      sortValue: (c) => c.projectedMonthEnd,
+      sortValue: (c) => c.expectedByNow,
       cell: (c) => (
-        <span className="tabular-nums text-muted-foreground">{num(c.projectedMonthEnd)}</span>
+        <span
+          className="tabular-nums text-muted-foreground"
+          title="Where they should be today, on working-day linear pace"
+        >
+          {c.target > 0 ? c.expectedByNow.toFixed(1) : '—'}
+        </span>
       ),
     },
     {
@@ -234,7 +245,36 @@ export default function TriagePage() {
       cell: (c) => {
         const tone: StatusTone =
           c.paceRatio >= 1 ? 'ok' : c.paceRatio >= 0.8 ? 'warn' : 'error'
-        return <StatusBadge status={tone}>{pace(c.paceRatio)}</StatusBadge>
+        return (
+          <StatusBadge status={tone} className={c.target > 0 ? '' : 'opacity-40'}>
+            {c.target > 0 ? pace(c.paceRatio) : '—'}
+          </StatusBadge>
+        )
+      },
+    },
+    {
+      key: 'rr',
+      header: 'Reply rate',
+      numeric: true,
+      sortValue: (c) => c.replyRateNow ?? -1,
+      cell: (c) => {
+        if (c.replyRateNow == null) return <span className="text-muted-foreground">—</span>
+        const tone = c.replyRateDropped ? 'text-destructive' : 'text-muted-foreground'
+        return (
+          <span
+            className={`tabular-nums ${tone}`}
+            title={
+              c.replyRateBaseline != null
+                ? `Now ${c.replyRateNow.toFixed(1)}% · 90d avg ${c.replyRateBaseline.toFixed(1)}%${c.replyRateDropped ? ' — dropped, can recover' : ''}`
+                : `Now ${c.replyRateNow.toFixed(1)}%`
+            }
+          >
+            {c.replyRateNow.toFixed(1)}%
+            {c.replyRateDropped && c.replyRateBaseline != null && (
+              <span className="text-[10px] text-muted-foreground"> ↓{c.replyRateBaseline.toFixed(1)}</span>
+            )}
+          </span>
+        )
       },
     },
     {
@@ -256,15 +296,15 @@ export default function TriagePage() {
       numeric: true,
       sortValue: (c) => c.dataOnHand,
       cell: (c) => {
-        // Days of runway at current capacity.
+        // Working-day runway at current capacity vs working days left in month.
         const runway = c.dailyCapacity > 0 ? c.dataOnHand / c.dailyCapacity : Infinity
-        const short = Number.isFinite(runway) && runway < c.daysLeft
+        const short = Number.isFinite(runway) && runway < c.workingDaysLeft
         return (
           <span
             className={short ? 'tabular-nums text-destructive' : 'tabular-nums text-muted-foreground'}
             title={
               Number.isFinite(runway)
-                ? `~${Math.round(runway)}d runway · ${c.daysLeft}d left in month`
+                ? `~${Math.round(runway)} working-day runway · ${c.workingDaysLeft} working days left`
                 : 'No capacity data'
             }
           >
@@ -278,7 +318,7 @@ export default function TriagePage() {
   return (
     <PageShell
       title="CM Triage"
-      subtitle="Who needs work right now — projected month-end leads vs target, with the binding constraint and the fix"
+      subtitle="Who needs work right now — actual pace vs target (working days), with the reason it's behind and the fix"
       freshness={{ table: 'workspace_stats + revenue_leads', syncedAt: data?.generatedAt ?? null }}
       actions={
         <select
@@ -300,9 +340,9 @@ export default function TriagePage() {
         <KpiCard label="Structurally behind" value={num(kpis.structural)} tone="yellow" loading={status === 'loading'} />
         <KpiCard label="On track / ahead" value={num(kpis.onTrack)} tone="green" loading={status === 'loading'} />
         <KpiCard
-          label="Projected shortfall"
-          value={num(kpis.projShortfall)}
-          sub="leads below target this month"
+          label="Behind pace"
+          value={num(kpis.behindPace)}
+          sub="leads behind where they should be today"
           tone="purple"
           loading={status === 'loading'}
         />

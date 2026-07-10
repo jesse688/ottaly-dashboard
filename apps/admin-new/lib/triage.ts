@@ -32,6 +32,8 @@ export interface TriageInput {
   target: number // clients.lead_target_monthly (0 = no target)
   deliveredMtd: number // qualified leads this month from revenue_leads
   lpt: number | null // leads per 1000 sends (workspace_stats.lpt_30d, fallbacks applied upstream)
+  replyRateNow: number | null // current reply rate % (workspace_stats.reply_rate_30d)
+  replyRateBaseline: number | null // client's OWN trailing avg reply rate % (reply_rate_90d) — the bar to recover to
   dailyCapacity: number // avg_daily_per_mailbox × mailbox_count (sends/day)
   dataOnHand: number // un-emailed sendable contacts (contacts_total minus emailed)
   lastSentAt: string | null // ISO — recency drives is_sending
@@ -45,23 +47,34 @@ export interface TriageResult extends TriageInput {
   daysInMonth: number
   dayOfMonth: number
   daysLeft: number
-  sendsLeftPossible: number
-  projectedNewLeads: number
-  projectedMonthEnd: number
-  gap: number // target − projected (>0 = will miss)
-  paceRatio: number // projected / target (<1 = behind)
+  workingDaysInMonth: number
+  workingDaysElapsed: number
+  workingDaysLeft: number
+  expectedByNow: number // where they should be today (leads), working-day linear
+  gap: number // leads behind pace (expectedByNow − deliveredMtd, ≥0)
+  paceRatio: number // deliveredMtd / expectedByNow (<1 = behind pace)
   reason: ReasonCode
   bucket: Bucket
   priority: number
   action: string
-  lowConfidence: boolean // projection rests on thin data
+  lowConfidence: boolean // reply-rate/LPT rests on thin data
+  // Is the client's current reply rate meaningfully below their OWN trailing
+  // average? If so the RR can demonstrably recover (they've hit it before) — a
+  // recoverable LOW_REPLY_RATE the CM can quantify. (replyRateNow/Baseline are
+  // inherited from TriageInput.)
+  replyRateDropped: boolean
 }
 
+// Current RR counts as "dropped" when it's below this fraction of the client's
+// own trailing baseline (e.g. 0.85 → now < 85% of their average). Tune to taste.
+export const RR_DROP_RATIO = 0.85
+
 // ── Tunables (from spec §2 decisions) ────────────────────────────────────────
-export const MISS_THRESHOLD = 0.8 // projected < 80% of target → needs work
+export const MISS_THRESHOLD = 0.8 // actual pace < 80% of expected → needs work
 export const SENDING_RECENCY_DAYS = 3 // sent within N days = actively sending
 export const EARLY_MONTH_GATE = 5 // don't score before day N (noise)
 export const DEFAULT_DAILY_PER_MAILBOX = 30 // fallback if capacity unknown
+export const WORKING_DAYS_PER_MONTH = 22 // ~Mon–Fri days/month for capacity ceiling math
 // Benchmark leads-per-1000-sends a healthy campaign should achieve. Used ONLY to
 // separate "not enough mailboxes" from "reply rate too low". ~20 ≈ a 4% reply
 // rate with ~half converting to qualified leads. TUNE to your book's real median.
@@ -88,7 +101,12 @@ const ACTIONS: Record<ReasonCode, string> = {
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n))
 
-/** Calendar facts for the current month. `now` injected so callers stay pure/testable. */
+/**
+ * Calendar + WORKING-DAY facts for the current month. `now` injected so callers
+ * stay pure/testable. Cold email only sends Mon–Fri, so leads only arrive on
+ * weekdays — pace is measured on working days, not calendar days, so a client
+ * checked on a Monday isn't falsely shown behind for a weekend nothing sends on.
+ */
 export function monthClock(now: Date) {
   const year = now.getUTCFullYear()
   const month = now.getUTCMonth()
@@ -96,7 +114,29 @@ export function monthClock(now: Date) {
   const dayOfMonth = now.getUTCDate()
   const daysLeft = Math.max(0, daysInMonth - dayOfMonth)
   const monthStart = `${year}-${String(month + 1).padStart(2, '0')}-01`
-  return { daysInMonth, dayOfMonth, daysLeft, monthStart }
+
+  // Count working days (Mon–Fri). getUTCDay(): 0=Sun … 6=Sat.
+  let workingDaysInMonth = 0
+  let workingDaysElapsed = 0
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dow = new Date(Date.UTC(year, month, d)).getUTCDay()
+    const isWeekday = dow >= 1 && dow <= 5
+    if (isWeekday) {
+      workingDaysInMonth++
+      if (d <= dayOfMonth) workingDaysElapsed++
+    }
+  }
+  const workingDaysLeft = Math.max(0, workingDaysInMonth - workingDaysElapsed)
+
+  return {
+    daysInMonth,
+    dayOfMonth,
+    daysLeft,
+    monthStart,
+    workingDaysInMonth,
+    workingDaysElapsed,
+    workingDaysLeft,
+  }
 }
 
 function isSendingNow(lastSentAt: string | null, now: Date): boolean {
@@ -108,49 +148,70 @@ function isSendingNow(lastSentAt: string | null, now: Date): boolean {
 }
 
 /**
- * Core evaluation for one client. Returns the full projection, the binding-
- * constraint reason, its bucket, and a priority score for sorting.
+ * Core evaluation for one client. Scores on ACTUAL current-month pace (delivered
+ * so far vs where they should be by today) — NOT on a forward projection. We
+ * deliberately do not project month-end from capacity × efficiency: those
+ * projections proved wildly optimistic (a client with 1 lead in 10 days but
+ * healthy capacity/LPT projected to "hit target"). Real delivered leads are the
+ * only trustworthy signal; the reason codes then explain WHY a client is behind.
  */
 export function evaluate(input: TriageInput, now: Date): TriageResult {
-  const { daysInMonth, dayOfMonth, daysLeft } = monthClock(now)
+  const { daysInMonth, dayOfMonth, daysLeft, workingDaysInMonth, workingDaysElapsed, workingDaysLeft } =
+    monthClock(now)
   const isSending = isSendingNow(input.lastSentAt, now)
 
   // Capacity fallback: unknown/zero capacity → assume standard per-mailbox rate.
+  // Still used by the reason codes (NO_DATA / NOT_ENOUGH_MAILBOXES), just not for
+  // any projection of future leads.
   const dailyCapacity = input.dailyCapacity > 0 ? input.dailyCapacity : DEFAULT_DAILY_PER_MAILBOX
 
-  // Forward projection: how many more sends are realistically possible, capped by
-  // BOTH mailbox throughput and remaining data — whichever runs out first.
-  // If the client isn't sending RIGHT NOW, we project zero future sends — we do
-  // not assume sending magically resumes. This is deliberate: a stalled client
-  // must project to miss so it surfaces as NOT_SENDING rather than being masked
-  // by an optimistic "if only they were sending" projection.
-  const sendsByCapacity = isSending ? dailyCapacity * daysLeft : 0
-  const sendsLeftPossible = Math.max(0, Math.min(sendsByCapacity, input.dataOnHand))
+  // Actual linear pace on WORKING DAYS (leads only arrive Mon–Fri):
+  //   expectedByNow = target × (workingDaysElapsed / workingDaysInMonth)
+  //   paceRatio     = deliveredMtd / expectedByNow   (1.0 = exactly on pace)
+  // No projection, no trusting future capacity — real delivered leads vs where
+  // they should be by today. Example: target 30, 10 working days of 22 elapsed →
+  // expected 13.6; 10 delivered → 74% (behind). Target 30, 10 leads early with
+  // few days elapsed → over 100% (ahead).
+  const expectedByNow =
+    input.target > 0 && workingDaysInMonth > 0
+      ? (input.target * workingDaysElapsed) / workingDaysInMonth
+      : 0
+  const paceRatio =
+    input.target <= 0 ? 1 : expectedByNow > 0 ? input.deliveredMtd / expectedByNow : 1
 
-  // Efficiency: leads per 1000 sends. Null (thin data) → treat as low-confidence
-  // and fall back to 0 leads projected from future sends (conservative).
+  // Gap = leads behind where they should be by now (>0 = behind pace).
+  const gap = Math.max(0, expectedByNow - input.deliveredMtd)
+
   const lpt = input.lpt ?? 0
   const lowConfidence = input.lpt == null || input.target <= 0
 
-  const projectedNewLeads = sendsLeftPossible * (lpt / 1000)
-  const projectedMonthEnd = input.deliveredMtd + projectedNewLeads
-  const gap = input.target - projectedMonthEnd
-  const paceRatio = input.target > 0 ? projectedMonthEnd / input.target : 1
+  // Reply-rate vs the client's OWN history: has it dropped below their baseline?
+  // Proves the RR can recover (they've done better before) and gives the CM a
+  // concrete "you were at X%, you're at Y% — get it back" target.
+  const replyRateDropped =
+    input.replyRateNow != null &&
+    input.replyRateBaseline != null &&
+    input.replyRateBaseline > 0 &&
+    input.replyRateNow < input.replyRateBaseline * RR_DROP_RATIO
 
   const reason = classify(input, {
     isSending,
     dayOfMonth,
-    daysLeft,
+    workingDaysLeft,
     dailyCapacity,
     lpt,
-    projectedMonthEnd,
     paceRatio,
+    replyRateDropped,
     now,
   })
   const bucket = bucketFor(reason)
-  const action = ACTIONS[reason]
+  // Concrete, recoverable RR message when we can show now-vs-baseline.
+  const action =
+    reason === 'LOW_REPLY_RATE' && replyRateDropped && input.replyRateNow != null && input.replyRateBaseline != null
+      ? `Reply rate dropped to ${input.replyRateNow.toFixed(1)}% from a ${input.replyRateBaseline.toFixed(1)}% average — it can recover. Rework the copy / targeting.`
+      : ACTIONS[reason]
 
-  // Priority: how far below target × how much target is at stake × how fixable.
+  // Priority: how far below pace × how much target is at stake × how fixable.
   const gapSeverity = clamp(1 - paceRatio, 0, 1)
   const clientWeight = input.target // lead-volume weighting (spec decision)
   const fixability = FIXABILITY[reason] ?? 0
@@ -162,9 +223,10 @@ export function evaluate(input: TriageInput, now: Date): TriageResult {
     daysInMonth,
     dayOfMonth,
     daysLeft,
-    sendsLeftPossible,
-    projectedNewLeads,
-    projectedMonthEnd,
+    workingDaysInMonth,
+    workingDaysElapsed,
+    workingDaysLeft,
+    expectedByNow,
     gap,
     paceRatio,
     reason,
@@ -172,17 +234,18 @@ export function evaluate(input: TriageInput, now: Date): TriageResult {
     priority,
     action,
     lowConfidence,
+    replyRateDropped,
   }
 }
 
 interface Derived {
   isSending: boolean
   dayOfMonth: number
-  daysLeft: number
+  workingDaysLeft: number
   dailyCapacity: number
   lpt: number
-  projectedMonthEnd: number
   paceRatio: number
+  replyRateDropped: boolean
   now: Date
 }
 
@@ -200,40 +263,42 @@ function classify(input: TriageInput, d: Derived): ReasonCode {
     if (!Number.isNaN(until) && d.now.getTime() < until) return 'WARMING_UP'
   }
 
-  // Already hit target → ahead, leave alone (checked before pace so a met target
-  // never reads as "behind" on a bad projection).
+  // Already at/over target for the month → ahead, leave alone.
   if (input.deliveredMtd >= input.target) return 'AHEAD'
 
-  // Projected to hit ≥ threshold → on track.
+  // On or above pace (delivered ≥ 80% of expected-by-today) → on track.
   if (d.paceRatio >= MISS_THRESHOLD) return 'ON_TRACK'
 
-  // From here down the client is projected to MISS. Name why.
+  // ── From here the client is BEHIND PACE. Diagnose WHY so the CM knows whether
+  //    capacity is slipping or the reply rate is the problem. ──────────────────
 
-  // Emergency: not sending at all.
+  // Emergency: not sending at all (surfaced regardless of day-of-month).
   if (!d.isSending) return 'NOT_SENDING'
 
-  // Too early to trust a miss verdict on a sending client (but NOT_SENDING above
-  // is always worth surfacing regardless of day).
+  // Too early in the month to trust a behind-pace verdict on a sending client.
   if (d.dayOfMonth < EARLY_MONTH_GATE) return 'TOO_EARLY'
 
-  // Data runs out before month-end (can't fill remaining capacity with leads).
-  const capacityDemand = d.dailyCapacity * d.daysLeft
+  // Out of data: not enough sendable leads left to fill the remaining working
+  // days at current capacity → sending WILL slip because there's nothing to send.
+  const capacityDemand = d.dailyCapacity * d.workingDaysLeft
   if (input.dataOnHand < capacityDemand) return 'NO_DATA'
 
-  // Distinguish a capacity ceiling from a copy problem by asking: if this client
-  // had a HEALTHY reply rate, would their mailboxes still be too few?
-  //   - Yes  → genuinely NOT_ENOUGH_MAILBOXES (more infra is the fix).
-  //   - No   → a healthy reply rate WOULD reach target, so the current shortfall
-  //            is the reply rate / copy → LOW_REPLY_RATE.
-  // Benchmarked against HEALTHY_LPT, not the client's current LPT (which is the
-  // very thing under suspicion). Using current LPT here would make LOW_REPLY_RATE
-  // unreachable — any low-LPT miss would always look capacity-capped.
-  const maxLeadsAtHealthyLpt =
-    input.deliveredMtd + capacityDemand * (HEALTHY_LPT / 1000)
-  if (maxLeadsAtHealthyLpt < input.target) return 'NOT_ENOUGH_MAILBOXES'
+  // Reply rate has dropped below the client's OWN trailing average → decisive
+  // evidence it's a reply-rate problem AND that it can recover (they've hit the
+  // higher rate before). This beats the capacity check: even a capacity-tight
+  // client with a fixable RR drop should be told to fix the RR first.
+  if (d.replyRateDropped) return 'LOW_REPLY_RATE'
 
-  // Capacity + data could reach target at a healthy reply rate — so the binding
-  // constraint is the current (too-low) reply efficiency.
+  // Otherwise separate "capacity slipping" from "reply rate low" structurally.
+  // Ask: at a HEALTHY reply rate, is this client's sending capacity enough to hit
+  // target for the month?
+  //   - No  → capacity is the ceiling → NOT_ENOUGH_MAILBOXES (add mailboxes).
+  //   - Yes → capacity is fine, so the shortfall is the reply rate → LOW_REPLY_RATE.
+  // Benchmarked against HEALTHY_LPT, not the client's own (suspect) LPT.
+  const monthlyCapacity = d.dailyCapacity * WORKING_DAYS_PER_MONTH
+  const leadsAtHealthyReplyRate = monthlyCapacity * (HEALTHY_LPT / 1000)
+  if (leadsAtHealthyReplyRate < input.target) return 'NOT_ENOUGH_MAILBOXES'
+
   return 'LOW_REPLY_RATE'
 }
 
