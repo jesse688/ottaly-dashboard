@@ -121,5 +121,25 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
      JSON.stringify(rawToMerge)]
   )
 
+  // A lead can exist as MORE THAN ONE esp_leads row for the same email in a
+  // workspace with different ids (e.g. the original bison-id row vs a later
+  // `manual_<replyid>` row). The client Leads page dedups by email and may read a
+  // DIFFERENT row than the one we just upserted — so an edit here could otherwise
+  // never reach the client (the "Ja onglynn"/blank split-brain bug). Propagate the
+  // edited top-level fields to EVERY row for this email+workspace so the correction
+  // lands on whichever row the client actually sees. Only overwrites fields the
+  // admin actually entered (blank inputs are left untouched).
+  if (email && (first_name !== undefined || last_name !== undefined || company_name !== undefined)) {
+    await pool.query(
+      `UPDATE esp_leads
+          SET first_name   = COALESCE($3, first_name),
+              last_name    = COALESCE($4, last_name),
+              company_name = COALESCE($5, company_name),
+              updated_at   = NOW()
+        WHERE workspace_id = $1 AND lower(email) = $2 AND id <> $6`,
+      [reply.workspace_id, email, first_name ?? null, last_name ?? null, company_name ?? null, leadId]
+    )
+  }
+
   return NextResponse.json({ ok: true, leadId })
 }
