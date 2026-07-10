@@ -144,12 +144,16 @@ export default function ComboAnalysisPage() {
   const [enrichLabel, setEnrichLabel] = useState('Enrich Recipient MX')
   const [enrichDisabled, setEnrichDisabled] = useState(false)
   const enrichTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Agency (all) vs single-client scope. '' = all workspaces.
+  const [workspaceId, setWorkspaceId] = useState('')
+  const [workspaces, setWorkspaces] = useState<{ id: string; name: string }[]>([])
 
-  const loadData = useCallback(async (start: string, end: string) => {
+  const loadData = useCallback(async (start: string, end: string, ws: string) => {
     setLoading(true)
     setError(null)
     try {
-      const d: ComboData = await fetch(`/api/data/combo-analysis?start=${start}&end=${end}`).then((r) => r.json())
+      const wsParam = ws ? `&workspace_id=${encodeURIComponent(ws)}` : ''
+      const d: ComboData = await fetch(`/api/data/combo-analysis?start=${start}&end=${end}${wsParam}`).then((r) => r.json())
       if (d.error) throw new Error(d.error)
       setData(d)
     } catch (err) {
@@ -161,8 +165,16 @@ export default function ComboAnalysisPage() {
   }, [])
 
   useEffect(() => {
-    loadData(dateFrom, dateTo)
+    loadData(dateFrom, dateTo, workspaceId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Load the client list once for the scope dropdown.
+  useEffect(() => {
+    fetch('/api/data/combo-analysis/workspaces')
+      .then((r) => r.json())
+      .then((d: { workspaces?: { id: string; name: string }[] }) => setWorkspaces(d.workspaces ?? []))
+      .catch(() => setWorkspaces([]))
   }, [])
 
   function setPeriod(k: PeriodKey) {
@@ -170,14 +182,19 @@ export default function ComboAnalysisPage() {
     setActivePeriod(k)
     setDateFrom(start)
     setDateTo(end)
-    loadData(start, end)
+    loadData(start, end, workspaceId)
   }
 
   function applyCustom(nextFrom: string, nextTo: string) {
     if (nextFrom && nextTo) {
       setActivePeriod(null)
-      loadData(nextFrom, nextTo)
+      loadData(nextFrom, nextTo, workspaceId)
     }
+  }
+
+  function setScope(ws: string) {
+    setWorkspaceId(ws)
+    loadData(dateFrom, dateTo, ws)
   }
 
   async function runBackfill() {
@@ -187,7 +204,7 @@ export default function ComboAnalysisPage() {
       const r = await fetch('/api/data/combo-analysis/backfill', { method: 'POST' }).then((res) => res.json())
       if (r.ok) {
         alert(`Backfill complete — ${r.updated} rows updated. Reloading.`)
-        if (dateFrom && dateTo) loadData(dateFrom, dateTo)
+        if (dateFrom && dateTo) loadData(dateFrom, dateTo, workspaceId)
       } else {
         alert('Backfill error: ' + (r.error || 'unknown'))
       }
@@ -296,6 +313,20 @@ export default function ComboAnalysisPage() {
           >
             {enrichLabel}
           </Button>
+          {/* Scope: agency (all) vs single client */}
+          <select
+            value={workspaceId}
+            onChange={(e) => setScope(e.target.value)}
+            className="rounded-md border border-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-gray-700"
+            title="Agency-wide, or scope the matrix to one client"
+          >
+            <option value="">All clients (agency)</option>
+            {workspaces.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name}
+              </option>
+            ))}
+          </select>
           {/* Period bar */}
           <div className="flex flex-wrap items-center gap-1.5">
             {PERIODS.map((p) => (

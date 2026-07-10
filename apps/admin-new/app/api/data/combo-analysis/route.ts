@@ -37,10 +37,18 @@ async function clampStartDate(startStr: string): Promise<string> {
 export async function GET(req: NextRequest) {
   const startRaw = String(req.nextUrl.searchParams.get('start') || '')
   const end = String(req.nextUrl.searchParams.get('end') || '')
+  // Optional single-client scope. Absent/empty → agency-wide (all workspaces).
+  const workspaceId = String(req.nextUrl.searchParams.get('workspace_id') || '').trim()
   const start = await clampStartDate(startRaw)
   if (!start || !end) {
     return NextResponse.json({ error: 'start and end required' }, { status: 400 })
   }
+
+  // When a workspace is selected, $3 carries it and each query gets an extra
+  // AND ee.workspace_id = $3 (indexed via idx_ee_ws_event_at / idx_ee_ws_lead).
+  const wsFilter = workspaceId ? `AND ee.workspace_id = $3` : '' // sends + coverage (email_events)
+  const wsFilterUr = workspaceId ? `AND ur.workspace_id = $3` : '' // leads (unibox_replies)
+  const params = workspaceId ? [start, end, workspaceId] : [start, end]
 
   const exactQ = `
     WITH sender_types AS (
@@ -76,6 +84,7 @@ export async function GET(req: NextRequest) {
       WHERE ee.event_type = 'sent'
         AND ee.event_at >= $1 AND ee.event_at < ($2::date + interval '1 day')
         AND (ee.raw->>'seeded')::boolean IS NOT TRUE
+        ${wsFilter}
     )
     SELECT s.from_type, s.to_type,
       COUNT(*)::int                                AS sent,
@@ -129,13 +138,14 @@ export async function GET(req: NextRequest) {
     LEFT JOIN recipient_types rt ON rt.email_lower = lower(COALESCE(ur.matched_lead_email, ur.lead_email))
     WHERE ur.marked_as_lead = TRUE
       AND ur.marked_at >= $1 AND ur.marked_at < ($2::date + interval '1 day')
+      ${wsFilterUr}
     GROUP BY 1, 2
   `
 
   try {
     const [{ rows: exact }, { rows: leadRows }] = await Promise.all([
-      pool.query(exactQ, [start, end]),
-      pool.query(leadsQ, [start, end]),
+      pool.query(exactQ, params),
+      pool.query(leadsQ, params),
     ])
     const leadByCombo = new Map<string, number>()
     for (const l of leadRows) leadByCombo.set(`${l.from_type}|${l.to_type}`, +l.leads || 0)
@@ -164,15 +174,17 @@ export async function GET(req: NextRequest) {
     }
     const hasApprox = rows.some((r) => r.is_approx)
 
-    // Coverage: how many non-seeded events have sender_email populated
+    // Coverage: how many non-seeded events have sender_email populated (scoped
+    // to the selected workspace when one is chosen). Aliased ee so wsFilter fits.
     const { rows: cov } = await pool.query(
       `SELECT
-         COUNT(*)                                          AS total,
-         COUNT(*) FILTER (WHERE sender_email IS NOT NULL) AS with_sender
-       FROM email_events
-       WHERE event_at >= $1 AND event_at < ($2::date + interval '1 day')
-         AND (raw->>'seeded')::boolean IS NOT TRUE`,
-      [start, end]
+         COUNT(*)                                             AS total,
+         COUNT(*) FILTER (WHERE ee.sender_email IS NOT NULL) AS with_sender
+       FROM email_events ee
+       WHERE ee.event_at >= $1 AND ee.event_at < ($2::date + interval '1 day')
+         AND (ee.raw->>'seeded')::boolean IS NOT TRUE
+         ${wsFilter}`,
+      params
     )
 
     return NextResponse.json({ rows, coverage: cov[0], hasApprox, start, end })
