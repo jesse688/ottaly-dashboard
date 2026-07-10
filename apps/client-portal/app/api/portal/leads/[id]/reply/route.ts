@@ -187,15 +187,43 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // Also pass any ALTERNATE addresses the lead replied from (a colleague's
     // mailbox), recorded at ingest, so a colleague-address reply still resolves
     // instead of flipping to "send manually".
+    // Collect EVERY address this lead's thread may have replied FROM: the recorded
+    // sender_email AND matched_lead_email. PV often threads a colleague at the same
+    // company (e.g. lead=tom@acme, but jess@acme actually replied) — PV's inbound
+    // email then has from_address_email=jess@, which getPlusVibeInbound rejects
+    // unless jess@ is in acceptFrom. That colleague address lives in
+    // matched_lead_email, so pulling ONLY sender_email missed it and flipped a
+    // genuine reply to "SEND MANUALLY" (no-plusvibe-thread-resolved).
     const alt = await pool.query(
-      `SELECT DISTINCT sender_email FROM unibox_replies
+      `SELECT DISTINCT addr FROM (
+         SELECT sender_email       AS addr FROM unibox_replies
+           WHERE workspace_id = $1
+             AND (lower(lead_email) = lower($2) OR lower(matched_lead_email) = lower($2))
+         UNION
+         SELECT matched_lead_email AS addr FROM unibox_replies
+           WHERE workspace_id = $1
+             AND (lower(lead_email) = lower($2) OR lower(matched_lead_email) = lower($2))
+       ) a
+       WHERE addr IS NOT NULL AND addr <> '' AND lower(addr) <> lower($2)`,
+      [session.workspaceId, lead.email]
+    ).catch(() => ({ rows: [] as { addr?: string }[] }))
+    const acceptFrom = alt.rows.map(r => r.addr!).filter(Boolean)
+
+    // The RFC Message-ID of the exact reply we're answering, captured at ingest as
+    // unibox_replies.bison_reply_id = `pv_<message-id>`. This is what PV's own reply
+    // UI targets a thread by, so we hand it to the resolver for an EXACT match —
+    // robust even when PV's loose `lead=` filter returns another lead's email first.
+    const msg = await pool.query(
+      `SELECT bison_reply_id FROM unibox_replies
         WHERE workspace_id = $1
           AND (lower(lead_email) = lower($2) OR lower(matched_lead_email) = lower($2))
-          AND sender_email IS NOT NULL AND sender_email <> '' AND lower(sender_email) <> lower($2)`,
+          AND bison_reply_id LIKE 'pv_%'
+        ORDER BY received_at DESC LIMIT 1`,
       [session.workspaceId, lead.email]
-    ).catch(() => ({ rows: [] as { sender_email?: string }[] }))
-    const acceptFrom = alt.rows.map(r => r.sender_email!).filter(Boolean)
-    const pv = await getPlusVibeInbound(session.workspaceId, lead.email, acceptFrom)
+    ).catch(() => ({ rows: [] as { bison_reply_id?: string }[] }))
+    const wantMsgId = (msg.rows[0]?.bison_reply_id ?? '').replace(/^pv_/, '') || null
+
+    const pv = await getPlusVibeInbound(session.workspaceId, lead.email, acceptFrom, wantMsgId)
     const fromMailbox = pv?.from || eaccount
     // Strip any known prefix; if it's a plain-numeric Bison id we can't use it as
     // a PV reply_to_id, so prefer the freshly-resolved PV id.

@@ -60,6 +60,11 @@ export async function getPlusVibeInbound(
   // Other addresses the lead may have replied FROM (e.g. a colleague's mailbox).
   // Recorded at ingest; pass them so a colleague-address reply still resolves.
   acceptFrom: string[] = [],
+  // The RFC Message-ID of the exact inbound reply we're answering (stored at
+  // ingest as unibox_replies.bison_reply_id = `pv_<message-id>`). This is how
+  // PlusVibe's OWN reply UI targets a thread — by the message identity, not by
+  // re-guessing the sender's address. When we have it, an EXACT match wins.
+  messageId?: string | null,
 ): Promise<{ id: string; from: string; to: string } | null> {
   const key = process.env.PLUSVIBE_API_KEY ?? process.env.PLUSVIBE_KEY
   if (!key) return null
@@ -68,23 +73,39 @@ export async function getPlusVibeInbound(
   const accepted = new Set(
     [leadEmail, ...acceptFrom].map(a => (a || '').toLowerCase().trim()).filter(Boolean)
   )
+  // Normalise the target message-id for comparison (PV returns it WITH angle
+  // brackets, e.g. "<8E52…@naturaw.co.uk>"; strip them + case for a robust match).
+  const norm = (m: string | null | undefined) => (m ?? '').replace(/[<>]/g, '').trim().toLowerCase()
+  const wantMsgId = norm(messageId)
 
-  // One lookup by a given `lead` query value. SAFETY: PlusVibe ignores an
-  // unmatched `lead` filter and returns the workspace's latest email instead, so
-  // we accept the result ONLY if it's actually FROM one of our accepted senders.
+  type PVEmail = { id?: string; eaccount?: string; from_address_email?: string; message_id?: string }
+
+  // One lookup by a given `lead` query value. CRITICAL: PlusVibe's `lead=` filter is
+  // LOOSE — it returns the mailbox's recent received emails (newest-first) even when
+  // none are from this lead. So we must scan the WHOLE page, not just data[0], and
+  // pick the right email by identity:
+  //   1) EXACT message-id match (PV-native — the thread we're actually answering), else
+  //   2) the newest email whose from_address_email is one of our accepted senders.
+  // This fixes the bug where data[0] was some OTHER lead's newer reply, which failed
+  // the sender check and flipped a genuine reply to "SEND MANUALLY".
+  const pick = (emails: PVEmail[]): { id: string; from: string; to: string } | null => {
+    if (wantMsgId) {
+      const exact = emails.find(e => e.id && norm(e.message_id) === wantMsgId)
+      if (exact) return { id: exact.id!, from: exact.eaccount ?? '', to: exact.from_address_email ?? leadEmail }
+    }
+    const bySender = emails.find(e => e.id && accepted.has((e.from_address_email ?? '').toLowerCase()))
+    if (bySender) return { id: bySender.id!, from: bySender.eaccount ?? '', to: bySender.from_address_email ?? leadEmail }
+    return null
+  }
+
   const tryLead = async (q: string): Promise<{ id: string; from: string; to: string } | null> => {
     const res = await fetch(
       `https://api.plusvibe.ai/api/v1/unibox/emails?workspace_id=${encodeURIComponent(workspaceId)}&lead=${encodeURIComponent(q)}&email_type=received`,
       { headers: { 'x-api-key': key, 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(8000) }
     )
     if (!res.ok) throw new Error(`pv_${res.status}`)   // treat non-200 as retryable
-    const data = await res.json() as {
-      data?: { id?: string; eaccount?: string; from_address_email?: string }[]
-    }
-    const email = data?.data?.[0]
-    if (!email?.id) return null
-    if (!accepted.has((email.from_address_email ?? '').toLowerCase())) return null
-    return { id: email.id, from: email.eaccount ?? '', to: email.from_address_email ?? q }
+    const data = await res.json() as { data?: PVEmail[] }
+    return pick(data?.data ?? [])
   }
 
   // Query by the lead address first, then each alternate. Retry each ONCE on a
