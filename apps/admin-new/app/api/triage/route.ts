@@ -61,8 +61,22 @@ export async function GET() {
          (ws.stats->'contacts_by_status'->>'interested')::int     AS contacts_interested,
          (ws.stats->'contacts_by_status'->>'replied')::int        AS contacts_replied,
          (ws.stats->'contacts_by_status'->>'bounced')::int        AS contacts_bounced,
-          ws.stats->>'last_sent_at'                               AS last_sent_at
-       FROM workspace_stats ws`,
+         -- "Is the client sending?" ground truth = the most recent per-contact
+         -- last_emailed_at, NOT the stats blob's last_sent_at. The blob field is
+         -- stale/blank for most workspaces (the stats sync stopped populating it
+         -- after the move to PlusVibe), which falsely flagged actively-sending
+         -- clients as NOT_SENDING. contacts.last_emailed_at is refreshed live, so
+         -- prefer it and fall back to the blob only when there are no contacts.
+         COALESCE(
+           to_char(c.max_last_emailed AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+           ws.stats->>'last_sent_at'
+         )                                                        AS last_sent_at
+       FROM workspace_stats ws
+       LEFT JOIN (
+         SELECT workspace_id, MAX(last_emailed_at) AS max_last_emailed
+         FROM contacts
+         GROUP BY workspace_id
+       ) c ON c.workspace_id = ws.workspace_id`,
     )
 
     // 2. Month-to-date qualified leads per workspace (revenue_leads.date is
