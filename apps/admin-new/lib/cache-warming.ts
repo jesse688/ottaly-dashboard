@@ -217,6 +217,124 @@ export async function warmDates(dates: string[]): Promise<void> {
   }
 }
 
+// ── Combo (sender ESP × recipient ESP) daily stats ──────────────────────────
+// MEASURED per combo via /account/email-stats provider + recp_provider filters
+// (verified to segment: unfiltered total = sum of provider buckets = sum of
+// recp_provider buckets). Stored in combo_daily_stats, read by the Combo
+// Analysis page. Sends/replies/bounce/OOO/pos are all real PV numbers — no
+// apportioning, no incomplete email_events.
+const ESP_VALUES = ['GOOGLE_WORKSPACE', 'MICROSOFT365', 'REGULAR_ACCOUNT'] as const
+const TTL_COMBO_TODAY_MS = 30 * 60 * 1000 // combos are heavier (9 calls/day) → 30 min today
+const TTL_COMBO_OLD_MS = 24 * 60 * 60 * 1000
+
+let comboTableReady = false
+async function ensureComboTable(): Promise<void> {
+  if (comboTableReady) return
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS combo_daily_stats (
+       ws_id TEXT NOT NULL, date TEXT NOT NULL,
+       provider TEXT NOT NULL, recp_provider TEXT NOT NULL,
+       data JSONB NOT NULL, saved_at BIGINT NOT NULL,
+       PRIMARY KEY (ws_id, date, provider, recp_provider)
+     )`,
+  )
+  comboTableReady = true
+}
+
+async function ensureComboDaily(wsIds: string[], dates: string[]): Promise<void> {
+  await ensureComboTable()
+  const today = dateStr(new Date())
+
+  // A combo cell is "fresh" if ANY of its 9 rows for that ws+date is within TTL.
+  // We refetch a whole ws+date's 9 combos together (one settled check per ws+date).
+  const needsFetch: Array<{ wsId: string; date: string }> = []
+  for (const wsId of wsIds) {
+    if (deadWorkspaces.has(wsId)) continue
+    for (const date of dates) {
+      const ttl = date === today ? TTL_COMBO_TODAY_MS : TTL_COMBO_OLD_MS
+      const res = await pool.query(
+        `SELECT MAX(saved_at) AS saved_at FROM combo_daily_stats WHERE ws_id = $1 AND date = $2`,
+        [wsId, date],
+      )
+      const savedAt = res.rows[0]?.saved_at
+      if (!savedAt || Date.now() - Number(savedAt) > ttl) needsFetch.push({ wsId, date })
+    }
+  }
+  if (!needsFetch.length) return
+
+  console.log(`[cache-warming] combo: fetching ${needsFetch.length} ws-date pairs × 9 combos`)
+
+  // One ws+date at a time; its 9 combos fetched with modest concurrency. Keeps
+  // total PV load bounded (needsFetch is usually just today for active ws).
+  for (const { wsId, date } of needsFetch) {
+    const pairs: Array<{ provider: string; recp: string }> = []
+    for (const provider of ESP_VALUES) for (const recp of ESP_VALUES) pairs.push({ provider, recp })
+
+    const now = Date.now()
+    await Promise.allSettled(
+      pairs.map(async ({ provider, recp }) => {
+        try {
+          const raw = await pvFetch(
+            `/account/email-stats?workspace_id=${wsId}&start_date=${date}&end_date=${date}` +
+              `&provider=${provider}&recp_provider=${recp}`,
+          )
+          const data = aggregatePvEmailStats(raw)
+          // Skip storing empty cells to keep the table lean, but always clear a
+          // stale non-empty row if it went to zero by upserting when sent>0.
+          if (!data.sent && !data.replies && !data.bounces) return
+          await pool.query(
+            `INSERT INTO combo_daily_stats (ws_id, date, provider, recp_provider, data, saved_at)
+             VALUES ($1,$2,$3,$4,$5,$6)
+             ON CONFLICT (ws_id, date, provider, recp_provider)
+               DO UPDATE SET data = $5, saved_at = $6`,
+            [wsId, date, provider, recp, JSON.stringify(data), now],
+          )
+        } catch (err) {
+          console.error(
+            `[cache-warming] combo fetch failed ${wsId} ${date} ${provider}->${recp}:`,
+            err instanceof Error ? err.message : err,
+          )
+        }
+      }),
+    )
+    // Touch a sentinel so a ws+date with all-empty combos is still considered
+    // "fetched" (freshness check reads MAX(saved_at) across its rows).
+    await pool
+      .query(
+        `INSERT INTO combo_daily_stats (ws_id, date, provider, recp_provider, data, saved_at)
+         VALUES ($1,$2,'_','_','{}'::jsonb,$3)
+         ON CONFLICT (ws_id, date, provider, recp_provider) DO UPDATE SET saved_at = $3`,
+        [wsId, date, now],
+      )
+      .catch(() => {})
+  }
+}
+
+export async function warmComboCache(): Promise<void> {
+  try {
+    const wsIds = await getActiveWorkspaces()
+    if (!wsIds.length) return
+    // Last 7 days is enough for the default Combo view; older windows fetched
+    // on demand by the route if needed.
+    await ensureComboDaily(wsIds, lastNDates(7))
+    console.log('[cache-warming] combo cache warmed (7d)')
+  } catch (err) {
+    console.error('[cache-warming] combo warm failed:', err instanceof Error ? err.message : err)
+  }
+}
+
+// On-demand combo warm for a specific date list (TTL-guarded). Called by the
+// combo-analysis route so a requested window is filled even if the background
+// interval hasn't covered it yet.
+export async function warmComboDates(dates: string[]): Promise<void> {
+  try {
+    const wsIds = await getActiveWorkspaces()
+    if (wsIds.length) await ensureComboDaily(wsIds, dates)
+  } catch (err) {
+    console.error('[cache-warming] warmComboDates failed:', err instanceof Error ? err.message : err)
+  }
+}
+
 export async function warmPerformanceCache(): Promise<void> {
   try {
     const wsIds = await getActiveWorkspaces()
@@ -256,14 +374,23 @@ export async function startCacheWarmingInterval(): Promise<void> {
   setTimeout(() => {
     warmPerformanceCache().catch(() => {})
   }, 5000)
+  // Combo cache is heavier (9 calls/ws/day); warm a bit later and less often.
+  setTimeout(() => {
+    warmComboCache().catch(() => {})
+  }, 20000)
 
   // Then every 2 minutes (same as legacy)
   const INTERVAL_MS = 2 * 60 * 1000
   setInterval(() => {
     warmPerformanceCache().catch(() => {})
   }, INTERVAL_MS)
+  // Combo every 15 min — its TTL (30 min today) means most passes are no-ops.
+  const COMBO_INTERVAL_MS = 15 * 60 * 1000
+  setInterval(() => {
+    warmComboCache().catch(() => {})
+  }, COMBO_INTERVAL_MS)
 
-  console.log('[cache-warming] interval started (2 min)')
+  console.log('[cache-warming] interval started (perf 2 min, combo 15 min)')
 }
 
 // Auto-initialize when module is imported (only on server)

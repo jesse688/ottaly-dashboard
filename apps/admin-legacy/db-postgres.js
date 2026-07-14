@@ -335,6 +335,20 @@ class PostgresDatabase {
         saved_at   BIGINT NOT NULL,
         PRIMARY KEY (ws_id, date)
       )`,
+      // Per-day stats broken down by (sender ESP × recipient ESP), pulled from
+      // PlusVibe /account/email-stats with provider + recp_provider filters
+      // (MEASURED per combo, not apportioned). Powers the accurate Combo
+      // Analysis page. Separate from perf_cache_daily so the many consumers of
+      // that table are untouched. Written by admin-new lib/cache-warming.ts.
+      `CREATE TABLE IF NOT EXISTS combo_daily_stats (
+        ws_id         TEXT NOT NULL,
+        date          TEXT NOT NULL,
+        provider      TEXT NOT NULL,
+        recp_provider TEXT NOT NULL,
+        data          JSONB NOT NULL,
+        saved_at      BIGINT NOT NULL,
+        PRIMARY KEY (ws_id, date, provider, recp_provider)
+      )`,
       `CREATE TABLE IF NOT EXISTS perf_cache_leads (
         ws_id      TEXT PRIMARY KEY,
         data       JSONB NOT NULL,
