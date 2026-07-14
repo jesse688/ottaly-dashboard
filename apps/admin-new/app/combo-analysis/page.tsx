@@ -10,11 +10,13 @@ interface ComboRow {
   from_type: string
   to_type: string
   sent: number
-  replies: number
-  pos_replies: number
+  replies: number        // incl. OOO/auto (primary reply rate)
+  replies_human: number  // real human replies (excludes OOO + warmup)
+  pos_replies: number    // = replies_human (back-compat)
   bounces: number
   leads: number
   unique_contacts: number
+  capped?: boolean        // replies arrived whose send predates the window → rate capped at 100%
   is_approx: boolean
 }
 interface Coverage {
@@ -133,6 +135,14 @@ function brPill(p: number) {
 }
 const fmt = (n: number) => n.toLocaleString()
 
+// Reply rate as a %, capped at 100% when a row is flagged (reply's send predates
+// the window, so replies>sends is a windowing artefact, not a real >100% rate).
+function ratePct(num: number, den: number, capped?: boolean) {
+  if (!den) return null
+  const p = (100 * num) / den
+  return capped ? Math.min(p, 100) : p
+}
+
 export default function ComboAnalysisPage() {
   const [data, setData] = useState<ComboData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -249,8 +259,8 @@ export default function ComboAnalysisPage() {
     idx[`${r.from_type}|${r.to_type}`] = r
   })
 
-  // Best/worst by reply rate (min 50 sends)
-  const qualified = rows.filter((r) => r.sent >= 50)
+  // Best/worst by reply rate incl. OOO (min 50 sends, exclude capped/windowing rows)
+  const qualified = rows.filter((r) => r.sent >= 50 && !r.capped)
   let best: ComboRow | null = null
   let worst: ComboRow | null = null
   if (qualified.length) {
@@ -258,8 +268,19 @@ export default function ComboAnalysisPage() {
     worst = qualified.reduce((a, b) => (pctNum(b.replies, b.sent) < pctNum(a.replies, a.sent) ? b : a))
   }
 
+  // Recommendation: for each recipient provider, the sender with the highest
+  // Reply Rate (incl. OOO), among combos with enough volume to trust (≥50 sends).
+  const REAL_TO = ['email_google', 'email_outlook', 'email_other']
+  const recommendation = REAL_TO.map((to) => {
+    const candidates = rows.filter((r) => r.to_type === to && r.sent >= 50 && !r.capped)
+    if (!candidates.length) return null
+    const win = candidates.reduce((a, b) => (pctNum(b.replies, b.sent) > pctNum(a.replies, a.sent) ? b : a))
+    return { to, win, rr: pctNum(win.replies, win.sent) }
+  }).filter((x): x is { to: string; win: ComboRow; rr: number } => x !== null)
+
   function ComboCard({ r, label, variant }: { r: ComboRow; label: string; variant: 'winner' | 'loser' }) {
-    const rr = pctNum(r.replies, r.sent)
+    const rr = ratePct(r.replies, r.sent, r.capped) ?? 0
+    const rrHuman = ratePct(r.replies_human, r.sent, r.capped) ?? 0
     const br = pctNum(r.bounces, r.sent)
     return (
       <div
@@ -274,10 +295,13 @@ export default function ComboAnalysisPage() {
         </div>
         <div className="flex flex-wrap gap-3 text-xs text-gray-500">
           <div>
-            <strong className="text-gray-900">{fmt(r.sent)}</strong> sent
+            <strong className="text-gray-900">{fmt(r.sent)}</strong> sends
           </div>
           <div>
-            <strong className={rrClass(rr)}>{rr.toFixed(1)}%</strong> reply rate
+            <strong className={rrClass(rr)}>{rr.toFixed(1)}%</strong> reply (OOO)
+          </div>
+          <div>
+            <strong className="text-sky-700">{rrHuman.toFixed(1)}%</strong> human
           </div>
           <div>
             <strong className={brClass(br)}>{br.toFixed(2)}%</strong> bounce
@@ -297,7 +321,7 @@ export default function ComboAnalysisPage() {
         <div>
           <div className="text-xl font-bold text-gray-900">Combo Analysis</div>
           <div className="mt-0.5 text-xs text-gray-500">
-            Sender provider × recipient provider — reply rate, bounce rate, leads
+            Which sending provider works best for each recipient provider. Replies from classified inbox (warmup excluded); sends from webhook events.
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -390,6 +414,27 @@ export default function ComboAnalysisPage() {
         </div>
       )}
 
+      {/* Recommendation — best sender for each recipient provider */}
+      {!loading && !error && recommendation.length > 0 && (
+        <div className="mb-5 rounded-xl border border-teal-200 bg-teal-50/60 p-4">
+          <div className="mb-3 text-[13px] font-bold text-gray-900">
+            Recommended sender for each recipient
+            <span className="ml-2 text-[11px] font-normal text-gray-500">ranked by reply rate (incl. out-of-office), ≥50 sends</span>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            {recommendation.map(({ to, win, rr }) => (
+              <div key={to} className="rounded-lg border border-gray-200 bg-white p-3">
+                <div className="text-[11px] uppercase tracking-wide text-gray-500">Sending to {toLabel(to)}</div>
+                <div className="mt-1 text-base font-bold text-gray-900">Use {fromLabel(win.from_type)}</div>
+                <div className="mt-1 text-xs text-gray-500">
+                  <strong className="text-teal-700">{rr.toFixed(1)}%</strong> reply rate · {fmt(win.sent)} sent
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Best / Worst */}
       {best && worst && (
         <div className="mb-5 grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -450,7 +495,8 @@ export default function ComboAnalysisPage() {
                             </td>
                           )
                         }
-                        const rr = pctNum(r.replies, r.sent)
+                        const rr = ratePct(r.replies, r.sent, r.capped) ?? 0
+                        const rrHuman = ratePct(r.replies_human, r.sent, r.capped) ?? 0
                         const br = pctNum(r.bounces, r.sent)
                         const isBest = best && r.from_type === best.from_type && r.to_type === best.to_type
                         const isWorst = worst && r.from_type === worst.from_type && r.to_type === worst.to_type
@@ -458,17 +504,22 @@ export default function ComboAnalysisPage() {
                           <td
                             key={to}
                             className={cn(
-                              'min-w-[140px] border-b border-l border-gray-200 px-4 py-3 text-center align-top',
+                              'min-w-[150px] border-b border-l border-gray-200 px-4 py-3 text-center align-top',
                               isBest ? 'bg-green-50' : isWorst ? 'bg-rose-50' : ''
                             )}
                           >
-                            <div className="text-lg font-bold leading-none text-gray-900">{fmt(r.sent)}</div>
+                            <div className="text-lg font-bold leading-none text-gray-900">
+                              {fmt(r.sent)} {r.capped ? <span title="Some replies arrived from sends before this window — rate capped at 100%">⚠️</span> : null}
+                            </div>
                             <div className="mt-1.5 flex flex-wrap justify-center gap-1">
-                              <span className={cn('whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-bold', rrPill(rr))} title="Reply rate">
-                                {rr.toFixed(1)}% RR
+                              <span className={cn('whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-bold', rrPill(rr))} title="Reply rate including out-of-office / auto-replies">
+                                {rr.toFixed(1)}% reply
+                              </span>
+                              <span className="whitespace-nowrap rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold text-sky-800" title="Human reply rate (excludes out-of-office and warmup)">
+                                {rrHuman.toFixed(1)}% human
                               </span>
                               <span className={cn('whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-bold', brPill(br))} title="Bounce rate">
-                                {br.toFixed(2)}% BR
+                                {br.toFixed(2)}% bounce
                               </span>
                               {r.leads ? (
                                 <span className="whitespace-nowrap rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800" title="Leads">
@@ -496,27 +547,24 @@ export default function ComboAnalysisPage() {
             <table className="w-full border-collapse">
               <thead>
                 <tr className="text-[10px] uppercase tracking-wide text-gray-500">
-                  <th className="border-b border-gray-200 px-4 py-2.5 text-left font-bold">From</th>
-                  <th className="border-b border-gray-200 px-4 py-2.5 text-left font-bold">To</th>
-                  <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold">Sent</th>
-                  <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold">Contacts</th>
-                  <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold">Replies</th>
-                  <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold">Reply %</th>
-                  <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold">Pos Reply %</th>
+                  <th className="border-b border-gray-200 px-4 py-2.5 text-left font-bold">Sender</th>
+                  <th className="border-b border-gray-200 px-4 py-2.5 text-left font-bold">Recipient</th>
+                  <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold">Sends</th>
+                  <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold" title="Reply rate including out-of-office / auto-replies">Reply Rate (OOO)</th>
+                  <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold" title="Human reply rate — excludes out-of-office and warmup">Human Reply Rate</th>
                   <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold">Bounces</th>
-                  <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold">Bounce %</th>
                   <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold">Leads</th>
-                  <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold" title="Leads Per Thousand sent">
-                    LPT
-                  </th>
+                  <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold" title="RTL — replies per lead (all replies ÷ leads). Lower is better.">RTL</th>
+                  <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold" title="LTR — leads per 1,000 sends. Higher is better.">LTR</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((r, i) => {
-                  const rr = pctNum(r.replies, r.sent)
+                  const rr = ratePct(r.replies, r.sent, r.capped)
+                  const rrHuman = ratePct(r.replies_human, r.sent, r.capped)
                   const br = pctNum(r.bounces, r.sent)
-                  const pr = r.replies > 0 ? pctNum(r.pos_replies, r.replies) : 0
-                  const lpt = r.sent > 0 ? (r.leads * 1000) / r.sent : 0
+                  const rtl = r.leads > 0 ? r.replies / r.leads : null   // replies per lead
+                  const ltr = r.sent > 0 ? (r.leads * 1000) / r.sent : null // leads per 1,000 sends
                   return (
                     <tr key={`${r.from_type}|${r.to_type}|${i}`} className="text-[13px] hover:bg-gray-50">
                       <td className="border-b border-gray-200 px-4 py-3 text-left">
@@ -525,17 +573,23 @@ export default function ComboAnalysisPage() {
                       <td className="border-b border-gray-200 px-4 py-3 text-left">
                         <ToTag t={r.to_type} />
                       </td>
-                      <td className="border-b border-gray-200 px-4 py-3 text-right">{fmt(r.sent)}</td>
-                      <td className="border-b border-gray-200 px-4 py-3 text-right">{fmt(r.unique_contacts)}</td>
-                      <td className="border-b border-gray-200 px-4 py-3 text-right">{fmt(r.replies)}</td>
-                      <td className={cn('border-b border-gray-200 px-4 py-3 text-right', rrClass(rr))}>{r.sent ? rr.toFixed(2) + '%' : '—'}</td>
-                      <td className={cn('border-b border-gray-200 px-4 py-3 text-right', rrClass(pr))}>{r.replies ? pr.toFixed(1) + '%' : '—'}</td>
-                      <td className="border-b border-gray-200 px-4 py-3 text-right">{fmt(r.bounces)}</td>
-                      <td className={cn('border-b border-gray-200 px-4 py-3 text-right', brClass(br))}>{r.sent ? br.toFixed(2) + '%' : '—'}</td>
-                      <td className="border-b border-gray-200 px-4 py-3 text-right">{r.leads}</td>
-                      <td className="border-b border-gray-200 px-4 py-3 text-right" title="Leads Per Thousand sent">
-                        {r.sent ? lpt.toFixed(2) : '—'}
+                      <td className="border-b border-gray-200 px-4 py-3 text-right">
+                        {fmt(r.sent)} {r.capped ? <span title="Replies from sends before this window — rate capped">⚠️</span> : null}
                       </td>
+                      <td className={cn('border-b border-gray-200 px-4 py-3 text-right', rr != null ? rrClass(rr) : '')}>
+                        {rr != null ? rr.toFixed(1) + '%' : '—'}
+                        <span className="ml-1 text-[11px] font-normal text-gray-400">({fmt(r.replies)})</span>
+                      </td>
+                      <td className={cn('border-b border-gray-200 px-4 py-3 text-right', rrHuman != null ? rrClass(rrHuman) : '')}>
+                        {rrHuman != null ? rrHuman.toFixed(1) + '%' : '—'}
+                        <span className="ml-1 text-[11px] font-normal text-gray-400">({fmt(r.replies_human)})</span>
+                      </td>
+                      <td className={cn('border-b border-gray-200 px-4 py-3 text-right', r.sent ? brClass(br) : '')}>
+                        {fmt(r.bounces)} {r.sent ? <span className="text-[11px] font-normal text-gray-400">({br.toFixed(2)}%)</span> : null}
+                      </td>
+                      <td className="border-b border-gray-200 px-4 py-3 text-right text-blue-700 font-medium">{r.leads}</td>
+                      <td className="border-b border-gray-200 px-4 py-3 text-right" title="Replies per lead">{rtl != null ? rtl.toFixed(1) : '—'}</td>
+                      <td className="border-b border-gray-200 px-4 py-3 text-right" title="Leads per 1,000 sends">{ltr != null ? ltr.toFixed(2) : '—'}</td>
                     </tr>
                   )
                 })}

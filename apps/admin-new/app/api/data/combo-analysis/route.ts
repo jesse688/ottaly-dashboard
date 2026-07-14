@@ -50,7 +50,14 @@ export async function GET(req: NextRequest) {
   const wsFilterUr = workspaceId ? `AND ur.workspace_id = $3` : '' // leads (unibox_replies)
   const params = workspaceId ? [start, end, workspaceId] : [start, end]
 
-  const exactQ = `
+  // Sends come from email_events (real non-seeded sends). Replies/leads come from
+  // unibox_replies — the CLASSIFIED, warmup-stripped source. The old query counted
+  // reply/positive_reply events from email_events, but those are ~100% warmup seed
+  // replies (raw.seeded=true) and 'positive_reply' isn't even a real event_type,
+  // so reply rate was polluted and positive-reply was always 0. Bounces stay on
+  // email_events (real bounce events). Sender ESP ← mailbox_meta.mailbox_type,
+  // recipient ESP ← contacts.mx_provider.
+  const sendsQ = `
     WITH sender_types AS (
       SELECT DISTINCT ON (lower(email))
         lower(email) AS email_lower,
@@ -64,7 +71,7 @@ export async function GET(req: NextRequest) {
       FROM contacts WHERE mx_provider IS NOT NULL ORDER BY lower(email)
     ),
     sends AS (
-      SELECT ee.workspace_id, ee.campaign_id, lower(ee.lead_email) AS le,
+      SELECT ee.workspace_id, lower(ee.lead_email) AS le,
         COALESCE(st.sender_type, 'smtp') AS from_type,
         COALESCE(
           rt.recipient_type,
@@ -87,39 +94,23 @@ export async function GET(req: NextRequest) {
         ${wsFilter}
     )
     SELECT s.from_type, s.to_type,
-      COUNT(*)::int                                AS sent,
-      COUNT(DISTINCT CASE WHEN EXISTS (
-        SELECT 1 FROM email_events e
-        WHERE e.workspace_id = s.workspace_id
-          AND lower(e.lead_email) = s.le
-          AND e.event_type IN ('reply','positive_reply')
-      ) THEN s.le END)::int                        AS replies,
-      COUNT(DISTINCT CASE WHEN EXISTS (
-        SELECT 1 FROM email_events e
-        WHERE e.workspace_id = s.workspace_id
-          AND lower(e.lead_email) = s.le
-          AND e.event_type = 'positive_reply'
-      ) THEN s.le END)::int                        AS pos_replies,
+      COUNT(*)::int                    AS sent,
       COUNT(DISTINCT CASE WHEN EXISTS (
         SELECT 1 FROM email_events e
         WHERE e.workspace_id = s.workspace_id
           AND lower(e.lead_email) = s.le
           AND e.event_type = 'bounce'
-      ) THEN s.le END)::int                        AS bounces,
-      0::int                                       AS leads, -- filled lead-anchored below
-      COUNT(DISTINCT s.le)::int                    AS unique_contacts,
-      FALSE                                        AS is_approx
+      ) THEN s.le END)::int            AS bounces,
+      COUNT(DISTINCT s.le)::int        AS unique_contacts
     FROM sends s
     GROUP BY s.from_type, s.to_type
   `
 
-  // Leads are counted LEAD-ANCHORED (every unibox_replies.marked_as_lead in the
-  // window), NOT send-anchored — a lead's original send often falls outside the
-  // window or isn't in email_events, so send-anchoring silently drops most leads
-  // (matches the Stats page's direct lead count, not the old always-0 column).
-  // Sender type ← the receiving mailbox (mailbox_meta); recipient type ←
-  // contacts.mx_provider, same buckets as the send cohort.
-  const leadsQ = `
+  // Replies + leads, classified via unibox_replies. Warmup always excluded.
+  //   replies_ooo   = every non-warmup reply (human + OOO/auto) — "Reply Rate (OOO)"
+  //   replies_human = non-warmup, non-OOO (real people typed it)  — "Human reply rate"
+  //   leads         = marked_as_lead
+  const repliesQ = `
     WITH sender_types AS (
       SELECT DISTINCT ON (lower(email)) lower(email) AS email_lower,
         COALESCE(mailbox_type, 'smtp') AS sender_type
@@ -132,44 +123,60 @@ export async function GET(req: NextRequest) {
     SELECT
       COALESCE(st.sender_type, 'smtp') AS from_type,
       COALESCE(rt.recipient_type, 'unknown') AS to_type,
-      COUNT(*)::int AS leads
+      COUNT(*) FILTER (WHERE COALESCE(ur.admin_label, ur.category) NOT IN ('warmup','warm_up'))::int AS replies_ooo,
+      COUNT(*) FILTER (WHERE COALESCE(ur.admin_label, ur.category) NOT IN ('warmup','warm_up','ooo_auto_reply'))::int AS replies_human,
+      COUNT(*) FILTER (WHERE ur.marked_as_lead)::int AS leads
     FROM unibox_replies ur
     LEFT JOIN sender_types    st ON st.email_lower = lower(ur.mailbox_email)
     LEFT JOIN recipient_types rt ON rt.email_lower = lower(COALESCE(ur.matched_lead_email, ur.lead_email))
-    WHERE ur.marked_as_lead = TRUE
-      AND ur.marked_at >= $1 AND ur.marked_at < ($2::date + interval '1 day')
+    WHERE ur.received_at >= $1 AND ur.received_at < ($2::date + interval '1 day')
       ${wsFilterUr}
     GROUP BY 1, 2
   `
 
   try {
-    const [{ rows: exact }, { rows: leadRows }] = await Promise.all([
-      pool.query(exactQ, params),
-      pool.query(leadsQ, params),
+    const [{ rows: sendRows }, { rows: replyRows }] = await Promise.all([
+      pool.query(sendsQ, params),
+      pool.query(repliesQ, params),
     ])
-    const leadByCombo = new Map<string, number>()
-    for (const l of leadRows) leadByCombo.set(`${l.from_type}|${l.to_type}`, +l.leads || 0)
+    const replyByCombo = new Map<string, { ooo: number; human: number; leads: number }>()
+    for (const r of replyRows) {
+      replyByCombo.set(`${r.from_type}|${r.to_type}`, {
+        ooo: +r.replies_ooo || 0, human: +r.replies_human || 0, leads: +r.leads || 0,
+      })
+    }
 
-    const rows = exact
-      .map((r) => ({
+    const rows = sendRows.map((r) => {
+      const rep = replyByCombo.get(`${r.from_type}|${r.to_type}`) || { ooo: 0, human: 0, leads: 0 }
+      const sent = +r.sent || 0
+      // Replies can exceed sends in-window (a reply's original send predates the
+      // window). Flag those rows so the UI can cap the displayed rate at 100%.
+      const capped = rep.ooo > sent && sent > 0
+      return {
         from_type: r.from_type as string,
         to_type: r.to_type as string,
-        sent: +r.sent || 0,
-        replies: +r.replies || 0,
-        pos_replies: +r.pos_replies || 0,
+        sent,
+        replies: rep.ooo,          // incl. OOO (primary reply rate)
+        replies_human: rep.human,
+        pos_replies: rep.human,    // kept for back-compat with any old consumer
         bounces: +r.bounces || 0,
-        leads: leadByCombo.get(`${r.from_type}|${r.to_type}`) || 0,
+        leads: rep.leads,
         unique_contacts: +r.unique_contacts || 0,
+        capped,
         is_approx: false,
-      }))
-      .sort((a, b) => b.sent - a.sent)
+      }
+    }).sort((a, b) => b.sent - a.sent)
 
-    // A lead combo may have NO matching send row (send outside window / not in
-    // email_events). Surface those as their own rows so the lead total is honest.
-    for (const [key, n] of leadByCombo) {
+    // Reply/lead combos with NO matching send row (send outside window / unmatched).
+    // Surface them so totals are honest, marked capped (no denominator).
+    for (const [key, rep] of replyByCombo) {
       const [from_type, to_type] = key.split('|')
       if (!rows.some((r) => r.from_type === from_type && r.to_type === to_type)) {
-        rows.push({ from_type, to_type, sent: 0, replies: 0, pos_replies: 0, bounces: 0, leads: n, unique_contacts: 0, is_approx: false })
+        rows.push({
+          from_type, to_type, sent: 0, replies: rep.ooo, replies_human: rep.human,
+          pos_replies: rep.human, bounces: 0, leads: rep.leads, unique_contacts: 0,
+          capped: rep.ooo > 0, is_approx: false,
+        })
       }
     }
     const hasApprox = rows.some((r) => r.is_approx)
