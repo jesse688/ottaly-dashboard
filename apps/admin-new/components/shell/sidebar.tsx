@@ -43,6 +43,7 @@ const CATEGORIES: Category[] = [
       { href: '/database', label: 'Database' },
       { href: '/verify-split', label: 'Verify Split' },
       { href: '/combo-analysis', label: 'Combo Analysis' },
+      { href: '/esp-matching', label: 'ESP Matching' },
     ],
   },
   {
