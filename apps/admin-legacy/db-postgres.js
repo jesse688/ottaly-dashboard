@@ -335,6 +335,28 @@ class PostgresDatabase {
         saved_at   BIGINT NOT NULL,
         PRIMARY KEY (ws_id, date)
       )`,
+      // ESP Inboxing Test runs. Each row = one workspace's test: ESP matching is
+      // flipped to broad for window_hours, then finalized (measure OOO rate per
+      // sender×recipient combo → flip to the best sender per recipient). Persisted
+      // so a server restart mid-window can restore/finalize on boot (never leave a
+      // client stuck on broad). Written/updated by admin-new lib/inbox-test.ts.
+      // NOTE: jwt is a short-lived PlusVibe token stored only to drive the delayed
+      // finalize write; cleared once the test reaches a terminal state.
+      `CREATE TABLE IF NOT EXISTS esp_inbox_tests (
+        id             TEXT PRIMARY KEY,
+        workspace_id   TEXT NOT NULL,
+        workspace_name TEXT,
+        status         TEXT NOT NULL,          -- running | done | error
+        started_at     BIGINT NOT NULL,
+        ends_at        BIGINT NOT NULL,
+        window_hours   REAL NOT NULL,
+        prior_setting  JSONB,                  -- ESP setting captured before flip (for restore)
+        jwt            TEXT,                    -- short-lived; nulled at terminal state
+        result         JSONB,                  -- per-combo stats + per-recipient recommendation
+        error          TEXT,
+        created_at     BIGINT NOT NULL,
+        updated_at     BIGINT NOT NULL
+      )`,
       // Per-day stats broken down by (sender ESP × recipient ESP), pulled from
       // PlusVibe /account/email-stats with provider + recp_provider filters
       // (MEASURED per combo, not apportioned). Powers the accurate Combo

@@ -336,6 +336,244 @@ export default function EspMatchingPage() {
           </div>
         ))}
       </div>
+
+      {/* Inboxing Test */}
+      <InboxTest token={token} workspaces={workspaces} selectedWsId={wsId} />
+    </div>
+  )
+}
+
+// ── Inboxing Test panel ──────────────────────────────────────────────────────
+// Flip a workspace to BROAD, wait a window, measure each combo's OOO/auto-reply
+// rate (fast inboxing signal), then auto-flip to the best sender per recipient.
+const ESP_LABEL: Record<string, string> = {
+  GOOGLE_WORKSPACE: 'Google',
+  MICROSOFT365: 'Microsoft',
+  REGULAR_ACCOUNT: 'Other',
+}
+
+interface RecRow { recp_provider: string; winner: string | null; ooo_rate: number; sent: number; confident: boolean }
+interface ComboRow { provider: string; recp_provider: string; sent: number; ooo: number; bounces: number; ooo_rate: number }
+interface TestRow {
+  id: string
+  workspace_id: string
+  workspace_name: string | null
+  status: 'running' | 'done' | 'error'
+  started_at: number
+  ends_at: number
+  window_hours: number
+  result: { combos: ComboRow[]; recommendations: RecRow[] } | null
+  error: string | null
+}
+
+function InboxTest({
+  token,
+  workspaces,
+  selectedWsId,
+}: {
+  token: string
+  workspaces: Workspace[]
+  selectedWsId: string
+}) {
+  const [tests, setTests] = useState<TestRow[]>([])
+  const [windowHours, setWindowHours] = useState('1')
+  const [scope, setScope] = useState<'single' | 'all'>('single')
+  const [msg, setMsg] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const load = useCallback(async () => {
+    const r = await fetch('/api/data/esp-matching/inbox-test').then((x) => x.json()).catch(() => ({ tests: [] }))
+    setTests(r.tests ?? [])
+  }, [])
+
+  useEffect(() => {
+    load()
+    const t = setInterval(load, 30000) // refresh running-test status
+    return () => clearInterval(t)
+  }, [load])
+
+  async function post(body: object) {
+    setBusy(true)
+    setMsg(null)
+    try {
+      const r = await fetch('/api/data/esp-matching/inbox-test', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token.trim()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }).then((x) => x.json())
+      if (r.error) setMsg(`Error: ${r.error}`)
+      else if (typeof r.started !== 'undefined')
+        setMsg(`Started ${r.started.length} test(s)${r.failed?.length ? `, ${r.failed.length} failed` : ''}.`)
+      else if (r.ok) setMsg('Done.')
+      await load()
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'request failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function startTests() {
+    if (!token.trim()) return setMsg('Paste a token above first.')
+    const wss =
+      scope === 'single'
+        ? workspaces.filter((w) => w.id === selectedWsId)
+        : workspaces
+    if (!wss.length) return setMsg('No workspace selected.')
+    if (scope === 'all' && !confirm(`Start an inboxing test on ALL ${wss.length} workspaces? Each is flipped to broad for ${windowHours}h.`))
+      return
+    post({ action: 'start', workspaces: wss.map((w) => ({ id: w.id, name: w.name })), window_hours: Number(windowHours) })
+  }
+
+  const running = tests.filter((t) => t.status === 'running')
+  const errored = tests.filter((t) => t.status === 'error')
+
+  return (
+    <div className="mt-8">
+      <div className="mb-2 text-lg font-bold text-gray-900">Inboxing Test</div>
+      <div className="mb-3 text-xs text-gray-500">
+        Flips a workspace to <b>send-to-all</b> for a window, measures each sender→recipient combo&apos;s
+        out-of-office/auto-reply rate (a fast inboxing signal), then auto-sets the best sender per
+        recipient. Recipients without enough signal stay on their prior setting (shown as &quot;inconclusive&quot;).
+      </div>
+
+      {/* Controls */}
+      <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-gray-200 bg-white p-4">
+        <div className="flex rounded-md border border-gray-200 overflow-hidden">
+          {(['single', 'all'] as const).map((s) => (
+            <button
+              key={s}
+              onClick={() => setScope(s)}
+              className={cn('px-3 py-1.5 text-sm', scope === s ? 'bg-gray-900 text-white' : 'bg-white text-gray-700')}
+            >
+              {s === 'single' ? 'Selected workspace' : 'All workspaces'}
+            </button>
+          ))}
+        </div>
+        <label className="text-xs text-gray-500">Window (hours)</label>
+        <input
+          value={windowHours}
+          onChange={(e) => setWindowHours(e.target.value)}
+          className="w-20 rounded-md border border-gray-200 px-2 py-1.5 text-sm"
+        />
+        <button
+          onClick={startTests}
+          disabled={busy}
+          className="rounded-md bg-gray-900 px-4 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
+        >
+          {busy ? 'Working…' : 'Run test'}
+        </button>
+        <button
+          onClick={() => post({ action: 'retest_inconclusive', window_hours: Number(windowHours) })}
+          disabled={busy}
+          className="rounded-md border border-gray-200 px-3 py-1.5 text-sm hover:bg-gray-50 disabled:opacity-50"
+          title="Re-run only workspaces whose last test left a recipient inconclusive"
+        >
+          Retest inconclusive
+        </button>
+        {msg && <span className="text-xs text-gray-600">{msg}</span>}
+      </div>
+
+      {/* Stuck-on-broad alerts */}
+      {errored.length > 0 && (
+        <div className="mb-3 rounded-xl border border-red-300 bg-red-50 p-3 text-xs text-red-800">
+          ⚠ {errored.length} test(s) errored and may be <b>stuck on send-to-all</b> (token likely expired).
+          Paste a fresh token above, then click Restore:
+          <div className="mt-2 flex flex-col gap-1">
+            {errored.map((t) => (
+              <div key={t.id} className="flex items-center gap-2">
+                <span>{t.workspace_name || t.workspace_id} — {t.error}</span>
+                <button
+                  onClick={() => post({ action: 'restore', id: t.id })}
+                  className="rounded border border-red-400 px-2 py-0.5 text-red-700 hover:bg-red-100"
+                >
+                  Restore prior
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Running */}
+      {running.length > 0 && (
+        <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+          {running.length} test(s) running (broad sending). Winners apply automatically when each window ends.
+          {running.map((t) => (
+            <div key={t.id}>
+              {t.workspace_name || t.workspace_id} — ends {new Date(Number(t.ends_at)).toLocaleTimeString()}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Results */}
+      <div className="space-y-4">
+        {tests
+          .filter((t) => t.status === 'done' && t.result)
+          .slice(0, 20)
+          .map((t) => (
+            <div key={t.id} className="rounded-xl border border-gray-200 bg-white p-4">
+              <div className="mb-2 flex items-baseline justify-between">
+                <div className="text-sm font-semibold text-gray-900">{t.workspace_name || t.workspace_id}</div>
+                <div className="text-[11px] text-gray-400">
+                  {t.window_hours}h test · {new Date(Number(t.started_at)).toLocaleString()}
+                </div>
+              </div>
+              {/* Recommendation per recipient */}
+              <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                {(t.result?.recommendations ?? []).map((r) => (
+                  <div key={r.recp_provider} className="rounded-lg border border-gray-200 p-2">
+                    <div className="text-[11px] uppercase text-gray-500">To {ESP_LABEL[r.recp_provider]}</div>
+                    {r.confident && r.winner ? (
+                      <>
+                        <div className="text-sm font-bold text-gray-900">Use {ESP_LABEL[r.winner]}</div>
+                        <div className="text-[11px] text-gray-500">
+                          {(r.ooo_rate * 100).toFixed(1)}% OOO · {r.sent} sent
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-sm font-medium text-amber-600">
+                        Inconclusive
+                        <div className="text-[11px] font-normal text-gray-400">only {r.sent} sent — retest longer</div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {/* Per-combo detail */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-[12px]">
+                  <thead>
+                    <tr className="text-left text-[10px] uppercase text-gray-400">
+                      <th className="py-1">Sender → Recipient</th>
+                      <th className="py-1 text-right">Sent</th>
+                      <th className="py-1 text-right">OOO/Auto</th>
+                      <th className="py-1 text-right">OOO Rate</th>
+                      <th className="py-1 text-right">Bounces</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(t.result?.combos ?? [])
+                      .filter((c) => c.sent > 0)
+                      .sort((a, b) => b.sent - a.sent)
+                      .map((c) => (
+                        <tr key={`${c.provider}-${c.recp_provider}`} className="border-t border-gray-100">
+                          <td className="py-1">
+                            {ESP_LABEL[c.provider]} → {ESP_LABEL[c.recp_provider]}
+                          </td>
+                          <td className="py-1 text-right">{c.sent}</td>
+                          <td className="py-1 text-right">{c.ooo}</td>
+                          <td className="py-1 text-right font-medium">{(c.ooo_rate * 100).toFixed(1)}%</td>
+                          <td className="py-1 text-right text-gray-500">{c.bounces}</td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+      </div>
     </div>
   )
 }
