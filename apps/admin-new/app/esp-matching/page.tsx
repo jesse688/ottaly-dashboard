@@ -139,7 +139,8 @@ export default function EspMatchingPage() {
 
   async function applyOne(id: string, name: string, payload: object) {
     try {
-      const res = await fetch(`/api/data/esp-matching/setting?workspace_id=${id}`, {
+      const qs = `workspace_id=${id}&source=manual&ws_name=${encodeURIComponent(name)}`
+      const res = await fetch(`/api/data/esp-matching/setting?${qs}`, {
         method: 'PUT',
         headers: authHeaders(),
         body: JSON.stringify(payload),
@@ -183,13 +184,17 @@ export default function EspMatchingPage() {
   }
 
   return (
-    <div className="mx-auto max-w-[1000px] px-6 py-6">
+    <div className="mx-auto max-w-[1200px] px-6 py-6">
       <div className="mb-4">
         <div className="text-xl font-bold text-gray-900">ESP Matching</div>
         <div className="mt-0.5 text-xs text-gray-500">
           Set which sender provider(s) send to each recipient provider — one workspace or all at once.
         </div>
       </div>
+
+      {/* Current settings across all workspaces + change history */}
+      <SettingsOverview />
+      <ChangeLog />
 
       {/* Auth */}
       <details className="mb-4 rounded-xl border border-gray-200 bg-white p-4">
@@ -353,6 +358,184 @@ export default function EspMatchingPage() {
       {/* Inboxing Test */}
       <InboxTest token={token} workspaces={workspaces} selectedWsId={wsId} />
     </div>
+  )
+}
+
+// ── Settings overview (all workspaces) ───────────────────────────────────────
+const ESP_SHORT: Record<string, string> = {
+  GOOGLE_WORKSPACE: 'Google',
+  MICROSOFT365: 'Microsoft',
+  REGULAR_ACCOUNT: 'Other',
+}
+function senders(arr: string[] | undefined): string {
+  if (!arr || arr.length === 0) return 'Skip'
+  if (arr.length === 3) return 'All'
+  return arr.map((v) => ESP_SHORT[v] ?? v).join(' + ')
+}
+interface OverviewRow {
+  id: string
+  name: string
+  mapping: Record<string, string[]> | null
+  drifted: boolean
+  error: string | null
+}
+
+function SettingsOverview() {
+  const [rows, setRows] = useState<OverviewRow[]>([])
+  const [loading, setLoading] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const [fetchedAt, setFetchedAt] = useState<number | null>(null)
+
+  async function load() {
+    setLoading(true)
+    setErr(null)
+    try {
+      const r = await fetch('/api/data/esp-matching/overview').then((x) => x.json())
+      if (r.error) setErr(r.error)
+      else {
+        setRows(r.workspaces ?? [])
+        setFetchedAt(r.fetched_at ?? null)
+      }
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const driftCount = rows.filter((r) => r.drifted).length
+
+  return (
+    <div className="mb-4 rounded-xl border border-gray-200 bg-white p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <div>
+          <div className="text-sm font-bold text-gray-900">Current settings — all workspaces</div>
+          <div className="text-[11px] text-gray-400">
+            {fetchedAt ? `Fetched ${new Date(fetchedAt).toLocaleTimeString()}` : 'Live from PlusVibe'}
+            {driftCount > 0 && <span className="ml-2 text-amber-600">· {driftCount} changed outside this tool</span>}
+          </div>
+        </div>
+        <button
+          onClick={load}
+          disabled={loading}
+          className="rounded-md bg-gray-900 px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
+        >
+          {loading ? 'Loading…' : rows.length ? 'Refresh' : 'Load current settings'}
+        </button>
+      </div>
+      {err && <div className="mb-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">Error: {err}</div>}
+      {rows.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-[12px]">
+            <thead>
+              <tr className="text-left text-[10px] uppercase text-gray-400">
+                <th className="py-1 pr-3">Workspace</th>
+                <th className="py-1 pr-3">Google recipients →</th>
+                <th className="py-1 pr-3">Microsoft recipients →</th>
+                <th className="py-1 pr-3">Other recipients →</th>
+                <th className="py-1">Flag</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id} className={cn('border-t border-gray-100', r.drifted && 'bg-amber-50')}>
+                  <td className="py-1 pr-3 font-medium text-gray-800">{r.name}</td>
+                  {r.error ? (
+                    <td colSpan={3} className="py-1 text-red-500">
+                      {r.error}
+                    </td>
+                  ) : (
+                    <>
+                      <td className="py-1 pr-3">{senders(r.mapping?.GOOGLE_WORKSPACE)}</td>
+                      <td className="py-1 pr-3">{senders(r.mapping?.MICROSOFT365)}</td>
+                      <td className="py-1 pr-3">{senders(r.mapping?.REGULAR_ACCOUNT)}</td>
+                    </>
+                  )}
+                  <td className="py-1">{r.drifted && <span className="text-amber-600" title="Changed outside this tool">⚠ external</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Change log ────────────────────────────────────────────────────────────────
+interface ChangeRow {
+  id: number
+  ws_name: string | null
+  ws_id: string
+  before_mapping: Record<string, string[]> | null
+  after_mapping: Record<string, string[]> | null
+  source: string
+  note: string | null
+  changed_at: number
+}
+function diffLine(before: Record<string, string[]> | null, after: Record<string, string[]> | null): string {
+  const recps = ['GOOGLE_WORKSPACE', 'MICROSOFT365', 'REGULAR_ACCOUNT']
+  const parts: string[] = []
+  for (const rc of recps) {
+    const b = senders(before?.[rc])
+    const a = senders(after?.[rc])
+    if (b !== a) parts.push(`${ESP_SHORT[rc]}: ${b} → ${a}`)
+  }
+  return parts.length ? parts.join('  ·  ') : 'no change'
+}
+function ChangeLog() {
+  const [rows, setRows] = useState<ChangeRow[]>([])
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    fetch('/api/data/esp-matching/change-log')
+      .then((x) => x.json())
+      .then((d) => setRows(d.changes ?? []))
+      .catch(() => {})
+  }, [open])
+
+  const SOURCE_STYLE: Record<string, string> = {
+    manual: 'bg-gray-100 text-gray-700',
+    'inbox-test': 'bg-sky-100 text-sky-700',
+    restore: 'bg-amber-100 text-amber-700',
+    external: 'bg-red-100 text-red-700',
+  }
+
+  return (
+    <details className="mb-4 rounded-xl border border-gray-200 bg-white p-4" onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
+      <summary className="cursor-pointer text-sm font-bold text-gray-900">Change history</summary>
+      <div className="mt-3 overflow-x-auto">
+        {rows.length === 0 ? (
+          <div className="text-xs text-gray-400">No changes recorded yet.</div>
+        ) : (
+          <table className="w-full text-[12px]">
+            <thead>
+              <tr className="text-left text-[10px] uppercase text-gray-400">
+                <th className="py-1 pr-3">When</th>
+                <th className="py-1 pr-3">Workspace</th>
+                <th className="py-1 pr-3">Source</th>
+                <th className="py-1">Change</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((c) => (
+                <tr key={c.id} className="border-t border-gray-100">
+                  <td className="whitespace-nowrap py-1 pr-3 text-gray-500">{new Date(Number(c.changed_at)).toLocaleString()}</td>
+                  <td className="py-1 pr-3 font-medium text-gray-800">{c.ws_name || c.ws_id}</td>
+                  <td className="py-1 pr-3">
+                    <span className={cn('rounded-full px-1.5 py-0.5 text-[10px] font-bold', SOURCE_STYLE[c.source] ?? 'bg-gray-100 text-gray-600')}>
+                      {c.source}
+                    </span>
+                  </td>
+                  <td className="py-1 text-gray-700">{diffLine(c.before_mapping, c.after_mapping)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </details>
   )
 }
 

@@ -1,5 +1,6 @@
 import pool from './db'
 import { getPvJwt } from './pv-auth'
+import { normalizeMapping, logEspChange } from './esp-audit'
 
 // ── ESP Inboxing Test engine ─────────────────────────────────────────────────
 // Flow per workspace:
@@ -256,6 +257,14 @@ export async function finalizeTest(id: string): Promise<void> {
     })
 
     await putEspSetting(wsId, esp_setting)
+    await logEspChange(
+      wsId,
+      (test.workspace_name as string) || null,
+      normalizeMapping(prior),
+      normalizeMapping(esp_setting),
+      'inbox-test',
+      now,
+    )
     await pool.query(
       `UPDATE esp_inbox_tests
          SET status='done', result=$2, updated_at=$3, error=NULL
@@ -283,6 +292,14 @@ export async function restoreTest(id: string): Promise<void> {
   const prior: EspEntry[] = test.prior_setting || []
   if (!prior.length) throw new Error('no prior setting captured to restore')
   await putEspSetting(test.workspace_id, prior)
+  await logEspChange(
+    test.workspace_id,
+    (test.workspace_name as string) || null,
+    null,
+    normalizeMapping(prior),
+    'restore',
+    Date.now(),
+  )
   await pool.query(
     `UPDATE esp_inbox_tests SET status='done', error='restored to prior', updated_at=$2 WHERE id=$1`,
     [id, Date.now()],

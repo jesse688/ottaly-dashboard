@@ -2,20 +2,17 @@ import { NextResponse } from 'next/server'
 import pool from '@/lib/db'
 
 // Client list for the Combo Analysis scope dropdown: workspace_id + human name.
-// Names come from workspace_stats (same source /triage uses); only workspaces
-// that actually appear in email_events are offered, so the dropdown never lists
-// clients with no send data to analyse.
+// Lists ALL workspaces from workspace_stats (not just those with email_events
+// send history — that filter hid workspaces that are actually sending, because
+// email_events is webhook-partial). Combo data now comes from combo_daily_stats,
+// which is populated per-workspace by the warmer regardless of email_events.
 export async function GET() {
   try {
     const { rows } = await pool.query<{ id: string; name: string }>(
-      `SELECT ws.workspace_id AS id,
-              COALESCE(NULLIF(ws.workspace_name, ''), ws.workspace_id) AS name
-         FROM workspace_stats ws
-        WHERE EXISTS (
-                SELECT 1 FROM email_events ee
-                 WHERE ee.workspace_id = ws.workspace_id
-                   AND ee.event_type = 'sent'
-              )
+      `SELECT workspace_id AS id,
+              COALESCE(NULLIF(workspace_name, ''), workspace_id) AS name
+         FROM workspace_stats
+        WHERE workspace_id IS NOT NULL AND workspace_id <> ''
         ORDER BY name`
     )
     return NextResponse.json({ workspaces: rows })

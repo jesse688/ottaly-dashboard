@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from 'next/server'
 import { getPvJwt, invalidatePvJwt, hasPvCreds } from '@/lib/pv-auth'
+import { normalizeMapping, logEspChange, type Mapping } from '@/lib/esp-audit'
 
 // ESP Matching (Advanced ESP Matching / deliverability) read + write.
 // These live ONLY on PlusVibe's internal API (api.pipl.ai/v1) — the public
@@ -71,12 +72,32 @@ export async function PUT(req: NextRequest) {
   if (!workspaceId) return NextResponse.json({ error: 'Missing workspace_id' }, { status: 400 })
   const body = await req.json().catch(() => null)
   if (!body) return NextResponse.json({ error: 'Missing/invalid JSON body' }, { status: 400 })
+  const wsName = req.nextUrl.searchParams.get('ws_name')
+  const source = req.nextUrl.searchParams.get('source') || 'manual'
   try {
     const usingServer = !suppliedBearer(req)
-    let token = await resolveToken(req)
+    const token = await resolveToken(req)
+    const authHeader = { Authorization: `Bearer ${token}` }
+
+    // Capture BEFORE mapping for the audit log (best-effort; don't block write).
+    let before: Mapping | null = null
+    try {
+      const bres = await fetch(
+        `${PIPL_BASE}/user/get-workspace-setting?workspace_id=${encodeURIComponent(workspaceId)}`,
+        { headers: authHeader, signal: AbortSignal.timeout(15000) },
+      )
+      if (bres.ok) {
+        const bd = await bres.json()
+        const esp = bd?.esp_setting ? bd : bd?.data?.esp_setting ? bd.data : bd?.data || bd
+        before = normalizeMapping(esp?.esp_setting)
+      }
+    } catch {
+      /* before-read failed; proceed with the write, log after-only */
+    }
+
     const init: RequestInit = {
       method: 'PUT',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      headers: { ...authHeader, 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(15000),
     }
@@ -89,6 +110,13 @@ export async function PUT(req: NextRequest) {
       },
     )
     const data = await res.json().catch(() => ({}))
+
+    // Log the change on success (after = the mapping we just wrote).
+    if (res.ok) {
+      const after = normalizeMapping((body as { esp_setting?: [] })?.esp_setting)
+      await logEspChange(workspaceId, wsName, before, after, source, Date.now())
+    }
+
     return NextResponse.json(data, { status: res.status })
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : 'proxy error' }, { status: 502 })
