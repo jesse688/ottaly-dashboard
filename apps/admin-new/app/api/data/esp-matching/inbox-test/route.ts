@@ -4,10 +4,8 @@ import { startTest, restoreTest, finalizeTest } from '@/lib/inbox-test'
 
 export const dynamic = 'force-dynamic'
 
-function bearer(req: NextRequest): string {
-  const auth = req.headers.get('authorization') || ''
-  return auth.startsWith('Bearer ') ? auth.slice(7) : auth
-}
+// Auth is handled server-side (lib/pv-auth logs in with env creds) — no token
+// needs to come from the client for inbox-test actions.
 
 // GET  → list recent tests (status + results) for the dashboard.
 export async function GET() {
@@ -33,13 +31,11 @@ export async function GET() {
 //   { action: 'restore', id }                          (manual restore, needs token)
 //   { action: 'finalize', id }                         (force-finalize now, for testing)
 export async function POST(req: NextRequest) {
-  const jwt = bearer(req)
   const body = await req.json().catch(() => ({}))
   const action = body?.action
 
   try {
     if (action === 'start') {
-      if (!jwt) return NextResponse.json({ error: 'Missing Bearer token' }, { status: 400 })
       const windowHours = Number(body.window_hours) || 1
       const wss: Array<{ id: string; name: string }> = Array.isArray(body.workspaces) ? body.workspaces : []
       if (!wss.length) return NextResponse.json({ error: 'No workspaces' }, { status: 400 })
@@ -47,7 +43,7 @@ export async function POST(req: NextRequest) {
       const failed: Array<{ id: string; error: string }> = []
       for (const w of wss) {
         try {
-          const { id } = await startTest(w.id, w.name, jwt, windowHours)
+          const { id } = await startTest(w.id, w.name, windowHours)
           started.push(id)
         } catch (e) {
           failed.push({ id: w.id, error: e instanceof Error ? e.message : 'start failed' })
@@ -57,7 +53,6 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'retest_inconclusive') {
-      if (!jwt) return NextResponse.json({ error: 'Missing Bearer token' }, { status: 400 })
       const windowHours = Number(body.window_hours) || 2
       // Latest test per workspace; retest those with any non-confident recipient.
       const { rows } = await pool.query(
@@ -74,7 +69,7 @@ export async function POST(req: NextRequest) {
       const failed: Array<{ id: string; error: string }> = []
       for (const r of toRetest) {
         try {
-          const { id } = await startTest(r.workspace_id, r.workspace_name || r.workspace_id, jwt, windowHours)
+          const { id } = await startTest(r.workspace_id, r.workspace_name || r.workspace_id, windowHours)
           started.push(id)
         } catch (e) {
           failed.push({ id: r.workspace_id, error: e instanceof Error ? e.message : 'start failed' })
@@ -84,9 +79,8 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'restore') {
-      if (!jwt) return NextResponse.json({ error: 'Missing Bearer token' }, { status: 400 })
       if (!body.id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
-      await restoreTest(body.id, jwt)
+      await restoreTest(body.id)
       return NextResponse.json({ ok: true })
     }
 

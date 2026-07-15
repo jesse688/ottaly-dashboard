@@ -1,4 +1,5 @@
 import pool from './db'
+import { getPvJwt } from './pv-auth'
 
 // ── ESP Inboxing Test engine ─────────────────────────────────────────────────
 // Flow per workspace:
@@ -70,7 +71,8 @@ async function pvStat(
   }
 }
 
-async function getEspSetting(wsId: string, jwt: string): Promise<EspEntry[]> {
+async function getEspSetting(wsId: string): Promise<EspEntry[]> {
+  const jwt = await getPvJwt()
   const res = await fetch(`${PIPL}/user/get-workspace-setting?workspace_id=${wsId}`, {
     headers: { Authorization: `Bearer ${jwt}` },
     signal: AbortSignal.timeout(15000),
@@ -81,12 +83,8 @@ async function getEspSetting(wsId: string, jwt: string): Promise<EspEntry[]> {
   return esp?.esp_setting ?? []
 }
 
-async function putEspSetting(
-  wsId: string,
-  jwt: string,
-  esp_setting: EspEntry[],
-  maxLeadDomain = 0,
-): Promise<void> {
+async function putEspSetting(wsId: string, esp_setting: EspEntry[], maxLeadDomain = 0): Promise<void> {
+  const jwt = await getPvJwt()
   // PlusVibe 500s if max_lead_domain_per_day < 1 — only send it when enabled.
   const payload: Record<string, unknown> = {
     esp_setting,
@@ -134,11 +132,9 @@ function newId(wsId: string, now: number): string {
 export async function startTest(
   wsId: string,
   wsName: string,
-  jwt: string,
   windowHours: number,
 ): Promise<{ id: string }> {
   await ensureTable()
-  if (!jwt) throw new Error('Missing token')
   // Refuse a second concurrent running test for the same workspace.
   const existing = await pool.query(
     `SELECT id FROM esp_inbox_tests WHERE workspace_id = $1 AND status = 'running'`,
@@ -146,18 +142,20 @@ export async function startTest(
   )
   if (existing.rows.length) throw new Error('A test is already running for this workspace')
 
-  const prior = await getEspSetting(wsId, jwt) // capture BEFORE flipping
-  await putEspSetting(wsId, jwt, broadSetting())
+  const prior = await getEspSetting(wsId) // capture BEFORE flipping (server token)
+  await putEspSetting(wsId, broadSetting())
 
   const now = Date.now()
   const id = newId(wsId, now)
   const endsAt = now + windowHours * 3600_000
+  // jwt column no longer used (server auto-login handles the delayed finalize);
+  // kept nullable in schema for compatibility.
   await pool.query(
     `INSERT INTO esp_inbox_tests
        (id, workspace_id, workspace_name, status, started_at, ends_at, window_hours,
-        prior_setting, jwt, created_at, updated_at)
-     VALUES ($1,$2,$3,'running',$4,$5,$6,$7,$8,$4,$4)`,
-    [id, wsId, wsName, now, endsAt, windowHours, JSON.stringify(prior), jwt],
+        prior_setting, created_at, updated_at)
+     VALUES ($1,$2,$3,'running',$4,$5,$6,$7,$4,$4)`,
+    [id, wsId, wsName, now, endsAt, windowHours, JSON.stringify(prior)],
   )
   scheduleFinalize(id, endsAt - now)
   return { id }
@@ -235,7 +233,6 @@ export async function finalizeTest(id: string): Promise<void> {
   if (!test || test.status !== 'running') return
 
   const wsId = test.workspace_id as string
-  const jwt = test.jwt as string
   const now = Date.now()
 
   try {
@@ -258,17 +255,17 @@ export async function finalizeTest(id: string): Promise<void> {
       }
     })
 
-    await putEspSetting(wsId, jwt, esp_setting)
+    await putEspSetting(wsId, esp_setting)
     await pool.query(
       `UPDATE esp_inbox_tests
-         SET status='done', result=$2, jwt=NULL, updated_at=$3, error=NULL
+         SET status='done', result=$2, updated_at=$3, error=NULL
        WHERE id=$1`,
       [id, JSON.stringify(result), now],
     )
   } catch (err) {
-    // Write/measure failed (often: JWT expired). Leave a loud error state — the
-    // workspace is still on BROAD, which is safe-ish (sends continue) but the UI
-    // must surface it so the user restores manually with a fresh token.
+    // Measure/write failed. With server auto-login this is rare (token refreshes
+    // itself), but if it happens the workspace is still on BROAD — surface a loud
+    // error so the user can hit Restore (which also uses the server token).
     await pool.query(
       `UPDATE esp_inbox_tests SET status='error', error=$2, updated_at=$3 WHERE id=$1`,
       [id, err instanceof Error ? err.message : 'finalize failed', now],
@@ -276,18 +273,18 @@ export async function finalizeTest(id: string): Promise<void> {
   }
 }
 
-// Manual restore (fresh token supplied) — used by the safety-net button when a
-// test errored and the workspace is stuck on broad.
-export async function restoreTest(id: string, jwt: string): Promise<void> {
+// Restore a workspace to its captured prior setting (server token). Used by the
+// safety-net button when a test errored and the workspace is stuck on broad.
+export async function restoreTest(id: string): Promise<void> {
   await ensureTable()
   const { rows } = await pool.query(`SELECT * FROM esp_inbox_tests WHERE id=$1`, [id])
   const test = rows[0]
   if (!test) throw new Error('test not found')
   const prior: EspEntry[] = test.prior_setting || []
   if (!prior.length) throw new Error('no prior setting captured to restore')
-  await putEspSetting(test.workspace_id, jwt, prior)
+  await putEspSetting(test.workspace_id, prior)
   await pool.query(
-    `UPDATE esp_inbox_tests SET status='done', jwt=NULL, error='restored to prior', updated_at=$2 WHERE id=$1`,
+    `UPDATE esp_inbox_tests SET status='done', error='restored to prior', updated_at=$2 WHERE id=$1`,
     [id, Date.now()],
   )
 }

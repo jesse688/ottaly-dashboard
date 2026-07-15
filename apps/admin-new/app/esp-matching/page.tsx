@@ -82,10 +82,13 @@ export default function EspMatchingPage() {
     })
   }
 
-  const authHeaders = useCallback(
-    () => ({ Authorization: `Bearer ${token.trim()}`, 'Content-Type': 'application/json' }),
-    [token],
-  )
+  // Token is OPTIONAL now: the server logs in with its own creds. Only send an
+  // Authorization header if the user pasted a token to override.
+  const authHeaders = useCallback((): Record<string, string> => {
+    const h: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (token.trim()) h.Authorization = `Bearer ${token.trim()}`
+    return h
+  }, [token])
 
   function buildPayload() {
     const cap = Number(dailyCap) || 0
@@ -105,7 +108,6 @@ export default function EspMatchingPage() {
   }
 
   async function showCurrent() {
-    if (!token.trim()) return addLog('Paste a token first.', 'err')
     if (!wsId) return addLog('Pick a workspace.', 'err')
     const ws = workspaces.find((w) => w.id === wsId)
     addLog(`Reading ${ws?.name ?? wsId}…`)
@@ -155,7 +157,6 @@ export default function EspMatchingPage() {
   }
 
   async function apply() {
-    if (!token.trim()) return addLog('Paste a token first.', 'err')
     const payload = buildPayload()
     addLog(`Payload: ${JSON.stringify(payload)}`, 'info')
     setBusy(true)
@@ -191,31 +192,36 @@ export default function EspMatchingPage() {
       </div>
 
       {/* Auth */}
-      <div className="mb-4 rounded-xl border border-gray-200 bg-white p-4">
-        <label className="mb-1 block text-xs font-medium text-gray-500">PlusVibe Bearer token (JWT)</label>
-        <textarea
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-          placeholder="eyJhbGci…"
-          className="h-16 w-full rounded-md border border-gray-200 p-2 font-mono text-xs"
-        />
-        <div className="mt-1 flex items-center gap-3">
-          <button
-            className="rounded-md border border-gray-200 px-2.5 py-1 text-xs hover:bg-gray-50"
-            onClick={() => {
-              try {
-                localStorage.setItem('pv_token', token.trim())
-                addLog('Token saved in this browser.', 'ok')
-              } catch {}
-            }}
-          >
-            Remember on this device
-          </button>
-          <span className="text-[11px] text-gray-400">
-            DevTools → Network → any api.pipl.ai request → Authorization: Bearer … (token expires in hours)
-          </span>
+      <details className="mb-4 rounded-xl border border-gray-200 bg-white p-4">
+        <summary className="cursor-pointer text-xs font-medium text-gray-500">
+          Auth: automatic (server login) — click to override with your own token
+        </summary>
+        <div className="mt-3">
+          <label className="mb-1 block text-xs font-medium text-gray-500">PlusVibe Bearer token (JWT) — optional override</label>
+          <textarea
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder="Leave blank to use the server's login"
+            className="h-16 w-full rounded-md border border-gray-200 p-2 font-mono text-xs"
+          />
+          <div className="mt-1 flex items-center gap-3">
+            <button
+              className="rounded-md border border-gray-200 px-2.5 py-1 text-xs hover:bg-gray-50"
+              onClick={() => {
+                try {
+                  localStorage.setItem('pv_token', token.trim())
+                  addLog('Token saved in this browser.', 'ok')
+                } catch {}
+              }}
+            >
+              Remember on this device
+            </button>
+            <span className="text-[11px] text-gray-400">
+              Normally not needed — the server authenticates itself. Paste a token only to act as a different account.
+            </span>
+          </div>
         </div>
-      </div>
+      </details>
 
       {/* Target */}
       <div className="mb-4 rounded-xl border border-gray-200 bg-white p-4">
@@ -403,9 +409,11 @@ function InboxTest({
     setBusy(true)
     setMsg(null)
     try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (token.trim()) headers.Authorization = `Bearer ${token.trim()}`
       const r = await fetch('/api/data/esp-matching/inbox-test', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token.trim()}`, 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(body),
       }).then((x) => x.json())
       if (r.error) setMsg(`Error: ${r.error}`)
@@ -421,7 +429,6 @@ function InboxTest({
   }
 
   function startTests() {
-    if (!token.trim()) return setMsg('Paste a token above first.')
     const wss =
       scope === 'single'
         ? workspaces.filter((w) => w.id === selectedWsId)
