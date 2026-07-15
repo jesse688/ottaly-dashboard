@@ -27,11 +27,14 @@ interface Campaign {
 }
 
 async function listCampaigns(wsId: string): Promise<Campaign[]> {
-  const res = await fetch(`${PV_BASE}/campaign/list?workspace_id=${wsId}&limit=500`, {
+  // Use /campaign/list-all: it returns the FULL campaign objects (including
+  // is_esp_match + first_wait_time, which we need). /campaign/list returns only
+  // minimal fields and 400s on limit>100.
+  const res = await fetch(`${PV_BASE}/campaign/list-all?workspace_id=${wsId}`, {
     headers: { 'x-api-key': PV_KEY },
     signal: AbortSignal.timeout(20000),
   })
-  if (!res.ok) throw new Error(`campaign/list ${res.status}`)
+  if (!res.ok) throw new Error(`campaign/list-all ${res.status}`)
   const data = await res.json()
   return Array.isArray(data) ? data : data?.data ?? data?.campaigns ?? []
 }
