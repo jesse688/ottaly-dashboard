@@ -195,6 +195,7 @@ export default function EspMatchingPage() {
 
       {/* Current settings across all workspaces + change history */}
       <SettingsOverview />
+      <EspEnforcement />
       <ChangeLog />
 
       {/* Auth */}
@@ -358,6 +359,119 @@ export default function EspMatchingPage() {
 
       {/* Inboxing Test */}
       <InboxTest token={token} workspaces={workspaces} selectedWsId={wsId} />
+    </div>
+  )
+}
+
+// ── ESP enforcement (is_esp_match on campaigns) ──────────────────────────────
+// Workspace ESP mappings do nothing unless is_esp_match=1 on each campaign.
+// This panel shows how many campaigns have it on/off and enables it in bulk.
+interface EnforceRow {
+  id: string
+  name: string
+  active: number
+  esp_on: number
+  esp_off: number
+  error: string | null
+}
+function EspEnforcement() {
+  const [rows, setRows] = useState<EnforceRow[]>([])
+  const [loading, setLoading] = useState(false)
+  const [msg, setMsg] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  async function loadStatus() {
+    setLoading(true)
+    setMsg(null)
+    try {
+      const r = await fetch('/api/data/esp-matching/enable').then((x) => x.json())
+      if (r.error) setMsg(r.error)
+      else setRows(r.workspaces ?? [])
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function enableAll(on: boolean) {
+    const label = on ? 'ENABLE' : 'DISABLE'
+    if (!confirm(`${label} ESP matching on ALL active campaigns across every workspace? This makes your ESP mappings actually take effect.`)) return
+    setBusy(true)
+    setMsg('Working… this updates every active campaign, may take a minute.')
+    try {
+      const r = await fetch('/api/data/esp-matching/enable', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: on ? 'enable' : 'disable' }),
+      }).then((x) => x.json())
+      if (r.error) setMsg(`Error: ${r.error}`)
+      else setMsg(`Done — ${r.updated} campaign(s) updated${r.failed ? `, ${r.failed} failed` : ''}.`)
+      await loadStatus()
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const offTotal = rows.reduce((s, r) => s + (r.esp_off || 0), 0)
+  const onTotal = rows.reduce((s, r) => s + (r.esp_on || 0), 0)
+
+  return (
+    <div className="mb-4 rounded-xl border border-gray-200 bg-white p-4">
+      <div className="mb-2 flex items-center justify-between">
+        <div>
+          <div className="text-sm font-bold text-gray-900">ESP matching enforcement</div>
+          <div className="text-[11px] text-gray-400">
+            Mappings only take effect when campaigns have ESP matching ON. {rows.length > 0 && `${onTotal} on · ${offTotal} off`}
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={loadStatus} disabled={loading} className="rounded-md border border-gray-200 px-3 py-1.5 text-sm hover:bg-gray-50 disabled:opacity-50">
+            {loading ? 'Checking…' : 'Check status'}
+          </button>
+          <button onClick={() => enableAll(true)} disabled={busy} className="rounded-md bg-gray-900 px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50">
+            {busy ? 'Working…' : 'Enable on all campaigns'}
+          </button>
+        </div>
+      </div>
+      {msg && <div className="mb-2 text-xs text-gray-600">{msg}</div>}
+      {offTotal > 0 && (
+        <div className="mb-2 rounded bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          ⚠ {offTotal} active campaign(s) have ESP matching OFF — their ESP mappings are being ignored.
+        </div>
+      )}
+      {rows.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-[12px]">
+            <thead>
+              <tr className="text-left text-[10px] uppercase text-gray-400">
+                <th className="py-1 pr-3">Workspace</th>
+                <th className="py-1 pr-3 text-right">Active campaigns</th>
+                <th className="py-1 pr-3 text-right">ESP on</th>
+                <th className="py-1 pr-3 text-right">ESP off</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.filter((r) => r.active > 0 || r.error).map((r) => (
+                <tr key={r.id} className={cn('border-t border-gray-100', r.esp_off > 0 && 'bg-amber-50')}>
+                  <td className="py-1 pr-3 font-medium text-gray-800">{r.name}</td>
+                  {r.error ? (
+                    <td colSpan={3} className="py-1 text-red-500">{r.error}</td>
+                  ) : (
+                    <>
+                      <td className="py-1 pr-3 text-right">{r.active}</td>
+                      <td className="py-1 pr-3 text-right text-green-700">{r.esp_on}</td>
+                      <td className="py-1 pr-3 text-right text-amber-700">{r.esp_off}</td>
+                    </>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }
