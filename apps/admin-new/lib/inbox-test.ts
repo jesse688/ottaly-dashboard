@@ -87,14 +87,16 @@ async function putEspSetting(
   esp_setting: EspEntry[],
   maxLeadDomain = 0,
 ): Promise<void> {
+  // PlusVibe 500s if max_lead_domain_per_day < 1 — only send it when enabled.
+  const payload: Record<string, unknown> = {
+    esp_setting,
+    is_max_lead_domain_per_day: maxLeadDomain >= 1 ? 1 : 0,
+  }
+  if (maxLeadDomain >= 1) payload.max_lead_domain_per_day = maxLeadDomain
   const res = await fetch(`${PIPL}/user/update-workspace-setting?workspace_id=${wsId}`, {
     method: 'PUT',
     headers: { Authorization: `Bearer ${jwt}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      esp_setting,
-      is_max_lead_domain_per_day: maxLeadDomain > 0 ? 1 : 0,
-      max_lead_domain_per_day: maxLeadDomain,
-    }),
+    body: JSON.stringify(payload),
     signal: AbortSignal.timeout(15000),
   })
   if (!res.ok) throw new Error(`update-workspace-setting ${res.status}`)

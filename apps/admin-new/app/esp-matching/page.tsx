@@ -53,7 +53,7 @@ export default function EspMatchingPage() {
 
   // Load workspace list (reuses the combo-analysis dropdown source).
   useEffect(() => {
-    fetch('/api/data/combo-analysis/workspaces')
+    fetch('/api/data/esp-matching/workspaces')
       .then((r) => r.json())
       .then((d: { workspaces?: Workspace[] }) => {
         const ws = d.workspaces ?? []
@@ -94,7 +94,14 @@ export default function EspMatchingPage() {
       sender_esp: Array.from(picks[r.key]),
       tag_ids: '',
     }))
-    return { esp_setting, is_max_lead_domain_per_day: cap > 0 ? 1 : 0, max_lead_domain_per_day: cap }
+    // PlusVibe rejects max_lead_domain_per_day when it's < 1 ("must be a number
+    // greater than 0" → HTTP 500). Only include it when the cap is enabled.
+    const payload: Record<string, unknown> = {
+      esp_setting,
+      is_max_lead_domain_per_day: cap >= 1 ? 1 : 0,
+    }
+    if (cap >= 1) payload.max_lead_domain_per_day = cap
+    return payload
   }
 
   async function showCurrent() {
