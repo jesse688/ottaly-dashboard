@@ -61,10 +61,11 @@ export default function EspMatchingPage() {
         if (ws.length && !wsId) setWsId(ws[0].id)
       })
       .catch(() => addLog('Could not load workspace list.', 'err'))
-    // restore token from localStorage
+    // Do NOT auto-restore a saved token: the server auto-logs-in, and a stale
+    // pasted token would override it and 401. Clear any legacy saved token so it
+    // can't leak into requests. The token box is now an explicit opt-in override.
     try {
-      const t = localStorage.getItem('pv_token')
-      if (t) setToken(t)
+      localStorage.removeItem('pv_token')
     } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
