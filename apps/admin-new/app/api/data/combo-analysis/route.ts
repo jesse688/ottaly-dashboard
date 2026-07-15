@@ -138,15 +138,19 @@ export async function GET(req: NextRequest) {
         const from_type = SENDER_LABEL[r.provider as string] || (r.provider as string)
         const to_type = RECIP_LABEL[r.recp_provider as string] || (r.recp_provider as string)
         const sent = +r.sent || 0
-        const replies = +r.replies || 0 // PV total_reply_count = human + OOO (all non-warmup)
+        // PlusVibe field semantics (verified via PV's own computed rates):
+        //   total_reply_count  = HUMAN replies (EXCLUDES OOO)
+        //   total_ooo_reply_count = OOO / auto-replies (separate)
+        // So reply-rate-incl-OOO = reply + ooo; human = reply.
+        const human = +r.replies || 0 // stored from total_reply_count
         const ooo = +r.ooo || 0
-        const human = Math.max(0, replies - ooo)
+        const repliesInclOoo = human + ooo
         return {
           from_type,
           to_type,
           sent,
-          replies,                     // reply rate incl. OOO
-          replies_human: human,        // human reply rate (replies − OOO)
+          replies: repliesInclOoo,     // reply rate incl. OOO (human + OOO)
+          replies_human: human,        // human reply rate (excludes OOO)
           pos_replies: +r.pos || 0,    // positive/interested
           bounces: +r.bounces || 0,
           leads: leadByCombo.get(`${from_type}|${to_type}`) || 0,
