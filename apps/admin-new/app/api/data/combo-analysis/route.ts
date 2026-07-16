@@ -31,6 +31,7 @@ const MX_TO_RECIP: Record<string, string> = {
   email_other: 'email_other',
 }
 
+
 // Mirror legacy clampStartDate(): when "show historical" is off and a
 // fresh_start_date is set, never query earlier than that date.
 async function clampStartDate(startStr: string): Promise<string> {
@@ -92,8 +93,7 @@ export async function GET(req: NextRequest) {
               SUM((data->>'oooReplies')::int) AS ooo,
               SUM((data->>'posReplies')::int) AS pos,
               SUM((data->>'bounces')::int)    AS bounces,
-              SUM((data->>'contacted')::int)  AS contacted,
-              SUM(COALESCE((data->>'newLeads')::int, 0)) AS new_leads
+              SUM((data->>'contacted')::int)  AS contacted
          FROM combo_daily_stats
         WHERE date >= $1 AND date <= $2
           AND provider <> '_'
@@ -101,6 +101,11 @@ export async function GET(req: NextRequest) {
         GROUP BY provider, recp_provider`,
       workspaceId ? [start, end, workspaceId] : [start, end]
     )
+    // NOTE: new-lead / follow-up split is NOT computed here — PlusVibe's
+    // total_new_lead_contacted_count is only meaningful over a multi-day window
+    // (0 per-day) AND its stats API is very slow (~75s for one workspace's 9
+    // combos). So the split is fetched ON DEMAND, per-workspace, by the separate
+    // /new-lead-split route. This keeps the combo page fast.
 
     // Leads per (sender ESP × recipient ESP) from unibox_replies (marked_as_lead).
     // sender ESP ← receiving mailbox_meta.mailbox_type; recipient ESP ← contacts.mx_provider.
@@ -146,17 +151,10 @@ export async function GET(req: NextRequest) {
         const human = +r.replies || 0 // stored from total_reply_count
         const ooo = +r.ooo || 0
         const repliesInclOoo = human + ooo
-        // Step-1 (new-lead) sends vs follow-ups. new_leads = total_new_lead_contacted_count;
-        // follow-ups ≈ sent − new_leads. Shows how much of a combo is NEW leads on the
-        // wrong sender (rule not honored now) vs the draining follow-up tail.
-        const newLeads = Math.min(+r.new_leads || 0, sent)
-        const followUps = Math.max(0, sent - newLeads)
         return {
           from_type,
           to_type,
           sent,
-          new_leads: newLeads,
-          follow_ups: followUps,
           replies: repliesInclOoo,     // reply rate incl. OOO (human + OOO)
           replies_human: human,        // human reply rate (excludes OOO)
           pos_replies: +r.pos || 0,    // positive/interested
@@ -176,7 +174,7 @@ export async function GET(req: NextRequest) {
       const [from_type, to_type] = key.split('|')
       if (!rows.some((r) => r.from_type === from_type && r.to_type === to_type)) {
         rows.push({
-          from_type, to_type, sent: 0, new_leads: 0, follow_ups: 0, replies: 0, replies_human: 0,
+          from_type, to_type, sent: 0, replies: 0, replies_human: 0,
           pos_replies: 0, bounces: 0, leads: n, unique_contacts: 0,
           capped: false, is_approx: false,
         })

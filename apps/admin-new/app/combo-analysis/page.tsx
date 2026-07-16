@@ -159,6 +159,26 @@ export default function ComboAnalysisPage() {
   // Agency (all) vs single-client scope. '' = all workspaces.
   const [workspaceId, setWorkspaceId] = useState('')
   const [workspaces, setWorkspaces] = useState<{ id: string; name: string }[]>([])
+  // New-lead/follow-up split — on-demand, per-workspace only (slow PV API).
+  const [splitMap, setSplitMap] = useState<Record<string, number>>({})
+  const [splitLoading, setSplitLoading] = useState(false)
+
+  async function loadSplit() {
+    if (!workspaceId) return
+    setSplitLoading(true)
+    try {
+      const r = await fetch(
+        `/api/data/combo-analysis/new-lead-split?workspace_id=${workspaceId}&start=${dateFrom}&end=${dateTo}`,
+      ).then((x) => x.json())
+      const m: Record<string, number> = {}
+      for (const c of r.combos ?? []) m[`${c.from_type}|${c.to_type}`] = c.new_leads
+      setSplitMap(m)
+    } catch {
+      /* ignore */
+    } finally {
+      setSplitLoading(false)
+    }
+  }
 
   const loadData = useCallback(async (start: string, end: string, ws: string) => {
     setLoading(true)
@@ -206,6 +226,7 @@ export default function ComboAnalysisPage() {
 
   function setScope(ws: string) {
     setWorkspaceId(ws)
+    setSplitMap({}) // stale for the new scope
     loadData(dateFrom, dateTo, ws)
   }
 
@@ -544,7 +565,21 @@ export default function ComboAnalysisPage() {
       {/* Full breakdown table */}
       {!loading && !error && rows.length > 0 && (
         <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
-          <div className="border-b border-gray-200 bg-gray-50 px-5 py-3 text-[13px] font-bold text-gray-900">Full Breakdown</div>
+          <div className="flex items-center justify-between border-b border-gray-200 bg-gray-50 px-5 py-3">
+            <span className="text-[13px] font-bold text-gray-900">Full Breakdown</span>
+            {workspaceId ? (
+              <button
+                onClick={loadSplit}
+                disabled={splitLoading}
+                className="rounded-md border border-gray-200 bg-white px-3 py-1 text-xs font-medium hover:bg-gray-50 disabled:opacity-50"
+                title="Fetch new-lead (step 1) vs follow-up split for this workspace — slow (~1 min), on demand."
+              >
+                {splitLoading ? 'Loading split… (~1 min)' : 'Load new/follow-up split'}
+              </button>
+            ) : (
+              <span className="text-[11px] text-gray-400">Select a single workspace to load the new/follow-up split</span>
+            )}
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full border-collapse">
               <thead>
@@ -580,18 +615,22 @@ export default function ComboAnalysisPage() {
                         {fmt(r.sent)} {r.capped ? <span title="Replies from sends before this window — rate capped">⚠️</span> : null}
                       </td>
                       <td className="border-b border-gray-200 px-4 py-3 text-right tabular-nums">
-                        {r.sent > 0 ? (
-                          <>
-                            <span className="text-gray-900">{fmt(r.new_leads ?? 0)}</span>
-                            <span className="text-gray-300"> / </span>
-                            <span className="text-amber-600">{fmt(r.follow_ups ?? 0)}</span>
-                            <span className="ml-1 text-[11px] font-normal text-gray-400">
-                              ({Math.round((100 * (r.follow_ups ?? 0)) / r.sent)}% f/u)
-                            </span>
-                          </>
-                        ) : (
-                          '—'
-                        )}
+                        {(() => {
+                          const nl = splitMap[`${r.from_type}|${r.to_type}`]
+                          if (r.sent <= 0 || nl === undefined) return <span className="text-gray-300">—</span>
+                          const newLeads = Math.min(nl, r.sent)
+                          const fu = Math.max(0, r.sent - newLeads)
+                          return (
+                            <>
+                              <span className="text-gray-900">{fmt(newLeads)}</span>
+                              <span className="text-gray-300"> / </span>
+                              <span className="text-amber-600">{fmt(fu)}</span>
+                              <span className="ml-1 text-[11px] font-normal text-gray-400">
+                                ({Math.round((100 * fu) / r.sent)}% f/u)
+                              </span>
+                            </>
+                          )
+                        })()}
                       </td>
                       <td className={cn('border-b border-gray-200 px-4 py-3 text-right', rr != null ? rrClass(rr) : '')}>
                         {rr != null ? rr.toFixed(1) + '%' : '—'}

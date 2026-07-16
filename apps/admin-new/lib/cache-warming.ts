@@ -77,7 +77,7 @@ function aggregatePvEmailStats(raw: any): Record<string, number> {
   const header = raw?.header
   if (!header) {
     console.warn('[cache-warming] no header in PV response:', JSON.stringify(raw).slice(0, 100))
-    return { sent: 0, replies: 0, bounces: 0, posReplies: 0, oooReplies: 0, contacted: 0, newLeads: 0, leads: 0 }
+    return { sent: 0, replies: 0, bounces: 0, posReplies: 0, oooReplies: 0, contacted: 0, leads: 0 }
   }
 
   const agg = {
@@ -89,9 +89,6 @@ function aggregatePvEmailStats(raw: any): Record<string, number> {
     // People contacted (distinct leads emailed), NOT total emails sent — this is
     // the denominator for LPT (Contacts-To-Lead). Falls back to sent if PV omits it.
     contacted: header.total_contacted_count ?? header.total_sent_count ?? 0,
-    // New-lead (step-1) sends. follow-ups ≈ sent - newLeads. Lets the combo page
-    // split "new leads on this combo now" vs the draining follow-up tail.
-    newLeads: header.total_new_lead_contacted_count ?? 0,
     leads: 0, // Not available from email-stats, loaded separately
   }
   console.log(`[cache-warming] aggregated: sent=${agg.sent} replies=${agg.replies} ooo=${agg.oooReplies}`)
