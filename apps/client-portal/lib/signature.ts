@@ -137,25 +137,69 @@ function extractCompanyLinkedIn(text: string): string | null {
   const m = text.match(/https?:\/\/(?:[a-z]{2,3}\.)?linkedin\.com\/company\/[A-Za-z0-9\-_%]+\/?/i)
   return m ? m[0] : null
 }
+// Hosts that appear in signatures/email HTML but are NEVER the prospect's own
+// website: social, scheduling/CRM, marketing/tracking, review sites, code/dev,
+// CDNs and asset hosts. A URL on one of these is noise — grabbing it as the
+// "website" is exactly how we ended up with github.com / fonts.googleapis.com /
+// trustpilot.com as company sites (and fake company names derived from them).
+const BAD_HOST = /(?:^|\.)(?:linkedin|twitter|x|facebook|fb|instagram|youtube|youtu\.be|tiktok|pinterest|calendly|cal\.com|zoho|hubspot|mailchimp|sendgrid|sendgrid\.net|constantcontact|klaviyo|list-manage|mailgun|amazonses|awstrack|google|googleapis|gstatic|cloudfront|akamai|jsdelivr|unpkg|bootstrapcdn|fontawesome|github|githubusercontent|gitlab|bitbucket|trustpilot|glassdoor|yelp|feefo|reviews\.io|bit\.ly|tinyurl|t\.co|lnkd\.in|hs-sites|hsforms|typeform|docs\.google|drive\.google|dropbox|wetransfer|caseboard|notion\.so|substack|medium|wordpress\.org|w3\.org|schema\.org|sentry|segment|intercom|drift|zendesk|freshdesk)\./i
+const BAD_URL = /(linkedin|twitter|x\.com|facebook|instagram|youtube|calendly|zoho|hubspot|mailto|unsubscribe|\.png|\.jpe?g|\.gif|\.svg|\.css|\.js|\.woff2?|\.ico|\/issues\/|\/pull\/|\/blob\/|\/review\/|googleapis\.com|gstatic\.com|github\.com|githubusercontent|trustpilot|caseboard)/i
+
+function hostOf(u: string): string {
+  return u.replace(/^https?:\/\//i, '').replace(/^www\./i, '').split(/[/?#]/)[0].toLowerCase()
+}
+// The registrable-ish core of a host for comparison: drop www + TLD parts, keep
+// the main label. "mail.einhell.com" → "einhell", "acme.co.uk" → "acme".
+function domainCore(host: string): string {
+  const parts = host.replace(/^www\./, '').split('.')
+  if (parts.length <= 1) return parts[0] ?? ''
+  // Handle co.uk / com.au style: the core is the label before a 2-part public suffix.
+  const twoPart = /^(co|com|org|net|ac|gov)\.[a-z]{2}$/i.test(parts.slice(-2).join('.'))
+  return (twoPart ? parts[parts.length - 3] : parts[parts.length - 2]) ?? ''
+}
+
 function extractWebsite(text: string, leadEmail?: string): string | null {
-  // Any http(s) URL that isn't social/booking/email-tracking noise.
-  const urls = text.match(/https?:\/\/[^\s<>"')]+/gi) ?? []
-  const bad = /(linkedin|twitter|x\.com|facebook|instagram|youtube|calendly|zoho|hubspot|mailto|unsubscribe|\.png|\.jpg|\.gif)/i
-  for (const u of urls) {
-    if (!bad.test(u)) return u.replace(/[.,);]+$/, '')
+  // The lead's own email domain is the ground truth for their company site.
+  const emailHost = leadEmail && leadEmail.includes('@') ? hostOf(leadEmail.split('@')[1]) : ''
+  const emailCore = emailHost ? domainCore(emailHost) : ''
+  // Free-mail domains: the email domain tells us nothing about the company site.
+  const freeMail = /^(gmail|googlemail|outlook|hotmail|live|yahoo|ymail|icloud|me|aol|protonmail|proton|gmx|mail|msn)\.[a-z.]+$/i.test(emailHost)
+
+  const isNoise = (u: string): boolean => BAD_URL.test(u) || BAD_HOST.test(hostOf(u))
+
+  // 1) Best: a URL whose host matches the lead's own email domain (their real site).
+  const urls = (text.match(/https?:\/\/[^\s<>"')]+/gi) ?? []).map(u => u.replace(/[.,);]+$/, ''))
+  if (emailCore && !freeMail) {
+    for (const u of urls) {
+      if (!isNoise(u) && domainCore(hostOf(u)) === emailCore) return u
+    }
   }
-  // Bare domain — with OR without www. (signatures often show "NewlyBornUK.com").
+  // 2) Otherwise the first non-noise URL (kept conservative via the expanded blocklist).
+  for (const u of urls) {
+    if (!isNoise(u)) return u
+  }
+  // 3) Bare domain — with OR without www. (signatures often show "NewlyBornUK.com").
   // First REMOVE all email addresses from the text so we never mistake an email's
   // domain (or a fragment of it) for the website. Then match a domain on a common
   // public TLD and skip social/noise domains.
   const noEmails = text.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, ' ')
   const domainRe = /\b((?:www\.)?[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9-]+)*\.(?:com|co\.uk|org|net|io|ai|dev|app|biz|info|uk|us|ca|de|fr|es|it|nl|eu|me|store|shop))\b/gi
   const cands = noEmails.match(domainRe) ?? []
+  // Prefer a bare domain matching the email core, else the first non-noise one.
+  if (emailCore && !freeMail) {
+    for (const d of cands) {
+      if (!BAD_HOST.test(d) && !BAD_URL.test(d) && domainCore(d) === emailCore) {
+        return 'https://' + d.replace(/^https?:\/\//, '')
+      }
+    }
+  }
   for (const d of cands) {
-    if (bad.test(d)) continue
+    if (BAD_HOST.test(d) || BAD_URL.test(d)) continue
     return 'https://' + d.replace(/^https?:\/\//, '')
   }
-  void leadEmail
+  // 4) Last resort: if the email is a company domain (not free-mail), the domain
+  // itself is a reliable company site — better than nothing.
+  if (emailHost && !freeMail) return 'https://' + emailHost
   return null
 }
 
@@ -181,12 +225,20 @@ function extractTitle(text: string): string | null {
 function companyFromDomain(website: string | null): string | null {
   if (!website) return null
   const host = website.replace(/^https?:\/\//i, '').replace(/^www\./i, '').split(/[/?#]/)[0]
-  const label = host.split('.')[0]
+  // Use the registrable label (the part before the public suffix), not the first
+  // subdomain — "hello.email.trustedhousesitters.com" → "trustedhousesitters",
+  // not "hello". Strips common mail/notification subdomains that would mislead.
+  const label = domainCore(host)
   if (!label || label.length < 2) return null
   // Split camelCase / separators into words and Title-case.
   const words = label.replace(/[-_]+/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').trim()
   return words.replace(/\b\w/g, c => c.toUpperCase())
 }
+
+// Field labels that appear on their own line in signatures (often followed by the
+// value on the next line). These must NEVER be taken as a company name — that's
+// how "Phone" ended up as a company (it was the label above a phone number).
+const LABEL_ONLY = /^(?:phone|tel|telephone|mobile|mob|cell|fax|email|e-mail|mail|web|website|url|address|addr|office|direct|linkedin|twitter|instagram|facebook|whatsapp|skype|www)\b[:\s]*$/i
 
 function extractCompany(text: string, website?: string | null): string | null {
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
@@ -198,6 +250,7 @@ function extractCompany(text: string, website?: string | null): string | null {
   const looksLikeCompany = (line: string): boolean => {
     if (!line || line.length < 2 || line.length > 60) return false
     if (!/[A-Za-z]/.test(line)) return false
+    if (LABEL_ONLY.test(line)) return false               // bare "Phone" / "Email" / "Web"
     if (/[@=;:!?]|https?:|www\.|\bdmarc\b|\bspf\b|\bdkim\b|mailfrom|\.com\/|\d{4,}/i.test(line)) return false
     if (/[.!?]$/.test(line)) return false                 // ends like a sentence
     if (line.split(/\s+/).length > 6) return false        // too many words to be a name
@@ -206,11 +259,24 @@ function extractCompany(text: string, website?: string | null): string | null {
     return true
   }
 
-  // 1) Strongest signal: a line with a legal suffix (and it must read like a name).
-  for (const line of lines) {
-    if (suffix.test(line) && looksLikeCompany(line)) return line.replace(/\s{2,}/g, ' ')
+  // A company website is our most trustworthy anchor (it's derived from the lead's
+  // own email domain, see extractWebsite). Prefer it over shaky signature-text
+  // heuristics that historically produced junk ("Phone", "Colds", "Explore sits").
+  const fromDomain = companyFromDomain(website ?? null)
+
+  // 1) Strongest text signal: a line with a legal suffix. If the line is a long
+  //    address blob ("Einhell UK Ltd, Unit 10, ..."), keep only the company part
+  //    (text up to the first comma) so a real "<Name> Ltd" is recovered.
+  for (const raw of lines) {
+    if (!suffix.test(raw)) continue
+    const head = raw.split(/\s*[,|]\s*/)[0].trim()      // company portion before address
+    if (suffix.test(head) && looksLikeCompany(head)) return head.replace(/\s{2,}/g, ' ')
+    if (looksLikeCompany(raw)) return raw.replace(/\s{2,}/g, ' ')
   }
-  // 2) The line right after a title line (Name / Title / Company) — only if clean.
+  // 2) Prefer the domain-derived company over the "line after a title" heuristic —
+  //    the latter grabs the next label ("Phone") when the sig has no company line.
+  if (fromDomain) return fromDomain
+  // 3) Last resort: the line right after a title line (Name / Title / Company).
   const titleRe = new RegExp(`\\b(?:${TITLE_WORDS.map(w => w.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')).join('|')})\\b`, 'i')
   for (let i = 0; i < lines.length - 1; i++) {
     if (lines[i].length <= 60 && titleRe.test(lines[i])) {
@@ -218,9 +284,7 @@ function extractCompany(text: string, website?: string | null): string | null {
       if (next && looksLikeCompany(next) && !titleRe.test(next)) return next.replace(/\s{2,}/g, ' ')
     }
   }
-  // 3) Most reliable fallback: derive from the website domain (myvintage.uk →
-  // "Myvintage"). Always better than the wrong imported company_name.
-  return companyFromDomain(website ?? null)
+  return null
 }
 
 // Extract the requested fields from one email body. Returns only the fields it
