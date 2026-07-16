@@ -1,5 +1,6 @@
 import pool from './db'
 import { getActiveWorkspaceIds } from './active-clients'
+import { recomputeAll } from './newlead-cache'
 
 const PV_BASE = 'https://api.plusvibe.ai/api/v1'
 const PV_KEY = process.env.PLUSVIBE_KEY ?? ''
@@ -390,7 +391,18 @@ export async function startCacheWarmingInterval(): Promise<void> {
     warmComboCache().catch(() => {})
   }, COMBO_INTERVAL_MS)
 
-  console.log('[cache-warming] interval started (perf 2 min, combo 15 min)')
+  // New-lead/follow-up split: precompute ALL workspaces × standard windows.
+  // Slow (~11 min) so run once ~2 min after boot, then every 12h. The agency
+  // Combo view reads the cache instantly; an on-demand button can refresh it.
+  setTimeout(() => {
+    recomputeAll().catch(() => {})
+  }, 120_000)
+  const NEWLEAD_INTERVAL_MS = 12 * 60 * 60 * 1000
+  setInterval(() => {
+    recomputeAll().catch(() => {})
+  }, NEWLEAD_INTERVAL_MS)
+
+  console.log('[cache-warming] interval started (perf 2 min, combo 15 min, new-lead 12 h)')
 }
 
 // Auto-initialize when module is imported (only on server)

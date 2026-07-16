@@ -159,22 +159,53 @@ export default function ComboAnalysisPage() {
   // Agency (all) vs single-client scope. '' = all workspaces.
   const [workspaceId, setWorkspaceId] = useState('')
   const [workspaces, setWorkspaces] = useState<{ id: string; name: string }[]>([])
-  // New-lead/follow-up split — on-demand, per-workspace only (slow PV API).
+  // New-lead/follow-up split. Reads a nightly precomputed cache (instant, works
+  // agency-wide + per-workspace) via GET. A "Refresh" recomputes live (POST).
   const [splitMap, setSplitMap] = useState<Record<string, number>>({})
   const [splitLoading, setSplitLoading] = useState(false)
+  const [splitInfo, setSplitInfo] = useState<string | null>(null)
 
+  // Read the precomputed split for the current scope+window.
   async function loadSplit() {
-    if (!workspaceId) return
     setSplitLoading(true)
+    setSplitInfo(null)
     try {
+      const wsParam = workspaceId ? `workspace_id=${workspaceId}&` : ''
       const r = await fetch(
-        `/api/data/combo-analysis/new-lead-split?workspace_id=${workspaceId}&start=${dateFrom}&end=${dateTo}`,
+        `/api/data/combo-analysis/new-lead-split?${wsParam}start=${dateFrom}&end=${dateTo}`,
       ).then((x) => x.json())
       const m: Record<string, number> = {}
       for (const c of r.combos ?? []) m[`${c.from_type}|${c.to_type}`] = c.new_leads
       setSplitMap(m)
+      if (!r.combos?.length) setSplitInfo('No precomputed split yet — click Refresh to compute it.')
+      else if (r.computed_at) setSplitInfo(`As of ${new Date(r.computed_at).toLocaleString()} · ${r.window_days}d window`)
     } catch {
-      /* ignore */
+      setSplitInfo('Failed to load split.')
+    } finally {
+      setSplitLoading(false)
+    }
+  }
+
+  // Recompute live: per-workspace waits (~1 min); agency kicks off in background.
+  async function refreshSplit() {
+    setSplitLoading(true)
+    setSplitInfo(workspaceId ? 'Computing (~1 min)…' : 'Agency refresh started (~11 min) — reload later.')
+    try {
+      const r = await fetch('/api/data/combo-analysis/new-lead-split', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspace_id: workspaceId || undefined }),
+      }).then((x) => x.json())
+      if (workspaceId && r.combos) {
+        const m: Record<string, number> = {}
+        for (const c of r.combos) m[`${c.from_type}|${c.to_type}`] = c.new_leads
+        setSplitMap(m)
+        setSplitInfo(`Refreshed · ${r.window_days}d window`)
+      } else if (r.started) {
+        setSplitInfo('Agency refresh running in background (~11 min). Reload and click Load again.')
+      }
+    } catch {
+      setSplitInfo('Refresh failed.')
     } finally {
       setSplitLoading(false)
     }
@@ -567,18 +598,25 @@ export default function ComboAnalysisPage() {
         <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
           <div className="flex items-center justify-between border-b border-gray-200 bg-gray-50 px-5 py-3">
             <span className="text-[13px] font-bold text-gray-900">Full Breakdown</span>
-            {workspaceId ? (
+            <div className="flex items-center gap-2">
+              {splitInfo && <span className="text-[11px] text-gray-400">{splitInfo}</span>}
               <button
                 onClick={loadSplit}
                 disabled={splitLoading}
                 className="rounded-md border border-gray-200 bg-white px-3 py-1 text-xs font-medium hover:bg-gray-50 disabled:opacity-50"
-                title="Fetch new-lead (step 1) vs follow-up split for this workspace — slow (~1 min), on demand."
+                title="Show the new-lead (step 1) vs follow-up split from the nightly precompute. Works agency-wide and per-workspace, 7d/30d windows."
               >
-                {splitLoading ? 'Loading split… (~1 min)' : 'Load new/follow-up split'}
+                {splitLoading ? 'Loading…' : 'Load new/follow-up split'}
               </button>
-            ) : (
-              <span className="text-[11px] text-gray-400">Select a single workspace to load the new/follow-up split</span>
-            )}
+              <button
+                onClick={refreshSplit}
+                disabled={splitLoading}
+                className="rounded-md border border-gray-200 bg-white px-3 py-1 text-xs font-medium hover:bg-gray-50 disabled:opacity-50"
+                title={workspaceId ? 'Recompute this workspace now (~1 min).' : 'Recompute the whole agency now (~11 min, runs in background).'}
+              >
+                Refresh
+              </button>
+            </div>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full border-collapse">
