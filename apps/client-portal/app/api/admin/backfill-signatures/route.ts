@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import pool, { ready } from '@/lib/db'
 import { getAdminSession } from '@/lib/auth'
-import { extractSignatureFields, ALL_SIGNATURE_FIELDS } from '@/lib/signature'
+import { extractSignatureFields, ALL_SIGNATURE_FIELDS, isJunkCompanyName } from '@/lib/signature'
 
 // One-off / repeatable backfill: copy the FULL reply body (html + text, with the
 // lead's signature/photos) from unibox_replies.raw into portal_emails for inbound
@@ -144,12 +144,23 @@ async function run(req: NextRequest) {
     if (company_name) {
       let hit = false
       if (realId) {
-        const up = await pool.query(
-          `UPDATE esp_leads SET company_name = $1, updated_at = NOW()
-            WHERE id = $2 AND workspace_id = $3`,
-          [company_name, realId, r.workspace_id]
-        ).catch(() => null)
-        hit = (up?.rowCount ?? 0) > 0
+        // Only overwrite when the stored name is junk, or the extracted one is a
+        // high-confidence "<Name> Ltd/…". Never downgrade a good name (e.g.
+        // "Cheese Riot" → domain-squash "Cheeseriot").
+        const cur = await pool.query(
+          `SELECT company_name FROM esp_leads WHERE id = $1 AND workspace_id = $2`,
+          [realId, r.workspace_id]
+        ).catch(() => ({ rows: [] as { company_name: string | null }[] }))
+        const stored = cur.rows[0]?.company_name ?? null
+        const hasSuffix = /\b(?:Ltd\.?|Limited|LLC|Inc\.?|PLC|GmbH|Pty|Corp\.?|Corporation|Holdings)\b/i.test(company_name)
+        if (isJunkCompanyName(stored) || hasSuffix) {
+          const up = await pool.query(
+            `UPDATE esp_leads SET company_name = $1, updated_at = NOW()
+              WHERE id = $2 AND workspace_id = $3`,
+            [company_name, realId, r.workspace_id]
+          ).catch(() => null)
+          hit = (up?.rowCount ?? 0) > 0
+        }
       }
       if (hit) companyUpdated++
       if (samples.length < 6) {

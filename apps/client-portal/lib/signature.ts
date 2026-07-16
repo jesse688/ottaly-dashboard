@@ -240,6 +240,22 @@ function companyFromDomain(website: string | null): string | null {
 // how "Phone" ended up as a company (it was the label above a phone number).
 const LABEL_ONLY = /^(?:phone|tel|telephone|mobile|mob|cell|fax|email|e-mail|mail|web|website|url|address|addr|office|direct|linkedin|twitter|instagram|facebook|whatsapp|skype|www)\b[:\s]*$/i
 
+// Is a stored/imported company name detectable JUNK worth overwriting? Empty, a
+// URL, a bare field label ("Phone"), "null", or an address blob. A merely-different
+// but plausible name ("Cheese Riot", "Tenzo") is NOT junk — callers must not clobber
+// it with a lower-confidence extraction (e.g. a domain-squash "Cheeseriot"). Shared
+// by the runtime enrich paths so a reply never downgrades a good name.
+export function isJunkCompanyName(v: string | null | undefined): boolean {
+  const s = (v ?? '').trim()
+  if (!s) return true
+  if (/^null$/i.test(s)) return true
+  if (/https?:|www\.|\.com\/|\.co\.uk|\.io\b|\.net\b/i.test(s)) return true
+  if (LABEL_ONLY.test(s)) return true
+  if (/^\d/.test(s)) return true                                                       // starts with a number → address
+  if (/\b(street|road|lane|avenue|place|court|house|unit|floor|suite|drive|way)\b/i.test(s) && /\d/.test(s)) return true
+  return false
+}
+
 function extractCompany(text: string, website?: string | null): string | null {
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
   const suffix = /\b(?:Ltd\.?|Limited|LLC|L\.L\.C\.|Inc\.?|Incorporated|PLC|GmbH|Pty|Corp\.?|Corporation|Holdings)\b/i
