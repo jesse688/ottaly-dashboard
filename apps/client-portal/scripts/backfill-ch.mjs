@@ -149,8 +149,30 @@ const { rows } = await client.query(sql, params)
 console.log(`Mode: ${COMMIT ? 'COMMIT (writing)' : 'DRY RUN (no writes)'}`)
 console.log(`Candidates (replied, missing CH, has company_name)${WORKSPACE ? ` in workspace ${WORKSPACE}` : ''}: ${rows.length}\n`)
 
+// Leads whose stored company_name is generic junk that coincidentally EXACT-matches
+// an unrelated registered company (verified by inspecting the lead's real domain).
+// These would attach the wrong company's CH data to a billable lead, so skip them.
+// Keyed by lead email (lowercase).
+const SKIP_EMAILS = new Set([
+  'te@emailmarketing.com',   // "Email Marketing" → EMAIL MARKETING LTD (generic phrase, not this co)
+  'paul@amassauces.com',     // "Caseboard" → CASEBOARD LIMITED (real domain is amassauces.com)
+])
+
 const stats = { matched: 0, skipped: 0, byReason: {} }
 for (const row of rows) {
+  if (SKIP_EMAILS.has((row.email ?? '').toLowerCase())) {
+    stats.skipped++
+    stats.byReason['skipped_junk_name'] = (stats.byReason['skipped_junk_name'] ?? 0) + 1
+    console.log(`⨯ ${row.email}  "${row.company_name}" → SKIPPED (junk name, would mis-match)`)
+    if (COMMIT) {
+      await client.query(
+        `UPDATE esp_leads SET raw = COALESCE(raw, '{}'::jsonb) || $1::jsonb, updated_at = NOW()
+         WHERE id = $2 AND workspace_id = $3`,
+        [JSON.stringify({ ch_enrich_reason: 'skipped_junk_name' }), row.id, row.workspace_id]
+      )
+    }
+    continue
+  }
   const { rundown, reason } = await resolveCompany({ knownNumber: row.known_number, companyName: row.company_name })
   stats.byReason[reason] = (stats.byReason[reason] ?? 0) + 1
   if (rundown) {
