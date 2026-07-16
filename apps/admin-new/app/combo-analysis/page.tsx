@@ -240,6 +240,13 @@ export default function ComboAnalysisPage() {
       .catch(() => setWorkspaces([]))
   }, [])
 
+  // Auto-load the precomputed new/follow-up split whenever the window or scope
+  // changes (cache read is instant). No button hunting needed.
+  useEffect(() => {
+    loadSplit()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dateFrom, dateTo, workspaceId])
+
   function setPeriod(k: PeriodKey) {
     const { start, end } = periodDates(k)
     setActivePeriod(k)
@@ -599,22 +606,14 @@ export default function ComboAnalysisPage() {
           <div className="flex items-center justify-between border-b border-gray-200 bg-gray-50 px-5 py-3">
             <span className="text-[13px] font-bold text-gray-900">Full Breakdown</span>
             <div className="flex items-center gap-2">
-              {splitInfo && <span className="text-[11px] text-gray-400">{splitInfo}</span>}
-              <button
-                onClick={loadSplit}
-                disabled={splitLoading}
-                className="rounded-md border border-gray-200 bg-white px-3 py-1 text-xs font-medium hover:bg-gray-50 disabled:opacity-50"
-                title="Show the new-lead (step 1) vs follow-up split from the nightly precompute. Works agency-wide and per-workspace, 7d/30d windows."
-              >
-                {splitLoading ? 'Loading…' : 'Load new/follow-up split'}
-              </button>
+              {splitInfo && <span className="text-[11px] text-gray-500">{splitInfo}</span>}
               <button
                 onClick={refreshSplit}
                 disabled={splitLoading}
-                className="rounded-md border border-gray-200 bg-white px-3 py-1 text-xs font-medium hover:bg-gray-50 disabled:opacity-50"
-                title={workspaceId ? 'Recompute this workspace now (~1 min).' : 'Recompute the whole agency now (~11 min, runs in background).'}
+                className="rounded-md bg-gray-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-50"
+                title={workspaceId ? 'Recompute new/follow-up split for this workspace now (~1 min).' : 'Recompute the whole agency new/follow-up split now (~11 min, runs in background).'}
               >
-                Refresh
+                {splitLoading ? 'Working…' : 'Refresh new/follow-up'}
               </button>
             </div>
           </div>
@@ -625,7 +624,7 @@ export default function ComboAnalysisPage() {
                   <th className="border-b border-gray-200 px-4 py-2.5 text-left font-bold">Sender</th>
                   <th className="border-b border-gray-200 px-4 py-2.5 text-left font-bold">Recipient</th>
                   <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold">Sends</th>
-                  <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold" title="New-lead (step 1) sends vs follow-ups (step 2+). Follow-ups are locked to the mailbox from first contact, so they ignore ESP matching — a high follow-up share on a wrong combo is the draining tail.">New / Follow-up</th>
+                  <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold" title="New-lead (step 1) sends vs follow-ups (step 2+), over the nearest precomputed 7d/30d window (PlusVibe's new-lead count is only meaningful over multi-day ranges — so this does NOT match a single-day 'Today' total). Follow-ups are locked to the mailbox from first contact, so they ignore ESP matching — a high follow-up share on a wrong combo is the draining tail.">New / Follow-up <span className="font-normal text-gray-400">(7/30d)</span></th>
                   <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold" title="Reply rate including out-of-office / auto-replies">Reply Rate (OOO)</th>
                   <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold" title="Human reply rate — excludes out-of-office and warmup">Human Reply Rate</th>
                   <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold">Bounces</th>
