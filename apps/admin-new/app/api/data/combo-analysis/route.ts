@@ -92,7 +92,8 @@ export async function GET(req: NextRequest) {
               SUM((data->>'oooReplies')::int) AS ooo,
               SUM((data->>'posReplies')::int) AS pos,
               SUM((data->>'bounces')::int)    AS bounces,
-              SUM((data->>'contacted')::int)  AS contacted
+              SUM((data->>'contacted')::int)  AS contacted,
+              SUM(COALESCE((data->>'newLeads')::int, 0)) AS new_leads
          FROM combo_daily_stats
         WHERE date >= $1 AND date <= $2
           AND provider <> '_'
@@ -145,10 +146,17 @@ export async function GET(req: NextRequest) {
         const human = +r.replies || 0 // stored from total_reply_count
         const ooo = +r.ooo || 0
         const repliesInclOoo = human + ooo
+        // Step-1 (new-lead) sends vs follow-ups. new_leads = total_new_lead_contacted_count;
+        // follow-ups ≈ sent − new_leads. Shows how much of a combo is NEW leads on the
+        // wrong sender (rule not honored now) vs the draining follow-up tail.
+        const newLeads = Math.min(+r.new_leads || 0, sent)
+        const followUps = Math.max(0, sent - newLeads)
         return {
           from_type,
           to_type,
           sent,
+          new_leads: newLeads,
+          follow_ups: followUps,
           replies: repliesInclOoo,     // reply rate incl. OOO (human + OOO)
           replies_human: human,        // human reply rate (excludes OOO)
           pos_replies: +r.pos || 0,    // positive/interested
@@ -168,7 +176,7 @@ export async function GET(req: NextRequest) {
       const [from_type, to_type] = key.split('|')
       if (!rows.some((r) => r.from_type === from_type && r.to_type === to_type)) {
         rows.push({
-          from_type, to_type, sent: 0, replies: 0, replies_human: 0,
+          from_type, to_type, sent: 0, new_leads: 0, follow_ups: 0, replies: 0, replies_human: 0,
           pos_replies: 0, bounces: 0, leads: n, unique_contacts: 0,
           capped: false, is_approx: false,
         })

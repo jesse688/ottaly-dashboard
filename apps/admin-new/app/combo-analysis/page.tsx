@@ -10,6 +10,8 @@ interface ComboRow {
   from_type: string
   to_type: string
   sent: number
+  new_leads?: number     // step-1 (new lead) sends
+  follow_ups?: number    // sent − new_leads (draining tail)
   replies: number        // incl. OOO/auto (primary reply rate)
   replies_human: number  // real human replies (excludes OOO + warmup)
   pos_replies: number    // = replies_human (back-compat)
@@ -550,6 +552,7 @@ export default function ComboAnalysisPage() {
                   <th className="border-b border-gray-200 px-4 py-2.5 text-left font-bold">Sender</th>
                   <th className="border-b border-gray-200 px-4 py-2.5 text-left font-bold">Recipient</th>
                   <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold">Sends</th>
+                  <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold" title="New-lead (step 1) sends vs follow-ups (step 2+). Follow-ups are locked to the mailbox from first contact, so they ignore ESP matching — a high follow-up share on a wrong combo is the draining tail.">New / Follow-up</th>
                   <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold" title="Reply rate including out-of-office / auto-replies">Reply Rate (OOO)</th>
                   <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold" title="Human reply rate — excludes out-of-office and warmup">Human Reply Rate</th>
                   <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold">Bounces</th>
@@ -575,6 +578,20 @@ export default function ComboAnalysisPage() {
                       </td>
                       <td className="border-b border-gray-200 px-4 py-3 text-right">
                         {fmt(r.sent)} {r.capped ? <span title="Replies from sends before this window — rate capped">⚠️</span> : null}
+                      </td>
+                      <td className="border-b border-gray-200 px-4 py-3 text-right tabular-nums">
+                        {r.sent > 0 ? (
+                          <>
+                            <span className="text-gray-900">{fmt(r.new_leads ?? 0)}</span>
+                            <span className="text-gray-300"> / </span>
+                            <span className="text-amber-600">{fmt(r.follow_ups ?? 0)}</span>
+                            <span className="ml-1 text-[11px] font-normal text-gray-400">
+                              ({Math.round((100 * (r.follow_ups ?? 0)) / r.sent)}% f/u)
+                            </span>
+                          </>
+                        ) : (
+                          '—'
+                        )}
                       </td>
                       <td className={cn('border-b border-gray-200 px-4 py-3 text-right', rr != null ? rrClass(rr) : '')}>
                         {rr != null ? rr.toFixed(1) + '%' : '—'}
