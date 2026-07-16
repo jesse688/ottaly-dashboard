@@ -37,6 +37,8 @@ interface Lead {
   ch_incorporated_on: string | null
   ch_registered_address: string | null
   ch_sic_codes: string | null
+  ch_companies_house_url: string | null
+  ch_endole_url: string | null
   custom_fields: { label: string; value: string }[] | null
   deal_value: string | null
   deal_notes: string | null
@@ -1148,6 +1150,29 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
               </Section>
             )}
 
+            {(selected.ch_company_status || selected.ch_company_number || selected.ch_incorporated_on || selected.ch_registered_address || selected.ch_sic_codes) && (
+              <Section title="Companies House">
+                {selected.ch_company_status && (
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-gray-400 mt-0.5 shrink-0"><Icon name="building" /></span>
+                    <ChStatusBadge status={selected.ch_company_status} />
+                  </div>
+                )}
+                {selected.ch_incorporated_on && <Row icon="tag" label={`Incorporated ${fmtChDate(selected.ch_incorporated_on)}`} />}
+                {selected.ch_company_number && (
+                  <Row
+                    icon="badge"
+                    label={`Company no. ${selected.ch_company_number}`}
+                    href={selected.ch_companies_house_url ?? `https://find-and-update.company-information.service.gov.uk/company/${selected.ch_company_number}`}
+                  />
+                )}
+                {selected.ch_company_type && <Row icon="tag" label={selected.ch_company_type} />}
+                {selected.ch_registered_address && <Row icon="pin" label={selected.ch_registered_address} />}
+                {selected.ch_sic_codes && <Row icon="tag" label={`SIC: ${selected.ch_sic_codes}`} />}
+                {selected.ch_endole_url && <Row icon="link" label="View on Endole" href={selected.ch_endole_url} />}
+              </Section>
+            )}
+
             {Array.isArray(selected.custom_fields) && selected.custom_fields.some(c => c?.label && c?.value) && (
               <Section title="More details">
                 {selected.custom_fields.filter(c => c?.label && c?.value).map((c, i) => (
@@ -1621,6 +1646,24 @@ function Row({ icon, label, href }: { icon: string; label: string; href?: string
       {href ? <a href={href} target="_blank" rel="noreferrer" className="text-sm text-brand-600 hover:underline break-words">{label}</a> : inner}
     </div>
   )
+}
+// Format a Companies House incorporation date (YYYY-MM-DD) as a UK long date.
+function fmtChDate(d: string): string {
+  const date = new Date(d)
+  if (isNaN(date.getTime())) return d
+  return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+// Coloured pill for the CH company status. Active = green, dissolved/liquidation = red,
+// anything else (administration, converted, etc.) = amber.
+function ChStatusBadge({ status }: { status: string }) {
+  const s = status.toLowerCase()
+  const tone = s === 'active'
+    ? 'bg-green-50 text-green-700 border-green-200'
+    : (s === 'dissolved' || s.includes('liquidation') || s === 'closed' || s.includes('receiver'))
+      ? 'bg-red-50 text-red-700 border-red-200'
+      : 'bg-amber-50 text-amber-700 border-amber-200'
+  const label = status.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+  return <span className={`inline-block text-xs font-medium px-2 py-0.5 border rounded-full ${tone}`}>{label}</span>
 }
 function Icon({ name }: { name: string }) {
   const p: Record<string, ReactNode> = {

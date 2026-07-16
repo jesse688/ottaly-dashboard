@@ -1,6 +1,6 @@
 import pool from './db'
 import { resolveCompany, rundownToRawFields, type CompanyRundown } from './companies-house'
-import { extractSignatureFields, ALL_SIGNATURE_FIELDS, type SignatureField } from './signature'
+import { extractSignatureFields, ALL_SIGNATURE_FIELDS, isJunkCompanyName, type SignatureField } from './signature'
 
 // When a lead becomes INTERESTED we enrich it from our OWN contacts database — the
 // full Apollo/PlusVibe record (linkedin, industry, location, address, seniority...).
@@ -277,13 +277,24 @@ export async function enrichUniboxReply(input: {
           [JSON.stringify(rawFields), leadId, input.workspaceId]
         )
       }
-      // company_name from the signature overrides the imported (often agency) name.
+      // company_name from the signature overrides the imported (often agency) name —
+      // but ONLY when the current stored name is junk, or the extracted one is a
+      // high-confidence "<Name> Ltd/Limited/…". Otherwise we'd downgrade a good name
+      // (e.g. "Cheese Riot" → domain-squash "Cheeseriot") on every reply.
       if (company_name) {
-        await pool.query(
-          `UPDATE esp_leads SET company_name = $1, updated_at = NOW()
-            WHERE id = $2 AND workspace_id = $3`,
-          [company_name, leadId, input.workspaceId]
-        )
+        const cur = await pool.query(
+          `SELECT company_name FROM esp_leads WHERE id = $1 AND workspace_id = $2`,
+          [leadId, input.workspaceId]
+        ).catch(() => ({ rows: [] as { company_name: string | null }[] }))
+        const stored = cur.rows[0]?.company_name ?? null
+        const hasSuffix = /\b(?:Ltd\.?|Limited|LLC|Inc\.?|PLC|GmbH|Pty|Corp\.?|Corporation|Holdings)\b/i.test(company_name)
+        if (isJunkCompanyName(stored) || hasSuffix) {
+          await pool.query(
+            `UPDATE esp_leads SET company_name = $1, updated_at = NOW()
+              WHERE id = $2 AND workspace_id = $3`,
+            [company_name, leadId, input.workspaceId]
+          )
+        }
       }
     }
 
