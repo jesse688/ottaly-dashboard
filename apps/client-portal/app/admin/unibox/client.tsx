@@ -964,7 +964,7 @@ export function AdminUniboxClient() {
                               type="text"
                               value={assignQuery}
                               onChange={e => setAssignQuery(e.target.value)}
-                              placeholder="Search leads by name, email, or company…"
+                              placeholder="Search leads & contacts by name, email, or company…"
                               className="block w-full mt-2 border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white"
                             />
                             {assignLoading ? (

@@ -69,26 +69,56 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   // operator can TYPE to find a lead instead of hunting a capped top-N list —
   // the previous fixed top-50 silently hid any lead past position 50 (e.g. a
   // valid lead in a large workspace whose domain differs from the sender's).
+  //
+  // We search BOTH esp_leads AND contacts: many campaign recipients live only in
+  // the master `contacts` DB and were never synced into esp_leads (e.g. Laura
+  // Holmes — emailed via a campaign but absent from esp_leads), so an
+  // esp_leads-only picker can't surface them. contacts is scoped by the same
+  // workspace_id. Results are unioned and de-duped by email (esp_leads wins).
   const domain = (reply.lead_email ?? '').split('@')[1]?.toLowerCase() ?? ''
   const q = (url.searchParams.get('q') ?? '').trim()
-  const queryParams: (string | null)[] = [reply.workspace_id, domain]
-  let filter = ''
-  if (q) {
-    // Escape LIKE metacharacters so a typed % or _ is matched literally.
-    const like = `%${q.replace(/[\\%_]/g, m => '\\' + m)}%`
-    queryParams.push(like)
-    filter = ` AND (email ILIKE $3 OR first_name ILIKE $3 OR last_name ILIKE $3 OR company_name ILIKE $3
-                    OR (coalesce(first_name,'') || ' ' || coalesce(last_name,'')) ILIKE $3)`
-  }
-  const res = await pool.query(
-    `SELECT id, email, first_name, last_name, company_name, label
-       FROM esp_leads
-      WHERE workspace_id = $1 AND email IS NOT NULL AND email <> ''${filter}
-      ORDER BY (split_part(lower(email),'@',2) = $2) DESC, updated_at DESC NULLS LAST
-      LIMIT 50`,
-    queryParams
-  )
-  const leads = res.rows as { id: string; email: string; first_name?: string; last_name?: string; company_name?: string }[]
+  const like = q ? `%${q.replace(/[\\%_]/g, m => '\\' + m)}%` : null
+  // Escape LIKE metacharacters so a typed % or _ is matched literally.
+  const espFilter = q
+    ? ` AND (email ILIKE $3 OR first_name ILIKE $3 OR last_name ILIKE $3 OR company_name ILIKE $3
+             OR (coalesce(first_name,'') || ' ' || coalesce(last_name,'')) ILIKE $3)`
+    : ''
+  const queryParams: (string | null)[] = like
+    ? [reply.workspace_id, domain, like]
+    : [reply.workspace_id, domain]
+
+  const [espRes, contactRes] = await Promise.all([
+    pool.query(
+      `SELECT id, email, first_name, last_name, company_name, label
+         FROM esp_leads
+        WHERE workspace_id = $1 AND email IS NOT NULL AND email <> ''${espFilter}
+        ORDER BY (split_part(lower(email),'@',2) = $2) DESC, updated_at DESC NULLS LAST
+        LIMIT 50`,
+      queryParams
+    ),
+    pool.query(
+      `SELECT id::text AS id, email, first_name, last_name, company_name, NULL::text AS label
+         FROM contacts
+        WHERE workspace_id = $1 AND email IS NOT NULL AND email <> ''${espFilter}
+        ORDER BY (split_part(lower(email),'@',2) = $2) DESC, last_engaged_at DESC NULLS LAST
+        LIMIT 50`,
+      queryParams
+    ),
+  ])
+  type Lead = { id: string; email: string; first_name?: string; last_name?: string; company_name?: string }
+  // De-dupe by lowercased email; esp_leads rows take precedence over contacts.
+  const byEmail = new Map<string, Lead>()
+  for (const r of contactRes.rows as Lead[]) byEmail.set(r.email.toLowerCase(), r)
+  for (const r of espRes.rows as Lead[]) byEmail.set(r.email.toLowerCase(), r)
+  // Same-domain first, then keep insertion (recency) order within each group.
+  const all = [...byEmail.values()]
+  const leads = all
+    .sort((a, b) => {
+      const ad = (a.email.split('@')[1] ?? '').toLowerCase() === domain ? 0 : 1
+      const bd = (b.email.split('@')[1] ?? '').toLowerCase() === domain ? 0 : 1
+      return ad - bd
+    })
+    .slice(0, 50)
 
   // RECOMMENDATION: the lead we matched at ingest (matched_lead_email, set by the
   // same-company domain match) — else the top same-domain candidate. The operator
@@ -127,13 +157,19 @@ async function assign(id: string, rawTarget: string) {
   const ws = reply.workspace_id
   if (!ws) return NextResponse.json({ error: 'Reply has no workspace' }, { status: 409 })
 
-  // Confirm the target lead exists in this workspace (don't silently create one).
+  // Confirm the target exists in this workspace (don't silently invent one).
+  // Accept a match in EITHER esp_leads OR the master contacts DB — many campaign
+  // recipients live only in contacts and were never synced to esp_leads, so an
+  // esp_leads-only check would 404 a perfectly valid lead the picker just showed.
   const lead = await pool.query(
-    `SELECT id, email FROM esp_leads WHERE workspace_id = $1 AND lower(email) = lower($2) LIMIT 1`,
+    `SELECT email FROM esp_leads WHERE workspace_id = $1 AND lower(email) = lower($2)
+     UNION ALL
+     SELECT email FROM contacts   WHERE workspace_id = $1 AND lower(email) = lower($2)
+     LIMIT 1`,
     [ws, targetEmail]
   )
   if (!lead.rows.length) {
-    return NextResponse.json({ error: `No lead with email ${targetEmail} in this workspace` }, { status: 404 })
+    return NextResponse.json({ error: `No lead or contact with email ${targetEmail} in this workspace` }, { status: 404 })
   }
 
   const client = await pool.connect()
