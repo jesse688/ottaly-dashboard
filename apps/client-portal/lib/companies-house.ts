@@ -3,9 +3,9 @@
 // Everything here comes from the official Companies House public API
 // (https://developer.company-information.service.gov.uk), which returns exact,
 // authoritative register data. We NEVER scrape estimated/3rd-party figures: a
-// field is filled only when CH gives it to us, otherwise it stays empty. The
-// Endole link is a convenience deep-link (credit score / 10yr accounts) — we
-// attach the URL but never ingest its numbers.
+// field is filled only when CH gives it to us, otherwise it stays empty.
+// Companies House is the ONLY company-data source surfaced — Endole deep-links
+// were disabled (not rendered, not written to client-facing fields).
 //
 // Matching is NUMBER-FIRST and skip-if-uncertain (see resolveCompany): a wrong
 // match would put another company's data on a lead, so we only auto-accept a
@@ -130,7 +130,9 @@ export interface CompanyRundown {
     dissolved: boolean
   }
   active_officers: { name: string; role: string; appointed_on: string | null }[]
-  // Reference links (Endole = link only, never scraped data).
+  // Reference links. companies_house_url is the only one surfaced in the UI;
+  // endole_url is retained in the shape but no longer rendered or written to the
+  // client-facing raw fields (Endole links were disabled).
   companies_house_url: string
   endole_url: string
   matched_by: 'company_number' | 'name_search'
@@ -257,7 +259,8 @@ export function rundownToRawFields(r: CompanyRundown): Record<string, string> {
   put('ch_incorporated_on', r.incorporated_on)
   put('ch_registered_address', r.registered_address)
   put('ch_companies_house_url', r.companies_house_url)
-  put('ch_endole_url', r.endole_url)
+  // Endole intentionally omitted — Companies House is the only company-data
+  // source we surface (Endole deep-links were disabled).
   if (r.sic_codes.length) put('ch_sic_codes', r.sic_codes.join(', '))
   // address_line is what the leads panel already renders — backfill it from the
   // verified registered address when we have one.

@@ -1169,7 +1169,6 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
                 {selected.ch_company_type && <Row icon="tag" label={selected.ch_company_type} />}
                 {selected.ch_registered_address && <Row icon="pin" label={selected.ch_registered_address} />}
                 {selected.ch_sic_codes && <Row icon="tag" label={`SIC: ${selected.ch_sic_codes}`} />}
-                {selected.ch_endole_url && <Row icon="link" label="View on Endole" href={selected.ch_endole_url} />}
               </Section>
             )}
 

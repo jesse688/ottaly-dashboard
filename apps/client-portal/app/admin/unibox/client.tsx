@@ -1362,7 +1362,6 @@ function CHRundownPanel({ reply, onSet }: { reply: Reply; onSet: (ch: CompanyRun
 
       <div className="mt-3 flex gap-3">
         <a href={ch.companies_house_url} target="_blank" rel="noopener noreferrer" className="text-[11px] font-medium text-indigo-600 hover:text-indigo-800">Companies House ↗</a>
-        <a href={ch.endole_url} target="_blank" rel="noopener noreferrer" className="text-[11px] font-medium text-indigo-600 hover:text-indigo-800">Endole ↗</a>
       </div>
     </div>
   )
