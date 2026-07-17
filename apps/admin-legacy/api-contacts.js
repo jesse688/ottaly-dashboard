@@ -246,6 +246,7 @@ module.exports = (db) => {
       technologies: q.technologies, technologiesExclude: q.technologiesExclude,
       website: q.website, companyLinkedin: q.companyLinkedin,
       city: q.city, state: q.state, country: q.country,
+      cityExclude: q.cityExclude, stateExclude: q.stateExclude, countryExclude: q.countryExclude,
       personRegion: q.personRegion, personCounty: q.personCounty, personTown: q.personTown,
       companyCity: q.companyCity, companyState: q.companyState, companyCountry: q.companyCountry,
       // Normalised location hierarchy filters (Country>Region>County>City>Town)
@@ -568,6 +569,7 @@ module.exports = (db) => {
         technologies: rest.technologies, technologiesExclude: rest.technologiesExclude,
         website: rest.website, companyLinkedin: rest.companyLinkedin,
         city: rest.city, state: rest.state, country: rest.country,
+        cityExclude: rest.cityExclude, stateExclude: rest.stateExclude, countryExclude: rest.countryExclude,
         personRegion: rest.personRegion, personCounty: rest.personCounty, personTown: rest.personTown,
         companyCity: rest.companyCity, companyState: rest.companyState, companyCountry: rest.companyCountry,
         // Normalised location hierarchy filters (Country>Region>County>City>Town)
