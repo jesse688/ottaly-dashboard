@@ -1077,7 +1077,8 @@ export function AdminUniboxClient() {
                    <ContactRow label="Email" value={selected.lead_email} href={`mailto:${selected.lead_email}`} />
                    {(selected.mobile_phone || selected.phone_number) && <ContactRow label="Mobile" value={(selected.mobile_phone ?? selected.phone_number)!} href={`tel:${selected.mobile_phone ?? selected.phone_number}`} />}
                    {selected.office_phone && <ContactRow label="Office" value={selected.office_phone} href={`tel:${selected.office_phone}`} />}
-                   {(selected.lead_company || selected.company_website) && <ContactRow label="Company" value={selected.lead_company ?? selected.company_website ?? ''} href={selected.company_website ? ensureUrl(selected.company_website) : undefined} />}
+                   {selected.lead_company && <ContactRow label="Company" value={selected.lead_company} />}
+                   {selected.company_website && <ContactRow label="Website" value={selected.company_website.replace(/^https?:\/\//i, '')} href={ensureUrl(selected.company_website)} />}
                    {selected.linkedin_url && <ContactRow label="LinkedIn" value="View profile" href={ensureUrl(selected.linkedin_url)} />}
                    {selected.linkedin_company_url && <ContactRow label="Company LinkedIn" value="View page" href={ensureUrl(selected.linkedin_company_url)} />}
                    {selected.industry && <ContactRow label="Industry" value={selected.industry} />}
@@ -1091,7 +1092,7 @@ export function AdminUniboxClient() {
                  {/* Companies House rundown — verified register data captured at
                      intake. Shown so the admin has the full company picture before
                      deciding Lead vs Info. */}
-                 <CHRundownPanel reply={selected} />
+                 <CHRundownPanel reply={selected} onSet={ch => setSelected(prev => prev ? { ...prev, ch_data: ch, enrich_state: 'matched' } : prev)} />
 
                  {/* Fill in lead details — for sparse leads (question/forwarded/
                      outside-Bison) where the webhook captured no name/company/etc.
@@ -1194,10 +1195,112 @@ function ContactRow({ label, value, href }: { label: string; value: string; href
   )
 }
 
+// Manual company confirmation for replies where CH auto-match refused (ambiguous
+// name → multiple real companies, or no name). Lists name-search candidates the
+// operator can click, or accepts a typed company number directly. Resolving by
+// number is a certain match — never a guess.
+function SetCompany({ replyId, onSet }: { replyId: string; onSet: (ch: CompanyRundown) => void }) {
+  const [open, setOpen] = useState(false)
+  const [q, setQ] = useState('')
+  const [items, setItems] = useState<{ company_number: string; title: string; company_status: string; address: string }[]>([])
+  const [loading, setLoading] = useState(false)
+  const [busy, setBusy] = useState('')
+  const [err, setErr] = useState('')
+
+  async function search(query?: string) {
+    setLoading(true); setErr('')
+    try {
+      const qs = query !== undefined ? `?q=${encodeURIComponent(query)}` : ''
+      const r = await fetch(`/api/admin/unibox/${replyId}/set-company${qs}`)
+      const d = await r.json() as { ok?: boolean; query?: string; items?: typeof items; error?: string }
+      if (!r.ok || !d.ok) { setErr(d.error === 'no_api_key' ? 'CH API key not configured' : (d.error ?? 'Search failed')); return }
+      if (d.query && q === '') setQ(d.query)
+      setItems(d.items ?? [])
+      if (d.error === 'no_api_key') setErr('CH API key not configured')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function confirm(companyNumber: string) {
+    setBusy(companyNumber); setErr('')
+    try {
+      const r = await fetch(`/api/admin/unibox/${replyId}/set-company`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyNumber }),
+      })
+      const d = await r.json() as { ok?: boolean; ch?: CompanyRundown; error?: string }
+      if (!r.ok || !d.ok || !d.ch) { setErr(d.error ?? 'Could not set company'); return }
+      onSet(d.ch)
+    } finally {
+      setBusy('')
+    }
+  }
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => { setOpen(true); void search() }}
+        className="text-[11px] font-medium text-indigo-600 hover:text-indigo-800"
+      >
+        🏛 Set company manually
+      </button>
+    )
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex gap-1">
+        <input
+          type="text"
+          value={q}
+          onChange={e => setQ(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') void search(q) }}
+          placeholder="Company name or number…"
+          className="flex-1 border border-gray-200 rounded-lg px-2 py-1 text-[11px] bg-white"
+        />
+        <button onClick={() => void search(q)} disabled={loading}
+          className="text-[11px] font-medium text-indigo-600 hover:text-indigo-800 disabled:opacity-50 px-1">
+          {loading ? '…' : 'Search'}
+        </button>
+      </div>
+      {/* Direct-number confirm: if they typed a bare company number, offer it. */}
+      {/^[A-Z0-9]{6,10}$/i.test(q.trim()) && (
+        <button onClick={() => void confirm(q.trim())} disabled={!!busy}
+          className="w-full text-[11px] font-medium bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg py-1.5 disabled:opacity-50">
+          {busy ? 'Setting…' : `Use company number ${q.trim().toUpperCase()}`}
+        </button>
+      )}
+      {items.length > 0 && (
+        <ul className="space-y-1 max-h-56 overflow-y-auto">
+          {items.map(it => (
+            <li key={it.company_number}>
+              <button
+                onClick={() => void confirm(it.company_number)}
+                disabled={!!busy}
+                className="w-full text-left rounded-lg border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/40 px-2 py-1.5 disabled:opacity-50"
+              >
+                <span className="block text-[11px] font-medium text-gray-800">{it.title}</span>
+                <span className="block text-[10px] text-gray-500">
+                  {it.company_number} · {it.company_status}{it.address ? ` · ${it.address}` : ''}
+                </span>
+                {busy === it.company_number && <span className="text-[10px] text-indigo-600">Setting…</span>}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {!loading && items.length === 0 && q && <p className="text-[10px] text-gray-400">No results — try a different name or paste the company number.</p>}
+      {err && <p className="text-[10px] text-red-600">{err}</p>}
+      <button onClick={() => setOpen(false)} className="text-[10px] text-gray-400 hover:text-gray-600">Cancel</button>
+    </div>
+  )
+}
+
 // Companies House rundown — verified register facts pulled at reply intake.
 // Renders nothing until enrichment has run; a clear "no match" note when CH
 // found no confident company (so the admin can fill it in manually).
-function CHRundownPanel({ reply }: { reply: Reply }) {
+function CHRundownPanel({ reply, onSet }: { reply: Reply; onSet: (ch: CompanyRundown) => void }) {
   const ch = reply.ch_data
   if (!ch && reply.enrich_state == null) return null // not enriched yet
 
@@ -1205,11 +1308,12 @@ function CHRundownPanel({ reply }: { reply: Reply }) {
     return (
       <div className="mt-4 pt-4 border-t border-gray-100">
         <p className="text-xs font-semibold text-gray-600 mb-1">Companies House</p>
-        <p className="text-[11px] text-gray-500">
+        <p className="text-[11px] text-gray-500 mb-2">
           {reply.enrich_state === 'error'
-            ? 'Lookup failed — try again later.'
-            : 'No confident company match — verify and fill in manually.'}
+            ? 'Lookup failed — the name was ambiguous or the API errored. Set the company manually below.'
+            : 'No confident company match — set the company manually below.'}
         </p>
+        <SetCompany replyId={reply.id} onSet={onSet} />
       </div>
     )
   }

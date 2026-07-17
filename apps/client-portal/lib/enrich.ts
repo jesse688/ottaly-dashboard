@@ -183,6 +183,26 @@ export async function enrichReplyWithCH(
   }
 }
 
+// Operator-confirmed company: resolve a reply's CH data from an explicit company
+// number (certain match — no name-ambiguity guessing). Used by the "Set company"
+// panel action when auto-match refused because the name was ambiguous or missing.
+// Overwrites any prior ch_data for this reply and marks enrich_state='matched'.
+export async function setReplyCompanyByNumber(
+  uniboxReplyId: string, companyNumber: string
+): Promise<{ rundown: CompanyRundown | null; reason: string }> {
+  const num = (companyNumber ?? '').trim().toUpperCase()
+  if (!num) return { rundown: null, reason: 'no_number' }
+  const { rundown, reason } = await resolveCompany({ knownNumber: num })
+  if (!rundown) return { rundown: null, reason }
+  await pool.query(
+    `UPDATE unibox_replies
+        SET ch_company_number = $2, ch_data = $3::jsonb, enrich_state = 'matched', updated_at = NOW()
+      WHERE id = $1`,
+    [uniboxReplyId, rundown.company_number, JSON.stringify(rundown)]
+  )
+  return { rundown, reason: 'matched_by_number' }
+}
+
 // Merge a reply's stored CH rundown into the esp_leads.raw fields the client
 // dashboard renders (fills only CH-provided keys, never blanks existing data).
 // Called when a reply is marked as a lead/info so the verified company data
