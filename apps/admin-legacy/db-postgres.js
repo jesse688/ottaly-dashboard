@@ -1552,6 +1552,16 @@ class PostgresDatabase {
       params.push(wordRegex(values));
       p++;
     };
+    // Exact-match exclusion — the negative counterpart of colExact (used by the
+    // normalised region/county/town filters). A row passes if the column is
+    // NULL or its lowercased value is none of the excluded values.
+    const colExactExclude = (col, val) => {
+      const values = val.split(',').map(v => v.trim().toLowerCase()).filter(Boolean);
+      if (!values.length) return;
+      clauses.push(`(${col} IS NULL OR LOWER(${col}) <> ALL($${p}))`);
+      params.push(values);
+      p++;
+    };
 
     // Apply each filter inside a `safe()` wrapper so one bad value (malformed
     // range, weird unicode, etc.) doesn't abort the whole search. Failed
@@ -1647,6 +1657,18 @@ class PostgresDatabase {
     safe('cityExclude',   () => { if (filters.cityExclude)   colExclude(['city','company_city'],          filters.cityExclude); });
     safe('stateExclude',  () => { if (filters.stateExclude)  colExclude(['state','company_state'],        filters.stateExclude); });
     safe('countryExclude',() => { if (filters.countryExclude)colExclude(['country','company_country'],    filters.countryExclude); });
+    // Person normalised-location excludes (exact match, mirroring their includes).
+    safe('personRegionExclude', () => { if (filters.personRegionExclude) colExactExclude('person_region', filters.personRegionExclude); });
+    safe('personCountyExclude', () => { if (filters.personCountyExclude) colExactExclude('person_county', filters.personCountyExclude); });
+    safe('personTownExclude',   () => { if (filters.personTownExclude)   colExactExclude('person_town',   filters.personTownExclude); });
+    // Company-location excludes. City/State/Country are whole-word (match their
+    // colMulti includes); region/county/town are exact (match their colExact).
+    safe('companyCityExclude',    () => { if (filters.companyCityExclude)    colExclude('company_city',       filters.companyCityExclude); });
+    safe('companyStateExclude',   () => { if (filters.companyStateExclude)   colExclude('company_state',      filters.companyStateExclude); });
+    safe('companyCountryExclude', () => { if (filters.companyCountryExclude) colExclude('company_country',    filters.companyCountryExclude); });
+    safe('companyRegionExclude',  () => { if (filters.companyRegionExclude)  colExactExclude('company_region', filters.companyRegionExclude); });
+    safe('companyCountyExclude',  () => { if (filters.companyCountyExclude)  colExactExclude('company_county', filters.companyCountyExclude); });
+    safe('companyTownExclude',    () => { if (filters.companyTownExclude)    colExactExclude('company_town',   filters.companyTownExclude); });
     safe('email',         () => { if (filters.email)         like('email', filters.email); });
     safe('phone',         () => { if (filters.phone)         { clauses.push(`(corporate_phone ILIKE $${p} OR company_phone ILIKE $${p})`); params.push(`%${filters.phone}%`); p++; } });
     safe('company',       () => { if (filters.company)       { clauses.push(`(company_name ILIKE $${p} OR company_domain ILIKE $${p})`); params.push(`%${filters.company}%`); p++; } });
