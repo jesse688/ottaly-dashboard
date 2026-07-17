@@ -216,6 +216,7 @@ export function AdminUniboxClient() {
   const [assignLeads, setAssignLeads] = useState<{ id: string; email: string; first_name?: string; last_name?: string; company_name?: string }[]>([])
   const [assignPick, setAssignPick] = useState<string>('')
   const [assignSuggest, setAssignSuggest] = useState<{ email: string | null; reason: string }>({ email: null, reason: '' })
+  const [assignQuery, setAssignQuery] = useState('')
 
   // Warm-up tag filter panel
   const [showWarmup, setShowWarmup] = useState(false)
@@ -264,6 +265,28 @@ export function AdminUniboxClient() {
 
   // Reload when folder, search, label filter, or client zoom changes.
   useEffect(() => { load(folder, undefined, activeQuery, category, zoomClient) }, [folder, activeQuery, category, zoomClient, load])
+
+  // Debounced lead search in the assign picker. Re-fetches the candidate list
+  // (filtered by the typed query) so the operator can find any lead, not just
+  // the top-N. Skips the initial empty query — openAssign() already loaded that
+  // plus the recommendation. A stale-guard ignores out-of-order responses.
+  useEffect(() => {
+    if (!assignOpen || !selected) return
+    const q = assignQuery.trim()
+    if (!q) return
+    let cancelled = false
+    const t = setTimeout(async () => {
+      setAssignLoading(true)
+      try {
+        const r = await fetch(`/api/admin/unibox/${selected.id}/assign-to-lead?q=${encodeURIComponent(q)}`)
+        const d = await r.json() as { ok?: boolean; leads?: { id: string; email: string; first_name?: string; last_name?: string; company_name?: string }[] }
+        if (!cancelled && r.ok && d.ok) setAssignLeads(d.leads ?? [])
+      } finally {
+        if (!cancelled) setAssignLoading(false)
+      }
+    }, 250)
+    return () => { cancelled = true; clearTimeout(t) }
+  }, [assignQuery, assignOpen, selected])
 
   function runSearch() {
     setSelected(null)
@@ -453,10 +476,13 @@ export function AdminUniboxClient() {
     }
   }
 
-  // Open the assign-to-lead panel: load candidate leads in this workspace.
+  // Open the assign-to-lead panel: load the initial candidate list + the
+  // recommended lead. Typing in the search box re-fetches a filtered list via
+  // the debounced effect above, so any lead in the workspace is reachable — not
+  // just the top-N shown here.
   async function openAssign() {
     if (!selected) return
-    setAssignOpen(true); setAssignLoading(true); setMsg(''); setAssignLeads([]); setAssignPick(''); setAssignSuggest({ email: null, reason: '' })
+    setAssignOpen(true); setAssignLoading(true); setMsg(''); setAssignLeads([]); setAssignPick(''); setAssignSuggest({ email: null, reason: '' }); setAssignQuery('')
     try {
       const r = await fetch(`/api/admin/unibox/${selected.id}/assign-to-lead`)
       const d = await r.json() as { ok?: boolean; error?: string; suggested?: string | null; suggestedReason?: string; leads?: { id: string; email: string; first_name?: string; last_name?: string; company_name?: string }[] }
@@ -928,17 +954,24 @@ export function AdminUniboxClient() {
                         <p className="text-xs text-gray-500 mt-0.5">
                           Threads this reply (from <span className="font-medium">{selected.lead_email}</span>) under the lead you pick, so it shows on the client dashboard. Same-company leads are listed first.
                         </p>
-                        {assignLoading ? (
-                          <p className="text-xs text-gray-500 mt-3">Loading leads…</p>
-                        ) : assignLeads.length === 0 ? (
-                          <p className="text-xs text-gray-500 mt-3">No leads found in this workspace.</p>
-                        ) : (
-                          <>
-                            {assignSuggest.email && (
+                        <>
+                            {assignSuggest.email && assignLeads.some(l => l.email === assignSuggest.email) && (
                               <p className="text-xs text-indigo-700 mt-3">
                                 💡 Recommended: <span className="font-medium">{assignLeads.find(l => l.email === assignSuggest.email)?.first_name || ''} {assignLeads.find(l => l.email === assignSuggest.email)?.last_name || ''}</span> ({assignSuggest.email}){assignSuggest.reason ? ` — ${assignSuggest.reason}` : ''}. Review and accept, or pick another below.
                               </p>
                             )}
+                            <input
+                              type="text"
+                              value={assignQuery}
+                              onChange={e => setAssignQuery(e.target.value)}
+                              placeholder="Search leads by name, email, or company…"
+                              className="block w-full mt-2 border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white"
+                            />
+                            {assignLoading ? (
+                              <p className="text-xs text-gray-500 mt-2">Loading leads…</p>
+                            ) : assignLeads.length === 0 ? (
+                              <p className="text-xs text-gray-500 mt-2">{assignQuery.trim() ? 'No leads match your search.' : 'No leads found in this workspace.'}</p>
+                            ) : (
                             <select
                               value={assignPick}
                               onChange={e => setAssignPick(e.target.value)}
@@ -951,6 +984,7 @@ export function AdminUniboxClient() {
                                 </option>
                               ))}
                             </select>
+                            )}
                             <div className="flex items-center gap-2 mt-3">
                               <button
                                 onClick={saveAssign}
@@ -968,7 +1002,6 @@ export function AdminUniboxClient() {
                               </button>
                             </div>
                           </>
-                        )}
                       </div>
                     )}
 

@@ -64,14 +64,29 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
   // Candidate leads in this workspace. Surface same-domain leads first (the
   // common "colleague replied" case), then the rest, newest first.
+  //
+  // Optional ?q= filters server-side across email/name/company (ILIKE) so the
+  // operator can TYPE to find a lead instead of hunting a capped top-N list —
+  // the previous fixed top-50 silently hid any lead past position 50 (e.g. a
+  // valid lead in a large workspace whose domain differs from the sender's).
   const domain = (reply.lead_email ?? '').split('@')[1]?.toLowerCase() ?? ''
+  const q = (url.searchParams.get('q') ?? '').trim()
+  const queryParams: (string | null)[] = [reply.workspace_id, domain]
+  let filter = ''
+  if (q) {
+    // Escape LIKE metacharacters so a typed % or _ is matched literally.
+    const like = `%${q.replace(/[\\%_]/g, m => '\\' + m)}%`
+    queryParams.push(like)
+    filter = ` AND (email ILIKE $3 OR first_name ILIKE $3 OR last_name ILIKE $3 OR company_name ILIKE $3
+                    OR (coalesce(first_name,'') || ' ' || coalesce(last_name,'')) ILIKE $3)`
+  }
   const res = await pool.query(
     `SELECT id, email, first_name, last_name, company_name, label
        FROM esp_leads
-      WHERE workspace_id = $1 AND email IS NOT NULL AND email <> ''
+      WHERE workspace_id = $1 AND email IS NOT NULL AND email <> ''${filter}
       ORDER BY (split_part(lower(email),'@',2) = $2) DESC, updated_at DESC NULLS LAST
       LIMIT 50`,
-    [reply.workspace_id, domain]
+    queryParams
   )
   const leads = res.rows as { id: string; email: string; first_name?: string; last_name?: string; company_name?: string }[]
 
