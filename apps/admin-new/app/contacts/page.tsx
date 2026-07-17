@@ -170,7 +170,7 @@ const SECTION_KEYS: Record<string, string[]> = {
   company: ['company', 'website', 'companyLinkedin'],
   scrapeTag: ['tags', 'source'],
   industry: ['industry', 'industryExclude'],
-  'person-location': ['country', 'personRegion', 'personCounty', 'city', 'personTown'],
+  'person-location': ['country', 'personRegion', 'personCounty', 'city', 'personTown', 'countryExclude', 'stateExclude', 'cityExclude'],
   'company-location': [
     'companyCountry', 'companyRegion', 'companyCounty', 'companyCity', 'companyTown',
   ],
@@ -1603,6 +1603,11 @@ function FilterPanel({
         <FilterTypeahead {...ta} k="personCounty" label="County" field="person_county" ph="Surrey, Greater Manchester…" />
         <FilterTypeahead {...ta} k="city" label="City" field="city" ph="City…" />
         <FilterTypeahead {...ta} k="personTown" label="Town" field="person_town" ph="Town…" />
+        {/* Location EXCLUDE — drops rows matching any of these across BOTH person
+            and company location columns (mirrors industry/keywords exclude). */}
+        <FilterText filters={filters} setF={setF} k="countryExclude" label="Country (exclude)" ph="e.g. United States, India" />
+        <FilterText filters={filters} setF={setF} k="stateExclude" label="Region / County (exclude)" ph="e.g. Scotland, Greater London" />
+        <FilterText filters={filters} setF={setF} k="cityExclude" label="City (exclude)" ph="e.g. London, Manchester" />
       </Section>
 
       <Section title="Company Location" sectionKey="company-location" active={sectionActive('company-location')} onClear={clearSection}>

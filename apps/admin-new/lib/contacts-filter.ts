@@ -534,6 +534,14 @@ export function filtersFromParams(sp: URLSearchParams): ContactFilters {
     personRegion: g('personRegion'),
     personCounty: g('personCounty'),
     personTown: g('personTown'),
+    // Location EXCLUDE filters. buildFilterClauses already supports these
+    // (colExclude over person+company columns); they just weren't parsed out of
+    // the query string, so the UI toggle had no effect. Employee exclude-ranges
+    // were likewise declared but never read.
+    cityExclude: g('cityExclude'),
+    stateExclude: g('stateExclude'),
+    countryExclude: g('countryExclude'),
+    numEmployeesExcludeRanges: g('numEmployeesExcludeRanges'),
     locationNeedsReview: g('locationNeedsReview'),
     email: g('email'),
     phone: g('phone'),
