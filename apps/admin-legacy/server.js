@@ -4210,8 +4210,11 @@ async function refreshRevenueCache() {
             first_name:      row.first_name  || '',
             last_name:       row.last_name   || '',
             lead_email:      row.lead_email  || '',
-            // Use the current client price if set, else the price stored with the lead.
-            lead_price:      (priceMap[row.workspace_id] ?? Number(row.lead_price)) || 0,
+            // Use the current client price if set (>0), else the price stored with
+            // the lead. `||` (not `??`) so a 0/missing client price — e.g. a client
+            // not in the hardcoded price list — falls back to the stored lead_price
+            // instead of zeroing the lead's revenue.
+            lead_price:      (priceMap[row.workspace_id] || Number(row.lead_price)) || 0,
             label:           row.label       || '',
             date:            row.date        || '',
             client_inactive: statusMap[row.workspace_id] === 'inactive',
@@ -4298,7 +4301,7 @@ app.get('/api/avg-lead-price', requireSession, (req, res) => {
     return !(override?.active || pvNonlead);
   });
 
-  const totalRevenue = leads.reduce((s, l) => s + (livePriceMap[l.workspace_id] ?? l.lead_price ?? 0), 0);
+  const totalRevenue = leads.reduce((s, l) => s + ((livePriceMap[l.workspace_id] || l.lead_price) || 0), 0);
   const totalLeads   = leads.length;
   const avg          = totalLeads > 0 ? totalRevenue / totalLeads : 0;
 
@@ -4327,7 +4330,7 @@ app.get('/api/revenue/leads', requireSession, (req, res) => {
 
   const leads = (revenueCache.leads || []).filter(l => !isRevenueExcludedWorkspace(l)).map(l => {
     const o        = nonleadMap[(l.lead_email || '').toLowerCase()];
-    const livePrice = livePriceMap[l.workspace_id] ?? l.lead_price ?? 0;
+    const livePrice = (livePriceMap[l.workspace_id] || l.lead_price) || 0;
     const pvNonlead = Boolean(l.pv_nonlead || isPvNonLeadLabel(l.label));
     return {
       ...l,
@@ -4375,7 +4378,7 @@ app.get('/api/revenue/stats-by-workspace', requireAdmin, (req, res) => {
     if (l.pv_nonlead || isPvNonLeadLabel(l.label)) return;
     if (!counts[l.workspace_id]) counts[l.workspace_id] = { delivered: 0, revenue: 0 };
     counts[l.workspace_id].delivered++;
-    counts[l.workspace_id].revenue += livePriceMap[l.workspace_id] ?? l.lead_price ?? 0;
+    counts[l.workspace_id].revenue += (livePriceMap[l.workspace_id] || l.lead_price) || 0;
   });
   res.json(counts);
 });
@@ -12259,7 +12262,9 @@ async function revenueByWorkspaceForMonth(month) {
     const ws = l.workspace_id;
     if (!out[ws]) out[ws] = { delivered: 0, revenue: 0, manual_leads: 0, manual_revenue: 0 };
     out[ws].delivered++;
-    out[ws].revenue += livePriceMap[ws] ?? l.lead_price ?? 0;
+    // `||` not `??`: a 0/missing live price (client not in the price list) must
+    // fall back to the lead's stored price, not zero the revenue.
+    out[ws].revenue += (livePriceMap[ws] || l.lead_price) || 0;
   }
   // Merge manually-entered revenue
   const pgdb = app.locals?.pgDb;
@@ -12413,7 +12418,7 @@ async function buildFinanceSnapshot(month) {
     const mgr2 = (meta.campaign_manager_2 || '').toLowerCase().trim();
     if (!mgr1 && !mgr2) continue;
     if (meta.manager_start_date && l.date < meta.manager_start_date) continue;
-    const price    = livePriceMapMgr[l.workspace_id] ?? l.lead_price ?? 0;
+    const price    = (livePriceMapMgr[l.workspace_id] || l.lead_price) || 0;
     const numMgrs  = (mgr1 ? 1 : 0) + (mgr2 ? 1 : 0);
     const share    = price / numMgrs;
     if (mgr1) revenueByManager[mgr1] = (revenueByManager[mgr1] || 0) + share;
@@ -12521,7 +12526,7 @@ app.get('/api/finance/staff-debug', requireAdmin, (req, res) => {
     const mgr = (meta.campaign_manager || '').toLowerCase().trim();
     if (!mgr) { skipped.noMgr++; continue; }
     if (meta.manager_start_date && l.date < meta.manager_start_date) { skipped.startDate++; continue; }
-    const price = livePriceMapMgr[l.workspace_id] ?? l.lead_price ?? 0;
+    const price = (livePriceMapMgr[l.workspace_id] || l.lead_price) || 0;
     revenueByManager[mgr] = (revenueByManager[mgr] || 0) + price;
     skipped.counted++;
   }
