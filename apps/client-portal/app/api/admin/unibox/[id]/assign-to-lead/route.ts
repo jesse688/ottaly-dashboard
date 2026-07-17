@@ -235,29 +235,54 @@ async function assign(id: string, rawTarget: string) {
       [ws, targetEmail]
     )
     if (!espExists.rows.length) {
+      // A contact is often split across rows: a thin per-WORKSPACE copy plus the
+      // enriched 'ottaly-global' master row (which carries website/domain,
+      // department, fuller title). Read BOTH and COALESCE field-by-field —
+      // prefer the workspace row, fall back to global — so no enriched field is
+      // dropped just because it only lives on the master row.
       const c = await client.query(
-        `SELECT first_name, last_name, company_name, company_domain,
-                job_title, phone, linkedin_url, company_linkedin_url,
-                industry, city, state, country, company_address
-           FROM contacts
-          WHERE workspace_id = $1 AND lower(email) = lower($2)
-          ORDER BY last_engaged_at DESC NULLS LAST LIMIT 1`,
+        `WITH picked AS (
+           SELECT *, (workspace_id = $1) AS is_ws
+             FROM contacts
+            WHERE lower(email) = lower($2)
+              AND (workspace_id = $1 OR workspace_id = 'ottaly-global')
+         )
+         SELECT
+           coalesce(max(first_name)     FILTER (WHERE is_ws), max(first_name))     AS first_name,
+           coalesce(max(last_name)      FILTER (WHERE is_ws), max(last_name))      AS last_name,
+           coalesce(max(company_name)   FILTER (WHERE is_ws), max(company_name))   AS company_name,
+           coalesce(max(nullif(company_domain,'')) FILTER (WHERE is_ws), max(nullif(company_domain,''))) AS company_domain,
+           coalesce(max(job_title)      FILTER (WHERE is_ws), max(job_title))      AS job_title,
+           coalesce(max(phone)          FILTER (WHERE is_ws), max(phone))          AS phone,
+           coalesce(max(linkedin_url)   FILTER (WHERE is_ws), max(linkedin_url))   AS linkedin_url,
+           coalesce(max(company_linkedin_url) FILTER (WHERE is_ws), max(company_linkedin_url)) AS company_linkedin_url,
+           coalesce(max(industry)       FILTER (WHERE is_ws), max(industry))       AS industry,
+           coalesce(max(city)           FILTER (WHERE is_ws), max(city))           AS city,
+           coalesce(max(state)          FILTER (WHERE is_ws), max(state))          AS state,
+           coalesce(max(country)        FILTER (WHERE is_ws), max(country))        AS country,
+           coalesce(max(company_address) FILTER (WHERE is_ws), max(company_address)) AS company_address
+         FROM picked`,
         [ws, targetEmail]
       )
-      if (c.rows.length) {
-        const ct = c.rows[0] as {
-          first_name?: string; last_name?: string; company_name?: string
-          company_domain?: string; job_title?: string
-          phone?: string; linkedin_url?: string; company_linkedin_url?: string
-          industry?: string; city?: string; state?: string; country?: string
-          company_address?: string
-        }
+      const ct = (c.rows[0] ?? {}) as {
+        first_name?: string; last_name?: string; company_name?: string
+        company_domain?: string; job_title?: string
+        phone?: string; linkedin_url?: string; company_linkedin_url?: string
+        industry?: string; city?: string; state?: string; country?: string
+        company_address?: string
+      }
+      // The aggregate always returns one row; only seed if a contact actually
+      // matched (some identifying field is present).
+      if (ct.first_name || ct.last_name || ct.company_name || ct.job_title) {
+        const website = ct.company_domain
+          ? (/^https?:\/\//i.test(ct.company_domain) ? ct.company_domain : `https://${ct.company_domain}`)
+          : null
         // Keys match exactly what the unibox list route reads out of esp_leads.raw
         // (job_title/industry/address/city/state/country/company_website/…), so the
         // lead panel's Title/Industry/Location/Company rows all populate.
         const raw = {
           job_title: ct.job_title ?? null,
-          company_website: ct.company_domain ? `https://${ct.company_domain}` : null,
+          company_website: website,
           phone_number: ct.phone ?? null,
           linkedin_person_url: ct.linkedin_url ?? null,
           linkedin_company_url: ct.company_linkedin_url ?? null,
