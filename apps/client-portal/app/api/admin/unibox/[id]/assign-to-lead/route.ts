@@ -237,7 +237,8 @@ async function assign(id: string, rawTarget: string) {
     if (!espExists.rows.length) {
       const c = await client.query(
         `SELECT first_name, last_name, company_name, company_domain,
-                job_title, phone, linkedin_url, company_linkedin_url
+                job_title, phone, linkedin_url, company_linkedin_url,
+                industry, city, state, country, company_address
            FROM contacts
           WHERE workspace_id = $1 AND lower(email) = lower($2)
           ORDER BY last_engaged_at DESC NULLS LAST LIMIT 1`,
@@ -248,13 +249,23 @@ async function assign(id: string, rawTarget: string) {
           first_name?: string; last_name?: string; company_name?: string
           company_domain?: string; job_title?: string
           phone?: string; linkedin_url?: string; company_linkedin_url?: string
+          industry?: string; city?: string; state?: string; country?: string
+          company_address?: string
         }
+        // Keys match exactly what the unibox list route reads out of esp_leads.raw
+        // (job_title/industry/address/city/state/country/company_website/…), so the
+        // lead panel's Title/Industry/Location/Company rows all populate.
         const raw = {
           job_title: ct.job_title ?? null,
           company_website: ct.company_domain ? `https://${ct.company_domain}` : null,
           phone_number: ct.phone ?? null,
           linkedin_person_url: ct.linkedin_url ?? null,
           linkedin_company_url: ct.company_linkedin_url ?? null,
+          industry: ct.industry ?? null,
+          address: ct.company_address ?? null,
+          city: ct.city ?? null,
+          state: ct.state ?? null,
+          country: ct.country ?? null,
         }
         await client.query(
           `INSERT INTO esp_leads
