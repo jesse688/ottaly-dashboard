@@ -176,10 +176,14 @@ async function assign(id: string, rawTarget: string) {
   try {
     await client.query('BEGIN')
 
-    // 1. Re-key the reply onto the target lead + file it in Lead Replies.
+    // 1. Re-key the reply onto the target lead + move it into REVIEW so it
+    //    re-enters normal triage (the operator then Marks-as-lead / categorises
+    //    it). Assigning only fixes WHO the reply belongs to; it is not itself a
+    //    lead decision, so it should not skip straight to Lead Replies. Clearing
+    //    classify_state to 'done' would hide it from Review, so leave it actionable.
     await client.query(
       `UPDATE unibox_replies
-          SET lead_email = $2, folder = 'lead_replies', updated_at = NOW()
+          SET lead_email = $2, folder = 'review', classify_state = 'done', updated_at = NOW()
         WHERE id = $1`,
       [id, targetEmail]
     )
@@ -220,8 +224,58 @@ async function assign(id: string, rawTarget: string) {
       )
     }
 
+    // 4. If the target lives ONLY in contacts (no esp_leads row yet), seed one
+    //    from the contact so the lead panel + client dashboard show full data
+    //    (name/company/title/website/phone/LinkedIn) instead of a bare email.
+    //    Same id/source/raw shape as the "Edit lead details" endpoint, so the
+    //    dashboard reads it identically. COALESCE-on-conflict never clobbers an
+    //    existing richer row.
+    const espExists = await client.query(
+      `SELECT 1 FROM esp_leads WHERE workspace_id = $1 AND lower(email) = lower($2) LIMIT 1`,
+      [ws, targetEmail]
+    )
+    if (!espExists.rows.length) {
+      const c = await client.query(
+        `SELECT first_name, last_name, company_name, company_domain,
+                job_title, phone, linkedin_url, company_linkedin_url
+           FROM contacts
+          WHERE workspace_id = $1 AND lower(email) = lower($2)
+          ORDER BY last_engaged_at DESC NULLS LAST LIMIT 1`,
+        [ws, targetEmail]
+      )
+      if (c.rows.length) {
+        const ct = c.rows[0] as {
+          first_name?: string; last_name?: string; company_name?: string
+          company_domain?: string; job_title?: string
+          phone?: string; linkedin_url?: string; company_linkedin_url?: string
+        }
+        const raw = {
+          job_title: ct.job_title ?? null,
+          company_website: ct.company_domain ? `https://${ct.company_domain}` : null,
+          phone_number: ct.phone ?? null,
+          linkedin_person_url: ct.linkedin_url ?? null,
+          linkedin_company_url: ct.company_linkedin_url ?? null,
+        }
+        await client.query(
+          `INSERT INTO esp_leads
+             (id, workspace_id, campaign_id, source, email, first_name, last_name, company_name,
+              status, label, raw, created_at, updated_at)
+           VALUES ($1,$2,NULL,'bison',$3,$4,$5,$6,NULL,NULL,$7::jsonb,NOW(),NOW())
+           ON CONFLICT (id, source) DO UPDATE SET
+             first_name   = COALESCE(esp_leads.first_name, EXCLUDED.first_name),
+             last_name    = COALESCE(esp_leads.last_name, EXCLUDED.last_name),
+             company_name = COALESCE(esp_leads.company_name, EXCLUDED.company_name),
+             raw          = EXCLUDED.raw || COALESCE(esp_leads.raw, '{}'::jsonb),
+             updated_at   = NOW()`,
+          [`assign_${id}`, ws, targetEmail,
+           ct.first_name ?? null, ct.last_name ?? null, ct.company_name ?? null,
+           JSON.stringify(raw)]
+        )
+      }
+    }
+
     await client.query('COMMIT')
-    return NextResponse.json({ ok: true, assignedTo: targetEmail, leadId: lead.rows[0].id })
+    return NextResponse.json({ ok: true, assignedTo: targetEmail })
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {})
     console.error('[unibox/assign-to-lead]', err)
