@@ -1010,9 +1010,8 @@ class PostgresDatabase {
         // the Finance page — that way it shows correctly regardless of
         // how many of the 49 slots are filled.
         ['Inboxing', 'microsoft', 0.00, 'Flat $30/domain/month — add as expense, not per-mailbox'],
-        // Google Generic — self-hosted generic Google mailboxes. Seeded at $0;
-        // set the real per-mailbox cost on the Finance → mailbox pricing UI.
-        ['Google Generic', 'google', 0.00, 'Set per-mailbox cost in pricing UI'],
+        // Google Generic — generic Google mailboxes, $3.50/mailbox/month.
+        ['Google Generic', 'google', 3.50, 'Google Generic — $3.50/mailbox/month'],
       ];
       for (const [supplier, type, cost, notes] of defaults) {
         await this.pool.query(
