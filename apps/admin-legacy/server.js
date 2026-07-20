@@ -4436,6 +4436,9 @@ app.get('/api/revenue/profit', requireAdmin, async (req, res) => {
         const ws = m.workspace_id;
         if (!ws) continue;
         costByWorkspace[ws] = (costByWorkspace[ws] || 0) + mailboxUnitCost(m, prices);
+        // Domain cost EXCLUDES 'Google Generic' mailboxes — those domains
+        // aren't paid for, so they must not count toward the PV domain auto-fill.
+        if (m.supplier === 'Google Generic') continue;
         const dom = (m.domain || (m.email || '').split('@')[1] || '').toLowerCase();
         if (dom) {
           if (!pvDomainsByWorkspace[ws]) pvDomainsByWorkspace[ws] = new Set();
