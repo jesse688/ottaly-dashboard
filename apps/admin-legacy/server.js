@@ -157,6 +157,10 @@ const PV_WORKSPACES = [
   { pv: '6964ec1b2364418165378b13', name: 'Rural & Country' },
   { pv: '6964ec4f693ae16dcb15b9f7', name: 'TangerineTax' },
   { pv: '696e3c1682c0ae8e5357c552', name: 'FAIT' },
+  { pv: '6a35364e981ca441b3db8e5c', name: 'Bybo Digital' },
+  { pv: '6a353641e5488018209fc409', name: 'BlueHawk' },
+  { pv: '6a35364d981ca441b3db8e5b', name: 'Hayes & Co' },
+  { pv: '6a4b908c2e4ecfeb61a5951b', name: 'FirstVehicleFinance' },
 ];
 
 // Shim: code that did pvFetch('/workspaces') now calls this directly.
