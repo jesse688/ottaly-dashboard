@@ -494,6 +494,10 @@ for (const sql of [
   // Health view. 0 means "no target set" (skip pace scoring).
   `ALTER TABLE clients ADD COLUMN lead_target_monthly INTEGER DEFAULT 0`,
   `ALTER TABLE clients ADD COLUMN campaign_manager_2 TEXT DEFAULT ''`,
+  // Number of sending domains bought for this client. Domains are a yearly
+  // registrar cost (domain_unit_cost, in USD, stored in app_settings) absorbed
+  // 100% in the client's FIRST revenue month — see /api/revenue/profit.
+  `ALTER TABLE clients ADD COLUMN domains_bought INTEGER DEFAULT 0`,
   `ALTER TABLE managers ADD COLUMN commission_rate REAL DEFAULT 15`,
   `ALTER TABLE managers ADD COLUMN base_salary REAL DEFAULT 0`,
   `ALTER TABLE leads ADD COLUMN closed_value REAL`,
@@ -4381,6 +4385,192 @@ app.get('/api/revenue/stats-by-workspace', requireAdmin, (req, res) => {
     counts[l.workspace_id].revenue += (livePriceMap[l.workspace_id] || l.lead_price) || 0;
   });
   res.json(counts);
+});
+
+// Per-client profitability + lifetime value (Hormozi LTGP) for the Revenue page.
+//
+// Cost model (per user spec — NO cost other than these two):
+//   • Mailbox cost  — MONTHLY recurring. Current monthly $/client (supplier×type
+//                     unit cost, same as the Finance snapshot) × months active.
+//   • Domain cost   — a YEARLY registrar cost (domains_bought × domain_unit_cost),
+//                     absorbed 100% in the client's FIRST revenue month.
+// Both costs are stored/priced in USD and converted to GBP (revenue is GBP) using
+// the current month's FX rate, matching how finance.html displays them.
+//
+// Gross profit (lifetime) = lifetime revenue − (months_active × monthly_mailbox)
+//                                             − domain_cost
+// LTV = lifetime gross profit (LTGP). Also returns a per-month gross-profit series.
+app.get('/api/revenue/profit', requireAdmin, async (req, res) => {
+  try {
+    const pgdb = app.locals.pgDb;
+
+    // FX (USD→GBP) for the current month — costs are USD, revenue is GBP.
+    const month = new Date().toISOString().slice(0, 7);
+    let fx = { GBP: 1, USD: 0.79 };
+    try { fx = { ...fx, ...(await getFxRatesForMonth(month)) }; } catch {}
+    const usdToGbp = fx.USD || 0.79;
+
+    // Domain unit cost (USD) from app_settings; default $5.42/domain.
+    let domainUnitCostUsd = 5.42;
+    try {
+      const s = pgdb ? await pgdb.getSetting('domain_unit_cost', null) : null;
+      if (s != null && !isNaN(Number(s))) domainUnitCostUsd = Number(s);
+    } catch {}
+
+    // Current monthly mailbox cost per workspace (USD) — reuse Finance machinery.
+    const costByWorkspace = {};
+    try {
+      const allMailboxes = _mailboxCache.mailboxes || [];
+      const meta = pgdb ? await pgdb.listMailboxMeta() : [];
+      const metaByEmail = new Map(meta.map(m => [m.email, m]));
+      const mailboxes = mergeMailboxesWithMeta(allMailboxes, metaByEmail);
+      const prices = pricingMap(pgdb ? await pgdb.listMailboxPricing() : []);
+      for (const m of mailboxes) {
+        const ws = m.workspace_id;
+        if (!ws) continue;
+        costByWorkspace[ws] = (costByWorkspace[ws] || 0) + mailboxUnitCost(m, prices);
+      }
+    } catch (e) { console.warn('[profit] mailbox cost failed:', e.message); }
+
+    // Client meta: price, status, domains bought.
+    const clientRows = db.prepare(
+      'SELECT workspace_id, workspace_name, price_per_lead, client_status, domains_bought FROM clients'
+    ).all();
+    const cmeta = {};
+    clientRows.forEach(c => { cmeta[c.workspace_id] = c; });
+
+    // Non-lead exclusions — same rules as the rest of the revenue page.
+    const manualNonleads = new Set(
+      db.prepare(`SELECT email FROM nonlead_overrides WHERE active = 1`).all()
+        .map(r => String(r.email || '').toLowerCase())
+    );
+
+    // Aggregate active leads → per-workspace revenue + first/last revenue month.
+    const agg = {}; // ws → { revenue, leads, firstMonth, lastMonth }
+    (revenueCache.leads || []).forEach(l => {
+      if (isRevenueExcludedWorkspace(l)) return;
+      if (manualNonleads.has(String(l.lead_email || '').toLowerCase())) return;
+      if (l.pv_nonlead || isPvNonLeadLabel(l.label)) return;
+      const ws = l.workspace_id;
+      if (!ws) return;
+      const price = (cmeta[ws]?.price_per_lead || l.lead_price) || 0;
+      const mo = (l.date || '').slice(0, 7); // YYYY-MM
+      if (!agg[ws]) agg[ws] = { revenue: 0, leads: 0, firstMonth: null, lastMonth: null, byMonth: {} };
+      const a = agg[ws];
+      a.revenue += price;
+      a.leads += 1;
+      if (/^\d{4}-\d{2}$/.test(mo)) {
+        if (!a.firstMonth || mo < a.firstMonth) a.firstMonth = mo;
+        if (!a.lastMonth  || mo > a.lastMonth)  a.lastMonth  = mo;
+        a.byMonth[mo] = (a.byMonth[mo] || 0) + price;
+      }
+    });
+
+    // Whole calendar months from first→last revenue month, inclusive.
+    const monthsBetween = (from, to) => {
+      if (!from || !to) return 1;
+      const [fy, fm] = from.split('-').map(Number);
+      const [ty, tm] = to.split('-').map(Number);
+      return Math.max(1, (ty - fy) * 12 + (tm - fm) + 1);
+    };
+
+    const clients = [];
+    let totRevenue = 0, totMailbox = 0, totDomain = 0, totGross = 0;
+
+    for (const ws of Object.keys(agg)) {
+      const a = agg[ws];
+      const m = cmeta[ws] || {};
+      const monthsActive   = monthsBetween(a.firstMonth, a.lastMonth);
+      const monthlyMailbox = (costByWorkspace[ws] || 0) * usdToGbp;      // GBP/mo
+      const mailboxCost    = monthlyMailbox * monthsActive;             // lifetime GBP
+      const domainsBought  = m.domains_bought || 0;
+      const domainCost     = domainsBought * domainUnitCostUsd * usdToGbp; // GBP, absorbed month 1
+      const grossProfit    = a.revenue - mailboxCost - domainCost;       // = LTV (LTGP)
+      const grossMargin    = a.revenue > 0 ? grossProfit / a.revenue : null;
+
+      // Monthly gross-profit series: revenue that month − monthly mailbox −
+      // (domain cost only in the first revenue month).
+      const monthly = Object.keys(a.byMonth).sort().map(mo => ({
+        month: mo,
+        revenue: a.byMonth[mo],
+        gross_profit: a.byMonth[mo] - monthlyMailbox - (mo === a.firstMonth ? domainCost : 0),
+      }));
+
+      totRevenue += a.revenue; totMailbox += mailboxCost;
+      totDomain  += domainCost; totGross += grossProfit;
+
+      clients.push({
+        workspace_id:   ws,
+        client_name:    m.workspace_name || a.client_name || ws,
+        client_status:  m.client_status || 'active',
+        leads:          a.leads,
+        months_active:  monthsActive,
+        revenue:        a.revenue,
+        monthly_mailbox_cost: monthlyMailbox,
+        mailbox_cost:   mailboxCost,
+        domains_bought: domainsBought,
+        domain_cost:    domainCost,
+        gross_profit:   grossProfit,
+        gross_margin:   grossMargin,
+        avg_monthly_gross_profit: grossProfit / monthsActive, // lifetime GP ÷ months active
+        ltv:            grossProfit, // lifetime gross profit
+        monthly,
+      });
+    }
+    clients.sort((x, y) => y.gross_profit - x.gross_profit);
+
+    res.json({
+      fx: { usd_to_gbp: usdToGbp, month },
+      domain_unit_cost_usd: domainUnitCostUsd,
+      totals: {
+        revenue:      totRevenue,
+        mailbox_cost: totMailbox,
+        domain_cost:  totDomain,
+        gross_profit: totGross,
+        gross_margin: totRevenue > 0 ? totGross / totRevenue : null,
+        client_count: clients.length,
+        avg_ltv:      clients.length ? totGross / clients.length : 0,
+        // Mean of each client's own monthly-average gross profit (£/client/month).
+        avg_monthly_gross_profit: clients.length
+          ? clients.reduce((s, c) => s + c.avg_monthly_gross_profit, 0) / clients.length
+          : 0,
+      },
+      clients,
+    });
+  } catch (err) {
+    console.error('[revenue/profit] failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get / set the global domain unit cost (USD per domain) used by the profit calc.
+app.get('/api/revenue/domain-cost', requireAdmin, async (req, res) => {
+  const pgdb = app.locals.pgDb;
+  let cost = 5.42;
+  try {
+    const s = pgdb ? await pgdb.getSetting('domain_unit_cost', null) : null;
+    if (s != null && !isNaN(Number(s))) cost = Number(s);
+  } catch {}
+  res.json({ domain_unit_cost_usd: cost });
+});
+
+app.post('/api/revenue/domain-cost', requireAdmin, async (req, res) => {
+  const v = Number(req.body?.domain_unit_cost_usd);
+  if (isNaN(v) || v < 0) return res.status(400).json({ error: 'Invalid cost' });
+  try { await app.locals.pgDb?.setSetting('domain_unit_cost', v); }
+  catch (e) { return res.status(500).json({ error: e.message }); }
+  res.json({ ok: true, domain_unit_cost_usd: v });
+});
+
+// Set domains_bought for one client (by workspace_id) — inline edit from the
+// Revenue page's Client Performance table.
+app.post('/api/revenue/domains-bought', requireAdmin, (req, res) => {
+  const { workspace_id, domains_bought } = req.body || {};
+  if (!workspace_id) return res.status(400).json({ error: 'Missing workspace_id' });
+  const n = parseInt(domains_bought);
+  if (isNaN(n) || n < 0) return res.status(400).json({ error: 'Invalid domains_bought' });
+  db.prepare('UPDATE clients SET domains_bought = ? WHERE workspace_id = ?').run(n, workspace_id);
+  res.json({ ok: true });
 });
 
 // ── Performance cache (kept warm so filter changes are fast) ──
@@ -14610,6 +14800,7 @@ app.put('/api/admin/clients/:id', requireAdmin, (req, res) => {
   if (req.body.commission_rate    !== undefined) { updates.push('commission_rate = ?');    vals.push(parseFloat(req.body.commission_rate) || 15); }
   if (req.body.manager_start_date !== undefined) { updates.push('manager_start_date = ?'); vals.push(req.body.manager_start_date || null); }
   if (req.body.lead_target_monthly !== undefined) { updates.push('lead_target_monthly = ?'); vals.push(parseInt(req.body.lead_target_monthly) || 0); }
+  if (req.body.domains_bought      !== undefined) { updates.push('domains_bought = ?');      vals.push(parseInt(req.body.domains_bought) || 0); }
   if (updates.length)
     db.prepare(`UPDATE clients SET ${updates.join(', ')} WHERE id = ?`).run(...vals, req.params.id);
   if (notes !== undefined) {

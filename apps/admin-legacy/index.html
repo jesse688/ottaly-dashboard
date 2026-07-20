@@ -688,6 +688,39 @@
             </div>
         </div>
 
+        <!-- Profitability metrics (Hormozi: gross profit + LTV) -->
+        <div class="section-title" style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;">
+            Profitability &amp; Lifetime Value
+            <span style="font-size:12px;font-weight:500;color:#9CA3AF;text-transform:none;letter-spacing:0;">Gross profit = revenue − mailbox − domains · LTV = lifetime gross profit</span>
+            <span id="profitDomainCost" style="margin-left:auto;font-size:12px;color:#6B7280;background:#fff;border:1px solid #E5E7EB;border-radius:8px;padding:5px 10px;cursor:pointer;" onclick="editDomainCost()" title="Click to edit domain unit cost">Domain: $— ea</span>
+        </div>
+        <div class="metrics">
+            <div class="metric teal">
+                <div class="metric-icon teal">💰</div>
+                <div class="metric-label">Gross Profit</div>
+                <div class="metric-value" id="metricGross">£0</div>
+                <div class="metric-sub" id="metricGrossSub">— margin</div>
+            </div>
+            <div class="metric navy">
+                <div class="metric-icon navy">📈</div>
+                <div class="metric-label">Monthly Avg Gross Profit</div>
+                <div class="metric-value" id="metricMonthlyGP">£0</div>
+                <div class="metric-sub">per client / month</div>
+            </div>
+            <div class="metric yellow">
+                <div class="metric-icon yellow">💎</div>
+                <div class="metric-label">Avg LTV / Client</div>
+                <div class="metric-value" id="metricLtv">£0</div>
+                <div class="metric-sub" id="metricLtvSub">lifetime gross profit</div>
+            </div>
+            <div class="metric purple">
+                <div class="metric-icon purple">🧾</div>
+                <div class="metric-label">Total Costs</div>
+                <div class="metric-value" id="metricCosts">£0</div>
+                <div class="metric-sub" id="metricCostsSub">mailbox + domains</div>
+            </div>
+        </div>
+
         <!-- Time Series Charts -->
         <div class="section-title">Revenue Over Time</div>
         <div class="card" style="margin-bottom:1.25rem;">
@@ -737,11 +770,16 @@
                         <th>Client</th>
                         <th>Leads</th>
                         <th>Revenue</th>
-                        <th>Avg per Lead</th>
+                        <th title="Domains bought — click a cell to edit">Domains</th>
+                        <th title="Lifetime mailbox + domain cost">Cost</th>
+                        <th title="Revenue − mailbox − domains">Gross Profit</th>
+                        <th title="Gross profit ÷ revenue">Margin</th>
+                        <th title="Lifetime gross profit ÷ months active">Monthly Avg GP</th>
+                        <th title="Lifetime gross profit (LTGP)">LTV</th>
                     </tr>
                 </thead>
                 <tbody id="clientsTable">
-                    <tr><td colspan="4" style="text-align: center; padding: 2rem; color: #9CA3AF;">Loading...</td></tr>
+                    <tr><td colspan="9" style="text-align: center; padding: 2rem; color: #9CA3AF;">Loading...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -980,6 +1018,7 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
                 });
                 populateClientFilter();
                 updateDisplay();
+                loadProfit();
                 document.getElementById('loadingStatus').style.display = 'none';
                 document.getElementById('lastUpdateWrap').style.display = '';
                 document.getElementById('lastUpdate').textContent =
@@ -1078,9 +1117,21 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
             updateTsChart(calcLeads);
         }
 
+        // Profitability data from /api/revenue/profit, keyed by client name.
+        let profitByClient = {};
+
+        function gbp(v) { return '£' + Math.round(v || 0).toLocaleString('en-GB'); }
+
         function updateClientTable(sortedClients) {
             const colors = getClientColors(sortedClients.length);
-            document.getElementById('clientsTable').innerHTML = sortedClients.map(([client, stats], i) => `
+            document.getElementById('clientsTable').innerHTML = sortedClients.map(([client, stats], i) => {
+                const p = profitByClient[client];
+                const gp = p ? p.gross_profit : null;
+                const gpColor = gp == null ? '#9CA3AF' : (gp >= 0 ? '#16A34A' : '#DC2626');
+                const marginTxt = p && p.gross_margin != null ? (p.gross_margin * 100).toFixed(0) + '%' : '—';
+                const domains = p ? p.domains_bought : 0;
+                const wsId = p ? p.workspace_id : '';
+                return `
                 <tr>
                     <td>
                         <div class="client-badge">
@@ -1089,10 +1140,67 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
                         </div>
                     </td>
                     <td><span class="num">${stats.leads}</span></td>
-                    <td><span class="revenue-pill">£${Math.round(stats.revenue).toLocaleString('en-GB')}</span></td>
-                    <td class="num">£${Math.round(stats.revenue / stats.leads)}</td>
-                </tr>
-            `).join('') || '<tr><td colspan="4" style="text-align:center;padding:2rem;color:#9CA3AF;">No data</td></tr>';
+                    <td><span class="revenue-pill">${gbp(stats.revenue)}</span></td>
+                    <td class="num">${p ? `<span style="cursor:pointer;border-bottom:1px dashed #CBD5E1" title="Click to edit domains bought" onclick="editDomains('${wsId}','${client.replace(/'/g,"\\'")}',${domains})">${domains}</span>` : '—'}</td>
+                    <td class="num" style="color:#6B7280">${p ? gbp(p.mailbox_cost + p.domain_cost) : '—'}</td>
+                    <td class="num" style="color:${gpColor};font-weight:700">${gp == null ? '—' : gbp(gp)}</td>
+                    <td class="num">${marginTxt}</td>
+                    <td class="num">${p ? gbp(p.avg_monthly_gross_profit) : '—'}</td>
+                    <td class="num" style="font-weight:700;color:var(--navy-text)">${p ? gbp(p.ltv) : '—'}</td>
+                </tr>`;
+            }).join('') || '<tr><td colspan="9" style="text-align:center;padding:2rem;color:#9CA3AF;">No data</td></tr>';
+        }
+
+        async function loadProfit() {
+            try {
+                const d = await fetch('/api/revenue/profit').then(r => r.json());
+                if (d.error) return;
+                profitByClient = {};
+                (d.clients || []).forEach(c => { profitByClient[c.client_name] = c; });
+
+                const t = d.totals || {};
+                document.getElementById('metricGross').textContent = gbp(t.gross_profit);
+                document.getElementById('metricGrossSub').textContent =
+                    (t.gross_margin != null ? (t.gross_margin * 100).toFixed(0) + '% margin' : '— margin');
+                document.getElementById('metricMonthlyGP').textContent = gbp(t.avg_monthly_gross_profit);
+                document.getElementById('metricLtv').textContent = gbp(t.avg_ltv);
+                document.getElementById('metricLtvSub').textContent =
+                    (t.client_count || 0) + ' clients · lifetime gross profit';
+                document.getElementById('metricCosts').textContent = gbp((t.mailbox_cost || 0) + (t.domain_cost || 0));
+                document.getElementById('metricCostsSub').textContent =
+                    'mailbox ' + gbp(t.mailbox_cost) + ' + domains ' + gbp(t.domain_cost);
+                document.getElementById('profitDomainCost').textContent =
+                    'Domain: $' + (d.domain_unit_cost_usd || 0).toFixed(2) + ' ea';
+
+                // Re-render the client table so profit columns fill in.
+                updateDisplay();
+            } catch (e) { /* profit is additive — never block the page */ }
+        }
+
+        async function editDomainCost() {
+            const cur = document.getElementById('profitDomainCost').textContent.replace(/[^0-9.]/g, '');
+            const v = prompt('Domain unit cost (USD per domain):', cur || '5.42');
+            if (v == null) return;
+            const n = Number(v);
+            if (isNaN(n) || n < 0) { alert('Invalid number'); return; }
+            await fetch('/api/revenue/domain-cost', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ domain_unit_cost_usd: n })
+            });
+            loadProfit();
+        }
+
+        async function editDomains(workspaceId, clientName, current) {
+            if (!workspaceId) return;
+            const v = prompt('Domains bought for ' + clientName + ':', current || 0);
+            if (v == null) return;
+            const n = parseInt(v);
+            if (isNaN(n) || n < 0) { alert('Invalid number'); return; }
+            await fetch('/api/revenue/domains-bought', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ workspace_id: workspaceId, domains_bought: n })
+            });
+            loadProfit();
         }
 
         function updateLeadsTable(leads) {
