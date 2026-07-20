@@ -11857,6 +11857,39 @@ app.get('/api/mailboxes/refresh-status', requireSession, (req, res) => {
   });
 });
 
+// Audit: how many live mailboxes carry each supplier tag (incl. UNTAGGED and
+// any typo'd variants that won't match SUPPLIERS_ALLOWED). Use this to confirm
+// every "Google Generic" mailbox actually landed on that exact string —
+// mismatched strings get $0 unit cost and aren't excluded from domain cost.
+app.get('/api/mailboxes/supplier-audit', requireSession, async (req, res) => {
+  try {
+    const pgdb = app.locals.pgDb;
+    const meta = pgdb ? await pgdb.listMailboxMeta() : [];
+    const metaByEmail = new Map(meta.map(m => [m.email, m]));
+    const merged = mergeMailboxesWithMeta(_mailboxCache.mailboxes || [], metaByEmail);
+
+    const counts = {};        // supplier string → count
+    let untagged = 0;
+    for (const m of merged) {
+      const s = m.supplier;
+      if (!s) { untagged++; continue; }
+      counts[s] = (counts[s] || 0) + 1;
+    }
+    // Flag any tag that isn't an exact allowed supplier (typos/variants).
+    const unrecognised = Object.keys(counts).filter(s => !SUPPLIERS_ALLOWED.includes(s));
+
+    res.json({
+      total: merged.length,
+      allowed_suppliers: SUPPLIERS_ALLOWED,
+      by_supplier: counts,
+      untagged,
+      unrecognised_tags: unrecognised, // non-empty ⇒ these won't be costed correctly
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Assign supplier / type to a single mailbox.
 app.put('/api/mailboxes/:email', requireSession, async (req, res) => {
   try {
