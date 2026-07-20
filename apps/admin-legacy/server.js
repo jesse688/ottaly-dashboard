@@ -10190,7 +10190,7 @@ function detectMailboxType(provider) {
   return null;
 }
 
-const SUPPLIERS_ALLOWED = ['Maildoso', 'Mithun', 'Winnr', 'Inboxing'];
+const SUPPLIERS_ALLOWED = ['Maildoso', 'Mithun', 'Winnr', 'Inboxing', 'Google Generic'];
 const TYPES_ALLOWED     = ['google', 'microsoft', 'smtp'];
 
 // In-memory cache. PlusVibe data refreshes every 30 minutes; on each
