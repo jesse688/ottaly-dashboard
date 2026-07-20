@@ -498,6 +498,9 @@ for (const sql of [
   // registrar cost (domain_unit_cost, in USD, stored in app_settings) absorbed
   // 100% in the client's FIRST revenue month — see /api/revenue/profit.
   `ALTER TABLE clients ADD COLUMN domains_bought INTEGER DEFAULT 0`,
+  // Manual override for a client's MONTHLY mailbox cost, in USD. NULL = use the
+  // auto-computed supplier×type unit cost. Set to a number to force that figure.
+  `ALTER TABLE clients ADD COLUMN mailbox_cost_override REAL DEFAULT NULL`,
   `ALTER TABLE managers ADD COLUMN commission_rate REAL DEFAULT 15`,
   `ALTER TABLE managers ADD COLUMN base_salary REAL DEFAULT 0`,
   `ALTER TABLE leads ADD COLUMN closed_value REAL`,
@@ -4418,7 +4421,11 @@ app.get('/api/revenue/profit', requireAdmin, async (req, res) => {
     } catch {}
 
     // Current monthly mailbox cost per workspace (USD) — reuse Finance machinery.
+    // Also count DISTINCT sending domains per workspace from PlusVibe's live
+    // roster (same derivation as the client health snapshot) so the UI can
+    // auto-fill domains_bought from PV.
     const costByWorkspace = {};
+    const pvDomainsByWorkspace = {}; // ws → Set of domains
     try {
       const allMailboxes = _mailboxCache.mailboxes || [];
       const meta = pgdb ? await pgdb.listMailboxMeta() : [];
@@ -4429,12 +4436,17 @@ app.get('/api/revenue/profit', requireAdmin, async (req, res) => {
         const ws = m.workspace_id;
         if (!ws) continue;
         costByWorkspace[ws] = (costByWorkspace[ws] || 0) + mailboxUnitCost(m, prices);
+        const dom = (m.domain || (m.email || '').split('@')[1] || '').toLowerCase();
+        if (dom) {
+          if (!pvDomainsByWorkspace[ws]) pvDomainsByWorkspace[ws] = new Set();
+          pvDomainsByWorkspace[ws].add(dom);
+        }
       }
     } catch (e) { console.warn('[profit] mailbox cost failed:', e.message); }
 
-    // Client meta: price, status, domains bought.
+    // Client meta: price, status, domains bought, mailbox cost override.
     const clientRows = db.prepare(
-      'SELECT workspace_id, workspace_name, price_per_lead, client_status, domains_bought FROM clients'
+      'SELECT workspace_id, workspace_name, price_per_lead, client_status, domains_bought, mailbox_cost_override FROM clients'
     ).all();
     const cmeta = {};
     clientRows.forEach(c => { cmeta[c.workspace_id] = c; });
@@ -4481,9 +4493,17 @@ app.get('/api/revenue/profit', requireAdmin, async (req, res) => {
       const a = agg[ws];
       const m = cmeta[ws] || {};
       const monthsActive   = monthsBetween(a.firstMonth, a.lastMonth);
-      const monthlyMailbox = (costByWorkspace[ws] || 0) * usdToGbp;      // GBP/mo
-      const mailboxCost    = monthlyMailbox * monthsActive;             // lifetime GBP
-      const domainsBought  = m.domains_bought || 0;
+      // Manual override (USD/mo) wins over the auto-computed supplier×type cost.
+      const overrideUsd    = (m.mailbox_cost_override != null) ? Number(m.mailbox_cost_override) : null;
+      const monthlyMailboxUsd = overrideUsd != null ? overrideUsd : (costByWorkspace[ws] || 0);
+      const monthlyMailbox = monthlyMailboxUsd * usdToGbp;             // GBP/mo
+      const mailboxCost    = monthlyMailbox * monthsActive;            // lifetime GBP
+      // Domains for costing: manual domains_bought if set (>0), else fall back
+      // to the live count of distinct sending domains on PlusVibe.
+      const pvDomains      = pvDomainsByWorkspace[ws] ? pvDomainsByWorkspace[ws].size : 0;
+      const domainsManual  = m.domains_bought || 0;
+      const domainsBought  = domainsManual > 0 ? domainsManual : pvDomains;
+      const domainsSource  = domainsManual > 0 ? 'manual' : 'pv';
       const domainCost     = domainsBought * domainUnitCostUsd * usdToGbp; // GBP, absorbed month 1
       const grossProfit    = a.revenue - mailboxCost - domainCost;       // = LTV (LTGP)
       const grossMargin    = a.revenue > 0 ? grossProfit / a.revenue : null;
@@ -4507,8 +4527,13 @@ app.get('/api/revenue/profit', requireAdmin, async (req, res) => {
         months_active:  monthsActive,
         revenue:        a.revenue,
         monthly_mailbox_cost: monthlyMailbox,
+        mailbox_cost_override_usd: overrideUsd, // null = auto
+        monthly_mailbox_cost_usd:  monthlyMailboxUsd,
         mailbox_cost:   mailboxCost,
         domains_bought: domainsBought,
+        domains_manual: domainsManual,   // what's stored (0 = not set)
+        pv_domains:     pvDomains,        // live distinct domains on PlusVibe
+        domains_source: domainsSource,    // 'manual' | 'pv'
         domain_cost:    domainCost,
         gross_profit:   grossProfit,
         gross_margin:   grossMargin,
@@ -4571,6 +4596,21 @@ app.post('/api/revenue/domains-bought', requireAdmin, (req, res) => {
   if (isNaN(n) || n < 0) return res.status(400).json({ error: 'Invalid domains_bought' });
   db.prepare('UPDATE clients SET domains_bought = ? WHERE workspace_id = ?').run(n, workspace_id);
   res.json({ ok: true });
+});
+
+// Manually override a client's MONTHLY mailbox cost (USD). Send null/empty to
+// clear the override and fall back to the auto-computed supplier×type cost.
+app.post('/api/revenue/mailbox-cost', requireAdmin, (req, res) => {
+  const { workspace_id } = req.body || {};
+  if (!workspace_id) return res.status(400).json({ error: 'Missing workspace_id' });
+  const raw = req.body?.mailbox_cost_override_usd;
+  let val = null;
+  if (raw !== null && raw !== undefined && String(raw).trim() !== '') {
+    val = Number(raw);
+    if (isNaN(val) || val < 0) return res.status(400).json({ error: 'Invalid cost' });
+  }
+  db.prepare('UPDATE clients SET mailbox_cost_override = ? WHERE workspace_id = ?').run(val, workspace_id);
+  res.json({ ok: true, mailbox_cost_override_usd: val });
 });
 
 // ── Performance cache (kept warm so filter changes are fast) ──

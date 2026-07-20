@@ -771,6 +771,7 @@
                         <th>Leads</th>
                         <th>Revenue</th>
                         <th title="Domains bought — click a cell to edit">Domains</th>
+                        <th title="Monthly mailbox cost (USD) — click to override, blank to auto">Mailbox/mo</th>
                         <th title="Lifetime mailbox + domain cost">Cost</th>
                         <th title="Revenue − mailbox − domains">Gross Profit</th>
                         <th title="Gross profit ÷ revenue">Margin</th>
@@ -779,7 +780,7 @@
                     </tr>
                 </thead>
                 <tbody id="clientsTable">
-                    <tr><td colspan="9" style="text-align: center; padding: 2rem; color: #9CA3AF;">Loading...</td></tr>
+                    <tr><td colspan="10" style="text-align: center; padding: 2rem; color: #9CA3AF;">Loading...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -1131,6 +1132,15 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
                 const marginTxt = p && p.gross_margin != null ? (p.gross_margin * 100).toFixed(0) + '%' : '—';
                 const domains = p ? p.domains_bought : 0;
                 const wsId = p ? p.workspace_id : '';
+                const domFromPv = p && p.domains_source === 'pv';
+                const domLabel = p
+                    ? domains + (domFromPv ? ' <span style="color:#7C89CD;font-size:11px" title="Auto from PlusVibe live domains">PV</span>' : '')
+                    : '—';
+                const mbOverride = p ? p.mailbox_cost_override_usd : null;
+                const mbUsd = p ? (p.monthly_mailbox_cost_usd || 0) : 0;
+                const mbLabel = mbOverride != null
+                    ? '$' + mbUsd.toFixed(2)
+                    : '$' + mbUsd.toFixed(2) + ' <span style="color:#9CA3AF;font-size:11px">auto</span>';
                 return `
                 <tr>
                     <td>
@@ -1141,14 +1151,15 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
                     </td>
                     <td><span class="num">${stats.leads}</span></td>
                     <td><span class="revenue-pill">${gbp(stats.revenue)}</span></td>
-                    <td class="num">${p ? `<span style="cursor:pointer;border-bottom:1px dashed #CBD5E1" title="Click to edit domains bought" onclick="editDomains('${wsId}','${client.replace(/'/g,"\\'")}',${domains})">${domains}</span>` : '—'}</td>
+                    <td class="num">${p ? `<span style="cursor:pointer;border-bottom:1px dashed #CBD5E1" title="Click to set domains bought. Blank = auto from PlusVibe." onclick="editDomains('${wsId}','${client.replace(/'/g,"\\'")}',${p.domains_manual || 0})">${domLabel}</span>` : '—'}</td>
+                    <td class="num">${p ? `<span style="cursor:pointer;border-bottom:1px dashed #CBD5E1" title="Click to override monthly mailbox cost (USD). Blank = auto." onclick="editMailboxCost('${wsId}','${client.replace(/'/g,"\\'")}',${mbOverride == null ? 'null' : mbOverride})">${mbLabel}</span>` : '—'}</td>
                     <td class="num" style="color:#6B7280">${p ? gbp(p.mailbox_cost + p.domain_cost) : '—'}</td>
                     <td class="num" style="color:${gpColor};font-weight:700">${gp == null ? '—' : gbp(gp)}</td>
                     <td class="num">${marginTxt}</td>
                     <td class="num">${p ? gbp(p.avg_monthly_gross_profit) : '—'}</td>
                     <td class="num" style="font-weight:700;color:var(--navy-text)">${p ? gbp(p.ltv) : '—'}</td>
                 </tr>`;
-            }).join('') || '<tr><td colspan="9" style="text-align:center;padding:2rem;color:#9CA3AF;">No data</td></tr>';
+            }).join('') || '<tr><td colspan="10" style="text-align:center;padding:2rem;color:#9CA3AF;">No data</td></tr>';
         }
 
         async function loadProfit() {
@@ -1192,13 +1203,40 @@ const IS_LOCAL = window.location.hostname === 'localhost' || window.location.hos
 
         async function editDomains(workspaceId, clientName, current) {
             if (!workspaceId) return;
-            const v = prompt('Domains bought for ' + clientName + ':', current || 0);
-            if (v == null) return;
-            const n = parseInt(v);
-            if (isNaN(n) || n < 0) { alert('Invalid number'); return; }
+            const v = prompt(
+                'Domains bought for ' + clientName + '.\nLeave BLANK to auto-use the live PlusVibe domain count.',
+                current || ''
+            );
+            if (v === null) return; // cancelled
+            const trimmed = String(v).trim();
+            // Blank → 0 clears the manual value so it falls back to PV.
+            let n = 0;
+            if (trimmed !== '') {
+                n = parseInt(trimmed);
+                if (isNaN(n) || n < 0) { alert('Invalid number'); return; }
+            }
             await fetch('/api/revenue/domains-bought', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ workspace_id: workspaceId, domains_bought: n })
+            });
+            loadProfit();
+        }
+
+        async function editMailboxCost(workspaceId, clientName, current) {
+            if (!workspaceId) return;
+            const v = prompt(
+                'Monthly mailbox cost for ' + clientName + ' (USD/month).\nLeave BLANK to auto-calculate from mailboxes.',
+                current == null ? '' : current
+            );
+            if (v === null) return; // cancelled
+            const trimmed = String(v).trim();
+            if (trimmed !== '') {
+                const n = Number(trimmed);
+                if (isNaN(n) || n < 0) { alert('Invalid number'); return; }
+            }
+            await fetch('/api/revenue/mailbox-cost', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ workspace_id: workspaceId, mailbox_cost_override_usd: trimmed === '' ? null : Number(trimmed) })
             });
             loadProfit();
         }
