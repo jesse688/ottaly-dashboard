@@ -152,11 +152,11 @@ const PV_WORKSPACES = [
   { pv: '69a9db287af7ef2854f57636', name: 'GGRS' },
   { pv: '691ed9eaa1b5035dd42b4d86', name: 'Volancy' },
   { pv: '695259b0d1677bc04d5a3aa8', name: 'Stribe' },
-  { pv: '6932e1e2d3beeb70040857e7', name: 'AIVI' },
-  { pv: '6964c76a36e2bd2af31c7adf', name: 'V4One' },
   { pv: '6964ec1b2364418165378b13', name: 'Rural & Country' },
   { pv: '6964ec4f693ae16dcb15b9f7', name: 'TangerineTax' },
-  { pv: '696e3c1682c0ae8e5357c552', name: 'FAIT' },
+  // AIVI / V4One / FAIT removed — their seed-list PV ids return "Workspace id
+  // does not belong to this user" (stale/invalid). Re-add with correct ids if
+  // these become active clients.
   { pv: '6a35364e981ca441b3db8e5c', name: 'Bybo Digital' },
   { pv: '6a353641e5488018209fc409', name: 'BlueHawk' },
   { pv: '6a35364d981ca441b3db8e5b', name: 'Hayes & Co' },
