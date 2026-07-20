@@ -143,6 +143,20 @@ const PV_WORKSPACES = [
   { pv: '69a686632f5aaca7d9602c1f', name: 'Animo' },
   { pv: '6a1d40b3bb80380c1be750c6', name: 'ButterflyEco SOP' },
   { pv: '6989ac90bb085fcd05167fc9', name: 'Josh - Commercial Flooring' },
+  // Previously-missing workspaces — their mailboxes/domains weren't being
+  // fetched, so they showed £0 infra cost on Finance/Revenue. Ids from the
+  // clients seed list. (BlueHawk/Bybo/Hayes/FirstVehicleFinance still need
+  // their PV ids added — not present anywhere in code yet.)
+  { pv: '693fc9d9fd3453ffb933c88c', name: 'FleetSauce' },
+  { pv: '695259ea8de377db7577dc46', name: 'JMC Accountants' },
+  { pv: '69a9db287af7ef2854f57636', name: 'GGRS' },
+  { pv: '691ed9eaa1b5035dd42b4d86', name: 'Volancy' },
+  { pv: '695259b0d1677bc04d5a3aa8', name: 'Stribe' },
+  { pv: '6932e1e2d3beeb70040857e7', name: 'AIVI' },
+  { pv: '6964c76a36e2bd2af31c7adf', name: 'V4One' },
+  { pv: '6964ec1b2364418165378b13', name: 'Rural & Country' },
+  { pv: '6964ec4f693ae16dcb15b9f7', name: 'TangerineTax' },
+  { pv: '696e3c1682c0ae8e5357c552', name: 'FAIT' },
 ];
 
 // Shim: code that did pvFetch('/workspaces') now calls this directly.
