@@ -11857,6 +11857,58 @@ app.get('/api/mailboxes/refresh-status', requireSession, (req, res) => {
   });
 });
 
+// Pull the LIVE supplier from PlusVibe tags — the real source of truth. Supplier
+// tags are set in PlusVibe (mailbox tags), but the mailbox_meta table admin-legacy
+// reads can be stale. This scans the live roster (_mailboxCache, which already
+// carries each account's PV `tags`), matches any tag against SUPPLIERS_ALLOWED
+// (case-insensitive), and reports the true per-supplier breakdown + untagged +
+// per-workspace counts. This is what should drive supplier/costing, not the DB.
+app.get('/api/mailboxes/pv-supplier-tags', requireSession, (req, res) => {
+  const roster = _mailboxCache.mailboxes || [];
+  const allowedLower = new Map(SUPPLIERS_ALLOWED.map(s => [s.toLowerCase(), s]));
+
+  const bySupplier = {};        // canonical supplier → count
+  const byWorkspace = {};       // workspace → { supplier → count }
+  const untaggedByWorkspace = {};
+  const multiTagged = [];       // mailboxes carrying >1 supplier tag (ambiguous)
+  let untagged = 0, total = roster.length;
+
+  for (const m of roster) {
+    const tagNames = Array.isArray(m.tags)
+      ? m.tags.map(t => (typeof t === 'string' ? t : (t?.name || ''))).filter(Boolean)
+      : [];
+    // Which of this mailbox's tags are supplier tags?
+    const matched = [...new Set(
+      tagNames.map(t => allowedLower.get(t.trim().toLowerCase())).filter(Boolean)
+    )];
+    const ws = m.workspace_name || m.workspace_id || '(none)';
+    if (matched.length === 0) {
+      untagged++;
+      untaggedByWorkspace[ws] = (untaggedByWorkspace[ws] || 0) + 1;
+      continue;
+    }
+    if (matched.length > 1) multiTagged.push({ email: m.email, workspace: ws, suppliers: matched });
+    // Count under each matched supplier (usually exactly one).
+    for (const sup of matched) {
+      bySupplier[sup] = (bySupplier[sup] || 0) + 1;
+      if (!byWorkspace[ws]) byWorkspace[ws] = {};
+      byWorkspace[ws][sup] = (byWorkspace[ws][sup] || 0) + 1;
+    }
+  }
+
+  res.json({
+    source: 'plusvibe-live-tags',
+    lastRun: _mailboxCache.lastRun,
+    total,
+    allowed_suppliers: SUPPLIERS_ALLOWED,
+    by_supplier: bySupplier,
+    untagged,
+    untagged_by_workspace: untaggedByWorkspace,
+    by_workspace: byWorkspace,
+    multi_tagged: multiTagged, // non-empty ⇒ these have >1 supplier tag in PV
+  });
+});
+
 // Audit: how many live mailboxes carry each supplier tag (incl. UNTAGGED and
 // any typo'd variants that won't match SUPPLIERS_ALLOWED). Use this to confirm
 // every "Google Generic" mailbox actually landed on that exact string —
