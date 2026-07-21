@@ -8721,12 +8721,73 @@ function scoreDomain({ spf, dkim, dmarc, mx, blacklists }) {
   return { score, status, notes };
 }
 
+// Follow the domain root's HTTP redirect chain and report where it lands.
+// Reported, not scored — a sending domain usually 301/302s to the client's
+// real site; "no redirect" or a dead target is what we want visible.
+// Returns { ok, checked_url, final_url, status, chain[], redirected, error }.
+async function checkRedirect(domain) {
+  const started = `http://${domain}`;
+  const chain = [];
+  let url = started;
+  try {
+    for (let hop = 0; hop < 10; hop++) {
+      const resp = await fetch(url, {
+        method: 'HEAD',
+        redirect: 'manual',
+        signal: AbortSignal.timeout(10000),
+        headers: { 'User-Agent': 'Mozilla/5.0 (OttalyDomainCheck)' },
+      });
+      const status = resp.status;
+      const loc = resp.headers.get('location');
+      chain.push({ url, status, location: loc || null });
+      if (status >= 300 && status < 400 && loc) {
+        // Resolve relative Location against the current URL.
+        url = new URL(loc, url).toString();
+        continue;
+      }
+      // Terminal (2xx/4xx/5xx or 3xx with no Location).
+      return {
+        ok: status >= 200 && status < 400,
+        checked_url: started,
+        final_url: url,
+        status,
+        chain,
+        redirected: url !== started,
+        error: null,
+      };
+    }
+    return { ok: false, checked_url: started, final_url: url, status: null, chain, redirected: true, error: 'too many redirects' };
+  } catch (err) {
+    // Some hosts reject HEAD — one GET retry before giving up.
+    if (chain.length === 0) {
+      try {
+        const resp = await fetch(started, {
+          method: 'GET', redirect: 'follow',
+          signal: AbortSignal.timeout(10000),
+          headers: { 'User-Agent': 'Mozilla/5.0 (OttalyDomainCheck)' },
+        });
+        return {
+          ok: resp.status >= 200 && resp.status < 400,
+          checked_url: started, final_url: resp.url, status: resp.status,
+          chain: [{ url: started, status: resp.status, location: null }],
+          redirected: resp.url !== started && resp.url !== started + '/',
+          error: null,
+        };
+      } catch (e2) {
+        return { ok: false, checked_url: started, final_url: null, status: null, chain, redirected: false, error: e2.name === 'TimeoutError' ? 'timeout' : e2.message };
+      }
+    }
+    return { ok: false, checked_url: started, final_url: url, status: null, chain, redirected: chain.length > 0, error: err.name === 'TimeoutError' ? 'timeout' : err.message };
+  }
+}
+
 async function checkDomain(domain, ws) {
-  const [spf, dkim, dmarc, mx] = await Promise.all([
+  const [spf, dkim, dmarc, mx, redirect] = await Promise.all([
     checkSpf(domain),
     checkDkim(domain),
     checkDmarc(domain),
     checkMx(domain),
+    checkRedirect(domain),
   ]);
   // Check the DOMAIN against domain-blacklists (DBLs), not MX IPs.
   // MX IPs point to the inbound mail provider (Outlook/Google) — they
@@ -8738,6 +8799,7 @@ async function checkDomain(domain, ws) {
     workspace_id:   ws?.id || null,
     workspace_name: ws?.name || null,
     spf, dkim, dmarc, mx, blacklists,
+    redirect,
     score, status,
     notes: notes.join('; ') || null,
   };

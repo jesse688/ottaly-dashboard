@@ -228,6 +228,10 @@ class PostgresDatabase {
       )`,
       `CREATE INDEX IF NOT EXISTS idx_domain_health_workspace ON domain_health (workspace_id)`,
       `CREATE INDEX IF NOT EXISTS idx_domain_health_status    ON domain_health (status)`,
+      // Where the domain root redirects to (final URL + status chain). Reported,
+      // not scored — surfaced on the Domains page so broken/missing redirects
+      // are visible. { ok, final_url, status, chain[], error }
+      `ALTER TABLE domain_health ADD COLUMN IF NOT EXISTS redirect JSONB DEFAULT '{}'`,
       // Tombstone flag — when set, the auto-refresh skips re-adding this
       // domain even though PlusVibe still lists it. Used for inactive
       // clients or sunset domains. ignored_at is a soft-delete: the row
@@ -3566,9 +3570,9 @@ class PostgresDatabase {
   async upsertDomainHealth(row) {
     const sql = `
       INSERT INTO domain_health
-        (domain, workspace_id, workspace_name, spf, dkim, dmarc, mx, blacklists, score, status, last_checked, notes, updated_at)
+        (domain, workspace_id, workspace_name, spf, dkim, dmarc, mx, blacklists, score, status, last_checked, notes, redirect, updated_at)
       VALUES
-        ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, NOW(), $11, NOW())
+        ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, NOW(), $11, $12::jsonb, NOW())
       ON CONFLICT (domain) DO UPDATE SET
         workspace_id   = COALESCE(EXCLUDED.workspace_id, domain_health.workspace_id),
         workspace_name = COALESCE(EXCLUDED.workspace_name, domain_health.workspace_name),
@@ -3581,6 +3585,7 @@ class PostgresDatabase {
         status         = EXCLUDED.status,
         last_checked   = NOW(),
         notes          = EXCLUDED.notes,
+        redirect       = EXCLUDED.redirect,
         updated_at     = NOW()
     `;
     await this.query(sql, [
@@ -3595,6 +3600,7 @@ class PostgresDatabase {
       row.score || 0,
       row.status || 'unknown',
       row.notes || null,
+      JSON.stringify(row.redirect || {}),
     ]);
   }
 

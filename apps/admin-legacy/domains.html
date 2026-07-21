@@ -122,7 +122,7 @@ tr:hover td{background:#FAFBFF;cursor:pointer}
   <div class="page-header">
     <div>
       <div class="page-title">Domain Health</div>
-      <div class="page-sub">SPF · DKIM · DMARC · MX · domain blacklists (Spamhaus DBL, SURBL, URIBL) — across all sending domains. Auto-refreshed every 6 hours.</div>
+      <div class="page-sub">SPF · DKIM · DMARC · MX · redirect target · domain blacklists (Spamhaus DBL, SURBL, URIBL) — across all sending domains. Auto-refreshed every 6 hours.</div>
     </div>
     <div style="display:flex;gap:0.5rem;align-items:center">
       <span id="lastRun" style="font-size:12px;color:var(--muted)"></span>
@@ -158,6 +158,7 @@ tr:hover td{background:#FAFBFF;cursor:pointer}
           <th style="text-align:center">DKIM</th>
           <th style="text-align:center">DMARC</th>
           <th style="text-align:center">MX</th>
+          <th>Redirect →</th>
           <th>Blacklists</th>
           <th style="text-align:right">Score</th>
           <th>Status</th>
@@ -269,6 +270,28 @@ function chk(ok, label) {
   return `<span class="chk ${cls}" title="${label || ''}">${glyph}</span>`;
 }
 
+// Render the redirect result: where the domain root lands. Reported, not scored.
+//  · error / dead        → red "✗ <error>"
+//  · no redirect (2xx)   → amber "no redirect (200)"
+//  · redirects somewhere → green "→ host  (301)"
+function redirCell(redir) {
+  if (!redir || (redir.status == null && redir.error == null && !redir.final_url)) {
+    return '<span style="color:var(--muted)">—</span>';
+  }
+  if (redir.error) {
+    return `<span style="color:var(--red)" title="${(redir.error||'').replace(/"/g,'')}">✗ ${redir.error}</span>`;
+  }
+  let host = '';
+  try { host = redir.final_url ? new URL(redir.final_url).host : ''; } catch { host = redir.final_url || ''; }
+  const code = redir.status != null ? redir.status : '';
+  if (redir.redirected) {
+    const full = (redir.final_url || '').replace(/"/g, '');
+    return `<span style="color:var(--green)" title="${full}">→ ${host} <span style="color:var(--muted)">(${code})</span></span>`;
+  }
+  // Reached the domain but it didn't redirect anywhere.
+  return `<span style="color:var(--amber,#D97706)" title="Root responded ${code} without redirecting">no redirect (${code})</span>`;
+}
+
 function fmtAgo(ts) {
   if (!ts) return '—';
   const ms = Date.now() - new Date(ts).getTime();
@@ -325,6 +348,7 @@ function render() {
     const dkim = typeof r.dkim === 'string' ? JSON.parse(r.dkim || '{}') : r.dkim || {};
     const dmarc = typeof r.dmarc === 'string' ? JSON.parse(r.dmarc || '{}') : r.dmarc || {};
     const mx = typeof r.mx === 'string' ? JSON.parse(r.mx || '{}') : r.mx || {};
+    const redir = typeof r.redirect === 'string' ? JSON.parse(r.redirect || '{}') : r.redirect || {};
     const safeDom = (r.domain || '').replace(/'/g, "\\'");
     return `
       <tr onclick="openDetail('${safeDom}')">
@@ -336,6 +360,7 @@ function render() {
         <td style="text-align:center">${chk(dkim.present === true, dkim.selector ? `selector: ${dkim.selector}` : 'No DKIM record found')}</td>
         <td style="text-align:center">${chk(dmarcState(dmarc), dmarc.policy ? `p=${dmarc.policy}` : 'Missing')}</td>
         <td style="text-align:center">${chk(mx.present === true, (mx.hosts || []).join(', '))}</td>
+        <td style="font-size:12px">${redirCell(redir)}</td>
         <td class="bl-cell">${bl.length
           ? `<span class="bl-hits">${bl.length} listing${bl.length > 1 ? 's' : ''}</span> <span style="color:var(--muted);font-size:11px">${bl.map(b=>b.list).slice(0,2).join(', ')}${bl.length > 2 ? '…' : ''}</span>`
           : `<span class="bl-clean">Clean</span>`}</td>
@@ -373,6 +398,7 @@ function openDetail(domain) {
   const dkim = typeof r.dkim === 'string' ? JSON.parse(r.dkim || '{}') : r.dkim || {};
   const dmarc = typeof r.dmarc === 'string' ? JSON.parse(r.dmarc || '{}') : r.dmarc || {};
   const mx = typeof r.mx === 'string' ? JSON.parse(r.mx || '{}') : r.mx || {};
+  const redir = typeof r.redirect === 'string' ? JSON.parse(r.redirect || '{}') : r.redirect || {};
   const bl = r.blacklists || [];
 
   document.getElementById('detailDomain').textContent = r.domain;
@@ -397,6 +423,15 @@ function openDetail(domain) {
       <label>Present</label><div>${dmarc.present ? 'Yes' : 'No'}</div>
       <label>Policy</label><div>${dmarc.policy || '—'}</div>
       ${dmarc.raw ? `<label>Record</label><div class="raw">${dmarc.raw}</div>` : ''}
+    </div>
+
+    <div class="section-h">Redirect</div>
+    <div class="detail-grid">
+      <label>Checked</label><div>${redir.checked_url || ('http://' + r.domain)}</div>
+      <label>Redirects?</label><div>${redir.error ? '<span style="color:var(--red)">Error — ' + redir.error + '</span>' : (redir.redirected ? 'Yes' : 'No')}</div>
+      ${redir.final_url ? `<label>Lands on</label><div class="raw"><a href="${redir.final_url}" target="_blank" rel="noopener">${redir.final_url}</a></div>` : ''}
+      ${redir.status != null ? `<label>Final status</label><div>${redir.status}</div>` : ''}
+      ${Array.isArray(redir.chain) && redir.chain.length ? `<label>Hops</label><div class="raw">${redir.chain.map(h => `${h.status} ${h.url}${h.location ? ' → ' + h.location : ''}`).join('<br>')}</div>` : ''}
     </div>
 
     <div class="section-h">MX</div>
