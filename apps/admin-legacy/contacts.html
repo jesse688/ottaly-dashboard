@@ -3612,6 +3612,11 @@
         return;
       }
       const contacts = chosen.map(c => ({
+        // Carry the ENTIRE contact record so the solar page can show every field
+        // in the expandable detail card — nothing hand-picked, nothing lost.
+        ...c,
+        // Then guarantee the specific keys the cascade + push need are populated,
+        // normalising a few aliases.
         id: c.id,
         email: c.email || '',
         first_name: c.first_name || '',
@@ -3621,14 +3626,7 @@
         company_reg: c.company_number || c.company_reg || '',
         // The cascade needs a postcode; company_address usually carries it.
         company_address: c.company_address || [c.company_city, c.company_county, c.company_town].filter(Boolean).join(', ') || '',
-        // Extra contact context carried through so the solar page shows the full
-        // picture (who to email, their title, the site) without going back here.
-        job_title: c.job_title || c.job_title_cleaned || '',
-        seniority: c.seniority || '',
-        department: c.department || '',
         phone: c.phone || c.corporate_phone || c.company_phone || '',
-        linkedin_url: c.linkedin_url || '',
-        industry: c.industry || '',
       })).filter(c => c.company_address || c.company_name);
       if (!contacts.length) { showMessage('No usable address/company on the selected contacts', 'error'); return; }
       sessionStorage.setItem('solarContacts', JSON.stringify(contacts));

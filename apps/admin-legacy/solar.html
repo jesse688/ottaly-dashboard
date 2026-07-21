@@ -120,6 +120,38 @@
 
 <script>
 let ROWS = [], VIEW = 'prospects';
+const EXPANDED = new Set();
+function toggleRow(i){ if(EXPANDED.has(i)) EXPANDED.delete(i); else EXPANDED.add(i); render(); }
+
+// Fields we already surface in the compact columns — skip them in the "all fields"
+// detail card to avoid duplication. Everything else on the contact shows.
+const CARD_SKIP = new Set(['index','_img','_company','status','stage','stop_reason','raw',
+  'owner_candidates','company_name','address','email','first_name','last_name','job_title',
+  'company_domain','phone','linkedin_url','building_owner','maps_url','lat','lng']);
+const NICE = { est_annual_kwh:'Est. annual kWh', max_system_kwp:'Max system kWp',
+  max_panels_fit:'Panels (fit)', roof_area_m2:'Roof m²', ppa_eligible:'PPA eligible',
+  has_solar:'Existing solar', owns_building:'Owns building', imagery_date:'Roof imagery',
+  company_reg:'Company reg', lead_reg_resolved:'CH-resolved reg', seniority:'Seniority',
+  department:'Department', industry:'Industry', keywords:'Keywords', technologies:'Technologies',
+  num_employees:'Employees', company_linkedin_url:'Company LinkedIn', corporate_phone:'Corporate phone',
+  company_phone:'Company phone', company_city:'Company city', company_county:'Company county',
+  company_country:'Company country', tags:'Tags', apollo_id:'Apollo ID' };
+function niceLabel(k){ return NICE[k] || k.replace(/_/g,' ').replace(/\b\w/g,m=>m.toUpperCase()); }
+
+function detailCard(r, ncols){
+  const rows = Object.keys(r)
+    .filter(k => !CARD_SKIP.has(k) && r[k] != null && r[k] !== '' && typeof r[k] !== 'object')
+    .sort()
+    .map(k => {
+      let v = String(r[k]);
+      if(/^https?:\/\//.test(v)) v = `<a href="${esc(v)}" target="_blank">${esc(v)}</a>`;
+      else v = esc(v);
+      return `<div style="display:flex;gap:8px;padding:3px 0;border-bottom:1px solid var(--line)">
+        <span class="mut" style="min-width:150px">${esc(niceLabel(k))}</span><span>${v}</span></div>`;
+    }).join('');
+  return `<tr class="detailwrap"><td colspan="${ncols}" style="background:#12151c;padding:14px 18px">
+    <div style="columns:2;column-gap:40px">${rows||'<span class="mut">No additional fields</span>'}</div></td></tr>`;
+}
 
 // Fields available to send as PV variables (key -> label shown to user).
 const FIELDS = [
@@ -263,18 +295,19 @@ function render(){
       + `<div class="mut" style="font-size:11px">${esc(r.address||'')}</div>`
       + `${site?`<div style="font-size:11px">${site}</div>`:''}`
       + `${r.industry?`<div class="mut" style="font-size:11px">${esc(r.industry)}</div>`:''}`;
-    return `<tr>
-      <td class="addr">${companyCell}</td>
-      <td class="addr" style="min-width:180px">${contactCell}</td>
+    const openArrow = EXPANDED.has(r.index)?'▾':'▸';
+    return `<tr style="cursor:pointer" onclick="toggleRow(${r.index})">
+      <td class="addr"><span class="mut">${openArrow}</span> ${companyCell}</td>
+      <td class="addr" style="min-width:180px" onclick="event.stopPropagation()">${contactCell}</td>
       <td>${stopPill(r)}</td>
       <td>${owns}${r.building_owner?`<div class="mut" style="font-size:11px">${esc(r.building_owner)}</div>`:''}</td>
       <td>${kwp}</td>
       <td>${r.max_panels_fit!=null?r.max_panels_fit:'<span class="mut">—</span>'}</td>
       <td>${kwh}</td>
       <td>${r.has_solar||'<span class="mut">—</span>'}</td>
-      <td>${maps}</td>
-      <td>${img}</td>
-    </tr>`;
+      <td onclick="event.stopPropagation()">${maps}</td>
+      <td onclick="event.stopPropagation()">${img}</td>
+    </tr>` + (EXPANDED.has(r.index) ? detailCard(r, 10) : '');
   }).join('');
   w.innerHTML=`<table><thead><tr><th>Company / Address</th><th>Contact</th><th>Result</th><th>Owns building</th><th>Max system</th><th>Panels</th><th>Annual kWh</th><th>Existing solar</th><th>Map</th><th>Roof img</th></tr></thead><tbody>${body}</tbody></table>`;
 }
