@@ -110,7 +110,7 @@ tr:last-child td{border-bottom:none}
       <div class="sum-val" id="sumClients">0</div>
     </div>
     <div class="sum-card">
-      <div class="sum-label">Rate per Lead</div>
+      <div class="sum-label">Commission Rate</div>
       <div class="sum-val" id="sumRate" style="font-size:1.1rem">—</div>
     </div>
     <div class="sum-card" id="salaryCard" style="display:none">
@@ -243,12 +243,12 @@ function renderManager() {
   const { start, end, label } = getRange();
   document.getElementById('periodLabel').textContent = label;
 
-  // Per-lead bonus = last month avg lead price (GBP) × CM rate% × ZAR rate
-  const perLeadGbp = (_avgLeadPriceGbp || 0) * ((_defaultRate || 5) / 100);
-  const perLeadZar = _zarRate ? perLeadGbp * _zarRate : perLeadGbp;
+  // Commission = CM rate% × the ACTUAL value of each lead (converted GBP→ZAR).
+  const rateFrac = (_defaultRate || 5) / 100;
 
   const rows = [];
   let totalLeads = 0;
+  let totalCommGbp = 0;
   for (const c of myClients) {
     const mgrStart = c.manager_start_date ? new Date(c.manager_start_date + 'T00:00:00') : null;
     const leads = allLeads.filter(l =>
@@ -257,13 +257,17 @@ function renderManager() {
       (!mgrStart || l.date >= mgrStart)
     );
     if (leads.length === 0) continue;
-    const earned = leads.length * perLeadZar;
+    // Sum this client's lead values, take the CM's %.
+    const clientValueGbp = leads.reduce((s, l) => s + (l.lead_price || 0), 0);
+    const earnedGbp = clientValueGbp * rateFrac;
+    const earnedZar = _zarRate ? earnedGbp * _zarRate : earnedGbp;
     totalLeads += leads.length;
-    rows.push({ name: c.workspace_name, since: c.manager_start_date, leads: leads.length, earned });
+    totalCommGbp += earnedGbp;
+    rows.push({ name: c.workspace_name, since: c.manager_start_date, leads: leads.length, earned: earnedZar });
   }
-  rows.sort((a, b) => b.leads - a.leads);
+  rows.sort((a, b) => b.earned - a.earned);
 
-  const totalCommZar = totalLeads * perLeadZar;
+  const totalCommZar = _zarRate ? totalCommGbp * _zarRate : totalCommGbp;
 
   // Business day salary accrual — only for "This Month" view
   const isThisMonth = document.getElementById('period').value === 'month';
@@ -292,7 +296,7 @@ function renderManager() {
   document.getElementById('sumComm').textContent    = 'R' + totalCommZar.toLocaleString('en-ZA', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   document.getElementById('sumLeads').textContent   = totalLeads;
   document.getElementById('sumClients').textContent = rows.length;
-  document.getElementById('sumRate').textContent    = 'R' + perLeadZar.toLocaleString('en-ZA', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '/lead';
+  document.getElementById('sumRate').textContent    = (_defaultRate || 5) + '% of lead value';
   document.getElementById('sumSalary').innerHTML    = salaryLabel;
   document.getElementById('sumTotal').textContent   = 'R' + totalZar.toLocaleString('en-ZA', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   document.getElementById('salaryCard').style.display = 'block';
@@ -396,7 +400,9 @@ function renderAdmin() {
       }
       _earnerStats[earner][lead.client_name].leads++;
       _earnerStats[earner][lead.client_name].revenue   += lead.lead_price;
-      _earnerStats[earner][lead.client_name].commission += (_avgLeadPriceGbp || 0) * effectiveRate;
+      // Commission = the CM's rate × THIS lead's actual value (not a global
+      // average). So 5% of a £205 lead = £10.25, of a £72 lead = £3.60.
+      _earnerStats[earner][lead.client_name].commission += (lead.lead_price || 0) * effectiveRate;
     });
   });
 
@@ -565,17 +571,14 @@ async function init() {
       fetch('/api/avg-lead-price').then(r => r.json()).catch(() => ({ avg_lead_price_gbp: 0 })),
     ]);
     _avgLeadPriceGbp = avgData.avg_lead_price_gbp || 0;
-    // Show per-lead rate explanation card
-    const perLeadGbp = _avgLeadPriceGbp * ((_defaultRate || 5) / 100);
-    const perLeadZar = _zarRate ? perLeadGbp * _zarRate : 0;
+    // Explain the value-based commission model.
     document.getElementById('sumRate').closest('.sum-card').insertAdjacentHTML('afterend',
       `<div class="sum-card" style="border-top-color:#7C89CD">
-        <div class="sum-label">How your rate is calculated</div>
+        <div class="sum-label">How your commission is calculated</div>
         <div style="font-size:11px;color:var(--muted);margin-top:6px;line-height:1.6">
-          All-time avg lead: <strong>£${_avgLeadPriceGbp.toFixed(2)}</strong><br>
-          × ${_defaultRate}% commission = £${(perLeadGbp).toFixed(2)}<br>
-          × R${_zarRate ? _zarRate.toFixed(2) : '23.50'}/GBP<br>
-          = <strong style="color:var(--green)">R${perLeadZar.toFixed(2)} per lead</strong>
+          <strong>${_defaultRate || 5}%</strong> of the value of each lead you get.<br>
+          e.g. a £200 lead → £${(200 * ((_defaultRate || 5) / 100)).toFixed(2)} commission<br>
+          Converted to ZAR at R${_zarRate ? _zarRate.toFixed(2) : '23.50'}/GBP.
         </div>
       </div>`
     );
