@@ -122,7 +122,7 @@ tr:hover td{background:#FAFBFF;cursor:pointer}
   <div class="page-header">
     <div>
       <div class="page-title">Domain Health</div>
-      <div class="page-sub">SPF · DKIM · DMARC · MX · redirect target · domain blacklists (Spamhaus DBL, SURBL, URIBL) — across all sending domains. Auto-refreshed every 6 hours.</div>
+      <div class="page-sub">SPF · DKIM · DMARC · MX · redirect target · domain blacklists (Spamhaus DBL, SURBL, URIBL) — across all sending domains. <b>Refresh all</b> re-checks redirects only (safe, no blacklist lookups); use <b>Check domain</b> for a full single-domain recheck.</div>
     </div>
     <div style="display:flex;gap:0.5rem;align-items:center">
       <span id="lastRun" style="font-size:12px;color:var(--muted)"></span>
@@ -141,6 +141,7 @@ tr:hover td{background:#FAFBFF;cursor:pointer}
     <select id="wsFilter" onchange="render()" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:#fff;outline:none;min-width:160px">
       <option value="">All clients</option>
     </select>
+    <button class="btn btn-ghost" onclick="editClientRedirect()" title="Set one expected redirect for ALL domains of the selected client">↳ Set client redirect</button>
     <div class="filter-pills">
       <div class="filter-pill active" data-status="" onclick="setFilter(this,'')">All</div>
       <div class="filter-pill" data-status="critical" onclick="setFilter(this,'critical')">Critical</div>
@@ -197,7 +198,7 @@ tr:hover td{background:#FAFBFF;cursor:pointer}
     </div>
     <div class="modal-body">
       <div style="font-size:13px;color:var(--muted);margin-bottom:0.75rem">
-        Runs SPF, DKIM, DMARC, MX and DNS-blacklist checks. Saved to the table.
+        Runs SPF, DKIM, DMARC, MX, redirect and DNS-blacklist checks for this one domain. Saved to the table.
       </div>
       <input type="text" id="checkInput" placeholder="example.com" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;outline:none">
       <div id="checkResult" style="margin-top:1rem"></div>
@@ -214,6 +215,16 @@ tr:hover td{background:#FAFBFF;cursor:pointer}
 <script>
 let data = [];
 let activeStatus = '';
+let clientRedirects = {}; // workspace_id -> expected redirect URL (client-level)
+
+// The expected redirect that applies to a domain: its own override wins,
+// else the client (workspace) level target.
+function effectiveExpected(r) {
+  if (r.expected_redirect) return { url: r.expected_redirect, source: 'domain' };
+  const ws = r.workspace_id;
+  if (ws && clientRedirects[ws]) return { url: clientRedirects[ws], source: 'client' };
+  return { url: '', source: null };
+}
 
 fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true})).then(s=>{
   if (s.ok === false) { location.href = '/login.html'; return; }
@@ -226,9 +237,13 @@ function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t
 
 async function load() {
   try {
-    const r = await fetch('/api/domains/health');
+    const [r, cr] = await Promise.all([
+      fetch('/api/domains/health'),
+      fetch('/api/domains/client-redirects').then(x => x.json()).catch(() => ({ map: {} })),
+    ]);
     const j = await r.json();
     data = j.rows || [];
+    clientRedirects = cr.map || {};
     if (j.lastRun) {
       const d = new Date(j.lastRun);
       document.getElementById('lastRun').textContent = `Last refresh: ${d.toLocaleString()}`;
@@ -289,9 +304,12 @@ function normUrl(u) {
 // The whole cell is clickable to set/change the expected target.
 function redirCell(r) {
   const redir = typeof r.redirect === 'string' ? JSON.parse(r.redirect || '{}') : r.redirect || {};
-  const expected = r.expected_redirect || '';
+  const eff = effectiveExpected(r);
+  const expected = eff.url;
   const safeDom = (r.domain || '').replace(/'/g, "\\'");
-  const edit = `onclick="event.stopPropagation();editExpected('${safeDom}')" style="cursor:pointer" title="Click to set the expected redirect"`;
+  const edit = `onclick="event.stopPropagation();editExpected('${safeDom}')" style="cursor:pointer" title="Click to set the expected redirect for this domain"`;
+  // Tiny marker when the target comes from the client-level setting.
+  const srcTag = eff.source === 'client' ? ' <span style="color:var(--muted);font-size:10px">(client)</span>' : '';
 
   const hasResult = redir && (redir.status != null || redir.error != null || redir.final_url);
   let host = '';
@@ -315,9 +333,9 @@ function redirCell(r) {
   }
   const match = normUrl(redir.final_url) === expHost || normUrl(redir.final_url).startsWith(expHost);
   if (match) {
-    return `<span ${edit}><span style="color:var(--green);font-weight:600">✓ ${host}</span> <span style="color:var(--muted)">(${code})</span></span>`;
+    return `<span ${edit}><span style="color:var(--green);font-weight:600">✓ ${host}</span> <span style="color:var(--muted)">(${code})</span>${srcTag}</span>`;
   }
-  return `<span ${edit}><span style="color:var(--red);font-weight:600">✗ ${host}</span> <span style="color:var(--muted);font-size:11px">exp: ${expHost}</span></span>`;
+  return `<span ${edit}><span style="color:var(--red);font-weight:600">✗ ${host}</span> <span style="color:var(--muted);font-size:11px">exp: ${expHost}</span>${srcTag}</span>`;
 }
 
 // Set / change / clear the expected redirect target for a domain.
@@ -338,6 +356,37 @@ async function editExpected(domain) {
     if (!res.ok) throw new Error(j.error || 'save failed');
     if (row) row.expected_redirect = j.expected_redirect; // update in-memory
     render(); // re-colour immediately
+  } catch (e) {
+    alert('Could not save: ' + e.message);
+  }
+}
+
+// Set ONE expected redirect for every domain of a client (workspace). Applies
+// to the client currently chosen in the filter; if "All clients", asks you to
+// pick one first. Per-domain overrides still win over this.
+async function editClientRedirect() {
+  const wsName = document.getElementById('wsFilter').value;
+  if (!wsName) { alert('Pick a client in the dropdown first, then set its redirect.'); return; }
+  // Map the selected workspace_name → workspace_id (from loaded rows).
+  const sample = data.find(r => r.workspace_name === wsName && r.workspace_id);
+  if (!sample) { alert('No workspace id found for ' + wsName + ' — can\'t set a client redirect.'); return; }
+  const wsId = sample.workspace_id;
+  const current = clientRedirects[wsId] || '';
+  const nDomains = data.filter(r => r.workspace_id === wsId).length;
+  const v = prompt(
+    'Expected redirect for ALL ' + nDomains + ' domains of ' + wsName + '\n(e.g. https://theirsite.com — blank to clear):',
+    current
+  );
+  if (v === null) return;
+  try {
+    const res = await fetch('/api/domains/client-redirects', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspace_id: wsId, expected_redirect: v.trim() })
+    });
+    const j = await res.json();
+    if (!res.ok) throw new Error(j.error || 'save failed');
+    clientRedirects = j.map || clientRedirects;
+    render();
   } catch (e) {
     alert('Could not save: ' + e.message);
   }
@@ -477,15 +526,20 @@ function openDetail(domain) {
     </div>
 
     <div class="section-h">Redirect</div>
-    <div class="detail-grid">
-      <label>Expected</label><div>${r.expected_redirect ? r.expected_redirect : '<span style="color:var(--muted)">not set</span>'} <a href="#" onclick="editExpected('${(r.domain||'').replace(/'/g,"\\'")}');return false;" style="color:var(--purple);font-size:12px;margin-left:8px">${r.expected_redirect ? 'change' : 'set'}</a></div>
+    ${(() => {
+      const eff = effectiveExpected(r);
+      const exp = eff.url;
+      const isMatch = exp && normUrl(redir.final_url) && (normUrl(redir.final_url) === normUrl(exp) || normUrl(redir.final_url).startsWith(normUrl(exp)));
+      return `<div class="detail-grid">
+      <label>Expected</label><div>${exp ? exp + (eff.source === 'client' ? ' <span style="color:var(--muted);font-size:11px">(client-level)</span>' : '') : '<span style="color:var(--muted)">not set</span>'} <a href="#" onclick="editExpected('${(r.domain||'').replace(/'/g,"\\'")}');return false;" style="color:var(--purple);font-size:12px;margin-left:8px">${r.expected_redirect ? 'change domain' : 'set domain'}</a></div>
       <label>Checked</label><div>${redir.checked_url || ('http://' + r.domain)}</div>
       <label>Redirects?</label><div>${redir.error ? '<span style="color:var(--red)">Error — ' + redir.error + '</span>' : (redir.redirected ? 'Yes' : 'No')}</div>
       ${redir.final_url ? `<label>Lands on</label><div class="raw"><a href="${redir.final_url}" target="_blank" rel="noopener">${redir.final_url}</a></div>` : ''}
       ${redir.status != null ? `<label>Final status</label><div>${redir.status}</div>` : ''}
-      ${r.expected_redirect ? `<label>Match</label><div>${normUrl(redir.final_url) && (normUrl(redir.final_url)===normUrl(r.expected_redirect)||normUrl(redir.final_url).startsWith(normUrl(r.expected_redirect))) ? '<span style="color:var(--green);font-weight:600">✓ Matches</span>' : '<span style="color:var(--red);font-weight:600">✗ Does not match</span>'}</div>` : ''}
+      ${exp ? `<label>Match</label><div>${isMatch ? '<span style="color:var(--green);font-weight:600">✓ Matches</span>' : '<span style="color:var(--red);font-weight:600">✗ Does not match</span>'}</div>` : ''}
       ${Array.isArray(redir.chain) && redir.chain.length ? `<label>Hops</label><div class="raw">${redir.chain.map(h => `${h.status} ${h.url}${h.location ? ' → ' + h.location : ''}`).join('<br>')}</div>` : ''}
-    </div>
+    </div>`;
+    })()}
 
     <div class="section-h">MX</div>
     <div class="detail-grid">

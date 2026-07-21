@@ -3619,6 +3619,20 @@ class PostgresDatabase {
     return r.rows;
   }
 
+  // Update ONLY the redirect column for a domain (safe manual refresh). Does
+  // not touch SPF/DKIM/DMARC/MX/blacklist/score — those stay as last measured.
+  // Upserts a bare row if the domain isn't present yet.
+  async updateDomainRedirect(domain, redirect) {
+    await this.query(
+      `INSERT INTO domain_health (domain, redirect, updated_at)
+       VALUES ($1, $2::jsonb, NOW())
+       ON CONFLICT (domain) DO UPDATE SET
+         redirect   = EXCLUDED.redirect,
+         updated_at = NOW()`,
+      [domain, JSON.stringify(redirect || {})]
+    );
+  }
+
   // Set (or clear, with null) the expected redirect target for a domain.
   async setExpectedRedirect(domain, expected) {
     const r = await this.query(

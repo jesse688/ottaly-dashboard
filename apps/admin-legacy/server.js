@@ -8974,6 +8974,12 @@ async function checkDomainWithTimeout(domain, ws, ms = 25000) {
     new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms)),
   ]);
 }
+// SAFE manual refresh — REDIRECT ONLY. Deliberately does NOT re-run
+// SPF/DKIM/DMARC/MX or blacklist (Spamhaus/SURBL) checks: frequent DBL lookups
+// create reputation bias and look suspicious (per Bison — that's why the auto
+// blacklist refresh was disabled). We only touch each domain's `redirect`
+// column via a single throttled HEAD request that looks like normal monitoring.
+// No auto-timer — runs solely when the user clicks Refresh.
 async function refreshDomainHealth() {
   // STALE-RESET: if a previous run has been "running" for >10 min it has hung
   // (or the process state is stale) — take over instead of blocking forever.
@@ -8985,29 +8991,30 @@ async function refreshDomainHealth() {
     const pgdb = app.locals.pgDb;
     if (!pgdb) return;
     const allDomains = await listSendingDomains();
-    // Skip ignored (soft-deleted) domains so a user-removed row doesn't
-    // come back on the next refresh.
     const ignored = new Set(await pgdb.listIgnoredDomains());
     const domains = allDomains.filter(d => !ignored.has(d.domain));
-    console.log(`[domain-health] checking ${domains.length} domains (${ignored.size} ignored)…`);
-    // Process in parallel batches to keep DNS load reasonable.
-    const CONCURRENCY = 8;
+    console.log(`[domain-redirect] checking redirects for ${domains.length} domains (${ignored.size} ignored)…`);
+    // Low concurrency + a gap between batches so we never burst hundreds of
+    // requests at once — reads as benign monitoring, not a scan.
+    const CONCURRENCY = 4;
+    const BATCH_GAP_MS = 750;
     let done = 0;
     for (let i = 0; i < domains.length; i += CONCURRENCY) {
       const batch = domains.slice(i, i + CONCURRENCY);
-      await Promise.all(batch.map(async ({ domain, ws }) => {
+      await Promise.all(batch.map(async ({ domain }) => {
         try {
-          const row = await checkDomainWithTimeout(domain, ws);
-          await pgdb.upsertDomainHealth(row);
+          const redirect = await checkRedirect(domain);
+          await pgdb.updateDomainRedirect(domain, redirect);
           done++;
         } catch (err) {
-          console.warn(`[domain-health] ${domain} failed:`, err.message);
+          console.warn(`[domain-redirect] ${domain} failed:`, err.message);
         }
       }));
+      if (i + CONCURRENCY < domains.length) await new Promise(r => setTimeout(r, BATCH_GAP_MS));
     }
-    console.log(`[domain-health] done ${done}/${domains.length} in ${Math.round((Date.now() - t0) / 1000)}s`);
+    console.log(`[domain-redirect] done ${done}/${domains.length} in ${Math.round((Date.now() - t0) / 1000)}s`);
   } catch (err) {
-    console.error('[domain-health] refresh error:', err.message);
+    console.error('[domain-redirect] refresh error:', err.message);
   } finally {
     _domainHealthRunning = false;
   }
@@ -9028,7 +9035,14 @@ app.get('/api/domains/health', requireSession, async (req, res) => {
 });
 
 app.post('/api/domains/refresh', requireSession, async (req, res) => {
-  res.json({ ok: true, disabled: true, message: 'Domain health refresh is disabled' });
+  // Manual only — kicks off a full re-check (SPF/DKIM/DMARC/MX/blacklists +
+  // redirect) of every domain in the background. There is NO auto-refresh
+  // timer; this runs solely when the user clicks Refresh.
+  if (_domainHealthRunning) {
+    return res.json({ ok: true, running: true, message: 'Refresh already in progress' });
+  }
+  refreshDomainHealth().catch(err => console.error('[domain-health] manual refresh failed:', err.message));
+  res.json({ ok: true, running: true, message: 'Domain health refresh started' });
 });
 
 // Single-domain on-demand check (useful when adding a new client)
@@ -9068,6 +9082,36 @@ app.post('/api/domains/:domain/restore', requireSession, async (req, res) => {
     if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
     const r = await pgdb.setDomainIgnored(domain, false);
     res.json({ ok: true, ...r });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Per-CLIENT (workspace) expected redirect. One target applied to all of that
+// client's domains — the per-domain expected_redirect (above) overrides it.
+// Stored as a { workspace_id: url } map in app_settings.
+app.get('/api/domains/client-redirects', requireSession, async (req, res) => {
+  try {
+    const pgdb = app.locals.pgDb;
+    const map = pgdb ? await pgdb.getSetting('client_expected_redirects', {}) : {};
+    res.json({ map: map || {} });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/domains/client-redirects', requireSession, async (req, res) => {
+  try {
+    const pgdb = app.locals.pgDb;
+    if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
+    const wsId = (req.body?.workspace_id || '').toString().trim();
+    if (!wsId) return res.status(400).json({ error: 'Missing workspace_id' });
+    let expected = (req.body?.expected_redirect ?? '').toString().trim();
+    if (expected && !/^https?:\/\//i.test(expected)) expected = 'https://' + expected;
+    const map = (await pgdb.getSetting('client_expected_redirects', {})) || {};
+    if (expected) map[wsId] = expected; else delete map[wsId];
+    await pgdb.setSetting('client_expected_redirects', map);
+    res.json({ ok: true, workspace_id: wsId, expected_redirect: expected || null, map });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
