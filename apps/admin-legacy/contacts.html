@@ -1447,6 +1447,9 @@
           Deselect All
         </button>
         <div style="flex:1;"></div>
+        <button class="btn btn-secondary" id="pushSolarBtn" onclick="pushToSolar()" style="padding:5px 12px;font-size:12px;background:#f59e0b;color:#1a1a1a;border:none;font-weight:700;">
+          ☀️ Push to Solar
+        </button>
         <button class="btn btn-plusvibe" id="pushBtn" onclick="openPushModal()">
           🚀 Verify &amp; Push to PlusVibe
         </button>
@@ -3596,6 +3599,33 @@
 
     // ── PlusVibe Push ────────────────────────────────────────
     let pvWorkspaces = [];
+
+    // Hand the selected contacts to the Solar Qualification page. We ship the
+    // fields the solar cascade needs (address/postcode + company identity) via
+    // sessionStorage, then open /solar in a new tab.
+    function pushToSolar() {
+      if (_selectedIds.size === 0) { showMessage('Select contacts first', 'error'); return; }
+      const src = window._lastContacts || [];
+      const chosen = src.filter(c => _selectedIds.has(String(c.id)));
+      if (!chosen.length) {
+        showMessage('Selected contacts aren’t on the current page — load them into view first, or narrow the selection.', 'error');
+        return;
+      }
+      const contacts = chosen.map(c => ({
+        id: c.id,
+        email: c.email || '',
+        first_name: c.first_name || '',
+        last_name: c.last_name || '',
+        company_name: c.company_name || c.organization_name || '',
+        company_domain: c.company_domain || c.website || '',
+        company_reg: c.company_number || c.company_reg || '',
+        // The cascade needs a postcode; company_address usually carries it.
+        company_address: c.company_address || [c.company_city, c.company_county, c.company_town].filter(Boolean).join(', ') || '',
+      })).filter(c => c.company_address || c.company_name);
+      if (!contacts.length) { showMessage('No usable address/company on the selected contacts', 'error'); return; }
+      sessionStorage.setItem('solarContacts', JSON.stringify(contacts));
+      window.open('/solar', '_blank');
+    }
 
     async function openPushModal() {
       if (_selectedIds.size === 0) { showMessage('Select contacts first', 'error'); return; }

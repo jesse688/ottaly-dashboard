@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Solar Qualification — Ottaly</title>
+<style>
+  :root{--bg:#0b0f17;--panel:#111827;--card:#1e293b;--line:#334155;--txt:#e2e8f0;--mut:#94a3b8;--accent:#f59e0b;--green:#22c55e;--red:#ef4444;--blue:#224388}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  header{padding:14px 20px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  header h1{font-size:16px;margin:0}
+  .sub{color:var(--mut);font-size:12px}
+  .bar{padding:12px 20px;border-bottom:1px solid var(--line);display:flex;gap:12px;align-items:center;flex-wrap:wrap;background:var(--panel)}
+  .btn{background:var(--accent);color:#1a1a1a;border:0;border-radius:7px;padding:8px 15px;font-weight:700;cursor:pointer;font-size:13px}
+  .btn:disabled{opacity:.5;cursor:default}
+  .btn.ghost{background:transparent;color:var(--txt);border:1px solid var(--line)}
+  .btn.green{background:var(--green);color:#06210f}
+  .toggle{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--mut)}
+  .tabs{display:flex;gap:4px;padding:10px 20px 0;background:var(--bg)}
+  .tab{padding:7px 13px;border-radius:7px 7px 0 0;cursor:pointer;font-size:13px;color:var(--mut);border:1px solid transparent;border-bottom:none}
+  .tab.active{color:var(--txt);background:var(--panel);border-color:var(--line)}
+  .tab .n{background:var(--card);border-radius:999px;padding:0 7px;margin-left:5px;font-size:11px}
+  .wrap{padding:0 20px 40px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+  th{position:sticky;top:0;background:var(--panel);color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.03em}
+  td.addr{white-space:normal;min-width:220px;max-width:320px}
+  .pill{font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px}
+  .pill.g{background:#0e2a1c;color:var(--green)} .pill.r{background:#2c1414;color:var(--red)} .pill.u{background:#232833;color:var(--mut)} .pill.a{background:#3a2f0e;color:var(--accent)}
+  .stage{font-size:11px;color:var(--mut)}
+  .mut{color:var(--mut)} a{color:#7ca7ff}
+  .stat{display:inline-flex;flex-direction:column;padding:6px 14px;border-right:1px solid var(--line)}
+  .stat b{font-size:18px} .stat span{font-size:11px;color:var(--mut)}
+  .funnel{display:flex;background:var(--panel);border-bottom:1px solid var(--line)}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:10}
+  .modal.open{display:flex}
+  .box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px;width:520px;max-width:92vw;max-height:88vh;overflow:auto}
+  .box h2{margin:0 0 4px;font-size:16px}
+  .fieldgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0}
+  .fieldgrid label{display:flex;gap:8px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:7px;padding:8px 10px;font-size:12.5px;cursor:pointer}
+  .row-input{display:flex;flex-direction:column;gap:4px;margin:8px 0}
+  .row-input input,.row-input select{background:var(--card);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:8px}
+  .thumb{width:40px;height:40px;object-fit:cover;border-radius:5px;cursor:zoom-in}
+  #lightbox{position:fixed;inset:0;background:rgba(0,0,0,.85);display:none;align-items:center;justify-content:center;z-index:20;cursor:zoom-out}
+  #lightbox img{max-width:90vw;max-height:90vh;border-radius:10px}
+</style>
+</head>
+<body>
+<header>
+  <h1>☀️ Solar Qualification</h1>
+  <span class="sub" id="cfg">ownership-first cascade</span>
+  <span class="sub" id="status"></span>
+</header>
+
+<div class="bar">
+  <div class="toggle">
+    <label class="toggle"><input type="checkbox" id="gateUnclear"> Include “ownership unclear” (spends more Google calls)</label>
+  </div>
+  <span class="mut">|</span>
+  <label class="toggle">PPA min kWp <input id="minKwp" type="number" value="100" style="width:60px;background:var(--card);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:4px 6px"></label>
+  <label class="toggle">Panel W <input id="panelW" type="number" value="500" style="width:60px;background:var(--card);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:4px 6px"></label>
+  <button class="btn" id="run">Run qualification</button>
+  <span class="mut" id="prog"></span>
+  <span style="flex:1"></span>
+  <button class="btn green" id="pushBtn" disabled>🚀 Push prospects to PlusVibe</button>
+</div>
+
+<div class="funnel" id="funnel"></div>
+
+<div class="tabs">
+  <div class="tab active" data-view="prospects">🎯 Prospects <span class="n" id="n-pros">0</span></div>
+  <div class="tab" data-view="all">All <span class="n" id="n-all">0</span></div>
+  <div class="tab" data-view="tenant">Tenants <span class="n" id="n-tenant">0</span></div>
+  <div class="tab" data-view="roof">Roof too small <span class="n" id="n-roof">0</span></div>
+  <div class="tab" data-view="hassolar">Already solar <span class="n" id="n-solar">0</span></div>
+</div>
+
+<div class="wrap"><div id="tablewrap"><div class="mut" style="padding:40px 0">No contacts loaded. Come here via “Push to Solar” on the Contacts page, or paste below.</div>
+  <textarea id="paste" placeholder="Optional: paste address, company per line — e.g.  91 Brick Ln, London E1 6QL, Rough Trade Retail" style="width:100%;height:80px;background:var(--card);color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:10px"></textarea>
+</div></div>
+
+<!-- Push modal: tickbox field picker -->
+<div class="modal" id="pushModal">
+  <div class="box">
+    <h2>Push prospects to PlusVibe</h2>
+    <div class="mut" id="pushSummary"></div>
+    <div class="row-input"><label>Workspace ID</label><input id="pvWorkspace" placeholder="PlusVibe workspace_id"></div>
+    <div class="row-input"><label>Campaign ID</label><input id="pvCampaign" placeholder="PlusVibe campaign_id"></div>
+    <div style="margin-top:12px;font-weight:600">Include these as campaign variables:</div>
+    <div class="mut" style="font-size:11.5px">Ticked fields are sent as PlusVibe custom_variables → usable as {{merge_fields}} in your email.</div>
+    <div class="fieldgrid" id="fieldGrid"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+      <button class="btn ghost" onclick="closePush()">Cancel</button>
+      <button class="btn green" id="doPush">Push to PlusVibe</button>
+    </div>
+    <div class="mut" id="pushResult" style="margin-top:10px"></div>
+  </div>
+</div>
+<div id="lightbox"><img id="lbimg" alt=""></div>
+
+<script>
+let ROWS = [], VIEW = 'prospects';
+
+// Fields available to send as PV variables (key -> label shown to user).
+const FIELDS = [
+  ['owns_building','Owns building (yes/no)'],
+  ['building_owner','Registered owner name'],
+  ['max_panels_fit','Panel count (fits)'],
+  ['max_system_kwp','System size kWp'],
+  ['est_annual_kwh','Est. annual kWh'],
+  ['roof_area_m2','Roof area m²'],
+  ['ppa_eligible','PPA eligible'],
+  ['has_solar','Already has solar'],
+  ['imagery_date','Roof imagery date'],
+  ['maps_url','Google Maps roof link'],
+];
+
+const $=s=>document.querySelector(s);
+
+fetch('/api/solar/status').then(r=>r.json()).then(s=>{
+  $('#status').textContent = `CCOD index: ${s.ccodIndex?'loaded':'MISSING'} · Companies House: ${s.chEnabled?'on':'off'} · Google: ${s.googleKey?'on':'MISSING'}`;
+  if(!s.ccodIndex) $('#status').style.color='var(--red)';
+}).catch(()=>{});
+
+// Contacts handed over from the Contacts page via sessionStorage.
+function loadHandoff(){
+  try{
+    const raw = sessionStorage.getItem('solarContacts');
+    if(raw){ const arr=JSON.parse(raw); if(Array.isArray(arr)&&arr.length){ return arr; } }
+  }catch{}
+  return null;
+}
+let INPUT = loadHandoff();
+if(INPUT){ $('#tablewrap').innerHTML=`<div class="mut" style="padding:20px 0">${INPUT.length} contacts loaded from Contacts page. Set options, then Run qualification.</div>`; }
+
+$('#run').addEventListener('click', run);
+async function run(){
+  let contacts = INPUT;
+  if(!contacts){
+    // fallback: parse the paste box "address, company"
+    const lines = $('#paste').value.split('\n').map(s=>s.trim()).filter(Boolean);
+    contacts = lines.map(l=>{ const parts=l.split(',').map(x=>x.trim()); const company=parts.pop(); return { address: parts.join(', '), company_name: company }; });
+  }
+  if(!contacts||!contacts.length){ alert('No contacts to qualify.'); return; }
+
+  const options = {
+    ownershipGate: $('#gateUnclear').checked ? 'yes_or_unclear' : 'yes',
+    ppaMinKwp: Number($('#minKwp').value)||100,
+    panelWatts: Number($('#panelW').value)||500,
+  };
+  ROWS = contacts.map((c,i)=>({index:i, email:c.email||'', company_name:c.company_name||'', address:c.address||c.company_address||'', first_name:c.first_name||'', last_name:c.last_name||'', status:'…', stage:'ownership'}));
+  render(); $('#run').disabled=true; $('#pushBtn').disabled=true;
+  let done=0; $('#prog').textContent=`0 / ${contacts.length}…`;
+
+  const resp = await fetch('/api/solar/enrich',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contacts,options})});
+  const reader = resp.body.getReader(); const dec=new TextDecoder(); let buf='';
+  while(true){
+    const {value,done:d}=await reader.read(); if(d) break;
+    buf+=dec.decode(value,{stream:true}); let nl;
+    while((nl=buf.indexOf('\n'))>=0){
+      const line=buf.slice(0,nl); buf=buf.slice(nl+1); if(!line.trim()) continue;
+      const rec=JSON.parse(line);
+      // preserve identity fields from input
+      const inp = contacts[rec.index]||{};
+      rec.email=rec.email||inp.email||''; rec.first_name=inp.first_name||''; rec.last_name=inp.last_name||'';
+      ROWS[rec.index]=rec; done++;
+      $('#prog').textContent=`${done} / ${contacts.length}…`; render();
+    }
+  }
+  $('#run').disabled=false;
+  const pros=ROWS.filter(r=>r.status==='qualified').length;
+  $('#pushBtn').disabled = pros===0;
+  $('#prog').textContent=`Done. ${done} checked · 🎯 ${pros} qualified prospects.`;
+}
+
+document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active')); t.classList.add('active'); VIEW=t.dataset.view; render();
+}));
+
+function visible(){
+  if(VIEW==='prospects') return ROWS.filter(r=>r.status==='qualified');
+  if(VIEW==='tenant') return ROWS.filter(r=>r.stop_reason==='tenant');
+  if(VIEW==='roof') return ROWS.filter(r=>String(r.stop_reason||'').startsWith('roof_too_small'));
+  if(VIEW==='hassolar') return ROWS.filter(r=>r.stop_reason==='already_has_solar');
+  return ROWS;
+}
+function counts(){
+  $('#n-pros').textContent=ROWS.filter(r=>r.status==='qualified').length;
+  $('#n-all').textContent=ROWS.length;
+  $('#n-tenant').textContent=ROWS.filter(r=>r.stop_reason==='tenant').length;
+  $('#n-roof').textContent=ROWS.filter(r=>String(r.stop_reason||'').startsWith('roof_too_small')).length;
+  $('#n-solar').textContent=ROWS.filter(r=>r.stop_reason==='already_has_solar').length;
+  // funnel bar
+  const q=ROWS.filter(r=>r.status==='qualified').length;
+  const t=ROWS.filter(r=>r.stop_reason==='tenant').length;
+  const rf=ROWS.filter(r=>String(r.stop_reason||'').startsWith('roof_too_small')).length;
+  const hs=ROWS.filter(r=>r.stop_reason==='already_has_solar').length;
+  $('#funnel').innerHTML = ROWS.length ? `
+    <div class="stat"><b>${ROWS.length}</b><span>contacts</span></div>
+    <div class="stat"><b style="color:var(--green)">${q}</b><span>🎯 prospects</span></div>
+    <div class="stat"><b>${t}</b><span>tenants (stopped)</span></div>
+    <div class="stat"><b>${rf}</b><span>roof too small</span></div>
+    <div class="stat"><b>${hs}</b><span>already solar</span></div>` : '';
+}
+function stopPill(r){
+  if(r.status==='qualified') return '<span class="pill g">🎯 PROSPECT</span>';
+  const m={tenant:'tenant',ownership_unclear:'owner?',geocode_no_match:'no geo',no_roof_imagery:'no imagery',already_has_solar:'has solar'};
+  let label = m[r.stop_reason] || (String(r.stop_reason||'').startsWith('roof_too_small')?('roof '+ (r.max_system_kwp||0)+'kWp'):(r.stop_reason||'—'));
+  const cls = r.stop_reason==='tenant'?'r':r.stop_reason==='already_has_solar'?'a':'u';
+  return `<span class="pill ${cls}" title="stopped at: ${r.stage}">${label}</span>`;
+}
+function render(){
+  counts();
+  const rows=visible(); const w=$('#tablewrap');
+  if(!ROWS.length){ return; }
+  if(!rows.length){ w.innerHTML='<div class="mut" style="padding:30px 0">No rows in this view.</div>'; return; }
+  const body=rows.map(r=>{
+    const owns = r.owns_building==='yes'?'<span class="pill g">owns</span>':r.owns_building==='no'?'<span class="pill r">tenant</span>':'<span class="pill u">?</span>';
+    const kwp = r.max_system_kwp!=null?`${r.max_system_kwp} kWp`:'<span class="mut">—</span>';
+    const kwh = r.est_annual_kwh!=null?`${r.est_annual_kwh.toLocaleString()}`:'<span class="mut">—</span>';
+    const maps = r.maps_url?`<a href="${r.maps_url}" target="_blank">map</a>`:'<span class="mut">—</span>';
+    const img = r._img?`<img class="thumb" src="${r._img}" onclick="zoom('${r._img}')">`:(r.lat!=null?`<button class="btn ghost" style="padding:3px 8px;font-size:11px" onclick="getImg(${r.index})">get 💷</button>`:'<span class="mut">—</span>');
+    return `<tr>
+      <td class="addr">${esc(r.company_name||'')}<div class="mut" style="font-size:11px">${esc(r.address||'')}${r.email?' · '+esc(r.email):''}</div></td>
+      <td>${stopPill(r)}</td>
+      <td>${owns}${r.building_owner?`<div class="mut" style="font-size:11px">${esc(r.building_owner)}</div>`:''}</td>
+      <td>${kwp}</td>
+      <td>${r.max_panels_fit!=null?r.max_panels_fit:'<span class="mut">—</span>'}</td>
+      <td>${kwh}</td>
+      <td>${r.has_solar||'<span class="mut">—</span>'}</td>
+      <td>${maps}</td>
+      <td>${img}</td>
+    </tr>`;
+  }).join('');
+  w.innerHTML=`<table><thead><tr><th>Company / Address</th><th>Result</th><th>Owns building</th><th>Max system</th><th>Panels</th><th>Annual kWh</th><th>Existing solar</th><th>Map</th><th>Roof img</th></tr></thead><tbody>${body}</tbody></table>`;
+}
+
+async function getImg(i){
+  const r=ROWS[i]; if(!r||r.lat==null) return;
+  r._img='';
+  try{
+    const resp=await fetch('/api/solar/image',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({lat:r.lat,lng:r.lng})});
+    const j=await resp.json();
+    if(j.error){ alert('Image: '+j.error); return; }
+    r._img=j.png; render();
+  }catch(e){ alert('Image failed: '+e.message); }
+}
+function zoom(src){ $('#lbimg').src=src; $('#lightbox').style.display='flex'; }
+$('#lightbox').addEventListener('click',()=>$('#lightbox').style.display='none');
+
+// ---- Push modal ----
+$('#pushBtn').addEventListener('click',()=>{
+  const pros=ROWS.filter(r=>r.status==='qualified');
+  if(!pros.length){ alert('No qualified prospects.'); return; }
+  $('#pushSummary').textContent=`${pros.length} qualified prospect(s) ready.`;
+  $('#fieldGrid').innerHTML=FIELDS.map(([k,l])=>`<label><input type="checkbox" class="fchk" value="${k}" ${['owns_building','max_panels_fit','max_system_kwp','est_annual_kwh'].includes(k)?'checked':''}> ${l}</label>`).join('');
+  $('#pushModal').classList.add('open');
+});
+function closePush(){ $('#pushModal').classList.remove('open'); }
+$('#doPush').addEventListener('click', async ()=>{
+  const workspace_id=$('#pvWorkspace').value.trim(), campaign_id=$('#pvCampaign').value.trim();
+  if(!workspace_id||!campaign_id){ alert('Workspace ID and Campaign ID required'); return; }
+  const fields=[...document.querySelectorAll('.fchk:checked')].map(c=>c.value);
+  const prospects=ROWS.filter(r=>r.status==='qualified');
+  $('#pushResult').textContent='Pushing…';
+  try{
+    const resp=await fetch('/api/solar/push-to-pv',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({workspace_id,campaign_id,prospects,fields})});
+    const j=await resp.json();
+    if(j.error){ $('#pushResult').textContent='Error: '+j.error; $('#pushResult').style.color='var(--red)'; return; }
+    $('#pushResult').style.color='var(--green)';
+    $('#pushResult').textContent=`✅ Pushed ${j.pushed}. Variables sent: ${(j.variables_sent||[]).join(', ')||'none'}`;
+  }catch(e){ $('#pushResult').textContent='Failed: '+e.message; }
+});
+
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+</script>
+</body>
+</html>

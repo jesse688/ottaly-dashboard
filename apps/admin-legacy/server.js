@@ -909,6 +909,11 @@ app.use(express.static(path.join(__dirname), {
   }
 }));
 
+// Solar Qualification API + page. DB-independent (uses the CCOD SQLite index +
+// Google/CH APIs), so register at top level rather than inside the DB init block.
+app.use('/api/solar', require('./api-solar')());
+app.get('/solar', (req, res) => res.sendFile(path.join(__dirname, 'solar.html')));
+
 function requireAuth(req, res, next) {
   const token = (req.headers.authorization || '').replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'Unauthorized' });
@@ -15768,6 +15773,69 @@ function isFreeDomain(email) {
   const domain = (email || '').split('@')[1] || '';
   return FREE_EMAIL_DOMAINS.has(domain.toLowerCase());
 }
+
+// Push solar-enriched prospects to PlusVibe, attaching selected solar fields as
+// custom_variables so they can be used as {{merge_fields}} in the campaign.
+//   body: { workspace_id, campaign_id, prospects:[{email,first_name,last_name,company_name,...solarFields}],
+//           fields:[ 'owns_building','max_panels_fit','max_system_kwp','est_annual_kwh',... ] }
+// The `fields` array is the tickbox selection — only these solar keys are sent.
+app.post('/api/solar/push-to-pv', requireSession, async (req, res) => {
+  const { workspace_id, campaign_id, prospects, fields } = req.body || {};
+  if (!workspace_id || !campaign_id || !Array.isArray(prospects) || !prospects.length) {
+    return res.status(400).json({ error: 'workspace_id, campaign_id and prospects[] required' });
+  }
+  const selected = Array.isArray(fields) ? fields : [];
+
+  // Human-friendly variable names for the campaign editor.
+  const VAR_LABELS = {
+    owns_building: 'owns_building',
+    building_owner: 'building_owner',
+    max_panels_fit: 'solar_panel_count',
+    max_system_kwp: 'solar_system_kwp',
+    est_annual_kwh: 'solar_annual_kwh',
+    roof_area_m2: 'roof_area_m2',
+    ppa_eligible: 'ppa_eligible',
+    has_solar: 'existing_solar',
+    imagery_date: 'roof_imagery_date',
+    maps_url: 'roof_maps_link',
+  };
+
+  try {
+    const leads = prospects
+      .filter((p) => p.email && p.first_name && p.last_name)
+      .map((p) => {
+        const custom = {};
+        for (const key of selected) {
+          if (p[key] == null || p[key] === '') continue;
+          custom[VAR_LABELS[key] || key] = String(p[key]);
+        }
+        return {
+          email: p.email,
+          first_name: p.first_name,
+          last_name: p.last_name,
+          company_name: p.company_name || null,
+          custom_variables: custom,
+        };
+      });
+
+    if (!leads.length) return res.status(400).json({ error: 'No prospects with email + first/last name' });
+
+    let pushed = 0;
+    for (let i = 0; i < leads.length; i += 100) {
+      const batch = leads.slice(i, i + 100);
+      const body = { workspace_id, campaign_id, leads: batch };
+      try {
+        await pvApi('/lead/import', { method: 'POST', wsId: workspace_id, body });
+      } catch {
+        await pvApi('/lead/add', { method: 'POST', wsId: workspace_id, body });
+      }
+      pushed += batch.length;
+    }
+    res.json({ ok: true, pushed, skipped: prospects.length - pushed, variables_sent: selected.map((k) => VAR_LABELS[k] || k) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // One-shot: flag all existing contacts whose email is on a free/consumer domain.
 // Safe to run multiple times (WHERE email_status != 'invalid' guards it).
