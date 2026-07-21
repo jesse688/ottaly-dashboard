@@ -4,7 +4,9 @@
 //
 // Docs: https://developers.google.com/maps/documentation/solar/building-insights
 
-const GOOGLE_KEY = () => process.env.GOOGLE_SOLAR_API_KEY || process.env.GOOGLE_API_KEY || '';
+const usage = require('./usage');
+// Key comes from the settings page (volume) first, then env — so it's rotatable.
+const GOOGLE_KEY = () => usage.getGoogleKey();
 
 function fmtDate(d) {
   if (!d || d.year == null) return null;
@@ -19,6 +21,7 @@ async function buildingInsights(lat, lng) {
     + `?location.latitude=${lat}&location.longitude=${lng}`
     + `&requiredQuality=HIGH&additionalInsights=DETECTED_ARRAYS&key=${key}`;
 
+  usage.record('buildingInsights');
   const res = await fetch(url);
   const data = await res.json();
 
@@ -56,6 +59,7 @@ async function roofImagePng(lat, lng) {
   const url = 'https://solar.googleapis.com/v1/dataLayers:get'
     + `?location.latitude=${lat}&location.longitude=${lng}`
     + `&radiusMeters=40&view=IMAGERY_LAYERS&requiredQuality=HIGH&pixelSizeMeters=0.1&key=${key}`;
+  usage.record('dataLayers');
   const res = await fetch(url);
   const data = await res.json();
   if (res.status === 404 || (data.error && data.error.status === 'NOT_FOUND')) return { error: 'no_imagery' };

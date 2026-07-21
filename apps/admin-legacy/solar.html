@@ -85,8 +85,10 @@
   <div class="box">
     <h2>Push prospects to PlusVibe</h2>
     <div class="mut" id="pushSummary"></div>
-    <div class="row-input"><label>Workspace ID</label><input id="pvWorkspace" placeholder="PlusVibe workspace_id"></div>
-    <div class="row-input"><label>Campaign ID</label><input id="pvCampaign" placeholder="PlusVibe campaign_id"></div>
+    <div class="row-input"><label>Workspace</label>
+      <select id="pvWorkspace" onchange="loadPvCampaigns()"><option value="">Loading workspaces…</option></select></div>
+    <div class="row-input"><label>Campaign</label>
+      <select id="pvCampaign"><option value="">Select a workspace first</option></select></div>
     <div style="margin-top:12px;font-weight:600">Include these as campaign variables:</div>
     <div class="mut" style="font-size:11.5px">Ticked fields are sent as PlusVibe custom_variables → usable as {{merge_fields}} in your email.</div>
     <div class="fieldgrid" id="fieldGrid"></div>
@@ -95,6 +97,23 @@
       <button class="btn green" id="doPush">Push to PlusVibe</button>
     </div>
     <div class="mut" id="pushResult" style="margin-top:10px"></div>
+  </div>
+</div>
+<!-- Settings modal: view usage, rotate keys -->
+<div class="modal" id="settingsModal">
+  <div class="box">
+    <h2>Solar settings — keys &amp; usage</h2>
+    <div id="usagePanel" class="mut" style="margin:6px 0 14px"></div>
+    <div class="row-input"><label>Google Solar API key <span class="mut" id="gMask"></span></label>
+      <input id="setGoogle" placeholder="paste to rotate — leave blank to keep current"></div>
+    <div class="row-input"><label>Companies House API key <span class="mut" id="cMask"></span></label>
+      <input id="setCh" placeholder="paste to rotate — leave blank to keep current"></div>
+    <div class="mut" style="font-size:11.5px">Keys are stored on the server volume (survive redeploys). Only a masked preview is ever shown here.</div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+      <button class="btn ghost" onclick="closeSettings()">Close</button>
+      <button class="btn green" id="saveKeys">Save keys</button>
+    </div>
+    <div class="mut" id="setResult" style="margin-top:8px"></div>
   </div>
 </div>
 <div id="lightbox"><img id="lbimg" alt=""></div>
@@ -118,10 +137,18 @@ const FIELDS = [
 
 const $=s=>document.querySelector(s);
 
-fetch('/api/solar/status').then(r=>r.json()).then(s=>{
-  $('#status').textContent = `CCOD index: ${s.ccodIndex?'loaded':'MISSING'} · Companies House: ${s.chEnabled?'on':'off'} · Google: ${s.googleKey?'on':'MISSING'}`;
-  if(!s.ccodIndex) $('#status').style.color='var(--red)';
-}).catch(()=>{});
+function fmtUsage(u){
+  if(!u||!u.endpoints) return '';
+  const bi=u.endpoints.buildingInsights||{}, dl=u.endpoints.dataLayers||{};
+  const warn = bi.pct>=80||dl.pct>=80;
+  return ` · <b style="color:${warn?'var(--red)':'var(--green)'}">Google ${u.month}: ${bi.used}/${bi.limit} roof · ${dl.used}/${dl.limit} img</b>`;
+}
+function refreshStatus(){
+  fetch('/api/solar/status').then(r=>r.json()).then(s=>{
+    $('#status').innerHTML = `CCOD index: ${s.ccodIndex?'loaded':'<span style="color:var(--red)">MISSING</span>'} · Companies House: ${s.chEnabled?'on':'off'} · Google: ${s.googleKey?'on':'<span style="color:var(--red)">MISSING</span>'}${fmtUsage(s.usage)} · <a href="#" onclick="openSettings();return false;">⚙ keys</a>`;
+  }).catch(()=>{});
+}
+refreshStatus();
 
 // Contacts handed over from the Contacts page via sessionStorage.
 function loadHandoff(){
@@ -256,8 +283,33 @@ $('#pushBtn').addEventListener('click',()=>{
   $('#pushSummary').textContent=`${pros.length} qualified prospect(s) ready.`;
   $('#fieldGrid').innerHTML=FIELDS.map(([k,l])=>`<label><input type="checkbox" class="fchk" value="${k}" ${['owns_building','max_panels_fit','max_system_kwp','est_annual_kwh'].includes(k)?'checked':''}> ${l}</label>`).join('');
   $('#pushModal').classList.add('open');
+  loadPvWorkspaces();
 });
 function closePush(){ $('#pushModal').classList.remove('open'); }
+
+// Populate the workspace dropdown from the same endpoint the Contacts page uses.
+async function loadPvWorkspaces(){
+  const sel = $('#pvWorkspace');
+  try{
+    const r = await fetch('/api/pv/workspaces').then(x=>x.json());
+    const ws = r.workspaces || [];
+    sel.innerHTML = '<option value="">— Select workspace —</option>' +
+      ws.map(w=>`<option value="${esc(w._id)}">${esc(w.name||w._id)}</option>`).join('');
+  }catch(e){ sel.innerHTML='<option value="">Failed to load workspaces</option>'; }
+}
+// When a workspace is picked, load its campaigns.
+async function loadPvCampaigns(){
+  const wsId = $('#pvWorkspace').value;
+  const sel = $('#pvCampaign');
+  if(!wsId){ sel.innerHTML='<option value="">Select a workspace first</option>'; return; }
+  sel.innerHTML='<option value="">Loading campaigns…</option>';
+  try{
+    const r = await fetch(`/api/pv/campaigns?workspace_id=${encodeURIComponent(wsId)}`).then(x=>x.json());
+    const list = r.campaigns || (Array.isArray(r)?r:[]);
+    sel.innerHTML = '<option value="">— Select campaign —</option>' +
+      list.map(c=>`<option value="${esc(c.id||c._id)}">${esc(c.name||c.camp_name||c.id)}</option>`).join('');
+  }catch(e){ sel.innerHTML='<option value="">Failed to load campaigns</option>'; }
+}
 $('#doPush').addEventListener('click', async ()=>{
   const workspace_id=$('#pvWorkspace').value.trim(), campaign_id=$('#pvCampaign').value.trim();
   if(!workspace_id||!campaign_id){ alert('Workspace ID and Campaign ID required'); return; }
@@ -271,6 +323,35 @@ $('#doPush').addEventListener('click', async ()=>{
     $('#pushResult').style.color='var(--green)';
     $('#pushResult').textContent=`✅ Pushed ${j.pushed}. Variables sent: ${(j.variables_sent||[]).join(', ')||'none'}`;
   }catch(e){ $('#pushResult').textContent='Failed: '+e.message; }
+});
+
+// ---- Settings modal ----
+async function openSettings(){
+  $('#settingsModal').classList.add('open');
+  try{
+    const s = await fetch('/api/solar/settings').then(r=>r.json());
+    $('#gMask').textContent = s.googleKeySet?`(current: ${s.googleKeyMasked})`:'(not set)';
+    $('#cMask').textContent = s.chKeySet?`(current: ${s.chKeyMasked})`:'(not set)';
+    const u = await fetch('/api/solar/usage').then(r=>r.json());
+    const bi=u.endpoints.buildingInsights, dl=u.endpoints.dataLayers, gc=u.endpoints.geocoding;
+    $('#usagePanel').innerHTML = `<b>This month (${u.month}) Google usage:</b><br>
+      Roof checks (buildingInsights): <b>${bi.used.toLocaleString()}</b> / ${bi.limit.toLocaleString()} free (${bi.remaining.toLocaleString()} left)<br>
+      Roof images (dataLayers): <b>${dl.used.toLocaleString()}</b> / ${dl.limit.toLocaleString()} free (${dl.remaining.toLocaleString()} left)<br>
+      Geocoding (Google only): <b>${gc.used.toLocaleString()}</b> / ${gc.limit.toLocaleString()} free`;
+  }catch(e){ $('#usagePanel').textContent='Failed to load usage.'; }
+}
+function closeSettings(){ $('#settingsModal').classList.remove('open'); }
+$('#saveKeys').addEventListener('click', async ()=>{
+  const googleKey=$('#setGoogle').value.trim(), chKey=$('#setCh').value.trim();
+  if(!googleKey && !chKey){ $('#setResult').textContent='Nothing to save (both blank).'; return; }
+  $('#setResult').textContent='Saving…';
+  try{
+    const r = await fetch('/api/solar/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({googleKey,chKey})}).then(x=>x.json());
+    $('#setResult').style.color='var(--green)';
+    $('#setResult').textContent=`✅ Saved. Google: ${r.googleKeyMasked||'—'} · CH: ${r.chKeyMasked||'—'}`;
+    $('#setGoogle').value=''; $('#setCh').value='';
+    refreshStatus();
+  }catch(e){ $('#setResult').textContent='Failed: '+e.message; }
 });
 
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}

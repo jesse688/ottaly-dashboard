@@ -1,7 +1,8 @@
 // Address/postcode -> { lat, lng }. Free postcodes.io for UK postcodes,
 // Google Geocoding fallback. Uses admin-legacy's existing GOOGLE_API_KEY.
 
-const GOOGLE_KEY = () => process.env.GOOGLE_SOLAR_API_KEY || process.env.GOOGLE_API_KEY || '';
+const usage = require('./usage');
+const GOOGLE_KEY = () => usage.getGoogleKey();
 const UK_POSTCODE_RE = /\b([A-Z]{1,2}\d[A-Z\d]?)\s*(\d[A-Z]{2})\b/i;
 
 function extractPostcode(text) {
@@ -25,6 +26,7 @@ async function geocodeGoogle(address) {
   const key = GOOGLE_KEY();
   if (!key) return null;
   const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&region=uk&key=${key}`;
+  usage.record('geocoding');
   const res = await fetch(url);
   const data = await res.json();
   if (data.status === 'OK' && data.results.length) {

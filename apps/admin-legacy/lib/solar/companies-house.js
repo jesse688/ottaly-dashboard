@@ -6,7 +6,8 @@
 // links/name best fit — CH search is fuzzy, so the domain reduces wrong picks.
 
 const BASE = 'https://api.company-information.service.gov.uk';
-const KEY = () => process.env.COMPANIES_HOUSE_API_KEY || '';
+const usage = require('./usage');
+const KEY = () => usage.getChKey();
 
 let lastCall = 0;
 async function throttle() {

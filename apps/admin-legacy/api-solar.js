@@ -12,16 +12,34 @@ const { enrichContact } = require('./lib/solar/enrich');
 const { roofImagePng } = require('./lib/solar/google-solar');
 const { indexAvailable } = require('./lib/solar/ccod');
 const { chEnabled } = require('./lib/solar/companies-house');
+const usage = require('./lib/solar/usage');
 
 module.exports = function solarAPI() {
   const router = express.Router();
 
   router.get('/status', (req, res) => {
+    const s = usage.maskedSettings();
     res.json({
       ccodIndex: indexAvailable(),
       chEnabled: chEnabled(),
-      googleKey: !!(process.env.GOOGLE_SOLAR_API_KEY || process.env.GOOGLE_API_KEY),
+      googleKey: s.googleKeySet,
+      usage: usage.summary(),
     });
+  });
+
+  // Current-month Google usage vs free-tier limits.
+  router.get('/usage', (req, res) => res.json(usage.summary()));
+
+  // Settings: view masked keys / save (rotate) keys without a redeploy.
+  router.get('/settings', (req, res) => res.json(usage.maskedSettings()));
+  router.post('/settings', (req, res) => {
+    const { googleKey, chKey } = req.body || {};
+    // Only overwrite a key when a non-empty value is provided (blank = leave as-is).
+    const patch = {};
+    if (typeof googleKey === 'string' && googleKey.trim()) patch.googleKey = googleKey.trim();
+    if (typeof chKey === 'string' && chKey.trim()) patch.chKey = chKey.trim();
+    usage.setKeys(patch);
+    res.json({ ok: true, ...usage.maskedSettings() });
   });
 
   router.post('/enrich', async (req, res) => {
