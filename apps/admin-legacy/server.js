@@ -15814,6 +15814,10 @@ app.post('/api/solar/push-to-pv', requireSession, async (req, res) => {
           first_name: p.first_name,
           last_name: p.last_name,
           company_name: p.company_name || null,
+          job_title: p.job_title || null,
+          phone_number: p.phone || null,
+          website: p.company_domain || null,
+          linkedin_url: p.linkedin_url || null,
           custom_variables: custom,
         };
       });

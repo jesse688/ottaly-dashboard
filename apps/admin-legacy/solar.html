@@ -188,10 +188,12 @@ async function run(){
     while((nl=buf.indexOf('\n'))>=0){
       const line=buf.slice(0,nl); buf=buf.slice(nl+1); if(!line.trim()) continue;
       const rec=JSON.parse(line);
-      // preserve identity fields from input
+      // Merge the original contact under the enrichment so ALL contact fields
+      // (job title, phone, LinkedIn, website, industry, name) survive for display
+      // and for the PV push. Enrichment fields win on key collisions.
       const inp = contacts[rec.index]||{};
-      rec.email=rec.email||inp.email||''; rec.first_name=inp.first_name||''; rec.last_name=inp.last_name||'';
-      ROWS[rec.index]=rec; done++;
+      ROWS[rec.index] = { ...inp, ...rec };
+      done++;
       $('#prog').textContent=`${done} / ${contacts.length}…`; render();
     }
   }
@@ -248,8 +250,22 @@ function render(){
     const kwh = r.est_annual_kwh!=null?`${r.est_annual_kwh.toLocaleString()}`:'<span class="mut">—</span>';
     const maps = r.maps_url?`<a href="${r.maps_url}" target="_blank">map</a>`:'<span class="mut">—</span>';
     const img = r._img?`<img class="thumb" src="${r._img}" onclick="zoom('${r._img}')">`:(r.lat!=null?`<button class="btn ghost" style="padding:3px 8px;font-size:11px" onclick="getImg(${r.index})">get 💷</button>`:'<span class="mut">—</span>');
+    // Person / contact block
+    const person = [r.first_name, r.last_name].filter(Boolean).join(' ');
+    const li = r.linkedin_url?` · <a href="${esc(r.linkedin_url)}" target="_blank">in</a>`:'';
+    const contactCell = `${person?`<b>${esc(person)}</b>`:'<span class="mut">—</span>'}`
+      + `${r.job_title?`<div class="mut" style="font-size:11px">${esc(r.job_title)}${r.seniority?' · '+esc(r.seniority):''}</div>`:''}`
+      + `${r.email?`<div style="font-size:11px"><a href="mailto:${esc(r.email)}">${esc(r.email)}</a>${li}</div>`:''}`
+      + `${r.phone?`<div class="mut" style="font-size:11px">${esc(r.phone)}</div>`:''}`;
+    // Company block
+    const site = r.company_domain?`<a href="${/^https?:/.test(r.company_domain)?'':'https://'}${esc(r.company_domain)}" target="_blank">${esc(r.company_domain)}</a>`:'';
+    const companyCell = `${esc(r.company_name||'')}`
+      + `<div class="mut" style="font-size:11px">${esc(r.address||'')}</div>`
+      + `${site?`<div style="font-size:11px">${site}</div>`:''}`
+      + `${r.industry?`<div class="mut" style="font-size:11px">${esc(r.industry)}</div>`:''}`;
     return `<tr>
-      <td class="addr">${esc(r.company_name||'')}<div class="mut" style="font-size:11px">${esc(r.address||'')}${r.email?' · '+esc(r.email):''}</div></td>
+      <td class="addr">${companyCell}</td>
+      <td class="addr" style="min-width:180px">${contactCell}</td>
       <td>${stopPill(r)}</td>
       <td>${owns}${r.building_owner?`<div class="mut" style="font-size:11px">${esc(r.building_owner)}</div>`:''}</td>
       <td>${kwp}</td>
@@ -260,7 +276,7 @@ function render(){
       <td>${img}</td>
     </tr>`;
   }).join('');
-  w.innerHTML=`<table><thead><tr><th>Company / Address</th><th>Result</th><th>Owns building</th><th>Max system</th><th>Panels</th><th>Annual kWh</th><th>Existing solar</th><th>Map</th><th>Roof img</th></tr></thead><tbody>${body}</tbody></table>`;
+  w.innerHTML=`<table><thead><tr><th>Company / Address</th><th>Contact</th><th>Result</th><th>Owns building</th><th>Max system</th><th>Panels</th><th>Annual kWh</th><th>Existing solar</th><th>Map</th><th>Roof img</th></tr></thead><tbody>${body}</tbody></table>`;
 }
 
 async function getImg(i){
