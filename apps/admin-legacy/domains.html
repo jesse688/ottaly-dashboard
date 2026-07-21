@@ -270,26 +270,77 @@ function chk(ok, label) {
   return `<span class="chk ${cls}" title="${label || ''}">${glyph}</span>`;
 }
 
-// Render the redirect result: where the domain root lands. Reported, not scored.
-//  · error / dead        → red "✗ <error>"
-//  · no redirect (2xx)   → amber "no redirect (200)"
-//  · redirects somewhere → green "→ host  (301)"
-function redirCell(redir) {
-  if (!redir || (redir.status == null && redir.error == null && !redir.final_url)) {
-    return '<span style="color:var(--muted)">—</span>';
-  }
-  if (redir.error) {
-    return `<span style="color:var(--red)" title="${(redir.error||'').replace(/"/g,'')}">✗ ${redir.error}</span>`;
-  }
+// Normalise a URL for comparison: drop scheme, leading www., trailing slash,
+// lowercase. So "https://x.com/" == "http://www.x.com" == "x.com".
+function normUrl(u) {
+  if (!u) return '';
+  let s = String(u).trim().toLowerCase();
+  s = s.replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/+$/, '');
+  return s;
+}
+
+// Render the redirect cell. Behaviour depends on whether an expected target
+// is set for this domain:
+//  · expected set + actual matches  → GREEN "✓ → host"
+//  · expected set + actual differs  → RED   "✗ → host (expected …)"
+//  · expected set + domain dead     → RED   "✗ <error>"
+//  · no expected set                → neutral report of where it lands + a
+//                                     "set expected" affordance
+// The whole cell is clickable to set/change the expected target.
+function redirCell(r) {
+  const redir = typeof r.redirect === 'string' ? JSON.parse(r.redirect || '{}') : r.redirect || {};
+  const expected = r.expected_redirect || '';
+  const safeDom = (r.domain || '').replace(/'/g, "\\'");
+  const edit = `onclick="event.stopPropagation();editExpected('${safeDom}')" style="cursor:pointer" title="Click to set the expected redirect"`;
+
+  const hasResult = redir && (redir.status != null || redir.error != null || redir.final_url);
   let host = '';
   try { host = redir.final_url ? new URL(redir.final_url).host : ''; } catch { host = redir.final_url || ''; }
   const code = redir.status != null ? redir.status : '';
-  if (redir.redirected) {
-    const full = (redir.final_url || '').replace(/"/g, '');
-    return `<span style="color:var(--green)" title="${full}">→ ${host} <span style="color:var(--muted)">(${code})</span></span>`;
+
+  // No expected target set → neutral report + prompt to set one.
+  if (!expected) {
+    let body;
+    if (!hasResult) body = '<span style="color:var(--muted)">—</span>';
+    else if (redir.error) body = `<span style="color:var(--amber,#D97706)">${redir.error}</span>`;
+    else if (redir.redirected) body = `<span style="color:#374151">→ ${host} <span style="color:var(--muted)">(${code})</span></span>`;
+    else body = `<span style="color:var(--amber,#D97706)">no redirect (${code})</span>`;
+    return `<span ${edit}>${body} <span style="color:var(--purple);font-size:11px">set ✎</span></span>`;
   }
-  // Reached the domain but it didn't redirect anywhere.
-  return `<span style="color:var(--amber,#D97706)" title="Root responded ${code} without redirecting">no redirect (${code})</span>`;
+
+  // Expected set → compare.
+  const expHost = normUrl(expected);
+  if (redir.error || !redir.final_url) {
+    return `<span ${edit}><span style="color:var(--red)">✗ ${redir.error || 'no response'}</span> <span style="color:var(--muted);font-size:11px">exp: ${expHost}</span></span>`;
+  }
+  const match = normUrl(redir.final_url) === expHost || normUrl(redir.final_url).startsWith(expHost);
+  if (match) {
+    return `<span ${edit}><span style="color:var(--green);font-weight:600">✓ ${host}</span> <span style="color:var(--muted)">(${code})</span></span>`;
+  }
+  return `<span ${edit}><span style="color:var(--red);font-weight:600">✗ ${host}</span> <span style="color:var(--muted);font-size:11px">exp: ${expHost}</span></span>`;
+}
+
+// Set / change / clear the expected redirect target for a domain.
+async function editExpected(domain) {
+  const row = data.find(x => x.domain === domain);
+  const current = (row && row.expected_redirect) || '';
+  const v = prompt(
+    'Expected redirect target for ' + domain + '\n(e.g. https://theirsite.com — leave blank to clear):',
+    current
+  );
+  if (v === null) return; // cancelled
+  try {
+    const res = await fetch('/api/domains/' + encodeURIComponent(domain) + '/expected-redirect', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expected_redirect: v.trim() })
+    });
+    const j = await res.json();
+    if (!res.ok) throw new Error(j.error || 'save failed');
+    if (row) row.expected_redirect = j.expected_redirect; // update in-memory
+    render(); // re-colour immediately
+  } catch (e) {
+    alert('Could not save: ' + e.message);
+  }
 }
 
 function fmtAgo(ts) {
@@ -360,7 +411,7 @@ function render() {
         <td style="text-align:center">${chk(dkim.present === true, dkim.selector ? `selector: ${dkim.selector}` : 'No DKIM record found')}</td>
         <td style="text-align:center">${chk(dmarcState(dmarc), dmarc.policy ? `p=${dmarc.policy}` : 'Missing')}</td>
         <td style="text-align:center">${chk(mx.present === true, (mx.hosts || []).join(', '))}</td>
-        <td style="font-size:12px">${redirCell(redir)}</td>
+        <td style="font-size:12px">${redirCell(r)}</td>
         <td class="bl-cell">${bl.length
           ? `<span class="bl-hits">${bl.length} listing${bl.length > 1 ? 's' : ''}</span> <span style="color:var(--muted);font-size:11px">${bl.map(b=>b.list).slice(0,2).join(', ')}${bl.length > 2 ? '…' : ''}</span>`
           : `<span class="bl-clean">Clean</span>`}</td>
@@ -427,10 +478,12 @@ function openDetail(domain) {
 
     <div class="section-h">Redirect</div>
     <div class="detail-grid">
+      <label>Expected</label><div>${r.expected_redirect ? r.expected_redirect : '<span style="color:var(--muted)">not set</span>'} <a href="#" onclick="editExpected('${(r.domain||'').replace(/'/g,"\\'")}');return false;" style="color:var(--purple);font-size:12px;margin-left:8px">${r.expected_redirect ? 'change' : 'set'}</a></div>
       <label>Checked</label><div>${redir.checked_url || ('http://' + r.domain)}</div>
       <label>Redirects?</label><div>${redir.error ? '<span style="color:var(--red)">Error — ' + redir.error + '</span>' : (redir.redirected ? 'Yes' : 'No')}</div>
       ${redir.final_url ? `<label>Lands on</label><div class="raw"><a href="${redir.final_url}" target="_blank" rel="noopener">${redir.final_url}</a></div>` : ''}
       ${redir.status != null ? `<label>Final status</label><div>${redir.status}</div>` : ''}
+      ${r.expected_redirect ? `<label>Match</label><div>${normUrl(redir.final_url) && (normUrl(redir.final_url)===normUrl(r.expected_redirect)||normUrl(redir.final_url).startsWith(normUrl(r.expected_redirect))) ? '<span style="color:var(--green);font-weight:600">✓ Matches</span>' : '<span style="color:var(--red);font-weight:600">✗ Does not match</span>'}</div>` : ''}
       ${Array.isArray(redir.chain) && redir.chain.length ? `<label>Hops</label><div class="raw">${redir.chain.map(h => `${h.status} ${h.url}${h.location ? ' → ' + h.location : ''}`).join('<br>')}</div>` : ''}
     </div>
 

@@ -232,6 +232,10 @@ class PostgresDatabase {
       // not scored — surfaced on the Domains page so broken/missing redirects
       // are visible. { ok, final_url, status, chain[], error }
       `ALTER TABLE domain_health ADD COLUMN IF NOT EXISTS redirect JSONB DEFAULT '{}'`,
+      // The redirect target this domain SHOULD land on. Set per-domain in the UI.
+      // The Domains page compares the actual redirect final_url against this and
+      // shows green (match) / red (mismatch or unset-but-broken).
+      `ALTER TABLE domain_health ADD COLUMN IF NOT EXISTS expected_redirect TEXT`,
       // Tombstone flag — when set, the auto-refresh skips re-adding this
       // domain even though PlusVibe still lists it. Used for inactive
       // clients or sunset domains. ignored_at is a soft-delete: the row
@@ -3613,6 +3617,15 @@ class PostgresDatabase {
       `SELECT * FROM domain_health ${where} ORDER BY status DESC, score ASC, domain ASC`
     );
     return r.rows;
+  }
+
+  // Set (or clear, with null) the expected redirect target for a domain.
+  async setExpectedRedirect(domain, expected) {
+    const r = await this.query(
+      `UPDATE domain_health SET expected_redirect = $2, updated_at = NOW() WHERE domain = $1`,
+      [domain, expected || null]
+    );
+    return { changed: r.rowCount || 0 };
   }
 
   async setDomainIgnored(domain, ignored) {

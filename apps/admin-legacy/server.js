@@ -9073,6 +9073,23 @@ app.post('/api/domains/:domain/restore', requireSession, async (req, res) => {
   }
 });
 
+// Set (or clear) the expected redirect target for a domain. The Domains page
+// then shows green when the actual redirect matches this, red when it doesn't.
+app.post('/api/domains/:domain/expected-redirect', requireSession, async (req, res) => {
+  try {
+    const domain = (req.params.domain || '').toLowerCase().trim();
+    const pgdb = app.locals.pgDb;
+    if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
+    let expected = (req.body?.expected_redirect ?? '').toString().trim();
+    // Normalise: allow entering "example.com" without a scheme.
+    if (expected && !/^https?:\/\//i.test(expected)) expected = 'https://' + expected;
+    const r = await pgdb.setExpectedRedirect(domain, expected || null);
+    res.json({ ok: true, domain, expected_redirect: expected || null, ...r });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/domains', (req, res) => res.sendFile(path.join(__dirname, 'domains.html')));
 app.get('/domains.html', (req, res) => res.sendFile(path.join(__dirname, 'domains.html')));
 app.get('/enrichment',      (req, res) => res.sendFile(path.join(__dirname, 'enrichment.html')));
