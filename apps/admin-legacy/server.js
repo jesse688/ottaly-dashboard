@@ -9001,10 +9001,10 @@ async function refreshDomainHealth() {
     let done = 0;
     for (let i = 0; i < domains.length; i += CONCURRENCY) {
       const batch = domains.slice(i, i + CONCURRENCY);
-      await Promise.all(batch.map(async ({ domain }) => {
+      await Promise.all(batch.map(async ({ domain, ws }) => {
         try {
           const redirect = await checkRedirect(domain);
-          await pgdb.updateDomainRedirect(domain, redirect);
+          await pgdb.updateDomainRedirect(domain, redirect, ws);
           done++;
         } catch (err) {
           console.warn(`[domain-redirect] ${domain} failed:`, err.message);
@@ -9085,6 +9085,24 @@ app.post('/api/domains/:domain/restore', requireSession, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// Live PV domain → client (workspace) map, straight from the roster. Answers
+// "which domain is assigned to which client on PlusVibe?" without relying on
+// the domain_health table (which can lag). Returns one row per sending domain
+// with its workspace, plus mailbox count.
+app.get('/api/domains/pv-assignments', requireSession, (req, res) => {
+  const roster = _mailboxCache.mailboxes || [];
+  const byDomain = {}; // domain → { workspace_id, workspace_name, mailboxes }
+  for (const m of roster) {
+    const d = (m.domain || (m.email || '').split('@')[1] || '').toLowerCase();
+    if (!d) continue;
+    if (!byDomain[d]) byDomain[d] = { domain: d, workspace_id: m.workspace_id || null, workspace_name: m.workspace_name || null, mailboxes: 0 };
+    byDomain[d].mailboxes++;
+  }
+  const rows = Object.values(byDomain).sort((a, b) =>
+    (a.workspace_name || '').localeCompare(b.workspace_name || '') || a.domain.localeCompare(b.domain));
+  res.json({ lastRun: _mailboxCache.lastRun, total_domains: rows.length, rows });
 });
 
 // Per-CLIENT (workspace) expected redirect. One target applied to all of that

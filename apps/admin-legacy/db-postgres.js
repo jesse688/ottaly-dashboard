@@ -3621,15 +3621,19 @@ class PostgresDatabase {
 
   // Update ONLY the redirect column for a domain (safe manual refresh). Does
   // not touch SPF/DKIM/DMARC/MX/blacklist/score — those stay as last measured.
+  // Also backfills the domain→client (workspace) assignment from the live PV
+  // roster when known, so the Domains page shows which client owns each domain.
   // Upserts a bare row if the domain isn't present yet.
-  async updateDomainRedirect(domain, redirect) {
+  async updateDomainRedirect(domain, redirect, ws) {
     await this.query(
-      `INSERT INTO domain_health (domain, redirect, updated_at)
-       VALUES ($1, $2::jsonb, NOW())
+      `INSERT INTO domain_health (domain, redirect, workspace_id, workspace_name, updated_at)
+       VALUES ($1, $2::jsonb, $3, $4, NOW())
        ON CONFLICT (domain) DO UPDATE SET
-         redirect   = EXCLUDED.redirect,
-         updated_at = NOW()`,
-      [domain, JSON.stringify(redirect || {})]
+         redirect       = EXCLUDED.redirect,
+         workspace_id   = COALESCE(EXCLUDED.workspace_id,   domain_health.workspace_id),
+         workspace_name = COALESCE(EXCLUDED.workspace_name, domain_health.workspace_name),
+         updated_at     = NOW()`,
+      [domain, JSON.stringify(redirect || {}), ws?.id || null, ws?.name || null]
     );
   }
 
