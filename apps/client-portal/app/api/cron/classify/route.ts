@@ -18,6 +18,15 @@ export async function GET(req: NextRequest) {
 
   await ready()
 
+  // HARD TIME BUDGET. cron-job.org caps the request at 30s (free tier) and marks
+  // a longer run "failed (timeout)" — which, run every 2 min, floods the app and
+  // wedged the pool. This route was written for maxDuration=300 (50-row Claude
+  // batch + a 120s enrich pass), which cannot finish in 30s. Bound BOTH passes to
+  // a shared ~22s deadline and drain the backlog across successive runs instead
+  // of one long request. Override via ?budget=<ms> for a manual longer run.
+  const budgetMs = Math.min(Math.max(parseInt(new URL(req.url).searchParams.get('budget') || '22000', 10) || 22000, 5000), 280000)
+  const RUN_DEADLINE = Date.now() + budgetMs
+
   // ?force=1 ignores the retry-backoff window so rows that failed during an
   // outage (e.g. Gemini out of credit) reclassify immediately instead of waiting
   // out their exponential backoff.
@@ -65,9 +74,11 @@ export async function GET(req: NextRequest) {
 
     // HARD TIME BUDGET. Each row does a Gemini call (~1-2s) inside this open
     // transaction; 25-50 of them blew past cron-job.org's 30s kill, which logged
-    // nothing and tripped the failure alarm. Stop at ~22s and COMMIT what's done;
-    // the rest stay pending/claimable for the next minute's run.
-    const DEADLINE = Date.now() + 22_000
+    // nothing and tripped the failure alarm. Use the run-wide deadline (shared
+    // with the enrich pass below) so classify + enrich together stay under the
+    // cron timeout; COMMIT what's done and leave the rest claimable next run.
+    // Reserve ~40% of the budget for the enrichment pass that follows.
+    const DEADLINE = Date.now() + Math.floor((RUN_DEADLINE - Date.now()) * 0.6)
     for (const row of claimed.rows) {
       if (Date.now() > DEADLINE) break
       const id = row.id as string
@@ -266,7 +277,10 @@ export async function GET(req: NextRequest) {
   // positive replies that were never enriched (enrich_state IS NULL). Idempotent
   // (enrichReplyWithCH skips already-matched), bounded, and time-budgeted — CH is
   // rate-limited (~1-2s each) and classify's maxDuration is 300s.
-  const ENRICH_DEADLINE = Date.now() + 120_000
+  // Enrichment shares the run's overall budget (cron-job.org's 30s cap), not its
+  // own 120s window — otherwise the run blows the cron timeout. Leftover rows are
+  // picked up next run (idempotent, ordered by recency).
+  const ENRICH_DEADLINE = RUN_DEADLINE
   try {
     const pending = await pool.query(
       `SELECT u.id, u.lead_email,
