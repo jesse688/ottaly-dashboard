@@ -5,6 +5,16 @@ function normPostcode(pc) {
   return String(pc || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
+// Extract a UK postcode from free-text, tolerating extra inner spaces that
+// Apollo/CRM data often has ("E1 6 QL", "SW1A 1 AA"). Returns canonical
+// "OUTCODE INCODE" or null. Looser than a strict validator on purpose — we'd
+// rather recover a slightly-malformed postcode than lose the lead.
+const POSTCODE_RE = /([A-Z]{1,2}\d[A-Z\d]?)\s{0,2}(\d)\s?([A-Z]{2})/i;
+function extractPostcode(text) {
+  const m = String(text || '').toUpperCase().match(POSTCODE_RE);
+  return m ? `${m[1]} ${m[2]}${m[3]}` : null;
+}
+
 // Tokenise an address into a set of meaningful, comparable tokens.
 // Drops noise words and punctuation; keeps unit numbers and street words.
 const STOP = new Set([
@@ -56,4 +66,4 @@ function confidenceLabel(score, onlyCandidateAtPostcode) {
   return 'candidate';                         // postcode-only, several owners
 }
 
-module.exports = { normPostcode, tokens, addressSimilarity, confidenceLabel };
+module.exports = { normPostcode, extractPostcode, tokens, addressSimilarity, confidenceLabel };

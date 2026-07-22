@@ -2,13 +2,8 @@
 // Google Geocoding fallback. Uses admin-legacy's existing GOOGLE_API_KEY.
 
 const usage = require('./usage');
+const { extractPostcode } = require('./address-match'); // shared, looser regex
 const GOOGLE_KEY = () => usage.getGoogleKey();
-const UK_POSTCODE_RE = /\b([A-Z]{1,2}\d[A-Z\d]?)\s*(\d[A-Z]{2})\b/i;
-
-function extractPostcode(text) {
-  const m = String(text || '').toUpperCase().match(UK_POSTCODE_RE);
-  return m ? `${m[1]} ${m[2]}` : null;
-}
 
 async function geocodePostcodeIO(postcode) {
   try {
@@ -38,8 +33,23 @@ async function geocodeGoogle(address) {
 
 async function geocode(address) {
   const pc = extractPostcode(address);
-  if (pc) { const hit = await geocodePostcodeIO(pc); if (hit) return hit; }
-  return geocodeGoogle(address);
+  if (pc) { const hit = await geocodePostcodeIO(pc); if (hit) return { ...hit, postcode: pc }; }
+  const g = await geocodeGoogle(address);
+  if (!g) return null;
+  // Recover a postcode from the coordinates when the text had none — this lets
+  // ownership lookup work even for Apollo rows that only had "City, Country".
+  const recovered = await reversePostcode(g.lat, g.lng);
+  return { ...g, postcode: recovered || pc || null };
 }
 
-module.exports = { geocode, extractPostcode };
+// lat/lng -> nearest postcode via free postcodes.io reverse lookup.
+async function reversePostcode(lat, lng) {
+  try {
+    const res = await fetch(`https://api.postcodes.io/postcodes?lon=${lng}&lat=${lat}&limit=1`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return (data.result && data.result[0] && data.result[0].postcode) || null;
+  } catch { return null; }
+}
+
+module.exports = { geocode, extractPostcode, reversePostcode };

@@ -17,6 +17,7 @@ const { buildingInsights } = require('./google-solar');
 const { lookupOwner } = require('./ccod');
 const { resolveOwnership } = require('./company-match');
 const { resolveNameToReg, chEnabled } = require('./companies-house');
+const { findOwnSites } = require('./own-sites');
 
 // status values: 'qualified' | 'disqualified'
 // stage:  'ownership' | 'roof' | 'solar' | 'done'
@@ -40,6 +41,7 @@ async function enrichContact(contact, opts = {}) {
     // stage 1
     owns_building: null, owns_basis: null, building_owner: null, owner_count: null,
     owner_candidates: null, lead_reg_resolved: null,
+    site_count: null, other_sites: null, // lead company's own multi-site portfolio
     // stage 2
     lat: null, lng: null, maps_url: null,
     roof_area_m2: null, max_panels_fit: null, panel_watts: null, max_system_kwp: null,
@@ -55,9 +57,27 @@ async function enrichContact(contact, opts = {}) {
 
   // ---------- Stage 1: OWNERSHIP (offline, cheap, most-eliminating) ----------
   const address = out.address;
-  const postcode = extractPostcode(address);
-  if (!address || !postcode) {
-    out.stop_reason = 'no_address_or_postcode';
+  if (!address) { out.stop_reason = 'no_address'; return out; }
+
+  // Get a postcode to key ownership on. Prefer the text; if absent/garbled, we
+  // geocode NOW to recover it (postcodes.io reverse lookup) rather than dropping
+  // the lead. This is the main fix for "unclear" leads that were really just
+  // missing a postcode in the Apollo address string.
+  let postcode = extractPostcode(address);
+  if (!postcode) {
+    try {
+      const geo = await geocode(address);
+      if (geo) {
+        out.lat = geo.lat; out.lng = geo.lng;
+        out.maps_url = `https://www.google.com/maps/@${geo.lat},${geo.lng},20z/data=!3m1!1e3`;
+        postcode = geo.postcode || null;
+        out._geocoded = true; // remember, so stage 2 doesn't geocode twice
+      }
+    } catch (e) { /* fall through — no postcode recovered */ }
+  }
+  if (!postcode) {
+    // Genuinely can't locate this contact — its own bucket, not a false "tenant".
+    out.stop_reason = 'no_postcode';
     return out;
   }
 
@@ -100,6 +120,17 @@ async function enrichContact(contact, opts = {}) {
     confidence: o.confidence, similarity: Math.round((o.similarity || 0) * 100) / 100,
   }));
 
+  // Multi-site: does the LEAD's own company own property at other postcodes too?
+  // (Their portfolio — not the building owner's.) Only meaningful once we've
+  // confirmed they own; uses the CH-resolved reg when available for precision.
+  if (out.owns_building === 'yes') {
+    try {
+      const sites = findOwnSites({ name: lead.name, reg: lead.reg || out.lead_reg_resolved || '' });
+      out.site_count = sites.length;
+      out.other_sites = sites; // [{postcode, property_address}] — includes this one
+    } catch (e) { /* multi-site optional */ }
+  }
+
   const passesOwnership = out.owns_building === 'yes'
     || (cfg.ownershipGate === 'yes_or_unclear' && out.owns_building === 'unclear');
   if (!passesOwnership) {
@@ -110,17 +141,20 @@ async function enrichContact(contact, opts = {}) {
 
   // ---------- Stage 2: ROOF / PPA (paid Google call — only for owners) ----------
   out.stage = 'roof';
-  let geo;
-  try {
-    geo = await geocode(address);
-  } catch (e) { out.error = `geocode: ${e.message}`; out.stop_reason = 'geocode_failed'; return out; }
-  if (!geo) { out.stop_reason = 'geocode_no_match'; return out; }
-  out.lat = geo.lat; out.lng = geo.lng;
-  out.maps_url = `https://www.google.com/maps/@${geo.lat},${geo.lng},20z/data=!3m1!1e3`; // satellite
+  // Reuse coords if stage 1 already geocoded to recover the postcode.
+  if (out.lat == null) {
+    let geo;
+    try {
+      geo = await geocode(address);
+    } catch (e) { out.error = `geocode: ${e.message}`; out.stop_reason = 'geocode_failed'; return out; }
+    if (!geo) { out.stop_reason = 'geocode_no_match'; return out; }
+    out.lat = geo.lat; out.lng = geo.lng;
+    out.maps_url = `https://www.google.com/maps/@${geo.lat},${geo.lng},20z/data=!3m1!1e3`;
+  }
 
   let bi;
   try {
-    bi = await buildingInsights(geo.lat, geo.lng);
+    bi = await buildingInsights(out.lat, out.lng);
   } catch (e) { out.error = `solar_api: ${e.message}`; out.stop_reason = 'solar_api_failed'; return out; }
 
   if (bi.notFound) { out.stop_reason = 'no_roof_imagery'; return out; }
