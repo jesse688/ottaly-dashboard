@@ -70,10 +70,13 @@
 
 <div class="tabs">
   <div class="tab active" data-view="prospects">🎯 Prospects <span class="n" id="n-pros">0</span></div>
+  <div class="tab" data-view="multisite">🏢 Multi-site <span class="n" id="n-multi">0</span></div>
+  <div class="tab" data-view="uncertain">❓ Uncertain <span class="n" id="n-uncertain">0</span></div>
   <div class="tab" data-view="all">All <span class="n" id="n-all">0</span></div>
   <div class="tab" data-view="tenant">Tenants <span class="n" id="n-tenant">0</span></div>
   <div class="tab" data-view="roof">Roof too small <span class="n" id="n-roof">0</span></div>
   <div class="tab" data-view="hassolar">Already solar <span class="n" id="n-solar">0</span></div>
+  <div class="tab" data-view="nopc">No location <span class="n" id="n-nopc">0</span></div>
 </div>
 
 <div class="wrap"><div id="tablewrap"><div class="mut" style="padding:40px 0">No contacts loaded. Come here via “Push to Solar” on the Contacts page, or paste below.</div>
@@ -239,19 +242,27 @@ document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{
   document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active')); t.classList.add('active'); VIEW=t.dataset.view; render();
 }));
 
+function isUncertain(r){ return r.stop_reason==='ownership_unclear'; }
+function isMultiSite(r){ return (r.site_count||0) > 1; }
 function visible(){
   if(VIEW==='prospects') return ROWS.filter(r=>r.status==='qualified');
+  if(VIEW==='multisite') return ROWS.filter(isMultiSite);
+  if(VIEW==='uncertain') return ROWS.filter(isUncertain);
   if(VIEW==='tenant') return ROWS.filter(r=>r.stop_reason==='tenant');
   if(VIEW==='roof') return ROWS.filter(r=>String(r.stop_reason||'').startsWith('roof_too_small'));
   if(VIEW==='hassolar') return ROWS.filter(r=>r.stop_reason==='already_has_solar');
+  if(VIEW==='nopc') return ROWS.filter(r=>r.stop_reason==='no_postcode'||r.stop_reason==='no_address');
   return ROWS;
 }
 function counts(){
   $('#n-pros').textContent=ROWS.filter(r=>r.status==='qualified').length;
+  $('#n-multi').textContent=ROWS.filter(isMultiSite).length;
+  $('#n-uncertain').textContent=ROWS.filter(isUncertain).length;
   $('#n-all').textContent=ROWS.length;
   $('#n-tenant').textContent=ROWS.filter(r=>r.stop_reason==='tenant').length;
   $('#n-roof').textContent=ROWS.filter(r=>String(r.stop_reason||'').startsWith('roof_too_small')).length;
   $('#n-solar').textContent=ROWS.filter(r=>r.stop_reason==='already_has_solar').length;
+  $('#n-nopc').textContent=ROWS.filter(r=>r.stop_reason==='no_postcode'||r.stop_reason==='no_address').length;
   // funnel bar
   const q=ROWS.filter(r=>r.status==='qualified').length;
   const t=ROWS.filter(r=>r.stop_reason==='tenant').length;
@@ -300,7 +311,7 @@ function render(){
       <td class="addr"><span class="mut">${openArrow}</span> ${companyCell}</td>
       <td class="addr" style="min-width:180px" onclick="event.stopPropagation()">${contactCell}</td>
       <td>${stopPill(r)}</td>
-      <td>${owns}${r.building_owner?`<div class="mut" style="font-size:11px">${esc(r.building_owner)}</div>`:''}</td>
+      <td>${owns}${r.site_count>1?` <span class="pill g" title="${esc((r.other_sites||[]).map(s=>s.postcode+' '+(s.property_address||'')).join('\n'))}">🏢 ${r.site_count} sites</span>`:''}${r.building_owner?`<div class="mut" style="font-size:11px">${esc(r.building_owner)}</div>`:''}</td>
       <td>${kwp}</td>
       <td>${r.max_panels_fit!=null?r.max_panels_fit:'<span class="mut">—</span>'}</td>
       <td>${kwh}</td>
