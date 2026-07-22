@@ -384,7 +384,12 @@ export async function GET(req: NextRequest) {
   // pipeline is fine. Stop launching new batches at 22s and return what we've
   // done as a PARTIAL success; the next minute's run continues. A complete run
   // that just covers fewer workspaces beats a 30s hard-kill that logs nothing.
-  const DEADLINE = Date.now() + 18_000
+  // Overall run budget for cron-job.org's 30s free-tier cap. The workspace sweep
+  // gets ~15s; the dedup pass that follows (heavy MERGE/DELETE) is SKIPPED if the
+  // sweep already consumed the budget — otherwise sweep(18s)+dedup pushed the
+  // whole request past 30s and cron-job.org killed it ("failed (timeout)").
+  const RUN_DEADLINE = Date.now() + 25_000
+  const DEADLINE = Date.now() + 15_000
   const totals = zero()
   let processedWs = 0
   for (let i = 0; i < workspaces.length; i += CONC) {
@@ -441,7 +446,11 @@ export async function GET(req: NextRequest) {
   // ~every 10 min instead of every minute, to keep the per-run time under the 30s
   // cron limit. ?dedup=1 forces it.
   let deduped = 0
-  const runDedup = url.searchParams.get('dedup') === '1' || Math.floor(Date.now() / 60_000) % 10 === 0
+  // Skip the heavy dedup pass if the sweep already used the run budget — running
+  // it anyway pushed the request past cron-job.org's 30s cap. It runs on the next
+  // eligible cycle instead (it's periodic + idempotent, so nothing is lost).
+  const runDedup = url.searchParams.get('dedup') === '1'
+    || (Math.floor(Date.now() / 60_000) % 10 === 0 && Date.now() < RUN_DEADLINE)
   const ddClient = runDedup ? await pool.connect() : null
   if (ddClient) try {
     await ddClient.query('BEGIN')
