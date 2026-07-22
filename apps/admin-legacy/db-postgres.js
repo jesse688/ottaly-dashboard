@@ -141,6 +141,14 @@ class PostgresDatabase {
       `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMP`,
       `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS email_status TEXT`,
       `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS mx_provider TEXT`,
+      // Solar CCOD ownership sweep (Land Registry). Kept SEPARATE from the
+      // reply-derived owns_building signal above so the two never collide.
+      // ccod_owns_building: yes|no|unclear|no_postcode. ccod_site_count: the
+      // lead company's own multi-site count.
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ccod_owns_building TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ccod_building_owner TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ccod_site_count INT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ccod_checked_at TIMESTAMP`,
       // Intelligence columns from reply parsing
       `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS works_remote BOOLEAN`,
       `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS owns_building TEXT DEFAULT 'unknown'`,

@@ -193,4 +193,47 @@ async function enrichContact(contact, opts = {}) {
   return out;
 }
 
-module.exports = { enrichContact };
+// Ownership-ONLY check — no Google/geocode calls, so it's safe & free to run
+// across the whole database. Returns { owns_building, building_owner, site_count,
+// stop_reason }. Uses CCOD (offline) + optional Companies House (cheap).
+async function ownershipOnly(contact) {
+  const address = contact.address || contact.company_address || '';
+  let postcode = extractPostcode(address);
+  if (!postcode) return { owns_building: 'no_postcode', building_owner: null, site_count: null };
+
+  let owners = [];
+  try {
+    const look = lookupOwner(address, postcode);
+    if (look.available) owners = look.owners;
+    else return { owns_building: 'no_index', building_owner: null, site_count: null };
+  } catch (e) {
+    return { owns_building: 'error', building_owner: null, site_count: null };
+  }
+
+  const lead = { name: contact.company_name || '', reg: contact.company_reg || '' };
+  const ownerList = owners.map((o) => ({ proprietor_name: o.name, company_reg_no: o.company_reg_no }));
+  let verdict = resolveOwnership(lead, ownerList);
+
+  if (verdict.owns_building !== 'yes' && !lead.reg && lead.name && chEnabled()) {
+    try {
+      const hit = await resolveNameToReg(lead.name, contact.company_domain);
+      if (hit && hit.reg) {
+        lead.reg = hit.reg;
+        const v2 = resolveOwnership({ name: lead.name, reg: hit.reg }, ownerList);
+        if (v2.owns_building === 'yes') verdict = v2;
+      }
+    } catch (e) { /* CH optional */ }
+  }
+
+  let siteCount = null;
+  if (verdict.owns_building === 'yes') {
+    try { siteCount = findOwnSites({ name: lead.name, reg: lead.reg }).length || 1; } catch {}
+  }
+  return {
+    owns_building: verdict.owns_building,
+    building_owner: verdict.matched_owner || null,
+    site_count: siteCount,
+  };
+}
+
+module.exports = { enrichContact, ownershipOnly };

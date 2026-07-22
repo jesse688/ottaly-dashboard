@@ -63,8 +63,10 @@
   <button class="btn" id="run">Run qualification</button>
   <span class="mut" id="prog"></span>
   <span style="flex:1"></span>
+  <button class="btn ghost" id="sweepBtn" title="Run ownership (CCOD + Companies House) across the whole contacts DB — no Google/roof calls, free & safe">🏢 Ownership sweep (DB-wide)</button>
   <button class="btn green" id="pushBtn" disabled>🚀 Push prospects to PlusVibe</button>
 </div>
+<div id="sweepBar" class="mut" style="display:none;padding:8px 20px;border-bottom:1px solid var(--line);background:var(--panel);font-size:12.5px"></div>
 
 <div class="funnel" id="funnel"></div>
 
@@ -412,6 +414,32 @@ $('#saveKeys').addEventListener('click', async ()=>{
     $('#setGoogle').value=''; $('#setCh').value='';
     refreshStatus();
   }catch(e){ $('#setResult').textContent='Failed: '+e.message; }
+});
+
+// ---- DB-wide ownership sweep (offline, no Google) ----
+$('#sweepBtn').addEventListener('click', async ()=>{
+  const wsId = prompt('Workspace ID to sweep (leave blank = ENTIRE database):','');
+  if(wsId===null) return; // cancelled
+  const onlyNew = confirm('Only sweep contacts not yet checked? (OK = only new, Cancel = re-check all)');
+  const bar = $('#sweepBar'); bar.style.display='block'; bar.textContent='Starting ownership sweep…';
+  $('#sweepBtn').disabled=true;
+  try{
+    const resp = await fetch('/api/solar/ownership-sweep',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ workspace_id: wsId||undefined, only_unchecked: onlyNew })});
+    const reader=resp.body.getReader(); const dec=new TextDecoder(); let buf='';
+    while(true){
+      const {value,done}=await reader.read(); if(done) break;
+      buf+=dec.decode(value,{stream:true}); let nl;
+      while((nl=buf.indexOf('\n'))>=0){
+        const line=buf.slice(0,nl); buf=buf.slice(nl+1); if(!line.trim()) continue;
+        const s=JSON.parse(line);
+        if(s.error){ bar.innerHTML='<span style="color:var(--red)">Error: '+esc(s.error)+'</span>'; continue; }
+        const p = s.progress||s.total||0;
+        bar.innerHTML = `${s.done?'✅ Done. ':''}Swept <b>${p}/${s.total}</b> · owns <b style="color:var(--green)">${s.owns}</b> (🏢 ${s.multi} multi-site) · tenant ${s.tenant} · unclear ${s.unclear} · no-postcode ${s.no_postcode} · other ${s.other}`;
+      }
+    }
+  }catch(e){ bar.innerHTML='<span style="color:var(--red)">Sweep failed: '+esc(e.message)+'</span>'; }
+  $('#sweepBtn').disabled=false;
 });
 
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}

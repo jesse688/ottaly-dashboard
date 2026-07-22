@@ -15779,6 +15779,73 @@ function isFreeDomain(email) {
 //   body: { workspace_id, campaign_id, prospects:[{email,first_name,last_name,company_name,...solarFields}],
 //           fields:[ 'owns_building','max_panels_fit','max_system_kwp','est_annual_kwh',... ] }
 // The `fields` array is the tickbox selection — only these solar keys are sent.
+// DB-wide (or per-workspace) OWNERSHIP sweep. Runs the offline CCOD + optional
+// Companies House ownership check across contacts and writes ccod_* columns.
+// NO Google/roof calls — safe and free to run on the whole database.
+//   body: { workspace_id? , limit? , only_unchecked? }  (streams NDJSON progress)
+app.post('/api/solar/ownership-sweep', requireSession, async (req, res) => {
+  const db = req.app.locals.pgDb;
+  if (!db) return res.status(500).json({ error: 'Database not available' });
+  const { ownershipOnly } = require('./lib/solar/enrich');
+  const { workspace_id, limit, only_unchecked } = req.body || {};
+
+  // Pull candidate contacts: those with a company + some address, optionally
+  // scoped to a workspace, optionally only ones not yet checked.
+  const where = [`(company_name IS NOT NULL AND company_name != '')`,
+                 `(company_address IS NOT NULL AND company_address != '')`];
+  const params = [];
+  if (workspace_id) { params.push(workspace_id); where.push(`workspace_id = $${params.length}`); }
+  if (only_unchecked) where.push(`ccod_checked_at IS NULL`);
+  const lim = Math.min(Number(limit) || 100000, 500000);
+  params.push(lim);
+
+  res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store' });
+
+  let rows;
+  try {
+    const q = await db.query(
+      `SELECT id, company_name, company_domain, company_number, company_address
+       FROM contacts WHERE ${where.join(' AND ')} LIMIT $${params.length}`, params);
+    rows = q.rows || q;
+  } catch (e) { res.write(JSON.stringify({ error: e.message }) + '\n'); return res.end(); }
+
+  const tally = { total: rows.length, owns: 0, tenant: 0, unclear: 0, no_postcode: 0, other: 0, multi: 0 };
+  let done = 0;
+  // Bounded concurrency; ownership is offline so this is fast, CH is the only I/O.
+  const CONC = 6;
+  let cursor = 0;
+  async function worker() {
+    while (cursor < rows.length) {
+      const c = rows[cursor++];
+      let r;
+      try {
+        r = await ownershipOnly({
+          company_name: c.company_name, company_domain: c.company_domain,
+          company_reg: c.company_number, company_address: c.company_address,
+        });
+      } catch { r = { owns_building: 'error', building_owner: null, site_count: null }; }
+
+      try {
+        await db.query(
+          `UPDATE contacts SET ccod_owns_building=$1, ccod_building_owner=$2, ccod_site_count=$3, ccod_checked_at=NOW() WHERE id=$4`,
+          [r.owns_building, r.building_owner, r.site_count, c.id]);
+      } catch (e) { /* keep going; report at end */ }
+
+      if (r.owns_building === 'yes') { tally.owns++; if ((r.site_count || 0) > 1) tally.multi++; }
+      else if (r.owns_building === 'no') tally.tenant++;
+      else if (r.owns_building === 'unclear') tally.unclear++;
+      else if (r.owns_building === 'no_postcode') tally.no_postcode++;
+      else tally.other++;
+
+      done++;
+      if (done % 25 === 0 || done === rows.length) res.write(JSON.stringify({ progress: done, ...tally }) + '\n');
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONC, rows.length) }, worker));
+  res.write(JSON.stringify({ done: true, ...tally }) + '\n');
+  res.end();
+});
+
 app.post('/api/solar/push-to-pv', requireSession, async (req, res) => {
   const { workspace_id, campaign_id, prospects, fields } = req.body || {};
   if (!workspace_id || !campaign_id || !Array.isArray(prospects) || !prospects.length) {
