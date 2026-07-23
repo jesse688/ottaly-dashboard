@@ -4,8 +4,33 @@
 // signal; name+postcode is the fallback.
 
 import { searchCompanies, getProfile, getOfficers, getPSC, chEnabled } from './ch.js'
-import { bestPersonMatch, parseCHName } from './names.js'
+import { bestPersonMatch, parseCHName, personSimilarity } from './names.js'
 import { postcodeTier } from './postcode.js'
+
+// Diagnostic: for one domain, show the raw contact names, the top candidate's
+// officers/PSC, and every pairwise person-similarity score — so we can see
+// exactly why an officer match did or didn't fire.
+export async function debugDomain(domain, contacts, meta) {
+  const companyName = meta?.company_name || contacts[0]?.company_name
+  const out = { domain, companyName, contacts: contacts.map((c) => ({ id: c.id, first_name: c.first_name, last_name: c.last_name, seniority: c.seniority })) }
+  if (!companyName) return { ...out, note: 'no company name' }
+  const candidates = await searchCompanies(companyName, 5)
+  out.candidates = candidates.map((c) => ({ number: c.company_number, title: c.title, status: c.company_status }))
+  if (!candidates.length) return out
+  const top = candidates[0]
+  const [officers, psc] = await Promise.all([getOfficers(top.company_number), getPSC(top.company_number)])
+  out.top_company = top.company_number
+  out.officers = officers.map((o) => o.name)
+  out.psc = psc.list.map((p) => p.name)
+  out.psc_filedNone = psc.filedNone
+  const people = [...officers.map((o) => ({ name: o.name, _kind: 'officer' })), ...psc.list.map((p) => ({ name: p.name, _kind: 'psc' }))]
+  out.scores = []
+  for (const c of contacts) for (const p of people) {
+    out.scores.push({ contact: `${c.first_name || ''} ${c.last_name || ''}`.trim(), ch: p.name, kind: p._kind, score: personSimilarity(c, p.name) })
+  }
+  out.scores.sort((a, b) => b.score - a.score)
+  return out
+}
 
 // Confident company-NAME match, for the fallback path. Token-containment: every
 // meaningful token of the shorter name appears in the longer.

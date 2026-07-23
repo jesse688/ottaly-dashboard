@@ -1,6 +1,6 @@
 import express from 'express'
 import { ensureSchema, pool, getDomainContacts, getDomainMeta, saveCompany, stampContacts, getCompany } from './src/db.js'
-import { resolveDomain } from './src/resolver.js'
+import { resolveDomain, debugDomain } from './src/resolver.js'
 import { chEnabled } from './src/ch.js'
 
 const PORT = Number(process.env.PORT) || 3100
@@ -46,6 +46,17 @@ app.post('/refresh', async (req, res) => {
     console.error('[refresh]', domain, e.message)
     res.status(500).json({ error: e.message })
   }
+})
+
+// Diagnostic: raw contact names vs CH officers/PSC + pairwise scores for a domain.
+app.get('/debug', async (req, res) => {
+  const domain = (req.query.domain || '').toString().trim().toLowerCase()
+  if (!domain) return res.status(400).json({ error: 'domain required' })
+  try {
+    const contacts = await getDomainContacts(domain)
+    const meta = await getDomainMeta(domain)
+    res.json(await debugDomain(domain, contacts, meta))
+  } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
 // Read a resolved company row.

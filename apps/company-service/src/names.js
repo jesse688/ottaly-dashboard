@@ -72,7 +72,8 @@ export function bestPersonMatch(contacts, people) {
   let best = null
   for (const c of contacts) {
     for (const p of people) {
-      const score = personSimilarity(c, p)
+      // p is { name, _kind } — personSimilarity expects the CH NAME string.
+      const score = personSimilarity(c, p.name)
       if (score >= 0.8 && (!best || score > best.score)) {
         best = { contact: c, person: p, score, kind: p._kind }
       }

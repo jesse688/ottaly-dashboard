@@ -18,7 +18,7 @@ RUN npm install --omit=dev
 # `COPY ... ./` layer even when the commit changes, shipping stale code on a
 # "successful" build. Bump CACHEBUST (any new value) each deploy to force this
 # layer — and everything after it — to rebuild.
-ARG CACHEBUST=2026-07-23-5
+ARG CACHEBUST=2026-07-23-6
 COPY apps/company-service/ ./
 
 EXPOSE 3100
