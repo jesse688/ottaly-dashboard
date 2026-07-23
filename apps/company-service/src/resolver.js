@@ -4,7 +4,7 @@
 // signal; name+postcode is the fallback.
 
 import { searchCompanies, getProfile, getOfficers, getPSC, chEnabled } from './ch.js'
-import { localSearch, localProfile, localOfficers } from './chlocal.js'
+import { localSearch, localProfile } from './chlocal.js'
 import { bestPersonMatch, parseCHName, personSimilarity } from './names.js'
 import { postcodeTier } from './postcode.js'
 
@@ -13,8 +13,13 @@ import { postcodeTier } from './postcode.js'
 // (not in the bulk data). Track API usage on the returned result for observability.
 async function searchFirst(name, n, stats) {
   const local = await localSearch(name, n)
-  if (local.length) { stats.local_search++; return local }
-  stats.api_search++; return searchCompanies(name, n)
+  // Trust local only if it surfaced an ACTIVE candidate — the bulk register can
+  // hold just a dissolved namesake while the live company (the one with current
+  // officers/PSC) is the API's top hit. If local has no active hit, use the API.
+  if (local.some((c) => c.company_status === 'active')) { stats.local_search++; return local }
+  stats.api_search++
+  const api = await searchCompanies(name, n)
+  return api.length ? api : local
 }
 async function profileFirst(num, stats) {
   const local = await localProfile(num)
@@ -22,9 +27,12 @@ async function profileFirst(num, stats) {
   stats.api_profile++; return getProfile(num)
 }
 async function officersFirst(num, stats) {
-  const local = await localOfficers(num)
-  if (local) { stats.local_officers++; return local }
-  stats.api_officers++; return getOfficers(num)
+  // ch_directors is SPARSELY populated (on-demand, not bulk-imported like
+  // ch_companies), so a local hit can be partial — and officers drive the
+  // AUTHORITATIVE person match, where partial data silently loses matches.
+  // Always use the API for officers; keep local only for the safe search+profile.
+  stats.api_officers++
+  return getOfficers(num)
 }
 
 // Diagnostic: for one domain, show the raw contact names, the top candidate's
