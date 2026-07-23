@@ -1474,6 +1474,35 @@
         <button onclick="document.getElementById('ccodSweepBar').style.display='none'" style="background:none;border:none;color:#4f46e5;cursor:pointer;font-size:12px;text-decoration:underline;">Hide</button>
       </div>
 
+      <!-- CCOD sweep scope picker -->
+      <div id="ccodSweepModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">
+        <div style="background:#fff;border-radius:12px;padding:24px;width:460px;max-width:92vw;box-shadow:0 20px 50px rgba(0,0,0,.3);">
+          <h3 style="margin:0 0 4px;font-size:17px;color:#111827;">🏢 Check building ownership</h3>
+          <p style="margin:0 0 16px;font-size:13px;color:#6b7280;line-height:1.5;">Land Registry (CCOD) + Companies House. Free — no Google/roof calls. Writes the 🏢 Building Owner column.</p>
+
+          <div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:6px;">What to sweep</div>
+          <label style="display:flex;gap:8px;align-items:flex-start;padding:10px;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:8px;cursor:pointer;">
+            <input type="radio" name="ccodScope" value="all" checked style="margin-top:2px;">
+            <span><b style="font-size:13px;color:#111827;">Entire database</b><br><span style="font-size:12px;color:#6b7280;">Every contact across all clients (~592k).</span></span>
+          </label>
+          <label id="ccodScopeClientLabel" style="display:flex;gap:8px;align-items:flex-start;padding:10px;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:16px;cursor:pointer;">
+            <input type="radio" name="ccodScope" value="client" style="margin-top:2px;">
+            <span><b style="font-size:13px;color:#111827;">Current client only</b><br><span id="ccodScopeClientHint" style="font-size:12px;color:#6b7280;">Select a client in the sidebar first.</span></span>
+          </label>
+
+          <div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:6px;">Coverage</div>
+          <label style="display:flex;gap:8px;align-items:center;padding:8px 10px;font-size:13px;color:#374151;cursor:pointer;">
+            <input type="checkbox" id="ccodOnlyNew" checked> Only contacts not yet checked <span style="color:#9ca3af;">(faster top-up)</span>
+          </label>
+          <div style="font-size:11px;color:#9ca3af;margin:0 0 18px 26px;">Uncheck to re-check everything from scratch.</div>
+
+          <div style="display:flex;gap:8px;justify-content:flex-end;">
+            <button onclick="document.getElementById('ccodSweepModal').style.display='none'" style="padding:8px 16px;border:1px solid #d1d5db;border-radius:7px;background:#fff;font-size:13px;cursor:pointer;color:#374151;">Cancel</button>
+            <button onclick="startCcodSweep()" style="padding:8px 16px;border:none;border-radius:7px;background:#224388;color:#fff;font-weight:700;font-size:13px;cursor:pointer;">Start sweep</button>
+          </div>
+        </div>
+      </div>
+
       <!-- Push Queue Panel — capped + scrollable so several paused jobs can't
            push the contacts table off-screen. -->
       <div id="pushQueuePanel" style="display:none;background:#1e293b;border-bottom:1px solid #334155;padding:0;flex-shrink:0;">
@@ -3642,26 +3671,57 @@
     // roof calls, so it's free & safe. Writes ccod_owns_building / building_owner
     // / site_count per contact, which the 🏢 Building Owner column + filter show.
     let _ccodSweepRunning = false;
-    async function runCcodSweep() {
+    // Opens the scope picker (entire DB vs current client). The actual run is
+    // startCcodSweep() below.
+    function runCcodSweep() {
       if (_ccodSweepRunning) return;
-      const onlyNew = confirm(
-        'Check building ownership across the ENTIRE database via Land Registry + Companies House.\n\n' +
-        'This is free (no Google/roof calls).\n\n' +
-        'OK  = only contacts not yet checked (faster top-up)\n' +
-        'Cancel = re-check everything');
+      // Reflect whether a client is currently selected in the sidebar filter.
+      const clientSel = document.getElementById('clientFilter');
+      const clientId = clientSel && clientSel.value ? clientSel.value : '';
+      const clientName = clientSel && clientSel.value ? (clientSel.options[clientSel.selectedIndex]?.text || 'selected client') : '';
+      const clientLabel = document.getElementById('ccodScopeClientLabel');
+      const clientHint = document.getElementById('ccodScopeClientHint');
+      const clientRadio = clientLabel.querySelector('input[value="client"]');
+      if (clientId) {
+        clientRadio.disabled = false; clientLabel.style.opacity = '1';
+        clientHint.textContent = 'Only ' + clientName + '.';
+      } else {
+        // No client selected → disable that option, force "entire database".
+        clientRadio.disabled = true; clientRadio.checked = false; clientLabel.style.opacity = '.5';
+        clientHint.textContent = 'Select a client in the sidebar first.';
+        const allRadio = document.querySelector('input[name="ccodScope"][value="all"]');
+        if (allRadio) allRadio.checked = true;
+      }
+      document.getElementById('ccodSweepModal').style.display = 'flex';
+    }
+
+    async function startCcodSweep() {
+      if (_ccodSweepRunning) return;
+      document.getElementById('ccodSweepModal').style.display = 'none';
+      const scope = (document.querySelector('input[name="ccodScope"]:checked') || {}).value || 'all';
+      const onlyNew = document.getElementById('ccodOnlyNew').checked;
+      // For "current client", scope by the selected workspace; else entire DB.
+      let workspace_id;
+      if (scope === 'client') {
+        const clientSel = document.getElementById('clientFilter');
+        workspace_id = clientSel && clientSel.value ? clientSel.value : undefined;
+      }
       _ccodSweepRunning = true;
       const btn = document.getElementById('ccodSweepBtn');
       const bar = document.getElementById('ccodSweepBar');
       const txt = document.getElementById('ccodSweepText');
       const origLabel = btn.textContent;
       btn.disabled = true; btn.textContent = '🏢 Sweeping…';
-      bar.style.display = 'flex'; txt.textContent = 'Starting sweep across the whole database…';
+      bar.style.display = 'flex';
+      txt.textContent = 'Starting sweep across ' + (workspace_id ? 'the selected client…' : 'the whole database…');
       try {
-        // Blank workspace_id = entire database (see /api/solar/ownership-sweep).
+        // Omit workspace_id entirely = entire database (see /api/solar/ownership-sweep).
+        const body = { only_unchecked: onlyNew };
+        if (workspace_id) body.workspace_id = workspace_id;
         const resp = await fetch('/api/solar/ownership-sweep', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ only_unchecked: onlyNew }),
+          body: JSON.stringify(body),
         });
         if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
         const reader = resp.body.getReader();

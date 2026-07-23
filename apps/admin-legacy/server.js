@@ -15796,7 +15796,9 @@ app.post('/api/solar/ownership-sweep', requireSession, async (req, res) => {
   const params = [];
   if (workspace_id) { params.push(workspace_id); where.push(`workspace_id = $${params.length}`); }
   if (only_unchecked) where.push(`ccod_checked_at IS NULL`);
-  const lim = Math.min(Number(limit) || 100000, 500000);
+  // Default to effectively "no cap" so a full-DB sweep covers every contact
+  // (the table is ~600k). An explicit smaller limit still scopes the run.
+  const lim = Math.min(Number(limit) || 5000000, 5000000);
   params.push(lim);
 
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store' });
