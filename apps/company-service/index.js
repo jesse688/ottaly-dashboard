@@ -40,6 +40,8 @@ app.post('/refresh', async (req, res) => {
         ? { contact_id: result.anchor_contact_id, matched_officer: result.anchor_officer_name }
         : null,
       business_owner: result.business_owner, business_owner_basis: result.business_owner_basis,
+      psc_owners: result.psc_owners || null,
+      ch_source_stats: result.ch_source_stats || null,
       seniors_considered: contacts.length,
     })
   } catch (e) {

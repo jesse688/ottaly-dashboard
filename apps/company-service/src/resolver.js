@@ -4,8 +4,28 @@
 // signal; name+postcode is the fallback.
 
 import { searchCompanies, getProfile, getOfficers, getPSC, chEnabled } from './ch.js'
+import { localSearch, localProfile, localOfficers } from './chlocal.js'
 import { bestPersonMatch, parseCHName, personSimilarity } from './names.js'
 import { postcodeTier } from './postcode.js'
+
+// Local-DB-first wrappers: hit the bulk-imported ch_companies/ch_directors tables
+// first (free, no rate limit), fall to the CH API only on a miss. PSC is API-only
+// (not in the bulk data). Track API usage on the returned result for observability.
+async function searchFirst(name, n, stats) {
+  const local = await localSearch(name, n)
+  if (local.length) { stats.local_search++; return local }
+  stats.api_search++; return searchCompanies(name, n)
+}
+async function profileFirst(num, stats) {
+  const local = await localProfile(num)
+  if (local) { stats.local_profile++; return local }
+  stats.api_profile++; return getProfile(num)
+}
+async function officersFirst(num, stats) {
+  const local = await localOfficers(num)
+  if (local) { stats.local_officers++; return local }
+  stats.api_officers++; return getOfficers(num)
+}
 
 // Diagnostic: for one domain, show the raw contact names, the top candidate's
 // officers/PSC, and every pairwise person-similarity score — so we can see
@@ -78,63 +98,83 @@ export async function resolveDomain(domain, contacts, meta) {
   }
   if (!companyName) return { ...base, refresh_error: 'no_company_name' }
 
-  const candidates = await searchCompanies(companyName, 5)
-  if (!candidates.length) return { ...base }
+  const stats = { local_search: 0, api_search: 0, local_profile: 0, api_profile: 0, local_officers: 0, api_officers: 0, api_psc: 0 }
+  const candidates = await searchFirst(companyName, 5, stats)
+  if (!candidates.length) return { ...base, ch_source_stats: stats }
 
-  // Probe candidates (active first) for an officer/PSC name match.
+  // Score EVERY candidate: fetch its profile/officers/PSC, look for a person
+  // match, and score how well the company name+postcode fit. We pick the best
+  // company by (person-match > confident name+postcode > any name match), then
+  // ALWAYS derive ownership from that company's PSC — decoupled from whether OUR
+  // contact happens to be a director. Ownership is a property of the company.
   const ordered = [...candidates].sort((a, b) => (b.company_status === 'active') - (a.company_status === 'active'))
-  let fallback = null // best name+postcode candidate if no person match
-
+  const scored = []
   for (const cand of ordered) {
     const [profile, officers, psc] = await Promise.all([
-      getProfile(cand.company_number),
-      getOfficers(cand.company_number),
-      getPSC(cand.company_number),
+      profileFirst(cand.company_number, stats),
+      officersFirst(cand.company_number, stats),
+      getPSC(cand.company_number).then((r) => { stats.api_psc++; return r }), // PSC = API only (not in bulk data)
     ])
     if (!profile) continue
     const identity = profileToIdentity(profile)
-
-    // Build the person pool: officers + PSC (each tagged with its kind).
     const people = [
       ...officers.map((o) => ({ name: o.name, _kind: 'officer' })),
       ...psc.list.map((p) => ({ name: p.name, _kind: 'psc' })),
     ]
     const match = bestPersonMatch(contacts, people)
+    const nameOk = confidentNameMatch(companyName, profile.company_name)
+    const tier = postcodeTier(address, identity.ch_postcode)
+    // rank: person-match (3) > confident name + postcode agree (2) > confident name (1) > weak (0)
+    let rank = 0
+    if (match) rank = 3
+    else if (nameOk && tier !== 'none') rank = 2
+    else if (nameOk) rank = 1
+    scored.push({ identity, officers, psc, match, nameOk, tier, rank })
+    // A person match on an active company is the best we can do — take it early.
+    if (match && identity.ch_company_status === 'active') break
+  }
+  if (!scored.length) return { ...base, ch_source_stats: stats }
 
-    if (match) {
-      const tier = postcodeTier(address, identity.ch_postcode)
-      // Officer/PSC match is strong on its own; postcode only adjusts confidence,
-      // it does NOT clear (unlike the per-contact name job).
-      const confidence = tier === 'confident' ? 'confident' : tier === 'medium' ? 'medium' : 'medium'
-      // Business ownership: did the anchor match a PSC (>25% control)?
-      const isPSC = match.kind === 'psc'
-      let business_owner, business_owner_basis
-      if (isPSC) { business_owner = 'yes'; business_owner_basis = 'psc' }
-      else if (psc.filedNone) { business_owner = 'unknown'; business_owner_basis = 'no_psc_filed' }
-      else if (psc.list.length) { business_owner = 'no'; business_owner_basis = 'not_psc' }
-      else { business_owner = 'unknown'; business_owner_basis = 'no_psc_filed' }
+  // Best company: highest rank, prefer active, then postcode agreement.
+  scored.sort((a, b) => b.rank - a.rank
+    || (b.identity.ch_company_status === 'active') - (a.identity.ch_company_status === 'active')
+    || (b.tier === 'confident') - (a.tier === 'confident'))
+  const best = scored[0]
+  if (best.rank === 0) return { ...base, ch_source_stats: stats } // nothing we're confident about
 
-      return {
-        ...base, ...identity,
-        match_method: match.kind, match_confidence: confidence,
-        anchor_contact_id: match.contact.id,
-        anchor_officer_name: match.person.name,
-        officers_snapshot: officers, psc_snapshot: psc.list,
-        business_owner, business_owner_basis,
-      }
-    }
-
-    // No person match on this candidate — remember it if the company name is a
-    // confident match + postcode agrees, as a fallback.
-    if (!fallback && confidentNameMatch(companyName, profile.company_name)) {
-      const tier = postcodeTier(address, identity.ch_postcode)
-      if (tier !== 'none' && identity.ch_company_status === 'active') {
-        fallback = { ...base, ...identity, match_method: 'name_postcode', match_confidence: 'low',
-          officers_snapshot: officers, psc_snapshot: psc.list,
-          business_owner: psc.filedNone ? 'unknown' : 'unknown', business_owner_basis: 'no_psc_filed' }
-      }
-    }
+  // ── Ownership from the chosen company's PSC (independent of contact match) ──
+  const psc = best.psc
+  const pscNames = psc.list.map((p) => p.name)
+  let business_owner, business_owner_basis
+  if (best.match && best.match.kind === 'psc') {
+    // Our contact IS a >25% owner — the strongest possible ownership signal.
+    business_owner = 'yes'; business_owner_basis = 'contact_is_psc'
+  } else if (psc.list.length) {
+    // The company HAS identified owners (PSC). If our contact matched an officer
+    // but isn't on the PSC list, they're a director-not-owner. Either way we now
+    // KNOW who the owners are — surface them.
+    business_owner = best.match ? 'no' : 'unknown'
+    business_owner_basis = best.match ? 'contact_not_psc' : 'psc_known_not_matched'
+  } else if (psc.filedNone) {
+    business_owner = 'unknown'; business_owner_basis = 'no_psc_filed'
+  } else {
+    business_owner = 'unknown'; business_owner_basis = 'no_psc_data'
   }
 
-  return fallback || base
+  // Confidence + method reflect HOW we picked the company.
+  const method = best.match ? best.match.kind : (best.rank >= 2 ? 'name_postcode' : 'name')
+  const confidence = best.match
+    ? (best.tier === 'confident' ? 'confident' : 'medium')
+    : (best.rank === 2 ? (best.tier === 'confident' ? 'medium' : 'medium') : 'low')
+
+  return {
+    ...base, ...best.identity,
+    match_method: method, match_confidence: confidence,
+    anchor_contact_id: best.match ? best.match.contact.id : null,
+    anchor_officer_name: best.match ? best.match.person.name : null,
+    officers_snapshot: best.officers, psc_snapshot: psc.list,
+    business_owner, business_owner_basis,
+    psc_owners: pscNames, // the identified >25% owners of the company
+    ch_source_stats: stats,
+  }
 }

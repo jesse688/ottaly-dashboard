@@ -37,7 +37,8 @@ export async function ensureSchema() {
       psc_snapshot         JSONB,
       -- ownership verdicts (both fall out of the ONE resolve)
       business_owner       TEXT,     -- yes | no | unknown
-      business_owner_basis TEXT,     -- psc | no_psc_filed | not_psc
+      business_owner_basis TEXT,     -- contact_is_psc | contact_not_psc | psc_known_not_matched | no_psc_filed | no_psc_data
+      psc_owners           TEXT[],   -- the company's identified >25% owners (from PSC)
       building_owner       TEXT,     -- yes | no | unclear | no_postcode
       building_owner_name  TEXT,
       building_site_count  INT,
@@ -71,6 +72,7 @@ export async function ensureSchema() {
   // BIGINT id columns, migrate them to TEXT (idempotent — no-op once already TEXT).
   await pool.query(`ALTER TABLE companies ALTER COLUMN anchor_contact_id TYPE TEXT USING anchor_contact_id::text`)
   await pool.query(`ALTER TABLE companies ALTER COLUMN senior_contact_ids TYPE TEXT[] USING senior_contact_ids::text[]`)
+  await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS psc_owners TEXT[]`)
 }
 
 // Senior decision-makers for a domain, most senior first. seniority is a free-text
@@ -120,10 +122,10 @@ export async function saveCompany(c) {
        ch_postcode, ch_address, ch_sic_codes, ch_date_of_cessation,
        match_method, match_confidence, anchor_contact_id, anchor_officer_name,
        officers_snapshot, psc_snapshot,
-       business_owner, business_owner_basis, building_owner, building_owner_name, building_site_count,
+       business_owner, business_owner_basis, psc_owners, building_owner, building_owner_name, building_site_count,
        senior_contact_ids, last_refreshed_at, refresh_error
      ) VALUES (
-       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15::jsonb,$16,$17,$18,$19,$20,$21,now(),$22
+       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15::jsonb,$16,$17,$18,$19,$20,$21,$22,now(),$23
      )
      ON CONFLICT (domain) DO UPDATE SET
        ch_company_number=EXCLUDED.ch_company_number, ch_company_name=EXCLUDED.ch_company_name,
@@ -134,6 +136,7 @@ export async function saveCompany(c) {
        anchor_contact_id=EXCLUDED.anchor_contact_id, anchor_officer_name=EXCLUDED.anchor_officer_name,
        officers_snapshot=EXCLUDED.officers_snapshot, psc_snapshot=EXCLUDED.psc_snapshot,
        business_owner=EXCLUDED.business_owner, business_owner_basis=EXCLUDED.business_owner_basis,
+       psc_owners=EXCLUDED.psc_owners,
        building_owner=EXCLUDED.building_owner, building_owner_name=EXCLUDED.building_owner_name,
        building_site_count=EXCLUDED.building_site_count,
        senior_contact_ids=EXCLUDED.senior_contact_ids, last_refreshed_at=now(),
@@ -145,7 +148,7 @@ export async function saveCompany(c) {
       c.anchor_contact_id ?? null, c.anchor_officer_name ?? null,
       c.officers_snapshot ? JSON.stringify(c.officers_snapshot) : null,
       c.psc_snapshot ? JSON.stringify(c.psc_snapshot) : null,
-      c.business_owner ?? 'unknown', c.business_owner_basis ?? null,
+      c.business_owner ?? 'unknown', c.business_owner_basis ?? null, c.psc_owners ?? null,
       c.building_owner ?? null, c.building_owner_name ?? null, c.building_site_count ?? null,
       c.senior_contact_ids ?? null, c.refresh_error ?? null,
     ]
