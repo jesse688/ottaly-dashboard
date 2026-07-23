@@ -61,7 +61,11 @@ app.get('/company', async (req, res) => {
 // so the shadow test has domains the resolver can actually work on. Ordered to
 // surface domains with several contacts (good propagation demos) first.
 app.get('/sample-domains', async (req, res) => {
-  const limit = Math.min(Number(req.query.limit) || 20, 100)
+  const limit = Math.min(Number(req.query.limit) || 20, 200)
+  const maxc = Number(req.query.max) || 100000   // cap contacts-per-domain (find SMEs)
+  const minc = Number(req.query.min) || 1
+  // order: 'top' = most contacts first; 'sample' = spread across the table by id.
+  const order = req.query.order === 'top' ? 'named DESC, contacts DESC' : 'MIN(id)'
   try {
     const { rows } = await pool.query(
       `SELECT company_domain AS domain,
@@ -74,8 +78,9 @@ app.get('/sample-domains', async (req, res) => {
           AND company_address IS NOT NULL AND company_address <> ''
         GROUP BY company_domain
        HAVING COUNT(*) FILTER (WHERE first_name IS NOT NULL OR last_name IS NOT NULL) >= 1
-        ORDER BY named DESC, contacts DESC
-        LIMIT $1`, [limit])
+          AND COUNT(*) BETWEEN $2 AND $3
+        ORDER BY ${order}
+        LIMIT $1`, [limit, minc, maxc])
     res.json({ domains: rows })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
