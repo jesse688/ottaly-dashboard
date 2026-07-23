@@ -1407,6 +1407,7 @@
           <button class="btn btn-secondary" id="resetExportBtn" onclick="resetApolloExports()" title="Clear all 'exported to Apollo' stamps so every contact shows as not-exported again">↺ Reset Exports</button>
           <button class="btn btn-secondary" id="mxScanBtn" onclick="classifyUnknownProviders(this)" title="Verify each contact's TRUE email provider (Google / Microsoft / Other) via a live DNS MX lookup — the most accurate method. Detects Microsoft hidden behind security gateways (Mimecast/Proofpoint) via SPF. Runs in the background; safe to re-run.">🔍 Verify Providers</button>
           <label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#6b7280;cursor:pointer;" title="Re-resolve EVERY contact (not just unverified ones) — catches domains that migrated provider, e.g. Google→Microsoft. Slower."><input type="checkbox" id="mxReverify"> re-verify all</label>
+          <button class="btn btn-secondary" id="ccodSweepBtn" onclick="runCcodSweep()" title="Check who owns their building via Land Registry (CCOD) + Companies House across the ENTIRE database. Free — no Google/roof calls. Writes results into the 🏢 Building Owner column & filter." style="background:#224388;color:#fff;font-weight:700;">🏢 Check building ownership</button>
           <button class="btn btn-secondary" onclick="openCreateContactModal()">+ Add</button>
         </div>
       </div>
@@ -1456,9 +1457,6 @@
           Deselect All
         </button>
         <div style="flex:1;"></div>
-        <button class="btn btn-secondary" id="ccodSweepBtn" onclick="runCcodSweep()" title="Check who owns their building via Land Registry (CCOD) + Companies House across the ENTIRE database. Free — no Google/roof calls. Writes results into the 🏢 Building Owner column & filter." style="padding:5px 12px;font-size:12px;background:#224388;color:#fff;border:none;font-weight:700;">
-          🏢 Check building ownership
-        </button>
         <button class="btn btn-secondary" id="pushSolarBtn" onclick="pushToSolar()" style="padding:5px 12px;font-size:12px;background:#f59e0b;color:#1a1a1a;border:none;font-weight:700;">
           ☀️ Push to Solar
         </button>
