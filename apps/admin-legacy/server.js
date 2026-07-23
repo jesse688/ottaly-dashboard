@@ -2484,6 +2484,231 @@ app.post('/api/admin/enrich/stop', requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
+// ── Companies House registration-number re-verification ────────────────────
+// Re-resolves and VALIDATES ch_company_number for a contact so the stored number
+// stops being stale/wrong (companies dissolve, get re-registered, or the original
+// match was wrong). Accuracy matters because the solar building-ownership sweep
+// treats a reg-number match as authoritative — a wrong number confidently
+// mis-matches a lead to the wrong building owner, so a bad number is worse than none.
+//
+// Reuses the GOOD resolver fetchCompaniesHouse() (confident name match via
+// isConfidentCHMatch, full profile incl. status + registered postcode), all routed
+// through the shared chFetch throttle. Validation is outcode-tiered:
+//   'confident' = confident name match + ACTIVE + full registered postcode == lead postcode
+//   'medium'    = confident name match + ACTIVE + OUTCODE matches (registered office
+//                 often differs from trading address, so outcode agreement is a
+//                 softer-but-real signal rather than a clear)
+//   'none'      = no confident name match, dissolved/inactive, or postcode disagrees
+//                 → the stored number is CLEARED (never leave a wrong number).
+async function verifyContactCH(contact) {
+  const { extractPostcode, normPostcode } = require('./lib/solar/address-match');
+  const outcode = (pc) => {
+    const canon = extractPostcode(pc); // "OUTCODE INCODE" or null
+    return canon ? canon.split(' ')[0] : null;
+  };
+
+  const leadCanon = extractPostcode(contact.company_address);
+  // No postcode to cross-check against → we can't validate a number, so clear it.
+  if (!leadCanon) return { outcome: 'no_postcode', ch_company_number: null, confidence: 'none' };
+
+  // Confident name match + full CH profile (returns null when no confident match).
+  let res;
+  try { res = await fetchCompaniesHouse(contact.company_name); }
+  catch (e) { return { outcome: 'error', error: e.message }; } // leave unstamped → retried on resume
+
+  if (!res || !res.ch_company_number) {
+    return { outcome: 'cleared_no_match', ch_company_number: null, confidence: 'none' };
+  }
+  // Active-only. fetchCompaniesHouse normalises status to 'active' | 'not active';
+  // a present date_of_cessation is a hard reject too.
+  if (res.company_status !== 'active' || res.ch_date_of_cessation) {
+    return { outcome: 'cleared_inactive', ch_company_number: null, confidence: 'none' };
+  }
+
+  // Postcode cross-check (outcode-tiered).
+  const leadFull = normPostcode(leadCanon);
+  const chFull = normPostcode(res.ch_postcode);
+  const leadOut = outcode(leadCanon);
+  const chOut = outcode(res.ch_postcode);
+  let confidence;
+  if (chFull && leadFull && chFull === leadFull) confidence = 'confident';
+  else if (chOut && leadOut && chOut === leadOut) confidence = 'medium';
+  else return { outcome: 'cleared_postcode_mismatch', ch_company_number: null, confidence: 'none' };
+
+  return {
+    outcome: 'verified', ch_company_number: res.ch_company_number, confidence,
+    ch_postcode: res.ch_postcode || null, company_status: res.company_status,
+    ch_address: res.ch_address || null, ch_date_of_cessation: res.ch_date_of_cessation || null,
+    prev: contact.ch_company_number || null,
+  };
+}
+
+let _activeChVerifyJob = null;   // in-memory ref to kill running loops
+let _chVerifyGeneration = 0;     // increment to abandon any previous loop
+
+async function chVerifyDbState(pgdb) {
+  await pgdb.query(`CREATE TABLE IF NOT EXISTS _chverify_job (
+    id INT PRIMARY KEY DEFAULT 1,
+    state JSONB NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+  )`);
+}
+async function saveChVerifyJob(pgdb, job) {
+  await pgdb.query(`INSERT INTO _chverify_job (id, state) VALUES (1, $1)
+    ON CONFLICT (id) DO UPDATE SET state = $1, updated_at = NOW()`, [JSON.stringify(job)]);
+}
+async function loadChVerifyJob(pgdb) {
+  try {
+    const { rows } = await pgdb.query(`SELECT state FROM _chverify_job WHERE id = 1`);
+    return rows[0]?.state || null;
+  } catch { return null; }
+}
+
+// The resumable loop. Re-queries the DB gate each batch (ch_verified_at IS NULL),
+// so a mid-batch crash simply re-picks the un-stamped rows on resume — no cursor.
+async function runChVerify(pgdb, job) {
+  const myGen = ++_chVerifyGeneration;
+  _activeChVerifyJob = job;
+  const CONC = 5;                 // more workers don't go faster (chFetch serialises)
+  const BATCH = 200;
+
+  const scopeSql = job.workspace_id ? ` AND workspace_id = $1` : '';
+  while (true) {
+    if (job.paused || _chVerifyGeneration !== myGen) return;
+
+    const params = job.workspace_id ? [job.workspace_id, BATCH] : [BATCH];
+    let rows;
+    try {
+      const q = await pgdb.query(
+        `SELECT id, company_name, company_address, ch_company_number
+         FROM contacts
+         WHERE ch_verified_at IS NULL
+           AND company_name IS NOT NULL AND company_name != ''
+           AND company_address IS NOT NULL AND company_address != ''${scopeSql}
+         ORDER BY id LIMIT $${params.length}`, params);
+      rows = q.rows || [];
+    } catch (e) { job.status = 'error'; job.error = e.message; await saveChVerifyJob(pgdb, job); return; }
+
+    if (!rows.length) {           // gate empty → done
+      job.status = 'completed'; job.paused = true; job.finished_at = new Date().toISOString();
+      await saveChVerifyJob(pgdb, job); _activeChVerifyJob = null; return;
+    }
+
+    let cursor = 0;
+    async function worker() {
+      while (cursor < rows.length) {
+        if (job.paused || _chVerifyGeneration !== myGen) return;
+        const c = rows[cursor++];
+        const r = await verifyContactCH(c);
+        if (r.outcome === 'error') { job.errors++; continue; } // don't stamp → retried
+        try {
+          await pgdb.query(
+            `UPDATE contacts SET ch_company_number = $1, ch_match_confidence = $2, ch_verified_at = NOW() WHERE id = $3`,
+            [r.ch_company_number, r.confidence, c.id]);
+        } catch { job.errors++; continue; }
+        job.processed++;
+        if (r.outcome === 'verified') {
+          job.verified++;
+          if (r.prev && r.prev !== r.ch_company_number) job.changed++;
+          else if (!r.prev) job.filled++;
+          else job.unchanged++;
+        } else if (r.outcome === 'no_postcode') job.no_postcode++;
+        else job.cleared++;       // cleared_no_match | cleared_inactive | cleared_postcode_mismatch
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(CONC, rows.length) }, worker));
+    await saveChVerifyJob(pgdb, job); // persist progress each batch → survives restart
+  }
+}
+
+// Count the population + how many still need verifying (resume/top-up sizing).
+app.get('/api/admin/ch-verify/scan', requireAdmin, async (req, res) => {
+  const pgdb = req.app.locals.pgDb;
+  if (!pgdb) return res.status(503).json({ error: 'Database not available' });
+  if (!process.env.COMPANIES_HOUSE_API_KEY) return res.status(400).json({ error: 'COMPANIES_HOUSE_API_KEY is not set' });
+  const ws = req.query.workspace_id;
+  const params = ws ? [ws] : [];
+  const scope = ws ? ` AND workspace_id = $1` : '';
+  const base = `FROM contacts WHERE company_name IS NOT NULL AND company_name != '' AND company_address IS NOT NULL AND company_address != ''${scope}`;
+  const { rows } = await pgdb.query(
+    `SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE ch_verified_at IS NULL) AS unverified ${base}`, params);
+  res.json({ total: +rows[0].total, unverified: +rows[0].unverified });
+});
+
+app.post('/api/admin/ch-verify/start', requireAdmin, async (req, res) => {
+  const pgdb = req.app.locals.pgDb;
+  if (!pgdb) return res.status(503).json({ error: 'Database not available' });
+  if (!process.env.COMPANIES_HOUSE_API_KEY) return res.status(400).json({ error: 'COMPANIES_HOUSE_API_KEY is not set — CH verification cannot run.' });
+  const { force = true, workspace_id } = req.body || {};
+  await chVerifyDbState(pgdb);
+
+  // Kill any prior loop.
+  _chVerifyGeneration++;
+  if (_activeChVerifyJob) { _activeChVerifyJob.paused = true; _activeChVerifyJob.status = 'stopped'; _activeChVerifyJob = null; }
+
+  const ws = workspace_id || null;
+  const scope = ws ? ` AND workspace_id = $1` : '';
+  const params = ws ? [ws] : [];
+  // force = re-verify everyone in scope: reset the gate so the whole population re-runs.
+  if (force) {
+    await pgdb.query(`UPDATE contacts SET ch_verified_at = NULL WHERE TRUE${scope}`, params);
+  }
+  const cnt = await pgdb.query(
+    `SELECT COUNT(*) AS n FROM contacts
+     WHERE ch_verified_at IS NULL AND company_name IS NOT NULL AND company_name != ''
+       AND company_address IS NOT NULL AND company_address != ''${scope}`, params);
+
+  const job = {
+    status: 'running', workspace_id: ws, total: +cnt.rows[0].n,
+    processed: 0, verified: 0, changed: 0, filled: 0, unchanged: 0,
+    cleared: 0, no_postcode: 0, errors: 0,
+    paused: false, started_at: new Date().toISOString(),
+  };
+  await saveChVerifyJob(pgdb, job);
+  res.json({ ok: true, total: job.total });
+  runChVerify(pgdb, job).catch(err => console.error('[ch-verify]', err.message));
+});
+
+app.get('/api/admin/ch-verify/status', requireAdmin, async (req, res) => {
+  const pgdb = req.app.locals.pgDb;
+  if (!pgdb) return res.json({ status: 'idle' });
+  await chVerifyDbState(pgdb).catch(() => {});
+  const job = await loadChVerifyJob(pgdb);
+  if (!job) return res.json({ status: 'idle', pid: process.pid });
+  res.json({ ...job, pid: process.pid });
+});
+
+app.post('/api/admin/ch-verify/pause', requireAdmin, async (req, res) => {
+  const pgdb = req.app.locals.pgDb;
+  const job = await loadChVerifyJob(pgdb);
+  if (!job) return res.status(404).json({ error: 'No job' });
+  job.paused = true; job.status = 'paused';
+  if (_activeChVerifyJob) _activeChVerifyJob.paused = true;
+  await saveChVerifyJob(pgdb, job);
+  res.json({ ok: true });
+});
+
+app.post('/api/admin/ch-verify/resume', requireAdmin, async (req, res) => {
+  const pgdb = req.app.locals.pgDb;
+  const job = await loadChVerifyJob(pgdb);
+  if (!job) return res.status(404).json({ error: 'No job' });
+  if (job.status === 'stopped') return res.status(409).json({ error: 'Job was stopped — start a new job instead' });
+  job.paused = false; job.status = 'running';
+  await saveChVerifyJob(pgdb, job);
+  runChVerify(pgdb, job).catch(err => console.error('[ch-verify]', err.message));
+  res.json({ ok: true });
+});
+
+app.post('/api/admin/ch-verify/stop', requireAdmin, async (req, res) => {
+  const pgdb = req.app.locals.pgDb;
+  _chVerifyGeneration++;
+  if (_activeChVerifyJob) { _activeChVerifyJob.paused = true; _activeChVerifyJob.status = 'stopped'; _activeChVerifyJob = null; }
+  await pgdb.query(`INSERT INTO _chverify_job (id, state) VALUES (1, $1)
+    ON CONFLICT (id) DO UPDATE SET state = $1, updated_at = NOW()`,
+    [JSON.stringify({ status: 'stopped', paused: true, stopped_at: new Date().toISOString() })]).catch(() => {});
+  res.json({ ok: true });
+});
+
 // enrichDomainFromWeb + runEnrichment defined after callClaude — see below
 
 app.get('/api/admin/migrations-status', requireAdmin, async (req, res) => {
@@ -15806,7 +16031,7 @@ app.post('/api/solar/ownership-sweep', requireSession, async (req, res) => {
   let rows;
   try {
     const q = await db.query(
-      `SELECT id, company_name, company_domain, ch_company_number, company_address
+      `SELECT id, company_name, company_domain, ch_company_number, ch_verified_at, company_address
        FROM contacts WHERE ${where.join(' AND ')} LIMIT $${params.length}`, params);
     rows = q.rows || q;
   } catch (e) { res.write(JSON.stringify({ error: e.message }) + '\n'); return res.end(); }
@@ -15824,6 +16049,9 @@ app.post('/api/solar/ownership-sweep', requireSession, async (req, res) => {
         r = await ownershipOnly({
           company_name: c.company_name, company_domain: c.company_domain,
           company_reg: c.ch_company_number, company_address: c.company_address,
+          // Once the CH-verify job has run, a NULL reg is authoritative ("no
+          // confident CH match") — don't let the crude name->reg fallback re-guess.
+          ch_verified: !!c.ch_verified_at,
         });
       } catch { r = { owns_building: 'error', building_owner: null, site_count: null }; }
 
@@ -20217,6 +20445,21 @@ function scheduleAudienceScoring(pgdb) {
     app.locals.pgDb = pgdb;
     app.locals.sqliteDb = db;
     restorePausedJobs(db);
+
+    // Resume an interrupted CH-verification run (deploys restart the process, but
+    // the ~82h job must survive them). Only auto-resume if it was actively running
+    // — a user-paused/stopped job stays put. Delay a little so the pool is warm.
+    setTimeout(() => {
+      chVerifyDbState(pgdb)
+        .then(() => loadChVerifyJob(pgdb))
+        .then((job) => {
+          if (job && job.status === 'running' && !job.paused) {
+            console.log('[ch-verify] resuming interrupted job at', job.processed, '/', job.total);
+            runChVerify(pgdb, job).catch((e) => console.error('[ch-verify] resume', e.message));
+          }
+        })
+        .catch(() => {});
+    }, 20 * 1000);
 
     // Keep the Keywords/Technologies filter dropdowns instant: their live
     // unnest+GROUP over ~590k rows is ~90s, so we precompute distinct values into

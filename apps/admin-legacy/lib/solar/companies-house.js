@@ -36,8 +36,12 @@ async function resolveNameToReg(name, domain) {
     if (res.ok) {
       const data = await res.json();
       const items = (data && data.items) || [];
-      const active = items.filter((i) => i.company_status === 'active');
-      const pool = active.length ? active : items;
+      // ACTIVE-ONLY: never fall back to the full (dissolved-inclusive) pool. A
+      // dissolved company's reg number is worse than none — the ownership sweep
+      // treats reg matches as authoritative, so a dissolved match confidently
+      // mis-attributes the building. No active candidate => unresolved.
+      const pool = items.filter((i) => i.company_status === 'active');
+      if (!pool.length) { cache.set(ckey, null); return null; }
       // Prefer a candidate whose title shares the domain's core token, else first.
       let pick = pool[0];
       if (domain) {

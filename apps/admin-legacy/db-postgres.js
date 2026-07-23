@@ -189,6 +189,13 @@ class PostgresDatabase {
       `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ch_year_end_month INT`,
       `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ch_data JSONB`,
       `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS enriched_at TIMESTAMPTZ`,
+      // CH registration-number re-verification job. ch_verified_at is the resume
+      // gate (NULL = not yet processed this run). ch_match_confidence records how
+      // the number was validated: 'confident' (name + full-postcode + active),
+      // 'medium' (name + outcode-only + active), or 'none' (cleared — no confident
+      // name match, dissolved/inactive, or postcode disagreed). See verifyContactCH.
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ch_verified_at TIMESTAMP`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ch_match_confidence TEXT`,
       // ── Normalised location hierarchy ────────────────────────────
       // Clean Country > Region > County > City > Town, derived by the
       // location-normalizer (postcode-area primary, place-name fallback).
@@ -977,6 +984,9 @@ class PostgresDatabase {
         ['location_review',  `CREATE INDEX IF NOT EXISTS idx_contacts_location_review ON contacts (location_needs_review) WHERE location_needs_review = true`],
         ['works_remote',     `CREATE INDEX IF NOT EXISTS idx_contacts_works_remote ON contacts (works_remote)`],
         ['owns_building',    `CREATE INDEX IF NOT EXISTS idx_contacts_owns_building ON contacts (owns_building)`],
+        // Resume gate for the CH re-verification job — shrinks toward empty as the
+        // run completes, so "next unverified batch" scans stay O(batch) on 592k rows.
+        ['ch_unverified',    `CREATE INDEX IF NOT EXISTS idx_contacts_ch_unverified ON contacts (id) WHERE ch_verified_at IS NULL`],
         ['exported_apollo',  `CREATE INDEX IF NOT EXISTS idx_contacts_exported_apollo ON contacts (exported_to_apollo_at)`],
         ['first_name',       `CREATE INDEX IF NOT EXISTS idx_contacts_first_name_trgm ON contacts USING GIN (first_name gin_trgm_ops)`],
         ['last_name',        `CREATE INDEX IF NOT EXISTS idx_contacts_last_name_trgm ON contacts USING GIN (last_name gin_trgm_ops)`],

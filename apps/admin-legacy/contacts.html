@@ -1408,6 +1408,7 @@
           <button class="btn btn-secondary" id="mxScanBtn" onclick="classifyUnknownProviders(this)" title="Verify each contact's TRUE email provider (Google / Microsoft / Other) via a live DNS MX lookup — the most accurate method. Detects Microsoft hidden behind security gateways (Mimecast/Proofpoint) via SPF. Runs in the background; safe to re-run.">🔍 Verify Providers</button>
           <label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#6b7280;cursor:pointer;" title="Re-resolve EVERY contact (not just unverified ones) — catches domains that migrated provider, e.g. Google→Microsoft. Slower."><input type="checkbox" id="mxReverify"> re-verify all</label>
           <button class="btn btn-secondary" id="ccodSweepBtn" onclick="runCcodSweep()" title="Check who owns their building via Land Registry (CCOD) + Companies House across the ENTIRE database. Free — no Google/roof calls. Writes results into the 🏢 Building Owner column & filter." style="background:#224388;color:#fff;font-weight:700;">🏢 Check building ownership</button>
+          <button class="btn btn-secondary" id="chVerifyBtn" onclick="runChVerify()" title="Re-resolve & VALIDATE every contact's Companies House number (confident name match + active-only + postcode cross-check). Clears wrong/stale numbers. Resumable background job — safe to close the tab; it keeps running (~82h for the full DB)." style="background:#0d9488;color:#fff;font-weight:700;">✅ Verify CH numbers</button>
           <button class="btn btn-secondary" onclick="openCreateContactModal()">+ Add</button>
         </div>
       </div>
@@ -1497,6 +1498,46 @@
           <div style="display:flex;gap:8px;justify-content:flex-end;">
             <button onclick="document.getElementById('ccodSweepModal').style.display='none'" style="padding:8px 16px;border:1px solid #d1d5db;border-radius:7px;background:#fff;font-size:13px;cursor:pointer;color:#374151;">Cancel</button>
             <button onclick="startCcodSweep()" style="padding:8px 16px;border:none;border-radius:7px;background:#224388;color:#fff;font-weight:700;font-size:13px;cursor:pointer;">Start sweep</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- CH-verify progress bar (detached background job — polled, survives refresh) -->
+      <div id="chVerifyBar" style="display:none;background:#f0fdfa;border-bottom:1px solid #99f6e4;padding:8px 20px;font-size:12px;color:#0f766e;align-items:center;gap:12px;">
+        <span style="font-weight:700;">✅ CH number verification</span>
+        <span id="chVerifyText" style="flex:1;">Starting…</span>
+        <button id="chVerifyPauseBtn" onclick="pauseChVerify()" style="background:none;border:1px solid #0d9488;border-radius:5px;color:#0f766e;cursor:pointer;font-size:12px;padding:2px 10px;">Pause</button>
+        <button id="chVerifyResumeBtn" onclick="resumeChVerify()" style="display:none;background:none;border:1px solid #0d9488;border-radius:5px;color:#0f766e;cursor:pointer;font-size:12px;padding:2px 10px;">Resume</button>
+        <button onclick="stopChVerify()" style="background:none;border:1px solid #ef4444;border-radius:5px;color:#b91c1c;cursor:pointer;font-size:12px;padding:2px 10px;">Stop</button>
+        <button onclick="document.getElementById('chVerifyBar').style.display='none'" style="background:none;border:none;color:#0d9488;cursor:pointer;font-size:12px;text-decoration:underline;">Hide</button>
+      </div>
+
+      <!-- CH-verify scope picker -->
+      <div id="chVerifyModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">
+        <div style="background:#fff;border-radius:12px;padding:24px;width:480px;max-width:92vw;box-shadow:0 20px 50px rgba(0,0,0,.3);">
+          <h3 style="margin:0 0 4px;font-size:17px;color:#111827;">✅ Verify Companies House numbers</h3>
+          <p style="margin:0 0 16px;font-size:13px;color:#6b7280;line-height:1.5;">Re-resolves each contact against Companies House: confident name match + <b>active-only</b> + postcode cross-check. Wrong/stale/dissolved numbers are <b>cleared</b>. Runs as a resumable background job — you can close the tab.</p>
+
+          <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:10px 12px;font-size:12px;color:#92400e;margin-bottom:16px;line-height:1.5;">⏱ The full database (~592k) takes <b>days</b> (Companies House rate limit ≈ 600 req/5 min) and will slow other CH features while it runs. Consider a single client first.</div>
+
+          <div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:6px;">What to verify</div>
+          <label style="display:flex;gap:8px;align-items:flex-start;padding:10px;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:8px;cursor:pointer;">
+            <input type="radio" name="chvScope" value="all" checked style="margin-top:2px;">
+            <span><b style="font-size:13px;color:#111827;">Entire database</b><br><span style="font-size:12px;color:#6b7280;">Every contact across all clients (~592k). Days-long.</span></span>
+          </label>
+          <label id="chvScopeClientLabel" style="display:flex;gap:8px;align-items:flex-start;padding:10px;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:16px;cursor:pointer;">
+            <input type="radio" name="chvScope" value="client" style="margin-top:2px;">
+            <span><b style="font-size:13px;color:#111827;">Current client only</b><br><span id="chvScopeClientHint" style="font-size:12px;color:#6b7280;">Select a client in the sidebar first.</span></span>
+          </label>
+
+          <label style="display:flex;gap:8px;align-items:center;padding:8px 10px;font-size:13px;color:#374151;cursor:pointer;">
+            <input type="checkbox" id="chvForce" checked> Re-verify all in scope <span style="color:#9ca3af;">(uncheck to only fill not-yet-verified)</span>
+          </label>
+
+          <div id="chvScanInfo" style="font-size:12px;color:#6b7280;margin:10px 0 4px;"></div>
+          <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px;">
+            <button onclick="document.getElementById('chVerifyModal').style.display='none'" style="padding:8px 16px;border:1px solid #d1d5db;border-radius:7px;background:#fff;font-size:13px;cursor:pointer;color:#374151;">Cancel</button>
+            <button onclick="startChVerify()" style="padding:8px 16px;border:none;border-radius:7px;background:#0d9488;color:#fff;font-weight:700;font-size:13px;cursor:pointer;">Start verification</button>
           </div>
         </div>
       </div>
@@ -3763,6 +3804,115 @@
         btn.disabled = false; btn.textContent = origLabel;
       }
     }
+
+    // ── CH number verification (detached background job, polled) ──────────
+    let _chVerifyPoll = null;
+    function fmtEta(job) {
+      if (!job.started_at || !job.processed || job.processed >= job.total) return '';
+      const elapsed = (Date.now() - new Date(job.started_at).getTime()) / 1000;
+      const rate = job.processed / elapsed; // contacts/sec
+      if (rate <= 0) return '';
+      const remain = (job.total - job.processed) / rate; // sec
+      const h = Math.floor(remain / 3600), m = Math.round((remain % 3600) / 60);
+      return h > 0 ? ` · ~${h}h ${m}m left` : ` · ~${m}m left`;
+    }
+    function renderChVerify(job) {
+      const bar = document.getElementById('chVerifyBar');
+      const txt = document.getElementById('chVerifyText');
+      const pauseB = document.getElementById('chVerifyPauseBtn');
+      const resumeB = document.getElementById('chVerifyResumeBtn');
+      if (!job || job.status === 'idle') { bar.style.display = 'none'; return; }
+      bar.style.display = 'flex';
+      const paused = job.status === 'paused';
+      pauseB.style.display = paused ? 'none' : '';
+      resumeB.style.display = paused ? '' : 'none';
+      const head = job.status === 'completed' ? '✅ Done. ' : job.status === 'paused' ? '⏸ Paused. ' : job.status === 'stopped' ? '⏹ Stopped. ' : '';
+      txt.innerHTML = head +
+        'Verified <b>' + (job.processed || 0) + '/' + (job.total || 0) + '</b> · ' +
+        'kept <b style="color:#0f766e">' + (job.verified || 0) + '</b>' +
+        ((job.changed || 0) ? ' (' + job.changed + ' corrected)' : '') + ' · ' +
+        'cleared <b>' + (job.cleared || 0) + '</b> · ' +
+        'no-postcode ' + (job.no_postcode || 0) +
+        ((job.errors || 0) ? ' · errors ' + job.errors : '') +
+        (job.status === 'running' ? fmtEta(job) : '');
+    }
+    async function pollChVerify() {
+      try {
+        const job = await fetch('/api/admin/ch-verify/status').then(r => r.json());
+        renderChVerify(job);
+        if (!job || ['completed', 'stopped', 'paused', 'idle'].includes(job.status)) {
+          clearInterval(_chVerifyPoll); _chVerifyPoll = null;
+          if (job && job.status === 'completed' && typeof search === 'function') search();
+        }
+      } catch { /* transient — keep polling */ }
+    }
+    function startChVerifyPolling() {
+      if (_chVerifyPoll) clearInterval(_chVerifyPoll);
+      pollChVerify();
+      _chVerifyPoll = setInterval(pollChVerify, 3000);
+    }
+
+    async function runChVerify() {
+      // Populate the "current client" option from the sidebar filter.
+      const clientSel = document.getElementById('clientFilter');
+      const clientId = clientSel && clientSel.value ? clientSel.value : '';
+      const clientName = clientId ? (clientSel.options[clientSel.selectedIndex]?.text || 'selected client') : '';
+      const label = document.getElementById('chvScopeClientLabel');
+      const hint = document.getElementById('chvScopeClientHint');
+      const radio = label.querySelector('input[value="client"]');
+      if (clientId) { radio.disabled = false; label.style.opacity = '1'; hint.textContent = 'Only ' + clientName + '.'; }
+      else {
+        radio.disabled = true; radio.checked = false; label.style.opacity = '.5';
+        hint.textContent = 'Select a client in the sidebar first.';
+        document.querySelector('input[name="chvScope"][value="all"]').checked = true;
+      }
+      document.getElementById('chvScanInfo').textContent = '';
+      document.getElementById('chVerifyModal').style.display = 'flex';
+      // Show how many are in scope / still unverified.
+      try {
+        const q = clientId ? ('?workspace_id=' + encodeURIComponent(clientId)) : '';
+        const s = await fetch('/api/admin/ch-verify/scan' + q).then(r => r.json());
+        if (!s.error) document.getElementById('chvScanInfo').textContent =
+          s.total.toLocaleString() + ' contacts in scope · ' + s.unverified.toLocaleString() + ' not yet verified.';
+        else document.getElementById('chvScanInfo').textContent = s.error;
+      } catch {}
+    }
+
+    async function startChVerify() {
+      document.getElementById('chVerifyModal').style.display = 'none';
+      const scope = (document.querySelector('input[name="chvScope"]:checked') || {}).value || 'all';
+      const force = document.getElementById('chvForce').checked;
+      let workspace_id;
+      if (scope === 'client') {
+        const clientSel = document.getElementById('clientFilter');
+        workspace_id = clientSel && clientSel.value ? clientSel.value : undefined;
+      }
+      document.getElementById('chVerifyBar').style.display = 'flex';
+      document.getElementById('chVerifyText').textContent = 'Starting…';
+      try {
+        const body = { force }; if (workspace_id) body.workspace_id = workspace_id;
+        const r = await fetch('/api/admin/ch-verify/start', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        }).then(x => x.json());
+        if (r.error) { document.getElementById('chVerifyText').innerHTML = '<span style="color:#b91c1c">' + esc(r.error) + '</span>'; return; }
+        startChVerifyPolling();
+      } catch (e) {
+        document.getElementById('chVerifyText').innerHTML = '<span style="color:#b91c1c">Failed: ' + esc(e.message) + '</span>';
+      }
+    }
+    async function pauseChVerify() { await fetch('/api/admin/ch-verify/pause', { method: 'POST' }); pollChVerify(); }
+    async function resumeChVerify() { await fetch('/api/admin/ch-verify/resume', { method: 'POST' }); startChVerifyPolling(); }
+    async function stopChVerify() {
+      if (!confirm('Stop CH verification? Progress is kept — you can start again later, and unverified contacts remain unverified.')) return;
+      await fetch('/api/admin/ch-verify/stop', { method: 'POST' }); pollChVerify();
+    }
+    // On page load, if a verification job is already running, show the bar + poll
+    // (the job is detached, so it survives refreshes and deploys).
+    (function resumeChVerifyUI() {
+      fetch('/api/admin/ch-verify/status').then(r => r.json()).then(job => {
+        if (job && (job.status === 'running' || job.status === 'paused')) { renderChVerify(job); startChVerifyPolling(); }
+      }).catch(() => {});
+    })();
 
     // Hand the selected contacts to the Solar Qualification page. We ship the
     // fields the solar cascade needs (address/postcode + company identity) via

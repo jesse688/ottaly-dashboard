@@ -214,7 +214,11 @@ async function ownershipOnly(contact) {
   const ownerList = owners.map((o) => ({ proprietor_name: o.name, company_reg_no: o.company_reg_no }));
   let verdict = resolveOwnership(lead, ownerList);
 
-  if (verdict.owns_building !== 'yes' && !lead.reg && lead.name && chEnabled()) {
+  // Only guess a reg via CH name-search when the contact was NEVER run through
+  // the CH-verify job. After verification, a NULL reg means "no confident CH
+  // match" and is authoritative — re-guessing here would re-introduce the exact
+  // stale/wrong numbers the verify job cleared.
+  if (verdict.owns_building !== 'yes' && !lead.reg && !contact.ch_verified && lead.name && chEnabled()) {
     try {
       const hit = await resolveNameToReg(lead.name, contact.company_domain);
       if (hit && hit.reg) {
