@@ -15804,7 +15804,7 @@ app.post('/api/solar/ownership-sweep', requireSession, async (req, res) => {
   let rows;
   try {
     const q = await db.query(
-      `SELECT id, company_name, company_domain, company_number, company_address
+      `SELECT id, company_name, company_domain, ch_company_number, company_address
        FROM contacts WHERE ${where.join(' AND ')} LIMIT $${params.length}`, params);
     rows = q.rows || q;
   } catch (e) { res.write(JSON.stringify({ error: e.message }) + '\n'); return res.end(); }
@@ -15821,7 +15821,7 @@ app.post('/api/solar/ownership-sweep', requireSession, async (req, res) => {
       try {
         r = await ownershipOnly({
           company_name: c.company_name, company_domain: c.company_domain,
-          company_reg: c.company_number, company_address: c.company_address,
+          company_reg: c.ch_company_number, company_address: c.company_address,
         });
       } catch { r = { owns_building: 'error', building_owner: null, site_count: null }; }
 
