@@ -57,6 +57,29 @@ app.get('/company', async (req, res) => {
   res.json(row)
 })
 
+// Sample real domains that have named senior contacts + a company name + address,
+// so the shadow test has domains the resolver can actually work on. Ordered to
+// surface domains with several contacts (good propagation demos) first.
+app.get('/sample-domains', async (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 20, 100)
+  try {
+    const { rows } = await pool.query(
+      `SELECT company_domain AS domain,
+              MAX(company_name) AS company_name,
+              COUNT(*) AS contacts,
+              COUNT(*) FILTER (WHERE first_name IS NOT NULL OR last_name IS NOT NULL) AS named
+         FROM contacts
+        WHERE company_domain IS NOT NULL AND company_domain <> ''
+          AND company_name IS NOT NULL AND company_name <> ''
+          AND company_address IS NOT NULL AND company_address <> ''
+        GROUP BY company_domain
+       HAVING COUNT(*) FILTER (WHERE first_name IS NOT NULL OR last_name IS NOT NULL) >= 1
+        ORDER BY named DESC, contacts DESC
+        LIMIT $1`, [limit])
+    res.json({ domains: rows })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
 // Shadow-mode confidence report: how the resolved companies rows compare to the
 // per-contact ch_company_number currently on contacts. Sanity check before stamping.
 app.get('/status', async (req, res) => {
