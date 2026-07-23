@@ -18,6 +18,11 @@ RUN cd email-finder-local && npm install --omit=dev
 COPY apps/admin-legacy/package*.json ./
 RUN npm install --omit=dev
 
+# Cache-bust the source COPY. EasyPanel's Docker cache was reusing an old
+# `COPY apps/admin-legacy/ ./` layer even when the commit changed, shipping
+# stale code on a "successful" build. Bumping CACHEBUST (any new value each
+# deploy) forces this layer — and everything after it — to rebuild.
+ARG CACHEBUST=2026-07-23-1
 COPY apps/admin-legacy/ ./
 
 EXPOSE 3000
