@@ -1221,6 +1221,15 @@
               <option value="no">❌ Rents / doesn't own</option>
               <option value="unknown">❓ Unknown</option>
             </select>
+            <select id="ccodOwnsBuilding" title="Land Registry (CCOD) sweep result — run '🏢 Check building ownership' to populate">
+              <option value="">🏢 Land Registry — all</option>
+              <option value="yes">✅ Owns (Land Registry)</option>
+              <option value="no">❌ Tenant (Land Registry)</option>
+              <option value="unclear">❓ Unclear</option>
+              <option value="no_postcode">📍 No postcode</option>
+              <option value="checked">— Checked (any result)</option>
+              <option value="unchecked">— Not yet checked</option>
+            </select>
             <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;">
               <input type="checkbox" id="filterRemote" style="accent-color:#3b82f6"> 🏠 Remote workers only
             </label>
@@ -1447,12 +1456,22 @@
           Deselect All
         </button>
         <div style="flex:1;"></div>
+        <button class="btn btn-secondary" id="ccodSweepBtn" onclick="runCcodSweep()" title="Check who owns their building via Land Registry (CCOD) + Companies House across the ENTIRE database. Free — no Google/roof calls. Writes results into the 🏢 Building Owner column & filter." style="padding:5px 12px;font-size:12px;background:#224388;color:#fff;border:none;font-weight:700;">
+          🏢 Check building ownership
+        </button>
         <button class="btn btn-secondary" id="pushSolarBtn" onclick="pushToSolar()" style="padding:5px 12px;font-size:12px;background:#f59e0b;color:#1a1a1a;border:none;font-weight:700;">
           ☀️ Push to Solar
         </button>
         <button class="btn btn-plusvibe" id="pushBtn" onclick="openPushModal()">
           🚀 Verify &amp; Push to PlusVibe
         </button>
+      </div>
+
+      <!-- CCOD ownership sweep progress (Land Registry + Companies House) -->
+      <div id="ccodSweepBar" style="display:none;background:#eef2ff;border-bottom:1px solid #c7d2fe;padding:8px 20px;font-size:12px;color:#3730a3;align-items:center;gap:12px;">
+        <span style="font-weight:700;">🏢 Building ownership sweep</span>
+        <span id="ccodSweepText" style="flex:1;">Starting…</span>
+        <button onclick="document.getElementById('ccodSweepBar').style.display='none'" style="background:none;border:none;color:#4f46e5;cursor:pointer;font-size:12px;text-decoration:underline;">Hide</button>
       </div>
 
       <!-- Push Queue Panel — capped + scrollable so several paused jobs can't
@@ -1916,6 +1935,7 @@
       { key: 'email_provider',  label: 'Email Provider',    sortKey: null,           defaultOn: true },
       { key: 'apollo_id',       label: 'Apollo ID',         sortKey: null,           defaultOn: false },
       { key: 'owns_building',    label: 'Owns Building',     sortKey: null,           defaultOn: false },
+      { key: 'ccod_owns_building', label: '🏢 Building Owner (Land Registry)', sortKey: null, defaultOn: false },
       { key: 'works_remote',    label: 'Remote',            sortKey: null,           defaultOn: false },
       { key: 'snoozed',         label: 'Snoozed',           sortKey: null,           defaultOn: false },
       { key: 'marked_as_lead',  label: 'Lead',              sortKey: 'marked_as_lead_at', defaultOn: false },
@@ -2045,6 +2065,22 @@
           const obStyle = ob === 'yes' ? 'background:#dcfce7;color:#166534' : ob === 'no' ? 'background:#fee2e2;color:#991b1b' : 'background:#f3f4f6;color:#9ca3af';
           const obLabel = ob === 'yes' ? '✅ Owns' : ob === 'no' ? '❌ Rents' : '—';
           return `<td><span style="padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600;${obStyle}">${obLabel}</span></td>`;
+        }
+        case 'ccod_owns_building': {
+          const cv = c.ccod_owns_building;
+          if (!cv && !c.ccod_checked_at) return `<td style="font-size:11px;color:#9ca3af">—</td>`;
+          const map = {
+            yes:         { bg:'background:#dcfce7;color:#166534', label:'✅ Owns' },
+            no:          { bg:'background:#fee2e2;color:#991b1b', label:'❌ Tenant' },
+            unclear:     { bg:'background:#fef9c3;color:#854d0e', label:'❓ Unclear' },
+            no_postcode: { bg:'background:#f3f4f6;color:#6b7280', label:'📍 No postcode' },
+            no_index:    { bg:'background:#f3f4f6;color:#6b7280', label:'⚠ No index' },
+            error:       { bg:'background:#f3f4f6;color:#6b7280', label:'⚠ Error' },
+          };
+          const m = map[cv] || { bg:'background:#f3f4f6;color:#9ca3af', label: cv || '—' };
+          const owner = c.ccod_building_owner ? `<div style="font-size:10px;color:#6b7280;margin-top:2px;max-width:180px;white-space:normal">${esc(c.ccod_building_owner)}</div>` : '';
+          const sites = (c.ccod_site_count && c.ccod_site_count > 1) ? ` <span style="padding:1px 5px;border-radius:5px;font-size:10px;background:#dbeafe;color:#1e40af" title="Owns property at ${c.ccod_site_count} postcodes">🏢 ${c.ccod_site_count} sites</span>` : '';
+          return `<td><span style="padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600;${m.bg}">${m.label}</span>${sites}${owner}</td>`;
         }
         case 'works_remote':
           return `<td style="font-size:12px">${c.works_remote ? '🏠 Remote' : '—'}</td>`;
@@ -2560,6 +2596,7 @@
         chOverdue: document.getElementById('chOverdue')?.checked ? 'true' : '',
         chOnlyEnriched: document.getElementById('chOnlyEnriched')?.checked ? 'true' : '',
         ownsBuilding: get('ownsBuilding'),
+        ccodOwnsBuilding: get('ccodOwnsBuilding'),
         worksRemote: document.getElementById('filterRemote')?.checked ? 'true' : '',
         excludeRemote: document.getElementById('filterExcludeRemote')?.checked ? 'true' : '',
         excludeDNC: document.getElementById('filterExcludeDNC')?.checked ? 'true' : '',
@@ -2917,7 +2954,7 @@
         def.selected.forEach(v => params.append(key, v));
         def.excluded.forEach(v => params.append(key + '!', v));
       });
-      ['globalSearch','company','status','ownsBuilding'].forEach(id => {
+      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding'].forEach(id => {
         const el = document.getElementById(id);
         if (el && el.value) params.append(id, el.value);
       });
@@ -3021,7 +3058,7 @@
       // Reset everything, install the saved hash, then re-run the standard
       // restoration path so behaviour matches a bookmarked-URL reload.
       Object.keys(filterDefs).forEach(k => { filterDefs[k].selected = []; filterDefs[k].excluded = []; });
-      ['globalSearch','company','status','ownsBuilding'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
       ['emailGoogle','emailOutlook','emailOther','emailUnknown','filterRemote','filterExcludeRemote','filterExcludeDNC','filterNotExported','filterExportedOnly','filterSentToPV','filterNotSentToPV','filterSentToPV','filterNotSentToPV'].forEach(id => { const el = document.getElementById(id); if (el) el.checked = false; });
       if (typeof applyFilterDefaults === 'function') applyFilterDefaults();
       window.location.hash = v.filters || '';
@@ -3052,7 +3089,7 @@
         if (inc.length) { filterDefs[key].selected = inc; any = true; }
         if (exc.length) { filterDefs[key].excluded = exc; any = true; }
       });
-      ['globalSearch','company','status','ownsBuilding'].forEach(id => {
+      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding'].forEach(id => {
         const v = params.get(id);
         const el = document.getElementById(id);
         if (el && v != null) { el.value = v; any = true; }
@@ -3599,6 +3636,75 @@
 
     // ── PlusVibe Push ────────────────────────────────────────
     let pvWorkspaces = [];
+
+    // ── Building-ownership sweep (Land Registry CCOD + Companies House) ──
+    // Runs the offline ownership check across the ENTIRE database — no Google/
+    // roof calls, so it's free & safe. Writes ccod_owns_building / building_owner
+    // / site_count per contact, which the 🏢 Building Owner column + filter show.
+    let _ccodSweepRunning = false;
+    async function runCcodSweep() {
+      if (_ccodSweepRunning) return;
+      const onlyNew = confirm(
+        'Check building ownership across the ENTIRE database via Land Registry + Companies House.\n\n' +
+        'This is free (no Google/roof calls).\n\n' +
+        'OK  = only contacts not yet checked (faster top-up)\n' +
+        'Cancel = re-check everything');
+      _ccodSweepRunning = true;
+      const btn = document.getElementById('ccodSweepBtn');
+      const bar = document.getElementById('ccodSweepBar');
+      const txt = document.getElementById('ccodSweepText');
+      const origLabel = btn.textContent;
+      btn.disabled = true; btn.textContent = '🏢 Sweeping…';
+      bar.style.display = 'flex'; txt.textContent = 'Starting sweep across the whole database…';
+      try {
+        // Blank workspace_id = entire database (see /api/solar/ownership-sweep).
+        const resp = await fetch('/api/solar/ownership-sweep', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ only_unchecked: onlyNew }),
+        });
+        if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
+        const reader = resp.body.getReader();
+        const dec = new TextDecoder();
+        let buf = '';
+        let last = null;
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let nl;
+          while ((nl = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+            if (!line.trim()) continue;
+            let s; try { s = JSON.parse(line); } catch { continue; }
+            if (s.error) { txt.innerHTML = '<span style="color:#b91c1c">Error: ' + esc(s.error) + '</span>'; continue; }
+            last = s;
+            const p = s.progress || s.total || 0;
+            txt.innerHTML =
+              (s.done ? '✅ Done. ' : '') +
+              'Swept <b>' + p + '/' + (s.total || 0) + '</b> · ' +
+              'owns <b style="color:#166534">' + (s.owns || 0) + '</b>' +
+              ((s.multi || 0) ? ' (🏢 ' + s.multi + ' multi-site)' : '') + ' · ' +
+              'tenant <b>' + (s.tenant || 0) + '</b> · ' +
+              'unclear ' + (s.unclear || 0) + ' · ' +
+              'no-postcode ' + (s.no_postcode || 0) + ' · ' +
+              'other ' + (s.other || 0);
+          }
+        }
+        if (last && last.done) {
+          if (typeof showMessage === 'function')
+            showMessage('Building ownership sweep complete: ' + (last.owns || 0) + ' own · ' + (last.tenant || 0) + ' tenant · ' + (last.unclear || 0) + ' unclear.', 'success');
+          // Refresh the table so the 🏢 column shows the new verdicts.
+          if (typeof search === 'function') search();
+        }
+      } catch (e) {
+        txt.innerHTML = '<span style="color:#b91c1c">Sweep failed: ' + esc(e.message) + '</span>';
+        if (typeof showMessage === 'function') showMessage('Sweep failed: ' + e.message, 'error');
+      } finally {
+        _ccodSweepRunning = false;
+        btn.disabled = false; btn.textContent = origLabel;
+      }
+    }
 
     // Hand the selected contacts to the Solar Qualification page. We ship the
     // fields the solar cascade needs (address/postcode + company identity) via

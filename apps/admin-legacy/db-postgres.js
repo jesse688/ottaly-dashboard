@@ -1837,6 +1837,16 @@ class PostgresDatabase {
 
     // Intelligence filters
     safe('ownsBuilding',   () => { if (filters.ownsBuilding) { clauses.push(`owns_building = $${p++}`); params.push(filters.ownsBuilding); } });
+    // Land Registry (CCOD) ownership sweep result — separate from the manual
+    // owns_building signal above. Special values: 'checked'/'unchecked' filter
+    // on whether the sweep has run; anything else matches ccod_owns_building.
+    safe('ccodOwnsBuilding', () => {
+      const v = filters.ccodOwnsBuilding;
+      if (!v) return;
+      if (v === 'checked')        clauses.push(`ccod_checked_at IS NOT NULL`);
+      else if (v === 'unchecked') clauses.push(`ccod_checked_at IS NULL`);
+      else { clauses.push(`ccod_owns_building = $${p++}`); params.push(v); }
+    });
     safe('worksRemote',    () => { if (filters.worksRemote === 'true')   clauses.push(`works_remote = true`); });
     safe('excludeRemote',  () => { if (filters.excludeRemote === 'true') clauses.push(`(works_remote IS NULL OR works_remote = false)`); });
     safe('excludeDNC',     () => { if (filters.excludeDNC === 'true')    clauses.push(`(do_not_contact IS NULL OR do_not_contact = false)`); });
@@ -1913,6 +1923,7 @@ class PostgresDatabase {
             location_source, location_needs_review, location_review_reason,
             corporate_phone, company_phone, email_status, email_verified_at,
             status, tags, source, do_not_contact, works_remote, owns_building,
+            ccod_owns_building, ccod_building_owner, ccod_site_count, ccod_checked_at,
             snoozed_verticals, reply_notes, last_reply_at, marked_as_lead_at,
             bounced_at, bounce_type, soft_bounce_count, last_emailed_at, email_count,
             emailed_workspaces, last_campaign_name, pushed_campaigns,
@@ -1938,6 +1949,7 @@ class PostgresDatabase {
       city, state, country, company_address, company_city, company_state, company_country,
       corporate_phone, company_phone, email_status, email_verified_at,
       status, tags, source, do_not_contact, works_remote, owns_building,
+      ccod_owns_building, ccod_building_owner, ccod_site_count, ccod_checked_at,
       snoozed_verticals, reply_notes, last_reply_at, marked_as_lead_at,
       bounced_at, bounce_type, soft_bounce_count, last_emailed_at, email_count,
       emailed_workspaces, last_campaign_name, pushed_campaigns,
