@@ -64,8 +64,9 @@ app.get('/sample-domains', async (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 20, 200)
   const maxc = Number(req.query.max) || 100000   // cap contacts-per-domain (find SMEs)
   const minc = Number(req.query.min) || 1
-  // order: 'top' = most contacts first; 'sample' = spread across the table by id.
-  const order = req.query.order === 'top' ? 'named DESC, contacts DESC' : 'MIN(id)'
+  // order: 'top' = most contacts first; 'sample' = spread across domains
+  // alphabetically (id is a UUID, so MIN(id) is invalid — order by the group key).
+  const order = req.query.order === 'top' ? 'named DESC, contacts DESC' : 'company_domain'
   try {
     const { rows } = await pool.query(
       `SELECT company_domain AS domain,
