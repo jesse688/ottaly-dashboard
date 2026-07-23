@@ -67,12 +67,36 @@ export async function ensureSchema() {
     -- Provenance stamped onto contacts (kept minimal; the ch_* columns already exist).
     ALTER TABLE contacts ADD COLUMN IF NOT EXISTS company_data_provenance TEXT; -- anchor | inherited | unresolved
     ALTER TABLE contacts ADD COLUMN IF NOT EXISTS company_stamped_at TIMESTAMPTZ;
+
+    -- Persons with Significant Control, loaded from the CH free PSC bulk snapshot
+    -- (download.companieshouse.gov.uk/en_pscdata.html) via scripts/import-psc-bulk.js.
+    -- Lets the resolver read ownership locally instead of an API call per company.
+    -- One row per (company, PSC). kind distinguishes individual vs corporate owner.
+    CREATE TABLE IF NOT EXISTS ch_psc (
+      company_number TEXT NOT NULL,
+      name           TEXT,
+      kind           TEXT,      -- individual-person… | corporate-entity… | legal-person… | *-statement
+      ceased_on      TEXT,      -- non-null = this PSC no longer in control
+      natures        TEXT[],    -- natures_of_control (encodes the >25% thresholds)
+      created_at     TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_ch_psc_company ON ch_psc(company_number);
+    -- Marks whether the PSC bulk has been loaded + freshness (import script updates it).
+    CREATE TABLE IF NOT EXISTS ch_psc_meta (
+      id INT PRIMARY KEY DEFAULT 1,
+      loaded_at   TIMESTAMPTZ,
+      snapshot    TEXT,     -- the snapshot date/label imported
+      row_count   BIGINT
+    );
   `)
   // contacts.id is a UUID, not a bigint. If an earlier boot created companies with
   // BIGINT id columns, migrate them to TEXT (idempotent — no-op once already TEXT).
   await pool.query(`ALTER TABLE companies ALTER COLUMN anchor_contact_id TYPE TEXT USING anchor_contact_id::text`)
   await pool.query(`ALTER TABLE companies ALTER COLUMN senior_contact_ids TYPE TEXT[] USING senior_contact_ids::text[]`)
   await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS psc_owners TEXT[]`)
+  // Officer cache marker on the shared ch_directors table: rows the company-service
+  // fetched itself (complete + fresh), safe to trust vs admin-legacy's partial rows.
+  await pool.query(`ALTER TABLE ch_directors ADD COLUMN IF NOT EXISTS fetched_by_svc_at TIMESTAMPTZ`).catch(() => {})
 }
 
 // Senior decision-makers for a domain, most senior first. seniority is a free-text

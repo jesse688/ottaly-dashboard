@@ -4,7 +4,7 @@
 // signal; name+postcode is the fallback.
 
 import { searchCompanies, getProfile, getOfficers, getPSC, chEnabled } from './ch.js'
-import { localSearch, localProfile } from './chlocal.js'
+import { localSearch, localProfile, localPSC, cachedOfficers, cacheOfficers } from './chlocal.js'
 import { bestPersonMatch, parseCHName, personSimilarity } from './names.js'
 import { postcodeTier } from './postcode.js'
 
@@ -27,12 +27,24 @@ async function profileFirst(num, stats) {
   stats.api_profile++; return getProfile(num)
 }
 async function officersFirst(num, stats) {
-  // ch_directors is SPARSELY populated (on-demand, not bulk-imported like
-  // ch_companies), so a local hit can be partial — and officers drive the
-  // AUTHORITATIVE person match, where partial data silently loses matches.
-  // Always use the API for officers; keep local only for the safe search+profile.
+  // Officers drive the AUTHORITATIVE match, so we can't trust admin-legacy's
+  // partial ch_directors rows. But we CAN trust rows the service cached itself
+  // (complete + fresh). Cache → API → cache-write.
+  const cached = await cachedOfficers(num)
+  if (cached) { stats.cache_officers++; return cached }
   stats.api_officers++
-  return getOfficers(num)
+  const officers = await getOfficers(num)
+  cacheOfficers(num, officers).catch(() => {}) // fire-and-forget
+  return officers
+}
+async function pscFirst(num, stats) {
+  // PSC bulk snapshot (ch_psc) is the FULL dataset when loaded, so local is
+  // authoritative here (unlike officers). Fall to API only when the snapshot
+  // isn't loaded or this company isn't in it.
+  const local = await localPSC(num)
+  if (local) { stats.local_psc++; return local }
+  stats.api_psc++
+  return getPSC(num)
 }
 
 // Diagnostic: for one domain, show the raw contact names, the top candidate's
@@ -106,7 +118,7 @@ export async function resolveDomain(domain, contacts, meta) {
   }
   if (!companyName) return { ...base, refresh_error: 'no_company_name' }
 
-  const stats = { local_search: 0, api_search: 0, local_profile: 0, api_profile: 0, local_officers: 0, api_officers: 0, api_psc: 0 }
+  const stats = { local_search: 0, api_search: 0, local_profile: 0, api_profile: 0, cache_officers: 0, api_officers: 0, local_psc: 0, api_psc: 0 }
   const candidates = await searchFirst(companyName, 5, stats)
   if (!candidates.length) return { ...base, ch_source_stats: stats }
 
@@ -121,7 +133,7 @@ export async function resolveDomain(domain, contacts, meta) {
     const [profile, officers, psc] = await Promise.all([
       profileFirst(cand.company_number, stats),
       officersFirst(cand.company_number, stats),
-      getPSC(cand.company_number).then((r) => { stats.api_psc++; return r }), // PSC = API only (not in bulk data)
+      pscFirst(cand.company_number, stats), // local ch_psc snapshot first, API on miss
     ])
     if (!profile) continue
     const identity = profileToIdentity(profile)

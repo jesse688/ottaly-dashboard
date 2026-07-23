@@ -54,16 +54,74 @@ export async function localProfile(companyNumber) {
   } catch { return null }
 }
 
-// Active officers from ch_directors, in the API getOfficers() output shape.
-export async function localOfficers(companyNumber) {
+// Has the PSC bulk snapshot been loaded? Cached after first check so we don't
+// re-query per resolve. If not loaded, local PSC is skipped entirely (→ API).
+let _pscLoaded = null
+export async function pscBulkLoaded() {
+  if (_pscLoaded !== null) return _pscLoaded
+  try {
+    const { rows } = await pool.query(`SELECT row_count FROM ch_psc_meta WHERE id = 1`)
+    _pscLoaded = !!(rows[0] && Number(rows[0].row_count) > 0)
+  } catch { _pscLoaded = false }
+  return _pscLoaded
+}
+
+// Local PSC for a company, in the API getPSC() output shape { list, filedNone }.
+// Returns null when the bulk snapshot isn't loaded (caller falls to API).
+// A company present in the snapshot but with only a "…-statement" row (no person)
+// → filedNone:true. A company absent from the snapshot → we can't tell locally,
+// so return null and let the API decide (absent ≠ "no PSC").
+export async function localPSC(companyNumber) {
+  if (!(await pscBulkLoaded())) return null
+  try {
+    const { rows } = await pool.query(
+      `SELECT name, kind, ceased_on FROM ch_psc WHERE company_number = $1`, [companyNumber])
+    if (!rows.length) return null // not in snapshot → let API confirm
+    const active = rows.filter((r) => !r.ceased_on)
+    const list = active
+      .filter((r) => r.name && !/statement$/.test(r.kind || ''))
+      .map((r) => ({ name: r.name, kind: r.kind, ceased: false }))
+    const filedNone = !list.length // present in snapshot but no active person PSC
+    return { list, filedNone, _local: true }
+  } catch { return null }
+}
+
+// Officer CACHE. ch_directors is sparse/partial from admin-legacy's on-demand
+// fetches, so we can't trust an arbitrary local hit for the authoritative match.
+// Instead: the company-service marks companies IT has fully fetched (ch_directors
+// carries a fetched_by_svc_at stamp we add), and only trusts the cache for those.
+// This lets repeat resolves of the same company skip the officer API call without
+// risking partial admin-legacy data.
+
+// Read cached officers ONLY if the company-service fetched them recently.
+export async function cachedOfficers(companyNumber, maxAgeDays = 30) {
   try {
     const { rows } = await pool.query(
       `SELECT name, role, appointed_on, address FROM ch_directors
-        WHERE company_number = $1 AND resigned_on IS NULL`, [companyNumber])
-    if (!rows.length) return null // null = "not in local set" → caller tries API
+        WHERE company_number = $1 AND resigned_on IS NULL
+          AND fetched_by_svc_at IS NOT NULL
+          AND fetched_by_svc_at > now() - ($2 || ' days')::interval`,
+      [companyNumber, String(maxAgeDays)])
+    if (!rows.length) return null
     return rows.map((o) => ({
       name: o.name, role: o.role, appointed_on: o.appointed_on,
-      postcode: o.address?.postal_code || null,
+      postcode: (typeof o.address === 'object' && o.address) ? o.address.postal_code || null : null,
     }))
-  } catch { return null }
+  } catch { return null } // column may not exist yet on first boot → treat as miss
+}
+
+// Persist API-fetched officers so the next resolve of this company is free.
+export async function cacheOfficers(companyNumber, officers) {
+  if (!companyNumber) return
+  try {
+    // Clear our previous cache for this company, then insert the fresh set.
+    await pool.query(`DELETE FROM ch_directors WHERE company_number = $1 AND fetched_by_svc_at IS NOT NULL`, [companyNumber])
+    for (const o of officers) {
+      await pool.query(
+        `INSERT INTO ch_directors (company_number, name, role, appointed_on, address, fetched_by_svc_at)
+         VALUES ($1,$2,$3,$4,$5::jsonb, now())`,
+        [companyNumber, o.name, o.role || null, o.appointed_on || null,
+         o.postcode ? JSON.stringify({ postal_code: o.postcode }) : null])
+    }
+  } catch { /* caching is best-effort — never block a resolve */ }
 }
