@@ -30,7 +30,7 @@ export async function ensureSchema() {
       -- match provenance
       match_method         TEXT,     -- officer | psc | name_postcode | none
       match_confidence     TEXT,     -- confident | medium | low | none
-      anchor_contact_id    BIGINT,   -- contact whose name matched an officer/PSC
+      anchor_contact_id    TEXT,     -- contact whose name matched an officer/PSC (contacts.id is a UUID)
       anchor_officer_name  TEXT,     -- the CH officer/PSC name that matched
       -- full CH payloads for audit + re-derivation
       officers_snapshot    JSONB,
@@ -42,7 +42,7 @@ export async function ensureSchema() {
       building_owner_name  TEXT,
       building_site_count  INT,
       -- refresh bookkeeping
-      senior_contact_ids   BIGINT[],
+      senior_contact_ids   TEXT[],   -- contacts.id is a UUID
       last_refreshed_at    TIMESTAMPTZ,
       refresh_error        TEXT,
       created_at           TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -67,6 +67,10 @@ export async function ensureSchema() {
     ALTER TABLE contacts ADD COLUMN IF NOT EXISTS company_data_provenance TEXT; -- anchor | inherited | unresolved
     ALTER TABLE contacts ADD COLUMN IF NOT EXISTS company_stamped_at TIMESTAMPTZ;
   `)
+  // contacts.id is a UUID, not a bigint. If an earlier boot created companies with
+  // BIGINT id columns, migrate them to TEXT (idempotent — no-op once already TEXT).
+  await pool.query(`ALTER TABLE companies ALTER COLUMN anchor_contact_id TYPE TEXT USING anchor_contact_id::text`)
+  await pool.query(`ALTER TABLE companies ALTER COLUMN senior_contact_ids TYPE TEXT[] USING senior_contact_ids::text[]`)
 }
 
 // Senior decision-makers for a domain, most senior first. seniority is a free-text
