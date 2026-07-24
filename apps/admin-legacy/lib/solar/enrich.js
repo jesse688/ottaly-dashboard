@@ -125,8 +125,14 @@ async function enrichContact(contact, opts = {}) {
   // owns. This is far more precise than the scraped Apollo address (which is often
   // truncated to just a street), so we geocode THIS for the roof, avoiding the
   // "wrong building / false panel count" problem.
-  if (out.owns_building === 'yes' && verdict.matched_owner) {
-    const matched = owners.find((o) => o.name === verdict.matched_owner && o.property_address);
+  if (out.owns_building === 'yes') {
+    // Find the owner record we matched to and take its precise property address.
+    // Match by name (exact, then case-insensitive), falling back to the best
+    // address-similarity owner — so a minor name-format difference never drops the
+    // precise address and silently reverts to the coarse Apollo one.
+    const target = String(verdict.matched_owner || out.building_owner || '').trim().toUpperCase();
+    let matched = owners.find((o) => o.property_address && String(o.name || '').trim().toUpperCase() === target);
+    if (!matched) matched = owners.find((o) => o.property_address); // best-scored (owners are sorted by similarity)
     if (matched && matched.property_address) out.ccod_property_address = matched.property_address;
   }
 
