@@ -11,12 +11,15 @@ import { postcodeTier } from './postcode.js'
 // Local-DB-first wrappers: hit the bulk-imported ch_companies/ch_directors tables
 // first (free, no rate limit), fall to the CH API only on a miss. PSC is API-only
 // (not in the bulk data). Track API usage on the returned result for observability.
+// Case-insensitive active check (API: 'active'; local bulk: 'Active').
+const isActive = (s) => String(s || '').toLowerCase() === 'active'
+
 async function searchFirst(name, n, stats) {
   const local = await localSearch(name, n)
   // Trust local only if it surfaced an ACTIVE candidate — the bulk register can
   // hold just a dissolved namesake while the live company (the one with current
   // officers/PSC) is the API's top hit. If local has no active hit, use the API.
-  if (local.some((c) => c.company_status === 'active')) { stats.local_search++; return local }
+  if (local.some((c) => isActive(c.company_status))) { stats.local_search++; return local }
   stats.api_search++
   const api = await searchCompanies(name, n)
   return api.length ? api : local
@@ -94,7 +97,11 @@ function profileToIdentity(p) {
   return {
     ch_company_number: p.company_number,
     ch_company_name: p.company_name || null,
-    ch_company_status: p.company_status === 'active' ? 'active' : 'not active',
+    // Case-insensitive: the API returns 'active', but the local ch_companies bulk
+    // import stores the CSV's 'Active' (capital A). Lowercasing both fixes the
+    // "everything shows not-active" bug (a case mismatch, not stale data — the
+    // bulk import is active-only anyway).
+    ch_company_status: String(p.company_status || '').toLowerCase() === 'active' ? 'active' : 'not active',
     ch_company_type: p.type || null,
     ch_postcode: addr.postal_code || null,
     ch_address: addrParts.join(', ') || null,
@@ -127,7 +134,7 @@ export async function resolveDomain(domain, contacts, meta) {
   // company by (person-match > confident name+postcode > any name match), then
   // ALWAYS derive ownership from that company's PSC — decoupled from whether OUR
   // contact happens to be a director. Ownership is a property of the company.
-  const ordered = [...candidates].sort((a, b) => (b.company_status === 'active') - (a.company_status === 'active'))
+  const ordered = [...candidates].sort((a, b) => isActive(b.company_status) - isActive(a.company_status))
   const scored = []
   for (const cand of ordered) {
     const [profile, officers, psc] = await Promise.all([
@@ -137,6 +144,13 @@ export async function resolveDomain(domain, contacts, meta) {
     ])
     if (!profile) continue
     const identity = profileToIdentity(profile)
+    // The local ch_companies bulk import's company_status is stale/unreliable
+    // (shows most companies "not active"). The CH SEARCH result carries a fresh,
+    // correct status — prefer it. Only fall back to the profile's when the search
+    // candidate didn't provide one.
+    if (cand.company_status) {
+      identity.ch_company_status = isActive(cand.company_status) ? 'active' : 'not active'
+    }
     const people = [
       ...officers.map((o) => ({ name: o.name, _kind: 'officer' })),
       ...psc.list.map((p) => ({ name: p.name, _kind: 'psc' })),
