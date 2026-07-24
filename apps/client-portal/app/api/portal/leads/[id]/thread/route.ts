@@ -137,7 +137,17 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     for (const row of r.rows) {
       const key = contentKey(row)
       const existing = byContent.get(key)
-      if (!existing || (!existing.body_html && row.body_html)) byContent.set(key, row)
+      if (!existing) { byContent.set(key, row); continue }
+      // Two stored rows for the SAME message (e.g. an old ingest without cc + a
+      // healed backfill row with cc). Keep the richer HTML body, but never let the
+      // collapse DROP a field the loser has and the winner lacks — merge cc (and
+      // attachments) across so a healed cc still surfaces even if the other row
+      // owns the body_html we keep.
+      const winner = (!existing.body_html && row.body_html) ? row : existing
+      const loser = winner === existing ? row : existing
+      winner.cc = winner.cc || loser.cc
+      winner.attachments = winner.attachments || loser.attachments
+      byContent.set(key, winner)
     }
     return Array.from(byContent.values()).sort((a, b) => {
       const ta = a.timestamp_created ? new Date(a.timestamp_created).getTime() : 0
