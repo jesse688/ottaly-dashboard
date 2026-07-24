@@ -157,11 +157,12 @@ export async function resolveDomain(domain, contacts, meta) {
     // First pass: match against PSC only (local).
     let officers = null
     let match = bestPersonMatch(contacts, psc.list.map((p) => ({ name: p.name, _kind: 'psc' })))
-    // Fetch officers (API) only when it could actually change the outcome: we have
-    // named contacts, no PSC match yet, and this candidate is plausibly the company
-    // (name matches or it's the sole/first candidate). Skips the officer API call
-    // for domains already settled by name+postcode.
-    const worthOfficers = !match && contacts.length > 0 && (nameOk || ordered.length === 1)
+    // Consult officers when there's no PSC match yet and we have named contacts.
+    // officersFirst is LOCAL-first (bulk officers loaded into ch_directors), so
+    // this is usually a cheap DB read; it only spends an API call for companies
+    // missing from the bulk. Restrict to plausible candidates to avoid probing
+    // obviously-wrong ones.
+    const worthOfficers = !match && contacts.length > 0 && (nameOk || ordered.length <= 2)
     if (worthOfficers) {
       officers = await officersFirst(cand.company_number, stats)
       match = bestPersonMatch(contacts, [
