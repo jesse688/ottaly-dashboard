@@ -12,18 +12,30 @@ import { pool } from './db.js'
 export async function localSearch(name, n = 5) {
   const q = String(name || '').trim()
   if (!q) return []
+  // Strip legal suffixes + leading "the" so "The 0141 Design Ltd" → "0141 design".
+  const bare = q.replace(/\b(limited|ltd|plc|llp|lp|company|co)\b/gi, '')
+    .replace(/^the\s+/i, '').replace(/[^a-z0-9\s]/gi, ' ').replace(/\s+/g, ' ').trim()
+  if (!bare) return []
   try {
-    // Strip legal suffixes off the query; match on a leading ILIKE so the bulk
-    // register's "… LIMITED/LTD" still hits. Prefer active companies.
-    const bare = q.replace(/\b(limited|ltd|plc|llp|lp|company|co)\b/gi, '').replace(/\s+/g, ' ').trim()
+    // Prefix match first (fast, precise), widen to contains only if needed.
+    // LOWER(company_status)='active' — the bulk import stores 'Active' (capital A).
     const { rows } = await pool.query(
       `SELECT company_number, company_name AS title, company_status
          FROM ch_companies
-        WHERE company_name ILIKE $1 OR company_name ILIKE $2
-        ORDER BY (company_status = 'active') DESC, length(company_name)
-        LIMIT $3`,
-      [bare + '%', '%' + bare + '%', n])
-    return rows
+        WHERE company_name ILIKE $1
+        ORDER BY (LOWER(company_status) = 'active') DESC, length(company_name)
+        LIMIT $2`,
+      [bare + '%', n])
+    if (rows.length) return rows
+    // Fallback: contains-match (slower) when no prefix hit.
+    const { rows: rows2 } = await pool.query(
+      `SELECT company_number, company_name AS title, company_status
+         FROM ch_companies
+        WHERE company_name ILIKE $1
+        ORDER BY (LOWER(company_status) = 'active') DESC, length(company_name)
+        LIMIT $2`,
+      ['%' + bare + '%', n])
+    return rows2
   } catch { return [] } // table may not exist in some envs — caller falls back to API
 }
 

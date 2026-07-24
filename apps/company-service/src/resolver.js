@@ -138,33 +138,44 @@ export async function resolveDomain(domain, contacts, meta) {
   const ordered = [...candidates].sort((a, b) => isActive(b.company_status) - isActive(a.company_status))
   const scored = []
   for (const cand of ordered) {
-    const [profile, officers, psc] = await Promise.all([
+    // Profile + PSC are LOCAL (fast). Officers are the only API-only step, so we
+    // fetch them LAZILY — first try to match against PSC (local) + name+postcode;
+    // only spend an officer API call when that leaves the match ambiguous.
+    const [profile, psc] = await Promise.all([
       profileFirst(cand.company_number, stats),
-      officersFirst(cand.company_number, stats),
-      pscFirst(cand.company_number, stats), // local ch_psc snapshot first, API on miss
+      pscFirst(cand.company_number, stats),
     ])
     if (!profile) continue
     const identity = profileToIdentity(profile)
-    // The local ch_companies bulk import's company_status is stale/unreliable
-    // (shows most companies "not active"). The CH SEARCH result carries a fresh,
-    // correct status — prefer it. Only fall back to the profile's when the search
-    // candidate didn't provide one.
+    // Prefer the fresh search-candidate status over the local profile's stale one.
     if (cand.company_status) {
       identity.ch_company_status = isActive(cand.company_status) ? 'active' : 'not active'
     }
-    const people = [
-      ...officers.map((o) => ({ name: o.name, _kind: 'officer' })),
-      ...psc.list.map((p) => ({ name: p.name, _kind: 'psc' })),
-    ]
-    const match = bestPersonMatch(contacts, people)
     const nameOk = confidentNameMatch(companyName, profile.company_name)
     const tier = postcodeTier(address, identity.ch_postcode)
+
+    // First pass: match against PSC only (local).
+    let officers = null
+    let match = bestPersonMatch(contacts, psc.list.map((p) => ({ name: p.name, _kind: 'psc' })))
+    // Fetch officers (API) only when it could actually change the outcome: we have
+    // named contacts, no PSC match yet, and this candidate is plausibly the company
+    // (name matches or it's the sole/first candidate). Skips the officer API call
+    // for domains already settled by name+postcode.
+    const worthOfficers = !match && contacts.length > 0 && (nameOk || ordered.length === 1)
+    if (worthOfficers) {
+      officers = await officersFirst(cand.company_number, stats)
+      match = bestPersonMatch(contacts, [
+        ...officers.map((o) => ({ name: o.name, _kind: 'officer' })),
+        ...psc.list.map((p) => ({ name: p.name, _kind: 'psc' })),
+      ])
+    }
+
     // rank: person-match (3) > confident name + postcode agree (2) > confident name (1) > weak (0)
     let rank = 0
     if (match) rank = 3
     else if (nameOk && tier !== 'none') rank = 2
     else if (nameOk) rank = 1
-    scored.push({ identity, officers, psc, match, nameOk, tier, rank })
+    scored.push({ identity, officers: officers || [], psc, match, nameOk, tier, rank })
     // A person match on an active company is the best we can do — take it early.
     if (match && identity.ch_company_status === 'active') break
   }
