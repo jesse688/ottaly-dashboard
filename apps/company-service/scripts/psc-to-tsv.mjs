@@ -19,9 +19,8 @@ if (!input || !output) {
 }
 
 let src
-let child = null
 if (input.endsWith('.zip')) {
-  child = spawn('unzip', ['-p', input])
+  const child = spawn('unzip', ['-p', input])
   child.stderr.on('data', () => {})
   child.on('error', (e) => { console.error('FATAL unzip:', e.message); process.exit(1) })
   src = child.stdout
@@ -37,10 +36,19 @@ for (const [name, s] of [['src', src], ['gzip', gzip], ['out', out]]) {
 }
 
 const rl = readline.createInterface({ input: src, crlfDelay: Infinity })
-const clean = (s) => String(s == null ? '' : s).replace(/[\t\r\n]+/g, ' ').trim()
 
-// Single, reusable backpressure handler — no per-line listener churn (that was
-// what thrashed on the slower container disk and emitted the MaxListeners flood).
+// Field sanitiser. Strips control chars, unicode line/paragraph separators
+// (U+2028 / U+2029) and backslashes, all of which corrupt COPY's text format:
+// an embedded newline splits one row into two ("missing data for column") and
+// backslash is COPY's escape char. Every field ends up single-line and tab-free,
+// so each emitted row has exactly 5 tab-separated columns.
+const clean = (s) => String(s == null ? '' : s)
+  .replace(/[\x00-\x1f\u2028\u2029\\]+/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim()
+
+// Single reusable backpressure handler (a per-line .once('drain') piled up
+// thousands of listeners on the slower container disk and thrashed to a halt).
 let paused = false
 gzip.on('drain', () => { if (paused) { paused = false; rl.resume() } })
 
