@@ -12,7 +12,7 @@
 //
 // Every result carries stage + stop_reason so the funnel is fully visible.
 
-const { geocode, extractPostcode } = require('./geocode');
+const { geocode, geocodePrecise, extractPostcode } = require('./geocode');
 const { buildingInsights } = require('./google-solar');
 const { lookupOwner } = require('./ccod');
 const { resolveOwnership } = require('./company-match');
@@ -156,21 +156,27 @@ async function enrichContact(contact, opts = {}) {
   // the RIGHT roof. This overrides any coords from the stage-1 postcode-recovery
   // geocode (which used the imprecise Apollo address). Fall back to the Apollo
   // address only when there's no CCOD property address.
-  const roofAddress = out.ccod_property_address || address;
-  if (out.ccod_property_address || out.lat == null) {
+  if (out.ccod_property_address) {
+    // Owned building confirmed: geocode the Land Registry title address at
+    // BUILDING level (geocodePrecise skips the postcode-centroid shortcut that
+    // was landing mid-street and grabbing the wrong roof on dense estates).
+    let geo;
+    try { geo = await geocodePrecise(out.ccod_property_address); } catch { geo = null; }
+    if (!geo && address) { try { geo = await geocode(address); } catch { geo = null; } } // fallback
+    if (!geo) { out.stop_reason = 'geocode_no_match'; return out; }
+    out.lat = geo.lat; out.lng = geo.lng;
+    out.roof_address_used = out.ccod_property_address;
+    out.roof_geocode_precise = geo.precise === true; // did we get building-level precision?
+    out.maps_url = `https://www.google.com/maps/@${geo.lat},${geo.lng},20z/data=!3m1!1e3`;
+  } else if (out.lat == null) {
+    // No owned-property address — geocode the (Apollo) address as before.
     let geo;
     try {
-      geo = await geocode(roofAddress);
+      geo = await geocode(address);
     } catch (e) { out.error = `geocode: ${e.message}`; out.stop_reason = 'geocode_failed'; return out; }
-    if (!geo) {
-      // CCOD address failed to geocode — fall back to the Apollo address rather than drop the lead.
-      if (out.ccod_property_address && address) {
-        try { geo = await geocode(address); } catch { /* handled below */ }
-      }
-      if (!geo) { out.stop_reason = 'geocode_no_match'; return out; }
-    }
+    if (!geo) { out.stop_reason = 'geocode_no_match'; return out; }
     out.lat = geo.lat; out.lng = geo.lng;
-    out.roof_address_used = roofAddress; // surface which address the roof came from
+    out.roof_address_used = address;
     out.maps_url = `https://www.google.com/maps/@${geo.lat},${geo.lng},20z/data=!3m1!1e3`;
   }
 

@@ -42,6 +42,24 @@ async function geocode(address) {
   return { ...g, postcode: recovered || pc || null };
 }
 
+// PRECISE geocode — for a full building/unit address (e.g. a Land Registry CCOD
+// property address). Skips the postcodes.io postcode-CENTROID shortcut (which lands
+// mid-street and grabs the wrong roof on dense estates) and goes straight to
+// Google's building-level geocoder. Falls back to the postcode centroid only if
+// Google can't resolve it.
+async function geocodePrecise(address) {
+  const g = await geocodeGoogle(address);
+  if (g) {
+    const pc = extractPostcode(address);
+    const recovered = pc || await reversePostcode(g.lat, g.lng);
+    return { ...g, postcode: recovered || null, precise: true };
+  }
+  // Google failed → fall back to postcode centroid (better than nothing).
+  const pc = extractPostcode(address);
+  if (pc) { const hit = await geocodePostcodeIO(pc); if (hit) return { ...hit, postcode: pc, precise: false }; }
+  return null;
+}
+
 // lat/lng -> nearest postcode via free postcodes.io reverse lookup.
 async function reversePostcode(lat, lng) {
   try {
@@ -52,4 +70,4 @@ async function reversePostcode(lat, lng) {
   } catch { return null; }
 }
 
-module.exports = { geocode, extractPostcode, reversePostcode };
+module.exports = { geocode, geocodePrecise, extractPostcode, reversePostcode };
