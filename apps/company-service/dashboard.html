@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Company Data Engine — Ottaly</title>
+<style>
+  :root{--bg:#0b0f17;--panel:#111827;--card:#1e293b;--line:#334155;--txt:#e2e8f0;--mut:#94a3b8;--accent:#0d9488;--green:#22c55e;--red:#ef4444;--amber:#f59e0b;--blue:#3b82f6}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  header{padding:16px 24px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  header h1{font-size:17px;margin:0}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block}
+  .dot.on{background:var(--green);box-shadow:0 0 8px var(--green)} .dot.off{background:var(--mut)}
+  .btn{background:var(--accent);color:#04211d;border:0;border-radius:7px;padding:8px 16px;font-weight:700;cursor:pointer;font-size:13px}
+  .btn.stop{background:var(--red);color:#2c0b0b} .btn.ghost{background:transparent;color:var(--txt);border:1px solid var(--line)}
+  .btn:disabled{opacity:.5;cursor:default}
+  .wrap{padding:20px 24px 60px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:20px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .stat b{font-size:24px;display:block} .stat span{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
+  .bar{height:8px;background:var(--card);border-radius:999px;overflow:hidden;margin-top:8px}
+  .bar>div{height:100%;background:var(--accent);transition:width .5s}
+  .controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:20px;padding:14px 16px;background:var(--panel);border:1px solid var(--line);border-radius:10px}
+  input,select{background:var(--card);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:7px 9px;font-size:13px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+  th{position:sticky;top:0;background:var(--panel);color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.03em}
+  td.wrap2{white-space:normal;max-width:280px}
+  .pill{font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px}
+  .pill.officer{background:#0e2a1c;color:var(--green)} .pill.psc{background:#0e2a1c;color:var(--green)}
+  .pill.name_postcode{background:#3a2f0e;color:var(--amber)} .pill.name{background:#232833;color:var(--mut)} .pill.none{background:#2c1414;color:var(--red)}
+  .own-yes{color:var(--green);font-weight:700} .own-no{color:var(--mut)} .own-unknown{color:var(--mut)}
+  .mut{color:var(--mut)} a{color:#7ca7ff}
+  .sub{color:var(--mut);font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1>⚙️ Company Data Engine</h1>
+  <span class="sub">per-domain Companies House + ownership (PSC) · shadow mode</span>
+  <span style="flex:1"></span>
+  <span id="engineDot" class="dot off"></span><span id="engineLabel" class="sub">stopped</span>
+  <button class="btn" id="startBtn" onclick="engine('start')">▶ Start</button>
+  <button class="btn stop" id="stopBtn" onclick="engine('stop')">■ Stop</button>
+</header>
+
+<div class="wrap">
+  <div class="grid" id="stats"></div>
+
+  <div class="controls">
+    <b style="font-size:13px">Queue</b>
+    <span id="queueSummary" class="sub">—</span>
+    <span class="mut">|</span>
+    <input id="enqLimit" type="number" value="500" style="width:80px" title="how many domains to enqueue">
+    <button class="btn ghost" onclick="enqueue()">＋ Enqueue stale domains</button>
+    <span id="enqMsg" class="sub"></span>
+  </div>
+
+  <div class="controls">
+    <input id="q" placeholder="Search domain / company / owner…" style="flex:1;min-width:200px" oninput="debouncedLoad()">
+    <select id="fMethod" onchange="loadCompanies()">
+      <option value="">All match methods</option>
+      <option value="officer">officer</option><option value="psc">psc</option>
+      <option value="name_postcode">name+postcode</option><option value="name">name</option>
+    </select>
+    <select id="fOwner" onchange="loadCompanies()">
+      <option value="">Any ownership</option>
+      <option value="yes">owner = yes</option><option value="no">owner = no</option><option value="unknown">owner = unknown</option>
+    </select>
+    <span id="compCount" class="sub"></span>
+  </div>
+
+  <div style="overflow:auto;border:1px solid var(--line);border-radius:10px">
+    <table>
+      <thead><tr>
+        <th>Domain</th><th>CH Company</th><th>Match</th><th>Matched officer/PSC</th>
+        <th>Business owner</th><th>PSC owners</th><th>Refreshed</th>
+      </tr></thead>
+      <tbody id="compBody"><tr><td colspan="7" class="mut" style="padding:20px">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+async function refresh(){
+  try{
+    const s=await fetch('/status').then(r=>r.json());
+    const e=s.engine||{}, qd=s.queue||{};
+    $('#engineDot').className='dot '+(e.running?'on':'off');
+    $('#engineLabel').textContent=e.running?'running':'stopped';
+    $('#startBtn').disabled=!!e.running; $('#stopBtn').disabled=!e.running;
+    const total=(qd.queued||0)+(qd.running||0)+(qd.done||0)+(qd.failed||0);
+    const doneish=(qd.done||0)+(qd.failed||0);
+    const pct=total?Math.round(100*doneish/total):0;
+    $('#queueSummary').innerHTML=`queued <b>${qd.queued||0}</b> · running ${qd.running||0} · done ${qd.done||0} · failed ${qd.failed||0}`;
+    $('#stats').innerHTML=`
+      ${stat('Resolved companies', (s.resolved||0).toLocaleString())}
+      ${stat('With CH number', (s.with_number||0).toLocaleString())}
+      ${stat('Processed (session)', (e.processed||0).toLocaleString())}
+      ${stat('Matched (session)', (e.resolved||0).toLocaleString())}
+      ${stat('Failed', (e.failed||0).toLocaleString())}
+      <div class="stat"><span>Queue progress</span><b>${pct}%</b><div class="bar"><div style="width:${pct}%"></div></div></div>`;
+    if(e.last_domain) $('#engineLabel').title='last: '+e.last_domain;
+    if(e.error){ $('#engineLabel').textContent='error'; $('#engineLabel').style.color='var(--red)'; $('#engineLabel').title=e.error; }
+  }catch{}
+}
+function stat(label,val){ return `<div class="stat"><span>${label}</span><b>${val}</b></div>`; }
+
+async function engine(action){
+  await fetch('/engine/'+action,{method:'POST'}).then(r=>r.json()).catch(()=>{});
+  refresh();
+}
+async function enqueue(){
+  const lim=Number($('#enqLimit').value)||500;
+  $('#enqMsg').textContent='enqueuing…';
+  try{
+    const r=await fetch('/engine/enqueue?limit='+lim,{method:'POST'}).then(x=>x.json());
+    $('#enqMsg').textContent = r.error ? ('error: '+r.error) : ('＋ '+r.enqueued+' queued');
+  }catch(e){ $('#enqMsg').textContent='failed: '+e.message; }
+  refresh();
+}
+
+let _t;
+function debouncedLoad(){ clearTimeout(_t); _t=setTimeout(loadCompanies,300); }
+async function loadCompanies(){
+  const q=encodeURIComponent($('#q').value.trim());
+  const m=$('#fMethod').value, o=$('#fOwner').value;
+  try{
+    const r=await fetch(`/companies?q=${q}&method=${m}&owner=${o}&limit=100`).then(x=>x.json());
+    $('#compCount').textContent=`${(r.total||0).toLocaleString()} companies`;
+    const rows=r.rows||[];
+    if(!rows.length){ $('#compBody').innerHTML='<tr><td colspan="7" class="mut" style="padding:20px">No companies yet — enqueue + start the engine, or resolve a domain.</td></tr>'; return; }
+    $('#compBody').innerHTML=rows.map(c=>{
+      const mcls=c.match_method||'none';
+      const owners=(c.psc_owners||[]).join(', ');
+      const own=c.business_owner||'unknown';
+      const ownCls=own==='yes'?'own-yes':own==='no'?'own-no':'own-unknown';
+      const chLink=c.ch_company_number?`<a href="https://find-and-update.company-information.service.gov.uk/company/${esc(c.ch_company_number)}" target="_blank">${esc(c.ch_company_name||c.ch_company_number)}</a>`:'<span class="mut">—</span>';
+      const st=c.ch_company_status&&c.ch_company_status!=='active'?` <span class="mut">(${esc(c.ch_company_status)})</span>`:'';
+      const when=c.last_refreshed_at?new Date(c.last_refreshed_at).toISOString().slice(0,16).replace('T',' '):'—';
+      return `<tr>
+        <td>${esc(c.domain)}</td>
+        <td class="wrap2">${chLink}${st}</td>
+        <td><span class="pill ${mcls}">${esc(mcls)}</span> <span class="mut" style="font-size:10px">${esc(c.match_confidence||'')}</span></td>
+        <td>${esc(c.anchor_officer_name||'—')}</td>
+        <td class="${ownCls}">${own}${c.business_owner_basis?`<div class="mut" style="font-size:10px">${esc(c.business_owner_basis)}</div>`:''}</td>
+        <td class="wrap2">${esc(owners||'—')}</td>
+        <td class="mut">${when}</td>
+      </tr>`;
+    }).join('');
+  }catch(e){ $('#compBody').innerHTML=`<tr><td colspan="7" style="color:var(--red);padding:20px">${esc(e.message)}</td></tr>`; }
+}
+
+refresh(); loadCompanies();
+setInterval(refresh, 3000);
+setInterval(()=>{ if(!$('#q').value) loadCompanies(); }, 8000); // refresh table while idle
+</script>
+</body>
+</html>

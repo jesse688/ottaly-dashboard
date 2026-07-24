@@ -208,10 +208,12 @@ export async function getCompany(domain) {
 // staleness (never-resolved first, then oldest last_refreshed_at). Returns how
 // many were enqueued. Bounded by `limit` so we never enqueue the whole DB at once.
 export async function enqueueStaleDomains(limit = 500) {
+  // priority = staleness in seconds, capped to INT range. Never-resolved domains
+  // get the max (2147483647) so they sort first. (Was overflowing INT with bigint.)
+  const STALENESS = `LEAST(COALESCE(EXTRACT(EPOCH FROM (now() - co.last_refreshed_at))::bigint, 2147483647), 2147483647)`
   const { rows } = await pool.query(
     `INSERT INTO company_refresh_jobs (domain, priority)
-     SELECT d.domain,
-            COALESCE(EXTRACT(EPOCH FROM (now() - co.last_refreshed_at))::bigint, 9223372036854775807)
+     SELECT d.domain, ${STALENESS}
        FROM (SELECT DISTINCT company_domain AS domain FROM contacts
               WHERE company_domain IS NOT NULL AND company_domain <> ''
                 AND company_name IS NOT NULL AND company_name <> '') d
@@ -219,7 +221,7 @@ export async function enqueueStaleDomains(limit = 500) {
       WHERE NOT EXISTS (
               SELECT 1 FROM company_refresh_jobs j
                WHERE j.domain = d.domain AND j.status IN ('queued','running'))
-      ORDER BY COALESCE(EXTRACT(EPOCH FROM (now() - co.last_refreshed_at))::bigint, 9223372036854775807) DESC
+      ORDER BY ${STALENESS} DESC
       LIMIT $1
      RETURNING id`,
     [limit])

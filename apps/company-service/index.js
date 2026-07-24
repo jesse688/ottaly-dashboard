@@ -1,4 +1,7 @@
 import express from 'express'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 import { ensureSchema, pool, getDomainContacts, getDomainMeta, saveCompany, stampContacts, getCompany } from './src/db.js'
 import { resolveDomain, debugDomain } from './src/resolver.js'
 import { chEnabled } from './src/ch.js'
@@ -16,6 +19,9 @@ const app = express()
 app.use(express.json())
 
 app.get('/health', (req, res) => res.json({ ok: true, ch: chEnabled(), pid: process.pid }))
+
+// Operator dashboard.
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'dashboard.html')))
 
 // Resolve ONE domain. Shadow mode by default: writes the companies row only.
 // Pass ?stamp=1 to also stamp contacts.ch_* (Phase 3 behaviour).
@@ -117,6 +123,33 @@ app.get('/status', async (req, res) => {
       ch: chEnabled(), resolved: +comp[0].resolved, with_number: +comp[0].with_number,
       by_method: byMethod, engine: engineState(), queue: depth,
     })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Resolved companies list for the dashboard table. Optional ?q= search on
+// domain/company/owner, ?method= filter, ?owner= filter, paged.
+app.get('/companies', async (req, res) => {
+  const q = (req.query.q || '').toString().trim().toLowerCase()
+  const method = (req.query.method || '').toString().trim()
+  const owner = (req.query.owner || '').toString().trim()
+  const limit = Math.min(Number(req.query.limit) || 50, 200)
+  const offset = Math.max(Number(req.query.offset) || 0, 0)
+  const where = []; const params = []
+  if (q) { params.push('%' + q + '%'); where.push(`(LOWER(domain) LIKE $${params.length} OR LOWER(ch_company_name) LIKE $${params.length} OR LOWER(anchor_officer_name) LIKE $${params.length} OR EXISTS (SELECT 1 FROM unnest(psc_owners) o WHERE LOWER(o) LIKE $${params.length}))`) }
+  if (method) { params.push(method); where.push(`match_method = $${params.length}`) }
+  if (owner) { params.push(owner); where.push(`business_owner = $${params.length}`) }
+  const wsql = where.length ? 'WHERE ' + where.join(' AND ') : ''
+  try {
+    params.push(limit, offset)
+    const { rows } = await pool.query(
+      `SELECT domain, ch_company_number, ch_company_name, ch_company_status,
+              match_method, match_confidence, anchor_officer_name,
+              business_owner, business_owner_basis, psc_owners, last_refreshed_at
+         FROM companies ${wsql}
+        ORDER BY last_refreshed_at DESC NULLS LAST
+        LIMIT $${params.length - 1} OFFSET $${params.length}`, params)
+    const { rows: cnt } = await pool.query(`SELECT COUNT(*)::int AS n FROM companies ${wsql}`, params.slice(0, params.length - 2))
+    res.json({ total: cnt[0].n, rows })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
