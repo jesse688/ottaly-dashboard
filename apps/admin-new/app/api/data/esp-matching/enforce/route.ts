@@ -61,8 +61,10 @@ export async function GET(req: NextRequest) {
     let token = await getPvJwt()
     const now = Date.now()
 
-    // Read one workspace's mapping; refresh the token once on 401.
-    async function readSetting(wsId: string): Promise<{ full: Record<string, unknown>; esp: EspEntry[] } | null> {
+    // Read one workspace's mapping; refresh the token once on 401. Returns the
+    // HTTP status alongside the data so callers can report WHY a read failed
+    // (e.g. 404 = workspace not on this account → no ESP setting to enforce).
+    async function readSetting(wsId: string): Promise<{ full: Record<string, unknown>; esp: EspEntry[]; status: number }> {
       const doFetch = () =>
         fetch(`${PIPL}/user/get-workspace-setting?workspace_id=${encodeURIComponent(wsId)}`, {
           headers: { Authorization: `Bearer ${token}` },
@@ -74,10 +76,10 @@ export async function GET(req: NextRequest) {
         token = await getPvJwt()
         res = await doFetch()
       }
-      if (!res.ok) return null
+      if (!res.ok) return { full: {}, esp: [], status: res.status }
       const data = await res.json()
       const espObj = data?.esp_setting ? data : data?.data?.esp_setting ? data.data : data?.data || data
-      return { full: espObj as Record<string, unknown>, esp: (espObj?.esp_setting as EspEntry[]) || [] }
+      return { full: espObj as Record<string, unknown>, esp: (espObj?.esp_setting as EspEntry[]) || [], status: res.status }
     }
 
     // Write a corrected mapping back, echoing the workspace's own cap fields so we
@@ -107,7 +109,9 @@ export async function GET(req: NextRequest) {
     async function enforceOne(ws: { id: string; name: string }) {
       try {
         const read = await readSetting(ws.id)
-        if (!read) return { ...ws, checked: false, violation: false, fixed: false, error: 'read failed' }
+        if (read.status !== 200) {
+          return { ...ws, checked: false, violation: false, fixed: false, error: `read failed (HTTP ${read.status})` }
+        }
         if (!hasOtherToOther(read.esp)) {
           return { ...ws, checked: true, violation: false, fixed: false, error: null }
         }
