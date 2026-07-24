@@ -15,9 +15,11 @@ import { resolveDomain } from './resolver.js'
 
 const IDLE_POLL_MS = Number(process.env.ENGINE_IDLE_POLL_MS) || 5000
 const ENQUEUE_BATCH = Number(process.env.ENGINE_ENQUEUE_BATCH) || 500
-// Concurrency is bounded by the CH throttle anyway (chFetch serialises), so keep
-// it modest — a few workers overlap the local-DB + non-throttled work.
-const CONCURRENCY = Number(process.env.ENGINE_CONCURRENCY) || 4
+// Most domains now resolve fully-LOCAL (~7ms); only the minority missing from the
+// bulk register hit the API (~550ms, CH-throttled). With low concurrency those few
+// slow API domains starve the fast local ones. Higher concurrency lets many local
+// resolves fly in parallel while the CH throttle still serialises the API calls.
+const CONCURRENCY = Number(process.env.ENGINE_CONCURRENCY) || 16
 
 const state = {
   running: false,          // is the loop active

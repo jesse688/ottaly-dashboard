@@ -4,7 +4,7 @@ const { Pool } = pg
 
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  max: 5,
+  max: Number(process.env.PG_POOL_MAX) || 20, // engine runs many concurrent local queries
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000,
 })
