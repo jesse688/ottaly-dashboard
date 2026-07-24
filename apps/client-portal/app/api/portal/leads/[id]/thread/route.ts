@@ -93,7 +93,17 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       `SELECT id, direction, subject, body_html, body_text, content_preview,
               from_email, to_email, eaccount, pv_label, message_id, sent_via_portal,
               timestamp_created, raw->'attachments' AS attachments,
-              COALESCE(NULLIF(raw->>'cc',''), NULLIF(raw->>'cc_address_email_list','')) AS cc
+              -- CC recipients. PlusVibe returns cc as a JSON ARRAY of formatted
+              -- strings on inbound replies (e.g. ['Jada-Rae Poku <jada@x.com>']),
+              -- but our own outbound portal replies store cc as a plain STRING.
+              -- Handle both: if it is a JSON array, join the elements with ', ';
+              -- otherwise fall back to the scalar text (or legacy cc_address_email_list).
+              COALESCE(
+                NULLIF((SELECT string_agg(v, ', ') FROM jsonb_array_elements_text(
+                          CASE WHEN jsonb_typeof(raw->'cc') = 'array' THEN raw->'cc' ELSE '[]'::jsonb END) AS v), ''),
+                CASE WHEN jsonb_typeof(raw->'cc') = 'array' THEN NULL ELSE NULLIF(raw->>'cc','') END,
+                NULLIF(raw->>'cc_address_email_list','')
+              ) AS cc
          FROM portal_emails
         WHERE workspace_id = $1 AND lower(lead_email) = lower($2)
         ORDER BY timestamp_created ASC NULLS FIRST`,

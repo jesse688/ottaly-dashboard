@@ -293,6 +293,24 @@ function splitQuote(text: string): { main: string; quoted: string } {
   return { main: text.slice(0, idx).trim(), quoted }
 }
 
+// Reply-all CC seed: whoever the LEAD cc'd on their most recent inbound reply is
+// who the client most likely wants to keep on the thread (e.g. a colleague the
+// lead looped in). PlusVibe gives cc as formatted strings like
+// `Jada-Rae Poku <jada@x.com>` — extract the bare address so it round-trips
+// cleanly through the reply API's parser (which keeps any token containing '@').
+// Exclude the lead (already in To) and the client's own login address (their
+// mailbox is the sender) so those don't get duplicated into Cc.
+function ccFromLastInbound(thread: ThreadMsg[] | null, leadEmail: string, clientEmail: string): string {
+  if (!thread?.length) return ''
+  const lastInbound = [...thread].reverse().find(m => m.direction === 'IN' && m.cc)
+  if (!lastInbound?.cc) return ''
+  const drop = new Set([leadEmail.toLowerCase(), clientEmail.toLowerCase()].filter(Boolean))
+  const emails = (lastInbound.cc.match(/[^\s<>,;"]+@[^\s<>,;"]+/g) ?? [])
+    .map(e => e.trim())
+    .filter(e => !drop.has(e.toLowerCase()))
+  return Array.from(new Set(emails.map(e => e.toLowerCase()))).join(', ')
+}
+
 export function UniboxClient({ companyName, clientName, clientEmail = '', workspaces = [], activeWorkspaceId }: { companyName: string; clientName: string; clientEmail?: string; workspaces?: Array<{ clientId: string; workspaceId: string; companyName: string }>; activeWorkspaceId?: string }) {
   async function switchWorkspace(workspaceId: string) {
     if (!workspaceId || workspaceId === activeWorkspaceId) return
@@ -1094,7 +1112,7 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
                 <RichReply
                   key={selected.id}
                   toEmail={selected.email ?? ''}
-                  ccEmail={clientEmail}
+                  ccEmail={ccFromLastInbound(thread, selected.email ?? '', clientEmail)}
                   placeholderName={selected.first_name ?? fullName(selected).split(' ')[0]}
                   sending={replying}
                   statusMsg={replyMsg}
@@ -1337,10 +1355,14 @@ function RichReply({ toEmail, ccEmail = '', placeholderName, sending, statusMsg,
   const [empty, setEmpty] = useState(true)
   const [chars, setChars] = useState(0)
   const [to, setTo] = useState<string[]>(toEmail ? [toEmail] : [])
-  // Pre-fill Cc with the client's own profile email so they get a copy — shown openly
-  // in the Cc field so they can remove it if they don't want it (not hidden/forced).
-  const [showCc, setShowCc] = useState(!!ccEmail)
-  const [cc, setCc] = useState<string[]>(ccEmail ? [ccEmail] : [])
+  // Pre-fill Cc with whoever the lead CC'd on their reply, so the client can
+  // reply-all and keep that person (e.g. a colleague the lead looped in) on the
+  // thread. `ccEmail` may hold several comma-separated addresses — split them into
+  // individual chips. Shown openly in the Cc field so the client can remove any
+  // before sending (not hidden/forced).
+  const ccSeed = ccEmail.split(',').map(s => s.trim()).filter(Boolean)
+  const [showCc, setShowCc] = useState(ccSeed.length > 0)
+  const [cc, setCc] = useState<string[]>(ccSeed)
   // Collapsed by default — a slim bar that reclaims reading space. Clicking it
   // (or a forward seed arriving) expands the full composer and focuses it.
   const [expanded, setExpanded] = useState(false)
@@ -1511,7 +1533,7 @@ function RichReply({ toEmail, ccEmail = '', placeholderName, sending, statusMsg,
     onSend(text, el.innerHTML, to.join(', '), cc.join(', '), attachedFiles)
     el.innerHTML = ''
     draftHtml.current = ''
-    setEmpty(true); setChars(0); setCc(ccEmail ? [ccEmail] : []); setShowCc(!!ccEmail); setTo(toEmail ? [toEmail] : []); setExpanded(false); setAttachedFiles([])
+    setEmpty(true); setChars(0); setCc(ccSeed); setShowCc(ccSeed.length > 0); setTo(toEmail ? [toEmail] : []); setExpanded(false); setAttachedFiles([])
   }
 
   const Btn = ({ cmd, val, title, children }: { cmd?: string; val?: string; title: string; children: ReactNode }) => (
