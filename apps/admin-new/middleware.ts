@@ -7,7 +7,9 @@ const SECRET = new TextEncoder().encode(
 const COOKIE = 'ottaly_session'
 const FIN_COOKIE = 'ottaly_fin'
 
-const PUBLIC_PATHS = ['/login', '/api/auth', '/api/healthz']
+// /api/data/esp-matching/enforce is a cron endpoint that self-protects with
+// ?key=ADMIN_KEY (a cron caller can't do the interactive login), so it's public here.
+const PUBLIC_PATHS = ['/login', '/api/auth', '/api/healthz', '/api/data/esp-matching/enforce']
 
 // Finance + Revenue (pages and APIs) are gated by a SEPARATE env passphrase on
 // top of login — ANYONE (admin or CM) must unlock with FINANCE_KEY to view them.

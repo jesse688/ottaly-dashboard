@@ -93,11 +93,18 @@ export default function EspMatchingPage() {
 
   function buildPayload() {
     const cap = Number(dailyCap) || 0
-    const esp_setting: EspSettingEntry[] = RECIPIENTS.map((r) => ({
-      recipient_esp: r.recipient_esp,
-      sender_esp: Array.from(picks[r.key]),
-      tag_ids: '',
-    }))
+    const esp_setting: EspSettingEntry[] = RECIPIENTS.map((r) => {
+      let sender_esp = Array.from(picks[r.key])
+      // HARD RULE: never send Other → Other. An "Other ESP" sender (REGULAR_ACCOUNT)
+      // hitting an "Other" recipient is our worst-delivering combo, so it is banned
+      // unconditionally — no matter what's ticked, we strip REGULAR_ACCOUNT from the
+      // Other recipient's allowed senders before every write (single + all-workspaces
+      // both flow through here). Other recipients may still receive from Google/MS.
+      if (r.recipient_esp === 'REGULAR_ACCOUNT') {
+        sender_esp = sender_esp.filter((s) => s !== 'REGULAR_ACCOUNT')
+      }
+      return { recipient_esp: r.recipient_esp, sender_esp, tag_ids: '' }
+    })
     // PlusVibe rejects max_lead_domain_per_day when it's < 1 ("must be a number
     // greater than 0" → HTTP 500). Only include it when the cap is enabled.
     const payload: Record<string, unknown> = {
@@ -125,8 +132,13 @@ export default function EspMatchingPage() {
       setPicks({
         google: new Set(byRec['GOOGLE_WORKSPACE'] || []),
         microsoft: new Set(byRec['MICROSOFT365'] || []),
-        other: new Set(byRec['REGULAR_ACCOUNT'] || []),
+        // HARD RULE: never surface Other→Other even if the live workspace has it —
+        // strip REGULAR_ACCOUNT from the Other recipient's senders on load, so the
+        // banned combo can't be re-applied by loading then saving.
+        other: new Set((byRec['REGULAR_ACCOUNT'] || []).filter((s) => s !== 'REGULAR_ACCOUNT')),
       })
+      if ((byRec['REGULAR_ACCOUNT'] || []).includes('REGULAR_ACCOUNT'))
+        addLog('  ⚠ This workspace currently allows Other→Other — it will be removed on next Apply.', 'err')
       const cap = esp?.max_lead_domain_per_day ?? (esp?.is_max_lead_domain_per_day ? 1 : 0)
       setDailyCap(String(cap))
       list.forEach((s) =>
@@ -286,22 +298,32 @@ export default function EspMatchingPage() {
                   {r.label}
                   <div className="text-[11px] text-gray-400">{r.recipient_esp}</div>
                 </div>
-                {SENDER_OPTIONS.map((o) => (
-                  <label
-                    key={o.value}
-                    className={cn(
-                      'flex cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs',
-                      set.has(o.value) ? 'border-gray-900 bg-gray-50' : 'border-gray-200',
-                    )}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={set.has(o.value)}
-                      onChange={() => togglePick(r.key, o.value)}
-                    />
-                    {o.label}
-                  </label>
-                ))}
+                {SENDER_OPTIONS.map((o) => {
+                  // HARD RULE: Other → Other is banned. Lock the "Other ESPs" sender
+                  // for the Other recipient row so it can't be selected here (and
+                  // buildPayload strips it regardless). Other recipients: Google/MS only.
+                  const banned = r.recipient_esp === 'REGULAR_ACCOUNT' && o.value === 'REGULAR_ACCOUNT'
+                  return (
+                    <label
+                      key={o.value}
+                      title={banned ? 'Blocked: Other senders can never send to Other recipients' : undefined}
+                      className={cn(
+                        'flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs',
+                        banned
+                          ? 'cursor-not-allowed border-gray-200 bg-gray-50 text-gray-300 line-through'
+                          : cn('cursor-pointer', set.has(o.value) ? 'border-gray-900 bg-gray-50' : 'border-gray-200'),
+                      )}
+                    >
+                      <input
+                        type="checkbox"
+                        disabled={banned}
+                        checked={!banned && set.has(o.value)}
+                        onChange={() => togglePick(r.key, o.value)}
+                      />
+                      {o.label}
+                    </label>
+                  )
+                })}
                 <label
                   className={cn(
                     'flex cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs',
