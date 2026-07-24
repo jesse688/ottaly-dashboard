@@ -18,13 +18,14 @@ export async function GET(req: NextRequest) {
 
   await ready()
 
-  // HARD TIME BUDGET. cron-job.org caps the request at 30s (free tier) and marks
-  // a longer run "failed (timeout)" — which, run every 2 min, floods the app and
-  // wedged the pool. This route was written for maxDuration=300 (50-row Claude
-  // batch + a 120s enrich pass), which cannot finish in 30s. Bound BOTH passes to
-  // a shared ~22s deadline and drain the backlog across successive runs instead
-  // of one long request. Override via ?budget=<ms> for a manual longer run.
-  const budgetMs = Math.min(Math.max(parseInt(new URL(req.url).searchParams.get('budget') || '22000', 10) || 22000, 5000), 280000)
+  // HARD TIME BUDGET. cron-job.org caps the request at 5 min on the paid
+  // Sustaining tier (was 30s on free, which floods+wedged the pool). This cron
+  // fires every 2 min, so we keep each run to ~90s: comfortably under the 2-min
+  // interval (runs never stack) and well under both maxDuration=300 and the
+  // cron-job.org kill. The 90s budget is split across the Claude batch and the
+  // CH-enrich pass below; backlog still drains across successive runs.
+  // Override via ?budget=<ms> for a manual longer run (capped at 280s).
+  const budgetMs = Math.min(Math.max(parseInt(new URL(req.url).searchParams.get('budget') || '90000', 10) || 90000, 5000), 280000)
   const RUN_DEADLINE = Date.now() + budgetMs
 
   // ?force=1 ignores the retry-backoff window so rows that failed during an

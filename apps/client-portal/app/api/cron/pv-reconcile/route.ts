@@ -379,17 +379,15 @@ export async function GET(req: NextRequest) {
   // Run workspaces in PARALLEL batches so the whole sweep finishes in seconds
   // (sequential 20-workspace runs were blowing past cron-job.org's 30s timeout).
   const CONC = 6
-  // HARD TIME BUDGET. cron-job.org kills the request at 30s and marks the run
-  // "failed (timeout)" — which then trips the ingest-down alarm even though the
-  // pipeline is fine. Stop launching new batches at 22s and return what we've
-  // done as a PARTIAL success; the next minute's run continues. A complete run
-  // that just covers fewer workspaces beats a 30s hard-kill that logs nothing.
-  // Overall run budget for cron-job.org's 30s free-tier cap. The workspace sweep
-  // gets ~15s; the dedup pass that follows (heavy MERGE/DELETE) is SKIPPED if the
-  // sweep already consumed the budget — otherwise sweep(18s)+dedup pushed the
-  // whole request past 30s and cron-job.org killed it ("failed (timeout)").
-  const RUN_DEADLINE = Date.now() + 25_000
-  const DEADLINE = Date.now() + 15_000
+  // HARD TIME BUDGET. cron-job.org caps the request at 5 min on the paid
+  // Sustaining tier (was 30s on free, whose hard-kill flooded the app and wedged
+  // the pool). This cron fires every 5 min, so we keep the whole run well under
+  // 300s — both the interval (runs never stack) and maxDuration/kill. The sweep
+  // gets ~120s and returns a PARTIAL success if it can't finish (the next run
+  // continues); the dedup pass that follows gets the remaining budget up to the
+  // 200s overall deadline, leaving ~100s cushion under the 300s kill.
+  const RUN_DEADLINE = Date.now() + 200_000
+  const DEADLINE = Date.now() + 120_000
   const totals = zero()
   let processedWs = 0
   for (let i = 0; i < workspaces.length; i += CONC) {
@@ -441,16 +439,14 @@ export async function GET(req: NextRequest) {
   // the real Message-ID can't merge two genuinely-different emails.)
   const MID = `lower(COALESCE(NULLIF(raw->>'message_id',''), NULLIF(raw->>'raw_message_id','')))`
   const SCOPE = `${MID} IS NOT NULL AND received_at > NOW() - INTERVAL '14 days'`
-  // Throttle: now that the Bison webhook is off (the dupe source is gone) and keys
-  // are message-id-stable, dupes are rare — so run this heavier MERGE+DELETE only
-  // ~every 10 min instead of every minute, to keep the per-run time under the 30s
-  // cron limit. ?dedup=1 forces it.
+  // Run the heavier MERGE+DELETE dedup pass every cycle now that the 5-min paid
+  // cap leaves ample budget after the sweep (it was throttled to ~1-in-10 runs
+  // only to fit the old 30s free cap). Still skipped if the sweep already spent
+  // the run budget — it's periodic + idempotent, so the next run catches it.
+  // ?dedup=1 forces it regardless.
   let deduped = 0
-  // Skip the heavy dedup pass if the sweep already used the run budget — running
-  // it anyway pushed the request past cron-job.org's 30s cap. It runs on the next
-  // eligible cycle instead (it's periodic + idempotent, so nothing is lost).
   const runDedup = url.searchParams.get('dedup') === '1'
-    || (Math.floor(Date.now() / 60_000) % 10 === 0 && Date.now() < RUN_DEADLINE)
+    || Date.now() < RUN_DEADLINE
   const ddClient = runDedup ? await pool.connect() : null
   if (ddClient) try {
     await ddClient.query('BEGIN')
