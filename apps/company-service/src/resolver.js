@@ -7,6 +7,7 @@ import { searchCompanies, getProfile, getOfficers, getPSC, chEnabled } from './c
 import { localSearch, localProfile, localPSC, cachedOfficers, cacheOfficers } from './chlocal.js'
 import { bestPersonMatch, parseCHName, personSimilarity } from './names.js'
 import { postcodeTier } from './postcode.js'
+import { resolveBuildingOwnership } from './ownership.js'
 
 // Local-DB-first wrappers: hit the bulk-imported ch_companies/ch_directors tables
 // first (free, no rate limit), fall to the CH API only on a miss. PSC is API-only
@@ -201,6 +202,12 @@ export async function resolveDomain(domain, contacts, meta) {
     ? (best.tier === 'confident' ? 'confident' : 'medium')
     : (best.rank === 2 ? (best.tier === 'confident' ? 'medium' : 'medium') : 'low')
 
+  // ── Building ownership (HM Land Registry CCOD) ──
+  // Does this company own property at its registered postcode? Uses the resolved
+  // company's postcode + name + reg against the local ch_ccod table. No-op (nulls)
+  // until CCOD is loaded. This is why we now have an authoritative reg number.
+  const building = await resolveBuildingOwnership(best.identity)
+
   return {
     ...base, ...best.identity,
     match_method: method, match_confidence: confidence,
@@ -209,6 +216,9 @@ export async function resolveDomain(domain, contacts, meta) {
     officers_snapshot: best.officers, psc_snapshot: psc.list,
     business_owner, business_owner_basis,
     psc_owners: pscNames, // the identified >25% owners of the company
+    building_owner: building.building_owner,
+    building_owner_name: building.building_owner_name,
+    building_site_count: building.building_site_count,
     ch_source_stats: stats,
   }
 }

@@ -49,6 +49,7 @@ app.post('/refresh', async (req, res) => {
         : null,
       business_owner: result.business_owner, business_owner_basis: result.business_owner_basis,
       psc_owners: result.psc_owners || null,
+      building_owner: result.building_owner || null, building_owner_name: result.building_owner_name || null,
       ch_source_stats: result.ch_source_stats || null,
       seniors_considered: contacts.length,
     })
@@ -144,7 +145,8 @@ app.get('/companies', async (req, res) => {
     const { rows } = await pool.query(
       `SELECT domain, ch_company_number, ch_company_name, ch_company_status,
               match_method, match_confidence, anchor_officer_name,
-              business_owner, business_owner_basis, psc_owners, last_refreshed_at
+              business_owner, business_owner_basis, psc_owners,
+              building_owner, building_owner_name, building_site_count, last_refreshed_at
          FROM companies ${wsql}
         ORDER BY last_refreshed_at DESC NULLS LAST
         LIMIT $${params.length - 1} OFFSET $${params.length}`, params)

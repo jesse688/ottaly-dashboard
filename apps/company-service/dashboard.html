@@ -75,9 +75,9 @@
     <table>
       <thead><tr>
         <th>Domain</th><th>CH Company</th><th>Match</th><th>Matched officer/PSC</th>
-        <th>Business owner</th><th>PSC owners</th><th>Refreshed</th>
+        <th>Business owner</th><th>PSC owners</th><th>🏢 Building owner</th><th>Refreshed</th>
       </tr></thead>
-      <tbody id="compBody"><tr><td colspan="7" class="mut" style="padding:20px">Loading…</td></tr></tbody>
+      <tbody id="compBody"><tr><td colspan="8" class="mut" style="padding:20px">Loading…</td></tr></tbody>
     </table>
   </div>
 </div>
@@ -133,7 +133,7 @@ async function loadCompanies(){
     const r=await fetch(`/companies?q=${q}&method=${m}&owner=${o}&limit=100`).then(x=>x.json());
     $('#compCount').textContent=`${(r.total||0).toLocaleString()} companies`;
     const rows=r.rows||[];
-    if(!rows.length){ $('#compBody').innerHTML='<tr><td colspan="7" class="mut" style="padding:20px">No companies yet — enqueue + start the engine, or resolve a domain.</td></tr>'; return; }
+    if(!rows.length){ $('#compBody').innerHTML='<tr><td colspan="8" class="mut" style="padding:20px">No companies yet — enqueue + start the engine, or resolve a domain.</td></tr>'; return; }
     $('#compBody').innerHTML=rows.map(c=>{
       const mcls=c.match_method||'none';
       const owners=(c.psc_owners||[]).join(', ');
@@ -142,6 +142,13 @@ async function loadCompanies(){
       const chLink=c.ch_company_number?`<a href="https://find-and-update.company-information.service.gov.uk/company/${esc(c.ch_company_number)}" target="_blank">${esc(c.ch_company_name||c.ch_company_number)}</a>`:'<span class="mut">—</span>';
       const st=c.ch_company_status&&c.ch_company_status!=='active'?` <span class="mut">(${esc(c.ch_company_status)})</span>`:'';
       const when=c.last_refreshed_at?new Date(c.last_refreshed_at).toISOString().slice(0,16).replace('T',' '):'—';
+      // Building owner (CCOD). null = CCOD not loaded / not run yet.
+      const bo=c.building_owner;
+      let boCell='<span class="mut">—</span>';
+      if(bo==='yes') boCell=`<span class="own-yes">🏢 owns</span>${c.building_site_count>1?` <span class="mut">(${c.building_site_count} sites)</span>`:''}${c.building_owner_name?`<div class="mut" style="font-size:10px">${esc(c.building_owner_name)}</div>`:''}`;
+      else if(bo==='no') boCell='<span class="own-no">tenant</span>';
+      else if(bo==='unclear') boCell='<span class="mut">unclear</span>';
+      else if(bo==='no_postcode') boCell='<span class="mut">no postcode</span>';
       return `<tr>
         <td>${esc(c.domain)}</td>
         <td class="wrap2">${chLink}${st}</td>
@@ -149,10 +156,11 @@ async function loadCompanies(){
         <td>${esc(c.anchor_officer_name||'—')}</td>
         <td class="${ownCls}">${own}${c.business_owner_basis?`<div class="mut" style="font-size:10px">${esc(c.business_owner_basis)}</div>`:''}</td>
         <td class="wrap2">${esc(owners||'—')}</td>
+        <td class="wrap2">${boCell}</td>
         <td class="mut">${when}</td>
       </tr>`;
     }).join('');
-  }catch(e){ $('#compBody').innerHTML=`<tr><td colspan="7" style="color:var(--red);padding:20px">${esc(e.message)}</td></tr>`; }
+  }catch(e){ $('#compBody').innerHTML=`<tr><td colspan="8" style="color:var(--red);padding:20px">${esc(e.message)}</td></tr>`; }
 }
 
 refresh(); loadCompanies();

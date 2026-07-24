@@ -88,6 +88,25 @@ export async function ensureSchema() {
       snapshot    TEXT,     -- the snapshot date/label imported
       row_count   BIGINT
     );
+
+    -- HM Land Registry CCOD ("UK companies that own property in England & Wales"),
+    -- postcode-keyed. Lets the resolver answer "does this company own its building?"
+    -- locally (no volume / no SQLite file needed). Loaded via scripts/ccod-*.mjs.
+    CREATE TABLE IF NOT EXISTS ch_ccod (
+      postcode            TEXT NOT NULL,   -- normalised (no spaces, upper)
+      title_number        TEXT,
+      tenure              TEXT,            -- Freehold | Leasehold
+      property_address    TEXT,
+      proprietor_name     TEXT,
+      company_reg_no      TEXT,
+      proprietor_category TEXT,
+      created_at          TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_ch_ccod_postcode ON ch_ccod(postcode);
+    CREATE TABLE IF NOT EXISTS ch_ccod_meta (
+      id INT PRIMARY KEY DEFAULT 1,
+      loaded_at TIMESTAMPTZ, snapshot TEXT, row_count BIGINT
+    );
   `)
   // contacts.id is a UUID, not a bigint. If an earlier boot created companies with
   // BIGINT id columns, migrate them to TEXT (idempotent — no-op once already TEXT).
