@@ -1363,6 +1363,24 @@ function RichReply({ toEmail, ccEmail = '', placeholderName, sending, statusMsg,
   const ccSeed = ccEmail.split(',').map(s => s.trim()).filter(Boolean)
   const [showCc, setShowCc] = useState(ccSeed.length > 0)
   const [cc, setCc] = useState<string[]>(ccSeed)
+  // ccEmail arrives from the thread, which loads AFTER the composer mounts — so
+  // the useState seeds above are empty on first render. Sync the Cc seed in once
+  // the inbound CC resolves (only while the client hasn't started editing Cc, so
+  // we never stomp a manual edit). Keyed on ccEmail so it also refreshes per lead.
+  const ccTouched = useRef(false)
+  useEffect(() => {
+    if (ccTouched.current) return
+    setCc(ccSeed)
+    if (ccSeed.length) setShowCc(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ccEmail])
+  // "Reply all" from the collapsed bar: expand with the inbound CC filled in.
+  function replyAll() {
+    ccTouched.current = false
+    setCc(ccSeed)
+    setShowCc(true)
+    expand()
+  }
   // Collapsed by default — a slim bar that reclaims reading space. Clicking it
   // (or a forward seed arriving) expands the full composer and focuses it.
   const [expanded, setExpanded] = useState(false)
@@ -1533,6 +1551,7 @@ function RichReply({ toEmail, ccEmail = '', placeholderName, sending, statusMsg,
     onSend(text, el.innerHTML, to.join(', '), cc.join(', '), attachedFiles)
     el.innerHTML = ''
     draftHtml.current = ''
+    ccTouched.current = false
     setEmpty(true); setChars(0); setCc(ccSeed); setShowCc(ccSeed.length > 0); setTo(toEmail ? [toEmail] : []); setExpanded(false); setAttachedFiles([])
   }
 
@@ -1547,12 +1566,18 @@ function RichReply({ toEmail, ccEmail = '', placeholderName, sending, statusMsg,
   // Collapsed: a slim click-to-expand bar, so reading gets the space.
   if (!expanded) {
     return (
-      <button type="button" onClick={expand}
-        className="w-full flex items-center gap-3 rounded-xl border border-gray-200 shadow-sm bg-white px-4 py-3 text-left hover:border-brand-300 hover:bg-gray-50/60 transition-colors">
+      <div className="w-full flex items-center gap-2 rounded-xl border border-gray-200 shadow-sm bg-white px-4 py-3 hover:border-brand-300 transition-colors">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-brand-600 shrink-0"><path d="M3 21l1.9-5.7a8.5 8.5 0 1 1 3.8 3.8z"/></svg>
-        <span className="text-sm text-gray-500 flex-1">Reply to {placeholderName}…</span>
-        <span className="text-xs font-medium text-brand-600">Write reply →</span>
-      </button>
+        <button type="button" onClick={expand} className="text-sm text-gray-500 flex-1 text-left hover:text-gray-700">Reply to {placeholderName}…</button>
+        {ccSeed.length > 0 && (
+          <button type="button" onClick={replyAll}
+            className="text-xs font-medium text-brand-600 hover:text-brand-800 border border-brand-200 hover:border-brand-300 rounded-md px-2.5 py-1 shrink-0"
+            title={`Reply all — Cc ${ccSeed.join(', ')}`}>
+            Reply all
+          </button>
+        )}
+        <button type="button" onClick={expand} className="text-xs font-medium text-brand-600 shrink-0">Write reply →</button>
+      </div>
     )
   }
 
@@ -1572,7 +1597,7 @@ function RichReply({ toEmail, ccEmail = '', placeholderName, sending, statusMsg,
       {showCc && (
         <div className="px-3 py-1.5 border-b border-gray-100 flex items-center gap-2">
           <span className="text-xs font-medium text-gray-500 w-7 shrink-0">Cc:</span>
-          <RecipientInput value={cc} onChange={setCc} placeholder="add cc…" />
+          <RecipientInput value={cc} onChange={next => { ccTouched.current = true; setCc(next) }} placeholder="add cc…" />
         </div>
       )}
 
