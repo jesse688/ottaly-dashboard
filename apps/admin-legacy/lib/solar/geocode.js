@@ -38,14 +38,25 @@ async function geocodeGoogle(address) {
 async function geocodePlaces(query) {
   const key = GOOGLE_KEY();
   if (!key) return null;
-  const url = `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(query)}&region=uk&key=${key}`;
   usage.record('geocoding');
+  // Places API (NEW): places.googleapis.com/v1/places:searchText (POST + JSON).
+  // The legacy /maps/api/place/textsearch endpoint is deprecated ("REQUEST_DENIED:
+  // calling a legacy API"). Requires "Places API (New)" enabled on the key.
   try {
-    const res = await fetch(url);
+    const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': key,
+        'X-Goog-FieldMask': 'places.location,places.displayName,places.formattedAddress',
+      },
+      body: JSON.stringify({ textQuery: query, regionCode: 'GB' }),
+    });
     const data = await res.json();
-    if (data.status === 'OK' && data.results && data.results.length) {
-      const loc = data.results[0].geometry.location;
-      return { lat: loc.lat, lng: loc.lng, source: 'places', place_name: data.results[0].name || null };
+    const p = data.places && data.places[0];
+    if (p && p.location) {
+      return { lat: p.location.latitude, lng: p.location.longitude, source: 'places',
+               place_name: (p.displayName && p.displayName.text) || null };
     }
   } catch { /* fall through */ }
   return null;
