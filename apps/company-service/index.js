@@ -127,6 +127,23 @@ app.get('/status', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
+// Debug: officer-cache coverage. How many officers are loaded, and does a given
+// company number have cached officers?
+app.get('/debug-officers', async (req, res) => {
+  try {
+    const { rows: tot } = await pool.query(
+      `SELECT COUNT(*)::bigint AS n, COUNT(*) FILTER (WHERE fetched_by_svc_at IS NOT NULL)::bigint AS svc FROM ch_directors`)
+    const num = (req.query.company || '').toString().trim()
+    let forCompany = null
+    if (num) {
+      const { rows } = await pool.query(
+        `SELECT name, role, fetched_by_svc_at IS NOT NULL AS svc FROM ch_directors WHERE company_number = $1 LIMIT 10`, [num])
+      forCompany = { count: rows.length, rows }
+    }
+    res.json({ total_directors: +tot[0].n, service_loaded: +tot[0].svc, forCompany })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
 // Resolved companies list for the dashboard table. Optional ?q= search on
 // domain/company/owner, ?method= filter, ?owner= filter, paged.
 app.get('/companies', async (req, res) => {
