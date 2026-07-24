@@ -311,12 +311,29 @@ export async function GET(req: NextRequest) {
       if (isFreshSeed || backfill) {
         const bodyHtml = e.body?.html ?? e.html_body ?? null
         const bodyText = e.body?.text ?? e.text_body ?? e.content_preview ?? null
+        // Normal (fresh-seed) ingest is non-destructive: DO NOTHING so we never
+        // clobber a row a client may already be reading. But an explicit ?backfill=1
+        // REFRESHES `raw` (and the fields derived from it) on existing rows — this is
+        // how we heal historical rows that were stored before PlusVibe exposed a field
+        // we now read, e.g. cc_address_email_list / cc_address_json for CC recipients.
+        // We only overwrite content-bearing columns, never the row identity/keys.
+        const onConflict = backfill
+          ? `ON CONFLICT (id) DO UPDATE SET
+               raw = EXCLUDED.raw,
+               subject = COALESCE(EXCLUDED.subject, portal_emails.subject),
+               body_html = COALESCE(EXCLUDED.body_html, portal_emails.body_html),
+               body_text = COALESCE(EXCLUDED.body_text, portal_emails.body_text),
+               content_preview = COALESCE(EXCLUDED.content_preview, portal_emails.content_preview),
+               from_email = COALESCE(EXCLUDED.from_email, portal_emails.from_email),
+               to_email = COALESCE(EXCLUDED.to_email, portal_emails.to_email),
+               message_id = COALESCE(EXCLUDED.message_id, portal_emails.message_id)`
+          : `ON CONFLICT (id) DO NOTHING`
         await pool.query(
           `INSERT INTO portal_emails
              (id, workspace_id, lead_email, direction, subject, body_html, body_text,
               content_preview, from_email, to_email, is_unread, message_id, timestamp_created, raw)
            VALUES ($1,$2,$3,'IN',$4,$5,$6,$7,$8,$9,1,$10,$11,$12::jsonb)
-           ON CONFLICT (id) DO NOTHING`,
+           ${onConflict}`,
           [dedupeKey, ws, lead, e.subject ?? null, bodyHtml, bodyText,
            (bodyText ?? '').slice(0, 200) || null, e.from_address_email ?? lead, e.eaccount ?? null,
            e.message_id ?? null, e.timestamp_created ?? new Date().toISOString(), JSON.stringify(e)]

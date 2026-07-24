@@ -93,16 +93,30 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       `SELECT id, direction, subject, body_html, body_text, content_preview,
               from_email, to_email, eaccount, pv_label, message_id, sent_via_portal,
               timestamp_created, raw->'attachments' AS attachments,
-              -- CC recipients. PlusVibe returns cc as a JSON ARRAY of formatted
-              -- strings on inbound replies (e.g. ['Jada-Rae Poku <jada@x.com>']),
-              -- but our own outbound portal replies store cc as a plain STRING.
-              -- Handle both: if it is a JSON array, join the elements with ', ';
-              -- otherwise fall back to the scalar text (or legacy cc_address_email_list).
+              -- CC recipients. PlusVibe exposes cc under DIFFERENT keys depending on
+              -- which endpoint fed the row into raw:
+              --   * /unibox/emails LIST feed (what the reconcile cron ingests):
+              --       cc_address_email_list  (string, e.g. "Jada-Rae <j@x.com>")
+              --       cc_address_json        (array of {name,address})  <- cleanest
+              --   * /unibox/emails thread-DETAIL feed: cc  (array of formatted strings)
+              --   * our own OUTBOUND portal replies: cc  (plain string)
+              -- Try them in order of cleanliness; the first non-empty wins.
               COALESCE(
+                -- structured list-endpoint form: join "Name <addr>" (or bare addr)
+                NULLIF((SELECT string_agg(
+                          CASE WHEN COALESCE(x->>'name','') <> ''
+                               THEN (x->>'name') || ' <' || (x->>'address') || '>'
+                               ELSE x->>'address' END, ', ')
+                        FROM jsonb_array_elements(
+                          CASE WHEN jsonb_typeof(raw->'cc_address_json') = 'array'
+                               THEN raw->'cc_address_json' ELSE '[]'::jsonb END) AS x), ''),
+                -- string list-endpoint form
+                NULLIF(raw->>'cc_address_email_list',''),
+                -- thread-detail array form
                 NULLIF((SELECT string_agg(v, ', ') FROM jsonb_array_elements_text(
                           CASE WHEN jsonb_typeof(raw->'cc') = 'array' THEN raw->'cc' ELSE '[]'::jsonb END) AS v), ''),
-                CASE WHEN jsonb_typeof(raw->'cc') = 'array' THEN NULL ELSE NULLIF(raw->>'cc','') END,
-                NULLIF(raw->>'cc_address_email_list','')
+                -- outbound plain-string form (skip if cc is actually an array)
+                CASE WHEN jsonb_typeof(raw->'cc') = 'array' THEN NULL ELSE NULLIF(raw->>'cc','') END
               ) AS cc
          FROM portal_emails
         WHERE workspace_id = $1 AND lower(lead_email) = lower($2)
