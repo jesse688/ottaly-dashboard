@@ -120,6 +120,16 @@ async function enrichContact(contact, opts = {}) {
     confidence: o.confidence, similarity: Math.round((o.similarity || 0) * 100) / 100,
   }));
 
+  // When ownership is confirmed, grab the CCOD PROPERTY ADDRESS of the matched
+  // owner's title — the Land Registry's exact address of the building the company
+  // owns. This is far more precise than the scraped Apollo address (which is often
+  // truncated to just a street), so we geocode THIS for the roof, avoiding the
+  // "wrong building / false panel count" problem.
+  if (out.owns_building === 'yes' && verdict.matched_owner) {
+    const matched = owners.find((o) => o.name === verdict.matched_owner && o.property_address);
+    if (matched && matched.property_address) out.ccod_property_address = matched.property_address;
+  }
+
   // Multi-site: does the LEAD's own company own property at other postcodes too?
   // (Their portfolio — not the building owner's.) Only meaningful once we've
   // confirmed they own; uses the CH-resolved reg when available for precision.
@@ -141,14 +151,26 @@ async function enrichContact(contact, opts = {}) {
 
   // ---------- Stage 2: ROOF / PPA (paid Google call — only for owners) ----------
   out.stage = 'roof';
-  // Reuse coords if stage 1 already geocoded to recover the postcode.
-  if (out.lat == null) {
+  // ACCURACY: geocode the exact CCOD property address of the building the company
+  // OWNS (from Land Registry), not the truncated Apollo address — so Google returns
+  // the RIGHT roof. This overrides any coords from the stage-1 postcode-recovery
+  // geocode (which used the imprecise Apollo address). Fall back to the Apollo
+  // address only when there's no CCOD property address.
+  const roofAddress = out.ccod_property_address || address;
+  if (out.ccod_property_address || out.lat == null) {
     let geo;
     try {
-      geo = await geocode(address);
+      geo = await geocode(roofAddress);
     } catch (e) { out.error = `geocode: ${e.message}`; out.stop_reason = 'geocode_failed'; return out; }
-    if (!geo) { out.stop_reason = 'geocode_no_match'; return out; }
+    if (!geo) {
+      // CCOD address failed to geocode — fall back to the Apollo address rather than drop the lead.
+      if (out.ccod_property_address && address) {
+        try { geo = await geocode(address); } catch { /* handled below */ }
+      }
+      if (!geo) { out.stop_reason = 'geocode_no_match'; return out; }
+    }
     out.lat = geo.lat; out.lng = geo.lng;
+    out.roof_address_used = roofAddress; // surface which address the roof came from
     out.maps_url = `https://www.google.com/maps/@${geo.lat},${geo.lng},20z/data=!3m1!1e3`;
   }
 
