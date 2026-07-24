@@ -15,8 +15,9 @@ import { pipeline } from 'node:stream/promises'
 import pg from 'pg'
 import copyFrom from 'pg-copy-streams'
 
-const [input, label] = process.argv.slice(2)
-if (!input) { console.error('Usage: node scripts/load-officers-tsv.mjs <officers.tsv.gz> [label]'); process.exit(1) }
+const positional = process.argv.slice(2).filter((a) => !a.startsWith('--'))
+const [input, label] = positional
+if (!input) { console.error('Usage: node scripts/load-officers-tsv.mjs [--append] <officers.tsv.gz> [label]'); process.exit(1) }
 if (!fs.existsSync(input)) { console.error('Not found:', input); process.exit(1) }
 
 const { Client } = pg
@@ -43,8 +44,11 @@ async function main() {
   console.error(`Staged ${c[0].n} rows. Swapping the service-loaded officer set in ch_directors…`)
 
   await client.query('BEGIN')
-  // Drop the previous bulk-loaded set (ours), keep admin-legacy's on-demand rows.
-  await client.query(`DELETE FROM ch_directors WHERE fetched_by_svc_at IS NOT NULL`)
+  // By default REPLACE the service officer set (full monthly reload). Pass
+  // --append (env APPEND=1) to ADD to it instead — used to load ew_2..ew_7 on top
+  // of an already-loaded ew_1 without re-parsing the first part.
+  const append = process.argv.includes('--append') || /^(1|true|yes)$/i.test(process.env.APPEND || '')
+  if (!append) await client.query(`DELETE FROM ch_directors WHERE fetched_by_svc_at IS NOT NULL`)
   // Insert fresh. resigned_on NULL (snapshot = current appointments only).
   // ch_directors has UNIQUE(company_number, name, role); the bulk snapshot contains
   // duplicate (company, person, role) combos, so dedupe in the SELECT and skip any
