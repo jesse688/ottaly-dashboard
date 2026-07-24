@@ -90,4 +90,7 @@ async function reversePostcode(lat, lng) {
   } catch { return null; }
 }
 
-module.exports = { geocode, geocodePrecise, extractPostcode, reversePostcode };
+module.exports = {
+  geocode, geocodePrecise, extractPostcode, reversePostcode,
+  geocodeGoogleRaw: geocodeGoogle, geocodePlacesRaw: geocodePlaces,
+};
