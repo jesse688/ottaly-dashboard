@@ -3011,7 +3011,7 @@ class PostgresDatabase {
     // often) Microsoft. MX alone would mislabel these 'Other' and leak real
     // Microsoft past an MS-exclude filter. Unmask via the domain's SPF record,
     // which a tenant almost always still publishes for its true mailbox host.
-    if (/mimecast|pphosted|ppe-hosted|proofpoint|barracuda|cisco|iphmx|sophos|messagelabs|symantec|forcepoint|trendmicro|fortimail|mailcontrol|securence|emailsrvr/.test(joined)) {
+    if (/mimecast|pphosted|ppe-hosted|proofpoint|barracuda|cisco|iphmx|sophos|messagelabs|symantec|forcepoint|trendmicro|fortimail|mailcontrol|securence|emailsrvr|hornetsecurity|spamtitan|reflexion|spamexperts|antispamcloud|mailanyone|mailprotect|emailfiltering|arsubacloud|clearswift|retarus|libraesva/.test(joined)) {
       const behind = await this._providerFromSpf(domain);
       if (behind) return behind;            // resolved the masked provider
       return 'email_other';                  // unknown behind the gateway
@@ -3024,12 +3024,29 @@ class PostgresDatabase {
   // the MX is a security gateway. Microsoft 365 tenants include
   // 'spf.protection.outlook.com'; Google Workspace includes '_spf.google.com'.
   // Returns 'email_outlook' | 'email_google' | null (couldn't tell).
-  async _providerFromSpf(domain) {
+  async _providerFromSpf(domain, depth = 0) {
     try {
       const txt = await mxResolver.resolveTxt(domain); // public resolver — same automated enrichment path as resolveMx
       const spf = txt.map(parts => parts.join('')).join(' ').toLowerCase();
+      // Only inspect the actual SPF record (v=spf1 ...), not arbitrary TXT.
+      if (!/v=spf1/.test(spf)) return null;
+      // Direct backend signals on this domain's own SPF.
       if (/spf\.protection\.outlook\.com|outlook\.com|sharepointonline|protection\.outlook/.test(spf)) return 'email_outlook';
       if (/_spf\.google\.com|google\.com|googlemail/.test(spf)) return 'email_google';
+      // Gateway-fronted tenants often publish only include:spf.<gateway>.com with
+      // no direct backend token. Recurse ONE level into the include: chain — the
+      // gateway's own SPF frequently reveals the real backend (e.g. a Mimecast
+      // include that itself includes spf.protection.outlook.com). Depth-capped at
+      // 1 to bound DNS fan-out and avoid include loops.
+      if (depth < 1) {
+        const includes = [...spf.matchAll(/include:([a-z0-9._-]+)/g)].map(m => m[1]).slice(0, 5);
+        for (const inc of includes) {
+          // Skip the obvious no-op / self includes.
+          if (inc === domain) continue;
+          const behind = await this._providerFromSpf(inc, depth + 1);
+          if (behind) return behind;
+        }
+      }
       return null;
     } catch {
       return null;
