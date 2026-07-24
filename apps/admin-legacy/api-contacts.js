@@ -336,12 +336,17 @@ module.exports = (db) => {
   router.post('/contacts/mx-scan', async (req, res) => {
     if (mxJob.running) return res.status(409).json({ error: 'A provider scan is already running', running: true, stats: mxJob.stats });
     const reverify = req.body && (req.body.reverify === true || req.body.reverify === 'true');
+    // Optional scope: reverify ONLY domains currently at this provider (e.g.
+    // { reverify:true, onlyProvider:'email_other' } to cheaply re-check just the
+    // Other bucket after a resolver improvement, instead of the whole table).
+    const onlyProvider = req.body && typeof req.body.onlyProvider === 'string' && req.body.onlyProvider
+      ? req.body.onlyProvider : null;
     mxJob.running = true; mxJob.stats = null; mxJob.error = null; mxJob.startedAt = Date.now();
     // Fire-and-forget; the GET endpoint reports progress.
     (async () => {
       try {
         if (reverify && db.reverifyAllMxProvider) {
-          mxJob.stats = await db.reverifyAllMxProvider({ onProgress: s => { mxJob.stats = s; } });
+          mxJob.stats = await db.reverifyAllMxProvider({ onlyProvider, onProgress: s => { mxJob.stats = s; } });
         } else {
           mxJob.stats = await db.scanContactsMxProvider({ onProgress: s => { mxJob.stats = s; } });
         }
@@ -352,7 +357,7 @@ module.exports = (db) => {
         mxJob.running = false;
       }
     })();
-    res.json({ started: true, reverify });
+    res.json({ started: true, reverify, onlyProvider });
   });
 
   router.get('/contacts/mx-scan', (req, res) => {

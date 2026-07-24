@@ -3166,14 +3166,22 @@ class PostgresDatabase {
   async reverifyAllMxProvider(opts = {}) {
     const concurrency = Math.min(opts.concurrency || 20, 50);
     const BATCH = 500;
-    // Upfront total (ALL distinct domains) for the progress bar + ETA.
+    // Optional scope: re-resolve ONLY domains currently classified as this
+    // provider (e.g. 'email_other') instead of the whole table. Useful for a
+    // cheap targeted sweep after a resolver improvement — re-checking the 61k
+    // email_other domains to unmask gateway-fronted Microsoft/Google is 3× less
+    // DNS work than a full reverify and never touches already-correct rows.
+    const onlyProvider = opts.onlyProvider || null;
+    // Scope clause is parameterized ($1 when scoped) to avoid any injection.
+    const scopeSql = onlyProvider ? ` AND mx_provider = $1` : '';
+    // Upfront total (distinct domains in scope) for the progress bar + ETA.
     let totalDomains = 0;
     try {
       const tc = await this.query(`
         SELECT COUNT(*)::int AS n FROM (
           SELECT DISTINCT LOWER(SPLIT_PART(email,'@',2)) AS d
-          FROM contacts WHERE email IS NOT NULL AND POSITION('@' IN email) > 0
-        ) q`);
+          FROM contacts WHERE email IS NOT NULL AND POSITION('@' IN email) > 0${scopeSql}
+        ) q`, onlyProvider ? [onlyProvider] : []);
       totalDomains = tc.rows[0]?.n || 0;
     } catch {}
     const stats = {
@@ -3185,15 +3193,22 @@ class PostgresDatabase {
     };
     let lastDomain = '';
     while (true) {
-      // Keyset-paginate over DISTINCT domains so we cover the whole table once.
-      const { rows } = await this.query(`
-        SELECT DISTINCT LOWER(SPLIT_PART(email, '@', 2)) AS domain
-        FROM contacts
-        WHERE email IS NOT NULL AND POSITION('@' IN email) > 0
-          AND LOWER(SPLIT_PART(email, '@', 2)) > $1
-        ORDER BY domain
-        LIMIT $2
-      `, [lastDomain, BATCH]);
+      // Keyset-paginate over DISTINCT domains so we cover the whole scope once.
+      // When scoped, $1 = provider, $2 = lastDomain, $3 = BATCH; else $1/$2.
+      const pageSql = onlyProvider
+        ? `SELECT DISTINCT LOWER(SPLIT_PART(email, '@', 2)) AS domain
+           FROM contacts
+           WHERE email IS NOT NULL AND POSITION('@' IN email) > 0
+             AND mx_provider = $1
+             AND LOWER(SPLIT_PART(email, '@', 2)) > $2
+           ORDER BY domain LIMIT $3`
+        : `SELECT DISTINCT LOWER(SPLIT_PART(email, '@', 2)) AS domain
+           FROM contacts
+           WHERE email IS NOT NULL AND POSITION('@' IN email) > 0
+             AND LOWER(SPLIT_PART(email, '@', 2)) > $1
+           ORDER BY domain LIMIT $2`;
+      const pageParams = onlyProvider ? [onlyProvider, lastDomain, BATCH] : [lastDomain, BATCH];
+      const { rows } = await this.query(pageSql, pageParams);
       if (!rows.length) { stats.exhausted = true; break; }
       lastDomain = rows[rows.length - 1].domain;
 
