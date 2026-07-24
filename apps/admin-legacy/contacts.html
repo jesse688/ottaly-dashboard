@@ -1215,16 +1215,19 @@
         <div class="filter-section" data-clear="intelligence">
           <div class="filter-label">Intelligence</div>
           <div class="filter-control" style="gap:8px;">
-            <select id="ownsBuilding">
+            <!-- Old manual/reply-derived owns_building signal — superseded by the
+                 Land Registry (ccodOwnsBuilding) filter below. Kept hidden so the
+                 JS that reads/clears it still works, but removed from the UI. -->
+            <select id="ownsBuilding" style="display:none;">
               <option value="">Building ownership — all</option>
               <option value="yes">✅ Owns building</option>
               <option value="no">❌ Rents / doesn't own</option>
               <option value="unknown">❓ Unknown</option>
             </select>
-            <select id="ccodOwnsBuilding" title="Land Registry (CCOD) sweep result — run '🏢 Check building ownership' to populate">
-              <option value="">🏢 Land Registry — all</option>
-              <option value="yes">✅ Owns (Land Registry)</option>
-              <option value="no">❌ Tenant (Land Registry)</option>
+            <select id="ccodOwnsBuilding" title="Building ownership from HM Land Registry (CCOD) + Companies House, resolved by the company data engine.">
+              <option value="">🏢 Building ownership — all</option>
+              <option value="yes">✅ Owns building</option>
+              <option value="no">❌ Tenant / rents</option>
               <option value="unclear">❓ Unclear</option>
               <option value="no_postcode">📍 No postcode</option>
               <option value="checked">— Checked (any result)</option>
