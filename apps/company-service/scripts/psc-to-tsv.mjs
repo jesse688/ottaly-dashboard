@@ -30,8 +30,14 @@ if (input.endsWith('.zip')) {
 }
 
 const gzip = zlib.createGzip()
+gzip.setMaxListeners(0) // we attach a drain listener per backpressure pause; that's fine
 const out = fs.createWriteStream(output)
 gzip.pipe(out)
+
+// Surface any stream error instead of dying silently mid-file.
+for (const [n, s] of [['src', src], ['gzip', gzip], ['out', out]]) {
+  s.on('error', (e) => { console.error(`FATAL ${n} stream:`, e.message); process.exit(1) })
+}
 
 const rl = readline.createInterface({ input: src, crlfDelay: Infinity })
 
