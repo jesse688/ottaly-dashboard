@@ -46,11 +46,20 @@ async function main() {
   // Drop the previous bulk-loaded set (ours), keep admin-legacy's on-demand rows.
   await client.query(`DELETE FROM ch_directors WHERE fetched_by_svc_at IS NOT NULL`)
   // Insert fresh. resigned_on NULL (snapshot = current appointments only).
+  // ch_directors has UNIQUE(company_number, name, role); the bulk snapshot contains
+  // duplicate (company, person, role) combos, so dedupe in the SELECT and skip any
+  // that still collide with admin-legacy's kept rows.
+  // ch_directors has UNIQUE(company_number, name, role); the bulk snapshot contains
+  // duplicate (company, person, role) combos. Dedupe in-batch, coalescing role to ''
+  // (so NULL/'' collapse to one row and match the constraint), then DO NOTHING on
+  // any that still collide with admin-legacy's kept rows.
   await client.query(`
     INSERT INTO ch_directors (company_number, name, role, resigned_on, fetched_by_svc_at)
-    SELECT company_number, name, NULLIF(role,''), NULL, now()
+    SELECT DISTINCT ON (company_number, name, COALESCE(NULLIF(role,''),''))
+           company_number, name, COALESCE(NULLIF(role,''),''), NULL, now()
       FROM ch_dir_stage
-     WHERE company_number <> '' AND name <> ''`)
+     WHERE company_number <> '' AND name <> ''
+    ON CONFLICT (company_number, name, role) DO NOTHING`)
   const { rows: fin } = await client.query(`SELECT COUNT(*)::bigint AS n FROM ch_directors WHERE fetched_by_svc_at IS NOT NULL`)
   await client.query(`CREATE INDEX IF NOT EXISTS idx_ch_directors_company ON ch_directors(company_number)`)
   await client.query(
