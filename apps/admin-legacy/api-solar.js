@@ -84,5 +84,25 @@ module.exports = function solarAPI() {
     }
   });
 
+  // Diagnostic: geocode any address and show exactly where it lands + precision.
+  // Lets us verify "Hercules House, Merlin Quay…" resolves to the right building
+  // vs the postcode centroid. ?address=... (&precise=1 to use building-level path).
+  router.get('/geocode-test', async (req, res) => {
+    const { geocode, geocodePrecise } = require('./lib/solar/geocode');
+    const address = (req.query.address || '').toString();
+    if (!address) return res.status(400).json({ error: 'address required' });
+    try {
+      const plain = await geocode(address);
+      const precise = await geocodePrecise(address);
+      res.json({
+        address,
+        plain,                  // what the old path returns (likely postcode centroid)
+        precise,                // building-level via Google
+        maps_plain: plain ? `https://www.google.com/maps/@${plain.lat},${plain.lng},20z` : null,
+        maps_precise: precise ? `https://www.google.com/maps/@${precise.lat},${precise.lng},20z` : null,
+      });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   return router;
 };
