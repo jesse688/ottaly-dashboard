@@ -67,6 +67,12 @@ export async function ensureSchema() {
     -- Provenance stamped onto contacts (kept minimal; the ch_* columns already exist).
     ALTER TABLE contacts ADD COLUMN IF NOT EXISTS company_data_provenance TEXT; -- anchor | inherited | unresolved
     ALTER TABLE contacts ADD COLUMN IF NOT EXISTS company_stamped_at TIMESTAMPTZ;
+    -- Authoritative CH-derived ownership stamped from the engine (distinct from the
+    -- older reply/manual owns_building signal). ccod_owns_building / ccod_building_owner
+    -- already exist (the first CCOD sweep). Add business ownership (PSC) here.
+    ALTER TABLE contacts ADD COLUMN IF NOT EXISTS business_owner TEXT;      -- yes | no | unknown
+    ALTER TABLE contacts ADD COLUMN IF NOT EXISTS business_owner_basis TEXT;
+    ALTER TABLE contacts ADD COLUMN IF NOT EXISTS psc_owners TEXT[];        -- the company's >25% owners
 
     -- Persons with Significant Control, loaded from the CH free PSC bulk snapshot
     -- (download.companieshouse.gov.uk/en_pscdata.html) via scripts/import-psc-bulk.js.
@@ -214,12 +220,19 @@ export async function stampContacts(c) {
        ch_match_confidence = $3,
        ch_postcode = COALESCE($4, ch_postcode),
        ch_verified_at = now(),
+       ccod_owns_building = $6,          -- building ownership (owns | no | unclear | no_postcode)
+       ccod_building_owner = $7,         -- the registered proprietor at the postcode
+       business_owner = $8,              -- business ownership (yes | no | unknown, from PSC)
+       business_owner_basis = $9,
+       psc_owners = $10,                 -- the company's >25% owners
        company_data_provenance = CASE WHEN id = $5 THEN 'anchor'
                                       WHEN $2 IS NULL THEN 'unresolved'
                                       ELSE 'inherited' END,
        company_stamped_at = now()
      WHERE company_domain = $1`,
-    [c.domain, c.ch_company_number ?? null, c.match_confidence ?? 'none', c.ch_postcode ?? null, c.anchor_contact_id ?? null]
+    [c.domain, c.ch_company_number ?? null, c.match_confidence ?? 'none', c.ch_postcode ?? null,
+     c.anchor_contact_id ?? null, c.building_owner ?? null, c.building_owner_name ?? null,
+     c.business_owner ?? null, c.business_owner_basis ?? null, c.psc_owners ?? null]
   )
 }
 

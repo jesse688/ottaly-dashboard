@@ -172,6 +172,32 @@ app.get('/companies', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
+// Bulk-stamp ALL already-resolved companies onto contacts in one SQL pass — gets
+// ownership data into the admin-legacy Contacts page immediately without waiting
+// for the engine to re-resolve. Idempotent; safe to re-run.
+app.post('/stamp-all', async (req, res) => {
+  try {
+    const { rowCount } = await pool.query(`
+      UPDATE contacts ct SET
+        ch_company_number = co.ch_company_number,
+        ch_match_confidence = co.match_confidence,
+        ch_postcode = COALESCE(co.ch_postcode, ct.ch_postcode),
+        ch_verified_at = now(),
+        ccod_owns_building = co.building_owner,
+        ccod_building_owner = co.building_owner_name,
+        business_owner = co.business_owner,
+        business_owner_basis = co.business_owner_basis,
+        psc_owners = co.psc_owners,
+        company_data_provenance = CASE WHEN ct.id = co.anchor_contact_id THEN 'anchor'
+                                       WHEN co.ch_company_number IS NULL THEN 'unresolved'
+                                       ELSE 'inherited' END,
+        company_stamped_at = now()
+      FROM companies co
+      WHERE ct.company_domain = co.domain`)
+    res.json({ ok: true, contacts_stamped: rowCount })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
 // ── Continuous engine controls ──
 app.post('/engine/start', (req, res) => {
   runEngine().catch((e) => console.error('[engine]', e.message))
