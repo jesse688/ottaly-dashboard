@@ -90,8 +90,26 @@ export async function ccodLoaded() {
   return _ccodLoaded
 }
 
-// Main entry: does `company` own property at its registered postcode?
-// Returns { building_owner, building_owner_name, building_site_count } or nulls.
+// Match a PERSON's name (officer/PSC) against a CCOD proprietor name. Proprietors
+// are usually companies but can be individuals; individuals appear as "SURNAME
+// Forenames" or "Forenames Surname". Compare on a surname-anchored token overlap.
+function personOwnsMatch(personName, proprietorName) {
+  const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(Boolean)
+  const p = norm(personName), o = norm(proprietorName)
+  if (p.length < 2 || !o.length) return false
+  // A proprietor that's clearly a company won't be an individual owner-occupier.
+  if (/\b(limited|ltd|plc|llp|company|holdings|group|trust|properties|investments)\b/i.test(proprietorName)) return false
+  // Require BOTH the person's surname and forename to appear in the proprietor name.
+  const surname = p[p.length - 1], forename = p[0]
+  const oset = new Set(o)
+  return oset.has(surname) && oset.has(forename)
+}
+
+// Main entry: does `company` (or its directors/PSCs) own property at its registered
+// postcode? Returns { building_owner, building_owner_name, building_site_count, basis }.
+// company may carry officers[] and psc[] (name lists) to enable the person-owner
+// fallback — catches owner-occupiers who hold the building personally or via a
+// same-named entity, which CCOD wouldn't attribute to the trading company itself.
 export async function resolveBuildingOwnership(company) {
   if (!(await ccodLoaded())) return { building_owner: null, building_owner_name: null, building_site_count: null }
   const pc = String(company.ch_postcode || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
@@ -104,10 +122,25 @@ export async function resolveBuildingOwnership(company) {
     owners = rows
   } catch { return { building_owner: null, building_owner_name: null, building_site_count: null } }
   if (!owners.length) return { building_owner: 'no', building_owner_name: null, building_site_count: null }
+
+  // 1) Company-name / reg match (the authoritative case).
   const v = resolveOwnership({ name: company.ch_company_name, reg: company.ch_company_number }, owners)
-  return {
-    building_owner: v.owns_building,
-    building_owner_name: v.matched_owner || null,
-    building_site_count: v.site_count || null,
+  if (v.owns_building === 'yes') {
+    return { building_owner: 'yes', building_owner_name: v.matched_owner || null, building_site_count: v.site_count || null, basis: 'company' }
   }
+
+  // 2) Person fallback: does a DIRECTOR or PSC own property here? (owner-occupier
+  //    holding the building personally, or via a name we can recognise). Only fires
+  //    when the company itself didn't match — so it recovers otherwise-"tenant" rows.
+  const people = [...(company.officers || []), ...(company.psc || [])]
+  if (people.length) {
+    for (const o of owners) {
+      const hit = people.find((nm) => personOwnsMatch(nm, o.proprietor_name))
+      if (hit) {
+        return { building_owner: 'yes', building_owner_name: o.proprietor_name, building_site_count: 1, basis: 'director' }
+      }
+    }
+  }
+
+  return { building_owner: v.owns_building, building_owner_name: v.matched_owner || null, building_site_count: v.site_count || null, basis: v.owns_building === 'unclear' ? 'unclear' : 'no' }
 }

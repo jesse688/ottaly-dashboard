@@ -215,10 +215,14 @@ export async function resolveDomain(domain, contacts, meta) {
     : (best.rank === 2 ? (best.tier === 'confident' ? 'medium' : 'medium') : 'low')
 
   // ── Building ownership (HM Land Registry CCOD) ──
-  // Does this company own property at its registered postcode? Uses the resolved
-  // company's postcode + name + reg against the local ch_ccod table. No-op (nulls)
-  // until CCOD is loaded. This is why we now have an authoritative reg number.
-  const building = await resolveBuildingOwnership(best.identity)
+  // Does this company — OR its directors/PSCs — own property at its registered
+  // postcode? Company-name/reg match first, then a person fallback (owner-occupiers
+  // who hold the building personally). Pass officer + PSC names for that fallback.
+  const building = await resolveBuildingOwnership({
+    ...best.identity,
+    officers: (best.officers || []).map((o) => o.name),
+    psc: psc.list.map((p) => p.name),
+  })
 
   return {
     ...base, ...best.identity,
