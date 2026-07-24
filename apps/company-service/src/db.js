@@ -225,7 +225,7 @@ export async function stampContacts(c) {
        business_owner = $8,              -- business ownership (yes | no | unknown, from PSC)
        business_owner_basis = $9,
        psc_owners = $10,                 -- the company's >25% owners
-       company_data_provenance = CASE WHEN id = $5 THEN 'anchor'
+       company_data_provenance = CASE WHEN id::text = $5 THEN 'anchor'
                                       WHEN $2 IS NULL THEN 'unresolved'
                                       ELSE 'inherited' END,
        company_stamped_at = now()

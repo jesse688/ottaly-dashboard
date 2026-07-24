@@ -188,7 +188,7 @@ app.post('/stamp-all', async (req, res) => {
         business_owner = co.business_owner,
         business_owner_basis = co.business_owner_basis,
         psc_owners = co.psc_owners,
-        company_data_provenance = CASE WHEN ct.id = co.anchor_contact_id THEN 'anchor'
+        company_data_provenance = CASE WHEN ct.id::text = co.anchor_contact_id THEN 'anchor'
                                        WHEN co.ch_company_number IS NULL THEN 'unresolved'
                                        ELSE 'inherited' END,
         company_stamped_at = now()
