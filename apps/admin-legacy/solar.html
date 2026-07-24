@@ -293,7 +293,11 @@ function render(){
     const owns = r.owns_building==='yes'?'<span class="pill g">owns</span>':r.owns_building==='no'?'<span class="pill r">tenant</span>':'<span class="pill u">?</span>';
     const kwp = r.max_system_kwp!=null?`${r.max_system_kwp} kWp`:'<span class="mut">—</span>';
     const kwh = r.est_annual_kwh!=null?`${r.est_annual_kwh.toLocaleString()}`:'<span class="mut">—</span>';
-    const maps = r.maps_url?`<a href="${r.maps_url}" target="_blank">map</a>`:'<span class="mut">—</span>';
+    // Show WHICH address the roof was calculated from + whether it was building-precise.
+    const roofAddr = r.roof_address_used
+      ? `<div class="mut" style="font-size:10px;max-width:200px;white-space:normal;margin-top:2px" title="roof calculated from this address">${r.roof_geocode_precise===false?'⚠ ':'📍 '}${esc(r.roof_address_used)}</div>`
+      : '';
+    const maps = r.maps_url?`<a href="${r.maps_url}" target="_blank">map</a>${roofAddr}`:'<span class="mut">—</span>';
     const img = r._img?`<img class="thumb" src="${r._img}" onclick="zoom('${r._img}')">`:(r.lat!=null?`<button class="btn ghost" style="padding:3px 8px;font-size:11px" onclick="getImg(${r.index})">get 💷</button>`:'<span class="mut">—</span>');
     // Person / contact block
     const person = [r.first_name, r.last_name].filter(Boolean).join(' ');
