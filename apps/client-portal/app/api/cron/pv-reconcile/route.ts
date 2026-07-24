@@ -439,14 +439,14 @@ export async function GET(req: NextRequest) {
   // the real Message-ID can't merge two genuinely-different emails.)
   const MID = `lower(COALESCE(NULLIF(raw->>'message_id',''), NULLIF(raw->>'raw_message_id','')))`
   const SCOPE = `${MID} IS NOT NULL AND received_at > NOW() - INTERVAL '14 days'`
-  // Run the heavier MERGE+DELETE dedup pass every cycle now that the 5-min paid
-  // cap leaves ample budget after the sweep (it was throttled to ~1-in-10 runs
-  // only to fit the old 30s free cap). Still skipped if the sweep already spent
-  // the run budget — it's periodic + idempotent, so the next run catches it.
-  // ?dedup=1 forces it regardless.
+  // In-route dedup is OPT-IN only (?dedup=1) — a DEDICATED "Dedup" cron
+  // (/api/admin/unibox/dupes, every 5 min) is the primary cleaner, so running the
+  // full MERGE+DELETE here on every sweep just doubles the load on the same table.
+  // Kept as a manual lever (and it's periodic + idempotent, so nothing is lost by
+  // leaving it to the dedicated cron). The old wall-clock %10 throttle was tuned
+  // for a per-minute cron and is meaningless now this fires every 5 min.
   let deduped = 0
-  const runDedup = url.searchParams.get('dedup') === '1'
-    || Date.now() < RUN_DEADLINE
+  const runDedup = url.searchParams.get('dedup') === '1' && Date.now() < RUN_DEADLINE
   const ddClient = runDedup ? await pool.connect() : null
   if (ddClient) try {
     await ddClient.query('BEGIN')
