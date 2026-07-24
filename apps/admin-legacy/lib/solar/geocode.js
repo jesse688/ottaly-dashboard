@@ -67,10 +67,14 @@ async function geocode(address) {
 // mid-street and grabs the wrong roof on dense estates) and goes straight to
 // Google's building-level geocoder. Falls back to the postcode centroid only if
 // Google can't resolve it.
-async function geocodePrecise(address) {
+async function geocodePrecise(address, companyName) {
   const pc = extractPostcode(address);
   // 1) Places Text Search — resolves named buildings the Geocoding API can't.
-  const places = await geocodePlaces(address);
+  //    Prepend the company name when we have it ("Enoflex, Hercules House, …") —
+  //    that pins the actual business, the strongest signal for the right building.
+  const query = companyName ? `${companyName}, ${address}` : address;
+  let places = await geocodePlaces(query);
+  if (!places && companyName) places = await geocodePlaces(address); // retry address-only
   if (places) return { ...places, postcode: pc || await reversePostcode(places.lat, places.lng), precise: true };
   // 2) Geocoding API on the full address (building-level when it works).
   const g = await geocodeGoogle(address);

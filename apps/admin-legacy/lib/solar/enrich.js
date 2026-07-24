@@ -167,7 +167,9 @@ async function enrichContact(contact, opts = {}) {
     // BUILDING level (geocodePrecise skips the postcode-centroid shortcut that
     // was landing mid-street and grabbing the wrong roof on dense estates).
     let geo;
-    try { geo = await geocodePrecise(out.ccod_property_address); } catch { geo = null; }
+    // Pass the company name so Places can pin the actual business ("Enoflex,
+    // Hercules House, Merlin Quay…") — the strongest signal for the right building.
+    try { geo = await geocodePrecise(out.ccod_property_address, out.building_owner || contact.company_name); } catch { geo = null; }
     if (!geo && address) { try { geo = await geocode(address); } catch { geo = null; } } // fallback
     if (!geo) { out.stop_reason = 'geocode_no_match'; return out; }
     out.lat = geo.lat; out.lng = geo.lng;
