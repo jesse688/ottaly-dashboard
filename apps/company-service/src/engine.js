@@ -48,18 +48,36 @@ async function processOne(job) {
   state.processed++
 }
 
+// Workers run CONTINUOUSLY — claim → resolve → claim, never returning while the
+// engine runs. On an empty claim they briefly sleep and retry (the topper refills
+// the queue in the background). This avoids the previous batch-wave pattern where
+// every 500 jobs blocked on a heavy enqueue query (the real ~1/s bottleneck).
 async function worker() {
   while (!_stop) {
     let job
-    try { job = await claimNextRefreshJob() } catch { await sleep(IDLE_POLL_MS); continue }
-    if (!job) return // queue empty for this worker — let the loop top up
+    try { job = await claimNextRefreshJob() } catch { await sleep(500); continue }
+    if (!job) { await sleep(IDLE_POLL_MS); continue } // queue momentarily empty
     await processOne(job)
   }
 }
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)) }
 
-// The forever loop: top up the queue, run a wave of workers until it drains, repeat.
+// Background queue-topper: keeps the queue filled WITHOUT blocking workers. Only
+// runs the heavy enqueueStaleDomains query when the queue dips below a threshold,
+// so the expensive DISTINCT/LEFT-JOIN over 195k domains happens rarely, not between
+// every batch (that serialization was the ~1/s cap).
+async function topper() {
+  const LOW_WATER = ENQUEUE_BATCH        // refill when queued drops below this
+  while (!_stop) {
+    try {
+      const depth = await queueDepth()
+      if (depth.queued < LOW_WATER) await enqueueStaleDomains(ENQUEUE_BATCH * 4)
+    } catch { /* transient */ }
+    await sleep(3000) // check queue level every 3s, not every job
+  }
+}
+
 export async function runEngine() {
   if (state.running) return
   _stop = false
@@ -67,19 +85,10 @@ export async function runEngine() {
   state.started_at = state.started_at || new Date().toISOString()
   state.error = null
   try {
-    await requeueRunning() // recover crash-interrupted jobs
-    while (!_stop) {
-      const enq = await enqueueStaleDomains(ENQUEUE_BATCH)
-      const depth = await queueDepth()
-      if (!depth.queued) {
-        // Nothing to do right now — wait, then re-check (a full pass is done;
-        // staleness ordering will re-surface the oldest domains next top-up).
-        await sleep(IDLE_POLL_MS)
-        continue
-      }
-      // Drain the current queue with a wave of concurrent workers.
-      await Promise.all(Array.from({ length: CONCURRENCY }, worker))
-    }
+    await requeueRunning()               // recover crash-interrupted jobs
+    await enqueueStaleDomains(ENQUEUE_BATCH * 4) // prime the queue once up front
+    // Run the topper + all workers concurrently; workers pull continuously.
+    await Promise.all([topper(), ...Array.from({ length: CONCURRENCY }, worker)])
   } catch (e) {
     state.error = e.message
   } finally {
