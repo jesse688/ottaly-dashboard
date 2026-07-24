@@ -57,8 +57,15 @@ export async function localProfile(companyNumber) {
 // Has the PSC bulk snapshot been loaded? Cached after first check so we don't
 // re-query per resolve. If not loaded, local PSC is skipped entirely (→ API).
 let _pscLoaded = null
+let _pscCheckedAt = 0
 export async function pscBulkLoaded() {
-  if (_pscLoaded !== null) return _pscLoaded
+  // Cache a TRUE result permanently (data doesn't un-load mid-run). While still
+  // false, re-check at most every 60s so a load that happens AFTER boot is picked
+  // up automatically — no restart needed.
+  if (_pscLoaded === true) return true
+  const now = Date.now()
+  if (_pscLoaded === false && now - _pscCheckedAt < 60000) return false
+  _pscCheckedAt = now
   try {
     const { rows } = await pool.query(`SELECT row_count FROM ch_psc_meta WHERE id = 1`)
     _pscLoaded = !!(rows[0] && Number(rows[0].row_count) > 0)
