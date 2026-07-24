@@ -12,29 +12,34 @@ import { pool } from './db.js'
 export async function localSearch(name, n = 5) {
   const q = String(name || '').trim()
   if (!q) return []
-  // Strip legal suffixes + leading "the" so "The 0141 Design Ltd" → "0141 design".
-  const bare = q.replace(/\b(limited|ltd|plc|llp|lp|company|co)\b/gi, '')
-    .replace(/^the\s+/i, '').replace(/[^a-z0-9\s]/gi, ' ').replace(/\s+/g, ' ').trim()
-  if (!bare) return []
+  // Normalise to alphanumeric-only: "GTA Civils & Transport Ltd" → "gtacivilstransport".
+  // Compare against the same normalisation of company_name so '&', spaces, and
+  // punctuation never cause a miss. Strip legal suffixes + leading "the" first.
+  const norm = (s) => String(s || '').toLowerCase()
+    .replace(/\b(limited|ltd|plc|llp|lp|company|co)\b/g, '')
+    .replace(/^the\s+/, '').replace(/&/g, 'and').replace(/[^a-z0-9]/g, '')
+  const key = norm(q)
+  if (!key) return []
+  // Regex on the normalised column. `regexp_replace(lower(company_name),'[^a-z0-9]','','g')`
+  // must be index-backed for speed — an expression index on ch_companies is built
+  // at boot (see ensureSchema). Anchored prefix (^key) first, then contains.
+  const stripExpr = `regexp_replace(replace(lower(company_name),'&','and'),'[^a-z0-9]','','g')`
   try {
-    // Prefix match first (fast, precise), widen to contains only if needed.
-    // LOWER(company_status)='active' — the bulk import stores 'Active' (capital A).
     const { rows } = await pool.query(
       `SELECT company_number, company_name AS title, company_status
          FROM ch_companies
-        WHERE company_name ILIKE $1
+        WHERE ${stripExpr} LIKE $1
         ORDER BY (LOWER(company_status) = 'active') DESC, length(company_name)
         LIMIT $2`,
-      [bare + '%', n])
+      [key + '%', n])
     if (rows.length) return rows
-    // Fallback: contains-match (slower) when no prefix hit.
     const { rows: rows2 } = await pool.query(
       `SELECT company_number, company_name AS title, company_status
          FROM ch_companies
-        WHERE company_name ILIKE $1
+        WHERE ${stripExpr} LIKE $1
         ORDER BY (LOWER(company_status) = 'active') DESC, length(company_name)
         LIMIT $2`,
-      ['%' + bare + '%', n])
+      ['%' + key + '%', n])
     return rows2
   } catch { return [] } // table may not exist in some envs — caller falls back to API
 }

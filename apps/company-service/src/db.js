@@ -116,6 +116,13 @@ export async function ensureSchema() {
   // Officer cache marker on the shared ch_directors table: rows the company-service
   // fetched itself (complete + fresh), safe to trust vs admin-legacy's partial rows.
   await pool.query(`ALTER TABLE ch_directors ADD COLUMN IF NOT EXISTS fetched_by_svc_at TIMESTAMPTZ`).catch(() => {})
+  // Expression index backing localSearch's normalised (alphanumeric-only) name
+  // match on ch_companies — without it, the regexp_replace LIKE is a 5M-row scan.
+  // Built in the background; localSearch tolerates its brief absence (falls to API).
+  pool.query(
+    `CREATE INDEX IF NOT EXISTS idx_ch_companies_normname
+       ON ch_companies (regexp_replace(replace(lower(company_name),'&','and'),'[^a-z0-9]','','g') text_pattern_ops)`
+  ).catch((e) => console.warn('[schema] normname index:', e.message))
 }
 
 // Senior decision-makers for a domain, most senior first. seniority is a free-text
