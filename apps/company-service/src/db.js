@@ -201,3 +201,66 @@ export async function getCompany(domain) {
   const { rows } = await pool.query(`SELECT * FROM companies WHERE domain = $1`, [domain])
   return rows[0] || null
 }
+
+// ── Continuous-refresh queue ───────────────────────────────────────────────
+
+// Top up the queue with domains not already queued/running, prioritised by
+// staleness (never-resolved first, then oldest last_refreshed_at). Returns how
+// many were enqueued. Bounded by `limit` so we never enqueue the whole DB at once.
+export async function enqueueStaleDomains(limit = 500) {
+  const { rows } = await pool.query(
+    `INSERT INTO company_refresh_jobs (domain, priority)
+     SELECT d.domain,
+            COALESCE(EXTRACT(EPOCH FROM (now() - co.last_refreshed_at))::bigint, 9223372036854775807)
+       FROM (SELECT DISTINCT company_domain AS domain FROM contacts
+              WHERE company_domain IS NOT NULL AND company_domain <> ''
+                AND company_name IS NOT NULL AND company_name <> '') d
+       LEFT JOIN companies co ON co.domain = d.domain
+      WHERE NOT EXISTS (
+              SELECT 1 FROM company_refresh_jobs j
+               WHERE j.domain = d.domain AND j.status IN ('queued','running'))
+      ORDER BY COALESCE(EXTRACT(EPOCH FROM (now() - co.last_refreshed_at))::bigint, 9223372036854775807) DESC
+      LIMIT $1
+     RETURNING id`,
+    [limit])
+  return rows.length
+}
+
+// Atomically claim the highest-priority queued job (SKIP LOCKED so parallel
+// workers never grab the same one). Mirrors scraper-service claimNextJob.
+export async function claimNextRefreshJob() {
+  const { rows } = await pool.query(
+    `UPDATE company_refresh_jobs
+        SET status = 'running', started_at = now()
+      WHERE id = (
+        SELECT id FROM company_refresh_jobs
+         WHERE status = 'queued'
+         ORDER BY priority DESC, created_at
+         FOR UPDATE SKIP LOCKED
+         LIMIT 1)
+     RETURNING id, domain`)
+  return rows[0] || null
+}
+
+export async function finishRefreshJob(id, error) {
+  await pool.query(
+    `UPDATE company_refresh_jobs
+        SET status = $2, finished_at = now(), error = $3
+      WHERE id = $1`,
+    [id, error ? 'failed' : 'done', error || null])
+}
+
+// Recover jobs a crash left 'running' back to 'queued' on boot.
+export async function requeueRunning() {
+  const { rowCount } = await pool.query(
+    `UPDATE company_refresh_jobs SET status = 'queued', started_at = NULL WHERE status = 'running'`)
+  return rowCount
+}
+
+export async function queueDepth() {
+  const { rows } = await pool.query(
+    `SELECT status, COUNT(*)::int AS n FROM company_refresh_jobs GROUP BY status`)
+  const out = { queued: 0, running: 0, done: 0, failed: 0 }
+  for (const r of rows) out[r.status] = r.n
+  return out
+}

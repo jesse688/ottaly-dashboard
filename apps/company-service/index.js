@@ -2,6 +2,8 @@ import express from 'express'
 import { ensureSchema, pool, getDomainContacts, getDomainMeta, saveCompany, stampContacts, getCompany } from './src/db.js'
 import { resolveDomain, debugDomain } from './src/resolver.js'
 import { chEnabled } from './src/ch.js'
+import { runEngine, stopEngine, engineState, maybeAutostart } from './src/engine.js'
+import { queueDepth, enqueueStaleDomains } from './src/db.js'
 
 const PORT = Number(process.env.PORT) || 3100
 
@@ -110,7 +112,28 @@ app.get('/status', async (req, res) => {
       pool.query(`SELECT match_method, match_confidence, COUNT(*) AS n
                     FROM companies GROUP BY 1,2 ORDER BY 3 DESC`),
     ])
-    res.json({ ch: chEnabled(), resolved: +comp[0].resolved, with_number: +comp[0].with_number, by_method: byMethod })
+    const depth = await queueDepth()
+    res.json({
+      ch: chEnabled(), resolved: +comp[0].resolved, with_number: +comp[0].with_number,
+      by_method: byMethod, engine: engineState(), queue: depth,
+    })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ── Continuous engine controls ──
+app.post('/engine/start', (req, res) => {
+  runEngine().catch((e) => console.error('[engine]', e.message))
+  res.json({ ok: true, engine: engineState() })
+})
+app.post('/engine/stop', (req, res) => {
+  stopEngine()
+  res.json({ ok: true, engine: engineState() })
+})
+// Manually top up the queue (useful to seed a capped test batch without running).
+app.post('/engine/enqueue', async (req, res) => {
+  try {
+    const n = await enqueueStaleDomains(Number(req.query.limit) || 500)
+    res.json({ ok: true, enqueued: n, queue: await queueDepth() })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
@@ -118,5 +141,6 @@ ensureSchema()
   .then(() => {
     console.log(`[company-service] schema ensured, CH ${chEnabled() ? 'enabled' : 'DISABLED (no key)'}`)
     app.listen(PORT, () => console.log(`[company-service] listening on ${PORT} — shadow mode (POST /refresh?domain=)`))
+    maybeAutostart() // starts the continuous engine only if ENGINE_ENABLED is set
   })
   .catch((e) => { console.error('FATAL: ensureSchema failed:', e.message); process.exit(1) })
