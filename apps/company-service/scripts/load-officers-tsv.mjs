@@ -49,16 +49,18 @@ async function main() {
   // ch_directors has UNIQUE(company_number, name, role); the bulk snapshot contains
   // duplicate (company, person, role) combos, so dedupe in the SELECT and skip any
   // that still collide with admin-legacy's kept rows.
-  // ch_directors has UNIQUE(company_number, name, role); the bulk snapshot contains
-  // duplicate (company, person, role) combos. Dedupe in-batch, coalescing role to ''
-  // (so NULL/'' collapse to one row and match the constraint), then DO NOTHING on
-  // any that still collide with admin-legacy's kept rows.
+  // ch_directors: UNIQUE(company_number,name,role) AND a FK to ch_companies. So:
+  //  - dedupe in-batch (bulk has duplicate person/role combos), role coalesced to ''
+  //  - only insert officers whose company EXISTS in ch_companies (the FK) — orphan
+  //    companies aren't in our data, so their officers can't match anything anyway
+  //  - ON CONFLICT DO NOTHING for any that collide with admin-legacy's kept rows
   await client.query(`
     INSERT INTO ch_directors (company_number, name, role, resigned_on, fetched_by_svc_at)
-    SELECT DISTINCT ON (company_number, name, COALESCE(NULLIF(role,''),''))
-           company_number, name, COALESCE(NULLIF(role,''),''), NULL, now()
-      FROM ch_dir_stage
-     WHERE company_number <> '' AND name <> ''
+    SELECT DISTINCT ON (s.company_number, s.name, COALESCE(NULLIF(s.role,''),''))
+           s.company_number, s.name, COALESCE(NULLIF(s.role,''),''), NULL, now()
+      FROM ch_dir_stage s
+     WHERE s.company_number <> '' AND s.name <> ''
+       AND EXISTS (SELECT 1 FROM ch_companies c WHERE c.company_number = s.company_number)
     ON CONFLICT (company_number, name, role) DO NOTHING`)
   const { rows: fin } = await client.query(`SELECT COUNT(*)::bigint AS n FROM ch_directors WHERE fetched_by_svc_at IS NOT NULL`)
   await client.query(`CREATE INDEX IF NOT EXISTS idx_ch_directors_company ON ch_directors(company_number)`)
