@@ -277,9 +277,17 @@ export async function getPlusVibeReceived(
 // Attachments are supported natively: PV takes an array of { file_name, content }
 // where content is base64 — so a client reply WITH a file still sends from the
 // client's own mailbox (no Resend, no Ottaly-identity leak).
+//
+// GUARANTEED LAST RESORT: pass an EMPTY `replyToId` and this posts to
+// /unibox/emails/send instead, which needs only subject/from/to (+ body) — no
+// thread id, no lead, no campaign. Verified against the live API: it accepts the
+// same cc + attachments payload. The mail still goes FROM the client's own
+// mailbox; it just isn't stitched onto the PV thread. That is strictly better
+// than a human retyping it by hand, so an unresolvable thread no longer means a
+// manual send.
 export async function sendPlusVibeReply(opts: {
   workspaceId: string
-  replyToId: string
+  replyToId: string        // '' => send as a new email (no threading) instead
   subject: string
   from?: string
   to: string
@@ -289,9 +297,11 @@ export async function sendPlusVibeReply(opts: {
 }): Promise<{ ok: boolean; reason?: string }> {
   const key = process.env.PLUSVIBE_API_KEY ?? process.env.PLUSVIBE_KEY
   if (!key) return { ok: false, reason: 'no_pv_key' }
+  // /send has no thread to infer the sender from, so `from` is mandatory there.
+  if (!opts.replyToId && !opts.from) return { ok: false, reason: 'no-sending-mailbox-resolved' }
 
   const payload = JSON.stringify({
-    reply_to_id: opts.replyToId,
+    ...(opts.replyToId ? { reply_to_id: opts.replyToId } : {}),
     subject: opts.subject.startsWith('Re:') ? opts.subject : `Re: ${opts.subject}`,
     ...(opts.from ? { from: opts.from } : {}),
     to: opts.to,
@@ -314,7 +324,7 @@ export async function sendPlusVibeReply(opts: {
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     try {
       const res = await fetch(
-        `https://api.plusvibe.ai/api/v1/unibox/emails/reply?workspace_id=${encodeURIComponent(opts.workspaceId)}`,
+        `https://api.plusvibe.ai/api/v1/unibox/emails/${opts.replyToId ? 'reply' : 'send'}?workspace_id=${encodeURIComponent(opts.workspaceId)}`,
         {
           method: 'POST',
           headers: { 'x-api-key': key, 'Content-Type': 'application/json' },

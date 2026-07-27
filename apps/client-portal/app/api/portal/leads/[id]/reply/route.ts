@@ -250,11 +250,27 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const strippedId = (inboundId ?? '').replace(/^(unibox_|pv_)/, '')
     const replyToId = storedRow?.pv_id || pv?.id || (/^[a-f0-9]{16,}$/i.test(strippedId) ? strippedId : '')
     const fromMailbox = storedRow?.pv_eaccount || pv?.from || eaccount
-    if (!fromMailbox || !replyToId) {
-      // Couldn't resolve a PV thread to reply to (no live PV email for this lead,
-      // or no sending mailbox). Surface a clear reason so it's flagged for manual
-      // send instead of a cryptic error or a dead-Bison attempt.
-      send = { ok: false, reason: !replyToId ? 'no-plusvibe-thread-resolved' : 'no-sending-mailbox-resolved' }
+    if (!fromMailbox) {
+      // No client mailbox to send FROM — we will NOT fall back to an Ottaly
+      // identity, so this one genuinely has to go out by hand.
+      send = { ok: false, reason: 'no-sending-mailbox-resolved' }
+    } else if (!replyToId) {
+      // No PV thread id anywhere (stored or live). Rather than dump this on a
+      // human, send it as a NEW email from the client's own mailbox — same
+      // sender, same recipients, same attachments, subject prefixed "Re:" so it
+      // still threads in the LEAD's mail client. It just won't be stitched onto
+      // the PV thread, which is a bookkeeping loss, not a delivery one.
+      send = await sendPlusVibeReply({
+        workspaceId: session.workspaceId,
+        replyToId: '',
+        subject: subject,
+        from: fromMailbox,
+        to: toList,
+        body: outboundHtml,
+        cc: ccList || undefined,
+        attachments: attachments.length ? attachments : undefined,
+      })
+      if (send.ok) send.reason = 'sent-as-new-email-unthreaded'
     } else {
       send = await sendPlusVibeReply({
         workspaceId: session.workspaceId,
@@ -267,10 +283,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         attachments: attachments.length ? attachments : undefined,
       })
       // A stored id can go stale (thread archived/purged in PV) — PV then rejects
-      // it with a permanent 4xx. Don't fall to manual while we still have the live
-      // resolver untried: re-resolve against the API and send once more.
-      if (!send.ok && storedRow && !/^pv_(429|5\d\d)/.test(send.reason ?? '')) {
-        const live = await getPlusVibeInbound(session.workspaceId, lead.email, acceptFrom, wantMsgId)
+      // it with a permanent 4xx. Don't fall to manual while we still have options.
+      // Scoped to a PV 4xx that ISN'T 429: those mean "PV read the request and
+      // refused it", i.e. it definitely did not send, so retrying can't duplicate.
+      // A timeout/5xx is deliberately excluded — the mail may actually have gone.
+      const rejected = /^pv_4/.test(send.reason ?? '') && !/^pv_429/.test(send.reason ?? '')
+      if (!send.ok && rejected) {
+        // 1. Re-resolve live, in case the stored id is simply out of date.
+        const live = storedRow
+          ? await getPlusVibeInbound(session.workspaceId, lead.email, acceptFrom, wantMsgId)
+          : null
         if (live?.id && live.id !== replyToId) {
           send = await sendPlusVibeReply({
             workspaceId: session.workspaceId,
@@ -282,6 +304,20 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
             cc: ccList || undefined,
             attachments: attachments.length ? attachments : undefined,
           })
+        }
+        // 2. Still refused — send it unthreaded rather than hand it to a human.
+        if (!send.ok) {
+          const asNew = await sendPlusVibeReply({
+            workspaceId: session.workspaceId,
+            replyToId: '',
+            subject: subject,
+            from: fromMailbox,
+            to: toList,
+            body: outboundHtml,
+            cc: ccList || undefined,
+            attachments: attachments.length ? attachments : undefined,
+          })
+          if (asNew.ok) send = { ok: true, reason: 'sent-as-new-email-unthreaded' }
         }
       }
     }
@@ -318,7 +354,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       title: send.ok
         ? `${session.companyName} replied re: ${who}`
         : `⚠️ SEND MANUALLY — ${session.companyName} re: ${who}`,
-      body: `${send.ok ? '✅ Sent live via PlusVibe' : '⚠️ NOT auto-sent (' + send.reason + ') — PLEASE SEND THIS MANUALLY'}\nFrom (client mailbox): ${eaccount ?? '— unresolved —'}\nTo: ${toList}\nCc: ${ccList || '(none)'}\nSubject: ${subject}\n\n${body}`,
+      body: `${send.ok
+        ? (send.reason === 'sent-as-new-email-unthreaded'
+            // Delivered, so NOT a manual-send job — but say plainly that it went
+            // out as a new email so nobody hunts for it on the PV thread.
+            ? '✅ Sent live via PlusVibe — as a NEW email (no PV thread could be resolved), so it will not appear stitched onto the thread in PlusVibe. No action needed.'
+            : '✅ Sent live via PlusVibe')
+        : '⚠️ NOT auto-sent (' + send.reason + ') — PLEASE SEND THIS MANUALLY'}\nFrom (client mailbox): ${eaccount ?? '— unresolved —'}\nTo: ${toList}\nCc: ${ccList || '(none)'}\nSubject: ${subject}\n\n${body}`,
     })
   } catch (err) {
     console.error('[reply] notifyAdmin failed (reply already handled — not failing the request):', err)
