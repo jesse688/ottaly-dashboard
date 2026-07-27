@@ -153,6 +153,15 @@ export async function ensureSchema() {
     `CREATE INDEX IF NOT EXISTS idx_ch_companies_normname
        ON ch_companies (regexp_replace(replace(lower(company_name),'&','and'),'[^a-z0-9]','','g') text_pattern_ops)`
   ).catch((e) => console.warn('[schema] normname index:', e.message))
+  // Index the join key EVERYTHING here uses: getDomainContacts, stampContacts, and
+  // the /stamp-all batch UPDATE all filter contacts by company_domain. Without it
+  // each of those is a full sequential scan of contacts — the /stamp-all batches
+  // were doing a whole-table scan PER 2000-domain batch (~80s each, IO-bound). With
+  // it, each batch is an index range scan (ms). CONCURRENTLY so building it doesn't
+  // lock out admin-legacy's live reads/writes on contacts; fire-and-forget (can't
+  // run inside a txn), and the stamp tolerates its brief absence.
+  pool.query(`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_contacts_company_domain ON contacts (company_domain)`)
+    .catch((e) => console.warn('[schema] contacts company_domain index:', e.message))
 }
 
 // Senior decision-makers for a domain, most senior first. seniority is a free-text

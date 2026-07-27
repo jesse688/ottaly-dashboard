@@ -247,6 +247,33 @@ app.post('/stamp-all', (req, res) => {
   res.json({ ok: true, started: true, note: 'stamping in background — poll /stamp-status' })
 })
 
+// Is the contacts.company_domain index built and VALID? A CONCURRENTLY build takes
+// a while on the full table and leaves an INVALID index if it fails partway, so the
+// stamp should wait for valid=true before running (else it seq-scans per batch).
+app.get('/index-status', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT c.relname AS index, i.indisvalid AS valid, i.indisready AS ready
+         FROM pg_class c
+         JOIN pg_index i ON i.indexrelid = c.oid
+        WHERE c.relname = 'idx_contacts_company_domain'`)
+    res.json({ ok: true, exists: rows.length > 0, valid: rows[0]?.valid ?? false, ready: rows[0]?.ready ?? false })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Manually (re)build the contacts.company_domain index — drops an INVALID leftover
+// first, then rebuilds CONCURRENTLY. Fire-and-forget; poll /index-status for valid.
+app.post('/reindex-contacts', (req, res) => {
+  ;(async () => {
+    try {
+      await pool.query(`DROP INDEX CONCURRENTLY IF EXISTS idx_contacts_company_domain`).catch(() => {})
+      await pool.query(`CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_contacts_company_domain ON contacts (company_domain)`)
+      console.log('[reindex] idx_contacts_company_domain built')
+    } catch (e) { console.error('[reindex]', e.message) }
+  })()
+  res.json({ ok: true, started: true, note: 'building idx_contacts_company_domain concurrently — poll /index-status' })
+})
+
 // DB introspection — what's active and what's blocking whom. Lets us diagnose a
 // stuck stamp (the UPDATE queues behind whoever holds a conflicting lock on
 // `contacts`) without shell/psql access to the EasyPanel Postgres.
