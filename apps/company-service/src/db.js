@@ -9,6 +9,24 @@ export const pool = new Pool({
   connectionTimeoutMillis: 10000,
 })
 
+// Run an ALTER COLUMN ... TYPE only if the column isn't already the target type.
+// A bare ALTER TYPE takes an ACCESS EXCLUSIVE lock and rewrites the table on EVERY
+// boot even when it's a no-op — which hangs startup if another session holds a lock.
+// The information_schema check is a cheap read (no lock), so steady-state boots skip
+// the ALTER entirely. targetType: the data_type as information_schema reports it
+// (e.g. 'text', or 'ARRAY' for TEXT[]). Missing table/column → skip quietly.
+async function migrateColumnType(table, column, targetType, alterSql) {
+  try {
+    const { rows } = await pool.query(
+      `SELECT data_type FROM information_schema.columns WHERE table_name = $1 AND column_name = $2`,
+      [table, column]
+    )
+    if (!rows.length) return                       // column doesn't exist yet — nothing to migrate
+    if (rows[0].data_type === targetType) return   // already the target type — skip the locking ALTER
+    await pool.query(alterSql)
+  } catch (e) { console.warn(`[schema] migrateColumnType ${table}.${column}:`, e.message) }
+}
+
 // Self-migrating, like scraper-service/src/db.js and admin-legacy's db-postgres.
 // Safe to run on every boot. Owns the `companies` table (keyed by domain) and the
 // refresh queue; adds provenance columns to the shared `contacts` table.
@@ -115,9 +133,15 @@ export async function ensureSchema() {
     );
   `)
   // contacts.id is a UUID, not a bigint. If an earlier boot created companies with
-  // BIGINT id columns, migrate them to TEXT (idempotent — no-op once already TEXT).
-  await pool.query(`ALTER TABLE companies ALTER COLUMN anchor_contact_id TYPE TEXT USING anchor_contact_id::text`)
-  await pool.query(`ALTER TABLE companies ALTER COLUMN senior_contact_ids TYPE TEXT[] USING senior_contact_ids::text[]`)
+  // BIGINT id columns, migrate them to TEXT. Guard on the CURRENT type: a bare
+  // ALTER COLUMN ... TYPE takes an ACCESS EXCLUSIVE lock and rewrites the table EVERY
+  // boot even when already TEXT — which blocks the whole startup (→ crash-loop/502)
+  // if any other session holds a lock on `companies`. Only fire the ALTER when the
+  // column isn't already the target type.
+  await migrateColumnType('companies', 'anchor_contact_id', 'text',
+    `ALTER TABLE companies ALTER COLUMN anchor_contact_id TYPE TEXT USING anchor_contact_id::text`)
+  await migrateColumnType('companies', 'senior_contact_ids', 'ARRAY',
+    `ALTER TABLE companies ALTER COLUMN senior_contact_ids TYPE TEXT[] USING senior_contact_ids::text[]`)
   await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS psc_owners TEXT[]`)
   // Officer cache marker on the shared ch_directors table: rows the company-service
   // fetched itself (complete + fresh), safe to trust vs admin-legacy's partial rows.

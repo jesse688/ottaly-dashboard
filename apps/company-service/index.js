@@ -253,10 +253,19 @@ app.post('/engine/enqueue', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
+// Listen FIRST, migrate schema in the BACKGROUND. ensureSchema() runs blocking DDL
+// (incl. ALTER COLUMN ... TYPE, which takes an ACCESS EXCLUSIVE lock and table
+// rewrite). If a prior container or an in-flight stamp still holds a lock on
+// `companies`/`contacts`, that ALTER blocks indefinitely — the old
+// ensureSchema().then(listen) ordering then never bound the port, so EasyPanel saw
+// no healthy process and the deploy crash-looped into a 502. Binding the port up
+// front keeps /health responsive no matter what the DB is doing; the migration
+// (long since a no-op in prod) settles behind it, and a failure is logged, not fatal.
+app.listen(PORT, () => console.log(`[company-service] listening on ${PORT} — shadow mode (POST /refresh?domain=)`))
+
 ensureSchema()
   .then(() => {
     console.log(`[company-service] schema ensured, CH ${chEnabled() ? 'enabled' : 'DISABLED (no key)'}`)
-    app.listen(PORT, () => console.log(`[company-service] listening on ${PORT} — shadow mode (POST /refresh?domain=)`))
     maybeAutostart() // starts the continuous engine only if ENGINE_ENABLED is set
   })
-  .catch((e) => { console.error('FATAL: ensureSchema failed:', e.message); process.exit(1) })
+  .catch((e) => console.error('[company-service] ensureSchema failed (server still up):', e.message))
