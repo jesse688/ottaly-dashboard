@@ -198,17 +198,24 @@ app.get('/stamp-status', (req, res) => res.json(stampState))
 async function runStampAll() {
   if (stampState.running) return
   Object.assign(stampState, { running: true, done: 0, total: 0, contacts: 0, started_at: new Date().toISOString(), finished_at: null, error: null })
+  // Dedicated client so we can set a lock_timeout: if some other session holds a
+  // conflicting lock on `contacts` (an idle-in-transaction admin query, a schema
+  // ALTER, etc.), the batch UPDATE fails FAST and loud instead of hanging forever
+  // at done:0 with no signal (which is exactly how the first attempts silently
+  // stalled). The error surfaces on /stamp-status so we can see and clear the blocker.
+  const client = await pool.connect()
   try {
-    const totalRow = await pool.query(`SELECT COUNT(*)::int AS n FROM companies`)
+    await client.query(`SET lock_timeout = '20s'`)
+    const totalRow = await client.query(`SELECT COUNT(*)::int AS n FROM companies`)
     stampState.total = totalRow.rows[0].n
     const BATCH = 2000
     let last = '' // keyset cursor: last domain stamped (domains sort > '')
     while (true) {
-      const { rows } = await pool.query(
+      const { rows } = await client.query(
         `SELECT domain FROM companies WHERE domain > $1 ORDER BY domain LIMIT $2`, [last, BATCH])
       if (!rows.length) break
       const domains = rows.map((r) => r.domain)
-      const upd = await pool.query(`
+      const upd = await client.query(`
         UPDATE contacts ct SET
           ch_company_number = co.ch_company_number,
           ch_match_confidence = co.match_confidence,
@@ -230,6 +237,7 @@ async function runStampAll() {
       last = domains[domains.length - 1] // advance the cursor
     }
   } catch (e) { stampState.error = e.message } finally {
+    client.release()
     stampState.running = false; stampState.finished_at = new Date().toISOString()
   }
 }
@@ -237,6 +245,38 @@ async function runStampAll() {
 app.post('/stamp-all', (req, res) => {
   runStampAll().catch((e) => console.error('[stamp]', e.message))
   res.json({ ok: true, started: true, note: 'stamping in background — poll /stamp-status' })
+})
+
+// DB introspection — what's active and what's blocking whom. Lets us diagnose a
+// stuck stamp (the UPDATE queues behind whoever holds a conflicting lock on
+// `contacts`) without shell/psql access to the EasyPanel Postgres.
+app.get('/pg-activity', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT pid, state,
+             now() - xact_start  AS xact_age,
+             now() - query_start AS query_age,
+             wait_event_type, wait_event,
+             pg_blocking_pids(pid) AS blocked_by,
+             left(query, 200) AS query
+        FROM pg_stat_activity
+       WHERE datname = current_database() AND pid <> pg_backend_pid()
+         AND state IS NOT NULL AND state <> 'idle'
+       ORDER BY xact_start NULLS LAST`)
+    res.json({ ok: true, activity: rows })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Cancel (default) or terminate a backend by pid — to clear a blocker holding a
+// lock on `contacts`. ?terminate=1 uses pg_terminate_backend (harder kill).
+app.post('/pg-kill', async (req, res) => {
+  const pid = Number(req.query.pid)
+  if (!pid) return res.status(400).json({ error: 'pid required' })
+  const fn = req.query.terminate === '1' ? 'pg_terminate_backend' : 'pg_cancel_backend'
+  try {
+    const { rows } = await pool.query(`SELECT ${fn}($1) AS ok`, [pid])
+    res.json({ ok: true, fn, pid, result: rows[0].ok })
+  } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
 // ── Continuous engine controls ──
