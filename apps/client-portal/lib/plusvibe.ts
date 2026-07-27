@@ -115,10 +115,16 @@ export async function getPlusVibeInbound(
   //
   // So: walk the feed with the `page_trail` cursor instead of reading one page,
   // and stop as soon as we match. Bounded so a miss can't hang the request.
+  // This runs inside the client's reply request, so the whole scan gets a hard
+  // wall-clock budget. Without it a string of slow pages (8s timeout each, across
+  // two folders) could leave the client staring at a spinner for minutes.
+  const deadline = Date.now() + 12_000
+
   const scanFolder = async (path: string, extraParams: Record<string, string>) => {
     let pageTrail: string | undefined
     const seen = new Set<string>()
     for (let page = 0; page < MAX_PAGES; page++) {
+      if (Date.now() > deadline) return null
       const url = new URL(`https://api.plusvibe.ai/api/v1/${path}`)
       url.searchParams.set('workspace_id', workspaceId)
       for (const [k, v] of Object.entries(extraParams)) url.searchParams.set(k, v)
