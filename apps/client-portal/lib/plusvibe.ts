@@ -80,6 +80,10 @@ export async function getPlusVibeInbound(
 
   type PVEmail = { id?: string; eaccount?: string; from_address_email?: string; message_id?: string }
 
+  // Pages to walk before giving up. PV returns small pages, so this is a real
+  // scan, not a peek — but it stays bounded so a genuine miss can't hang a reply.
+  const MAX_PAGES = 12
+
   // One lookup by a given `lead` query value. CRITICAL: PlusVibe's `lead=` filter is
   // LOOSE — it returns the mailbox's recent received emails (newest-first) even when
   // none are from this lead. So we must scan the WHOLE page, not just data[0], and
@@ -98,32 +102,67 @@ export async function getPlusVibeInbound(
     return null
   }
 
-  const tryLead = async (q: string): Promise<{ id: string; from: string; to: string } | null> => {
-    const res = await fetch(
-      `https://api.plusvibe.ai/api/v1/unibox/emails?workspace_id=${encodeURIComponent(workspaceId)}&lead=${encodeURIComponent(q)}&email_type=received`,
-      { headers: { 'x-api-key': key, 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(8000) }
-    )
-    if (!res.ok) throw new Error(`pv_${res.status}`)   // treat non-200 as retryable
-    const data = await res.json() as { data?: PVEmail[] }
-    return pick(data?.data ?? [])
+  // VERIFIED AGAINST THE LIVE API (2026-07-27): PlusVibe's `lead=` query param is
+  // NOT a filter — it is IGNORED. Asking for lead=hannah@systemhydraulics.net
+  // returned the workspace's 4 newest received emails, none of them hers. So this
+  // endpoint only ever answers "the newest emails in this workspace".
+  //
+  // That is the whole "SEND MANUALLY" bug: a reply resolves only while the lead's
+  // email is still near the top of the workspace-wide feed. Once other leads reply
+  // and push it down, resolution fails — permanently, for that thread. It looked
+  // intermittent (~17%) but is fully deterministic per thread, which is why the
+  // same lead failed 7 times in a row.
+  //
+  // So: walk the feed with the `page_trail` cursor instead of reading one page,
+  // and stop as soon as we match. Bounded so a miss can't hang the request.
+  const scanFolder = async (path: string, extraParams: Record<string, string>) => {
+    let pageTrail: string | undefined
+    const seen = new Set<string>()
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const url = new URL(`https://api.plusvibe.ai/api/v1/${path}`)
+      url.searchParams.set('workspace_id', workspaceId)
+      for (const [k, v] of Object.entries(extraParams)) url.searchParams.set(k, v)
+      if (pageTrail) url.searchParams.set('page_trail', pageTrail)
+
+      let data: { page_trail?: string; data?: PVEmail[] } | null = null
+      // Retry each page ONCE on a transient failure (timeout / 5xx / network) — a
+      // single slow PV call used to silently flip a genuine reply to manual.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const res = await fetch(url, {
+            headers: { 'x-api-key': key, 'User-Agent': 'Mozilla/5.0' },
+            signal: AbortSignal.timeout(8000),
+          })
+          if (!res.ok) throw new Error(`pv_${res.status}`)
+          data = await res.json() as { page_trail?: string; data?: PVEmail[] }
+          break
+        } catch {
+          if (attempt === 0) await new Promise(r => setTimeout(r, 600))
+        }
+      }
+      if (!data) return null                       // both attempts failed — give up on this folder
+
+      const batch = data.data ?? []
+      if (!batch.length) return null
+      const hit = pick(batch)
+      if (hit) return hit
+
+      // No new ids means the cursor isn't advancing (param ignored / end of feed).
+      let added = 0
+      for (const e of batch) if (e.id && !seen.has(e.id)) { seen.add(e.id); added++ }
+      if (added === 0 || !data.page_trail) return null
+      pageTrail = data.page_trail
+    }
+    return null
   }
 
-  // Query by the lead address first, then each alternate. Retry each ONCE on a
-  // transient failure (timeout / 5xx / network) — a single slow PV call is what
-  // was silently flipping genuine replies to "send manually".
-  for (const q of [leadEmail, ...acceptFrom]) {
-    if (!q) continue
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const hit = await tryLead(q)
-        if (hit) return hit
-        break   // valid response, just not a match for this q — move to next q
-      } catch {
-        if (attempt === 0) await new Promise(r => setTimeout(r, 600))  // brief backoff, then retry
-      }
-    }
-  }
-  return null
+  // The tracked feed first (where campaign replies live), then PV's "Others"
+  // folder — a reply PV couldn't link to a campaign sequence never appears in
+  // `received` at all, but we ingest and show it, so the client can reply to it.
+  return (
+    await scanFolder('unibox/emails', { email_type: 'received' })
+    ?? await scanFolder('unibox/other-emails', {})
+  )
 }
 
 // A received email from the PlusVibe unibox.

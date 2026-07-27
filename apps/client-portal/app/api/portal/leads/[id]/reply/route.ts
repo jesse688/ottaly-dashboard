@@ -213,22 +213,43 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // unibox_replies.bison_reply_id = `pv_<message-id>`. This is what PV's own reply
     // UI targets a thread by, so we hand it to the resolver for an EXACT match —
     // robust even when PV's loose `lead=` filter returns another lead's email first.
-    const msg = await pool.query(
-      `SELECT bison_reply_id FROM unibox_replies
+    // THE PV EMAIL ID WE ALREADY HAVE. At ingest we store PlusVibe's own email
+    // object verbatim (`raw = JSON.stringify(e)`), so `raw->>'id'` IS the exact
+    // field the live resolver would go looking for — the one PV wants as
+    // `reply_to_id`. We were throwing it away and re-searching PV for it, via a
+    // `lead=` filter that PV IGNORES (verified live), which is what produced
+    // "SEND MANUALLY" ~17% of the time. Read it straight from the DB instead:
+    // it's exact, free, and can't be paged out of a feed.
+    //
+    // `bison_reply_id` holds a bare PV id on some rows too (older ingest path),
+    // so accept that shape as well — the previous `LIKE 'pv_%'` filter discarded
+    // precisely the rows that carried a usable id.
+    const stored = await pool.query(
+      `SELECT COALESCE(
+                NULLIF(raw->>'id',''),
+                CASE WHEN bison_reply_id ~ '^[a-f0-9]{16,}$' THEN bison_reply_id END
+              ) AS pv_id,
+              NULLIF(raw->>'eaccount','') AS pv_eaccount,
+              NULLIF(raw->>'message_id','') AS pv_msg_id
+         FROM unibox_replies
         WHERE workspace_id = $1
           AND (lower(lead_email) = lower($2) OR lower(matched_lead_email) = lower($2))
-          AND bison_reply_id LIKE 'pv_%'
-        ORDER BY received_at DESC LIMIT 1`,
+        ORDER BY received_at DESC`,
       [session.workspaceId, lead.email]
-    ).catch(() => ({ rows: [] as { bison_reply_id?: string }[] }))
-    const wantMsgId = (msg.rows[0]?.bison_reply_id ?? '').replace(/^pv_/, '') || null
+    ).catch(() => ({ rows: [] as { pv_id?: string; pv_eaccount?: string; pv_msg_id?: string }[] }))
+    // Newest row that actually carries a PV-shaped id.
+    const storedRow = stored.rows.find(r => /^[a-f0-9]{16,}$/i.test(r.pv_id ?? ''))
+    const wantMsgId = (stored.rows.find(r => r.pv_msg_id)?.pv_msg_id) ?? null
 
-    const pv = await getPlusVibeInbound(session.workspaceId, lead.email, acceptFrom, wantMsgId)
-    const fromMailbox = pv?.from || eaccount
+    // Only hit the API when we DON'T already know the id — that's the slow,
+    // lossy path, now a fallback rather than the default.
+    const pv = storedRow ? null : await getPlusVibeInbound(session.workspaceId, lead.email, acceptFrom, wantMsgId)
+
     // Strip any known prefix; if it's a plain-numeric Bison id we can't use it as
-    // a PV reply_to_id, so prefer the freshly-resolved PV id.
+    // a PV reply_to_id, so prefer a real PV id.
     const strippedId = (inboundId ?? '').replace(/^(unibox_|pv_)/, '')
-    const replyToId = pv?.id || (/^[a-f0-9]{8,}$/i.test(strippedId) ? strippedId : '')
+    const replyToId = storedRow?.pv_id || pv?.id || (/^[a-f0-9]{16,}$/i.test(strippedId) ? strippedId : '')
+    const fromMailbox = storedRow?.pv_eaccount || pv?.from || eaccount
     if (!fromMailbox || !replyToId) {
       // Couldn't resolve a PV thread to reply to (no live PV email for this lead,
       // or no sending mailbox). Surface a clear reason so it's flagged for manual
@@ -245,6 +266,24 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         cc: ccList || undefined,
         attachments: attachments.length ? attachments : undefined,
       })
+      // A stored id can go stale (thread archived/purged in PV) — PV then rejects
+      // it with a permanent 4xx. Don't fall to manual while we still have the live
+      // resolver untried: re-resolve against the API and send once more.
+      if (!send.ok && storedRow && !/^pv_(429|5\d\d)/.test(send.reason ?? '')) {
+        const live = await getPlusVibeInbound(session.workspaceId, lead.email, acceptFrom, wantMsgId)
+        if (live?.id && live.id !== replyToId) {
+          send = await sendPlusVibeReply({
+            workspaceId: session.workspaceId,
+            replyToId: live.id,
+            subject: subject,
+            from: live.from || fromMailbox,
+            to: toList,
+            body: outboundHtml,
+            cc: ccList || undefined,
+            attachments: attachments.length ? attachments : undefined,
+          })
+        }
+      }
     }
   }
 
