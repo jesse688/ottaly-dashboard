@@ -18,6 +18,9 @@ if (!process.env.DATABASE_URL) {
 const app = express()
 app.use(express.json())
 
+// Background stamp job state (declared early so /status can report it).
+const stampState = { running: false, done: 0, total: 0, contacts: 0, started_at: null, finished_at: null, error: null }
+
 app.get('/health', (req, res) => res.json({ ok: true, ch: chEnabled(), pid: process.pid }))
 
 // Operator dashboard.
@@ -122,7 +125,7 @@ app.get('/status', async (req, res) => {
     const depth = await queueDepth()
     res.json({
       ch: chEnabled(), resolved: +comp[0].resolved, with_number: +comp[0].with_number,
-      by_method: byMethod, engine: engineState(), queue: depth,
+      by_method: byMethod, engine: engineState(), queue: depth, stamp: stampState,
     })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
@@ -175,27 +178,62 @@ app.get('/companies', async (req, res) => {
 // Bulk-stamp ALL already-resolved companies onto contacts in one SQL pass — gets
 // ownership data into the admin-legacy Contacts page immediately without waiting
 // for the engine to re-resolve. Idempotent; safe to re-run.
-app.post('/stamp-all', async (req, res) => {
+// Bulk-stamp resolved companies onto contacts, BATCHED and in the BACKGROUND so a
+// full-DB stamp completes reliably instead of hanging one giant UPDATE over HTTP.
+// Processes companies in chunks (by domain), only re-stamping companies resolved
+// more recently than the last stamp (so re-runs are cheap). Progress on /status.
+app.get('/stamp-status', (req, res) => res.json(stampState))
+
+async function runStampAll({ force = false } = {}) {
+  if (stampState.running) return
+  Object.assign(stampState, { running: true, done: 0, contacts: 0, started_at: new Date().toISOString(), finished_at: null, error: null })
   try {
-    const { rowCount } = await pool.query(`
-      UPDATE contacts ct SET
-        ch_company_number = co.ch_company_number,
-        ch_match_confidence = co.match_confidence,
-        ch_postcode = COALESCE(co.ch_postcode, ct.ch_postcode),
-        ch_verified_at = now(),
-        ccod_owns_building = co.building_owner,
-        ccod_building_owner = co.building_owner_name,
-        business_owner = co.business_owner,
-        business_owner_basis = co.business_owner_basis,
-        psc_owners = co.psc_owners,
-        company_data_provenance = CASE WHEN ct.id::text = co.anchor_contact_id THEN 'anchor'
-                                       WHEN co.ch_company_number IS NULL THEN 'unresolved'
-                                       ELSE 'inherited' END,
-        company_stamped_at = now()
-      FROM companies co
-      WHERE ct.company_domain = co.domain`)
-    res.json({ ok: true, contacts_stamped: rowCount })
-  } catch (e) { res.status(500).json({ error: e.message }) }
+    // Which companies to stamp: all (force) or those refreshed since last stamp.
+    const totalRow = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM companies co
+        ${force ? '' : `WHERE NOT EXISTS (SELECT 1 FROM contacts ct WHERE ct.company_domain = co.domain AND ct.company_stamped_at >= co.last_refreshed_at)`}`)
+    stampState.total = totalRow.rows[0].n
+    const BATCH = 2000
+    let offset = 0
+    while (true) {
+      // Grab a batch of domains to stamp (ordered for stable paging).
+      const { rows } = await pool.query(
+        `SELECT domain FROM companies co
+          ${force ? '' : `WHERE NOT EXISTS (SELECT 1 FROM contacts ct WHERE ct.company_domain = co.domain AND ct.company_stamped_at >= co.last_refreshed_at)`}
+          ORDER BY domain LIMIT $1 OFFSET $2`, [BATCH, offset])
+      if (!rows.length) break
+      const domains = rows.map((r) => r.domain)
+      const upd = await pool.query(`
+        UPDATE contacts ct SET
+          ch_company_number = co.ch_company_number,
+          ch_match_confidence = co.match_confidence,
+          ch_postcode = COALESCE(co.ch_postcode, ct.ch_postcode),
+          ch_verified_at = now(),
+          ccod_owns_building = co.building_owner,
+          ccod_building_owner = co.building_owner_name,
+          business_owner = co.business_owner,
+          business_owner_basis = co.business_owner_basis,
+          psc_owners = co.psc_owners,
+          company_data_provenance = CASE WHEN ct.id::text = co.anchor_contact_id THEN 'anchor'
+                                         WHEN co.ch_company_number IS NULL THEN 'unresolved'
+                                         ELSE 'inherited' END,
+          company_stamped_at = now()
+        FROM companies co
+        WHERE ct.company_domain = co.domain AND co.domain = ANY($1)`, [domains])
+      stampState.contacts += upd.rowCount
+      stampState.done += domains.length
+      offset += BATCH
+      if (force === false && offset > stampState.total + BATCH) break // safety
+    }
+  } catch (e) { stampState.error = e.message } finally {
+    stampState.running = false; stampState.finished_at = new Date().toISOString()
+  }
+}
+
+app.post('/stamp-all', (req, res) => {
+  const force = req.query.force === '1'
+  runStampAll({ force }).catch((e) => console.error('[stamp]', e.message))
+  res.json({ ok: true, started: true, note: 'stamping in background — poll /stamp-status' })
 })
 
 // ── Continuous engine controls ──

@@ -13,11 +13,11 @@ import {
 } from './db.js'
 import { resolveDomain } from './resolver.js'
 
-// STAMP: when on, each resolve writes the result back onto contacts.ch_* +
-// ccod_owns_building + business_owner (so the admin-legacy Contacts page can
-// filter on property/business ownership). Off by default so shadow-mode resolves
-// don't touch live contacts until we deliberately enable it.
-const STAMP = /^(1|true|yes|on)$/i.test(process.env.ENGINE_STAMP || '')
+// STAMP: each resolve writes the result back onto contacts.ch_* + ccod_owns_building
+// + business_owner, so the admin-legacy Contacts page's ownership filter stays
+// current automatically. ON by default now (the data pipeline is proven); set
+// ENGINE_STAMP=0 to run shadow-only.
+const STAMP = !/^(0|false|no|off)$/i.test(process.env.ENGINE_STAMP || '1')
 
 const IDLE_POLL_MS = Number(process.env.ENGINE_IDLE_POLL_MS) || 5000
 const ENQUEUE_BATCH = Number(process.env.ENGINE_ENQUEUE_BATCH) || 500
