@@ -206,6 +206,14 @@ async function runStampAll() {
   const client = await pool.connect()
   try {
     await client.query(`SET lock_timeout = '20s'`)
+    // Force the contacts(company_domain) index. Even with a VALID index present, the
+    // planner kept choosing a full seq scan of contacts per batch (~80s, IO-bound) —
+    // stale stats after the bulk loads make it mis-estimate the 2000-key join. Refresh
+    // stats AND hard-disable seqscan on this dedicated connection so every batch UPDATE
+    // is a nested-loop index scan (ms). Scoped to this client only; the engine/others
+    // are unaffected.
+    await client.query(`ANALYZE contacts`).catch((e) => console.warn('[stamp] analyze:', e.message))
+    await client.query(`SET enable_seqscan = off`)
     const totalRow = await client.query(`SELECT COUNT(*)::int AS n FROM companies`)
     stampState.total = totalRow.rows[0].n
     const BATCH = 2000
