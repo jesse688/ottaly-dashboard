@@ -239,7 +239,14 @@ async function runStampAll() {
                                          ELSE 'inherited' END,
           company_stamped_at = now()
         FROM companies co
-        WHERE ct.company_domain = co.domain AND co.domain = ANY($1)`, [domains])
+        -- Filter the TARGET table (ct) directly by the indexed column against the
+        -- 2000-domain array. The old form filtered co.domain = ANY(...) and joined ct
+        -- via ct.company_domain = co.domain, which the planner kept satisfying with a
+        -- FULL SEQ SCAN of contacts per batch (~80s). Putting ct.company_domain = ANY($1)
+        -- gives Postgres a direct index predicate on idx_contacts_company_domain — the
+        -- same fast access path the single-domain stampContacts uses — so each batch is
+        -- an index scan over just those domains, not the whole table.
+        WHERE ct.company_domain = ANY($1) AND co.domain = ct.company_domain`, [domains])
       stampState.contacts += upd.rowCount
       stampState.done += domains.length
       last = domains[domains.length - 1] // advance the cursor
