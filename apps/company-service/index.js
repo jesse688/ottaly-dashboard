@@ -184,23 +184,28 @@ app.get('/companies', async (req, res) => {
 // more recently than the last stamp (so re-runs are cheap). Progress on /status.
 app.get('/stamp-status', (req, res) => res.json(stampState))
 
-async function runStampAll({ force = false } = {}) {
+// Full-DB backfill: stamp every resolved company's ownership onto its contacts.
+// The engine already stamps per-resolve (STAMP on), so this is the manual bulk
+// pass. Two hard-won perf rules baked in:
+//  1) Count with a PLAIN COUNT(*) — the old correlated `NOT EXISTS
+//     (…contacts…since last stamp)` filter probed the contacts table once per
+//     company and wedged for minutes before the first batch even ran (no fast
+//     index for that probe). Re-stamping is idempotent and cheap, so we just
+//     stamp everything rather than compute an expensive "what changed" set.
+//  2) KEYSET pagination (domain > lastDomain), not LIMIT/OFFSET — OFFSET rescans
+//     all prior rows each batch (O(n²) over 195k). The PRIMARY KEY on domain makes
+//     `WHERE domain > $1 ORDER BY domain` an index range scan, flat per batch.
+async function runStampAll() {
   if (stampState.running) return
-  Object.assign(stampState, { running: true, done: 0, contacts: 0, started_at: new Date().toISOString(), finished_at: null, error: null })
+  Object.assign(stampState, { running: true, done: 0, total: 0, contacts: 0, started_at: new Date().toISOString(), finished_at: null, error: null })
   try {
-    // Which companies to stamp: all (force) or those refreshed since last stamp.
-    const totalRow = await pool.query(
-      `SELECT COUNT(*)::int AS n FROM companies co
-        ${force ? '' : `WHERE NOT EXISTS (SELECT 1 FROM contacts ct WHERE ct.company_domain = co.domain AND ct.company_stamped_at >= co.last_refreshed_at)`}`)
+    const totalRow = await pool.query(`SELECT COUNT(*)::int AS n FROM companies`)
     stampState.total = totalRow.rows[0].n
     const BATCH = 2000
-    let offset = 0
+    let last = '' // keyset cursor: last domain stamped (domains sort > '')
     while (true) {
-      // Grab a batch of domains to stamp (ordered for stable paging).
       const { rows } = await pool.query(
-        `SELECT domain FROM companies co
-          ${force ? '' : `WHERE NOT EXISTS (SELECT 1 FROM contacts ct WHERE ct.company_domain = co.domain AND ct.company_stamped_at >= co.last_refreshed_at)`}
-          ORDER BY domain LIMIT $1 OFFSET $2`, [BATCH, offset])
+        `SELECT domain FROM companies WHERE domain > $1 ORDER BY domain LIMIT $2`, [last, BATCH])
       if (!rows.length) break
       const domains = rows.map((r) => r.domain)
       const upd = await pool.query(`
@@ -222,8 +227,7 @@ async function runStampAll({ force = false } = {}) {
         WHERE ct.company_domain = co.domain AND co.domain = ANY($1)`, [domains])
       stampState.contacts += upd.rowCount
       stampState.done += domains.length
-      offset += BATCH
-      if (force === false && offset > stampState.total + BATCH) break // safety
+      last = domains[domains.length - 1] // advance the cursor
     }
   } catch (e) { stampState.error = e.message } finally {
     stampState.running = false; stampState.finished_at = new Date().toISOString()
@@ -231,8 +235,7 @@ async function runStampAll({ force = false } = {}) {
 }
 
 app.post('/stamp-all', (req, res) => {
-  const force = req.query.force === '1'
-  runStampAll({ force }).catch((e) => console.error('[stamp]', e.message))
+  runStampAll().catch((e) => console.error('[stamp]', e.message))
   res.json({ ok: true, started: true, note: 'stamping in background — poll /stamp-status' })
 })
 
