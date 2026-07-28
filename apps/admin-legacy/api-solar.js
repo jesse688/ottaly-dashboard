@@ -51,7 +51,7 @@ module.exports = function solarAPI() {
 
     // Bounded concurrency — 4 at a time. Ownership stage is offline so the real
     // cost/latency is only the Google calls for contacts that pass ownership.
-    const CONC = Math.min(Number(options.concurrency) || 4, 8);
+    const CONC = Math.min(Number(options.concurrency) || 6, 10);
     const queue = contacts.map((c, i) => ({ c, i }));
     let cursor = 0;
     async function worker() {

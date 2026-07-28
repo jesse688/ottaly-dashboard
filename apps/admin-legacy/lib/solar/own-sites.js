@@ -32,11 +32,20 @@ function findOwnSites(lead) {
   let rows = [];
   const reg = normRegNo(lead.reg);
   if (reg) {
-    // Match on reg number regardless of stored formatting/leading zeros.
-    rows = db.all(
-      `SELECT DISTINCT postcode, property_address, proprietor_name, company_reg_no
-       FROM owners WHERE company_reg_no != ''`
-    ).filter((r) => normRegNo(r.company_reg_no) === reg);
+    // Match on reg number regardless of stored formatting/leading zeros. Narrow the
+    // scan with a LIKE on the significant digits (distinctive), THEN exact-normalise
+    // in JS — same correctness as before but WITHOUT pulling every reg-bearing row
+    // into JS. The old `WHERE company_reg_no != ''` full pull materialised millions
+    // of rows from the 2.8M-row CCOD index PER contact (~90s each) and, once every
+    // owner carried a CH reg, dominated the whole Solar run.
+    const digits = reg.replace(/^[A-Z]+/, '').replace(/^0+/, '') || reg.replace(/^[A-Z]+/, '');
+    if (digits) {
+      const cand = db.all(
+        `SELECT DISTINCT postcode, property_address, proprietor_name, company_reg_no
+         FROM owners WHERE company_reg_no LIKE ?`, `%${digits}%`
+      );
+      rows = cand.filter((r) => normRegNo(r.company_reg_no) === reg);
+    }
   }
 
   // If no reg (or no reg hits), fall back to strong name equality — but only
