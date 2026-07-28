@@ -55,95 +55,98 @@ async function enrichContact(contact, opts = {}) {
     error: null,
   };
 
-  // ---------- Stage 1: OWNERSHIP (offline, cheap, most-eliminating) ----------
+  // ---------- Stage 1: OWNERSHIP (engine is the source of truth) ----------
   const address = out.address;
-  if (!address) { out.stop_reason = 'no_address'; return out; }
 
-  // Get a postcode to key ownership on. Prefer the text; if absent/garbled, we
-  // geocode NOW to recover it (postcodes.io reverse lookup) rather than dropping
-  // the lead. This is the main fix for "unclear" leads that were really just
-  // missing a postcode in the Apollo address string.
-  let postcode = extractPostcode(address);
-  if (!postcode) {
-    try {
-      const geo = await geocode(address);
-      if (geo) {
-        out.lat = geo.lat; out.lng = geo.lng;
-        out.maps_url = `https://www.google.com/maps/@${geo.lat},${geo.lng},20z/data=!3m1!1e3`;
-        postcode = geo.postcode || null;
-        out._geocoded = true; // remember, so stage 2 doesn't geocode twice
-      }
-    } catch (e) { /* fall through — no postcode recovered */ }
-  }
-  if (!postcode) {
-    // Genuinely can't locate this contact — its own bucket, not a false "tenant".
-    out.stop_reason = 'no_postcode';
-    return out;
-  }
+  // Postcode to key the roof/CCOD property lookup on. Prefer the engine's
+  // AUTHORITATIVE Companies House registered postcode (ch_postcode) — the scraped
+  // Apollo address is frequently missing or truncated, which is exactly what used
+  // to produce false 'no_postcode' verdicts. Fall back to the address text.
+  let postcode = extractPostcode(contact.ch_postcode || '') || (contact.ch_postcode || '').trim() || extractPostcode(address) || null;
 
-  let owners = [];
-  try {
-    const look = lookupOwner(address, postcode);
-    if (look.available) {
-      owners = look.owners;
-      out.owner_count = owners.length;
-      if (look.best) { out.building_owner = look.best.name; }
-    } else {
-      out.error = 'ccod_index_missing'; // surface, don't hide — no ownership data
+  // OWNERSHIP VERDICT — trust the company-data engine's stamped verdict so Solar and
+  // the Contacts "owns building" filter ALWAYS agree. The engine derives ownership
+  // from the official CH registered postcode + officer/PSC control + a
+  // director-owns-property fallback — far more reliable than re-checking the scraped
+  // Apollo address here. Only fall back to the legacy address-based derivation for
+  // contacts the engine hasn't stamped yet (ccod_owns_building is null/empty).
+  const engineVerdict = contact.ccod_owns_building || null; // 'yes'|'no'|'unclear'|'no_postcode'
+  if (engineVerdict) {
+    out.owns_building = engineVerdict;
+    out.owns_basis = 'engine_stamp';
+    out.building_owner = contact.ccod_building_owner || null;
+    if (contact.ccod_site_count != null) out.site_count = Number(contact.ccod_site_count) || null;
+  } else {
+    // ---- Legacy fallback: unstamped contact — derive ownership from the address ----
+    if (!address) { out.stop_reason = 'no_address'; return out; }
+    if (!postcode) {
+      try {
+        const geo = await geocode(address);
+        if (geo) {
+          out.lat = geo.lat; out.lng = geo.lng;
+          out.maps_url = `https://www.google.com/maps/@${geo.lat},${geo.lng},20z/data=!3m1!1e3`;
+          postcode = geo.postcode || null;
+          out._geocoded = true; // remember, so stage 2 doesn't geocode twice
+        }
+      } catch (e) { /* fall through — no postcode recovered */ }
     }
-  } catch (e) {
-    // A real lookup failure must be visible, not silently downgraded to "unclear".
-    out.error = `ownership_lookup: ${e.message}`;
-  }
+    if (!postcode) { out.stop_reason = 'no_postcode'; return out; }
 
-  const lead = { name: contact.company_name || '', reg: contact.company_reg || '' };
-  let verdict = resolveOwnership(lead, owners.map((o) => ({ proprietor_name: o.name, company_reg_no: o.company_reg_no })));
-
-  // CH fallback: resolve name -> reg and retry, but only accept a confident YES.
-  if (verdict.owns_building !== 'yes' && !lead.reg && lead.name && chEnabled()) {
+    let owners = [];
     try {
-      const hit = await resolveNameToReg(lead.name, contact.company_domain);
-      if (hit && hit.reg) {
-        out.lead_reg_resolved = hit.reg;
-        const v2 = resolveOwnership({ name: lead.name, reg: hit.reg }, owners.map((o) => ({ proprietor_name: o.name, company_reg_no: o.company_reg_no })));
-        if (v2.owns_building === 'yes') verdict = v2;
+      const look = lookupOwner(address, postcode);
+      if (look.available) {
+        owners = look.owners;
+        out.owner_count = owners.length;
+        if (look.best) { out.building_owner = look.best.name; }
+      } else {
+        out.error = 'ccod_index_missing';
       }
-    } catch (e) { /* CH optional */ }
+    } catch (e) {
+      out.error = `ownership_lookup: ${e.message}`;
+    }
+
+    const lead = { name: contact.company_name || '', reg: contact.company_reg || '' };
+    let verdict = resolveOwnership(lead, owners.map((o) => ({ proprietor_name: o.name, company_reg_no: o.company_reg_no })));
+    if (verdict.owns_building !== 'yes' && !lead.reg && lead.name && chEnabled()) {
+      try {
+        const hit = await resolveNameToReg(lead.name, contact.company_domain);
+        if (hit && hit.reg) {
+          out.lead_reg_resolved = hit.reg;
+          const v2 = resolveOwnership({ name: lead.name, reg: hit.reg }, owners.map((o) => ({ proprietor_name: o.name, company_reg_no: o.company_reg_no })));
+          if (v2.owns_building === 'yes') verdict = v2;
+        }
+      } catch (e) { /* CH optional */ }
+    }
+    out.owns_building = verdict.owns_building;
+    out.owns_basis = verdict.basis;
+    if (verdict.matched_owner) out.building_owner = verdict.matched_owner;
+    out.owner_candidates = owners.slice(0, 50).map((o) => ({
+      name: o.name, company_reg_no: o.company_reg_no || null,
+      property_address: o.property_address || null, category: o.category || null,
+      confidence: o.confidence, similarity: Math.round((o.similarity || 0) * 100) / 100,
+    }));
   }
 
-  out.owns_building = verdict.owns_building;
-  out.owns_basis = verdict.basis;
-  if (verdict.matched_owner) out.building_owner = verdict.matched_owner;
-  out.owner_candidates = owners.slice(0, 50).map((o) => ({
-    name: o.name, company_reg_no: o.company_reg_no || null,
-    property_address: o.property_address || null, category: o.category || null,
-    confidence: o.confidence, similarity: Math.round((o.similarity || 0) * 100) / 100,
-  }));
-
-  // When ownership is confirmed, grab the CCOD PROPERTY ADDRESS of the matched
-  // owner's title — the Land Registry's exact address of the building the company
-  // owns. This is far more precise than the scraped Apollo address (which is often
-  // truncated to just a street), so we geocode THIS for the roof, avoiding the
-  // "wrong building / false panel count" problem.
-  if (out.owns_building === 'yes') {
-    // Find the owner record we matched to and take its precise property address.
-    // Match by name (exact, then case-insensitive), falling back to the best
-    // address-similarity owner — so a minor name-format difference never drops the
-    // precise address and silently reverts to the coarse Apollo one.
-    const target = String(verdict.matched_owner || out.building_owner || '').trim().toUpperCase();
-    let matched = owners.find((o) => o.property_address && String(o.name || '').trim().toUpperCase() === target);
-    if (!matched) matched = owners.find((o) => o.property_address); // best-scored (owners are sorted by similarity)
-    if (matched && matched.property_address) out.ccod_property_address = matched.property_address;
-  }
-
-  // Multi-site: does the LEAD's own company own property at other postcodes too?
-  // (Their portfolio — not the building owner's.) Only meaningful once we've
-  // confirmed they own; uses the CH-resolved reg when available for precision.
-  if (out.owns_building === 'yes') {
+  // For a CONFIRMED owner, grab the CCOD PROPERTY ADDRESS of the owned building so
+  // stage 2 geocodes the RIGHT roof (the precise Land Registry title address, not the
+  // coarse Apollo street). Keyed on the authoritative postcode. Runs for both the
+  // engine and legacy paths.
+  if (out.owns_building === 'yes' && postcode) {
     try {
-      const sites = findOwnSites({ name: lead.name, reg: lead.reg || out.lead_reg_resolved || '' });
-      out.site_count = sites.length;
-      out.other_sites = sites; // [{postcode, property_address}] — includes this one
+      const look = lookupOwner(address, postcode);
+      if (look.available) {
+        const owners = look.owners;
+        const target = String(out.building_owner || '').trim().toUpperCase();
+        let matched = target ? owners.find((o) => o.property_address && String(o.name || '').trim().toUpperCase() === target) : null;
+        if (!matched) matched = owners.find((o) => o.property_address); // best-scored
+        if (matched && matched.property_address) out.ccod_property_address = matched.property_address;
+      }
+    } catch (e) { /* property-address lookup optional — falls back to Apollo address */ }
+    // Multi-site: does the company own property at other postcodes too?
+    try {
+      const sites = findOwnSites({ name: contact.company_name || '', reg: contact.company_reg || out.lead_reg_resolved || '' });
+      if (sites && sites.length) { out.site_count = sites.length; out.other_sites = sites; }
     } catch (e) { /* multi-site optional */ }
   }
 

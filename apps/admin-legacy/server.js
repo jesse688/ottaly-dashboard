@@ -15823,7 +15823,8 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
     // job on this path (this endpoint is 'push without verify').
     const cooloffDate = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const campaignNameLc = (req.body.campaign_name || '').toString().trim().toLowerCase();
-    const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, missingEnrichment: 0, missingName: 0 };
+    const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, verticalCollision: 0, globalFrequency: 0, alreadyInCampaign: 0, missingEnrichment: 0, missingName: 0 };
+    const crossClientGuard = buildCrossClientGuard(workspace_id, req.body.workspace_name || '');
     // Status gate. The user picks which verification-result buckets to push via
     // the modal (allowed_statuses). Validate against the known vocabulary; default
     // to the safe pair when absent so existing callers are unchanged. NULL/empty
@@ -15855,6 +15856,8 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
         const lastSent = emailed[workspace_id]?.last_sent;
         if (lastSent && lastSent >= cooloffDate) { skipped.cooldownWorkspace++; return false; }
       }
+      // Cross-client spacing: same vertical, then any client inside 30 days.
+      if (!crossClientGuard(c, skipped)) return false;
       return true;
     });
     console.log(`[push-contacts] filtered ${allContacts.length} → ${contacts.length}`, skipped);
@@ -15907,6 +15910,25 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
       };
     });
 
+    // Reserve BEFORE pushing. The stamp used to run after the push and was
+    // fire-and-forget, so two concurrent pushes to different workspaces both
+    // read pre-stamp state and both passed the cross-client guard — which is
+    // how one contact reached seven workspaces in five days. Stamping first
+    // and awaiting it makes the guard authoritative.
+    //
+    // Deliberate trade-off: if the PlusVibe call then fails, these contacts
+    // stay reserved and sit out the cooldown despite never being emailed. We
+    // lose a few leads rather than risk emailing someone twice.
+    const pushedIds = contacts.map(c => c.id).filter(Boolean);
+    if (pushedIds.length && db.stampPushedCampaign) {
+      try {
+        await db.stampPushedCampaign(pushedIds, workspace_id, campaign_id, req.body.campaign_name || '');
+      } catch (err) {
+        console.error('[push-contacts] reserve failed, aborting push:', err.message);
+        return res.status(500).json({ error: 'Could not reserve contacts before push: ' + err.message });
+      }
+    }
+
     const BATCH = 100;
     let pushed = 0;
     for (let i = 0; i < leads.length; i += BATCH) {
@@ -15944,14 +15966,6 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
         await pvApi('/lead/add', { method: 'POST', wsId: workspace_id, body: { workspace_id, campaign_id, leads: pvLeadPayload } });
         pushed += pvLeadPayload.length;
       } catch (e) { console.warn('[pv-push] lead add failed:', e.message); }
-    }
-
-    // Stamp emailed_workspaces so these contacts are snoozed for 60 days
-    // for this client — prevents them from appearing in future push batches.
-    const pushedIds = contacts.map(c => c.id).filter(Boolean);
-    if (pushedIds.length && db.stampPushedCampaign) {
-      db.stampPushedCampaign(pushedIds, workspace_id, campaign_id, req.body.campaign_name || '').catch(err =>
-        console.warn('[push-contacts] workspace stamp failed:', err.message));
     }
 
     res.json({ success: true, pushed, total: leads.length, skipped });
@@ -16056,8 +16070,14 @@ app.post('/api/solar/ownership-sweep', requireSession, async (req, res) => {
       } catch { r = { owns_building: 'error', building_owner: null, site_count: null }; }
 
       try {
+        // The company-data engine is the SOURCE OF TRUTH for ccod_owns_building
+        // (authoritative CH-registered-postcode + officer/PSC derivation). This older
+        // Apollo-address sweep must only FILL GAPS for contacts the engine hasn't
+        // stamped — never overwrite a stamped value, or it degrades the good data the
+        // Contacts "owns building" filter and Solar now rely on.
         await db.query(
-          `UPDATE contacts SET ccod_owns_building=$1, ccod_building_owner=$2, ccod_site_count=$3, ccod_checked_at=NOW() WHERE id=$4`,
+          `UPDATE contacts SET ccod_owns_building=$1, ccod_building_owner=$2, ccod_site_count=$3, ccod_checked_at=NOW()
+             WHERE id=$4 AND ccod_owns_building IS NULL`,
           [r.owns_building, r.building_owner, r.site_count, c.id]);
       } catch (e) { /* keep going; report at end */ }
 
@@ -16168,10 +16188,13 @@ app.post('/api/admin/flag-free-domain-contacts', requireAdmin, async (req, res) 
 });
 
 // Shared contact→pushable filter (same rules as the PV path). Pure function.
-function filterPushableContacts(allContacts, { cooldownWorkspaceId, campaignName, allowedStatuses }) {
+function filterPushableContacts(allContacts, { cooldownWorkspaceId, campaignName, allowedStatuses, pushWorkspaceId, workspaceName }) {
   const cooloffDate = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const campaignNameLc = (campaignName || '').toString().trim().toLowerCase();
-  const skipped = { unsafe: 0, dnc: 0, freeDomain: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, missingEnrichment: 0, missingName: 0 };
+  const skipped = { unsafe: 0, dnc: 0, freeDomain: 0, cooldownWorkspace: 0, verticalCollision: 0, globalFrequency: 0, alreadyInCampaign: 0, missingEnrichment: 0, missingName: 0 };
+  // Guard against the workspace actually being pushed to; cooldownWorkspaceId
+  // is optional on this path, so fall back to it only when no target is given.
+  const crossClientGuard = buildCrossClientGuard(pushWorkspaceId || cooldownWorkspaceId || '', workspaceName || '');
   // Caller-chosen verification buckets; default to the safe pair when absent.
   const KNOWN_STATUSES = ['safe', 'safe_catchall', 'unknown', 'risky', 'invalid'];
   const validStatuses = Array.isArray(allowedStatuses)
@@ -16199,6 +16222,8 @@ function filterPushableContacts(allContacts, { cooldownWorkspaceId, campaignName
       const lastSent = emailed[cooldownWorkspaceId]?.last_sent;
       if (lastSent && lastSent >= cooloffDate) { skipped.cooldownWorkspace++; return false; }
     }
+    // Cross-client spacing: same vertical, then any client inside 30 days.
+    if (!crossClientGuard(c, skipped)) return false;
     return true;
   });
   return { contacts, skipped };
@@ -16279,12 +16304,31 @@ app.post('/api/bison/push-contacts', requireSession, async (req, res) => {
     if (allContacts.length === 0) return res.status(404).json({ error: 'No contacts found' });
 
     const cooldownWorkspaceId = req.body.cooldown_workspace_id || null;
+    // Guard and stamp must agree on which workspace this push belongs to, or
+    // a contact could be checked against one key and recorded under another.
+    // ws_id is the fallback: the stamp used to be skipped entirely when no
+    // cooldown_workspace_id was sent, leaving those pushes invisible to every
+    // downstream cooldown.
+    const guardWorkspaceId = cooldownWorkspaceId || ws_id;
     const { contacts, skipped } = filterPushableContacts(allContacts, {
       cooldownWorkspaceId, campaignName: req.body.campaign_name,
       allowedStatuses: req.body.allowed_statuses,
+      pushWorkspaceId: guardWorkspaceId, workspaceName: req.body.workspace_name || '',
     });
     console.log(`[pv-push] filtered ${allContacts.length} → ${contacts.length}`, skipped);
     if (contacts.length === 0) return res.json({ success: true, pushed: 0, total: 0, skipped });
+
+    // Reserve before pushing — see the note on /api/pv/push-contacts. Awaiting
+    // this is what makes the cross-client guard authoritative under concurrency.
+    const pushedIds = contacts.map(c => c.id).filter(Boolean);
+    if (pushedIds.length && guardWorkspaceId && pgDb.stampPushedCampaign) {
+      try {
+        await pgDb.stampPushedCampaign(pushedIds, guardWorkspaceId, String(campaign_id), req.body.campaign_name || '');
+      } catch (err) {
+        console.error('[pv-push] reserve failed, aborting push:', err.message);
+        return res.status(500).json({ error: 'Could not reserve contacts before push: ' + err.message });
+      }
+    }
 
     // Push leads to PlusVibe /lead/add — batch { workspace_id, campaign_id, leads }
     // (top-level native fields; campaign assignment happens in the same call).
@@ -16297,12 +16341,6 @@ app.post('/api/bison/push-contacts', requireSession, async (req, res) => {
         await pvApi('/lead/add', { method: 'POST', wsId: ws_id, body: { workspace_id: ws_id, campaign_id, leads } });
         pushed += leads.length;
       } catch (e) { console.warn('[pv-push] lead add failed:', e.message); }
-    }
-
-    const pushedIds = contacts.map(c => c.id).filter(Boolean);
-    if (pushedIds.length && cooldownWorkspaceId && pgDb.stampPushedCampaign) {
-      pgDb.stampPushedCampaign(pushedIds, cooldownWorkspaceId, String(campaign_id), req.body.campaign_name || '')
-        .catch(err => console.warn('[pv-push] stamp failed:', err.message));
     }
 
     res.json({ success: true, pushed, total: contacts.length, skipped });
@@ -16902,6 +16940,105 @@ function getClientRules(workspaceId, workspaceName) {
     exclude_remote: vertical === 'office_furniture' ? 1 : 0,
     require_owns_building: (vertical === 'solar' || vertical === 'flooring') ? 1 : 0,
     snooze_months: 6
+  };
+}
+
+// ── Cross-client send guards ─────────────────────────────────────────────
+// Ottaly pushes one shared contact universe out to many client workspaces.
+// The existing 60-day cooldown only ever inspects ONE workspace key, so
+// seven different clients could each push the same person on the same day
+// and every one of them would pass its own check (this is exactly how one
+// contact ended up stamped by 7 workspaces inside 5 days). Two guards close
+// that gap, both keyed off emailed_workspaces:
+//
+//   global   — no client may push a contact any other client pushed inside
+//              GLOBAL_PUSH_COOLDOWN_DAYS ("never twice in the same month")
+//   vertical — no client may push a contact that a DIFFERENT client in the
+//              same vertical pushed inside that client's snooze_months
+//
+// Deliberately fail-safe: an unparseable or unknown stamp is treated as
+// "no record", but any stamp inside the window blocks the push.
+const GLOBAL_PUSH_COOLDOWN_DAYS = 30;
+const DEFAULT_VERTICAL_SNOOZE_MONTHS = 6;
+
+function stampDaysAgo(days) {
+  return new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+}
+
+function stampMonthsAgo(months) {
+  const d = new Date();
+  d.setMonth(d.getMonth() - months);
+  return d.toISOString().slice(0, 10);
+}
+
+// One emailed_workspaces entry → the YYYY-MM-DD it was last touched.
+// pushed_at is the honest field (written at push time); last_sent is the
+// legacy name for the same event and is still written, so take the later.
+function workspaceStampDate(info) {
+  if (!info || typeof info !== 'object') return '';
+  const pushed = typeof info.pushed_at === 'string' ? info.pushed_at : '';
+  const sent   = typeof info.last_sent === 'string' ? info.last_sent : '';
+  return pushed > sent ? pushed : sent;
+}
+
+function parseEmailedWorkspaces(contact) {
+  const raw = contact && contact.emailed_workspaces;
+  if (!raw) return {};
+  if (typeof raw !== 'string') return raw;
+  try { return JSON.parse(raw) || {}; } catch { return {}; }
+}
+
+// Build the cross-client guard for one push target.
+// Returns (contact, skipped) => boolean, mutating `skipped` for reporting.
+function buildCrossClientGuard(workspaceId, workspaceName) {
+  const globalCutoff = stampDaysAgo(GLOBAL_PUSH_COOLDOWN_DAYS);
+  const vertical = detectVertical(workspaceName || '', workspaceId);
+
+  // Peer workspaces = every OTHER configured client in the same vertical.
+  // Workspaces absent from client_verticals have no known vertical, so they
+  // only ever trip the global cap — which is the safe direction.
+  const peerWorkspaces = new Set();
+  let verticalCutoff = null;
+  if (vertical && db) {
+    let months = DEFAULT_VERTICAL_SNOOZE_MONTHS;
+    try {
+      const rules = db.prepare('SELECT snooze_months FROM client_verticals WHERE workspace_id = ?').get(workspaceId);
+      if (rules && Number(rules.snooze_months) > 0) months = Number(rules.snooze_months);
+    } catch {}
+    verticalCutoff = stampMonthsAgo(months);
+    try {
+      for (const row of db.prepare('SELECT workspace_id, vertical FROM client_verticals').all()) {
+        if (row.vertical && row.vertical === vertical && row.workspace_id !== workspaceId) {
+          peerWorkspaces.add(row.workspace_id);
+        }
+      }
+    } catch {}
+  }
+
+  return function passesCrossClientGuard(contact, skipped) {
+    const emailed = parseEmailedWorkspaces(contact);
+    // Same-workspace history belongs to the per-client cooldown, not here.
+    const others = Object.entries(emailed).filter(([wsId]) => wsId !== workspaceId);
+    if (!others.length) return true;
+
+    // Vertical collisions are checked across ALL entries first so the skip
+    // reason is deterministic (and the more specific reason wins).
+    if (verticalCutoff) {
+      for (const [wsId, info] of others) {
+        if (peerWorkspaces.has(wsId) && workspaceStampDate(info) >= verticalCutoff) {
+          skipped.verticalCollision = (skipped.verticalCollision || 0) + 1;
+          return false;
+        }
+      }
+    }
+    for (const [, info] of others) {
+      const stamp = workspaceStampDate(info);
+      if (stamp && stamp >= globalCutoff) {
+        skipped.globalFrequency = (skipped.globalFrequency || 0) + 1;
+        return false;
+      }
+    }
+    return true;
   };
 }
 
@@ -18249,11 +18386,12 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
       const VERIFY_TIMEOUT_MS = parseInt(process.env.PUSH_VERIFY_TIMEOUT_MS || (job.loose ? '10000' : '65000'), 10);
       const VERIFY_THEN_PUSH = Math.max(20, parseInt(process.env.VERIFY_THEN_PUSH || '100', 10));
       let doneCount = 0;
-      const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, snoozed: 0, missingEnrichment: 0, wrongProvider: 0, missingName: 0 };
+      const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, verticalCollision: 0, globalFrequency: 0, alreadyInCampaign: 0, snoozed: 0, missingEnrichment: 0, wrongProvider: 0, missingName: 0 };
       const allowedProviders = Array.isArray(job.allowedProviders) ? job.allowedProviders : [];
 
       // ── Shared filter constants ────────────────────────────────
-      const campaignVertical = detectVertical((job.campaign_name || '') + ' ' + (job.workspace_name || ''));
+      const campaignVertical = detectVertical((job.campaign_name || '') + ' ' + (job.workspace_name || ''), job.workspace_id);
+      const crossClientGuard = buildCrossClientGuard(job.workspace_id || '', job.workspace_name || '');
       const today        = new Date().toISOString().slice(0, 10);
       const cooloffDate  = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
       const targetCampLc = (job.campaign_name || '').trim().toLowerCase();
@@ -18346,6 +18484,8 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
             ? c.snoozed_verticals : JSON.parse(c.snoozed_verticals || '[]');
           if (snoozes.some(s => s.vertical === campaignVertical && s.until >= today)) { skipped.snoozed++; return false; }
         }
+        // Cross-client spacing: same vertical, then any client inside 30 days.
+        if (!crossClientGuard(c, skipped)) return false;
         return true;
       };
 
@@ -18804,9 +18944,10 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
       const VERIFY_TIMEOUT_MS = parseInt(process.env.PUSH_VERIFY_TIMEOUT_MS || (job.loose ? '10000' : '65000'), 10);
       const VERIFY_THEN_PUSH = Math.max(20, parseInt(process.env.VERIFY_THEN_PUSH || '100', 10));
       let doneCount = 0;
-      const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, alreadyInCampaign: 0, snoozed: 0 };
+      const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, verticalCollision: 0, globalFrequency: 0, alreadyInCampaign: 0, snoozed: 0 };
 
-      const campaignVertical = detectVertical((job.campaign_name || '') + ' ' + (job.workspace_name || ''));
+      const campaignVertical = detectVertical((job.campaign_name || '') + ' ' + (job.workspace_name || ''), job.workspace_id);
+      const crossClientGuard = buildCrossClientGuard(job.workspace_id || '', job.workspace_name || '');
       const today       = new Date().toISOString().slice(0, 10);
       const cooloffDate = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
       const targetCampLc = (job.campaign_name || '').trim().toLowerCase();
@@ -18846,6 +18987,8 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
             ? c.snoozed_verticals : JSON.parse(c.snoozed_verticals || '[]');
           if (snoozes.some(s => s.vertical === campaignVertical && s.until >= today)) { skipped.snoozed++; return false; }
         }
+        // Cross-client spacing: same vertical, then any client inside 30 days.
+        if (!crossClientGuard(c, skipped)) return false;
         return true;
       };
 

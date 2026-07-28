@@ -3940,7 +3940,7 @@
         last_name: c.last_name || '',
         company_name: c.company_name || c.organization_name || '',
         company_domain: c.company_domain || c.website || '',
-        company_reg: c.company_number || c.company_reg || '',
+        company_reg: c.ch_company_number || c.company_number || c.company_reg || '',
         // The cascade needs a postcode; company_address usually carries it.
         company_address: c.company_address || [c.company_city, c.company_county, c.company_town].filter(Boolean).join(', ') || '',
         phone: c.phone || c.corporate_phone || c.company_phone || '',
@@ -5154,7 +5154,16 @@
                 <div class="pval" style="font-size:12px;line-height:1.7;">
                   ${wsEntries.map(([wsId, info]) => {
                     const wsName = (typeof pvWorkspaces !== 'undefined' && pvWorkspaces.find(w => w._id === wsId)?.name) || wsId;
-                    return `<div>· <b>${esc(wsName)}</b> — ${info.count || 0} sent · last ${info.last_sent || '?'}</div>`;
+                    // `count` is only ever incremented by the PlusVibe 'sent'
+                    // webhook. The push path stamps pushed_at/last_sent alone,
+                    // so count===0 with a stamp means "handed to PlusVibe, no
+                    // send confirmed" — not "0 sent", which read as a no-op.
+                    const stamp = info.pushed_at || info.last_sent || '';
+                    const n = Number(info.count) || 0;
+                    const detail = n
+                      ? `${n} sent · last ${info.last_sent || stamp || '?'}`
+                      : `pushed ${stamp || '?'} · no send confirmed`;
+                    return `<div>· <b>${esc(wsName)}</b> — ${detail}</div>`;
                   }).join('')}
                 </div>
               </div>`;

@@ -1934,6 +1934,7 @@ class PostgresDatabase {
             corporate_phone, company_phone, email_status, email_verified_at,
             status, tags, source, do_not_contact, works_remote, owns_building,
             ccod_owns_building, ccod_building_owner, ccod_site_count, ccod_checked_at,
+            ch_company_number, ch_postcode,
             snoozed_verticals, reply_notes, last_reply_at, marked_as_lead_at,
             bounced_at, bounce_type, soft_bounce_count, last_emailed_at, email_count,
             emailed_workspaces, last_campaign_name, pushed_campaigns,
@@ -1960,6 +1961,7 @@ class PostgresDatabase {
       corporate_phone, company_phone, email_status, email_verified_at,
       status, tags, source, do_not_contact, works_remote, owns_building,
       ccod_owns_building, ccod_building_owner, ccod_site_count, ccod_checked_at,
+      ch_company_number, ch_postcode,
       snoozed_verticals, reply_notes, last_reply_at, marked_as_lead_at,
       bounced_at, bounce_type, soft_bounce_count, last_emailed_at, email_count,
       emailed_workspaces, last_campaign_name, pushed_campaigns,
@@ -3617,13 +3619,20 @@ class PostgresDatabase {
       pushed_at: new Date().toISOString().slice(0, 10),
     });
     const today = new Date().toISOString().slice(0, 10);
+    // pushed_at is the honest field — this stamp records a PUSH, not a send.
+    // 'last_sent' is kept in step with it because the 60-day cooldown (here,
+    // in _buildFilterClauses, and in the four server.js push filters) still
+    // reads that key; dropping it would silently disable every cooldown.
+    // Only the webhook 'sent' handler sets `count`, so count===0 with a
+    // pushed_at present means "handed to PlusVibe, no send confirmed yet".
     const sql = `
       UPDATE contacts
       SET pushed_campaigns = COALESCE(pushed_campaigns, '[]'::jsonb) || $1::jsonb,
           emailed_workspaces = jsonb_set(
             COALESCE(emailed_workspaces, '{}'::jsonb),
             ARRAY[$2],
-            COALESCE(emailed_workspaces->$2, '{}'::jsonb) || jsonb_build_object('last_sent', $3::text),
+            COALESCE(emailed_workspaces->$2, '{}'::jsonb)
+              || jsonb_build_object('last_sent', $3::text, 'pushed_at', $3::text),
             true
           ),
           updated_at = CURRENT_TIMESTAMP
