@@ -128,6 +128,7 @@
 <script>
 let ROWS = [], VIEW = 'prospects';
 const EXPANDED = new Set();
+const SELECTED = new Set(); // r.index of rows ticked for push (persists across views)
 function toggleRow(i){ if(EXPANDED.has(i)) EXPANDED.delete(i); else EXPANDED.add(i); render(); }
 
 // Fields we already surface in the compact columns — skip them in the "all fields"
@@ -217,6 +218,7 @@ async function run(){
     panelWatts: Number($('#panelW').value)||500,
   };
   ROWS = contacts.map((c,i)=>({index:i, email:c.email||'', company_name:c.company_name||'', address:c.address||c.company_address||'', first_name:c.first_name||'', last_name:c.last_name||'', status:'…', stage:'ownership'}));
+  SELECTED.clear(); // selection is by row index — reset it for the new result set
   render(); $('#run').disabled=true; $('#pushBtn').disabled=true;
   let done=0; $('#prog').textContent=`0 / ${contacts.length}…`;
 
@@ -317,6 +319,7 @@ function render(){
       + `${r.industry?`<div class="mut" style="font-size:11px">${esc(r.industry)}</div>`:''}`;
     const openArrow = EXPANDED.has(r.index)?'▾':'▸';
     return `<tr style="cursor:pointer" onclick="toggleRow(${r.index})">
+      <td onclick="event.stopPropagation()" style="text-align:center"><input type="checkbox" class="rowsel" ${SELECTED.has(r.index)?'checked':''} onclick="toggleSelect(${r.index},this.checked)"></td>
       <td class="addr"><span class="mut">${openArrow}</span> ${companyCell}</td>
       <td class="addr" style="min-width:180px" onclick="event.stopPropagation()">${contactCell}</td>
       <td>${stopPill(r)}</td>
@@ -327,9 +330,25 @@ function render(){
       <td>${r.has_solar||'<span class="mut">—</span>'}</td>
       <td onclick="event.stopPropagation()">${maps}</td>
       <td onclick="event.stopPropagation()">${img}</td>
-    </tr>` + (EXPANDED.has(r.index) ? detailCard(r, 10) : '');
+    </tr>` + (EXPANDED.has(r.index) ? detailCard(r, 11) : '');
   }).join('');
-  w.innerHTML=`<table><thead><tr><th>Company / Address</th><th>Contact</th><th>Result</th><th>Owns building</th><th>Max system</th><th>Panels</th><th>Annual kWh</th><th>Existing solar</th><th>Map</th><th>Roof img</th></tr></thead><tbody>${body}</tbody></table>`;
+  const allSel = rows.length>0 && rows.every(r=>SELECTED.has(r.index));
+  w.innerHTML=`<table><thead><tr><th style="width:28px;text-align:center"><input type="checkbox" id="selAll" title="Select all in this view" ${allSel?'checked':''} onclick="toggleSelectAll(this.checked)"></th><th>Company / Address</th><th>Contact</th><th>Result</th><th>Owns building</th><th>Max system</th><th>Panels</th><th>Annual kWh</th><th>Existing solar</th><th>Map</th><th>Roof img</th></tr></thead><tbody>${body}</tbody></table>`;
+  updatePushBtn();
+}
+
+// Row selection for the push. Selection is by r.index so it persists across the
+// prospects/multi-site/all tabs. "Select all" ticks every row in the CURRENT view.
+function toggleSelect(i, checked){ if(checked) SELECTED.add(i); else SELECTED.delete(i); syncSelAll(); updatePushBtn(); }
+function toggleSelectAll(checked){ for(const r of visible()){ if(checked) SELECTED.add(r.index); else SELECTED.delete(r.index); } render(); }
+function syncSelAll(){ const rows=visible(); const el=$('#selAll'); if(el) el.checked = rows.length>0 && rows.every(r=>SELECTED.has(r.index)); }
+function selectedRows(){ return ROWS.filter(r=>SELECTED.has(r.index)); }
+function updatePushBtn(){
+  const sel = SELECTED.size;
+  const pros = ROWS.filter(r=>r.status==='qualified').length;
+  const n = sel || pros;
+  const btn = $('#pushBtn');
+  if(btn){ btn.disabled = n===0; btn.textContent = sel ? `🚀 Push ${sel} selected to PlusVibe` : `🚀 Push prospects to PlusVibe`; }
 }
 
 async function getImg(i){
@@ -347,9 +366,12 @@ $('#lightbox').addEventListener('click',()=>$('#lightbox').style.display='none')
 
 // ---- Push modal ----
 $('#pushBtn').addEventListener('click',()=>{
-  const pros=ROWS.filter(r=>r.status==='qualified');
-  if(!pros.length){ alert('No qualified prospects.'); return; }
-  $('#pushSummary').textContent=`${pros.length} qualified prospect(s) ready.`;
+  // Push the ticked rows if any are selected; otherwise fall back to all qualified.
+  const pros = SELECTED.size ? selectedRows() : ROWS.filter(r=>r.status==='qualified');
+  if(!pros.length){ alert('No rows selected (and no qualified prospects).'); return; }
+  $('#pushSummary').textContent = SELECTED.size
+    ? `${pros.length} selected row(s) ready.`
+    : `${pros.length} qualified prospect(s) ready.`;
   $('#fieldGrid').innerHTML=FIELDS.map(([k,l])=>`<label><input type="checkbox" class="fchk" value="${k}" ${['owns_building','max_panels_fit','max_system_kwp','est_annual_kwh'].includes(k)?'checked':''}> ${l}</label>`).join('');
   $('#pushModal').classList.add('open');
   loadPvWorkspaces();
@@ -385,7 +407,8 @@ $('#doPush').addEventListener('click', async ()=>{
   const workspace_id=$('#pvWorkspace').value.trim(), campaign_id=$('#pvCampaign').value.trim();
   if(!workspace_id||!campaign_id){ alert('Workspace ID and Campaign ID required'); return; }
   const fields=[...document.querySelectorAll('.fchk:checked')].map(c=>c.value);
-  const prospects=ROWS.filter(r=>r.status==='qualified');
+  // Push the ticked rows if any; otherwise all qualified (matches the modal summary).
+  const prospects = SELECTED.size ? selectedRows() : ROWS.filter(r=>r.status==='qualified');
   $('#pushResult').textContent='Pushing…';
   try{
     const resp=await fetch('/api/solar/push-to-pv',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({workspace_id,campaign_id,prospects,fields})});
