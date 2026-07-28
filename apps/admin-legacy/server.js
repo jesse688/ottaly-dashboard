@@ -15821,9 +15821,9 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
     // Same dedup/cooldown filter as /verify-and-push — per-workspace
     // 60-day cooldown + per-campaign skip. Verification is the caller's
     // job on this path (this endpoint is 'push without verify').
-    const cooloffDate = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const cooloffDate = stampDaysAgo(pushGuardSettings().sameClientDays);
     const campaignNameLc = (req.body.campaign_name || '').toString().trim().toLowerCase();
-    const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, verticalCollision: 0, globalFrequency: 0, alreadyInCampaign: 0, missingEnrichment: 0, missingName: 0 };
+    const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, verticalCollision: 0, burstGap: 0, densityCeiling: 0, alreadyInCampaign: 0, missingEnrichment: 0, missingName: 0 };
     const crossClientGuard = buildCrossClientGuard(workspace_id, req.body.workspace_name || '');
     // Status gate. The user picks which verification-result buckets to push via
     // the modal (allowed_statuses). Validate against the known vocabulary; default
@@ -16126,17 +16126,21 @@ app.post('/api/solar/push-to-pv', requireSession, async (req, res) => {
           if (p[key] == null || p[key] === '') continue;
           custom[VAR_LABELS[key] || key] = String(p[key]);
         }
-        return {
+        // Match PlusVibe's accepted /lead/add schema (same as the Contacts push's
+        // toLead). Prior bugs: phone_number was null (PV requires a STRING → use '');
+        // `website`/`linkedin_url` are NOT allowed top-level (the allowed field is
+        // `company_website`). Empty strings for optional fields, not null.
+        const lead = {
           email: p.email,
           first_name: p.first_name,
           last_name: p.last_name,
-          company_name: p.company_name || null,
-          job_title: p.job_title || null,
-          phone_number: p.phone || null,
-          website: p.company_domain || null,
-          linkedin_url: p.linkedin_url || null,
+          company_name: p.company_name || '',
+          job_title: p.job_title || '',
+          phone_number: p.phone ? String(p.phone) : '',
+          company_website: p.company_domain || '',
           custom_variables: custom,
         };
+        return sanitizePvLead(lead).lead; // email local-part + phone coercion, like the Contacts push
       });
 
     if (!leads.length) return res.status(400).json({ error: 'No prospects with email + first/last name' });
@@ -16189,9 +16193,9 @@ app.post('/api/admin/flag-free-domain-contacts', requireAdmin, async (req, res) 
 
 // Shared contact→pushable filter (same rules as the PV path). Pure function.
 function filterPushableContacts(allContacts, { cooldownWorkspaceId, campaignName, allowedStatuses, pushWorkspaceId, workspaceName }) {
-  const cooloffDate = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const cooloffDate = stampDaysAgo(pushGuardSettings().sameClientDays);
   const campaignNameLc = (campaignName || '').toString().trim().toLowerCase();
-  const skipped = { unsafe: 0, dnc: 0, freeDomain: 0, cooldownWorkspace: 0, verticalCollision: 0, globalFrequency: 0, alreadyInCampaign: 0, missingEnrichment: 0, missingName: 0 };
+  const skipped = { unsafe: 0, dnc: 0, freeDomain: 0, cooldownWorkspace: 0, verticalCollision: 0, burstGap: 0, densityCeiling: 0, alreadyInCampaign: 0, missingEnrichment: 0, missingName: 0 };
   // Guard against the workspace actually being pushed to; cooldownWorkspaceId
   // is optional on this path, so fall back to it only when no target is given.
   const crossClientGuard = buildCrossClientGuard(pushWorkspaceId || cooldownWorkspaceId || '', workspaceName || '');
@@ -16799,6 +16803,48 @@ app.post('/api/admin/client-verticals', requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
+// ── Send Rules (push guard windows) ───────────────────────────────────────
+// Business policy, not engineering constants — operators tune these without a
+// deploy. Read on every push, so a change takes effect on the next one.
+
+app.get('/api/admin/push-guards', requireSession, (_req, res) => {
+  // Report vertical coverage too: the vertical rule can only see clients that
+  // have a row in client_verticals, so a low count silently weakens it.
+  let configured = 0, withVertical = 0;
+  try {
+    const rows = db.prepare('SELECT vertical FROM client_verticals').all();
+    configured = rows.length;
+    withVertical = rows.filter(r => r.vertical).length;
+  } catch {}
+  res.json({
+    settings: pushGuardSettings(),
+    defaults: { ...PUSH_GUARD_DEFAULTS },
+    coverage: { configured, withVertical },
+  });
+});
+
+app.post('/api/admin/push-guards', requireAdmin, (req, res) => {
+  const incoming = req.body || {};
+  const current = pushGuardSettings();
+  const next = {};
+  for (const [key, fallback] of Object.entries(PUSH_GUARD_DEFAULTS)) {
+    // Absent key = leave as-is; present but junk = fall back rather than 0,
+    // because a silent 0 would switch a rule off without anyone noticing.
+    next[key] = key in incoming
+      ? toPositiveNumber(incoming[key], current[key] ?? fallback)
+      : (current[key] ?? fallback);
+  }
+  try {
+    db.prepare(`INSERT INTO app_meta (key, value) VALUES ('push_guard_settings', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(JSON.stringify(next));
+  } catch (err) {
+    console.error('[push-guards] save failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+  console.log('[push-guards] updated:', next);
+  res.json({ ok: true, settings: next });
+});
+
 // ── Webhook Events API ────────────────────────────────────────────────────
 
 // PlusVibe webhooks are configured in the PlusVibe UI — no API endpoint needed.
@@ -16944,22 +16990,53 @@ function getClientRules(workspaceId, workspaceName) {
 }
 
 // ── Cross-client send guards ─────────────────────────────────────────────
-// Ottaly pushes one shared contact universe out to many client workspaces.
-// The existing 60-day cooldown only ever inspects ONE workspace key, so
-// seven different clients could each push the same person on the same day
-// and every one of them would pass its own check (this is exactly how one
-// contact ended up stamped by 7 workspaces inside 5 days). Two guards close
-// that gap, both keyed off emailed_workspaces:
+// Ottaly sends AS its clients, not as itself — the prospect sees N separate
+// companies, never "Ottaly". So the risk isn't a brand touching someone too
+// often, it's three distinct failures, each with its own rule:
 //
-//   global   — no client may push a contact any other client pushed inside
-//              GLOBAL_PUSH_COOLDOWN_DAYS ("never twice in the same month")
-//   vertical — no client may push a contact that a DIFFERENT client in the
-//              same vertical pushed inside that client's snooze_months
+//   vertical — two clients selling the SAME thing to one person. Competitive
+//              collision: bad for the prospect, worse for the two clients who
+//              each think the list is theirs. The strict rule.
+//   burst    — several "unrelated companies" landing in the same week reads as
+//              coordinated. Timing matters far more than the monthly total.
+//   ceiling  — a density cap over a rolling window, so a contact can work for
+//              several clients across a year without ever clustering.
 //
-// Deliberately fail-safe: an unparseable or unknown stamp is treated as
-// "no record", but any stamp inside the window blocks the push.
-const GLOBAL_PUSH_COOLDOWN_DAYS = 30;
-const DEFAULT_VERTICAL_SNOOZE_MONTHS = 6;
+// The same-client cooldown is separate and older; it lives in each push
+// filter and is configurable through the same settings blob.
+//
+// Every window is operator-tunable via the Send Rules pane (app_meta →
+// push_guard_settings). Deliberately fail-safe: an unparseable stamp is
+// treated as "no record", but any stamp inside a window blocks the push.
+const PUSH_GUARD_DEFAULTS = Object.freeze({
+  sameClientDays:      60,  // this client re-pushing their own contact
+  sameVerticalMonths:   6,  // a different client in the same vertical
+  burstGapDays:        10,  // any other client, minimum gap
+  maxClientsPerWindow:  2,  // at most N clients total…
+  ceilingWindowDays:   30,  // …inside this rolling window
+});
+
+function toPositiveNumber(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+// Read the operator-set windows. Falls back to defaults on a missing row,
+// bad JSON, or any individual field being absent/garbage — a broken settings
+// blob must never disable the guards.
+function pushGuardSettings() {
+  if (!db) return { ...PUSH_GUARD_DEFAULTS };
+  let saved = {};
+  try {
+    const row = db.prepare("SELECT value FROM app_meta WHERE key = 'push_guard_settings'").get();
+    if (row && row.value) saved = JSON.parse(row.value) || {};
+  } catch { saved = {}; }
+  const out = {};
+  for (const [key, fallback] of Object.entries(PUSH_GUARD_DEFAULTS)) {
+    out[key] = toPositiveNumber(saved[key], fallback);
+  }
+  return out;
+}
 
 function stampDaysAgo(days) {
   return new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
@@ -16991,16 +17068,20 @@ function parseEmailedWorkspaces(contact) {
 // Build the cross-client guard for one push target.
 // Returns (contact, skipped) => boolean, mutating `skipped` for reporting.
 function buildCrossClientGuard(workspaceId, workspaceName) {
-  const globalCutoff = stampDaysAgo(GLOBAL_PUSH_COOLDOWN_DAYS);
+  const settings = pushGuardSettings();
+  const burstCutoff   = stampDaysAgo(settings.burstGapDays);
+  const ceilingCutoff = stampDaysAgo(settings.ceilingWindowDays);
   const vertical = detectVertical(workspaceName || '', workspaceId);
 
   // Peer workspaces = every OTHER configured client in the same vertical.
   // Workspaces absent from client_verticals have no known vertical, so they
-  // only ever trip the global cap — which is the safe direction.
+  // can only ever trip the burst/ceiling rules — the safe direction, but it
+  // does mean the vertical rule is only as good as that table's coverage.
   const peerWorkspaces = new Set();
   let verticalCutoff = null;
   if (vertical && db) {
-    let months = DEFAULT_VERTICAL_SNOOZE_MONTHS;
+    // A per-client snooze_months overrides the global default for that client.
+    let months = settings.sameVerticalMonths;
     try {
       const rules = db.prepare('SELECT snooze_months FROM client_verticals WHERE workspace_id = ?').get(workspaceId);
       if (rules && Number(rules.snooze_months) > 0) months = Number(rules.snooze_months);
@@ -17021,8 +17102,10 @@ function buildCrossClientGuard(workspaceId, workspaceName) {
     const others = Object.entries(emailed).filter(([wsId]) => wsId !== workspaceId);
     if (!others.length) return true;
 
-    // Vertical collisions are checked across ALL entries first so the skip
-    // reason is deterministic (and the more specific reason wins).
+    // Checked most-specific first so the skip reason is deterministic and
+    // actionable — "same vertical" tells you something "too recent" doesn't.
+
+    // 1. Competitive collision.
     if (verticalCutoff) {
       for (const [wsId, info] of others) {
         if (peerWorkspaces.has(wsId) && workspaceStampDate(info) >= verticalCutoff) {
@@ -17031,13 +17114,33 @@ function buildCrossClientGuard(workspaceId, workspaceName) {
         }
       }
     }
-    for (const [, info] of others) {
-      const stamp = workspaceStampDate(info);
-      if (stamp && stamp >= globalCutoff) {
-        skipped.globalFrequency = (skipped.globalFrequency || 0) + 1;
+
+    // 2. Burst gap — nothing from anyone else in the last few days.
+    if (settings.burstGapDays > 0) {
+      for (const [, info] of others) {
+        const stamp = workspaceStampDate(info);
+        if (stamp && stamp >= burstCutoff) {
+          skipped.burstGap = (skipped.burstGap || 0) + 1;
+          return false;
+        }
+      }
+    }
+
+    // 3. Density ceiling — at most N clients inside the rolling window,
+    //    counting this push as one of them. Distinct workspaces, so a client
+    //    that pushed twice in the window still only occupies one slot.
+    if (settings.maxClientsPerWindow > 0) {
+      const recent = new Set();
+      for (const [wsId, info] of others) {
+        const stamp = workspaceStampDate(info);
+        if (stamp && stamp >= ceilingCutoff) recent.add(wsId);
+      }
+      if (recent.size >= settings.maxClientsPerWindow) {
+        skipped.densityCeiling = (skipped.densityCeiling || 0) + 1;
         return false;
       }
     }
+
     return true;
   };
 }
@@ -18386,14 +18489,14 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
       const VERIFY_TIMEOUT_MS = parseInt(process.env.PUSH_VERIFY_TIMEOUT_MS || (job.loose ? '10000' : '65000'), 10);
       const VERIFY_THEN_PUSH = Math.max(20, parseInt(process.env.VERIFY_THEN_PUSH || '100', 10));
       let doneCount = 0;
-      const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, verticalCollision: 0, globalFrequency: 0, alreadyInCampaign: 0, snoozed: 0, missingEnrichment: 0, wrongProvider: 0, missingName: 0 };
+      const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, verticalCollision: 0, burstGap: 0, densityCeiling: 0, alreadyInCampaign: 0, snoozed: 0, missingEnrichment: 0, wrongProvider: 0, missingName: 0 };
       const allowedProviders = Array.isArray(job.allowedProviders) ? job.allowedProviders : [];
 
       // ── Shared filter constants ────────────────────────────────
       const campaignVertical = detectVertical((job.campaign_name || '') + ' ' + (job.workspace_name || ''), job.workspace_id);
       const crossClientGuard = buildCrossClientGuard(job.workspace_id || '', job.workspace_name || '');
       const today        = new Date().toISOString().slice(0, 10);
-      const cooloffDate  = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const cooloffDate  = stampDaysAgo(pushGuardSettings().sameClientDays);
       const targetCampLc = (job.campaign_name || '').trim().toLowerCase();
 
       const passesFilter = (c) => {
@@ -18944,12 +19047,12 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
       const VERIFY_TIMEOUT_MS = parseInt(process.env.PUSH_VERIFY_TIMEOUT_MS || (job.loose ? '10000' : '65000'), 10);
       const VERIFY_THEN_PUSH = Math.max(20, parseInt(process.env.VERIFY_THEN_PUSH || '100', 10));
       let doneCount = 0;
-      const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, verticalCollision: 0, globalFrequency: 0, alreadyInCampaign: 0, snoozed: 0 };
+      const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, verticalCollision: 0, burstGap: 0, densityCeiling: 0, alreadyInCampaign: 0, snoozed: 0 };
 
       const campaignVertical = detectVertical((job.campaign_name || '') + ' ' + (job.workspace_name || ''), job.workspace_id);
       const crossClientGuard = buildCrossClientGuard(job.workspace_id || '', job.workspace_name || '');
       const today       = new Date().toISOString().slice(0, 10);
-      const cooloffDate = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const cooloffDate = stampDaysAgo(pushGuardSettings().sameClientDays);
       const targetCampLc = (job.campaign_name || '').trim().toLowerCase();
 
       const passesFilter = (c) => {
