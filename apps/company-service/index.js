@@ -262,6 +262,29 @@ app.post('/stamp-all', (req, res) => {
   res.json({ ok: true, started: true, note: 'stamping in background — poll /stamp-status' })
 })
 
+// Diagnostic (shared DB): do the admin-legacy solar_* columns exist, and are the
+// solar results actually being persisted? Confirms whether the Solar page's
+// enrichment caching is landing writes without needing psql access.
+app.get('/solar-diag', async (req, res) => {
+  try {
+    const cols = await pool.query(
+      `SELECT column_name FROM information_schema.columns
+        WHERE table_name='contacts' AND column_name LIKE 'solar_%' ORDER BY column_name`)
+    const hasCol = cols.rows.some((r) => r.column_name === 'solar_checked_at')
+    let counts = null
+    if (hasCol) {
+      const c = await pool.query(
+        `SELECT COUNT(*)::int AS total,
+                COUNT(*) FILTER (WHERE solar_checked_at IS NOT NULL)::int AS checked,
+                COUNT(*) FILTER (WHERE solar_status='qualified')::int AS qualified,
+                MAX(solar_checked_at) AS last_checked
+           FROM contacts`)
+      counts = c.rows[0]
+    }
+    res.json({ ok: true, solar_columns: cols.rows.map((r) => r.column_name), has_solar_checked_at: hasCol, counts })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
 // Is the contacts.company_domain index built and VALID? A CONCURRENTLY build takes
 // a while on the full table and leaves an INVALID index if it fails partway, so the
 // stamp should wait for valid=true before running (else it seq-scans per batch).
