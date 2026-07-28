@@ -15804,6 +15804,21 @@ app.get('/api/pv/campaigns', requireSession, async (req, res) => {
   } catch (err) { res.status(502).json({ error: err.message }); }
 });
 
+// Return full contact rows for a list of ids. Lets the client gather a selection
+// that spans MANY pages (e.g. "select all 500") before handing it to the Solar
+// page — the grid only holds the visible page, so filtering it client-side
+// truncated big selections. Capped to keep the response sane.
+app.post('/api/contacts/by-ids', requireSession, async (req, res) => {
+  const db = req.app.locals.pgDb;
+  if (!db || !db.getContactsById) return res.status(500).json({ error: 'Contacts DB not available' });
+  const ids = Array.isArray(req.body && req.body.ids) ? req.body.ids.filter(Boolean).slice(0, 10000) : [];
+  if (!ids.length) return res.status(400).json({ error: 'ids[] required' });
+  try {
+    const contacts = await db.getContactsById(ids);
+    res.json({ contacts, count: contacts.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── PlusVibe — push contacts to campaign ──────────────────
 app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
   const { workspace_id, campaign_id, contact_ids } = req.body;

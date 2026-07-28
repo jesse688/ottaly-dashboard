@@ -1403,6 +1403,7 @@
             </div>
             <div id="columnPickerList" style="max-height:340px;overflow-y:auto;padding:4px 0;"></div>
           </div>
+          <button class="btn btn-secondary" onclick="openSendRules()" title="Set how often the same contact may be pushed — across your clients, within a vertical, and how tightly pushes may cluster." style="font-size:12px;padding:7px 12px;">⚙ Send Rules</button>
           <button class="btn btn-primary" onclick="switchToImportTab()">Import CSV</button>
           <button class="btn" onclick="switchToImportTab(); setTimeout(() => document.getElementById('deleteCsvDropZone').scrollIntoView({behavior:'smooth'}), 100)" style="background:#dc2626;color:white;">Delete from CSV</button>
           <button class="btn btn-secondary" id="exportBtn" onclick="startApolloExport()">⬇ Apollo Export</button>
@@ -1672,6 +1673,70 @@
       <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px">
         <button onclick="closeFilterDefaults()" style="font-size:13px;padding:8px 16px;border:1px solid #d1d5db;border-radius:8px;background:#fff;cursor:pointer">Cancel</button>
         <button onclick="saveFilterDefaults()" style="font-size:13px;padding:8px 16px;border:none;border-radius:8px;background:#224388;color:#fff;cursor:pointer;font-weight:600">Save defaults</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Send Rules — how often one contact may be pushed, and by whom.
+       We send AS our clients, so the prospect sees N separate companies.
+       These windows control competitive collisions and burst density. -->
+  <div id="sendRulesModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;align-items:center;justify-content:center">
+    <div style="background:#fff;border-radius:12px;max-width:560px;width:92%;padding:24px;box-shadow:0 10px 40px rgba(0,0,0,.2);max-height:88vh;overflow:auto">
+      <div style="font-size:17px;font-weight:700;margin-bottom:4px">Send Rules</div>
+      <div style="font-size:12px;color:#6b7280;margin-bottom:18px">
+        Applied at push time, before any lead reaches PlusVibe. Changes take effect on the next push — nothing already in PlusVibe is affected.
+      </div>
+
+      <div id="srCoverage" style="display:none;font-size:12px;background:#fef3c7;border:1px solid #fde68a;color:#92400e;border-radius:8px;padding:10px 12px;margin-bottom:16px"></div>
+
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <label style="display:block">
+          <div style="font-size:13px;font-weight:600;color:#374151">Same client — cooldown</div>
+          <div style="font-size:11px;color:#6b7280;margin-bottom:6px">How long before this client may push the same contact again.</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <input type="number" min="0" id="srSameClientDays" style="width:90px;padding:7px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px">
+            <span style="font-size:12px;color:#6b7280">days</span>
+          </div>
+        </label>
+
+        <label style="display:block">
+          <div style="font-size:13px;font-weight:600;color:#374151">Same vertical — lockout</div>
+          <div style="font-size:11px;color:#6b7280;margin-bottom:6px">Blocks a <em>different</em> client in the same vertical. The competitive-collision rule. A client with its own snooze_months overrides this.</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <input type="number" min="0" id="srSameVerticalMonths" style="width:90px;padding:7px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px">
+            <span style="font-size:12px;color:#6b7280">months</span>
+          </div>
+        </label>
+
+        <label style="display:block">
+          <div style="font-size:13px;font-weight:600;color:#374151">Burst gap — any client</div>
+          <div style="font-size:11px;color:#6b7280;margin-bottom:6px">Minimum gap between two different clients hitting the same contact. Stops the same-week pile-up, which is the pattern a prospect actually notices.</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <input type="number" min="0" id="srBurstGapDays" style="width:90px;padding:7px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px">
+            <span style="font-size:12px;color:#6b7280">days <span style="color:#9ca3af">(0 = off)</span></span>
+          </div>
+        </label>
+
+        <label style="display:block">
+          <div style="font-size:13px;font-weight:600;color:#374151">Density ceiling</div>
+          <div style="font-size:11px;color:#6b7280;margin-bottom:6px">Most clients that may touch one contact inside a rolling window, counting the push being attempted.</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <input type="number" min="0" id="srMaxClientsPerWindow" style="width:70px;padding:7px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px">
+            <span style="font-size:12px;color:#6b7280">clients per</span>
+            <input type="number" min="1" id="srCeilingWindowDays" style="width:70px;padding:7px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px">
+            <span style="font-size:12px;color:#6b7280">days <span style="color:#9ca3af">(0 clients = off)</span></span>
+          </div>
+        </label>
+      </div>
+
+      <div id="srStatus" style="font-size:12px;margin-top:14px;min-height:16px"></div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:14px">
+        <button onclick="resetSendRules()" style="font-size:12px;padding:8px 12px;border:1px solid #d1d5db;border-radius:8px;background:#fff;cursor:pointer;color:#6b7280">Restore defaults</button>
+        <span style="display:flex;gap:8px">
+          <button onclick="closeSendRules()" style="font-size:13px;padding:8px 16px;border:1px solid #d1d5db;border-radius:8px;background:#fff;cursor:pointer">Cancel</button>
+          <button id="srSaveBtn" onclick="saveSendRules()" style="font-size:13px;padding:8px 16px;border:none;border-radius:8px;background:#224388;color:#fff;cursor:pointer;font-weight:600">Save rules</button>
+        </span>
       </div>
     </div>
   </div>
@@ -3335,6 +3400,106 @@
       m.style.display = 'flex';
     }
     function closeFilterDefaults(){ document.getElementById('filterDefaultsModal').style.display='none'; }
+
+    // ── Send Rules ────────────────────────────────────────────────────────
+    // Push-guard windows. Business policy, so it lives in a settings pane
+    // rather than in code — see /api/admin/push-guards.
+    const SR_FIELDS = {
+      srSameClientDays:       'sameClientDays',
+      srSameVerticalMonths:   'sameVerticalMonths',
+      srBurstGapDays:         'burstGapDays',
+      srMaxClientsPerWindow:  'maxClientsPerWindow',
+      srCeilingWindowDays:    'ceilingWindowDays',
+    };
+    let _sendRuleDefaults = null;
+
+    function srFill(settings) {
+      for (const [inputId, key] of Object.entries(SR_FIELDS)) {
+        const el = document.getElementById(inputId);
+        if (el && settings[key] != null) el.value = settings[key];
+      }
+    }
+
+    async function openSendRules() {
+      const m = document.getElementById('sendRulesModal');
+      const status = document.getElementById('srStatus');
+      status.textContent = 'Loading…'; status.style.color = '#6b7280';
+      m.style.display = 'flex';
+      try {
+        const r = await fetch('/api/admin/push-guards');
+        const d = await r.json();
+        if (d.error) throw new Error(d.error);
+        _sendRuleDefaults = d.defaults || null;
+        srFill(d.settings || {});
+        status.textContent = '';
+        // The vertical rule can only see clients configured in client_verticals.
+        // Surface thin coverage rather than letting the rule quietly no-op.
+        const cov = d.coverage || {};
+        const warn = document.getElementById('srCoverage');
+        if (!cov.withVertical) {
+          warn.style.display = 'block';
+          warn.innerHTML = '<b>The same-vertical rule is not active.</b> No client has a vertical set, so nothing can be matched as a competitor. The burst gap and density ceiling still apply.';
+        } else if (cov.withVertical < cov.configured) {
+          warn.style.display = 'block';
+          warn.innerHTML = `<b>Partial vertical coverage.</b> ${cov.withVertical} of ${cov.configured} configured clients have a vertical set — clients without one can't be matched as competitors.`;
+        } else {
+          warn.style.display = 'none';
+        }
+      } catch (e) {
+        status.textContent = 'Could not load current rules: ' + e.message;
+        status.style.color = '#b91c1c';
+      }
+    }
+
+    function closeSendRules(){ document.getElementById('sendRulesModal').style.display = 'none'; }
+
+    function resetSendRules() {
+      if (!_sendRuleDefaults) return;
+      srFill(_sendRuleDefaults);
+      const status = document.getElementById('srStatus');
+      status.textContent = 'Defaults restored — not saved yet.';
+      status.style.color = '#6b7280';
+    }
+
+    async function saveSendRules() {
+      const btn = document.getElementById('srSaveBtn');
+      const status = document.getElementById('srStatus');
+      const payload = {};
+      for (const [inputId, key] of Object.entries(SR_FIELDS)) {
+        const el = document.getElementById(inputId);
+        if (!el) continue;
+        const n = Number(el.value);
+        if (!Number.isFinite(n) || n < 0) {
+          status.textContent = 'Every value must be a number of 0 or more.';
+          status.style.color = '#b91c1c';
+          el.focus();
+          return;
+        }
+        payload[key] = n;
+      }
+      if (payload.ceilingWindowDays < 1) {
+        status.textContent = 'The density window must be at least 1 day. Set the client count to 0 to switch that rule off instead.';
+        status.style.color = '#b91c1c';
+        return;
+      }
+      btn.disabled = true; btn.textContent = 'Saving…';
+      try {
+        const r = await fetch('/api/admin/push-guards', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const d = await r.json();
+        if (d.error) throw new Error(d.error);
+        srFill(d.settings || payload);
+        closeSendRules();
+        if (typeof showMessage === 'function') showMessage('Send rules saved — applied from the next push.', 'success');
+      } catch (e) {
+        status.textContent = 'Save failed: ' + e.message;
+        status.style.color = '#b91c1c';
+      } finally {
+        btn.disabled = false; btn.textContent = 'Save rules';
+      }
+    }
     async function saveFilterDefaults() {
       const excludeGateways = Array.from(document.querySelectorAll('.fdGw:checked')).map(c => c.value);
       try {
@@ -3920,14 +4085,30 @@
     // Hand the selected contacts to the Solar Qualification page. We ship the
     // fields the solar cascade needs (address/postcode + company identity) via
     // sessionStorage, then open /solar in a new tab.
-    function pushToSolar() {
+    async function pushToSolar() {
       if (_selectedIds.size === 0) { showMessage('Select contacts first', 'error'); return; }
-      const src = window._lastContacts || [];
-      const chosen = src.filter(c => _selectedIds.has(String(c.id)));
-      if (!chosen.length) {
-        showMessage('Selected contacts aren’t on the current page — load them into view first, or narrow the selection.', 'error');
-        return;
+      // Fetch the FULL records for EVERY selected id (across all pages). Previously
+      // this filtered window._lastContacts — the visible page only — so a 500-contact
+      // selection spanning multiple pages was silently truncated to the ~100 on screen.
+      const ids = [..._selectedIds];
+      const btn = document.getElementById('pushSolarBtn');
+      const oldLabel = btn ? btn.innerHTML : '';
+      if (btn) { btn.innerHTML = '⏳ Loading…'; btn.disabled = true; }
+      let chosen = [];
+      try {
+        const r = await fetch('/api/contacts/by-ids', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids }),
+        });
+        const data = await r.json();
+        chosen = data.contacts || [];
+      } catch (err) {
+        // Fallback: whatever's on the current page, so the button still does something.
+        chosen = (window._lastContacts || []).filter(c => _selectedIds.has(String(c.id)));
+      } finally {
+        if (btn) { btn.innerHTML = oldLabel; btn.disabled = false; }
       }
+      if (!chosen.length) { showMessage('Could not load the selected contacts — try again.', 'error'); return; }
       const contacts = chosen.map(c => ({
         // Carry the ENTIRE contact record so the solar page can show every field
         // in the expandable detail card — nothing hand-picked, nothing lost.
