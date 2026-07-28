@@ -4085,49 +4085,16 @@
     // Hand the selected contacts to the Solar Qualification page. We ship the
     // fields the solar cascade needs (address/postcode + company identity) via
     // sessionStorage, then open /solar in a new tab.
-    async function pushToSolar() {
+    function pushToSolar() {
       if (_selectedIds.size === 0) { showMessage('Select contacts first', 'error'); return; }
-      // Fetch the FULL records for EVERY selected id (across all pages). Previously
-      // this filtered window._lastContacts — the visible page only — so a 500-contact
-      // selection spanning multiple pages was silently truncated to the ~100 on screen.
+      // Pass the selected IDS (small) and let the Solar page fetch the full records
+      // itself. Two reasons: (1) it carries the WHOLE selection across pages — the
+      // grid only holds the visible page, so filtering it here truncated a 500-select
+      // to ~100; (2) it keeps window.open SYNCHRONOUS — doing an async fetch here
+      // first made the browser popup-block the new tab ("Push to Solar did nothing").
       const ids = [..._selectedIds];
-      const btn = document.getElementById('pushSolarBtn');
-      const oldLabel = btn ? btn.innerHTML : '';
-      if (btn) { btn.innerHTML = '⏳ Loading…'; btn.disabled = true; }
-      let chosen = [];
-      try {
-        const r = await fetch('/api/contacts/by-ids', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ids }),
-        });
-        const data = await r.json();
-        chosen = data.contacts || [];
-      } catch (err) {
-        // Fallback: whatever's on the current page, so the button still does something.
-        chosen = (window._lastContacts || []).filter(c => _selectedIds.has(String(c.id)));
-      } finally {
-        if (btn) { btn.innerHTML = oldLabel; btn.disabled = false; }
-      }
-      if (!chosen.length) { showMessage('Could not load the selected contacts — try again.', 'error'); return; }
-      const contacts = chosen.map(c => ({
-        // Carry the ENTIRE contact record so the solar page can show every field
-        // in the expandable detail card — nothing hand-picked, nothing lost.
-        ...c,
-        // Then guarantee the specific keys the cascade + push need are populated,
-        // normalising a few aliases.
-        id: c.id,
-        email: c.email || '',
-        first_name: c.first_name || '',
-        last_name: c.last_name || '',
-        company_name: c.company_name || c.organization_name || '',
-        company_domain: c.company_domain || c.website || '',
-        company_reg: c.ch_company_number || c.company_number || c.company_reg || '',
-        // The cascade needs a postcode; company_address usually carries it.
-        company_address: c.company_address || [c.company_city, c.company_county, c.company_town].filter(Boolean).join(', ') || '',
-        phone: c.phone || c.corporate_phone || c.company_phone || '',
-      })).filter(c => c.company_address || c.company_name);
-      if (!contacts.length) { showMessage('No usable address/company on the selected contacts', 'error'); return; }
-      sessionStorage.setItem('solarContacts', JSON.stringify(contacts));
+      sessionStorage.setItem('solarContactIds', JSON.stringify(ids));
+      sessionStorage.removeItem('solarContacts'); // drop any stale full-object handoff
       window.open('/solar', '_blank');
     }
 

@@ -190,19 +190,57 @@ function refreshStatus(){
 }
 refreshStatus();
 
-// Contacts handed over from the Contacts page via sessionStorage.
-function loadHandoff(){
+// Contacts handed over from the Contacts page. Two shapes: the full objects
+// ('solarContacts', legacy) or a list of ids ('solarContactIds') which we resolve to
+// full records here via /api/contacts/by-ids. The id path carries the WHOLE selection
+// (the grid only holds the visible page) and keeps the Contacts-page window.open
+// synchronous (an async fetch there got the new tab popup-blocked).
+function mapContact(c){
+  return {
+    ...c,
+    id: c.id,
+    email: c.email || '',
+    first_name: c.first_name || '',
+    last_name: c.last_name || '',
+    company_name: c.company_name || c.organization_name || '',
+    company_domain: c.company_domain || c.website || '',
+    company_reg: c.ch_company_number || c.company_number || c.company_reg || '',
+    company_address: c.company_address || [c.company_city, c.company_county, c.company_town].filter(Boolean).join(', ') || '',
+    phone: c.phone || c.corporate_phone || c.company_phone || '',
+  };
+}
+async function loadHandoff(){
   try{
     const raw = sessionStorage.getItem('solarContacts');
-    if(raw){ const arr=JSON.parse(raw); if(Array.isArray(arr)&&arr.length){ return arr; } }
+    if(raw){ const arr=JSON.parse(raw); if(Array.isArray(arr)&&arr.length) return arr.map(mapContact); }
   }catch{}
+  try{
+    const rawIds = sessionStorage.getItem('solarContactIds');
+    if(rawIds){
+      const ids = JSON.parse(rawIds);
+      if(Array.isArray(ids)&&ids.length){
+        const r = await fetch('/api/contacts/by-ids',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});
+        const data = await r.json();
+        return (data.contacts||[]).map(mapContact).filter(c=>c.company_address||c.company_name);
+      }
+    }
+  }catch(e){}
   return null;
 }
-let INPUT = loadHandoff();
-if(INPUT){ $('#tablewrap').innerHTML=`<div class="mut" style="padding:20px 0">${INPUT.length} contacts loaded from Contacts page. Set options, then Run qualification.</div>`; }
+let INPUT = null;
+(async ()=>{
+  const rawIds = sessionStorage.getItem('solarContactIds');
+  if(sessionStorage.getItem('solarContacts') || rawIds){
+    $('#tablewrap').innerHTML='<div class="mut" style="padding:20px 0">⏳ Loading contacts…</div>';
+  }
+  INPUT = await loadHandoff();
+  if(INPUT && INPUT.length){ $('#tablewrap').innerHTML=`<div class="mut" style="padding:20px 0">${INPUT.length} contacts loaded from Contacts page. Set options, then Run qualification.</div>`; }
+  else if(rawIds){ $('#tablewrap').innerHTML='<div class="mut" style="padding:20px 0;color:var(--red)">Could not load the selected contacts — go back and try Push to Solar again.</div>'; }
+})();
 
 $('#run').addEventListener('click', run);
 async function run(){
+  if(!INPUT){ INPUT = await loadHandoff(); } // handle Run clicked before the handoff finished loading
   let contacts = INPUT;
   if(!contacts){
     // fallback: parse the paste box "address, company"
