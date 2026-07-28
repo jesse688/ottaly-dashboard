@@ -27,6 +27,33 @@ module.exports = function solarAPI() {
     });
   });
 
+  // Diagnostic for the persistence path: is the DB handle present, does the live
+  // instance actually have the save/read methods (i.e. is the new db-postgres
+  // deployed), do the solar_* columns exist, and how many rows are saved?
+  router.get('/diag', async (req, res) => {
+    const db = req.app.locals.pgDb;
+    const out = {
+      pgDb_present: !!db,
+      has_saveSolarResult: !!(db && typeof db.saveSolarResult === 'function'),
+      has_getSolarResults: !!(db && typeof db.getSolarResults === 'function'),
+      columns: null, checked: null, total: null, error: null,
+    };
+    try {
+      if (db) {
+        const cols = await db.query(
+          `SELECT column_name FROM information_schema.columns
+            WHERE table_name='contacts' AND column_name LIKE 'solar_%' ORDER BY column_name`);
+        out.columns = cols.rows.map((r) => r.column_name);
+        if (out.columns.includes('solar_checked_at')) {
+          const c = await db.query(
+            `SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE solar_checked_at IS NOT NULL)::int AS checked FROM contacts`);
+          out.total = c.rows[0].total; out.checked = c.rows[0].checked;
+        }
+      }
+    } catch (e) { out.error = e.message; }
+    res.json(out);
+  });
+
   // Current-month Google usage vs free-tier limits.
   router.get('/usage', (req, res) => res.json(usage.summary()));
 
