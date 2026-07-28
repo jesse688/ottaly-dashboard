@@ -58,6 +58,8 @@
     <label class="toggle"><input type="checkbox" id="gateUnclear"> Include “ownership unclear” (spends more Google calls)</label>
   </div>
   <span class="mut">|</span>
+  <label class="toggle" title="Off = reuse saved results (no Google spend) for contacts already qualified. On = re-run everything fresh."><input type="checkbox" id="forceRecheck"> Re-check already-done (spends Google)</label>
+  <span class="mut">|</span>
   <label class="toggle">PPA min kWp <input id="minKwp" type="number" value="100" style="width:60px;background:var(--card);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:4px 6px"></label>
   <label class="toggle">Panel W <input id="panelW" type="number" value="500" style="width:60px;background:var(--card);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:4px 6px"></label>
   <button class="btn" id="run">Run qualification</button>
@@ -210,6 +212,7 @@ async function run(){
 
   const options = {
     ownershipGate: $('#gateUnclear').checked ? 'yes_or_unclear' : 'yes',
+    force: $('#forceRecheck').checked, // re-run instead of reusing saved results
     ppaMinKwp: Number($('#minKwp').value)||100,
     panelWatts: Number($('#panelW').value)||500,
   };
@@ -371,7 +374,9 @@ async function loadPvCampaigns(){
   sel.innerHTML='<option value="">Loading campaigns…</option>';
   try{
     const r = await fetch(`/api/pv/campaigns?workspace_id=${encodeURIComponent(wsId)}`).then(x=>x.json());
-    const list = r.campaigns || (Array.isArray(r)?r:[]);
+    // /api/pv/campaigns returns { list: [...] } (same as the Contacts page uses).
+    // Accept the older keys too so this never silently shows an empty dropdown again.
+    const list = r.list || r.campaigns || (Array.isArray(r)?r:[]);
     sel.innerHTML = '<option value="">— Select campaign —</option>' +
       list.map(c=>`<option value="${esc(c.id||c._id)}">${esc(c.name||c.camp_name||c.id)}</option>`).join('');
   }catch(e){ sel.innerHTML='<option value="">Failed to load campaigns</option>'; }

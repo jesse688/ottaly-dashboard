@@ -149,6 +149,21 @@ class PostgresDatabase {
       `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ccod_building_owner TEXT`,
       `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ccod_site_count INT`,
       `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ccod_checked_at TIMESTAMP`,
+      // Solar qualification RESULTS — persisted so a re-run reuses them instead of
+      // re-spending Google geocode + buildingInsights calls (and re-blocking the
+      // server on the offline CCOD scans). solar_checked_at != NULL = already done.
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS solar_checked_at TIMESTAMP`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS solar_status TEXT`,        -- qualified | disqualified
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS solar_stop_reason TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS solar_max_kwp INT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS solar_panels INT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS solar_annual_kwh INT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS solar_roof_area_m2 INT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS solar_has_solar TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS solar_lat DOUBLE PRECISION`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS solar_lng DOUBLE PRECISION`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS solar_roof_address TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS solar_maps_url TEXT`,
       // Intelligence columns from reply parsing
       `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS works_remote BOOLEAN`,
       `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS owns_building TEXT DEFAULT 'unknown'`,
@@ -1497,6 +1512,42 @@ class PostgresDatabase {
     const sql = `SELECT * FROM contacts WHERE id IN (${placeholders})`;
     const result = await this.query(sql, ids);
     return result.rows;
+  }
+
+  // Cached solar-qualification results, keyed by contact id. Only rows already
+  // checked (solar_checked_at != NULL) are returned — the /enrich endpoint uses
+  // these to skip re-spending Google calls on contacts done in a previous run.
+  async getSolarResults(ids) {
+    if (!ids || ids.length === 0) return {};
+    const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
+    const sql = `SELECT id, solar_checked_at, solar_status, solar_stop_reason, solar_max_kwp,
+                   solar_panels, solar_annual_kwh, solar_roof_area_m2, solar_has_solar,
+                   solar_lat, solar_lng, solar_roof_address, solar_maps_url,
+                   ccod_owns_building, ccod_building_owner, ccod_site_count
+                 FROM contacts WHERE id IN (${placeholders}) AND solar_checked_at IS NOT NULL`;
+    const result = await this.query(sql, ids);
+    const out = {};
+    for (const r of result.rows) out[String(r.id)] = r;
+    return out;
+  }
+
+  // Persist one solar-qualification result onto its contact so future runs reuse it.
+  async saveSolarResult(id, rec) {
+    if (!id) return;
+    const num = (v) => (v == null || v === '' || Number.isNaN(Number(v))) ? null : Number(v);
+    await this.query(
+      `UPDATE contacts SET
+         solar_checked_at = NOW(),
+         solar_status = $2, solar_stop_reason = $3,
+         solar_max_kwp = $4, solar_panels = $5, solar_annual_kwh = $6, solar_roof_area_m2 = $7,
+         solar_has_solar = $8, solar_lat = $9, solar_lng = $10,
+         solar_roof_address = $11, solar_maps_url = $12
+       WHERE id = $1`,
+      [id, rec.status ?? null, rec.stop_reason ?? null,
+       num(rec.max_system_kwp), num(rec.max_panels_fit), num(rec.est_annual_kwh), num(rec.roof_area_m2),
+       rec.has_solar ?? null, num(rec.lat), num(rec.lng),
+       rec.roof_address_used ?? null, rec.maps_url ?? null]
+    );
   }
 
   _buildFilterClauses(filters) {

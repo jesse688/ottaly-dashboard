@@ -42,6 +42,29 @@ module.exports = function solarAPI() {
     res.json({ ok: true, ...usage.maskedSettings() });
   });
 
+  // Rebuild a result record from a persisted solar row so a cached contact renders
+  // identically to a freshly-enriched one (no Google calls spent).
+  function cachedRec(row) {
+    return {
+      status: row.solar_status,
+      stage: row.solar_status === 'qualified' ? 'done' : 'ownership',
+      stop_reason: row.solar_stop_reason,
+      owns_building: row.ccod_owns_building,          // engine stamp — still current
+      owns_basis: 'engine_stamp',
+      building_owner: row.ccod_building_owner,
+      site_count: row.ccod_site_count,
+      max_system_kwp: row.solar_max_kwp,
+      max_panels_fit: row.solar_panels,
+      est_annual_kwh: row.solar_annual_kwh,
+      roof_area_m2: row.solar_roof_area_m2,
+      has_solar: row.solar_has_solar,
+      lat: row.solar_lat, lng: row.solar_lng,
+      roof_address_used: row.solar_roof_address,
+      maps_url: row.solar_maps_url,
+      cached: true,
+    };
+  }
+
   router.post('/enrich', async (req, res) => {
     const { contacts, options = {} } = req.body || {};
     if (!Array.isArray(contacts) || !contacts.length) {
@@ -49,8 +72,20 @@ module.exports = function solarAPI() {
     }
     res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store' });
 
-    // Bounded concurrency — 4 at a time. Ownership stage is offline so the real
-    // cost/latency is only the Google calls for contacts that pass ownership.
+    const db = req.app.locals.pgDb;
+    const force = !!options.force; // re-check even contacts already done
+
+    // PERSISTENCE: reuse prior results so a re-run doesn't re-spend Google calls (and
+    // doesn't re-block the server on the offline CCOD scans). Preload the cached
+    // rows for any contacts we've qualified before, unless the user asked to re-check.
+    let cached = {};
+    if (db && !force) {
+      const ids = contacts.map((c) => c.id).filter(Boolean);
+      if (ids.length) { try { cached = await db.getSolarResults(ids); } catch (e) { /* fall back to live */ } }
+    }
+
+    // Bounded concurrency — the cascade is network-bound on Google calls, so a few in
+    // parallel. Ownership + CCOD stages are offline.
     const CONC = Math.min(Number(options.concurrency) || 6, 10);
     const queue = contacts.map((c, i) => ({ c, i }));
     let cursor = 0;
@@ -58,10 +93,19 @@ module.exports = function solarAPI() {
       while (cursor < queue.length) {
         const { c, i } = queue[cursor++];
         let rec;
-        try {
-          rec = await enrichContact(c, options);
-        } catch (e) {
-          rec = { status: 'disqualified', stage: 'error', stop_reason: 'error', error: e.message, email: c.email, company_name: c.company_name };
+        const hit = c.id && cached[String(c.id)];
+        if (hit) {
+          rec = cachedRec(hit); // reuse — no Google spend
+        } else {
+          try {
+            rec = await enrichContact(c, options);
+          } catch (e) {
+            rec = { status: 'disqualified', stage: 'error', stop_reason: 'error', error: e.message, email: c.email, company_name: c.company_name };
+          }
+          // Persist the fresh result so the next run reuses it (skip pure errors).
+          if (db && c.id && rec.stage !== 'error') {
+            try { await db.saveSolarResult(c.id, rec); } catch (e) { /* non-fatal */ }
+          }
         }
         rec.index = i;
         const { raw, ...lean } = rec; // keep the heavy raw off the wire
