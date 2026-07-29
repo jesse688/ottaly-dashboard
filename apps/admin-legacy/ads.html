@@ -168,6 +168,7 @@ tbody tr.sel{background:#EEF2FF}
       <span style="flex:1"></span>
       <button class="btn ghost sm" id="pauseBtn">Pause</button>
       <button class="btn ghost sm" id="retryBtn">Retry errors</button>
+      <button class="btn sm" id="pushPvBtn" style="background:#059669;border-color:#059669">🚀 Verify &amp; Push to PlusVibe</button>
       <button class="btn sm" id="exportBtn">Export CSV</button>
       <button class="btn danger sm" id="deleteBtn">Delete</button>
     </div>
@@ -176,6 +177,43 @@ tbody tr.sel{background:#EEF2FF}
       <button class="btn ghost sm" id="prevPage">← Prev</button>
       <span class="card-sub" id="pageInfo"></span>
       <button class="btn ghost sm" id="nextPage">Next →</button>
+    </div>
+  </div>
+</div>
+
+<!-- Push to PlusVibe. Deliberately posts to /api/contacts/verify-and-push — the
+     SAME endpoint the Contacts page uses — so the Reacher/No2Bounce verification
+     step and every push guard (cooldowns, DNC, cross-client, vertical lockout)
+     apply identically. This page must never become a way to bypass them. -->
+<div id="pvModal" style="display:none;position:fixed;inset:0;background:rgba(5,12,41,.55);z-index:9998;align-items:center;justify-content:center">
+  <div style="background:#fff;border-radius:12px;width:520px;max-width:94vw;max-height:90vh;overflow:auto;padding:1.25rem 1.5rem">
+    <div style="font-family:'Genos',sans-serif;font-size:1.25rem;font-weight:700">Verify &amp; Push to PlusVibe</div>
+    <div class="card-sub" id="pvSummary" style="margin:.35rem 0 1rem"></div>
+
+    <label class="fld">Which results?</label>
+    <select id="pvWhich" style="margin-bottom:.75rem">
+      <option value="yes">Only domains that RUN ads</option>
+      <option value="no">Only domains that DON'T run ads</option>
+      <option value="done">All checked domains</option>
+    </select>
+
+    <label class="fld">Minimum ad count <span style="text-transform:none;font-weight:400">(optional — isolate heavier advertisers)</span></label>
+    <input type="text" id="pvMinAds" placeholder="e.g. 10" style="margin-bottom:.75rem">
+
+    <label class="fld">Workspace / client</label>
+    <select id="pvWorkspace" style="margin-bottom:.75rem"><option value="">Loading…</option></select>
+
+    <label class="fld">Campaign</label>
+    <select id="pvCampaign" style="margin-bottom:.75rem"><option value="">Select a workspace first</option></select>
+
+    <div style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;padding:.6rem .8rem;font-size:11.5px;color:#166534;margin-bottom:.9rem">
+      ✓ Goes through the normal verifier and every push guard — same path as “Verify &amp; Push” on the Contacts page.
+    </div>
+
+    <div id="pvResult" class="card-sub" style="margin-bottom:.6rem"></div>
+    <div style="display:flex;gap:.5rem;justify-content:flex-end">
+      <button class="btn ghost sm" id="pvCancel">Cancel</button>
+      <button class="btn sm" id="pvGo" style="background:#059669;border-color:#059669">Verify &amp; Push</button>
     </div>
   </div>
 </div>
@@ -248,11 +286,14 @@ $('#bfile').addEventListener('change', (e) => {
   rd.readAsText(f);
 });
 
-async function startBatch(name, region, domains) {
+// `payload` is either { domains: [...] } for an ad-hoc list, or
+// { contacts: [{id, domain}] } from the Contacts handoff — the latter lets the
+// finished batch be pushed to PlusVibe as contacts rather than bare domains.
+async function startBatch(name, region, payload) {
   const r = await api('/batches', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, region, domains }),
+    body: JSON.stringify({ name, region, ...payload }),
   });
   toast(`Batch queued — ${r.total} domains` + (r.cached ? ` (${r.cached} already cached)` : ''));
   selected = r.id; offset = 0;
@@ -266,7 +307,7 @@ $('#startBtn').addEventListener('click', async () => {
   const btn = $('#startBtn');
   btn.disabled = true; btn.textContent = 'Starting…';
   try {
-    await startBatch($('#bname').value.trim(), $('#bregion').value, domains);
+    await startBatch($('#bname').value.trim(), $('#bregion').value, { domains });
     $('#domains').value = ''; $('#bname').value = ''; $('#bfile').value = ''; updateParsed();
   } catch (e) { toast(e.message, true); }
   btn.disabled = false; btn.textContent = 'Start batch';
@@ -328,11 +369,15 @@ async function consumeHandoff() {
     if (!r.ok) throw new Error(data.error || 'Could not load contacts');
 
     const contacts = data.contacts || [];
-    const domains = [...new Set(contacts.map(contactDomain).map((d) => {
-      const n = parseDomains(d);
-      return n[0] || null;
-    }).filter(Boolean))];
-    const noDomain = contacts.length - contacts.filter((c) => contactDomain(c)).length;
+    // Keep the contact→domain pairing: several contacts can share one company
+    // domain, and the PlusVibe push needs to resolve results back to contacts.
+    const pairs = [];
+    for (const c of contacts) {
+      const d = parseDomains(contactDomain(c))[0];
+      if (d) pairs.push({ id: c.id, domain: d });
+    }
+    const domains = [...new Set(pairs.map((p) => p.domain))];
+    const noDomain = contacts.length - pairs.length;
 
     if (!domains.length) {
       banner(`Loaded ${contacts.length.toLocaleString()} contacts but none had a usable company domain — nothing to check.`, true);
@@ -341,7 +386,7 @@ async function consumeHandoff() {
 
     const name = label || `Contacts selection — ${new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}`;
     banner(`🔎 Checking <b>${domains.length.toLocaleString()}</b> domains from ${contacts.length.toLocaleString()} selected contacts…`);
-    const res = await startBatch(name, $('#bregion').value, domains);
+    const res = await startBatch(name, $('#bregion').value, { contacts: pairs });
     banner(`🔎 Running <b>${res.total.toLocaleString()}</b> domains from ${contacts.length.toLocaleString()} selected contacts`
       + (res.cached ? ` · ${res.cached.toLocaleString()} answered from cache` : '')
       + (noDomain ? ` · ${noDomain.toLocaleString()} contact(s) had no company domain and were skipped` : '')
@@ -510,6 +555,90 @@ $('#deleteBtn').addEventListener('click', async () => {
   if (!confirm(`Delete batch "${b ? b.name || 'Untitled' : selected}" and all its results?`)) return;
   try { await api('/batches/' + selected, { method: 'DELETE' }); selected = null; toast('Batch deleted'); refresh(); }
   catch (e) { toast(e.message, true); }
+});
+
+// ── push to PlusVibe ──
+// Resolves the chosen result filter back to contact ids server-side, then hands
+// them to /api/contacts/verify-and-push — the same endpoint (and therefore the
+// same verification + guards) the Contacts page uses.
+async function pvCount() {
+  const min = parseInt($('#pvMinAds').value, 10);
+  const q = `status=${$('#pvWhich').value}` + (Number.isFinite(min) ? `&min_ads=${min}` : '');
+  return api(`/batches/${selected}/contact-ids?${q}`);
+}
+
+async function refreshPvSummary() {
+  $('#pvSummary').textContent = 'Counting…';
+  try {
+    const r = await pvCount();
+    $('#pvSummary').innerHTML = r.linked_contacts
+      ? `<b>${r.count.toLocaleString()}</b> contact(s) match, from ${r.linked_contacts.toLocaleString()} linked to this batch.`
+      : `This batch has no linked contacts — it was started from a pasted/uploaded list, not from a Contacts selection, so there is nothing to push.`;
+    $('#pvGo').disabled = !r.count;
+  } catch (e) { $('#pvSummary').textContent = e.message; $('#pvGo').disabled = true; }
+}
+
+$('#pushPvBtn').addEventListener('click', async () => {
+  if (!selected) return;
+  $('#pvResult').textContent = '';
+  $('#pvModal').style.display = 'flex';
+  refreshPvSummary();
+  try {
+    const ws = await (await fetch('/api/pv/workspaces')).json();
+    const list = ws.workspaces || ws || [];
+    $('#pvWorkspace').innerHTML = '<option value="">Select a client…</option>'
+      + list.map((w) => `<option value="${esc(w._id || w.id)}">${esc(w.name)}</option>`).join('');
+  } catch (e) { $('#pvWorkspace').innerHTML = `<option value="">Could not load workspaces: ${esc(e.message)}</option>`; }
+});
+$('#pvCancel').addEventListener('click', () => { $('#pvModal').style.display = 'none'; });
+$('#pvWhich').addEventListener('change', refreshPvSummary);
+$('#pvMinAds').addEventListener('input', () => { clearTimeout(window._pvT); window._pvT = setTimeout(refreshPvSummary, 350); });
+
+$('#pvWorkspace').addEventListener('change', async () => {
+  const id = $('#pvWorkspace').value;
+  const el = $('#pvCampaign');
+  if (!id) { el.innerHTML = '<option value="">Select a workspace first</option>'; return; }
+  el.innerHTML = '<option value="">Loading campaigns…</option>';
+  try {
+    const r = await (await fetch(`/api/pv/campaigns?workspace_id=${encodeURIComponent(id)}`)).json();
+    const camps = r.campaigns || r || [];
+    el.innerHTML = '<option value="">Select a campaign…</option>'
+      + camps.map((c) => `<option value="${esc(c._id || c.id)}">${esc(c.name)}</option>`).join('');
+  } catch (e) { el.innerHTML = `<option value="">Could not load campaigns: ${esc(e.message)}</option>`; }
+});
+
+$('#pvGo').addEventListener('click', async () => {
+  const wsEl = $('#pvWorkspace'); const cEl = $('#pvCampaign');
+  if (!wsEl.value) return toast('Pick a client first', true);
+  if (!cEl.value) return toast('Pick a campaign first', true);
+  const btn = $('#pvGo');
+  btn.disabled = true; btn.textContent = 'Verifying…';
+  $('#pvResult').textContent = 'Resolving contacts…';
+  try {
+    const { contact_ids } = await pvCount();
+    if (!contact_ids.length) throw new Error('No contacts match that filter');
+    $('#pvResult').textContent = `Verifying and pushing ${contact_ids.length.toLocaleString()} contact(s)… this can take a while.`;
+    const r = await fetch('/api/contacts/verify-and-push', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contact_ids,
+        workspace_id: wsEl.value,
+        campaign_id: cEl.value,
+        workspace_name: wsEl.options[wsEl.selectedIndex].text,
+        campaign_name: cEl.options[cEl.selectedIndex].text,
+        include_risky: false,
+        max_age_days: 90,
+      }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    $('#pvResult').innerHTML = `<b>Done.</b> ${esc(JSON.stringify(data).slice(0, 400))}`;
+    toast('Pushed to PlusVibe');
+  } catch (e) {
+    $('#pvResult').innerHTML = `<span style="color:var(--red)">${esc(e.message)}</span>`;
+    toast(e.message, true);
+  }
+  btn.disabled = false; btn.textContent = 'Verify & Push';
 });
 
 async function refresh() {

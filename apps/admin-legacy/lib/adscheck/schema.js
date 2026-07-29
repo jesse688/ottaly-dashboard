@@ -53,6 +53,18 @@ CREATE TABLE IF NOT EXISTS ads_domain_cache (
   PRIMARY KEY (domain, region)
 );
 
+-- Which CONTACTS a batch came from. The queue works in domains (many contacts
+-- share one company domain), but a PlusVibe push needs contact ids — and
+-- /api/contacts/verify-and-push takes contact_ids. This link table is what lets
+-- "filter the results, push the winners" resolve back to real contacts.
+CREATE TABLE IF NOT EXISTS ads_batch_contacts (
+  batch_id   uuid   NOT NULL REFERENCES ads_batches(id) ON DELETE CASCADE,
+  contact_id bigint NOT NULL,
+  domain     text   NOT NULL,
+  PRIMARY KEY (batch_id, contact_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ads_batch_contacts_domain ON ads_batch_contacts (batch_id, domain);
+
 -- Worker liveness. Each replica upserts its own row; /api/ads/health reads it so
 -- "is anything actually draining the queue?" is answerable without shell access.
 CREATE TABLE IF NOT EXISTS ads_workers (
@@ -64,6 +76,16 @@ CREATE TABLE IF NOT EXISTS ads_workers (
   last_heartbeat timestamptz NOT NULL DEFAULT now()
 );
 `;
+
+// Normalises contacts.company_domain to the form ads_jobs.domain is stored in:
+// lowercased, scheme stripped, leading www. stripped, path/query dropped.
+// Apollo exports carry all of "kingspan.com", "www.Kingspan.com" and
+// "https://egg.com" for the same company — a www-only strip silently misses the
+// scheme-prefixed rows, which then never get stamped and never show up in the
+// Contacts filter. MUST stay character-identical to idx_contacts_domain_norm in
+// db-postgres.js, or Postgres won't use the index and every stamp seq-scans.
+const DOMAIN_NORM_SQL =
+  `REGEXP_REPLACE(LOWER(COALESCE(company_domain,'')), '^(https?://)?(www\\.)?([^/?#]+).*$', '\\3')`;
 
 let ready = null;
 
@@ -80,4 +102,4 @@ function ensureSchema(db) {
   return ready;
 }
 
-module.exports = { ensureSchema, DDL };
+module.exports = { ensureSchema, DDL, DOMAIN_NORM_SQL };

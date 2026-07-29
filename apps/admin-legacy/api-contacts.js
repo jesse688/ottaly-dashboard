@@ -611,6 +611,9 @@ module.exports = (db) => {
         chCharges: rest.chCharges,
         chOverdue: rest.chOverdue,
         chOnlyEnriched: rest.chOnlyEnriched,
+        // Google Ads Transparency, stamped by the ads checker (lib/adscheck).
+        adsRunsAds: rest.adsRunsAds,     // yes | no | checked | unchecked
+        adsMinCount: rest.adsMinCount,
       };
 
       // Master exclusions per client — when a target client is selected, load

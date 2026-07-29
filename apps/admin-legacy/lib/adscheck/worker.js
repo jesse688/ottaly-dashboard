@@ -14,6 +14,7 @@
 const os = require('os');
 const { BrowserPool } = require('./browser');
 const { checkDomain, sleep } = require('./checkDomain');
+const { DOMAIN_NORM_SQL } = require('./schema');
 
 const HEARTBEAT_MS = 15 * 1000;
 const SWEEP_MS = 60 * 1000;
@@ -159,6 +160,7 @@ class AdsWorker {
           [job.domain, job.region || 'anywhere', res.runs_ads, res.ad_count, res.is_estimate,
            JSON.stringify(res.advertisers || [])]).catch(() => {});
       }
+      await this.stampContacts(job.domain, res).catch(() => {}); // non-fatal
       this.lastError = null;
     } catch (err) {
       await this.db.query(
@@ -169,6 +171,22 @@ class AdsWorker {
       if (this.doneRecent.length > 500) this.doneRecent.splice(0, this.doneRecent.length - 500);
       await this.markBatchDoneIfFinished(job.batch_id).catch(() => {});
     }
+  }
+
+  /**
+   * Persist the result onto every contact at this domain, so the Contacts grid
+   * can filter on it later and a push can be built from it — not just the
+   * contacts that happened to be in this batch. Matches on the normalised
+   * domain (lowered, www-stripped), which is the form ads_jobs.domain is in;
+   * idx_contacts_domain_norm makes it an index lookup rather than a seq scan.
+   */
+  async stampContacts(domain, res) {
+    await this.db.query(
+      `UPDATE contacts
+          SET ads_runs_ads=$2, ads_count=$3, ads_is_estimate=$4,
+              ads_advertisers=$5::jsonb, ads_checked_at=now()
+        WHERE ${DOMAIN_NORM_SQL} = $1`,
+      [domain, res.runs_ads, res.ad_count, res.is_estimate, JSON.stringify(res.advertisers || [])]);
   }
 
   /** Flip a batch to 'done' once nothing is queued or running for it. */

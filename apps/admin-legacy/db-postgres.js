@@ -3,6 +3,12 @@ const path = require('path');
 const fs = require('fs');
 const dnsPromises = require('dns').promises;
 
+// Single definition of the company_domain normalisation, shared with the ads
+// checker's stamping queries. The index below and those queries MUST use the
+// identical expression or Postgres silently ignores the index — importing it
+// rather than re-typing it makes drift impossible.
+const { DOMAIN_NORM_SQL } = require('./lib/adscheck/schema');
+
 // Dedicated resolver for high-volume MX enrichment. Routing these lookups through
 // public resolvers (Cloudflare / Google) instead of the server's default resolver
 // means our ~8k-per-run MX queries blend into global query volume rather than
@@ -164,6 +170,16 @@ class PostgresDatabase {
       `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS solar_lng DOUBLE PRECISION`,
       `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS solar_roof_address TEXT`,
       `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS solar_maps_url TEXT`,
+      // Google Ads Transparency RESULTS — stamped by the ads-checker worker
+      // (lib/adscheck) so the Contacts grid can filter on "runs Google ads" and
+      // a PlusVibe push can be built straight from it. ads_domain_cache stays
+      // the reusable per-DOMAIN source of truth; these are its per-CONTACT
+      // projection, stamped onto every contact sharing the checked domain.
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ads_runs_ads BOOLEAN`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ads_count INT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ads_is_estimate BOOLEAN`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ads_advertisers JSONB`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ads_checked_at TIMESTAMP`,
       // Intelligence columns from reply parsing
       `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS works_remote BOOLEAN`,
       `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS owns_building TEXT DEFAULT 'unknown'`,
@@ -982,6 +998,12 @@ class PostgresDatabase {
         ['email_domain',      `CREATE INDEX IF NOT EXISTS idx_contacts_email_domain ON contacts (LOWER(SPLIT_PART(email, '@', 2)))`],
         // B-tree indexes for equality/range filters used on every saved view
         ['do_not_contact',   `CREATE INDEX IF NOT EXISTS idx_contacts_dnc ON contacts (do_not_contact) WHERE do_not_contact = false OR do_not_contact IS NULL`],
+        // Ads checker. The partial index serves the "runs Google ads" grid
+        // filter; the functional one is what the worker stamps against, matching
+        // ads_domain_cache.domain (already lowercased, www-stripped) — without
+        // it every finished job would seq-scan the whole contacts table.
+        ['ads_runs_ads',     `CREATE INDEX IF NOT EXISTS idx_contacts_ads_runs_ads ON contacts (ads_runs_ads) WHERE ads_runs_ads IS NOT NULL`],
+        ['ads_runs_ads',     `CREATE INDEX IF NOT EXISTS idx_contacts_domain_norm ON contacts (${DOMAIN_NORM_SQL})`],
         ['email_status',     `CREATE INDEX IF NOT EXISTS idx_contacts_email_status ON contacts (workspace_id, email_status)`],
         ['num_employees',    `CREATE INDEX IF NOT EXISTS idx_contacts_num_employees ON contacts (num_employees)`],
         ['country',          `CREATE INDEX IF NOT EXISTS idx_contacts_country ON contacts (LOWER(country))`],
@@ -1723,6 +1745,23 @@ class PostgresDatabase {
     safe('companyCity',   () => { if (filters.companyCity)   colMulti('company_city',    filters.companyCity); });
     safe('companyState',  () => { if (filters.companyState)  colMulti('company_state',   filters.companyState); });
     safe('companyCountry',() => { if (filters.companyCountry)colMulti('company_country', filters.companyCountry); });
+    // Google Ads Transparency (stamped by the ads checker — see lib/adscheck).
+    //   yes / no      → known to run ads / known not to
+    //   checked       → any result, regardless of outcome
+    //   unchecked     → never been through the ads checker
+    // Plus an optional minimum ad count, to isolate the heavier advertisers.
+    safe('adsRunsAds', () => {
+      const v = String(filters.adsRunsAds || '').toLowerCase();
+      if (v === 'yes')            clauses.push('ads_runs_ads IS TRUE');
+      else if (v === 'no')        clauses.push('ads_runs_ads IS FALSE');
+      else if (v === 'checked')   clauses.push('ads_checked_at IS NOT NULL');
+      else if (v === 'unchecked') clauses.push('ads_checked_at IS NULL');
+    });
+    safe('adsMinCount', () => {
+      const n = parseInt(filters.adsMinCount, 10);
+      if (Number.isFinite(n)) { clauses.push(`ads_count >= $${p}`); params.push(n); p++; }
+    });
+
     // Normalised location hierarchy filters — the clean split/filter columns.
     safe('companyRegion', () => { if (filters.companyRegion) colExact('company_region',  filters.companyRegion); });
     safe('companyCounty', () => { if (filters.companyCounty) colExact('company_county',  filters.companyCounty); });
