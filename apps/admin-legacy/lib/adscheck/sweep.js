@@ -37,10 +37,14 @@ function scopeSql(ukOnly) {
  * 0 means re-check everything.
  */
 async function previewSweep(db, { ukOnly = true, staleDays = 30 } = {}) {
-  // Two COUNT(DISTINCT)s in one pass, rather than GROUP BY + bool_or over a
-  // subquery — same answer, one scan, and it stays inside the pool's 45s
-  // statement_timeout on a ~600k-row contacts table.
-  const { rows } = await db.query(
+  // Counting distinct domains scans all ~600k contacts and normalises each
+  // company_domain — routinely more than the pool's 45s statement_timeout, so
+  // it needs its own connection with a longer one, exactly like the insert.
+  const client = db.pool ? await db.pool.connect() : null;
+  const q = client ? (t, p) => client.query(t, p) : (t, p) => db.query(t, p);
+  try {
+  if (client) await q(`SET statement_timeout = '300s'`);
+  const { rows } = await q(
     `SELECT COUNT(DISTINCT d)::int AS total_domains,
             COUNT(DISTINCT d) FILTER (
               WHERE $1::int <= 0 OR ads_checked_at IS NULL
@@ -52,6 +56,12 @@ async function previewSweep(db, { ukOnly = true, staleDays = 30 } = {}) {
        ) s
       WHERE d ~ '^[a-z0-9][a-z0-9.-]*\\.[a-z]{2,}$'`, [staleDays]);
   return rows[0];
+  } finally {
+    if (client) {
+      await client.query(`SET statement_timeout = DEFAULT`).catch(() => {});
+      client.release();
+    }
+  }
 }
 
 /**

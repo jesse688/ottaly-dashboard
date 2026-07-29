@@ -727,22 +727,28 @@ $('#sweepBtn').addEventListener('click', async () => {
   const label = btn.textContent;
   btn.disabled = true; btn.textContent = '⏳ Counting UK domains…';
   toast('Counting UK domains across ~600k contacts — this can take a moment…');
-  let p;
+  // The preview only sizes the confirm dialog. If counting is slow or times
+  // out, fall back to asking without a number rather than blocking the sweep.
+  let p = null;
   try { p = await api('/sweep/preview?uk_only=true&stale_days=30'); }
-  catch (e) { btn.disabled = false; btn.textContent = label; return toast('Sweep preview failed: ' + e.message, true); }
+  catch (e) { console.warn('sweep preview failed:', e.message); }
   finally { btn.disabled = false; btn.textContent = label; }
-  if (!p || typeof p.to_check !== 'number') return toast('Sweep preview returned no count — is the deploy up to date?', true);
-  if (!p.to_check) return toast(`All ${p.total_domains.toLocaleString()} UK domains checked in the last 30 days — nothing to do`);
-  const mins = Math.round(p.to_check / 12);
-  if (!confirm(`Sweep the whole database?\n\n`
-    + `${p.total_domains.toLocaleString()} distinct UK company domains\n`
-    + `${p.to_check.toLocaleString()} need checking (rest done in the last 30 days)\n\n`
-    + `At the current rate that's roughly ${mins > 90 ? Math.round(mins / 60) + ' hours' : mins + ' min'}.\n`
-    + `Results apply to EVERY contact at each domain.`)) return;
+
+  if (!p || typeof p.to_check !== 'number') {
+    if (!confirm('Sweep the whole database?\n\nCounting the domains timed out, so this will queue every UK company domain that has not been checked in the last 30 days without showing you the number first.\n\nResults apply to EVERY contact at each domain.')) return;
+  } else {
+    if (!p.to_check) return toast(`All ${p.total_domains.toLocaleString()} UK domains checked in the last 30 days — nothing to do`);
+    const mins = Math.round(p.to_check / 12);
+    if (!confirm(`Sweep the whole database?\n\n`
+      + `${p.total_domains.toLocaleString()} distinct UK company domains\n`
+      + `${p.to_check.toLocaleString()} need checking (rest done in the last 30 days)\n\n`
+      + `At the current rate that's roughly ${mins > 90 ? Math.round(mins / 60) + ' hours' : mins + ' min'}.\n`
+      + `Results apply to EVERY contact at each domain.`)) return;
+  }
   try {
     const r = await api('/sweep', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ uk_only: true, stale_days: 30 }) });
-    toast(`Building the sweep — queueing ${p.to_check.toLocaleString()} domains. This takes a minute or two.`);
+    toast(`Building the sweep${p ? ` — queueing ${p.to_check.toLocaleString()} domains` : ''}. This takes a minute or two.`);
     selected = r.id; offset = 0; await refresh();
   } catch (e) { toast(e.message, true); }
 });

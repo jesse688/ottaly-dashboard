@@ -30,7 +30,7 @@ RUN npm install --omit=dev
 # `COPY apps/admin-legacy/ ./` layer even when the commit changed, shipping
 # stale code on a "successful" build. Bumping CACHEBUST (any new value each
 # deploy) forces this layer — and everything after it — to rebuild.
-ARG CACHEBUST=2026-07-29-17
+ARG CACHEBUST=2026-07-29-18
 COPY apps/admin-legacy/ ./
 
 EXPOSE 3000
