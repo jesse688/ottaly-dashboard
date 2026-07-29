@@ -778,7 +778,10 @@ async function refresh() {
 function schedulePoll() {
   clearTimeout(pollTimer);
   const busy = (window._batches || []).some((b) => b.status === 'running' && (b.queued || b.running));
-  pollTimer = setTimeout(async () => { await refresh(); schedulePoll(); }, busy ? 3000 : 15000);
+  // 3s was fine at 100 domains; against a 187k-job sweep each poll runs two
+  // aggregates, so it becomes real database load. Nothing here needs
+  // sub-10-second latency.
+  pollTimer = setTimeout(async () => { await refresh(); schedulePoll(); }, busy ? 10000 : 30000);
 }
 
 // A handoff starts its own batch (and selects it); refresh() then paints the page

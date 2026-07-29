@@ -195,19 +195,28 @@ module.exports = function adsAPI(getWorker) {
   router.get('/batches', async (req, res) => {
     const limit = Math.min(Number(req.query.limit) || 50, 200);
     try {
+      // Pick the page of batches FIRST, then aggregate only their jobs via a
+      // lateral. The previous shape joined all of ads_jobs (187k+ rows after a
+      // full sweep) and grouped before applying the limit — on a 3s poll that
+      // was a constant load on the whole database, not just this page.
       const { rows } = await req.db.query(
-        `SELECT b.id, b.name, b.region, b.total, b.status, b.created_at,
-                COUNT(j.*) FILTER (WHERE j.status='queued')::int  AS queued,
-                COUNT(j.*) FILTER (WHERE j.status='running')::int AS running,
-                COUNT(j.*) FILTER (WHERE j.status='done')::int    AS done,
-                COUNT(j.*) FILTER (WHERE j.status='error')::int   AS errors,
-                COUNT(j.*) FILTER (WHERE j.runs_ads IS TRUE)::int  AS yes,
-                COUNT(j.*) FILTER (WHERE j.runs_ads IS FALSE)::int AS no,
-                MAX(j.updated_at) AS last_activity
-           FROM ads_batches b LEFT JOIN ads_jobs j ON j.batch_id = b.id
-          GROUP BY b.id
-          ORDER BY b.created_at DESC
-          LIMIT $1`, [limit]);
+        `WITH b AS (
+           SELECT id, name, region, total, status, created_at
+             FROM ads_batches ORDER BY created_at DESC LIMIT $1
+         )
+         SELECT b.*, c.queued, c.running, c.done, c.errors, c.yes, c.no, c.last_activity
+           FROM b
+           LEFT JOIN LATERAL (
+             SELECT COUNT(*) FILTER (WHERE status='queued')::int  AS queued,
+                    COUNT(*) FILTER (WHERE status='running')::int AS running,
+                    COUNT(*) FILTER (WHERE status='done')::int    AS done,
+                    COUNT(*) FILTER (WHERE status='error')::int   AS errors,
+                    COUNT(*) FILTER (WHERE runs_ads IS TRUE)::int  AS yes,
+                    COUNT(*) FILTER (WHERE runs_ads IS FALSE)::int AS no,
+                    MAX(updated_at) AS last_activity
+               FROM ads_jobs WHERE batch_id = b.id
+           ) c ON TRUE
+          ORDER BY b.created_at DESC`, [limit]);
       res.json({ batches: rows });
     } catch (err) {
       res.status(500).json({ error: err.message });

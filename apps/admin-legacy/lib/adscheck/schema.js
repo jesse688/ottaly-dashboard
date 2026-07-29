@@ -155,7 +155,16 @@ async function ensureContactIndexes(db) {
 async function ensureContactColumns(db, { attempts = 5 } = {}) {
   for (let i = 1; i <= attempts; i++) {
     try {
-      if (await contactColumnsPresent(db)) return true;
+      // Columns already there? Still ensure the INDEXES — they are created
+      // separately and can lose their own race. Returning early here meant that
+      // on every subsequent boot the index build was skipped, so a single
+      // failed build left stampContacts seq-scanning all ~600k contacts on
+      // EVERY finished job. That is a whole-dashboard performance problem, not
+      // just a slow checker.
+      if (await contactColumnsPresent(db)) {
+        await ensureContactIndexes(db);
+        return true;
+      }
       for (const [col, type] of CONTACT_COLUMNS) {
         await db.query(`SET lock_timeout = '15s'`);
         await db.query(`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ${col} ${type}`);
