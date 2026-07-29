@@ -136,6 +136,35 @@ module.exports = function adsAPI(getWorker) {
     }
   });
 
+  // Backfill contacts from ALL finished jobs. Needed once because cached rows
+  // in a sweep were marked done without ever stamping contacts, but it is also
+  // a general repair: it re-derives the per-contact projection from ads_jobs,
+  // which is the durable record. Idempotent.
+  router.post('/restamp', async (req, res) => {
+    const client = req.db.pool ? await req.db.pool.connect() : null;
+    const q = client ? (t, p) => client.query(t, p) : (t, p) => req.db.query(t, p);
+    try {
+      if (client) await q(`SET statement_timeout = '900s'`);
+      // Newest result per domain wins, so a re-check supersedes an older answer.
+      const r = await q(
+        `UPDATE contacts c
+            SET ads_runs_ads=s.runs_ads, ads_count=s.ad_count, ads_is_estimate=s.is_estimate,
+                ads_advertisers=s.advertisers, ads_checked_at=s.updated_at
+           FROM (
+             SELECT DISTINCT ON (domain) domain, runs_ads, ad_count, is_estimate, advertisers, updated_at
+               FROM ads_jobs WHERE status='done'
+              ORDER BY domain, updated_at DESC
+           ) s
+          WHERE ${DOMAIN_NORM_SQL.replace(/company_domain/g, 'c.company_domain')} = s.domain
+            AND (c.ads_checked_at IS NULL OR c.ads_checked_at < s.updated_at)`);
+      res.json({ ok: true, contacts_stamped: r.rowCount });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    } finally {
+      if (client) { await client.query(`SET statement_timeout = DEFAULT`).catch(() => {}); client.release(); }
+    }
+  });
+
   // ── full-database sweep ───────────────────────────────────
   // Queue every distinct UK company domain in contacts. Results stamp onto
   // EVERY contact at that domain (worker.stampContacts), so one check answers

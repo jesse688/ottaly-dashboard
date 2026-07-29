@@ -188,6 +188,21 @@ async function fillSweep(db, id, { region = 'anywhere', ukOnly = true, staleDays
       [id, staleDays, region, cacheTtlDays]);
 
     if (!rowCount) { await q(`DELETE FROM ads_batches WHERE id=$1`, [id]); return 0; }
+
+    // Rows pre-filled from ads_domain_cache are marked 'done' without ever
+    // reaching the worker, so worker.stampContacts never sees them. Without
+    // this they'd show as answered in the batch but leave contacts untouched —
+    // invisible to the Contacts filter and to a PlusVibe push. Stamp them here.
+    const stamped = await q(
+      `UPDATE contacts c
+          SET ads_runs_ads=j.runs_ads, ads_count=j.ad_count, ads_is_estimate=j.is_estimate,
+              ads_advertisers=j.advertisers, ads_checked_at=now()
+         FROM ads_jobs j
+        WHERE j.batch_id=$1 AND j.status='done'
+          AND ${DOMAIN_NORM_SQL.replace(/company_domain/g, 'c.company_domain')} = j.domain`,
+      [id]);
+    if (stamped.rowCount) console.log(`[ads] sweep ${id}: stamped ${stamped.rowCount} contact(s) from cache`);
+
     await q(`UPDATE ads_batches SET total=$2, status='running' WHERE id=$1`, [id, rowCount]);
     const c = await q(
       `SELECT COUNT(*) FILTER (WHERE status='done')::int AS cached FROM ads_jobs WHERE batch_id=$1`, [id]);
