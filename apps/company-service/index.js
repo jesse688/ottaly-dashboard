@@ -262,6 +262,42 @@ app.post('/stamp-all', (req, res) => {
   res.json({ ok: true, started: true, note: 'stamping in background — poll /stamp-status' })
 })
 
+// One-shot: create the admin-legacy solar_* result columns on `contacts`. The
+// admin boot migration adds them with a 5s lock_timeout, which can't win the
+// AccessExclusive lock on the busy contacts table, so they silently never got
+// created (→ every solar save threw "column doesn't exist"). This adds ALL columns
+// in a SINGLE ALTER (one lock, not 12) and RETRIES until it grabs a quiet moment.
+app.post('/add-solar-columns', async (req, res) => {
+  const sql = `ALTER TABLE contacts
+    ADD COLUMN IF NOT EXISTS solar_checked_at   TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS solar_status       TEXT,
+    ADD COLUMN IF NOT EXISTS solar_stop_reason  TEXT,
+    ADD COLUMN IF NOT EXISTS solar_max_kwp       INT,
+    ADD COLUMN IF NOT EXISTS solar_panels        INT,
+    ADD COLUMN IF NOT EXISTS solar_annual_kwh    INT,
+    ADD COLUMN IF NOT EXISTS solar_roof_area_m2  INT,
+    ADD COLUMN IF NOT EXISTS solar_has_solar     TEXT,
+    ADD COLUMN IF NOT EXISTS solar_lat           DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS solar_lng           DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS solar_roof_address  TEXT,
+    ADD COLUMN IF NOT EXISTS solar_maps_url      TEXT`
+  let lastErr = null
+  for (let i = 0; i < 15; i++) {
+    const c = await pool.connect()
+    try {
+      await c.query(`SET lock_timeout = '4s'`)
+      await c.query(sql)
+      c.release()
+      return res.json({ ok: true, attempts: i + 1 })
+    } catch (e) {
+      lastErr = e.message
+      c.release()
+      await new Promise((r) => setTimeout(r, 3000)) // let readers drain, then retry
+    }
+  }
+  res.status(500).json({ ok: false, error: lastErr })
+})
+
 // Diagnostic (shared DB): do the admin-legacy solar_* columns exist, and are the
 // solar results actually being persisted? Confirms whether the Solar page's
 // enrichment caching is landing writes without needing psql access.
