@@ -1465,6 +1465,9 @@
         <button class="btn btn-secondary" id="pushSolarBtn" onclick="pushToSolar()" style="padding:5px 12px;font-size:12px;background:#f59e0b;color:#1a1a1a;border:none;font-weight:700;">
           ☀️ Push to Solar
         </button>
+        <button class="btn btn-secondary" id="pushAdsBtn" onclick="pushToAdsFinder()" title="Check the selected contacts' domains against the Google Ads Transparency Centre" style="padding:5px 12px;font-size:12px;background:#4285F4;color:#fff;border:none;font-weight:700;">
+          🔎 Google Ads Finder
+        </button>
         <button class="btn btn-plusvibe" id="pushBtn" onclick="openPushModal()">
           🚀 Verify &amp; Push to PlusVibe
         </button>
@@ -4096,6 +4099,24 @@
       sessionStorage.setItem('solarContactIds', JSON.stringify(ids));
       sessionStorage.removeItem('solarContacts'); // drop any stale full-object handoff
       window.open('/solar', '_blank');
+    }
+
+    // Hand the selected contacts to the Ads Checker, which resolves the ids to
+    // company domains and immediately queues a batch against the Google Ads
+    // Transparency Centre. Same id-handoff shape as Push to Solar (whole
+    // selection, and window.open stays synchronous so it isn't popup-blocked).
+    function pushToAdsFinder() {
+      if (_selectedIds.size === 0) { showMessage('Select contacts first', 'error'); return; }
+      const ids = [..._selectedIds];
+      sessionStorage.setItem('adsContactIds', JSON.stringify(ids));
+      // Name the batch after whatever the grid is currently filtered to, so the
+      // batches list is readable a week later.
+      const clientSel = document.getElementById('clientFilter');
+      const wsName = clientSel?.options[clientSel.selectedIndex]?.text || '';
+      const stamp = new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+      sessionStorage.setItem('adsBatchName',
+        `${wsName && clientSel.value ? wsName + ' — ' : ''}${ids.length} contacts · ${stamp}`);
+      window.open('/ads.html', '_blank'); // .html so nav.js highlights the sidebar entry
     }
 
     async function openPushModal() {

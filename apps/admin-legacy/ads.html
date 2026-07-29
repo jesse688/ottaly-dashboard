@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="theme-color" content="#050C29">
+<title>Ottaly — Ads Checker</title>
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@400;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<script src="/splash.js?v=off"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--purple:#7C89CD;
+  --bg:#F0F2F8;--card:#fff;--border:#E2E6F0;--text:#050C29;--muted:#6B7280;
+  --green:#059669;--amber:#D97706;--red:#DC2626;
+}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+.page{max-width:1400px;margin:0 auto;padding:1.5rem 2rem}
+.page-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:1.25rem;flex-wrap:wrap;gap:.75rem}
+.page-title{font-family:'Genos',sans-serif;font-size:1.4rem;font-weight:700;letter-spacing:.5px}
+.page-sub{font-size:12px;color:var(--muted);margin-top:3px}
+
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:1.25rem}
+.card-head{padding:.9rem 1.25rem;font-size:13px;font-weight:700;border-bottom:1px solid var(--border);background:#fafbfd;display:flex;align-items:center;justify-content:space-between;gap:.75rem;flex-wrap:wrap}
+.card-sub{font-size:11px;color:var(--muted);font-weight:400}
+.card-body{padding:1.1rem 1.25rem}
+
+button{font-family:inherit}
+.btn{padding:7px 14px;border:1px solid var(--navy-dark);background:var(--navy-dark);color:#fff;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;transition:opacity .15s}
+.btn:hover{opacity:.88}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.ghost{background:#fff;color:var(--muted);border-color:var(--border)}
+.btn.ghost:hover{color:var(--text)}
+.btn.danger{background:#fff;color:var(--red);border-color:#FBD5D5}
+.btn.sm{padding:4px 10px;font-size:11px}
+
+textarea,input[type=text],select,input[type=file]{font-family:inherit;font-size:12.5px;padding:8px 10px;border:1px solid var(--border);border-radius:7px;background:#fff;color:var(--text);outline:none;width:100%}
+textarea{min-height:120px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.5}
+textarea:focus,input:focus,select:focus{border-color:var(--purple)}
+label.fld{display:block;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin-bottom:4px}
+.form-row{display:grid;grid-template-columns:1.4fr 1fr .8fr auto;gap:.75rem;align-items:end;margin-top:.9rem}
+@media(max-width:900px){.form-row{grid-template-columns:1fr}}
+
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{padding:.6rem 1rem;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);border-bottom:1px solid var(--border);background:#fafbfd;text-align:left;position:sticky;top:0;z-index:2}
+td{padding:.55rem 1rem;border-bottom:1px solid var(--border);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tbody tr.click{cursor:pointer}
+tbody tr.click:hover{background:#F8FAFF}
+tbody tr.sel{background:#EEF2FF}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.muted{color:var(--muted)}
+.right{text-align:right}
+.nowrap{white-space:nowrap}
+.trunc{max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;white-space:nowrap}
+.p-yes{background:#D1FAE5;color:#065F46}
+.p-no{background:#F3F4F6;color:#4B5563}
+.p-err{background:#FEE2E2;color:#991B1B}
+.p-run{background:#DBEAFE;color:#1E40AF}
+.p-queue{background:#F3F4F6;color:#6B7280}
+.p-pause{background:#FEF3C7;color:#92400E}
+.p-done{background:#D1FAE5;color:#065F46}
+
+.bar{height:7px;background:#EDF0F7;border-radius:4px;overflow:hidden;min-width:110px}
+.bar>i{display:block;height:100%;background:var(--teal);transition:width .4s}
+.bar>i.err{background:var(--red)}
+
+.stats{display:flex;gap:0;flex-wrap:wrap;border:1px solid var(--border);border-radius:10px;background:#fff;overflow:hidden;margin-bottom:1.25rem}
+.stat{flex:1;min-width:110px;padding:.7rem 1rem;border-right:1px solid var(--border)}
+.stat:last-child{border-right:none}
+.stat b{display:block;font-size:19px;font-weight:700;line-height:1.2}
+.stat span{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;vertical-align:middle}
+.dot.on{background:var(--green)} .dot.off{background:var(--red)}
+
+.filters{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap}
+.filters button{padding:4px 11px;border:1px solid var(--border);background:#fff;border-radius:6px;font-size:11.5px;font-weight:600;cursor:pointer;color:var(--muted)}
+.filters button.active{background:var(--navy-dark);color:#fff;border-color:var(--navy-dark)}
+.filters input[type=text]{width:180px;padding:4px 9px;font-size:11.5px}
+.empty{padding:2.5rem 1rem;text-align:center;color:var(--muted);font-size:12.5px}
+.toast{position:fixed;bottom:20px;right:20px;background:var(--navy-dark);color:#fff;padding:10px 16px;border-radius:8px;font-size:12.5px;z-index:9999;opacity:0;transform:translateY(8px);transition:all .25s;pointer-events:none}
+.toast.show{opacity:1;transform:none}
+.toast.bad{background:var(--red)}
+.scroll{max-height:62vh;overflow:auto}
+</style>
+<script src="/nav.js" defer></script>
+</head>
+<body>
+
+<div class="page">
+  <div class="page-header">
+    <div>
+      <div class="page-title">Ads Checker</div>
+      <div class="page-sub">Google Ads Transparency Centre — does this domain run ads, and roughly how many?</div>
+    </div>
+    <div class="filters">
+      <button id="refreshBtn" class="btn ghost sm">Refresh</button>
+    </div>
+  </div>
+
+  <!-- worker / queue health -->
+  <div class="stats" id="health">
+    <div class="stat"><b class="muted">…</b><span>loading</span></div>
+  </div>
+
+  <!-- new batch -->
+  <div class="card">
+    <div class="card-head">
+      <span>New batch <span class="card-sub">paste domains or upload a .txt / .csv</span></span>
+      <span class="card-sub" id="parsedCount"></span>
+    </div>
+    <div class="card-body">
+      <textarea id="domains" placeholder="kingspan.com&#10;egg.com&#10;absolar.co.uk&#10;&#10;…or paste a CSV with a Domain / Website / URL column"></textarea>
+      <div class="form-row">
+        <div><label class="fld" for="bname">Batch name</label><input type="text" id="bname" placeholder="e.g. Solar list — July"></div>
+        <div><label class="fld" for="bfile">Upload file</label><input type="file" id="bfile" accept=".txt,.csv,text/plain,text/csv"></div>
+        <div><label class="fld" for="bregion">Region</label>
+          <select id="bregion">
+            <option value="anywhere">Anywhere</option>
+            <option value="GB">United Kingdom (GB)</option>
+            <option value="US">United States (US)</option>
+            <option value="IE">Ireland (IE)</option>
+            <option value="DE">Germany (DE)</option>
+            <option value="FR">France (FR)</option>
+            <option value="ES">Spain (ES)</option>
+            <option value="NL">Netherlands (NL)</option>
+            <option value="AU">Australia (AU)</option>
+            <option value="CA">Canada (CA)</option>
+          </select>
+        </div>
+        <div><button class="btn" id="startBtn">Start batch</button></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- batches -->
+  <div class="card">
+    <div class="card-head"><span>Batches</span><span class="card-sub" id="batchCount"></span></div>
+    <div id="batchesWrap"><div class="empty">Loading…</div></div>
+  </div>
+
+  <!-- results -->
+  <div class="card" id="resultsCard" style="display:none">
+    <div class="card-head">
+      <span id="resTitle">Results</span>
+      <div class="filters">
+        <button data-f="all" class="active">All</button>
+        <button data-f="yes">Runs ads</button>
+        <button data-f="no">No ads</button>
+        <button data-f="error">Errors</button>
+        <button data-f="pending">Pending</button>
+        <input type="text" id="search" placeholder="search domain…">
+        <select id="sort" style="width:auto;padding:4px 8px;font-size:11.5px">
+          <option value="id">Order added</option>
+          <option value="count_desc">Most ads</option>
+          <option value="count_asc">Fewest ads</option>
+          <option value="domain">Domain A–Z</option>
+          <option value="recent">Recently checked</option>
+        </select>
+      </div>
+    </div>
+    <div class="card-body" style="padding:.6rem 1.25rem;border-bottom:1px solid var(--border);display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+      <span class="card-sub" id="resProgress"></span>
+      <span style="flex:1"></span>
+      <button class="btn ghost sm" id="pauseBtn">Pause</button>
+      <button class="btn ghost sm" id="retryBtn">Retry errors</button>
+      <button class="btn sm" id="exportBtn">Export CSV</button>
+      <button class="btn danger sm" id="deleteBtn">Delete</button>
+    </div>
+    <div class="scroll" id="jobsWrap"><div class="empty">Select a batch above.</div></div>
+    <div class="card-body" id="pager" style="display:none;border-top:1px solid var(--border);gap:.5rem;align-items:center">
+      <button class="btn ghost sm" id="prevPage">← Prev</button>
+      <span class="card-sub" id="pageInfo"></span>
+      <button class="btn ghost sm" id="nextPage">Next →</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = '/api/ads';
+const $ = (s) => document.querySelector(s);
+let selected = null;         // selected batch id
+let filter = 'all';
+let offset = 0;
+const PAGE = 200;
+let pollTimer = null;
+
+function toast(msg, bad) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (bad ? ' bad' : '');
+  clearTimeout(t._t);
+  t._t = setTimeout(() => { t.className = 'toast'; }, 3200);
+}
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+async function api(path, opts) {
+  const r = await fetch(API + path, opts);
+  const ct = r.headers.get('content-type') || '';
+  if (!ct.includes('json')) { if (!r.ok) throw new Error(await r.text()); return r; }
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+
+// ── domain parsing (display only — the server re-normalises authoritatively) ──
+function parseDomains(text) {
+  const lines = String(text || '').split(/\r?\n/).filter((l) => l.trim());
+  if (!lines.length) return [];
+  const norm = (raw) => {
+    if (!raw) return null;
+    let d = String(raw).trim().toLowerCase()
+      .replace(/^https?:\/\//, '').replace(/^www\./, '')
+      .split('/')[0].split('?')[0].replace(/["',;]/g, '').trim();
+    if (d.includes('@')) d = d.split('@').pop();
+    return /^[a-z0-9.-]+\.[a-z]{2,}$/.test(d) ? d : null;
+  };
+  const header = lines[0].toLowerCase().split(',').map((h) => h.trim().replace(/"/g, ''));
+  let col = header.findIndex((h) => ['domain', 'website', 'url', 'company domain'].includes(h));
+  if (col === -1) col = header.findIndex((h) => h.includes('domain') || h.includes('website'));
+  const rows = (col !== -1 && !norm(header[col]))
+    ? lines.slice(1).map((l) => (l.split(',')[col] || ''))
+    : lines.map((l) => (l.includes(',') ? l.split(',')[0] : l));
+  return [...new Set(rows.map(norm).filter(Boolean))];
+}
+
+$('#domains').addEventListener('input', updateParsed);
+function updateParsed() {
+  const n = parseDomains($('#domains').value).length;
+  $('#parsedCount').textContent = n ? n.toLocaleString() + ' valid domain' + (n === 1 ? '' : 's') : '';
+}
+
+$('#bfile').addEventListener('change', (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    $('#domains').value = rd.result;
+    if (!$('#bname').value.trim()) $('#bname').value = f.name.replace(/\.(txt|csv)$/i, '');
+    updateParsed();
+  };
+  rd.readAsText(f);
+});
+
+async function startBatch(name, region, domains) {
+  const r = await api('/batches', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, region, domains }),
+  });
+  toast(`Batch queued — ${r.total} domains` + (r.cached ? ` (${r.cached} already cached)` : ''));
+  selected = r.id; offset = 0;
+  await refresh();
+  return r;
+}
+
+$('#startBtn').addEventListener('click', async () => {
+  const domains = parseDomains($('#domains').value);
+  if (!domains.length) return toast('No valid domains found', true);
+  const btn = $('#startBtn');
+  btn.disabled = true; btn.textContent = 'Starting…';
+  try {
+    await startBatch($('#bname').value.trim(), $('#bregion').value, domains);
+    $('#domains').value = ''; $('#bname').value = ''; $('#bfile').value = ''; updateParsed();
+  } catch (e) { toast(e.message, true); }
+  btn.disabled = false; btn.textContent = 'Start batch';
+});
+
+// ── handoff from Contacts ("🔎 Google Ads Finder") ──
+// The Contacts page stashes the selected contact IDS (not the rows) in
+// sessionStorage and opens this page synchronously — same reasons as
+// Push-to-Solar: the grid only holds the visible page, so shipping the ids
+// carries the WHOLE selection, and no async work before window.open means the
+// new tab isn't popup-blocked. We resolve the ids to records here, pull one
+// domain per contact, and start the batch immediately.
+function contactDomain(c) {
+  const raw = c.company_domain || c.website || c.organization_website || '';
+  if (raw) return raw;
+  // No website on the record — fall back to the email's domain, minus the
+  // free providers (a gmail.com contact tells us nothing about their company).
+  const FREE = new Set(['gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com',
+    'yahoo.com', 'yahoo.co.uk', 'aol.com', 'icloud.com', 'me.com', 'btinternet.com', 'sky.com']);
+  const dom = String(c.email || '').split('@')[1];
+  return dom && !FREE.has(dom.toLowerCase()) ? dom : '';
+}
+
+function banner(html, bad) {
+  let el = document.getElementById('handoffBar');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'handoffBar';
+    el.className = 'card';
+    el.style.cssText = 'background:#EEF2FF;border-color:#C7D2FE';
+    $('.page-header').after(el);
+  }
+  el.innerHTML = `<div class="card-body" style="font-size:12.5px;color:${bad ? 'var(--red)' : '#3730A3'}">${html}</div>`;
+  return el;
+}
+
+async function consumeHandoff() {
+  let ids;
+  try {
+    const raw = sessionStorage.getItem('adsContactIds');
+    if (!raw) return false;
+    sessionStorage.removeItem('adsContactIds'); // one-shot — a refresh must not re-run it
+    ids = JSON.parse(raw);
+  } catch { return false; }
+  if (!Array.isArray(ids) || !ids.length) return false;
+
+  const region = sessionStorage.getItem('adsRegion') || 'anywhere';
+  const label = sessionStorage.getItem('adsBatchName') || '';
+  sessionStorage.removeItem('adsRegion');
+  sessionStorage.removeItem('adsBatchName');
+  $('#bregion').value = [...$('#bregion').options].some((o) => o.value === region) ? region : 'anywhere';
+
+  banner(`⏳ Loading ${ids.length.toLocaleString()} selected contacts from the Contacts page…`);
+  try {
+    const r = await fetch('/api/contacts/by-ids', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Could not load contacts');
+
+    const contacts = data.contacts || [];
+    const domains = [...new Set(contacts.map(contactDomain).map((d) => {
+      const n = parseDomains(d);
+      return n[0] || null;
+    }).filter(Boolean))];
+    const noDomain = contacts.length - contacts.filter((c) => contactDomain(c)).length;
+
+    if (!domains.length) {
+      banner(`Loaded ${contacts.length.toLocaleString()} contacts but none had a usable company domain — nothing to check.`, true);
+      return true;
+    }
+
+    const name = label || `Contacts selection — ${new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}`;
+    banner(`🔎 Checking <b>${domains.length.toLocaleString()}</b> domains from ${contacts.length.toLocaleString()} selected contacts…`);
+    const res = await startBatch(name, $('#bregion').value, domains);
+    banner(`🔎 Running <b>${res.total.toLocaleString()}</b> domains from ${contacts.length.toLocaleString()} selected contacts`
+      + (res.cached ? ` · ${res.cached.toLocaleString()} answered from cache` : '')
+      + (noDomain ? ` · ${noDomain.toLocaleString()} contact(s) had no company domain and were skipped` : '')
+      + (contacts.length - noDomain - domains.length > 0 ? ` · ${(contacts.length - noDomain - domains.length).toLocaleString()} duplicate domain(s) collapsed` : ''));
+  } catch (e) {
+    banner(`Could not start from the Contacts selection: ${esc(e.message)} — go back and try “Google Ads Finder” again.`, true);
+  }
+  return true;
+}
+
+// ── health ──
+async function loadHealth() {
+  try {
+    const h = await api('/health');
+    const alive = (h.workers || []).filter((w) => w.alive);
+    const inFlight = alive.reduce((s, w) => s + (w.in_flight || 0), 0);
+    const browserBad = alive.some((w) => w.browser_ok === false && w.note);
+    const note = browserBad ? (alive.find((w) => w.note) || {}).note : '';
+    $('#health').innerHTML = [
+      ['Queued', (h.queue.queued || 0).toLocaleString()],
+      ['Running', inFlight || h.queue.running || 0],
+      ['Done today', (h.queue.done_today || 0).toLocaleString()],
+      ['Throughput', (h.rate_per_min || 0) + '/min'],
+      ['Workers', `<span class="dot ${alive.length ? 'on' : 'off'}"></span>${alive.length}`],
+    ].map(([label, val]) => `<div class="stat"><b>${val}</b><span>${label}</span></div>`).join('')
+      + (note ? `<div class="stat" style="flex:2"><b style="font-size:12px;color:var(--red)">${esc(String(note).slice(0, 90))}</b><span>worker note</span></div>` : '');
+  } catch (e) {
+    $('#health').innerHTML = `<div class="stat"><b style="font-size:13px;color:var(--red)">${esc(e.message)}</b><span>health</span></div>`;
+  }
+}
+
+// ── batches ──
+function progressBar(b) {
+  const total = b.total || (b.queued + b.running + b.done + b.errors) || 1;
+  const donePct = Math.round(((b.done || 0) / total) * 100);
+  const errPct = Math.round(((b.errors || 0) / total) * 100);
+  return `<div style="display:flex;align-items:center;gap:.5rem">
+    <div class="bar" style="flex:1"><i style="width:${donePct}%"></i></div>
+    <span class="muted nowrap" style="font-size:11px">${(b.done || 0).toLocaleString()}/${total.toLocaleString()}${errPct ? ` · ${b.errors} err` : ''}</span>
+  </div>`;
+}
+const statusPill = (s) => `<span class="pill ${s === 'done' ? 'p-done' : s === 'paused' ? 'p-pause' : 'p-run'}">${esc(s)}</span>`;
+
+async function loadBatches() {
+  try {
+    const { batches } = await api('/batches');
+    $('#batchCount').textContent = batches.length ? batches.length + ' batch' + (batches.length === 1 ? '' : 'es') : '';
+    if (!batches.length) {
+      $('#batchesWrap').innerHTML = '<div class="empty">No batches yet — paste some domains above to start one.</div>';
+      return;
+    }
+    $('#batchesWrap').innerHTML = `<div class="scroll" style="max-height:38vh"><table>
+      <thead><tr><th>Name</th><th>Region</th><th style="min-width:200px">Progress</th>
+        <th class="right">Runs ads</th><th class="right">No ads</th><th class="right">Errors</th>
+        <th>Status</th><th>Created</th></tr></thead>
+      <tbody>${batches.map((b) => `
+        <tr class="click ${b.id === selected ? 'sel' : ''}" data-id="${b.id}">
+          <td><b>${esc(b.name || 'Untitled')}</b></td>
+          <td class="muted">${esc(b.region)}</td>
+          <td>${progressBar(b)}</td>
+          <td class="right"><span class="pill p-yes">${(b.yes || 0).toLocaleString()}</span></td>
+          <td class="right"><span class="pill p-no">${(b.no || 0).toLocaleString()}</span></td>
+          <td class="right">${b.errors ? `<span class="pill p-err">${b.errors}</span>` : '<span class="muted">0</span>'}</td>
+          <td>${statusPill(b.status)}</td>
+          <td class="muted nowrap">${new Date(b.created_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</td>
+        </tr>`).join('')}</tbody></table></div>`;
+    $('#batchesWrap').querySelectorAll('tr.click').forEach((tr) => {
+      tr.addEventListener('click', () => { selected = tr.dataset.id; offset = 0; refresh(); });
+    });
+    // Keep the batch object handy for the pause/resume label.
+    window._batches = batches;
+  } catch (e) {
+    $('#batchesWrap').innerHTML = `<div class="empty" style="color:var(--red)">${esc(e.message)}</div>`;
+  }
+}
+
+// ── results ──
+// attempts=0 on a finished job means it was never scraped for this batch — the
+// result came straight from the cross-batch domain cache.
+function triesCell(j) {
+  if (j.status === 'done' && !j.attempts) return '<span title="reused from the domain cache — no scrape spent">cached</span>';
+  return j.attempts || '—';
+}
+
+function resultCell(j) {
+  if (j.status === 'error') return '<span class="pill p-err">ERROR</span>';
+  if (j.status === 'queued') return '<span class="pill p-queue">queued</span>';
+  if (j.status === 'running') return '<span class="pill p-run">checking…</span>';
+  return j.runs_ads ? '<span class="pill p-yes">YES</span>' : '<span class="pill p-no">NO</span>';
+}
+
+async function loadJobs() {
+  if (!selected) { $('#resultsCard').style.display = 'none'; return; }
+  $('#resultsCard').style.display = '';
+  const b = (window._batches || []).find((x) => x.id === selected);
+  $('#resTitle').textContent = b ? (b.name || 'Untitled') + ' — results' : 'Results';
+  $('#pauseBtn').textContent = b && b.status === 'paused' ? 'Resume' : 'Pause';
+  $('#pauseBtn').disabled = !b || b.status === 'done';
+
+  try {
+    const [sum, res] = await Promise.all([
+      api('/batches/' + selected),
+      api(`/batches/${selected}/jobs?status=${filter}&search=${encodeURIComponent($('#search').value.trim())}&sort=${$('#sort').value}&limit=${PAGE}&offset=${offset}`),
+    ]);
+    const c = sum.counts;
+    const eta = sum.eta_seconds ? ` · ETA ~${sum.eta_seconds > 90 ? Math.round(sum.eta_seconds / 60) + ' min' : sum.eta_seconds + 's'}` : '';
+    $('#resProgress').innerHTML =
+      `<b>${c.done.toLocaleString()}</b> / ${c.total.toLocaleString()} checked · ` +
+      `${c.yes.toLocaleString()} run ads · ${c.no.toLocaleString()} don't · ` +
+      `${c.errors} errors · ${c.queued + c.running} pending · ${sum.rate_per_min}/min${eta}`;
+
+    if (!res.jobs.length) {
+      $('#jobsWrap').innerHTML = '<div class="empty">No rows match this filter.</div>';
+      $('#pager').style.display = 'none';
+      return;
+    }
+    $('#jobsWrap').innerHTML = `<table>
+      <thead><tr><th>Domain</th><th>Result</th><th class="right">Ads</th><th>Advertisers</th>
+        <th class="right">Tries</th><th>Checked</th><th>Error</th></tr></thead>
+      <tbody>${res.jobs.map((j) => `
+        <tr>
+          <td class="mono"><a href="https://adstransparency.google.com/?region=${encodeURIComponent(b ? b.region : 'anywhere')}&domain=${encodeURIComponent(j.domain)}" target="_blank" rel="noopener" style="color:var(--navy)">${esc(j.domain)}</a></td>
+          <td>${resultCell(j)}</td>
+          <td class="right mono"><b>${j.ad_count == null ? '<span class="muted">—</span>' : (j.is_estimate ? '~' : '') + j.ad_count.toLocaleString()}</b></td>
+          <td class="trunc muted" title="${esc((j.advertisers || []).join(', '))}">${esc((j.advertisers || []).slice(0, 3).join(', ')) || '—'}</td>
+          <td class="right muted">${triesCell(j)}</td>
+          <td class="muted nowrap">${j.status === 'done' || j.status === 'error' ? new Date(j.updated_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+          <td class="trunc muted" title="${esc(j.error)}" style="max-width:220px">${esc(j.error) || ''}</td>
+        </tr>`).join('')}</tbody></table>`;
+
+    $('#pager').style.display = res.total > PAGE ? 'flex' : 'none';
+    $('#pageInfo').textContent = `${offset + 1}–${Math.min(offset + PAGE, res.total)} of ${res.total.toLocaleString()}`;
+    $('#prevPage').disabled = offset === 0;
+    $('#nextPage').disabled = offset + PAGE >= res.total;
+  } catch (e) {
+    $('#jobsWrap').innerHTML = `<div class="empty" style="color:var(--red)">${esc(e.message)}</div>`;
+  }
+}
+
+// ── controls ──
+document.querySelectorAll('.filters [data-f]').forEach((b) => b.addEventListener('click', () => {
+  document.querySelectorAll('.filters [data-f]').forEach((x) => x.classList.remove('active'));
+  b.classList.add('active'); filter = b.dataset.f; offset = 0; loadJobs();
+}));
+let searchT;
+$('#search').addEventListener('input', () => { clearTimeout(searchT); searchT = setTimeout(() => { offset = 0; loadJobs(); }, 300); });
+$('#sort').addEventListener('change', () => { offset = 0; loadJobs(); });
+$('#prevPage').addEventListener('click', () => { offset = Math.max(0, offset - PAGE); loadJobs(); });
+$('#nextPage').addEventListener('click', () => { offset += PAGE; loadJobs(); });
+$('#refreshBtn').addEventListener('click', refresh);
+
+$('#pauseBtn').addEventListener('click', async () => {
+  const b = (window._batches || []).find((x) => x.id === selected);
+  if (!b) return;
+  const action = b.status === 'paused' ? 'resume' : 'pause';
+  try { await api(`/batches/${selected}/${action}`, { method: 'POST' }); toast('Batch ' + action + 'd'); refresh(); }
+  catch (e) { toast(e.message, true); }
+});
+$('#retryBtn').addEventListener('click', async () => {
+  try { const r = await api(`/batches/${selected}/retry-errors`, { method: 'POST' }); toast(`Re-queued ${r.requeued} error(s)`); refresh(); }
+  catch (e) { toast(e.message, true); }
+});
+$('#exportBtn').addEventListener('click', () => { window.location = `${API}/batches/${selected}/export.csv`; });
+$('#deleteBtn').addEventListener('click', async () => {
+  const b = (window._batches || []).find((x) => x.id === selected);
+  if (!confirm(`Delete batch "${b ? b.name || 'Untitled' : selected}" and all its results?`)) return;
+  try { await api('/batches/' + selected, { method: 'DELETE' }); selected = null; toast('Batch deleted'); refresh(); }
+  catch (e) { toast(e.message, true); }
+});
+
+async function refresh() {
+  await Promise.all([loadHealth(), loadBatches()]);
+  await loadJobs();
+}
+
+// Poll while anything is in flight; back right off when everything is idle.
+function schedulePoll() {
+  clearTimeout(pollTimer);
+  const busy = (window._batches || []).some((b) => b.status === 'running' && (b.queued || b.running));
+  pollTimer = setTimeout(async () => { await refresh(); schedulePoll(); }, busy ? 3000 : 15000);
+}
+
+// A handoff starts its own batch (and selects it); refresh() then paints the page
+// either way, including when the handoff failed.
+consumeHandoff().catch(() => {}).then(refresh).then(schedulePoll);
+</script>
+</body>
+</html>

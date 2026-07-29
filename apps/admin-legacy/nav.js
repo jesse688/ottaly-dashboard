@@ -38,6 +38,7 @@
         { href: 'apollo-prep.html',    label: 'Apollo Prep' },
         { href: 'verify-split.html',   label: 'Verify Split' },
         { href: 'combo-analysis.html', label: 'Combo Analysis' },
+        { href: 'ads.html',            label: 'Ads Checker' },
       ]
     },
     {

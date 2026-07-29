@@ -914,6 +914,13 @@ app.use(express.static(path.join(__dirname), {
 app.use('/api/solar', require('./api-solar')());
 app.get('/solar', (req, res) => res.sendFile(path.join(__dirname, 'solar.html')));
 
+// Google Ads Transparency checker. The queue worker (lib/adscheck/worker.js)
+// starts in the DB-init block below — it needs the pool — but the routes mount
+// here and resolve app.locals.pgDb per request.
+let adsWorker = null;
+app.use('/api/ads', requireSession, require('./api-ads')(() => adsWorker));
+app.get('/ads', (req, res) => res.sendFile(path.join(__dirname, 'ads.html')));
+
 function requireAuth(req, res, next) {
   const token = (req.headers.authorization || '').replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'Unauthorized' });
@@ -20706,6 +20713,23 @@ function scheduleAudienceScoring(pgdb) {
     app.locals.pgDb = pgdb;
     app.locals.sqliteDb = db;
     restorePausedJobs(db);
+
+    // Ads Transparency checker: create the ads_* tables, then start the queue
+    // worker. It claims with SKIP LOCKED, so every replica is an extra worker on
+    // the same queue. Chromium is launched lazily on the first job and closed
+    // again when idle, so an empty queue costs nothing. Set ADS_WORKER=0 on a
+    // replica that should serve the UI but not scrape.
+    if (process.env.ADS_WORKER !== '0') {
+      setTimeout(async () => {
+        try {
+          const { ensureSchema } = require('./lib/adscheck/schema');
+          const { AdsWorker } = require('./lib/adscheck/worker');
+          await ensureSchema(pgdb);
+          adsWorker = new AdsWorker(pgdb);
+          adsWorker.start();
+        } catch (e) { console.error('[ads] worker start failed:', e.message); }
+      }, 10 * 1000);
+    }
 
     // Resume an interrupted CH-verification run (deploys restart the process, but
     // the ~82h job must survive them). Only auto-resume if it was actively running

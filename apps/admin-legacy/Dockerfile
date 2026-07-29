@@ -2,6 +2,14 @@ FROM node:20-alpine
 
 RUN apk add --no-cache python3 make g++ tzdata
 
+# Chromium for the Ads Transparency checker (lib/adscheck). Playwright doesn't
+# ship an Alpine build, so we use the distro browser and point playwright at it
+# via CHROMIUM_PATH — see lib/adscheck/browser.js. PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
+# stops `npm install` trying (and failing) to fetch the glibc build.
+RUN apk add --no-cache chromium nss freetype harfbuzz ttf-freefont ca-certificates
+ENV CHROMIUM_PATH=/usr/bin/chromium-browser
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+
 # Run in Europe/London so the server's calendar "today" matches Bison's day
 # boundary (Bison stats/charts bucket by London time). Without this the UTC
 # container treated 00:00–01:00 BST as the previous/next day and today's stats
@@ -22,7 +30,7 @@ RUN npm install --omit=dev
 # `COPY apps/admin-legacy/ ./` layer even when the commit changed, shipping
 # stale code on a "successful" build. Bumping CACHEBUST (any new value each
 # deploy) forces this layer — and everything after it — to rebuild.
-ARG CACHEBUST=2026-07-28-8
+ARG CACHEBUST=2026-07-29-1
 COPY apps/admin-legacy/ ./
 
 EXPOSE 3000
