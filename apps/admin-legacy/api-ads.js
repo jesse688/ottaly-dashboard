@@ -269,14 +269,20 @@ module.exports = function adsAPI(getWorker) {
   router.get('/debug', async (req, res) => {
     const domain = String(req.query.domain || 'kingspan.com');
     const region = String(req.query.region || 'anywhere');
+    // Reuse the worker's browser when there is one, but never depend on it —
+    // the request may land on a replica with ADS_WORKER=0, or within the 10s
+    // before the worker starts after a redeploy. Diagnostics that only work
+    // when things are already healthy aren't diagnostics.
     const worker = typeof getWorker === 'function' ? getWorker() : null;
-    if (!worker) return res.status(503).json({ error: 'No local worker on this replica' });
+    const { BrowserPool, findChromium } = require('./lib/adscheck/browser');
+    const pool = worker ? worker.browsers : new BrowserPool();
+    const ownPool = !worker;
 
-    const out = { domain, region, chromium: require('./lib/adscheck/browser').findChromium() };
+    const out = { domain, region, chromium: findChromium(), used_worker_browser: !!worker };
     let page;
     try {
       const t0 = Date.now();
-      const context = await worker.browsers.getContext();
+      const context = await pool.getContext();
       out.launch_ms = Date.now() - t0;
       page = await context.newPage();
       page.on('console', (m) => { (out.console = out.console || []).push(`${m.type()}: ${m.text()}`.slice(0, 200)); });
@@ -313,6 +319,7 @@ module.exports = function adsAPI(getWorker) {
       res.status(200).json(out);
     } finally {
       if (page) await page.close().catch(() => {});
+      if (ownPool) await pool.close().catch(() => {}); // don't leak a browser per debug call
     }
   });
 
