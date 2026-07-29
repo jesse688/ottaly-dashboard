@@ -269,6 +269,7 @@ function recFromSaved(c, i){
     lat: c.solar_lat ?? null, lng: c.solar_lng ?? null,
     roof_address_used: c.solar_roof_address || null,
     maps_url: c.solar_maps_url || null,
+    imagery_date: c.solar_imagery_date || null,
     cached: checked || undefined,
   };
 }
@@ -444,7 +445,8 @@ function render(){
     const roofAddr = r.roof_address_used
       ? `<div class="mut" style="font-size:10px;max-width:200px;white-space:normal;margin-top:2px" title="roof calculated from this address">${r.roof_geocode_precise===false?'⚠ ':'📍 '}${esc(r.roof_address_used)}</div>`
       : '';
-    const maps = r.maps_url?`<a href="${r.maps_url}" target="_blank">map</a>${roofAddr}`:'<span class="mut">—</span>';
+    const imgDate = r.imagery_date?`<div class="mut" style="font-size:10px;margin-top:2px" title="Date Google's roof imagery was captured">📅 imagery ${esc(r.imagery_date)}</div>`:'';
+    const maps = r.maps_url?`<a href="${r.maps_url}" target="_blank">map</a>${roofAddr}${imgDate}`:'<span class="mut">—</span>';
     const img = r._img?`<img class="thumb" src="${r._img}" onclick="zoom('${r._img}')">`:(r.lat!=null?`<button class="btn ghost" style="padding:3px 8px;font-size:11px" onclick="getImg(${r.index})">get 💷</button>`:'<span class="mut">—</span>');
     // Person / contact block
     const person = [r.first_name, r.last_name].filter(Boolean).join(' ');

@@ -170,6 +170,7 @@ class PostgresDatabase {
       `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS solar_lng DOUBLE PRECISION`,
       `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS solar_roof_address TEXT`,
       `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS solar_maps_url TEXT`,
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS solar_imagery_date TEXT`,
       // Google Ads Transparency RESULTS — stamped by the ads-checker worker
       // (lib/adscheck) so the Contacts grid can filter on "runs Google ads" and
       // a PlusVibe push can be built straight from it. ads_domain_cache stays
@@ -1557,7 +1558,7 @@ class PostgresDatabase {
     const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
     const sql = `SELECT id, solar_checked_at, solar_status, solar_stop_reason, solar_max_kwp,
                    solar_panels, solar_annual_kwh, solar_roof_area_m2, solar_has_solar,
-                   solar_lat, solar_lng, solar_roof_address, solar_maps_url,
+                   solar_lat, solar_lng, solar_roof_address, solar_maps_url, solar_imagery_date,
                    ccod_owns_building, ccod_building_owner, ccod_site_count
                  FROM contacts WHERE id IN (${placeholders}) AND solar_checked_at IS NOT NULL`;
     const result = await this.query(sql, ids);
@@ -1586,12 +1587,12 @@ class PostgresDatabase {
          solar_status = $2, solar_stop_reason = $3,
          solar_max_kwp = $4, solar_panels = $5, solar_annual_kwh = $6, solar_roof_area_m2 = $7,
          solar_has_solar = $8, solar_lat = $9, solar_lng = $10,
-         solar_roof_address = $11, solar_maps_url = $12
+         solar_roof_address = $11, solar_maps_url = $12, solar_imagery_date = $13
        WHERE id = $1`,
       [id, rec.status ?? null, rec.stop_reason ?? null,
        num(rec.max_system_kwp), num(rec.max_panels_fit), num(rec.est_annual_kwh), num(rec.roof_area_m2),
        rec.has_solar ?? null, num(rec.lat), num(rec.lng),
-       rec.roof_address_used ?? null, rec.maps_url ?? null]
+       rec.roof_address_used ?? null, rec.maps_url ?? null, rec.imagery_date ?? null]
     );
   }
 
@@ -1998,6 +1999,19 @@ class PostgresDatabase {
       const n = parseInt(filters.solarMinKwp, 10);
       if (!Number.isFinite(n) || n <= 0) return;
       clauses.push(`solar_max_kwp >= $${p++}`); params.push(n);
+    });
+    // Data age — filter by how fresh the contact is. "last N days" = recently
+    // touched; "staleN" = NOT touched in N days (or never). Uses the most recent of
+    // updated_at / created_at so a contact that's never been updated still sorts by
+    // when it was added.
+    safe('updatedAge', () => {
+      const v = filters.updatedAge;
+      if (!v) return;
+      const recent = { '7':7, '30':30, '90':90, '180':180 };
+      const stale  = { 'stale90':90, 'stale180':180, 'stale365':365 };
+      const age = `COALESCE(updated_at, created_at)`;
+      if (recent[v]) { clauses.push(`${age} >= now() - ($${p++}::int * interval '1 day')`); params.push(recent[v]); }
+      else if (stale[v]) { clauses.push(`(${age} IS NULL OR ${age} < now() - ($${p++}::int * interval '1 day'))`); params.push(stale[v]); }
     });
     safe('worksRemote',    () => { if (filters.worksRemote === 'true')   clauses.push(`works_remote = true`); });
     safe('excludeRemote',  () => { if (filters.excludeRemote === 'true') clauses.push(`(works_remote IS NULL OR works_remote = false)`); });

@@ -280,7 +280,8 @@ app.post('/add-solar-columns', async (req, res) => {
     ADD COLUMN IF NOT EXISTS solar_lat           DOUBLE PRECISION,
     ADD COLUMN IF NOT EXISTS solar_lng           DOUBLE PRECISION,
     ADD COLUMN IF NOT EXISTS solar_roof_address  TEXT,
-    ADD COLUMN IF NOT EXISTS solar_maps_url      TEXT`
+    ADD COLUMN IF NOT EXISTS solar_maps_url      TEXT,
+    ADD COLUMN IF NOT EXISTS solar_imagery_date  TEXT`
   let lastErr = null
   for (let i = 0; i < 15; i++) {
     const c = await pool.connect()
