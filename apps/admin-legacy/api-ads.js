@@ -260,6 +260,62 @@ module.exports = function adsAPI(getWorker) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // ── diagnostics ───────────────────────────────────────────
+  // Run ONE navigation and report exactly what the server's Chromium sees.
+  // A generic "waitForFunction timeout" can't distinguish "Google served us a
+  // consent/blocked interstitial" from "Chromium rendered nothing at all", and
+  // those need opposite fixes — so dump the real page state.
+  //   GET /api/ads/debug?domain=kingspan.com[&region=anywhere][&shot=1]
+  router.get('/debug', async (req, res) => {
+    const domain = String(req.query.domain || 'kingspan.com');
+    const region = String(req.query.region || 'anywhere');
+    const worker = typeof getWorker === 'function' ? getWorker() : null;
+    if (!worker) return res.status(503).json({ error: 'No local worker on this replica' });
+
+    const out = { domain, region, chromium: require('./lib/adscheck/browser').findChromium() };
+    let page;
+    try {
+      const t0 = Date.now();
+      const context = await worker.browsers.getContext();
+      out.launch_ms = Date.now() - t0;
+      page = await context.newPage();
+      page.on('console', (m) => { (out.console = out.console || []).push(`${m.type()}: ${m.text()}`.slice(0, 200)); });
+
+      const t1 = Date.now();
+      const resp = await page.goto(
+        `https://adstransparency.google.com/?region=${encodeURIComponent(region)}&domain=${encodeURIComponent(domain)}`,
+        { waitUntil: 'domcontentloaded', timeout: 30000 });
+      out.nav_ms = Date.now() - t1;
+      out.http_status = resp && resp.status();
+      out.final_url = page.url();
+      out.title = await page.title();
+
+      // Give it the same window the real check gets, then report regardless.
+      await page.waitForTimeout(12000);
+      const state = await page.evaluate(() => ({
+        text: (document.body.innerText || '').slice(0, 1500),
+        html_len: document.documentElement.outerHTML.length,
+        scripts: document.querySelectorAll('script').length,
+      }));
+      out.text = state.text;
+      out.text_len = state.text.length;
+      out.html_len = state.html_len;
+      out.scripts = state.scripts;
+      out.has_count = /(~?\s*[\d,]+)\s+ads?\b/i.test(state.text);
+      out.has_no_ads = /No ads found/i.test(state.text);
+      out.looks_blocked = /unusual traffic|not a robot|captcha|consent|before you continue|sorry/i.test(state.text);
+      if (req.query.shot) out.screenshot = 'data:image/png;base64,'
+        + (await page.screenshot({ type: 'png', fullPage: false })).toString('base64');
+      res.json(out);
+    } catch (err) {
+      out.error = err.message;
+      try { if (page) { out.text_on_error = (await page.evaluate(() => (document.body.innerText || '').slice(0, 1500))); out.final_url = page.url(); } } catch { /* page may be dead */ }
+      res.status(200).json(out);
+    } finally {
+      if (page) await page.close().catch(() => {});
+    }
+  });
+
   // ── health ────────────────────────────────────────────────
   router.get('/health', async (req, res) => {
     try {

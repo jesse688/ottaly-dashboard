@@ -30,10 +30,13 @@ async function checkOnce(context, domain, { region = 'anywhere', navTimeout = 30
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: navTimeout });
 
     // Wait until either an ad count or the "No ads found" message renders.
+    // NOTE the explicit `null` arg. waitForFunction(fn, arg, options) — passing the
+    // options object as the 2nd positional makes Playwright treat it as the page
+    // function's ARGUMENT and silently fall back to the 30s default timeout.
     await page.waitForFunction(() => {
       const t = document.body.innerText || '';
       return /(~?\s*[\d,]+)\s+ads?\b/i.test(t) || /No ads found/i.test(t) || /Sorry, we couldn/i.test(t);
-    }, { timeout: waitTimeout });
+    }, null, { timeout: waitTimeout });
 
     const data = await page.evaluate(() => {
       const text = document.body.innerText || '';
