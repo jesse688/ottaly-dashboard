@@ -721,9 +721,17 @@ $('#pvGo').addEventListener('click', async () => {
 // One check per DOMAIN answers every contact at that company: results are
 // stamped onto all of them, including contacts imported later.
 $('#sweepBtn').addEventListener('click', async () => {
+  // Counting distinct domains scans the whole contacts table, so say so —
+  // otherwise the button looks dead for however long that takes.
+  const btn = $('#sweepBtn');
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = '⏳ Counting UK domains…';
+  toast('Counting UK domains across ~600k contacts — this can take a moment…');
   let p;
   try { p = await api('/sweep/preview?uk_only=true&stale_days=30'); }
-  catch (e) { return toast(e.message, true); }
+  catch (e) { btn.disabled = false; btn.textContent = label; return toast('Sweep preview failed: ' + e.message, true); }
+  finally { btn.disabled = false; btn.textContent = label; }
+  if (!p || typeof p.to_check !== 'number') return toast('Sweep preview returned no count — is the deploy up to date?', true);
   if (!p.to_check) return toast(`All ${p.total_domains.toLocaleString()} UK domains checked in the last 30 days — nothing to do`);
   const mins = Math.round(p.to_check / 12);
   if (!confirm(`Sweep the whole database?\n\n`

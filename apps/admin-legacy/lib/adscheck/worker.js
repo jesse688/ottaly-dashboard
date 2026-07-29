@@ -15,7 +15,7 @@ const os = require('os');
 const { BrowserPool } = require('./browser');
 const { checkDomain, sleep } = require('./checkDomain');
 const { DOMAIN_NORM_SQL } = require('./schema');
-const { createSweep, getSetting, setSetting } = require('./sweep');
+const { createSweep, cleanupEmptyBatches, getSetting } = require('./sweep');
 
 const HEARTBEAT_MS = 15 * 1000;
 const SWEEP_MS = 60 * 1000;
@@ -133,12 +133,20 @@ class AdsWorker {
    * backs off). A minimum gap stops a sweep that finds nothing from spinning.
    */
   async autoSweepTick() {
+    // Clear any empty batches a cancelled insert left behind, so they don't
+    // pile up in the list.
+    const removed = await cleanupEmptyBatches(this.db).catch(() => 0);
+    if (removed) console.log(`[ads] removed ${removed} empty batch(es)`);
+
     if ((await getSetting(this.db, 'auto_sweep', 'off')) !== 'on') return;
 
+    // Outstanding work in ANY batch — including paused ones. Checking only
+    // 'running' batches would make "Pause all" useless: the worker would see an
+    // empty runnable queue, start a brand-new sweep and quietly undo the pause.
+    // A pause means stop, so continuous mode waits rather than working around it.
     const busy = await this.db.query(
-      `SELECT COUNT(*)::int AS n FROM ads_jobs j JOIN ads_batches b ON b.id=j.batch_id
-        WHERE j.status IN ('queued','running') AND b.status='running'`);
-    if (busy.rows[0].n > 0) return;               // still work to do
+      `SELECT COUNT(*)::int AS n FROM ads_jobs WHERE status IN ('queued','running')`);
+    if (busy.rows[0].n > 0) return;
 
     // Claim the right to start one. now() - interval guards against two
     // replicas racing, and against a no-op sweep looping every minute.
