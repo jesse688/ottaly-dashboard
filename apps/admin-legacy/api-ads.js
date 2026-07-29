@@ -428,6 +428,29 @@ module.exports = function adsAPI(getWorker) {
         `SELECT indexname FROM pg_indexes WHERE tablename='contacts' AND indexname IN
            ('idx_contacts_domain_norm','idx_contacts_ads_runs_ads')`);
       out.indexes = idx.rows.map((r) => r.indexname);
+
+      // ?scope=1 — how big is a full sweep, and what would it cost in proxy
+      // bandwidth? Measured at ~3.88 MB per domain checked (JS-heavy page).
+      // COUNT(DISTINCT) over ~600k rows, so it's opt-in rather than always-on.
+      if (req.query.scope) {
+        const MB_PER_DOMAIN = 3.88;
+        const d = await req.db.query(
+          `SELECT COUNT(DISTINCT ${DOMAIN_NORM_SQL})::int AS domains,
+                  COUNT(*) FILTER (WHERE company_domain IS NOT NULL AND company_domain <> '')::int AS with_domain,
+                  COUNT(*)::int AS contacts
+             FROM contacts`);
+        const row = d.rows[0];
+        const todo = out.contacts
+          ? Math.max(row.domains - 0, 0)   // cached domains still cost nothing to re-check
+          : row.domains;
+        out.scope = {
+          contacts: row.contacts,
+          contacts_with_domain: row.with_domain,
+          distinct_domains: row.domains,
+          full_sweep_gb: +((todo * MB_PER_DOMAIN) / 1024).toFixed(1),
+          mb_per_domain: MB_PER_DOMAIN,
+        };
+      }
     } catch (e) { out.error = e.message; }
     res.json(out);
   });
