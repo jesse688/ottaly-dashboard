@@ -1566,6 +1566,16 @@ class PostgresDatabase {
     return out;
   }
 
+  // Just the QUALIFIED prospects among a set of ids (small result → fast refresh,
+  // even when the id set is thousands). Filters in SQL, not in JS.
+  async getSolarProspects(ids) {
+    if (!ids || ids.length === 0) return [];
+    const placeholders = ids.map((_, i) => `$${i + 1}`).join(',');
+    const sql = `SELECT * FROM contacts WHERE id IN (${placeholders}) AND solar_status = 'qualified'`;
+    const result = await this.query(sql, ids);
+    return result.rows;
+  }
+
   // Persist one solar-qualification result onto its contact so future runs reuse it.
   async saveSolarResult(id, rec) {
     if (!id) return;

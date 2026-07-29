@@ -129,6 +129,9 @@
 let ROWS = [], VIEW = 'prospects';
 const EXPANDED = new Set();
 const SELECTED = new Set(); // r.index of rows ticked for push (persists across views)
+let JOBSTAT = null;   // last server /enrich-job/status — drives funnel/tab counts
+let JOBIDS = null;    // the id set this page tracks (for lean prospect/status loads)
+let pollTimer = null; // status poll interval
 function toggleRow(i){ if(EXPANDED.has(i)) EXPANDED.delete(i); else EXPANDED.add(i); render(); }
 
 // Fields we already surface in the compact columns — skip them in the "all fields"
@@ -219,9 +222,23 @@ async function loadHandoff(){
     if(rawIds){
       const ids = JSON.parse(rawIds);
       if(Array.isArray(ids)&&ids.length){
-        const r = await fetch('/api/contacts/by-ids',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});
-        const data = await r.json();
-        return (data.contacts||[]).map(mapContact).filter(c=>c.company_address||c.company_name);
+        // Fetch in CHUNKS with retry. One by-ids request for thousands of ids returns
+        // a huge (~9MB) payload that can time out — losing the whole reload on refresh.
+        // Chunking makes it reliable and a failed chunk only loses those rows.
+        const out=[]; const CH=400;
+        for(let i=0;i<ids.length;i+=CH){
+          const slice=ids.slice(i,i+CH);
+          let got=false;
+          for(let attempt=0; attempt<2 && !got; attempt++){
+            try{
+              const r=await fetch('/api/contacts/by-ids',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:slice})});
+              if(r.ok){ const data=await r.json(); (data.contacts||[]).forEach(c=>out.push(c)); got=true; }
+            }catch(e){ /* retry once */ }
+          }
+          const el=$('#tablewrap'); if(el && ids.length>CH) el.innerHTML=`<div class="mut" style="padding:20px 0">⏳ Loading contacts… ${out.length.toLocaleString()} / ${ids.length.toLocaleString()}</div>`;
+        }
+        const mapped = out.map(mapContact).filter(c=>c.company_address||c.company_name);
+        return mapped.length ? mapped : null;
       }
     }
   }catch(e){}
@@ -257,81 +274,113 @@ function recFromSaved(c, i){
 }
 let INPUT = null;
 (async ()=>{
-  const rawIds = sessionStorage.getItem('solarContactIds');
-  if(sessionStorage.getItem('solarContacts') || rawIds){
+  // Fast refresh: use the id set (small) to poll the server job status + load only
+  // the prospects — NOT thousands of full rows. The run lives server-side, so this
+  // reconnects to it and resumes the progress view instantly.
+  let ids = null;
+  try{ const raw = sessionStorage.getItem('solarContactIds'); if(raw){ const a=JSON.parse(raw); if(Array.isArray(a)&&a.length) ids=a; } }catch{}
+  if(ids){
+    JOBIDS = ids;
+    INPUT = ids.map((id)=>({ id })); // enough for run()/paths that just need the ids
+    $('#tablewrap').innerHTML='<div class="mut" style="padding:20px 0">⏳ Loading…</div>';
+    await poll(); // sets JOBSTAT + counts, loads prospects, resumes polling if a job is running
+    if(!(JOBSTAT && JOBSTAT.running)){
+      const checked = JOBSTAT && JOBSTAT.total ? (JOBSTAT.done||0) : null;
+      $('#prog').textContent = (checked && JOBSTAT.finished_at)
+        ? `Done. ${checked.toLocaleString()} checked · 🎯 ${JOBSTAT.qualified||0} prospects.`
+        : `${ids.length.toLocaleString()} contacts loaded. Run qualification (server-side).`;
+    }
+    if(!ROWS.length && !(JOBSTAT&&JOBSTAT.running)) $('#tablewrap').innerHTML='<div class="mut" style="padding:20px 0">No prospects yet — click Run qualification.</div>';
+    return;
+  }
+  // Legacy: full-object handoff (paste/small) — restore from saved results.
+  const legacy = sessionStorage.getItem('solarContacts');
+  if(legacy){
     $('#tablewrap').innerHTML='<div class="mut" style="padding:20px 0">⏳ Loading contacts…</div>';
+    INPUT = await loadHandoff();
+    if(INPUT && INPUT.length){ ROWS = INPUT.map((c,i)=>recFromSaved(c,i)); render(); const pros=ROWS.filter(r=>r.status==='qualified').length; if(pros>0) $('#pushBtn').disabled=false; $('#prog').textContent=`${INPUT.length.toLocaleString()} contacts loaded.`; }
   }
-  INPUT = await loadHandoff();
-  if(INPUT && INPUT.length){
-    // Restore saved results so a refresh keeps your progress (data lives in the DB).
-    ROWS = INPUT.map((c,i)=>recFromSaved(c,i));
-    render();
-    const doneCount = ROWS.filter(r=>r.status!=='…').length;
-    const pros = ROWS.filter(r=>r.status==='qualified').length;
-    $('#prog').textContent = doneCount
-      ? `${doneCount.toLocaleString()}/${INPUT.length.toLocaleString()} already checked (saved) · 🎯 ${pros} prospects · Run to do the rest.`
-      : `${INPUT.length.toLocaleString()} contacts loaded. Run qualification.`;
-    if(pros>0) $('#pushBtn').disabled=false;
-  }
-  else if(rawIds){ $('#tablewrap').innerHTML='<div class="mut" style="padding:20px 0;color:var(--red)">Could not load the selected contacts — go back and try Push to Solar again.</div>'; }
 })();
 
 $('#run').addEventListener('click', run);
+
+// Job runs SERVER-SIDE: Run starts it and the page polls. A refresh reconnects to
+// the running job (no progress lost) and loads results fast (just prospects + a
+// light status poll — never thousands of rows). State declared up top (TDZ-safe).
 async function run(){
-  if(!INPUT){ INPUT = await loadHandoff(); } // handle Run clicked before the handoff finished loading
+  if(!INPUT){ INPUT = await loadHandoff(); }
   let contacts = INPUT;
   if(!contacts){
-    // fallback: parse the paste box "address, company"
     const lines = $('#paste').value.split('\n').map(s=>s.trim()).filter(Boolean);
     contacts = lines.map(l=>{ const parts=l.split(',').map(x=>x.trim()); const company=parts.pop(); return { address: parts.join(', '), company_name: company }; });
   }
   if(!contacts||!contacts.length){ alert('No contacts to qualify.'); return; }
-  if(contacts.length > 1000 && !confirm(`Qualify ${contacts.length.toLocaleString()} contacts?\n\nThis can take a while and uses Google Solar calls for any not already checked. Contacts you've checked before are reused for free.`)) return;
-
+  const ids = contacts.map(c=>c.id).filter(Boolean);
   const options = {
     ownershipGate: $('#gateUnclear').checked ? 'yes_or_unclear' : 'yes',
-    force: $('#forceRecheck').checked, // re-run instead of reusing saved results
+    force: $('#forceRecheck').checked,
     ppaMinKwp: Number($('#minKwp').value)||100,
     panelWatts: Number($('#panelW').value)||500,
   };
-  ROWS = contacts.map((c,i)=>({index:i, email:c.email||'', company_name:c.company_name||'', address:c.address||c.company_address||'', first_name:c.first_name||'', last_name:c.last_name||'', status:'…', stage:'ownership'}));
-  SELECTED.clear(); // selection is by row index — reset it for the new result set
-  render(); $('#run').disabled=true; $('#pushBtn').disabled=true;
-  let done=0; $('#prog').textContent=`0 / ${contacts.length}…`;
+  if(!ids.length){ return runPasted(contacts, options); } // paste box has no ids → client-side
+  if(contacts.length > 1000 && !confirm(`Qualify ${contacts.length.toLocaleString()} contacts?\n\nRuns on the server — you can close this tab and come back. Uses a Google Solar call for any not already checked; already-checked ones are reused free.`)) return;
 
-  // Enrich in CHUNKS. A single streaming request over thousands of contacts is a
-  // ~1-hour response that the proxy kills (returns nothing → "0 checked"). Short
-  // chunked requests stream reliably; persistence makes already-done ones instant.
-  // Rendering is throttled — rebuilding a multi-thousand-row table on every result
-  // freezes the tab.
-  const CHUNK = 200; let lastRender = 0;
+  JOBIDS = ids;
+  $('#run').disabled=true;
+  try{ await fetch('/api/solar/enrich-job',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids, options})}); }
+  catch(e){ alert('Could not start the job: '+e.message); $('#run').disabled=false; return; }
+  startPolling();
+}
+
+function startPolling(){
+  if(pollTimer) clearInterval(pollTimer);
+  poll();
+  pollTimer = setInterval(poll, 3000);
+}
+
+async function poll(){
+  let s; try{ s = await fetch('/api/solar/enrich-job/status').then(r=>r.json()); }catch{ return; }
+  JOBSTAT = s;
+  if(s.running){
+    $('#run').disabled=true;
+    $('#prog').textContent = `⏳ Running (server-side) — ${(s.done||0).toLocaleString()} / ${(s.total||0).toLocaleString()} · 🎯 ${s.qualified||0} prospects · safe to close this tab`;
+  } else {
+    if(pollTimer){ clearInterval(pollTimer); pollTimer=null; }
+    $('#run').disabled=false;
+    if(s.finished_at) $('#prog').textContent = `Done. ${(s.done||0).toLocaleString()} checked · 🎯 ${s.qualified||0} prospects.`;
+  }
+  counts();
+  await loadProspects(); // refresh the visible prospects from the DB (small, fast)
+}
+
+// Load ONLY the qualified prospects (small) for display + push.
+async function loadProspects(){
+  if(!JOBIDS || !JOBIDS.length) return;
+  try{
+    const r = await fetch('/api/solar/job-prospects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:JOBIDS})});
+    const data = await r.json();
+    ROWS = (data.prospects||[]).map((c,i)=>recFromSaved(c,i));
+    render();
+    $('#pushBtn').disabled = ROWS.length===0;
+  }catch(e){}
+}
+
+// Legacy client-side path for pasted (id-less) contacts — small, ad-hoc.
+async function runPasted(contacts, options){
+  ROWS = contacts.map((c,i)=>({index:i, email:c.email||'', company_name:c.company_name||'', address:c.address||c.company_address||'', first_name:c.first_name||'', last_name:c.last_name||'', status:'…', stage:'ownership'}));
+  SELECTED.clear(); render(); $('#run').disabled=true; $('#pushBtn').disabled=true;
+  let done=0; $('#prog').textContent=`0 / ${contacts.length}…`; let lastRender=0; const CHUNK=200;
   for(let start=0; start<contacts.length; start+=CHUNK){
     const slice = contacts.slice(start, start+CHUNK);
-    let resp;
-    try{ resp = await fetch('/api/solar/enrich',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contacts:slice,options})}); }
-    catch(e){ continue; } // network hiccup on one chunk — keep going
-    if(!resp || !resp.ok || !resp.body){ continue; }
-    const reader = resp.body.getReader(); const dec=new TextDecoder(); let buf='';
-    while(true){
-      const {value,done:d}=await reader.read(); if(d) break;
-      buf+=dec.decode(value,{stream:true}); let nl;
-      while((nl=buf.indexOf('\n'))>=0){
-        const line=buf.slice(0,nl); buf=buf.slice(nl+1); if(!line.trim()) continue;
-        let rec; try{ rec=JSON.parse(line); }catch{ continue; }
-        const gi = start + rec.index; // rec.index is local to this chunk
-        const inp = contacts[gi]||{};
-        ROWS[gi] = { ...inp, ...rec };
-        done++;
-        $('#prog').textContent=`${done} / ${contacts.length}…`;
-        const now=Date.now();
-        if(now-lastRender>1200){ lastRender=now; render(); } // throttle heavy table renders
-      }
-    }
+    let resp; try{ resp = await fetch('/api/solar/enrich',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contacts:slice,options})}); }catch(e){ continue; }
+    if(!resp||!resp.ok||!resp.body){ continue; }
+    const reader=resp.body.getReader(); const dec=new TextDecoder(); let buf='';
+    while(true){ const {value,done:d}=await reader.read(); if(d) break; buf+=dec.decode(value,{stream:true}); let nl;
+      while((nl=buf.indexOf('\n'))>=0){ const line=buf.slice(0,nl); buf=buf.slice(nl+1); if(!line.trim()) continue; let rec; try{rec=JSON.parse(line);}catch{continue;}
+        ROWS[start+rec.index]={...(contacts[start+rec.index]||{}),...rec}; done++; $('#prog').textContent=`${done} / ${contacts.length}…`;
+        const now=Date.now(); if(now-lastRender>1200){ lastRender=now; render(); } } }
   }
-  render();
-  $('#run').disabled=false;
-  const pros=ROWS.filter(r=>r.status==='qualified').length;
-  $('#pushBtn').disabled = pros===0;
+  render(); $('#run').disabled=false; const pros=ROWS.filter(r=>r.status==='qualified').length; $('#pushBtn').disabled=pros===0;
   $('#prog').textContent=`Done. ${done} checked · 🎯 ${pros} qualified prospects.`;
 }
 
@@ -352,21 +401,24 @@ function visible(){
   return ROWS;
 }
 function counts(){
-  $('#n-pros').textContent=ROWS.filter(r=>r.status==='qualified').length;
+  // Prefer the SERVER JOB counts (the table now holds only the prospects, so ROWS
+  // isn't the whole set). Fall back to ROWS for the paste-box client-side path.
+  const s = JOBSTAT;
+  const total = s && s.total ? s.total : ROWS.length;
+  const q  = s ? (s.qualified||0)     : ROWS.filter(r=>r.status==='qualified').length;
+  const t  = s ? (s.tenants||0)       : ROWS.filter(r=>r.stop_reason==='tenant').length;
+  const rf = s ? (s.roof_small||0)    : ROWS.filter(r=>String(r.stop_reason||'').startsWith('roof_too_small')).length;
+  const hs = s ? (s.already_solar||0) : ROWS.filter(r=>r.stop_reason==='already_has_solar').length;
+  $('#n-pros').textContent=q;
   $('#n-multi').textContent=ROWS.filter(isMultiSite).length;
   $('#n-uncertain').textContent=ROWS.filter(isUncertain).length;
-  $('#n-all').textContent=ROWS.length;
-  $('#n-tenant').textContent=ROWS.filter(r=>r.stop_reason==='tenant').length;
-  $('#n-roof').textContent=ROWS.filter(r=>String(r.stop_reason||'').startsWith('roof_too_small')).length;
-  $('#n-solar').textContent=ROWS.filter(r=>r.stop_reason==='already_has_solar').length;
+  $('#n-all').textContent=total;
+  $('#n-tenant').textContent=t;
+  $('#n-roof').textContent=rf;
+  $('#n-solar').textContent=hs;
   $('#n-nopc').textContent=ROWS.filter(r=>r.stop_reason==='no_postcode'||r.stop_reason==='no_address').length;
-  // funnel bar
-  const q=ROWS.filter(r=>r.status==='qualified').length;
-  const t=ROWS.filter(r=>r.stop_reason==='tenant').length;
-  const rf=ROWS.filter(r=>String(r.stop_reason||'').startsWith('roof_too_small')).length;
-  const hs=ROWS.filter(r=>r.stop_reason==='already_has_solar').length;
-  $('#funnel').innerHTML = ROWS.length ? `
-    <div class="stat"><b>${ROWS.length}</b><span>contacts</span></div>
+  $('#funnel').innerHTML = total ? `
+    <div class="stat"><b>${total.toLocaleString()}</b><span>contacts</span></div>
     <div class="stat"><b style="color:var(--green)">${q}</b><span>🎯 prospects</span></div>
     <div class="stat"><b>${t}</b><span>tenants (stopped)</span></div>
     <div class="stat"><b>${rf}</b><span>roof too small</span></div>
