@@ -108,6 +108,15 @@ class BrowserPool {
         this.context = await this.browser.newContext({
           userAgent: UA,
           viewport: { width: 1280, height: 800 },
+          // MUST pin the locale. Google localises the Transparency Centre by the
+          // caller's IP, so from the German datacentre it renders "~600 Anzeigen"
+          // / "Bestätigt" instead of "600 ads" / "Verified" — the English-only
+          // signals never appear and every job times out. Playwright's `locale`
+          // sets Accept-Language and navigator.language; the explicit header is
+          // belt-and-braces.
+          locale: 'en-GB',
+          timezoneId: 'Europe/London',
+          extraHTTPHeaders: { 'Accept-Language': 'en-GB,en;q=0.9' },
         });
         this.lastError = null;
         console.log(`[ads] chromium launched (${executablePath || 'playwright default'})`);

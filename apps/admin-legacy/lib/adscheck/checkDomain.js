@@ -26,7 +26,9 @@ async function checkOnce(context, domain, { region = 'anywhere', navTimeout = 30
       return (t === 'image' || t === 'media' || t === 'font') ? route.abort() : route.continue();
     });
 
-    const url = `https://adstransparency.google.com/?region=${encodeURIComponent(region)}&domain=${encodeURIComponent(domain)}`;
+    // hl=en forces the English UI. Google otherwise localises by caller IP, and
+    // every signal we match on is English text — see the locale note in browser.js.
+    const url = `https://adstransparency.google.com/?region=${encodeURIComponent(region)}&domain=${encodeURIComponent(domain)}&hl=en`;
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: navTimeout });
 
     // Wait until either an ad count or the "No ads found" message renders.
@@ -78,6 +80,22 @@ async function checkOnce(context, domain, { region = 'anywhere', navTimeout = 30
       is_estimate: !!(data.rawCount && data.rawCount.includes('~')),
       advertisers: data.advertisers,
     };
+  } catch (err) {
+    // A bare "waitForFunction timeout" can't distinguish "Google never answered"
+    // from "the page rendered fine but not in English" — which is exactly what
+    // cost us a production debugging cycle. Say which one it was.
+    let detail = '';
+    try {
+      const t = await page.evaluate(() => (document.body.innerText || '').slice(0, 400));
+      if (!t.trim()) detail = ' [page rendered no text]';
+      else if (/Anzeigen|annonces|anuncios|annunci|advertenties|reklamy|реклам/i.test(t)) {
+        const m = t.match(/[\d,~]+\s+\S+/);
+        detail = ` [page rendered in a NON-ENGLISH locale${m ? ` — found "${m[0].trim()}"` : ''}; expected English. Check the context locale / hl=en]`;
+      } else if (/unusual traffic|not a robot|captcha/i.test(t)) detail = ' [Google served a bot check]';
+      else detail = ` [rendered text began: ${JSON.stringify(t.slice(0, 120))}]`;
+    } catch { /* page may already be gone */ }
+    err.message += detail;
+    throw err;
   } finally {
     await page.close().catch(() => {});
   }
