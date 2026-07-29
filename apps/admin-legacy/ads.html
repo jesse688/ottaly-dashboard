@@ -98,6 +98,8 @@ tbody tr.sel{background:#EEF2FF}
       <div class="page-sub">Google Ads Transparency Centre — does this domain run ads, and roughly how many?</div>
     </div>
     <div class="filters">
+      <button id="sweepBtn" class="btn sm" style="background:var(--teal);border-color:var(--teal)">🌍 Sweep whole database</button>
+      <button id="autoBtn" class="btn ghost sm">↻ Continuous: off</button>
       <button id="pauseAllBtn" class="btn ghost sm">⏸ Pause all</button>
       <button id="resumeAllBtn" class="btn ghost sm">▶ Resume all</button>
       <button id="refreshBtn" class="btn ghost sm">Refresh</button>
@@ -715,8 +717,52 @@ $('#pvGo').addEventListener('click', async () => {
   btn.disabled = false; btn.textContent = 'Verify & Push';
 });
 
+// ── whole-database sweep + continuous mode ──
+// One check per DOMAIN answers every contact at that company: results are
+// stamped onto all of them, including contacts imported later.
+$('#sweepBtn').addEventListener('click', async () => {
+  let p;
+  try { p = await api('/sweep/preview?uk_only=true&stale_days=30'); }
+  catch (e) { return toast(e.message, true); }
+  if (!p.to_check) return toast(`All ${p.total_domains.toLocaleString()} UK domains checked in the last 30 days — nothing to do`);
+  const mins = Math.round(p.to_check / 12);
+  if (!confirm(`Sweep the whole database?\n\n`
+    + `${p.total_domains.toLocaleString()} distinct UK company domains\n`
+    + `${p.to_check.toLocaleString()} need checking (rest done in the last 30 days)\n\n`
+    + `At the current rate that's roughly ${mins > 90 ? Math.round(mins / 60) + ' hours' : mins + ' min'}.\n`
+    + `Results apply to EVERY contact at each domain.`)) return;
+  try {
+    const r = await api('/sweep', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uk_only: true, stale_days: 30 }) });
+    toast(r.total ? `Sweep queued — ${r.total.toLocaleString()} domains` : (r.message || 'Nothing to queue'));
+    selected = r.id; offset = 0; await refresh();
+  } catch (e) { toast(e.message, true); }
+});
+
+async function loadAuto() {
+  try {
+    const a = await api('/auto');
+    const b = $('#autoBtn');
+    b.textContent = `↻ Continuous: ${a.enabled ? 'ON' : 'off'}`;
+    b.style.background = a.enabled ? 'var(--teal)' : '';
+    b.style.color = a.enabled ? '#fff' : '';
+    b.style.borderColor = a.enabled ? 'var(--teal)' : '';
+    b.title = a.enabled
+      ? 'When the queue empties, a fresh UK-wide sweep starts automatically — runs 24/7.'
+      : 'Off — the queue drains and stops.';
+    window._auto = a.enabled;
+  } catch { /* non-fatal */ }
+}
+$('#autoBtn').addEventListener('click', async () => {
+  const next = !window._auto;
+  if (next && !confirm('Turn on continuous mode?\n\nWhen the queue empties, a fresh sweep of every UK domain starts automatically. It will keep running 24/7 until you turn it off.')) return;
+  try { await api('/auto', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: next, uk_only: true }) });
+    toast(`Continuous mode ${next ? 'ON' : 'off'}`); await loadAuto(); }
+  catch (e) { toast(e.message, true); }
+});
+
 async function refresh() {
-  await Promise.all([loadHealth(), loadBatches()]);
+  await Promise.all([loadHealth(), loadBatches(), loadAuto()]);
   await loadJobs();
 }
 

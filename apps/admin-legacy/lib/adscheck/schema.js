@@ -78,6 +78,13 @@ BEGIN
 END $$;
 CREATE INDEX IF NOT EXISTS idx_ads_batch_contacts_domain ON ads_batch_contacts (batch_id, domain);
 
+-- Small key/value store for the checker's own settings (e.g. continuous mode).
+CREATE TABLE IF NOT EXISTS ads_settings (
+  key        text PRIMARY KEY,
+  value      text,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
 -- Worker liveness. Each replica upserts its own row; /api/ads/health reads it so
 -- "is anything actually draining the queue?" is answerable without shell access.
 CREATE TABLE IF NOT EXISTS ads_workers (

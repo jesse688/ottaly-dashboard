@@ -15,6 +15,7 @@ const os = require('os');
 const { BrowserPool } = require('./browser');
 const { checkDomain, sleep } = require('./checkDomain');
 const { DOMAIN_NORM_SQL } = require('./schema');
+const { createSweep, getSetting, setSetting } = require('./sweep');
 
 const HEARTBEAT_MS = 15 * 1000;
 const SWEEP_MS = 60 * 1000;
@@ -65,6 +66,7 @@ class AdsWorker {
       setInterval(() => this.heartbeat().catch(() => {}), HEARTBEAT_MS),
       setInterval(() => this.sweepStale().catch(() => {}), SWEEP_MS),
       setInterval(() => this.browsers.closeIfIdle().catch(() => {}), 60 * 1000),
+      setInterval(() => this.autoSweepTick().catch((e) => console.warn('[ads] auto-sweep:', e.message)), 60 * 1000),
     ];
     this.loop().catch((e) => {
       this.running = false;
@@ -118,6 +120,42 @@ class AdsWorker {
             VALUES ($1,$2,$3,$4,$5, now())
        ON CONFLICT (id) DO UPDATE SET in_flight=$2, concurrency=$3, browser_ok=$4, note=$5, last_heartbeat=now()`,
       [this.id, ids.length, this.concurrency, this.browsers.ok, this.browsers.lastError || this.lastError]);
+  }
+
+  /**
+   * Continuous mode. When the queue is completely drained and continuous mode
+   * is on, start a fresh sweep — so the database keeps re-checking itself 24/7
+   * without anyone pressing anything. The queue itself is untouched; this only
+   * refills it.
+   *
+   * Guards: only ONE replica should create the sweep, so the claim is done with
+   * a conditional settings write (a losing replica sees the timestamp move and
+   * backs off). A minimum gap stops a sweep that finds nothing from spinning.
+   */
+  async autoSweepTick() {
+    if ((await getSetting(this.db, 'auto_sweep', 'off')) !== 'on') return;
+
+    const busy = await this.db.query(
+      `SELECT COUNT(*)::int AS n FROM ads_jobs j JOIN ads_batches b ON b.id=j.batch_id
+        WHERE j.status IN ('queued','running') AND b.status='running'`);
+    if (busy.rows[0].n > 0) return;               // still work to do
+
+    // Claim the right to start one. now() - interval guards against two
+    // replicas racing, and against a no-op sweep looping every minute.
+    const claim = await this.db.query(
+      `INSERT INTO ads_settings (key, value) VALUES ('auto_last_started', now()::text)
+       ON CONFLICT (key) DO UPDATE SET value = now()::text, updated_at = now()
+        WHERE ads_settings.updated_at < now() - interval '5 minutes'
+       RETURNING key`);
+    if (!claim.rowCount) return;                  // another replica got it, or too soon
+
+    const r = await createSweep(this.db, {
+      ukOnly: (await getSetting(this.db, 'auto_uk_only', 'on')) === 'on',
+      staleDays: Number(await getSetting(this.db, 'auto_stale_days', '30')),
+      cacheTtlDays: this.cacheTtlDays,
+      auto: true,
+    });
+    console.log(`[ads] continuous mode: queued ${r.total} domain(s)${r.cached ? `, ${r.cached} from cache` : ''}`);
   }
 
   /** Atomically take up to n queued jobs from non-paused batches. */

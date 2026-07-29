@@ -15,6 +15,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const { ensureSchema, DOMAIN_NORM_SQL } = require('./lib/adscheck/schema');
+const { createSweep, previewSweep, getSetting, setSetting } = require('./lib/adscheck/sweep');
 const { normalizeList, parseDomainText } = require('./lib/adscheck/normalize');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -133,6 +134,59 @@ module.exports = function adsAPI(getWorker) {
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
+  });
+
+  // ── full-database sweep ───────────────────────────────────
+  // Queue every distinct UK company domain in contacts. Results stamp onto
+  // EVERY contact at that domain (worker.stampContacts), so one check answers
+  // the whole company — including contacts imported later.
+  router.post('/sweep', async (req, res) => {
+    const { name, region, uk_only, stale_days } = req.body || {};
+    const rawRegion = (region || process.env.ADS_REGION_DEFAULT || 'anywhere').trim();
+    if (!REGION_RE.test(rawRegion)) return res.status(400).json({ error: 'Invalid region' });
+    try {
+      const r = await createSweep(req.db, {
+        name, region: rawRegion,
+        ukOnly: uk_only !== false,
+        staleDays: Number(stale_days ?? 30),
+        cacheTtlDays: Number(process.env.ADS_CACHE_TTL_DAYS ?? 7),
+      });
+      res.json({ ...r, region: rawRegion,
+        message: r.total ? undefined : 'Every domain has already been checked recently — nothing to queue.' });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Size a sweep before running it.
+  router.get('/sweep/preview', async (req, res) => {
+    try {
+      res.json(await previewSweep(req.db, {
+        ukOnly: req.query.uk_only !== 'false',
+        staleDays: Number(req.query.stale_days ?? 30),
+      }));
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Continuous mode. The queue is unchanged — this just refills it: when
+  // nothing is left to do, the worker starts a fresh sweep, so the database
+  // stays continuously up to date without anyone pressing anything.
+  router.get('/auto', async (req, res) => {
+    try {
+      res.json({
+        enabled: (await getSetting(req.db, 'auto_sweep', 'off')) === 'on',
+        uk_only: (await getSetting(req.db, 'auto_uk_only', 'on')) === 'on',
+        stale_days: Number(await getSetting(req.db, 'auto_stale_days', '30')),
+        last_started: await getSetting(req.db, 'auto_last_started', null),
+      });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+  router.post('/auto', async (req, res) => {
+    try {
+      const on = !!(req.body && req.body.enabled);
+      await setSetting(req.db, 'auto_sweep', on ? 'on' : 'off');
+      if (req.body && req.body.uk_only !== undefined) await setSetting(req.db, 'auto_uk_only', req.body.uk_only ? 'on' : 'off');
+      if (req.body && req.body.stale_days !== undefined) await setSetting(req.db, 'auto_stale_days', Number(req.body.stale_days) || 30);
+      res.json({ ok: true, enabled: on });
+    } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
   // ── list ──────────────────────────────────────────────────
