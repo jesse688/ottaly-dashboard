@@ -87,6 +87,55 @@ CREATE TABLE IF NOT EXISTS ads_workers (
 const DOMAIN_NORM_SQL =
   `REGEXP_REPLACE(LOWER(COALESCE(company_domain,'')), '^(https?://)?(www\\.)?([^/?#]+).*$', '\\3')`;
 
+// The per-contact projection of the ads results. These live on `contacts`, so
+// they're ALTERs on a ~600k-row table under constant load — and the main
+// migration runner in db-postgres.js uses lock_timeout=5s and SILENTLY swallows
+// lock-timeout failures, so on a busy deploy they simply never get added and the
+// Contacts filter then 500s on a missing column. Owned here instead, with a
+// longer lock_timeout and retries, and reported by /api/ads/diag.
+const CONTACT_COLUMNS = [
+  ['ads_runs_ads', 'BOOLEAN'],
+  ['ads_count', 'INT'],
+  ['ads_is_estimate', 'BOOLEAN'],
+  ['ads_advertisers', 'JSONB'],
+  ['ads_checked_at', 'TIMESTAMP'],
+];
+
+/** Are the ads_* columns present on contacts? */
+async function contactColumnsPresent(db) {
+  const { rows } = await db.query(
+    `SELECT column_name FROM information_schema.columns
+      WHERE table_name='contacts' AND column_name LIKE 'ads_%'`);
+  const have = new Set(rows.map((r) => r.column_name));
+  return CONTACT_COLUMNS.every(([c]) => have.has(c));
+}
+
+/**
+ * Add the ads_* columns to contacts, retrying around lock contention.
+ * ADD COLUMN with no default is instant in PG11+ once the lock is granted — the
+ * only hard part is getting it, so retry rather than give up silently.
+ */
+async function ensureContactColumns(db, { attempts = 5 } = {}) {
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      if (await contactColumnsPresent(db)) return true;
+      for (const [col, type] of CONTACT_COLUMNS) {
+        await db.query(`SET lock_timeout = '15s'`);
+        await db.query(`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS ${col} ${type}`);
+      }
+      if (await contactColumnsPresent(db)) {
+        console.log('[ads] contacts ads_* columns ready');
+        return true;
+      }
+    } catch (err) {
+      console.warn(`[ads] contacts column migration attempt ${i}/${attempts} failed:`, err.message.slice(0, 140));
+    }
+    await new Promise((r) => setTimeout(r, 5000 * i)); // back off past the busy window
+  }
+  console.error('[ads] could NOT add ads_* columns to contacts — the Contacts "Google Ads" filter will stay disabled');
+  return false;
+}
+
 let ready = null;
 
 /** Create the ads_* tables once per process. Returns the same promise on re-call. */
@@ -102,4 +151,7 @@ function ensureSchema(db) {
   return ready;
 }
 
-module.exports = { ensureSchema, DDL, DOMAIN_NORM_SQL };
+module.exports = {
+  ensureSchema, DDL, DOMAIN_NORM_SQL,
+  CONTACT_COLUMNS, contactColumnsPresent, ensureContactColumns,
+};

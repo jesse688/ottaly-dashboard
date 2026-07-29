@@ -206,6 +206,13 @@ module.exports = function adsAPI(getWorker) {
       params.push(`%${String(req.query.search).toLowerCase()}%`);
       where.push(`domain LIKE $${params.length}`);
     }
+    // Ad-count band. Rows with no count yet (queued/running/error) are excluded
+    // once a bound is set — "between 5 and 50 ads" can't be true of an unchecked
+    // domain, and leaving them in makes the count read as if they qualified.
+    const minAds = parseInt(req.query.min_ads, 10);
+    const maxAds = parseInt(req.query.max_ads, 10);
+    if (Number.isFinite(minAds)) { params.push(minAds); where.push(`ad_count >= $${params.length}`); }
+    if (Number.isFinite(maxAds)) { params.push(maxAds); where.push(`ad_count <= $${params.length}`); }
 
     try {
       const sql = `SELECT id, domain, status, attempts, runs_ads, ad_count, is_estimate,
@@ -239,8 +246,10 @@ module.exports = function adsAPI(getWorker) {
     // Optional ad-count band, so you can push e.g. only domains already spending
     // heavily (or only those with a token presence).
     const params = [req.params.id];
-    if (req.query.min_ads) { params.push(Number(req.query.min_ads)); where.push(`j.ad_count >= $${params.length}`); }
-    if (req.query.max_ads) { params.push(Number(req.query.max_ads)); where.push(`j.ad_count <= $${params.length}`); }
+    const cMin = parseInt(req.query.min_ads, 10);
+    const cMax = parseInt(req.query.max_ads, 10);
+    if (Number.isFinite(cMin)) { params.push(cMin); where.push(`j.ad_count >= $${params.length}`); }
+    if (Number.isFinite(cMax)) { params.push(cMax); where.push(`j.ad_count <= $${params.length}`); }
 
     try {
       const { rows } = await req.db.query(
@@ -334,6 +343,42 @@ module.exports = function adsAPI(getWorker) {
   });
 
   // ── diagnostics ───────────────────────────────────────────
+  // Is the persistence path actually wired? Mirrors /api/solar/diag. Answers
+  // "why is the Contacts Google Ads filter doing nothing / erroring" without
+  // shell access — the ads_* ALTERs can lose a lock race on the busy contacts
+  // table, and that used to fail silently.
+  router.get('/diag', async (req, res) => {
+    const { contactColumnsPresent, ensureContactColumns, CONTACT_COLUMNS } = require('./lib/adscheck/schema');
+    const out = { expected_columns: CONTACT_COLUMNS.map(([c]) => c) };
+    try {
+      const cols = await req.db.query(
+        `SELECT column_name FROM information_schema.columns
+          WHERE table_name='contacts' AND column_name LIKE 'ads_%' ORDER BY column_name`);
+      out.present_columns = cols.rows.map((r) => r.column_name);
+      out.columns_ready = await contactColumnsPresent(req.db);
+      out.filter_enabled = req.db._hasAdsColumns === true;
+
+      if (out.columns_ready) {
+        const c = await req.db.query(
+          `SELECT COUNT(*) FILTER (WHERE ads_checked_at IS NOT NULL)::int AS checked,
+                  COUNT(*) FILTER (WHERE ads_runs_ads IS TRUE)::int  AS runs_ads,
+                  COUNT(*) FILTER (WHERE ads_runs_ads IS FALSE)::int AS no_ads
+             FROM contacts`);
+        out.contacts = c.rows[0];
+      }
+      // ?fix=1 retries the migration on demand, for when a deploy lost the race.
+      if (req.query.fix) {
+        out.fix_result = await ensureContactColumns(req.db, { attempts: 3 });
+        req.db._hasAdsColumns = out.fix_result;
+      }
+      const idx = await req.db.query(
+        `SELECT indexname FROM pg_indexes WHERE tablename='contacts' AND indexname IN
+           ('idx_contacts_domain_norm','idx_contacts_ads_runs_ads')`);
+      out.indexes = idx.rows.map((r) => r.indexname);
+    } catch (e) { out.error = e.message; }
+    res.json(out);
+  });
+
   // Run ONE navigation and report exactly what the server's Chromium sees.
   // A generic "waitForFunction timeout" can't distinguish "Google served us a
   // consent/blocked interstitial" from "Chromium rendered nothing at all", and

@@ -977,6 +977,19 @@ class PostgresDatabase {
       mClient.release();
     }
 
+    // Ads-checker columns on `contacts`. Deliberately NOT part of the migration
+    // list above: that runner uses lock_timeout=5s and swallows lock-timeout
+    // failures silently, which on a busy deploy left the columns missing and
+    // turned the Contacts "Google Ads" filter into a 500. This retries around
+    // the contention and records whether it succeeded, so _buildFilterClauses
+    // can skip the filter instead of emitting SQL against a missing column.
+    // Fire-and-forget: the retries back off for up to ~75s and must not block
+    // app.listen().
+    this._hasAdsColumns = false;
+    require('./lib/adscheck/schema').ensureContactColumns(this)
+      .then((ok) => { this._hasAdsColumns = ok; })
+      .catch((e) => console.warn('[ads] contacts column check failed:', e.message));
+
     // Trigram indexes for fast substring ILIKE on the filter columns.
     // Each GIN build can scan the full contacts table — on a 25k+ row table
     // the six of these together can take minutes and block `app.listen()`.
@@ -1750,7 +1763,12 @@ class PostgresDatabase {
     //   checked       → any result, regardless of outcome
     //   unchecked     → never been through the ads checker
     // Plus an optional minimum ad count, to isolate the heavier advertisers.
+    // Guarded by _hasAdsColumns: the ALTERs that add these can lose a lock race
+    // on the busy contacts table, and referencing a missing column turns the
+    // WHOLE contacts search into a 500 rather than just ignoring one filter.
+    // A filter that quietly does nothing is far better than a dead grid.
     safe('adsRunsAds', () => {
+      if (!this._hasAdsColumns) return;
       const v = String(filters.adsRunsAds || '').toLowerCase();
       if (v === 'yes')            clauses.push('ads_runs_ads IS TRUE');
       else if (v === 'no')        clauses.push('ads_runs_ads IS FALSE');
@@ -1758,8 +1776,14 @@ class PostgresDatabase {
       else if (v === 'unchecked') clauses.push('ads_checked_at IS NULL');
     });
     safe('adsMinCount', () => {
+      if (!this._hasAdsColumns) return;
       const n = parseInt(filters.adsMinCount, 10);
       if (Number.isFinite(n)) { clauses.push(`ads_count >= $${p}`); params.push(n); p++; }
+    });
+    safe('adsMaxCount', () => {
+      if (!this._hasAdsColumns) return;
+      const n = parseInt(filters.adsMaxCount, 10);
+      if (Number.isFinite(n)) { clauses.push(`ads_count <= $${p}`); params.push(n); p++; }
     });
 
     // Normalised location hierarchy filters — the clean split/filter columns.

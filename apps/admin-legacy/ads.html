@@ -154,6 +154,10 @@ tbody tr.sel{background:#EEF2FF}
         <button data-f="error">Errors</button>
         <button data-f="pending">Pending</button>
         <input type="text" id="search" placeholder="search domain…">
+        <span class="card-sub" style="margin-left:.25rem">ads</span>
+        <input type="number" id="minAds" min="0" placeholder="min" style="width:66px;padding:4px 8px;font-size:11.5px">
+        <span class="card-sub">–</span>
+        <input type="number" id="maxAds" min="0" placeholder="max" style="width:66px;padding:4px 8px;font-size:11.5px">
         <select id="sort" style="width:auto;padding:4px 8px;font-size:11.5px">
           <option value="id">Order added</option>
           <option value="count_desc">Most ads</option>
@@ -198,7 +202,10 @@ tbody tr.sel{background:#EEF2FF}
     </select>
 
     <label class="fld">Minimum ad count <span style="text-transform:none;font-weight:400">(optional — isolate heavier advertisers)</span></label>
-    <input type="text" id="pvMinAds" placeholder="e.g. 10" style="margin-bottom:.75rem">
+    <div style="display:flex;gap:.5rem;margin-bottom:.75rem">
+      <input type="number" id="pvMinAds" min="0" placeholder="min ads">
+      <input type="number" id="pvMaxAds" min="0" placeholder="max ads">
+    </div>
 
     <label class="fld">Workspace / client</label>
     <select id="pvWorkspace" style="margin-bottom:.75rem"><option value="">Loading…</option></select>
@@ -489,7 +496,8 @@ async function loadJobs() {
   try {
     const [sum, res] = await Promise.all([
       api('/batches/' + selected),
-      api(`/batches/${selected}/jobs?status=${filter}&search=${encodeURIComponent($('#search').value.trim())}&sort=${$('#sort').value}&limit=${PAGE}&offset=${offset}`),
+      api(`/batches/${selected}/jobs?status=${filter}&search=${encodeURIComponent($('#search').value.trim())}`
+        + `&sort=${$('#sort').value}&limit=${PAGE}&offset=${offset}${adsBandQS()}`),
     ]);
     const c = sum.counts;
     const eta = sum.eta_seconds ? ` · ETA ~${sum.eta_seconds > 90 ? Math.round(sum.eta_seconds / 60) + ' min' : sum.eta_seconds + 's'}` : '';
@@ -534,6 +542,15 @@ document.querySelectorAll('.filters [data-f]').forEach((b) => b.addEventListener
 let searchT;
 $('#search').addEventListener('input', () => { clearTimeout(searchT); searchT = setTimeout(() => { offset = 0; loadJobs(); }, 300); });
 $('#sort').addEventListener('change', () => { offset = 0; loadJobs(); });
+// Ad-count band on the results table. Debounced like the search box.
+function adsBandQS() {
+  const mn = parseInt($('#minAds').value, 10), mx = parseInt($('#maxAds').value, 10);
+  return (Number.isFinite(mn) ? `&min_ads=${mn}` : '') + (Number.isFinite(mx) ? `&max_ads=${mx}` : '');
+}
+let bandT;
+['#minAds', '#maxAds'].forEach((sel) => $(sel).addEventListener('input', () => {
+  clearTimeout(bandT); bandT = setTimeout(() => { offset = 0; loadJobs(); }, 350);
+}));
 $('#prevPage').addEventListener('click', () => { offset = Math.max(0, offset - PAGE); loadJobs(); });
 $('#nextPage').addEventListener('click', () => { offset += PAGE; loadJobs(); });
 $('#refreshBtn').addEventListener('click', refresh);
@@ -563,7 +580,10 @@ $('#deleteBtn').addEventListener('click', async () => {
 // same verification + guards) the Contacts page uses.
 async function pvCount() {
   const min = parseInt($('#pvMinAds').value, 10);
-  const q = `status=${$('#pvWhich').value}` + (Number.isFinite(min) ? `&min_ads=${min}` : '');
+  const max = parseInt($('#pvMaxAds').value, 10);
+  const q = `status=${$('#pvWhich').value}`
+    + (Number.isFinite(min) ? `&min_ads=${min}` : '')
+    + (Number.isFinite(max) ? `&max_ads=${max}` : '');
   return api(`/batches/${selected}/contact-ids?${q}`);
 }
 
@@ -592,7 +612,8 @@ $('#pushPvBtn').addEventListener('click', async () => {
 });
 $('#pvCancel').addEventListener('click', () => { $('#pvModal').style.display = 'none'; });
 $('#pvWhich').addEventListener('change', refreshPvSummary);
-$('#pvMinAds').addEventListener('input', () => { clearTimeout(window._pvT); window._pvT = setTimeout(refreshPvSummary, 350); });
+['#pvMinAds', '#pvMaxAds'].forEach((sel) => $(sel).addEventListener('input',
+  () => { clearTimeout(window._pvT); window._pvT = setTimeout(refreshPvSummary, 350); }));
 
 $('#pvWorkspace').addEventListener('change', async () => {
   const id = $('#pvWorkspace').value;
