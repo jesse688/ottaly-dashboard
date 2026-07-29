@@ -227,6 +227,34 @@ async function loadHandoff(){
   }catch(e){}
   return null;
 }
+// Build a result row from a contact's SAVED solar_*/ccod_* columns — so a page
+// refresh RESTORES prior progress from the DB instead of showing a blank slate.
+// Unchecked contacts come back pending ('…') but still show engine ownership.
+function recFromSaved(c, i){
+  const checked = !!c.solar_checked_at;
+  return {
+    ...c,
+    index: i,
+    email: c.email||'', company_name: c.company_name||'', address: c.address||c.company_address||'',
+    first_name: c.first_name||'', last_name: c.last_name||'',
+    status: checked ? (c.solar_status||'disqualified') : '…',
+    stage: checked ? (c.solar_status==='qualified' ? 'done' : 'ownership') : 'ownership',
+    stop_reason: checked ? (c.solar_stop_reason||null) : null,
+    owns_building: c.ccod_owns_building || null,
+    owns_basis: c.ccod_owns_building ? 'engine_stamp' : null,
+    building_owner: c.ccod_building_owner || null,
+    site_count: c.ccod_site_count || null,
+    max_system_kwp: c.solar_max_kwp ?? null,
+    max_panels_fit: c.solar_panels ?? null,
+    est_annual_kwh: c.solar_annual_kwh ?? null,
+    roof_area_m2: c.solar_roof_area_m2 ?? null,
+    has_solar: c.solar_has_solar || null,
+    lat: c.solar_lat ?? null, lng: c.solar_lng ?? null,
+    roof_address_used: c.solar_roof_address || null,
+    maps_url: c.solar_maps_url || null,
+    cached: checked || undefined,
+  };
+}
 let INPUT = null;
 (async ()=>{
   const rawIds = sessionStorage.getItem('solarContactIds');
@@ -234,7 +262,17 @@ let INPUT = null;
     $('#tablewrap').innerHTML='<div class="mut" style="padding:20px 0">⏳ Loading contacts…</div>';
   }
   INPUT = await loadHandoff();
-  if(INPUT && INPUT.length){ $('#tablewrap').innerHTML=`<div class="mut" style="padding:20px 0">${INPUT.length} contacts loaded from Contacts page. Set options, then Run qualification.</div>`; }
+  if(INPUT && INPUT.length){
+    // Restore saved results so a refresh keeps your progress (data lives in the DB).
+    ROWS = INPUT.map((c,i)=>recFromSaved(c,i));
+    render();
+    const doneCount = ROWS.filter(r=>r.status!=='…').length;
+    const pros = ROWS.filter(r=>r.status==='qualified').length;
+    $('#prog').textContent = doneCount
+      ? `${doneCount.toLocaleString()}/${INPUT.length.toLocaleString()} already checked (saved) · 🎯 ${pros} prospects · Run to do the rest.`
+      : `${INPUT.length.toLocaleString()} contacts loaded. Run qualification.`;
+    if(pros>0) $('#pushBtn').disabled=false;
+  }
   else if(rawIds){ $('#tablewrap').innerHTML='<div class="mut" style="padding:20px 0;color:var(--red)">Could not load the selected contacts — go back and try Push to Solar again.</div>'; }
 })();
 
