@@ -591,9 +591,12 @@ async function refreshPvSummary() {
   $('#pvSummary').textContent = 'Counting…';
   try {
     const r = await pvCount();
-    $('#pvSummary').innerHTML = r.linked_contacts
-      ? `<b>${r.count.toLocaleString()}</b> contact(s) match, from ${r.linked_contacts.toLocaleString()} linked to this batch.`
-      : `This batch has no linked contacts — it was started from a pasted/uploaded list, not from a Contacts selection, so there is nothing to push.`;
+    $('#pvSummary').innerHTML = r.count
+      ? `<b>${r.count.toLocaleString()}</b> contact(s) match`
+        + (r.matched_by === 'domain'
+            ? ` — matched by company domain (this batch predates contact linking).`
+            : ` of the ${r.linked_contacts.toLocaleString()} linked to this batch.`)
+      : `No contacts matched. Either this batch was a pasted/uploaded list, or none of its domains exist in Contacts.`;
     $('#pvGo').disabled = !r.count;
   } catch (e) { $('#pvSummary').textContent = e.message; $('#pvGo').disabled = true; }
 }
@@ -605,7 +608,8 @@ $('#pushPvBtn').addEventListener('click', async () => {
   refreshPvSummary();
   try {
     const ws = await (await fetch('/api/pv/workspaces')).json();
-    const list = ws.workspaces || ws || [];
+    const list = ws.workspaces || ws.list || ws.data || [];
+    if (!Array.isArray(list)) throw new Error('unexpected workspaces response');
     $('#pvWorkspace').innerHTML = '<option value="">Select a client…</option>'
       + list.map((w) => `<option value="${esc(w._id || w.id)}">${esc(w.name)}</option>`).join('');
   } catch (e) { $('#pvWorkspace').innerHTML = `<option value="">Could not load workspaces: ${esc(e.message)}</option>`; }
@@ -622,9 +626,10 @@ $('#pvWorkspace').addEventListener('change', async () => {
   el.innerHTML = '<option value="">Loading campaigns…</option>';
   try {
     const r = await (await fetch(`/api/pv/campaigns?workspace_id=${encodeURIComponent(id)}`)).json();
-    const camps = r.campaigns || r || [];
+    const camps = r.list || r.campaigns || r.data || [];
+    if (!Array.isArray(camps)) throw new Error('unexpected campaigns response');
     el.innerHTML = '<option value="">Select a campaign…</option>'
-      + camps.map((c) => `<option value="${esc(c._id || c.id)}">${esc(c.name)}</option>`).join('');
+      + camps.map((c) => `<option value="${esc(c.id || c._id)}">${esc(c.name)}</option>`).join('');
   } catch (e) { el.innerHTML = `<option value="">Could not load campaigns: ${esc(e.message)}</option>`; }
 });
 

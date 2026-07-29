@@ -252,17 +252,33 @@ module.exports = function adsAPI(getWorker) {
     if (Number.isFinite(cMax)) { params.push(cMax); where.push(`j.ad_count <= $${params.length}`); }
 
     try {
-      const { rows } = await req.db.query(
-        `SELECT DISTINCT bc.contact_id
-           FROM ads_batch_contacts bc
-           JOIN ads_jobs j ON j.batch_id = bc.batch_id AND j.domain = bc.domain
-          WHERE ${where.join(' AND ')}`, params);
-      const ids = rows.map((r) => Number(r.contact_id));
-      // domains_matched tells the UI whether this batch even has contact links
-      // (an ad-hoc paste-in batch has none) so it can explain an empty result.
       const linked = await req.db.query(
         `SELECT COUNT(*)::int AS n FROM ads_batch_contacts WHERE batch_id=$1`, [req.params.id]);
-      res.json({ contact_ids: ids, count: ids.length, linked_contacts: linked.rows[0].n });
+      const hasLinks = linked.rows[0].n > 0;
+
+      // Two ways to resolve results back to contacts:
+      //   linked — the exact contacts the batch was started from (preferred).
+      //   domain — every contact whose company domain matches a result.
+      // The fallback matters: batches created before contact-linking existed
+      // have no links, and a pasted list can still correspond to real contacts.
+      // It uses idx_contacts_domain_norm, so it's an index scan, not a seq scan.
+      const sql = hasLinks
+        ? `SELECT DISTINCT bc.contact_id AS id
+             FROM ads_batch_contacts bc
+             JOIN ads_jobs j ON j.batch_id = bc.batch_id AND j.domain = bc.domain
+            WHERE ${where.join(' AND ')}`
+        : `SELECT DISTINCT c.id
+             FROM contacts c
+             JOIN ads_jobs j ON j.domain = ${DOMAIN_NORM_SQL.replace(/company_domain/g, 'c.company_domain')}
+            WHERE ${where.join(' AND ')}`;
+      const { rows } = await req.db.query(sql, params);
+      const ids = rows.map((r) => Number(r.id));
+      res.json({
+        contact_ids: ids,
+        count: ids.length,
+        linked_contacts: linked.rows[0].n,
+        matched_by: hasLinks ? 'linked' : 'domain',
+      });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

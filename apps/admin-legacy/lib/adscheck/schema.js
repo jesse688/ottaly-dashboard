@@ -111,6 +111,23 @@ async function contactColumnsPresent(db) {
 }
 
 /**
+ * Indexes for the ads columns. Created HERE, after the columns are confirmed —
+ * db-postgres builds its index list at init in parallel with the column
+ * migration, so idx_contacts_ads_runs_ads raced the ALTER, failed with a
+ * warning, and was never retried (indexes are only built at startup).
+ */
+async function ensureContactIndexes(db) {
+  const idx = [
+    `CREATE INDEX IF NOT EXISTS idx_contacts_ads_runs_ads ON contacts (ads_runs_ads) WHERE ads_runs_ads IS NOT NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_contacts_domain_norm ON contacts (${DOMAIN_NORM_SQL})`,
+  ];
+  for (const sql of idx) {
+    try { await db.query(sql); }
+    catch (e) { console.warn('[ads] index build failed:', e.message.slice(0, 120)); }
+  }
+}
+
+/**
  * Add the ads_* columns to contacts, retrying around lock contention.
  * ADD COLUMN with no default is instant in PG11+ once the lock is granted — the
  * only hard part is getting it, so retry rather than give up silently.
@@ -125,6 +142,7 @@ async function ensureContactColumns(db, { attempts = 5 } = {}) {
       }
       if (await contactColumnsPresent(db)) {
         console.log('[ads] contacts ads_* columns ready');
+        await ensureContactIndexes(db);
         return true;
       }
     } catch (err) {
@@ -142,7 +160,19 @@ let ready = null;
 function ensureSchema(db) {
   if (!ready) {
     ready = db.query(DDL)
-      .then(() => true)
+      .then(() => {
+        // Also (re)try the contacts columns, once per process. Startup can lose
+        // the lock race on a busy deploy, and this gives a second chance the
+        // moment anyone opens the Ads Checker — no redeploy needed. Detached so
+        // the request isn't held for the retry backoff.
+        if (!ensureSchema._contactsKicked) {
+          ensureSchema._contactsKicked = true;
+          ensureContactColumns(db)
+            .then((ok) => { db._hasAdsColumns = ok; })
+            .catch(() => {});
+        }
+        return true;
+      })
       .catch((err) => {
         ready = null; // let a later request retry (e.g. DB was briefly down)
         throw err;

@@ -614,7 +614,22 @@ module.exports = (db) => {
         // Google Ads Transparency, stamped by the ads checker (lib/adscheck).
         adsRunsAds: rest.adsRunsAds,     // yes | no | checked | unchecked
         adsMinCount: rest.adsMinCount,
+        adsMaxCount: rest.adsMaxCount,
       };
+
+      // If an ads filter is set but the ads_* columns aren't available, REFUSE.
+      // _buildFilterClauses skips those clauses when the columns are missing,
+      // which would silently return the entire database as though every row
+      // matched — and those results feed a PlusVibe push. A filter that quietly
+      // does nothing is far more dangerous here than a visible error.
+      const wantsAds = !!(rest.adsRunsAds || rest.adsMinCount || rest.adsMaxCount);
+      if (wantsAds && db._hasAdsColumns !== true) {
+        return res.status(409).json({
+          error: 'Google Ads filter unavailable: the ads_* columns are not on the contacts table yet. '
+               + 'Open /api/ads/diag to check, or /api/ads/diag?fix=1 to create them now. '
+               + 'Refusing the search rather than returning unfiltered results.',
+        });
+      }
 
       // Master exclusions per client — when a target client is selected, load
       // their always-on exclusion lists from SQLite (client_verticals) and
