@@ -44,7 +44,12 @@ class AdsWorker {
     // proxies, each request leaves from a different IP and the cap lifts
     // automatically — buy proxies and throughput scales with no config change.
     this.configuredConcurrency = this.concurrency;
-    this.directMax = Math.max(1, num(process.env.ADS_DIRECT_CONCURRENCY, 2));
+    // Budget for the SHARED server IP, split across however many replicas are
+    // alive — 3 is the validated sweet spot for one address. With 2 replicas
+    // that's 1 each; alone, a worker gets the full 3. Recomputed from the
+    // heartbeat table so scaling replicas up or down needs no config change.
+    this.directTotal = Math.max(1, num(process.env.ADS_DIRECT_CONCURRENCY, 3));
+    this.liveWorkers = 1;
 
     this.running = false;
     this.inFlight = new Set();   // job ids currently being processed
@@ -100,6 +105,14 @@ class AdsWorker {
         `UPDATE ads_jobs SET locked_at=now() WHERE id = ANY($1::bigint[]) AND locked_by=$2`,
         [ids, this.id]);
     }
+    // How many replicas are actually alive? The direct-IP budget is split
+    // between them, so this drives effectiveConcurrency().
+    try {
+      const { rows } = await this.db.query(
+        `SELECT COUNT(*)::int AS n FROM ads_workers WHERE last_heartbeat > now() - interval '90 seconds'`);
+      this.liveWorkers = Math.max(1, rows[0].n);
+    } catch { /* keep the previous value */ }
+
     await this.db.query(
       `INSERT INTO ads_workers (id, in_flight, concurrency, browser_ok, note, last_heartbeat)
             VALUES ($1,$2,$3,$4,$5, now())
@@ -220,10 +233,11 @@ class AdsWorker {
     const proxies = this.browsers.proxyContexts.length;
     const eff = proxies > 0
       ? Math.min(this.configuredConcurrency, Math.max(proxies, 1))
-      : Math.min(this.configuredConcurrency, this.directMax);
+      // Share the single-IP budget across live replicas, never below 1.
+      : Math.max(1, Math.floor(this.directTotal / this.liveWorkers));
     if (eff !== this.concurrency) {
       console.log(`[ads] concurrency ${this.concurrency} → ${eff} `
-        + `(${proxies ? proxies + ' proxies' : 'direct — one IP'})`);
+        + `(${proxies ? proxies + ' proxies' : `direct — one IP shared by ${this.liveWorkers} worker(s)`})`);
       this.concurrency = eff;
     }
     return eff;
