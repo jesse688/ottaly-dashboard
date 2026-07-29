@@ -248,6 +248,7 @@ async function run(){
     contacts = lines.map(l=>{ const parts=l.split(',').map(x=>x.trim()); const company=parts.pop(); return { address: parts.join(', '), company_name: company }; });
   }
   if(!contacts||!contacts.length){ alert('No contacts to qualify.'); return; }
+  if(contacts.length > 1000 && !confirm(`Qualify ${contacts.length.toLocaleString()} contacts?\n\nThis can take a while and uses Google Solar calls for any not already checked. Contacts you've checked before are reused for free.`)) return;
 
   const options = {
     ownershipGate: $('#gateUnclear').checked ? 'yes_or_unclear' : 'yes',
@@ -260,23 +261,36 @@ async function run(){
   render(); $('#run').disabled=true; $('#pushBtn').disabled=true;
   let done=0; $('#prog').textContent=`0 / ${contacts.length}…`;
 
-  const resp = await fetch('/api/solar/enrich',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contacts,options})});
-  const reader = resp.body.getReader(); const dec=new TextDecoder(); let buf='';
-  while(true){
-    const {value,done:d}=await reader.read(); if(d) break;
-    buf+=dec.decode(value,{stream:true}); let nl;
-    while((nl=buf.indexOf('\n'))>=0){
-      const line=buf.slice(0,nl); buf=buf.slice(nl+1); if(!line.trim()) continue;
-      const rec=JSON.parse(line);
-      // Merge the original contact under the enrichment so ALL contact fields
-      // (job title, phone, LinkedIn, website, industry, name) survive for display
-      // and for the PV push. Enrichment fields win on key collisions.
-      const inp = contacts[rec.index]||{};
-      ROWS[rec.index] = { ...inp, ...rec };
-      done++;
-      $('#prog').textContent=`${done} / ${contacts.length}…`; render();
+  // Enrich in CHUNKS. A single streaming request over thousands of contacts is a
+  // ~1-hour response that the proxy kills (returns nothing → "0 checked"). Short
+  // chunked requests stream reliably; persistence makes already-done ones instant.
+  // Rendering is throttled — rebuilding a multi-thousand-row table on every result
+  // freezes the tab.
+  const CHUNK = 200; let lastRender = 0;
+  for(let start=0; start<contacts.length; start+=CHUNK){
+    const slice = contacts.slice(start, start+CHUNK);
+    let resp;
+    try{ resp = await fetch('/api/solar/enrich',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contacts:slice,options})}); }
+    catch(e){ continue; } // network hiccup on one chunk — keep going
+    if(!resp || !resp.ok || !resp.body){ continue; }
+    const reader = resp.body.getReader(); const dec=new TextDecoder(); let buf='';
+    while(true){
+      const {value,done:d}=await reader.read(); if(d) break;
+      buf+=dec.decode(value,{stream:true}); let nl;
+      while((nl=buf.indexOf('\n'))>=0){
+        const line=buf.slice(0,nl); buf=buf.slice(nl+1); if(!line.trim()) continue;
+        let rec; try{ rec=JSON.parse(line); }catch{ continue; }
+        const gi = start + rec.index; // rec.index is local to this chunk
+        const inp = contacts[gi]||{};
+        ROWS[gi] = { ...inp, ...rec };
+        done++;
+        $('#prog').textContent=`${done} / ${contacts.length}…`;
+        const now=Date.now();
+        if(now-lastRender>1200){ lastRender=now; render(); } // throttle heavy table renders
+      }
     }
   }
+  render();
   $('#run').disabled=false;
   const pros=ROWS.filter(r=>r.status==='qualified').length;
   $('#pushBtn').disabled = pros===0;
