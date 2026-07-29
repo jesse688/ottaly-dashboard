@@ -58,11 +58,24 @@ CREATE TABLE IF NOT EXISTS ads_domain_cache (
 -- /api/contacts/verify-and-push takes contact_ids. This link table is what lets
 -- "filter the results, push the winners" resolve back to real contacts.
 CREATE TABLE IF NOT EXISTS ads_batch_contacts (
-  batch_id   uuid   NOT NULL REFERENCES ads_batches(id) ON DELETE CASCADE,
-  contact_id bigint NOT NULL,
-  domain     text   NOT NULL,
+  batch_id   uuid NOT NULL REFERENCES ads_batches(id) ON DELETE CASCADE,
+  -- TEXT, not bigint: contacts.id is a UUID (db-schema-postgres.sql). The first
+  -- cut assumed bigint and Number(uuid) -> NaN silently rejected every contact,
+  -- so the whole Contacts handoff failed with "no valid domains found". TEXT
+  -- also keeps this working if the id type ever changes again.
+  contact_id text NOT NULL,
+  domain     text NOT NULL,
   PRIMARY KEY (batch_id, contact_id)
 );
+-- Repair the bigint version shipped briefly before the UUID id was noticed.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+              WHERE table_name='ads_batch_contacts' AND column_name='contact_id'
+                AND data_type <> 'text') THEN
+    ALTER TABLE ads_batch_contacts ALTER COLUMN contact_id TYPE text USING contact_id::text;
+  END IF;
+END $$;
 CREATE INDEX IF NOT EXISTS idx_ads_batch_contacts_domain ON ads_batch_contacts (batch_id, domain);
 
 -- Worker liveness. Each replica upserts its own row; /api/ads/health reads it so

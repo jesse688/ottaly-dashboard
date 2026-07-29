@@ -61,8 +61,10 @@ module.exports = function adsAPI(getWorker) {
     if (Array.isArray(contacts) && contacts.length) {
       for (const c of contacts) {
         const d = normalizeList([c && c.domain])[0];
-        const id = Number(c && c.id);
-        if (d && Number.isFinite(id)) links.push({ id, domain: d });
+        // contacts.id is a UUID — keep it as a string. Coercing with Number()
+        // yielded NaN and silently dropped every contact.
+        const id = c && c.id != null ? String(c.id).trim() : '';
+        if (d && id) links.push({ id, domain: d });
       }
       list = normalizeList(links.map((l) => l.domain));
     } else if (Array.isArray(domains) && domains.length) list = normalizeList(domains);
@@ -101,7 +103,7 @@ module.exports = function adsAPI(getWorker) {
         await req.db.query(
           `INSERT INTO ads_batch_contacts (batch_id, contact_id, domain)
            SELECT $1, u.id, u.domain
-             FROM unnest($2::bigint[], $3::text[]) AS u(id, domain)
+             FROM unnest($2::text[], $3::text[]) AS u(id, domain)
             ON CONFLICT (batch_id, contact_id) DO NOTHING`,
           [id, links.map((l) => l.id), links.map((l) => l.domain)]);
       }
@@ -270,9 +272,9 @@ module.exports = function adsAPI(getWorker) {
         : `SELECT DISTINCT c.id
              FROM contacts c
              JOIN ads_jobs j ON j.domain = ${DOMAIN_NORM_SQL.replace(/company_domain/g, 'c.company_domain')}
-            WHERE ${where.join(' AND ')}`;
+            WHERE ${where.join(' AND ')}`;   // c.id is a UUID — returned as text
       const { rows } = await req.db.query(sql, params);
-      const ids = rows.map((r) => Number(r.id));
+      const ids = rows.map((r) => String(r.id));   // UUIDs — never Number() these
       res.json({
         contact_ids: ids,
         count: ids.length,

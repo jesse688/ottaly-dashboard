@@ -219,6 +219,27 @@ class BrowserPool {
             + this.deadProxies.map((d) => `${d.label} (${d.why})`).join(', '));
         }
 
+        // If EVERY proxy is dead (e.g. the Webshare plan ran out of bandwidth),
+        // fall back to the server's own IP rather than stopping. The default
+        // context can't be reused for that: the browser was launched with the
+        // 'http://per-context' placeholder that per-context proxies require, and
+        // a context with no proxy override inherits it — poisoning every
+        // request. Relaunch cleanly without it.
+        if (proxies.length && !this.proxyContexts.length) {
+          console.warn('[ads] no usable proxies — relaunching direct from the server IP');
+          const dead = this.deadProxies;
+          await this.close();
+          this.browser = await chromium.launch({
+            headless: true,
+            ...(executablePath ? { executablePath } : {}),
+            args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+          });
+          this.context = await this.browser.newContext(contextOpts);
+          this.deadProxies = dead;   // keep the reasons visible in /api/ads/health
+          this.lastError = `all ${proxies.length} proxies unusable — running direct`;
+          return this.context;
+        }
+
         this.lastError = null;
         console.log(`[ads] chromium launched (${executablePath || 'playwright default'})`
           + `, ${this.proxyContexts.length}/${proxies.length} proxies healthy`);
