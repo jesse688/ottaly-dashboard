@@ -1971,6 +1971,24 @@ class PostgresDatabase {
       else if (v === 'unchecked') clauses.push(`ccod_checked_at IS NULL`);
       else { clauses.push(`ccod_owns_building = $${p++}`); params.push(v); }
     });
+
+    // Solar-qualification result (from the Solar page, persisted to solar_* columns).
+    safe('solarStatus', () => {
+      const v = filters.solarStatus;
+      if (!v) return;
+      if (v === 'prospect')          clauses.push(`solar_status = 'qualified'`);
+      else if (v === 'roof_small')   clauses.push(`solar_stop_reason LIKE 'roof_too_small%'`);
+      else if (v === 'tenant')       clauses.push(`solar_stop_reason = 'tenant'`);
+      else if (v === 'already_solar')clauses.push(`solar_has_solar = 'yes'`);
+      else if (v === 'checked')      clauses.push(`solar_checked_at IS NOT NULL`);
+      else if (v === 'unchecked')    clauses.push(`solar_checked_at IS NULL`);
+    });
+    // Minimum solar system size (kWp) — e.g. only PPA-worthy 100kWp+ prospects.
+    safe('solarMinKwp', () => {
+      const n = parseInt(filters.solarMinKwp, 10);
+      if (!Number.isFinite(n) || n <= 0) return;
+      clauses.push(`solar_max_kwp >= $${p++}`); params.push(n);
+    });
     safe('worksRemote',    () => { if (filters.worksRemote === 'true')   clauses.push(`works_remote = true`); });
     safe('excludeRemote',  () => { if (filters.excludeRemote === 'true') clauses.push(`(works_remote IS NULL OR works_remote = false)`); });
     safe('excludeDNC',     () => { if (filters.excludeDNC === 'true')    clauses.push(`(do_not_contact IS NULL OR do_not_contact = false)`); });

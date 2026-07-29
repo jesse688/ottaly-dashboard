@@ -1233,6 +1233,18 @@
               <option value="checked">— Checked (any result)</option>
               <option value="unchecked">— Not yet checked</option>
             </select>
+            <select id="solarStatus" title="Solar qualification result from the Solar page (saved per contact).">
+              <option value="">☀️ Solar — all</option>
+              <option value="prospect">🎯 Solar prospect (qualified)</option>
+              <option value="roof_small">Roof too small</option>
+              <option value="tenant">Tenant (stopped)</option>
+              <option value="already_solar">Already has solar</option>
+              <option value="checked">— Checked (any result)</option>
+              <option value="unchecked">— Not yet checked</option>
+            </select>
+            <label style="display:flex;align-items:center;gap:5px;font-size:12px;" title="Only contacts whose estimated solar system is at least this many kWp.">
+              ☀️ Min kWp <input type="number" id="solarMinKwp" min="0" step="10" placeholder="e.g. 100" style="width:70px;background:var(--card,#1a1a1a);color:inherit;border:1px solid var(--line,#333);border-radius:6px;padding:3px 6px;">
+            </label>
             <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;">
               <input type="checkbox" id="filterRemote" style="accent-color:#3b82f6"> 🏠 Remote workers only
             </label>
@@ -2761,6 +2773,8 @@
         adsMaxCount: get('adsMaxCount'),
         ownsBuilding: get('ownsBuilding'),
         ccodOwnsBuilding: get('ccodOwnsBuilding'),
+        solarStatus: get('solarStatus'),
+        solarMinKwp: get('solarMinKwp'),
         worksRemote: document.getElementById('filterRemote')?.checked ? 'true' : '',
         excludeRemote: document.getElementById('filterExcludeRemote')?.checked ? 'true' : '',
         excludeDNC: document.getElementById('filterExcludeDNC')?.checked ? 'true' : '',
@@ -3118,7 +3132,7 @@
         def.selected.forEach(v => params.append(key, v));
         def.excluded.forEach(v => params.append(key + '!', v));
       });
-      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding'].forEach(id => {
+      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding','solarStatus','solarMinKwp'].forEach(id => {
         const el = document.getElementById(id);
         if (el && el.value) params.append(id, el.value);
       });
@@ -3222,7 +3236,7 @@
       // Reset everything, install the saved hash, then re-run the standard
       // restoration path so behaviour matches a bookmarked-URL reload.
       Object.keys(filterDefs).forEach(k => { filterDefs[k].selected = []; filterDefs[k].excluded = []; });
-      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding','solarStatus','solarMinKwp'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
       ['emailGoogle','emailOutlook','emailOther','emailUnknown','filterRemote','filterExcludeRemote','filterExcludeDNC','filterNotExported','filterExportedOnly','filterSentToPV','filterNotSentToPV','filterSentToPV','filterNotSentToPV'].forEach(id => { const el = document.getElementById(id); if (el) el.checked = false; });
       if (typeof applyFilterDefaults === 'function') applyFilterDefaults();
       window.location.hash = v.filters || '';
@@ -3253,7 +3267,7 @@
         if (inc.length) { filterDefs[key].selected = inc; any = true; }
         if (exc.length) { filterDefs[key].excluded = exc; any = true; }
       });
-      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding'].forEach(id => {
+      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding','solarStatus','solarMinKwp'].forEach(id => {
         const v = params.get(id);
         const el = document.getElementById(id);
         if (el && v != null) { el.value = v; any = true; }
