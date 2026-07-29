@@ -98,6 +98,8 @@ tbody tr.sel{background:#EEF2FF}
       <div class="page-sub">Google Ads Transparency Centre — does this domain run ads, and roughly how many?</div>
     </div>
     <div class="filters">
+      <button id="pauseAllBtn" class="btn ghost sm">⏸ Pause all</button>
+      <button id="resumeAllBtn" class="btn ghost sm">▶ Resume all</button>
       <button id="refreshBtn" class="btn ghost sm">Refresh</button>
     </div>
   </div>
@@ -171,6 +173,7 @@ tbody tr.sel{background:#EEF2FF}
       <span class="card-sub" id="resProgress"></span>
       <span style="flex:1"></span>
       <button class="btn ghost sm" id="pauseBtn">Pause</button>
+      <button class="btn ghost sm" id="cancelBtn">Cancel remaining</button>
       <button class="btn ghost sm" id="retryBtn">Retry errors</button>
       <button class="btn sm" id="pushPvBtn" style="background:#059669;border-color:#059669">🚀 Verify &amp; Push to PlusVibe</button>
       <button class="btn sm" id="exportBtn">Export CSV</button>
@@ -435,6 +438,21 @@ function progressBar(b) {
     <span class="muted nowrap" style="font-size:11px">${(b.done || 0).toLocaleString()}/${total.toLocaleString()}${errPct ? ` · ${b.errors} err` : ''}</span>
   </div>`;
 }
+// Pause/Resume only make sense while there's outstanding work; Cancel only
+// while something is still queued. Hiding the rest avoids no-op buttons.
+function rowActions(b) {
+  const pending = (b.queued || 0) + (b.running || 0);
+  const esc2 = (v) => esc(v).replace(/"/g, '&quot;');
+  const attrs = `data-id="${b.id}" data-name="${esc2(b.name || 'Untitled')}"`;
+  const out = [];
+  if (b.status === 'running' && pending) out.push(`<button class="btn ghost sm" data-act="pause" ${attrs}>Pause</button>`);
+  if (b.status === 'paused')             out.push(`<button class="btn ghost sm" data-act="resume" ${attrs}>Resume</button>`);
+  if (pending)                           out.push(`<button class="btn ghost sm" data-act="cancel" ${attrs}>Cancel</button>`);
+  if (b.errors)                          out.push(`<button class="btn ghost sm" data-act="retry-errors" ${attrs}>Retry ${b.errors}</button>`);
+  out.push(`<button class="btn danger sm" data-act="delete" ${attrs}>Delete</button>`);
+  return `<div style="display:flex;gap:.3rem">${out.join('')}</div>`;
+}
+
 const statusPill = (s) => `<span class="pill ${s === 'done' ? 'p-done' : s === 'paused' ? 'p-pause' : 'p-run'}">${esc(s)}</span>`;
 
 async function loadBatches() {
@@ -448,7 +466,7 @@ async function loadBatches() {
     $('#batchesWrap').innerHTML = `<div class="scroll" style="max-height:38vh"><table>
       <thead><tr><th>Name</th><th>Region</th><th style="min-width:200px">Progress</th>
         <th class="right">Runs ads</th><th class="right">No ads</th><th class="right">Errors</th>
-        <th>Status</th><th>Created</th></tr></thead>
+        <th>Status</th><th>Created</th><th>Actions</th></tr></thead>
       <tbody>${batches.map((b) => `
         <tr class="click ${b.id === selected ? 'sel' : ''}" data-id="${b.id}">
           <td><b>${esc(b.name || 'Untitled')}</b></td>
@@ -459,7 +477,23 @@ async function loadBatches() {
           <td class="right">${b.errors ? `<span class="pill p-err">${b.errors}</span>` : '<span class="muted">0</span>'}</td>
           <td>${statusPill(b.status)}</td>
           <td class="muted nowrap">${new Date(b.created_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</td>
+          <td class="nowrap" onclick="event.stopPropagation()">${rowActions(b)}</td>
         </tr>`).join('')}</tbody></table></div>`;
+    // Row actions act on THAT row, not on whatever happens to be selected.
+    $('#batchesWrap').querySelectorAll('[data-act]').forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const { act, id, name } = btn.dataset;
+        if (act === 'delete' && !confirm(`Delete "${name}" and all its results?`)) return;
+        if (act === 'cancel' && !confirm(`Cancel "${name}"? Queued domains are dropped; results already found are kept.`)) return;
+        btn.disabled = true;
+        try {
+          if (act === 'delete') { await api('/batches/' + id, { method: 'DELETE' }); if (selected === id) selected = null; toast('Batch deleted'); }
+          else { const r = await api(`/batches/${id}/${act}`, { method: 'POST' }); toast(act === 'cancel' ? `Cancelled — ${r.dropped} queued domain(s) dropped` : `Batch ${act}d`); }
+          await refresh();
+        } catch (err) { toast(err.message, true); btn.disabled = false; }
+      });
+    });
     $('#batchesWrap').querySelectorAll('tr.click').forEach((tr) => {
       tr.addEventListener('click', () => { selected = tr.dataset.id; offset = 0; refresh(); });
     });
@@ -554,6 +588,20 @@ let bandT;
 $('#prevPage').addEventListener('click', () => { offset = Math.max(0, offset - PAGE); loadJobs(); });
 $('#nextPage').addEventListener('click', () => { offset += PAGE; loadJobs(); });
 $('#refreshBtn').addEventListener('click', refresh);
+$('#pauseAllBtn').addEventListener('click', async () => {
+  try { const r = await api('/pause-all', { method: 'POST' }); toast(`Paused ${r.paused} batch(es)`); refresh(); }
+  catch (e) { toast(e.message, true); }
+});
+$('#resumeAllBtn').addEventListener('click', async () => {
+  try { const r = await api('/resume-all', { method: 'POST' }); toast(`Resumed ${r.resumed} batch(es)`); refresh(); }
+  catch (e) { toast(e.message, true); }
+});
+$('#cancelBtn').addEventListener('click', async () => {
+  const b = (window._batches || []).find((x) => x.id === selected);
+  if (!b || !confirm(`Cancel "${b.name || 'Untitled'}"? Queued domains are dropped; results already found are kept.`)) return;
+  try { const r = await api(`/batches/${selected}/cancel`, { method: 'POST' }); toast(`Cancelled — ${r.dropped} dropped`); refresh(); }
+  catch (e) { toast(e.message, true); }
+});
 
 $('#pauseBtn').addEventListener('click', async () => {
   const b = (window._batches || []).find((x) => x.id === selected);

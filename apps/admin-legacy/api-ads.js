@@ -340,6 +340,41 @@ module.exports = function adsAPI(getWorker) {
   router.post('/batches/:id/pause', setStatus('paused'));
   router.post('/batches/:id/resume', setStatus('running'));
 
+  // Stop a batch for good WITHOUT losing what it already found: drop everything
+  // still queued and close it. Distinct from pause (resumable) and delete
+  // (destroys the results too) — the middle option you want when a big batch is
+  // half-useful and you don't want it eating the queue any longer.
+  router.post('/batches/:id/cancel', async (req, res) => {
+    if (badId(req.params.id)) return res.status(400).json({ error: 'Invalid batch id' });
+    try {
+      const r = await req.db.query(
+        `DELETE FROM ads_jobs WHERE batch_id=$1 AND status='queued'`, [req.params.id]);
+      // Running jobs are mid-flight in a worker; let them land rather than
+      // orphaning them. Once they finish, nothing is left queued.
+      await req.db.query(
+        `UPDATE ads_batches SET status='done' WHERE id=$1`, [req.params.id]);
+      res.json({ ok: true, dropped: r.rowCount });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Global stop/start — one control when several batches are in flight.
+  router.post('/pause-all', async (req, res) => {
+    try {
+      const r = await req.db.query(`UPDATE ads_batches SET status='paused' WHERE status='running'`);
+      res.json({ ok: true, paused: r.rowCount });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+  router.post('/resume-all', async (req, res) => {
+    try {
+      // Only revive batches that still have work; a finished batch stays done.
+      const r = await req.db.query(
+        `UPDATE ads_batches b SET status='running'
+          WHERE b.status='paused'
+            AND EXISTS (SELECT 1 FROM ads_jobs j WHERE j.batch_id=b.id AND j.status IN ('queued','error'))`);
+      res.json({ ok: true, resumed: r.rowCount });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   router.post('/batches/:id/retry-errors', async (req, res) => {
     if (badId(req.params.id)) return res.status(400).json({ error: 'Invalid batch id' });
     try {
