@@ -15,7 +15,7 @@ const os = require('os');
 const { BrowserPool } = require('./browser');
 const { checkDomain, sleep } = require('./checkDomain');
 const { DOMAIN_NORM_SQL } = require('./schema');
-const { createSweep, cleanupEmptyBatches, getSetting } = require('./sweep');
+const { startSweepDetached, cleanupEmptyBatches, getSetting } = require('./sweep');
 
 const HEARTBEAT_MS = 15 * 1000;
 const SWEEP_MS = 60 * 1000;
@@ -140,13 +140,22 @@ class AdsWorker {
 
     if ((await getSetting(this.db, 'auto_sweep', 'off')) !== 'on') return;
 
-    // Outstanding work in ANY batch — including paused ones. Checking only
-    // 'running' batches would make "Pause all" useless: the worker would see an
-    // empty runnable queue, start a brand-new sweep and quietly undo the pause.
-    // A pause means stop, so continuous mode waits rather than working around it.
+    // "Pause all" sets an explicit flag. Honour that — otherwise continuous
+    // mode would start new work a minute later and quietly undo the pause.
+    // But a single OLD paused batch must NOT block continuous mode forever,
+    // which is why this is a deliberate flag rather than "is anything paused".
+    if ((await getSetting(this.db, 'global_pause', 'off')) === 'on') return;
+
+    // Runnable work only: jobs in batches that are actually running.
     const busy = await this.db.query(
-      `SELECT COUNT(*)::int AS n FROM ads_jobs WHERE status IN ('queued','running')`);
+      `SELECT COUNT(*)::int AS n FROM ads_jobs j JOIN ads_batches b ON b.id=j.batch_id
+        WHERE j.status IN ('queued','running') AND b.status IN ('running','building')`);
     if (busy.rows[0].n > 0) return;
+
+    // A sweep already being built counts as work in flight.
+    const building = await this.db.query(
+      `SELECT COUNT(*)::int AS n FROM ads_batches WHERE status='building'`);
+    if (building.rows[0].n > 0) return;
 
     // Claim the right to start one. now() - interval guards against two
     // replicas racing, and against a no-op sweep looping every minute.
@@ -157,13 +166,13 @@ class AdsWorker {
        RETURNING key`);
     if (!claim.rowCount) return;                  // another replica got it, or too soon
 
-    const r = await createSweep(this.db, {
+    const r = await startSweepDetached(this.db, {
       ukOnly: (await getSetting(this.db, 'auto_uk_only', 'on')) === 'on',
       staleDays: Number(await getSetting(this.db, 'auto_stale_days', '30')),
       cacheTtlDays: this.cacheTtlDays,
       auto: true,
     });
-    console.log(`[ads] continuous mode: queued ${r.total} domain(s)${r.cached ? `, ${r.cached} from cache` : ''}`);
+    console.log(`[ads] continuous mode: building sweep ${r.id}`);
   }
 
   /** Atomically take up to n queued jobs from non-paused batches. */

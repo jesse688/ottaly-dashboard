@@ -76,7 +76,7 @@ async function createSweep(db, { name, region = 'anywhere', ukOnly = true, stale
   if (client) await q(`SET statement_timeout = '900s'`);
 
   await q(
-    `INSERT INTO ads_batches (id, name, region, total, status) VALUES ($1,$2,$3,0,'running')`,
+    `INSERT INTO ads_batches (id, name, region, total, status) VALUES ($1,$2,$3,0,'building')`,
     [id, label, region]);
 
   // Pre-fill from the cross-batch cache where it's still fresh, so a re-run
@@ -100,7 +100,7 @@ async function createSweep(db, { name, region = 'anywhere', ukOnly = true, stale
       ON CONFLICT (batch_id, domain) DO NOTHING`,
     [id, staleDays, region, cacheTtlDays]);
 
-    await q(`UPDATE ads_batches SET total=$2 WHERE id=$1`, [id, rowCount]);
+    await q(`UPDATE ads_batches SET total=$2, status='running' WHERE id=$1`, [id, rowCount]);
 
     if (!rowCount) {
       // Nothing to do — drop the batch entirely rather than leaving an empty
@@ -130,6 +130,68 @@ async function createSweep(db, { name, region = 'anywhere', ukOnly = true, stale
 }
 
 /**
+ * Kick off a sweep in the background and return its batch id immediately.
+ * The batch sits in status 'building' until the insert completes, which the UI
+ * surfaces — a multi-minute query must not be held open across an HTTP request.
+ */
+async function startSweepDetached(db, opts = {}) {
+  const id = crypto.randomUUID();
+  await db.query(
+    `INSERT INTO ads_batches (id, name, region, total, status) VALUES ($1,$2,$3,0,'building')`,
+    [id, (opts.name || '').trim()
+      || `${opts.auto ? 'Auto sweep' : 'Full sweep'}${opts.ukOnly === false ? '' : ' (UK)'} — ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
+      opts.region || 'anywhere']);
+
+  // Detached on purpose: the caller gets the id now and polls the batch list.
+  fillSweep(db, id, opts)
+    .then((n) => console.log(`[ads] sweep ${id} built with ${n} domain(s)`))
+    .catch(async (e) => {
+      console.error('[ads] sweep build failed:', e.message);
+      await db.query(`DELETE FROM ads_batches WHERE id=$1`, [id]).catch(() => {});
+    });
+  return { id, building: true };
+}
+
+/** The expensive part of a sweep: populate an existing 'building' batch. */
+async function fillSweep(db, id, { region = 'anywhere', ukOnly = true, staleDays = 30, cacheTtlDays = 7 } = {}) {
+  const client = db.pool ? await db.pool.connect() : null;
+  const q = client ? (t, p) => client.query(t, p) : (t, p) => db.query(t, p);
+  try {
+    if (client) await q(`SET statement_timeout = '900s'`);
+    const { rowCount } = await q(
+      `INSERT INTO ads_jobs (batch_id, domain, status, runs_ads, ad_count, is_estimate, advertisers, updated_at)
+       SELECT $1, s.domain,
+              CASE WHEN dc.domain IS NOT NULL THEN 'done' ELSE 'queued' END,
+              dc.runs_ads, dc.ad_count, dc.is_estimate, dc.advertisers, now()
+         FROM (
+           SELECT DISTINCT ${DOMAIN_NORM_SQL} AS domain
+             FROM contacts
+            WHERE ${scopeSql(ukOnly)}
+              AND ($2::int <= 0 OR ads_checked_at IS NULL
+                   OR ads_checked_at < now() - ($2::int * interval '1 day'))
+         ) s
+         LEFT JOIN ads_domain_cache dc
+                ON dc.domain = s.domain AND dc.region = $3
+               AND $4::int > 0 AND dc.checked_at > now() - ($4::int * interval '1 day')
+        WHERE ${VALID_DOMAIN}
+        ON CONFLICT (batch_id, domain) DO NOTHING`,
+      [id, staleDays, region, cacheTtlDays]);
+
+    if (!rowCount) { await q(`DELETE FROM ads_batches WHERE id=$1`, [id]); return 0; }
+    await q(`UPDATE ads_batches SET total=$2, status='running' WHERE id=$1`, [id, rowCount]);
+    const c = await q(
+      `SELECT COUNT(*) FILTER (WHERE status='done')::int AS cached FROM ads_jobs WHERE batch_id=$1`, [id]);
+    if (c.rows[0].cached === rowCount) await q(`UPDATE ads_batches SET status='done' WHERE id=$1`, [id]);
+    return rowCount;
+  } finally {
+    if (client) {
+      await client.query(`SET statement_timeout = DEFAULT`).catch(() => {});
+      client.release();
+    }
+  }
+}
+
+/**
  * Remove sweep batches that were left empty by a failed/cancelled insert.
  * Safe: only touches batches that have no jobs at all.
  */
@@ -137,7 +199,8 @@ async function cleanupEmptyBatches(db) {
   const r = await db.query(
     `DELETE FROM ads_batches b
       WHERE NOT EXISTS (SELECT 1 FROM ads_jobs j WHERE j.batch_id = b.id)
-        AND b.created_at < now() - interval '2 minutes'`);
+        AND (b.status <> 'building' AND b.created_at < now() - interval '2 minutes'
+             OR b.status = 'building' AND b.created_at < now() - interval '30 minutes')`);
   return r.rowCount;
 }
 
@@ -154,4 +217,4 @@ async function setSetting(db, key, value) {
      ON CONFLICT (key) DO UPDATE SET value=$2, updated_at=now()`, [key, String(value)]);
 }
 
-module.exports = { createSweep, previewSweep, cleanupEmptyBatches, getSetting, setSetting, UK_FILTER };
+module.exports = { createSweep, startSweepDetached, fillSweep, previewSweep, cleanupEmptyBatches, getSetting, setSetting, UK_FILTER };

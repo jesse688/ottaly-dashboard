@@ -15,7 +15,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const { ensureSchema, DOMAIN_NORM_SQL } = require('./lib/adscheck/schema');
-const { createSweep, previewSweep, getSetting, setSetting } = require('./lib/adscheck/sweep');
+const { startSweepDetached, previewSweep, getSetting, setSetting } = require('./lib/adscheck/sweep');
 const { normalizeList, parseDomainText } = require('./lib/adscheck/normalize');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -145,14 +145,16 @@ module.exports = function adsAPI(getWorker) {
     const rawRegion = (region || process.env.ADS_REGION_DEFAULT || 'anywhere').trim();
     if (!REGION_RE.test(rawRegion)) return res.status(400).json({ error: 'Invalid region' });
     try {
-      const r = await createSweep(req.db, {
+      // Returns as soon as the batch row exists; the ~187k-domain insert runs
+      // detached and the batch shows as 'building' until it lands. Holding the
+      // request open would just hit the proxy's gateway timeout.
+      const r = await startSweepDetached(req.db, {
         name, region: rawRegion,
         ukOnly: uk_only !== false,
         staleDays: Number(stale_days ?? 30),
         cacheTtlDays: Number(process.env.ADS_CACHE_TTL_DAYS ?? 7),
       });
-      res.json({ ...r, region: rawRegion,
-        message: r.total ? undefined : 'Every domain has already been checked recently — nothing to queue.' });
+      res.json({ ...r, region: rawRegion });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -414,12 +416,16 @@ module.exports = function adsAPI(getWorker) {
   // Global stop/start — one control when several batches are in flight.
   router.post('/pause-all', async (req, res) => {
     try {
+      // Explicit flag, so continuous mode knows this was a deliberate global
+      // stop rather than just an empty runnable queue.
+      await setSetting(req.db, 'global_pause', 'on');
       const r = await req.db.query(`UPDATE ads_batches SET status='paused' WHERE status='running'`);
       res.json({ ok: true, paused: r.rowCount });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
   router.post('/resume-all', async (req, res) => {
     try {
+      await setSetting(req.db, 'global_pause', 'off');
       // Only revive batches that still have work; a finished batch stays done.
       const r = await req.db.query(
         `UPDATE ads_batches b SET status='running'

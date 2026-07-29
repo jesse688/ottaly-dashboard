@@ -455,7 +455,7 @@ function rowActions(b) {
   return `<div style="display:flex;gap:.3rem">${out.join('')}</div>`;
 }
 
-const statusPill = (s) => `<span class="pill ${s === 'done' ? 'p-done' : s === 'paused' ? 'p-pause' : 'p-run'}">${esc(s)}</span>`;
+const statusPill = (s) => `<span class="pill ${s === 'done' ? 'p-done' : s === 'paused' ? 'p-pause' : s === 'building' ? 'p-queue' : 'p-run'}">${esc(s === 'building' ? 'building…' : s)}</span>`;
 
 async function loadBatches() {
   try {
@@ -742,7 +742,7 @@ $('#sweepBtn').addEventListener('click', async () => {
   try {
     const r = await api('/sweep', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ uk_only: true, stale_days: 30 }) });
-    toast(r.total ? `Sweep queued — ${r.total.toLocaleString()} domains` : (r.message || 'Nothing to queue'));
+    toast(`Building the sweep — queueing ${p.to_check.toLocaleString()} domains. This takes a minute or two.`);
     selected = r.id; offset = 0; await refresh();
   } catch (e) { toast(e.message, true); }
 });
