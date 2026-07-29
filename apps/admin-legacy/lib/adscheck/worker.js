@@ -34,6 +34,18 @@ class AdsWorker {
     this.cacheTtlDays = num(process.env.ADS_CACHE_TTL_DAYS, 7);
     this.browsers = new BrowserPool({ idleMs: num(process.env.ADS_BROWSER_IDLE_MS, 5 * 60 * 1000) });
 
+    // Concurrency has to be judged PER EGRESS IP, not per worker. Google
+    // soft-throttles bursts from one address — the prototype measured ~40%
+    // render failures at 4 concurrent from a single IP. admin-legacy runs 2
+    // replicas, so a nominal concurrency of 3 is really 6 against one IP, which
+    // is exactly what produced 168 errors on a live batch.
+    //
+    // So: with no proxies configured, cap hard at DIRECT_MAX per worker. With
+    // proxies, each request leaves from a different IP and the cap lifts
+    // automatically — buy proxies and throughput scales with no config change.
+    this.configuredConcurrency = this.concurrency;
+    this.directMax = Math.max(1, num(process.env.ADS_DIRECT_CONCURRENCY, 2));
+
     this.running = false;
     this.inFlight = new Set();   // job ids currently being processed
     this.doneRecent = [];        // completion timestamps, for the throughput readout
@@ -199,9 +211,27 @@ class AdsWorker {
       [batchId]);
   }
 
+  /**
+   * Effective concurrency for the current egress situation. Recomputed each
+   * tick so it lifts the moment proxies become available (or drops back if they
+   * all die) without a restart.
+   */
+  effectiveConcurrency() {
+    const proxies = this.browsers.proxyContexts.length;
+    const eff = proxies > 0
+      ? Math.min(this.configuredConcurrency, Math.max(proxies, 1))
+      : Math.min(this.configuredConcurrency, this.directMax);
+    if (eff !== this.concurrency) {
+      console.log(`[ads] concurrency ${this.concurrency} → ${eff} `
+        + `(${proxies ? proxies + ' proxies' : 'direct — one IP'})`);
+      this.concurrency = eff;
+    }
+    return eff;
+  }
+
   async loop() {
     while (this.running) {
-      const slots = this.concurrency - this.inFlight.size;
+      const slots = this.effectiveConcurrency() - this.inFlight.size;
       let claimed = [];
       if (slots > 0) {
         try {
