@@ -21,9 +21,15 @@ const jitter = (a, b) => a + Math.floor(Math.random() * (b - a));
 async function checkOnce(context, domain, { region = 'anywhere', navTimeout = 30000, waitTimeout = 15000 } = {}) {
   const page = await context.newPage();
   try {
+    // Block everything that isn't needed to render the ad count. Proxies are
+    // billed by BANDWIDTH (Webshare), and this is a heavy Angular app — so
+    // stylesheets go too: we read document.body.innerText, which does not care
+    // how the page looks. Scripts and xhr/fetch MUST stay; the count is rendered
+    // client-side. Blocked types are also what made the direct path fast.
     await page.route('**/*', (route) => {
       const t = route.request().resourceType();
-      return (t === 'image' || t === 'media' || t === 'font') ? route.abort() : route.continue();
+      const drop = t === 'image' || t === 'media' || t === 'font' || t === 'stylesheet';
+      return drop ? route.abort() : route.continue();
     });
 
     // hl=en forces the English UI. Google otherwise localises by caller IP, and

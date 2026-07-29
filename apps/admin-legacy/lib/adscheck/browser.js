@@ -76,6 +76,49 @@ function findChromium() {
   return cachedPath;
 }
 
+// ── proxy list ────────────────────────────────────────────
+// Webshare's "download list" endpoint returns one `ip:port:user:pass` per line.
+// ADS_PROXY_LIST_URL holds the (secret) download URL; ADS_PROXY_LIST can hold
+// the same lines inline instead. Neither is ever committed.
+let proxyCache = null;
+
+function parseProxyLines(text) {
+  return String(text || '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith('#'))
+    .map((line) => {
+      const [host, port, username, password] = line.split(':');
+      if (!host || !port) return null;
+      return {
+        server: `http://${host}:${port}`,
+        ...(username ? { username, password: password || '' } : {}),
+        label: `${host}:${port}`,   // safe to log — no credentials
+      };
+    })
+    .filter(Boolean);
+}
+
+/** Load the proxy list once per process. Returns [] when no proxy is configured. */
+async function loadProxies() {
+  if (proxyCache) return proxyCache;
+  const inline = process.env.ADS_PROXY_LIST;
+  const url = process.env.ADS_PROXY_LIST_URL;
+  try {
+    if (inline && inline.trim()) proxyCache = parseProxyLines(inline);
+    else if (url && url.trim()) {
+      const r = await fetch(url.trim(), { signal: AbortSignal.timeout(20000) });
+      if (!r.ok) throw new Error(`proxy list HTTP ${r.status}`);
+      proxyCache = parseProxyLines(await r.text());
+    } else proxyCache = [];
+  } catch (err) {
+    console.warn('[ads] proxy list load failed:', err.message, '— falling back to the server IP');
+    proxyCache = [];
+  }
+  if (proxyCache.length) console.log(`[ads] ${proxyCache.length} proxies loaded (${proxyCache.map((p) => p.label).join(', ')})`);
+  return proxyCache;
+}
+
 class BrowserPool {
   constructor({ idleMs = 5 * 60 * 1000 } = {}) {
     this.idleMs = idleMs;
@@ -84,9 +127,26 @@ class BrowserPool {
     this.starting = null;
     this.lastUsed = 0;
     this.lastError = null;
+    // One context per proxy. Playwright sets the proxy per CONTEXT, so this is
+    // how a single browser gets N distinct egress IPs. Jobs round-robin across
+    // them, which keeps each IP well under Google's per-IP burst threshold.
+    this.proxyContexts = [];
+    this.rr = 0;
   }
 
   get ok() { return !!(this.browser && this.browser.isConnected()); }
+
+  /**
+   * Round-robin a context across the configured proxies. Falls back to the
+   * single direct context when no proxy list is set.
+   */
+  async nextContext() {
+    await this.getContext();               // ensures the browser is up
+    if (!this.proxyContexts.length) return this.context;
+    const ctx = this.proxyContexts[this.rr % this.proxyContexts.length];
+    this.rr++;
+    return ctx;
+  }
 
   /** Launch on demand; concurrent callers share one launch. */
   async getContext() {
@@ -98,28 +158,70 @@ class BrowserPool {
       await this.close(); // drop a disconnected browser before relaunching
       const executablePath = findChromium();
       try {
+        const proxies = await loadProxies();
         this.browser = await chromium.launch({
           headless: true,
           ...(executablePath ? { executablePath } : {}),
           // --no-sandbox is required running as root in the container; the
           // /dev/shm default (64 MB) is too small for Chromium under load.
           args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+          // Playwright only honours a PER-CONTEXT proxy if the browser was also
+          // launched with one. Without this placeholder every proxied context
+          // fails with ERR_TUNNEL_CONNECTION_FAILED — the credentials are never
+          // applied. The value is irrelevant since every context overrides it.
+          ...(proxies.length ? { proxy: { server: 'http://per-context' } } : {}),
         });
-        this.context = await this.browser.newContext({
+        // Locale MUST be pinned. Google localises the Transparency Centre by the
+        // caller's IP, so from the German datacentre it rendered "~600 Anzeigen"
+        // / "Bestätigt" instead of "600 ads" / "Verified" — the English-only
+        // signals never appeared and every job timed out. This matters even more
+        // with proxies, whose exit IPs land in arbitrary countries.
+        const contextOpts = {
           userAgent: UA,
           viewport: { width: 1280, height: 800 },
-          // MUST pin the locale. Google localises the Transparency Centre by the
-          // caller's IP, so from the German datacentre it renders "~600 Anzeigen"
-          // / "Bestätigt" instead of "600 ads" / "Verified" — the English-only
-          // signals never appear and every job times out. Playwright's `locale`
-          // sets Accept-Language and navigator.language; the explicit header is
-          // belt-and-braces.
           locale: 'en-GB',
           timezoneId: 'Europe/London',
           extraHTTPHeaders: { 'Accept-Language': 'en-GB,en;q=0.9' },
-        });
+        };
+        this.context = await this.browser.newContext(contextOpts);
+
+        // One context per proxy → N egress IPs from one browser. Each is health-
+        // checked before entering rotation: Webshare bills by BANDWIDTH, and an
+        // exhausted proxy answers every CONNECT with a tunnel failure. Left in
+        // rotation those look like Google throttling and poison the results, so
+        // they're excluded up front (a 25-byte check, negligible bandwidth).
+        this.proxyContexts = [];
+        this.deadProxies = [];
+        const checks = await Promise.all(proxies.map(async (proxy) => {
+          let ctx;
+          try {
+            ctx = await this.browser.newContext({ ...contextOpts, proxy });
+            const page = await ctx.newPage();
+            await page.goto('http://api.ipify.org/?format=json', { timeout: 20000, waitUntil: 'domcontentloaded' });
+            const body = await page.evaluate(() => document.body.innerText || '');
+            await page.close();
+            if (/bandwidth limit/i.test(body)) return { proxy, ctx, ok: false, why: 'bandwidth limit reached' };
+            if (!/"ip"/.test(body)) return { proxy, ctx, ok: false, why: `unexpected response: ${body.slice(0, 60)}` };
+            return { proxy, ctx, ok: true };
+          } catch (e) {
+            return { proxy, ctx, ok: false, why: e.message.split('\n')[0].slice(0, 80) };
+          }
+        }));
+        for (const c of checks) {
+          if (c.ok) this.proxyContexts.push(c.ctx);
+          else {
+            this.deadProxies.push({ label: c.proxy.label, why: c.why });
+            if (c.ctx) await c.ctx.close().catch(() => {});
+          }
+        }
+        if (this.deadProxies.length) {
+          console.warn(`[ads] ${this.deadProxies.length} proxy/proxies unusable: `
+            + this.deadProxies.map((d) => `${d.label} (${d.why})`).join(', '));
+        }
+
         this.lastError = null;
-        console.log(`[ads] chromium launched (${executablePath || 'playwright default'})`);
+        console.log(`[ads] chromium launched (${executablePath || 'playwright default'})`
+          + `, ${this.proxyContexts.length}/${proxies.length} proxies healthy`);
         return this.context;
       } catch (err) {
         this.lastError = err.message;
@@ -146,8 +248,10 @@ class BrowserPool {
     const b = this.browser;
     this.browser = null;
     this.context = null;
+    this.proxyContexts = [];
+    this.rr = 0;
     if (b) await b.close().catch(() => {});
   }
 }
 
-module.exports = { BrowserPool, findChromium, UA };
+module.exports = { BrowserPool, findChromium, loadProxies, parseProxyLines, UA };

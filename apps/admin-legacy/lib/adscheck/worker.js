@@ -118,7 +118,10 @@ class AdsWorker {
   async process(job) {
     let context;
     try {
-      context = await this.browsers.getContext();
+      // Round-robins across the proxy contexts, so consecutive jobs leave from
+      // different egress IPs. Falls back to the direct context when no proxy
+      // list is configured.
+      context = await this.browsers.nextContext();
     } catch (err) {
       // Browser can't launch (missing Chromium). Requeue rather than burning
       // the job through to 'error' — a redeploy with the binary should recover.

@@ -343,7 +343,16 @@ module.exports = function adsAPI(getWorker) {
         workers: w.rows,
         queue: q.rows[0],
         rate_per_min: +(q.rows[0].done_5m / 5).toFixed(1),
-        local_worker: local ? { id: local.id, running: local.running, in_flight: local.inFlight.size } : null,
+        local_worker: local ? {
+          id: local.id,
+          running: local.running,
+          in_flight: local.inFlight.size,
+          // Proxy health. Webshare bills by bandwidth, so an exhausted proxy is
+          // a routine, expected state — surface it rather than letting it look
+          // like Google throttling.
+          proxies_healthy: local.browsers.proxyContexts.length,
+          proxies_dead: (local.browsers.deadProxies || []).map((d) => `${d.label}: ${d.why}`),
+        } : null,
       });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
