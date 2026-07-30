@@ -15843,7 +15843,7 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
     // Same dedup/cooldown filter as /verify-and-push — per-workspace
     // 60-day cooldown + per-campaign skip. Verification is the caller's
     // job on this path (this endpoint is 'push without verify').
-    const cooloffDate = stampDaysAgo(pushGuardSettings().sameClientDays);
+    const cooloffDate = sameClientCooloffDate();
     const campaignNameLc = (req.body.campaign_name || '').toString().trim().toLowerCase();
     const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, verticalCollision: 0, burstGap: 0, densityCeiling: 0, alreadyInCampaign: 0, missingEnrichment: 0, missingName: 0 };
     const crossClientGuard = buildCrossClientGuard(workspace_id, req.body.workspace_name || '');
@@ -15876,7 +15876,7 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
           ? JSON.parse(c.emailed_workspaces || '{}')
           : (c.emailed_workspaces || {});
         const lastSent = emailed[workspace_id]?.last_sent;
-        if (lastSent && lastSent >= cooloffDate) { skipped.cooldownWorkspace++; return false; }
+        if (cooloffDate && lastSent && lastSent >= cooloffDate) { skipped.cooldownWorkspace++; return false; }
       }
       // Cross-client spacing: same vertical, then any client inside 30 days.
       if (!crossClientGuard(c, skipped)) return false;
@@ -16215,7 +16215,7 @@ app.post('/api/admin/flag-free-domain-contacts', requireAdmin, async (req, res) 
 
 // Shared contact→pushable filter (same rules as the PV path). Pure function.
 function filterPushableContacts(allContacts, { cooldownWorkspaceId, campaignName, allowedStatuses, pushWorkspaceId, workspaceName }) {
-  const cooloffDate = stampDaysAgo(pushGuardSettings().sameClientDays);
+  const cooloffDate = sameClientCooloffDate();
   const campaignNameLc = (campaignName || '').toString().trim().toLowerCase();
   const skipped = { unsafe: 0, dnc: 0, freeDomain: 0, cooldownWorkspace: 0, verticalCollision: 0, burstGap: 0, densityCeiling: 0, alreadyInCampaign: 0, missingEnrichment: 0, missingName: 0 };
   // Guard against the workspace actually being pushed to; cooldownWorkspaceId
@@ -16840,6 +16840,8 @@ app.get('/api/admin/push-guards', requireSession, (_req, res) => {
   } catch {}
   res.json({
     settings: pushGuardSettings(),
+    // Windows only — deliberately no `enabled`, so "Restore defaults" resets
+    // the numbers without silently flipping the master switch back on.
     defaults: { ...PUSH_GUARD_DEFAULTS },
     coverage: { configured, withVertical },
   });
@@ -16856,6 +16858,9 @@ app.post('/api/admin/push-guards', requireAdmin, (req, res) => {
       ? toPositiveNumber(incoming[key], current[key] ?? fallback)
       : (current[key] ?? fallback);
   }
+  // The master switch. Absent = leave as-is; only a literal false disables, so
+  // the windows above are preserved and come straight back when re-enabled.
+  next.enabled = 'enabled' in incoming ? incoming.enabled !== false : current.enabled;
   try {
     db.prepare(`INSERT INTO app_meta (key, value) VALUES ('push_guard_settings', ?)
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(JSON.stringify(next));
@@ -17038,6 +17043,12 @@ const PUSH_GUARD_DEFAULTS = Object.freeze({
   ceilingWindowDays:   30,  // …inside this rolling window
 });
 
+// Master off-switch, stored alongside the windows. Kept separate from the
+// numbers because zeroing them does NOT disable the rules: a 0-month vertical
+// lockout still blocks a peer pushed today, and a 0-day cooldown still blocks
+// a same-day re-push. Only an explicit flag can mean "let everything through".
+const PUSH_GUARDS_ENABLED_DEFAULT = true;
+
 function toPositiveNumber(value, fallback) {
   const n = Number(value);
   return Number.isFinite(n) && n >= 0 ? n : fallback;
@@ -17047,7 +17058,9 @@ function toPositiveNumber(value, fallback) {
 // bad JSON, or any individual field being absent/garbage — a broken settings
 // blob must never disable the guards.
 function pushGuardSettings() {
-  if (!db) return { ...PUSH_GUARD_DEFAULTS };
+  // No DB → defaults, guards ON. `enabled` is set explicitly so every return
+  // path carries the key; callers must never see it as undefined.
+  if (!db) return { ...PUSH_GUARD_DEFAULTS, enabled: PUSH_GUARDS_ENABLED_DEFAULT };
   let saved = {};
   try {
     const row = db.prepare("SELECT value FROM app_meta WHERE key = 'push_guard_settings'").get();
@@ -17057,11 +17070,22 @@ function pushGuardSettings() {
   for (const [key, fallback] of Object.entries(PUSH_GUARD_DEFAULTS)) {
     out[key] = toPositiveNumber(saved[key], fallback);
   }
+  // Only an explicit `false` turns the guards off — a missing or garbage value
+  // leaves them on, so a corrupt blob can never silently unguard every push.
+  out.enabled = saved.enabled === false ? false : PUSH_GUARDS_ENABLED_DEFAULT;
   return out;
 }
 
 function stampDaysAgo(days) {
   return new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+}
+
+// Cutoff for the same-client cooldown, or null when the guards are switched
+// off. Call sites treat null as "no cooldown" — never as a date, because any
+// real stamp sorts >= '' and an empty string would block every push instead.
+function sameClientCooloffDate() {
+  const settings = pushGuardSettings();
+  return settings.enabled ? stampDaysAgo(settings.sameClientDays) : null;
 }
 
 function stampMonthsAgo(months) {
@@ -17091,6 +17115,9 @@ function parseEmailedWorkspaces(contact) {
 // Returns (contact, skipped) => boolean, mutating `skipped` for reporting.
 function buildCrossClientGuard(workspaceId, workspaceName) {
   const settings = pushGuardSettings();
+  // Master switch off → every contact passes. Returned before any lookup so
+  // the disabled path costs nothing and can't trip on a bad client_verticals row.
+  if (!settings.enabled) return () => true;
   const burstCutoff   = stampDaysAgo(settings.burstGapDays);
   const ceilingCutoff = stampDaysAgo(settings.ceilingWindowDays);
   const vertical = detectVertical(workspaceName || '', workspaceId);
@@ -18518,7 +18545,7 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
       const campaignVertical = detectVertical((job.campaign_name || '') + ' ' + (job.workspace_name || ''), job.workspace_id);
       const crossClientGuard = buildCrossClientGuard(job.workspace_id || '', job.workspace_name || '');
       const today        = new Date().toISOString().slice(0, 10);
-      const cooloffDate  = stampDaysAgo(pushGuardSettings().sameClientDays);
+      const cooloffDate  = sameClientCooloffDate();
       const targetCampLc = (job.campaign_name || '').trim().toLowerCase();
 
       const passesFilter = (c) => {
@@ -18602,7 +18629,7 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
         if (job.workspace_id) {
           const emailed = typeof c.emailed_workspaces === 'string'
             ? JSON.parse(c.emailed_workspaces || '{}') : (c.emailed_workspaces || {});
-          if (emailed[job.workspace_id]?.last_sent >= cooloffDate) { skipped.cooldownWorkspace++; return false; }
+          if (cooloffDate && emailed[job.workspace_id]?.last_sent >= cooloffDate) { skipped.cooldownWorkspace++; return false; }
         }
         if (campaignVertical) {
           const snoozes = Array.isArray(c.snoozed_verticals)
@@ -19074,7 +19101,7 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
       const campaignVertical = detectVertical((job.campaign_name || '') + ' ' + (job.workspace_name || ''), job.workspace_id);
       const crossClientGuard = buildCrossClientGuard(job.workspace_id || '', job.workspace_name || '');
       const today       = new Date().toISOString().slice(0, 10);
-      const cooloffDate = stampDaysAgo(pushGuardSettings().sameClientDays);
+      const cooloffDate = sameClientCooloffDate();
       const targetCampLc = (job.campaign_name || '').trim().toLowerCase();
 
       const passesFilter = (c) => {
@@ -19105,7 +19132,7 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
         if (job.workspace_id) {
           const emailed = typeof c.emailed_workspaces === 'string'
             ? JSON.parse(c.emailed_workspaces || '{}') : (c.emailed_workspaces || {});
-          if (emailed[job.workspace_id]?.last_sent >= cooloffDate) { skipped.cooldownWorkspace++; return false; }
+          if (cooloffDate && emailed[job.workspace_id]?.last_sent >= cooloffDate) { skipped.cooldownWorkspace++; return false; }
         }
         if (campaignVertical) {
           const snoozes = Array.isArray(c.snoozed_verticals)

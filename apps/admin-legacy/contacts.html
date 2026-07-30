@@ -1447,7 +1447,7 @@
             </div>
             <div id="columnPickerList" style="max-height:340px;overflow-y:auto;padding:4px 0;"></div>
           </div>
-          <button class="btn btn-secondary" onclick="openSendRules()" title="Set how often the same contact may be pushed — across your clients, within a vertical, and how tightly pushes may cluster." style="font-size:12px;padding:7px 12px;">⚙ Send Rules</button>
+          <button id="sendRulesBtn" class="btn btn-secondary" onclick="openSendRules()" title="Set how often the same contact may be pushed — across your clients, within a vertical, and how tightly pushes may cluster." style="font-size:12px;padding:7px 12px;">⚙ Send Rules</button>
           <button class="btn btn-primary" onclick="switchToImportTab()">Import CSV</button>
           <button class="btn" onclick="switchToImportTab(); setTimeout(() => document.getElementById('deleteCsvDropZone').scrollIntoView({behavior:'smooth'}), 100)" style="background:#dc2626;color:white;">Delete from CSV</button>
           <button class="btn btn-secondary" id="exportBtn" onclick="startApolloExport()">⬇ Apollo Export</button>
@@ -1734,9 +1734,15 @@
         Applied at push time, before any lead reaches PlusVibe. Changes take effect on the next push — nothing already in PlusVibe is affected.
       </div>
 
+      <!-- Master switch. Disabling keeps the windows below intact so they come
+           straight back when re-enabled — it never rewrites the numbers. -->
+      <div id="srDisabledBanner" style="display:none;font-size:12px;background:#fee2e2;border:1px solid #fecaca;color:#991b1b;border-radius:8px;padding:10px 12px;margin-bottom:16px">
+        <b>All send rules are off.</b> Every push goes through unguarded — no cooldown, no competitor lockout, no burst or density limit. The windows below are kept and will apply again when you re-enable.
+      </div>
+
       <div id="srCoverage" style="display:none;font-size:12px;background:#fef3c7;border:1px solid #fde68a;color:#92400e;border-radius:8px;padding:10px 12px;margin-bottom:16px"></div>
 
-      <div style="display:flex;flex-direction:column;gap:14px">
+      <div id="srFields" style="display:flex;flex-direction:column;gap:14px">
         <label style="display:block">
           <div style="font-size:13px;font-weight:600;color:#374151">Same client — cooldown</div>
           <div style="font-size:11px;color:#6b7280;margin-bottom:6px">How long before this client may push the same contact again.</div>
@@ -1779,7 +1785,10 @@
       <div id="srStatus" style="font-size:12px;margin-top:14px;min-height:16px"></div>
 
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:14px">
-        <button onclick="resetSendRules()" style="font-size:12px;padding:8px 12px;border:1px solid #d1d5db;border-radius:8px;background:#fff;cursor:pointer;color:#6b7280">Restore defaults</button>
+        <span style="display:flex;gap:8px">
+          <button id="srToggleBtn" onclick="toggleSendRulesEnabled()" style="font-size:12px;padding:8px 12px;border:1px solid #d1d5db;border-radius:8px;background:#fff;cursor:pointer"></button>
+          <button onclick="resetSendRules()" style="font-size:12px;padding:8px 12px;border:1px solid #d1d5db;border-radius:8px;background:#fff;cursor:pointer;color:#6b7280">Restore defaults</button>
+        </span>
         <span style="display:flex;gap:8px">
           <button onclick="closeSendRules()" style="font-size:13px;padding:8px 16px;border:1px solid #d1d5db;border-radius:8px;background:#fff;cursor:pointer">Cancel</button>
           <button id="srSaveBtn" onclick="saveSendRules()" style="font-size:13px;padding:8px 16px;border:none;border-radius:8px;background:#224388;color:#fff;cursor:pointer;font-weight:600">Save rules</button>
@@ -3465,12 +3474,60 @@
       srCeilingWindowDays:    'ceilingWindowDays',
     };
     let _sendRuleDefaults = null;
+    let _sendRulesEnabled = true;   // master switch, mirrored from the server
 
     function srFill(settings) {
       for (const [inputId, key] of Object.entries(SR_FIELDS)) {
         const el = document.getElementById(inputId);
         if (el && settings[key] != null) el.value = settings[key];
       }
+    }
+
+    // Paint the master-switch state. The inputs stay populated when off — the
+    // values are still saved, just not enforced — so re-enabling restores them.
+    function srRenderEnabled() {
+      const on = _sendRulesEnabled;
+      document.getElementById('srDisabledBanner').style.display = on ? 'none' : 'block';
+      const fields = document.getElementById('srFields');
+      fields.style.opacity = on ? '1' : '.45';
+      fields.querySelectorAll('input').forEach(i => { i.disabled = !on; });
+      const btn = document.getElementById('srToggleBtn');
+      btn.textContent = on ? 'Disable all rules' : 'Re-enable rules';
+      btn.style.color       = on ? '#b91c1c' : '#166534';
+      btn.style.borderColor = on ? '#fecaca' : '#bbf7d0';
+      // The toolbar badge is deliberately NOT repainted here — it tracks the
+      // saved state, and this runs on unsaved toggles too.
+      // A stale coverage note about the vertical rule is noise while it's off.
+      if (!on) document.getElementById('srCoverage').style.display = 'none';
+    }
+
+    // Surface an unguarded state on the toolbar, so it's visible without
+    // opening the modal — pushing with the guards off is easy to forget.
+    function srPaintToolbar(enabled) {
+      const btn = document.getElementById('sendRulesBtn');
+      if (!btn) return;
+      btn.textContent = enabled ? '⚙ Send Rules' : '⚠ Send Rules: OFF';
+      btn.style.color       = enabled ? '' : '#b91c1c';
+      btn.style.borderColor = enabled ? '' : '#fecaca';
+      btn.style.fontWeight  = enabled ? '' : '700';
+    }
+
+    async function srRefreshToolbar() {
+      try {
+        const r = await fetch('/api/admin/push-guards');
+        const d = await r.json();
+        srPaintToolbar((d.settings || {}).enabled !== false);
+      } catch { /* leave the default label on a failed probe */ }
+    }
+
+    function toggleSendRulesEnabled() {
+      _sendRulesEnabled = !_sendRulesEnabled;
+      srRenderEnabled();
+      const status = document.getElementById('srStatus');
+      status.textContent = _sendRulesEnabled
+        ? 'Rules re-enabled — press Save rules to apply.'
+        : 'All rules will be switched off — press Save rules to apply.';
+      status.style.color = _sendRulesEnabled ? '#6b7280' : '#b91c1c';
     }
 
     async function openSendRules() {
@@ -3484,6 +3541,8 @@
         if (d.error) throw new Error(d.error);
         _sendRuleDefaults = d.defaults || null;
         srFill(d.settings || {});
+        // Absent flag = on, matching the server's fail-safe reading.
+        _sendRulesEnabled = (d.settings || {}).enabled !== false;
         status.textContent = '';
         // The vertical rule can only see clients configured in client_verticals.
         // Surface thin coverage rather than letting the rule quietly no-op.
@@ -3498,6 +3557,7 @@
         } else {
           warn.style.display = 'none';
         }
+        srRenderEnabled();   // last, so it can hide the note above when off
       } catch (e) {
         status.textContent = 'Could not load current rules: ' + e.message;
         status.style.color = '#b91c1c';
@@ -3517,12 +3577,15 @@
     async function saveSendRules() {
       const btn = document.getElementById('srSaveBtn');
       const status = document.getElementById('srStatus');
-      const payload = {};
+      const payload = { enabled: _sendRulesEnabled };
       for (const [inputId, key] of Object.entries(SR_FIELDS)) {
         const el = document.getElementById(inputId);
         if (!el) continue;
         const n = Number(el.value);
         if (!Number.isFinite(n) || n < 0) {
+          // While the rules are off the numbers aren't enforced, so a bad one
+          // must not block saving the off-state. Drop it and keep the stored value.
+          if (!_sendRulesEnabled) continue;
           status.textContent = 'Every value must be a number of 0 or more.';
           status.style.color = '#b91c1c';
           el.focus();
@@ -3530,7 +3593,7 @@
         }
         payload[key] = n;
       }
-      if (payload.ceilingWindowDays < 1) {
+      if (_sendRulesEnabled && payload.ceilingWindowDays < 1) {
         status.textContent = 'The density window must be at least 1 day. Set the client count to 0 to switch that rule off instead.';
         status.style.color = '#b91c1c';
         return;
@@ -3544,8 +3607,15 @@
         const d = await r.json();
         if (d.error) throw new Error(d.error);
         srFill(d.settings || payload);
+        _sendRulesEnabled = (d.settings || payload).enabled !== false;
+        srPaintToolbar(_sendRulesEnabled);
         closeSendRules();
-        if (typeof showMessage === 'function') showMessage('Send rules saved — applied from the next push.', 'success');
+        if (typeof showMessage === 'function') showMessage(
+          _sendRulesEnabled
+            ? 'Send rules saved — applied from the next push.'
+            : 'Send rules disabled — pushes are unguarded from the next push.',
+          // No 'warning' class exists; 'error' carries the right weight here.
+          _sendRulesEnabled ? 'success' : 'error');
       } catch (e) {
         status.textContent = 'Save failed: ' + e.message;
         status.style.color = '#b91c1c';
@@ -5972,6 +6042,7 @@
     initCollapsibleFilters();
     initFilterClearButtons();
     loadFilterDefaults();   // apply admin-configured provider/gateway defaults
+    srRefreshToolbar();     // flag the toolbar if the send rules are switched off
     loadDistinctValues();
     loadClients();
     loadSavedViews();
