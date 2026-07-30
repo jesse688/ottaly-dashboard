@@ -16858,9 +16858,12 @@ app.post('/api/admin/push-guards', requireAdmin, (req, res) => {
       ? toPositiveNumber(incoming[key], current[key] ?? fallback)
       : (current[key] ?? fallback);
   }
-  // The master switch. Absent = leave as-is; only a literal false disables, so
+  // The two switches. Absent = leave as-is; only a literal false disables, so
   // the windows above are preserved and come straight back when re-enabled.
   next.enabled = 'enabled' in incoming ? incoming.enabled !== false : current.enabled;
+  next.sameClientEnabled = 'sameClientEnabled' in incoming
+    ? incoming.sameClientEnabled !== false
+    : current.sameClientEnabled;
   try {
     db.prepare(`INSERT INTO app_meta (key, value) VALUES ('push_guard_settings', ?)
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(JSON.stringify(next));
@@ -17043,11 +17046,22 @@ const PUSH_GUARD_DEFAULTS = Object.freeze({
   ceilingWindowDays:   30,  // …inside this rolling window
 });
 
-// Master off-switch, stored alongside the windows. Kept separate from the
+// Two off-switches, stored alongside the windows. Kept separate from the
 // numbers because zeroing them does NOT disable the rules: a 0-month vertical
 // lockout still blocks a peer pushed today, and a 0-day cooldown still blocks
 // a same-day re-push. Only an explicit flag can mean "let everything through".
+//
+// They're split because the two kinds of rule protect different things:
+//   enabled           → the three CROSS-CLIENT rules (vertical lockout, burst
+//                       gap, density ceiling). Competitive-collision policy.
+//   sameClientEnabled → the same-client cooldown, i.e. one client re-pushing
+//                       a contact they already emailed. This is the baseline
+//                       "don't pester your own prospect" rule and is standard,
+//                       so switching the cross-client rules off must NOT take
+//                       it down with them.
+// Both default to on, and each needs its own explicit false to disable.
 const PUSH_GUARDS_ENABLED_DEFAULT = true;
+const SAME_CLIENT_GUARD_ENABLED_DEFAULT = true;
 
 function toPositiveNumber(value, fallback) {
   const n = Number(value);
@@ -17060,7 +17074,11 @@ function toPositiveNumber(value, fallback) {
 function pushGuardSettings() {
   // No DB → defaults, guards ON. `enabled` is set explicitly so every return
   // path carries the key; callers must never see it as undefined.
-  if (!db) return { ...PUSH_GUARD_DEFAULTS, enabled: PUSH_GUARDS_ENABLED_DEFAULT };
+  if (!db) return {
+    ...PUSH_GUARD_DEFAULTS,
+    enabled: PUSH_GUARDS_ENABLED_DEFAULT,
+    sameClientEnabled: SAME_CLIENT_GUARD_ENABLED_DEFAULT,
+  };
   let saved = {};
   try {
     const row = db.prepare("SELECT value FROM app_meta WHERE key = 'push_guard_settings'").get();
@@ -17070,9 +17088,11 @@ function pushGuardSettings() {
   for (const [key, fallback] of Object.entries(PUSH_GUARD_DEFAULTS)) {
     out[key] = toPositiveNumber(saved[key], fallback);
   }
-  // Only an explicit `false` turns the guards off — a missing or garbage value
-  // leaves them on, so a corrupt blob can never silently unguard every push.
+  // Only an explicit `false` turns a guard off — a missing or garbage value
+  // leaves it on, so a corrupt blob can never silently unguard every push.
   out.enabled = saved.enabled === false ? false : PUSH_GUARDS_ENABLED_DEFAULT;
+  out.sameClientEnabled = saved.sameClientEnabled === false
+    ? false : SAME_CLIENT_GUARD_ENABLED_DEFAULT;
   return out;
 }
 
@@ -17080,12 +17100,14 @@ function stampDaysAgo(days) {
   return new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
 }
 
-// Cutoff for the same-client cooldown, or null when the guards are switched
-// off. Call sites treat null as "no cooldown" — never as a date, because any
-// real stamp sorts >= '' and an empty string would block every push instead.
+// Cutoff for the same-client cooldown, or null when that cooldown is off.
+// Gated on sameClientEnabled ONLY — deliberately not on `enabled`, so
+// switching the cross-client rules off leaves this baseline rule standing.
+// Call sites treat null as "no cooldown" — never as a date, because any real
+// stamp sorts >= '' and an empty string would block every push instead.
 function sameClientCooloffDate() {
   const settings = pushGuardSettings();
-  return settings.enabled ? stampDaysAgo(settings.sameClientDays) : null;
+  return settings.sameClientEnabled ? stampDaysAgo(settings.sameClientDays) : null;
 }
 
 function stampMonthsAgo(months) {

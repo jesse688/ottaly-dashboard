@@ -1737,21 +1737,32 @@
       <!-- Master switch. Disabling keeps the windows below intact so they come
            straight back when re-enabled — it never rewrites the numbers. -->
       <div id="srDisabledBanner" style="display:none;font-size:12px;background:#fee2e2;border:1px solid #fecaca;color:#991b1b;border-radius:8px;padding:10px 12px;margin-bottom:16px">
-        <b>All send rules are off.</b> Every push goes through unguarded — no cooldown, no competitor lockout, no burst or density limit. The windows below are kept and will apply again when you re-enable.
+        <b>Cross-client rules are off.</b> Nothing stops two different clients hitting the same contact — no competitor lockout, no burst gap, no density limit. The windows are kept and apply again when you re-enable. The same-client cooldown below is separate and unaffected.
       </div>
 
       <div id="srCoverage" style="display:none;font-size:12px;background:#fef3c7;border:1px solid #fde68a;color:#92400e;border-radius:8px;padding:10px 12px;margin-bottom:16px"></div>
 
-      <div id="srFields" style="display:flex;flex-direction:column;gap:14px">
-        <label style="display:block">
+      <!-- The baseline rule: one client re-pushing their own contact. Kept
+           OUTSIDE #srFields so the cross-client off-switch never greys it out. -->
+      <div style="border:1px solid #e5e7eb;border-radius:10px;padding:12px 14px;margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
           <div style="font-size:13px;font-weight:600;color:#374151">Same client — cooldown</div>
-          <div style="font-size:11px;color:#6b7280;margin-bottom:6px">How long before this client may push the same contact again.</div>
-          <div style="display:flex;align-items:center;gap:8px">
-            <input type="number" min="0" id="srSameClientDays" style="width:90px;padding:7px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px">
-            <span style="font-size:12px;color:#6b7280">days</span>
-          </div>
-        </label>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#6b7280;cursor:pointer">
+            <input type="checkbox" id="srSameClientEnabled" onchange="srRenderEnabled()" style="cursor:pointer">
+            <span>on</span>
+          </label>
+        </div>
+        <div style="font-size:11px;color:#6b7280;margin:4px 0 6px">How long before this client may push the same contact again. Standard protection — independent of the cross-client rules.</div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <input type="number" min="0" id="srSameClientDays" style="width:90px;padding:7px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px">
+          <span style="font-size:12px;color:#6b7280">days</span>
+        </div>
+        <div id="srSameClientOff" style="display:none;font-size:11px;color:#991b1b;margin-top:8px">⚠ Off — a client can re-push a contact they already emailed, with no waiting period.</div>
+      </div>
 
+      <div style="font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">Cross-client rules</div>
+
+      <div id="srFields" style="display:flex;flex-direction:column;gap:14px">
         <label style="display:block">
           <div style="font-size:13px;font-weight:600;color:#374151">Same vertical — lockout</div>
           <div style="font-size:11px;color:#6b7280;margin-bottom:6px">Blocks a <em>different</em> client in the same vertical. The competitive-collision rule. A client with its own snooze_months overrides this.</div>
@@ -3488,11 +3499,17 @@
     function srRenderEnabled() {
       const on = _sendRulesEnabled;
       document.getElementById('srDisabledBanner').style.display = on ? 'none' : 'block';
+      // Only the cross-client block is greyed — #srFields excludes the
+      // same-client cooldown, which has its own independent checkbox.
       const fields = document.getElementById('srFields');
       fields.style.opacity = on ? '1' : '.45';
       fields.querySelectorAll('input').forEach(i => { i.disabled = !on; });
+      // Same-client cooldown: its input follows its own checkbox, not `on`.
+      const scOn = document.getElementById('srSameClientEnabled').checked;
+      document.getElementById('srSameClientDays').disabled = !scOn;
+      document.getElementById('srSameClientOff').style.display = scOn ? 'none' : 'block';
       const btn = document.getElementById('srToggleBtn');
-      btn.textContent = on ? 'Disable all rules' : 'Re-enable rules';
+      btn.textContent = on ? 'Disable cross-client rules' : 'Re-enable cross-client rules';
       btn.style.color       = on ? '#b91c1c' : '#166534';
       btn.style.borderColor = on ? '#fecaca' : '#bbf7d0';
       // The toolbar badge is deliberately NOT repainted here — it tracks the
@@ -3503,10 +3520,14 @@
 
     // Surface an unguarded state on the toolbar, so it's visible without
     // opening the modal — pushing with the guards off is easy to forget.
-    function srPaintToolbar(enabled) {
+    // Three states, because "cross-client off but cooldown on" is a normal
+    // working setup and shouldn't scream the same as fully unguarded.
+    function srPaintToolbar(enabled, sameClientEnabled) {
       const btn = document.getElementById('sendRulesBtn');
       if (!btn) return;
-      btn.textContent = enabled ? '⚙ Send Rules' : '⚠ Send Rules: OFF';
+      const allOff = !enabled && !sameClientEnabled;
+      btn.textContent = enabled ? '⚙ Send Rules'
+        : (allOff ? '⚠ Send Rules: ALL OFF' : '⚠ Cross-client: OFF');
       btn.style.color       = enabled ? '' : '#b91c1c';
       btn.style.borderColor = enabled ? '' : '#fecaca';
       btn.style.fontWeight  = enabled ? '' : '700';
@@ -3516,7 +3537,8 @@
       try {
         const r = await fetch('/api/admin/push-guards');
         const d = await r.json();
-        srPaintToolbar((d.settings || {}).enabled !== false);
+        const s = d.settings || {};
+        srPaintToolbar(s.enabled !== false, s.sameClientEnabled !== false);
       } catch { /* leave the default label on a failed probe */ }
     }
 
@@ -3525,8 +3547,8 @@
       srRenderEnabled();
       const status = document.getElementById('srStatus');
       status.textContent = _sendRulesEnabled
-        ? 'Rules re-enabled — press Save rules to apply.'
-        : 'All rules will be switched off — press Save rules to apply.';
+        ? 'Cross-client rules re-enabled — press Save rules to apply.'
+        : 'Cross-client rules will be switched off — press Save rules to apply.';
       status.style.color = _sendRulesEnabled ? '#6b7280' : '#b91c1c';
     }
 
@@ -3543,6 +3565,8 @@
         srFill(d.settings || {});
         // Absent flag = on, matching the server's fail-safe reading.
         _sendRulesEnabled = (d.settings || {}).enabled !== false;
+        document.getElementById('srSameClientEnabled').checked =
+          (d.settings || {}).sameClientEnabled !== false;
         status.textContent = '';
         // The vertical rule can only see clients configured in client_verticals.
         // Surface thin coverage rather than letting the rule quietly no-op.
@@ -3577,15 +3601,21 @@
     async function saveSendRules() {
       const btn = document.getElementById('srSaveBtn');
       const status = document.getElementById('srStatus');
-      const payload = { enabled: _sendRulesEnabled };
+      const payload = {
+        enabled: _sendRulesEnabled,
+        sameClientEnabled: document.getElementById('srSameClientEnabled').checked,
+      };
       for (const [inputId, key] of Object.entries(SR_FIELDS)) {
         const el = document.getElementById(inputId);
         if (!el) continue;
         const n = Number(el.value);
         if (!Number.isFinite(n) || n < 0) {
-          // While the rules are off the numbers aren't enforced, so a bad one
-          // must not block saving the off-state. Drop it and keep the stored value.
-          if (!_sendRulesEnabled) continue;
+          // An unenforced number must not block saving. The cooldown field is
+          // governed by its OWN toggle; the rest by the cross-client switch.
+          const governed = inputId === 'srSameClientDays'
+            ? document.getElementById('srSameClientEnabled').checked
+            : _sendRulesEnabled;
+          if (!governed) continue;
           status.textContent = 'Every value must be a number of 0 or more.';
           status.style.color = '#b91c1c';
           el.focus();
@@ -3607,15 +3637,20 @@
         const d = await r.json();
         if (d.error) throw new Error(d.error);
         srFill(d.settings || payload);
-        _sendRulesEnabled = (d.settings || payload).enabled !== false;
-        srPaintToolbar(_sendRulesEnabled);
+        const savedS = d.settings || payload;
+        _sendRulesEnabled = savedS.enabled !== false;
+        const scOn = savedS.sameClientEnabled !== false;
+        srPaintToolbar(_sendRulesEnabled, scOn);
         closeSendRules();
         if (typeof showMessage === 'function') showMessage(
           _sendRulesEnabled
             ? 'Send rules saved — applied from the next push.'
-            : 'Send rules disabled — pushes are unguarded from the next push.',
-          // No 'warning' class exists; 'error' carries the right weight here.
-          _sendRulesEnabled ? 'success' : 'error');
+            : (scOn
+                ? 'Cross-client rules off — the same-client cooldown still applies.'
+                : 'All send rules off — pushes are fully unguarded from the next push.'),
+          // No 'warning' class exists. Only fully-unguarded warrants 'error';
+          // cross-client-off with the cooldown intact is a normal setup.
+          (_sendRulesEnabled || scOn) ? 'success' : 'error');
       } catch (e) {
         status.textContent = 'Save failed: ' + e.message;
         status.style.color = '#b91c1c';
