@@ -1628,6 +1628,12 @@
           <span style="color:#d1d5db">·</span>
           <span id="vtUnknown" style="color:#9ca3af">— unknown</span>
           <span style="color:#d1d5db;margin-left:6px">|</span>
+          <!-- Verifier health: hourly self-test. Click for the full report. -->
+          <span id="verifierHealth" onclick="showVerifierReport()" title="Checking verifier…"
+                style="font-size:11px;cursor:pointer;display:inline-flex;align-items:center;gap:4px;padding:1px 7px;border-radius:999px;border:1px solid #e5e7eb;color:#6b7280">
+            <span id="verifierDot" style="width:7px;height:7px;border-radius:50%;background:#d1d5db;display:inline-block"></span>
+            <span id="verifierLabel">Verifier…</span>
+          </span>
           <span id="reaPool" style="color:#6b7280;font-size:11px">Reacher: —</span>
           <span id="reaTestBtns" style="display:none;gap:4px;align-items:center"></span>
         </div>
@@ -2495,6 +2501,62 @@
     let allCity = [];
     let allState = [];
     let allCountry = [];
+
+    // ── Verifier health indicator ─────────────────────────────────────────
+    // Green/amber/red dot driven by /api/verifier-health, which self-tests at
+    // most hourly. Amber matters as much as red: a verifier that is UP but
+    // timing out returns 'unknown' for most contacts, which looks like a bad
+    // list rather than an outage.
+    let _verifierReport = null;
+
+    function renderVerifierHealth(r) {
+      _verifierReport = r;
+      const dot   = document.getElementById('verifierDot');
+      const label = document.getElementById('verifierLabel');
+      const wrap  = document.getElementById('verifierHealth');
+      if (!dot || !label || !wrap) return;
+      const map = {
+        ok:       { c: '#16a34a', bg: '#f0fdf4', bd: '#bbf7d0', t: 'Verifier OK' },
+        degraded: { c: '#b45309', bg: '#fffbeb', bd: '#fde68a', t: 'Verifier degraded' },
+        down:     { c: '#b91c1c', bg: '#fef2f2', bd: '#fecaca', t: 'Verifier DOWN' },
+      };
+      const s = map[r.status] || map.down;
+      dot.style.background   = s.c;
+      label.textContent      = s.t;
+      wrap.style.color       = s.c;
+      wrap.style.background  = s.bg;
+      wrap.style.borderColor = s.bd;
+      wrap.style.fontWeight  = r.status === 'ok' ? '' : '700';
+      const when = r.checkedAt ? new Date(r.checkedAt).toLocaleTimeString() : '';
+      wrap.title = (r.reasons && r.reasons.length ? r.reasons.join('\n') : 'All checks passed')
+        + (when ? `\n\nLast checked ${when}. Click for details.` : '');
+    }
+
+    async function loadVerifierHealth(force) {
+      try {
+        const r = await fetch('/api/verifier-health' + (force ? '?force=1' : '')).then(x => x.json());
+        renderVerifierHealth(r);
+      } catch {
+        renderVerifierHealth({ status: 'down', reasons: ['Could not reach the health endpoint.'] });
+      }
+    }
+
+    function showVerifierReport() {
+      const r = _verifierReport;
+      if (!r) return;
+      const pct = ((r.failureRatio || 0) * 100).toFixed(1);
+      const lines = [
+        `Status: ${String(r.status || '').toUpperCase()}`,
+        `Checked: ${r.checkedAt ? new Date(r.checkedAt).toLocaleString() : '—'}`,
+        '',
+        `Calls today: ${(r.usageToday || 0).toLocaleString()}`,
+        `Failed calls: ${(r.failureCount || 0).toLocaleString()} (${pct}%)`,
+        r.probe ? `Live probe: ${r.probe.ok ? 'OK' : 'FAILED'}${r.probe.ms != null ? ` in ${r.probe.ms}ms` : ''} (HTTP ${r.probe.status || '—'})` : 'Live probe: not run',
+        '',
+        (r.reasons && r.reasons.length) ? 'Why:\n- ' + r.reasons.join('\n- ') : 'All checks passed.',
+      ];
+      alert(lines.join('\n'));
+    }
 
     async function loadVerifiedToday() {
       try {
@@ -6078,6 +6140,8 @@
     initFilterClearButtons();
     loadFilterDefaults();   // apply admin-configured provider/gateway defaults
     srRefreshToolbar();     // flag the toolbar if the send rules are switched off
+    loadVerifierHealth();                                     // verifier dot on load
+    setInterval(() => loadVerifierHealth(), 60 * 60 * 1000);  // …and hourly after
     loadDistinctValues();
     loadClients();
     loadSavedViews();

@@ -18333,6 +18333,92 @@ app.get('/api/reacher-pool', requireSession, async (req, res) => {
   }
 });
 
+// ── Verifier health ───────────────────────────────────────────────────────
+// Hourly self-test so a degraded verifier is visible BEFORE a push burns a
+// list. Reacher answering at all is not enough: it can be up and still time
+// out on most calls, which lands every contact in 'unknown' and silently
+// halves a push's yield. So health = live probe + today's failure ratio.
+const VERIFIER_HEALTH_TTL_MS = 60 * 60 * 1000;   // re-test at most hourly
+let _verifierHealth = null;                       // last computed report
+
+// A timeout ratio this high means most contacts come back 'unknown'.
+const VERIFIER_FAIL_RATIO_DEGRADED = 0.10;
+const VERIFIER_FAIL_RATIO_DOWN     = 0.35;
+
+async function computeVerifierHealth() {
+  const finderPort = process.env.EMAIL_FINDER_INTERNAL_PORT || '5055';
+  const report = {
+    checkedAt: new Date().toISOString(),
+    status: 'down',            // 'ok' | 'degraded' | 'down'
+    reasons: [],
+    probe: null,
+    usageToday: 0,
+    failureCount: 0,
+    failureRatio: 0,
+    lastError: '',
+  };
+
+  // 1. Pool counters — how many calls failed today vs succeeded.
+  try {
+    const r = await fetch(`http://127.0.0.1:${finderPort}/api/reacher-pool`,
+      { signal: AbortSignal.timeout(10000) });
+    const d = await r.json();
+    const m = (d.pool || [])[0] || {};
+    report.usageToday   = m.usageToday || 0;
+    report.failureCount = m.failureCount || 0;
+    report.lastError    = m.lastError || '';
+    const attempts = report.usageToday + report.failureCount;
+    report.failureRatio = attempts ? report.failureCount / attempts : 0;
+  } catch (e) {
+    report.reasons.push(`Could not read verifier pool counters: ${e.message}`);
+  }
+
+  // 2. Live end-to-end probe against a mailbox we know exists.
+  try {
+    const t0 = Date.now();
+    const r = await fetch(`http://127.0.0.1:${finderPort}/api/reacher-pool-test/primary`,
+      { signal: AbortSignal.timeout(70000) });
+    const d = await r.json();
+    report.probe = { ok: !!d.ok, status: d.status || 0, ms: Date.now() - t0 };
+    if (!d.ok) report.reasons.push(`Live probe failed (HTTP ${d.status || '—'}): ${String(d.error || d.body || '').slice(0, 200)}`);
+  } catch (e) {
+    report.probe = { ok: false, status: 0, ms: null };
+    report.reasons.push(`Live probe did not complete: ${e.message}`);
+  }
+
+  // 3. Verdict. A dead probe is fatal; otherwise the failure ratio decides,
+  //    because "up but timing out" is the failure mode that actually bites.
+  const pct = (report.failureRatio * 100).toFixed(1);
+  if (!report.probe || !report.probe.ok) {
+    report.status = 'down';
+  } else if (report.failureRatio >= VERIFIER_FAIL_RATIO_DOWN) {
+    report.status = 'down';
+    report.reasons.push(`${pct}% of verifier calls failed today (${report.failureCount} of ${report.usageToday + report.failureCount}). Most contacts will come back "unknown" instead of a real verdict.`);
+  } else if (report.failureRatio >= VERIFIER_FAIL_RATIO_DEGRADED) {
+    report.status = 'degraded';
+    report.reasons.push(`${pct}% of verifier calls failed today (${report.failureCount} of ${report.usageToday + report.failureCount}). Yield will be lower than normal.`);
+  } else {
+    report.status = 'ok';
+  }
+  if (report.lastError && report.status !== 'ok') {
+    report.reasons.push(`Most recent verifier error: ${report.lastError}`);
+  }
+  return report;
+}
+
+app.get('/api/verifier-health', requireSession, async (req, res) => {
+  const force = req.query.force === '1';
+  const fresh = _verifierHealth &&
+    (Date.now() - new Date(_verifierHealth.checkedAt).getTime()) < VERIFIER_HEALTH_TTL_MS;
+  if (fresh && !force) return res.json({ ..._verifierHealth, cached: true });
+  try {
+    _verifierHealth = await computeVerifierHealth();
+    res.json({ ..._verifierHealth, cached: false });
+  } catch (e) {
+    res.status(500).json({ status: 'down', reasons: [e.message], checkedAt: new Date().toISOString() });
+  }
+});
+
 app.get('/api/reacher-pool-test/:label', requireSession, async (req, res) => {
   try {
     const finderPort = process.env.EMAIL_FINDER_INTERNAL_PORT || '5055';
@@ -18851,8 +18937,22 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
         job.etaSeconds = rate > 0 ? Math.round((needsVerify.length - doneCount) / rate) : null;
       };
 
-      // Count already-verified stats
-      alreadyVerified.forEach(c => { const s = c.email_status || 'unknown'; job[s] = (job[s] || 0) + 1; });
+      // Already-verified contacts are ALREADY counted: verifyResults was
+      // pre-populated with their stored email_status above, and the live tally
+      // recomputes every chip from verifyResults. Incrementing job[s] here too
+      // counted them twice — a list with many cached 'invalid' rows showed a
+      // wildly inflated invalid chip (85% on screen vs 2% in the DB), which
+      // reads as a broken verifier. Seed the chips from verifyResults instead,
+      // so they're correct before the first live result lands.
+      const seedCountsFromVerifyResults = () => {
+        const all = Object.values(verifyResults);
+        job.safe          = all.filter(s => s === 'safe').length;
+        job.safe_catchall = all.filter(s => s === 'safe_catchall').length;
+        job.risky         = all.filter(s => s === 'risky').length;
+        job.invalid       = all.filter(s => s === 'invalid').length;
+        job.unknown       = all.filter(s => s === 'unknown').length;
+      };
+      seedCountsFromVerifyResults();
 
       // ── Phase 1: push already-verified contacts immediately ────
       const alreadyPassing = alreadyVerified.filter(passesFilter);
@@ -19295,7 +19395,17 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
         job.etaSeconds = rate > 0 ? Math.round((needsVerify.length - doneCount) / rate) : null;
       };
 
-      alreadyVerified.forEach(c => { const s = c.email_status || 'unknown'; job[s] = (job[s] || 0) + 1; });
+      // Same double-count as the verify-and-push path: verifyResults is already
+      // seeded with these contacts' stored status, and the live tally recomputes
+      // from it — so incrementing job[s] here counted them a second time.
+      {
+        const all = Object.values(verifyResults);
+        job.safe          = all.filter(s => s === 'safe').length;
+        job.safe_catchall = all.filter(s => s === 'safe_catchall').length;
+        job.risky         = all.filter(s => s === 'risky').length;
+        job.invalid       = all.filter(s => s === 'invalid').length;
+        job.unknown       = all.filter(s => s === 'unknown').length;
+      }
 
       const alreadyPassing = alreadyVerified.filter(passesFilter);
       if (alreadyPassing.length) {
