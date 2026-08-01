@@ -1,1 +1,1 @@
-redeploy: 2026-07-27 reply resolves via stored PV id + unthreaded last-resort send (kills SEND MANUALLY)
+redeploy: 2026-08-01 pg pool-slot leak fix — query/statement timeouts + keepAlive, pool telemetry, mark-as-lead early release
