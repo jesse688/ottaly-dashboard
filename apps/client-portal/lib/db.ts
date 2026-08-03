@@ -5,6 +5,7 @@ declare global {
   var _portalPgPool: Pool | undefined
   var _portalMigrated: boolean | undefined
   var _portalMigratedPromise: Promise<void> | undefined
+  var _portalPoolMonitor: ReturnType<typeof setInterval> | undefined
 }
 
 function createPool() {
@@ -19,9 +20,37 @@ function createPool() {
     idleTimeoutMillis: 30000,
     // Ride out brief contention before failing the acquire (was 5s).
     connectionTimeoutMillis: 10000,
+
+    // === Pool-slot leak guard (portal outages 2026-07-22 and 2026-08-01) ===
+    // pg's defaults are statement_timeout:false, query_timeout:false and
+    // keepAlive:false, which means an in-flight query has NO deadline. If the
+    // TCP socket dies SILENTLY (no FIN/RST — NAT idle-reap, container network
+    // blip) the query promise never settles: it neither resolves nor rejects.
+    // The caller's `finally { client.release() }` therefore never runs and that
+    // pool slot is stranded permanently. Ten of those over a day and every
+    // DB-backed route fails at exactly connectionTimeoutMillis (10s) until the
+    // process restarts. Confirmed by pg_stat_activity showing only 5-7 live
+    // connections while the app believed all 10 were checked out.
+    //
+    // keepAlive stops the strand happening; the timeouts guarantee recovery if
+    // it happens anyway. statement_timeout sits BELOW query_timeout so a slow
+    // but healthy query dies server-side with a clean error (connection stays
+    // reusable) and the client-side read timeout only fires on a dead socket.
+    // NOTE: 60s must exceed the slowest SINGLE query. Cron budgets (classify
+    // 90s, pv-reconcile 200s) are whole-run wall-clock over many short queries,
+    // so they are unaffected. Raise a genuinely long statement per-transaction
+    // with `SET LOCAL statement_timeout` rather than lifting this global.
+    statement_timeout: Number(process.env.PG_STATEMENT_TIMEOUT_MS) || 60000,
+    query_timeout: Number(process.env.PG_QUERY_TIMEOUT_MS) || 65000,
+    idle_in_transaction_session_timeout: 120000,
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10000,
+    maxUses: 7500,
   })
   // A dropped idle connection (DB restart / network blip) emits 'error' on the
   // pool; without a listener Node kills the process. Log and let pg recover.
+  // NB: this fires for IDLE clients only — a stranded CHECKED-OUT client never
+  // reaches here, which is why the timeouts above are the actual safety net.
   pool.on('error', (err) => console.error('[db] idle client error:', err.message))
   return pool
 }
@@ -32,6 +61,30 @@ function createPool() {
 // exhaustion. One shared pool per process is correct in all envs.
 const pool = globalThis._portalPgPool ?? createPool()
 globalThis._portalPgPool = pool
+
+// Pool telemetry. Both prior outages were diagnosed only after clients were
+// already locked out, because nothing recorded the pool draining. Log the
+// counts periodically so a slow leak is visible in the container logs BEFORE it
+// reaches zero, and shout loudly once callers start queueing for a slot.
+//   total   = connections the pool owns (checked out + idle)
+//   idle    = ready to hand out
+//   waiting = callers blocked in acquire — sustained >0 means exhaustion
+if (!globalThis._portalPoolMonitor) {
+  const max = Number(process.env.PG_POOL_MAX) || 10
+  globalThis._portalPoolMonitor = setInterval(() => {
+    const { totalCount: total, idleCount: idle, waitingCount: waiting } = pool
+    // A stranded slot is one the pool owns but that is neither idle nor doing
+    // work for a waiting caller — the leak signature. Surface it directly.
+    const busy = total - idle
+    if (waiting > 0 || busy >= max) {
+      console.error(`[db] POOL PRESSURE total=${total}/${max} idle=${idle} busy=${busy} waiting=${waiting}`)
+    } else if (process.env.PG_POOL_LOG === '1') {
+      console.log(`[db] pool total=${total}/${max} idle=${idle} busy=${busy} waiting=${waiting}`)
+    }
+  }, 60000)
+  // Never hold the event loop open on this timer alone.
+  globalThis._portalPoolMonitor.unref?.()
+}
 
 // Run migration once per process start
 async function runMigration() {

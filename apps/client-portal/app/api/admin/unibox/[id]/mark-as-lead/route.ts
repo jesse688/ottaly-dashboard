@@ -30,6 +30,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   } catch { /* no body */ }
 
   const client = await pool.connect()
+  // Released either early (right after COMMIT, so the best-effort enrichment tail
+  // doesn't pin a pool slot) or by the `finally`. Guarded so it only ever counts
+  // once and so the error path can tell whether the client is still usable.
+  let released = false
+  const releaseOnce = () => {
+    if (released) return
+    released = true
+    client.release()
+  }
   try {
     await client.query('BEGIN')
 
@@ -213,6 +222,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     await client.query('COMMIT')
 
+    // Hand the connection back the moment the transaction is done. Everything
+    // below is best-effort external I/O (Companies House, website scrape, PV,
+    // email) plus helpers that take their OWN pool connection via pool.query().
+    // Holding this one across all of that pinned a slot for the whole chain and,
+    // because those helpers re-enter the pool, N concurrent mark-as-lead calls
+    // could each hold one slot while waiting for a second — self-deadlocking the
+    // pool until connectionTimeoutMillis fired. The `finally` below is a no-op
+    // after this (pg's release() is idempotent once already returned).
+    releaseOnce()
+
     // Enrich from our contacts DB — pull the full record (linkedin, industry, city,
     // address, seniority, phone) we have on this email but never pushed to Bison, now
     // that it's an interested lead. Best-effort, after commit.
@@ -284,10 +303,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     return NextResponse.json({ ok: true, clientId, charges, bison_tag_state: tagState })
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {})
+    // Only roll back while we still hold the client. Past the early release the
+    // transaction is already committed and the client is back in the pool —
+    // querying it there throws synchronously ("client has already been
+    // released"), which .catch() would NOT swallow and would mask the real error.
+    if (!released) {
+      try { await client.query('ROLLBACK') } catch { /* connection already gone */ }
+    }
     console.error('[admin/unibox/mark-as-lead] error:', err)
     return NextResponse.json({ error: String(err) }, { status: 500 })
   } finally {
-    client.release()
+    releaseOnce()
   }
 }
