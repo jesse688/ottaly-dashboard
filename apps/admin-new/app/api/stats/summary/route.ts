@@ -2,7 +2,7 @@ import { type NextRequest, NextResponse } from 'next/server'
 import * as Sentry from '@sentry/nextjs'
 import pool from '@/lib/db'
 import { getActiveWorkspaceIds } from '@/lib/active-clients'
-import '@/lib/cache-warming' // Initialize cache warming on first import
+import { perfCacheUpdatedAt } from '@/lib/cache-warming' // also initialises cache warming on first import
 
 interface DayData {
   date: string
@@ -193,13 +193,25 @@ export async function GET(req: NextRequest) {
     // Sort by reply volume descending
     workspaces.sort((a, b) => b.totals.replies - a.totals.replies)
 
+    // Report the REAL cache age, not the time we served the request. This was
+    // `new Date()`, so the page said "Updated just now" over rows that had been
+    // frozen for hours when the warm loop died (2026-08-04). `partial` was
+    // hardcoded false for the same reason — nothing could ever surface staleness.
+    const cacheUpdatedAt = await perfCacheUpdatedAt(start, end)
+    const todayStr = new Date().toISOString().slice(0, 10)
+    const coversToday = start <= todayStr && todayStr <= end
+    const cacheAgeMs = cacheUpdatedAt ? Date.now() - Date.parse(cacheUpdatedAt) : Infinity
+    // Today's rows are on a 5-minute TTL; past ~15 minutes the warm loop is not
+    // keeping up and these numbers are understated.
+    const partial = coversToday && cacheAgeMs > 15 * 60 * 1000
+
     return NextResponse.json({
       workspaces,
       dates,
       start,
       end,
-      partial: false,
-      updatedAt: new Date().toISOString(),
+      partial,
+      updatedAt: cacheUpdatedAt ?? new Date().toISOString(),
     })
   } catch (err) {
     // Capture to Sentry (not a silent console.error) and return an informative
