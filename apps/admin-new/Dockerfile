@@ -11,6 +11,15 @@ RUN npm install --legacy-peer-deps
 FROM base AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
+# Cache-bust: copy the deploy-trigger FIRST and stamp it into an ARG so every
+# deploy whose trigger changed invalidates the source COPY + build below. Without
+# this, EasyPanel's Docker layer cache serves a stale `COPY apps/admin-new .` and
+# `npm run build` — the deploy "succeeds" in seconds but runs OLD code. Bump
+# apps/admin-new/.deploy-trigger to force a real rebuild. (Same guard client-portal
+# needed in #37.)
+COPY apps/admin-new/.deploy-trigger ./.deploy-trigger
+ARG CACHE_BUST=unset
+RUN echo "build for: ${CACHE_BUST}" && cat ./.deploy-trigger
 COPY apps/admin-new .
 ENV NEXT_TELEMETRY_DISABLED=1
 # Suppress Sentry source-map upload during build (no auth token in CI)
