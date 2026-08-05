@@ -1001,14 +1001,23 @@
         </div>
 
         <div class="filter-section" data-clear="scrapeTag">
-          <div class="filter-label">Scrape batch / tag</div>
-          <div class="filter-control">
-            <input type="text" id="scrapeTag" placeholder="e.g. Care homes — Leeds, or ch_scraper">
+          <div class="filter-label">Where the lead came from</div>
+          <div class="filter-control" style="display:flex;flex-direction:column;gap:6px;">
+            <select id="sourceFilter" title="Which import produced this lead.">
+              <option value="">📥 Any source</option>
+              <option value="commoncrawl">🕸️ Common Crawl (scraped)</option>
+              <option value="apollo_csv">Apollo CSV</option>
+              <option value="plusvibe">PlusVibe</option>
+              <option value="plusvibe_csv">PlusVibe CSV</option>
+              <option value="engine">Engine</option>
+              <option value="ch_scraper">CH scraper</option>
+            </select>
+            <input type="text" id="scrapeTag" placeholder="…or a specific batch tag, e.g. Care homes — Leeds">
           </div>
         </div>
 
         <div class="filter-section" data-clear="industry">
-          <div class="filter-label">Industry</div>
+          <div class="filter-label" title="Broad industry label from the data provider. Use this for everyday targeting; use 'Industry (SIC code)' below when you need an exact official classification.">Industry (general)</div>
           <div class="filter-control">
             <div class="multi-select" id="industryContainer">
               <div class="multi-select-input" id="industryInput" style="cursor:text;">
@@ -1225,18 +1234,6 @@
               <option value="unknown">❓ Unknown</option>
             </select>
 
-            <!-- Where the lead came from. Lets you isolate (or exclude) a single
-                 import batch — e.g. everything the Common Crawl pipeline added. -->
-            <select id="sourceFilter" title="Which import produced this lead.">
-              <option value="">📥 Data source — all</option>
-              <option value="commoncrawl">🕸️ Common Crawl (scraped)</option>
-              <option value="apollo_csv">Apollo CSV</option>
-              <option value="plusvibe">PlusVibe</option>
-              <option value="plusvibe_csv">PlusVibe CSV</option>
-              <option value="engine">Engine</option>
-              <option value="ch_scraper">CH scraper</option>
-            </select>
-
             <!-- Companies House enrichment. Only populated for pipeline leads;
                  older imports leave these blank, so choosing a value excludes them. -->
             <select id="companyAgeBand" title="Company age from the Companies House incorporation date.">
@@ -1248,18 +1245,12 @@
               <option value="legacy (25y+)">🏰 Legacy (25y+)</option>
             </select>
 
-            <select id="ownsFreehold" title="Freehold property owned, matched on company number in HM Land Registry (CCOD). A freeholder can authorise works; a leaseholder usually cannot.">
-              <option value="">🏠 Freehold — all</option>
-              <option value="yes">✅ Owns freehold</option>
-              <option value="no">❌ No freehold</option>
-            </select>
-
-            <select id="companyStatus" title="Companies House status.">
-              <option value="">📋 CH status — all</option>
-              <option value="Active">✅ Active</option>
-              <option value="Liquidation">⚠️ Liquidation</option>
-            </select>
-
+            <!-- NB: no separate freehold or CH-status dropdown here. Building
+                 ownership is already covered by #ccodOwnsBuilding and CH status
+                 by #chStatusFilter; adding parallel controls for the same thing
+                 gives two ways to ask one question and they disagree. The
+                 pipeline's freehold/status values populate those existing
+                 filters instead. -->
             <select id="chVerified" title="Whether the Companies House match was corroborated by company name or postcode. Unverified leads have a valid email but no trustworthy company data — avoid personalising on company name.">
               <option value="">🔍 CH match — all</option>
               <option value="yes">✅ Verified</option>
@@ -1321,7 +1312,7 @@
         </div>
 
         <div class="filter-section" data-clear="status">
-          <div class="filter-label">Status</div>
+          <div class="filter-label" title="How this lead has responded to outreach — not the company's Companies House status.">Lead status (outreach)</div>
           <select id="status">
             <option value="">All statuses</option>
             <option value="new">New</option>
@@ -1333,11 +1324,11 @@
         </div>
 
         <div class="filter-section" data-clear="ch-status">
-          <div class="filter-label">Company Status (CH)</div>
+          <div class="filter-label" title="Whether the company is still trading, from Companies House — not the lead's outreach status.">Company trading status</div>
           <select id="chStatusFilter">
             <option value="">Any</option>
-            <option value="active">Active</option>
-            <option value="not active">Not Active</option>
+            <option value="active">✅ Active (trading)</option>
+            <option value="not active">⚠️ Dissolved / liquidation</option>
           </select>
         </div>
 
@@ -2905,11 +2896,11 @@
         adsMinCount: get('adsMinCount'),
         adsMaxCount: get('adsMaxCount'),
         ownsBuilding: get('ownsBuilding'),
-        // Common Crawl pipeline: provenance + Companies House enrichment
+        // Common Crawl pipeline: provenance + Companies House enrichment.
+        // Freehold and CH status deliberately reuse ccodOwnsBuilding /
+        // chStatusFilter rather than adding parallel controls.
         source: get('sourceFilter'),
         companyAgeBand: get('companyAgeBand'),
-        ownsFreehold: get('ownsFreehold'),
-        companyStatus: get('companyStatus'),
         chVerified: get('chVerified'),
         ccodOwnsBuilding: get('ccodOwnsBuilding'),
         solarStatus: get('solarStatus'),

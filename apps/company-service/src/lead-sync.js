@@ -252,6 +252,12 @@ export async function syncLeadsToContacts(opts = {}) {
           industry: chVerified ? sicToIndustry(r.sic_codes) : null,
           city: chVerified ? (r.post_town || null) : null,
           phone: r.phones?.[0] || null,
+          // Populate the columns the EXISTING contacts-page filters read, rather
+          // than adding parallel ones: ccod_owns_building backs the "Building
+          // ownership" filter, company_age_band the age filter.
+          ccod_owns_building: chVerified ? (r.owns_freehold ? 'yes' : 'no') : null,
+          company_age_band: ageBand(ageYears),
+          ch_verified: chVerified,
           raw: {
             domain: r.domain,
             scraped_source: 'commoncrawl',
@@ -288,17 +294,20 @@ export async function syncLeadsToContacts(opts = {}) {
       const slice = out.slice(i, i + CHUNK)
       const vals = [], params = []
       slice.forEach((c, n) => {
-        const o = n * 11
-        vals.push(`($${o+1},$${o+2},$${o+3},$${o+4},$${o+5},$${o+6},$${o+7},$${o+8},$${o+9},$${o+10},$${o+11})`)
+        const o = n * 14
+        vals.push(`(${Array.from({length: 14}, (_, k) => '$' + (o + k + 1)).join(',')})`)
         params.push(WORKSPACE, c.email, c.first, c.last, c.company_name,
-                    c.company_domain, c.industry, c.city, c.phone, SOURCE, JSON.stringify(c.raw))
+                    c.company_domain, c.industry, c.city, c.phone, SOURCE,
+                    c.ccod_owns_building, c.company_age_band, c.ch_verified,
+                    JSON.stringify(c.raw))
       })
       // DO NOTHING, never DO UPDATE: an existing row may already carry
       // emailed_workspaces / sent_count and must not be touched.
       const res = await pool.query(
         `INSERT INTO contacts
            (workspace_id, email, first_name, last_name, company_name,
-            company_domain, industry, city, phone, source, raw_data)
+            company_domain, industry, city, phone, source,
+            ccod_owns_building, company_age_band, ch_verified, raw_data)
          VALUES ${vals.join(',')}
          ON CONFLICT (workspace_id, email) DO NOTHING`, params)
       inserted += res.rowCount
