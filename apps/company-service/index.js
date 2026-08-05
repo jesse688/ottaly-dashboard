@@ -429,6 +429,108 @@ app.get('/lead-pipeline', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
+// ── Lead pipeline auto-queue ──
+// Keeps scraper-service fed from cc_domains (Common Crawl domains matched to
+// Companies House). Without this the queue has to be topped up by hand from a
+// workstation, which does not scale to ~800k domains.
+//
+// LOW_WATER/BATCH are deliberately conservative: a pending backlog is wasted
+// work if the batch turns out to be bad, and scraper-service claims one job at
+// a time anyway.
+const AUTOQ = {
+  enabled: process.env.LEAD_AUTOQUEUE !== '0',
+  lowWater: Number(process.env.LEAD_QUEUE_LOW_WATER || 2000),
+  batch: Number(process.env.LEAD_QUEUE_BATCH || 5000),
+  lastRun: null, lastQueued: 0, lastError: null,
+}
+
+/** Move `n` unqueued cc_domains rows into a new scrape job. Returns how many. */
+async function topUpLeadQueue(n) {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    // FOR UPDATE SKIP LOCKED so two concurrent top-ups can't claim the same
+    // domains. 'exact' first — see cc-match notes on tier quality.
+    const { rows: picks } = await client.query(`
+      SELECT domain, company_number, company_name
+        FROM cc_domains
+       WHERE queued_at IS NULL
+       ORDER BY CASE confidence WHEN 'exact' THEN 1 WHEN 'pdl' THEN 2
+                                WHEN 'first2' THEN 3 ELSE 4 END, domain
+       LIMIT $1
+         FOR UPDATE SKIP LOCKED`, [n])
+    if (!picks.length) { await client.query('ROLLBACK'); return 0 }
+
+    const { rows: [job] } = await client.query(
+      `INSERT INTO scrape_jobs (label, status, total, source, fields)
+       VALUES ($1,'queued',$2,'list',$3) RETURNING id`,
+      [`auto: commoncrawl ${new Date().toISOString().slice(0, 10)}`, picks.length,
+       ['emails', 'phones', 'address']])
+
+    const vals = [], params = []
+    picks.forEach((p, i) => {
+      const o = i * 4
+      vals.push(`($${o+1},$${o+2},$${o+3},$${o+4})`)
+      params.push(job.id, p.company_number, p.company_name, p.domain)
+    })
+    await client.query(
+      `INSERT INTO scrape_job_items (job_id, company_number, company_name, domain)
+       VALUES ${vals.join(',')}`, params)
+
+    await client.query(
+      `UPDATE cc_domains SET queued_at = now() WHERE domain = ANY($1)`,
+      [picks.map(p => p.domain)])
+
+    await client.query('COMMIT')
+    return picks.length
+  } catch (e) {
+    await client.query('ROLLBACK'); throw e
+  } finally { client.release() }
+}
+
+app.get('/lead-queue/status', async (req, res) => {
+  try {
+    const { rows: [d] } = await pool.query(`
+      SELECT (SELECT COUNT(*) FROM cc_domains)                        AS total,
+             (SELECT COUNT(*) FROM cc_domains WHERE queued_at IS NULL) AS remaining,
+             (SELECT COUNT(*) FROM scrape_job_items WHERE status='pending') AS pending`)
+    res.json({
+      total: +d.total, remaining: +d.remaining, pending: +d.pending,
+      auto: { enabled: AUTOQ.enabled, low_water: AUTOQ.lowWater, batch: AUTOQ.batch,
+              last_run: AUTOQ.lastRun, last_queued: AUTOQ.lastQueued, last_error: AUTOQ.lastError },
+    })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.post('/lead-queue/top-up', async (req, res) => {
+  try {
+    const n = await topUpLeadQueue(Math.min(Number(req.query.limit) || AUTOQ.batch, 25000))
+    res.json({ ok: true, queued: n })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.post('/lead-queue/auto', (req, res) => {
+  AUTOQ.enabled = req.query.on !== '0'
+  res.json({ ok: true, enabled: AUTOQ.enabled })
+})
+
+// Poll every 60s: top up only when the queue has drained below the low-water
+// mark, so this is a no-op almost every tick.
+setInterval(async () => {
+  if (!AUTOQ.enabled) return
+  try {
+    const { rows: [{ pending }] } = await pool.query(
+      `SELECT COUNT(*) pending FROM scrape_job_items WHERE status='pending'`)
+    if (+pending >= AUTOQ.lowWater) return
+    const n = await topUpLeadQueue(AUTOQ.batch)
+    AUTOQ.lastRun = new Date().toISOString(); AUTOQ.lastQueued = n; AUTOQ.lastError = null
+    if (n) console.log(`[lead-queue] topped up ${n} domains (pending was ${pending})`)
+  } catch (e) {
+    AUTOQ.lastError = e.message
+    console.error('[lead-queue]', e.message)
+  }
+}, 60000)
+
 // ── Continuous engine controls ──
 app.post('/engine/start', (req, res) => {
   runEngine().catch((e) => console.error('[engine]', e.message))
