@@ -62,6 +62,23 @@ async function mapPool(items, concurrency, fn) {
 }
 
 async function processJob(job) {
+  // Beat on a TIMER, not at batch boundaries. A batch of 500 domains can crawl
+  // for longer than JOB_STALE_SECS, so a boundary-only heartbeat goes silent
+  // mid-batch and the reclaimer requeues a perfectly healthy job — the exact
+  // failure the heartbeat was added to prevent.
+  await beatJob(job.id).catch(() => {})   // stamp immediately, don't wait 30s
+  const beat = setInterval(() => {
+    beatJob(job.id).catch(err => log('heartbeat error:', err.message))
+  }, 30000)
+  beat.unref()
+  try {
+    return await processJobInner(job)
+  } finally {
+    clearInterval(beat)
+  }
+}
+
+async function processJobInner(job) {
   const fields = normaliseFields(job.fields)
   const useClaude = wantsClaude(fields) && classifierAvailable
   const claudeKeys = CLAUDE_FIELD_KEYS.filter((k) => fields.includes(k))
@@ -76,7 +93,6 @@ async function processJob(job) {
       log(`■ job ${job.id} cancelled — stopping`)
       return
     }
-    await beatJob(job.id)
     const items = await loadPendingItems(job.id, BATCH_SIZE)
     if (items.length === 0) break
 
