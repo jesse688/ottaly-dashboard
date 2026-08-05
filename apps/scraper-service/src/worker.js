@@ -10,10 +10,12 @@ import { normaliseDomain } from './extract.js'
 import { normaliseFields, wantsClaude, CLAUDE_FIELD_KEYS } from './fields.js'
 import { classifyBusiness, classifierAvailable, classifierProvider } from './classify.js'
 
-// Larger batches mean fewer round trips between crawl runs. Progress is written
-// at batch boundaries, so very large values make the dashboard look frozen —
-// 250 is a reasonable compromise between throughput and visible progress.
-const BATCH_SIZE = parseInt(process.env.BATCH_SIZE || '250', 10)
+// Batch size interacts with Crawlee's autoscaling: the pool ramps up every 10s
+// in small steps, so a short batch finishes while concurrency is still climbing
+// and the next batch starts from the floor again. Bigger batches amortise that
+// ramp. Progress is written at batch boundaries, so this also sets how often the
+// dashboard moves — 500 is the compromise.
+const BATCH_SIZE = parseInt(process.env.BATCH_SIZE || '500', 10)
 const IDLE_POLL_MS = parseInt(process.env.IDLE_POLL_MS || '5000', 10)
 const DISCOVERY_CONCURRENCY = parseInt(process.env.DISCOVERY_CONCURRENCY || '10', 10)
 const ENRICH_CONCURRENCY = parseInt(process.env.ENRICH_CONCURRENCY || '6', 10)
