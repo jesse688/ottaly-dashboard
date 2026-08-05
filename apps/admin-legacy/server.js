@@ -18214,7 +18214,7 @@ function initPausedJobsTable(sq) {
     campaign_name TEXT,
     contact_ids TEXT,
     include_risky INTEGER DEFAULT 0,
-    max_age_days INTEGER DEFAULT 90,
+    max_age_days INTEGER DEFAULT 14,
     paused_at TEXT DEFAULT (datetime('now')),
     verified_count INTEGER DEFAULT 0,
     pushed_count INTEGER DEFAULT 0
@@ -18502,7 +18502,12 @@ app.get('/api/debug/push-jobs', (req, res) => {
 
 // POST starts job immediately, returns job ID — processing runs in background
 app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
-  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 90, emailProviders, excludeMicrosoft, loose, skipVerify } = req.body;
+  // max_age_days: how old a stored verdict may be before we re-verify. Was 90,
+  // so a "safe" from ten weeks earlier was pushed without re-checking. A batch
+  // of 36 bounced with verdicts averaging 52 days old; re-running the same list
+  // through the verifier returned 11 invalid. Mailboxes get disabled constantly,
+  // so 14 days keeps the credit saving on genuinely recent checks only.
+  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 14, emailProviders, excludeMicrosoft, loose, skipVerify } = req.body;
   if (!workspace_id || !campaign_id || !Array.isArray(contact_ids) || !contact_ids.length) {
     return res.status(400).json({ error: 'workspace_id, campaign_id and contact_ids required' });
   }
@@ -19179,7 +19184,7 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
 
   const contact_ids = JSON.parse(row.contact_ids || '[]');
   const include_risky = !!row.include_risky;
-  const max_age_days = row.max_age_days || 90;
+  const max_age_days = row.max_age_days || 14;
   const workspace_id = row.workspace_id;
   const campaign_id  = row.campaign_id;
 

@@ -4488,7 +4488,7 @@
       try {
         const endpoint = verifyFirst ? '/api/contacts/verify-and-push' : '/api/pv/push-contacts';
         const body = verifyFirst
-          ? { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, workspace_name: wsName, campaign_name: campName, include_risky: false, max_age_days: 90, emailProviders: pushProviders.join(','), excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '', use_n2b: useN2b, allowed_statuses: allowedStatuses }
+          ? { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, workspace_name: wsName, campaign_name: campName, include_risky: false, max_age_days: 14, emailProviders: pushProviders.join(','), excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '', use_n2b: useN2b, allowed_statuses: allowedStatuses }
           : { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, campaign_name: campName, excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '', allowed_statuses: allowedStatuses };
 
         const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -4956,7 +4956,7 @@
           body: JSON.stringify({
             workspace_id: wsId, campaign_id: campId,
             contact_ids: contactIds, workspace_name: wsName, campaign_name: campName,
-            include_risky: false, max_age_days: 90,
+            include_risky: false, max_age_days: 14,
             emailProviders: pushProviders.join(','),
             excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '',
             use_n2b: useN2b,

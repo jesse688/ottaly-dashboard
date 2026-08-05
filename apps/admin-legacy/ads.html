@@ -703,7 +703,7 @@ $('#pvGo').addEventListener('click', async () => {
         workspace_name: wsEl.options[wsEl.selectedIndex].text,
         campaign_name: cEl.options[cEl.selectedIndex].text,
         include_risky: false,
-        max_age_days: 90,
+        max_age_days: 14,
       }),
     });
     const data = await r.json();
