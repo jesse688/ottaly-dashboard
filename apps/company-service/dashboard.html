@@ -69,6 +69,19 @@
 
   <!-- ── Lead pipeline: Common Crawl → scrape → emails ── -->
   <h2 class="sec">📧 Lead Pipeline <span class="sub" style="font-weight:400">Common Crawl domains → scrape → emails</span></h2>
+
+  <div class="controls">
+    <b style="font-size:13px">Auto-queue</b>
+    <span id="aqDot" class="dot off"></span><span id="aqLabel" class="sub">—</span>
+    <span class="mut">|</span>
+    <span id="aqRemaining" class="sub">—</span>
+    <span style="flex:1"></span>
+    <input id="aqLimit" type="number" value="5000" style="width:90px" title="domains to queue now">
+    <button class="btn ghost" onclick="topUp()">＋ Queue now</button>
+    <button class="btn ghost" id="aqToggle" onclick="toggleAuto()">Pause auto</button>
+    <span id="aqMsg" class="sub"></span>
+  </div>
+
   <div class="grid" id="lpStats"></div>
 
   <div class="two">
@@ -146,6 +159,35 @@ async function refresh(){
   }catch{}
 }
 function stat(label,val){ return `<div class="stat"><span>${label}</span><b>${val}</b></div>`; }
+
+let autoOn=true;
+async function loadLeadQueue(){
+  try{
+    const d=await fetch('/lead-queue/status').then(r=>r.json());
+    if(d.error) throw new Error(d.error);
+    autoOn=!!d.auto.enabled;
+    $('#aqDot').className='dot '+(autoOn?'on':'off');
+    $('#aqLabel').textContent=autoOn?`on · tops up below ${d.auto.low_water.toLocaleString()}`:'paused';
+    $('#aqToggle').textContent=autoOn?'Pause auto':'Resume auto';
+    const pct=d.total?Math.round(100*(d.total-d.remaining)/d.total):0;
+    $('#aqRemaining').innerHTML=
+      `<b>${d.remaining.toLocaleString()}</b> domains left of ${d.total.toLocaleString()} (${pct}% queued) · ${d.pending.toLocaleString()} pending`;
+    if(d.auto.last_error){ $('#aqMsg').textContent='error: '+d.auto.last_error; $('#aqMsg').style.color='var(--red)'; }
+  }catch{ $('#aqLabel').textContent='unavailable'; }
+}
+async function topUp(){
+  $('#aqMsg').textContent='queueing…'; $('#aqMsg').style.color='';
+  try{
+    const n=Number($('#aqLimit').value)||5000;
+    const r=await fetch('/lead-queue/top-up?limit='+n,{method:'POST'}).then(r=>r.json());
+    $('#aqMsg').textContent=r.error?('error: '+r.error):`queued ${(r.queued||0).toLocaleString()}`;
+  }catch(e){ $('#aqMsg').textContent='error: '+e.message; }
+  loadLeadQueue(); loadLeadPipeline();
+}
+async function toggleAuto(){
+  await fetch('/lead-queue/auto?on='+(autoOn?'0':'1'),{method:'POST'}).catch(()=>{});
+  loadLeadQueue();
+}
 
 async function loadLeadPipeline(){
   try{
@@ -239,11 +281,12 @@ async function loadCompanies(){
   }catch(e){ $('#compBody').innerHTML=`<tr><td colspan="8" style="color:var(--red);padding:20px">${esc(e.message)}</td></tr>`; }
 }
 
-refresh(); loadCompanies(); loadLeadPipeline();
+refresh(); loadCompanies(); loadLeadPipeline(); loadLeadQueue();
 setInterval(refresh, 3000);
 // Slower than the engine poll: these are aggregate counts over the whole
 // scraped_contacts table, not a cheap status read.
 setInterval(loadLeadPipeline, 10000);
+setInterval(loadLeadQueue, 10000);
 setInterval(()=>{ if(!$('#q').value) loadCompanies(); }, 8000); // refresh table while idle
 </script>
 </body>
