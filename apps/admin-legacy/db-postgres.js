@@ -1972,6 +1972,31 @@ class PostgresDatabase {
 
     // Intelligence filters
     safe('ownsBuilding',   () => { if (filters.ownsBuilding) { clauses.push(`owns_building = $${p++}`); params.push(filters.ownsBuilding); } });
+
+    // Companies House enrichment, populated by the Common Crawl lead pipeline.
+    // Age band is a coarse bucket ("legacy (25y+)") rather than a raw number so
+    // it can be picked from a list; company_age_years is kept for range queries.
+    safe('companyAgeBand', () => { if (filters.companyAgeBand) eqMulti('company_age_band', filters.companyAgeBand); });
+    safe('companyStatus',  () => { if (filters.companyStatus)  eqMulti('company_status',  filters.companyStatus); });
+    // Land Registry freehold, matched on company_number rather than the postcode
+    // sweep above. A freeholder can authorise solar or roofing work; a
+    // leaseholder generally cannot.
+    safe('ownsFreehold',   () => {
+      const v = filters.ownsFreehold;
+      if (!v) return;
+      if (v === 'yes') clauses.push(`owns_freehold IS TRUE`);
+      else if (v === 'no') clauses.push(`(owns_freehold IS FALSE OR owns_freehold IS NULL)`);
+    });
+    // Whether the Companies House match was corroborated by name or postcode.
+    // Unverified rows still carry a valid email — they just have no CH-derived
+    // fields, so exclude them when personalising on company or director name.
+    safe('chVerified',     () => {
+      const v = filters.chVerified;
+      if (!v) return;
+      if (v === 'yes') clauses.push(`ch_verified IS TRUE`);
+      else if (v === 'no') clauses.push(`(ch_verified IS FALSE OR ch_verified IS NULL)`);
+    });
+
     // Land Registry (CCOD) ownership sweep result — separate from the manual
     // owns_building signal above. Special values: 'checked'/'unchecked' filter
     // on whether the sweep has run; anything else matches ccod_owns_building.
