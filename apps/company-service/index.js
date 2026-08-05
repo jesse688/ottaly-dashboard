@@ -397,10 +397,23 @@ app.get('/lead-pipeline', async (req, res) => {
           (SELECT COUNT(*) FROM scraped_contacts WHERE status = 'no_contact')      AS no_contact,
           (SELECT COUNT(*) FROM scraped_contacts WHERE status = 'error')           AS errored,
           (SELECT COUNT(*) FROM scrape_job_items WHERE status = 'pending')         AS queued,
-          (SELECT COALESCE(SUM(array_length(emails,1)),0) FROM scraped_contacts)   AS emails_total`),
+          (SELECT COALESCE(SUM(array_length(emails,1)),0) FROM scraped_contacts)   AS emails_total,
+          -- "Actually working" means a live heartbeat, not just status='running'.
+          -- A job orphaned by a restart keeps that status until the watchdog
+          -- reclaims it, so counting status alone overstates real concurrency.
+          (SELECT COUNT(*) FROM scrape_jobs
+            WHERE status='running'
+              AND heartbeat_at > now() - interval '60 seconds')                    AS workers_active`),
+      // Running jobs first, then queued, then finished — NOT newest-first.
+      // Ordering by id alone hides the work actually in flight behind whatever
+      // was queued most recently, so a healthy pipeline with 7 busy workers can
+      // read as "1 running" purely because a top-up added newer idle jobs.
       pool.query(`
         SELECT id, label, status, total, done, ok, failed, created_at
-          FROM scrape_jobs ORDER BY id DESC LIMIT 10`),
+          FROM scrape_jobs
+         ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'queued' THEN 1 ELSE 2 END,
+                  id DESC
+         LIMIT 12`),
       pool.query(`
         SELECT domain, emails, status, scraped_at
           FROM scraped_contacts
@@ -422,6 +435,7 @@ app.get('/lead-pipeline', async (req, res) => {
         scraped, queued: +f.queued, with_email: +f.with_email,
         no_contact: +f.no_contact, errored: +f.errored, emails_total: +f.emails_total,
         yield_pct: scraped ? Math.round((1000 * +f.with_email) / scraped) / 10 : 0,
+        workers_active: +f.workers_active,
       },
       split: { role: +s.role, named: +s.named },
       jobs: jobs.rows,
