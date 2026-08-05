@@ -2032,7 +2032,9 @@ function PushModal({
           campaign_id: campId,
           contact_ids: contactIds,
           include_risky: false,
-          max_age_days: 90,
+          // Re-verify anything checked more than 14 days ago. At 90 we were
+          // pushing verdicts averaging ~52 days old, and they bounced.
+          max_age_days: 14,
           excludeMicrosoft: excludeMicrosoft ? 'true' : '',
           verify_only: false,
         }),
