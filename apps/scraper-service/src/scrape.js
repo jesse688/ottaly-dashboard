@@ -1,5 +1,6 @@
 import { CheerioCrawler, PlaywrightCrawler, ProxyConfiguration, log, LogLevel, Configuration } from 'crawlee'
 import * as cheerio from 'cheerio'
+import dns from 'node:dns/promises'
 import { proxyUrls } from './proxies.js'
 import {
   extractEmails, extractPhones, extractNames, CONTACT_PATHS,
@@ -12,6 +13,32 @@ log.setLevel(LogLevel.WARNING)
 // Don't let Crawlee persist request queues / datasets to disk between runs —
 // each batch is independent and the source of truth is Postgres.
 Configuration.getGlobalConfig().set('persistStorage', false)
+
+// Local copy of worker.js's mapPool — importing it would make worker <-> scrape
+// circular, and this is four lines.
+async function mapPool(items, concurrency, fn) {
+  const out = new Array(items.length)
+  let next = 0
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (true) {
+      const i = next++
+      if (i >= items.length) return
+      out[i] = await fn(items[i], i)
+    }
+  })
+  await Promise.all(workers)
+  return out
+}
+
+/** DNS A-record lookup with its own short timeout — the resolver can hang too. */
+async function dnsResolve4(host) {
+  return Promise.race([
+    dns.resolve4(host),
+    new Promise((_, rej) =>
+      setTimeout(() => rej(Object.assign(new Error('dns timeout'), { code: 'ETIMEOUT' })),
+        Number(process.env.DNS_TIMEOUT_MS || 3000)).unref()),
+  ])
+}
 
 // Shared per-page extraction — used by BOTH the Cheerio and Playwright crawlers
 // so they produce identical results. Takes a cheerio $ (Playwright loads its
@@ -135,8 +162,49 @@ export async function scrapeBatch(targets, opts = {}) {
     })
   }
 
+  // DNS pre-check. ~31% of Common Crawl domains are lapsed registrations, and
+  // each one otherwise burns the full navigation timeout on every page and every
+  // retry before the crawler gives up — measured as roughly the entire batch
+  // wall-time, while live sites answer in 1-2s. A DNS lookup settles the same
+  // question in ~20ms.
+  //
+  // Only NXDOMAIN (and NODATA) are treated as dead: those mean the name does not
+  // exist. Timeouts and SERVFAIL are resolver problems, not domain problems, so
+  // those still go to the crawler rather than being wrongly discarded.
+  const live = []
+  if (process.env.DNS_PRECHECK !== '0') {
+    const t0 = Date.now()
+    const checks = await mapPool(targets, Number(process.env.DNS_CONCURRENCY || 50), async (t) => {
+      try {
+        await dnsResolve4(t.domain)
+        return { t, alive: true }
+      } catch (err) {
+        if (err.code === 'ENOTFOUND' || err.code === 'ENODATA') {
+          // Try the www host before writing it off: some domains only publish
+          // an A record on www.
+          try { await dnsResolve4(`www.${t.domain}`); return { t, alive: true } }
+          catch { return { t, alive: false } }
+        }
+        return { t, alive: true }   // resolver hiccup — let the crawler decide
+      }
+    })
+    for (const c of checks) {
+      if (c.alive) { live.push(c.t); continue }
+      const r = results.get(c.t.domain)
+      r.status = 'error'
+      r.errorMsg = 'Domain does not resolve (NXDOMAIN)'
+    }
+    const skipped = targets.length - live.length
+    if (skipped) {
+      console.log(`[dns] ${skipped}/${targets.length} domains dead, skipped in ${Date.now() - t0}ms`)
+    }
+  } else {
+    live.push(...targets)
+  }
+  if (live.length === 0) return results
+
   const startUrls = []
-  for (const t of targets) {
+  for (const t of live) {
     const base = `https://${t.domain}`
     startUrls.push({ url: base, userData: { domain: t.domain, isSub: false } })
     for (const p of CONTACT_PATHS) {
