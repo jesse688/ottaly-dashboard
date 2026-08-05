@@ -215,14 +215,19 @@ export async function runWorker() {
   await initProxies()
   log(`scraper-service ready — schema ensured, AI classifier=${classifierProvider}, polling for jobs`)
 
-  // Recover any job left 'running' by a crash: its pending items will be picked
-  // up again here since we re-select pending rows.
-  await pool.query(`UPDATE scrape_jobs SET status = 'queued' WHERE status = 'running'`)
+  // Recover jobs orphaned by a crash — but ONLY stale ones. The previous
+  // unconditional `UPDATE ... WHERE status='running'` is fatal with replicas:
+  // every booting worker would requeue jobs the OTHER workers were actively
+  // running, so three replicas permanently sabotage each other and only one
+  // ever makes progress. Heartbeats make the blanket reset unnecessary — a job
+  // with a live heartbeat belongs to a live worker.
+  const reclaimed = await reclaimStalledJobs(Number(process.env.JOB_STALE_SECS || 300))
+  if (reclaimed) log(`↻ startup: reclaimed ${reclaimed} stale job(s)`)
 
-  // ...and keep checking. The boot-time reset above only catches jobs orphaned
-  // BEFORE this process started. A container killed mid-job (every deploy) can
-  // strand a job claimed after that point, and nothing would ever reclaim it —
-  // the queue silently stops with the dashboard still showing "running".
+  // Keep checking. Boot-time recovery only catches jobs orphaned BEFORE this
+  // process started; a container killed mid-job (every deploy) can strand a job
+  // claimed after that point, and nothing would ever reclaim it — the queue
+  // silently stops with the dashboard still showing "running".
   const STALE_SECS = Number(process.env.JOB_STALE_SECS || 300)
   setInterval(async () => {
     try {
