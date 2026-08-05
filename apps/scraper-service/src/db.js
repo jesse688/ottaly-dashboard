@@ -68,7 +68,31 @@ export async function ensureSchema() {
     ALTER TABLE scrape_jobs       ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'ch';
     ALTER TABLE scrape_jobs       ADD COLUMN IF NOT EXISTS fields TEXT[];
     ALTER TABLE scrape_job_items  ADD COLUMN IF NOT EXISTS location TEXT;
+    -- Liveness stamp so a job orphaned by a restart can be reclaimed. Without
+    -- it, a container that dies mid-job leaves status='running' forever and no
+    -- worker will ever claim it again.
+    ALTER TABLE scrape_jobs       ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMPTZ;
   `)
+}
+
+/** Mark a job as still being worked on. Called each batch. */
+export async function beatJob(jobId) {
+  await pool.query(`UPDATE scrape_jobs SET heartbeat_at = now() WHERE id = $1`, [jobId])
+}
+
+/**
+ * Return jobs stuck in 'running' with no recent heartbeat to the queue.
+ * Runs on a timer, not just at boot: a job claimed AFTER the startup reset is
+ * otherwise orphaned until someone notices and fixes it by hand.
+ */
+export async function reclaimStalledJobs(staleSecs = 300) {
+  const { rowCount } = await pool.query(`
+    UPDATE scrape_jobs
+       SET status = 'queued', started_at = NULL
+     WHERE status = 'running'
+       AND COALESCE(heartbeat_at, started_at) < now() - ($1 || ' seconds')::interval`,
+    [staleSecs])
+  return rowCount
 }
 
 // Claim the oldest queued job atomically so two workers never grab the same one.

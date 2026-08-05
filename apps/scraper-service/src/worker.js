@@ -1,7 +1,7 @@
 import {
   ensureSchema, claimNextJob, loadPendingItems, saveContact, getCompanyContext,
   writeBackDomain, markItem, bumpJob, finishJob, getJobStatus,
-  existingScrapedDomains, pool,
+  existingScrapedDomains, beatJob, reclaimStalledJobs, pool,
 } from './db.js'
 import { discoverDomain } from './discover.js'
 import { scrapeBatch, scrapeBatchPlaywright } from './scrape.js'
@@ -10,7 +10,10 @@ import { normaliseDomain } from './extract.js'
 import { normaliseFields, wantsClaude, CLAUDE_FIELD_KEYS } from './fields.js'
 import { classifyBusiness, classifierAvailable, classifierProvider } from './classify.js'
 
-const BATCH_SIZE = parseInt(process.env.BATCH_SIZE || '100', 10)
+// Larger batches mean fewer round trips between crawl runs. Progress is written
+// at batch boundaries, so very large values make the dashboard look frozen —
+// 250 is a reasonable compromise between throughput and visible progress.
+const BATCH_SIZE = parseInt(process.env.BATCH_SIZE || '250', 10)
 const IDLE_POLL_MS = parseInt(process.env.IDLE_POLL_MS || '5000', 10)
 const DISCOVERY_CONCURRENCY = parseInt(process.env.DISCOVERY_CONCURRENCY || '10', 10)
 const ENRICH_CONCURRENCY = parseInt(process.env.ENRICH_CONCURRENCY || '6', 10)
@@ -71,6 +74,7 @@ async function processJob(job) {
       log(`■ job ${job.id} cancelled — stopping`)
       return
     }
+    await beatJob(job.id)
     const items = await loadPendingItems(job.id, BATCH_SIZE)
     if (items.length === 0) break
 
@@ -196,6 +200,18 @@ export async function runWorker() {
   // Recover any job left 'running' by a crash: its pending items will be picked
   // up again here since we re-select pending rows.
   await pool.query(`UPDATE scrape_jobs SET status = 'queued' WHERE status = 'running'`)
+
+  // ...and keep checking. The boot-time reset above only catches jobs orphaned
+  // BEFORE this process started. A container killed mid-job (every deploy) can
+  // strand a job claimed after that point, and nothing would ever reclaim it —
+  // the queue silently stops with the dashboard still showing "running".
+  const STALE_SECS = Number(process.env.JOB_STALE_SECS || 300)
+  setInterval(async () => {
+    try {
+      const n = await reclaimStalledJobs(STALE_SECS)
+      if (n) log(`↻ reclaimed ${n} stalled job(s) with no heartbeat for ${STALE_SECS}s`)
+    } catch (err) { log('reclaim error:', err.message) }
+  }, 60000).unref()
 
   while (true) {
     let job

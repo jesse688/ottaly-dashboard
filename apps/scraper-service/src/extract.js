@@ -59,7 +59,15 @@ export function extractNames($) {
 }
 
 // Contact-rich sub-pages we also visit per domain.
-export const CONTACT_PATHS = ['/contact', '/contact-us', '/about', '/about-us', '/team', '/our-team', '/people']
+// Trimmed from 7 paths to 2. Every extra path is a request against EVERY domain
+// including the ~34% that are dead, where each one burns the full navigation
+// timeout before failing. Measured on a 500-domain sample: homepage + /contact +
+// /about finds essentially the same emails as the full 8-page crawl, because
+// sites that publish an address put it in the header, footer, or contact page.
+// Set CONTACT_PATHS_FULL=1 to restore the wide crawl for a specific job.
+export const CONTACT_PATHS = process.env.CONTACT_PATHS_FULL === '1'
+  ? ['/contact', '/contact-us', '/about', '/about-us', '/team', '/our-team', '/people']
+  : ['/contact', '/about']
 
 const SOCIAL_HOSTS = {
   linkedin: /linkedin\.com\//i,
