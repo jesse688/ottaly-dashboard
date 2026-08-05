@@ -9285,8 +9285,30 @@ async function runFullDomainScan({ onlyUnchecked = false } = {}) {
   try {
     const pgdb = app.locals.pgDb;
     if (!pgdb) return;
-    const allDomains = await listSendingDomains();
-    const ignored = new Set(await pgdb.listIgnoredDomains());
+    // Primary source is the live mailbox list, but it depends on the PV API
+    // being reachable and returning accounts. If it yields nothing we fall
+    // back to the domains already stored in domain_health — otherwise the
+    // loop runs zero times and the scan "succeeds" having checked nothing,
+    // which is exactly what happened on the first run.
+    let allDomains = [];
+    try {
+      allDomains = await listSendingDomains();
+    } catch (err) {
+      console.warn('[domain-full-scan] live domain list failed:', err.message);
+    }
+    if (!allDomains.length) {
+      const stored = await pgdb.query(
+        `SELECT domain, workspace_id, workspace_name FROM domain_health ORDER BY domain`);
+      allDomains = (stored.rows || []).map(r => ({
+        domain: r.domain,
+        ws: { id: r.workspace_id, name: r.workspace_name },
+      }));
+      console.warn(`[domain-full-scan] live list empty — falling back to ${allDomains.length} stored domains`);
+    }
+
+    let ignored = new Set();
+    try { ignored = new Set(await pgdb.listIgnoredDomains()); }
+    catch (err) { console.warn('[domain-full-scan] ignore list unavailable:', err.message); }
     let domains = allDomains.filter(d => !ignored.has(d.domain));
 
     // onlyUnchecked: skip domains that already have a stored verdict, so a
@@ -9302,8 +9324,14 @@ async function runFullDomainScan({ onlyUnchecked = false } = {}) {
       }
     }
 
-    _fullScanProgress = { done: 0, total: domains.length, listed: 0, failed: 0, finishedAt: null };
+    _fullScanProgress = { done: 0, total: domains.length, listed: 0, failed: 0, finishedAt: null, error: null };
     console.log(`[domain-full-scan] starting: ${domains.length} domains (${ignored.size} ignored)`);
+    if (!domains.length) {
+      _fullScanProgress.error = 'No domains to scan — both the live mailbox list and domain_health came back empty.';
+      _fullScanProgress.finishedAt = new Date().toISOString();
+      console.warn('[domain-full-scan] nothing to scan — aborting');
+      return;
+    }
 
     const GAP_MS = 1200;
     for (const { domain, ws } of domains) {
