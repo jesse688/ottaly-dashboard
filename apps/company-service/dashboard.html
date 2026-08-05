@@ -167,7 +167,10 @@ async function loadLeadQueue(){
     if(d.error) throw new Error(d.error);
     autoOn=!!d.auto.enabled;
     $('#aqDot').className='dot '+(autoOn?'on':'off');
-    $('#aqLabel').textContent=autoOn?`on · tops up below ${d.auto.low_water.toLocaleString()}`:'paused';
+    const held = d.open_jobs >= d.auto.max_open_jobs;
+    $('#aqLabel').textContent = !autoOn ? 'paused'
+      : held ? `on · holding (${d.open_jobs} jobs open)`
+      : `on · tops up below ${d.auto.low_water.toLocaleString()}`;
     $('#aqToggle').textContent=autoOn?'Pause auto':'Resume auto';
     const pct=d.total?Math.round(100*(d.total-d.remaining)/d.total):0;
     $('#aqRemaining').innerHTML=
