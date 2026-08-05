@@ -9260,6 +9260,95 @@ async function refreshDomainHealth() {
 // Automatic blacklist checks disabled — per Bison: frequent DNS lookups create bias with SURBL/Spamhaus.
 // Run manually via POST /api/domains/refresh only.
 
+// ── Full scan (SPF/DKIM/DMARC/MX + DBL) across every sending domain ────────
+// Separate from refreshDomainHealth(), which is redirect-only on purpose.
+// This one DOES hit Spamhaus/SURBL/URIBL, so it is paced far more slowly:
+// strictly one domain at a time with a gap between each, never in parallel.
+// A burst of hundreds of DBL lookups gets the resolver rate-limited, and a
+// rate-limit reply (127.255.255.x) is not a listing — isRealDnsblHit already
+// rejects those, so throttling protects the ACCURACY of the results, not just
+// our standing with the providers.
+//
+// ~739 domains x 3 lists at 1.2s/domain lands around 15 minutes. It runs in
+// the background and reports progress via GET /api/domains/full-scan.
+let _fullScanRunning   = false;
+let _fullScanStartedAt = 0;
+let _fullScanProgress  = { done: 0, total: 0, listed: 0, failed: 0, finishedAt: null };
+
+async function runFullDomainScan({ onlyUnchecked = false } = {}) {
+  // Same stale-reset guard as the redirect refresh: a run wedged for >30 min
+  // (this job is legitimately slow) must not block every future scan.
+  if (_fullScanRunning && Date.now() - _fullScanStartedAt < 30 * 60 * 1000) return;
+  _fullScanRunning = true;
+  _fullScanStartedAt = Date.now();
+  const t0 = Date.now();
+  try {
+    const pgdb = app.locals.pgDb;
+    if (!pgdb) return;
+    const allDomains = await listSendingDomains();
+    const ignored = new Set(await pgdb.listIgnoredDomains());
+    let domains = allDomains.filter(d => !ignored.has(d.domain));
+
+    // onlyUnchecked: skip domains that already have a stored verdict, so a
+    // re-run after a failure doesn't re-query the whole set from scratch.
+    if (onlyUnchecked) {
+      try {
+        const existing = await pgdb.query(
+          `SELECT domain FROM domain_health WHERE last_checked IS NOT NULL`);
+        const seen = new Set((existing.rows || []).map(r => r.domain));
+        domains = domains.filter(d => !seen.has(d.domain));
+      } catch (err) {
+        console.warn('[domain-full-scan] unchecked filter failed, scanning all:', err.message);
+      }
+    }
+
+    _fullScanProgress = { done: 0, total: domains.length, listed: 0, failed: 0, finishedAt: null };
+    console.log(`[domain-full-scan] starting: ${domains.length} domains (${ignored.size} ignored)`);
+
+    const GAP_MS = 1200;
+    for (const { domain, ws } of domains) {
+      try {
+        const row = await checkDomainWithTimeout(domain, ws);
+        await pgdb.upsertDomainHealth(row);
+        if (row.blacklists?.length) {
+          _fullScanProgress.listed++;
+          console.log(`[domain-full-scan] LISTED ${domain} → ${row.blacklists.map(b => b.list).join(', ')}`);
+        }
+      } catch (err) {
+        _fullScanProgress.failed++;
+        console.warn(`[domain-full-scan] ${domain} failed:`, err.message);
+      }
+      _fullScanProgress.done++;
+      await new Promise(r => setTimeout(r, GAP_MS));
+    }
+
+    _fullScanProgress.finishedAt = new Date().toISOString();
+    console.log(`[domain-full-scan] done ${_fullScanProgress.done}/${domains.length} — ` +
+      `${_fullScanProgress.listed} listed, ${_fullScanProgress.failed} failed, ` +
+      `${Math.round((Date.now() - t0) / 1000)}s`);
+  } catch (err) {
+    console.error('[domain-full-scan] error:', err.message);
+  } finally {
+    _fullScanRunning = false;
+  }
+}
+
+// Kick off the full scan. Body: { onlyUnchecked?: boolean }
+app.post('/api/domains/full-scan', requireSession, (req, res) => {
+  if (_fullScanRunning) {
+    return res.json({ ok: true, running: true, progress: _fullScanProgress, message: 'Full scan already in progress' });
+  }
+  const onlyUnchecked = req.body?.onlyUnchecked === true;
+  runFullDomainScan({ onlyUnchecked })
+    .catch(err => console.error('[domain-full-scan] failed:', err.message));
+  res.json({ ok: true, running: true, message: 'Full domain scan started (this takes ~15 minutes)' });
+});
+
+// Poll for progress while the scan runs.
+app.get('/api/domains/full-scan', requireSession, (req, res) => {
+  res.json({ running: _fullScanRunning, progress: _fullScanProgress });
+});
+
 app.get('/api/domains/health', requireSession, async (req, res) => {
   try {
     const pgdb = app.locals.pgDb;

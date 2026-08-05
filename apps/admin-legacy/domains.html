@@ -122,12 +122,13 @@ tr:hover td{background:#FAFBFF;cursor:pointer}
   <div class="page-header">
     <div>
       <div class="page-title">Domain Health</div>
-      <div class="page-sub">SPF · DKIM · DMARC · MX · redirect target · domain blacklists (Spamhaus DBL, SURBL, URIBL) — across all sending domains. <b>Refresh all</b> re-checks redirects only (safe, no blacklist lookups); use <b>Check domain</b> for a full single-domain recheck.</div>
+      <div class="page-sub">SPF · DKIM · DMARC · MX · redirect target · domain blacklists (Spamhaus DBL, SURBL, URIBL) — across all sending domains. <b>Refresh all</b> re-checks redirects only (fast, no blacklist lookups); <b>Full scan</b> re-checks everything including blacklists across all domains (throttled, ~15 min); <b>Check domain</b> does a full recheck of one domain.</div>
     </div>
     <div style="display:flex;gap:0.5rem;align-items:center">
       <span id="lastRun" style="font-size:12px;color:var(--muted)"></span>
       <button class="btn btn-ghost" onclick="openCheckModal()">+ Check domain</button>
       <button class="btn btn-primary" id="refreshBtn" onclick="refreshAll()">↻ Refresh all</button>
+      <button class="btn" id="fullScanBtn" onclick="fullScan()" title="SPF/DKIM/DMARC/MX + blacklist lookups for every domain. Throttled — takes ~15 minutes.">🛡 Full scan (all)</button>
     </div>
   </div>
 
@@ -620,6 +621,46 @@ async function refreshAll() {
   } catch (err) {
     toast('Refresh failed: ' + err.message);
     btn.disabled = false; btn.textContent = '↻ Refresh all';
+  }
+}
+
+// Full scan — the only path that re-runs blacklist lookups across every
+// domain. Deliberately slow (one domain at a time) so Spamhaus/SURBL don't
+// rate-limit us, which would return rate-limit codes instead of real answers.
+async function fullScan() {
+  const btn = document.getElementById('fullScanBtn');
+  if (!confirm('Run SPF/DKIM/DMARC/MX + blacklist checks on every sending domain?\n\nThrottled to avoid rate limits — takes around 15 minutes. It runs in the background, so you can leave this page.')) return;
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Scanning…';
+  try {
+    const r = await fetch('/api/domains/full-scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const d = await r.json();
+    toast(d.message || 'Full scan started');
+    const poll = setInterval(async () => {
+      let p = {};
+      try {
+        const sr = await fetch('/api/domains/full-scan'); const sj = await sr.json();
+        p = sj.progress || {};
+        if (p.total) btn.innerHTML = `<span class="spin"></span>${p.done}/${p.total}${p.listed ? ` · ${p.listed} listed` : ''}`;
+        if (!sj.running) {
+          clearInterval(poll);
+          btn.disabled = false; btn.textContent = '🛡 Full scan (all)';
+          toast(`Full scan finished — ${p.listed || 0} domain(s) blacklisted, ${p.failed || 0} failed`);
+        }
+      } catch { /* transient poll failure — keep going */ }
+      // Refresh the table as results land so listings appear during the run.
+      try {
+        const rr = await fetch('/api/domains/health'); const jj = await rr.json();
+        data = jj.rows || [];
+        renderSummary(); populateWsFilter(); render();
+      } catch { /* ignore */ }
+    }, 8000);
+  } catch (err) {
+    toast('Full scan failed: ' + err.message);
+    btn.disabled = false; btn.textContent = '🛡 Full scan (all)';
   }
 }
 </script>
