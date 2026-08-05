@@ -17039,7 +17039,7 @@ function getClientRules(workspaceId, workspaceName) {
 // push_guard_settings). Deliberately fail-safe: an unparseable stamp is
 // treated as "no record", but any stamp inside a window blocks the push.
 const PUSH_GUARD_DEFAULTS = Object.freeze({
-  sameClientDays:      60,  // this client re-pushing their own contact
+  sameClientDays:      30,  // this client re-pushing their own contact
   sameVerticalMonths:   6,  // a different client in the same vertical
   burstGapDays:        10,  // any other client, minimum gap
   maxClientsPerWindow:  2,  // at most N clients total…
