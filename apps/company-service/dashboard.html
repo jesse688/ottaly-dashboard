@@ -33,6 +33,16 @@
   .own-yes{color:var(--green);font-weight:700} .own-no{color:var(--mut)} .own-unknown{color:var(--mut)}
   .mut{color:var(--mut)} a{color:#7ca7ff}
   .sub{color:var(--mut);font-size:12px}
+  .sec{font-size:14px;margin:28px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line);display:flex;align-items:baseline;gap:10px}
+  /* Side-by-side on desktop, stacked once there isn't room for two columns. */
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:8px}
+  @media (max-width:900px){.two{grid-template-columns:1fr}}
+  .split{display:flex;height:8px;border-radius:999px;overflow:hidden;margin-top:8px;background:var(--card)}
+  .split i{display:block;height:100%}
+  .em{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+  .jstat{font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px}
+  .jstat.done{background:#0e2a1c;color:var(--green)} .jstat.running{background:#0e2236;color:var(--blue)}
+  .jstat.queued{background:#232833;color:var(--mut)} .jstat.failed,.jstat.cancelled{background:#2c1414;color:var(--red)}
 </style>
 </head>
 <body>
@@ -56,6 +66,33 @@
     <button class="btn ghost" onclick="enqueue()">＋ Enqueue stale domains</button>
     <span id="enqMsg" class="sub"></span>
   </div>
+
+  <!-- ── Lead pipeline: Common Crawl → scrape → emails ── -->
+  <h2 class="sec">📧 Lead Pipeline <span class="sub" style="font-weight:400">Common Crawl domains → scrape → emails</span></h2>
+  <div class="grid" id="lpStats"></div>
+
+  <div class="two">
+    <div>
+      <div class="sub" style="margin:0 0 8px">Scrape jobs</div>
+      <div style="overflow:auto;border:1px solid var(--line);border-radius:10px">
+        <table>
+          <thead><tr><th>Job</th><th>Status</th><th>Progress</th><th>OK</th><th>Failed</th></tr></thead>
+          <tbody id="lpJobs"><tr><td colspan="5" class="mut" style="padding:16px">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div>
+      <div class="sub" style="margin:0 0 8px">Latest emails found</div>
+      <div style="overflow:auto;border:1px solid var(--line);border-radius:10px;max-height:340px">
+        <table>
+          <thead><tr><th>Domain</th><th>Emails</th></tr></thead>
+          <tbody id="lpRecent"><tr><td colspan="2" class="mut" style="padding:16px">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec">🏢 Resolved companies</h2>
 
   <div class="controls">
     <input id="q" placeholder="Search domain / company / owner…" style="flex:1;min-width:200px" oninput="debouncedLoad()">
@@ -110,6 +147,45 @@ async function refresh(){
 }
 function stat(label,val){ return `<div class="stat"><span>${label}</span><b>${val}</b></div>`; }
 
+async function loadLeadPipeline(){
+  try{
+    const d=await fetch('/lead-pipeline').then(r=>r.json());
+    if(d.error) throw new Error(d.error);
+    const f=d.funnel, sp=d.split, tot=(sp.role||0)+(sp.named||0);
+    const rolePct=tot?Math.round(100*sp.role/tot):0;
+
+    $('#lpStats').innerHTML=`
+      ${stat('Domains scraped', f.scraped.toLocaleString())}
+      ${stat('Queued to scrape', f.queued.toLocaleString())}
+      ${stat('Domains with email', f.with_email.toLocaleString())}
+      ${stat('Emails found', f.emails_total.toLocaleString())}
+      <div class="stat"><span>Yield</span><b>${f.yield_pct}%</b>
+        <div class="bar"><div style="width:${Math.min(f.yield_pct,100)}%"></div></div></div>
+      <div class="stat"><span>Role vs named</span><b>${rolePct}% role</b>
+        <div class="split" title="${sp.role} role · ${sp.named} named">
+          <i style="width:${rolePct}%;background:var(--amber)"></i>
+          <i style="width:${100-rolePct}%;background:var(--green)"></i>
+        </div></div>`;
+
+    $('#lpJobs').innerHTML = d.jobs.length ? d.jobs.map(j=>{
+      const pct=j.total?Math.round(100*j.done/j.total):0;
+      return `<tr>
+        <td>#${j.id} <span class="mut">${esc(j.label||'')}</span></td>
+        <td><span class="jstat ${esc(j.status)}">${esc(j.status)}</span></td>
+        <td style="min-width:120px">${j.done}/${j.total}
+          <div class="bar"><div style="width:${pct}%"></div></div></td>
+        <td class="own-yes">${j.ok}</td><td class="mut">${j.failed}</td></tr>`;
+    }).join('') : `<tr><td colspan="5" class="mut" style="padding:16px">No jobs yet</td></tr>`;
+
+    $('#lpRecent').innerHTML = d.recent.length ? d.recent.map(r=>`
+      <tr><td>${esc(r.domain)}</td>
+          <td class="em wrap2">${(r.emails||[]).slice(0,3).map(esc).join('<br>')}</td></tr>`).join('')
+      : `<tr><td colspan="2" class="mut" style="padding:16px">No emails yet</td></tr>`;
+  }catch(e){
+    $('#lpStats').innerHTML=`<div class="stat"><span>Lead pipeline</span><b style="font-size:14px;color:var(--red)">unavailable</b></div>`;
+  }
+}
+
 async function engine(action){
   await fetch('/engine/'+action,{method:'POST'}).then(r=>r.json()).catch(()=>{});
   refresh();
@@ -163,8 +239,11 @@ async function loadCompanies(){
   }catch(e){ $('#compBody').innerHTML=`<tr><td colspan="8" style="color:var(--red);padding:20px">${esc(e.message)}</td></tr>`; }
 }
 
-refresh(); loadCompanies();
+refresh(); loadCompanies(); loadLeadPipeline();
 setInterval(refresh, 3000);
+// Slower than the engine poll: these are aggregate counts over the whole
+// scraped_contacts table, not a cheap status read.
+setInterval(loadLeadPipeline, 10000);
 setInterval(()=>{ if(!$('#q').value) loadCompanies(); }, 8000); // refresh table while idle
 </script>
 </body>
