@@ -7,6 +7,7 @@ import { resolveDomain, debugDomain } from './src/resolver.js'
 import { chEnabled } from './src/ch.js'
 import { runEngine, stopEngine, engineState, maybeAutostart } from './src/engine.js'
 import { queueDepth, enqueueStaleDomains } from './src/db.js'
+import { syncLeadsToContacts, syncState } from './src/lead-sync.js'
 
 const PORT = Number(process.env.PORT) || 3100
 
@@ -548,6 +549,62 @@ setInterval(async () => {
     console.error('[lead-queue]', e.message)
   }
 }, 60000)
+
+// ── Lead sync: scraped_contacts -> contacts ──
+// Hourly rather than live: `contacts` is the table admin-legacy sends from, so
+// a bad scrape batch should not stream straight into it.
+//
+// OFF BY DEFAULT (LEAD_SYNC=1 to enable). This writes to production data that
+// admin-legacy owns, so it should be switched on deliberately after a dry run,
+// not merely by deploying.
+const SYNC_ON = process.env.LEAD_SYNC === '1'
+const SYNC_INTERVAL_MS = Number(process.env.LEAD_SYNC_INTERVAL_MS || 3600000)
+
+app.get('/lead-sync/status', async (req, res) => {
+  try {
+    const { rows: [d] } = await pool.query(`
+      SELECT count(*) FILTER (WHERE source='commoncrawl') AS synced,
+             count(*) AS contacts_total FROM contacts`)
+    res.json({
+      enabled: SYNC_ON, interval_ms: SYNC_INTERVAL_MS,
+      synced_from_pipeline: +d.synced, contacts_total: +d.contacts_total,
+      last_run: syncState.lastRun, last_inserted: syncState.lastInserted,
+      last_skipped: syncState.lastSkipped, last_error: syncState.lastError,
+      running: syncState.running,
+    })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Read-only preview: what WOULD be inserted, and how it's enriched.
+app.get('/lead-sync/preview', async (req, res) => {
+  try {
+    const r = await syncLeadsToContacts({
+      sinceHours: Number(req.query.hours) || 6,
+      limit: Number(req.query.limit) || 2000,
+      dryRun: true,
+    })
+    res.json(r)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.post('/lead-sync/run', async (req, res) => {
+  try {
+    const r = await syncLeadsToContacts({
+      sinceHours: Number(req.query.hours) || Number(process.env.LEAD_SYNC_WINDOW_HOURS || 2),
+      limit: Number(req.query.limit) || undefined,
+    })
+    res.json({ ok: true, ...r })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+if (SYNC_ON) {
+  setInterval(() => {
+    syncLeadsToContacts().catch(e => console.error('[lead-sync]', e.message))
+  }, SYNC_INTERVAL_MS).unref()
+  console.log(`[lead-sync] enabled — every ${SYNC_INTERVAL_MS / 60000} min`)
+} else {
+  console.log('[lead-sync] disabled (set LEAD_SYNC=1 to enable)')
+}
 
 // ── Continuous engine controls ──
 app.post('/engine/start', (req, res) => {
