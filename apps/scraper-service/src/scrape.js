@@ -152,15 +152,24 @@ export async function scrapeBatch(targets, opts = {}) {
     // and returns 502s under high concurrency. ~5 is safe for 10 proxies; raise
     // MAX_CONCURRENCY once you have a larger/paid pool.
     maxConcurrency: opts.maxConcurrency ?? parseInt(process.env.MAX_CONCURRENCY || '5', 10),
-    requestHandlerTimeoutSecs: 25,
-    navigationTimeoutSecs: 20,
+    // Tuned for a FAST FIRST PASS. ~34% of matched domains are dead (lapsed
+    // registrations in the Common Crawl set) and each one costs the full timeout
+    // on every page and every retry. A live small-business site answers well
+    // inside 8s; slower is overwhelmingly a domain that never will.
+    //
+    // This deliberately trades a little recall for a lot of speed: anything that
+    // times out lands in scraped_contacts with status='error' and can be
+    // re-run later with generous settings (NAV_TIMEOUT_SECS=25 MAX_RETRIES=3),
+    // by which point the retry set is thousands of domains rather than 800k.
+    requestHandlerTimeoutSecs: Number(process.env.REQ_TIMEOUT_SECS || 10),
+    navigationTimeoutSecs: Number(process.env.NAV_TIMEOUT_SECS || 6),
     // Some (mis-configured) servers label their HTML as octet-stream / plain text.
     // Accept those too so we still parse the page instead of skipping the domain.
     additionalMimeTypes: ['application/octet-stream', 'text/plain', 'application/x-download'],
-    // More retries + session rotation gives blocked requests a chance from a
-    // fresh IP/identity before we give up on a domain. Cap session rotations so
-    // a dead proxy / 502-ing site doesn't retry ~10x (was flooding the log).
-    maxRequestRetries: 3,
+    // Retries exist for blocked requests, which a fresh session can fix. They do
+    // nothing for a domain with no DNS or no server, and that is the common case
+    // here — so 3 retries multiplied the dead-domain cost 4x for no extra yield.
+    maxRequestRetries: Number(process.env.MAX_RETRIES || 1),
     maxSessionRotations: 2,
     ignoreSslErrors: true,
     // Session pool retires blocked/error sessions and rotates IP+identity.
