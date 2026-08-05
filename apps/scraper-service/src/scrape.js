@@ -152,6 +152,17 @@ export async function scrapeBatch(targets, opts = {}) {
     // and returns 502s under high concurrency. ~5 is safe for 10 proxies; raise
     // MAX_CONCURRENCY once you have a larger/paid pool.
     maxConcurrency: opts.maxConcurrency ?? parseInt(process.env.MAX_CONCURRENCY || '5', 10),
+    // maxConcurrency is only a CEILING. Crawlee's autoscaled pool starts at
+    // minConcurrency (default 1) and ramps on observed system load — but these
+    // requests are almost pure network wait, so CPU/memory never signal "go
+    // faster" and it settles far below the ceiling. Measured: 100 domains x 3
+    // pages took ~5 minutes, i.e. ~1 request/sec against a ceiling of 50.
+    // Setting minConcurrency floors it so a batch runs at a useful rate from the
+    // first request instead of spending the batch ramping.
+    minConcurrency: Number(process.env.MIN_CONCURRENCY || 15),
+    // Guard rail so the floor can't hammer one host or burn the proxy plan's
+    // bandwidth faster than intended.
+    maxRequestsPerMinute: Number(process.env.MAX_RPM || 1200),
     // Tuned for a FAST FIRST PASS. ~34% of matched domains are dead (lapsed
     // registrations in the Common Crawl set) and each one costs the full timeout
     // on every page and every retry. A live small-business site answers well
