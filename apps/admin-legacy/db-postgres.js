@@ -1977,16 +1977,10 @@ class PostgresDatabase {
     // Age band is a coarse bucket ("legacy (25y+)") rather than a raw number so
     // it can be picked from a list; company_age_years is kept for range queries.
     safe('companyAgeBand', () => { if (filters.companyAgeBand) eqMulti('company_age_band', filters.companyAgeBand); });
-    safe('companyStatus',  () => { if (filters.companyStatus)  eqMulti('company_status',  filters.companyStatus); });
-    // Land Registry freehold, matched on company_number rather than the postcode
-    // sweep above. A freeholder can authorise solar or roofing work; a
-    // leaseholder generally cannot.
-    safe('ownsFreehold',   () => {
-      const v = filters.ownsFreehold;
-      if (!v) return;
-      if (v === 'yes') clauses.push(`owns_freehold IS TRUE`);
-      else if (v === 'no') clauses.push(`(owns_freehold IS FALSE OR owns_freehold IS NULL)`);
-    });
+    // Deliberately NO companyStatus / ownsFreehold filters here: company trading
+    // status is already served by chStatusFilter, and building ownership by
+    // ccodOwnsBuilding. A second control asking the same question is how you end
+    // up with two filters that disagree.
     // Whether the Companies House match was corroborated by name or postcode.
     // Unverified rows still carry a valid email — they just have no CH-derived
     // fields, so exclude them when personalising on company or director name.

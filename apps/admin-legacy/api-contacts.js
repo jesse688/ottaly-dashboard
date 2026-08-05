@@ -598,8 +598,7 @@ module.exports = (db) => {
         emailStatus: rest.emailStatus,
         ownsBuilding: rest.ownsBuilding,
         // Companies House enrichment from the Common Crawl lead pipeline
-        companyAgeBand: rest.companyAgeBand, companyStatus: rest.companyStatus,
-        ownsFreehold: rest.ownsFreehold, chVerified: rest.chVerified,
+        companyAgeBand: rest.companyAgeBand, chVerified: rest.chVerified,
         ccodOwnsBuilding: rest.ccodOwnsBuilding,
         solarStatus: rest.solarStatus,
         solarMinKwp: rest.solarMinKwp,
