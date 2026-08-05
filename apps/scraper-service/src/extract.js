@@ -1,13 +1,44 @@
 // Shared extraction helpers — emails, UK phones, and likely person names.
 
-const EMAIL_RE = /\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b/g
+// {2,24} bounds the TLD. Unbounded {2,} lets a match run past a real TLD into
+// whatever follows when markup is stripped without a separator, producing
+// "enquiries@smithsnews.co.ukmedia". 24 covers the longest real TLDs
+// (.travelersinsurance) while still cutting off glued-on prose.
+const EMAIL_RE = /\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,24}\b/g
 const PHONE_RE = /(?:\+44\s?|0)(?:\d\s?){9,10}/g
 const EMAIL_NOISE = /\.(png|jpg|jpeg|gif|svg|css|webp)$/i
 const PLACEHOLDER = /(example\.com|sentry|wixpress|\.png|\.jpg|domain\.com|yourname|email@)/i
 
+// Multi-part UK suffixes are listed first: alternation is ordered, so without
+// "co.uk" ahead of "uk" a trim would cut "acme.co.uk" back to "acme.co".
+const KNOWN_TLD = /\.(co\.uk|org\.uk|ltd\.uk|plc\.uk|me\.uk|sch\.uk|ac\.uk|gov\.uk|nhs\.uk|net\.uk|com|org|net|uk|io|ai|dev|app|eu|ie|de|fr|es|it|nl|be|us|ca|au|nz|info|biz|online|shop|store|agency|company|group|london|scot|wales|cymru|email|life|live|world|today|team|care|health|clinic|dental|legal|finance|solutions|services|consulting|design|studio|media|digital|tech|systems|works|energy|solar|homes|properties|estate|travel|coop|charity|church|academy|school|college|education|training|events|photography|fitness|gallery)$/i
+
+/**
+ * Trim a match back to a known TLD boundary: "info@acme.co.ukmedia" ->
+ * "info@acme.co.uk". Returns null when no known TLD is found, dropping the
+ * value rather than guessing where to cut — a wrong address costs a
+ * verification credit and a bounce.
+ */
+function trimToKnownTld(email) {
+  if (KNOWN_TLD.test(email)) return email
+  const at = email.lastIndexOf('@')
+  if (at < 1) return null
+  const local = email.slice(0, at)
+  const host = email.slice(at + 1)
+  for (let end = host.length - 1; end > 3; end--) {
+    const cand = host.slice(0, end)
+    if (KNOWN_TLD.test(cand)) return `${local}@${cand}`
+  }
+  return null
+}
+
 export function extractEmails(text) {
   const found = [...new Set((text.match(EMAIL_RE) || []).map(e => e.toLowerCase()))]
-  return found.filter(e => !EMAIL_NOISE.test(e) && !PLACEHOLDER.test(e) && e.length < 80)
+  return found
+    .map(trimToKnownTld)
+    .filter(Boolean)
+    .filter(e => !EMAIL_NOISE.test(e) && !PLACEHOLDER.test(e) && e.length < 80)
+    .filter((e, i, a) => a.indexOf(e) === i)   // trimming can create duplicates
 }
 
 export function extractPhones(text) {
