@@ -19,7 +19,13 @@ Configuration.getGlobalConfig().set('persistStorage', false)
 // sub-page, and the page URL.
 function applyExtraction($, r, isSub, url) {
   if (typeof $ !== 'function') { if (r.status === 'pending') r.status = 'ok'; return }
-  const body = $('body').text()
+  // Join text nodes with a space rather than $('body').text(), which
+  // concatenates them with nothing between: `<a>info@acme.co.uk</a>media`
+  // collapses to "info@acme.co.ukmedia" and the email regex swallows the
+  // trailing word. See cheeriojs/cheerio#1306.
+  const body = $('body').find('*').contents()
+    .map((_, el) => (el.type === 'text' ? $(el).text() : ''))
+    .get().join(' ')
   r.emails = [...new Set([...r.emails, ...extractEmails(body)])]
   r.phones = [...new Set([...r.phones, ...extractPhones(body)])]
   r.names = [...new Set([...r.names, ...extractNames($)])].slice(0, 10)
