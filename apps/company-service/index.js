@@ -441,6 +441,10 @@ const AUTOQ = {
   enabled: process.env.LEAD_AUTOQUEUE !== '0',
   lowWater: Number(process.env.LEAD_QUEUE_LOW_WATER || 2000),
   batch: Number(process.env.LEAD_QUEUE_BATCH || 5000),
+  // Hard ceiling on unfinished jobs. scraper-service works one job at a time,
+  // so beyond a small number these are just sitting idle, and a big backlog is
+  // wasted work if a batch turns out to be bad.
+  maxOpenJobs: Number(process.env.LEAD_QUEUE_MAX_JOBS || 2),
   lastRun: null, lastQueued: 0, lastError: null,
 }
 
@@ -493,10 +497,12 @@ app.get('/lead-queue/status', async (req, res) => {
     const { rows: [d] } = await pool.query(`
       SELECT (SELECT COUNT(*) FROM cc_domains)                        AS total,
              (SELECT COUNT(*) FROM cc_domains WHERE queued_at IS NULL) AS remaining,
-             (SELECT COUNT(*) FROM scrape_job_items WHERE status='pending') AS pending`)
+             (SELECT COUNT(*) FROM scrape_job_items WHERE status='pending') AS pending,
+             (SELECT COUNT(*) FROM scrape_jobs WHERE status IN ('queued','running')) AS open_jobs`)
     res.json({
-      total: +d.total, remaining: +d.remaining, pending: +d.pending,
+      total: +d.total, remaining: +d.remaining, pending: +d.pending, open_jobs: +d.open_jobs,
       auto: { enabled: AUTOQ.enabled, low_water: AUTOQ.lowWater, batch: AUTOQ.batch,
+              max_open_jobs: AUTOQ.maxOpenJobs,
               last_run: AUTOQ.lastRun, last_queued: AUTOQ.lastQueued, last_error: AUTOQ.lastError },
     })
   } catch (e) { res.status(500).json({ error: e.message }) }
@@ -519,12 +525,18 @@ app.post('/lead-queue/auto', (req, res) => {
 setInterval(async () => {
   if (!AUTOQ.enabled) return
   try {
-    const { rows: [{ pending }] } = await pool.query(
-      `SELECT COUNT(*) pending FROM scrape_job_items WHERE status='pending'`)
-    if (+pending >= AUTOQ.lowWater) return
+    // Gate on UNFINISHED JOBS, not pending items. scraper-service claims one job
+    // at a time, so a backlog of queued jobs is work already waiting — topping
+    // up because item count looks low just grows a queue nothing is draining.
+    const { rows: [q] } = await pool.query(`
+      SELECT COUNT(*) FILTER (WHERE status IN ('queued','running')) AS open_jobs,
+             COALESCE(SUM(total - done) FILTER (WHERE status IN ('queued','running')),0) AS outstanding
+        FROM scrape_jobs`)
+    if (+q.open_jobs >= AUTOQ.maxOpenJobs) return
+    if (+q.outstanding >= AUTOQ.lowWater) return
     const n = await topUpLeadQueue(AUTOQ.batch)
     AUTOQ.lastRun = new Date().toISOString(); AUTOQ.lastQueued = n; AUTOQ.lastError = null
-    if (n) console.log(`[lead-queue] topped up ${n} domains (pending was ${pending})`)
+    if (n) console.log(`[lead-queue] topped up ${n} (open jobs ${q.open_jobs}, outstanding ${q.outstanding})`)
   } catch (e) {
     AUTOQ.lastError = e.message
     console.error('[lead-queue]', e.message)
