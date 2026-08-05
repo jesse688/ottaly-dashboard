@@ -1224,6 +1224,47 @@
               <option value="no">❌ Rents / doesn't own</option>
               <option value="unknown">❓ Unknown</option>
             </select>
+
+            <!-- Where the lead came from. Lets you isolate (or exclude) a single
+                 import batch — e.g. everything the Common Crawl pipeline added. -->
+            <select id="sourceFilter" title="Which import produced this lead.">
+              <option value="">📥 Data source — all</option>
+              <option value="commoncrawl">🕸️ Common Crawl (scraped)</option>
+              <option value="apollo_csv">Apollo CSV</option>
+              <option value="plusvibe">PlusVibe</option>
+              <option value="plusvibe_csv">PlusVibe CSV</option>
+              <option value="engine">Engine</option>
+              <option value="ch_scraper">CH scraper</option>
+            </select>
+
+            <!-- Companies House enrichment. Only populated for pipeline leads;
+                 older imports leave these blank, so choosing a value excludes them. -->
+            <select id="companyAgeBand" title="Company age from the Companies House incorporation date.">
+              <option value="">🗓️ Company age — all</option>
+              <option value="startup (&lt;1y)">🌱 Startup (&lt;1y)</option>
+              <option value="young (1-3y)">🌿 Young (1–3y)</option>
+              <option value="established (3-10y)">🌳 Established (3–10y)</option>
+              <option value="mature (10-25y)">🏛️ Mature (10–25y)</option>
+              <option value="legacy (25y+)">🏰 Legacy (25y+)</option>
+            </select>
+
+            <select id="ownsFreehold" title="Freehold property owned, matched on company number in HM Land Registry (CCOD). A freeholder can authorise works; a leaseholder usually cannot.">
+              <option value="">🏠 Freehold — all</option>
+              <option value="yes">✅ Owns freehold</option>
+              <option value="no">❌ No freehold</option>
+            </select>
+
+            <select id="companyStatus" title="Companies House status.">
+              <option value="">📋 CH status — all</option>
+              <option value="Active">✅ Active</option>
+              <option value="Liquidation">⚠️ Liquidation</option>
+            </select>
+
+            <select id="chVerified" title="Whether the Companies House match was corroborated by company name or postcode. Unverified leads have a valid email but no trustworthy company data — avoid personalising on company name.">
+              <option value="">🔍 CH match — all</option>
+              <option value="yes">✅ Verified</option>
+              <option value="no">❓ Unverified</option>
+            </select>
             <select id="ccodOwnsBuilding" title="Building ownership from HM Land Registry (CCOD) + Companies House, resolved by the company data engine.">
               <option value="">🏢 Building ownership — all</option>
               <option value="yes">✅ Owns building</option>
@@ -2864,6 +2905,12 @@
         adsMinCount: get('adsMinCount'),
         adsMaxCount: get('adsMaxCount'),
         ownsBuilding: get('ownsBuilding'),
+        // Common Crawl pipeline: provenance + Companies House enrichment
+        source: get('sourceFilter'),
+        companyAgeBand: get('companyAgeBand'),
+        ownsFreehold: get('ownsFreehold'),
+        companyStatus: get('companyStatus'),
+        chVerified: get('chVerified'),
         ccodOwnsBuilding: get('ccodOwnsBuilding'),
         solarStatus: get('solarStatus'),
         solarMinKwp: get('solarMinKwp'),
@@ -3225,7 +3272,8 @@
         def.selected.forEach(v => params.append(key, v));
         def.excluded.forEach(v => params.append(key + '!', v));
       });
-      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding','solarStatus','solarMinKwp','updatedAge'].forEach(id => {
+      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding','solarStatus','solarMinKwp','updatedAge',
+       'sourceFilter','companyAgeBand','ownsFreehold','companyStatus','chVerified'].forEach(id => {
         const el = document.getElementById(id);
         if (el && el.value) params.append(id, el.value);
       });
@@ -3329,7 +3377,8 @@
       // Reset everything, install the saved hash, then re-run the standard
       // restoration path so behaviour matches a bookmarked-URL reload.
       Object.keys(filterDefs).forEach(k => { filterDefs[k].selected = []; filterDefs[k].excluded = []; });
-      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding','solarStatus','solarMinKwp','updatedAge'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding','solarStatus','solarMinKwp','updatedAge',
+       'sourceFilter','companyAgeBand','ownsFreehold','companyStatus','chVerified'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
       ['emailGoogle','emailOutlook','emailOther','emailUnknown','filterRemote','filterExcludeRemote','filterExcludeDNC','filterNotExported','filterExportedOnly','filterSentToPV','filterNotSentToPV','filterSentToPV','filterNotSentToPV'].forEach(id => { const el = document.getElementById(id); if (el) el.checked = false; });
       if (typeof applyFilterDefaults === 'function') applyFilterDefaults();
       window.location.hash = v.filters || '';
@@ -3360,7 +3409,8 @@
         if (inc.length) { filterDefs[key].selected = inc; any = true; }
         if (exc.length) { filterDefs[key].excluded = exc; any = true; }
       });
-      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding','solarStatus','solarMinKwp','updatedAge'].forEach(id => {
+      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding','solarStatus','solarMinKwp','updatedAge',
+       'sourceFilter','companyAgeBand','ownsFreehold','companyStatus','chVerified'].forEach(id => {
         const v = params.get(id);
         const el = document.getElementById(id);
         if (el && v != null) { el.value = v; any = true; }
