@@ -82,8 +82,10 @@ const CATEGORIES: Category[] = [
 /** Legacy-style rail: colored category groups, hover reveals a dropdown of its pages.
  *  The dropdown is rendered as a fixed-position layer so the rail's scroll/overflow
  *  can never clip it (the bug where the flyout was hidden). */
-// CMs cannot see Finance + Revenue (they keep Commission). Hide those items.
-const CM_HIDDEN_HREFS = new Set(['/finance', '/revenue'])
+// Items that require a login (see middleware ADMIN_PATHS / FINANCE_PATHS).
+// Signed-out visitors are the normal case now — CMs browse without logging in —
+// so hide these rather than showing links that only bounce to a password prompt.
+const GATED_HREFS = new Set(['/finance', '/revenue', '/admin-settings', '/commission'])
 
 export function Sidebar() {
   const pathname = usePathname()
@@ -95,18 +97,19 @@ export function Sidebar() {
   useEffect(() => {
     fetch('/api/auth/role')
       .then(r => r.json())
-      .then(d => setRole(d.role ?? 'admin'))
-      .catch(() => setRole('admin'))
+      .then(d => setRole(d.role ?? null))
+      .catch(() => setRole(null))
   }, [])
 
-  // For CMs, strip Finance/Revenue from each category and drop any category
-  // left with no items. Admin (and the brief pre-load null) sees everything.
+  // Only a signed-in admin sees the gated items. Everyone else — signed-out CMs
+  // and the brief pre-load null — gets them stripped, along with any category
+  // left empty as a result.
   const categories =
-    role === 'cm'
-      ? CATEGORIES.map(c => ({ ...c, items: c.items.filter(i => !CM_HIDDEN_HREFS.has(i.href)) })).filter(
+    role === 'admin'
+      ? CATEGORIES
+      : CATEGORIES.map(c => ({ ...c, items: c.items.filter(i => !GATED_HREFS.has(i.href)) })).filter(
           c => c.items.length > 0,
         )
-      : CATEGORIES
 
   const openCat = categories.find(c => c.key === open) ?? null
 
