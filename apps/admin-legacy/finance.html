@@ -399,8 +399,22 @@ let FX = { GBP: 1, USD: 0.79, EUR: 0.85, ZAR: 0.042 };
 function _usd() { return FX.USD || 0.79; }
 function _zar() { return FX.ZAR || 0.042; }
 
-fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true})).then(s=>{
-  if (s.ok === false) { location.href = '/login.html'; return; }
+fetch('/api/session').then(r=>r.json()).catch(()=>({ok:true})).then(async s=>{
+  if (s.ok === false) { location.href = '/login.html?next=/finance.html'; return; }
+  // Admins only — managers never see Finance (matches Revenue's lockout).
+  if (s.role === 'manager') {
+    document.body.innerHTML = '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#F0F2F8;font-family:\'Inter\',sans-serif">'
+      + '<div style="text-align:center;padding:3rem">'
+      + '<div style="font-size:3rem;margin-bottom:1rem">&#128274;</div>'
+      + '<div style="font-size:1.2rem;font-weight:700;color:#050C29;margin-bottom:0.5rem">Access Restricted</div>'
+      + '<div style="color:#6B7280;margin-bottom:1.5rem">Finance data is only visible to admins.</div>'
+      + '<a href="/performance.html" style="padding:10px 24px;background:#1F6F78;color:#fff;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px">Go to Performance &rarr;</a>'
+      + '</div></div>';
+    return;
+  }
+  // Second factor: Finance/Revenue also need the FINANCE_KEY unlock.
+  const fin = await fetch('/api/finance-unlock').then(r=>r.json()).catch(()=>({unlocked:false}));
+  if (!fin.unlocked) { location.href = '/unlock.html?next=/finance.html'; return; }
   const nameEl = document.getElementById('sessionName');
   const signEl = document.getElementById('signOutBtn');
   if (nameEl) nameEl.textContent = s.name || '';

@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/favicon.svg">
+<meta name="theme-color" content="#050C29">
+<meta name="description" content="Ottaly — finance locked">
+<title>Ottaly — Finance Locked</title>
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Inter',sans-serif;background:#050C29;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.card{background:#fff;border-radius:16px;padding:2.5rem;width:380px;max-width:92vw;box-shadow:0 24px 80px rgba(0,0,0,0.4)}
+.logo{font-family:'Genos',sans-serif;font-size:2rem;font-weight:800;color:#050C29;letter-spacing:1px;text-align:center;margin-bottom:0.25rem}
+.logo span{color:#1F6F78}
+.lock{text-align:center;font-size:1.75rem;margin-bottom:0.5rem}
+.title{text-align:center;font-size:15px;font-weight:600;color:#050C29;margin-bottom:0.35rem}
+.subtitle{text-align:center;font-size:12px;color:#6B7280;margin-bottom:1.75rem;line-height:1.5}
+.field{margin-bottom:1rem}
+.field label{display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:5px}
+.field input{width:100%;padding:10px 12px;border:1.5px solid #E5E7EB;border-radius:8px;font-size:14px;outline:none;font-family:'Inter',sans-serif;transition:border 0.15s}
+.field input:focus{border-color:#1F6F78}
+.btn{width:100%;padding:11px;background:#050C29;color:#fff;border:none;border-radius:9px;font-size:14px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif;transition:background 0.15s;margin-top:0.5rem}
+.btn:hover:not(:disabled){background:#1a2a5e}
+.btn:disabled{opacity:.55;cursor:not-allowed}
+.error{color:#DC2626;font-size:12px;min-height:18px;margin-bottom:0.5rem;text-align:center}
+.back{display:block;text-align:center;margin-top:1rem;font-size:12px;color:#6B7280;text-decoration:none}
+.back:hover{color:#050C29}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">Ott<span>a</span>ly</div>
+  <div class="lock">🔒</div>
+  <div class="title">Finance locked</div>
+  <div class="subtitle">Enter the finance key to view Finance &amp; Revenue.<br>It stays unlocked for 12 hours.</div>
+
+  <div class="field">
+    <label>Finance Key</label>
+    <input type="password" id="finKey" placeholder="••••••••" autofocus onkeydown="if(event.key==='Enter')unlock()">
+  </div>
+
+  <div class="error" id="errMsg"></div>
+  <button class="btn" id="btn" onclick="unlock()">Unlock</button>
+  <a class="back" href="/performance.html">Back to dashboard</a>
+</div>
+
+<script>
+// Where to return after unlocking. Only same-origin relative paths, so a crafted
+// ?next= can't bounce the user off-site once they've entered the key.
+const rawNext = new URLSearchParams(location.search).get('next') || '/finance.html';
+const next = (rawNext.startsWith('/') && !rawNext.startsWith('//')) ? rawNext : '/finance.html';
+
+async function unlock() {
+  const key = document.getElementById('finKey').value;
+  const err = document.getElementById('errMsg');
+  const btn = document.getElementById('btn');
+  if (!key) return;
+  err.textContent = '';
+  btn.disabled = true;
+  btn.textContent = 'Unlocking…';
+  try {
+    const r = await fetch('/api/finance-unlock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key })
+    });
+    if (r.ok) { location.href = next; return; }
+    if (r.status === 401) {
+      const d = await r.json().catch(() => ({}));
+      err.textContent = d.error || 'Invalid finance key';
+    } else if (r.status === 403) {
+      err.textContent = 'Finance key is not configured on the server.';
+    } else {
+      // 401 from requireAdmin means the admin session itself has gone.
+      location.href = '/login.html?next=' + encodeURIComponent(next);
+      return;
+    }
+  } catch {
+    err.textContent = 'Something went wrong';
+  }
+  btn.disabled = false;
+  btn.textContent = 'Unlock';
+}
+</script>
+</body>
+</html>

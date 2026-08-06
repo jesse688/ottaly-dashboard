@@ -849,6 +849,9 @@
                 </div>`;
                 return;
             }
+            // Second factor: Finance/Revenue also need the FINANCE_KEY unlock.
+            const fin = await fetch('/api/finance-unlock').then(r => r.json()).catch(() => ({unlocked:false}));
+            if (!fin.unlocked) { location.href = '/unlock.html?next=/index.html'; return; }
         })();
 
 // Detect if running locally
