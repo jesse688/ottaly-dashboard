@@ -604,7 +604,7 @@ app.get('/lead-sync/preview', async (req, res) => {
 app.post('/lead-sync/run', async (req, res) => {
   try {
     const r = await syncLeadsToContacts({
-      sinceHours: Number(req.query.hours) || Number(process.env.LEAD_SYNC_WINDOW_HOURS || 2),
+      sinceHours: Number(req.query.hours) || Number(process.env.LEAD_SYNC_WINDOW_HOURS || 72),
       limit: Number(req.query.limit) || undefined,
     })
     res.json({ ok: true, ...r })
@@ -612,10 +612,17 @@ app.post('/lead-sync/run', async (req, res) => {
 })
 
 if (SYNC_ON) {
+  // Run shortly after boot as well as on the interval. The timer alone means a
+  // service that restarts more often than the interval (deploys, OOM kills)
+  // never completes a single cycle — which is exactly what happened: the hourly
+  // sync reported last_run: None for a day while leads piled up.
+  setTimeout(() => {
+    syncLeadsToContacts().catch(e => console.error('[lead-sync] startup run:', e.message))
+  }, 60000).unref()
   setInterval(() => {
     syncLeadsToContacts().catch(e => console.error('[lead-sync]', e.message))
   }, SYNC_INTERVAL_MS).unref()
-  console.log(`[lead-sync] enabled — every ${SYNC_INTERVAL_MS / 60000} min`)
+  console.log(`[lead-sync] enabled — startup run + every ${SYNC_INTERVAL_MS / 60000} min`)
 } else {
   console.log('[lead-sync] disabled (set LEAD_SYNC=1 to enable)')
 }

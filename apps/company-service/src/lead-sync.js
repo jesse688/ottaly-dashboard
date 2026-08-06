@@ -167,7 +167,15 @@ export const syncState = { lastRun: null, lastInserted: 0, lastSkipped: 0, lastE
  * @param {{sinceHours?:number, limit?:number, dryRun?:boolean}} opts
  */
 export async function syncLeadsToContacts(opts = {}) {
-  const sinceHours = opts.sinceHours ?? Number(process.env.LEAD_SYNC_WINDOW_HOURS || 2)
+  // 72h, not 2h. A short window strands leads permanently: every missed tick
+  // (restart, deploy, OOM kill) leaves that period's scrapes unsynced forever,
+  // because the next run only looks back 2 hours. Observed in production —
+  // 101,210 leads were scraped and never synced.
+  //
+  // A wide window is cheap because ON CONFLICT DO NOTHING makes re-reading
+  // already-synced rows a no-op, so the sync becomes self-healing rather than
+  // depending on an unbroken chain of hourly runs.
+  const sinceHours = opts.sinceHours ?? Number(process.env.LEAD_SYNC_WINDOW_HOURS || 72)
   const limit = opts.limit ?? Number(process.env.LEAD_SYNC_LIMIT || 20000)
   const dryRun = !!opts.dryRun
 
