@@ -5,10 +5,15 @@ export async function GET(req: NextRequest) {
   const p = req.nextUrl.searchParams
   const workspaceId = p.get('workspace_id')
   const signalType = p.get('signal_type')
-  const hours = parseInt(p.get('hours') ?? '24')
+  // Bind as a parameter, never interpolate: parseInt returns NaN for junk input
+  // and NaN stringifies into the SQL literal, which is an injection point.
+  const parsedHours = Number.parseInt(p.get('hours') ?? '24', 10)
+  const hours = Number.isFinite(parsedHours)
+    ? Math.min(Math.max(parsedHours, 1), 24 * 365)
+    : 24
 
-  const conditions = [`timestamp > now() - interval '${hours} hours'`]
-  const values: unknown[] = []
+  const values: unknown[] = [hours]
+  const conditions = [`timestamp > now() - make_interval(hours => $1)`]
 
   if (workspaceId) { values.push(workspaceId); conditions.push(`workspace_id = $${values.length}`) }
   if (signalType) { values.push(signalType); conditions.push(`signal_type = $${values.length}`) }
