@@ -979,6 +979,34 @@ function requireSession(req, res, next) {
   return res.status(401).json({ error: 'Unauthorized' });
 }
 
+// ── Finance lock ──────────────────────────────────────────
+// Mirrors admin-new: Finance + Revenue need a SEPARATE passphrase on top of the
+// admin login. Being an admin is not enough — you must also enter FINANCE_KEY,
+// which sets a short-lived (12h) signed cookie. Fails closed: if FINANCE_KEY is
+// unset, finance stays locked for everyone rather than falling back to open.
+const FINANCE_KEY = process.env.FINANCE_KEY;
+
+function isFinanceUnlocked(req) {
+  const raw = req.headers.cookie || '';
+  const m   = raw.match(/(?:^|;\s*)ottaly_fin=([^;]+)/);
+  if (!m) return false;
+  try { return jwt.verify(m[1], SESSION_SECRET).fin === true; } catch { return false; }
+}
+
+function setFinanceCookie(res) {
+  const token = jwt.sign({ fin: true }, SESSION_SECRET, { expiresIn: '12h' });
+  res.setHeader('Set-Cookie',
+    `ottaly_fin=${token}; HttpOnly; Path=/; Max-Age=${12*3600}; SameSite=Strict`);
+}
+
+// Admin login first, then the finance passphrase.
+function requireFinance(req, res, next) {
+  requireAdmin(req, res, () => {
+    if (isFinanceUnlocked(req)) return next();
+    return res.status(403).json({ error: 'Finance locked', financeLocked: true });
+  });
+}
+
 // ── Claude (MCP) write permissions ───────────────────────────────────
 // Capability toggles, owned from the admin "Claude Access" panel and stored in
 // app_settings under `claude_permissions`. The MCP write tools authenticate with
@@ -1152,6 +1180,35 @@ app.get('/api/session', (req, res) => {
   }
   res.json({ ok: true, role: s.role, name: s.name || 'Admin' });
 });
+
+// ── Finance unlock (mirrors admin-new) ────────────────────
+// GET reports whether this browser holds a valid finance unlock; POST exchanges
+// FINANCE_KEY for the 12h cookie; DELETE re-locks. Admin login required first,
+// so the passphrase is a second factor rather than a standalone password.
+// These sit BEFORE the prefix gate below so they stay reachable while locked;
+// Express matches app.use on path segments, so '/api/finance-unlock' is not
+// captured by the '/api/finance' mount.
+app.get('/api/finance-unlock', requireAdmin, (req, res) => {
+  res.json({ unlocked: isFinanceUnlocked(req), configured: !!FINANCE_KEY });
+});
+
+app.post('/api/finance-unlock', requireAdmin, (req, res) => {
+  const { key } = req.body || {};
+  if (!FINANCE_KEY) return res.status(403).json({ error: 'Finance key not configured' });
+  if (!key || key !== FINANCE_KEY) return res.status(401).json({ error: 'Invalid finance key' });
+  setFinanceCookie(res);
+  res.json({ ok: true });
+});
+
+app.delete('/api/finance-unlock', requireAdmin, (req, res) => {
+  res.setHeader('Set-Cookie', 'ottaly_fin=; HttpOnly; Path=/; Max-Age=0; SameSite=Strict');
+  res.json({ ok: true });
+});
+
+// Gate every finance/revenue/payslip API by prefix. Mounted here — before the
+// individual route definitions — so new endpoints under these prefixes inherit
+// the lock automatically instead of having to remember requireFinance on each.
+app.use(['/api/finance', '/api/revenue', '/api/payslips'], requireFinance);
 
 // Returns a manager's commission rate by name. Used by commission.html
 // so admins can also view commissions (they don't get commission_rate in
