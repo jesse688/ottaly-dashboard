@@ -4,7 +4,7 @@ import dns from 'node:dns/promises'
 import { proxyUrls } from './proxies.js'
 import {
   extractEmails, extractPhones, extractNames, CONTACT_PATHS,
-  extractSocials, extractMetaDescription, extractMetaKeywords,
+  extractSocials, extractMetaDescription, extractMetaKeywords, extractIcpSignals,
   extractJsonLd, extractAddressHeuristic, pageTextSample,
 } from './extract.js'
 
@@ -58,6 +58,23 @@ function applyExtraction($, r, isSub, url) {
   r.names = [...new Set([...r.names, ...extractNames($)])].slice(0, 10)
   r.socials = { ...extractSocials($), ...r.socials }
   r.metaKeywords = [...new Set([...r.metaKeywords, ...extractMetaKeywords($)])].slice(0, 25)
+  // ICP signals: what the business IS, for segmenting campaigns. Merged across
+  // pages — an ecommerce or careers signal on any page counts for the domain,
+  // and team_size takes the highest count seen (usually the team page).
+  {
+    // $.html() rather than a rawHtml param: applyExtraction is called from both
+    // the Cheerio and Playwright paths and only the parsed document is common to
+    // both. Platform detection needs the markup (script src, CDN hosts), which
+    // the text-only `body` above has already stripped.
+    const icp = extractIcpSignals($, $.html())
+    r.icp = r.icp || {}
+    if (icp.platform && !r.icp.platform) r.icp.platform = icp.platform
+    r.icp.tech = [...new Set([...(r.icp.tech || []), ...icp.tech])]
+    r.icp.ecommerce = r.icp.ecommerce || icp.ecommerce
+    r.icp.has_careers = r.icp.has_careers || icp.has_careers
+    r.icp.multi_location = r.icp.multi_location || icp.multi_location
+    if (icp.team_size && icp.team_size > (r.icp.team_size || 0)) r.icp.team_size = icp.team_size
+  }
   const jsonld = extractJsonLd($)
   if (!r.address) r.address = jsonld.address || extractAddressHeuristic($)
   if (!r.jsonldType && jsonld.type) r.jsonldType = jsonld.type
@@ -81,7 +98,7 @@ function buildTargets(targets) {
       domain: t.domain, company_number: t.company_number ?? null,
       pageUrl: `https://${t.domain}`, website: `https://${t.domain}`,
       emails: [], phones: [], names: [], socials: {}, metaKeywords: [],
-      description: null, address: null, jsonldType: null, textSample: null,
+      description: null, address: null, jsonldType: null, textSample: null, icp: {},
       status: 'pending', errorMsg: null,
     })
     const base = `https://${t.domain}`
@@ -157,7 +174,7 @@ export async function scrapeBatch(targets, opts = {}) {
       website: `https://${t.domain}`,
       emails: [], phones: [], names: [],
       socials: {}, metaKeywords: [],
-      description: null, address: null, jsonldType: null, textSample: null,
+      description: null, address: null, jsonldType: null, textSample: null, icp: {},
       status: 'pending', errorMsg: null,
     })
   }

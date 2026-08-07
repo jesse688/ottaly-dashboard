@@ -42,6 +42,11 @@ function buildContact(r, context, cls, fields) {
     business_type: has('business_type') ? (cls.business_type || context?.company_type || null) : null,
     industry: has('industry') ? (cls.industry || context?.industry || null) : null,
     keywords: has('keywords') ? (cls.keywords?.length ? cls.keywords : r.metaKeywords) : [],
+    // ICP signals are always kept — they cost nothing extra (same page fetch)
+    // and they're what a marketing team segments on. Gating them behind a field
+    // flag is how socials/description ended up empty across the first million
+    // domains.
+    icp: r.icp && Object.keys(r.icp).length ? r.icp : null,
   }
 }
 

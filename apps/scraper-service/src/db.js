@@ -64,6 +64,10 @@ export async function ensureSchema() {
     ALTER TABLE scraped_contacts ADD COLUMN IF NOT EXISTS keywords      TEXT[] NOT NULL DEFAULT '{}';
     ALTER TABLE scraped_contacts ADD COLUMN IF NOT EXISTS description   TEXT;
     ALTER TABLE scraped_contacts ADD COLUMN IF NOT EXISTS socials       JSONB;
+    -- ICP signals scraped from the site: platform, tech[], ecommerce,
+    -- team_size, has_careers, multi_location. What the business IS, for
+    -- segmenting campaigns — as opposed to how to contact it.
+    ALTER TABLE scraped_contacts ADD COLUMN IF NOT EXISTS icp           JSONB;
 
     ALTER TABLE scrape_jobs       ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'ch';
     ALTER TABLE scrape_jobs       ADD COLUMN IF NOT EXISTS fields TEXT[];
@@ -163,8 +167,8 @@ export async function saveContact(c) {
     `INSERT INTO scraped_contacts
        (domain, company_number, page_url, website, emails, phones, raw_names,
         address, business_type, industry, keywords, description, socials,
-        status, error_msg, scraped_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, now())
+        status, error_msg, icp, scraped_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16, now())
      ON CONFLICT (domain) DO UPDATE SET
        company_number = COALESCE(EXCLUDED.company_number, scraped_contacts.company_number),
        page_url      = EXCLUDED.page_url,
@@ -180,6 +184,9 @@ export async function saveContact(c) {
        socials       = EXCLUDED.socials,
        status        = EXCLUDED.status,
        error_msg     = EXCLUDED.error_msg,
+       -- COALESCE: a later narrow re-crawl shouldn't wipe ICP signals a wider
+       -- pass already established for this domain.
+       icp           = COALESCE(EXCLUDED.icp, scraped_contacts.icp),
        scraped_at    = now()`,
     [
       c.domain, c.company_number ?? null, c.pageUrl ?? null, c.website ?? (c.domain ? `https://${c.domain}` : null),
@@ -187,6 +194,7 @@ export async function saveContact(c) {
       c.address ?? null, c.business_type ?? null, c.industry ?? null,
       c.keywords ?? [], c.description ?? null, c.socials ? JSON.stringify(c.socials) : null,
       c.status, c.errorMsg ?? null,
+      c.icp && Object.keys(c.icp).length ? JSON.stringify(c.icp) : null,
     ]
   )
 }
