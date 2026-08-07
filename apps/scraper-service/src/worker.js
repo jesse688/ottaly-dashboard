@@ -121,7 +121,14 @@ async function processJobInner(job) {
     // 2b) DEDUP: skip any domain we've ALREADY scraped — reuse the stored row,
     // no re-crawl. Saves proxy bandwidth + Gemini cost and means we never scrape
     // the same business twice. (Link CH company_number to the existing row.)
-    const known = await existingScrapedDomains(withDomain.map(it => it.domain))
+    //
+    // A job labelled "recrawl" opts out. Without this, a deliberate second pass
+    // is impossible: every domain is already in scraped_contacts, so all 20,000
+    // items completed instantly as "ok" having fetched nothing. The dedup is
+    // right for new work and wrong for a re-crawl, so the job says which it is.
+    const isRecrawl = /recrawl/i.test(job.label || '')
+    const known = isRecrawl ? new Set()
+      : await existingScrapedDomains(withDomain.map(it => it.domain))
     const alreadyScraped = withDomain.filter(it => known.has(it.domain))
     const scrapeable = withDomain.filter(it => !known.has(it.domain))
     for (const it of alreadyScraped) {
