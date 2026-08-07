@@ -47,15 +47,95 @@ export function extractPhones(text) {
 }
 
 // "Firstname Lastname" headings near team/about content. Best-effort.
+// UI text that matches "Two Capitalised Words" but is never a person. Without
+// this the extractor returns "Page Not Found", "Log In", "First Name" — which is
+// what it did across the first million domains, making raw_names unusable.
+const NOT_A_NAME = /^(page not found|log ?in|sign ?in|sign ?up|first name|last name|full name|user name|email address|phone number|contact us|about us|read more|learn more|find out|get in|our team|meet the|privacy policy|terms and|cookie policy|all rights|company number|registered office|opening hours|customer service|free delivery|add to|view all|show more|main menu|skip to|search results|home page|news events|case studies|why choose|what we|how we|our services|our products|our clients|our work|latest news|book now|get started|contact form|thank you|coming soon|under construction)/i
+
+// Job titles worth knowing for outreach — seniority is the usual ICP filter.
+const TITLE_RE = /\b(chief executive|managing director|finance director|operations director|sales director|marketing director|technical director|creative director|founder|co-?founder|owner|proprietor|partner|principal|president|chairman|chairwoman|director|head of [a-z ]{3,25}|general manager|practice manager|office manager|operations manager|sales manager|marketing manager|account manager|business development|ceo|cfo|coo|cto|cmo|md)\b/i
+
+/**
+ * People named on the page, with a job title where one sits nearby.
+ *
+ * The old version matched any two capitalised words in any element, which is why
+ * raw_names filled with navigation text. This requires a plausible name shape,
+ * rejects known UI strings, and prefers elements on team/about pages where a
+ * title appears in the same block — a name with a title is worth far more for
+ * targeting than a bare name.
+ */
 export function extractNames($) {
-  const names = []
-  $('h2,h3,h4,p,span,div').each((_, el) => {
-    const txt = $(el).text().trim()
-    if (txt.length > 3 && txt.length < 50 && /^[A-Z][a-z]+ [A-Z][a-z]+/.test(txt) && !/\d/.test(txt)) {
-      names.push(txt)
-    }
+  const out = []
+  const seen = new Set()
+  // Narrower element set: names appear in headings and short blocks, not in
+  // every div on the page.
+  $('h2,h3,h4,h5,strong,b,figcaption,li,td').each((_, el) => {
+    const txt = $(el).text().replace(/\s+/g, ' ').trim()
+    if (txt.length < 5 || txt.length > 60) return
+    if (NOT_A_NAME.test(txt)) return
+    // "Firstname Lastname", optionally with a middle initial or double-barrel.
+    const m = txt.match(/^([A-Z][a-z]{1,15}(?:-[A-Z][a-z]{1,15})?)\s+(?:[A-Z]\.?\s+)?([A-Z][a-z]{1,20}(?:-[A-Z][a-z]{1,20})?)$/)
+    if (!m) return
+    const name = `${m[1]} ${m[2]}`
+    if (seen.has(name)) return
+    // A title in the same element or the next one turns a name into a lead.
+    const near = (txt + ' ' + $(el).next().text() + ' ' + $(el).parent().text()).slice(0, 400)
+    const t = near.match(TITLE_RE)
+    seen.add(name)
+    out.push(t ? `${name} — ${t[0]}` : name)
   })
-  return [...new Set(names)].slice(0, 10)
+  // Titled entries first: they're the ones worth writing to.
+  out.sort((a, b) => (b.includes('—') ? 1 : 0) - (a.includes('—') ? 1 : 0))
+  return out.slice(0, 12)
+}
+
+// ─── ICP signals ─────────────────────────────────────────────────────────────
+// Attributes a marketing team can actually segment on. Everything here comes
+// from HTML already fetched, so it costs no extra requests.
+
+const PLATFORMS = [
+  ['shopify', /cdn\.shopify\.com|\.myshopify\.com|Shopify\.theme/i],
+  ['woocommerce', /woocommerce|wp-content\/plugins\/woocommerce/i],
+  ['magento', /\/static\/version\d|Magento_|mage\/cookies/i],
+  ['bigcommerce', /bigcommerce|cdn\d*\.bigcommerce/i],
+  ['prestashop', /prestashop/i],
+  ['squarespace', /squarespace|static1\.squarespace/i],
+  ['wix', /\.wix\.com|wixstatic\.com/i],
+  ['webflow', /webflow\.(com|io)|wf-form/i],
+  ['wordpress', /wp-content|wp-includes/i],
+  ['hubspot', /hs-scripts\.com|hubspot/i],
+  ['salesforce', /salesforce|pardot/i],
+]
+const ECOM_PLATFORMS = new Set(['shopify', 'woocommerce', 'magento', 'bigcommerce', 'prestashop'])
+
+/**
+ * @returns {{platform:string|null, tech:string[], ecommerce:boolean,
+ *            team_size:number|null, has_careers:boolean, multi_location:boolean}}
+ */
+export function extractIcpSignals($, html) {
+  const tech = []
+  let platform = null
+  for (const [name, re] of PLATFORMS) {
+    if (re.test(html)) { tech.push(name); if (!platform) platform = name }
+  }
+
+  // Ecommerce: a store platform, Product schema, or a basket link. Any one is
+  // enough — plenty of shops run on a generic CMS.
+  const ecommerce = (platform && ECOM_PLATFORMS.has(platform))
+    || /"@type"\s*:\s*"Product"|itemtype="[^"]*schema\.org\/Product"/i.test(html)
+    || $('a[href*="/cart"], a[href*="/basket"], a[href*="/checkout"]').length > 0
+
+  // Headcount proxy: distinct people named on a team page. Crude, but it
+  // separates a sole trader from a 30-person firm, which is the split that
+  // usually matters for ICP.
+  const names = extractNames($)
+  const team_size = names.length >= 3 ? names.length : null
+
+  const has_careers = $('a[href*="career"], a[href*="jobs"], a[href*="vacanc"], a[href*="recruit"]').length > 0
+  // Several branch/location links suggests a multi-site operation.
+  const multi_location = $('a[href*="location"], a[href*="branch"], a[href*="/our-offices"]').length >= 2
+
+  return { platform, tech, ecommerce, team_size, has_careers, multi_location }
 }
 
 // Contact-rich sub-pages we also visit per domain.
