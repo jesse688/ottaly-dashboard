@@ -246,7 +246,18 @@ export async function syncLeadsToContacts(opts = {}) {
         LEFT JOIN ch_companies c ON c.company_number = sc.company_number
        WHERE array_length(sc.emails, 1) > 0
          AND sc.scraped_at > now() - ($1 || ' hours')::interval
-       LIMIT $2`, [sinceHours, limit])
+         -- Skip domains already in the pool. Without this the LIMIT is spent on
+         -- rows that ON CONFLICT will discard: with 378k rows in a 72h window
+         -- and a 20k limit, every run re-read the same already-synced slice and
+         -- inserted nothing, so a backlog could never drain. Observed in
+         -- production — 106,816 scraped domains stranded.
+         AND NOT EXISTS (
+           SELECT 1 FROM contacts ct
+            WHERE ct.company_domain = sc.domain AND ct.source = $3)
+       -- Deterministic order: an unordered LIMIT returns an arbitrary slice, so
+       -- the same rows can be picked forever while others are never seen.
+       ORDER BY sc.scraped_at DESC
+       LIMIT $2`, [sinceHours, limit, SOURCE])
 
     const out = []
     const seen = new Set()
