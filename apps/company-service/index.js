@@ -487,7 +487,12 @@ async function topUpLeadQueue(n) {
       `INSERT INTO scrape_jobs (label, status, total, source, fields)
        VALUES ($1,'queued',$2,'list',$3) RETURNING id`,
       [`auto: commoncrawl ${new Date().toISOString().slice(0, 10)}`, picks.length,
-       ['emails', 'phones', 'address']])
+       // Everything the marketing team segments on. The old three-field list
+       // predates socials/description/keywords, so jobs created by this path
+       // yielded leads with no industry and no ICP signals — the same data loss
+       // the manual loaders were already fixed for.
+       ['emails', 'phones', 'address', 'social_links', 'description',
+        'keywords', 'business_type']])
 
     const vals = [], params = []
     picks.forEach((p, i) => {
