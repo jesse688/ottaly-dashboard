@@ -8,6 +8,7 @@ import { chEnabled } from './src/ch.js'
 import { runEngine, stopEngine, engineState, maybeAutostart } from './src/engine.js'
 import { queueDepth, enqueueStaleDomains } from './src/db.js'
 import { syncLeadsToContacts, syncState } from './src/lead-sync.js'
+import { runEnrichment, enrichState } from './src/enrich.js'
 
 const PORT = Number(process.env.PORT) || 3100
 
@@ -628,9 +629,83 @@ if (SYNC_ON) {
     syncLeadsToContacts().catch(e => console.error('[lead-sync]', e.message))
   }, SYNC_INTERVAL_MS).unref()
   console.log(`[lead-sync] enabled — startup run + every ${SYNC_INTERVAL_MS / 60000} min`)
+
+  // Enrichment runs on the same schedule, offset to land AFTER the sync: it
+  // fills industry/city/ICP on leads in `contacts`, so the sync must have put
+  // them there first. Offsetting rather than chaining keeps a slow or failed
+  // sync from blocking enrichment of everything already synced.
+  const ENRICH_DELAY_MS = 5 * 60 * 1000
+  setTimeout(() => {
+    runEnrichment().catch(e => console.error('[enrich] startup run:', e.message))
+    setInterval(() => {
+      runEnrichment().catch(e => console.error('[enrich]', e.message))
+    }, SYNC_INTERVAL_MS).unref()
+  }, 60000 + ENRICH_DELAY_MS).unref()
+  console.log(`[enrich] enabled — every ${SYNC_INTERVAL_MS / 60000} min, 5 min after each sync`)
 } else {
   console.log('[lead-sync] disabled (set LEAD_SYNC=1 to enable)')
 }
+
+// Run the enrichment now rather than waiting for the timer — useful right after
+// a large scrape lands, and for confirming a deploy took.
+app.post('/enrich/run', async (req, res) => {
+  try {
+    const r = await runEnrichment({ limit: Number(req.query.limit) || undefined })
+    res.json({ ok: true, ...r })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+/**
+ * One call that answers "is the pipeline actually working, and how good is the
+ * data?" — the numbers previously only reachable by connecting to Postgres
+ * directly, which needed the public 5432 that is now (correctly) closed.
+ *
+ * `usable` is the number that matters: a lead without industry AND location
+ * cannot be segmented into a campaign, so raw lead count overstates what the
+ * marketing team can actually use.
+ */
+app.get('/pipeline/status', async (req, res) => {
+  try {
+    const q = async (sql) => (await pool.query(sql)).rows[0]
+    const [leads, scrape, queue] = await Promise.all([
+      q(`SELECT count(*)::int total,
+                count(*) FILTER (WHERE industry IS NOT NULL)::int with_industry,
+                count(*) FILTER (WHERE city IS NOT NULL)::int with_city,
+                count(*) FILTER (WHERE email IS NOT NULL AND industry IS NOT NULL
+                                   AND city IS NOT NULL)::int usable,
+                count(company_linkedin_url)::int linkedin,
+                count(technologies)::int technologies,
+                count(num_employees)::int team_size,
+                count(job_title)::int job_title,
+                max(created_at) newest
+           FROM contacts WHERE source = 'commoncrawl'`),
+      q(`SELECT count(*)::int scraped,
+                count(*) FILTER (WHERE icp IS NOT NULL)::int with_icp,
+                count(*) FILTER (WHERE scraped_at > now() - interval '5 minutes')::int last_5min,
+                max(scraped_at) newest
+           FROM scraped_contacts`),
+      q(`SELECT COALESCE(sum(total - done), 0)::int remaining,
+                count(*) FILTER (WHERE status = 'running')::int workers,
+                count(*) FILTER (WHERE status = 'running'
+                  AND COALESCE(heartbeat_at, started_at) < now() - interval '10 minutes')::int stalled
+           FROM scrape_jobs WHERE status IN ('queued','running')`),
+    ])
+    // Rate per minute from the 5-minute window: enough to smooth batch
+    // boundaries without lagging a real stall.
+    const perMin = Math.round(scrape.last_5min / 5)
+    res.json({
+      ok: true,
+      leads, scrape: { ...scrape, per_min: perMin },
+      queue,
+      eta_hours: perMin > 0 ? Math.round((queue.remaining / perMin / 60) * 10) / 10 : null,
+      sync: { last_run: syncState.lastRun, last_inserted: syncState.lastInserted,
+              last_error: syncState.lastError },
+      enrich: { last_run: enrichState.lastRun, last_error: enrichState.lastError,
+                industry: enrichState.industry, location: enrichState.location,
+                enrichment: enrichState.enrichment },
+    })
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }) }
+})
 
 // ── Continuous engine controls ──
 app.post('/engine/start', (req, res) => {
