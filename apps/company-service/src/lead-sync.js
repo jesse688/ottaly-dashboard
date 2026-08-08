@@ -114,9 +114,14 @@ function belongsToDomain(email, domain) {
   if (!h || !domain) return false
   const d = domain.toLowerCase()
   if (h === d) return true
+  // Hyphens are cosmetic in a domain name: vlvelectrical.co.uk and
+  // vlv-electrical.co.uk are the same business, and rejecting the pair loses a
+  // real lead. Compared without them, but only for equality — the prefix rule
+  // below still needs the literal form so unrelated hosts stay rejected.
   const rh = stripTld(h), rd = stripTld(d)
   if (!rh || !rd) return false
   if (rh === rd) return true
+  if (rh.replace(/-/g, '') === rd.replace(/-/g, '')) return true
   const shorter = rh.length < rd.length ? rh : rd
   const longer = rh.length < rd.length ? rd : rh
   return shorter.length >= 6 && longer.startsWith(shorter)
