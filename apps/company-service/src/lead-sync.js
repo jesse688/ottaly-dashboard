@@ -161,6 +161,41 @@ function parseName(raw) {
   return { first: tc(p[0]), last: tc(p[p.length - 1]) }
 }
 
+/**
+ * extractNames() emits "Devika Sadhotra — Practice Manager" for a titled person
+ * and a bare "Second Opinion" for anything it could not attribute. Only the
+ * titled form is worth promoting: an untitled string is as likely to be a page
+ * heading as a human, and a wrong job_title is worse than an empty one.
+ */
+function pickTitledPerson(rawNames) {
+  for (const entry of rawNames || []) {
+    const m = String(entry).split('—')
+    if (m.length < 2) continue
+    const { first, last } = parseName(m[0].trim())
+    const title = m.slice(1).join('—').trim()
+    if (first && last && title) return { first, last, title }
+  }
+  return null
+}
+
+/**
+ * Company LinkedIn only. The scraper reads links off the site, so a /company/
+ * URL is the business itself; a /in/ URL is whoever built the site as often as
+ * it is the owner, and would be wrong against a role address like info@.
+ */
+function companyLinkedIn(socials) {
+  const url = socials?.linkedin
+  if (!url) return null
+  return /\/company\//i.test(String(url)) ? String(url) : null
+}
+
+/** ICP tech[] -> the comma-joined string the existing `technologies` filter reads. */
+function techString(icp) {
+  const tech = Array.isArray(icp?.tech) ? icp.tech.filter(Boolean) : []
+  if (icp?.platform && !tech.includes(icp.platform)) tech.unshift(icp.platform)
+  return tech.length ? tech.join(', ') : null
+}
+
 export const syncState = { lastRun: null, lastInserted: 0, lastSkipped: 0, lastError: null, running: false }
 
 /**
@@ -187,6 +222,10 @@ export async function syncLeadsToContacts(opts = {}) {
     // and a gap would silently lose leads.
     const { rows } = await pool.query(`
       SELECT sc.domain, sc.emails, sc.phones, sc.address AS scraped_address, sc.company_number,
+             -- Enrichment the scraper already collects. Omitting these from the
+             -- SELECT is how socials/ICP/job titles were extracted for 550k
+             -- domains and then silently dropped on the way into contacts.
+             sc.socials, sc.icp, sc.raw_names,
              c.company_name, c.sic_codes, c.post_town, c.county, c.postcode,
              c.company_type, c.company_status, c.incorporated_on,
              (SELECT d.name FROM ch_directors d
@@ -229,6 +268,13 @@ export async function syncLeadsToContacts(opts = {}) {
 
       const ageYears = chVerified ? companyAgeYears(r.incorporated_on) : null
 
+      // Site-level enrichment: true of the business, so shared by every email
+      // on the domain. Computed once per row rather than per address.
+      const titled = pickTitledPerson(r.raw_names)
+      const coLinkedIn = companyLinkedIn(r.socials)
+      const technologies = techString(r.icp)
+      const numEmployees = Number.isFinite(r.icp?.team_size) ? r.icp.team_size : null
+
       for (const raw of r.emails) {
         const email = String(raw).toLowerCase().trim()
         if (!email || seen.has(email)) continue
@@ -252,9 +298,28 @@ export async function syncLeadsToContacts(opts = {}) {
           if (!first && !last) ({ first, last } = parseName(r.psc_owner))
         }
 
+        // A job title may only ride along with the person it belongs to. If the
+        // address resolves to a different name (or to none, as role addresses
+        // do), attaching the site's one titled person would tell the team that
+        // info@ is the Managing Director.
+        const samePerson = titled && first && last
+          && titled.first.toLowerCase() === first.toLowerCase()
+          && titled.last.toLowerCase() === last.toLowerCase()
+        // A role address has no name of its own, so the site's named decision
+        // maker is the best available person for it.
+        const useTitled = titled && isRole && !first && !last
+
         seen.add(email)
         out.push({
-          email, first, last,
+          email,
+          first: useTitled ? titled.first : first,
+          last: useTitled ? titled.last : last,
+          job_title: (samePerson || useTitled) ? titled.title : null,
+          company_linkedin_url: coLinkedIn,
+          technologies,
+          num_employees: numEmployees,
+          socials: r.socials && Object.keys(r.socials).length ? r.socials : null,
+          icp: r.icp || null,
           company_name: chVerified ? (r.company_name || null) : null,
           company_domain: r.domain,
           industry: chVerified ? sicToIndustry(r.sic_codes) : null,
@@ -282,6 +347,12 @@ export async function syncLeadsToContacts(opts = {}) {
             psc_owner: chVerified ? (r.psc_owner || null) : null,
             properties_owned: chVerified ? Number(r.props_owned || 0) : null,
             owns_freehold: chVerified ? !!r.owns_freehold : null,
+            // Kept whole in raw_data as well as in the dedicated columns:
+            // facebook/instagram/twitter have no column of their own, and the
+            // ICP booleans (ecommerce, has_careers, multi_location) are useful
+            // for segmenting even though nothing filters on them yet.
+            socials: r.socials && Object.keys(r.socials).length ? r.socials : null,
+            icp: r.icp || null,
           },
         })
       }
@@ -302,12 +373,13 @@ export async function syncLeadsToContacts(opts = {}) {
       const slice = out.slice(i, i + CHUNK)
       const vals = [], params = []
       slice.forEach((c, n) => {
-        const o = n * 14
-        vals.push(`(${Array.from({length: 14}, (_, k) => '$' + (o + k + 1)).join(',')})`)
+        const o = n * 18
+        vals.push(`(${Array.from({length: 18}, (_, k) => '$' + (o + k + 1)).join(',')})`)
         params.push(WORKSPACE, c.email, c.first, c.last, c.company_name,
                     c.company_domain, c.industry, c.city, c.phone, SOURCE,
                     c.ccod_owns_building, c.company_age_band, c.ch_verified,
-                    JSON.stringify(c.raw))
+                    JSON.stringify(c.raw),
+                    c.job_title, c.company_linkedin_url, c.technologies, c.num_employees)
       })
       // DO NOTHING, never DO UPDATE: an existing row may already carry
       // emailed_workspaces / sent_count and must not be touched.
@@ -315,7 +387,8 @@ export async function syncLeadsToContacts(opts = {}) {
         `INSERT INTO contacts
            (workspace_id, email, first_name, last_name, company_name,
             company_domain, industry, city, phone, source,
-            ccod_owns_building, company_age_band, ch_verified, raw_data)
+            ccod_owns_building, company_age_band, ch_verified, raw_data,
+            job_title, company_linkedin_url, technologies, num_employees)
          VALUES ${vals.join(',')}
          ON CONFLICT (workspace_id, email) DO NOTHING`, params)
       inserted += res.rowCount
