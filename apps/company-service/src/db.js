@@ -258,8 +258,14 @@ export async function stampContacts(c) {
        business_owner = $8,              -- business ownership (yes | no | unknown, from PSC)
        business_owner_basis = $9,
        psc_owners = $10,                 -- the company's >25% owners
+       -- $2::text, not a bare $2. Postgres infers a parameter's type from where
+       -- it is used; inside a CASE there is nothing to infer from, so the bare
+       -- form fails the whole statement with "could not determine data type of
+       -- parameter $2" — even though the same $2 is typed by the assignment
+       -- above. It silently failed 428,472 refresh jobs over four days, which
+       -- is why ownership coverage stopped growing.
        company_data_provenance = CASE WHEN id::text = $5 THEN 'anchor'
-                                      WHEN $2 IS NULL THEN 'unresolved'
+                                      WHEN $2::text IS NULL THEN 'unresolved'
                                       ELSE 'inherited' END,
        company_stamped_at = now()
      WHERE company_domain = $1`,
