@@ -5831,7 +5831,10 @@
         // Clear client filter
         window._activeVertical = '';
         document.getElementById('filterExcludeRemote').checked = false;
+        // Clear BOTH: the vertical rule sets ccodOwnsBuilding, so resetting only
+        // the legacy input left the real filter stuck on after deselecting.
         document.getElementById('ownsBuilding').value = '';
+        document.getElementById('ccodOwnsBuilding').value = '';
         infoEl.style.display = 'none';
         search();
         return;
@@ -5850,7 +5853,13 @@
       // previously-selected client stays active invisibly.
       const applyVerticalToggles = (excludeRemote, requireOwnsBuilding) => {
         document.getElementById('filterExcludeRemote').checked = !!excludeRemote;
-        document.getElementById('ownsBuilding').value = requireOwnsBuilding ? 'yes' : '';
+        // ccodOwnsBuilding, NOT the legacy ownsBuilding. The old column is the
+        // superseded manual/reply-derived signal and holds 'yes' for just 67 of
+        // 1.4M rows; Land Registry resolution writes ccod_owns_building, which
+        // has 83,737. Pointing the vertical rule at the dead column is what
+        // reduced a solar client to 64 contacts.
+        document.getElementById('ccodOwnsBuilding').value = requireOwnsBuilding ? 'yes' : '';
+        document.getElementById('ownsBuilding').value = '';
       };
       applyVerticalToggles(rules?.excludeRemote, rules?.requireOwnsBuilding);
       if (rules?.excludeRemote)       lines.push('🚫 Hiding remote workers');
