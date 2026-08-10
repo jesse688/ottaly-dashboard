@@ -45,15 +45,20 @@ export async function GET() {
               --   1. the row's own first/last name
               --   2. a sibling row's name (SAME email — matched on email ONLY, since
               --      a PV→Bison-migrated lead keeps its old PV workspace_id)
-              --   3. the LinkedIn URL slug: /in/danny-attwater-a182b1296 →
-              --      "Danny Attwater" (strip the trailing random id segment, split
-              --      the rest on '-'). Gives BOTH first and last name.
-              --   4. the email local-part (danny@… → "Danny") — first name only.
+              --   3. the master `contacts` table (the enrichment source the lead was
+              --      built from — a REAL name, so it outranks anything we can guess)
+              --   4. the LinkedIn URL slug: /in/danny-attwater-a182b1296 →
+              --      "Danny Attwater". Only trusted when it actually splits into
+              --      2+ all-letter words (see li_name below) — a vanity slug like
+              --      /in/amyjohnson90 is a HANDLE, not a name, and used to render
+              --      as garbage ("Amyjohn on90") on the client's Leads page.
+              --   5. the email local-part (danny.smith@… → "Danny"/"Smith").
               COALESCE(
                 NULLIF(btrim(l.first_name),''),
                 (SELECT NULLIF(btrim(s.first_name),'') FROM esp_leads s
                   WHERE lower(s.email)=lower(l.email) AND NULLIF(btrim(s.first_name),'') IS NOT NULL
                   ORDER BY s.updated_at DESC LIMIT 1),
+                ct_name.first_name,
                 NULLIF(split_part(li_name.full,' ',1),''),
                 NULLIF(initcap(split_part(regexp_replace(split_part(l.email,'@',1),'[._-]+',' ','g'),' ',1)),'')
               ) AS first_name,
@@ -62,8 +67,15 @@ export async function GET() {
                 (SELECT NULLIF(btrim(s.last_name),'') FROM esp_leads s
                   WHERE lower(s.email)=lower(l.email) AND NULLIF(btrim(s.last_name),'') IS NOT NULL
                   ORDER BY s.updated_at DESC LIMIT 1),
+                ct_name.last_name,
                 -- everything after the first word of the LinkedIn-derived name
-                NULLIF(btrim(substr(li_name.full, strpos(li_name.full,' ')+1)), li_name.full)
+                NULLIF(btrim(substr(li_name.full, strpos(li_name.full,' ')+1)), li_name.full),
+                -- email local-part surname: danny.smith@… → "Smith" (only when the
+                -- local-part actually has a separator, so "danny@" yields nothing).
+                NULLIF(initcap(NULLIF(btrim(substr(
+                  regexp_replace(split_part(l.email,'@',1),'[._-]+',' ','g'),
+                  strpos(regexp_replace(split_part(l.email,'@',1),'[._-]+',' ','g'),' ')+1)),
+                  regexp_replace(split_part(l.email,'@',1),'[._-]+',' ','g'))),'')
               ) AS last_name,
               l.company_name,
               l.status, l.label, l.first_replied_at, l.created_at,
@@ -172,9 +184,31 @@ export async function GET() {
              FROM esp_leads s
             WHERE lower(s.email)=lower(l.email)
               AND s.raw->>'linkedin_person_url' ILIKE '%/in/%'
+              -- ONLY trust a slug that is a real hyphenated name. After stripping the
+              -- trailing id segment it must be 2+ groups of pure letters
+              -- (danny-attwater ✓ / mike-o-brien ✓ / amyjohnson90 ✗ / enchant ✗).
+              -- Without this guard an unsplittable vanity handle was initcapped whole
+              -- and shown to the client as their lead's name.
+              AND regexp_replace(
+                    regexp_replace(lower(split_part(split_part(s.raw->>'linkedin_person_url','/in/',2),'?',1)), '/+$',''),
+                    '-[a-z0-9]*[0-9][a-z0-9]*$','')
+                  ~ '^[a-z]+(-[a-z]+)+$'
             ORDER BY s.updated_at DESC LIMIT 1
          ) AS full
        ) li_name ON TRUE
+       -- Real name from the master contacts table (the enrichment source). Ranked
+       -- above every derived guess, since it's an actual person record.
+       LEFT JOIN LATERAL (
+         SELECT NULLIF(btrim(c.first_name),'') AS first_name,
+                NULLIF(btrim(c.last_name),'')  AS last_name
+           FROM contacts c
+          -- Match on the raw column (idx_contacts_email is on `email`, NOT
+          -- lower(email) — using lower() here would seq-scan 1.4M rows per lead).
+          WHERE c.email = l.email
+            AND NULLIF(btrim(c.first_name),'') IS NOT NULL
+          ORDER BY c.updated_at DESC NULLS LAST
+          LIMIT 1
+       ) ct_name ON TRUE
        LEFT JOIN portal_lead_data ld     ON ld.lead_id = l.id AND ld.client_id = $3
        LEFT JOIN portal_lead_disputes pd ON pd.lead_id = l.id AND pd.client_id = $3
        WHERE l.workspace_id = $1
