@@ -483,6 +483,29 @@ function classifySmtpCode(line) {
   return 'unknown';
 }
 
+// A 5xx at RCPT TO usually means "no such mailbox", but plenty of servers use
+// the same code to refuse the *prober*: banned IP, RBL listing, SPF/DMARC
+// policy, rate limiting. Those must not become a permanent 'invalid' verdict.
+// 5.7.x is the RFC 3463 security/policy class, so it is the strongest signal;
+// the word list catches servers that send a bare 550 with a prose reason.
+const POLICY_REJECTION_RE = new RegExp([
+  'banned', 'blocked', 'blacklist', 'blocklist', 'denylist', 'rbl\\b', 'dnsbl', 'spamhaus', 'barracuda',
+  'access denied', 'not allowed', 'refused', 'rejected due to', 'policy', 'reputation', 'spam',
+  'unsolicited', 'rate limit', 'too many', 'throttl', 'greylist', 'greylisted', 'try again',
+  'authentication required', 'relay(?:ing)? denied', 'not permitted', 'client host',
+].join('|'), 'i');
+
+function isPolicyRejection(line) {
+  const text = String(line || '');
+  // Enhanced status code 5.7.x = policy/security rejection, not a bad mailbox.
+  // 5.7.1 is the one exception that is genuinely ambiguous, but it is far more
+  // often "you are blocked" than "no such user", so treat it as policy too.
+  if (/\b5\.7\.\d+\b/.test(text)) return true;
+  // 5.1.1 / 5.1.10 / 5.5.0 are the real "user unknown" codes — never policy.
+  if (/\b5\.1\.[01]\b|\b5\.1\.10\b/.test(text)) return false;
+  return POLICY_REJECTION_RE.test(text);
+}
+
 async function checkMailbox(email, mxHost, job = null) {
   return new Promise(async (resolve) => {
     let settled = false;
@@ -538,7 +561,21 @@ async function checkMailbox(email, mxHost, job = null) {
         return;
       }
 
-      if (code >= 500) { finish({ status: 'invalid', confidence: 'high', reason: line }); return; }
+      // A 5xx only means "this mailbox does not exist" when it is the reply to
+      // RCPT TO. A 5xx at banner/MAIL FROM is the server rejecting *us* — a
+      // banned sending IP, a policy block, a greylist that answers 5xx — and
+      // says nothing about the recipient. Both used to land here as
+      // invalid/confidence:high, which is never retried (shouldRetryReacherResult
+      // only retries unknown/error) and is then cached on the contact for 14
+      // days, so one blocklisted probe IP permanently buried good addresses.
+      if (code >= 500) {
+        if (state !== 'rcptto' || isPolicyRejection(line)) {
+          finish({ status: 'unknown', confidence: 'low', reason: `Blocked, not a mailbox verdict: ${line}` });
+          return;
+        }
+        finish({ status: 'invalid', confidence: 'high', reason: line });
+        return;
+      }
       if (code >= 400) { finish({ status: 'unknown', confidence: 'low', reason: line }); return; }
       if (code < 200) return;
 
@@ -659,7 +696,11 @@ async function checkMailboxWithRetry(email, mxHost, job = null, log = () => {}) 
     throwIfCancelled(job);
     if (lastResult.status !== 'unknown') return lastResult;
     const reason = String(lastResult.reason || lastResult.response || '').toLowerCase();
-    const retryable = reason.includes('timeout') || reason.includes('closed') || reason.includes('reset') || reason.includes('econn');
+    // 'blocked, not a mailbox verdict' is a 5xx aimed at the prober (banned IP,
+    // RBL, rate limit). Worth another attempt — the retry may go out on a
+    // different proxy exit IP, and greylisters answer on the second try.
+    const retryable = reason.includes('timeout') || reason.includes('closed') || reason.includes('reset')
+      || reason.includes('econn') || reason.includes('blocked, not a mailbox verdict');
     if (!retryable) return lastResult;
   }
   return lastResult || { status: 'unknown', confidence: 'low', reason: 'No SMTP response' };
@@ -928,12 +969,43 @@ function catchAllFlag(result) {
   return isCatchAllResult(result) ? 'yes' : 'no';
 }
 
+// Pull the raw SMTP conversation text out of a Reacher response. Reacher
+// serializes its SmtpError enum as { type, message }, and surfaces the server's
+// own refusal string in smtp.error / smtp.description / debug.smtp_connection.
+function smtpErrorText(result) {
+  const smtp = result?.smtp || {};
+  const parts = [
+    typeof smtp.error === 'string' ? smtp.error : smtp.error?.message,
+    smtp.description,
+    smtp.error?.type,
+    result?.debug?.smtp_connection?.error,
+  ];
+  return parts.filter(p => typeof p === 'string' && p).join(' ');
+}
+
 function mapReacherResult(email, result) {
   const reachable = result?.is_reachable || 'unknown';
   if (reachable === 'safe') {
     return { email, status: 'valid', confidence: 'high', reason: summarizeReacher(result), raw: result };
   }
   if (reachable === 'invalid') {
+    // Reacher reports is_reachable=invalid for a refused RCPT TO, but it cannot
+    // tell "no such mailbox" from "your sending IP is banned" — both are a 5xx.
+    // Our proxy exit IPs have been RBL-listed before, and an 'invalid' here is
+    // never retried and is cached on the contact for 14 days, so a blocked
+    // probe permanently buries a good address. Demote those to unknown.
+    // Reacher calls it Invalid when !is_deliverable OR !can_connect_smtp OR
+    // is_disabled. Only the first is a statement about the mailbox — if we
+    // could not even open the SMTP session, we learned nothing about it.
+    const smtpError = smtpErrorText(result);
+    const neverConnected = result?.smtp?.can_connect_smtp === false;
+    if (neverConnected || (smtpError && isPolicyRejection(smtpError))) {
+      const why = neverConnected && !smtpError ? 'could not connect to SMTP server' : smtpError.slice(0, 160);
+      return {
+        email, status: 'unknown', confidence: 'low',
+        reason: `Blocked, not a mailbox verdict: ${why}`, raw: result,
+      };
+    }
     return { email, status: 'invalid', confidence: 'high', reason: summarizeReacher(result), raw: result };
   }
   if (reachable === 'risky') {
