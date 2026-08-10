@@ -5843,16 +5843,18 @@
       const rules = vertical ? VERTICAL_RULES[vertical] : null;
       const lines = [];
 
-      if (rules) {
-        if (rules.excludeRemote) {
-          document.getElementById('filterExcludeRemote').checked = true;
-          lines.push('🚫 Hiding remote workers');
-        }
-        if (rules.requireOwnsBuilding) {
-          document.getElementById('ownsBuilding').value = 'yes';
-          lines.push('🏢 Showing building owners only');
-        }
-      }
+      // Guess from the name ONLY as a starting point; the saved per-client
+      // settings below override it. Applied via a helper because both this
+      // synchronous pass and the async /api/client-rules response set them, and
+      // they must set AND clear: these inputs are hidden, so a value left from a
+      // previously-selected client stays active invisibly.
+      const applyVerticalToggles = (excludeRemote, requireOwnsBuilding) => {
+        document.getElementById('filterExcludeRemote').checked = !!excludeRemote;
+        document.getElementById('ownsBuilding').value = requireOwnsBuilding ? 'yes' : '';
+      };
+      applyVerticalToggles(rules?.excludeRemote, rules?.requireOwnsBuilding);
+      if (rules?.excludeRemote)       lines.push('🚫 Hiding remote workers');
+      if (rules?.requireOwnsBuilding) lines.push('🏢 Showing building owners only');
 
       document.getElementById('filterExcludeDNC').checked = true;
       lines.push('🚫 Hiding do-not-contact');
@@ -5869,6 +5871,25 @@
         .then(d => {
           const r = d?.rules;
           if (!r || sel.value !== document.getElementById('clientFilter').value) return;
+
+          // The saved per-client settings WIN over the name guess. Hawthorne
+          // Energy matches /energy/ in detectVerticalJS and so inherited the
+          // solar rule requireOwnsBuilding — even with "Requires building
+          // ownership" explicitly unticked on its client record. That silently
+          // cut its pool to 64 contacts while the operator had set no filters.
+          const savedOwns   = r.require_owns_building == 1 || r.require_owns_building === true;
+          const savedRemote = r.exclude_remote        == 1 || r.exclude_remote        === true;
+          applyVerticalToggles(savedRemote, savedOwns);
+          // Rebuild the notes so the panel states what is actually applied.
+          const idxRemote = lines.indexOf('🚫 Hiding remote workers');
+          if (!savedRemote && idxRemote >= 0) lines.splice(idxRemote, 1);
+          else if (savedRemote && idxRemote < 0) lines.unshift('🚫 Hiding remote workers');
+          const idxOwns = lines.indexOf('🏢 Showing building owners only');
+          if (!savedOwns && idxOwns >= 0) lines.splice(idxOwns, 1);
+          else if (savedOwns && idxOwns < 0) lines.unshift('🏢 Showing building owners only');
+          infoEl.innerHTML = lines.join('<br>');
+          search();   // re-run: the toggles just changed under the first search
+
           const count = s => (s || '').split(',').map(x => x.trim()).filter(Boolean).length;
           const parts = [];
           if (count(r.excluded_industries))    parts.push(`${count(r.excluded_industries)} industries`);

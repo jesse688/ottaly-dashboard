@@ -1825,7 +1825,14 @@ class PostgresDatabase {
     safe('email',         () => { if (filters.email)         like('email', filters.email); });
     safe('phone',         () => { if (filters.phone)         { clauses.push(`(corporate_phone ILIKE $${p} OR company_phone ILIKE $${p})`); params.push(`%${filters.phone}%`); p++; } });
     safe('company',       () => { if (filters.company)       { clauses.push(`(company_name ILIKE $${p} OR company_domain ILIKE $${p})`); params.push(`%${filters.company}%`); p++; } });
-    safe('search',        () => { if (filters.search)        { clauses.push(`(email ILIKE $${p} OR first_name ILIKE $${p} OR last_name ILIKE $${p} OR company_name ILIKE $${p})`); params.push(`%${filters.search}%`); p++; } });
+    // Search covers who the contact IS *and* what the business DOES. Without the
+    // description arm, a search for a trade ("stand builder", "solar installer")
+    // could only ever match a company that happens to have the words in its
+    // registered name — so "exhibition stand" returned nothing while 178 stand
+    // builders sat in the data, described in their own words on their own sites.
+    // scraped_contacts.description is indexed (GIN trigram), so the EXISTS costs
+    // ~1.5s across 2.3M rows rather than the 14.5s a sequential scan took.
+    safe('search',        () => { if (filters.search)        { clauses.push(`(email ILIKE $${p} OR first_name ILIKE $${p} OR last_name ILIKE $${p} OR company_name ILIKE $${p} OR EXISTS (SELECT 1 FROM scraped_contacts sc WHERE sc.domain = contacts.company_domain AND sc.description ILIKE $${p}))`); params.push(`%${filters.search}%`); p++; } });
     // Tag filter — match contacts whose tags[] array overlaps any given tag.
     // Comma-separated; uses the GIN index (tags && ARRAY[...]). Lets you filter
     // to a named scrape batch (the batch name is stored as a tag) or 'ch_scraper'.
