@@ -2068,8 +2068,16 @@ class PostgresDatabase {
         WHERE sv->>'vertical' = $${p} AND sv->>'until' >= $${p+1}
       )`);
       params.push(v, today); p += 2;
-      if (v === 'solar') { clauses.push(`owns_building = $${p++}`); params.push('yes'); }
-      if (v === 'office_furniture') { clauses.push(`(works_remote IS NULL OR works_remote = false)`); }
+      // The vertical governs SNOOZES only. It used to also force
+      // owns_building='yes' for solar — the superseded manual signal, set on 67
+      // of 1.4M rows, so any client whose NAME matched /solar|energy/ collapsed
+      // to ~64 contacts no matter what filters the operator set, and no UI
+      // control could undo it. Building ownership is a real requirement for
+      // solar, but it belongs to the ccodOwnsBuilding filter (Land Registry,
+      // 83,737 rows), which the client's own "Requires building ownership"
+      // setting drives. Same for office_furniture and remote workers: that is
+      // the excludeRemote filter's job, and hardcoding it here overrode the
+      // client record.
     });
 
     // Per-client 60-day cooldown — hide contacts already pushed/emailed to this
