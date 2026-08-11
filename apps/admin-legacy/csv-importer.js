@@ -345,16 +345,20 @@ class ApolloCSVImporter {
     return Array.from(new Set(tags));
   }
 
-  // Validate contact data — email required, at least one name required
+  // Validate contact data — email is the only requirement.
+  //
+  // A name is NOT required. Apollo returns a person on roughly a quarter of an
+  // email-only upload, so demanding one silently discarded ~73% of an
+  // enrichment round trip: a 61.8MB file reported "1,766 updated". The contact
+  // is still valid and sendable to a role address; the "Name" filter segments
+  // on it, and name-from-email.js fills a first name where the address states
+  // one.
   validateContact(contact) {
     const errors = [];
     if (!contact.email) {
       errors.push('Missing email');
     } else if (!this.isValidEmail(contact.email)) {
       errors.push('Invalid email format');
-    }
-    if (!contact.firstName && !contact.lastName) {
-      errors.push('No name (skipped)');
     }
     return errors;
   }

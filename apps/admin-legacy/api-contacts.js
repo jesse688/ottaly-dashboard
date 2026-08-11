@@ -96,7 +96,13 @@ module.exports = (db) => {
           for (const row of rows) {
             const contact = importer.mapApolloRow(row);
             if (!contact.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact.email)) continue;
-            if (!contact.firstName && !contact.lastName) continue;
+            // A missing name is NOT a reason to drop the row. Apollo matches a
+            // person on roughly a quarter of an email-only upload, so this
+            // dropped ~73% of an enrichment round trip silently, before the DB
+            // ever saw it — a 61.8MB file reported "1,766 updated". The contact
+            // is still valid and sendable; use the "Name" filter to segment on
+            // it, and name-from-email.js to fill first names where the address
+            // states one.
             // Flag free-domain contacts as invalid at import time
             const importDomain = (contact.email.split('@')[1] || '').toLowerCase();
             if (FREE_EMAIL_DOMAINS_IMPORT.has(importDomain)) {
