@@ -809,9 +809,15 @@ module.exports = (db) => {
       // technologies, keywords, # employees). Smaller files = much faster
       // upload and ingest. Apollo Contact Id is included so existing
       // records get matched + updated instead of duplicated.
-      const cols = [
-        'First Name','Last Name','Email','Company Name','Website','Apollo Contact Id',
-      ];
+      // ?emailOnly=1 drops everything but the address. Apollo matches on the
+      // email alone, so the other columns only matter when you want it to
+      // UPDATE an existing record (Apollo Contact Id) rather than create one.
+      // For a pure enrichment lookup they are dead weight: a 436k-row export
+      // goes from ~32MB to ~9MB, which uploads and ingests far faster.
+      const emailOnly = req.query.emailOnly === '1' || req.query.emailOnly === 'true';
+      const cols = emailOnly
+        ? ['Email']
+        : ['First Name','Last Name','Email','Company Name','Website','Apollo Contact Id'];
 
       const esc = v => {
         const s = String(v == null ? '' : v);
@@ -823,14 +829,16 @@ module.exports = (db) => {
       // query, so we no longer pull the heavy raw_data JSONB blob per row — that
       // dragged a huge payload for 60k+ rows and blew the 45s statement_timeout
       // (16s just in Postgres for London). Extracting the one field is ~1.4s.
-      const rowToCsv = c => [
-        c.first_name||'',
-        c.last_name||'',
-        c.email||'',
-        c.company_name||'',
-        c.company_domain||'',
-        c.apollo_id||'',
-      ].map(esc).join(',');
+      const rowToCsv = emailOnly
+        ? c => esc(c.email || '')
+        : c => [
+            c.first_name||'',
+            c.last_name||'',
+            c.email||'',
+            c.company_name||'',
+            c.company_domain||'',
+            c.apollo_id||'',
+          ].map(esc).join(',');
 
       // KEYSET pagination by id cursor (`after`). One query pulls up to a whole
       // file's worth of rows in a single ~1.8s scan — the old code re-ran a
