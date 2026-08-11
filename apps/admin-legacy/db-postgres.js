@@ -2043,6 +2043,17 @@ class PostgresDatabase {
     safe('excludeRemote',  () => { if (filters.excludeRemote === 'true') clauses.push(`(works_remote IS NULL OR works_remote = false)`); });
     safe('excludeDNC',     () => { if (filters.excludeDNC === 'true')    clauses.push(`(do_not_contact IS NULL OR do_not_contact = false)`); });
 
+    // Email-only imports (e.g. an Apollo enrichment round trip) land without a
+    // first/last name — 202,468 contacts currently have neither. They are still
+    // sendable to a role address, but useless for a personalised first-line, so
+    // the team needs to segment on it rather than have it silently included.
+    safe('hasName', () => {
+      const v = filters.hasName;
+      if (v === 'yes') clauses.push(`(first_name IS NOT NULL AND first_name <> '' AND last_name IS NOT NULL AND last_name <> '')`);
+      else if (v === 'no') clauses.push(`(first_name IS NULL OR first_name = '' OR last_name IS NULL OR last_name = '')`);
+      else if (v === 'first_only') clauses.push(`(first_name IS NOT NULL AND first_name <> '')`);
+    });
+
     // Apollo export filter
     safe('notExportedToApollo', () => { if (filters.notExportedToApollo === 'true') clauses.push(`exported_to_apollo_at IS NULL`); });
     safe('exportedToApollo',    () => { if (filters.exportedToApollo === 'true')    clauses.push(`exported_to_apollo_at IS NOT NULL`); });
