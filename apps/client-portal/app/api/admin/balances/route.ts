@@ -60,6 +60,10 @@ export async function GET() {
       LEFT JOIN totals  t ON t.client_id  = COALESCE(pc.billing_client_id, pc.id)
       -- pending top-ups are requested BY the client, so they stay keyed on pc.id
       LEFT JOIN pending p ON p.client_id  = pc.id
+     -- Disabled clients are off the books: no leads are being delivered, so an
+     -- empty balance is not something to act on. Excluded HERE rather than in the
+     -- UI filter so they can't leak into "All clients" or skew the totals.
+     WHERE pc.active
      ORDER BY pc.company_name ASC
   `)
 
@@ -119,8 +123,9 @@ export async function GET() {
   // not_billed/pay_per_lead clients would inflate "leads on account" with zeros
   // and non-balances. Redirected clients are excluded from the sums too, since
   // their balance is a duplicate view of the target's pool.
+  // (Disabled clients are already excluded by the query.)
   const counted = clients.filter(
-    c => c.active && c.status !== 'not_billed' && c.status !== 'pay_per_lead' && !c.billing_company_name
+    c => c.status !== 'not_billed' && c.status !== 'pay_per_lead' && !c.billing_company_name
   )
 
   return NextResponse.json({
