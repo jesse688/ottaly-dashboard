@@ -211,6 +211,11 @@ async function runMigration() {
       `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS topup_buckets JSONB NOT NULL DEFAULT '[]'`,
       // Per-client minimum custom top-up (leads).
       `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS min_topup INTEGER NOT NULL DEFAULT 10`,
+      // Admin flag for the Balances page ONLY: "don't chase this one for payment",
+      // e.g. they're on a different arrangement or a top-up is already agreed.
+      // Purely a note to whoever raises invoices — it does NOT stop billing,
+      // change the balance, or affect what the client sees.
+      `ALTER TABLE portal_clients ADD COLUMN IF NOT EXISTS do_not_invoice BOOLEAN NOT NULL DEFAULT FALSE`,
 
       // ── Client deal-stage label per lead (separate from internal/PV label) ──
       `ALTER TABLE portal_lead_data ADD COLUMN IF NOT EXISTS client_label TEXT`,

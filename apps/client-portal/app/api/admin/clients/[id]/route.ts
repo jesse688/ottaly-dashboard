@@ -1,9 +1,11 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { getAdminSession, hashCode } from '@/lib/auth'
-import pool from '@/lib/db'
+import pool, { ready } from '@/lib/db'
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   if (!await getAdminSession()) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  // Ensure newer columns (do_not_invoice) exist before we try to write them.
+  await ready()
   const { id } = await params
   const body = await req.json() as {
     username?: string
@@ -24,6 +26,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     warmupDays?: number
     replySignatureEnabled?: boolean
     replySignature?: string | null
+    doNotInvoice?: boolean
   }
 
   const sets: string[] = []
@@ -54,6 +57,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (body.minTopup !== undefined) { values.push(Math.max(1, Math.floor(Number(body.minTopup)))); sets.push(`min_topup = $${values.length}`) }
   if (body.replySignatureEnabled !== undefined) { values.push(!!body.replySignatureEnabled); sets.push(`reply_signature_enabled = $${values.length}`) }
   if (body.replySignature !== undefined) { values.push((body.replySignature ?? '').trim() || null); sets.push(`reply_signature = $${values.length}`) }
+  if (body.doNotInvoice !== undefined) { values.push(!!body.doNotInvoice); sets.push(`do_not_invoice = $${values.length}`) }
 
   if (!sets.length) return NextResponse.json({ error: 'Nothing to update' }, { status: 400 })
 

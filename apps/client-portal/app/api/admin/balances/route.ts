@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getAdminSession } from '@/lib/auth'
-import pool from '@/lib/db'
+import pool, { ready } from '@/lib/db'
 
 // Balance summary across ALL clients — the at-a-glance view the per-client
 // Settings modal can't give you.
@@ -14,6 +14,10 @@ import pool from '@/lib/db'
 // One aggregate query, not N round-trips.
 export async function GET() {
   if (!await getAdminSession()) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  // do_not_invoice is added by a migration, and migrations only run when
+  // something awaits ready(). Without this the first request after deploy fails
+  // with "column does not exist" until someone hits Run Migration by hand.
+  await ready()
 
   // Balances live on the BILLING TARGET (portal_clients.billing_client_id), so a
   // redirected client (ButterflyEco SOP → ButterflyEco) has an empty ledger of its
@@ -45,6 +49,7 @@ export async function GET() {
            pc.cost_per_lead,
            pc.currency,
            pc.low_leads_threshold,
+           pc.do_not_invoice,
            pc.billing_client_id,
            bc.company_name                       AS billing_company_name,
            COALESCE(t.balance, 0)                AS balance,
@@ -106,6 +111,9 @@ export async function GET() {
       // Surfaced so the UI can say "pooled with X" rather than showing a number
       // that looks like it belongs to this client alone.
       billing_company_name: (r.billing_company_name as string | null) ?? null,
+      // Kept SEPARATE from status rather than folded into it: the account lady
+      // still needs to see that they're Low/Locked, just not chase them for it.
+      do_not_invoice: r.do_not_invoice === true,
       balance,
       added: Number(r.added),
       delivered: Number(r.delivered),
@@ -134,10 +142,15 @@ export async function GET() {
       clients: counted.length,
       leads: counted.reduce((s, c) => s + c.balance, 0),
       value: counted.reduce((s, c) => s + c.value, 0),
-      needsAttention: counted.filter(c => c.status !== 'ok').length,
-      negative: counted.filter(c => c.status === 'negative').length,
-      empty: counted.filter(c => c.status === 'empty').length,
-      low: counted.filter(c => c.status === 'low').length,
+      // "Attention" means someone has to chase it. A do-not-invoice client is
+      // explicitly handled, so it drops out of this count (and the tab badge)
+      // even while it still shows as Low/Locked in the table. Same for the
+      // locked/empty/low breakdown, so the parts keep summing to the whole.
+      needsAttention: counted.filter(c => c.status !== 'ok' && !c.do_not_invoice).length,
+      negative: counted.filter(c => c.status === 'negative' && !c.do_not_invoice).length,
+      empty: counted.filter(c => c.status === 'empty' && !c.do_not_invoice).length,
+      low: counted.filter(c => c.status === 'low' && !c.do_not_invoice).length,
+      doNotInvoice: counted.filter(c => c.do_not_invoice).length,
       pendingTopups: clients.reduce((s, c) => s + c.pending_count, 0),
     },
   })

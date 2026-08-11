@@ -44,6 +44,7 @@ interface BalanceRow {
   id: string; company_name: string; active: boolean
   cost_per_lead: number; currency: string; low_leads_threshold: number
   billing_company_name: string | null
+  do_not_invoice: boolean
   balance: number; added: number; delivered: number; value: number
   last_topup_at: string | null; last_charge_at: string | null
   pending_leads: number; pending_count: number
@@ -51,7 +52,8 @@ interface BalanceRow {
 }
 interface BalanceSummary {
   clients: number; leads: number; value: number
-  needsAttention: number; negative: number; empty: number; low: number; pendingTopups: number
+  needsAttention: number; negative: number; empty: number; low: number
+  doNotInvoice: number; pendingTopups: number
 }
 interface Notification {
   id: string; kind: string; title: string; body: string | null
@@ -220,6 +222,34 @@ export function AdminClientsClient() {
     }
     if (tab === 'balances' && !balances) loadBalances()
   }, [tab, disputes, invoices, topups, balances])
+
+  // "Don't invoice" — an admin note for whoever raises the invoices. Flips the
+  // row optimistically (and re-derives the summary counts locally) so the click
+  // lands instantly; a failed PATCH rolls the row back.
+  async function toggleDoNotInvoice(b: BalanceRow) {
+    const next = !b.do_not_invoice
+    const apply = (on: boolean) => setBalances(prev => {
+      if (!prev) return prev
+      const clients = prev.clients.map(c => c.id === b.id ? { ...c, do_not_invoice: on } : c)
+      const counted = clients.filter(c => c.status !== 'not_billed' && c.status !== 'pay_per_lead' && !c.billing_company_name)
+      const live = (s: BalanceStatus) => counted.filter(c => c.status === s && !c.do_not_invoice).length
+      return {
+        clients,
+        summary: {
+          ...prev.summary,
+          needsAttention: counted.filter(c => c.status !== 'ok' && !c.do_not_invoice).length,
+          negative: live('negative'), empty: live('empty'), low: live('low'),
+          doNotInvoice: counted.filter(c => c.do_not_invoice).length,
+        },
+      }
+    })
+    apply(next)
+    const r = await fetch(`/api/admin/clients/${b.id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ doNotInvoice: next }),
+    }).catch(() => null)
+    if (!r || !r.ok) { apply(!next); alert('Could not save that — please try again.') }
+  }
 
   function loadBalances() {
     fetch('/api/admin/balances').then(r => r.json()).then((d: { clients: BalanceRow[]; summary: BalanceSummary } | { error: string }) => {
@@ -392,7 +422,11 @@ export function AdminClientsClient() {
     .filter(b => balFilter === 'all' || ['negative', 'empty', 'low'].includes(b.status))
     .sort((a, b) => {
       const rank: Record<BalanceStatus, number> = { negative: 0, empty: 1, low: 2, ok: 3, pay_per_lead: 4, not_billed: 5 }
-      return rank[a.status] - rank[b.status] || a.balance - b.balance || a.company_name.localeCompare(b.company_name)
+      // Do-not-invoice sinks below everything that still needs chasing, so the
+      // top of the list is only clients to actually raise an invoice for.
+      return Number(a.do_not_invoice) - Number(b.do_not_invoice)
+        || rank[a.status] - rank[b.status] || a.balance - b.balance
+        || a.company_name.localeCompare(b.company_name)
     })
 
   // ── Settings modal ──
@@ -994,7 +1028,7 @@ export function AdminClientsClient() {
                 : [
                     { key: 'leads', label: 'Leads on account', value: balances.summary.leads.toLocaleString(), sub: `across ${balances.summary.clients} billed client${balances.summary.clients === 1 ? '' : 's'}`, tone: '' },
                     { key: 'value', label: 'Value of balances', value: fmt(balances.summary.value), sub: 'at each client’s cost/lead', tone: '' },
-                    { key: 'attn',  label: 'Need attention',   value: String(balances.summary.needsAttention), sub: `${balances.summary.negative} locked · ${balances.summary.empty} empty · ${balances.summary.low} low`, tone: balances.summary.needsAttention > 0 ? 'text-amber-600' : '' },
+                    { key: 'attn',  label: 'To invoice',       value: String(balances.summary.needsAttention), sub: `${balances.summary.negative} locked · ${balances.summary.empty} empty · ${balances.summary.low} low${balances.summary.doNotInvoice > 0 ? ` · ${balances.summary.doNotInvoice} not invoicing` : ''}`, tone: balances.summary.needsAttention > 0 ? 'text-amber-600' : '' },
                     { key: 'pend',  label: 'Pending top-ups',  value: String(balances.summary.pendingTopups), sub: balances.summary.pendingTopups > 0 ? 'awaiting confirmation' : 'none waiting', tone: balances.summary.pendingTopups > 0 ? 'text-indigo-600' : '' },
                   ]
               ).map((t, i) => (
@@ -1031,27 +1065,28 @@ export function AdminClientsClient() {
                 <thead>
                   <tr className="border-b border-gray-100 bg-gray-50">
                     {[
-                      { h: 'Company',   w: 'w-[26%]' },
-                      { h: 'Balance',   w: 'w-[14%]' },
-                      { h: 'Value',     w: 'w-[12%]' },
-                      { h: 'Delivered', w: 'w-[11%]' },
-                      { h: 'Last top-up', w: 'w-[15%]' },
-                      { h: 'Status',    w: 'w-[14%]' },
-                      { h: '',          w: 'w-[8%]'  },
+                      { h: 'Company',   w: 'w-[24%]' },
+                      { h: 'Balance',   w: 'w-[12%]' },
+                      { h: 'Value',     w: 'w-[10%]' },
+                      { h: 'Delivered', w: 'w-[9%]'  },
+                      { h: 'Last top-up', w: 'w-[13%]' },
+                      { h: 'Status',    w: 'w-[13%]' },
+                      { h: 'Invoice',   w: 'w-[12%]' },
+                      { h: '',          w: 'w-[7%]'  },
                     ].map(c => <th key={c.h} className={`${c.w} px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider`}>{c.h}</th>)}
                   </tr>
                 </thead>
                 <tbody>
                   {balances === null ? Array.from({length:5}).map((_,i) => (
-                    <tr key={i} className="border-b border-gray-50">{Array.from({length:7}).map((_,j) => <td key={j} className="px-4 py-3"><div className="h-4 bg-gray-100 rounded animate-pulse" /></td>)}</tr>
+                    <tr key={i} className="border-b border-gray-50">{Array.from({length:8}).map((_,j) => <td key={j} className="px-4 py-3"><div className="h-4 bg-gray-100 rounded animate-pulse" /></td>)}</tr>
                   )) : visibleBalances.length === 0 ? (
-                    <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400 text-sm">
+                    <tr><td colSpan={8} className="px-4 py-10 text-center text-gray-400 text-sm">
                       {balFilter === 'attention' ? 'Every billed client has leads in the bank. ✓' : 'No clients yet'}
                     </td></tr>
                   ) : visibleBalances.map(b => {
                     const meta = BALANCE_STATUS[b.status]
                     return (
-                      <tr key={b.id} className="border-b border-gray-50 hover:bg-gray-50">
+                      <tr key={b.id} className={`border-b border-gray-50 hover:bg-gray-50 ${b.do_not_invoice ? 'opacity-55' : ''}`}>
                         <td className="px-4 py-2.5 truncate" title={b.company_name}>
                           <span className="font-medium text-gray-900">{b.company_name}</span>
                           {/* A redirected client draws on someone else's pool — say so, or the
@@ -1079,6 +1114,21 @@ export function AdminClientsClient() {
                         <td className="px-4 py-2.5">
                           <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${meta.pill}`}>{meta.label}</span>
                         </td>
+                        {/* Don't-invoice switch. Deliberately does NOT replace the status
+                            pill — whoever raises invoices still needs to see they're Low
+                            or Locked, just know not to chase this one. */}
+                        <td className="px-4 py-2.5">
+                          <button
+                            onClick={() => toggleDoNotInvoice(b)}
+                            role="switch"
+                            aria-checked={b.do_not_invoice}
+                            title={b.do_not_invoice ? 'Marked: do not invoice. Click to clear.' : 'Mark as “do not invoice”'}
+                            className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium border transition-colors ${b.do_not_invoice ? 'bg-slate-700 border-slate-700 text-white' : 'bg-white border-gray-200 text-gray-400 hover:border-gray-300 hover:text-gray-600'}`}
+                          >
+                            <span className={`w-1.5 h-1.5 rounded-full ${b.do_not_invoice ? 'bg-white' : 'bg-gray-300'}`} />
+                            {b.do_not_invoice ? 'Do not invoice' : 'Invoice'}
+                          </button>
+                        </td>
                         <td className="px-4 py-2.5 text-right whitespace-nowrap">
                           <button
                             onClick={() => { const c = clients?.find(x => x.id === b.id); if (c) openSettings(c, 'balance') }}
@@ -1093,6 +1143,9 @@ export function AdminClientsClient() {
             </div>
 
             <p className="text-xs text-gray-400 mt-3">
+              Set a client to <strong className="font-medium text-gray-500">Do not invoice</strong> to leave them off the invoice run even while they&apos;re low — they stay listed, greyed out, and drop out of the &ldquo;to invoice&rdquo; count. It doesn&apos;t change their balance or billing.
+            </p>
+            <p className="text-xs text-gray-400 mt-1.5">
               Clients on £0/lead aren&apos;t billed, so they have no balance to track. Totals exclude them, pay-per-lead clients, and clients pooled onto another balance.
             </p>
           </>
