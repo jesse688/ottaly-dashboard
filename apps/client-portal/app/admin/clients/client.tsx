@@ -266,6 +266,10 @@ export function AdminClientsClient() {
   async function toggleActive(c: PortalClient) {
     await fetch(`/api/admin/clients/${c.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: !c.active }) })
     fetch('/api/admin/clients').then(r => r.json()).then(d => { if (Array.isArray(d)) setClients(d) }).catch(() => {})
+    // Balances only lists ACTIVE clients, so disabling/enabling changes that list
+    // and its totals. Refresh the cached snapshot instead of leaving a just-disabled
+    // client sitting in the work queue until a page reload.
+    if (balances) loadBalances()
   }
   async function viewAsClient(c: PortalClient) {
     // Mint a client session for this client, then open their portal in a new tab.
@@ -383,8 +387,9 @@ export function AdminClientsClient() {
   // about — healthy balances, clients not on lead billing, and pay-per-lead —
   // so the default view is a work queue, not a directory. Sorted most-urgent
   // first (locked before empty before low), then by how little is left.
+  // Disabled clients never appear in either view — the API omits them entirely.
   const visibleBalances = (balances?.clients ?? [])
-    .filter(b => balFilter === 'all' || (b.active && ['negative', 'empty', 'low'].includes(b.status)))
+    .filter(b => balFilter === 'all' || ['negative', 'empty', 'low'].includes(b.status))
     .sort((a, b) => {
       const rank: Record<BalanceStatus, number> = { negative: 0, empty: 1, low: 2, ok: 3, pay_per_lead: 4, not_billed: 5 }
       return rank[a.status] - rank[b.status] || a.balance - b.balance || a.company_name.localeCompare(b.company_name)
@@ -1049,7 +1054,6 @@ export function AdminClientsClient() {
                       <tr key={b.id} className="border-b border-gray-50 hover:bg-gray-50">
                         <td className="px-4 py-2.5 truncate" title={b.company_name}>
                           <span className="font-medium text-gray-900">{b.company_name}</span>
-                          {!b.active && <span className="ml-1.5 text-xs text-gray-400">(disabled)</span>}
                           {/* A redirected client draws on someone else's pool — say so, or the
                               number below reads as if it were their own. */}
                           {b.billing_company_name && (
