@@ -39,6 +39,20 @@ interface Topup {
 interface LedgerEntry {
   id: string; type: string; description: string; amount: string | number; created_at: string
 }
+type BalanceStatus = 'ok' | 'low' | 'empty' | 'negative' | 'not_billed' | 'pay_per_lead'
+interface BalanceRow {
+  id: string; company_name: string; active: boolean
+  cost_per_lead: number; currency: string; low_leads_threshold: number
+  billing_company_name: string | null
+  balance: number; added: number; delivered: number; value: number
+  last_topup_at: string | null; last_charge_at: string | null
+  pending_leads: number; pending_count: number
+  status: BalanceStatus
+}
+interface BalanceSummary {
+  clients: number; leads: number; value: number
+  needsAttention: number; negative: number; empty: number; low: number; pendingTopups: number
+}
 interface Notification {
   id: string; kind: string; title: string; body: string | null
   is_read: boolean; created_at: string; company_name: string | null
@@ -58,6 +72,18 @@ const FIELDS = [
   { key: 'deal_value', label: 'Deal value' },
 ]
 
+// Label, pill colour and balance-number colour per status. Red = leads are
+// actually locked for that client right now; amber = act soon; grey = nothing to
+// track (not billed / billed per lead).
+const BALANCE_STATUS: Record<BalanceStatus, { label: string; pill: string; num: string }> = {
+  negative:     { label: 'Locked',       pill: 'bg-red-100 text-red-700',     num: 'text-red-600' },
+  empty:        { label: 'Empty',        pill: 'bg-red-100 text-red-700',     num: 'text-red-600' },
+  low:          { label: 'Low',          pill: 'bg-amber-100 text-amber-700', num: 'text-amber-600' },
+  ok:           { label: 'OK',           pill: 'bg-green-100 text-green-700', num: 'text-gray-900' },
+  not_billed:   { label: 'Not billed',   pill: 'bg-gray-100 text-gray-500',   num: 'text-gray-400' },
+  pay_per_lead: { label: 'Pay per lead', pill: 'bg-gray-100 text-gray-500',   num: 'text-gray-400' },
+}
+
 function fmt(n: string | number) {
   return new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP', minimumFractionDigits: 0 }).format(Number(n))
 }
@@ -68,12 +94,16 @@ function fmtDate(d: string | null) {
 
 // ── Main component ────────────────────────────────────────────────────────
 export function AdminClientsClient() {
-  const [tab, setTab]             = useState<'clients'|'disputes'|'invoices'|'topups'>('clients')
+  const [tab, setTab]             = useState<'clients'|'balances'|'disputes'|'invoices'|'topups'>('clients')
   const [clients, setClients]     = useState<PortalClient[] | null>(null)
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [disputes, setDisputes]   = useState<Dispute[] | null>(null)
   const [invoices, setInvoices]   = useState<Invoice[] | null>(null)
   const [topups, setTopups]       = useState<Topup[] | null>(null)
+
+  // Balances tab
+  const [balances, setBalances]   = useState<{ clients: BalanceRow[]; summary: BalanceSummary } | null>(null)
+  const [balFilter, setBalFilter] = useState<'attention' | 'all'>('attention')
 
   // Client form
   const [showForm, setShowForm]   = useState(false)
@@ -188,7 +218,14 @@ export function AdminClientsClient() {
         if (Array.isArray(d)) setTopups(d)
       })
     }
-  }, [tab, disputes, invoices, topups])
+    if (tab === 'balances' && !balances) loadBalances()
+  }, [tab, disputes, invoices, topups, balances])
+
+  function loadBalances() {
+    fetch('/api/admin/balances').then(r => r.json()).then((d: { clients: BalanceRow[]; summary: BalanceSummary } | { error: string }) => {
+      if ('clients' in d) setBalances(d)
+    }).catch(() => {})
+  }
 
   function loadNotifs() {
     fetch('/api/admin/notifications').then(r => r.json()).then((d: { notifications: Notification[]; unread: number } | { error: string }) => {
@@ -342,15 +379,30 @@ export function AdminClientsClient() {
       .some(v => (v ?? '').toLowerCase().includes(q))
   })
 
+  // Balances list. "Needs attention" hides the clients there is nothing to do
+  // about — healthy balances, clients not on lead billing, and pay-per-lead —
+  // so the default view is a work queue, not a directory. Sorted most-urgent
+  // first (locked before empty before low), then by how little is left.
+  const visibleBalances = (balances?.clients ?? [])
+    .filter(b => balFilter === 'all' || (b.active && ['negative', 'empty', 'low'].includes(b.status)))
+    .sort((a, b) => {
+      const rank: Record<BalanceStatus, number> = { negative: 0, empty: 1, low: 2, ok: 3, pay_per_lead: 4, not_billed: 5 }
+      return rank[a.status] - rank[b.status] || a.balance - b.balance || a.company_name.localeCompare(b.company_name)
+    })
+
   // ── Settings modal ──
-  async function openSettings(c: PortalClient) {
-    setSettingsClient(c); setSettingsTab('labels'); setLabelData(null); setFieldData(null); setLedgerData(null)
+  async function openSettings(c: PortalClient, initialTab: 'labels'|'fields'|'balance'|'topups'|'warmup' = 'labels') {
+    setSettingsClient(c); setSettingsTab(initialTab); setLabelData(null); setFieldData(null); setLedgerData(null)
     setCplEdit(String(Number(c.cost_per_lead ?? 0))); setEntryForm({ type: 'topup', amount: '', note: '' })
     setSigEnabled(!!c.reply_signature_enabled); setSigEdit(c.reply_signature ?? '')
     setWarmStart(c.warmup_start_date ? String(c.warmup_start_date).slice(0, 10) : '')
     setWarmDays(String(c.warmup_days ?? 14))
     setBucketEdit(Array.isArray(c.topup_buckets) ? c.topup_buckets : [])
     setMinEdit(String(c.min_topup ?? 10))
+    // The balance tab normally loads its ledger from its own onClick, so opening
+    // the modal STRAIGHT onto that tab (from Balances → Top up) would sit on a
+    // skeleton forever. Kick the fetch off here instead.
+    if (initialTab === 'balance') loadLedger(c.id)
     const [lr, fr] = await Promise.all([
       fetch(`/api/admin/clients/${c.id}/labels`),
       fetch(`/api/admin/clients/${c.id}/fields`),
@@ -423,6 +475,9 @@ export function AdminClientsClient() {
     await fetch(`/api/admin/clients/${settingsClient.id}/ledger`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: entryForm.type, amount, note: entryForm.note || undefined }) })
     setEntryForm({ type: 'topup', amount: '', note: '' })
     loadLedger(settingsClient.id)
+    // The Balances tab is a cached snapshot — refresh it so a top-up made here
+    // doesn't leave that client still sitting in the "needs attention" list.
+    if (balances) loadBalances()
   }
   async function toggleLabel(label: string) {
     if (!labelData || !settingsClient) return
@@ -642,10 +697,11 @@ export function AdminClientsClient() {
         <nav className="flex gap-0 -mb-px">
           {([
             { key: 'clients',  label: 'Clients',  badge: clients?.length },
+            { key: 'balances', label: 'Balances', badge: balances?.summary.needsAttention || undefined },
             { key: 'disputes', label: 'Disputes', badge: pendingDisputes || undefined },
             { key: 'invoices', label: 'Invoices' },
             { key: 'topups',   label: 'Top-ups',  badge: pendingTopups || undefined },
-          ] as { key: 'clients'|'disputes'|'invoices'|'topups'; label: string; badge?: number }[]).map(t => (
+          ] as { key: 'clients'|'balances'|'disputes'|'invoices'|'topups'; label: string; badge?: number }[]).map(t => (
             <button
               key={t.key}
               onClick={() => setTab(t.key)}
@@ -653,7 +709,7 @@ export function AdminClientsClient() {
             >
               {t.label}
               {t.badge !== undefined && (
-                <span className={`px-1.5 py-0.5 rounded-full text-xs font-semibold ${(t.key === 'disputes' && pendingDisputes > 0) || (t.key === 'topups' && pendingTopups > 0) ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600'}`}>
+                <span className={`px-1.5 py-0.5 rounded-full text-xs font-semibold ${(t.key === 'disputes' && pendingDisputes > 0) || (t.key === 'topups' && pendingTopups > 0) || (t.key === 'balances' && (balances?.summary.needsAttention ?? 0) > 0) ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600'}`}>
                   {t.badge}
                 </span>
               )}
@@ -912,6 +968,129 @@ export function AdminClientsClient() {
                 </tbody>
               </table>
             </div>
+          </>
+        )}
+
+        {/* ── BALANCES TAB ── */}
+        {tab === 'balances' && (
+          <>
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <h1 className="text-lg font-semibold text-gray-900">Client Balances</h1>
+                <p className="text-xs text-gray-500 mt-0.5">Leads left on account. Who&apos;s running low, who&apos;s locked out.</p>
+              </div>
+              <button onClick={() => { setBalances(null); loadBalances() }} className="px-4 py-2 border border-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50">Refresh</button>
+            </div>
+
+            {/* Summary tiles */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+              {(balances === null
+                ? [0,1,2,3].map(i => ({ key: i, label: '', value: '', sub: '', tone: '' }))
+                : [
+                    { key: 'leads', label: 'Leads on account', value: balances.summary.leads.toLocaleString(), sub: `across ${balances.summary.clients} billed client${balances.summary.clients === 1 ? '' : 's'}`, tone: '' },
+                    { key: 'value', label: 'Value of balances', value: fmt(balances.summary.value), sub: 'at each client’s cost/lead', tone: '' },
+                    { key: 'attn',  label: 'Need attention',   value: String(balances.summary.needsAttention), sub: `${balances.summary.negative} locked · ${balances.summary.empty} empty · ${balances.summary.low} low`, tone: balances.summary.needsAttention > 0 ? 'text-amber-600' : '' },
+                    { key: 'pend',  label: 'Pending top-ups',  value: String(balances.summary.pendingTopups), sub: balances.summary.pendingTopups > 0 ? 'awaiting confirmation' : 'none waiting', tone: balances.summary.pendingTopups > 0 ? 'text-indigo-600' : '' },
+                  ]
+              ).map((t, i) => (
+                <div key={t.key ?? i} className="bg-white rounded-xl border border-gray-100 p-4">
+                  {balances === null ? (
+                    <><div className="h-3 w-24 bg-gray-100 rounded animate-pulse mb-3" /><div className="h-7 w-16 bg-gray-100 rounded animate-pulse" /></>
+                  ) : (
+                    <>
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">{t.label}</p>
+                      <p className={`text-2xl font-bold mt-1 ${t.tone || 'text-gray-900'}`}>{t.value}</p>
+                      <p className="text-xs text-gray-400 mt-0.5">{t.sub}</p>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {/* Filter: default to the clients that actually need doing something about */}
+            <div className="flex items-center gap-2 mb-4">
+              {([
+                { key: 'attention', label: 'Needs attention' },
+                { key: 'all',       label: 'All clients' },
+              ] as { key: 'attention'|'all'; label: string }[]).map(f => (
+                <button
+                  key={f.key}
+                  onClick={() => setBalFilter(f.key)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${balFilter === f.key ? 'bg-indigo-50 border-indigo-200 text-indigo-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+                >{f.label}</button>
+              ))}
+            </div>
+
+            <div className="bg-white rounded-xl border border-gray-100 overflow-x-auto">
+              <table className="w-full text-sm table-fixed min-w-[760px]">
+                <thead>
+                  <tr className="border-b border-gray-100 bg-gray-50">
+                    {[
+                      { h: 'Company',   w: 'w-[26%]' },
+                      { h: 'Balance',   w: 'w-[14%]' },
+                      { h: 'Value',     w: 'w-[12%]' },
+                      { h: 'Delivered', w: 'w-[11%]' },
+                      { h: 'Last top-up', w: 'w-[15%]' },
+                      { h: 'Status',    w: 'w-[14%]' },
+                      { h: '',          w: 'w-[8%]'  },
+                    ].map(c => <th key={c.h} className={`${c.w} px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider`}>{c.h}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {balances === null ? Array.from({length:5}).map((_,i) => (
+                    <tr key={i} className="border-b border-gray-50">{Array.from({length:7}).map((_,j) => <td key={j} className="px-4 py-3"><div className="h-4 bg-gray-100 rounded animate-pulse" /></td>)}</tr>
+                  )) : visibleBalances.length === 0 ? (
+                    <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400 text-sm">
+                      {balFilter === 'attention' ? 'Every billed client has leads in the bank. ✓' : 'No clients yet'}
+                    </td></tr>
+                  ) : visibleBalances.map(b => {
+                    const meta = BALANCE_STATUS[b.status]
+                    return (
+                      <tr key={b.id} className="border-b border-gray-50 hover:bg-gray-50">
+                        <td className="px-4 py-2.5 truncate" title={b.company_name}>
+                          <span className="font-medium text-gray-900">{b.company_name}</span>
+                          {!b.active && <span className="ml-1.5 text-xs text-gray-400">(disabled)</span>}
+                          {/* A redirected client draws on someone else's pool — say so, or the
+                              number below reads as if it were their own. */}
+                          {b.billing_company_name && (
+                            <span className="block text-xs text-gray-400 truncate">pooled with {b.billing_company_name}</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5 whitespace-nowrap">
+                          {b.status === 'not_billed' || b.status === 'pay_per_lead' ? (
+                            <span className="text-gray-400 text-xs">—</span>
+                          ) : (
+                            <>
+                              <span className={`font-semibold ${meta.num}`}>{b.balance.toLocaleString()}</span>
+                              <span className="text-gray-400 text-xs"> leads</span>
+                              {b.pending_count > 0 && (
+                                <span className="block text-xs text-indigo-600">+{b.pending_leads.toLocaleString()} pending</span>
+                              )}
+                            </>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5 text-gray-600 text-xs whitespace-nowrap">{b.value > 0 ? fmt(b.value) : '—'}</td>
+                        <td className="px-4 py-2.5 text-gray-600 text-xs">{b.delivered.toLocaleString()}</td>
+                        <td className="px-4 py-2.5 text-gray-600 text-xs whitespace-nowrap">{fmtDate(b.last_topup_at)}</td>
+                        <td className="px-4 py-2.5">
+                          <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${meta.pill}`}>{meta.label}</span>
+                        </td>
+                        <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                          <button
+                            onClick={() => { const c = clients?.find(x => x.id === b.id); if (c) openSettings(c, 'balance') }}
+                            className="text-xs font-medium text-indigo-600 hover:text-indigo-800 px-2 py-1 rounded hover:bg-indigo-50"
+                          >Top up</button>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <p className="text-xs text-gray-400 mt-3">
+              Clients on £0/lead aren&apos;t billed, so they have no balance to track. Totals exclude them, pay-per-lead clients, and clients pooled onto another balance.
+            </p>
           </>
         )}
 
