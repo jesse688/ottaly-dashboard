@@ -1275,9 +1275,15 @@
               <option value="no">❓ Unverified</option>
             </select>
             <select id="hasName" title="Whether the contact has a usable person name. Email-only imports (e.g. an Apollo enrichment round trip) arrive with no name — still sendable to a role address, but you cannot personalise a first line with them.">
-              <option value="">👤 Name — all</option>
-              <option value="first_only">✅ Has first name</option>
+              <!-- Defaults to "has first name", not "all": a first name is what
+                   a personalised opening line needs, and a nameless contact
+                   included silently is how one ends up in a campaign that
+                   greets nobody. Last name is not required — plenty of good
+                   leads are katie@ with no surname. Opt IN to the nameless by
+                   switching this to "all" or "missing a name". -->
+              <option value="first_only" selected>✅ Has first name</option>
               <option value="yes">✅ Has first + last name</option>
+              <option value="">👤 Name — all</option>
               <option value="no">❌ Missing a name</option>
             </select>
             <select id="ccodOwnsBuilding" title="Building ownership from HM Land Registry (CCOD) + Companies House, resolved by the company data engine.">
@@ -3614,6 +3620,12 @@
       const want = new Set(_filterDefaults.excludeGateways || []);
       document.querySelectorAll('.gwExcl').forEach(cb => { cb.checked = want.has(cb.value); });
       if (typeof onGatewayModeChange === 'function') onGatewayModeChange();
+      // Require a first name by default. Like the gateway exclusions above this
+      // is a safety default rather than a filter, so it survives Clear: a
+      // contact with no name cannot carry a personalised opening line, and the
+      // way that goes wrong is silently, in a campaign that greets nobody.
+      const hn = document.getElementById('hasName');
+      if (hn) hn.value = 'first_only';
     }
     // Settings modal: edit which exclusions are applied by default (admin-wide).
     const _ALL_GATEWAYS = ['Mimecast','Barracuda','Proofpoint','Cisco Ironport','Sophos','Trend Micro','FortiMail','Forcepoint/Mailcontrol','Microsoft 365','Google Workspace','NO MX / unresolved'];
