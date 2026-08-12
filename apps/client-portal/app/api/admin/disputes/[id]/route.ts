@@ -8,6 +8,7 @@ interface DisputeRow {
   id: string
   lead_id: string
   client_id: string
+  workspace_id: string
 }
 
 // PATCH — approve or deny a dispute
@@ -22,7 +23,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   }
 
   const disputeRes = await pool.query(
-    'SELECT id, lead_id, client_id FROM portal_lead_disputes WHERE id = $1',
+    'SELECT id, lead_id, client_id, workspace_id FROM portal_lead_disputes WHERE id = $1',
     [id]
   )
   if (!disputeRes.rows.length) return NextResponse.json({ error: 'Not found' }, { status: 404 })
@@ -40,9 +41,21 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   if (action === 'approved') {
     // Remove from the client's lead view AND refund the lead credit (idempotent).
+    //
+    // Mark EVERY row for this person, not just the disputed id. Duplicate ingest
+    // (PlusVibe + Bison, or two syncs) creates several esp_leads rows for one
+    // email; the dispute carries one id while the client's list may render a
+    // sibling. Updating only $1 left the sibling INTERESTED, so rejected leads
+    // stayed visible — LVM could still see Spencer Curti and Alan Lowe after
+    // both were approved and credited. Scoped to the same workspace so a shared
+    // email address can never leak across clients.
     await pool.query(
-      "UPDATE esp_leads SET label = 'NOT_INTERESTED' WHERE id = $1",
-      [dispute.lead_id]
+      `UPDATE esp_leads SET label = 'NOT_INTERESTED'
+        WHERE id = $1
+           OR (workspace_id = $2 AND email IS NOT NULL AND lower(email) = (
+                 SELECT lower(email) FROM esp_leads WHERE id = $1 AND email IS NOT NULL
+              ))`,
+      [dispute.lead_id, dispute.workspace_id]
     )
     // A refund that credits nothing must NOT look like a success — that's how an
     // approved dispute silently left the balance untouched. Carried through to
