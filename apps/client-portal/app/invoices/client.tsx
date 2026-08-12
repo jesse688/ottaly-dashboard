@@ -181,6 +181,49 @@ export function InvoicesClient({ companyName, workspaceId }: { companyName: stri
               <Card label="Deals won" value={bal ? bal.dealsWon.toLocaleString() : '—'} sub="Marked Won" />
             </div>
 
+            {/* Account breakdown. Clients total their own leads and query the
+                difference (LVM: "adds up to 58 but we've paid for 60") because
+                nothing on this page shows how delivered + left = purchased, or
+                that credited non-leads aren't delivered. Show the sum working. */}
+            {bal && typeof bal.added === 'number' && (
+              <div className="bg-white rounded-2xl border border-gray-100 p-4">
+                <p className="text-sm font-semibold text-[#050c29]">Your account</p>
+                {/* Rows must SUM. bal.added is every credit (top-ups AND non-lead
+                    refunds), while leadsDelivered already has refunds netted off —
+                    so splitting them out is what makes the arithmetic close. */}
+                {(() => {
+                  const credited = Math.max(0, Math.round(bal.added! - (bal.balance + bal.leadsDelivered)))
+                  const purchased = bal.added! - credited
+                  return (
+                    <dl className="mt-3 space-y-1.5">
+                      <div className="flex items-baseline justify-between gap-3">
+                        <dt className="text-sm text-gray-600">Leads purchased</dt>
+                        <dd className="text-sm font-semibold text-gray-900 tabular-nums">{purchased.toLocaleString()}</dd>
+                      </div>
+                      {credited > 0 && (
+                        <div className="flex items-baseline justify-between gap-3">
+                          <dt className="text-sm text-gray-600">Non-leads credited back</dt>
+                          <dd className="text-sm text-green-600 tabular-nums">+{credited.toLocaleString()}</dd>
+                        </div>
+                      )}
+                      <div className="flex items-baseline justify-between gap-3">
+                        <dt className="text-sm text-gray-600">Delivered to you</dt>
+                        <dd className="text-sm text-gray-900 tabular-nums">−{(bal.leadsDelivered + credited).toLocaleString()}</dd>
+                      </div>
+                      <div className="flex items-baseline justify-between gap-3 pt-1.5 border-t border-gray-100">
+                        <dt className="text-sm font-semibold text-[#050c29]">Leads left</dt>
+                        <dd className="text-sm font-bold text-[#050c29] tabular-nums">{Math.max(0, bal.balance).toLocaleString()}</dd>
+                      </div>
+                    </dl>
+                  )
+                })()}
+                <p className="text-xs text-gray-500 mt-3 leading-relaxed">
+                  Leads you&apos;ve told us aren&apos;t a fit are credited straight back, so they don&apos;t count as delivered — which is why your delivered total can be lower than the number of replies you remember.
+                  {' '}Archived leads still count: filing one away doesn&apos;t return it.
+                </p>
+              </div>
+            )}
+
             {topups.filter(t => t.status === 'pending').length > 0 && (
               <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
                 <p className="text-sm font-semibold text-amber-900 mb-2">Awaiting payment</p>
@@ -241,7 +284,12 @@ export function InvoicesClient({ companyName, workspaceId }: { companyName: stri
             </div>
 
             <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-              <div className="px-5 py-3 border-b border-gray-100"><h2 className="text-sm font-semibold text-[#050c29]">Lead activity</h2></div>
+              <div className="px-5 py-3 border-b border-gray-100">
+                <h2 className="text-sm font-semibold text-[#050c29]">Lead activity</h2>
+                {/* The right-hand figure is a running balance, not a total — it was
+                    being read as "leads credited" and added to other numbers. */}
+                <p className="text-xs text-gray-400 mt-0.5">Every change to your balance. The figure on the right is what was left at that point.</p>
+              </div>
               <div className="max-h-[280px] overflow-y-auto divide-y divide-gray-50">
                 {!bal ? <p className="px-5 py-6 text-center text-gray-400 text-sm">Loading…</p>
                 : (bal.ledger ?? []).length === 0 ? <p className="px-5 py-8 text-center text-gray-400 text-sm">No activity yet</p>
