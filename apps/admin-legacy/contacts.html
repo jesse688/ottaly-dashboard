@@ -1286,6 +1286,11 @@
               <option value="">👤 Name — all</option>
               <option value="no">❌ Missing a name</option>
             </select>
+            <select id="hasCompany" title="Whether the contact has a company name. Defaults to ON: copy that references the company reads as broken without one. Switch to 'all' to include the 42,226 contacts that have none.">
+              <option value="yes" selected>✅ Has company name</option>
+              <option value="">🏢 Company name — all</option>
+              <option value="no">❌ No company name</option>
+            </select>
             <select id="ccodOwnsBuilding" title="Building ownership from HM Land Registry (CCOD) + Companies House, resolved by the company data engine.">
               <option value="">🏢 Building ownership — all</option>
               <option value="yes">✅ Owns building</option>
@@ -2935,6 +2940,7 @@
         chVerified: get('chVerified'),
         ccodOwnsBuilding: get('ccodOwnsBuilding'),
         hasName: get('hasName'),
+        hasCompany: get('hasCompany'),
         solarStatus: get('solarStatus'),
         solarMinKwp: get('solarMinKwp'),
         updatedAge: get('updatedAge'),
@@ -3313,7 +3319,7 @@
         def.selected.forEach(v => params.append(key, v));
         def.excluded.forEach(v => params.append(key + '!', v));
       });
-      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding','hasName','solarStatus','solarMinKwp','updatedAge',
+      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding','hasName','hasCompany','solarStatus','solarMinKwp','updatedAge',
        'companyAgeBand','chVerified'].forEach(id => {
         const el = document.getElementById(id);
         if (el && el.value) params.append(id, el.value);
@@ -3422,7 +3428,7 @@
       // Reset everything, install the saved hash, then re-run the standard
       // restoration path so behaviour matches a bookmarked-URL reload.
       Object.keys(filterDefs).forEach(k => { filterDefs[k].selected = []; filterDefs[k].excluded = []; });
-      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding','hasName','solarStatus','solarMinKwp','updatedAge',
+      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding','hasName','hasCompany','solarStatus','solarMinKwp','updatedAge',
        'companyAgeBand','chVerified'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
       ['emailGoogle','emailOutlook','emailOther','emailUnknown','filterRemote','filterExcludeRemote','filterExcludeDNC','filterNotExported','filterExportedOnly','filterSentToPV','filterNotSentToPV','filterSentToPV','filterNotSentToPV'].forEach(id => { const el = document.getElementById(id); if (el) el.checked = false; });
       if (typeof applyFilterDefaults === 'function') applyFilterDefaults();
@@ -3454,7 +3460,7 @@
         if (inc.length) { filterDefs[key].selected = inc; any = true; }
         if (exc.length) { filterDefs[key].excluded = exc; any = true; }
       });
-      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding','hasName','solarStatus','solarMinKwp','updatedAge',
+      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding','hasName','hasCompany','solarStatus','solarMinKwp','updatedAge',
        'companyAgeBand','chVerified'].forEach(id => {
         const v = params.get(id);
         const el = document.getElementById(id);
@@ -3626,6 +3632,8 @@
       // way that goes wrong is silently, in a campaign that greets nobody.
       const hn = document.getElementById('hasName');
       if (hn) hn.value = 'first_only';
+      const hc = document.getElementById('hasCompany');
+      if (hc) hc.value = 'yes';
     }
     // Settings modal: edit which exclusions are applied by default (admin-wide).
     const _ALL_GATEWAYS = ['Mimecast','Barracuda','Proofpoint','Cisco Ironport','Sophos','Trend Micro','FortiMail','Forcepoint/Mailcontrol','Microsoft 365','Google Workspace','NO MX / unresolved'];

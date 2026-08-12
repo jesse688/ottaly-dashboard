@@ -2054,6 +2054,15 @@ class PostgresDatabase {
       else if (v === 'first_only') clauses.push(`(first_name IS NOT NULL AND first_name <> '')`);
     });
 
+    // Presence of a company name, as opposed to the `company` filter above which
+    // searches for a NAMED one. Same reasoning as hasName: copy that references
+    // the company reads as broken without it, and 42,226 contacts have none.
+    safe('hasCompany', () => {
+      const v = filters.hasCompany;
+      if (v === 'yes') clauses.push(`(company_name IS NOT NULL AND company_name <> '')`);
+      else if (v === 'no') clauses.push(`(company_name IS NULL OR company_name = '')`);
+    });
+
     // Apollo export filter
     safe('notExportedToApollo', () => { if (filters.notExportedToApollo === 'true') clauses.push(`exported_to_apollo_at IS NULL`); });
     safe('exportedToApollo',    () => { if (filters.exportedToApollo === 'true')    clauses.push(`exported_to_apollo_at IS NOT NULL`); });
