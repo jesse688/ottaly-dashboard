@@ -50,6 +50,18 @@ interface BalanceRow {
   pending_leads: number; pending_count: number
   status: BalanceStatus
 }
+interface AuditClient { client_id: string; company_name: string; leads: number; value: number; sibling_bug: number }
+interface AuditDispute {
+  dispute_id: string; client_id: string; company_name: string
+  lead: string; lead_email: string | null; lead_company: string | null
+  resolved_at: string; cost_per_lead: number; sibling_bug: boolean
+  verdict: 'owed' | 'never_charged' | 'ok'
+}
+interface DisputeAudit {
+  summary: { approvedDisputes: number; ok: number; owed: number; neverCharged: number; siblingBug: number; clientsAffected: number; leadsOwed: number; valueOwed: number }
+  byClient: AuditClient[]
+  disputes: AuditDispute[]
+}
 interface BalanceSummary {
   clients: number; leads: number; value: number
   needsAttention: number; negative: number; empty: number; low: number
@@ -102,6 +114,11 @@ export function AdminClientsClient() {
   const [disputes, setDisputes]   = useState<Dispute[] | null>(null)
   const [invoices, setInvoices]   = useState<Invoice[] | null>(null)
   const [topups, setTopups]       = useState<Topup[] | null>(null)
+
+  // Refund audit (Disputes tab)
+  const [audit, setAudit]         = useState<DisputeAudit | null>(null)
+  const [auditOpen, setAuditOpen] = useState(false)
+  const [auditBusy, setAuditBusy] = useState(false)
 
   // Balances tab
   const [balances, setBalances]   = useState<{ clients: BalanceRow[]; summary: BalanceSummary } | null>(null)
@@ -249,6 +266,14 @@ export function AdminClientsClient() {
       body: JSON.stringify({ doNotInvoice: next }),
     }).catch(() => null)
     if (!r || !r.ok) { apply(!next); alert('Could not save that — please try again.') }
+  }
+
+  async function loadAudit() {
+    setAuditBusy(true)
+    const d = await fetch('/api/admin/dispute-audit').then(r => r.json()).catch(() => null) as DisputeAudit | { error: string } | null
+    setAuditBusy(false)
+    if (d && 'summary' in d) { setAudit(d); setAuditOpen(true) }
+    else alert((d as { error?: string })?.error ?? 'Could not run the check.')
   }
 
   function loadBalances() {
@@ -1166,7 +1191,77 @@ export function AdminClientsClient() {
                 <h1 className="text-lg font-semibold text-gray-900">Non-Lead Disputes</h1>
                 <p className="text-sm text-gray-500 mt-0.5">Clients have flagged these leads as invalid</p>
               </div>
+              <button onClick={() => audit ? setAuditOpen(v => !v) : loadAudit()} disabled={auditBusy} className="px-4 py-2 border border-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 disabled:opacity-50">
+                {auditBusy ? 'Checking…' : audit && auditOpen ? 'Hide refund check' : 'Check refunds'}
+              </button>
             </div>
+
+            {/* Refund audit — finds approved disputes that credited nothing back
+                (the pre-#62 sibling bug). Read-only: it never credits anything. */}
+            {audit && auditOpen && (
+              <div className="bg-white rounded-xl border border-gray-100 p-5 mb-5">
+                <div className="flex items-start justify-between gap-4 mb-3">
+                  <div>
+                    <h2 className="text-sm font-semibold text-gray-900">Refund check</h2>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {audit.summary.approvedDisputes} approved dispute{audit.summary.approvedDisputes === 1 ? '' : 's'} checked · {audit.summary.ok} credited correctly · {audit.summary.neverCharged} had no charge to reverse
+                    </p>
+                  </div>
+                  <button onClick={loadAudit} disabled={auditBusy} className="text-xs font-medium text-indigo-600 hover:text-indigo-800 whitespace-nowrap disabled:opacity-50">Re-run</button>
+                </div>
+
+                {audit.summary.owed === 0 ? (
+                  <p className="text-sm text-green-700 bg-green-50 border border-green-100 rounded-lg px-3 py-2">
+                    No client is missing a credit. ✓
+                  </p>
+                ) : (
+                  <>
+                    <div className="bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 mb-3">
+                      <p className="text-sm text-amber-800">
+                        <strong>{audit.summary.leadsOwed} lead{audit.summary.leadsOwed === 1 ? '' : 's'}</strong> ({fmt(audit.summary.valueOwed)}) never credited back, across <strong>{audit.summary.clientsAffected} client{audit.summary.clientsAffected === 1 ? '' : 's'}</strong>.
+                      </p>
+                      <p className="text-xs text-amber-700 mt-0.5">
+                        These disputes are already resolved, so they can&apos;t be re-approved — add the leads via Balances → Top up → adjustment.
+                      </p>
+                    </div>
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-gray-100 bg-gray-50">
+                          {['Client','Leads owed','Value',''].map(h => <th key={h} className="px-3 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">{h}</th>)}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {audit.byClient.map(c => (
+                          <tr key={c.client_id} className="border-b border-gray-50">
+                            <td className="px-3 py-2 font-medium text-gray-900">{c.company_name}</td>
+                            <td className="px-3 py-2 text-amber-700 font-semibold">{c.leads}</td>
+                            <td className="px-3 py-2 text-gray-600">{fmt(c.value)}</td>
+                            <td className="px-3 py-2 text-right">
+                              <button
+                                onClick={() => { const cl = clients?.find(x => x.id === c.client_id); if (cl) { setTab('clients'); openSettings(cl, 'balance') } }}
+                                className="text-xs font-medium text-indigo-600 hover:text-indigo-800 px-2 py-1 rounded hover:bg-indigo-50 whitespace-nowrap"
+                              >Credit {c.leads}</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <details className="mt-3">
+                      <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-700">Show the {audit.summary.owed} affected lead{audit.summary.owed === 1 ? '' : 's'}</summary>
+                      <ul className="mt-2 space-y-1">
+                        {audit.disputes.filter(d => d.verdict === 'owed').map(d => (
+                          <li key={d.dispute_id} className="text-xs text-gray-600">
+                            <span className="font-medium text-gray-800">{d.company_name}</span> — {d.lead}
+                            {d.lead_company ? ` (${d.lead_company})` : ''} · {fmtDate(d.resolved_at)}
+                            {d.sibling_bug && <span className="ml-1 text-amber-700">· duplicate-row bug</span>}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  </>
+                )}
+              </div>
+            )}
             <div className="bg-white rounded-xl border border-gray-100 overflow-x-auto">
               <table className="w-full text-sm min-w-[640px]">
                 <thead>
