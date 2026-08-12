@@ -34,6 +34,11 @@ export async function GET(req: NextRequest) {
            WHERE workspace_id = $1
              AND source IN ('plusvibe', 'bison')
              AND status IN ('INTERESTED', 'MEETING_BOOKED', 'INFO')
+             -- Approving a non-lead dispute sets esp_leads.label, but this list
+             -- filters on STATUS — so rejected leads never actually disappeared
+             -- and clients kept counting them (LVM: "we're missing 2 leads").
+             -- Exclude them explicitly; they've been credited back already.
+             AND label IS DISTINCT FROM 'NOT_INTERESTED'
            ORDER BY lower(email), (source = 'bison') DESC, created_at DESC
          ) deduped
          ORDER BY first_replied_at DESC NULLS LAST, created_at DESC
@@ -46,6 +51,11 @@ export async function GET(req: NextRequest) {
            FROM esp_leads
            WHERE workspace_id = $1 AND source IN ('plusvibe', 'bison')
              AND status IN ('INTERESTED', 'MEETING_BOOKED', 'INFO')
+             -- Approving a non-lead dispute sets esp_leads.label, but this list
+             -- filters on STATUS — so rejected leads never actually disappeared
+             -- and clients kept counting them (LVM: "we're missing 2 leads").
+             -- Exclude them explicitly; they've been credited back already.
+             AND label IS DISTINCT FROM 'NOT_INTERESTED'
          ) d`,
         [session.workspaceId]
       ),

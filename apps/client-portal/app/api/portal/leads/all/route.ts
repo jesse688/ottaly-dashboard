@@ -185,6 +185,10 @@ export async function GET() {
          -- so the label-only filter hid them from the inbox while the dashboard
          -- tiles (which count by status) still showed them → an unreachable lead.
          AND (l.label IN ('INTERESTED', 'INFO') OR l.status = 'MEETING_BOOKED')
+         -- ...but never a lead whose non-lead dispute was approved. The label
+         -- branch already excludes those; the MEETING_BOOKED branch is status-
+         -- based and would let a rejected-and-credited lead back in.
+         AND l.label IS DISTINCT FROM 'NOT_INTERESTED'
          AND ($2::text[] = '{}' OR l.label IS NULL OR l.label != ALL($2::text[]))
          -- Dedup PV/Bison: drop a frozen PV row when a Bison row exists for the
          -- same email (Bison wins), so migrated clients aren't double-counted.

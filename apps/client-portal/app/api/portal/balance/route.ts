@@ -36,14 +36,24 @@ export async function GET() {
     const lowThreshold = Number(client.rows[0]?.low_leads_threshold ?? 5)
     const pipeline = Number(pipe.rows[0]?.pipeline ?? 0)
     const dealsWon = Number(pipe.rows[0]?.deals_won ?? 0)
-    const leadsDelivered = ledgerAll.filter(l => l.type === 'lead_charge').length
-
     // Server-side added/used totals (the ledger sent to the client is capped).
     const tot = await pool.query(
       `SELECT COALESCE(SUM(amount) FILTER (WHERE amount > 0), 0) AS added,
-              ABS(COALESCE(SUM(amount) FILTER (WHERE amount < 0), 0)) AS used
+              ABS(COALESCE(SUM(amount) FILTER (WHERE amount < 0), 0)) AS used,
+              COUNT(*) FILTER (WHERE type = 'lead_charge')     AS charges,
+              COUNT(*) FILTER (WHERE type = 'dispute_refund')  AS refunds
          FROM portal_ledger WHERE client_id = $1`,
       [billingId]
+    )
+
+    // NET delivered: a refunded non-lead was credited back, so counting it here
+    // overstates delivery and contradicts the client's own lead list — which is
+    // what made LVM total 58 against 60 paid and email us about missing leads.
+    // Counted in SQL, not from ledgerAll — that is capped at 500 rows and would
+    // silently undercount a long-running client.
+    const leadsDelivered = Math.max(
+      0,
+      Number(tot.rows[0]?.charges ?? 0) - Number(tot.rows[0]?.refunds ?? 0)
     )
 
     const spent = leadsDelivered * costPerLead
