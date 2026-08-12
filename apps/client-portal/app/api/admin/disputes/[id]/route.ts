@@ -44,19 +44,27 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       "UPDATE esp_leads SET label = 'NOT_INTERESTED' WHERE id = $1",
       [dispute.lead_id]
     )
-    await refundLead(dispute.client_id, dispute.lead_id)
+    // A refund that credits nothing must NOT look like a success — that's how an
+    // approved dispute silently left the balance untouched. Carried through to
+    // the response so the admin sees it instead of trusting a green "Approved".
+    const refunded = await refundLead(dispute.client_id, dispute.lead_id)
+    if (!refunded) {
+      console.error(`[dispute] approved ${id} but NO credit written — lead ${dispute.lead_id} has no lead_charge (already refunded, or never billed: delivered pre charges_reset_at / cost_per_lead was 0)`)
+    }
 
     // Sync to PlusVibe: NON_LEAD label makes the admin dashboard's revenue
     // logic exclude this lead automatically. Best-effort — surfaced if it fails.
     const lead = await pool.query('SELECT email, workspace_id FROM esp_leads WHERE id = $1', [dispute.lead_id])
     if (lead.rows[0]?.email) {
       const pv = await updateLeadStatus(lead.rows[0].workspace_id, lead.rows[0].email, 'NON_LEAD')
+      const noCredit = refunded ? '' : ' No lead was credited back — this lead had no charge against it (already refunded, or delivered before billing started). Adjust the balance by hand if they are owed one.'
       if (!pv.ok) {
         console.error('[dispute] PV NON_LEAD label failed:', pv.reason)
-        return NextResponse.json({ ok: true, pvSynced: false, warning: 'Approved & refunded, but PlusVibe NON_LEAD label failed — mark it in PlusVibe manually so revenue excludes it.' })
+        return NextResponse.json({ ok: true, refunded, pvSynced: false, warning: `Approved${refunded ? ' & refunded' : ''}, but PlusVibe NON_LEAD label failed — mark it in PlusVibe manually so revenue excludes it.${noCredit}` })
       }
-      return NextResponse.json({ ok: true, pvSynced: true })
+      return NextResponse.json({ ok: true, refunded, pvSynced: true, warning: noCredit.trim() || undefined })
     }
+    return NextResponse.json({ ok: true, refunded, warning: refunded ? undefined : 'Approved, but no lead was credited back — this lead had no charge against it (already refunded, or delivered before billing started).' })
   }
 
   return NextResponse.json({ ok: true })

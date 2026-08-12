@@ -556,8 +556,15 @@ export function AdminClientsClient() {
 
   // ── Disputes ──
   async function handleDispute(id: string, action: 'approved' | 'denied', note?: string) {
-    await fetch(`/api/admin/disputes/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, note }) })
+    const r = await fetch(`/api/admin/disputes/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, note }) })
+    // The response was previously discarded, so an approval that credited nothing
+    // (or failed to sync to PlusVibe) looked exactly like a clean one. Surface it.
+    const d = await r.json().catch(() => null) as { warning?: string; error?: string } | null
+    if (d?.error) alert(d.error)
+    else if (d?.warning) alert(d.warning)
     fetch('/api/admin/disputes').then(r => r.json()).then((d: Dispute[] | { error: string }) => { if (Array.isArray(d)) setDisputes(d) })
+    // An approved dispute credits a lead back, so the Balances snapshot is stale.
+    if (balances) loadBalances()
   }
 
   // ── Invoices ──
