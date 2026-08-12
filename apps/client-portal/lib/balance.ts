@@ -159,18 +159,53 @@ export async function reconcileLeadCharges(clientId: string): Promise<number> {
 // reconcileLeadCharges:113), so the refund (and its EXISTS guard) MUST key on the
 // same target — else a redirected client wins the dispute but the credit lands on
 // an unread ledger and is silently lost.
-export async function refundLead(clientId: string, leadId: string): Promise<void> {
+// Returns TRUE when a credit was actually written. Callers must surface a false
+// — an approved dispute that silently refunds nothing looks identical to a
+// working one in the UI, which is how LVM ended up with two approved disputes
+// and an unchanged balance.
+export async function refundLead(clientId: string, leadId: string): Promise<boolean> {
   const target = await billingClientId(clientId)
-  // Only refund a lead that was actually charged — never mint credits.
-  await pool.query(
-    `INSERT INTO portal_ledger (client_id, type, amount, lead_id, description, created_by)
-     SELECT $1, 'dispute_refund', 1, $2, 'Refund: non-lead approved', 'admin'
-      WHERE EXISTS (
-        SELECT 1 FROM portal_ledger WHERE client_id = $1 AND lead_id = $2 AND type = 'lead_charge'
-      )
-     ON CONFLICT (client_id, lead_id) WHERE type = 'dispute_refund' DO NOTHING`,
+
+  // Find the row that was ACTUALLY charged. reconcileLeadCharges bills once per
+  // EMAIL, not once per esp_leads row — when duplicate ingest creates two rows
+  // for the same person, only one carries the lead_charge. The client disputes
+  // the row they can see, which may be the sibling. Keying the refund strictly
+  // on the disputed id therefore finds no charge and silently credits nothing,
+  // so resolve to the charged sibling here (same email, same billing target).
+  const charged = await pool.query(
+    `SELECT pl.lead_id
+       FROM portal_ledger pl
+       JOIN esp_leads l2 ON l2.id = pl.lead_id
+      WHERE pl.client_id = $1
+        AND pl.type = 'lead_charge'
+        AND (
+          pl.lead_id = $2
+          OR EXISTS (
+            SELECT 1 FROM esp_leads l
+             WHERE l.id = $2
+               AND l.email IS NOT NULL
+               AND lower(l2.email) = lower(l.email)
+          )
+        )
+      -- Prefer the exact row; fall back to the charged sibling.
+      ORDER BY (pl.lead_id = $2) DESC
+      LIMIT 1`,
     [target, leadId]
   )
+  const chargedLeadId = charged.rows[0]?.lead_id as string | undefined
+  // Never mint credits: no charge anywhere for this person means nothing to give
+  // back (e.g. delivered before charges_reset_at, or while cost_per_lead was 0).
+  if (!chargedLeadId) return false
+
+  // Key the refund to the CHARGED row so the partial unique index still makes
+  // this idempotent — one refund per charge, even across sibling disputes.
+  const res = await pool.query(
+    `INSERT INTO portal_ledger (client_id, type, amount, lead_id, description, created_by)
+     VALUES ($1, 'dispute_refund', 1, $2, 'Refund: non-lead approved', 'admin')
+     ON CONFLICT (client_id, lead_id) WHERE type = 'dispute_refund' DO NOTHING`,
+    [target, chargedLeadId]
+  )
+  return (res.rowCount ?? 0) > 0
 }
 
 // amount = number of LEADS to add to the balance.
