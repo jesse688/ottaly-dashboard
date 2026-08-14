@@ -1604,8 +1604,16 @@ class PostgresDatabase {
     const like = (col, val) => { clauses.push(`${col} ILIKE $${p++}`); params.push(`%${val}%`); };
     const eq   = (col, val) => { clauses.push(`${col} = $${p++}`); params.push(val); };
     // Comma-separated → IN (...). Single value falls through to eq for an index-friendly plan.
+    // Array-safe: Express repeats become arrays, single values stay strings.
+    const multiVals = (val) => (Array.isArray(val) ? val : String(val || '').split(','))
+      .map(v => String(v).trim()).filter(Boolean);
     const eqMulti = (col, val) => {
-      const values = val.split(',').map(v => v.trim()).filter(Boolean);
+      // Express gives an ARRAY when a param repeats (?k=a&k=b) and a string when
+      // it appears once. The multi-select filters send repeats, so calling
+      // .split() on the array threw — and safe() swallowed it, silently
+      // returning unfiltered results instead of an error.
+      const values = (Array.isArray(val) ? val : String(val).split(','))
+        .map(v => String(v).trim()).filter(Boolean);
       if (values.length === 0) return;
       if (values.length === 1) { eq(col, values[0]); return; }
       const placeholders = values.map(() => `$${p++}`).join(',');
@@ -1696,7 +1704,7 @@ class PostgresDatabase {
       catch (e) { console.warn(`[search] filter "${name}" skipped:`, e.message); }
     };
 
-    safe('status',     () => { if (filters.status)     eq('status', filters.status); });
+    safe('status',     () => { if (filters.status)     eqMulti('status', filters.status); });
     safe('seniority',  () => { if (filters.seniority)  eqMulti('seniority', filters.seniority); });
     safe('firstName',  () => { if (filters.firstName)  like('first_name', filters.firstName); });
     safe('lastName',   () => { if (filters.lastName)   like('last_name', filters.lastName); });
@@ -1978,7 +1986,7 @@ class PostgresDatabase {
     });
 
     // Intelligence filters
-    safe('ownsBuilding',   () => { if (filters.ownsBuilding) { clauses.push(`owns_building = $${p++}`); params.push(filters.ownsBuilding); } });
+    safe('ownsBuilding',   () => { if (filters.ownsBuilding) eqMulti('owns_building', filters.ownsBuilding); });
 
     // Companies House enrichment, populated by the Common Crawl lead pipeline.
     // Age band is a coarse bucket ("legacy (25y+)") rather than a raw number so
@@ -1991,34 +1999,46 @@ class PostgresDatabase {
     // Whether the Companies House match was corroborated by name or postcode.
     // Unverified rows still carry a valid email — they just have no CH-derived
     // fields, so exclude them when personalising on company or director name.
+    // Multi-select: each chosen value contributes an OR branch, so picking
+    // several is a union ("verified OR unverified"), not an impossible AND.
     safe('chVerified',     () => {
-      const v = filters.chVerified;
-      if (!v) return;
-      if (v === 'yes') clauses.push(`ch_verified IS TRUE`);
-      else if (v === 'no') clauses.push(`(ch_verified IS FALSE OR ch_verified IS NULL)`);
+      const vals = multiVals(filters.chVerified);
+      if (!vals.length) return;
+      const ors = [];
+      if (vals.includes('yes')) ors.push(`ch_verified IS TRUE`);
+      if (vals.includes('no'))  ors.push(`(ch_verified IS FALSE OR ch_verified IS NULL)`);
+      if (ors.length) clauses.push(`(${ors.join(' OR ')})`);
     });
 
     // Land Registry (CCOD) ownership sweep result — separate from the manual
     // owns_building signal above. Special values: 'checked'/'unchecked' filter
     // on whether the sweep has run; anything else matches ccod_owns_building.
     safe('ccodOwnsBuilding', () => {
-      const v = filters.ccodOwnsBuilding;
-      if (!v) return;
-      if (v === 'checked')        clauses.push(`ccod_checked_at IS NOT NULL`);
-      else if (v === 'unchecked') clauses.push(`ccod_checked_at IS NULL`);
-      else { clauses.push(`ccod_owns_building = $${p++}`); params.push(v); }
+      const vals = multiVals(filters.ccodOwnsBuilding);
+      if (!vals.length) return;
+      const ors = [];
+      for (const v of vals) {
+        if (v === 'checked')        ors.push(`ccod_checked_at IS NOT NULL`);
+        else if (v === 'unchecked') ors.push(`ccod_checked_at IS NULL`);
+        else { ors.push(`ccod_owns_building = $${p++}`); params.push(v); }
+      }
+      if (ors.length) clauses.push(`(${ors.join(' OR ')})`);
     });
 
     // Solar-qualification result (from the Solar page, persisted to solar_* columns).
     safe('solarStatus', () => {
-      const v = filters.solarStatus;
-      if (!v) return;
-      if (v === 'prospect')          clauses.push(`solar_status = 'qualified'`);
-      else if (v === 'roof_small')   clauses.push(`solar_stop_reason LIKE 'roof_too_small%'`);
-      else if (v === 'tenant')       clauses.push(`solar_stop_reason = 'tenant'`);
-      else if (v === 'already_solar')clauses.push(`solar_has_solar = 'yes'`);
-      else if (v === 'checked')      clauses.push(`solar_checked_at IS NOT NULL`);
-      else if (v === 'unchecked')    clauses.push(`solar_checked_at IS NULL`);
+      const vals = multiVals(filters.solarStatus);
+      if (!vals.length) return;
+      const BRANCH = {
+        prospect:      `solar_status = 'qualified'`,
+        roof_small:    `solar_stop_reason LIKE 'roof_too_small%'`,
+        tenant:        `solar_stop_reason = 'tenant'`,
+        already_solar: `solar_has_solar = 'yes'`,
+        checked:       `solar_checked_at IS NOT NULL`,
+        unchecked:     `solar_checked_at IS NULL`,
+      };
+      const ors = vals.map(v => BRANCH[v]).filter(Boolean);
+      if (ors.length) clauses.push(`(${ors.join(' OR ')})`);
     });
     // Minimum solar system size (kWp) — e.g. only PPA-worthy 100kWp+ prospects.
     safe('solarMinKwp', () => {
@@ -2073,7 +2093,7 @@ class PostgresDatabase {
     safe('notSentToPV', () => { if (filters.notSentToPV === 'true') clauses.push(`COALESCE(emailed_workspaces, '{}'::jsonb) = '{}'::jsonb`); });
 
     // Companies House filters
-    safe('chStatus',      () => { if (filters.chStatus) { clauses.push(`company_status = $${p++}`); params.push(filters.chStatus); } });
+    safe('chStatus',      () => { if (filters.chStatus) eqMulti('company_status', filters.chStatus); });
     safe('chInsolvency',  () => { if (filters.chInsolvency === 'true')  clauses.push(`ch_has_insolvency = true`); });
     safe('chCharges',     () => { if (filters.chCharges === 'true')     clauses.push(`ch_has_charges = true`); });
     safe('chOverdue',     () => { if (filters.chOverdue === 'true')     clauses.push(`ch_accounts_overdue = true`); });

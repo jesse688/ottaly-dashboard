@@ -1253,15 +1253,13 @@
             </select>
 
             <!-- Companies House enrichment. Only populated for pipeline leads;
-                 older imports leave these blank, so choosing a value excludes them. -->
-            <select id="companyAgeBand" title="Company age from the Companies House incorporation date.">
-              <option value="">🗓️ Company age — all</option>
-              <option value="startup (&lt;1y)">🌱 Startup (&lt;1y)</option>
-              <option value="young (1-3y)">🌿 Young (1–3y)</option>
-              <option value="established (3-10y)">🌳 Established (3–10y)</option>
-              <option value="mature (10-25y)">🏛️ Mature (10–25y)</option>
-              <option value="legacy (25y+)">🏰 Legacy (25y+)</option>
-            </select>
+                 older imports leave these blank, so choosing a value excludes them.
+                 Multi-select: pick several bands to see their union. -->
+            <div class="multi-select" id="companyAgeBandContainer" title="Company age from the Companies House incorporation date. Pick more than one band to combine them.">
+              <div class="multi-select-input" id="companyAgeBandInput" style="cursor:text;">
+                <input type="text" id="companyAgeBandInputField" placeholder="🗓️ Company age — all" style="flex:1;min-width:100px;">
+              </div>
+            </div>
 
             <!-- NB: no separate freehold or CH-status dropdown here. Building
                  ownership is already covered by #ccodOwnsBuilding and CH status
@@ -1269,11 +1267,11 @@
                  gives two ways to ask one question and they disagree. The
                  pipeline's freehold/status values populate those existing
                  filters instead. -->
-            <select id="chVerified" title="Whether the Companies House match was corroborated by company name or postcode. Unverified leads have a valid email but no trustworthy company data — avoid personalising on company name.">
-              <option value="">🔍 CH match — all</option>
-              <option value="yes">✅ Verified</option>
-              <option value="no">❓ Unverified</option>
-            </select>
+            <div class="multi-select" id="chVerifiedContainer" title="Whether the Companies House match was corroborated by company name or postcode. Unverified leads have a valid email but no trustworthy company data — avoid personalising on company name.">
+              <div class="multi-select-input" id="chVerifiedInput" style="cursor:text;">
+                <input type="text" id="chVerifiedInputField" placeholder="🔍 CH match — all" style="flex:1;min-width:100px;">
+              </div>
+            </div>
             <select id="hasName" title="Whether the contact has a usable person name. Email-only imports (e.g. an Apollo enrichment round trip) arrive with no name — still sendable to a role address, but you cannot personalise a first line with them.">
               <!-- Defaults to "has first name", not "all": a first name is what
                    a personalised opening line needs, and a nameless contact
@@ -1291,24 +1289,16 @@
               <option value="">🏢 Company name — all</option>
               <option value="no">❌ No company name</option>
             </select>
-            <select id="ccodOwnsBuilding" title="Building ownership from HM Land Registry (CCOD) + Companies House, resolved by the company data engine.">
-              <option value="">🏢 Building ownership — all</option>
-              <option value="yes">✅ Owns building</option>
-              <option value="no">❌ Tenant / rents</option>
-              <option value="unclear">❓ Unclear</option>
-              <option value="no_postcode">📍 No postcode</option>
-              <option value="checked">— Checked (any result)</option>
-              <option value="unchecked">— Not yet checked</option>
-            </select>
-            <select id="solarStatus" title="Solar qualification result from the Solar page (saved per contact).">
-              <option value="">☀️ Solar — all</option>
-              <option value="prospect">🎯 Solar prospect (qualified)</option>
-              <option value="roof_small">Roof too small</option>
-              <option value="tenant">Tenant (stopped)</option>
-              <option value="already_solar">Already has solar</option>
-              <option value="checked">— Checked (any result)</option>
-              <option value="unchecked">— Not yet checked</option>
-            </select>
+            <div class="multi-select" id="ccodOwnsBuildingContainer" title="Building ownership from HM Land Registry (CCOD) + Companies House, resolved by the company data engine.">
+              <div class="multi-select-input" id="ccodOwnsBuildingInput" style="cursor:text;">
+                <input type="text" id="ccodOwnsBuildingInputField" placeholder="🏢 Building ownership — all" style="flex:1;min-width:100px;">
+              </div>
+            </div>
+            <div class="multi-select" id="solarStatusContainer" title="Solar qualification result from the Solar page (saved per contact).">
+              <div class="multi-select-input" id="solarStatusInput" style="cursor:text;">
+                <input type="text" id="solarStatusInputField" placeholder="☀️ Solar — all" style="flex:1;min-width:100px;">
+              </div>
+            </div>
             <label style="display:flex;align-items:center;gap:5px;font-size:12px;" title="Only contacts whose estimated solar system is at least this many kWp.">
               ☀️ Min kWp <input type="number" id="solarMinKwp" min="0" step="10" placeholder="e.g. 100" style="width:70px;background:var(--card,#1a1a1a);color:inherit;border:1px solid var(--line,#333);border-radius:6px;padding:3px 6px;">
             </label>
@@ -1348,23 +1338,20 @@
 
         <div class="filter-section" data-clear="status">
           <div class="filter-label" title="How this lead has responded to outreach — not the company's Companies House status.">Lead status (outreach)</div>
-          <select id="status">
-            <option value="">All statuses</option>
-            <option value="new">New</option>
-            <option value="interested">Interested</option>
-            <option value="replied">Replied</option>
-            <option value="bounced">Bounced</option>
-            <option value="active">Active</option>
-          </select>
+          <div class="multi-select" id="leadStatusContainer">
+            <div class="multi-select-input" id="leadStatusInput" style="cursor:text;">
+              <input type="text" id="leadStatusInputField" placeholder="All statuses" style="flex:1;min-width:100px;">
+            </div>
+          </div>
         </div>
 
         <div class="filter-section" data-clear="ch-status">
           <div class="filter-label" title="Whether the company is still trading, from Companies House — not the lead's outreach status.">Company trading status</div>
-          <select id="chStatusFilter">
-            <option value="">Any</option>
-            <option value="active">✅ Active (trading)</option>
-            <option value="not active">⚠️ Dissolved / liquidation</option>
-          </select>
+          <div class="multi-select" id="chStatusContainer">
+            <div class="multi-select-input" id="chStatusInput" style="cursor:text;">
+              <input type="text" id="chStatusInputField" placeholder="Trading status — any" style="flex:1;min-width:100px;">
+            </div>
+          </div>
         </div>
 
         <div class="filter-section" data-clear="ch-flags">
@@ -2191,6 +2178,17 @@
       companyRegion: { containerId: 'companyRegionInput', inputId: 'companyRegionInputField', placeholder: 'Region...',                selected: [], excluded: [], list: [], hasExclude: true },
       companyCounty: { containerId: 'companyCountyInput', inputId: 'companyCountyInputField', placeholder: 'County...',                selected: [], excluded: [], list: [], hasExclude: true },
       companyTown:   { containerId: 'companyTownInput',   inputId: 'companyTownInputField',   placeholder: 'Town...',                  selected: [], excluded: [], list: [], hasExclude: true },
+      // Converted from single-select dropdowns. Fixed option lists, so `list` is
+      // the full set and there is no exclude mode — picking several values is a
+      // union (the backend ORs them), which is what "show me young AND mature"
+      // actually means to a user.
+      companyAgeBand:  { containerId: 'companyAgeBandInput',  inputId: 'companyAgeBandInputField',  placeholder: '🗓️ Company age — all',   selected: [], excluded: [], list: ['startup (<1y)','young (1-3y)','established (3-10y)','mature (10-25y)','legacy (25y+)'], hasExclude: false },
+      chStatus:        { containerId: 'chStatusInput',        inputId: 'chStatusInputField',        placeholder: '🏛️ Trading status — all', selected: [], excluded: [], list: ['active','not active'], hasExclude: false },
+      chVerified:      { containerId: 'chVerifiedInput',      inputId: 'chVerifiedInputField',      placeholder: '🔍 CH match — all',      selected: [], excluded: [], list: ['yes','no'], hasExclude: false },
+      leadStatus:      { containerId: 'leadStatusInput',      inputId: 'leadStatusInputField',      placeholder: 'Lead status — all',      selected: [], excluded: [], list: ['new','active','interested','replied','not_interested','bounced'], hasExclude: false },
+      ownsBuilding:    { containerId: 'ownsBuildingInput',    inputId: 'ownsBuildingInputField',    placeholder: 'Building ownership — all', selected: [], excluded: [], list: ['yes','no','unknown'], hasExclude: false },
+      ccodOwnsBuilding:{ containerId: 'ccodOwnsBuildingInput',inputId: 'ccodOwnsBuildingInputField',placeholder: '🏢 Land Registry — all', selected: [], excluded: [], list: ['yes','no','checked','unchecked'], hasExclude: false },
+      solarStatus:     { containerId: 'solarStatusInput',     inputId: 'solarStatusInputField',     placeholder: '☀️ Solar — all',         selected: [], excluded: [], list: ['prospect','roof_small','tenant','already_solar','checked','unchecked'], hasExclude: false },
     };
 
     // ── Column definitions ───────────────────────────────────────
@@ -2881,7 +2879,7 @@
 
       const f = {
         q: get('globalSearch'),
-        status: get('status'),
+        status: sel('leadStatus'),
         seniority: sel('seniority'),
         jobTitle: sel('jobTitle'),
         jobTitleExclude: excl('jobTitle'),
@@ -2923,7 +2921,7 @@
         companyCountyExclude: excl('companyCounty'),
         companyTown: sel('companyTown'),
         companyTownExclude: excl('companyTown'),
-        chStatus: get('chStatusFilter'),
+        chStatus: sel('chStatus'),
         chInsolvency: document.getElementById('chInsolvency')?.checked ? 'true' : '',
         chCharges: document.getElementById('chCharges')?.checked ? 'true' : '',
         chOverdue: document.getElementById('chOverdue')?.checked ? 'true' : '',
@@ -2931,17 +2929,17 @@
         adsRunsAds: get('adsRunsAds'),
         adsMinCount: get('adsMinCount'),
         adsMaxCount: get('adsMaxCount'),
-        ownsBuilding: get('ownsBuilding'),
+        ownsBuilding: sel('ownsBuilding'),
         // Common Crawl pipeline: provenance + Companies House enrichment.
         // Freehold and CH status deliberately reuse ccodOwnsBuilding /
         // chStatusFilter rather than adding parallel controls.
         source: getSelectedSources(),
-        companyAgeBand: get('companyAgeBand'),
-        chVerified: get('chVerified'),
-        ccodOwnsBuilding: get('ccodOwnsBuilding'),
+        companyAgeBand: sel('companyAgeBand'),
+        chVerified: sel('chVerified'),
+        ccodOwnsBuilding: sel('ccodOwnsBuilding'),
         hasName: get('hasName'),
         hasCompany: get('hasCompany'),
-        solarStatus: get('solarStatus'),
+        solarStatus: sel('solarStatus'),
         solarMinKwp: get('solarMinKwp'),
         updatedAge: get('updatedAge'),
         worksRemote: document.getElementById('filterRemote')?.checked ? 'true' : '',
@@ -3021,13 +3019,18 @@
             const el = document.getElementById(id); if (el) el.checked = false;
           }); break;
         case 'intelligence':
-          { const ob = document.getElementById('ownsBuilding'); if (ob) ob.value = ''; }
+          // These are multi-selects now, so clear their filterDefs entries
+          // rather than a element .value that no longer exists.
+          ['ownsBuilding','ccodOwnsBuilding','solarStatus','companyAgeBand','chVerified'].forEach(k => {
+            if (filterDefs[k]) { filterDefs[k].selected = []; filterDefs[k].excluded = []; renderFilterTags(k); }
+          });
           ['filterRemote','filterExcludeRemote','filterExcludeDNC','filterNotExported','filterExportedOnly','filterSentToPV','filterNotSentToPV','filterSentToPV','filterNotSentToPV'].forEach(id => {
             const el = document.getElementById(id); if (el) el.checked = false;
           }); break;
         case 'status':
-          { const el = document.getElementById('status'); if (el) el.value = ''; } break;
-        case 'ch-status': { const el = document.getElementById('chStatusFilter'); if (el) el.value = ''; } break;
+          if (filterDefs.leadStatus) { filterDefs.leadStatus.selected = []; renderFilterTags("leadStatus"); } break;
+        case 'ch-status':
+          if (filterDefs.chStatus) { filterDefs.chStatus.selected = []; renderFilterTags("chStatus"); } break;
         case 'ch-flags': ['chInsolvency','chCharges','chOverdue','chOnlyEnriched'].forEach(id => { const el = document.getElementById(id); if (el) el.checked = false; }); break;
       }
       search();
@@ -3319,8 +3322,7 @@
         def.selected.forEach(v => params.append(key, v));
         def.excluded.forEach(v => params.append(key + '!', v));
       });
-      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding','hasName','hasCompany','solarStatus','solarMinKwp','updatedAge',
-       'companyAgeBand','chVerified'].forEach(id => {
+      ['globalSearch','company','hasName','hasCompany','solarMinKwp','updatedAge'].forEach(id => {
         const el = document.getElementById(id);
         if (el && el.value) params.append(id, el.value);
       });
@@ -3428,8 +3430,7 @@
       // Reset everything, install the saved hash, then re-run the standard
       // restoration path so behaviour matches a bookmarked-URL reload.
       Object.keys(filterDefs).forEach(k => { filterDefs[k].selected = []; filterDefs[k].excluded = []; });
-      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding','hasName','hasCompany','solarStatus','solarMinKwp','updatedAge',
-       'companyAgeBand','chVerified'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+      ['globalSearch','company','hasName','hasCompany','solarMinKwp','updatedAge'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
       ['emailGoogle','emailOutlook','emailOther','emailUnknown','filterRemote','filterExcludeRemote','filterExcludeDNC','filterNotExported','filterExportedOnly','filterSentToPV','filterNotSentToPV','filterSentToPV','filterNotSentToPV'].forEach(id => { const el = document.getElementById(id); if (el) el.checked = false; });
       if (typeof applyFilterDefaults === 'function') applyFilterDefaults();
       window.location.hash = v.filters || '';
@@ -3460,8 +3461,7 @@
         if (inc.length) { filterDefs[key].selected = inc; any = true; }
         if (exc.length) { filterDefs[key].excluded = exc; any = true; }
       });
-      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding','hasName','hasCompany','solarStatus','solarMinKwp','updatedAge',
-       'companyAgeBand','chVerified'].forEach(id => {
+      ['globalSearch','company','hasName','hasCompany','solarMinKwp','updatedAge'].forEach(id => {
         const v = params.get(id);
         const el = document.getElementById(id);
         if (el && v != null) { el.value = v; any = true; }
@@ -5861,8 +5861,10 @@
         document.getElementById('filterExcludeRemote').checked = false;
         // Clear BOTH: the vertical rule sets ccodOwnsBuilding, so resetting only
         // the legacy input left the real filter stuck on after deselecting.
-        document.getElementById('ownsBuilding').value = '';
-        document.getElementById('ccodOwnsBuilding').value = '';
+        // Now multi-selects: clear their filterDefs state, not a .value.
+        ['ownsBuilding','ccodOwnsBuilding'].forEach(k => {
+          if (filterDefs[k]) { filterDefs[k].selected = []; renderFilterTags(k); }
+        });
         infoEl.style.display = 'none';
         search();
         return;
@@ -5886,8 +5888,11 @@
         // 1.4M rows; Land Registry resolution writes ccod_owns_building, which
         // has 83,737. Pointing the vertical rule at the dead column is what
         // reduced a solar client to 64 contacts.
-        document.getElementById('ccodOwnsBuilding').value = requireOwnsBuilding ? 'yes' : '';
-        document.getElementById('ownsBuilding').value = '';
+        if (filterDefs.ccodOwnsBuilding) {
+          filterDefs.ccodOwnsBuilding.selected = requireOwnsBuilding ? ['yes'] : [];
+          renderFilterTags('ccodOwnsBuilding');
+        }
+        if (filterDefs.ownsBuilding) { filterDefs.ownsBuilding.selected = []; renderFilterTags('ownsBuilding'); }
       };
       applyVerticalToggles(rules?.excludeRemote, rules?.requireOwnsBuilding);
       if (rules?.excludeRemote)       lines.push('🚫 Hiding remote workers');
