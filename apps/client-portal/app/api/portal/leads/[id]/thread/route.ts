@@ -92,7 +92,19 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     const r = await pool.query(
       `SELECT id, direction, subject, body_html, body_text, content_preview,
               from_email, to_email, eaccount, pv_label, message_id, sent_via_portal,
-              timestamp_created, raw->'attachments' AS attachments,
+              timestamp_created,
+              -- Attachments come from portal_attachments, NOT from raw. Outbound
+              -- replies mirror their metadata into raw->'attachments', but INBOUND
+              -- files arrive under PV's own raw->'out_attachments' whose URLs are
+              -- presigned and expire in ~24h — unusable for rendering. The table is
+              -- the single source of truth for both directions: it holds the bytes
+              -- we copied, keyed by an id the download route can serve.
+              (SELECT jsonb_agg(jsonb_build_object(
+                        'id', pa.id, 'filename', pa.filename, 'size', pa.size,
+                        'content_type', pa.content_type, 'is_inline', pa.is_inline)
+                      ORDER BY pa.is_inline, pa.created_at)
+                 FROM portal_attachments pa
+                WHERE pa.email_id = portal_emails.id) AS attachments,
               -- CC recipients. PlusVibe exposes cc under DIFFERENT keys depending on
               -- which endpoint fed the row into raw:
               --   * /unibox/emails LIST feed (what the reconcile cron ingests):

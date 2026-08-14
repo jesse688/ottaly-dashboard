@@ -83,7 +83,7 @@ interface ThreadMsg {
   pv_label: string | null
   sent_via_portal: boolean
   timestamp_created: string | null
-  attachments?: { id?: string; filename: string; size?: number; content_type?: string }[] | null
+  attachments?: { id?: string; filename: string; size?: number; content_type?: string; is_inline?: boolean }[] | null
 }
 
 interface CustomLabel { id: string; name: string; color: string; prompts_value?: boolean }
@@ -1064,9 +1064,14 @@ export function UniboxClient({ companyName, clientName, clientEmail = '', worksp
                           // lines so it doesn't show huge gaps; readable column.
                           <div className="text-sm text-[#1a2332] whitespace-pre-wrap break-words leading-[1.55] max-w-[68ch]">{(main || '(no content)').replace(/\n{3,}/g, '\n\n').trim()}</div>
                         )}
-                        {m.attachments && m.attachments.length > 0 && (
+                        {/* Attachment chips. Inline parts (signature logos, pasted
+                            screenshots) are stored and downloadable like anything
+                            else, but they already appear in the body — chipping them
+                            too would bury a real contract under image001.png, which
+                            is why Gmail and PlusVibe hide them here as well. */}
+                        {m.attachments && m.attachments.some(a => !a.is_inline) && (
                           <div className="flex flex-wrap gap-1.5 mt-3">
-                            {m.attachments.map((a, i) => {
+                            {m.attachments.filter(a => !a.is_inline).map((a, i) => {
                               const sizeLabel = a.size != null
                                 ? (a.size > 1024 * 1024 ? `${(a.size / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(a.size / 1024))} KB`)
                                 : null

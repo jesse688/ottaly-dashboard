@@ -283,8 +283,12 @@ async function runMigration() {
       )`,
       `CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_recv ON webhook_deliveries (received_at DESC)`,
 
-      // Files attached to a client's outgoing reply. Bytes stored inline (base64
-      // in `content`) so they can be previewed/downloaded without external storage.
+      // Files on a message in BOTH directions — the client's outgoing replies and
+      // the prospect's inbound mail. Bytes stored inline (base64 in `content`) so
+      // they can be previewed/downloaded without external storage. This is not an
+      // optimisation: PlusVibe exposes inbound files only as presigned S3 URLs that
+      // expire ~24h after arrival, so the bytes MUST be copied while the link is
+      // still valid or the file is lost for good.
       // Scoped by workspace_id so the download route can authorize the viewer.
       `CREATE TABLE IF NOT EXISTS portal_attachments (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -297,6 +301,16 @@ async function runMigration() {
         created_at TIMESTAMPTZ DEFAULT NOW()
       )`,
       `CREATE INDEX IF NOT EXISTS idx_portal_attachments_email ON portal_attachments (email_id)`,
+      // Inline MIME parts (signature logos, pasted screenshots) are STORED like any
+      // other file — the portal never discards what a sender sent — but flagged so
+      // the thread can keep them out of the attachment chip bar, the way Gmail and
+      // PlusVibe do. They stay downloadable; they just don't shout.
+      `ALTER TABLE portal_attachments ADD COLUMN IF NOT EXISTS is_inline BOOLEAN NOT NULL DEFAULT false`,
+      // Identity of the source part, so re-running ingest/backfill over the same
+      // email cannot store the same file twice.
+      `ALTER TABLE portal_attachments ADD COLUMN IF NOT EXISTS source_key TEXT`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS uq_portal_attachments_src
+         ON portal_attachments (email_id, source_key) WHERE source_key IS NOT NULL`,
 
       // ── Lead-credit balance ledger ─────────────────────────────────
       // type: topup (+), lead_charge (-), dispute_refund (+), adjustment (+/-)

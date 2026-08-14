@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import pool, { ready } from '@/lib/db'
 import { getPlusVibeReceived, type PVReceivedEmail } from '@/lib/plusvibe'
+import { ingestAndLink } from '@/lib/attachments'
 import { detectWarmupFull } from '@/lib/classify'
 import { resolveClientId } from '@/lib/clients'
 import { notifyClientOfLeadReply } from '@/lib/email'
@@ -94,8 +95,8 @@ export async function GET(req: NextRequest) {
   const rot = allWorkspaces.length ? Math.floor(Date.now() / 60_000) % allWorkspaces.length : 0
   const workspaces = [...allWorkspaces.slice(rot), ...allWorkspaces.slice(0, rot)]
 
-  type Counts = { seen: number; inserted: number; healed: number; ooo: number; skipped_warmup: number; skipped_bounce: number; skipped_old: number; skipped_outbound: number }
-  const zero = (): Counts => ({ seen: 0, inserted: 0, healed: 0, ooo: 0, skipped_warmup: 0, skipped_bounce: 0, skipped_old: 0, skipped_outbound: 0 })
+  type Counts = { seen: number; inserted: number; healed: number; ooo: number; attachments: number; skipped_warmup: number; skipped_bounce: number; skipped_old: number; skipped_outbound: number }
+  const zero = (): Counts => ({ seen: 0, inserted: 0, healed: 0, ooo: 0, attachments: 0, skipped_warmup: 0, skipped_bounce: 0, skipped_old: 0, skipped_outbound: 0 })
   const errors: string[] = []
 
   // Process ONE workspace: fetch its PlusVibe received emails and upsert them.
@@ -339,6 +340,18 @@ export async function GET(req: NextRequest) {
            e.message_id ?? null, e.timestamp_created ?? new Date().toISOString(), JSON.stringify(e)]
         ).catch(err => console.error('[pv-reconcile] portal_emails insert failed:', err))
 
+        // ATTACHMENTS. Copy the prospect's files in NOW. PlusVibe exposes them as
+        // presigned S3 URLs that die ~24h after the mail arrives, so this cannot be
+        // deferred to render time — a link stored today 403s tomorrow. Awaited (not
+        // fired-and-forgotten) so the bytes land before the run ends, and internally
+        // never throws: a failed file must not cost us the email.
+        try {
+          const n = await ingestAndLink(dedupeKey, ws, e)
+          if (n) { c.attachments += n; console.log(`[pv-reconcile] stored ${n} attachment(s) for ${dedupeKey}`) }
+        } catch (err) {
+          console.error('[pv-reconcile] attachment ingest failed:', err)
+        }
+
         // NOTIFY: a first-ingest, just-arrived (<15 min) human reply where the
         // client is already ENGAGED with this lead. NEVER on backfill / historical.
         //
@@ -413,6 +426,7 @@ export async function GET(req: NextRequest) {
     processedWs += results.length
     for (const c of results) {
       totals.seen += c.seen; totals.inserted += c.inserted; totals.healed += c.healed; totals.ooo += c.ooo
+      totals.attachments += c.attachments
       totals.skipped_warmup += c.skipped_warmup; totals.skipped_bounce += c.skipped_bounce; totals.skipped_old += c.skipped_old
       totals.skipped_outbound += c.skipped_outbound
     }

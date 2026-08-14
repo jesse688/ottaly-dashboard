@@ -190,6 +190,115 @@ export interface PVReceivedEmail {
   body?: { html?: string; text?: string } | null
   html_body?: string | null
   text_body?: string | null
+  // Files the PROSPECT attached. Despite the name, `out_attachments` is what PV
+  // puts INBOUND attachments under (the outbound copies we write ourselves use
+  // `attachments`). `s3_key` is a PRESIGNED URL that expires ~24h after the mail
+  // arrived — the bytes must be fetched and stored while it is still valid, so
+  // this is ingested eagerly rather than linked to. See fetchPvAttachments().
+  out_attachments?: PVAttachmentRef[] | null
+}
+
+// One inbound attachment as PlusVibe describes it.
+export interface PVAttachmentRef {
+  s3_key?: string           // presigned URL, ~24h TTL (X-Amz-Expires=86400)
+  size?: number
+  file_name?: string        // storage name, e.g. "1786442834069-0.pdf"
+  filename?: string         // some payloads use this spelling instead
+  orig_file_name?: string   // the name the sender actually used — prefer this
+}
+
+// Best display name for an inbound attachment. PV's `file_name` is a storage id
+// ("1786442834069-0.bin"); `orig_file_name` is what the sender called it
+// ("VS 2025 Accounts Pack.zip"). Prefer the human one, fall back through the
+// spellings, and never return empty (the filename column is NOT NULL).
+export function pvAttachmentName(a: PVAttachmentRef, index = 0): string {
+  const pick = [a.orig_file_name, a.file_name, a.filename]
+    .map(s => (s ?? '').trim())
+    .find(Boolean)
+  return pick || `attachment-${index + 1}`
+}
+
+// Guess a content type from the filename. PV does not send one, and the download
+// route decides inline-preview vs forced-download from this value — so a PDF that
+// arrives as application/octet-stream would download instead of previewing.
+// Anything unrecognised stays octet-stream, which the download route treats as
+// "not inline-safe" — the safe default.
+export function guessContentType(filename: string): string {
+  const ext = (filename.match(/\.([a-z0-9]+)$/i)?.[1] ?? '').toLowerCase()
+  const MAP: Record<string, string> = {
+    pdf: 'application/pdf', txt: 'text/plain', csv: 'text/csv',
+    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+    gif: 'image/gif', webp: 'image/webp',
+    zip: 'application/zip',
+    doc: 'application/msword',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xls: 'application/vnd.ms-excel',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ppt: 'application/vnd.ms-powerpoint',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  }
+  return MAP[ext] ?? 'application/octet-stream'
+}
+
+// Is this part a document the sender deliberately attached, or an inline/MIME
+// part (signature logo, tracking pixel, crypto blob)?
+//
+// NOTHING IS DISCARDED ON THE BASIS OF THIS. Every part PV gives us is fetched and
+// stored, exactly like PlusVibe and Gmail do — the portal is a real inbox and must
+// not decide a file "doesn't count". This only drives PRESENTATION: real documents
+// get attachment chips; inline parts stay out of the chip bar (they are already
+// visible in the body, where the sender put them) but remain stored and
+// downloadable, so nothing is ever hidden from the client.
+//
+// Measured on 576 stored inbound parts (Nov 2025 – Aug 2026): 438 were inline
+// signature images and smime blobs, 138 were genuine documents. Chipping all 576
+// would bury a real contract under a wall of image001.png.
+//
+// Deliberately conservative: when in doubt, treat it as a REAL document. A junk
+// chip is cosmetic; a contract missing from the chip bar is the bug we are fixing.
+export function isRealAttachment(a: PVAttachmentRef): boolean {
+  // Read the RAW name, not pvAttachmentName() — that function substitutes a
+  // synthetic "attachment-N" for unnamed parts, which would sail past the noise
+  // check below and chip an anonymous MIME fragment as if it were a document.
+  const name = [a.orig_file_name, a.file_name, a.filename]
+    .map(s => (s ?? '').trim()).find(Boolean) ?? ''
+  const size = Number(a.size ?? 0)
+
+  // Named like an auto-generated MIME part rather than a document:
+  //   inline_image / image001.png…image0NN (Outlook signature images)
+  //   unknown_file (PV's placeholder for an unnamed part)
+  //   smime.p7s, winmail.dat (crypto / TNEF envelopes)
+  //   oledata.mso, ATT00001 (Office + generic MIME leftovers)
+  const NOISE = /^(inline_image|image0\d+|unknown_file|smime\.p7s|winmail\.dat|oledata|att\d{3,})/i
+  if (!name || NOISE.test(name)) return false
+
+  // Tiny images are signature/tracking assets even when oddly named. Applied ONLY
+  // to image types — a 3KB .pdf or .csv can be a genuine (if small) document.
+  const isImage = /\.(png|gif|jpe?g|webp|bmp|svg)$/i.test(name)
+  if (isImage && size > 0 && size < 50 * 1024) return false
+
+  return true
+}
+
+// Download one inbound attachment's bytes from its presigned URL. Returns null
+// on any failure (expired signature → 403, network, oversize) — a missing file
+// must never abort ingesting the email itself; the body is worth more than the
+// attachment. Bounded by size + timeout because this runs inside the cron.
+export async function fetchPvAttachment(
+  url: string,
+  maxBytes = 25 * 1024 * 1024,
+): Promise<Buffer | null> {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(30_000) })
+    if (!res.ok) return null                       // 403 = presign already expired
+    // Trust Content-Length when present to reject oversize before buffering it.
+    const declared = Number(res.headers.get('content-length') ?? '0')
+    if (declared > maxBytes) return null
+    const buf = Buffer.from(await res.arrayBuffer())
+    return buf.length > maxBytes ? null : buf
+  } catch {
+    return null
+  }
 }
 
 // Live list of ALL PlusVibe workspaces (id + name) for this API key. Used to
