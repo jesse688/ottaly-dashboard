@@ -576,7 +576,9 @@ module.exports = (db) => {
 
       const filters = {
         search: q, sortBy, sortDir,
-        status: rest.status, seniority: rest.seniority,
+        // `leadStatus` is the multi-select's key; `status` is the pre-multi-select
+        // name, still sent by saved views and bookmarked URLs. Accept both.
+        status: rest.leadStatus || rest.status, seniority: rest.seniority,
         firstName: rest.firstName, lastName: rest.lastName,
         jobTitle: rest.jobTitle, jobTitleExclude: rest.jobTitleExclude,
         department: rest.department, subDepartments: rest.subDepartments,
