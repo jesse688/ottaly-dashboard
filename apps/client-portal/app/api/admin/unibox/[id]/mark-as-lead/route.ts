@@ -6,6 +6,8 @@ import { addToBlocklist, bisonTeamForWorkspace, tagInBison, BISON_INGEST_ENABLED
 import { notifyClientOfLead } from '@/lib/email'
 import { enrichLeadFromContacts, applyCHRundownToLead, enrichUniboxReply } from '@/lib/enrich'
 import { enrichPhoneFromWebsite } from '@/lib/scrape-phone'
+import { ingestAndLink } from '@/lib/attachments'
+import type { PVAttachmentRef } from '@/lib/plusvibe'
 
 // Admin marks a Unibox reply as a real lead. This is the ONLY path that sets
 // esp_leads.label='INTERESTED' (which reconcileLeadCharges keys on to bill the
@@ -54,7 +56,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
               -- Full body with signature/image. PlusVibe-reconciler rows nest it at
               -- raw.body.html/.text; Bison rows use raw.html_body/.text_body.
               COALESCE(NULLIF(raw->'body'->>'html',''), NULLIF(raw->>'html_body','')) AS reply_html,
-              COALESCE(NULLIF(raw->'body'->>'text',''), NULLIF(raw->>'text_body','')) AS reply_text
+              COALESCE(NULLIF(raw->'body'->>'text',''), NULLIF(raw->>'text_body','')) AS reply_text,
+              -- Files the prospect attached. PlusVibe files INBOUND attachments under
+              -- out_attachments; their s3_key presigns die ~24h after arrival, so the
+              -- bytes are copied at seed time (see ingestAndLink below).
+              CASE WHEN jsonb_typeof(raw->'out_attachments') = 'array'
+                   THEN raw->'out_attachments' ELSE '[]'::jsonb END AS out_attachments
          FROM unibox_replies WHERE id = $1 FOR UPDATE`,
       [id]
     )
@@ -67,6 +74,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       lead_bison_id: string | null; lead_email: string | null
       subject: string | null; body_preview: string | null; received_at: string | null; marked_as_lead: boolean
       bison_tag_state: string | null; reply_html: string | null; reply_text: string | null
+      out_attachments: PVAttachmentRef[] | null
     }
 
     // Seed the client-facing thread (portal_emails) from the unibox reply so the
@@ -99,6 +107,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
          reply.reply_html, reply.reply_text ?? reply.body_preview,
          (reply.reply_text ?? reply.body_preview)?.slice(0, 200) ?? null, email, reply.received_at]
       ).catch((err) => { console.error('[mark-as-lead] seedThread failed:', err); return null })
+
+      // ATTACHMENTS. This route seeds the thread straight from unibox_replies, so it
+      // never goes through the pv-reconcile cron and would otherwise drop the
+      // prospect's files — the client would read "I attach the figures" with nothing
+      // attached. Runs AFTER the insert so the parent row exists, and outside the
+      // pool `client` (ingestAndLink uses its own connection). Never throws.
+      try {
+        const n = await ingestAndLink(msgId, ws, { out_attachments: reply.out_attachments })
+        if (n) console.log(`[mark-as-lead] stored ${n} attachment(s) for ${msgId}`)
+      } catch (err) {
+        console.error('[mark-as-lead] attachment ingest failed:', err)
+      }
     }
 
     // Idempotent: already marked → no double charge, no double tag. But HEAL the

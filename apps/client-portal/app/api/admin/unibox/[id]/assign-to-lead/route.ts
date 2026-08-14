@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import pool, { ready } from '@/lib/db'
 import { getAdminSession } from '@/lib/auth'
+import { ingestAndLink } from '@/lib/attachments'
+import type { PVAttachmentRef } from '@/lib/plusvibe'
 
 export const dynamic = 'force-dynamic'
 
@@ -29,13 +31,18 @@ interface ReplyRow {
   received_at: string | null
   reply_html: string | null
   reply_text: string | null
+  out_attachments: PVAttachmentRef[] | null
 }
 
 async function loadReply(id: string): Promise<ReplyRow | null> {
   const r = await pool.query(
     `SELECT id, workspace_id, lead_email, matched_lead_email, subject, body_preview, received_at,
             COALESCE(NULLIF(raw->'body'->>'html',''), NULLIF(raw->>'html_body','')) AS reply_html,
-            COALESCE(NULLIF(raw->'body'->>'text',''), NULLIF(raw->>'text_body','')) AS reply_text
+            COALESCE(NULLIF(raw->'body'->>'text',''), NULLIF(raw->>'text_body','')) AS reply_text,
+            -- Prospect's attachments (PV files inbound ones under out_attachments);
+            -- presigns expire ~24h after arrival so the bytes are copied at seed time.
+            CASE WHEN jsonb_typeof(raw->'out_attachments') = 'array'
+                 THEN raw->'out_attachments' ELSE '[]'::jsonb END AS out_attachments
        FROM unibox_replies WHERE id = $1`,
     [id]
   )
@@ -213,6 +220,15 @@ async function assign(id: string, rawTarget: string) {
         reply.received_at ?? new Date().toISOString(),
       ]
     )
+
+    // ATTACHMENTS — this path also bypasses the pv-reconcile cron, so the colleague's
+    // files would otherwise be dropped from the thread it gets filed under.
+    try {
+      const n = await ingestAndLink(msgId, ws, { out_attachments: reply.out_attachments })
+      if (n) console.log(`[assign-to-lead] stored ${n} attachment(s) for ${msgId}`)
+    } catch (err) {
+      console.error('[assign-to-lead] attachment ingest failed:', err)
+    }
 
     // 3. Move any portal_emails rows already seeded under the colleague's address
     //    onto the target lead too (so the whole sub-thread threads correctly).
