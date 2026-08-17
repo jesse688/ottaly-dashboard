@@ -97,7 +97,20 @@ export async function GET() {
                 -- ...and if the slug was one word, the surname from the reply
                 NULLIF(btrim(substr(sig_name.full, strpos(sig_name.full,' ')+1)), sig_name.full)
               ) AS last_name,
-              l.company_name,
+              -- ── COMPANY NAME ──────────────────────────────────────────────
+              -- company_name is often just the email domain with the TLD chopped
+              -- off and title-cased ("Klcemploymentlaw", "Tylt"), which is what the
+              -- client sees. Companies House gives the real name, but CH matching is
+              -- fuzzy and a blanket swap DEGRADES some rows (cake-architecture.com
+              -- matched "CAKE LTD"; rpm.ltd matched "RIVERSIDE PRECISION MATERIALS").
+              --
+              -- So only take the CH name when the DOMAIN corroborates it: strip the
+              -- legal suffix and punctuation from both, and require one to be a
+              -- prefix of the other. "KLC EMPLOYMENT LAW CONSULTANTS LLP" ->
+              -- klcemploymentlaw matches the domain, so it wins; "CAKE LTD" -> cake
+              -- does not match cakearchitecture, so we keep what we had. Conservative
+              -- by design: better a plain name than a confidently wrong one.
+              COALESCE(ch_co.name, l.company_name) AS company_name,
               l.status, l.label, l.first_replied_at, l.created_at,
               l.raw->>'camp_name'            AS campaign_name,
               l.raw->>'job_title'            AS job_title,
@@ -229,6 +242,25 @@ export async function GET() {
             LIMIT 1
          ) AS full
        ) sig_name ON TRUE
+       -- Real Companies House name for this lead, but ONLY when the email domain
+       -- corroborates it (see the company_name comment above).
+       LEFT JOIN LATERAL (
+         SELECT ch.nm AS name FROM (
+           SELECT btrim(u.ch_data->>'company_name') AS nm,
+                  -- domain, first label only, letters+digits
+                  regexp_replace(lower(split_part(split_part(l.email,'@',2),'.',1)),'[^a-z0-9]','','g') AS dom,
+                  -- CH name minus a trailing legal suffix, letters+digits
+                  regexp_replace(lower(regexp_replace(btrim(u.ch_data->>'company_name'),
+                    '\s*(LIMITED|LTD|LLP|PLC|COMPANY|L\.?T\.?D\.?)\b.*$','','gi')),'[^a-z0-9]','','g') AS chl
+             FROM unibox_replies u
+            WHERE lower(u.lead_email) = lower(l.email)
+              AND NULLIF(btrim(u.ch_data->>'company_name'),'') IS NOT NULL
+            ORDER BY u.received_at DESC
+            LIMIT 1
+         ) ch
+          WHERE ch.chl <> '' AND ch.dom <> ''
+            AND (ch.dom LIKE ch.chl || '%' OR ch.chl LIKE ch.dom || '%')
+       ) ch_co ON TRUE
        LEFT JOIN portal_lead_data ld     ON ld.lead_id = l.id AND ld.client_id = $3
        LEFT JOIN portal_lead_disputes pd ON pd.lead_id = l.id AND pd.client_id = $3
        WHERE l.workspace_id = $1
