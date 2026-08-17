@@ -39,7 +39,27 @@ export async function GET() {
     const hiddenFields: string[] = cfg.rows[0]?.hidden_fields ?? []
 
     const res = await pool.query(
-      `SELECT l.id, l.email,
+      // ── ONE ROW PER PERSON ─────────────────────────────────────────────────
+      // The inner query can return the SAME person twice. The PV-vs-Bison rule
+      // below only drops a `plusvibe` row when a `bison` row exists, so two rows
+      // of the SAME source survive it — and marking one reply as a lead twice in
+      // the admin unibox mints a fresh synthetic `manual_<uuid>` id each time
+      // (e.g. piers@ / matt@ for FirstVehicleFinance: two `bison` rows, 9 min
+      // apart, identical but for the id). The paginated /api/portal/leads route
+      // already de-dupes with DISTINCT ON; this one never did, so the client's
+      // list and its "Your Leads (N)" count showed the duplicate.
+      //
+      // De-dupe on the OUTSIDE so the inner SQL (name fallbacks, locks, disputes)
+      // is untouched. Survivor priority — keep the row the client has actually
+      // interacted with, because portal_lead_data / portal_lead_disputes join on
+      // l.id and picking the other row would silently drop a deal value, note or
+      // open dispute:
+      //   1. has deal data (value/notes/stage) or a dispute
+      //   2. has been replied to / has unread mail
+      //   3. newest by first_replied_at, then created_at
+      `SELECT * FROM (
+       SELECT DISTINCT ON (lower(d.email)) d.* FROM (
+       SELECT l.id, l.email,
               -- ── Name resolution with a FALLBACK CHAIN ──────────────────────
               -- A lead's name may be missing on its own row, so we try, in order:
               --   1. the row's own first/last name
@@ -49,11 +69,21 @@ export async function GET() {
               --      "Danny Attwater" (strip the trailing random id segment, split
               --      the rest on '-'). Gives BOTH first and last name.
               --   4. the email local-part (danny@… → "Danny") — first name only.
+              --
+              -- NOTE on 3: the slug only splits when it HAS hyphens. Plenty don't
+              -- (/in/pierschadwick, /in/matthodkinson), which rendered as a single
+              -- run-together word with a blank surname ("Pierschadwick"). So when
+              -- the slug is one word we re-split it using the properly spaced name
+              -- from the lead's own reply (sig_name.full) — that text is authored by
+              -- the lead, so "Piers Chadwick" / "Matt Hodkinson" come out right.
               COALESCE(
                 NULLIF(btrim(l.first_name),''),
                 (SELECT NULLIF(btrim(s.first_name),'') FROM esp_leads s
                   WHERE lower(s.email)=lower(l.email) AND NULLIF(btrim(s.first_name),'') IS NOT NULL
                   ORDER BY s.updated_at DESC LIMIT 1),
+                -- prefer a spaced name over a one-word slug
+                CASE WHEN li_name.full IS NULL OR strpos(btrim(li_name.full),' ') = 0
+                     THEN NULLIF(split_part(sig_name.full,' ',1),'') END,
                 NULLIF(split_part(li_name.full,' ',1),''),
                 NULLIF(initcap(split_part(regexp_replace(split_part(l.email,'@',1),'[._-]+',' ','g'),' ',1)),'')
               ) AS first_name,
@@ -63,7 +93,9 @@ export async function GET() {
                   WHERE lower(s.email)=lower(l.email) AND NULLIF(btrim(s.last_name),'') IS NOT NULL
                   ORDER BY s.updated_at DESC LIMIT 1),
                 -- everything after the first word of the LinkedIn-derived name
-                NULLIF(btrim(substr(li_name.full, strpos(li_name.full,' ')+1)), li_name.full)
+                NULLIF(btrim(substr(li_name.full, strpos(li_name.full,' ')+1)), li_name.full),
+                -- ...and if the slug was one word, the surname from the reply
+                NULLIF(btrim(substr(sig_name.full, strpos(sig_name.full,' ')+1)), sig_name.full)
               ) AS last_name,
               l.company_name,
               l.status, l.label, l.first_replied_at, l.created_at,
@@ -175,6 +207,28 @@ export async function GET() {
             ORDER BY s.updated_at DESC LIMIT 1
          ) AS full
        ) li_name ON TRUE
+       -- Properly SPACED name for this lead, used to split a one-word LinkedIn slug
+       -- (see the name chain above). Source is the reply envelope's display name
+       -- (raw->'from_address_json' = [{"name":"Matt Hodkinson","address":"matt@…"}]),
+       -- NOT a scan of the body: the display name is authored by the lead and tied
+       -- to their address, so quoted text (which contains OUR sender's name) can
+       -- never leak in. Guarded to a two-word "First Last" shape, and only used
+       -- when the slug is a single run-together word.
+       LEFT JOIN LATERAL (
+         SELECT (
+           SELECT btrim(a->>'name')
+             FROM unibox_replies u
+             CROSS JOIN LATERAL jsonb_array_elements(
+               CASE WHEN jsonb_typeof(u.raw->'from_address_json') = 'array'
+                    THEN u.raw->'from_address_json' ELSE '[]'::jsonb END
+             ) AS a
+            WHERE lower(u.lead_email) = lower(l.email)
+              AND lower(a->>'address') = lower(l.email)
+              AND btrim(a->>'name') ~ '^[A-Za-z][A-Za-z''-]* [A-Za-z][A-Za-z''-]*$'
+            ORDER BY u.received_at DESC
+            LIMIT 1
+         ) AS full
+       ) sig_name ON TRUE
        LEFT JOIN portal_lead_data ld     ON ld.lead_id = l.id AND ld.client_id = $3
        LEFT JOIN portal_lead_disputes pd ON pd.lead_id = l.id AND pd.client_id = $3
        WHERE l.workspace_id = $1
@@ -198,7 +252,18 @@ export async function GET() {
              AND lower(b.email) = lower(l.email)
              AND b.source = 'bison' AND b.label IN ('INTERESTED', 'INFO')
          ))
-       ORDER BY l.first_replied_at DESC NULLS LAST, l.created_at DESC`,
+       ORDER BY l.first_replied_at DESC NULLS LAST, l.created_at DESC
+       ) d
+       -- Survivor per person: client-touched row first, then newest. Must lead
+       -- with lower(email) to match DISTINCT ON.
+       ORDER BY lower(d.email),
+                (d.deal_value IS NOT NULL OR d.deal_notes IS NOT NULL
+                 OR d.client_label IS NOT NULL OR d.dispute_status IS NOT NULL) DESC,
+                (d.has_unread OR d.replied_off) DESC,
+                d.first_replied_at DESC NULLS LAST, d.created_at DESC
+       ) uniq
+       -- Restore the list order the UI expects (newest reply first).
+       ORDER BY uniq.first_replied_at DESC NULLS LAST, uniq.created_at DESC`,
       [session.workspaceId, hiddenLabels, session.clientId]
     )
 
