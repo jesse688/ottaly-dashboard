@@ -1,19 +1,17 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { jwtVerify } from 'jose'
 
-const SECRET = new TextEncoder().encode(
-  process.env.JWT_SECRET ?? 'ottaly-dev-secret-change-in-prod'
-)
+const JWT_SECRET = process.env.JWT_SECRET
+if (!JWT_SECRET) {
+  throw new Error('JWT_SECRET is not set — refusing to start without a signing secret')
+}
+const SECRET = new TextEncoder().encode(JWT_SECRET)
 const COOKIE = 'ottaly_session'
 
 const PUBLIC_PATHS = ['/login', '/api/auth']
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl
-  const host = req.headers.get('host') ?? ''
-
-  // Skip auth on Vercel preview deployments
-  if (host.includes('vercel.app')) return NextResponse.next()
 
   // Allow public paths
   if (PUBLIC_PATHS.some(p => pathname.startsWith(p))) {

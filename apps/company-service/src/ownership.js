@@ -123,23 +123,41 @@ export async function resolveBuildingOwnership(company) {
   } catch { return { building_owner: null, building_owner_name: null, building_site_count: null } }
   if (!owners.length) return { building_owner: 'no', building_owner_name: null, building_site_count: null }
 
-  // 1) Company-name / reg match (the authoritative case).
-  const v = resolveOwnership({ name: company.ch_company_name, reg: company.ch_company_number }, owners)
+  // Appearing in CCOD is NOT the same as owning the building. A LEASEHOLD title
+  // means the company holds a lease — it is the tenant. Flostream Limited holds
+  // three CCOD titles at its own address and every one is Leasehold; the page
+  // called it a PROSPECT and the contact replied that he rents.
+  //
+  // This matters specifically for solar: a leaseholder cannot authorise panels on
+  // a roof it does not own, which is the whole point of the qualification. Across
+  // the DB, 17,340 of 25,922 "owns" verdicts were leasehold-only — 67% wrong.
+  //
+  // Freehold titles only for a 'yes'. Leasehold-only becomes 'no' (tenant), which
+  // is what the caller already treats as a stop.
+  const freeholds = owners.filter(o => String(o.tenure || '').toLowerCase() === 'freehold')
+
+  // 1) Company-name / reg match (the authoritative case), freeholds only.
+  const v = resolveOwnership({ name: company.ch_company_name, reg: company.ch_company_number }, freeholds)
   if (v.owns_building === 'yes') {
     return { building_owner: 'yes', building_owner_name: v.matched_owner || null, building_site_count: v.site_count || null, basis: 'company' }
   }
 
-  // 2) Person fallback: does a DIRECTOR or PSC own property here? (owner-occupier
-  //    holding the building personally, or via a name we can recognise). Only fires
-  //    when the company itself didn't match — so it recovers otherwise-"tenant" rows.
+  // 2) Person fallback: does a DIRECTOR or PSC hold the FREEHOLD here? (owner-
+  //    occupier holding the building personally, or via a name we can recognise).
+  //    Only fires when the company itself didn't match.
   const people = [...(company.officers || []), ...(company.psc || [])]
   if (people.length) {
-    for (const o of owners) {
+    for (const o of freeholds) {
       const hit = people.find((nm) => personOwnsMatch(nm, o.proprietor_name))
       if (hit) {
         return { building_owner: 'yes', building_owner_name: o.proprietor_name, building_site_count: 1, basis: 'director' }
       }
     }
+  }
+
+  // Held a title here, but leasehold only — an explicit tenant, not "unclear".
+  if (!freeholds.length && owners.length) {
+    return { building_owner: 'no', building_owner_name: null, building_site_count: null, basis: 'leasehold_only' }
   }
 
   return { building_owner: v.owns_building, building_owner_name: v.matched_owner || null, building_site_count: v.site_count || null, basis: v.owns_building === 'unclear' ? 'unclear' : 'no' }

@@ -2,7 +2,12 @@ import { type NextRequest, NextResponse } from 'next/server'
 import { createSession, checkAdminKey, COOKIE } from '@/lib/auth'
 
 export async function POST(req: NextRequest) {
-  const { key } = await req.json()
+  let key: unknown
+  try {
+    ({ key } = await req.json())
+  } catch {
+    return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
+  }
 
   if (!checkAdminKey(key)) {
     return NextResponse.json({ error: 'Invalid key' }, { status: 401 })
