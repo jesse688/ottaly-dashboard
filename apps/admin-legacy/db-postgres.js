@@ -46,6 +46,29 @@ class PostgresDatabase {
       // completion. 45s catches genuinely-stuck queries while keeping the
       // CPU ceiling sane. Bump only after query plans are confirmed cheap.
       statement_timeout: 45000,
+      // statement_timeout is enforced by POSTGRES; query_timeout is enforced by
+      // the NODE CLIENT. Without the client-side one, a connection that wedges at
+      // the network layer waits forever: Postgres may have killed the query long
+      // ago, but node never finds out and the pool slot is stranded for good.
+      // Drain all 25 that way and every later request fails with "timeout
+      // exceeded when trying to connect" — that is the POOL handing out slots,
+      // not the database being down — until the process stops answering HTTP.
+      // Seen in the wild: `[distinct-cache] refreshed Keywords: 10000 rows in
+      // 76519ms` (plus a 34s Technologies refresh) alongside 41 workspace-stats
+      // calls stalled behind PlusVibe 429 backoffs drained the pool and took
+      // admin.ottaly.co.uk down — TLS completed, then zero bytes ever sent back.
+      //
+      // Deliberately set ABOVE the longest legitimate job rather than just above
+      // statement_timeout. Several jobs raise statement_timeout on their own
+      // connection on purpose — the ads worker uses 900s, a backfill uses 600s,
+      // distinct-cache and two others use 300s — and a 50s client-side cap would
+      // kill all of them. This is a backstop for sockets that are GONE, not a
+      // second query budget: Postgres still enforces the real per-query limit.
+      query_timeout: 960000,
+      // TCP keepalives so a silently-dropped connection (proxy/NAT idle reap) is
+      // detected and recycled instead of lingering in the pool as a zombie.
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 10000,
     } : {
       user: process.env.DB_USER || 'ottaly',
       password: process.env.DB_PASSWORD || 'ottaly_dev',
@@ -56,6 +79,10 @@ class PostgresDatabase {
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 5000,
       statement_timeout: 45000,
+      // Same client-side guards as the DATABASE_URL branch above.
+      query_timeout: 960000,
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 10000,
     };
 
     this.pool = new Pool(config);
