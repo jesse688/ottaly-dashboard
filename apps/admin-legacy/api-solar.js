@@ -9,7 +9,7 @@
 
 const express = require('express');
 const { enrichContact } = require('./lib/solar/enrich');
-const { roofImagePng } = require('./lib/solar/google-solar');
+const { roofImagePng, buildingInsights } = require('./lib/solar/google-solar');
 const { indexAvailable } = require('./lib/solar/ccod');
 const { chEnabled } = require('./lib/solar/companies-house');
 const usage = require('./lib/solar/usage');
@@ -221,6 +221,121 @@ module.exports = function solarAPI() {
     }
     await Promise.all(Array.from({ length: Math.min(CONC, queue.length) }, worker));
     res.end();
+  });
+
+  // ── Ad-hoc lookup from a Google Maps link ────────────────────────────────
+  // POST /api/solar/lookup { url } | { lat, lng }
+  //   -> { coords, roof:{...}, company:{ contacts:[...], solar:{...} } }
+  //
+  // For checking one site by hand: paste a Maps link, get the roof numbers and
+  // everything we already hold on whoever is at that address. Deliberately
+  // separate from /enrich, which is the batch cascade over stored contacts.
+
+  // Maps URLs carry coordinates in several places, and they do NOT all mean the
+  // same thing. The @lat,lng in the path is the CAMERA centre — panning the map
+  // moves it away from the place you actually clicked — whereas !3dLAT!4dLNG
+  // and the ?q=/query= parameters are the PIN. Prefer the pin, fall back to the
+  // camera, so a link copied after scrolling still resolves to the right roof.
+  function coordsFromMapsUrl(raw) {
+    const url = String(raw || '').trim();
+    if (!url) return null;
+    const num = '(-?\\d+\\.\\d+)';
+    const patterns = [
+      new RegExp(`!3d${num}!4d${num}`),                      // pin (place pages)
+      new RegExp(`[?&](?:q|query|destination)=${num},\\s*${num}`), // explicit query pin
+      new RegExp(`[?&]ll=${num},${num}`),                    // legacy centre
+      new RegExp(`@${num},${num}`),                          // camera centre
+      new RegExp(`^\\s*${num},\\s*${num}\\s*$`),             // bare "lat,lng" paste
+    ];
+    for (const re of patterns) {
+      const m = re.exec(url);
+      if (!m) continue;
+      const lat = parseFloat(m[1]), lng = parseFloat(m[2]);
+      if (Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
+        return { lat, lng };
+      }
+    }
+    return null;
+  }
+
+  router.post('/lookup', async (req, res) => {
+    const { url, lat: bodyLat, lng: bodyLng, panelWatts } = req.body || {};
+    const coords = (bodyLat != null && bodyLng != null)
+      ? { lat: Number(bodyLat), lng: Number(bodyLng) }
+      : coordsFromMapsUrl(url);
+
+    if (!coords || !Number.isFinite(coords.lat) || !Number.isFinite(coords.lng)) {
+      // A shortened maps.app.goo.gl / goo.gl link has no coordinates in it —
+      // they only appear after the redirect, so say that rather than failing blankly.
+      const shortened = /(?:maps\.app\.goo\.gl|goo\.gl\/maps)/i.test(String(url || ''));
+      return res.status(400).json({
+        error: shortened
+          ? 'That is a shortened link — open it in Maps and copy the full URL from the address bar (it contains the coordinates).'
+          : 'Could not find coordinates in that link. Paste a full Google Maps URL, or "lat,lng".',
+      });
+    }
+
+    try {
+      const insights = await buildingInsights(coords.lat, coords.lng);
+      if (insights.notFound) {
+        return res.json({ coords, roof: null, note: 'Google has no building imagery for this location.' });
+      }
+
+      // kWp from panel count × panel wattage. Google's own panelCapacityWatts is
+      // the module it modelled with, which is usually smaller than what actually
+      // gets installed, so allow an override to match the spec being quoted.
+      const watts = Number(panelWatts) || insights.panelWatts || 500;
+      const maxKwp = insights.maxPanels != null
+        ? Math.round((insights.maxPanels * watts) / 1000)
+        : null;
+
+      const roof = {
+        roof_area_m2: insights.roofAreaM2,
+        max_panels: insights.maxPanels,
+        panel_watts: watts,
+        max_kwp: maxKwp,
+        // ~950 kWh per kWp/year is the standard UK yield assumption.
+        annual_kwh: maxKwp != null ? Math.round(maxKwp * 950) : null,
+        max_sunshine_hours: insights.maxSunshineHoursPerYear,
+        has_solar_already: insights.hasSolar,
+        imagery_date: insights.imageryDate,
+      };
+
+      // Everything we already hold on whoever sits at this location. Matched by
+      // proximity on the coordinates we stored during past solar checks — the
+      // reliable key, since the same building is written a dozen different ways
+      // as an address string.
+      let company = { contacts: [], matched_on: null };
+      const db = req.app.locals.pgDb;
+      if (db) {
+        try {
+          // ~150m box. Longitude degrees shrink with latitude, so scale by
+          // cos(lat) or the box is far too wide in the UK.
+          const dLat = 0.00135;
+          const dLng = 0.00135 / Math.max(0.2, Math.cos(coords.lat * Math.PI / 180));
+          const r = await db.query(
+            `SELECT id, email, first_name, last_name, company_name, company_domain,
+                    company_address, ch_postcode, company_status, num_employees, industry,
+                    solar_status, solar_stop_reason, solar_roof_area_m2, solar_max_kwp,
+                    solar_has_solar, solar_checked_at, owns_building, do_not_contact,
+                    ROUND((point(solar_lng, solar_lat) <-> point($2, $1))::numeric, 6) AS dist
+               FROM contacts
+              WHERE solar_lat BETWEEN $1 - $3 AND $1 + $3
+                AND solar_lng BETWEEN $2 - $4 AND $2 + $4
+              ORDER BY dist
+              LIMIT 25`,
+            [coords.lat, coords.lng, dLat, dLng]
+          );
+          company = { contacts: r.rows, matched_on: r.rows.length ? 'coordinates' : null };
+        } catch (e) {
+          company = { contacts: [], matched_on: null, error: e.message };
+        }
+      }
+
+      res.json({ coords, roof, company });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   router.post('/image', async (req, res) => {

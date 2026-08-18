@@ -53,6 +53,18 @@
   <span class="sub" id="status"></span>
 </header>
 
+<!-- Check one site by hand. The cascade below works from stored contacts; this
+     is for a roof someone has just sent you a link to. -->
+<div class="bar" style="flex-wrap:wrap;gap:8px">
+  <label class="toggle" style="flex:1;min-width:320px;gap:8px">
+    📍 <input id="mapsUrl" type="text" placeholder="Paste a Google Maps link (or lat,lng) and press Enter"
+              style="flex:1;background:var(--card);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:7px 9px;font-size:13px">
+  </label>
+  <button class="btn" id="lookupBtn">Check this roof</button>
+  <span class="mut" id="lookupMsg"></span>
+  <div id="lookupOut" style="display:none;width:100%;margin-top:10px"></div>
+</div>
+
 <div class="bar">
   <div class="toggle">
     <label class="toggle"><input type="checkbox" id="gateUnclear"> Include “ownership unclear” (spends more Google calls)</label>
@@ -619,6 +631,112 @@ $('#sweepBtn').addEventListener('click', async ()=>{
 });
 
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+// ── One-off roof lookup ────────────────────────────────────────────────────
+// Paste a Maps link → roof numbers from Google Solar, plus whatever we already
+// hold on whoever is at that location (matched on the coordinates we stored
+// during previous checks, since the same building gets written a dozen ways as
+// an address string).
+async function runRoofLookup(){
+  const url = document.getElementById('mapsUrl').value.trim();
+  const msg = document.getElementById('lookupMsg');
+  const out = document.getElementById('lookupOut');
+  if (!url) { msg.textContent = 'Paste a link first.'; return; }
+
+  msg.textContent = 'Checking…';
+  out.style.display = 'none';
+  try {
+    const panelWatts = Number(document.getElementById('panelW')?.value) || undefined;
+    const r = await fetch('/api/solar/lookup', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, panelWatts }),
+    });
+    const d = await r.json();
+    if (d.error) { msg.textContent = ''; out.style.display = ''; out.innerHTML =
+      `<div style="color:#f59e0b;font-size:13px">${esc(d.error)}</div>`; return; }
+
+    msg.textContent = '';
+    out.style.display = '';
+    const minKwp = Number(document.getElementById('minKwp')?.value) || 100;
+    out.innerHTML = renderRoofLookup(d, minKwp);
+  } catch (e) {
+    msg.textContent = '';
+    out.style.display = '';
+    out.innerHTML = `<div style="color:#ef4444;font-size:13px">${esc(e.message)}</div>`;
+  }
+}
+
+function renderRoofLookup(d, minKwp){
+  const stat = (label, value, hint) => `
+    <div class="stat" style="border-right:1px solid var(--line)">
+      <span class="mut" style="font-size:11px">${esc(label)}</span>
+      <span style="font-size:16px;font-weight:700">${esc(value)}</span>
+      ${hint ? `<span class="mut" style="font-size:10px">${esc(hint)}</span>` : ''}
+    </div>`;
+
+  if (!d.roof) {
+    return `<div style="color:#f59e0b;font-size:13px">${esc(d.note || 'No roof data.')}
+      <span class="mut"> (${d.coords.lat.toFixed(5)}, ${d.coords.lng.toFixed(5)})</span></div>`;
+  }
+  const R = d.roof;
+  // The same PPA gate the batch cascade applies, so a hand check and a bulk run
+  // never disagree about whether a site qualifies.
+  const big = R.max_kwp != null && R.max_kwp >= minKwp;
+  const verdict = R.has_solar_already
+    ? { text: 'Already has solar', colour: '#f59e0b' }
+    : big ? { text: `Qualifies (≥ ${minKwp} kWp)`, colour: '#22c55e' }
+          : { text: `Below ${minKwp} kWp`, colour: '#ef4444' };
+
+  const rows = (d.company && d.company.contacts) || [];
+  const contactsHtml = rows.length ? `
+    <table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">
+      <tr class="mut" style="text-align:left">
+        <th style="padding:4px 6px">Contact</th><th>Company</th><th>Status</th>
+        <th>Owns</th><th>Prev. roof</th><th>Solar</th>
+      </tr>
+      ${rows.map(c => `
+        <tr style="border-top:1px solid var(--line)">
+          <td style="padding:4px 6px">${esc([c.first_name, c.last_name].filter(Boolean).join(' ') || '—')}
+            <div class="mut" style="font-size:11px">${esc(c.email || '')}${c.do_not_contact ? ' · 🚫 DNC' : ''}</div></td>
+          <td>${esc(c.company_name || '—')}
+            <div class="mut" style="font-size:11px">${esc(c.company_domain || '')}</div></td>
+          <td>${esc(c.solar_status || '—')}
+            ${c.solar_stop_reason ? `<div class="mut" style="font-size:11px">${esc(c.solar_stop_reason)}</div>` : ''}</td>
+          <td>${esc(c.owns_building || '—')}</td>
+          <td>${c.solar_roof_area_m2 != null ? esc(c.solar_roof_area_m2) + ' m²' : '—'}
+            ${c.solar_max_kwp != null ? `<div class="mut" style="font-size:11px">${esc(c.solar_max_kwp)} kWp</div>` : ''}</td>
+          <td>${esc(c.solar_has_solar || '—')}</td>
+        </tr>`).join('')}
+    </table>` : `<div class="mut" style="font-size:12px;margin-top:6px">
+      No contacts on record within ~150m of this point. Either we have never
+      scraped this business, or we hold it under an address we have not geocoded.</div>`;
+
+  return `
+    <div style="display:flex;flex-wrap:wrap;align-items:center;gap:0;margin-bottom:4px">
+      ${stat('Roof area', R.roof_area_m2 != null ? R.roof_area_m2 + ' m²' : '—')}
+      ${stat('Max panels', R.max_panels ?? '—', R.panel_watts ? R.panel_watts + ' W each' : '')}
+      ${stat('Max system', R.max_kwp != null ? R.max_kwp + ' kWp' : '—')}
+      ${stat('Est. output', R.annual_kwh != null ? R.annual_kwh.toLocaleString() + ' kWh/yr' : '—', '@ 950 kWh/kWp')}
+      ${stat('Sunshine', R.max_sunshine_hours != null ? Math.round(R.max_sunshine_hours) + ' h/yr' : '—')}
+      ${stat('Imagery', R.imagery_date || '—')}
+      <div class="stat" style="border-right:0">
+        <span class="mut" style="font-size:11px">Verdict</span>
+        <span style="font-size:15px;font-weight:700;color:${verdict.colour}">${esc(verdict.text)}</span>
+      </div>
+    </div>
+    <div class="mut" style="font-size:11px">
+      ${d.coords.lat.toFixed(5)}, ${d.coords.lng.toFixed(5)} ·
+      <a href="https://www.google.com/maps/@${d.coords.lat},${d.coords.lng},20z" target="_blank"
+         style="color:var(--accent)">open in Maps</a>
+    </div>
+    <div style="margin-top:10px;font-weight:600;font-size:13px">What we know about this site</div>
+    ${contactsHtml}`;
+}
+
+document.getElementById('lookupBtn').addEventListener('click', runRoofLookup);
+document.getElementById('mapsUrl').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); runRoofLookup(); }
+});
 </script>
 </body>
 </html>
