@@ -367,13 +367,29 @@ module.exports = function solarAPI() {
       // someone what their roof would look like.
       try {
         const bi = await buildingInsights(Number(lat), Number(lng));
-        const panels = bi && bi.raw && bi.raw.solarPotential && bi.raw.solarPotential.solarPanels;
-        // Say WHY the overlay is missing rather than returning a silent null:
-        // no panel geometry from Google, or no bounding box to project into.
+        const sp = (bi && bi.raw && bi.raw.solarPotential) || {};
+        const panels = sp.solarPanels;
+
+        // buildingInsights carries its own boundingBox. dataLayers does not
+        // always return one, and when it does not the projection has no anchor
+        // — which is exactly why this overlay came back silently empty.
+        const bounds = img.bounds || (bi && bi.raw && bi.raw.boundingBox) || null;
+
+        // Panels are square to their roof segment, so each needs its segment's
+        // azimuth to be drawn at the right angle.
+        const segmentAzimuths = {};
+        (sp.roofSegmentStats || []).forEach((seg, i) => {
+          if (seg && seg.azimuthDegrees != null) segmentAzimuths[i] = seg.azimuthDegrees;
+        });
+
         if (!panels || !panels.length) out.panelsError = 'Google returned no panel geometry for this building';
-        else if (!img.bounds) out.panelsError = 'dataLayers returned no bounding box to project panels into';
-        const svg = panelOverlaySvg(panels, img.bounds);
-        if (!svg && panels && panels.length && img.bounds) out.panelsError = 'panel projection produced no rectangles';
+        else if (!bounds) out.panelsError = 'no bounding box available to project panels into';
+        const svg = panelOverlaySvg(panels, bounds, 768, {
+          panelWidthM: sp.panelWidthMeters,
+          panelHeightM: sp.panelHeightMeters,
+          segmentAzimuths,
+        });
+        if (!svg && panels && panels.length && bounds) out.panelsError = 'panel projection produced no rectangles';
         if (svg && img.layers.rgb) {
           const sharp = require('sharp');
           const base = Buffer.from(img.layers.rgb.split(',')[1], 'base64');

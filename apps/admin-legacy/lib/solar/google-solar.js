@@ -187,7 +187,8 @@ function panelOverlaySvg(panels, bounds, size = 768, opts = {}) {
   const lngSpan = ne.longitude - sw.longitude;
   if (!latSpan || !lngSpan) return null;
 
-  // Panel footprint in metres → pixels. Defaults match Google's typical module.
+  // Panel dimensions come from the API, not a guess — Google models a specific
+  // module per building and reports it as panelWidthMeters/panelHeightMeters.
   const panelW = Number(opts.panelWidthM) || 1.045;
   const panelH = Number(opts.panelHeightM) || 1.879;
   const metresPerDegLat = 111320;
@@ -195,25 +196,50 @@ function panelOverlaySvg(panels, bounds, size = 768, opts = {}) {
   const metresPerDegLng = 111320 * Math.cos(((sw.latitude + ne.latitude) / 2) * Math.PI / 180);
   const pxPerMetreX = (size / lngSpan) / metresPerDegLng;
 
-  const rects = [];
+  // Panels sit square to their roof segment, not to north — a panel on a roof
+  // facing 135° is rotated 135°. Axis-aligned rectangles looked plausible on a
+  // square building and obviously wrong on anything angled. segmentAzimuths
+  // maps segmentIndex → azimuthDegrees from roofSegmentStats.
+  const azimuths = opts.segmentAzimuths || {};
+
+  // Shade by yield, best to worst, so the good part of the roof is visible at a
+  // glance rather than every panel reading as equally good.
+  const energies = panels.map(p => p.yearlyEnergyDcKwh).filter(e => typeof e === 'number');
+  const maxE = energies.length ? Math.max(...energies) : null;
+  const minE = energies.length ? Math.min(...energies) : null;
+
+  const shapes = [];
   for (const p of panels) {
     const c = p.center || p.centre;
     if (!c || c.latitude == null || c.longitude == null) continue;
-    const x = ((c.longitude - sw.longitude) / lngSpan) * size;
+    const cx = ((c.longitude - sw.longitude) / lngSpan) * size;
     // SVG y grows downward, latitude grows upward.
-    const y = size - ((c.latitude - sw.latitude) / latSpan) * size;
-    if (x < -50 || x > size + 50 || y < -50 || y > size + 50) continue;
-    // PORTRAIT panels stand tall relative to their azimuth; LANDSCAPE lie flat.
-    const landscape = p.orientation === 'LANDSCAPE';
-    const w = (landscape ? panelH : panelW) * pxPerMetreX;
-    const h = (landscape ? panelW : panelH) * pxPerMetreY;
-    rects.push(
-      `<rect x="${(x - w / 2).toFixed(1)}" y="${(y - h / 2).toFixed(1)}" ` +
+    const cy = size - ((c.latitude - sw.latitude) / latSpan) * size;
+    if (cx < -50 || cx > size + 50 || cy < -50 || cy > size + 50) continue;
+
+    // PORTRAIT stands the module on end relative to the segment direction.
+    const rot = (p.orientation === 'PORTRAIT' ? 90 : 0)
+      + (Number(azimuths[p.segmentIndex]) || 0);
+    const w = panelW * pxPerMetreX;
+    const h = panelH * pxPerMetreY;
+
+    let fill = '#1e3a8a';
+    if (maxE != null && minE != null && maxE > minE && typeof p.yearlyEnergyDcKwh === 'number') {
+      const t = (p.yearlyEnergyDcKwh - minE) / (maxE - minE); // 0 worst → 1 best
+      // deep blue (poor) → cyan → yellow (best)
+      const r = Math.round(30 + t * 225), g = Math.round(58 + t * 190), b = Math.round(138 - t * 100);
+      fill = `rgb(${r},${g},${b})`;
+    }
+
+    shapes.push(
+      `<g transform="translate(${cx.toFixed(1)} ${cy.toFixed(1)}) rotate(${rot.toFixed(1)})">` +
+      `<rect x="${(-w / 2).toFixed(1)}" y="${(-h / 2).toFixed(1)}" ` +
       `width="${w.toFixed(1)}" height="${h.toFixed(1)}" ` +
-      `fill="#1e3a8a" fill-opacity="0.55" stroke="#60a5fa" stroke-width="0.6"/>`
+      `fill="${fill}" fill-opacity="0.85" stroke="#B0BEC5" stroke-width="0.5" stroke-opacity="0.9"/></g>`
     );
   }
-  if (!rects.length) return null;
+  if (!shapes.length) return null;
+  const rects = shapes;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${rects.join('')}</svg>`;
 }
 
