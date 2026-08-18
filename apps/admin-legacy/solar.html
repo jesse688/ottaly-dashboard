@@ -751,16 +751,28 @@ function renderRoofLookup(d, minKwp){
 let _mapsSdk = null;
 function loadMapsSdk() {
   if (_mapsSdk) return _mapsSdk;
-  _mapsSdk = (async () => {
+  // Clear the cache on failure, so retrying after enabling the API in the
+  // console works without a page reload.
+  const p = (async () => {
     const { key } = await fetch('/api/solar/maps-key').then(r => r.json());
     if (!key) throw new Error('No Google Maps browser key configured');
     await new Promise((resolve, reject) => {
+      // Google reports key/activation problems by calling this global and
+      // painting its own grey "Oops! Something went wrong" box — the script
+      // itself still loads fine, so onerror never fires. Catch it and say what
+      // is actually wrong, since the fix is in the Cloud console, not the code.
+      window.gm_authFailure = () => reject(new Error(
+        'Google rejected the Maps key. Most often the Maps JavaScript API is not ' +
+        'enabled on the project (it is separate from the Solar API), or the key is ' +
+        'referrer-restricted and does not allow this domain. Enable it at ' +
+        'console.cloud.google.com/apis/library → Maps JavaScript API.'));
       const s = document.createElement('script');
       s.src = `https://maps.googleapis.com/maps/api/js?key=${key}&libraries=geometry`;
       s.async = true; s.onload = resolve; s.onerror = () => reject(new Error('Maps SDK failed to load'));
       document.head.appendChild(s);
     });
   })();
+  _mapsSdk = p.catch(err => { _mapsSdk = null; throw err; });
   return _mapsSdk;
 }
 
