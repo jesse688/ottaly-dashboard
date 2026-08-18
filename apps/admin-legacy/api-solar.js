@@ -368,7 +368,7 @@ module.exports = function solarAPI() {
       // kWp from panel count × panel wattage. Google's own panelCapacityWatts is
       // the module it modelled with, which is usually smaller than what actually
       // gets installed, so allow an override to match the spec being quoted.
-      const watts = Number(panelWatts) || insights.panelWatts || 500;
+      const watts = Number(panelWatts) || insights.panelWatts || 400;
       const maxKwp = insights.maxPanels != null
         ? Math.round((insights.maxPanels * watts) / 1000)
         : null;

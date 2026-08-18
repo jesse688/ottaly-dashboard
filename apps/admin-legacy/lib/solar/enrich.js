@@ -24,7 +24,7 @@ const { findOwnSites } = require('./own-sites');
 async function enrichContact(contact, opts = {}) {
   const cfg = {
     ppaMinKwp: opts.ppaMinKwp ?? 100,
-    panelWatts: opts.panelWatts ?? 500,
+    panelWatts: opts.panelWatts ?? 400,
     ownershipGate: opts.ownershipGate || 'yes', // 'yes' = strict, 'yes_or_unclear' = lenient
   };
 

@@ -73,7 +73,11 @@
   <label class="toggle" title="Off = reuse saved results (no Google spend) for contacts already qualified. On = re-run everything fresh."><input type="checkbox" id="forceRecheck"> Re-check already-done (spends Google)</label>
   <span class="mut">|</span>
   <label class="toggle">PPA min kWp <input id="minKwp" type="number" value="100" style="width:60px;background:var(--card);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:4px 6px"></label>
-  <label class="toggle">Panel W <input id="panelW" type="number" value="500" style="width:60px;background:var(--card);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:4px 6px"></label>
+  <!-- 400 W, not 500: it matches what Shawton actually installs (Longi 375 W
+       and 400 W, Trina 395 W and 410 W across their project records) and it is
+       also the module Google models, so the kWp and kWh figures reconcile
+       without scaling. 500 overstated every system by ~25%. -->
+  <label class="toggle">Panel W <input id="panelW" type="number" value="400" style="width:60px;background:var(--card);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:4px 6px"></label>
   <button class="btn" id="run">Run qualification</button>
   <span class="mut" id="prog"></span>
   <span style="flex:1"></span>
@@ -343,7 +347,7 @@ async function run(){
     ownershipGate: $('#gateUnclear').checked ? 'yes_or_unclear' : 'yes',
     force: $('#forceRecheck').checked,
     ppaMinKwp: Number($('#minKwp').value)||100,
-    panelWatts: Number($('#panelW').value)||500,
+    panelWatts: Number($('#panelW').value)||400,
   };
   if(!ids.length){ return runPasted(contacts, options); } // paste box has no ids → client-side
   if(contacts.length > 1000 && !confirm(`Qualify ${contacts.length.toLocaleString()} contacts?\n\nRuns on the server — you can close this tab and come back. Uses a Google Solar call for any not already checked; already-checked ones are reused free.`)) return;
@@ -1000,7 +1004,7 @@ function setPanelCount(n){
     kwh = d.panels.slice(0, n).reduce((s,p) => s + (p.energy || 0), 0);
   }
 
-  const watts = Number(document.getElementById('panelW')?.value) || d.panelWatts || 500;
+  const watts = Number(document.getElementById('panelW')?.value) || d.panelWatts || 400;
   // Google's yield figures assume ITS module (400W here). Quoting that kWh next
   // to a kWp computed from a different wattage puts two numbers on screen that
   // describe different systems — the first thing a client would query. Scale the
