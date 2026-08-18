@@ -97,6 +97,81 @@ module.exports = function solarAPI() {
     catch(e){ res.status(500).json({ error:e.message }); }
   });
 
+  // GET /api/solar/queue?limit=500&minFloor=1000
+  //   -> confirmed freehold owners with no roof check yet, biggest first.
+  //
+  // Google roof calls are the only paid step and the monthly quota is finite,
+  // so they should go to the roofs most likely to qualify. EPC floor area
+  // predicts that for free: measured against contacts where we have both, a
+  // floor area of 2,000 m²+ yields a qualifying roof 61% of the time, versus
+  // 14% under 500 m². Working biggest-first turns the same quota into roughly
+  // four times the qualified prospects.
+  //
+  // Ownership is still the gate — this only ever returns ccod_owns_building
+  // = 'yes', because a leaseholder cannot sign the PPA no matter how big the
+  // roof is.
+  router.get('/queue', async (req, res) => {
+    const db = req.app.locals.pgDb;
+    if (!db) return res.status(503).json({ error: 'Database unavailable' });
+    const limit = Math.min(parseInt(req.query.limit, 10) || 500, 5000);
+    const minFloor = parseFloat(req.query.minFloor) || 0;
+    try {
+      const r = await db.query(
+        `WITH owners AS (
+           SELECT id, email, first_name, last_name, company_name, company_domain,
+                  company_address, ch_postcode, ch_company_number
+             FROM contacts
+            WHERE ccod_owns_building = 'yes'
+              AND solar_max_kwp IS NULL          -- not yet roof-checked
+              AND COALESCE(do_not_contact,false) = false
+              AND ch_postcode IS NOT NULL AND ch_postcode <> ''
+         )
+         ranked AS (
+           SELECT o.*, f.floor_area AS epc_floor_area, f.pv_recommended,
+                  -- One row per company: several contacts often share a domain
+                  -- and the roof only needs checking once.
+                  ROW_NUMBER() OVER (
+                    PARTITION BY COALESCE(NULLIF(o.company_domain,''), o.company_name)
+                    ORDER BY (o.email IS NOT NULL) DESC, o.id
+                  ) AS rn
+             FROM owners o
+             LEFT JOIN LATERAL (
+               -- Largest certificate at the postcode: an upper bound on the
+               -- building, which is what we rank by. The precise per-building
+               -- match happens later, at lookup time.
+               --
+               -- Capped at 50,000 m2: a City of London postcode returns a
+               -- 175,839 m2 certificate for an entire office tower, which says
+               -- nothing about one tenant's roof and would otherwise sit at the
+               -- top of the queue.
+               SELECT e.floor_area, e.pv_recommended
+                 FROM epc_non_domestic e
+                WHERE upper(replace(e.postcode,' ','')) = upper(replace(o.ch_postcode,' ',''))
+                  AND e.floor_area > 0 AND e.floor_area <= 50000
+                ORDER BY e.floor_area DESC
+                LIMIT 1
+             ) f ON true
+         )
+         SELECT id, email, first_name, last_name, company_name, company_domain,
+                company_address, ch_postcode, ch_company_number,
+                epc_floor_area, pv_recommended
+           FROM ranked
+          WHERE rn = 1
+            AND COALESCE(epc_floor_area, 0) >= $1
+          ORDER BY epc_floor_area DESC NULLS LAST
+          LIMIT $2`,
+        [minFloor, limit]
+      );
+      res.json({
+        count: r.rows.length,
+        contacts: r.rows,
+        note: 'Confirmed freehold owners, never roof-checked, ordered by EPC floor area (largest first).',
+      });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   router.get('/status', (req, res) => {
     const s = usage.maskedSettings();
     res.json({
