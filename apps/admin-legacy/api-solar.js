@@ -370,10 +370,12 @@ module.exports = function solarAPI() {
         const sp = (bi && bi.raw && bi.raw.solarPotential) || {};
         const panels = sp.solarPanels;
 
-        // buildingInsights carries its own boundingBox. dataLayers does not
-        // always return one, and when it does not the projection has no anchor
-        // — which is exactly why this overlay came back silently empty.
-        const bounds = img.bounds || (bi && bi.raw && bi.raw.boundingBox) || null;
+        // Always the IMAGE's extent — roofImagery derives it from the request
+        // centre and radius when dataLayers omits boundingBox. Deliberately not
+        // buildingInsights.boundingBox: that is the building (~38m) not the
+        // tile (~80m), and projecting into it magnified every panel ~2x and
+        // scattered them over the trees and car park.
+        const bounds = img.bounds || null;
 
         // Panels are square to their roof segment, so each needs its segment's
         // azimuth to be drawn at the right angle.
@@ -401,9 +403,9 @@ module.exports = function solarAPI() {
             approx_m: Math.round((b.ne.latitude - b.sw.latitude) * 111320),
           } : null;
           out.debug = {
-            dataLayers_box: span(img.bounds),
+            image_box: span(img.bounds),
+            image_box_source: img.boundsSource,
             buildingInsights_box: span(bi && bi.raw && bi.raw.boundingBox),
-            used: img.bounds ? 'dataLayers' : 'buildingInsights',
             panel_dims: { w: sp.panelWidthMeters, h: sp.panelHeightMeters },
             segments: (sp.roofSegmentStats || []).length,
           };

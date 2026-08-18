@@ -112,7 +112,23 @@ async function roofImagery(lat, lng, opts = {}) {
     return Buffer.from(await r.arrayBuffer());
   };
 
-  const out = { layers: {}, bounds: data.boundingBox || null, imageryDate: fmtDate(data.imageryDate) };
+  // The image covers the square we ASKED for: radiusMeters around the request
+  // point. dataLayers often omits boundingBox, and falling back to
+  // buildingInsights.boundingBox is wrong — that describes the building (~38m
+  // here) not the tile (~80m), so panels projected into it came out magnified
+  // and scattered across the whole picture. Derive the real extent instead.
+  const dLat = radius / 111320;
+  const dLng = radius / (111320 * Math.cos(lat * Math.PI / 180));
+  const derived = {
+    sw: { latitude: lat - dLat, longitude: lng - dLng },
+    ne: { latitude: lat + dLat, longitude: lng + dLng },
+  };
+  const out = {
+    layers: {},
+    bounds: data.boundingBox || derived,
+    boundsSource: data.boundingBox ? 'dataLayers' : 'derived',
+    imageryDate: fmtDate(data.imageryDate),
+  };
 
   // RGB — straight through.
   const rgbTiff = await fetchTiff(data.rgbUrl);
