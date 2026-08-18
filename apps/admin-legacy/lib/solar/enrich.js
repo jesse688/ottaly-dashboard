@@ -267,14 +267,26 @@ async function ownershipOnly(contact) {
   }
 
   const lead = { name: contact.company_name || '', reg: contact.company_reg || '' };
-  const ownerList = owners.map((o) => ({ proprietor_name: o.name, company_reg_no: o.company_reg_no }));
+  // Freeholds only — same rule as enrichContact and company-service. A
+  // leaseholder cannot sign a rooftop PPA, so a lease is not ownership.
+  const freeholds = owners.filter(o => String(o.tenure || '').toLowerCase() === 'freehold');
+  const ownerList = freeholds.map((o) => ({ proprietor_name: o.name, company_reg_no: o.company_reg_no }));
   let verdict = resolveOwnership(lead, ownerList);
 
   // Only guess a reg via CH name-search when the contact was NEVER run through
   // the CH-verify job. After verification, a NULL reg means "no confident CH
   // match" and is authoritative — re-guessing here would re-introduce the exact
   // stale/wrong numbers the verify job cleared.
-  if (verdict.owns_building !== 'yes' && !lead.reg && !contact.ch_verified && lead.name && chEnabled()) {
+  // SPEED: the Companies House call is the only network I/O here and it is what
+  // makes a full sweep take days — it fires for every contact without a reg
+  // number, which is 657,228 of them. Its ONLY purpose is to turn a company
+  // name into a registration number so it can be matched against a freehold
+  // proprietor at this postcode. If there is no freehold title here at all,
+  // there is nothing to match and the call cannot change the verdict, so skip
+  // it. Most postcodes have no freehold owner matching the lead, so this drops
+  // the vast majority of the calls without altering a single result.
+  if (freeholds.length
+      && verdict.owns_building !== 'yes' && !lead.reg && !contact.ch_verified && lead.name && chEnabled()) {
     try {
       const hit = await resolveNameToReg(lead.name, contact.company_domain);
       if (hit && hit.reg) {

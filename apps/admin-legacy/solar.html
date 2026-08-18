@@ -614,6 +614,29 @@ $('#saveKeys').addEventListener('click', async ()=>{
   }catch(e){ $('#setResult').textContent='Failed: '+e.message; }
 });
 
+// ---- Ownership sweep: reconnect after a page refresh ----
+// The sweep streams its progress to whoever started it, so a refresh loses the
+// display even though the run continues server-side. Progress lives in
+// contacts.ccod_checked_at, so poll that instead of relying on the stream.
+async function pollSweepStatus(){
+  try{
+    const s = await fetch('/api/solar/ownership-sweep/status').then(r=>r.json());
+    if (s.error) return;
+    const bar = $('#sweepBar');
+    if (!s.running) { if (!bar.dataset.sticky) bar.style.display = 'none'; return; }
+    bar.style.display = 'block';
+    bar.dataset.sticky = '1';
+    const pct = s.candidates ? Math.round(100 * s.checked / s.candidates) : 0;
+    bar.textContent =
+      `🏢 Ownership sweep running — ${Number(s.checked).toLocaleString()} / ${Number(s.candidates).toLocaleString()} (${pct}%)`
+      + ` · owns ${Number(s.owns).toLocaleString()} · tenant ${Number(s.tenant).toLocaleString()} · unclear ${Number(s.unclear).toLocaleString()}`
+      + ` · ${s.per_minute}/min`
+      + (s.eta_hours != null ? ` · ~${s.eta_hours}h remaining` : '');
+  }catch(e){ /* transient */ }
+}
+pollSweepStatus();
+setInterval(pollSweepStatus, 15000);
+
 // ---- Work queue: who to spend Google calls on next ----
 // Saves building a selection on the Contacts page, which cannot express the two
 // things that decide this: confirmed freehold ownership, and not yet

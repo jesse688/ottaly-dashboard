@@ -16273,6 +16273,40 @@ function isFreeDomain(email) {
 // Companies House ownership check across contacts and writes ccod_* columns.
 // NO Google/roof calls — safe and free to run on the whole database.
 //   body: { workspace_id? , limit? , only_unchecked? }  (streams NDJSON progress)
+// GET /api/solar/ownership-sweep/status
+// The sweep streams NDJSON to whoever started it, so refreshing the page loses
+// the progress display — the run itself carries on server-side, but it looks
+// like it vanished. Progress is recorded in contacts.ccod_checked_at, so it can
+// be read back independently of any connection.
+app.get('/api/solar/ownership-sweep/status', requireSession, async (req, res) => {
+  const db = req.app.locals.pgDb;
+  if (!db) return res.status(503).json({ error: 'Database not available' });
+  try {
+    const r = await db.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE company_name <> '' AND company_address <> '') AS candidates,
+        COUNT(*) FILTER (WHERE ccod_checked_at IS NOT NULL)                  AS checked,
+        COUNT(*) FILTER (WHERE ccod_checked_at > now() - interval '5 minutes') AS last_5min,
+        COUNT(*) FILTER (WHERE ccod_owns_building = 'yes')                   AS owns,
+        COUNT(*) FILTER (WHERE ccod_owns_building = 'no')                    AS tenant,
+        COUNT(*) FILTER (WHERE ccod_owns_building = 'unclear')               AS unclear,
+        MAX(ccod_checked_at)                                                 AS last_checked_at
+      FROM contacts`);
+    const s = r.rows[0] || {};
+    const perMin = Number(s.last_5min || 0) / 5;
+    const remaining = Math.max(0, Number(s.candidates || 0) - Number(s.checked || 0));
+    res.json({
+      ...s,
+      running: Number(s.last_5min || 0) > 0,
+      per_minute: Math.round(perMin),
+      // Only meaningful while it is actually moving.
+      eta_hours: perMin > 0 ? Math.round((remaining / perMin / 60) * 10) / 10 : null,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post('/api/solar/ownership-sweep', requireSession, async (req, res) => {
   const db = req.app.locals.pgDb;
   if (!db) return res.status(500).json({ error: 'Database not available' });
@@ -16303,8 +16337,13 @@ app.post('/api/solar/ownership-sweep', requireSession, async (req, res) => {
 
   const tally = { total: rows.length, owns: 0, tenant: 0, unclear: 0, no_postcode: 0, other: 0, multi: 0 };
   let done = 0;
-  // Bounded concurrency; ownership is offline so this is fast, CH is the only I/O.
-  const CONC = 6;
+  // Bounded concurrency. The CCOD lookup is offline (SQLite, microseconds); the
+  // only I/O left is the occasional Companies House call, which now fires solely
+  // when a freehold title exists at the postcode. At 6 the sweep ran at ~45
+  // rows/min — 13 days for the full 831k. Raising this is safe because the
+  // work is overwhelmingly local, and SWEEP_CONCURRENCY allows backing off
+  // without a redeploy if CH starts rate-limiting.
+  const CONC = Math.max(1, Math.min(64, parseInt(process.env.SWEEP_CONCURRENCY, 10) || 24));
   let cursor = 0;
   async function worker() {
     while (cursor < rows.length) {
