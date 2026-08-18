@@ -9,7 +9,7 @@
 
 const express = require('express');
 const { enrichContact } = require('./lib/solar/enrich');
-const { roofImagePng, buildingInsights } = require('./lib/solar/google-solar');
+const { roofImagePng, buildingInsights, roofImagery, panelOverlaySvg } = require('./lib/solar/google-solar');
 const { indexAvailable } = require('./lib/solar/ccod');
 const { chEnabled } = require('./lib/solar/companies-house');
 const usage = require('./lib/solar/usage');
@@ -333,6 +333,56 @@ module.exports = function solarAPI() {
       }
 
       res.json({ coords, roof, company });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/solar/imagery { lat, lng }
+  //   -> { rgb, flux, flux_over_rgb, panels_over_rgb, panel_count, imageryDate }
+  //
+  // Every visual Google can give for a roof. Separate from /lookup because it
+  // is a second billed call (dataLayers) plus image processing — the numbers
+  // come back instantly, the pictures are asked for only when wanted.
+  router.post('/imagery', async (req, res) => {
+    const { lat, lng, radiusMeters } = req.body || {};
+    if (lat == null || lng == null) return res.status(400).json({ error: 'lat/lng required' });
+    try {
+      const img = await roofImagery(Number(lat), Number(lng), { radiusMeters });
+      if (img.error) return res.json({ error: img.error });
+
+      const out = {
+        rgb: img.layers.rgb || null,
+        flux: img.layers.flux || null,
+        flux_over_rgb: img.layers.flux_over_rgb || null,
+        panels_over_rgb: null,
+        panel_count: 0,
+        imageryDate: img.imageryDate || null,
+        fluxError: img.fluxError || null,
+      };
+
+      // Panel positions come from buildingInsights, not dataLayers, so this is
+      // a second (cheap, already-cached-by-Google) call. Drawn over the photo
+      // rather than returned as bare geometry, because the point is to show
+      // someone what their roof would look like.
+      try {
+        const bi = await buildingInsights(Number(lat), Number(lng));
+        const panels = bi && bi.raw && bi.raw.solarPotential && bi.raw.solarPotential.solarPanels;
+        const svg = panelOverlaySvg(panels, img.bounds);
+        if (svg && img.layers.rgb) {
+          const sharp = require('sharp');
+          const base = Buffer.from(img.layers.rgb.split(',')[1], 'base64');
+          const merged = await sharp(base)
+            .composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
+            .png().toBuffer();
+          out.panels_over_rgb = `data:image/png;base64,${merged.toString('base64')}`;
+          out.panel_count = panels.length;
+        }
+      } catch (e) {
+        out.panelsError = e.message;
+      }
+
+      res.json(out);
     } catch (e) {
       res.status(500).json({ error: e.message });
     }

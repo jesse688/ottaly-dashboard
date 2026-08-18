@@ -682,7 +682,10 @@ function renderRoofLookup(d, minKwp){
   // The same PPA gate the batch cascade applies, so a hand check and a bulk run
   // never disagree about whether a site qualifies.
   const big = R.max_kwp != null && R.max_kwp >= minKwp;
-  const verdict = R.has_solar_already
+  // has_solar_already is 'yes' | 'no' | 'unclear' — NOT a boolean. Testing it
+  // for truthiness marked every roof as already having panels, because 'no' and
+  // 'unclear' are both truthy strings. Only 'yes' is a detection.
+  const verdict = R.has_solar_already === 'yes'
     ? { text: 'Already has solar', colour: '#f59e0b' }
     : big ? { text: `Qualifies (≥ ${minKwp} kWp)`, colour: '#22c55e' }
           : { text: `Below ${minKwp} kWp`, colour: '#ef4444' };
@@ -718,6 +721,7 @@ function renderRoofLookup(d, minKwp){
       ${stat('Max system', R.max_kwp != null ? R.max_kwp + ' kWp' : '—')}
       ${stat('Est. output', R.annual_kwh != null ? R.annual_kwh.toLocaleString() + ' kWh/yr' : '—', '@ 950 kWh/kWp')}
       ${stat('Sunshine', R.max_sunshine_hours != null ? Math.round(R.max_sunshine_hours) + ' h/yr' : '—')}
+      ${stat('Existing panels', { yes: 'Detected', no: 'None seen', unclear: 'Unclear' }[R.has_solar_already] || '—')}
       ${stat('Imagery', R.imagery_date || '—')}
       <div class="stat" style="border-right:0">
         <span class="mut" style="font-size:11px">Verdict</span>
@@ -727,10 +731,63 @@ function renderRoofLookup(d, minKwp){
     <div class="mut" style="font-size:11px">
       ${d.coords.lat.toFixed(5)}, ${d.coords.lng.toFixed(5)} ·
       <a href="https://www.google.com/maps/@${d.coords.lat},${d.coords.lng},20z" target="_blank"
-         style="color:var(--accent)">open in Maps</a>
+         style="color:var(--accent)">open in Maps</a> ·
+      <a href="#" onclick="event.preventDefault();loadRoofImagery(${d.coords.lat},${d.coords.lng})"
+         style="color:var(--accent)">show roof imagery</a>
+      <span class="mut"> (extra Google call)</span>
     </div>
+    <div id="roofImagery" style="margin-top:10px"></div>
     <div style="margin-top:10px;font-weight:600;font-size:13px">What we know about this site</div>
     ${contactsHtml}`;
+}
+
+// Every visual Google offers for a roof: the aerial photo, the annual-sunlight
+// heatmap, that heatmap over the photo, and the panel layout drawn on it.
+// Loaded on request — it is a second billed call plus image processing.
+async function loadRoofImagery(lat, lng){
+  const box = document.getElementById('roofImagery');
+  if (!box) return;
+  box.innerHTML = '<span class="mut" style="font-size:12px">Fetching imagery…</span>';
+  try {
+    const d = await fetch('/api/solar/imagery', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ lat, lng }),
+    }).then(r=>r.json());
+
+    if (d.error) {
+      const friendly = {
+        no_imagery: 'Google has no high-resolution imagery for this location.',
+        sharp_not_installed: 'Image processing library (sharp) is not installed on the server.',
+        no_key: 'No Google Solar API key configured.',
+      }[d.error] || d.error;
+      box.innerHTML = `<div style="color:#f59e0b;font-size:12px">${esc(friendly)}</div>`;
+      return;
+    }
+
+    const tiles = [
+      ['Roof', d.rgb, 'Aerial photo'],
+      ['Sunlight', d.flux_over_rgb || d.flux, 'Annual irradiance — yellow is best'],
+      ['Panel layout', d.panels_over_rgb, d.panel_count ? `${d.panel_count} panels Google would fit` : ''],
+    ].filter(t => t[1]);
+
+    if (!tiles.length) { box.innerHTML = '<div class="mut" style="font-size:12px">No imagery layers returned.</div>'; return; }
+
+    box.innerHTML = `
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        ${tiles.map(([label, src, hint]) => `
+          <div style="width:240px">
+            <img src="${src}" class="thumb" style="width:240px;height:240px;object-fit:cover;border-radius:8px;border:1px solid var(--line);cursor:zoom-in"
+                 onclick="zoom(this.src)">
+            <div style="font-size:12px;font-weight:600;margin-top:3px">${esc(label)}</div>
+            ${hint ? `<div class="mut" style="font-size:11px">${esc(hint)}</div>` : ''}
+          </div>`).join('')}
+      </div>
+      ${d.imageryDate ? `<div class="mut" style="font-size:11px;margin-top:4px">Imagery captured ${esc(d.imageryDate)}</div>` : ''}
+      ${d.fluxError ? `<div class="mut" style="font-size:11px">Heatmap unavailable: ${esc(d.fluxError)}</div>` : ''}
+      ${d.panelsError ? `<div class="mut" style="font-size:11px">Panel layout unavailable: ${esc(d.panelsError)}</div>` : ''}`;
+  } catch (e) {
+    box.innerHTML = `<div style="color:#ef4444;font-size:12px">${esc(e.message)}</div>`;
+  }
 }
 
 document.getElementById('lookupBtn').addEventListener('click', runRoofLookup);
