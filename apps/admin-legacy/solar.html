@@ -650,12 +650,17 @@ $('#queueBtn').addEventListener('click', async ()=>{
     const d = await fetch(`/api/solar/queue?limit=${limit}`).then(r=>r.json());
     if(d.error){ $('#prog').textContent = 'Queue error: '+d.error; return; }
     if(!d.contacts || !d.contacts.length){ $('#prog').textContent = 'Queue empty — every confirmed owner has been roof-checked.'; return; }
-    ROWS = d.contacts.map((c,i)=>recFromSaved({
+    // run() qualifies INPUT, not ROWS — ROWS is only what the table renders.
+    // Setting ROWS alone left the queue on screen while Run silently used
+    // whatever handoff was already loaded (100 contacts from the Contacts
+    // page), so loading 500 and running qualified the wrong 100.
+    INPUT = d.contacts.map(c => ({
       ...c,
       address: c.company_address || '',
       solar_checked_at: null,          // never checked; that is why it is queued
       ccod_owns_building: 'yes',       // the queue only returns confirmed owners
-    }, i));
+    }));
+    ROWS = INPUT.map((c,i)=>recFromSaved(c, i));
     render();
     const withEpc = d.contacts.filter(c=>c.epc_floor_area).length;
     const pv = d.contacts.filter(c=>c.pv_recommended).length;
