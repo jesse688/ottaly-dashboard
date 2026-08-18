@@ -51,6 +51,14 @@ const RULES_VERSION = 'rules-v1-2026-08-18';
 // 22.5% is out-of-office — filtering first turns a 113k-row job into ~5k.
 const HUMAN = `('not_interested','interested','question','other')`;
 
+// Departure notices are the exception: "I have now left X, please contact Y" is
+// an AUTO-REPLY, so the classifier files it under ooo_auto_reply. 2,229 of them
+// live there versus 20 in the human categories — scanning only HUMAN missed
+// 99% of them. They are still worth reading because a person_left fact
+// permanently retires that address (and often names the replacement).
+// Warmup is never included: it is our own mailboxes talking to each other.
+const DEPARTURE_RE = `(no longer work|have now left|i have left|left the (company|business|organisation)|no longer with|has retired|i am retiring)`;
+
 // ── Text cleaning ──────────────────────────────────────────────────────────
 function stripQuotedHistory(raw) {
   if (!raw) return '';
@@ -267,14 +275,19 @@ async function writeFacts(rows) {
     process.exit(1);
   }
 
-  const personLeftClause = ONLY_PERSON_LEFT
-    ? `AND body_preview ~* '(no longer work|have now left|i have left|left the (company|business)|no longer with|has retired|i am retiring)'`
-    : '';
+  // --only-person-left deliberately reaches into ooo_auto_reply, where 2,229 of
+  // the 2,249 departure notices actually live. The normal pass stays on the
+  // human categories: reading all 24k auto-replies for the other attributes
+  // would be mostly noise at ~2s a call.
+  const where = ONLY_PERSON_LEFT
+    ? `category IN ${HUMAN} OR category = 'ooo_auto_reply'`
+    : `category IN ${HUMAN}`;
+  const personLeftClause = ONLY_PERSON_LEFT ? `AND body_preview ~* '${DEPARTURE_RE}'` : '';
 
   const { rows } = await pool.query(
     `SELECT id, lead_email, received_at, body_preview
        FROM unibox_replies
-      WHERE category IN ${HUMAN}
+      WHERE (${where})
         AND body_preview IS NOT NULL
         AND lead_email IS NOT NULL AND lead_email <> ''
         ${personLeftClause}
