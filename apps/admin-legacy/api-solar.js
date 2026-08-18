@@ -289,13 +289,30 @@ module.exports = function solarAPI() {
         ? Math.round((insights.maxPanels * watts) / 1000)
         : null;
 
+      // Prefer Google's own modelled yield for the full array over a flat
+      // kWp x 950 rule of thumb: it accounts for this roof's pitch, azimuth and
+      // shading. Scaled to the module wattage being quoted, since Google's
+      // figure assumes its own panel — otherwise the kWh and the kWp on screen
+      // describe two different systems, which is the first thing a client asks
+      // about. Falls back to the rule of thumb when no config is returned.
+      const cfgs = (insights.raw && insights.raw.solarPotential
+                    && insights.raw.solarPotential.solarPanelConfigs) || [];
+      const best = cfgs.length ? cfgs[cfgs.length - 1] : null;
+      const googleWatts = insights.panelWatts || null;
+      let annualKwh = null;
+      if (best && best.yearlyEnergyDcKwh != null) {
+        annualKwh = Math.round(best.yearlyEnergyDcKwh * (googleWatts ? watts / googleWatts : 1));
+      } else if (maxKwp != null) {
+        annualKwh = Math.round(maxKwp * 950);
+      }
+
       const roof = {
         roof_area_m2: insights.roofAreaM2,
         max_panels: insights.maxPanels,
         panel_watts: watts,
         max_kwp: maxKwp,
-        // ~950 kWh per kWp/year is the standard UK yield assumption.
-        annual_kwh: maxKwp != null ? Math.round(maxKwp * 950) : null,
+        annual_kwh: annualKwh,
+        yield_basis: best ? 'google_modelled' : 'estimate_950_kwh_per_kwp',
         max_sunshine_hours: insights.maxSunshineHoursPerYear,
         has_solar_already: insights.hasSolar,
         imagery_date: insights.imageryDate,

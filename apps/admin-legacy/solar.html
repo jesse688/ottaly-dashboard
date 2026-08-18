@@ -812,6 +812,7 @@ async function showPanelMap(lat, lng){
                  style="width:100%;accent-color:var(--accent)">
           <div class="mut" style="font-size:11px">Drag to size the array. Panels are ordered
             best-yield first, so the strongest part of the roof fills up first.</div>
+          <div class="mut" id="pmBasis" style="font-size:11px"></div>
           ${d.imageryDate ? `<div class="mut" style="font-size:11px">Imagery ${esc(d.imageryDate)}</div>` : ''}
         </div>
       </div>`;
@@ -849,6 +850,16 @@ async function showPanelMap(lat, lng){
 
     const slider = document.getElementById('pmSlider');
     slider.addEventListener('input', () => setPanelCount(+slider.value));
+    // Changing the module wattage must move the figures too, or the panel above
+    // ends up quoting a different system from the stats at the top of the page.
+    const wattsBox = document.getElementById('panelW');
+    if (wattsBox && !wattsBox._pmBound) {
+      wattsBox._pmBound = true;
+      wattsBox.addEventListener('input', () => {
+        const s = document.getElementById('pmSlider');
+        if (s) setPanelCount(+s.value);
+      });
+    }
     setPanelCount(d.panels.length);
   } catch (e) {
     box.innerHTML = `<div style="color:#ef4444;font-size:12px">${esc(e.message)}</div>`;
@@ -868,9 +879,19 @@ function setPanelCount(n){
   if (kwh == null && d.panels.length) {
     kwh = d.panels.slice(0, n).reduce((s,p) => s + (p.energy || 0), 0);
   }
-  document.getElementById('pmKwh').textContent = kwh != null ? Math.round(kwh).toLocaleString() : '—';
+
   const watts = Number(document.getElementById('panelW')?.value) || d.panelWatts || 500;
+  // Google's yield figures assume ITS module (400W here). Quoting that kWh next
+  // to a kWp computed from a different wattage puts two numbers on screen that
+  // describe different systems — the first thing a client would query. Scale the
+  // energy by the same ratio so both describe the modules actually being quoted.
+  if (kwh != null && d.panelWatts) kwh = kwh * (watts / d.panelWatts);
+
+  document.getElementById('pmKwh').textContent = kwh != null ? Math.round(kwh).toLocaleString() : '—';
   document.getElementById('pmKwp').textContent = Math.round(n * watts / 1000);
+  const note = document.getElementById('pmBasis');
+  if (note) note.textContent = `Based on ${watts} W modules` +
+    (d.panelWatts && watts !== d.panelWatts ? ` (Google models ${d.panelWatts} W)` : '');
 }
 
 // Flat-image fallback: the aerial photo, the sunlight heatmap and a composited
