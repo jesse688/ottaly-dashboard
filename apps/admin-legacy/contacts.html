@@ -1000,6 +1000,22 @@
           </div>
         </div>
 
+        <div class="filter-section" data-clear="replyFacts">
+          <div class="filter-label">What leads told us</div>
+          <div class="filter-control" style="display:flex;flex-direction:column;gap:6px;">
+            <!-- Built from reply_facts — things leads stated in their own
+                 replies ("we're in a serviced office", "we already have coffee").
+                 Ticking one EXCLUDES those contacts. Company-level facts apply
+                 to everyone at the domain, so one reply covers all colleagues;
+                 "has left" only silences that individual. Options are loaded
+                 from the data, not hardcoded, so new attributes appear on their
+                 own. Nothing here is automatic — it only filters this search. -->
+            <div id="factFilters" style="display:flex;flex-direction:column;gap:5px;font-size:12px;color:#6b7280;">
+              Loading…
+            </div>
+          </div>
+        </div>
+
         <div class="filter-section" data-clear="scrapeTag">
           <div class="filter-label">Where the lead came from</div>
           <div class="filter-control" style="display:flex;flex-direction:column;gap:6px;">
@@ -2952,6 +2968,7 @@
         sentToPV: document.getElementById('filterSentToPV')?.checked ? 'true' : '',
         notSentToPV: document.getElementById('filterNotSentToPV')?.checked ? 'true' : '',
         vertical: window._activeVertical || '',
+        excludeFact: getExcludeFactValue(),
         cooldownWorkspace: get('clientFilter'),
         numEmployeesRanges: getEmployeeRangesValue(),
         maxPerCompany: window._maxPerCompany || '',
@@ -2972,6 +2989,59 @@
       const { limit, offset, sortBy: _sb, sortDir: _sd, ...filters } = getFilterValues(0);
       return filters;
     }
+
+    // ── Reply-fact filters ────────────────────────────────────────
+    // Options come from /api/contacts/fact-options so the list always matches
+    // what has actually been extracted. Each ticked box contributes one
+    // attribute[:value][:vertical] spec to excludeFact.
+    async function loadFactFilters() {
+      const wrap = document.getElementById('factFilters');
+      if (!wrap) return;
+      try {
+        const r = await fetch('/api/contacts/fact-options');
+        const { options = [] } = await r.json();
+        if (!options.length) { wrap.innerHTML = '<span style="color:#9ca3af;">No reply facts yet</span>'; return; }
+
+        // person_left is per-person; the rest describe the company.
+        const label = o => {
+          if (o.attribute === 'premises_tenure') {
+            return { serviced_office: 'In a serviced office', rented: "Doesn't own their building", owned: 'Owns their building' }[o.value] || o.value;
+          }
+          if (o.attribute === 'has_supplier')   return `Already has ${o.vertical || 'a supplier'}`;
+          if (o.attribute === 'no_premises')    return 'Remote — no office';
+          if (o.attribute === 'ceased_trading') return 'No longer trading';
+          if (o.attribute === 'person_left')    return 'Person has left';
+          if (o.attribute === 'team_size')      return 'Stated a team size';
+          return `${o.attribute}: ${o.value}`;
+        };
+        // team_size values are numeric and endless — collapse to one option
+        // rather than listing every headcount as its own checkbox.
+        const seen = new Set();
+        const items = [];
+        for (const o of options) {
+          const spec = o.attribute === 'team_size' ? 'team_size'
+            : o.attribute === 'has_supplier' ? `has_supplier::${o.vertical || ''}`
+            : `${o.attribute}:${o.value}`;
+          if (seen.has(spec)) continue;
+          seen.add(spec);
+          items.push({ spec, text: label(o), companies: o.companies });
+        }
+        wrap.innerHTML = items.map(it => `
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input type="checkbox" class="factExcl" value="${esc(it.spec)}" onchange="search()">
+            <span>${esc(it.text)}</span>
+            <span style="color:#9ca3af;font-size:11px;margin-left:auto;">${it.companies}</span>
+          </label>`).join('');
+      } catch (err) {
+        wrap.innerHTML = '<span style="color:#9ca3af;">Could not load</span>';
+      }
+    }
+
+    function getExcludeFactValue() {
+      return [...document.querySelectorAll('.factExcl:checked')].map(el => el.value).join(',');
+    }
+
+    loadFactFilters();
 
     // ── Scalar filter registry ────────────────────────────────────
     // Every filter that is NOT a filterDefs tag list, keyed by the same name
@@ -3067,6 +3137,8 @@
           clearMulti(['jobTitle', 'seniority']); break;
         case 'company':
           { const el = document.getElementById('company'); if (el) el.value = ''; } break;
+        case 'replyFacts':
+          document.querySelectorAll('.factExcl').forEach(b => { b.checked = false; }); break;
         case 'industry':
           clearMulti(['industry']); break;
         case 'person-location':
@@ -5678,6 +5750,9 @@
                 c.reply_notes ? esc(c.reply_notes) : '—'
               }</div>
             </div>
+            <div class="panel-field"><label>Stated in replies</label>
+              <div id="panelFacts" class="pval empty">Loading…</div>
+            </div>
           </div>
 
           <div class="panel-section">
@@ -5757,8 +5832,63 @@
           ${raw.Technologies ? `<div class="panel-section"><div class="panel-section-title">Technologies</div><div class="pval" style="font-size:12px;">${esc(raw.Technologies)}</div></div>` : ''}
           ${(c.keywords || raw.Keywords) ? renderKeywordsSection(c.keywords || raw.Keywords) : ''}
         `;
+
+        loadContactFacts(c.email);
       } catch (err) {
         document.getElementById('panelBody').innerHTML = `<p style="color:red;padding:20px">${err.message}</p>`;
+      }
+    }
+
+    // ── Reply facts ──────────────────────────────────────────────
+    // What this lead (or a colleague at the same domain) actually told us.
+    // Loaded after the panel renders so a slow lookup never delays the contact.
+    const FACT_LABELS = {
+      premises_tenure: { serviced_office: 'In a serviced office', rented: 'Does not own their building', owned: 'Owns their building' },
+      no_premises:     { true: 'Remote — no office' },
+      ceased_trading:  { true: 'No longer trading' },
+      person_left:     { true: 'Has left the company' },
+    };
+
+    function factLabel(f) {
+      const byAttr = FACT_LABELS[f.attribute];
+      if (byAttr && byAttr[f.value]) return byAttr[f.value];
+      if (f.attribute === 'has_supplier') return `Already has ${f.vertical || 'a supplier'}`;
+      if (f.attribute === 'team_size')    return `Team of ${f.value}`;
+      if (f.attribute === 'person_left')  return `Has left — contact ${f.value}`;
+      return `${f.attribute}: ${f.value}`;
+    }
+
+    function factAge(iso) {
+      const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+      if (days <= 0) return 'today';
+      if (days === 1) return 'yesterday';
+      if (days < 31) return `${days}d ago`;
+      if (days < 365) return `${Math.round(days / 30)}mo ago`;
+      return `${Math.round(days / 365)}y ago`;
+    }
+
+    async function loadContactFacts(email) {
+      const el = document.getElementById('panelFacts');
+      if (!el || !email) return;
+      try {
+        const r = await fetch(`/api/contacts/facts?email=${encodeURIComponent(email)}`);
+        const { facts = [] } = await r.json();
+        if (!facts.length) { el.className = 'pval empty'; el.textContent = 'Nothing stated yet'; return; }
+        el.className = 'pval';
+        // The quote is the point: it is what makes a fact checkable, so it is
+        // always shown rather than hidden behind a tooltip.
+        el.innerHTML = facts.map(f => {
+          const scope = f.is_this_person ? '' :
+            `<span style="color:#9ca3af;font-size:10px;"> · from a colleague</span>`;
+          return `<div style="margin-bottom:8px;padding:6px 8px;background:#f9fafb;border-left:3px solid #7c3aed;border-radius:3px;">
+            <div style="font-weight:600;font-size:12px;color:#374151;">${esc(factLabel(f))}
+              <span style="color:#9ca3af;font-weight:400;font-size:10px;"> · ${factAge(f.observed_at)}</span>${scope}</div>
+            <div style="font-size:11px;color:#6b7280;font-style:italic;margin-top:2px;">“${esc(String(f.quote).slice(0, 180))}”</div>
+          </div>`;
+        }).join('');
+      } catch (err) {
+        el.className = 'pval empty';
+        el.textContent = 'Could not load facts';
       }
     }
 
@@ -6133,6 +6263,21 @@
         const srcBoxes = [...document.querySelectorAll('.src-cb')];
         if (f.source) setSourcesFromHash(f.source);
         else srcBoxes.forEach(b => { b.checked = true; });
+      }
+
+      // 5b. Reply-fact exclusions. These checkboxes are built asynchronously
+      //     from the data, so they may not exist yet when a filter is recalled
+      //     on page load — apply once they arrive rather than dropping them.
+      const applyFactBoxes = () => {
+        const want = new Set(toArr(f.excludeFact));
+        const boxes = document.querySelectorAll('.factExcl');
+        if (!boxes.length && want.size) return false;
+        boxes.forEach(b => { b.checked = want.has(b.value); });
+        return true;
+      };
+      if (!applyFactBoxes()) {
+        let tries = 0;
+        const iv = setInterval(() => { if (applyFactBoxes() || ++tries > 20) clearInterval(iv); }, 150);
       }
 
       // 6. SIC code chips — saved as bare codes, so the label falls back to it.

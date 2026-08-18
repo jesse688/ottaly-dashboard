@@ -18621,6 +18621,56 @@ app.get('/api/reacher-pool-test/:label', requireSession, async (req, res) => {
   }
 });
 
+// ── Reply facts ─────────────────────────────────────────────────
+// What a lead actually told us in a reply. Company-level facts (premises,
+// supplier, ceased trading) are looked up by DOMAIN so one reply covers every
+// colleague; person_left is looked up by EMAIL so it only silences that
+// individual. Every row carries the sentence it came from — a fact with no
+// quote is not trustworthy enough to filter on.
+app.get('/api/contacts/facts', requireSession, async (req, res) => {
+  try {
+    const dbPg = req.app.locals.pgDb;
+    if (!dbPg) return res.status(503).json({ error: 'Database unavailable' });
+    const email = String(req.query.email || '').trim().toLowerCase();
+    if (!email) return res.status(400).json({ error: 'email required' });
+    const domain = email.split('@')[1] || '';
+    const r = await dbPg.query(
+      `SELECT attribute, value, vertical, confidence, quote, observed_at, extractor,
+              (LOWER(lead_email) = $1) AS is_this_person
+         FROM reply_facts
+        WHERE company_domain = $2 OR LOWER(lead_email) = $1
+        ORDER BY observed_at DESC`,
+      [email, domain]
+    );
+    // person_left about a colleague must not read as a fact about this contact.
+    const rows = r.rows.filter(f => f.attribute !== 'person_left' || f.is_this_person);
+    res.json({ facts: rows });
+  } catch (err) {
+    console.error('[contacts/facts] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Distinct attribute/value/vertical combinations, so the filter UI can offer
+// exactly what exists rather than a hardcoded list that drifts.
+app.get('/api/contacts/fact-options', requireSession, async (req, res) => {
+  try {
+    const dbPg = req.app.locals.pgDb;
+    if (!dbPg) return res.status(503).json({ error: 'Database unavailable' });
+    const r = await dbPg.query(
+      `SELECT attribute, value, vertical, COUNT(*)::int AS n,
+              COUNT(DISTINCT company_domain)::int AS companies
+         FROM reply_facts
+        GROUP BY attribute, value, vertical
+        ORDER BY attribute, n DESC`
+    );
+    res.json({ options: r.rows });
+  } catch (err) {
+    console.error('[contacts/fact-options] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/contacts/verified-today', requireSession, async (req, res) => {
   try {
     const dbPg = req.app.locals.pgDb;

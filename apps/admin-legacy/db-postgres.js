@@ -2127,6 +2127,48 @@ class PostgresDatabase {
       // client record.
     });
 
+    // ── Reply facts ───────────────────────────────────────────────
+    // Facts leads stated in their own replies (reply_facts), e.g. "we're in a
+    // serviced office", "we already have a coffee machine", "I've left the
+    // company". User-selected only — nothing here runs automatically.
+    //
+    // Company-level facts match on the DOMAIN, so one reply covers every
+    // colleague at that business. person_left matches the EMAIL only: the
+    // company is still a valid prospect, just not that individual.
+    const COMPANY_FACTS = ['premises_tenure', 'no_premises', 'ceased_trading', 'team_size', 'has_supplier'];
+    const factScope = attr => COMPANY_FACTS.includes(attr)
+      ? `rf.company_domain = LOWER(SPLIT_PART(contacts.email,'@',2))`
+      : `LOWER(rf.lead_email) = LOWER(contacts.email)`;
+
+    // excludeFact=<attribute>[:<value>][:<vertical>] (comma-separated for several)
+    safe('excludeFact', () => {
+      if (!filters.excludeFact) return;
+      for (const spec of String(filters.excludeFact).split(',').map(s => s.trim()).filter(Boolean)) {
+        const [attr, value, vertical] = spec.split(':');
+        if (!attr) continue;
+        const extra = [];
+        if (value)    { extra.push(`rf.value = $${p++}`); params.push(value); }
+        if (vertical) { extra.push(`rf.vertical = $${p++}`); params.push(vertical); }
+        clauses.push(`NOT EXISTS (SELECT 1 FROM reply_facts rf
+          WHERE ${factScope(attr)} AND rf.attribute = $${p++}${extra.length ? ' AND ' + extra.join(' AND ') : ''})`);
+        params.push(attr);
+      }
+    });
+
+    // hasFact=<attribute>[:<value>][:<vertical>] — the inverse, for reviewing
+    // everyone a fact applies to.
+    safe('hasFact', () => {
+      if (!filters.hasFact) return;
+      const [attr, value, vertical] = String(filters.hasFact).split(':');
+      if (!attr) return;
+      const extra = [];
+      if (value)    { extra.push(`rf.value = $${p++}`); params.push(value); }
+      if (vertical) { extra.push(`rf.vertical = $${p++}`); params.push(vertical); }
+      clauses.push(`EXISTS (SELECT 1 FROM reply_facts rf
+        WHERE ${factScope(attr)} AND rf.attribute = $${p++}${extra.length ? ' AND ' + extra.join(' AND ') : ''})`);
+      params.push(attr);
+    });
+
     // Per-client 60-day cooldown — hide contacts already pushed/emailed to this
     // workspace in the last 60 days. Mirrors the push-time filter in
     // /api/pv/push-contacts so users don't see rows that would just be
