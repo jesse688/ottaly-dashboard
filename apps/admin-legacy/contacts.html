@@ -2963,6 +2963,79 @@
       return Object.fromEntries(Object.entries(f).filter(([,v]) => v !== '' && v !== 0));
     }
 
+    // Filter set to persist against a campaign. getFilterValues() drops every
+    // empty value because it builds a query string, where an absent key means
+    // "unset" — but that also makes it lossy as a snapshot. Here the pagination
+    // and sort keys are dropped instead (they are not filters and would pin a
+    // recalled search to a stale page), and everything else is kept as-is.
+    function getFilterSnapshot() {
+      const { limit, offset, sortBy: _sb, sortDir: _sd, ...filters } = getFilterValues(0);
+      return filters;
+    }
+
+    // ── Scalar filter registry ────────────────────────────────────
+    // Every filter that is NOT a filterDefs tag list, keyed by the same name
+    // getFilterValues() emits. Recall walks this to restore controls, so a new
+    // filter only has to be added here to survive a save/recall round-trip.
+    // 'text'  — <input>/<select>, value is the string
+    // 'check' — checkbox, saved as 'true' when ticked
+    const SCALAR_FILTERS = [
+      { key: 'q',                  id: 'globalSearch',         type: 'text'  },
+      { key: 'status',             id: 'status',               type: 'text'  },
+      { key: 'company',            id: 'company',              type: 'text'  },
+      { key: 'tags',               id: 'scrapeTag',            type: 'text'  },
+      { key: 'chStatus',           id: 'chStatusFilter',       type: 'text'  },
+      { key: 'chInsolvency',       id: 'chInsolvency',         type: 'check' },
+      { key: 'chCharges',          id: 'chCharges',            type: 'check' },
+      { key: 'chOverdue',          id: 'chOverdue',            type: 'check' },
+      { key: 'chOnlyEnriched',     id: 'chOnlyEnriched',       type: 'check' },
+      { key: 'adsRunsAds',         id: 'adsRunsAds',           type: 'text'  },
+      { key: 'adsMinCount',        id: 'adsMinCount',          type: 'text'  },
+      { key: 'adsMaxCount',        id: 'adsMaxCount',          type: 'text'  },
+      { key: 'ownsBuilding',       id: 'ownsBuilding',         type: 'text'  },
+      { key: 'companyAgeBand',     id: 'companyAgeBand',       type: 'text'  },
+      { key: 'chVerified',         id: 'chVerified',           type: 'text'  },
+      { key: 'ccodOwnsBuilding',   id: 'ccodOwnsBuilding',     type: 'text'  },
+      { key: 'hasName',            id: 'hasName',              type: 'text'  },
+      { key: 'hasCompany',         id: 'hasCompany',           type: 'text'  },
+      { key: 'solarStatus',        id: 'solarStatus',          type: 'text'  },
+      { key: 'solarMinKwp',        id: 'solarMinKwp',          type: 'text'  },
+      { key: 'updatedAge',         id: 'updatedAge',           type: 'text'  },
+      // NOTE: excludeMicrosoft is read by getFilterValues and by the push modal
+      // but no checkbox with that id is rendered anywhere on this page, so it is
+      // always empty and never saved. Left out deliberately — add it here if the
+      // control is ever restored.
+      { key: 'worksRemote',        id: 'filterRemote',         type: 'check' },
+      { key: 'excludeRemote',      id: 'filterExcludeRemote',  type: 'check' },
+      { key: 'excludeDNC',         id: 'filterExcludeDNC',     type: 'check' },
+      { key: 'notExportedToApollo',id: 'filterNotExported',    type: 'check' },
+      { key: 'exportedToApollo',   id: 'filterExportedOnly',   type: 'check' },
+      { key: 'sentToPV',           id: 'filterSentToPV',       type: 'check' },
+      { key: 'notSentToPV',        id: 'filterNotSentToPV',    type: 'check' },
+      { key: 'cooldownWorkspace',  id: 'clientFilter',         type: 'text'  },
+    ];
+
+    // Checkbox groups saved as a comma list. The provider group's saved tokens
+    // do NOT match the checkbox values (getFilterValues emits 'email_google'
+    // for value="google", but plain 'unknown' for emailUnknown), so the token
+    // is declared per box rather than read off the element.
+    const CHECK_GROUPS = [
+      { key: 'emailProviders', boxes: [
+        { id: 'emailGoogle',  token: 'email_google'  },
+        { id: 'emailOutlook', token: 'email_outlook' },
+        { id: 'emailOther',   token: 'email_other'   },
+        { id: 'emailUnknown', token: 'unknown'       },
+      ] },
+      { key: 'emailStatus', boxes: [
+        { id: 'vfSafe',         token: 'safe'          },
+        { id: 'vfSafeCatchall', token: 'safe_catchall' },
+        { id: 'vfRisky',        token: 'risky'         },
+        { id: 'vfInvalid',      token: 'invalid'       },
+        { id: 'vfUnknown',      token: 'unknown'       },
+        { id: 'vfNotVerified',  token: 'not_verified'  },
+      ] },
+    ];
+
     // Inject × clear buttons into every data-clear filter section.
     // Runs once after the DOM is ready. The button is hidden via CSS until
     // the section gains .has-active, so it never distracts when inactive.
@@ -4610,7 +4683,7 @@
         // failure should not break the push UX.
         if (saveFilter && r.ok) {
           try {
-            const filters = getFilterValues(0);
+            const filters = getFilterSnapshot();
             await fetch('/api/campaign-filters', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -6005,41 +6078,76 @@
       const row = _campaignFilters.find(r => r.workspace_id === wsId && r.campaign_id === campId);
       if (!row || !row.filters) { showMessage('Saved filter not found', 'error'); return; }
 
-      // Clear current filter state, then apply each saved value back into
-      // its filterDef. The saved shape matches what getFilterValues returns
-      // (comma-joined strings per key).
-      Object.keys(filterDefs).forEach(k => {
-        filterDefs[k].selected = [];
-        filterDefs[k].excluded = [];
-      });
+      // The saved shape matches what getFilterValues returns (comma-joined
+      // strings per key). Each step below assigns unconditionally, so there is
+      // no separate clearing pass — absent keys reset to empty on their own.
       const f = row.filters;
       const toArr = v => (typeof v === 'string' ? v.split(',').map(s => s.trim()).filter(Boolean) : []);
-      // Map filterDef keys (selected / excluded) back from the saved payload.
-      const map = [
-        ['jobTitle', 'jobTitle', 'jobTitleExclude'],
-        ['seniority', 'seniority', null],
-        ['industry', 'industry', 'industryExclude'],
-        ['keywords', 'keywords', 'keywordsExclude'],
-        ['technologies', 'technologies', 'technologiesExclude'],
-        ['city', 'city', null],
-        ['state', 'state', null],
-        ['country', 'country', null],
-        ['companyCity', 'companyCity', null],
-        ['companyState', 'companyState', null],
-        ['companyCountry', 'companyCountry', null],
-      ];
-      for (const [defKey, selKey, exclKey] of map) {
-        const def = filterDefs[defKey];
-        if (!def) continue;
-        def.selected = toArr(f[selKey]);
-        if (exclKey) def.excluded = toArr(f[exclKey]);
+
+      // Restore is a full snapshot, not an overlay: any filter missing from the
+      // saved payload is cleared, so a recalled search matches what was pushed
+      // rather than inheriting whatever the user had set beforehand. (Filters
+      // that were OFF at save time are absent — getFilterValues drops empties.)
+
+      // 1. Tag lists. Every filterDefs key round-trips as <key> / <key>Exclude,
+      //    which is exactly what getFilterValues emits — no hand-written map,
+      //    so a new tag filter is covered automatically.
+      Object.keys(filterDefs).forEach(k => {
+        filterDefs[k].selected = toArr(f[k]);
+        filterDefs[k].excluded = filterDefs[k].hasExclude ? toArr(f[k + 'Exclude']) : [];
+      });
+
+      // 2. Scalar inputs, selects and checkboxes.
+      for (const { key, id, type } of SCALAR_FILTERS) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        if (type === 'check') el.checked = f[key] === 'true';
+        else el.value = f[key] || '';
       }
-      // Employee buckets are stored as a comma list — restore the global Set
-      if (typeof _employeeSelected !== 'undefined' && f.numEmployeesRanges) {
-        _employeeSelected = new Set(toArr(f.numEmployeesRanges));
-        if (typeof renderEmployeeBuckets === 'function') renderEmployeeBuckets();
+
+      // 3. Checkbox groups (comma lists of per-box tokens).
+      for (const { key, boxes } of CHECK_GROUPS) {
+        const on = new Set(toArr(f[key]));
+        boxes.forEach(({ id, token }) => {
+          const el = document.getElementById(id);
+          if (el) el.checked = on.has(token);
+        });
       }
+
+      // 4. Gateway mode + ticked gateways. Save splits the ticked boxes into
+      //    gatewayExclude or gateway depending on the radio, so whichever key
+      //    is present tells us the mode to restore.
+      const gwOnly = toArr(f.gateway);
+      const gwExcl = toArr(f.gatewayExclude);
+      const gwMode = gwOnly.length > 0 ? 'only' : 'exclude';
+      const gwOn = new Set(gwOnly.length > 0 ? gwOnly : gwExcl);
+      const gwRadio = document.querySelector(`input[name="gwMode"][value="${gwMode}"]`);
+      if (gwRadio) gwRadio.checked = true;
+      document.querySelectorAll('.gwExcl').forEach(b => { b.checked = gwOn.has(b.value); });
+      if (typeof onGatewayModeChange === 'function') onGatewayModeChange();
+
+      // 5. Data sources. An empty/absent value means "all ticked" (that is how
+      //    getSelectedSources encodes the no-op case), so restore all rather
+      //    than none — unticking everything would return zero rows.
+      if (typeof setSourcesFromHash === 'function') {
+        const srcBoxes = [...document.querySelectorAll('.src-cb')];
+        if (f.source) setSourcesFromHash(f.source);
+        else srcBoxes.forEach(b => { b.checked = true; });
+      }
+
+      // 6. SIC code chips — saved as bare codes, so the label falls back to it.
+      _sicSelected = toArr(f.sicCodes).map(code => ({ code, label: code }));
+      renderSicChips();
+
+      // 7. Employee buckets and max-per-company.
+      if (typeof setEmployeeRangesFromString === 'function') {
+        setEmployeeRangesFromString(f.numEmployeesRanges || '');
+      }
+      // No DOM control for this one — it is read straight off the global.
+      window._maxPerCompany = f.maxPerCompany || '';
+
       Object.keys(filterDefs).forEach(renderFilterTags);
+      if (typeof updateFilterSectionStates === 'function') updateFilterSectionStates();
 
       const saved = row.saved_at ? new Date(row.saved_at).toLocaleDateString() : '';
       infoEl.innerHTML = `Loaded filter saved ${saved} · <a href="#" onclick="event.preventDefault();deleteRecalledFilter('${wsId}','${campId}')" style="color:#7c3aed;">remove</a>`;
