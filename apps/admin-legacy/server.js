@@ -11172,11 +11172,27 @@ async function reconcileBisonReplies() {
 
   try {
     // Bulk-fetch existing reply ids in window — dedup by PV email id, no per-row queries.
+    //
+    // Keyed by WORKSPACE, not global. The page walk below stops at the first
+    // already-stored reply on the assumption that "newest-first guarantees the
+    // rest are too" — which only holds if the set contains this workspace's own
+    // replies. The same PV reply id legitimately appears under several
+    // workspaces (one prospect emailed by more than one client; 6 such ids in a
+    // recent 7-day window), so a GLOBAL set made workspace A's poll stop dead on
+    // an id stored for workspace B and silently abandon the rest of the page.
+    // That is how a genuine "Interested" reply to Hayes & Co went missing while
+    // auto-replies either side of it came through.
     const existing = await pgdb.query(
-      `SELECT bison_reply_id FROM unibox_replies WHERE received_at >= $1`,
+      `SELECT workspace_id, bison_reply_id FROM unibox_replies WHERE received_at >= $1`,
       [since]
     );
-    const seen = new Set(existing.rows.map(r => String(r.bison_reply_id)));
+    const seenByWs = new Map();
+    for (const r of existing.rows) {
+      const k = String(r.workspace_id || '');
+      let s = seenByWs.get(k);
+      if (!s) { s = new Set(); seenByWs.set(k, s); }
+      s.add(String(r.bison_reply_id));
+    }
 
     for (const ws of PV_WORKSPACES) {
       const workspaceId = ws.pv;
@@ -11184,6 +11200,8 @@ async function reconcileBisonReplies() {
         // Pull this workspace's PV warm-up filter tags (cached 1h) so PV warm-up
         // replies are dropped at ingest.
         const pvWarmRe = await pvWarmupTagRegex(workspaceId);
+        // This workspace's own stored reply ids (see seenByWs above).
+        const seen = seenByWs.get(String(workspaceId)) || new Set();
         let pageTrail = null;
         let caughtUp = false;
         // newest-first; cap pages as a backstop. In steady state we break on the
