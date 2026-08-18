@@ -368,7 +368,12 @@ module.exports = function solarAPI() {
       try {
         const bi = await buildingInsights(Number(lat), Number(lng));
         const panels = bi && bi.raw && bi.raw.solarPotential && bi.raw.solarPotential.solarPanels;
+        // Say WHY the overlay is missing rather than returning a silent null:
+        // no panel geometry from Google, or no bounding box to project into.
+        if (!panels || !panels.length) out.panelsError = 'Google returned no panel geometry for this building';
+        else if (!img.bounds) out.panelsError = 'dataLayers returned no bounding box to project panels into';
         const svg = panelOverlaySvg(panels, img.bounds);
+        if (!svg && panels && panels.length && img.bounds) out.panelsError = 'panel projection produced no rectangles';
         if (svg && img.layers.rgb) {
           const sharp = require('sharp');
           const base = Buffer.from(img.layers.rgb.split(',')[1], 'base64');

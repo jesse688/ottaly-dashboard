@@ -131,12 +131,28 @@ async function roofImagery(lat, lng, opts = {}) {
     try {
       const grey = await sharp(fluxTiff).normalise().resize(SIZE, SIZE, { fit: 'cover' }).toColourspace('b-w').raw().toBuffer();
       const rgbBuf = Buffer.alloc(grey.length * 3);
+      // Piecewise ramp through dark purple → magenta → orange → yellow, the
+      // "inferno" progression Google's own viewer uses. An earlier version
+      // drove red to full while green and blue collapsed, so any roof with a
+      // decent spread rendered as a flat red square with no readable detail.
+      const STOPS = [
+        [0.00, [ 12,   8,  38]],  // near-black indigo
+        [0.25, [ 87,  16, 110]],  // purple
+        [0.50, [187,  55,  84]],  // magenta-red
+        [0.75, [237, 121,  33]],  // orange
+        [1.00, [252, 254, 164]],  // pale yellow
+      ];
       for (let i = 0; i < grey.length; i++) {
         const v = grey[i] / 255;
-        // purple (low) → orange → yellow (high)
-        rgbBuf[i * 3]     = Math.round(255 * Math.min(1, 0.3 + v * 1.4));
-        rgbBuf[i * 3 + 1] = Math.round(255 * Math.max(0, v * 1.25 - 0.15));
-        rgbBuf[i * 3 + 2] = Math.round(255 * Math.max(0, 0.55 - v * 0.75));
+        let a = STOPS[0], b = STOPS[STOPS.length - 1];
+        for (let s = 0; s < STOPS.length - 1; s++) {
+          if (v >= STOPS[s][0] && v <= STOPS[s + 1][0]) { a = STOPS[s]; b = STOPS[s + 1]; break; }
+        }
+        const span = b[0] - a[0];
+        const t = span > 0 ? (v - a[0]) / span : 0;
+        rgbBuf[i * 3]     = Math.round(a[1][0] + (b[1][0] - a[1][0]) * t);
+        rgbBuf[i * 3 + 1] = Math.round(a[1][1] + (b[1][1] - a[1][1]) * t);
+        rgbBuf[i * 3 + 2] = Math.round(a[1][2] + (b[1][2] - a[1][2]) * t);
       }
       const fluxPng = await sharp(rgbBuf, { raw: { width: SIZE, height: SIZE, channels: 3 } }).png().toBuffer();
       out.layers.flux = `data:image/png;base64,${fluxPng.toString('base64')}`;
@@ -144,8 +160,11 @@ async function roofImagery(lat, lng, opts = {}) {
       // Flux blended over the photo — the view that actually reads as "this
       // roof, and where the sun lands on it".
       if (rgbPng) {
+        // 'over' at partial opacity, not 'overlay': the overlay blend mode
+        // multiplies against the photo's own luminance, which pushed a bright
+        // roof to saturated red and lost all detail underneath.
         const blended = await sharp(rgbPng)
-          .composite([{ input: fluxPng, blend: 'overlay', opacity: 0.65 }])
+          .composite([{ input: fluxPng, blend: 'over', opacity: 0.55 }])
           .png().toBuffer();
         out.layers.flux_over_rgb = `data:image/png;base64,${blended.toString('base64')}`;
       }
