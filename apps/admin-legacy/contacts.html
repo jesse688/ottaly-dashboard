@@ -2969,6 +2969,7 @@
         notSentToPV: document.getElementById('filterNotSentToPV')?.checked ? 'true' : '',
         vertical: window._activeVertical || '',
         excludeFact: getExcludeFactValue(),
+        hasFact: getHasFactValue(),
         cooldownWorkspace: get('clientFilter'),
         numEmployeesRanges: getEmployeeRangesValue(),
         maxPerCompany: window._maxPerCompany || '',
@@ -3026,20 +3027,64 @@
           seen.add(spec);
           items.push({ spec, text: label(o), companies: o.companies });
         }
+        // Three states, not a checkbox: a fact can be something you want to
+        // hide (exclude) OR something you want to look at on its own (only).
+        // "Person has left" is the case that forced this — those addresses are
+        // dead for every client, but you still need to pull them up to find
+        // who replaced them, so a one-way "exclude" is not enough.
         wrap.innerHTML = items.map(it => `
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-            <input type="checkbox" class="factExcl" value="${esc(it.spec)}" onchange="search()">
-            <span>${esc(it.text)}</span>
+          <div class="factRow" data-spec="${esc(it.spec)}" data-state="off"
+               style="display:flex;align-items:center;gap:6px;">
+            <button type="button" class="factToggle" onclick="cycleFact(this)"
+                    title="Click to exclude, again to show only these"
+                    style="width:18px;height:18px;flex:0 0 18px;border:1px solid #d1d5db;border-radius:3px;background:#fff;cursor:pointer;font-size:11px;font-weight:700;line-height:1;padding:0;color:#6b7280;"></button>
+            <span style="cursor:pointer;" onclick="cycleFact(this.previousElementSibling)">${esc(it.text)}</span>
             <span style="color:#9ca3af;font-size:11px;margin-left:auto;">${it.companies}</span>
-          </label>`).join('');
+          </div>`).join('');
       } catch (err) {
         wrap.innerHTML = '<span style="color:#9ca3af;">Could not load</span>';
       }
     }
 
-    function getExcludeFactValue() {
-      return [...document.querySelectorAll('.factExcl:checked')].map(el => el.value).join(',');
+    // off → exclude (hide them) → only (show just them) → off
+    function cycleFact(btn) {
+      const row = btn.closest('.factRow');
+      const next = { off: 'exclude', exclude: 'only', only: 'off' }[row.dataset.state || 'off'];
+      setFactState(row, next);
+      search();
     }
+
+    function setFactState(row, state) {
+      row.dataset.state = state;
+      const btn = row.querySelector('.factToggle');
+      if (!btn) return;
+      if (state === 'exclude') {
+        btn.textContent = '✕'; btn.style.background = '#fef2f2';
+        btn.style.borderColor = '#ef4444'; btn.style.color = '#ef4444';
+        btn.title = 'Excluded — click to show ONLY these';
+      } else if (state === 'only') {
+        btn.textContent = '●'; btn.style.background = '#f5f3ff';
+        btn.style.borderColor = '#7c3aed'; btn.style.color = '#7c3aed';
+        btn.title = 'Showing only these — click to clear';
+      } else {
+        btn.textContent = ''; btn.style.background = '#fff';
+        btn.style.borderColor = '#d1d5db'; btn.style.color = '#6b7280';
+        btn.title = 'Click to exclude, again to show only these';
+      }
+    }
+
+    function getExcludeFactValue() {
+      return [...document.querySelectorAll('.factRow')]
+        .filter(r => r.dataset.state === 'exclude').map(r => r.dataset.spec).join(',');
+    }
+
+    // Only one "only" is meaningful at a time — several would AND together and
+    // return nothing, since a contact rarely carries two of these facts.
+    function getHasFactValue() {
+      const row = [...document.querySelectorAll('.factRow')].find(r => r.dataset.state === 'only');
+      return row ? row.dataset.spec : '';
+    }
+
 
     loadFactFilters();
 
@@ -3138,7 +3183,7 @@
         case 'company':
           { const el = document.getElementById('company'); if (el) el.value = ''; } break;
         case 'replyFacts':
-          document.querySelectorAll('.factExcl').forEach(b => { b.checked = false; }); break;
+          document.querySelectorAll('.factRow').forEach(r => setFactState(r, 'off')); break;
         case 'industry':
           clearMulti(['industry']); break;
         case 'person-location':
@@ -6269,10 +6314,14 @@
       //     from the data, so they may not exist yet when a filter is recalled
       //     on page load — apply once they arrive rather than dropping them.
       const applyFactBoxes = () => {
-        const want = new Set(toArr(f.excludeFact));
-        const boxes = document.querySelectorAll('.factExcl');
-        if (!boxes.length && want.size) return false;
-        boxes.forEach(b => { b.checked = want.has(b.value); });
+        const excl = new Set(toArr(f.excludeFact));
+        const only = String(f.hasFact || '');
+        const rows = document.querySelectorAll('.factRow');
+        if (!rows.length && (excl.size || only)) return false;
+        rows.forEach(r => {
+          const spec = r.dataset.spec;
+          setFactState(r, excl.has(spec) ? 'exclude' : (only && only === spec ? 'only' : 'off'));
+        });
         return true;
       };
       if (!applyFactBoxes()) {
