@@ -496,6 +496,47 @@ class PostgresDatabase {
       // by us', which the filter lets through anyway).
       `CREATE INDEX IF NOT EXISTS idx_contacts_last_emailed_at ON contacts (workspace_id, last_emailed_at) WHERE last_emailed_at IS NOT NULL`,
 
+      // ── Reply facts ───────────────────────────────────────────────
+      // Facts leads stated about themselves in their replies ("we are in a
+      // serviced office", "we already have a coffee machine", "I have left the
+      // company"), extracted by scripts/extract-reply-facts.js and surfaced by
+      // the "What leads told us" filter on the contacts page.
+      //
+      // A table rather than columns on contacts, for two reasons: the attribute
+      // set keeps growing, and contacts holds up to 16 duplicate rows per email
+      // address — a fact written to contacts.id would land on one duplicate and
+      // every filter would miss it. Facts key on email + domain instead, so one
+      // reply covers every colleague at that business.
+      //
+      // `quote` is the lead's own sentence and is never optional: a fact you
+      // cannot check is a fact you should not filter on.
+      `CREATE TABLE IF NOT EXISTS reply_facts (
+        id              BIGSERIAL PRIMARY KEY,
+        lead_email      TEXT NOT NULL,
+        company_domain  TEXT NOT NULL,
+        attribute       TEXT NOT NULL,
+        value           TEXT NOT NULL,
+        vertical        TEXT,
+        confidence      NUMERIC(3,2) NOT NULL DEFAULT 1.0,
+        quote           TEXT NOT NULL,
+        source_reply_id UUID NOT NULL REFERENCES unibox_replies(id) ON DELETE CASCADE,
+        observed_at     TIMESTAMPTZ NOT NULL,
+        extractor       TEXT NOT NULL,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`,
+      // NULLS NOT DISTINCT is essential: most facts have a NULL vertical, and a
+      // plain UNIQUE treats every NULL as distinct, so re-running an extractor
+      // would duplicate them instead of updating in place.
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'reply_facts_unique') THEN
+           ALTER TABLE reply_facts ADD CONSTRAINT reply_facts_unique
+             UNIQUE NULLS NOT DISTINCT (source_reply_id, attribute, vertical);
+         END IF;
+       END $$`,
+      `CREATE INDEX IF NOT EXISTS idx_reply_facts_domain ON reply_facts (company_domain, attribute)`,
+      `CREATE INDEX IF NOT EXISTS idx_reply_facts_email  ON reply_facts (lower(lead_email), attribute)`,
+      `CREATE INDEX IF NOT EXISTS idx_reply_facts_attr   ON reply_facts (attribute, vertical, observed_at DESC)`,
+
       // ── Client Health analytics ────────────────────────────────────
       // Denormalized event log written from the PlusVibe webhook so we can
       // slice reply/bounce/lead activity by template, campaign-step, and
