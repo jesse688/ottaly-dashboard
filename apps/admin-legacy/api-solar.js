@@ -125,7 +125,7 @@ module.exports = function solarAPI() {
               AND solar_max_kwp IS NULL          -- not yet roof-checked
               AND COALESCE(do_not_contact,false) = false
               AND ch_postcode IS NOT NULL AND ch_postcode <> ''
-         )
+         ),
          ranked AS (
            SELECT o.*, f.floor_area AS epc_floor_area, f.pv_recommended,
                   -- One row per company: several contacts often share a domain
