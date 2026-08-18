@@ -48,7 +48,15 @@ module.exports = function solarAPI() {
     jobStop=false;
     try{
       const force=!!options.force;
-      const CONC=Math.min(Number(options.concurrency)||6,10);
+      // Each contact costs up to three sequential network calls (geocode,
+      // buildingInsights, sometimes Companies House), so throughput is
+      // network-bound and the old default of 6 gave ~10 contacts/min — over an
+      // hour for a 500 batch. Google Solar's own quota is per-minute and far
+      // above this; the limit was ours, not theirs. SOLAR_CONCURRENCY allows
+      // backing off without a redeploy if Google starts returning 429s.
+      const CONC=Math.max(1,Math.min(
+        Number(options.concurrency) || Number(process.env.SOLAR_CONCURRENCY) || 24,
+        48));
       const BATCH=200;
       for(let bi=0; bi<ids.length && !jobStop; bi+=BATCH){
         const slice=ids.slice(bi,bi+BATCH);
