@@ -390,6 +390,24 @@ module.exports = function solarAPI() {
           segmentAzimuths,
         });
         if (!svg && panels && panels.length && bounds) out.panelsError = 'panel projection produced no rectangles';
+
+        // Which box the overlay used, and how big each is. The panels have to
+        // be projected into the box that matches the IMAGE, not the building —
+        // getting that wrong scatters them across the whole tile.
+        if (req.body.debug) {
+          const span = b => b && b.sw && b.ne ? {
+            lat_deg: +(b.ne.latitude - b.sw.latitude).toFixed(6),
+            lng_deg: +(b.ne.longitude - b.sw.longitude).toFixed(6),
+            approx_m: Math.round((b.ne.latitude - b.sw.latitude) * 111320),
+          } : null;
+          out.debug = {
+            dataLayers_box: span(img.bounds),
+            buildingInsights_box: span(bi && bi.raw && bi.raw.boundingBox),
+            used: img.bounds ? 'dataLayers' : 'buildingInsights',
+            panel_dims: { w: sp.panelWidthMeters, h: sp.panelHeightMeters },
+            segments: (sp.roofSegmentStats || []).length,
+          };
+        }
         if (svg && img.layers.rgb) {
           const sharp = require('sharp');
           const base = Buffer.from(img.layers.rgb.split(',')[1], 'base64');

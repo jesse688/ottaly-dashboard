@@ -118,7 +118,10 @@ async function roofImagery(lat, lng, opts = {}) {
   const rgbTiff = await fetchTiff(data.rgbUrl);
   let rgbPng = null;
   if (rgbTiff) {
-    rgbPng = await sharp(rgbTiff).png().resize(SIZE, SIZE, { fit: 'cover' }).toBuffer();
+    // 'fill', not 'cover': cover CROPS a non-square raster to fit, which moves
+    // the image away from its bounding box corners and makes every projected
+    // panel coordinate wrong. Stretching keeps pixel (0,0) at the box corner.
+    rgbPng = await sharp(rgbTiff).png().resize(SIZE, SIZE, { fit: 'fill' }).toBuffer();
     out.layers.rgb = `data:image/png;base64,${rgbPng.toString('base64')}`;
   }
 
@@ -129,7 +132,9 @@ async function roofImagery(lat, lng, opts = {}) {
   const fluxTiff = await fetchTiff(data.annualFluxUrl);
   if (fluxTiff) {
     try {
-      const grey = await sharp(fluxTiff).normalise().resize(SIZE, SIZE, { fit: 'cover' }).toColourspace('b-w').raw().toBuffer();
+      // Must match the RGB resize exactly, or the heatmap sits offset from the
+      // photo it is blended over.
+      const grey = await sharp(fluxTiff).normalise().resize(SIZE, SIZE, { fit: 'fill' }).toColourspace('b-w').raw().toBuffer();
       const rgbBuf = Buffer.alloc(grey.length * 3);
       // Piecewise ramp through dark purple → magenta → orange → yellow, the
       // "inferno" progression Google's own viewer uses. An earlier version
