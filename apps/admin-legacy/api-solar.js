@@ -429,6 +429,66 @@ module.exports = function solarAPI() {
     }
   });
 
+  // POST /api/solar/panels { lat, lng }
+  //   -> { center, panels:[{lat,lng,w,h,rot,energy}], configs:[...], key }
+  //
+  // Panel geometry for rendering on a live Google map, the way Google's own
+  // Solar demo does it (google.maps.Polygon over satellite imagery). This is
+  // what makes the view client-ready: real map tiles at full resolution, panels
+  // as crisp vectors, pan and zoom — instead of a server-composited PNG of a
+  // decoded GeoTIFF, which is always going to look like a screenshot.
+  router.get('/maps-key', (req, res) => {
+    // Browser-side Maps JS key. Separate from the server Solar key so it can be
+    // referrer-restricted; falls back to the Solar key if only one is set.
+    const key = process.env.GOOGLE_MAPS_BROWSER_KEY || usage.getGoogleKey() || '';
+    res.json({ key, restricted: !!process.env.GOOGLE_MAPS_BROWSER_KEY });
+  });
+
+  router.post('/panels', async (req, res) => {
+    const { lat, lng } = req.body || {};
+    if (lat == null || lng == null) return res.status(400).json({ error: 'lat/lng required' });
+    try {
+      const bi = await buildingInsights(Number(lat), Number(lng));
+      if (bi.notFound) return res.json({ error: 'no_building' });
+      const sp = (bi.raw && bi.raw.solarPotential) || {};
+      const segs = sp.roofSegmentStats || [];
+
+      // Panels come back best-first, so a "show N panels" slider is just a
+      // prefix of this list — same as Google's demo.
+      const panels = (sp.solarPanels || []).map(p => ({
+        lat: p.center && p.center.latitude,
+        lng: p.center && p.center.longitude,
+        rot: (p.orientation === 'PORTRAIT' ? 90 : 0)
+             + (segs[p.segmentIndex] ? Number(segs[p.segmentIndex].azimuthDegrees) || 0 : 0),
+        energy: p.yearlyEnergyDcKwh ?? null,
+        segment: p.segmentIndex ?? null,
+      })).filter(p => p.lat != null && p.lng != null);
+
+      res.json({
+        center: { lat: Number(lat), lng: Number(lng) },
+        panelWidthM: sp.panelWidthMeters ?? 1.045,
+        panelHeightM: sp.panelHeightMeters ?? 1.879,
+        panelWatts: sp.panelCapacityWatts ?? null,
+        panels,
+        // Pre-computed yield at different array sizes — powers the slider's
+        // energy figure without another API call.
+        configs: (sp.solarPanelConfigs || []).map(c => ({
+          panels: c.panelsCount,
+          yearlyKwh: c.yearlyEnergyDcKwh,
+        })),
+        segments: segs.map(s => ({
+          pitch: s.pitchDegrees, azimuth: s.azimuthDegrees,
+          areaM2: s.stats && s.stats.areaMeters2 != null ? Math.round(s.stats.areaMeters2) : null,
+        })),
+        roofAreaM2: bi.roofAreaM2,
+        hasSolar: bi.hasSolar,
+        imageryDate: bi.imageryDate,
+      });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   router.post('/image', async (req, res) => {
     const { lat, lng } = req.body || {};
     if (lat == null || lng == null) return res.status(400).json({ error: 'lat/lng required' });

@@ -732,8 +732,10 @@ function renderRoofLookup(d, minKwp){
       ${d.coords.lat.toFixed(5)}, ${d.coords.lng.toFixed(5)} ·
       <a href="https://www.google.com/maps/@${d.coords.lat},${d.coords.lng},20z" target="_blank"
          style="color:var(--accent)">open in Maps</a> ·
+      <a href="#" onclick="event.preventDefault();showPanelMap(${d.coords.lat},${d.coords.lng})"
+         style="color:var(--accent)">show panel layout</a> ·
       <a href="#" onclick="event.preventDefault();loadRoofImagery(${d.coords.lat},${d.coords.lng})"
-         style="color:var(--accent)">show roof imagery</a>
+         style="color:var(--accent)">sunlight heatmap</a>
       <span class="mut"> (extra Google call)</span>
     </div>
     <div id="roofImagery" style="margin-top:10px"></div>
@@ -741,9 +743,126 @@ function renderRoofLookup(d, minKwp){
     ${contactsHtml}`;
 }
 
-// Every visual Google offers for a roof: the aerial photo, the annual-sunlight
-// heatmap, that heatmap over the photo, and the panel layout drawn on it.
-// Loaded on request — it is a second billed call plus image processing.
+// ── Live panel map ─────────────────────────────────────────────────────────
+// Renders panels as polygons over real Google satellite tiles, the way Google's
+// own Solar demo does. A server-composited PNG of a decoded GeoTIFF always
+// looks like a screenshot; this is sharp at any zoom and can be panned, which
+// is what makes it usable in front of a client.
+let _mapsSdk = null;
+function loadMapsSdk() {
+  if (_mapsSdk) return _mapsSdk;
+  _mapsSdk = (async () => {
+    const { key } = await fetch('/api/solar/maps-key').then(r => r.json());
+    if (!key) throw new Error('No Google Maps browser key configured');
+    await new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = `https://maps.googleapis.com/maps/api/js?key=${key}&libraries=geometry`;
+      s.async = true; s.onload = resolve; s.onerror = () => reject(new Error('Maps SDK failed to load'));
+      document.head.appendChild(s);
+    });
+  })();
+  return _mapsSdk;
+}
+
+let _panelMap = null, _panelPolys = [], _panelData = null;
+
+async function showPanelMap(lat, lng){
+  const box = document.getElementById('roofImagery');
+  box.innerHTML = '<span class="mut" style="font-size:12px">Loading map…</span>';
+  try {
+    const [d] = await Promise.all([
+      fetch('/api/solar/panels', { method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ lat, lng }) }).then(r=>r.json()),
+      loadMapsSdk(),
+    ]);
+    if (d.error) { box.innerHTML = `<div style="color:#f59e0b;font-size:12px">${esc(d.error)}</div>`; return; }
+    _panelData = d;
+
+    box.innerHTML = `
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start">
+        <div id="panelMap" style="width:min(640px,100%);height:420px;border-radius:10px;border:1px solid var(--line)"></div>
+        <div style="min-width:220px;display:flex;flex-direction:column;gap:10px">
+          <div>
+            <div class="mut" style="font-size:11px">Panels shown</div>
+            <div style="font-size:22px;font-weight:700"><span id="pmCount">${d.panels.length}</span>
+              <span class="mut" style="font-size:13px;font-weight:400">/ ${d.panels.length}</span></div>
+          </div>
+          <div>
+            <div class="mut" style="font-size:11px">Estimated output</div>
+            <div style="font-size:22px;font-weight:700;color:#22c55e"><span id="pmKwh">—</span>
+              <span class="mut" style="font-size:13px;font-weight:400">kWh/yr</span></div>
+          </div>
+          <div>
+            <div class="mut" style="font-size:11px">System size</div>
+            <div style="font-size:18px;font-weight:700"><span id="pmKwp">—</span> kWp</div>
+          </div>
+          <input id="pmSlider" type="range" min="1" max="${d.panels.length}" value="${d.panels.length}"
+                 style="width:100%;accent-color:var(--accent)">
+          <div class="mut" style="font-size:11px">Drag to size the array. Panels are ordered
+            best-yield first, so the strongest part of the roof fills up first.</div>
+          ${d.imageryDate ? `<div class="mut" style="font-size:11px">Imagery ${esc(d.imageryDate)}</div>` : ''}
+        </div>
+      </div>`;
+
+    _panelMap = new google.maps.Map(document.getElementById('panelMap'), {
+      center: { lat, lng }, zoom: 20, mapTypeId: 'satellite', tilt: 0,
+      disableDefaultUI: false, streetViewControl: false, mapTypeControl: false,
+    });
+
+    // Colour by yield, best → worst, so the strong part of the roof reads at a glance.
+    const energies = d.panels.map(p=>p.energy).filter(e=>typeof e==='number');
+    const maxE = Math.max(...energies), minE = Math.min(...energies);
+    const colour = e => {
+      if (typeof e !== 'number' || maxE === minE) return '#1e40af';
+      const t = (e - minE) / (maxE - minE);
+      return `rgb(${Math.round(30+t*225)},${Math.round(58+t*190)},${Math.round(138-t*100)})`;
+    };
+
+    const [hw, hh] = [d.panelWidthM/2, d.panelHeightM/2];
+    _panelPolys = d.panels.map(p => {
+      // Corners offset from the centre, then rotated to the panel's bearing —
+      // computeOffset takes a distance and a compass bearing, so each corner is
+      // its diagonal distance at its own angle plus the panel rotation.
+      const pts = [[+hw,+hh],[+hw,-hh],[-hw,-hh],[-hw,+hh]].map(([x,y]) =>
+        google.maps.geometry.spherical.computeOffset(
+          new google.maps.LatLng(p.lat, p.lng),
+          Math.sqrt(x*x + y*y),
+          Math.atan2(y, x) * 180 / Math.PI + p.rot));
+      return new google.maps.Polygon({
+        paths: pts, map: _panelMap,
+        strokeColor:'#B0BEC5', strokeOpacity:0.9, strokeWeight:1,
+        fillColor: colour(p.energy), fillOpacity:0.9,
+      });
+    });
+
+    const slider = document.getElementById('pmSlider');
+    slider.addEventListener('input', () => setPanelCount(+slider.value));
+    setPanelCount(d.panels.length);
+  } catch (e) {
+    box.innerHTML = `<div style="color:#ef4444;font-size:12px">${esc(e.message)}</div>`;
+  }
+}
+
+function setPanelCount(n){
+  _panelPolys.forEach((poly,i) => poly.setMap(i < n ? _panelMap : null));
+  document.getElementById('pmCount').textContent = n;
+  const d = _panelData;
+  // Use Google's own pre-computed configs where one matches; otherwise scale.
+  let kwh = null;
+  if (d.configs && d.configs.length) {
+    const fit = d.configs.filter(c => c.panels <= n).pop() || d.configs[0];
+    kwh = fit ? fit.yearlyKwh : null;
+  }
+  if (kwh == null && d.panels.length) {
+    kwh = d.panels.slice(0, n).reduce((s,p) => s + (p.energy || 0), 0);
+  }
+  document.getElementById('pmKwh').textContent = kwh != null ? Math.round(kwh).toLocaleString() : '—';
+  const watts = Number(document.getElementById('panelW')?.value) || d.panelWatts || 500;
+  document.getElementById('pmKwp').textContent = Math.round(n * watts / 1000);
+}
+
+// Flat-image fallback: the aerial photo, the sunlight heatmap and a composited
+// panel layout. Kept for when no browser Maps key is configured.
 async function loadRoofImagery(lat, lng){
   const box = document.getElementById('roofImagery');
   if (!box) return;

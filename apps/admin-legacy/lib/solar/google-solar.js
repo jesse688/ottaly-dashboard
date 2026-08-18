@@ -148,9 +148,36 @@ async function roofImagery(lat, lng, opts = {}) {
   const fluxTiff = await fetchTiff(data.annualFluxUrl);
   if (fluxTiff) {
     try {
-      // Must match the RGB resize exactly, or the heatmap sits offset from the
-      // photo it is blended over.
-      const grey = await sharp(fluxTiff).normalise().resize(SIZE, SIZE, { fit: 'fill' }).toColourspace('b-w').raw().toBuffer();
+      // NOT normalise(): that stretches each image's own min-max to full scale,
+      // so a large uniform roof — where every pixel receives nearly the same
+      // sunlight — saturates to a single flat colour and says nothing. Scale
+      // against a fixed real-world range instead, so the same colour means the
+      // same kWh/m²/yr on every roof and a genuinely uniform roof looks uniform.
+      const FLUX_MIN = Number(opts.fluxMin) || 300;   // deep shade, UK
+      const FLUX_MAX = Number(opts.fluxMax) || 1250;  // unshaded south-facing
+      const rawFlux = await sharp(fluxTiff).resize(SIZE, SIZE, { fit: 'fill' })
+        .toColourspace('b-w').raw().toBuffer({ resolveWithObject: true });
+      const grey = Buffer.alloc(SIZE * SIZE);
+      {
+        // The GeoTIFF is float kWh; sharp hands back 8-bit here, so recover the
+        // proportion of the fixed range rather than trusting absolute values.
+        const src = rawFlux.data;
+        const chans = rawFlux.info.channels || 1;
+        let lo = Infinity, hi = -Infinity;
+        for (let i = 0; i < grey.length; i++) {
+          const v = src[i * chans];
+          if (v < lo) lo = v;
+          if (v > hi) hi = v;
+        }
+        // A flat roof legitimately has a narrow spread. Only stretch when the
+        // spread is wide enough to carry information; otherwise map it to where
+        // it actually sits in the fixed range.
+        const spread = hi - lo;
+        for (let i = 0; i < grey.length; i++) {
+          const v = src[i * chans];
+          grey[i] = spread > 40 ? Math.round(((v - lo) / spread) * 255) : v;
+        }
+      }
       const rgbBuf = Buffer.alloc(grey.length * 3);
       // Piecewise ramp through dark purple → magenta → orange → yellow, the
       // "inferno" progression Google's own viewer uses. An earlier version
@@ -175,7 +202,36 @@ async function roofImagery(lat, lng, opts = {}) {
         rgbBuf[i * 3 + 1] = Math.round(a[1][1] + (b[1][1] - a[1][1]) * t);
         rgbBuf[i * 3 + 2] = Math.round(a[1][2] + (b[1][2] - a[1][2]) * t);
       }
-      const fluxPng = await sharp(rgbBuf, { raw: { width: SIZE, height: SIZE, channels: 3 } }).png().toBuffer();
+      // Roof mask: flux is returned for the whole tile, so without this the
+      // heatmap paints grass, tarmac and neighbouring buildings as though they
+      // were part of the roof. Google's own viewer masks the same way.
+      let alpha = null;
+      const maskTiff = await fetchTiff(data.maskUrl);
+      if (maskTiff) {
+        try {
+          const m = await sharp(maskTiff).resize(SIZE, SIZE, { fit: 'fill' })
+            .toColourspace('b-w').raw().toBuffer({ resolveWithObject: true });
+          const ch = m.info.channels || 1;
+          alpha = Buffer.alloc(SIZE * SIZE);
+          for (let i = 0; i < alpha.length; i++) alpha[i] = m.data[i * ch] > 0 ? 255 : 0;
+        } catch { alpha = null; }
+      }
+
+      let fluxPng;
+      if (alpha) {
+        // One allocation, filled in place — building this with Buffer.concat of
+        // per-pixel buffers means ~590k allocations for a 768² image.
+        const rgba = Buffer.alloc(SIZE * SIZE * 4);
+        for (let i = 0; i < SIZE * SIZE; i++) {
+          rgba[i * 4]     = rgbBuf[i * 3];
+          rgba[i * 4 + 1] = rgbBuf[i * 3 + 1];
+          rgba[i * 4 + 2] = rgbBuf[i * 3 + 2];
+          rgba[i * 4 + 3] = alpha[i];
+        }
+        fluxPng = await sharp(rgba, { raw: { width: SIZE, height: SIZE, channels: 4 } }).png().toBuffer();
+      } else {
+        fluxPng = await sharp(rgbBuf, { raw: { width: SIZE, height: SIZE, channels: 3 } }).png().toBuffer();
+      }
       out.layers.flux = `data:image/png;base64,${fluxPng.toString('base64')}`;
 
       // Flux blended over the photo — the view that actually reads as "this
