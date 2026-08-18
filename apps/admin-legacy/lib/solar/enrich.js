@@ -106,18 +106,35 @@ async function enrichContact(contact, opts = {}) {
       out.error = `ownership_lookup: ${e.message}`;
     }
 
+    // Only a FREEHOLD title counts as owning the building — the same rule
+    // company-service applies (see its src/ownership.js). A leaseholder cannot
+    // sign a 25-year rooftop PPA, so counting any title as ownership qualified
+    // tenants: Crossflight, Timbawood and Eurosonic all hold a title at exactly
+    // their site address, all leasehold. Without this the two systems disagree
+    // and ccod_owns_building says "no" on prospects this cascade called owners.
+    const freeholds = owners.filter(o => String(o.tenure || '').toLowerCase() === 'freehold');
+
     const lead = { name: contact.company_name || '', reg: contact.company_reg || '' };
-    let verdict = resolveOwnership(lead, owners.map((o) => ({ proprietor_name: o.name, company_reg_no: o.company_reg_no })));
+    let verdict = resolveOwnership(lead, freeholds.map((o) => ({ proprietor_name: o.name, company_reg_no: o.company_reg_no })));
     if (verdict.owns_building !== 'yes' && !lead.reg && lead.name && chEnabled()) {
       try {
         const hit = await resolveNameToReg(lead.name, contact.company_domain);
         if (hit && hit.reg) {
           out.lead_reg_resolved = hit.reg;
-          const v2 = resolveOwnership({ name: lead.name, reg: hit.reg }, owners.map((o) => ({ proprietor_name: o.name, company_reg_no: o.company_reg_no })));
+          // freeholds, not owners — resolving the company's registration number
+          // must not re-admit a leasehold title the first pass excluded.
+          const v2 = resolveOwnership({ name: lead.name, reg: hit.reg }, freeholds.map((o) => ({ proprietor_name: o.name, company_reg_no: o.company_reg_no })));
           if (v2.owns_building === 'yes') verdict = v2;
         }
       } catch (e) { /* CH optional */ }
     }
+    // Held a title here but leasehold only: an explicit tenant, not "unclear".
+    // Without this they fall through as unclear and the lenient gate
+    // (ownershipGate='yes_or_unclear') would let known leaseholders qualify.
+    if (verdict.owns_building !== 'yes' && !freeholds.length && owners.length) {
+      verdict = { owns_building: 'no', basis: 'leasehold_only', matched_owner: null };
+    }
+
     out.owns_building = verdict.owns_building;
     out.owns_basis = verdict.basis;
     if (verdict.matched_owner) out.building_owner = verdict.matched_owner;
