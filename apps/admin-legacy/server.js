@@ -16018,6 +16018,41 @@ app.post('/api/contacts/by-ids', requireSession, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── Departed contacts ─────────────────────────────────────
+// Addresses whose owner told us, in writing, that they have left the company
+// ("I have now left Lifeplan Products Ltd"). Blocked on every push path, for
+// every client and every vertical — unlike the other reply facts, this is not
+// a judgement call: there is no campaign where mailing a dead mailbox is
+// correct, and it is usually an auto-reply, so we would never see a bounce.
+//
+// Scoped to the EMAIL, never the domain: the company is still a good prospect,
+// and the reply often names the replacement, who must stay mailable.
+//
+// This is a suppression, not a data change: contacts.do_not_contact is a bare
+// boolean with no reason column, so writing to it would be indistinguishable
+// from a bounce-driven DNC and impossible to undo selectively. Reading the
+// facts at push time keeps it reversible — delete the fact and the address is
+// live again.
+let _departedCache = { at: 0, set: new Set() };
+async function getDepartedEmails(pgdb) {
+  if (!pgdb) return new Set();
+  // A push is a burst of calls; 60s keeps them consistent without re-querying
+  // 1k+ rows per path.
+  if (Date.now() - _departedCache.at < 60000) return _departedCache.set;
+  try {
+    const r = await pgdb.query(
+      `SELECT DISTINCT LOWER(lead_email) AS email FROM reply_facts WHERE attribute = 'person_left'`
+    );
+    _departedCache = { at: Date.now(), set: new Set(r.rows.map(x => x.email)) };
+  } catch (err) {
+    // Never fail a push because this lookup broke — but say so loudly, because
+    // an empty set silently disables the block.
+    console.error('[departed] lookup failed, NOT blocking departed contacts:', err.message);
+    return new Set();
+  }
+  return _departedCache.set;
+}
+
 // ── PlusVibe — push contacts to campaign ──────────────────
 app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
   const { workspace_id, campaign_id, contact_ids } = req.body;
@@ -16048,9 +16083,11 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
       ? req.body.allowed_statuses.map(s => String(s).toLowerCase()).filter(s => KNOWN_STATUSES.includes(s))
       : [];
     const PUSHABLE_STATUSES = new Set(reqStatuses.length ? reqStatuses : ['safe', 'safe_catchall']);
+    const departed = await getDepartedEmails(db);
     const contacts = allContacts.filter(c => {
       if (!PUSHABLE_STATUSES.has((c.email_status || '').toLowerCase())) { skipped.unsafe++; return false; }
       if (c.do_not_contact) { skipped.dnc++; return false; }
+      if (departed.has(String(c.email || '').toLowerCase())) { skipped.departed = (skipped.departed || 0) + 1; return false; }
       // Bison requires non-empty first_name AND last_name (422s otherwise), and a
       // nameless contact shouldn't be cold-emailed anyway — skip and report.
       if (!(c.first_name && c.first_name.trim()) || !(c.last_name && c.last_name.trim())) {
@@ -16406,7 +16443,10 @@ app.post('/api/admin/flag-free-domain-contacts', requireAdmin, async (req, res) 
 });
 
 // Shared contact→pushable filter (same rules as the PV path). Pure function.
-function filterPushableContacts(allContacts, { cooldownWorkspaceId, campaignName, allowedStatuses, pushWorkspaceId, workspaceName }) {
+// `departed` is passed in rather than looked up here so this stays synchronous:
+// an empty set means "no block", so the caller must fetch it via
+// getDepartedEmails().
+function filterPushableContacts(allContacts, { cooldownWorkspaceId, campaignName, allowedStatuses, pushWorkspaceId, workspaceName, departed = new Set() }) {
   const cooloffDate = sameClientCooloffDate();
   const campaignNameLc = (campaignName || '').toString().trim().toLowerCase();
   const skipped = { unsafe: 0, dnc: 0, freeDomain: 0, cooldownWorkspace: 0, verticalCollision: 0, burstGap: 0, densityCeiling: 0, alreadyInCampaign: 0, missingEnrichment: 0, missingName: 0 };
@@ -16423,6 +16463,7 @@ function filterPushableContacts(allContacts, { cooldownWorkspaceId, campaignName
     if (isFreeDomain(c.email)) { skipped.freeDomain++; return false; }
     if (!PUSHABLE_STATUSES.has((c.email_status || '').toLowerCase())) { skipped.unsafe++; return false; }
     if (c.do_not_contact) { skipped.dnc++; return false; }
+    if (departed.has(String(c.email || '').toLowerCase())) { skipped.departed = (skipped.departed || 0) + 1; return false; }
     // Bison requires non-empty first_name AND last_name (422s otherwise).
     if (!(c.first_name && c.first_name.trim()) || !(c.last_name && c.last_name.trim())) {
       skipped.missingName++; return false;
@@ -16532,6 +16573,7 @@ app.post('/api/bison/push-contacts', requireSession, async (req, res) => {
       cooldownWorkspaceId, campaignName: req.body.campaign_name,
       allowedStatuses: req.body.allowed_statuses,
       pushWorkspaceId: guardWorkspaceId, workspaceName: req.body.workspace_name || '',
+      departed: await getDepartedEmails(req.app.locals.pgDb),
     });
     console.log(`[pv-push] filtered ${allContacts.length} → ${contacts.length}`, skipped);
     if (contacts.length === 0) return res.json({ success: true, pushed: 0, total: 0, skipped });
@@ -18902,6 +18944,7 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
       const today        = new Date().toISOString().slice(0, 10);
       const cooloffDate  = sameClientCooloffDate();
       const targetCampLc = (job.campaign_name || '').trim().toLowerCase();
+      const departed     = await getDepartedEmails(db);
 
       const passesFilter = (c) => {
         // Deliverability gate. Engine-scraped leads use a LOOSER rule: push
@@ -18926,6 +18969,7 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
           if (!allowedSet.includes(verifyResults[c.id])) { skipped.unsafe++; return false; }
         }
         if (c.do_not_contact)               { skipped.dnc++; return false; }
+        if (departed.has(String(c.email || '').toLowerCase())) { skipped.departed = (skipped.departed || 0) + 1; return false; }
         // Name requirement is a STALE Bison rule (Bison 422'd on empty names).
         // We send via PlusVibe now, which accepts nameless leads — engine leads
         // are company inboxes (info@, admin@) with no person, so requiring a
@@ -19465,13 +19509,14 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
       const VERIFY_TIMEOUT_MS = parseInt(process.env.PUSH_VERIFY_TIMEOUT_MS || (job.loose ? '10000' : '65000'), 10);
       const VERIFY_THEN_PUSH = Math.max(20, parseInt(process.env.VERIFY_THEN_PUSH || '100', 10));
       let doneCount = 0;
-      const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, verticalCollision: 0, burstGap: 0, densityCeiling: 0, alreadyInCampaign: 0, snoozed: 0 };
+      const skipped = { unsafe: 0, dnc: 0, departed: 0, cooldownWorkspace: 0, verticalCollision: 0, burstGap: 0, densityCeiling: 0, alreadyInCampaign: 0, snoozed: 0 };
 
       const campaignVertical = detectVertical((job.campaign_name || '') + ' ' + (job.workspace_name || ''), job.workspace_id);
       const crossClientGuard = buildCrossClientGuard(job.workspace_id || '', job.workspace_name || '');
       const today       = new Date().toISOString().slice(0, 10);
       const cooloffDate = sameClientCooloffDate();
       const targetCampLc = (job.campaign_name || '').trim().toLowerCase();
+      const departed    = await getDepartedEmails(db);
 
       const passesFilter = (c) => {
         // Engine leads: looser gate (push anything not hard-'invalid'; block
@@ -19488,6 +19533,7 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
           if (!allowedSet.includes(verifyResults[c.id])) { skipped.unsafe++; return false; }
         }
         if (c.do_not_contact) { skipped.dnc++; return false; }
+        if (departed.has(String(c.email || '').toLowerCase())) { skipped.departed++; return false; }
         const pushed = Array.isArray(c.pushed_campaigns)
           ? c.pushed_campaigns
           : (typeof c.pushed_campaigns === 'string' ? JSON.parse(c.pushed_campaigns || '[]') : []);

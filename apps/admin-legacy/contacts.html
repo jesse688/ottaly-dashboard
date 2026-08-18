@@ -4940,11 +4940,12 @@
           // ── Skip breakdown (only shown after completion) ─────
           let skipBlock = '';
           const sk = j.skipped || {};
-          const totalSkipped = (sk.unsafe||0) + (sk.dnc||0) + (sk.cooldownWorkspace||0) + (sk.alreadyInCampaign||0) + (sk.snoozed||0) + (sk.missingEnrichment||0) + (sk.missingName||0) + (sk.wrongProvider||0);
+          const totalSkipped = (sk.unsafe||0) + (sk.dnc||0) + (sk.departed||0) + (sk.cooldownWorkspace||0) + (sk.alreadyInCampaign||0) + (sk.snoozed||0) + (sk.missingEnrichment||0) + (sk.missingName||0) + (sk.wrongProvider||0);
           if (j.status === 'completed' && totalSkipped > 0) {
             const skipParts = [];
             if (sk.unsafe)            skipParts.push(`${sk.unsafe} unsafe`);
             if (sk.dnc)               skipParts.push(`${sk.dnc} DNC`);
+            if (sk.departed)          skipParts.push(`${sk.departed} left the company`);
             if (sk.cooldownWorkspace) skipParts.push(`${sk.cooldownWorkspace} in 90-day cooldown`);
             if (sk.alreadyInCampaign) skipParts.push(`${sk.alreadyInCampaign} already in campaign`);
             if (sk.snoozed)           skipParts.push(`${sk.snoozed} vertical snoozed`);
