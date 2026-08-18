@@ -109,6 +109,14 @@ const RULES = [
     re: /\b(?:we(?:'re| are)?|company is)\s+(?:a\s+)?(?:fully\s+|predominantly\s+|primarily\s+)?remote(?:[- ]first| business| company| working)?\b|\bwe\s+(?:have\s+no|don't have an?)\s+office\b|\ball\s+(?:our\s+)?staff\s+work\s+from\s+home\b/i },
   { attribute: 'ceased_trading', value: 'true',
     re: /\b(?:no longer trading|ceased trading|winding down the company|in (?:the process of )?liquidation|going through a liquidation|gone into administration)\b/i },
+  // Departure notices are near-boilerplate, so rules catch most of the 2,250
+  // without spending a throttled API call each. First person only ("I have
+  // left", "I no longer work") — a third party ("Josh Savage no longer works
+  // for OCU") is left to the LLM, which can work out WHOSE address to retire.
+  // The negative lookahead excludes "I have now left the office for the day",
+  // which is an ordinary out-of-office, not someone leaving the company.
+  { attribute: 'person_left', value: 'true',
+    re: /\bI\s+(?:have\s+(?:now\s+)?left|am\s+leaving|no\s+longer\s+work(?:ing)?)\b(?!\s+the\s+office\s+for\s+the\s+day)(?:\s+(?:at|for|from|the))?\b(?![^.!?\n]{0,20}\b(?:office for the day|today|this week|on holiday|on annual leave)\b)/i },
   { attribute: 'has_supplier', value: 'true', vertical: 'coffee',
     re: /\b(?:we|already)\b[^.!?\n]{0,30}\b(?:have|got|use)\b[^.!?\n]{0,30}\b(?:coffee machines?|bean[- ]to[- ]cup|nespresso|coffee (?:supplier|provider))\b/i },
   { attribute: 'has_supplier', value: 'true', vertical: 'solar',
