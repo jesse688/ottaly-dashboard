@@ -147,7 +147,60 @@ export async function enrichReplyWithCH(
 
     const email = (opts.email ?? '').trim().toLowerCase()
     const hints = email ? await companyHintsForEmail(email) : { chNumber: null, companyName: null }
-    const companyName = hints.companyName || (opts.companyName ?? '').trim() || null
+    let companyName = hints.companyName || (opts.companyName ?? '').trim() || null
+
+    // ── Don't hand CH a company name we don't actually trust ──────────────────
+    // resolveCompany is strict (exact normalized name, single active match), so
+    // whatever we pass comes back stamped enrich_state='matched' and rendered
+    // with a "verified" badge. That makes a WRONG INPUT worse than no input:
+    // a Gmail lead was shown OTTALY LTD — our own company, our own directors —
+    // because the caller passed a company_name of "Ottaly" (esp_leads holds our
+    // own name on 6 rows, and company_name is frequently just the email domain
+    // title-cased). 133 name_search matches exist; only 37 are corroborated by
+    // the lead's own email domain.
+    //
+    // Two guards, applied here so EVERY caller is covered rather than each call
+    // site. A number match (knownNumber) is unaffected — that path is certain.
+    // Malformed strings (URLs, addresses, bare labels) are already covered by
+    // isJunkCompanyName; these guards handle the different failure of a
+    // well-formed name that belongs to the WRONG ENTITY.
+    if (companyName && isJunkCompanyName(companyName)) companyName = null
+
+    if (companyName) {
+      const norm = companyName.toLowerCase().replace(/[^a-z0-9]/g, '')
+      const domain = email.split('@')[1] ?? ''
+      const domainLabel = domain.split('.')[0]?.replace(/[^a-z0-9]/g, '') ?? ''
+
+      // 1. Free-email lead → the domain is a mail provider, never the company,
+      //    so any name here is unverifiable. Also blocks "Gmail"-style names
+      //    that come from title-casing the domain.
+      const FREE_MAIL = new Set(['gmail', 'googlemail', 'hotmail', 'outlook', 'yahoo',
+        'icloud', 'live', 'aol', 'btinternet', 'msn', 'me', 'mac', 'protonmail', 'gmx'])
+      if (FREE_MAIL.has(domainLabel) || FREE_MAIL.has(norm)) companyName = null
+
+      // 2. Never match a lead to one of OUR OWN client companies. The lead is
+      //    the person who REPLIED — they are by definition not the sender, so a
+      //    name equal to a portal client's name means we picked up the wrong
+      //    side of the conversation.
+      if (companyName) {
+        const ours = await pool.query(
+          `SELECT 1 FROM portal_clients
+            WHERE regexp_replace(lower(company_name), '[^a-z0-9]', '', 'g') = $1
+            LIMIT 1`, [norm]
+        ).catch(() => ({ rows: [] as unknown[] }))
+        if (ours.rows.length) companyName = null
+      }
+    }
+
+    // Nothing trustworthy left to match on (and no company number) → record the
+    // miss so it isn't retried forever, rather than guessing.
+    if (!hints.chNumber && !companyName) {
+      await pool.query(
+        `UPDATE unibox_replies SET enrich_state = 'unmatched', updated_at = NOW() WHERE id = $1`,
+        [uniboxReplyId]
+      )
+      return null
+    }
 
     const { rundown, reason } = await resolveCompany({
       knownNumber: hints.chNumber,
