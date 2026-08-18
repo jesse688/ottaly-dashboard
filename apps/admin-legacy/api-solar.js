@@ -331,10 +331,15 @@ module.exports = function solarAPI() {
           const dLat = 0.00135;
           const dLng = 0.00135 / Math.max(0.2, Math.cos(coords.lat * Math.PI / 180));
           const r = await db.query(
+            // ccod_owns_building, not owns_building: the latter is 'unknown' on
+            // 12,778 of 12,880 solar-checked rows and tells you nothing. The
+            // CCOD column is the Land Registry title data and actually resolves
+            // (400 yes / 998 no across qualified prospects).
             `SELECT id, email, first_name, last_name, company_name, company_domain,
                     company_address, ch_postcode, company_status, num_employees, industry,
                     solar_status, solar_stop_reason, solar_roof_area_m2, solar_max_kwp,
-                    solar_has_solar, solar_checked_at, owns_building, do_not_contact,
+                    solar_has_solar, solar_checked_at, ccod_owns_building, do_not_contact,
+                    solar_roof_address,
                     ROUND((point(solar_lng, solar_lat) <-> point($2, $1))::numeric, 6) AS dist
                FROM contacts
               WHERE solar_lat BETWEEN $1 - $3 AND $1 + $3
@@ -349,7 +354,32 @@ module.exports = function solarAPI() {
         }
       }
 
-      res.json({ coords, roof, company });
+      // ── EPC ────────────────────────────────────────────────────────────
+      // What the building's energy certificate says: floor area, modelled
+      // consumption, efficiency band, and whether a government assessor
+      // formally recommended solar. Needs the precise Land Registry address of
+      // the nearest known contact — coordinates alone cannot pick between the
+      // dozen certificates that can share a postcode.
+      let epc = null;
+      if (db && company.contacts.length) {
+        const site = company.contacts.find(c => c.solar_roof_address) || company.contacts[0];
+        const addr = site.solar_roof_address || site.company_address || '';
+        const pcMatch = /\(([^)]+)\)\s*$/.exec(addr);
+        const postcode = (pcMatch && pcMatch[1]) || site.ch_postcode || '';
+        if (addr && postcode) {
+          try {
+            const e = await db.query(
+              `SELECT * FROM epc_match_site($1, $2, $3)`,
+              [addr, postcode, roof.roof_area_m2 || null]
+            );
+            epc = e.rows[0] || null;
+          } catch (err) {
+            epc = { error: err.message };
+          }
+        }
+      }
+
+      res.json({ coords, roof, company, epc });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }

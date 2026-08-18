@@ -739,8 +739,59 @@ function renderRoofLookup(d, minKwp){
       <span class="mut"> (extra Google call)</span>
     </div>
     <div id="roofImagery" style="margin-top:10px"></div>
+    ${renderEpc(d.epc, d.roof)}
     <div style="margin-top:10px;font-weight:600;font-size:13px">What we know about this site</div>
     ${contactsHtml}`;
+}
+
+// ── EPC panel ──────────────────────────────────────────────────────────────
+// The building's energy certificate. Two things here are genuinely strong: the
+// modelled consumption, and whether a government assessor formally recommended
+// solar. Tenure is deliberately NOT shown — transaction_type ("Property to
+// let") looked like an ownership signal but tested at 46% on buildings the Land
+// Registry says are rented vs 40% on ones it says are owned, which is barely
+// any discrimination. ccod_owns_building is the column that answers that.
+function renderEpc(e, roof){
+  if (!e) return '';
+  if (e.error) return `<div class="mut" style="font-size:11px;margin-top:8px">EPC lookup failed: ${esc(e.error)}</div>`;
+
+  const mwh = e.annual_mwh != null ? Number(e.annual_mwh) : null;
+  const gen = roof && roof.max_kwp != null ? Number(roof.max_kwp) * 950 / 1000 : null;
+
+  // Only quote a coverage % when the certificate plausibly covers the same
+  // building as the roof. 42% of matches are one unit inside a larger block,
+  // where the floor area is a fraction of the roof and this would overstate
+  // wildly — it read 331% before this gate existed.
+  const coverage = (mwh && gen && e.coverage_reliable)
+    ? Math.round(100 * gen / mwh) : null;
+
+  const chip = (label, value, colour) => `
+    <span style="display:inline-flex;flex-direction:column;padding:4px 12px;border-right:1px solid var(--line)">
+      <span class="mut" style="font-size:10px">${esc(label)}</span>
+      <span style="font-size:14px;font-weight:700${colour ? ';color:'+colour : ''}">${esc(value)}</span>
+    </span>`;
+
+  return `
+    <div style="margin-top:12px;font-weight:600;font-size:13px">Energy certificate</div>
+    <div style="display:flex;flex-wrap:wrap;align-items:center;margin:4px 0">
+      ${chip('Floor area', e.floor_area != null ? Number(e.floor_area).toLocaleString()+' m²' : '—')}
+      ${mwh != null ? chip('Uses', mwh.toLocaleString()+' MWh/yr') : ''}
+      ${chip('Efficiency', e.asset_rating_band || '—',
+             ['A','A+','B'].includes(e.asset_rating_band) ? '#22c55e'
+             : ['E','F','G'].includes(e.asset_rating_band) ? '#f59e0b' : '')}
+      ${chip('Heating', e.main_heating_fuel || '—')}
+      ${coverage != null ? chip('Solar would cover', coverage+'%', '#22c55e') : ''}
+      ${e.pv_recommended ? chip('Assessor', 'Recommended PV', '#22c55e') : ''}
+    </div>
+    <div class="mut" style="font-size:11px">
+      ${esc(e.epc_address || '')}${e.property_type ? ' · '+esc(e.property_type) : ''}
+      ${e.lodgement_date ? ' · certificate '+String(e.lodgement_date).slice(0,10) : ''}
+      ${e.match_score != null ? ' · match '+Number(e.match_score).toFixed(2) : ''}
+      ${mwh != null && gen != null && !e.coverage_reliable
+        ? ' · <span style="color:#f59e0b">coverage % hidden: the certificate covers '
+          + (e.floor_roof_ratio != null ? Number(e.floor_roof_ratio).toFixed(2)+'x' : 'a different share of')
+          + ' the roof area, so it is likely one unit of a larger building</span>' : ''}
+    </div>`;
 }
 
 // ── Live panel map ─────────────────────────────────────────────────────────
