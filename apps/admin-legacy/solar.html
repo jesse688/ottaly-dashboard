@@ -78,6 +78,16 @@
   <span class="mut" id="prog"></span>
   <span style="flex:1"></span>
   <button class="btn ghost" id="sweepBtn" title="Run ownership (CCOD + Companies House) across the whole contacts DB — no Google/roof calls, free & safe">🏢 Ownership sweep (DB-wide)</button>
+  <!-- Loads the work queue directly, so there is no need to build a selection
+       on the Contacts page. Confirmed freehold owners only, never roof-checked,
+       one per company, biggest building first — which is what decides how many
+       prospects a month of Google quota actually buys. -->
+  <label class="toggle" title="How many to load. Google's free tier is 10,000 roof calls a month.">
+    Load queue
+    <input id="queueLimit" type="number" value="500" min="1" max="5000"
+           style="width:70px;background:var(--card);color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:4px 6px">
+  </label>
+  <button class="btn ghost" id="queueBtn" title="Confirmed building owners with no roof check yet, largest building first">📋 Load work queue</button>
   <button class="btn green" id="pushBtn" disabled>🚀 Push prospects to PlusVibe</button>
 </div>
 <div id="sweepBar" class="mut" style="display:none;padding:8px 20px;border-bottom:1px solid var(--line);background:var(--panel);font-size:12.5px"></div>
@@ -602,6 +612,37 @@ $('#saveKeys').addEventListener('click', async ()=>{
     $('#setGoogle').value=''; $('#setCh').value='';
     refreshStatus();
   }catch(e){ $('#setResult').textContent='Failed: '+e.message; }
+});
+
+// ---- Work queue: who to spend Google calls on next ----
+// Saves building a selection on the Contacts page, which cannot express the two
+// things that decide this: confirmed freehold ownership, and not yet
+// roof-checked. Ordered by EPC floor area because it predicts roof size for
+// free — 2,000 m² buildings qualify 61% of the time, under 500 m² only 14%.
+$('#queueBtn').addEventListener('click', async ()=>{
+  const btn = $('#queueBtn');
+  const limit = Math.max(1, Math.min(5000, parseInt($('#queueLimit').value,10) || 500));
+  btn.disabled = true; $('#prog').textContent = 'Loading queue…';
+  try{
+    const d = await fetch(`/api/solar/queue?limit=${limit}`).then(r=>r.json());
+    if(d.error){ $('#prog').textContent = 'Queue error: '+d.error; return; }
+    if(!d.contacts || !d.contacts.length){ $('#prog').textContent = 'Queue empty — every confirmed owner has been roof-checked.'; return; }
+    ROWS = d.contacts.map((c,i)=>recFromSaved({
+      ...c,
+      address: c.company_address || '',
+      solar_checked_at: null,          // never checked; that is why it is queued
+      ccod_owns_building: 'yes',       // the queue only returns confirmed owners
+    }, i));
+    render();
+    const withEpc = d.contacts.filter(c=>c.epc_floor_area).length;
+    const pv = d.contacts.filter(c=>c.pv_recommended).length;
+    $('#prog').textContent = `${d.contacts.length.toLocaleString()} owners loaded, largest building first`
+      + (withEpc ? ` · ${withEpc} with a known floor area` : '')
+      + (pv ? ` · ${pv} already recommended for PV by an assessor` : '')
+      + '. Run qualification.';
+  }catch(e){
+    $('#prog').textContent = 'Queue failed: '+e.message;
+  }finally{ btn.disabled = false; }
 });
 
 // ---- DB-wide ownership sweep (offline, no Google) ----
