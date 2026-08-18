@@ -13,6 +13,22 @@ function fmtDate(d) {
   return `${d.year}-${String(d.month || 1).padStart(2, '0')}-${String(d.day || 1).padStart(2, '0')}`;
 }
 
+// fetch with a deadline. Node's fetch has NO default timeout, so a request that
+// never answers blocks its worker forever — with a pool of workers that stops
+// the whole qualification job dead, which is exactly what happened at
+// concurrency 40 (monthly quota only 36% used, so this was per-minute
+// throttling holding connections open, not exhaustion). Better to fail one
+// contact than to freeze the run.
+async function fetchWithTimeout(url, opts = {}, ms = Number(process.env.SOLAR_FETCH_TIMEOUT_MS) || 20000) {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), ms);
+  try {
+    return await fetch(url, { ...opts, signal: ac.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 async function buildingInsights(lat, lng) {
   const key = GOOGLE_KEY();
   if (!key) throw new Error('No Google Solar API key (GOOGLE_SOLAR_API_KEY / GOOGLE_API_KEY)');
@@ -22,7 +38,7 @@ async function buildingInsights(lat, lng) {
     + `&requiredQuality=HIGH&additionalInsights=DETECTED_ARRAYS&key=${key}`;
 
   usage.record('buildingInsights');
-  const res = await fetch(url);
+  const res = await fetchWithTimeout(url);
   const data = await res.json();
 
   if (res.status === 404 || (data.error && data.error.status === 'NOT_FOUND')) {
@@ -60,12 +76,12 @@ async function roofImagePng(lat, lng) {
     + `?location.latitude=${lat}&location.longitude=${lng}`
     + `&radiusMeters=40&view=IMAGERY_LAYERS&requiredQuality=HIGH&pixelSizeMeters=0.1&key=${key}`;
   usage.record('dataLayers');
-  const res = await fetch(url);
+  const res = await fetchWithTimeout(url);
   const data = await res.json();
   if (res.status === 404 || (data.error && data.error.status === 'NOT_FOUND')) return { error: 'no_imagery' };
   if (data.error || !data.rgbUrl) return { error: (data.error && data.error.message) || 'no_rgb' };
 
-  const tiffRes = await fetch(`${data.rgbUrl}&key=${key}`);
+  const tiffRes = await fetchWithTimeout(`${data.rgbUrl}&key=${key}`);
   if (!tiffRes.ok) return { error: `download_${tiffRes.status}` };
   const tiff = Buffer.from(await tiffRes.arrayBuffer());
 
@@ -96,7 +112,7 @@ async function roofImagery(lat, lng, opts = {}) {
     + `&radiusMeters=${radius}&view=FULL_LAYERS&requiredQuality=HIGH`
     + `&pixelSizeMeters=0.1&key=${key}`;
   usage.record('dataLayers');
-  const res = await fetch(url);
+  const res = await fetchWithTimeout(url);
   const data = await res.json();
   if (res.status === 404 || (data.error && data.error.status === 'NOT_FOUND')) return { error: 'no_imagery' };
   if (data.error) return { error: data.error.message || 'dataLayers_error' };
@@ -107,7 +123,7 @@ async function roofImagery(lat, lng, opts = {}) {
   const SIZE = 768;
   const fetchTiff = async (u) => {
     if (!u) return null;
-    const r = await fetch(`${u}&key=${key}`);
+    const r = await fetchWithTimeout(`${u}&key=${key}`);
     if (!r.ok) return null;
     return Buffer.from(await r.arrayBuffer());
   };

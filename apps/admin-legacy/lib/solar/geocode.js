@@ -5,9 +5,22 @@ const usage = require('./usage');
 const { extractPostcode } = require('./address-match'); // shared, looser regex
 const GOOGLE_KEY = () => usage.getGoogleKey();
 
+// Node's fetch has no default timeout, so a request that never answers blocks
+// its worker for the life of the process. In a pool that stops the whole
+// qualification job — one hung geocode should cost one contact, not the run.
+async function fetchWithTimeout(url, opts = {}, ms = Number(process.env.SOLAR_FETCH_TIMEOUT_MS) || 20000) {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), ms);
+  try {
+    return await fetch(url, { ...opts, signal: ac.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 async function geocodePostcodeIO(postcode) {
   try {
-    const res = await fetch(`https://api.postcodes.io/postcodes/${encodeURIComponent(postcode)}`);
+    const res = await fetchWithTimeout(`https://api.postcodes.io/postcodes/${encodeURIComponent(postcode)}`);
     if (!res.ok) return null;
     const data = await res.json();
     if (data && data.result) {
@@ -22,7 +35,7 @@ async function geocodeGoogle(address) {
   if (!key) return null;
   const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&region=uk&key=${key}`;
   usage.record('geocoding');
-  const res = await fetch(url);
+  const res = await fetchWithTimeout(url);
   const data = await res.json();
   if (data.status === 'OK' && data.results.length) {
     const loc = data.results[0].geometry.location;
@@ -43,7 +56,7 @@ async function geocodePlaces(query) {
   // The legacy /maps/api/place/textsearch endpoint is deprecated ("REQUEST_DENIED:
   // calling a legacy API"). Requires "Places API (New)" enabled on the key.
   try {
-    const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
+    const res = await fetchWithTimeout('https://places.googleapis.com/v1/places:searchText', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -98,7 +111,7 @@ async function geocodePrecise(address, companyName) {
 // lat/lng -> nearest postcode via free postcodes.io reverse lookup.
 async function reversePostcode(lat, lng) {
   try {
-    const res = await fetch(`https://api.postcodes.io/postcodes?lon=${lng}&lat=${lat}&limit=1`);
+    const res = await fetchWithTimeout(`https://api.postcodes.io/postcodes?lon=${lng}&lat=${lat}&limit=1`);
     if (!res.ok) return null;
     const data = await res.json();
     return (data.result && data.result[0] && data.result[0].postcode) || null;

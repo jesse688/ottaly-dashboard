@@ -55,8 +55,13 @@ module.exports = function solarAPI() {
       // above this; the limit was ours, not theirs. SOLAR_CONCURRENCY allows
       // backing off without a redeploy if Google starts returning 429s — worth
       // watching for at 40, since a 429 wastes the call without a result.
+      // 40 stalled a run: monthly quota was only 36% used, so this was
+      // per-minute rate limiting rather than exhaustion — 'solar_api_failed'
+      // and a spike in 'no_roof_imagery' appeared, then the job stopped
+      // progressing entirely. 16 is roughly 3x the original 6 while staying
+      // well inside whatever per-minute ceiling Google applies here.
       const CONC=Math.max(1,Math.min(
-        Number(options.concurrency) || Number(process.env.SOLAR_CONCURRENCY) || 40,
+        Number(options.concurrency) || Number(process.env.SOLAR_CONCURRENCY) || 16,
         64));
       const BATCH=200;
       for(let bi=0; bi<ids.length && !jobStop; bi+=BATCH){
