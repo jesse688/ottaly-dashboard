@@ -16307,9 +16307,29 @@ app.get('/api/solar/ownership-sweep/status', requireSession, async (req, res) =>
   }
 });
 
+// A sweep over 846k contacts runs for hours, and until now nothing could stop
+// it — the only way out was restarting the container, which also killed
+// anything else mid-flight. Module-scoped so the flag outlives the request that
+// set it, since the sweep's own request may already be disconnected.
+let _sweepStop = false;
+let _sweepRunning = false;
+
+app.post('/api/solar/ownership-sweep/stop', requireSession, (req, res) => {
+  _sweepStop = true;
+  res.json({ ok: true, was_running: _sweepRunning });
+});
+
 app.post('/api/solar/ownership-sweep', requireSession, async (req, res) => {
   const db = req.app.locals.pgDb;
   if (!db) return res.status(500).json({ error: 'Database not available' });
+  // Refuse to start a second sweep on top of a running one: two workers writing
+  // the same rows just doubles the load and confuses the progress figures.
+  if (_sweepRunning) {
+    return res.status(409).json({ error: 'A sweep is already running. Stop it first.' });
+  }
+  _sweepStop = false;
+  _sweepRunning = true;
+  res.on('close', () => { /* client gone; the sweep continues by design */ });
   const { ownershipOnly } = require('./lib/solar/enrich');
   const { workspace_id, limit, only_unchecked } = req.body || {};
 
@@ -16346,7 +16366,7 @@ app.post('/api/solar/ownership-sweep', requireSession, async (req, res) => {
   const CONC = Math.max(1, Math.min(64, parseInt(process.env.SWEEP_CONCURRENCY, 10) || 24));
   let cursor = 0;
   async function worker() {
-    while (cursor < rows.length) {
+    while (cursor < rows.length && !_sweepStop) {
       const c = rows[cursor++];
       let r;
       try {
@@ -16382,7 +16402,12 @@ app.post('/api/solar/ownership-sweep', requireSession, async (req, res) => {
     }
   }
   await Promise.all(Array.from({ length: Math.min(CONC, rows.length) }, worker));
-  res.write(JSON.stringify({ done: true, ...tally }) + '\n');
+  // Always clear, including on stop, or the next sweep is refused as "already
+  // running" for the life of the process.
+  _sweepRunning = false;
+  const stopped = _sweepStop;
+  _sweepStop = false;
+  res.write(JSON.stringify({ done: true, stopped, ...tally }) + '\n');
   res.end();
 });
 
