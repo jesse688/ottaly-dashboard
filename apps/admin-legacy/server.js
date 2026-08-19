@@ -18953,10 +18953,20 @@ app.get('/api/contacts/push-history', requireSession, (req, res) => {
       verified: j.verified || 0, pushed: j.pushed || 0,
       safe: j.safe, risky: j.risky, invalid: j.invalid,
       unknown: j.unknown, safe_catchall: j.safe_catchall,
+      // `job.skipped` means TWO different things depending on the phase, and
+      // conflating them made the UI report 1,425 contacts as rejected when they
+      // had merely been skipped past re-verification:
+      //   * a NUMBER during verify  = contacts with a still-fresh verdict, so
+      //     Reacher didn't re-check them. They are NOT dropped from the push.
+      //   * an OBJECT once pushing  = the real per-gate rejection breakdown.
+      // Keep them in separate fields so the UI can label each correctly.
       skipped_total: (j.skipped && typeof j.skipped === 'object')
         ? Object.values(j.skipped).reduce((a, v) => a + (Number(v) || 0), 0)
-        : (Number(j.skipped) || 0),
+        : 0,
       skipped: (j.skipped && typeof j.skipped === 'object') ? j.skipped : {},
+      already_verified: (j.skipped && typeof j.skipped === 'object')
+        ? 0 : (Number(j.skipped) || 0),
+      to_verify: Number(j.toVerify || 0),
       error: j.error || null,
     });
   }
