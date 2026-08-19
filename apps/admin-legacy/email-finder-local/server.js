@@ -164,8 +164,49 @@ const _reacherMember = (() => {
     consecutiveFailures: 0,
     lastError: '',
     lastErrorAt: 0,
+    // Rolling window of recent outcomes (1 = unknown), newest last.
+    // consecutiveFailures only counts HARD failures — HTTP errors, network
+    // drops. On 2026-08-19 Reacher answered every call successfully with
+    // status 'unknown' for three hours: valid responses, zero hard failures,
+    // nothing tripped, and 58% of a morning's verifications were wasted.
+    // A timeout looks like a normal result, so the only way to see it is the
+    // RATE of unknowns.
+    recent: [],
   };
 })();
+
+// Matt at proxy4smtp puts the normal unknown rate at 5-10% depending on data
+// quality; healthy hours here measured 10-12%. A sustained 40%+ over a
+// meaningful sample means the verifier is broken, not that the list is bad.
+const REACHER_HEALTH_WINDOW = Number(process.env.REACHER_HEALTH_WINDOW) || 50;
+const REACHER_UNKNOWN_ALERT = Number(process.env.REACHER_UNKNOWN_ALERT) || 0.40;
+let _reacherUnhealthySince = 0;
+
+function _recordReacherOutcome(status) {
+  const m = _reacherMember;
+  m.recent.push(status === 'unknown' ? 1 : 0);
+  if (m.recent.length > REACHER_HEALTH_WINDOW) m.recent.shift();
+  if (m.recent.length < REACHER_HEALTH_WINDOW) return;
+
+  const rate = m.recent.reduce((a, b) => a + b, 0) / m.recent.length;
+  if (rate >= REACHER_UNKNOWN_ALERT) {
+    if (!_reacherUnhealthySince) {
+      _reacherUnhealthySince = Date.now();
+      console.error(`[Reacher] UNHEALTHY — ${Math.round(rate * 100)}% unknown over the last `
+        + `${m.recent.length} checks (normal is 5-10%). Verification is returning nothing usable. `
+        + `Check the Reacher container and the proxy4smtp SOCKS5 exit.`);
+    } else if (Date.now() - _reacherUnhealthySince > 300000) {
+      // Re-warn every 5 minutes while it stays bad, so it cannot be lost in a
+      // busy log the way three hours of silent failure was today.
+      _reacherUnhealthySince = Date.now();
+      console.error(`[Reacher] STILL UNHEALTHY — ${Math.round(rate * 100)}% unknown. `
+        + `Restarting the Reacher container has cleared this before.`);
+    }
+  } else if (_reacherUnhealthySince) {
+    console.log(`[Reacher] Health recovered — unknown rate back to ${Math.round(rate * 100)}%`);
+    _reacherUnhealthySince = 0;
+  }
+}
 
 // Returns the current "Reacher day" key — resets at UTC midnight to match Reacher's own daily limit counter.
 function _reacherTodayUtc() { return new Date().toISOString().slice(0, 10); }
@@ -1095,7 +1136,12 @@ async function callReacherOnce(email) {
         console.log(`[Reacher] Recovered after ${m.consecutiveFailures} consecutive fails`);
         m.consecutiveFailures = 0;
       }
-      return [mapReacherResult(email, data), m];
+      const mapped = mapReacherResult(email, data);
+      // Track the outcome even on the success path: a timeout comes back as a
+      // perfectly valid response with status 'unknown', which is exactly how
+      // three hours of dead verification went unnoticed.
+      _recordReacherOutcome(mapped && mapped.status);
+      return [mapped, m];
     } catch (err) {
       const isNetworkErr = !isAbortError(err) && /fetch failed|ECONNREFUSED|ENOTFOUND|network/i.test(err.message || '');
       if (isNetworkErr) {
