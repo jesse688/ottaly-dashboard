@@ -4940,8 +4940,8 @@
       return esc(abs) + (rel ? ` <span style="color:#9ca3af;">(${rel})</span>` : '');
     }
 
-    function funnelChip(label, n, color) {
-      return `<span style="display:inline-flex;align-items:center;gap:5px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:999px;padding:3px 9px;">
+    function funnelChip(label, n, color, tip) {
+      return `<span title="${esc(tip || '')}" style="display:inline-flex;align-items:center;gap:5px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:999px;padding:3px 9px;${tip ? 'cursor:help;' : ''}">
           <span style="color:#6b7280;">${esc(label)}</span>
           <strong style="color:${color};">${Number(n || 0).toLocaleString()}</strong>
         </span>`;
@@ -5031,11 +5031,12 @@
                actually landed, and everything that fell out in between. -->
           <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;font-size:11px;">
             ${funnelChip('Requested', req, '#374151')}
-            ${funnelChip('Verified', Number(j.verified || 0), '#0891b2')}
-            ${funnelChip('Pushed', pushed, '#059669')}
-            ${Number(j.skipped_total || 0) > 0 ? funnelChip('Skipped', Number(j.skipped_total), '#d97706') : ''}
-            ${Number(j.invalid || 0) > 0 ? funnelChip('Invalid', Number(j.invalid), '#dc2626') : ''}
-            ${Number(skipped.alreadyInCampaign || 0) > 0 ? funnelChip('Already in campaign', Number(skipped.alreadyInCampaign), '#7c3aed') : ''}
+            ${Number(j.already_verified || 0) > 0 ? funnelChip('Already verified', Number(j.already_verified), '#6b7280', 'Had a recent verdict, so the verifier skipped re-checking them. These are still eligible to push.') : ''}
+            ${Number(j.to_verify || 0) > 0 ? funnelChip('To verify', Number(j.to_verify), '#0891b2', 'Sent to Reacher for a fresh verdict.') : ''}
+            ${funnelChip('Pushed', pushed, '#059669', 'Actually delivered to PlusVibe.')}
+            ${Number(j.skipped_total || 0) > 0 ? funnelChip('Blocked by rules', Number(j.skipped_total), '#d97706', 'Rejected by a push guard — cooldown, duplicate, missing data. See the breakdown below.') : ''}
+            ${Number(j.invalid || 0) > 0 ? funnelChip('Invalid', Number(j.invalid), '#dc2626', 'Verifier confirmed the mailbox does not exist.') : ''}
+            ${Number(j.risky || 0) > 0 ? funnelChip('Risky (not pushed)', Number(j.risky), '#d97706', 'The verifier could not confirm these. Only safe and catch-all addresses are pushed, so these are dropped.') : ''}
           </div>
 
           <div style="margin-top:10px;padding-top:10px;border-top:1px dashed #e5e7eb;font-size:11px;">
@@ -5046,7 +5047,7 @@
           ${skipRows ? `
           <div style="margin-top:10px;padding-top:10px;border-top:1px dashed #e5e7eb;font-size:11px;">
             <div style="color:#374151;font-weight:600;margin-bottom:4px;">
-              Skipped by push rules (${Number(j.skipped_total || 0).toLocaleString()})
+              Blocked by push rules (${Number(j.skipped_total || 0).toLocaleString()})
             </div>
             ${skipRows}
           </div>` : ''}
