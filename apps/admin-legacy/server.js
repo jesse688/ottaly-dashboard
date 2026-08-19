@@ -18517,6 +18517,36 @@ function initPausedJobsTable(sq) {
     verified_count INTEGER DEFAULT 0,
     pushed_count INTEGER DEFAULT 0
   )`);
+  // Permanent push HISTORY. paused_push_jobs is crash-recovery state and is
+  // DELETED the moment a job finishes, so until now a completed push left no
+  // record at all -- there was no way to answer "I pushed 3,000 contacts, why
+  // did only 900 arrive?". This table keeps one row per finished job, including
+  // the per-reason skip breakdown the push filter already computes and used to
+  // throw away.
+  sq.exec(`CREATE TABLE IF NOT EXISTS push_job_history (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT,
+    workspace_name TEXT,
+    campaign_id TEXT,
+    campaign_name TEXT,
+    started_at TEXT,
+    finished_at TEXT DEFAULT (datetime('now')),
+    status TEXT,
+    requested INTEGER DEFAULT 0,
+    verified INTEGER DEFAULT 0,
+    pushed INTEGER DEFAULT 0,
+    skipped_total INTEGER DEFAULT 0,
+    skipped_json TEXT,
+    error TEXT
+  )`);
+  try { sq.exec(`CREATE INDEX IF NOT EXISTS idx_pjh_finished ON push_job_history (finished_at DESC)`); } catch {}
+  // Verification buckets. These matter more than the guard skips: the push gate
+  // only lets safe/safe_catchall through, so a bad verifier run is the usual
+  // reason a 1,000-contact push delivers 100.
+  for (const col of ['safe','risky','invalid','unknown','safe_catchall']) {
+    try { sq.exec(`ALTER TABLE push_job_history ADD COLUMN ${col} INTEGER DEFAULT 0`); } catch {}
+  }
+
   // resume_on_boot: 1 only for jobs interrupted by a deploy (set by the SIGTERM
   // handler). Manually-paused jobs are 0 and must NOT auto-resume on next boot.
   try { sq.exec(`ALTER TABLE paused_push_jobs ADD COLUMN resume_on_boot INTEGER DEFAULT 0`); } catch {}
@@ -18525,6 +18555,47 @@ function initPausedJobsTable(sq) {
   // allowed_statuses: JSON array of verification buckets the user chose to push,
   // so a resumed job keeps the selection.
   try { sq.exec(`ALTER TABLE paused_push_jobs ADD COLUMN allowed_statuses TEXT`); } catch {}
+}
+
+// Write one permanent row per finished push. Best-effort and fully guarded:
+// a history-logging failure must NEVER surface as a push failure, since the
+// contacts have already been sent by this point.
+function recordPushHistory(sq, job) {
+  if (!sq || !job) return;
+  try {
+    initPausedJobsTable(sq);
+    const skipped = job.skipped || {};
+    const skippedTotal = Object.values(skipped)
+      .reduce((a, v) => a + (Number(v) || 0), 0);
+    sq.prepare(`INSERT OR REPLACE INTO push_job_history
+        (id, workspace_id, workspace_name, campaign_id, campaign_name,
+         started_at, finished_at, status, requested, verified, pushed,
+         skipped_total, skipped_json, error,
+         safe, risky, invalid, unknown, safe_catchall)
+      VALUES (?,?,?,?,?,?,datetime('now'),?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(
+        job.id,
+        job.workspace_id || null,
+        job.workspace_name || null,
+        job.campaign_id || null,
+        job.campaign_name || null,
+        job.started_at || null,
+        job.status || 'completed',
+        Number(job.requested || job.total || 0),
+        Number(job.verified || 0),
+        Number(job.pushed || 0),
+        skippedTotal,
+        JSON.stringify(skipped),
+        job.error || null,
+        Number(job.safe || 0),
+        Number(job.risky || 0),
+        Number(job.invalid || 0),
+        Number(job.unknown || 0),
+        Number(job.safe_catchall || 0)
+      );
+  } catch (e) {
+    console.warn('[push-history] could not record job:', e.message);
+  }
 }
 
 // On boot, restore paused jobs into the in-memory map so the UI shows them.
@@ -18820,6 +18891,68 @@ app.get('/api/contacts/push-jobs', requireSession, (req, res) => {
     .sort((a, b) => b.created_at - a.created_at)
     .slice(0, 20);
   res.json({ jobs });
+});
+
+// Push HISTORY — every finished job, newest first. The queue above deliberately
+// hides completed jobs, so this is the only place to answer "I pushed 3,000
+// contacts, why did only 900 arrive?" after the fact.
+//
+// Merges two sources: rows persisted to SQLite when a job finished (survives
+// restarts), plus anything still in memory that hasn't been written yet, so a
+// job that is mid-run still shows up rather than vanishing until it completes.
+app.get('/api/contacts/push-history', requireSession, (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+  const out = [];
+  try {
+    const sq = req.app.locals.sqliteDb;
+    if (sq) {
+      initPausedJobsTable(sq);
+      const rows = sq.prepare(
+        `SELECT * FROM push_job_history ORDER BY finished_at DESC LIMIT ?`
+      ).all(limit);
+      for (const r of rows) {
+        let skipped = {};
+        try { skipped = JSON.parse(r.skipped_json || '{}') || {}; } catch {}
+        out.push({
+          id: r.id, source: 'history',
+          workspace_id: r.workspace_id, workspace_name: r.workspace_name,
+          campaign_id: r.campaign_id, campaign_name: r.campaign_name,
+          started_at: r.started_at, finished_at: r.finished_at,
+          status: r.status,
+          requested: r.requested, verified: r.verified, pushed: r.pushed,
+          safe: r.safe, risky: r.risky, invalid: r.invalid,
+          unknown: r.unknown, safe_catchall: r.safe_catchall,
+          skipped_total: r.skipped_total, skipped, error: r.error,
+        });
+      }
+    }
+  } catch (e) {
+    console.warn('[push-history] read failed:', e.message);
+  }
+  // In-memory jobs not yet persisted (still running, or written pre-upgrade).
+  const seen = new Set(out.map(j => j.id));
+  for (const j of pushJobs.values()) {
+    if (seen.has(j.id)) continue;
+    out.push({
+      id: j.id, source: 'live',
+      workspace_id: j.workspace_id, workspace_name: j.workspace_name,
+      campaign_id: j.campaign_id, campaign_name: j.campaign_name,
+      started_at: j.started_at || null, finished_at: null,
+      status: j.status,
+      requested: j.requested || j.total || 0,
+      verified: j.verified || 0, pushed: j.pushed || 0,
+      safe: j.safe, risky: j.risky, invalid: j.invalid,
+      unknown: j.unknown, safe_catchall: j.safe_catchall,
+      skipped_total: (j.skipped && typeof j.skipped === 'object')
+        ? Object.values(j.skipped).reduce((a, v) => a + (Number(v) || 0), 0)
+        : (Number(j.skipped) || 0),
+      skipped: (j.skipped && typeof j.skipped === 'object') ? j.skipped : {},
+      error: j.error || null,
+    });
+  }
+  out.sort((a, b) => String(b.finished_at || b.started_at || '')
+                     .localeCompare(String(a.finished_at || a.started_at || '')));
+  res.json({ jobs: out.slice(0, limit) });
 });
 
 app.get('/api/contacts/push-jobs/:id', requireSession, (req, res) => {
@@ -19465,12 +19598,14 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
         if (sq) { try { sq.prepare(`DELETE FROM paused_push_jobs WHERE id = ?`).run(job.id); } catch {} }
         job.status = job.cancelled ? 'cancelled' : 'completed';
         job.progress = 100;
+        recordPushHistory(sq, job);
       }
     } catch (err) {
       job.status = 'failed';
       job.error = err.message;
       console.error('[Verify+Push]', err.message);
       if (sq) { try { sq.prepare(`DELETE FROM paused_push_jobs WHERE id = ?`).run(job.id); } catch {} }
+      recordPushHistory(sq, job);
     }
   })();
 });
