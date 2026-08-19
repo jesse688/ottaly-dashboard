@@ -186,7 +186,11 @@ class PostgresDatabase {
       // re-spending Google geocode + buildingInsights calls (and re-blocking the
       // server on the offline CCOD scans). solar_checked_at != NULL = already done.
       `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS solar_checked_at TIMESTAMP`,
-      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS solar_status TEXT`,        -- qualified | disqualified
+      // 'qualified' | 'disqualified'. This was written as a SQL `--` comment,
+      // which inside a JS array is not a comment at all: it parsed as
+      // -(-qualified) and threw "qualified is not defined" at runtime, on every
+      // boot, aborting the migrations array before anything below it ran.
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS solar_status TEXT`,
       `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS solar_stop_reason TEXT`,
       `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS solar_max_kwp INT`,
       `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS solar_panels INT`,
