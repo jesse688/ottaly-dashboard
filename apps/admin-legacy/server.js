@@ -18621,6 +18621,8 @@ function restorePausedJobs(sq) {
         pushed: row.pushed_count || 0,
         loose: !!row.loose, // engine/loose pushes keep the looser gate on resume
         resumeOnBoot: row.resume_on_boot === 1, // only deploy-interrupted jobs auto-resume
+        paused_at: row.paused_at || null, // the only timestamp a restored job has
+        requested: contactIds.length,
         skipped: 0, safe: 0, risky: 0, invalid: 0, unknown: 0, safe_catchall: 0,
         progress: 0,
         created_at: Date.now(),
@@ -18933,11 +18935,19 @@ app.get('/api/contacts/push-history', requireSession, (req, res) => {
   const seen = new Set(out.map(j => j.id));
   for (const j of pushJobs.values()) {
     if (seen.has(j.id)) continue;
+    // Live jobs stamp created_at as epoch ms (not started_at, and jobs restored
+    // from paused_push_jobs on boot carry neither) -- normalise to ISO so the UI
+    // has one date field to render. paused_at is the best available fallback for
+    // a restored job.
+    const startedIso = j.started_at
+      || (typeof j.created_at === 'number' ? new Date(j.created_at).toISOString() : null)
+      || j.paused_at
+      || null;
     out.push({
       id: j.id, source: 'live',
       workspace_id: j.workspace_id, workspace_name: j.workspace_name,
       campaign_id: j.campaign_id, campaign_name: j.campaign_name,
-      started_at: j.started_at || null, finished_at: null,
+      started_at: startedIso, finished_at: null,
       status: j.status,
       requested: j.requested || j.total || 0,
       verified: j.verified || 0, pushed: j.pushed || 0,

@@ -4920,6 +4920,33 @@
       }
     }
 
+    // "19 Aug 2026, 14:47" plus a relative hint, from either an ISO string or
+    // a SQLite "YYYY-MM-DD HH:MM:SS" (which is UTC, so mark it as such before
+    // parsing or the browser reads it as local and shifts the time).
+    function fmtWhen(v) {
+      if (!v) return '<span style="color:#9ca3af;">no date recorded</span>';
+      const s = String(v);
+      const d = new Date(/^\d{4}-\d{2}-\d{2} /.test(s) ? s.replace(' ', 'T') + 'Z' : s);
+      if (isNaN(d)) return esc(s.slice(0, 16));
+      const abs = d.toLocaleString('en-GB', {
+        day: 'numeric', month: 'short', year: 'numeric',
+        hour: '2-digit', minute: '2-digit',
+      });
+      const mins = Math.round((Date.now() - d.getTime()) / 60000);
+      let rel = '';
+      if (mins >= 0 && mins < 60)      rel = `${mins}m ago`;
+      else if (mins < 60 * 24)         rel = `${Math.round(mins / 60)}h ago`;
+      else if (mins < 60 * 24 * 30)    rel = `${Math.round(mins / 1440)}d ago`;
+      return esc(abs) + (rel ? ` <span style="color:#9ca3af;">(${rel})</span>` : '');
+    }
+
+    function funnelChip(label, n, color) {
+      return `<span style="display:inline-flex;align-items:center;gap:5px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:999px;padding:3px 9px;">
+          <span style="color:#6b7280;">${esc(label)}</span>
+          <strong style="color:${color};">${Number(n || 0).toLocaleString()}</strong>
+        </span>`;
+    }
+
     function renderPushHistoryRow(j) {
       const req    = Number(j.requested || 0);
       const pushed = Number(j.pushed || 0);
@@ -4927,7 +4954,25 @@
       // Colour the delivery rate: the number people actually care about.
       const pctColor = pct >= 70 ? '#059669' : pct >= 35 ? '#d97706' : '#dc2626';
       const when = j.finished_at || j.started_at || '';
-      const live = j.source === 'live';
+      // Badge the ACTUAL status. Every in-memory job was previously labelled
+      // "RUNNING", which was wrong: jobs restored from paused_push_jobs on boot
+      // are paused, not running, and that made a queue of stalled jobs look busy.
+      const st = String(j.status || '').toLowerCase();
+      const BADGE = {
+        verifying: ['VERIFYING', '#fde047', '#713f12'],
+        pushing:   ['PUSHING',   '#bfdbfe', '#1e3a8a'],
+        n2b_verifying: ['VERIFYING', '#fde047', '#713f12'],
+        pausing:   ['PAUSING',   '#fed7aa', '#7c2d12'],
+        paused:    ['PAUSED',    '#e5e7eb', '#374151'],
+        failed:    ['FAILED',    '#fecaca', '#7f1d1d'],
+        error:     ['FAILED',    '#fecaca', '#7f1d1d'],
+        cancelled: ['CANCELLED', '#e5e7eb', '#374151'],
+        completed: ['COMPLETED', '#bbf7d0', '#14532d'],
+      };
+      const b = BADGE[st] || [st.toUpperCase() || 'UNKNOWN', '#e5e7eb', '#374151'];
+      const badge = `<span style="margin-left:6px;font-size:10px;background:${b[1]};color:${b[2]};padding:2px 6px;border-radius:999px;font-weight:700;">${b[0]}</span>`;
+      // Only genuinely in-flight work gets the highlight tint.
+      const active = ['verifying','pushing','n2b_verifying','pausing'].includes(st);
 
       // Verification buckets — the push gate only lets safe/safe_catchall
       // through, so this is usually where the losses actually are.
@@ -4951,17 +4996,27 @@
               <span style="font-weight:600;color:#374151;">${Number(v).toLocaleString()}</span>
             </div>`).join('');
 
+      // A campaign name can be a pasted Apollo URL hundreds of chars long, which
+      // blew the card's layout apart. Trim it for display, keep the full value
+      // in the tooltip.
+      const rawName = String(j.campaign_name || j.campaign_id || 'Unknown campaign');
+      const shortName = rawName.length > 70 ? rawName.slice(0, 70) + '…' : rawName;
+      // Client name falls back to the workspace id when the push didn't carry
+      // one — show it as an id rather than pretending it's a name.
+      const client = j.workspace_name && j.workspace_name !== j.workspace_id
+        ? j.workspace_name
+        : (j.workspace_id ? 'workspace ' + String(j.workspace_id).slice(0, 8) : 'Unknown client');
+
       return `
-        <div style="border:1px solid #e5e7eb;border-radius:10px;padding:14px 16px;margin-bottom:10px;background:${live ? '#fefce8' : '#fff'};">
+        <div style="border:1px solid #e5e7eb;border-radius:10px;padding:14px 16px;margin-bottom:10px;background:${active ? '#fefce8' : '#fff'};">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;">
             <div style="min-width:240px;flex:1;">
-              <div style="font-weight:700;font-size:13px;color:#111827;">
-                ${esc(j.campaign_name || j.campaign_id || 'Unknown campaign')}
-                ${live ? '<span style="margin-left:6px;font-size:10px;background:#fde047;color:#713f12;padding:2px 6px;border-radius:999px;font-weight:700;">RUNNING</span>' : ''}
+              <div style="font-weight:700;font-size:13px;color:#111827;word-break:break-word;" title="${esc(rawName)}">
+                ${esc(shortName)}${badge}
               </div>
-              <div style="font-size:11px;color:#6b7280;margin-top:2px;">
-                ${esc(j.workspace_name || j.workspace_id || '')} · ${esc(String(when).replace('T',' ').slice(0,16))}
-                · status: ${esc(j.status || '?')}
+              <div style="font-size:11px;color:#6b7280;margin-top:3px;">
+                <strong style="color:#374151;">${esc(client)}</strong>
+                <span style="color:#d1d5db;"> · </span>${fmtWhen(when)}
               </div>
             </div>
             <div style="text-align:right;">
@@ -4970,6 +5025,17 @@
                 <strong style="color:#111827;">${pushed.toLocaleString()}</strong> of ${req.toLocaleString()} pushed
               </div>
             </div>
+          </div>
+
+          <!-- The funnel: what was asked for, what survived verification, what
+               actually landed, and everything that fell out in between. -->
+          <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;font-size:11px;">
+            ${funnelChip('Requested', req, '#374151')}
+            ${funnelChip('Verified', Number(j.verified || 0), '#0891b2')}
+            ${funnelChip('Pushed', pushed, '#059669')}
+            ${Number(j.skipped_total || 0) > 0 ? funnelChip('Skipped', Number(j.skipped_total), '#d97706') : ''}
+            ${Number(j.invalid || 0) > 0 ? funnelChip('Invalid', Number(j.invalid), '#dc2626') : ''}
+            ${Number(skipped.alreadyInCampaign || 0) > 0 ? funnelChip('Already in campaign', Number(skipped.alreadyInCampaign), '#7c3aed') : ''}
           </div>
 
           <div style="margin-top:10px;padding-top:10px;border-top:1px dashed #e5e7eb;font-size:11px;">
