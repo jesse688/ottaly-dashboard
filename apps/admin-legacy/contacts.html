@@ -1531,6 +1531,7 @@
             <div id="columnPickerList" style="max-height:340px;overflow-y:auto;padding:4px 0;"></div>
           </div>
           <button id="sendRulesBtn" class="btn btn-secondary" onclick="openSendRules()" title="Set how often the same contact may be pushed — across your clients, within a vertical, and how tightly pushes may cluster." style="font-size:12px;padding:7px 12px;">⚙ Send Rules</button>
+          <button id="pushHistoryBtn" class="btn btn-secondary" onclick="openPushHistory()" title="Every past push: how many contacts were requested, how the verifier graded them, how many actually reached PlusVibe, and which gate dropped the rest." style="font-size:12px;padding:7px 12px;">🕘 Push History</button>
           <button class="btn btn-primary" onclick="switchToImportTab()">Import CSV</button>
           <button class="btn" onclick="switchToImportTab(); setTimeout(() => document.getElementById('deleteCsvDropZone').scrollIntoView({behavior:'smooth'}), 100)" style="background:#dc2626;color:white;">Delete from CSV</button>
           <button class="btn btn-secondary" id="exportBtn" onclick="startApolloExport()">⬇ Apollo Export</button>
@@ -1681,6 +1682,27 @@
            push the contacts table off-screen. -->
       <div id="pushQueuePanel" style="display:none;background:#1e293b;border-bottom:1px solid #334155;padding:0;flex-shrink:0;">
         <div style="max-height:180px;overflow-y:auto;" id="pushQueueList"></div>
+      </div>
+
+      <!-- Push History modal. The queue panel above deliberately hides jobs that
+           finished, so this is where "why did only 900 of my 3,000 arrive?" gets
+           answered after the fact. -->
+      <div id="pushHistoryModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;align-items:flex-start;justify-content:center;padding:40px 20px;overflow-y:auto;">
+        <div style="background:#fff;border-radius:12px;max-width:1100px;width:100%;box-shadow:0 20px 50px rgba(0,0,0,.3);">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid #e5e7eb;">
+            <div>
+              <h3 style="margin:0;font-size:16px;font-weight:700;color:#111827;">Push History</h3>
+              <p style="margin:2px 0 0;font-size:12px;color:#6b7280;">Requested → verified → actually pushed, with the reason for every drop.</p>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <button onclick="loadPushHistory()" style="padding:6px 12px;border:1px solid #d1d5db;border-radius:7px;background:#fff;font-size:12px;cursor:pointer;color:#374151;">↻ Refresh</button>
+              <button onclick="document.getElementById('pushHistoryModal').style.display='none'" style="padding:6px 12px;border:none;border-radius:7px;background:#111827;color:#fff;font-size:12px;cursor:pointer;">Close</button>
+            </div>
+          </div>
+          <div id="pushHistoryBody" style="padding:12px 20px 20px;max-height:70vh;overflow-y:auto;">
+            <div style="padding:30px;text-align:center;color:#9ca3af;font-size:13px;">Loading…</div>
+          </div>
+        </div>
       </div>
 
       <!-- Import Progress Bar (background indicator) -->
@@ -4852,6 +4874,119 @@
       if (pushQueueTimer) return;
       pushQueueTimer = setInterval(refreshPushQueue, 2000);
       refreshPushQueue();
+    }
+
+    // ── Push History ──────────────────────────────────────────────
+    // Human-readable labels for the push gates. Keys match the `skipped`
+    // counters built in server.js's push filter.
+    const SKIP_LABELS = {
+      unsafe:            'Not verified-safe',
+      dnc:               'Do-not-contact',
+      freeDomain:        'Free email domain',
+      departed:          'Left the company',
+      missingName:       'No first/last name',
+      missingEnrichment: 'No keywords or industry',
+      alreadyInCampaign: 'Already in this campaign',
+      cooldownWorkspace: 'In 30-day client cooldown',
+      verticalCollision: 'Same-vertical lockout',
+      burstGap:          'Too soon after another client',
+      densityCeiling:    'Too many clients in window',
+      snoozed:           'Vertical snoozed',
+    };
+
+    function openPushHistory() {
+      const m = document.getElementById('pushHistoryModal');
+      m.style.display = 'flex';
+      loadPushHistory();
+    }
+
+    async function loadPushHistory() {
+      const body = document.getElementById('pushHistoryBody');
+      body.innerHTML = '<div style="padding:30px;text-align:center;color:#9ca3af;font-size:13px;">Loading…</div>';
+      try {
+        const r = await fetch('/api/contacts/push-history?limit=50');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const d = await r.json();
+        const jobs = d.jobs || [];
+        if (!jobs.length) {
+          body.innerHTML = '<div style="padding:30px;text-align:center;color:#9ca3af;font-size:13px;">'
+            + 'No pushes recorded yet. History starts from the next push.</div>';
+          return;
+        }
+        body.innerHTML = jobs.map(renderPushHistoryRow).join('');
+      } catch (err) {
+        body.innerHTML = '<div style="padding:20px;color:#b91c1c;font-size:13px;">'
+          + 'Could not load push history: ' + esc(err.message) + '</div>';
+      }
+    }
+
+    function renderPushHistoryRow(j) {
+      const req    = Number(j.requested || 0);
+      const pushed = Number(j.pushed || 0);
+      const pct    = req > 0 ? Math.round((pushed / req) * 100) : 0;
+      // Colour the delivery rate: the number people actually care about.
+      const pctColor = pct >= 70 ? '#059669' : pct >= 35 ? '#d97706' : '#dc2626';
+      const when = j.finished_at || j.started_at || '';
+      const live = j.source === 'live';
+
+      // Verification buckets — the push gate only lets safe/safe_catchall
+      // through, so this is usually where the losses actually are.
+      const vTotal = ['safe','risky','invalid','unknown','safe_catchall']
+        .reduce((a, k) => a + Number(j[k] || 0), 0);
+      const verifyBits = vTotal > 0 ? [
+        ['safe','Safe','#059669'], ['safe_catchall','Catch-all','#0891b2'],
+        ['risky','Risky','#d97706'], ['invalid','Invalid','#dc2626'],
+        ['unknown','Unknown','#6b7280'],
+      ].filter(([k]) => Number(j[k] || 0) > 0)
+       .map(([k,label,c]) => `<span style="color:${c};font-weight:600;">${Number(j[k]).toLocaleString()}</span>
+             <span style="color:#6b7280;">${label}</span>`).join('<span style="color:#d1d5db;"> · </span>')
+        : '<span style="color:#9ca3af;">no verification data</span>';
+
+      const skipped = j.skipped || {};
+      const skipRows = Object.entries(skipped)
+        .filter(([,v]) => Number(v) > 0)
+        .sort((a,b) => b[1] - a[1])
+        .map(([k,v]) => `<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 0;">
+              <span style="color:#6b7280;">${esc(SKIP_LABELS[k] || k)}</span>
+              <span style="font-weight:600;color:#374151;">${Number(v).toLocaleString()}</span>
+            </div>`).join('');
+
+      return `
+        <div style="border:1px solid #e5e7eb;border-radius:10px;padding:14px 16px;margin-bottom:10px;background:${live ? '#fefce8' : '#fff'};">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;">
+            <div style="min-width:240px;flex:1;">
+              <div style="font-weight:700;font-size:13px;color:#111827;">
+                ${esc(j.campaign_name || j.campaign_id || 'Unknown campaign')}
+                ${live ? '<span style="margin-left:6px;font-size:10px;background:#fde047;color:#713f12;padding:2px 6px;border-radius:999px;font-weight:700;">RUNNING</span>' : ''}
+              </div>
+              <div style="font-size:11px;color:#6b7280;margin-top:2px;">
+                ${esc(j.workspace_name || j.workspace_id || '')} · ${esc(String(when).replace('T',' ').slice(0,16))}
+                · status: ${esc(j.status || '?')}
+              </div>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-size:20px;font-weight:800;color:${pctColor};line-height:1;">${pct}%</div>
+              <div style="font-size:11px;color:#6b7280;margin-top:2px;">
+                <strong style="color:#111827;">${pushed.toLocaleString()}</strong> of ${req.toLocaleString()} pushed
+              </div>
+            </div>
+          </div>
+
+          <div style="margin-top:10px;padding-top:10px;border-top:1px dashed #e5e7eb;font-size:11px;">
+            <div style="color:#374151;font-weight:600;margin-bottom:4px;">Verification</div>
+            <div>${verifyBits}</div>
+          </div>
+
+          ${skipRows ? `
+          <div style="margin-top:10px;padding-top:10px;border-top:1px dashed #e5e7eb;font-size:11px;">
+            <div style="color:#374151;font-weight:600;margin-bottom:4px;">
+              Skipped by push rules (${Number(j.skipped_total || 0).toLocaleString()})
+            </div>
+            ${skipRows}
+          </div>` : ''}
+
+          ${j.error ? `<div style="margin-top:10px;font-size:11px;color:#b91c1c;">Error: ${esc(j.error)}</div>` : ''}
+        </div>`;
     }
 
     async function refreshPushQueue() {
