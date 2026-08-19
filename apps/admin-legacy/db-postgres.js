@@ -17,6 +17,19 @@ const { Resolver } = require('dns').promises;
 const mxResolver = new Resolver();
 mxResolver.setServers(['1.1.1.1', '8.8.8.8']);
 
+// Which colMulti() filters may use the search_tsv GIN pre-filter.
+//
+// ONLY the columns actually fed into search_tsv by the contacts_search_tsv_update
+// trigger belong here. Adding a column the trigger does not index would make the
+// tsquery a WRONG filter rather than a superset -- it would exclude real matches,
+// and those results feed PlusVibe pushes. Keys are the colMulti() `cols`
+// argument joined by comma, matched exactly.
+const TSV_PREFILTER_COLS = Object.freeze({
+  'job_title,job_title_cleaned': true,
+  'company_name': true,
+  'industry': true,
+});
+
 class PostgresDatabase {
   constructor() {
     this.pool = null;
@@ -1723,6 +1736,22 @@ class PostgresDatabase {
     // "real estate" matches inside "Real Estate & Property".
     const wordRegex = (values) => `\\y(${values.map(reEsc).join('|')})\\y`;
 
+    // Build a tsquery for the search_tsv index from the same value list the
+    // regex uses: multi-word values become phrase queries (foo<->bar), and the
+    // whole list is OR'd. Punctuation is stripped to match how search_tsv is
+    // built (see the contacts_search_tsv_update trigger) -- "Co-Founder" must
+    // tokenise the same way on both sides or the phrase never matches.
+    // Returns null when nothing usable survives, so the caller can skip the
+    // pre-filter entirely rather than emit an empty tsquery.
+    const toTsQuery = (values) => {
+      const parts = values.map(v => {
+        const words = String(v).toLowerCase()
+          .replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean);
+        return words.length ? words.join('<->') : null;
+      }).filter(Boolean);
+      return parts.length ? [...new Set(parts)].join(' | ') : null;
+    };
+
     const colMulti = (cols, val) => {
       const values = val.split(',').map(v => v.trim()).filter(Boolean);
       if (values.length === 0) return;
@@ -1730,9 +1759,29 @@ class PostgresDatabase {
       // Whole-word match (was substring ILIKE %val%, which wrongly matched
       // "cat" inside "eduCATion"). ~* is case-insensitive regex.
       const orClauses = colsArr.map(c => `${c} ~* $${p}`);
-      clauses.push(`(${orClauses.join(' OR ')})`);
+      const regexClause = `(${orClauses.join(' OR ')})`;
       params.push(wordRegex(values));
       p++;
+
+      // GIN pre-filter. The regex above cannot use an index, so on a narrow
+      // filter Postgres was reading ~800k rows off disk to keep 2.5k (11.7s
+      // measured). search_tsv @@ tsquery IS indexed, so it cuts the candidate
+      // set first and the regex then runs over the survivors -- 11.7s -> 0.6s.
+      //
+      // The regex is deliberately KEPT as the authoritative test rather than
+      // replaced. search_tsv also covers company_name/industry, so the tsquery
+      // matches a superset; leaving the regex in place means results stay
+      // byte-identical to before while only the access path changes. These
+      // results feed PlusVibe pushes, so a filter that returns subtly different
+      // contacts is far worse than a slow one.
+      const tsq = TSV_PREFILTER_COLS[colsArr.join(',')] ? toTsQuery(values) : null;
+      if (tsq) {
+        clauses.push(`(search_tsv @@ to_tsquery('simple', $${p}) AND ${regexClause})`);
+        params.push(tsq);
+        p++;
+      } else {
+        clauses.push(regexClause);
+      }
     };
     // Exact-match variant for normalised fields (region/county/town).
     // Uses LOWER() = ANY() so the LOWER() btree index is hit — no wildcard
@@ -1797,8 +1846,21 @@ class PostgresDatabase {
       const values = filters.keywords.split(',').map(v => v.trim()).filter(Boolean);
       if (!values.length) return;
       // Whole-word match (was substring) — see colMulti/wordRegex.
-      clauses.push(`COALESCE(NULLIF(keywords,''), raw_data->>'Keywords') ~* $${p}`);
+      const regexClause = `COALESCE(NULLIF(keywords,''), raw_data->>'Keywords') ~* $${p}`;
       params.push(wordRegex(values)); p++;
+
+      // GIN pre-filter, same reasoning as colMulti. This one matters most: the
+      // COALESCE wrapper makes even the existing keywords trigram index
+      // unusable, so keyword filters were the single most expensive predicate
+      // on the page. search_tsv is fed the identical COALESCE expression by the
+      // trigger, so the tsquery is a true superset and the regex still decides.
+      const tsq = toTsQuery(values);
+      if (tsq) {
+        clauses.push(`(search_tsv @@ to_tsquery('simple', $${p}) AND ${regexClause})`);
+        params.push(tsq); p++;
+      } else {
+        clauses.push(regexClause);
+      }
     });
     safe('keywordsExclude', () => {
       if (!filters.keywordsExclude) return;
