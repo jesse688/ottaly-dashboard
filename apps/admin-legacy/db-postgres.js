@@ -38,7 +38,14 @@ class PostgresDatabase {
     const config = dbUrl ? {
       connectionString: dbUrl,
       ssl: sslDisabled ? false : { rejectUnauthorized: false },
-      max: 25,
+      // Postgres allows 100 connections; the pool was claiming a quarter of
+      // them. Background work (mailbox refresh across 32 workspaces,
+      // distinct-cache, workspace-stats, the solar cascade) holds slots for
+      // long stretches, so with several people on the Contacts page at once
+      // every request queued behind a job and the page felt dead. 60 leaves
+      // ~40 spare for psql, the portal and anything else on the same database.
+      // PG_POOL_MAX allows tuning without a redeploy.
+      max: Math.max(5, Math.min(Number(process.env.PG_POOL_MAX) || 60, 90)),
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 10000,
       // Kill runaway queries fast. 120s was pegging CPU because expensive
