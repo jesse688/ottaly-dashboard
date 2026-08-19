@@ -2228,7 +2228,11 @@ class PostgresDatabase {
     // (stamped at push time + updated by webhook), so lexicographic comparison works.
     safe('cooldownWorkspace', () => {
       if (!filters.cooldownWorkspace) return;
-      const cooloffDate = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      // 30 days, matching PUSH_GUARD_DEFAULTS.sameClientDays in server.js.
+      // This filter exists to hide rows the push would skip anyway, so the two
+      // numbers MUST agree. It was 60 here against the guard's 30, which hid
+      // contacts aged 30-60 days that the push would in fact have accepted.
+      const cooloffDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
       clauses.push(`NOT (
         emailed_workspaces ? $${p}
         AND COALESCE(emailed_workspaces->$${p}->>'last_sent', '') >= $${p+1}
