@@ -2182,7 +2182,11 @@
     let currentPage = 0;
     let totalResults = 0;
     let pageSize = 100;
-    let sortBy = 'created_at';
+    // No default sort. Sending sortBy on every search made the server add
+    // `ORDER BY created_at DESC`, which forces Postgres to find EVERY matching
+    // row before returning the first page -- 11.6s vs 1.1s on a narrow filter,
+    // measured. Clicking a column header still sets sortBy and sorts properly.
+    let sortBy = '';
     let sortDir = 'desc';
 
     // ── Single shared popup ──────────────────────────────────────
