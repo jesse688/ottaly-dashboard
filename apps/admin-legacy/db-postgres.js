@@ -63,25 +63,25 @@ class PostgresDatabase {
     // Pool sized for high concurrency — parallel index builds, webhook
     // bursts, dashboard fan-out (search + count + employee buckets +
     // email-provider counts), and CSV imports all share the pool.
-    // Lowered 60→40→25: during a rolling deploy BOTH old and new replicas are alive
-    // briefly. Enrichment job also holds connections. 2 replicas × 25 = 50 leaves
-    // headroom under Postgres max_connections -- which is **100**, not 200.
-    // (The "200 limit" figure this comment used to quote was wrong; verified
-    // against the live server 2026-08-20. See the pool-sizing note below.)
+    // During a rolling deploy BOTH old and new replicas are briefly alive, and
+    // the enrichment job holds connections too, so the split pools below are
+    // sized with that overlap in mind. See the connection-budget note there --
+    // max_connections was 100 while this comment claimed 200; it is now really
+    // 200 (verified against the live server 2026-08-20).
     const config = dbUrl ? {
       connectionString: dbUrl,
       ssl: sslDisabled ? false : { rejectUnauthorized: false },
-      // Postgres allows 100 connections; the pool was claiming a quarter of
-      // them. Background work (mailbox refresh across 32 workspaces,
-      // distinct-cache, workspace-stats, the solar cascade) holds slots for
-      // long stretches, so with several people on the Contacts page at once
-      // every request queued behind a job and the page felt dead. 60 leaves
-      // ~40 spare for psql, the portal and anything else on the same database.
+      // Base config only. The REAL limits are webMax/bgMax below, which build
+      // on this and override `max`; PG_POOL_MAX is the legacy single-pool knob.
+      // Background work (mailbox refresh across 32 workspaces, distinct-cache,
+      // workspace-stats, the solar cascade) holds slots for long stretches, so
+      // with several people on the Contacts page at once every request queued
+      // behind a job and the page felt dead -- that is what the split fixes.
       // PG_POOL_MAX allows tuning without a redeploy.
       max: Math.max(5, Math.min(Number(process.env.PG_POOL_MAX) || 60, 90)),
       // Name the connections. Every service connects to this database as user
       // `postgres` with an empty application_name, so during an incident
-      // pg_stat_activity cannot tell you WHICH service is eating the 100
+      // pg_stat_activity cannot tell you WHICH service is eating the
       // connections -- 16 distinct client IPs, all anonymous. This makes
       // `SELECT application_name, count(*) FROM pg_stat_activity GROUP BY 1`
       // actually answer the question.
@@ -153,25 +153,30 @@ class PostgresDatabase {
     // the background pool held 2 of its 40. Web serves many short queries and
     // needs the bigger share; background runs a handful of long jobs and needs
     // depth, not width. Total still 60 against Postgres.
-    // MEASURED 2026-08-20 against the live server: max_connections is **100**
-    // (superuser_reserved 3, so 97 usable) -- NOT the 200 the comment above
-    // assumed. Every service points at the same database as user `postgres`:
-    //   admin-legacy web 45 + bg 15, admin-new 10, company-service 20,
-    //   scraper-service 5, esp-sync 5  =  100 per replica, against 97 usable.
-    // At 2 replicas that is ~190 claimed against 97. Pools open lazily, which
-    // is the only reason this has not already failed: the pools simply had not
-    // expanded. It fails as a CLIFF, not a slope -- once load pushes past 97
-    // every service starts throwing "too many connections" at the same moment,
-    // psql included.
+    // CONNECTION BUDGET (measured 2026-08-20, then fixed).
     //
-    // Sized to fit the real budget: 25 + 8 = 33 per replica, 66 for two, plus
-    // 40 for the other services = 106. Still tight, so the durable fix is
-    // raising max_connections to 200 (needs a Postgres restart) -- at which
-    // point these can go back up via the env vars, no redeploy needed.
+    // The comment above used to claim a "200 limit". It was wrong: the server
+    // was running max_connections=100 (3 superuser-reserved, 97 usable) while
+    // the services between them claimed ~100 per replica --
+    //   admin-legacy web 45 + bg 15, admin-new 10, company-service 20,
+    //   scraper-service 5, esp-sync 5
+    // -- i.e. ~190 at two replicas against 97 real slots. Pools open lazily,
+    // so this had not yet failed; it would have failed as a CLIFF, with every
+    // service throwing "too many connections" at the same moment.
+    //
+    // max_connections is now genuinely 200 (verified: source=command line, set
+    // via the EasyPanel start flags). Budget at two replicas:
+    //   admin-legacy 2 x (35 + 12) = 94, + admin-new 10 + company-service 20
+    //   + scraper 5 + esp-sync 5 = 134, against 197 usable. ~63 spare for
+    //   psql, rolling deploys (both replicas briefly alive), and headroom.
+    //
     // Web keeps the larger share: a previous split used web=20 and starved it
-    // (healthz showed web 20/20, 0 idle, 21-58 waiting).
-    const webMax = Math.max(5, Number(process.env.PG_POOL_WEB_MAX) || 25);
-    const bgMax  = Math.max(5, Number(process.env.PG_POOL_BG_MAX)  || 8);
+    // (healthz showed web 20/20, 0 idle, 21-58 waiting) -- web serves many
+    // short queries, background runs a few long jobs and needs depth not width.
+    // Both tunable by env var without a redeploy; check /healthz `pools` for
+    // `waiting > 0` on web, which is the signal that users are queueing.
+    const webMax = Math.max(5, Number(process.env.PG_POOL_WEB_MAX) || 35);
+    const bgMax  = Math.max(5, Number(process.env.PG_POOL_BG_MAX)  || 12);
 
     this.pool = new Pool({ ...config, max: webMax });
     // Background pool: long jobs, warms, syncs, backfills, migrations.
