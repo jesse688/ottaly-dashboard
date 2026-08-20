@@ -16269,6 +16269,99 @@ function isFreeDomain(email) {
 //   body: { workspace_id, campaign_id, prospects:[{email,first_name,last_name,company_name,...solarFields}],
 //           fields:[ 'owns_building','max_panels_fit','max_system_kwp','est_annual_kwh',... ] }
 // The `fields` array is the tickbox selection — only these solar keys are sent.
+// Freehold re-qualification — keeps solar_status honest as ownership changes.
+//
+// WHY THIS EXISTS SEPARATELY FROM THE SWEEP BELOW: the sweep only ever fills
+// gaps (`AND ccod_owns_building IS NULL`) so it cannot correct a row that was
+// already stamped. Contacts qualified before the freehold rule landed
+// (01479d6 / ce0789c) carry solar_status='qualified' alongside
+// ccod_owns_building='no' — 1,078 of them at the time of writing. A leaseholder
+// cannot sign a 25-year rooftop PPA, so those are not prospects, and anyone
+// working that list is emailing people who cannot buy.
+//
+// Cheap by construction: ownership is an offline CCOD lookup, so this spends NO
+// Google roof quota. It only rewrites solar_status/solar_stop_reason — the
+// measured roof figures (solar_max_kwp etc.) are left intact so a contact that
+// later becomes a freeholder does not need re-metering.
+//
+//   GET /api/solar/cron/requalify?secret=$CRON_SECRET[&dry=1][&limit=N]
+// Guarded by CRON_SECRET when set; also callable by an admin session for a
+// manual run. dry=1 reports what would change without writing.
+app.get('/api/solar/cron/requalify', async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  const s = decodeSession(req);
+  const okSession = s?.role === 'admin' || s?.role === 'manager' || req.headers['x-admin-key'] === ADMIN_KEY;
+  const okSecret = secret && req.query.secret === secret;
+  if (!okSecret && !okSession) return res.status(403).json({ error: 'forbidden (CRON_SECRET or sign in)' });
+
+  const db = req.app.locals.pgDb;
+  if (!db) return res.status(503).json({ error: 'DB unavailable' });
+  const dry = req.query.dry === '1' || req.query.dry === 'true';
+  const limit = Math.min(100000, Math.max(1, parseInt(req.query.limit, 10) || 100000));
+
+  try {
+    // Demote: qualified, but ownership says they do not hold the freehold.
+    // 'unclear'/'no_postcode' are deliberately NOT demoted — absence of a
+    // verdict is not evidence of tenancy, and demoting on it would silently
+    // delete prospects the CCOD index simply has no title for.
+    const sel = await db.query(
+      `SELECT id FROM contacts
+        WHERE solar_status = 'qualified' AND ccod_owns_building = 'no'
+        LIMIT $1`, [limit]);
+    const ids = (sel.rows || sel).map(r => r.id);
+
+    if (!dry && ids.length) {
+      await db.query(
+        `UPDATE contacts
+            SET solar_status = 'disqualified', solar_stop_reason = 'tenant'
+          WHERE id = ANY($1::uuid[])`, [ids]);
+    }
+
+    const after = await db.query(
+      `SELECT COUNT(*) FILTER (WHERE solar_status = 'qualified')                              AS qualified,
+              COUNT(*) FILTER (WHERE solar_status = 'qualified' AND ccod_owns_building = 'yes') AS qualified_freehold
+         FROM contacts`);
+    const a = (after.rows || after)[0] || {};
+
+    const result = {
+      ok: true, dry, demoted: ids.length,
+      qualified_now: Number(a.qualified || 0),
+      qualified_freehold: Number(a.qualified_freehold || 0),
+      ran_at: new Date().toISOString(),
+    };
+    console.log('[solar-requalify]', JSON.stringify(result));
+    res.json(result);
+  } catch (e) {
+    console.error('[solar-requalify]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Self-running: the correction above is only useful if it happens without
+// anyone remembering to trigger it, since ownership drifts as the CCOD index is
+// refreshed monthly and new contacts are qualified continuously. Runs in-process
+// like the other recurring jobs (postmaster, mailbox stats) — no external cron
+// needed, though the endpoint stays callable for a manual or cron-job.org run.
+// Free to repeat: offline lookups only, and a no-op once nothing is stale.
+async function requalifySolarFreehold() {
+  const db = app.locals.pgDb;
+  if (!db) return;
+  try {
+    const sel = await db.query(
+      `SELECT id FROM contacts
+        WHERE solar_status = 'qualified' AND ccod_owns_building = 'no' LIMIT 100000`);
+    const ids = (sel.rows || sel).map(r => r.id);
+    if (!ids.length) return;
+    await db.query(
+      `UPDATE contacts SET solar_status = 'disqualified', solar_stop_reason = 'tenant'
+        WHERE id = ANY($1::uuid[])`, [ids]);
+    console.log(`[solar-requalify] demoted ${ids.length} leaseholder(s) from qualified`);
+  } catch (e) { console.error('[solar-requalify]', e.message); }
+}
+// Once at startup (after 3 min, so the DB and CCOD index are up) then daily.
+setTimeout(() => { requalifySolarFreehold().catch(() => {}); }, 3 * 60 * 1000);
+setInterval(() => { requalifySolarFreehold().catch(() => {}); }, 24 * 60 * 60 * 1000);
+
 // DB-wide (or per-workspace) OWNERSHIP sweep. Runs the offline CCOD + optional
 // Companies House ownership check across contacts and writes ccod_* columns.
 // NO Google/roof calls — safe and free to run on the whole database.
