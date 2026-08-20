@@ -124,6 +124,34 @@ export async function GET(req: NextRequest) {
         GROUP BY provider, recp_provider`,
       workspaceId ? [prevStart, prevEnd, workspaceId] : [prevStart, prevEnd]
     )
+    // 8-week OOO history per combo, for the in-cell sparkline. A single arrow
+    // can't tell a one-week blip from a real slide; the shape can. Weeks are
+    // ISO (Mon-start) and read straight from cache — no PV calls.
+    const SPARK_WEEKS = 8
+    const { rows: sparkRows } = await pool.query(
+      `SELECT provider, recp_provider,
+              to_char(date_trunc('week', date::date), 'YYYY-MM-DD') AS wk,
+              SUM((data->>'sent')::int)       AS sent,
+              SUM((data->>'oooReplies')::int) AS ooo
+         FROM combo_daily_stats
+        WHERE date >= to_char(
+                date_trunc('week', $1::date) - ($2 - 1) * interval '1 week', 'YYYY-MM-DD')
+          AND date <= $3
+          AND provider <> '_'
+          ${workspaceId ? `AND ws_id = $4` : ''}
+        GROUP BY 1, 2, 3
+        ORDER BY 3`,
+      workspaceId ? [end, SPARK_WEEKS, end, workspaceId] : [end, SPARK_WEEKS, end]
+    )
+    const sparkByCombo = new Map<string, { wk: string; sent: number; ooo: number }[]>()
+    for (const s of sparkRows) {
+      const f = SENDER_LABEL[s.provider as string] || (s.provider as string)
+      const t = RECIP_LABEL[s.recp_provider as string] || (s.recp_provider as string)
+      const key = `${f}|${t}`
+      if (!sparkByCombo.has(key)) sparkByCombo.set(key, [])
+      sparkByCombo.get(key)!.push({ wk: s.wk as string, sent: +s.sent || 0, ooo: +s.ooo || 0 })
+    }
+
     const prevByCombo = new Map<string, { sent: number; ooo: number }>()
     for (const p of prevRows) {
       const f = SENDER_LABEL[p.provider as string] || (p.provider as string)
@@ -189,6 +217,7 @@ export async function GET(req: NextRequest) {
           ooo,                         // OOO/auto-replies alone — the infra signal
           prev_sent: prevByCombo.get(`${from_type}|${to_type}`)?.sent ?? 0,
           prev_ooo: prevByCombo.get(`${from_type}|${to_type}`)?.ooo ?? 0,
+          spark: sparkByCombo.get(`${from_type}|${to_type}`) ?? [],
           pos_replies: +r.pos || 0,    // positive/interested
           bounces: +r.bounces || 0,
           leads: leadByCombo.get(`${from_type}|${to_type}`) || 0,
@@ -207,7 +236,7 @@ export async function GET(req: NextRequest) {
       if (!rows.some((r) => r.from_type === from_type && r.to_type === to_type)) {
         rows.push({
           from_type, to_type, sent: 0, replies: 0, replies_human: 0, ooo: 0,
-          prev_sent: 0, prev_ooo: 0,
+          prev_sent: 0, prev_ooo: 0, spark: [],
           pos_replies: 0, bounces: 0, leads: n, unique_contacts: 0,
           capped: false, is_approx: false,
         })

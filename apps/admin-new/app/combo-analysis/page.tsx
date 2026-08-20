@@ -17,6 +17,7 @@ interface ComboRow {
   ooo: number            // OOO/auto-replies alone — the infra signal we rank on
   prev_sent: number      // same-length window immediately before this one
   prev_ooo: number
+  spark: { wk: string; sent: number; ooo: number }[] // last 8 ISO weeks
   pos_replies: number    // = replies_human (back-compat)
   bounces: number
   leads: number
@@ -408,6 +409,56 @@ export default function ComboAnalysisPage() {
     )
   }
 
+  // 8-week OOO sparkline. Scaled to its own min/max so the SHAPE is readable
+  // at cell size — this answers "is the arrow a blip or a slide", not "how does
+  // this combo compare to that one" (the matrix and chart already do that).
+  // Weeks under the volume floor break the line rather than drawing a
+  // misleading point off two sends.
+  function Spark({ r }: { r: ComboRow }) {
+    const MIN_WEEK_SENDS = 50
+    const pts = (r.spark ?? []).map((w) => ({
+      wk: w.wk,
+      sent: w.sent,
+      rate: w.sent >= MIN_WEEK_SENDS ? pctNum(w.ooo, w.sent) : null,
+    }))
+    const real = pts.filter((p) => p.rate != null) as { wk: string; sent: number; rate: number }[]
+    if (real.length < 2) return null
+    const W = 62, H = 18, PAD = 1.5
+    const lo = Math.min(...real.map((p) => p.rate))
+    const hi = Math.max(...real.map((p) => p.rate))
+    const span = hi - lo || 1
+    const x = (i: number) => (pts.length === 1 ? 0 : (i * (W - PAD * 2)) / (pts.length - 1) + PAD)
+    const y = (v: number) => H - PAD - ((v - lo) / span) * (H - PAD * 2)
+    // Break the path across gaps instead of interpolating through them.
+    let d = ''
+    let pen = false
+    pts.forEach((p, i) => {
+      if (p.rate == null) { pen = false; return }
+      d += `${pen ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.rate).toFixed(1)}`
+      pen = true
+    })
+    const last = real[real.length - 1]
+    const first = real[0]
+    const rising = last.rate >= first.rate
+    const stroke = rising ? '#059669' : '#dc2626'
+    const lastIdx = pts.findLastIndex((p) => p.rate != null)
+    return (
+      <svg
+        width={W}
+        height={H}
+        className="overflow-visible"
+        role="img"
+        aria-label={`${real.length}-week out-of-office trend`}
+      >
+        <title>
+          {real.map((p) => `${p.wk}: ${p.rate.toFixed(2)}% (${fmt(p.sent)} sent)`).join('\n')}
+        </title>
+        <path d={d} fill="none" stroke={stroke} strokeWidth="1.25" strokeLinejoin="round" strokeLinecap="round" />
+        <circle cx={x(lastIdx)} cy={y(last.rate)} r="1.8" fill={stroke} />
+      </svg>
+    )
+  }
+
   // Per-column winner/loser — the matrix highlights these so the comparison the
   // eye makes is always sender-vs-sender for the same recipients.
   const colBest: Record<string, ComboRow | null> = {}
@@ -720,7 +771,7 @@ export default function ComboAnalysisPage() {
         <div className="flex items-center justify-between border-b border-gray-200 bg-gray-50 px-5 py-3 text-[13px] font-bold text-gray-900">
           Provider Matrix
           <span className="text-[11px] font-normal text-gray-500">
-            Rows = sending provider · Columns = recipient provider · Green = best · Red = worst
+            Rows = sending provider · Columns = recipient provider · Green = best · Red = worst · Line = last 8 weeks OOO (hover for values)
           </span>
         </div>
         {loading ? (
@@ -806,6 +857,9 @@ export default function ComboAnalysisPage() {
                               <span className={cn('whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-bold', brPill(br))} title="Bounce rate — cross-check for real delivery failure">
                                 {br.toFixed(2)}% bounce
                               </span>
+                            </div>
+                            <div className="mt-1.5 flex justify-center">
+                              <Spark r={r} />
                             </div>
                           </td>
                         )
