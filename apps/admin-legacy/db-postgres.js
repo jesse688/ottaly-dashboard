@@ -33,6 +33,11 @@ const TSV_PREFILTER_COLS = Object.freeze({
 class PostgresDatabase {
   constructor() {
     this.pool = null;
+    // Separate pool for background work so long jobs cannot occupy the
+    // connections user requests need. Set in init(); every read guards with
+    // `this.bgPool || this.pool` so the class still works before init or if
+    // the background pool is ever disabled.
+    this.bgPool = null;
     this.initialized = false;
   }
 
@@ -105,11 +110,36 @@ class PostgresDatabase {
       keepAliveInitialDelayMillis: 10000,
     };
 
-    this.pool = new Pool(config);
+    // ── Two pools, one database ────────────────────────────────────────
+    // Measured: `SELECT 1` via /healthz took 4.4-11.4s (mean 7.4s, n=10) on
+    // production. That query has no table and no plan -- the time was spent
+    // WAITING FOR A CONNECTION, not executing. One process serves all HTTP and
+    // runs 19 setInterval background jobs against one pool; nine code paths
+    // hold a connection for 60-300s, and fan-out jobs run up to 24 workers.
+    // A few overlapping jobs consumed every slot and user requests queued
+    // behind them, so ordinary pages looked like database problems.
+    //
+    // Splitting the pool makes that impossible: background work can saturate
+    // its own pool without a user request ever waiting. Same total connection
+    // budget against Postgres, just partitioned so the two classes of work
+    // cannot starve each other.
+    //
+    // this.pool stays the WEB pool so all 37 internal + 5 external call sites
+    // keep their current meaning (serving users) without being rewritten.
+    const webMax = Math.max(5, Number(process.env.PG_POOL_WEB_MAX) || 20);
+    const bgMax  = Math.max(5, Number(process.env.PG_POOL_BG_MAX)  || 40);
+
+    this.pool = new Pool({ ...config, max: webMax });
+    // Background pool: long jobs, warms, syncs, backfills, migrations.
+    this.bgPool = new Pool({ ...config, max: bgMax });
 
     this.pool.on('error', (err) => {
       console.error('[PostgreSQL Pool Error]', err);
     });
+    this.bgPool.on('error', (err) => {
+      console.error('[PostgreSQL BG Pool Error]', err);
+    });
+    console.log(`[PostgreSQL] pools: web=${webMax} background=${bgMax}`);
 
     try {
       const client = await this.pool.connect();
@@ -146,7 +176,9 @@ class PostgresDatabase {
     // hang waiting on the previous deploy's still-running queries. If a
     // lock is contested, we skip that statement and retry later — better
     // than blocking the entire startup.
-    const client = await this.pool.connect();
+    // Background pool: migrations can block on locks held by a previous
+    // deploy's queries and must not occupy a web slot while they wait.
+    const client = await (this.bgPool || this.pool).connect();
     try {
       await client.query(`SET lock_timeout = '5s'`);
       await client.query(`SET statement_timeout = '60s'`);
@@ -1513,8 +1545,19 @@ class PostgresDatabase {
     })().catch(err => console.error('[PostgreSQL] Migration IIFE error:', err.message));
   }
 
+  // Pick the pool for a query. Background work must never occupy a web slot.
+  // A raised statementTimeoutMs is itself proof of long-running work, so those
+  // route to the background pool automatically -- that covers the existing
+  // callers without having to find and tag every one of them.
+  _poolFor(opts = {}) {
+    if (opts.background === true) return this.bgPool || this.pool;
+    if (opts.background === false) return this.pool;
+    if (opts.statementTimeoutMs) return this.bgPool || this.pool;
+    return this.pool;
+  }
+
   async query(sql, params, opts = {}) {
-    const client = await this.pool.connect();
+    const client = await this._poolFor(opts).connect();
     const raised = opts.statementTimeoutMs ? parseInt(opts.statementTimeoutMs, 10) : 0;
     try {
       // Optional per-statement timeout for bulk maintenance queries that need
@@ -1532,6 +1575,10 @@ class PostgresDatabase {
   }
 
   async close() {
+    if (this.bgPool) {
+      try { await this.bgPool.end(); } catch { /* already closing */ }
+      this.bgPool = null;
+    }
     if (this.pool) {
       await this.pool.end();
       this.initialized = false;
@@ -3087,7 +3134,10 @@ class PostgresDatabase {
   async refreshDistinctCache(workspaceId = 'ottaly-global', onlyField = null) {
     const fields = { Keywords: 'keywords', Technologies: 'technologies' };
     const targets = onlyField ? { [onlyField]: fields[onlyField] } : fields;
-    const client = await this.pool.connect();
+    // Background pool: this holds one connection for up to 5 minutes and has
+    // been measured at 76s for Keywords. On the web pool that is a slot no
+    // user request can use for the duration.
+    const client = await (this.bgPool || this.pool).connect();
     try {
       await client.query(`SET statement_timeout = '300000'`); // 5 min for the heavy scan
       for (const [field, col] of Object.entries(targets)) {
