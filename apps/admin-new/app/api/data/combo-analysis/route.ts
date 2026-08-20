@@ -157,6 +157,7 @@ export async function GET(req: NextRequest) {
           sent,
           replies: repliesInclOoo,     // reply rate incl. OOO (human + OOO)
           replies_human: human,        // human reply rate (excludes OOO)
+          ooo,                         // OOO/auto-replies alone — the infra signal
           pos_replies: +r.pos || 0,    // positive/interested
           bounces: +r.bounces || 0,
           leads: leadByCombo.get(`${from_type}|${to_type}`) || 0,
@@ -174,7 +175,7 @@ export async function GET(req: NextRequest) {
       const [from_type, to_type] = key.split('|')
       if (!rows.some((r) => r.from_type === from_type && r.to_type === to_type)) {
         rows.push({
-          from_type, to_type, sent: 0, replies: 0, replies_human: 0,
+          from_type, to_type, sent: 0, replies: 0, replies_human: 0, ooo: 0,
           pos_replies: 0, bounces: 0, leads: n, unique_contacts: 0,
           capped: false, is_approx: false,
         })

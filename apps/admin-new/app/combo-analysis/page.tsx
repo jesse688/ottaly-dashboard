@@ -12,8 +12,9 @@ interface ComboRow {
   sent: number
   new_leads?: number     // step-1 (new lead) sends
   follow_ups?: number    // sent − new_leads (draining tail)
-  replies: number        // incl. OOO/auto (primary reply rate)
-  replies_human: number  // real human replies (excludes OOO + warmup)
+  replies: number        // incl. OOO/auto
+  replies_human: number  // real human replies (excludes OOO + warmup) — lagging
+  ooo: number            // OOO/auto-replies alone — the infra signal we rank on
   pos_replies: number    // = replies_human (back-compat)
   bounces: number
   leads: number
@@ -131,6 +132,14 @@ function brClass(p: number) {
 }
 function rrPill(p: number) {
   return p >= 3 ? 'bg-emerald-100 text-emerald-800' : p >= 1 ? 'bg-amber-100 text-amber-800' : p > 0 ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-500'
+}
+// Index colouring is relative to the recipient column's own baseline (1.00 =
+// par), so it stays meaningful whatever the column's absolute OOO level is.
+function ixClass(x: number) {
+  return x >= 1.15 ? 'text-green-600 font-bold' : x >= 0.85 ? 'text-gray-700 font-bold' : 'text-red-600 font-bold'
+}
+function ixPill(x: number) {
+  return x >= 1.15 ? 'bg-emerald-100 text-emerald-800' : x >= 0.85 ? 'bg-gray-100 text-gray-700' : 'bg-red-100 text-red-800'
 }
 function brPill(p: number) {
   return p < 0.5 ? 'bg-green-50 text-green-700' : p < 2 ? 'bg-orange-50 text-orange-700' : 'bg-red-100 text-red-800'
@@ -320,27 +329,89 @@ export default function ComboAnalysisPage() {
     idx[`${r.from_type}|${r.to_type}`] = r
   })
 
-  // Best/worst by reply rate incl. OOO (min 50 sends, exclude capped/windowing rows)
-  const qualified = rows.filter((r) => r.sent >= 50 && !r.capped)
+  // ── Infra ranking ─────────────────────────────────────────────────────────
+  // This tool answers ONE question: does mail from sender ESP X land in the
+  // inbox of recipient ESP Y? OOO rate is the metric — auto-replies fire within
+  // minutes from the recipient's own mail server, so they are independent of
+  // copy/offer/list quality and settle same-day (human replies trickle in for
+  // days and are copy-driven; leads are worse still). Verified against 2 months
+  // of data: within every recipient column, OOO rate and human reply rate rank
+  // senders in the SAME order — so OOO predicts the outcome, days earlier.
+  //
+  // Comparisons are made WITHIN a recipient column only. Columns have very
+  // different OOO baselines (Google-recipient cells run ~6%, SMTP-recipient
+  // cells ~0%) because OOO adoption is a property of the recipient population,
+  // not of your infrastructure. Cross-column comparison is meaningless, and
+  // holiday periods lift/drop a whole column at once — comparing senders inside
+  // the same column and window cancels that out (same recipients, same weeks).
+  const MIN_SENDS = 100 // OOO rates are small; below ~100 sends a cell is noise
+
+  // Column (recipient-provider) baseline OOO rate, for the index score.
+  const colBaseline: Record<string, number> = {}
+  toTypes.forEach((to) => {
+    const cells = rows.filter((r) => r.to_type === to && r.sent > 0)
+    const s = cells.reduce((a, c) => a + c.sent, 0)
+    const o = cells.reduce((a, c) => a + c.ooo, 0)
+    colBaseline[to] = s > 0 ? (100 * o) / s : 0
+  })
+  // Index: this cell's OOO rate ÷ its column's OOO rate. 1.0 = par for these
+  // recipients this window; >1 beats the field. Readable across weeks because
+  // a season-wide shift moves numerator and denominator together.
+  function oooIndex(r: ComboRow): number | null {
+    const base = colBaseline[r.to_type]
+    if (!base || r.sent < MIN_SENDS) return null
+    return pctNum(r.ooo, r.sent) / base
+  }
+
+  // Per-column winner/loser — the matrix highlights these so the comparison the
+  // eye makes is always sender-vs-sender for the same recipients.
+  const colBest: Record<string, ComboRow | null> = {}
+  const colWorst: Record<string, ComboRow | null> = {}
+  toTypes.forEach((to) => {
+    const cells = rows.filter((r) => r.to_type === to && r.sent >= MIN_SENDS && !r.capped)
+    if (cells.length < 2) { colBest[to] = null; colWorst[to] = null; return }
+    colBest[to] = cells.reduce((a, b) => (pctNum(b.ooo, b.sent) > pctNum(a.ooo, a.sent) ? b : a))
+    colWorst[to] = cells.reduce((a, b) => (pctNum(b.ooo, b.sent) < pctNum(a.ooo, a.sent) ? b : a))
+  })
+
+  const qualified = rows.filter((r) => r.sent >= MIN_SENDS && !r.capped)
   let best: ComboRow | null = null
   let worst: ComboRow | null = null
   if (qualified.length) {
-    best = qualified.reduce((a, b) => (pctNum(b.replies, b.sent) > pctNum(a.replies, a.sent) ? b : a))
-    worst = qualified.reduce((a, b) => (pctNum(b.replies, b.sent) < pctNum(a.replies, a.sent) ? b : a))
+    // Ranked by index, not raw rate, so the winner isn't just whichever column
+    // happens to have the most out-of-office culture.
+    const scored = qualified.map((r) => ({ r, ix: oooIndex(r) ?? 0 }))
+    best = scored.reduce((a, b) => (b.ix > a.ix ? b : a)).r
+    worst = scored.reduce((a, b) => (b.ix < a.ix ? b : a)).r
   }
 
-  // Recommendation: for each recipient provider, the sender with the highest
-  // Reply Rate (incl. OOO), among combos with enough volume to trust (≥50 sends).
+  // Recommendation: within each recipient column, the sender with the best OOO
+  // rate. Same recipients, same window → the only variable left is the sender.
   const REAL_TO = ['email_google', 'email_outlook', 'email_other']
   const recommendation = REAL_TO.map((to) => {
-    const candidates = rows.filter((r) => r.to_type === to && r.sent >= 50 && !r.capped)
+    const candidates = rows.filter((r) => r.to_type === to && r.sent >= MIN_SENDS && !r.capped)
     if (!candidates.length) return null
-    const win = candidates.reduce((a, b) => (pctNum(b.replies, b.sent) > pctNum(a.replies, a.sent) ? b : a))
-    return { to, win, rr: pctNum(win.replies, win.sent) }
-  }).filter((x): x is { to: string; win: ComboRow; rr: number } => x !== null)
+    const win = candidates.reduce((a, b) => (pctNum(b.ooo, b.sent) > pctNum(a.ooo, a.sent) ? b : a))
+    // Runner-up gap tells you whether the win is decisive or a coin-flip.
+    const rest = candidates.filter((c) => c !== win)
+    const second = rest.length
+      ? rest.reduce((a, b) => (pctNum(b.ooo, b.sent) > pctNum(a.ooo, a.sent) ? b : a))
+      : null
+    return {
+      to,
+      win,
+      rr: pctNum(win.ooo, win.sent),
+      second,
+      secondRr: second ? pctNum(second.ooo, second.sent) : null,
+    }
+  }).filter(
+    (x): x is { to: string; win: ComboRow; rr: number; second: ComboRow | null; secondRr: number | null } =>
+      x !== null,
+  )
 
   function ComboCard({ r, label, variant }: { r: ComboRow; label: string; variant: 'winner' | 'loser' }) {
-    const rr = ratePct(r.replies, r.sent, r.capped) ?? 0
+    const oooRate = pctNum(r.ooo, r.sent)
+    const ix = oooIndex(r)
     const rrHuman = ratePct(r.replies_human, r.sent, r.capped) ?? 0
     const br = pctNum(r.bounces, r.sent)
     return (
@@ -354,21 +425,23 @@ export default function ComboAnalysisPage() {
         <div className="mb-2 text-lg font-bold text-gray-900">
           {fromLabel(r.from_type)} → {toLabel(r.to_type)}
         </div>
-        <div className="flex flex-wrap gap-3 text-xs text-gray-500">
+        <div className="flex flex-wrap items-baseline gap-3 text-xs text-gray-500">
           <div>
             <strong className="text-gray-900">{fmt(r.sent)}</strong> sends
           </div>
-          <div>
-            <strong className={rrClass(rr)}>{rr.toFixed(1)}%</strong> reply (OOO)
+          <div title="Out-of-office / auto-reply rate — the infra signal this page ranks on">
+            <strong className={rrClass(oooRate)}>{oooRate.toFixed(2)}%</strong> OOO
           </div>
-          <div>
-            <strong className="text-sky-700">{rrHuman.toFixed(1)}%</strong> human
-          </div>
-          <div>
+          {ix != null && (
+            <div title={`Versus the ${toLabel(r.to_type)} column average (${colBaseline[r.to_type].toFixed(2)}% OOO). 1.00 = par.`}>
+              <strong className={ixClass(ix)}>{ix.toFixed(2)}×</strong> vs column
+            </div>
+          )}
+          <div title="Bounce rate — cross-check. OOO down + bounce flat = seasonal; OOO down + bounce up = real problem.">
             <strong className={brClass(br)}>{br.toFixed(2)}%</strong> bounce
           </div>
-          <div>
-            <strong className="text-gray-900">{r.leads}</strong> leads
+          <div className="text-gray-400" title="Human reply rate — lagging confirmation, copy-dependent. Not used for ranking.">
+            {rrHuman.toFixed(2)}% human
           </div>
         </div>
       </div>
@@ -382,7 +455,9 @@ export default function ComboAnalysisPage() {
         <div>
           <div className="text-xl font-bold text-gray-900">Combo Analysis</div>
           <div className="mt-0.5 text-xs text-gray-500">
-            Which sending provider works best for each recipient provider. Replies from classified inbox (warmup excluded); sends from webhook events.
+            Deliverability only — which sending provider lands best with each recipient provider. Ranked on
+            out-of-office rate (fires in minutes from the recipient&apos;s mail server, so it measures infrastructure,
+            not copy). Compare senders <b>within</b> a recipient column; columns have different OOO baselines.
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -480,18 +555,36 @@ export default function ComboAnalysisPage() {
         <div className="mb-5 rounded-xl border border-teal-200 bg-teal-50/60 p-4">
           <div className="mb-3 text-[13px] font-bold text-gray-900">
             Recommended sender for each recipient
-            <span className="ml-2 text-[11px] font-normal text-gray-500">ranked by reply rate (incl. out-of-office), ≥50 sends</span>
+            <span className="ml-2 text-[11px] font-normal text-gray-500">
+              best out-of-office rate within each recipient column, ≥{MIN_SENDS} sends
+            </span>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            {recommendation.map(({ to, win, rr }) => (
-              <div key={to} className="rounded-lg border border-gray-200 bg-white p-3">
-                <div className="text-[11px] uppercase tracking-wide text-gray-500">Sending to {toLabel(to)}</div>
-                <div className="mt-1 text-base font-bold text-gray-900">Use {fromLabel(win.from_type)}</div>
-                <div className="mt-1 text-xs text-gray-500">
-                  <strong className="text-teal-700">{rr.toFixed(1)}%</strong> reply rate · {fmt(win.sent)} sent
+            {recommendation.map(({ to, win, rr, second, secondRr }) => {
+              // A win inside the noise band is not a win. Flag it rather than
+              // implying a switch is justified.
+              const margin = secondRr != null && secondRr > 0 ? rr / secondRr : null
+              const decisive = margin == null || margin >= 1.15
+              return (
+                <div key={to} className="rounded-lg border border-gray-200 bg-white p-3">
+                  <div className="text-[11px] uppercase tracking-wide text-gray-500">Sending to {toLabel(to)}</div>
+                  <div className="mt-1 text-base font-bold text-gray-900">Use {fromLabel(win.from_type)}</div>
+                  <div className="mt-1 text-xs text-gray-500">
+                    <strong className="text-teal-700">{rr.toFixed(2)}%</strong> OOO · {fmt(win.sent)} sent
+                  </div>
+                  {second && secondRr != null && (
+                    <div className="mt-1 text-[11px] text-gray-400">
+                      vs {fromLabel(second.from_type)} {secondRr.toFixed(2)}%
+                      {!decisive && (
+                        <span className="ml-1 font-semibold text-amber-600" title="Within noise of the runner-up — not a clear win. Watch it over more weeks before switching.">
+                          · too close to call
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </div>
       )}
@@ -556,37 +649,45 @@ export default function ComboAnalysisPage() {
                             </td>
                           )
                         }
-                        const rr = ratePct(r.replies, r.sent, r.capped) ?? 0
-                        const rrHuman = ratePct(r.replies_human, r.sent, r.capped) ?? 0
+                        const oooRate = pctNum(r.ooo, r.sent)
+                        const ix = oooIndex(r)
                         const br = pctNum(r.bounces, r.sent)
-                        const isBest = best && r.from_type === best.from_type && r.to_type === best.to_type
-                        const isWorst = worst && r.from_type === worst.from_type && r.to_type === worst.to_type
+                        const thin = r.sent < MIN_SENDS
+                        // Best/worst are highlighted per COLUMN, so the eye
+                        // compares senders for the same recipients — never
+                        // across columns, where baselines differ.
+                        const isBest = colBest[to] === r
+                        const isWorst = colWorst[to] === r
                         return (
                           <td
                             key={to}
                             className={cn(
                               'min-w-[150px] border-b border-l border-gray-200 px-4 py-3 text-center align-top',
-                              isBest ? 'bg-green-50' : isWorst ? 'bg-rose-50' : ''
+                              thin ? 'opacity-50' : isBest ? 'bg-green-50' : isWorst ? 'bg-rose-50' : ''
                             )}
                           >
                             <div className="text-lg font-bold leading-none text-gray-900">
-                              {fmt(r.sent)} {r.capped ? <span title="Some replies arrived from sends before this window — rate capped at 100%">⚠️</span> : null}
+                              {fmt(r.sent)}
                             </div>
                             <div className="mt-1.5 flex flex-wrap justify-center gap-1">
-                              <span className={cn('whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-bold', rrPill(rr))} title="Reply rate including out-of-office / auto-replies">
-                                {rr.toFixed(1)}% reply
+                              <span className={cn('whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-bold', rrPill(oooRate))} title="Out-of-office rate — the deliverability signal">
+                                {oooRate.toFixed(2)}% OOO
                               </span>
-                              <span className="whitespace-nowrap rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold text-sky-800" title="Human reply rate (excludes out-of-office and warmup)">
-                                {rrHuman.toFixed(1)}% human
-                              </span>
-                              <span className={cn('whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-bold', brPill(br))} title="Bounce rate">
+                              {ix != null ? (
+                                <span
+                                  className={cn('whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-bold', ixPill(ix))}
+                                  title={`${ix.toFixed(2)}× the ${toLabel(to)} column average (${colBaseline[to].toFixed(2)}% OOO). 1.00 = par for these recipients.`}
+                                >
+                                  {ix.toFixed(2)}×
+                                </span>
+                              ) : (
+                                <span className="whitespace-nowrap rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] font-bold text-gray-400" title={`Under ${MIN_SENDS} sends — too little volume to rank`}>
+                                  low vol
+                                </span>
+                              )}
+                              <span className={cn('whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-bold', brPill(br))} title="Bounce rate — cross-check for real delivery failure">
                                 {br.toFixed(2)}% bounce
                               </span>
-                              {r.leads ? (
-                                <span className="whitespace-nowrap rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800" title="Leads">
-                                  {r.leads} leads
-                                </span>
-                              ) : null}
                             </div>
                           </td>
                         )
@@ -625,21 +726,27 @@ export default function ComboAnalysisPage() {
                   <th className="border-b border-gray-200 px-4 py-2.5 text-left font-bold">Recipient</th>
                   <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold">Sends</th>
                   <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold" title="New-lead (step 1) sends vs follow-ups (step 2+), over the nearest precomputed 7d/30d window (PlusVibe's new-lead count is only meaningful over multi-day ranges — so this does NOT match a single-day 'Today' total). Follow-ups are locked to the mailbox from first contact, so they ignore ESP matching — a high follow-up share on a wrong combo is the draining tail.">New / Follow-up <span className="font-normal text-gray-400">(7/30d)</span></th>
-                  <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold" title="Reply rate including out-of-office / auto-replies">Reply Rate (OOO)</th>
-                  <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold" title="Human reply rate — excludes out-of-office and warmup">Human Reply Rate</th>
-                  <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold">Bounces</th>
-                  <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold">Leads</th>
-                  <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold" title="RTL — replies per lead (all replies ÷ leads). Lower is better.">RTL</th>
-                  <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold" title="LTR — leads per 1,000 sends. Higher is better.">LTR</th>
+                  <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold" title="Out-of-office rate — the deliverability signal this page ranks on. Fires within minutes from the recipient's mail server, independent of copy.">OOO Rate</th>
+                  <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold" title="OOO rate ÷ this recipient column's average OOO rate. 1.00 = par for these recipients. Cancels out season-wide swings (holidays lift a whole column at once).">vs Column</th>
+                  <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold" title="Bounce rate — cross-check. OOO down + bounce flat = seasonal. OOO down + bounce up = real deliverability problem.">Bounces</th>
+                  <th className="border-b border-gray-200 px-4 py-2.5 text-right font-normal text-gray-400" title="Lagging confirmation only — human replies are copy- and offer-dependent and take days to arrive. Not used for ranking.">Human %</th>
+                  <th className="border-b border-gray-200 px-4 py-2.5 text-right font-normal text-gray-400" title="Lagging, copy-dependent. Not a deliverability signal. Shown for reference only.">Leads</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r, i) => {
-                  const rr = ratePct(r.replies, r.sent, r.capped)
+                {[...rows]
+                  // Group by recipient column, best OOO first — the table reads
+                  // in the same order the comparison should be made.
+                  .sort((a, b) =>
+                    a.to_type === b.to_type
+                      ? pctNum(b.ooo, b.sent) - pctNum(a.ooo, a.sent)
+                      : a.to_type.localeCompare(b.to_type),
+                  )
+                  .map((r, i) => {
                   const rrHuman = ratePct(r.replies_human, r.sent, r.capped)
                   const br = pctNum(r.bounces, r.sent)
-                  const rtl = r.leads > 0 ? r.replies / r.leads : null   // replies per lead
-                  const ltr = r.sent > 0 ? (r.leads * 1000) / r.sent : null // leads per 1,000 sends
+                  const oooRate = pctNum(r.ooo, r.sent)
+                  const ix = oooIndex(r)
                   return (
                     <tr key={`${r.from_type}|${r.to_type}|${i}`} className="text-[13px] hover:bg-gray-50">
                       <td className="border-b border-gray-200 px-4 py-3 text-left">
@@ -669,20 +776,20 @@ export default function ComboAnalysisPage() {
                           )
                         })()}
                       </td>
-                      <td className={cn('border-b border-gray-200 px-4 py-3 text-right', rr != null ? rrClass(rr) : '')}>
-                        {rr != null ? rr.toFixed(1) + '%' : '—'}
-                        <span className="ml-1 text-[11px] font-normal text-gray-400">({fmt(r.replies)})</span>
+                      <td className={cn('border-b border-gray-200 px-4 py-3 text-right', r.sent ? rrClass(oooRate) : '')}>
+                        {r.sent ? oooRate.toFixed(2) + '%' : '—'}
+                        <span className="ml-1 text-[11px] font-normal text-gray-400">({fmt(r.ooo)})</span>
                       </td>
-                      <td className={cn('border-b border-gray-200 px-4 py-3 text-right', rrHuman != null ? rrClass(rrHuman) : '')}>
-                        {rrHuman != null ? rrHuman.toFixed(1) + '%' : '—'}
-                        <span className="ml-1 text-[11px] font-normal text-gray-400">({fmt(r.replies_human)})</span>
+                      <td className={cn('border-b border-gray-200 px-4 py-3 text-right tabular-nums', ix != null ? ixClass(ix) : 'text-gray-300')}>
+                        {ix != null ? ix.toFixed(2) + '×' : <span title={`Under ${MIN_SENDS} sends`}>low vol</span>}
                       </td>
                       <td className={cn('border-b border-gray-200 px-4 py-3 text-right', r.sent ? brClass(br) : '')}>
                         {fmt(r.bounces)} {r.sent ? <span className="text-[11px] font-normal text-gray-400">({br.toFixed(2)}%)</span> : null}
                       </td>
-                      <td className="border-b border-gray-200 px-4 py-3 text-right text-blue-700 font-medium">{r.leads}</td>
-                      <td className="border-b border-gray-200 px-4 py-3 text-right" title="Replies per lead">{rtl != null ? rtl.toFixed(1) : '—'}</td>
-                      <td className="border-b border-gray-200 px-4 py-3 text-right" title="Leads per 1,000 sends">{ltr != null ? ltr.toFixed(2) : '—'}</td>
+                      <td className="border-b border-gray-200 px-4 py-3 text-right text-gray-400">
+                        {rrHuman != null ? rrHuman.toFixed(2) + '%' : '—'}
+                      </td>
+                      <td className="border-b border-gray-200 px-4 py-3 text-right text-gray-400">{r.leads}</td>
                     </tr>
                   )
                 })}
