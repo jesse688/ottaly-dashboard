@@ -28,20 +28,6 @@ const SECTIONS: Section[] = [
     ],
   },
   {
-    label: 'Copy',
-    color: '#A78BFA',
-    icon: (
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/>
-      </svg>
-    ),
-    pages: [
-      { href: '/campaigns',     label: 'Campaigns' },
-      { href: '/copy',          label: 'Copy Analytics' },
-      { href: '/leads-analysis',label: 'Leads Analysis' },
-    ],
-  },
-  {
     label: 'Data',
     color: '#22D3EE',
     icon: (
@@ -69,13 +55,14 @@ const SECTIONS: Section[] = [
       </svg>
     ),
     pages: [
-      { href: '/actions',      label: 'Actions' },
-      { href: '/stats',        label: 'Stats' },
-      { href: '/health',       label: 'Health' },
-      { href: '/metrics',      label: 'Metrics' },
-      { href: '/audience',     label: 'Audience' },
-      { href: '/diagnostics',  label: 'Diagnostics' },
-      { href: '/intelligence', label: 'Intelligence' },
+      { href: '/actions',       label: 'Actions' },
+      { href: '/stats',         label: 'Stats' },
+      { href: '/health',        label: 'Health' },
+      { href: '/metrics',       label: 'Metrics' },
+      { href: '/audience',      label: 'Audience' },
+      { href: '/leads-analysis',label: 'Leads Analysis' },
+      { href: '/diagnostics',   label: 'Diagnostics' },
+      { href: '/intelligence',  label: 'Intelligence' },
     ],
   },
   {
