@@ -100,6 +100,13 @@ function toLabel(t: string) {
   )
 }
 
+// Line colours for the weekly trend, matching each sender's tag hue.
+const SENDER_COLOR: Record<string, string> = {
+  google: '#0284c7',
+  microsoft: '#7c3aed',
+  smtp: '#64748b',
+}
+
 const FROM_TAG: Record<string, string> = {
   google: 'bg-sky-100 text-sky-700',
   microsoft: 'bg-violet-100 text-violet-800',
@@ -459,6 +466,10 @@ export default function ComboAnalysisPage() {
     )
   }
 
+  // Union of every week present in the data, oldest first — the shared X axis
+  // for the weekly trend panels.
+  const weekKeys = [...new Set(rows.flatMap((r) => (r.spark ?? []).map((w) => w.wk)))].sort()
+
   // Per-column winner/loser — the matrix highlights these so the comparison the
   // eye makes is always sender-vs-sender for the same recipients.
   const colBest: Record<string, ComboRow | null> = {}
@@ -721,10 +732,13 @@ export default function ComboAnalysisPage() {
               const ranked = [...cells].sort((a, b) => pctNum(b.ooo, b.sent) - pctNum(a.ooo, a.sent))
               const top = ranked.find((c) => c.sent >= MIN_SENDS)
               return (
-                <div key={to}>
-                  <div className="mb-3 text-center text-[11px] font-bold uppercase tracking-wide text-gray-500">
+                <div key={to} className="min-w-0">
+                  <div className="mb-3 truncate text-center text-[11px] font-bold uppercase tracking-wide text-gray-500">
                     Sending to {toLabel(to)}
                   </div>
+                  {/* items-end + fixed height keeps bars on a common baseline;
+                      the value label sits inside the flow above each bar so it
+                      can't overlap the group heading. */}
                   <div className="flex h-40 items-end justify-center gap-4">
                     {ranked.map((c) => {
                       const rate = pctNum(c.ooo, c.sent)
@@ -742,7 +756,7 @@ export default function ComboAnalysisPage() {
                             )}
                             // Floor of 2px so a genuine zero still reads as a
                             // bar at zero rather than a missing category.
-                            style={{ height: `${Math.max(2, (rate / peak) * 128)}px` }}
+                            style={{ height: `${Math.max(2, (rate / peak) * 104)}px` }}
                             title={`${fromLabel(c.from_type)} → ${toLabel(to)}: ${rate.toFixed(2)}% OOO on ${fmt(c.sent)} sends${thin ? ` (under ${MIN_SENDS} sends — not ranked)` : ''}`}
                           />
                           <div className={cn('mt-1.5 text-center text-[10px] leading-tight', thin ? 'text-gray-300' : 'text-gray-600')}>
@@ -759,6 +773,100 @@ export default function ComboAnalysisPage() {
                       Use <b className="text-gray-900">{fromLabel(top.from_type)}</b>
                     </div>
                   )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Weekly trend — one panel per recipient, one line per sender. The bar
+          chart says who wins THIS window; this says whether that has been true
+          for weeks or just happened. Shared Y within a panel (senders compete
+          for the same recipients), independent Y across panels (columns have
+          different OOO baselines, so a shared scale would invite the invalid
+          cross-column read). */}
+      {!loading && !error && weekKeys.length >= 2 && (
+        <div className="mb-5 overflow-hidden rounded-xl border border-gray-200 bg-white">
+          <div className="flex items-center justify-between border-b border-gray-200 bg-gray-50 px-5 py-3 text-[13px] font-bold text-gray-900">
+            Weekly trend — OOO rate by sender
+            <span className="text-[11px] font-normal text-gray-500">
+              Last {weekKeys.length} weeks · higher = lands better · weeks under 50 sends are skipped
+            </span>
+          </div>
+          <div className="grid grid-cols-1 gap-6 p-5 lg:grid-cols-3">
+            {REAL_TO.map((to) => {
+              const series = fromTypes
+                .map((f) => ({ from: f, row: idx[`${f}|${to}`] }))
+                .filter((s) => s.row?.spark?.length)
+                .map((s) => ({
+                  from: s.from,
+                  pts: weekKeys.map((wk) => {
+                    const w = s.row.spark.find((x) => x.wk === wk)
+                    return w && w.sent >= 50 ? pctNum(w.ooo, w.sent) : null
+                  }),
+                }))
+                .filter((s) => s.pts.some((p) => p != null))
+              if (!series.length) return null
+              const all = series.flatMap((s) => s.pts).filter((p): p is number => p != null)
+              const hi = Math.max(...all, 0.001)
+              const W = 300, H = 130, L = 30, B = 20, T = 8
+              const px = (i: number) =>
+                L + (weekKeys.length === 1 ? 0 : (i * (W - L - 6)) / (weekKeys.length - 1))
+              const py = (v: number) => T + (1 - v / hi) * (H - T - B)
+              return (
+                <div key={to} className="min-w-0">
+                  <div className="mb-2 text-center text-[11px] font-bold uppercase tracking-wide text-gray-500">
+                    Sending to {toLabel(to)}
+                  </div>
+                  <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label={`Weekly OOO rate sending to ${toLabel(to)}`}>
+                    {[0, hi / 2, hi].map((g, i) => (
+                      <g key={i}>
+                        <line x1={L} y1={py(g)} x2={W - 6} y2={py(g)} stroke="#e5e7eb" strokeWidth="1" />
+                        <text x={L - 4} y={py(g) + 3} textAnchor="end" fontSize="8" fill="#9ca3af">
+                          {g.toFixed(1)}%
+                        </text>
+                      </g>
+                    ))}
+                    {weekKeys.map((wk, i) =>
+                      i % 2 === 0 || i === weekKeys.length - 1 ? (
+                        <text key={wk} x={px(i)} y={H - 6} textAnchor="middle" fontSize="8" fill="#9ca3af">
+                          {wk.slice(5)}
+                        </text>
+                      ) : null,
+                    )}
+                    {series.map((s) => {
+                      // Break the line across low-volume weeks rather than
+                      // interpolating a value that was never measured.
+                      let d = ''
+                      let pen = false
+                      s.pts.forEach((v, i) => {
+                        if (v == null) { pen = false; return }
+                        d += `${pen ? 'L' : 'M'}${px(i).toFixed(1)},${py(v).toFixed(1)}`
+                        pen = true
+                      })
+                      return (
+                        <g key={s.from}>
+                          <path d={d} fill="none" stroke={SENDER_COLOR[s.from] ?? '#9ca3af'} strokeWidth="1.75" strokeLinejoin="round" strokeLinecap="round" />
+                          {s.pts.map((v, i) =>
+                            v == null ? null : (
+                              <circle key={i} cx={px(i)} cy={py(v)} r="2" fill={SENDER_COLOR[s.from] ?? '#9ca3af'}>
+                                <title>{`${fromLabel(s.from)} · ${weekKeys[i]}: ${v.toFixed(2)}%`}</title>
+                              </circle>
+                            ),
+                          )}
+                        </g>
+                      )
+                    })}
+                  </svg>
+                  <div className="mt-1 flex flex-wrap justify-center gap-3">
+                    {series.map((s) => (
+                      <span key={s.from} className="flex items-center gap-1 text-[10px] text-gray-600">
+                        <span className="inline-block h-2 w-2 rounded-full" style={{ background: SENDER_COLOR[s.from] ?? '#9ca3af' }} />
+                        {fromLabel(s.from)}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               )
             })}
