@@ -2979,7 +2979,18 @@ app.get('/healthz', async (req, res) => {
   try {
     const pgPool = req.app.locals.pgDb;
     if (pgPool && typeof pgPool.query === 'function') {
+      // Pool saturation is what made ordinary pages look like database faults:
+      // a bare SELECT 1 measured 4.4-11.4s in production purely from waiting
+      // for a free connection. Expose both pools so that is visible directly
+      // instead of being inferred from endpoint latency.
+      // waiting > 0 on web = users are queueing for a connection.
+      const stat = (pool) => pool
+        ? { total: pool.totalCount, idle: pool.idleCount, waiting: pool.waitingCount }
+        : null;
+      health.pools = { web: stat(pgPool.pool), background: stat(pgPool.bgPool) };
+      const t0 = Date.now();
       await pgPool.query('SELECT 1');
+      health.dbLatencyMs = Date.now() - t0;
       health.db = 'ok';
     } else {
       health.db = 'unconfigured';
