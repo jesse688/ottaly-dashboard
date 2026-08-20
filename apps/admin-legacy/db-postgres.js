@@ -30,6 +30,19 @@ const TSV_PREFILTER_COLS = Object.freeze({
   'industry': true,
 });
 
+// Ambient "this is background work" marker. The 19 setInterval jobs reach the
+// database through ~268 scattered call sites; tagging each one would be both
+// laborious and easy to get wrong. AsyncLocalStorage carries the flag across
+// every await inside a job instead, so _poolFor() can see it without any call
+// site changing.
+const { AsyncLocalStorage } = require('async_hooks');
+const bgContext = new AsyncLocalStorage();
+
+// Run fn with every query inside it routed to the background pool.
+function runAsBackground(fn) {
+  return bgContext.run(true, fn);
+}
+
 class PostgresDatabase {
   constructor() {
     this.pool = null;
@@ -126,8 +139,13 @@ class PostgresDatabase {
     //
     // this.pool stays the WEB pool so all 37 internal + 5 external call sites
     // keep their current meaning (serving users) without being rewritten.
-    const webMax = Math.max(5, Number(process.env.PG_POOL_WEB_MAX) || 20);
-    const bgMax  = Math.max(5, Number(process.env.PG_POOL_BG_MAX)  || 40);
+    // Sized from measurement, not guesswork. The first split used web=20 and
+    // starved it: /healthz showed web 20/20 with 0 idle and 21-58 waiting while
+    // the background pool held 2 of its 40. Web serves many short queries and
+    // needs the bigger share; background runs a handful of long jobs and needs
+    // depth, not width. Total still 60 against Postgres.
+    const webMax = Math.max(5, Number(process.env.PG_POOL_WEB_MAX) || 45);
+    const bgMax  = Math.max(5, Number(process.env.PG_POOL_BG_MAX)  || 15);
 
     this.pool = new Pool({ ...config, max: webMax });
     // Background pool: long jobs, warms, syncs, backfills, migrations.
@@ -1550,9 +1568,12 @@ class PostgresDatabase {
   // route to the background pool automatically -- that covers the existing
   // callers without having to find and tag every one of them.
   _poolFor(opts = {}) {
+    // Explicit opts always win over the ambient context.
     if (opts.background === true) return this.bgPool || this.pool;
     if (opts.background === false) return this.pool;
     if (opts.statementTimeoutMs) return this.bgPool || this.pool;
+    // Inside runAsBackground(): a timer job, not a user request.
+    if (bgContext.getStore() === true) return this.bgPool || this.pool;
     return this.pool;
   }
 
@@ -4721,3 +4742,4 @@ class PostgresDatabase {
 }
 
 module.exports = PostgresDatabase;
+module.exports.runAsBackground = runAsBackground;

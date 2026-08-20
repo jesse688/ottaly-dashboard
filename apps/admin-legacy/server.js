@@ -24,6 +24,36 @@ try {
   PostgresDatabase = null;
 }
 
+// ── Route ALL timer-driven work to the background connection pool ──────────
+// 19 setInterval/setTimeout jobs reach the database through ~268 scattered
+// call sites. Rather than tag each one (laborious, easy to miss), wrap the
+// timer callbacks: anything scheduled by a timer runs inside an
+// AsyncLocalStorage context that _poolFor() reads, so every query it makes --
+// however deeply nested behind awaits -- takes a background connection.
+//
+// Express request handlers are NOT timer-scheduled, so they are unaffected and
+// keep using the web pool. This is what keeps a slow warm job from consuming
+// the connections user requests need.
+if (PostgresDatabase && PostgresDatabase.runAsBackground) {
+  const { runAsBackground } = PostgresDatabase;
+  const _setInterval = global.setInterval;
+  const _setTimeout = global.setTimeout;
+  global.setInterval = function (fn, ...rest) {
+    return typeof fn === 'function'
+      ? _setInterval(function (...a) { return runAsBackground(() => fn.apply(this, a)); }, ...rest)
+      : _setInterval(fn, ...rest);
+  };
+  global.setTimeout = function (fn, ...rest) {
+    return typeof fn === 'function'
+      ? _setTimeout(function (...a) { return runAsBackground(() => fn.apply(this, a)); }, ...rest)
+      : _setTimeout(fn, ...rest);
+  };
+  // Preserve promisify support (util.promisify(setTimeout) is used by some deps).
+  const { promisify } = require('util');
+  global.setTimeout[promisify.custom] = (ms, val) =>
+    new Promise(res => _setTimeout(() => res(val), ms));
+}
+
 let SqliteDatabase;
 try {
   SqliteDatabase = require('./db-sqlite');
