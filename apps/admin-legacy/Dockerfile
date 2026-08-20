@@ -30,9 +30,18 @@ RUN npm install --omit=dev
 # `COPY apps/admin-legacy/ ./` layer even when the commit changed, shipping
 # stale code on a "successful" build. Bumping CACHEBUST (any new value each
 # deploy) forces this layer — and everything after it — to rebuild.
-ARG CACHEBUST=2026-08-20-62
+ARG CACHEBUST=2026-08-20-63
 COPY apps/admin-legacy/ ./
 
 EXPOSE 3000
 
-CMD ["node", "server.js"]
+# Cap the JS heap. With no cap, V8 sizes itself against the HOST's memory and
+# happily grows past the container limit, so the kernel OOM-kills the process:
+# no stack, no log line, just a dead container. A cap turns that same event
+# into a catchable "JavaScript heap out of memory" with a stack trace.
+#
+# Set NODE_HEAP_MB to roughly 75% of the container's memory limit (leaving room
+# for Chromium, which costs ~1GB resident under load, plus native buffers).
+# 1536 assumes a 2GB container -- raise it if the container is larger.
+ENV NODE_HEAP_MB=1536
+CMD ["sh", "-c", "exec node --max-old-space-size=${NODE_HEAP_MB} server.js"]

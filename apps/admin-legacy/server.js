@@ -813,11 +813,32 @@ function startEmailFinderApp() {
   });
   emailFinderProc.stdout.on('data', chunk => console.log(`[email-finder] ${chunk.toString().trim()}`));
   emailFinderProc.stderr.on('data', chunk => console.error(`[email-finder] ${chunk.toString().trim()}`));
+  // Restart on exit. Without this a dead finder means every verification call
+  // fails with ECONNREFUSED -> _netfail -> 'unknown' written to the DB for
+  // every contact touched, until someone redeploys the container. The
+  // slack-bot child already restarted itself; this one never did, which is
+  // why "restart the container" became the recovery procedure.
   emailFinderProc.on('exit', code => {
     console.log(`[email-finder] exited with code ${code}`);
     emailFinderProc = null;
+    if (_finderShuttingDown) return;
+    _finderRestarts += 1;
+    const delay = Math.min(30000, 2000 * _finderRestarts);
+    console.log(`[email-finder] restarting in ${delay}ms (restart #${_finderRestarts})`);
+    setTimeout(() => {
+      try { startEmailFinderApp(); }
+      catch (e) { console.error('[email-finder] restart failed:', e.message); }
+    }, delay).unref?.();
   });
 }
+
+// Restart bookkeeping. The backoff is capped so a finder that cannot start at
+// all does not spin, and resets once one has stayed up for 5 minutes.
+let _finderRestarts = 0;
+let _finderShuttingDown = false;
+setInterval(() => {
+  if (emailFinderProc && _finderRestarts) _finderRestarts = 0;
+}, 5 * 60 * 1000).unref?.();
 
 startEmailFinderApp();
 
@@ -3023,6 +3044,12 @@ let _elLagMax = 0;
 app.get('/healthz', async (req, res) => {
   res.set('Cache-Control', 'no-store');
   const health = { status: 'ok', uptime: Math.round(process.uptime()), db: 'unknown' };
+  // Rejections survived rather than killed the process. A rising count with a
+  // flat uptime means background jobs are failing quietly; a reset to 0 with a
+  // low uptime means the process restarted.
+  try { health.unhandledRejections = req.app.locals.getCrashCount?.() ?? null; } catch (_) {}
+  // Configured heap ceiling, so an OOM can be told from a crash after the fact.
+  try { health.heapLimitMB = Math.round(require('v8').getHeapStatistics().heap_size_limit / 1048576); } catch (_) {}
   try {
     const pgPool = req.app.locals.pgDb;
     if (pgPool && typeof pgPool.query === 'function') {
@@ -22610,6 +22637,7 @@ function scheduleAudienceScoring(pgdb) {
   const gracefulShutdown = (sig) => {
     if (_shuttingDown) return;
     _shuttingDown = true;
+    _finderShuttingDown = true;   // don't respawn the finder while we exit
     console.log(`[shutdown] ${sig} received — preparing push jobs for resume`);
     try { pausePushJobsForShutdown(app.locals.sqliteDb); } catch (e) { console.warn('[shutdown] pause failed:', e.message); }
     // Give the SQLite writes a beat, then exit so the platform can swap us out.
@@ -22618,6 +22646,35 @@ function scheduleAudienceScoring(pgdb) {
   };
   process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
   process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
+
+  // ── Crash visibility ──────────────────────────────────────────────────────
+  // On Node 20 an unhandled rejection is FATAL by default. ~19 timer jobs do
+  // network I/O to PlusVibe/Bison/Reacher, so one unguarded rejection killed
+  // the whole server -- silently, with nothing written down. There is no
+  // process manager and no HEALTHCHECK, so the only trace was the site being
+  // down. That is the "sometimes works, sometimes doesn't" symptom.
+  //
+  // A rejected background fetch must not take the admin server with it, so we
+  // log and keep serving. uncaughtException is different: the process may be
+  // in an inconsistent state, so we log, then exit non-zero and let the
+  // platform restart us cleanly rather than limp on.
+  let _crashCount = 0;
+  process.on('unhandledRejection', (reason) => {
+    _crashCount += 1;
+    const msg = reason instanceof Error ? (reason.stack || reason.message) : String(reason);
+    console.error(`[unhandledRejection #${_crashCount}] ${msg}`);
+  });
+  process.on('uncaughtException', (err) => {
+    console.error(`[uncaughtException] ${err && (err.stack || err.message) || err}`);
+    if (_shuttingDown) return;
+    _shuttingDown = true;
+    _finderShuttingDown = true;
+    try { pausePushJobsForShutdown(app.locals.sqliteDb); } catch (_) {}
+    setTimeout(() => process.exit(1), 1000).unref();
+  });
+
+  // Surface the crash counter so a stall can be attributed without log access.
+  app.locals.getCrashCount = () => _crashCount;
 
   server.on('upgrade', (req, socket, head) => {
   if (!req.url || !req.url.startsWith('/automation-browser')) {
