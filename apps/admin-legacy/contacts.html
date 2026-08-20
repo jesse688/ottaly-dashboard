@@ -1509,7 +1509,7 @@
       <div class="header">
         <div class="header-left">
           <div class="header-title">DataBase 1.0</div>
-          <span class="total-badge"><span id="totalCount">0</span> total</span>
+          <span class="total-badge"><span id="totalCount">0</span><span id="totalCountPlus"></span> total</span>
           <div class="search-box" style="display:flex;flex-direction:column;gap:2px;">
             <div style="display:flex;align-items:center;gap:6px;">
               <div class="search-icon">&#9906;</div>
@@ -2203,6 +2203,8 @@
 
     let currentPage = 0;
     let totalResults = 0;
+    // True when the server stopped counting at the cap: real total is "or more".
+    let totalCapped = false;
     let pageSize = 100;
     // No default sort. Sending sortBy on every search made the server add
     // `ORDER BY created_at DESC`, which forces Postgres to find EVERY matching
@@ -4085,11 +4087,19 @@
           throw new Error('Invalid API response: missing total count');
         }
         totalResults = data.total;
+        // `capped` = the real total is totalResults OR MORE. The server stops
+        // counting past the cap because the exact figure over ~1M rows cost
+        // ~900ms while the rows took 3ms — the count WAS the spinner.
+        totalCapped = !!data.capped;
         renderContacts(data.contacts || []);
         renderPagination();
+        // The "+" goes in its own element: two call sites parse the badge text
+        // back into a number, and a "10,000+" string would break them.
         document.getElementById('totalCount').textContent = totalResults.toLocaleString();
+        const plus = document.getElementById('totalCountPlus');
+        if (plus) plus.textContent = totalCapped ? '+' : '';
         const sac = document.getElementById('selectAllCount');
-        if (sac) sac.textContent = totalResults.toLocaleString();
+        if (sac) sac.textContent = totalResults.toLocaleString() + (totalCapped ? '+' : '');
         updatePushButton();
       } catch (err) {
         if (mySeq !== _searchSeq) return;
@@ -4145,7 +4155,8 @@
       }
       const start = currentPage * pageSize + 1;
       const end = Math.min((currentPage + 1) * pageSize, totalResults);
-      document.getElementById('pageInfo').textContent = `Showing ${start}-${end} of ${totalResults.toLocaleString()}`;
+      document.getElementById('pageInfo').textContent =
+        `Showing ${start}-${end} of ${totalResults.toLocaleString()}${totalCapped ? '+' : ''}`;
     }
 
     function renderPagination() {

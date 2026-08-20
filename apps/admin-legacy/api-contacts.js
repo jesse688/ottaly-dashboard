@@ -688,7 +688,11 @@ module.exports = (db) => {
         db.searchContacts(req.workspaceId, filters, cappedLimit, parseInt(offset)),
         db.getContactsCount(req.workspaceId, filters)
       ]);
-      res.json({ contacts, total, limit: cappedLimit, offset: parseInt(offset) });
+      // `capped` means the real total is `total` OR MORE. The count stops early
+      // past the cap: an exact total over ~1M rows measured ~900ms while the
+      // rows themselves take 3ms, so the exact figure WAS the spinner.
+      const capped = db.wasLastCountCapped ? db.wasLastCountCapped() : false;
+      res.json({ contacts, total, capped, limit: cappedLimit, offset: parseInt(offset) });
     } catch (err) {
       console.error('[API] Search error:', err);
       res.status(500).json({ error: err.message });

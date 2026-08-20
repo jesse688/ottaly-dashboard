@@ -65,7 +65,9 @@ class PostgresDatabase {
     // email-provider counts), and CSV imports all share the pool.
     // Lowered 60→40→25: during a rolling deploy BOTH old and new replicas are alive
     // briefly. Enrichment job also holds connections. 2 replicas × 25 = 50 leaves
-    // comfortable headroom under Postgres max_connections (200 limit).
+    // headroom under Postgres max_connections -- which is **100**, not 200.
+    // (The "200 limit" figure this comment used to quote was wrong; verified
+    // against the live server 2026-08-20. See the pool-sizing note below.)
     const config = dbUrl ? {
       connectionString: dbUrl,
       ssl: sslDisabled ? false : { rejectUnauthorized: false },
@@ -77,6 +79,13 @@ class PostgresDatabase {
       // ~40 spare for psql, the portal and anything else on the same database.
       // PG_POOL_MAX allows tuning without a redeploy.
       max: Math.max(5, Math.min(Number(process.env.PG_POOL_MAX) || 60, 90)),
+      // Name the connections. Every service connects to this database as user
+      // `postgres` with an empty application_name, so during an incident
+      // pg_stat_activity cannot tell you WHICH service is eating the 100
+      // connections -- 16 distinct client IPs, all anonymous. This makes
+      // `SELECT application_name, count(*) FROM pg_stat_activity GROUP BY 1`
+      // actually answer the question.
+      application_name: process.env.PG_APP_NAME || 'admin-legacy',
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 10000,
       // Kill runaway queries fast. 120s was pegging CPU because expensive
@@ -144,8 +153,25 @@ class PostgresDatabase {
     // the background pool held 2 of its 40. Web serves many short queries and
     // needs the bigger share; background runs a handful of long jobs and needs
     // depth, not width. Total still 60 against Postgres.
-    const webMax = Math.max(5, Number(process.env.PG_POOL_WEB_MAX) || 45);
-    const bgMax  = Math.max(5, Number(process.env.PG_POOL_BG_MAX)  || 15);
+    // MEASURED 2026-08-20 against the live server: max_connections is **100**
+    // (superuser_reserved 3, so 97 usable) -- NOT the 200 the comment above
+    // assumed. Every service points at the same database as user `postgres`:
+    //   admin-legacy web 45 + bg 15, admin-new 10, company-service 20,
+    //   scraper-service 5, esp-sync 5  =  100 per replica, against 97 usable.
+    // At 2 replicas that is ~190 claimed against 97. Pools open lazily, which
+    // is the only reason this has not already failed: the pools simply had not
+    // expanded. It fails as a CLIFF, not a slope -- once load pushes past 97
+    // every service starts throwing "too many connections" at the same moment,
+    // psql included.
+    //
+    // Sized to fit the real budget: 25 + 8 = 33 per replica, 66 for two, plus
+    // 40 for the other services = 106. Still tight, so the durable fix is
+    // raising max_connections to 200 (needs a Postgres restart) -- at which
+    // point these can go back up via the env vars, no redeploy needed.
+    // Web keeps the larger share: a previous split used web=20 and starved it
+    // (healthz showed web 20/20, 0 idle, 21-58 waiting).
+    const webMax = Math.max(5, Number(process.env.PG_POOL_WEB_MAX) || 25);
+    const bgMax  = Math.max(5, Number(process.env.PG_POOL_BG_MAX)  || 8);
 
     this.pool = new Pool({ ...config, max: webMax });
     // Background pool: long jobs, warms, syncs, backfills, migrations.
@@ -2536,14 +2562,50 @@ class PostgresDatabase {
     if (!this._filterCountCache) this._filterCountCache = new Map();
     const now = Date.now();
     const cached = this._filterCountCache.get(cacheKey);
-    if (cached && now - cached.ts < 30000) return cached.value;
+    if (cached && now - cached.ts < 30000) {
+      // Restore the capped flag too, or a cache hit reports an exact total.
+      this._lastCountCapped = !!cached.capped;
+      return cached.value;
+    }
 
-    const sql = `SELECT COUNT(*) as count FROM contacts WHERE workspace_id = $1${where}`;
+    // CAPPED COUNT. Measured on live prod (1.46M rows, ottaly-global = 1.06M):
+    //   exact COUNT(*), Google + has-name + has-company ...... 901 ms
+    //   exact COUNT(*), unverified (mx_provider IS NULL) ..... 1022 ms
+    //   capped at 10001, same two filters .............. 130 ms / 55 ms
+    // while the ROW FETCH those numbers accompany takes 3 ms. The count was
+    // ~270x the cost of the rows it was labelling, and it IS the spinner --
+    // the rows are ready almost instantly and the page waits on the total.
+    //
+    // The exact count cannot stop early: it must visit all 1.06M workspace
+    // rows and discard ~281k per worker (there is no index on mx_provider).
+    // Capping lets Postgres stop at the first COUNT_CAP+1 matches. Past the
+    // cap the UI shows "10,000+", which is all a human can act on anyway --
+    // nobody pages to row 400,000. Below the cap the count is still EXACT,
+    // so ordinary filtered work is unaffected.
+    //
+    // Callers needing a true total (CSV export paging) use getExportableCount,
+    // which is deliberately left uncapped.
+    //
+    // Returns a NUMBER, as it always has -- two callers and db-sqlite.js share
+    // this signature, so changing the return type would break them silently.
+    // When the cap is hit the number returned is CAP and `lastCountCapped` is
+    // set, which the search route reads to send `capped:true` to the UI.
+    const CAP = Number(process.env.CONTACTS_COUNT_CAP) || 10000;
+    const sql = `SELECT COUNT(*) as count FROM (
+        SELECT 1 FROM contacts WHERE workspace_id = $1${where} LIMIT ${CAP + 1}
+      ) t`;
     const result = await this.query(sql, [workspaceId, ...params]);
-    const count = parseInt(result.rows[0].count, 10);
-    this._filterCountCache.set(cacheKey, { value: count, ts: now });
+    const raw = parseInt(result.rows[0].count, 10);
+    const capped = raw > CAP;
+    const count = capped ? CAP : raw;
+    this._lastCountCapped = capped;
+    this._filterCountCache.set(cacheKey, { value: count, ts: now, capped });
     return count;
   }
+
+  // True when the most recent getContactsCount hit its cap, i.e. the real
+  // total is "CAP or more". Read immediately after the count resolves.
+  wasLastCountCapped() { return !!this._lastCountCapped; }
 
   // Count of EXPORTABLE contacts (same filters + the export cleanliness guard as
   // exportContacts). The Apollo export paginates over this clean set, so the loop
