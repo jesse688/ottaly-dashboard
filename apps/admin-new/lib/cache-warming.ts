@@ -20,16 +20,31 @@ const deadWorkspaces = new Set<string>()
 // half-written and the backlog grew every pass. Serialising with a small
 // minimum gap keeps us under PV's limit and makes a pass slow-but-complete,
 // which is what a cache actually needs.
-const PV_CONCURRENCY = 2
-const PV_MIN_GAP_MS = 120        // ≈16 req/s ceiling across the whole process
-const PV_MAX_RETRIES = 4
-const PV_BASE_BACKOFF_MS = 1000
+// Tuned from live logs: at 2 concurrent / 120ms we still hit 429s constantly
+// and PV's own Retry-After was 10s every time — its real ceiling is far below
+// what we were asking for. Serialise (1 at a time) with a 400ms floor ≈ 2.5
+// req/s, which is slower than a burst but finishes; the previous settings
+// spent most of their time in backoff anyway, so throughput barely changes.
+const PV_CONCURRENCY = 1
+const PV_MIN_GAP_MS = 400
+const PV_MAX_RETRIES = 6         // was 4; one cell still exhausted retries
+const PV_BASE_BACKOFF_MS = 2000
+// After a 429 the whole process pauses briefly, not just the failing request.
+// Without this every other in-flight call marches into the same wall and each
+// burns its own retry budget — which is how a cell exhausted 5 attempts.
+const PV_COOLDOWN_MS = 5000
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 let pvActive = 0
 let pvLastStart = 0
+// Timestamp until which ALL PV traffic holds off, set when any call sees a 429.
+let pvPausedUntil = 0
 const pvQueue: Array<() => void> = []
+
+export function pvBackoffSignal(ms: number): void {
+  pvPausedUntil = Math.max(pvPausedUntil, Date.now() + ms)
+}
 
 async function pvGate<T>(fn: () => Promise<T>): Promise<T> {
   if (pvActive >= PV_CONCURRENCY) {
@@ -37,6 +52,12 @@ async function pvGate<T>(fn: () => Promise<T>): Promise<T> {
   }
   pvActive++
   try {
+    // Respect a process-wide cooldown first, then the per-request spacing.
+    for (;;) {
+      const waitFor = pvPausedUntil - Date.now()
+      if (waitFor <= 0) break
+      await sleep(Math.min(waitFor, 10_000))
+    }
     const since = Date.now() - pvLastStart
     if (since < PV_MIN_GAP_MS) await sleep(PV_MIN_GAP_MS - since)
     pvLastStart = Date.now()
@@ -117,6 +138,9 @@ async function pvFetch(path: string): Promise<any> {
       const wait = Number.isFinite(ra) && ra > 0
         ? Math.min(ra * 1000, 30_000)
         : Math.min(PV_BASE_BACKOFF_MS * 2 ** attempt, 30_000) + Math.random() * 250
+      // Hold the whole process back too, so queued calls don't each walk into
+      // the same limit and burn their own retry budgets in parallel.
+      pvBackoffSignal(Math.max(wait, PV_COOLDOWN_MS))
       console.warn(`[cache-warming] PlusVibe ${res.status}, retry ${attempt + 1}/${PV_MAX_RETRIES} in ${Math.round(wait)}ms`)
       await sleep(wait)
     }
