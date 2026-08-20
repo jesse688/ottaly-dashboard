@@ -226,7 +226,20 @@ export async function warmDates(dates: string[]): Promise<void> {
 // apportioning, no incomplete email_events.
 const ESP_VALUES = ['GOOGLE_WORKSPACE', 'MICROSOFT365', 'REGULAR_ACCOUNT'] as const
 const TTL_COMBO_TODAY_MS = 30 * 60 * 1000 // combos are heavier (9 calls/day) → 30 min today
-const TTL_COMBO_OLD_MS = 24 * 60 * 60 * 1000
+const TTL_COMBO_RECENT_MS = 6 * 60 * 60 * 1000 // still-moving days: re-check 4×/day
+const TTL_COMBO_OLD_MS = 7 * 24 * 60 * 60 * 1000 // settled days: weekly is plenty
+// A day's numbers keep moving after the day ends — OOO lands within minutes but
+// human replies and bounces trickle in for days. Caching a day as final the
+// moment it ends froze it mid-fill (this is why the page showed 50 replies where
+// PV's own API had 59). Treat anything inside the settle window as still-moving.
+const COMBO_SETTLE_DAYS = 14
+function comboTtlFor(date: string, today: string): number {
+  if (date === today) return TTL_COMBO_TODAY_MS
+  const ageDays = Math.floor(
+    (Date.parse(today + 'T00:00:00Z') - Date.parse(date + 'T00:00:00Z')) / 86_400_000,
+  )
+  return ageDays <= COMBO_SETTLE_DAYS ? TTL_COMBO_RECENT_MS : TTL_COMBO_OLD_MS
+}
 
 let comboTableReady = false
 async function ensureComboTable(): Promise<void> {
@@ -246,28 +259,50 @@ async function ensureComboDaily(wsIds: string[], dates: string[]): Promise<void>
   await ensureComboTable()
   const today = dateStr(new Date())
 
-  // A combo cell is "fresh" if ANY of its 9 rows for that ws+date is within TTL.
-  // We refetch a whole ws+date's 9 combos together (one settled check per ws+date).
-  const needsFetch: Array<{ wsId: string; date: string }> = []
+  // Freshness is judged on the OLDEST data row, and the '_' sentinel is excluded.
+  // Two bugs lived here: the sentinel is re-stamped on every pass, so MAX() over
+  // all rows was always fresh and real data never refreshed again; and MAX() over
+  // data rows would let one lucky cell mask eight stale ones. MIN() over data
+  // rows only means a ws+date refreshes while ANY of its cells is stale.
+  const needsFetch: Array<{ wsId: string; date: string; savedAt: number }> = []
   for (const wsId of wsIds) {
     if (deadWorkspaces.has(wsId)) continue
     for (const date of dates) {
-      const ttl = date === today ? TTL_COMBO_TODAY_MS : TTL_COMBO_OLD_MS
+      const ttl = comboTtlFor(date, today)
       const res = await pool.query(
-        `SELECT MAX(saved_at) AS saved_at FROM combo_daily_stats WHERE ws_id = $1 AND date = $2`,
+        `SELECT MIN(saved_at) AS saved_at, COUNT(*) AS n
+           FROM combo_daily_stats
+          WHERE ws_id = $1 AND date = $2 AND provider <> '_'`,
         [wsId, date],
       )
       const savedAt = res.rows[0]?.saved_at
-      if (!savedAt || Date.now() - Number(savedAt) > ttl) needsFetch.push({ wsId, date })
+      const n = Number(res.rows[0]?.n || 0)
+      // n < 9 means some combos were never stored (see the zero-cell fix below),
+      // so the day is incomplete regardless of how recently it was touched.
+      if (!savedAt || n < ESP_VALUES.length ** 2 || Date.now() - Number(savedAt) > ttl) {
+        needsFetch.push({ wsId, date, savedAt: savedAt ? Number(savedAt) : 0 })
+      }
     }
   }
   if (!needsFetch.length) return
 
-  console.log(`[cache-warming] combo: fetching ${needsFetch.length} ws-date pairs × 9 combos`)
+  // Bound one pass. 40 workspaces × 14 days × 9 combos is ~5k PV calls if
+  // everything is stale at once (first run after deploy, or after an outage).
+  // Oldest-stale-first so nothing starves, and the next pass picks up the rest.
+  const MAX_PAIRS_PER_PASS = 120
+  let queue = [...needsFetch].sort((a, b) => a.savedAt - b.savedAt)
+  if (queue.length > MAX_PAIRS_PER_PASS) {
+    console.log(
+      `[cache-warming] combo: ${queue.length} stale ws-date pairs, capping this pass at ${MAX_PAIRS_PER_PASS}`,
+    )
+    queue = queue.slice(0, MAX_PAIRS_PER_PASS)
+  }
+
+  console.log(`[cache-warming] combo: fetching ${queue.length} ws-date pairs × 9 combos`)
 
   // One ws+date at a time; its 9 combos fetched with modest concurrency. Keeps
   // total PV load bounded (needsFetch is usually just today for active ws).
-  for (const { wsId, date } of needsFetch) {
+  for (const { wsId, date } of queue) {
     const pairs: Array<{ provider: string; recp: string }> = []
     for (const provider of ESP_VALUES) for (const recp of ESP_VALUES) pairs.push({ provider, recp })
 
@@ -280,9 +315,12 @@ async function ensureComboDaily(wsIds: string[], dates: string[]): Promise<void>
               `&provider=${provider}&recp_provider=${recp}`,
           )
           const data = aggregatePvEmailStats(raw)
-          // Skip storing empty cells to keep the table lean, but always clear a
-          // stale non-empty row if it went to zero by upserting when sent>0.
-          if (!data.sent && !data.replies && !data.bounces) return
+          // Always store, including all-zero cells. Skipping them meant a combo
+          // that was empty at first fetch was never written and never revisited,
+          // so it stayed permanently absent from the matrix even once it had
+          // real volume — and an absent cell is indistinguishable from a genuine
+          // zero. Storing all 9 also lets the freshness check above use row
+          // count to detect an incomplete day.
           await pool.query(
             `INSERT INTO combo_daily_stats (ws_id, date, provider, recp_provider, data, saved_at)
              VALUES ($1,$2,$3,$4,$5,$6)
@@ -315,10 +353,11 @@ export async function warmComboCache(): Promise<void> {
   try {
     const wsIds = await getActiveWorkspaces()
     if (!wsIds.length) return
-    // Last 7 days is enough for the default Combo view; older windows fetched
-    // on demand by the route if needed.
-    await ensureComboDaily(wsIds, lastNDates(7))
-    console.log('[cache-warming] combo cache warmed (7d)')
+    // Cover the whole settle window, not just 7 days: a day inside it is still
+    // filling in, and the TTL above is what keeps the cost down (a settled day
+    // is skipped cheaply). Older windows are still fetched on demand by the route.
+    await ensureComboDaily(wsIds, lastNDates(COMBO_SETTLE_DAYS))
+    console.log(`[cache-warming] combo cache warmed (${COMBO_SETTLE_DAYS}d)`)
   } catch (err) {
     console.error('[cache-warming] combo warm failed:', err instanceof Error ? err.message : err)
   }

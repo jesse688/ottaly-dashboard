@@ -15,6 +15,8 @@ interface ComboRow {
   replies: number        // incl. OOO/auto
   replies_human: number  // real human replies (excludes OOO + warmup) — lagging
   ooo: number            // OOO/auto-replies alone — the infra signal we rank on
+  prev_sent: number      // same-length window immediately before this one
+  prev_ooo: number
   pos_replies: number    // = replies_human (back-compat)
   bounces: number
   leads: number
@@ -32,6 +34,8 @@ interface ComboData {
   hasApprox?: boolean
   start?: string
   end?: string
+  prev_start?: string
+  prev_end?: string
   error?: string
 }
 
@@ -158,9 +162,11 @@ export default function ComboAnalysisPage() {
   const [data, setData] = useState<ComboData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [activePeriod, setActivePeriod] = useState<PeriodKey | null>('today')
-  const [dateFrom, setDateFrom] = useState(periodDates('today').start)
-  const [dateTo, setDateTo] = useState(periodDates('today').end)
+  // 7 days by default: ESP matching is re-set weekly, so a week is the unit of
+  // decision — and a single day rarely clears the per-cell volume floor.
+  const [activePeriod, setActivePeriod] = useState<PeriodKey | null>('7d')
+  const [dateFrom, setDateFrom] = useState(periodDates('7d').start)
+  const [dateTo, setDateTo] = useState(periodDates('7d').end)
   const [backfilling, setBackfilling] = useState(false)
   const [enrichLabel, setEnrichLabel] = useState('Enrich Recipient MX')
   const [enrichDisabled, setEnrichDisabled] = useState(false)
@@ -363,6 +369,45 @@ export default function ComboAnalysisPage() {
     return pctNum(r.ooo, r.sent) / base
   }
 
+  // ── Trend vs the preceding window ─────────────────────────────────────────
+  // ESP matching is re-set weekly, so the question each week is "did last
+  // week's change help?" — not just "what's best right now". Compared on raw
+  // OOO rate for the same combo across two adjacent windows; both windows share
+  // the combo's own recipient population, so the comparison is like-for-like.
+  // Needs volume on BOTH sides or it's noise.
+  function trendOf(r: ComboRow): { now: number; prev: number; deltaPct: number } | null {
+    if (r.sent < MIN_SENDS || r.prev_sent < MIN_SENDS) return null
+    const now = pctNum(r.ooo, r.sent)
+    const prev = pctNum(r.prev_ooo, r.prev_sent)
+    if (prev <= 0) return null
+    return { now, prev, deltaPct: (100 * (now - prev)) / prev }
+  }
+  // ±10% relative is the noise band — below that, call it flat rather than
+  // implying a change worth acting on.
+  const TREND_BAND = 10
+  function TrendMark({ r, showNums = false }: { r: ComboRow; showNums?: boolean }) {
+    const t = trendOf(r)
+    if (!t) return null
+    const flat = Math.abs(t.deltaPct) < TREND_BAND
+    const up = t.deltaPct > 0
+    const cls = flat ? 'text-gray-400' : up ? 'text-green-600' : 'text-red-600'
+    const arrow = flat ? '→' : up ? '↑' : '↓'
+    return (
+      <span
+        className={cn('whitespace-nowrap font-bold', cls)}
+        title={`Previous window: ${t.prev.toFixed(2)}% OOO → now ${t.now.toFixed(2)}% (${t.deltaPct >= 0 ? '+' : ''}${t.deltaPct.toFixed(0)}%)${flat ? ' — within noise' : ''}`}
+      >
+        {arrow}
+        {showNums && (
+          <span className="ml-0.5 font-normal">
+            {t.deltaPct >= 0 ? '+' : ''}
+            {t.deltaPct.toFixed(0)}%
+          </span>
+        )}
+      </span>
+    )
+  }
+
   // Per-column winner/loser — the matrix highlights these so the comparison the
   // eye makes is always sender-vs-sender for the same recipients.
   const colBest: Record<string, ComboRow | null> = {}
@@ -458,6 +503,9 @@ export default function ComboAnalysisPage() {
             Deliverability only — which sending provider lands best with each recipient provider. Ranked on
             out-of-office rate (fires in minutes from the recipient&apos;s mail server, so it measures infrastructure,
             not copy). Compare senders <b>within</b> a recipient column; columns have different OOO baselines.
+            {data?.prev_start && data?.prev_end && (
+              <> Trend arrows compare against <b>{data.prev_start} → {data.prev_end}</b>.</>
+            )}
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -570,7 +618,8 @@ export default function ComboAnalysisPage() {
                   <div className="text-[11px] uppercase tracking-wide text-gray-500">Sending to {toLabel(to)}</div>
                   <div className="mt-1 text-base font-bold text-gray-900">Use {fromLabel(win.from_type)}</div>
                   <div className="mt-1 text-xs text-gray-500">
-                    <strong className="text-teal-700">{rr.toFixed(2)}%</strong> OOO · {fmt(win.sent)} sent
+                    <strong className="text-teal-700">{rr.toFixed(2)}%</strong> OOO · {fmt(win.sent)} sent{' '}
+                    <TrendMark r={win} showNums />
                   </div>
                   {second && secondRr != null && (
                     <div className="mt-1 text-[11px] text-gray-400">
@@ -671,7 +720,7 @@ export default function ComboAnalysisPage() {
                             </div>
                             <div className="mt-1.5 flex flex-wrap justify-center gap-1">
                               <span className={cn('whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-bold', rrPill(oooRate))} title="Out-of-office rate — the deliverability signal">
-                                {oooRate.toFixed(2)}% OOO
+                                {oooRate.toFixed(2)}% OOO <TrendMark r={r} />
                               </span>
                               {ix != null ? (
                                 <span
@@ -728,6 +777,7 @@ export default function ComboAnalysisPage() {
                   <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold" title="New-lead (step 1) sends vs follow-ups (step 2+), over the nearest precomputed 7d/30d window (PlusVibe's new-lead count is only meaningful over multi-day ranges — so this does NOT match a single-day 'Today' total). Follow-ups are locked to the mailbox from first contact, so they ignore ESP matching — a high follow-up share on a wrong combo is the draining tail.">New / Follow-up <span className="font-normal text-gray-400">(7/30d)</span></th>
                   <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold" title="Out-of-office rate — the deliverability signal this page ranks on. Fires within minutes from the recipient's mail server, independent of copy.">OOO Rate</th>
                   <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold" title="OOO rate ÷ this recipient column's average OOO rate. 1.00 = par for these recipients. Cancels out season-wide swings (holidays lift a whole column at once).">vs Column</th>
+                  <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold" title="Change in OOO rate vs the immediately preceding window of the same length. Needs volume in both windows. Under ±10% is shown flat — that's noise, not a signal.">Trend</th>
                   <th className="border-b border-gray-200 px-4 py-2.5 text-right font-bold" title="Bounce rate — cross-check. OOO down + bounce flat = seasonal. OOO down + bounce up = real deliverability problem.">Bounces</th>
                   <th className="border-b border-gray-200 px-4 py-2.5 text-right font-normal text-gray-400" title="Lagging confirmation only — human replies are copy- and offer-dependent and take days to arrive. Not used for ranking.">Human %</th>
                   <th className="border-b border-gray-200 px-4 py-2.5 text-right font-normal text-gray-400" title="Lagging, copy-dependent. Not a deliverability signal. Shown for reference only.">Leads</th>
@@ -782,6 +832,13 @@ export default function ComboAnalysisPage() {
                       </td>
                       <td className={cn('border-b border-gray-200 px-4 py-3 text-right tabular-nums', ix != null ? ixClass(ix) : 'text-gray-300')}>
                         {ix != null ? ix.toFixed(2) + '×' : <span title={`Under ${MIN_SENDS} sends`}>low vol</span>}
+                      </td>
+                      <td className="border-b border-gray-200 px-4 py-3 text-right tabular-nums">
+                        {trendOf(r) ? (
+                          <TrendMark r={r} showNums />
+                        ) : (
+                          <span className="text-gray-300" title="Not enough volume in one of the two windows to compare">—</span>
+                        )}
                       </td>
                       <td className={cn('border-b border-gray-200 px-4 py-3 text-right', r.sent ? brClass(br) : '')}>
                         {fmt(r.bounces)} {r.sent ? <span className="text-[11px] font-normal text-gray-400">({br.toFixed(2)}%)</span> : null}
