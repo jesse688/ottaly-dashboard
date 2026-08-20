@@ -3075,6 +3075,12 @@ app.get('/healthz', async (req, res) => {
       const t0 = Date.now();
       await pgPool.query('SELECT 1');
       health.dbLatencyMs = Date.now() - t0;
+      // Verification backlog. `due` climbing while `total` never falls means
+      // the verifier is down and work is being deferred (not lost); both
+      // dropping to 0 means the backlog drained on its own.
+      try {
+        if (pgPool.verificationQueueStats) health.verifyQueue = await pgPool.verificationQueueStats();
+      } catch (_) { /* never let health reporting fail the probe */ }
       health.db = 'ok';
     } else {
       health.db = 'unconfigured';
@@ -5440,6 +5446,87 @@ setTimeout(() => seedDistinctFromDb(), 3000);
 
 setTimeout(runDistinctWarm, 45000);
 setInterval(runDistinctWarm, DISTINCT_WARM_INTERVAL_MS);
+
+// ── Verification retry drain ───────────────────────────────────────────────
+// Re-checks addresses whose verification failed for an INFRASTRUCTURE reason
+// (timeout / refused / 5xx), never a genuine SMTP verdict. Before this queue
+// existed those addresses were written 'unknown' and forgotten, so a verifier
+// outage silently destroyed the work and the only recovery was a human
+// restarting the container. Now the backlog drains by itself.
+//
+// Deliberately small and slow: this is recovery work, not throughput. It must
+// never compete with the interactive push-verify path for the finder's 5
+// concurrent Reacher slots, so it runs a small batch on a long interval and
+// stops early the moment the verifier still looks unhealthy.
+const VERIFY_DRAIN_INTERVAL_MS = 5 * 60 * 1000;
+const VERIFY_DRAIN_BATCH = 50;
+const VERIFY_DRAIN_CONCURRENCY = 3;
+let _verifyDrainRunning = false;
+
+async function runVerificationDrain() {
+  const db = app.locals.pgDb;
+  if (!db || !db.claimVerificationBatch || _verifyDrainRunning) return;
+  _verifyDrainRunning = true;
+  try {
+    const batch = await db.claimVerificationBatch(VERIFY_DRAIN_BATCH);
+    if (!batch.length) return;
+
+    const port = EMAIL_FINDER_INTERNAL_PORT;
+    const settled = [];   // got a real verdict -> leave the queue
+    const failed  = [];   // still broken -> back off and stay queued
+    let lastErr = '';
+
+    // Sequential-ish with a small concurrency cap; see note above.
+    for (let i = 0; i < batch.length; i += VERIFY_DRAIN_CONCURRENCY) {
+      // If the verifier is still down, stop the whole pass rather than burn
+      // every queued row's attempt counter on the same outage.
+      if (failed.length >= VERIFY_DRAIN_CONCURRENCY * 2 && settled.length === 0) break;
+      const slice = batch.slice(i, i + VERIFY_DRAIN_CONCURRENCY);
+      await Promise.all(slice.map(async (row) => {
+        try {
+          const r = await fetch(`http://127.0.0.1:${port}/api/verify-email`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: row.email, verifier: 'reacher' }),
+            signal: AbortSignal.timeout(20000),
+          });
+          if (!r.ok) throw new Error(`finder HTTP ${r.status}`);
+          const d = await r.json();
+          const smtp = d.result?.raw?.smtp || d.result?.smtp || {};
+          const reason = d.result?.reason || '';
+          const catchAll = smtp.is_catch_all === true || /catch_all=yes/i.test(reason);
+          const rea = (d.result?.status || d.result?.is_reachable || 'unknown').toLowerCase();
+          const status = catchAll || rea === 'risky' ? 'risky'
+            : rea === 'safe' || rea === 'valid' ? 'safe'
+            : rea === 'invalid' ? 'invalid'
+            : 'unknown';
+          // 'unknown' from the finder is a real SMTP-level answer, not an
+          // outage -- accept it and stop retrying, or we would loop forever
+          // on addresses that genuinely cannot be resolved.
+          await db.query(
+            `UPDATE contacts SET email_status = $2, email_verified_at = NOW()::text WHERE id = $1`,
+            [row.contact_id, status], { background: true }
+          );
+          settled.push(row.contact_id);
+        } catch (e) {
+          lastErr = e && e.message || String(e);
+          failed.push(row);
+        }
+      }));
+    }
+
+    if (settled.length) await db.dequeueVerification(settled);
+    if (failed.length)  await db.enqueueVerification(failed, lastErr);
+    if (settled.length || failed.length) {
+      console.log(`[verify-drain] ${settled.length} settled, ${failed.length} deferred${lastErr ? ` (${lastErr.slice(0, 80)})` : ''}`);
+    }
+  } catch (err) {
+    console.error('[verify-drain] pass failed:', err.message);
+  } finally {
+    _verifyDrainRunning = false;
+  }
+}
+setTimeout(() => { runVerificationDrain().catch(() => {}); }, 120000);
+setInterval(() => { runVerificationDrain().catch(() => {}); }, VERIFY_DRAIN_INTERVAL_MS);
 
 function readReadyPerformanceCache(wsIds, dates) {
   const daily = {};
@@ -19656,11 +19743,22 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
           }
           verifyResults[c.id] = status;
           batchUpdates.push({ id: c.id, email_status: status, email_verified_at: new Date().toISOString(), mx_provider: mxProvider, email: c.email });
-        } catch {
+        } catch (err) {
           // Network/timeout reaching the finder itself = a real outage signal
           // (distinct from an SMTP-level "unknown" the finder returns normally).
           verifyResults[c.id] = 'unknown';
           batchUpdates.push({ id: c.id, email_status: 'unknown', email_verified_at: new Date().toISOString(), _netfail: true });
+          // Defer rather than destroy. This address was never actually checked,
+          // so queue it for retry with backoff; the drain picks it up once the
+          // verifier recovers. Without this the 'unknown' above was the only
+          // trace, carried no attempt count, and nothing ever retried it --
+          // which is why recovery meant a human restarting the container.
+          if (db.enqueueVerification) {
+            db.enqueueVerification(
+              [{ contact_id: c.id, email: c.email, workspace_id: c.workspace_id }],
+              err && err.message
+            ).catch(e => console.warn('[verify-queue] enqueue failed:', e.message));
+          }
         }
         doneCount++;
         job.verified  = doneCount;
@@ -20118,11 +20216,22 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
             : mxHost ? 'email_other' : null;
           verifyResults[c.id] = status;
           batchUpdates.push({ id: c.id, email_status: status, email_verified_at: new Date().toISOString(), mx_provider: mxProvider, email: c.email });
-        } catch {
+        } catch (err) {
           // Network/timeout reaching the finder itself = a real outage signal
           // (distinct from an SMTP-level "unknown" the finder returns normally).
           verifyResults[c.id] = 'unknown';
           batchUpdates.push({ id: c.id, email_status: 'unknown', email_verified_at: new Date().toISOString(), _netfail: true });
+          // Defer rather than destroy. This address was never actually checked,
+          // so queue it for retry with backoff; the drain picks it up once the
+          // verifier recovers. Without this the 'unknown' above was the only
+          // trace, carried no attempt count, and nothing ever retried it --
+          // which is why recovery meant a human restarting the container.
+          if (db.enqueueVerification) {
+            db.enqueueVerification(
+              [{ contact_id: c.id, email: c.email, workspace_id: c.workspace_id }],
+              err && err.message
+            ).catch(e => console.warn('[verify-queue] enqueue failed:', e.message));
+          }
         }
         doneCount++;
         job.verified      = doneCount;

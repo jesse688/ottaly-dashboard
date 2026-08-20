@@ -385,6 +385,32 @@ class PostgresDatabase {
       `ALTER TABLE template_alerts ADD COLUMN IF NOT EXISTS outcome TEXT`,
       `ALTER TABLE template_alerts ADD COLUMN IF NOT EXISTS outcome_at TIMESTAMP`,
       `ALTER TABLE template_alerts ADD COLUMN IF NOT EXISTS outcome_notes TEXT`,
+      // ── Verification retry queue ─────────────────────────────────
+      // Before this, a network/timeout failure reaching the verifier wrote
+      // email_status='unknown' and the work was DESTROYED: nothing recorded
+      // that the address had never actually been checked, so nothing could
+      // retry it. The documented recovery was a human restarting the Reacher
+      // container -- which is why the verifier "always needs restarting".
+      // This defers failed work instead, with an attempt count and backoff,
+      // so the backlog drains by itself once the verifier is healthy again.
+      `CREATE TABLE IF NOT EXISTS verification_queue (
+        id              BIGSERIAL PRIMARY KEY,
+        contact_id      BIGINT      NOT NULL,
+        email           TEXT        NOT NULL,
+        workspace_id    TEXT,
+        attempts        INT         NOT NULL DEFAULT 0,
+        last_error      TEXT,
+        next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`,
+      // One live queue row per contact; re-queueing bumps the existing row
+      // rather than piling up duplicates for the same address.
+      `CREATE UNIQUE INDEX IF NOT EXISTS uq_verification_queue_contact
+         ON verification_queue (contact_id)`,
+      // Serves the drain query: due rows first, fewest attempts first.
+      `CREATE INDEX IF NOT EXISTS idx_verification_queue_due
+         ON verification_queue (next_attempt_at, attempts)`,
       // ── Domain health table ──────────────────────────────────────
       // Free per-domain reputation snapshot built from DNS + blacklist
       // checks (no Google Postmaster account needed). Refreshed nightly
@@ -3125,6 +3151,80 @@ class PostgresDatabase {
     }
     console.log(`[distinct-warm] ${warmed} warmed, ${failed} failed in ${Math.round((Date.now() - t0) / 1000)}s`);
     return { warmed, failed };
+  }
+
+  // ── Verification retry queue ───────────────────────────────────────────
+  // A verifier outage used to destroy work: the failure path wrote
+  // email_status='unknown' and moved on, leaving nothing to retry from. These
+  // three methods turn that into deferred work that drains on its own.
+
+  // Record contacts whose verification FAILED for an infrastructure reason
+  // (timeout / connection refused / 5xx) -- never a genuine SMTP verdict.
+  // Backoff is exponential on attempts and capped at 1 hour.
+  async enqueueVerification(rows, errMsg = '') {
+    if (!rows || !rows.length) return 0;
+    const ids    = rows.map(r => Number(r.contact_id ?? r.id)).filter(Boolean);
+    const emails = rows.map(r => String(r.email || ''));
+    const wss    = rows.map(r => (r.workspace_id == null ? null : String(r.workspace_id)));
+    if (!ids.length) return 0;
+    const res = await this.query(
+      `INSERT INTO verification_queue (contact_id, email, workspace_id, attempts, last_error, next_attempt_at)
+       SELECT cid, em, ws, 1, $4, now() + interval '1 minute'
+       FROM unnest($1::bigint[], $2::text[], $3::text[]) AS t(cid, em, ws)
+       ON CONFLICT (contact_id) DO UPDATE SET
+         attempts        = verification_queue.attempts + 1,
+         last_error      = EXCLUDED.last_error,
+         updated_at      = now(),
+         -- 2^attempts minutes, capped at 1h, so a long outage backs off
+         -- instead of hammering a verifier that is already struggling.
+         next_attempt_at = now() + LEAST(
+           interval '1 hour',
+           (interval '1 minute') * power(2, LEAST(verification_queue.attempts, 6))
+         )`,
+      [ids, emails, wss, String(errMsg).slice(0, 500)],
+      { background: true }
+    );
+    return res.rowCount || 0;
+  }
+
+  // Claim the next due batch. MAX_ATTEMPTS caps a permanently-unverifiable
+  // address so it cannot be retried forever (the old implicit
+  // email_status='unknown' marker had no attempt counter at all).
+  async claimVerificationBatch(limit = 200, maxAttempts = 8) {
+    const res = await this.query(
+      `SELECT contact_id, email, workspace_id, attempts
+         FROM verification_queue
+        WHERE next_attempt_at <= now() AND attempts < $2
+        ORDER BY next_attempt_at, attempts
+        LIMIT $1`,
+      [limit, maxAttempts],
+      { background: true }
+    );
+    return res.rows;
+  }
+
+  // Drop rows that finally got a real verdict.
+  async dequeueVerification(contactIds) {
+    if (!contactIds || !contactIds.length) return 0;
+    const res = await this.query(
+      `DELETE FROM verification_queue WHERE contact_id = ANY($1::bigint[])`,
+      [contactIds.map(Number).filter(Boolean)],
+      { background: true }
+    );
+    return res.rowCount || 0;
+  }
+
+  // Queue depth for /healthz and the verifier-health UI.
+  async verificationQueueStats() {
+    const res = await this.query(
+      `SELECT count(*)::int AS total,
+              count(*) FILTER (WHERE next_attempt_at <= now())::int AS due,
+              count(*) FILTER (WHERE attempts >= 8)::int AS exhausted,
+              max(attempts)::int AS max_attempts
+         FROM verification_queue`,
+      [], { background: true }
+    );
+    return res.rows[0] || { total: 0, due: 0, exhausted: 0, max_attempts: 0 };
   }
 
   // Write one warmed field's values into contacts_distinct_cache so they
