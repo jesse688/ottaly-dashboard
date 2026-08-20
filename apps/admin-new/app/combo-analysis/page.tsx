@@ -646,6 +646,75 @@ export default function ComboAnalysisPage() {
         </div>
       )}
 
+      {/* Chart — one group per recipient, bars = senders. The comparison the
+          page is FOR is "which sender for these recipients", and that is a
+          within-group bar comparison, so the chart makes the right reading the
+          obvious one. Bars are scaled per group (tallest = 100%) because the
+          columns have different OOO baselines and a shared axis would invite
+          the cross-column comparison that isn't valid. */}
+      {!loading && !error && rows.length > 0 && (
+        <div className="mb-5 overflow-hidden rounded-xl border border-gray-200 bg-white">
+          <div className="flex items-center justify-between border-b border-gray-200 bg-gray-50 px-5 py-3 text-[13px] font-bold text-gray-900">
+            Best sender per recipient
+            <span className="text-[11px] font-normal text-gray-500">
+              Taller = more out-of-office = lands better. Compare bars inside a group only.
+            </span>
+          </div>
+          <div className="grid grid-cols-1 gap-6 p-5 sm:grid-cols-3">
+            {REAL_TO.map((to) => {
+              const cells = fromTypes
+                .map((f) => idx[`${f}|${to}`])
+                .filter((c): c is ComboRow => !!c && c.sent > 0)
+              if (!cells.length) return null
+              const peak = Math.max(...cells.map((c) => pctNum(c.ooo, c.sent)), 0.0001)
+              const ranked = [...cells].sort((a, b) => pctNum(b.ooo, b.sent) - pctNum(a.ooo, a.sent))
+              const top = ranked.find((c) => c.sent >= MIN_SENDS)
+              return (
+                <div key={to}>
+                  <div className="mb-3 text-center text-[11px] font-bold uppercase tracking-wide text-gray-500">
+                    Sending to {toLabel(to)}
+                  </div>
+                  <div className="flex h-40 items-end justify-center gap-4">
+                    {ranked.map((c) => {
+                      const rate = pctNum(c.ooo, c.sent)
+                      const thin = c.sent < MIN_SENDS
+                      const isTop = !thin && c === top
+                      return (
+                        <div key={c.from_type} className="flex w-16 flex-col items-center">
+                          <div className={cn('mb-1 text-[11px] font-bold', thin ? 'text-gray-300' : isTop ? 'text-teal-700' : 'text-gray-600')}>
+                            {rate.toFixed(2)}%
+                          </div>
+                          <div
+                            className={cn(
+                              'w-full rounded-t transition-all',
+                              thin ? 'bg-gray-200' : isTop ? 'bg-teal-600' : 'bg-gray-400',
+                            )}
+                            // Floor of 2px so a genuine zero still reads as a
+                            // bar at zero rather than a missing category.
+                            style={{ height: `${Math.max(2, (rate / peak) * 128)}px` }}
+                            title={`${fromLabel(c.from_type)} → ${toLabel(to)}: ${rate.toFixed(2)}% OOO on ${fmt(c.sent)} sends${thin ? ` (under ${MIN_SENDS} sends — not ranked)` : ''}`}
+                          />
+                          <div className={cn('mt-1.5 text-center text-[10px] leading-tight', thin ? 'text-gray-300' : 'text-gray-600')}>
+                            {fromLabel(c.from_type)}
+                          </div>
+                          <div className="text-[10px] text-gray-400">{fmt(c.sent)}</div>
+                          <TrendMark r={c} />
+                        </div>
+                      )
+                    })}
+                  </div>
+                  {top && (
+                    <div className="mt-2 text-center text-[11px] text-gray-500">
+                      Use <b className="text-gray-900">{fromLabel(top.from_type)}</b>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Matrix */}
       <div className="mb-5 overflow-hidden rounded-xl border border-gray-200 bg-white">
         <div className="flex items-center justify-between border-b border-gray-200 bg-gray-50 px-5 py-3 text-[13px] font-bold text-gray-900">
