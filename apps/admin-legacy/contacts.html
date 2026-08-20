@@ -2437,11 +2437,45 @@
 
     let popupMode = 'include';
 
+    // Which distinct-values field backs each filter. Only keys listed here are
+    // server-loaded; `seniority` has a hardcoded list and needs no fetch.
+    const DISTINCT_FIELD_BY_KEY = {
+      jobTitle: 'job_title', industry: 'industry',
+      keywords: 'Keywords', technologies: 'Technologies',
+      city: 'city', state: 'state', country: 'country',
+      companyCity: 'company_city', companyState: 'company_state', companyCountry: 'company_country',
+      companyRegion: 'company_region', companyCounty: 'company_county', companyTown: 'company_town',
+      personRegion: 'person_region', personCounty: 'person_county', personTown: 'person_town',
+    };
+    const distinctLoaded = {};
+
+    // Fetch one filter's options the first time its dropdown is opened.
+    // Previously all 16 were fetched up front on every page load — 16 concurrent
+    // full-table scans for dropdowns the user mostly never opens. Re-renders the
+    // popup when the values land so an open dropdown fills in place.
+    function ensureDistinctLoaded(filterKey) {
+      const field = DISTINCT_FIELD_BY_KEY[filterKey];
+      if (!field || distinctLoaded[filterKey]) return;
+      distinctLoaded[filterKey] = true;
+      fetch(`/api/contacts/distinct-values?field=${encodeURIComponent(field)}&limit=5000`)
+        .then(r => r.json())
+        .then(d => {
+          filterDefs[filterKey].list = d.values || [];
+          // Only redraw if this dropdown is still the open one.
+          if (activeFilterKey === filterKey) {
+            const input = document.getElementById(filterDefs[filterKey].inputId);
+            openPopup(filterKey, input ? input.value : '');
+          }
+        })
+        .catch(() => { distinctLoaded[filterKey] = false; });
+    }
+
     function openPopup(filterKey, query, mode) {
       const def = filterDefs[filterKey];
       if (!def) return;
       cancelClose();
       if (mode) popupMode = mode;
+      ensureDistinctLoaded(filterKey);
 
       const q = (query || '').toLowerCase();
       const filtered = def.list.filter(item => val(item) && val(item).toLowerCase().includes(q));
@@ -2723,55 +2757,22 @@
       } catch {}
     }
 
+    // The 16 distinct-values lists are NO LONGER fetched here. They are loaded
+    // lazily by ensureDistinctLoaded() the first time each dropdown is opened.
+    //
+    // Fetching them up front meant 16 concurrent full-table scans on every page
+    // load, for dropdowns the user mostly never opens. The slowest (job_title,
+    // ~62s) exceeded the server's 45s statement_timeout, so it returned [] to a
+    // blank dropdown every time — while all 16 held pool connections and starved
+    // the rest of the page. Only the email-provider counts, which are rendered
+    // immediately as part of the filter panel, are still fetched on load.
     async function loadDistinctValues() {
       try {
-        const [
-          jobTitles, industries, keywords, technologies,
-          cities, states, countries,
-          companyCities, companyStates, companyCountries,
-          companyRegions, companyCounties, companyTowns,
-          personRegions, personCounties, personTowns,
-          emailProviders
-        ] = await Promise.all([
-          fetch('/api/contacts/distinct-values?field=job_title&limit=5000').then(r => r.json()).catch(() => ({values: []})),
-          fetch('/api/contacts/distinct-values?field=industry&limit=5000').then(r => r.json()).catch(() => ({values: []})),
-          fetch('/api/contacts/distinct-values?field=Keywords&limit=5000').then(r => r.json()).catch(() => ({values: []})),
-          fetch('/api/contacts/distinct-values?field=Technologies&limit=5000').then(r => r.json()).catch(() => ({values: []})),
-          fetch('/api/contacts/distinct-values?field=city&limit=5000').then(r => r.json()).catch(() => ({values: []})),
-          fetch('/api/contacts/distinct-values?field=state&limit=5000').then(r => r.json()).catch(() => ({values: []})),
-          fetch('/api/contacts/distinct-values?field=country&limit=5000').then(r => r.json()).catch(() => ({values: []})),
-          fetch('/api/contacts/distinct-values?field=company_city&limit=5000').then(r => r.json()).catch(() => ({values: []})),
-          fetch('/api/contacts/distinct-values?field=company_state&limit=5000').then(r => r.json()).catch(() => ({values: []})),
-          fetch('/api/contacts/distinct-values?field=company_country&limit=5000').then(r => r.json()).catch(() => ({values: []})),
-          fetch('/api/contacts/distinct-values?field=company_region&limit=5000').then(r => r.json()).catch(() => ({values: []})),
-          fetch('/api/contacts/distinct-values?field=company_county&limit=5000').then(r => r.json()).catch(() => ({values: []})),
-          fetch('/api/contacts/distinct-values?field=company_town&limit=5000').then(r => r.json()).catch(() => ({values: []})),
-          fetch('/api/contacts/distinct-values?field=person_region&limit=5000').then(r => r.json()).catch(() => ({values: []})),
-          fetch('/api/contacts/distinct-values?field=person_county&limit=5000').then(r => r.json()).catch(() => ({values: []})),
-          fetch('/api/contacts/distinct-values?field=person_town&limit=5000').then(r => r.json()).catch(() => ({values: []})),
-          fetch('/api/contacts/email-providers').then(r => r.json()).catch(() => ({google: 0, outlook: 0, other: 0}))
-        ]);
-
-        filterDefs.jobTitle.list      = jobTitles.values      || [];
-        filterDefs.industry.list      = industries.values     || [];
-        filterDefs.keywords.list      = keywords.values       || [];
-        filterDefs.technologies.list  = technologies.values   || [];
-        filterDefs.city.list          = cities.values         || [];
-        filterDefs.state.list         = states.values         || [];
-        filterDefs.country.list       = countries.values      || [];
-        filterDefs.companyCity.list   = companyCities.values  || [];
-        filterDefs.companyState.list  = companyStates.values  || [];
-        filterDefs.companyCountry.list= companyCountries.values|| [];
-        filterDefs.companyRegion.list = companyRegions.values || [];
-        filterDefs.companyCounty.list = companyCounties.values|| [];
-        filterDefs.companyTown.list   = companyTowns.values   || [];
-        filterDefs.personRegion.list  = personRegions.values  || [];
-        filterDefs.personCounty.list  = personCounties.values || [];
-        filterDefs.personTown.list    = personTowns.values    || [];
+        const emailProviders = await fetch('/api/contacts/email-providers')
+          .then(r => r.json())
+          .catch(() => ({ google: 0, outlook: 0, other: 0 }));
 
         Object.keys(filterDefs).forEach(key => renderFilterTags(key));
-
-        // Update email provider counts
         updateEmailProviderCounts(emailProviders);
       } catch (err) {
         console.error('Error loading distinct values:', err);

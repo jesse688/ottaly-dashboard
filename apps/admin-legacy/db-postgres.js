@@ -2906,40 +2906,86 @@ class PostgresDatabase {
     return result.rows[0];
   }
 
-  async getDistinctValues(workspaceId, field, limit = 100) {
-    // Filter dropdowns (Industry, Keywords, Role, Company, Location…) all call
-    // this. On the 590k-row contacts table the unnest+group can exceed the
-    // statement timeout — intermittently, depending on workspace size and DB
-    // load — and the catch below returns [] → the dropdown shows "No results".
-    // That's the "sometimes they show, sometimes not" symptom.
-    //
-    // Cache results per (workspace, field, limit) with a TTL so repeat opens are
-    // instant and never re-run the heavy query. On a timeout/error we fall back
-    // to the last good cached value (stale-but-useful) rather than blanking the
-    // dropdown. These distinct sets change slowly, so a few minutes is fine.
+  // Serve filter dropdowns from cache ONLY. The heavy query is never run on a
+  // request — see warmDistinctValues() below, which owns filling this cache.
+  //
+  // The previous read-through version could not warm itself for the fields that
+  // needed it most. `job_title` takes ~62s on the 1.4M-row table but the pool's
+  // statement_timeout is 45s, so the query was killed EVERY time, `values` was
+  // always null, and nothing was ever cached — you can only populate this cache
+  // by completing the query once. Result: every page load re-ran a 62s scan,
+  // died at 45s, and returned [] to a blank dropdown, while holding a pool
+  // connection for 45s × 16 concurrent fields.
+  //
+  // A miss now returns [] instantly rather than queueing behind a doomed scan.
+  // The dropdown fills on the next open, once the warm pass has landed.
+  // Keyed on (workspace, field) only — NOT limit. The warm pass caches one
+  // list per field at DISTINCT_WARM_LIMIT (the largest anyone asks for) and
+  // callers slice it down. Keying on limit would mean any request for a limit
+  // the warm pass didn't use missed forever and silently returned [].
+  getDistinctValues(workspaceId, field, limit = 100) {
     this._distinctCache = this._distinctCache || new Map();
-    const cacheKey = `${workspaceId}:${field}:${limit}`;
-    const TTL_MS = 10 * 60 * 1000;
-    const cached = this._distinctCache.get(cacheKey);
-    if (cached && (Date.now() - cached.at) < TTL_MS) return cached.values;
-
-    let values;
-    try {
-      values = await this._getDistinctValuesUncached(workspaceId, field, limit);
-    } catch (err) {
-      console.error(`getDistinctValues failed for ${field}:`, err.message);
-      values = null;
-    }
-    // A timeout / cold cache returns [] (or null) — NEVER cache an empty result
-    // (it would blank the dropdown for the whole TTL even after data lands). Only
-    // cache non-empty results; serve a prior cached value if this run came back
-    // empty but we had one.
-    if (!values || values.length === 0) return cached ? cached.values : [];
-    this._distinctCache.set(cacheKey, { values, at: Date.now() });
-    return values;
+    const cached = this._distinctCache.get(`${workspaceId}:${field}`);
+    if (!cached) return [];
+    return cached.values.length > limit ? cached.values.slice(0, limit) : cached.values;
   }
 
-  async _getDistinctValuesUncached(workspaceId, field, limit = 100) {
+  // Fields the contacts page requests on load. The warm pass walks this list so
+  // a cold cache fills in one sweep instead of 16 racing request-path queries.
+  static DISTINCT_WARM_FIELDS = [
+    'job_title', 'industry', 'Keywords', 'Technologies',
+    'city', 'state', 'country',
+    'company_city', 'company_state', 'company_country',
+    'company_region', 'company_county', 'company_town',
+    'person_region', 'person_county', 'person_town',
+  ];
+
+  // Background filler for the distinct-value cache. Runs the heavy scans on a
+  // raised statement_timeout — the whole point, since the slowest fields exceed
+  // the pool default and could never complete on the request path.
+  //
+  // Deliberately SERIAL. These are full scans of the same table; running 16 at
+  // once is what exhausted the pool and starved every other query on the box.
+  // One at a time is slower in wall-clock and invisible to users, because no
+  // request is waiting on it.
+  // The one limit every warmed list is built at. The route caps requests at
+  // 10000, so warming at 10000 means every possible request can be served by
+  // slicing the cached list.
+  static DISTINCT_WARM_LIMIT = 10000;
+
+  async warmDistinctValues(workspaceId, limit = PostgresDatabase.DISTINCT_WARM_LIMIT) {
+    if (this._distinctWarming) return { skipped: true };
+    this._distinctWarming = true;
+    this._distinctCache = this._distinctCache || new Map();
+    const t0 = Date.now();
+    let warmed = 0, failed = 0;
+    try {
+      for (const field of PostgresDatabase.DISTINCT_WARM_FIELDS) {
+        try {
+          const values = await this._getDistinctValuesUncached(workspaceId, field, limit, {
+            statementTimeoutMs: 180000,
+          });
+          // Never cache an empty result — it would blank the dropdown until the
+          // next pass even after the data lands. Keep the last good value.
+          if (values && values.length) {
+            this._distinctCache.set(`${workspaceId}:${field}`, { values, at: Date.now() });
+            warmed++;
+          }
+        } catch (err) {
+          failed++;
+          console.error(`[distinct-warm] ${field} failed:`, err.message);
+        }
+      }
+    } finally {
+      this._distinctWarming = false;
+    }
+    console.log(`[distinct-warm] ${warmed} warmed, ${failed} failed in ${Math.round((Date.now() - t0) / 1000)}s`);
+    return { warmed, failed };
+  }
+
+  // `opts` is passed straight to query() — the warm pass uses it to raise
+  // statement_timeout above the pool default for the slow full-table scans.
+  async _getDistinctValuesUncached(workspaceId, field, limit = 100, opts = {}) {
     // Map of table columns (fast query)
     const tableColumns = {
       'job_title':      'job_title',
@@ -2970,7 +3016,7 @@ class PostgresDatabase {
         ORDER BY count DESC, ${tableColumn}
         LIMIT $1;
       `;
-      const result = await this.query(sql, [limit, workspaceId]);
+      const result = await this.query(sql, [limit, workspaceId], opts);
       return result.rows.filter(r => r.value).map(r => ({
         value: r.value,
         count: parseInt(r.count, 10)
@@ -3020,7 +3066,7 @@ class PostgresDatabase {
     `;
 
     try {
-      const result = await this.query(sql, [limit, workspaceId]);
+      const result = await this.query(sql, [limit, workspaceId], opts);
       return result.rows.filter(r => r.value).map(r => ({
         value: r.value,
         count: parseInt(r.count, 10)
