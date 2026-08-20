@@ -5419,6 +5419,25 @@ const runDistinctWarm = () => {
   db.warmDistinctValues('ottaly-global')
     .catch(e => console.error('[distinct-warm] pass failed:', e.message));
 };
+// Seed the dropdowns from contacts_distinct_cache FIRST. getDistinctValues is
+// cache-only (returns [] on a miss) and the cache is in-memory, so before this
+// existed every deploy left the location filters reading "No results" until the
+// 45s-delayed warm walked all 16 fields serially at ~1.3s each. Seeding is 16
+// indexed reads of a precomputed table, so the filters are usable within
+// seconds of boot; the warm then refreshes them with live values as before.
+const seedDistinctFromDb = (attempt = 0) => {
+  const db = app.locals.pgDb;
+  // pgDb is attached during async startup — retry briefly rather than losing
+  // the seed entirely if we land before it is ready.
+  if (!db) {
+    if (attempt < 10) setTimeout(() => seedDistinctFromDb(attempt + 1), 3000);
+    return;
+  }
+  db.seedDistinctCacheFromDb('ottaly-global')
+    .catch(e => console.error('[distinct-seed] failed:', e.message));
+};
+setTimeout(() => seedDistinctFromDb(), 3000);
+
 setTimeout(runDistinctWarm, 45000);
 setInterval(runDistinctWarm, DISTINCT_WARM_INTERVAL_MS);
 

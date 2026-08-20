@@ -3105,6 +3105,15 @@ class PostgresDatabase {
           if (values && values.length) {
             this._distinctCache.set(`${workspaceId}:${field}`, { values, at: Date.now() });
             warmed++;
+            // ALSO persist to contacts_distinct_cache. The in-memory Map dies
+            // with the process, so every deploy left the location dropdowns
+            // reading "No results" for minutes: the warm starts 45s after boot,
+            // then walks 16 fields serially at ~1.3s each. Keywords and
+            // Technologies never had this problem precisely because they were
+            // already served from this table. This gives the other 14 fields
+            // the same durability so boot can seed memory instantly.
+            this._persistDistinctField(workspaceId, field, values).catch(e =>
+              console.error(`[distinct-warm] persist ${field} failed:`, e.message));
           }
         } catch (err) {
           failed++;
@@ -3116,6 +3125,74 @@ class PostgresDatabase {
     }
     console.log(`[distinct-warm] ${warmed} warmed, ${failed} failed in ${Math.round((Date.now() - t0) / 1000)}s`);
     return { warmed, failed };
+  }
+
+  // Write one warmed field's values into contacts_distinct_cache so they
+  // survive a restart. Mirrors refreshDistinctCache's safe-prune pattern:
+  // stamp every row with a single timestamp captured up front, then delete
+  // only rows this run did NOT touch, so a partial run can never blank a
+  // field. Runs on the background pool — it must not take a web slot.
+  async _persistDistinctField(workspaceId, field, values) {
+    if (!values || !values.length) return;
+    const client = await (this.bgPool || this.pool).connect();
+    try {
+      const { rows: [{ now: runTs }] } = await client.query(`SELECT NOW() AS now`);
+      // Single multi-row INSERT: 16 fields x up to 10k values, so per-row
+      // round trips would be far too slow. unnest() keeps it to one statement.
+      const vals = values.map(v => String(v.value));
+      const cnts = values.map(v => Number(v.count) || 0);
+      const ins = await client.query(
+        `INSERT INTO contacts_distinct_cache (workspace_id, field, value, count, refreshed_at)
+         SELECT $1, $2, v, c, $5::timestamptz
+         FROM unnest($3::text[], $4::int[]) AS t(v, c)
+         ON CONFLICT (workspace_id, field, value)
+         DO UPDATE SET count = EXCLUDED.count, refreshed_at = $5::timestamptz`,
+        [workspaceId, field, vals, cnts, runTs]
+      );
+      if (ins.rowCount > 0) {
+        await client.query(
+          `DELETE FROM contacts_distinct_cache
+           WHERE workspace_id = $1 AND field = $2 AND refreshed_at < $3::timestamptz`,
+          [workspaceId, field, runTs]
+        );
+      }
+    } finally {
+      client.release();
+    }
+  }
+
+  // Seed the in-memory cache from contacts_distinct_cache at boot. Without
+  // this, getDistinctValues (which is cache-only and returns [] on a miss)
+  // serves empty dropdowns until the 45s-delayed warm reaches each field —
+  // which is why filters read "No results" after every deploy. One indexed
+  // read per field, so this is fast and safe to run before serving traffic.
+  async seedDistinctCacheFromDb(workspaceId = 'ottaly-global', limit = PostgresDatabase.DISTINCT_WARM_LIMIT) {
+    this._distinctCache = this._distinctCache || new Map();
+    let seeded = 0;
+    for (const field of PostgresDatabase.DISTINCT_WARM_FIELDS) {
+      // Don't clobber a field the live warm has already filled this boot.
+      if (this._distinctCache.has(`${workspaceId}:${field}`)) continue;
+      try {
+        const r = await this.query(
+          `SELECT value, count FROM contacts_distinct_cache
+           WHERE workspace_id = $1 AND field = $2
+           ORDER BY count DESC LIMIT $3`,
+          [workspaceId, field, limit],
+          { background: true }
+        );
+        if (r.rows.length) {
+          this._distinctCache.set(`${workspaceId}:${field}`, {
+            values: r.rows.map(x => ({ value: x.value, count: parseInt(x.count, 10) })),
+            at: Date.now(),
+          });
+          seeded++;
+        }
+      } catch (err) {
+        console.error(`[distinct-seed] ${field} failed:`, err.message);
+      }
+    }
+    console.log(`[distinct-seed] seeded ${seeded}/${PostgresDatabase.DISTINCT_WARM_FIELDS.length} fields from db`);
+    return seeded;
   }
 
   // `opts` is passed straight to query() — the warm pass uses it to raise
