@@ -1,6 +1,5 @@
 import { type NextRequest, NextResponse } from 'next/server'
 import pool from '@/lib/db'
-import { warmComboDates } from '@/lib/cache-warming'
 
 // ── Combo Analysis (sender provider × recipient provider) ───────────────────
 // MEASURED per combo. Reads combo_daily_stats, which the cache-warmer fills from
@@ -78,11 +77,13 @@ export async function GET(req: NextRequest) {
 
   const dates = dateRange(start, end)
   // Fill any stale/missing days for the requested window (TTL-guarded, cheap).
-  // Kick the warmer but DON'T await it. Now that PV calls are serialised and
-  // back off hard on 429, a warm pass takes minutes — awaiting it here made
-  // this route hang past 60s and time out, taking the page down with it.
-  // Serve whatever is cached immediately; the fill lands in a later request.
-  void warmComboDates(dates).catch(() => {})
+  // Deliberately NOT warming from this route. The 15-min background pass owns
+  // filling the cache; a per-request warm competed with it for the single
+  // in-flight slot and starved it — each page load grabbed the lock for its
+  // own 1-day window, so every timer tick found the lock held, skipped, and
+  // waited another 15 minutes. Writes stalled for 20+ minutes at a time while
+  // the route looked healthy. Serving stale-but-present data is the right
+  // trade here: the background pass catches up within a couple of ticks.
 
   // Immediately-preceding window of the same length, for week-over-week trend.
   // ESP matching is re-set weekly, so "is this combo better or worse than when

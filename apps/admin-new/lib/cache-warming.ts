@@ -520,8 +520,13 @@ export async function startCacheWarmingInterval(): Promise<void> {
   setInterval(() => {
     warmPerformanceCache().catch(() => {})
   }, INTERVAL_MS)
-  // Combo every 15 min — its TTL (30 min today) means most passes are no-ops.
-  const COMBO_INTERVAL_MS = 15 * 60 * 1000
+  // Combo every 2 min. This is now the ONLY thing that fills the combo cache
+  // (the API route no longer warms), and a pass is capped at 12 ws-days, so
+  // the interval sets the drain rate: 15 min would take ~4.5h to clear a
+  // 220-day backlog. Passes are cheap when there's nothing stale (one indexed
+  // count per ws-day), the in-flight guard means a long pass simply skips the
+  // next tick, and pvGate caps actual PV traffic regardless of tick rate.
+  const COMBO_INTERVAL_MS = 2 * 60 * 1000
   setInterval(() => {
     warmComboCache().catch(() => {})
   }, COMBO_INTERVAL_MS)
@@ -537,7 +542,7 @@ export async function startCacheWarmingInterval(): Promise<void> {
     recomputeAll().catch(() => {})
   }, NEWLEAD_INTERVAL_MS)
 
-  console.log('[cache-warming] interval started (perf 2 min, combo 15 min, new-lead 12 h)')
+  console.log('[cache-warming] interval started (perf 2 min, combo 2 min, new-lead 12 h)')
 }
 
 // Auto-initialize when module is imported (only on server)
