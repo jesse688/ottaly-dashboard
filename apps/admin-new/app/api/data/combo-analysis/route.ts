@@ -80,6 +80,15 @@ export async function GET(req: NextRequest) {
   // Fill any stale/missing days for the requested window (TTL-guarded, cheap).
   await warmComboDates(dates).catch(() => {})
 
+  // Immediately-preceding window of the same length, for week-over-week trend.
+  // ESP matching is re-set weekly, so "is this combo better or worse than when
+  // I last changed it" matters more than any single window's absolute rate.
+  const spanDays = Math.max(1, dates.length)
+  const prevEndD = new Date(Date.parse(start + 'T00:00:00Z') - 86_400_000)
+  const prevStartD = new Date(prevEndD.getTime() - (spanDays - 1) * 86_400_000)
+  const prevStart = prevStartD.toISOString().slice(0, 10)
+  const prevEnd = prevEndD.toISOString().slice(0, 10)
+
   const wsCombo = workspaceId ? `AND ws_id = $3` : ''
   const wsUr = workspaceId ? `AND ur.workspace_id = $3` : ''
 
@@ -101,6 +110,26 @@ export async function GET(req: NextRequest) {
         GROUP BY provider, recp_provider`,
       workspaceId ? [start, end, workspaceId] : [start, end]
     )
+    // Same shape for the preceding window. Read-only from cache — deliberately
+    // NOT warmed, so opening the page never triggers a second PV fetch storm.
+    // A prior window with no cached rows simply yields no trend arrows.
+    const { rows: prevRows } = await pool.query(
+      `SELECT provider, recp_provider,
+              SUM((data->>'sent')::int)       AS sent,
+              SUM((data->>'oooReplies')::int) AS ooo
+         FROM combo_daily_stats
+        WHERE date >= $1 AND date <= $2
+          AND provider <> '_'
+          ${wsCombo}
+        GROUP BY provider, recp_provider`,
+      workspaceId ? [prevStart, prevEnd, workspaceId] : [prevStart, prevEnd]
+    )
+    const prevByCombo = new Map<string, { sent: number; ooo: number }>()
+    for (const p of prevRows) {
+      const f = SENDER_LABEL[p.provider as string] || (p.provider as string)
+      const t = RECIP_LABEL[p.recp_provider as string] || (p.recp_provider as string)
+      prevByCombo.set(`${f}|${t}`, { sent: +p.sent || 0, ooo: +p.ooo || 0 })
+    }
     // NOTE: new-lead / follow-up split is NOT computed here — PlusVibe's
     // total_new_lead_contacted_count is only meaningful over a multi-day window
     // (0 per-day) AND its stats API is very slow (~75s for one workspace's 9
@@ -157,6 +186,9 @@ export async function GET(req: NextRequest) {
           sent,
           replies: repliesInclOoo,     // reply rate incl. OOO (human + OOO)
           replies_human: human,        // human reply rate (excludes OOO)
+          ooo,                         // OOO/auto-replies alone — the infra signal
+          prev_sent: prevByCombo.get(`${from_type}|${to_type}`)?.sent ?? 0,
+          prev_ooo: prevByCombo.get(`${from_type}|${to_type}`)?.ooo ?? 0,
           pos_replies: +r.pos || 0,    // positive/interested
           bounces: +r.bounces || 0,
           leads: leadByCombo.get(`${from_type}|${to_type}`) || 0,
@@ -174,7 +206,8 @@ export async function GET(req: NextRequest) {
       const [from_type, to_type] = key.split('|')
       if (!rows.some((r) => r.from_type === from_type && r.to_type === to_type)) {
         rows.push({
-          from_type, to_type, sent: 0, replies: 0, replies_human: 0,
+          from_type, to_type, sent: 0, replies: 0, replies_human: 0, ooo: 0,
+          prev_sent: 0, prev_ooo: 0,
           pos_replies: 0, bounces: 0, leads: n, unique_contacts: 0,
           capped: false, is_approx: false,
         })
@@ -189,6 +222,8 @@ export async function GET(req: NextRequest) {
       hasApprox: false,
       start,
       end,
+      prev_start: prevStart,
+      prev_end: prevEnd,
       source: 'combo_daily_stats (measured)',
     })
   } catch (err) {
