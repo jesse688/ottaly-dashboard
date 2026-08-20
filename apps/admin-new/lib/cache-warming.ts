@@ -424,7 +424,22 @@ async function ensureComboDaily(wsIds: string[], dates: string[]): Promise<void>
   }
 }
 
+// Guard against overlapping passes. A pass now outlives the request that
+// started it (fire-and-forget, minutes long), so without this every page load
+// would stack another concurrent warm on top — all of them competing for the
+// same serialised PV gate and pushing each other into 429 backoff. Declared
+// above both users: `let` is not hoisted, so referencing it from an earlier
+// line would be a TDZ error at runtime.
+let comboWarmInFlight = false
+
 export async function warmComboCache(): Promise<void> {
+  // Same guard as warmComboDates: a pass can now run longer than the 15-min
+  // interval, so the timer must not stack a second one on top of the first.
+  if (comboWarmInFlight) {
+    console.log('[cache-warming] combo warm already running, skipping this tick')
+    return
+  }
+  comboWarmInFlight = true
   try {
     const wsIds = await getActiveWorkspaces()
     if (!wsIds.length) return
@@ -435,6 +450,8 @@ export async function warmComboCache(): Promise<void> {
     console.log(`[cache-warming] combo cache warmed (${COMBO_SETTLE_DAYS}d)`)
   } catch (err) {
     console.error('[cache-warming] combo warm failed:', err instanceof Error ? err.message : err)
+  } finally {
+    comboWarmInFlight = false
   }
 }
 
@@ -442,11 +459,15 @@ export async function warmComboCache(): Promise<void> {
 // combo-analysis route so a requested window is filled even if the background
 // interval hasn't covered it yet.
 export async function warmComboDates(dates: string[]): Promise<void> {
+  if (comboWarmInFlight) return
+  comboWarmInFlight = true
   try {
     const wsIds = await getActiveWorkspaces()
     if (wsIds.length) await ensureComboDaily(wsIds, dates)
   } catch (err) {
     console.error('[cache-warming] warmComboDates failed:', err instanceof Error ? err.message : err)
+  } finally {
+    comboWarmInFlight = false
   }
 }
 

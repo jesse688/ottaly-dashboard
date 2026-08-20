@@ -78,7 +78,11 @@ export async function GET(req: NextRequest) {
 
   const dates = dateRange(start, end)
   // Fill any stale/missing days for the requested window (TTL-guarded, cheap).
-  await warmComboDates(dates).catch(() => {})
+  // Kick the warmer but DON'T await it. Now that PV calls are serialised and
+  // back off hard on 429, a warm pass takes minutes — awaiting it here made
+  // this route hang past 60s and time out, taking the page down with it.
+  // Serve whatever is cached immediately; the fill lands in a later request.
+  void warmComboDates(dates).catch(() => {})
 
   // Immediately-preceding window of the same length, for week-over-week trend.
   // ESP matching is re-set weekly, so "is this combo better or worse than when
