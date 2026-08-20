@@ -3003,6 +3003,23 @@ app.get('/api/version', (req, res) => {
   res.json({ build: 'apollo-export-fix-2026-07-08e', uptime: Math.round(process.uptime()) });
 });
 
+// Event-loop lag sampler. A timer set for 500ms that measures how late it
+// actually fires: if the loop is blocked, the delay is the block duration.
+// Records the WORST lag since the last /healthz read, not the instantaneous
+// value -- an instantaneous reading is always ~0 by the time the loop is free
+// enough to serve /healthz, which is exactly when we can observe it.
+let _elLagMax = 0;
+{
+  const TICK = 500;
+  let expected = Date.now() + TICK;
+  setInterval(() => {
+    const now = Date.now();
+    const late = now - expected;
+    if (late > _elLagMax) _elLagMax = late;
+    expected = now + TICK;
+  }, TICK).unref?.();
+}
+
 app.get('/healthz', async (req, res) => {
   res.set('Cache-Control', 'no-store');
   const health = { status: 'ok', uptime: Math.round(process.uptime()), db: 'unknown' };
@@ -3018,6 +3035,16 @@ app.get('/healthz', async (req, res) => {
         ? { total: pool.totalCount, idle: pool.idleCount, waiting: pool.waitingCount }
         : null;
       health.pools = { web: stat(pgPool.pool), background: stat(pgPool.bgPool) };
+      // Heap + event-loop lag. The site stalls with TLS completing and zero
+      // bytes returned while DB latency stays at 1-10ms, which points at the
+      // event loop rather than the database. rss near the container limit with
+      // heapUsed pinned high means GC thrashing; lag alone means sync work.
+      const m = process.memoryUsage();
+      const mb = (n) => Math.round(n / 1048576);
+      health.memory = { rssMB: mb(m.rss), heapUsedMB: mb(m.heapUsed), heapTotalMB: mb(m.heapTotal) };
+      // Worst block since the previous healthz call, then reset.
+      health.eventLoopLagMaxMs = Math.max(0, Math.round(_elLagMax));
+      _elLagMax = 0;
       const t0 = Date.now();
       await pgPool.query('SELECT 1');
       health.dbLatencyMs = Date.now() - t0;
