@@ -5304,6 +5304,29 @@ setTimeout(async () => {
 // Keep warming every 2 min after that
 setInterval(warmPerformanceCache, PERF_WARM_INTERVAL_MS);
 
+// ── Contacts filter-dropdown warm ───────────────────────────────────────────
+// getDistinctValues() is now cache-only, so this pass is the ONLY thing that
+// fills it — same trade as the combo cache: the background pass owns the cache
+// and the request path never pays for a scan. Serial, on a raised
+// statement_timeout, because the slow fields (job_title ~62s) exceed the pool
+// default and could never complete on a request.
+//
+// 30 min, not 2: these are full scans of the contacts table and the values
+// change on import, not minute to minute. First pass is delayed to let boot
+// settle — a cold dropdown for the first minute is fine, a scan competing with
+// startup is not.
+const DISTINCT_WARM_INTERVAL_MS = 30 * 60 * 1000;
+const runDistinctWarm = () => {
+  // pgDb is attached to app.locals during async startup, so it may not exist
+  // yet on the first tick — skip and catch the next one.
+  const db = app.locals.pgDb;
+  if (!db) return;
+  db.warmDistinctValues('ottaly-global')
+    .catch(e => console.error('[distinct-warm] pass failed:', e.message));
+};
+setTimeout(runDistinctWarm, 45000);
+setInterval(runDistinctWarm, DISTINCT_WARM_INTERVAL_MS);
+
 function readReadyPerformanceCache(wsIds, dates) {
   const daily = {};
   const leads = {};
