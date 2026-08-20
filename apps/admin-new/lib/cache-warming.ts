@@ -13,6 +13,40 @@ const TTL_OLD_MS = 12 * 60 * 60 * 1000
 // passes so we don't repeatedly fail+retry them and stall the warm.
 const deadWorkspaces = new Set<string>()
 
+// ── PlusVibe request pacing ────────────────────────────────────────────────
+// One global gate for EVERY PV call in this process. The combo warmer used to
+// fire a whole pass at once (120 ws-days x 9 combos = ~1,080 parallel requests)
+// and PV answered with 429s; those failures were swallowed, so days were left
+// half-written and the backlog grew every pass. Serialising with a small
+// minimum gap keeps us under PV's limit and makes a pass slow-but-complete,
+// which is what a cache actually needs.
+const PV_CONCURRENCY = 2
+const PV_MIN_GAP_MS = 120        // ≈16 req/s ceiling across the whole process
+const PV_MAX_RETRIES = 4
+const PV_BASE_BACKOFF_MS = 1000
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+let pvActive = 0
+let pvLastStart = 0
+const pvQueue: Array<() => void> = []
+
+async function pvGate<T>(fn: () => Promise<T>): Promise<T> {
+  if (pvActive >= PV_CONCURRENCY) {
+    await new Promise<void>((resolve) => pvQueue.push(resolve))
+  }
+  pvActive++
+  try {
+    const since = Date.now() - pvLastStart
+    if (since < PV_MIN_GAP_MS) await sleep(PV_MIN_GAP_MS - since)
+    pvLastStart = Date.now()
+    return await fn()
+  } finally {
+    pvActive--
+    pvQueue.shift()?.()
+  }
+}
+
 // Only warm workspaces that are ACTIVE clients (legacy /api/client-status) AND
 // not already known-dead in PlusVibe. workspace_stats is polluted with stale/
 // test/deleted workspaces that 400 or return all-zeros, which spammed PV and
@@ -52,26 +86,41 @@ function lastNDates(n: number): string[] {
 }
 
 async function pvFetch(path: string): Promise<any> {
-  const url = `${PV_BASE}${path}`
-  console.log(`[cache-warming] fetching ${url}`)
-  const res = await fetch(url, {
-    headers: { 'x-api-key': PV_KEY },
-    signal: AbortSignal.timeout(15000),
-  })
-  if (!res.ok) {
-    // 400 here means PV doesn't recognise the workspace — mark it dead so we
-    // stop retrying it. Extract workspace_id from the query string.
-    if (res.status === 400) {
-      const m = path.match(/workspace_id=([^&]+)/)
-      if (m) deadWorkspaces.add(m[1])
+  return pvGate(async () => {
+    const url = `${PV_BASE}${path}`
+    // Retry 429/5xx with backoff. Previously a 429 threw straight out, the
+    // caller's allSettled swallowed it, and that combo cell was simply never
+    // written — leaving the day permanently short of its 9 rows and its totals
+    // silently understated (this was ~33% of agency sends missing).
+    for (let attempt = 0; ; attempt++) {
+      const res = await fetch(url, {
+        headers: { 'x-api-key': PV_KEY },
+        signal: AbortSignal.timeout(20000),
+      })
+      if (res.ok) return await res.json()
+
+      // 400 = PV doesn't recognise the workspace. Permanent: mark it dead so
+      // we stop retrying it every pass.
+      if (res.status === 400) {
+        const m = path.match(/workspace_id=([^&]+)/)
+        if (m) deadWorkspaces.add(m[1])
+        throw new Error('PlusVibe 400')
+      }
+
+      const retryable = res.status === 429 || res.status >= 500
+      if (!retryable || attempt >= PV_MAX_RETRIES) {
+        console.error(`[cache-warming] PlusVibe ${res.status} (gave up after ${attempt + 1})`)
+        throw new Error(`PlusVibe ${res.status}`)
+      }
+      // Honour Retry-After when PV sends one, else exponential backoff+jitter.
+      const ra = Number(res.headers.get('retry-after'))
+      const wait = Number.isFinite(ra) && ra > 0
+        ? Math.min(ra * 1000, 30_000)
+        : Math.min(PV_BASE_BACKOFF_MS * 2 ** attempt, 30_000) + Math.random() * 250
+      console.warn(`[cache-warming] PlusVibe ${res.status}, retry ${attempt + 1}/${PV_MAX_RETRIES} in ${Math.round(wait)}ms`)
+      await sleep(wait)
     }
-    const err = `PlusVibe ${res.status}`
-    console.error(`[cache-warming] ${err}`)
-    throw new Error(err)
-  }
-  const data = await res.json()
-  console.log(`[cache-warming] got response:`, JSON.stringify(data).slice(0, 200))
-  return data
+  })
 }
 
 function aggregatePvEmailStats(raw: any): Record<string, number> {
@@ -286,10 +335,12 @@ async function ensureComboDaily(wsIds: string[], dates: string[]): Promise<void>
   }
   if (!needsFetch.length) return
 
-  // Bound one pass. 40 workspaces × 14 days × 9 combos is ~5k PV calls if
-  // everything is stale at once (first run after deploy, or after an outage).
-  // Oldest-stale-first so nothing starves, and the next pass picks up the rest.
-  const MAX_PAIRS_PER_PASS = 120
+  // Bound one pass. Each ws-day costs 9 PV calls, now paced through pvGate at
+  // ~2 concurrent / 120ms apart — so 12 ws-days ≈ 108 calls ≈ 7s of gating,
+  // comfortably inside the 15-min interval with room for retries. The old cap
+  // of 120 (1,080 calls) is what triggered the 429 storm. Oldest-stale-first
+  // so nothing starves; the next pass takes the rest.
+  const MAX_PAIRS_PER_PASS = 12
   let queue = [...needsFetch].sort((a, b) => a.savedAt - b.savedAt)
   if (queue.length > MAX_PAIRS_PER_PASS) {
     console.log(
