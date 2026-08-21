@@ -18284,7 +18284,12 @@ async function autopilotTick({ dry = false, force = false } = {}) {
             const p = state.providers[b];
             const floorHit = p.belowFloor;
             const runwayHit = p.runwayDays != null && p.runwayDays < s.topUpBelowDays;
-            const emergency = p.runwayDays != null && p.runwayDays < s.emergencyBelowDays;
+            // A provider at ZERO stock is the most urgent case there is, but it
+            // has no send rate, so runwayDays is null and the runway test below
+            // cannot see it. Without this, a bone-dry campaign sat deferred
+            // until the overnight window while its senders had nothing to send.
+            const empty = p.remaining === 0 && p.floor > 0;
+            const emergency = empty || (p.runwayDays != null && p.runwayDays < s.emergencyBelowDays);
             if (!floorHit && !runwayHit) continue;
             if (!windowOpen && !emergency) {
               entry.actions.push({ type: 'defer', provider: b, reason: 'outside overnight window',
@@ -18303,8 +18308,13 @@ async function autopilotTick({ dry = false, force = false } = {}) {
               entry.actions.push({ type: q.starved ? 'starved' : 'push', provider: b, want, ...q });
               if (q.starved) {
                 postBounceAlertToSlack(`🚱 Autopilot — *${state.campaign_name}*: no ${AP_BUCKET_LABEL[b]} contacts available to top up (${p.remaining} left, ${p.runwayDays ?? '?'}d runway)`).catch(() => {});
+                continue; // no supply here — try the next provider, don't waste the tick
               }
-              break; // one push per campaign per tick; next tick handles the rest
+              // One real push per campaign per tick: verify-and-push runs as a
+              // background job, and a second push for the same campaign would
+              // be skipped by the in-flight guard anyway. Next tick takes the
+              // remaining providers.
+              break;
             } catch (e) {
               entry.actions.push({ type: 'push', provider: b, error: e.message });
               result.errors.push(`${campaignId}/${b}: ${e.message}`);
