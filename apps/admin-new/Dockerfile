@@ -16,8 +16,17 @@ COPY --from=deps /app/node_modules ./node_modules
 # code from a "successful" build -- admin-legacy carries the same guard for the
 # same reason. Bump CACHEBUST (any new value) to force this layer, and every
 # layer after it, to rebuild.
-ARG CACHEBUST=2026-08-21-4
+ARG CACHEBUST=2026-08-21-5
 COPY apps/admin-new .
+
+# Stamp the build. /api/healthz already reports `sha`, but nothing ever set it,
+# so it returned a stale value baked in at image-build time (13a8777, an old
+# foundation commit) and therefore confirmed nothing. Next inlines
+# process.env at BUILD time, so this must be set before `npm run build`.
+# CACHEBUST changes every deploy, so it works as a build id with no extra step;
+# set GIT_SHA in EasyPanel's build args for the real commit.
+ARG GIT_SHA=""
+ENV GIT_SHA=${GIT_SHA:-$CACHEBUST}
 ENV NEXT_TELEMETRY_DISABLED=1
 # Suppress Sentry source-map upload during build (no auth token in CI)
 ENV SENTRY_AUTH_TOKEN=""
