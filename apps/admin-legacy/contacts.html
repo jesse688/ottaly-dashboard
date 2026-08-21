@@ -4216,6 +4216,13 @@
         if (!res.ok) throw new Error(d.error || 'failed');
         _lastSendability = d;
 
+        if (!d.checked) {
+          // Nothing was read, so we know nothing. Saying "0 sendable" here
+          // would be a confident lie about a filter with rows in it.
+          el.textContent = 'sendable: unknown';
+          el.style.color = '#94a3b8';
+          return;
+        }
         const n = d.sendableTotal;
         const approx = d.estimated ? '~' : '';
         el.textContent = `${approx}${n.toLocaleString()} sendable`;
@@ -4241,6 +4248,10 @@
           const scaled = d.estimated ? Math.round(v * (d.total / d.checked)) : v;
           return `${label}: ${scaled.toLocaleString()}`;
         });
+      if (!d.checked) {
+        showMessage('Sendability could not read any contacts for this filter — treat the badge as unknown, not as zero.', 'error');
+        return;
+      }
       const head = d.estimated
         ? `Checked a ${d.checked.toLocaleString()} sample of ${d.total.toLocaleString()}; figures below are scaled.`
         : `Checked all ${d.checked.toLocaleString()}.`;

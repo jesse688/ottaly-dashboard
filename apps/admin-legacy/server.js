@@ -16300,9 +16300,13 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
   const SAMPLE_CAP = Math.min(parseInt(body.sample || '5000', 10) || 5000, 20000);
 
   try {
+    // NB: searchContacts' first arg is the contacts-DB TENANT scope
+    // (req.workspaceId, e.g. 'ottaly-global') — NOT the PlusVibe workspace_id
+    // the guards target. Passing the PlusVibe id here matched zero rows and
+    // made the badge report "0 sendable of 0" on a 2,086-row filter.
     const [contacts, total] = await Promise.all([
-      db.searchContacts(workspaceId || req.workspaceId, filters, SAMPLE_CAP, 0),
-      db.getContactsCount(workspaceId || req.workspaceId, filters),
+      db.searchContacts(req.workspaceId, filters, SAMPLE_CAP, 0),
+      db.getContactsCount(req.workspaceId, filters),
     ]);
 
     const skipped = {
