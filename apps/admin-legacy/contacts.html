@@ -4191,6 +4191,10 @@
     // guards and reports the real number next to the total.
     let _sendSeq = 0;
     let _lastSendability = null;
+    // Declared here, not next to fetchSendableIds: refreshSendability (above it)
+    // clears this on every search, and a `let` further down would be in the
+    // temporal dead zone at that point.
+    let _sendableIdCache = { key: '', ids: null };
 
     async function refreshSendability() {
       const el = document.getElementById('sendableInfo');
@@ -4201,6 +4205,7 @@
       if (!workspaceId || !totalResults) { el.style.display = 'none'; _lastSendability = null; return; }
 
       const mySeq = ++_sendSeq;
+      _sendableIdCache = { key: '', ids: null }; // filter changed → ids are stale
       el.style.display = '';
       el.textContent = 'checking…';
       el.style.color = '#94a3b8';
@@ -4254,6 +4259,11 @@
       try {
         const f = { ...getFilterValues(0) };
         delete f.limit; delete f.offset; delete f.sortBy; delete f.sortDir;
+        // Same client + same filter = same answer. Selecting twice, or
+        // switching between "this page" and "select all", must not re-run the
+        // guards over thousands of rows.
+        const key = workspaceId + '|' + JSON.stringify(f) + '|' + sample;
+        if (_sendableIdCache.key === key && _sendableIdCache.ids) return _sendableIdCache.ids;
         const res = await fetch('/api/contacts/sendability', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -4272,7 +4282,9 @@
         // being selected, filtering would drop contacts it simply never looked
         // at — worse than not filtering. Bail out and let the caller select all.
         if (d.estimated) return null;
-        return new Set(d.ids);
+        const set = new Set(d.ids);
+        _sendableIdCache = { key, ids: set };
+        return set;
       } catch { return null; }
     }
 

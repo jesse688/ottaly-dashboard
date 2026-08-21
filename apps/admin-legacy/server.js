@@ -16298,6 +16298,10 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
   // and report the rate, so the UI can extrapolate honestly rather than lie
   // with a precise-looking number.
   const SAMPLE_CAP = Math.min(parseInt(body.sample || '5000', 10) || 5000, 20000);
+  // When the caller is about to SELECT (not just display a count), it needs the
+  // actual ids that pass — otherwise "select all" re-selects the blocked ones
+  // and the push silently discards them again.
+  const wantIds = body.return_ids === true;
 
   try {
     // NB: searchContacts' first arg is the contacts-DB TENANT scope, NOT the
@@ -16308,10 +16312,14 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
     // same way that middleware does, or the query scopes to undefined and the
     // badge reports "unknown" on a filter that plainly has rows.
     const tenantId = req.user?.workspace_id || req.headers['x-workspace-id'] || 'ottaly-global';
-    const [contacts, total] = await Promise.all([
-      db.searchContacts(tenantId, filters, SAMPLE_CAP, 0),
-      db.getContactsCount(tenantId, filters),
-    ]);
+    // The id path (selection) does not need the total — COUNT(*) over a big
+    // filter is the expensive half of the request and its only use is the
+    // "estimated" flag. Skip it and take the row count as the total, which is
+    // exact whenever the sample covered everything.
+    const contacts = await db.searchContacts(tenantId, filters, SAMPLE_CAP, 0);
+    const total = wantIds && contacts.length < SAMPLE_CAP
+      ? contacts.length
+      : await db.getContactsCount(tenantId, filters);
 
     const skipped = {
       unsafe: 0, dnc: 0, departed: 0, missingName: 0, alreadyInCampaign: 0,
@@ -16326,10 +16334,6 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
     const targetCampLc = campaignName.toLowerCase();
     const departed = await getDepartedEmails(db);
 
-    // When the caller is about to SELECT (not just display a count), it needs
-    // the actual ids that pass — otherwise "select all" re-selects the blocked
-    // ones and the push silently discards them again.
-    const wantIds = body.return_ids === true;
     const sendableIds = [];
     let sendable = 0;
     for (const c of contacts) {
