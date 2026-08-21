@@ -16265,6 +16265,140 @@ app.post('/api/contacts/by-ids', requireSession, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── Sendability check ─────────────────────────────────────
+// The contacts list answers "who matches this filter". The push answers "who
+// may we actually email". Those diverged: a filter could show 2,095 contacts
+// while the push pushed 0, because the guards below live only in the push
+// paths. That surprise is the whole reason this endpoint exists.
+//
+// It runs the SAME guard functions the push uses (buildCrossClientGuard,
+// getDepartedEmails, the cooloff date, PUSHABLE_STATUSES) over a set of
+// contacts and reports how many would survive, with a per-reason breakdown.
+// Reusing the functions — rather than re-expressing the rules in SQL — is
+// deliberate: it is the only way the two numbers cannot drift apart again.
+app.post('/api/contacts/sendability', requireSession, async (req, res) => {
+  const db = req.app.locals.pgDb;
+  if (!db || !db.searchContacts) return res.status(500).json({ error: 'Contacts DB not available' });
+
+  const body = req.body || {};
+  const workspaceId   = String(body.workspace_id || '').trim();
+  const workspaceName = String(body.workspace_name || '').trim();
+  const campaignName  = String(body.campaign_name || '').trim();
+  const filters       = body.filters && typeof body.filters === 'object' ? body.filters : {};
+  // Loose mirrors the push flag: engine leads only need "not invalid".
+  const loose = body.loose === true;
+  // Mirrors the push modal's default pair; callers may pass their own buckets.
+  const allowedStatuses = Array.isArray(body.allowedStatuses) && body.allowedStatuses.length
+    ? body.allowedStatuses.map(x => String(x).toLowerCase())
+    : ['safe', 'safe_catchall'];
+  const pushableStatuses = new Set(allowedStatuses);
+
+  // Sampling bound. A filter can match 200k rows; running the guards over all
+  // of them on every keystroke would be its own outage. Check a bounded slice
+  // and report the rate, so the UI can extrapolate honestly rather than lie
+  // with a precise-looking number.
+  const SAMPLE_CAP = Math.min(parseInt(body.sample || '5000', 10) || 5000, 20000);
+
+  try {
+    const [contacts, total] = await Promise.all([
+      db.searchContacts(workspaceId || req.workspaceId, filters, SAMPLE_CAP, 0),
+      db.getContactsCount(workspaceId || req.workspaceId, filters),
+    ]);
+
+    const skipped = {
+      unsafe: 0, dnc: 0, departed: 0, missingName: 0, alreadyInCampaign: 0,
+      cooldownWorkspace: 0, verticalCollision: 0, burstGap: 0, densityCeiling: 0,
+      snoozed: 0,
+    };
+
+    const crossClientGuard = buildCrossClientGuard(workspaceId, workspaceName);
+    const campaignVertical = detectVertical((campaignName || '') + ' ' + (workspaceName || ''), workspaceId);
+    const cooloffDate = sameClientCooloffDate();
+    const today = new Date().toISOString().slice(0, 10);
+    const targetCampLc = campaignName.toLowerCase();
+    const departed = await getDepartedEmails(db);
+
+    let sendable = 0;
+    for (const c of contacts) {
+      // Deliverability. Mirrors the push: loose accepts anything not invalid,
+      // strict accepts only the safe pair.
+      const status = String(c.email_status || '').toLowerCase();
+      if (loose) {
+        if (status === 'invalid') { skipped.unsafe++; continue; }
+      } else if (!pushableStatuses.has(status)) {
+        skipped.unsafe++; continue;
+      }
+      if (c.do_not_contact) { skipped.dnc++; continue; }
+      if (departed.has(String(c.email || '').toLowerCase())) { skipped.departed++; continue; }
+      if (!loose && (!(c.first_name && c.first_name.trim()) || !(c.last_name && c.last_name.trim()))) {
+        skipped.missingName++; continue;
+      }
+
+      // Already in this campaign (full history, then the legacy single field).
+      let pushed = [];
+      try {
+        pushed = Array.isArray(c.pushed_campaigns) ? c.pushed_campaigns
+               : JSON.parse(c.pushed_campaigns || '[]');
+      } catch { pushed = []; }
+      if (workspaceId && pushed.some(pc => pc.workspace_id === workspaceId
+          && (targetCampLc && String(pc.campaign_name || '').toLowerCase() === targetCampLc))) {
+        skipped.alreadyInCampaign++; continue;
+      }
+      if (targetCampLc && c.last_campaign_name
+          && String(c.last_campaign_name).toLowerCase() === targetCampLc) {
+        skipped.alreadyInCampaign++; continue;
+      }
+
+      // Same-client cooloff.
+      if (workspaceId && cooloffDate) {
+        let emailed = {};
+        try {
+          emailed = typeof c.emailed_workspaces === 'string'
+            ? JSON.parse(c.emailed_workspaces || '{}') : (c.emailed_workspaces || {});
+        } catch { emailed = {}; }
+        const info = emailed[workspaceId];
+        const stamp = info ? (info.pushed_at > info.last_sent ? info.pushed_at : info.last_sent) : '';
+        if (stamp && stamp >= cooloffDate) { skipped.cooldownWorkspace++; continue; }
+      }
+
+      // Vertical snooze.
+      if (campaignVertical) {
+        let snoozes = [];
+        try {
+          snoozes = Array.isArray(c.snoozed_verticals) ? c.snoozed_verticals
+                  : JSON.parse(c.snoozed_verticals || '[]');
+        } catch { snoozes = []; }
+        if (snoozes.some(s => s.vertical === campaignVertical && s.until >= today)) {
+          skipped.snoozed++; continue;
+        }
+      }
+
+      // Cross-client spacing (vertical collision → burst gap → density ceiling).
+      if (!crossClientGuard(c, skipped)) continue;
+      sendable++;
+    }
+
+    const checked = contacts.length;
+    // `estimated` = the sample rate applied to the true total. Flagged so the
+    // UI can show "~" rather than implying an exact count it did not measure.
+    const rate = checked > 0 ? sendable / checked : 0;
+    const estimated = checked < total;
+
+    res.json({
+      total,
+      checked,
+      sendable,
+      blocked: checked - sendable,
+      sendableTotal: estimated ? Math.round(total * rate) : sendable,
+      estimated,
+      reasons: skipped,
+    });
+  } catch (e) {
+    console.error('[sendability]', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── Departed contacts ─────────────────────────────────────
 // Addresses whose owner told us, in writing, that they have left the company
 // ("I have now left Lifeplan Products Ltd"). Blocked on every push path, for

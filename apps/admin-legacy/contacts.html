@@ -1766,6 +1766,13 @@
 
         <div class="pagination-bar">
           <span class="info-text" id="pageInfo">Showing 0 of 0</span>
+          <!-- Sendable indicator. The filter count answers "who matches"; this
+               answers "who may we actually email" by running the real push
+               guards. They used to disagree silently (2,095 shown, 0 pushed). -->
+          <span class="info-text" id="sendableInfo"
+                style="margin-left:12px;cursor:pointer;display:none;"
+                onclick="showSendabilityBreakdown()"
+                title="Click for the full breakdown"></span>
           <div id="pagination" style="display:flex;gap:4px;"></div>
         </div>
         </div><!-- end contactsTab -->
@@ -4153,6 +4160,7 @@
         const sac = document.getElementById('selectAllCount');
         if (sac) sac.textContent = totalResults.toLocaleString() + (totalCapped ? '+' : '');
         updatePushButton();
+        refreshSendability();
       } catch (err) {
         if (mySeq !== _searchSeq) return;
         showMessage('Error loading contacts: ' + err.message, 'error');
@@ -4161,6 +4169,84 @@
       } finally {
         if (mySeq === _searchSeq) setSearchLoading(false);
       }
+    }
+
+    // ── Sendability ────────────────────────────────────────────────
+    // The result count says how many contacts MATCH the filter. It has never
+    // said how many you may actually EMAIL — the push applies ~10 further
+    // guards (verification bucket, campaign history, client cooldown,
+    // same-vertical lockout, cross-client spacing). A filter could show 2,095
+    // and push 0 with no warning. This asks the server to run those same
+    // guards and reports the real number next to the total.
+    let _sendSeq = 0;
+    let _lastSendability = null;
+
+    async function refreshSendability() {
+      const el = document.getElementById('sendableInfo');
+      if (!el) return;
+      const workspaceId = (document.getElementById('clientFilter') || {}).value || '';
+      // The guards are all relative to a target client. Without one there is
+      // no meaningful answer, so say nothing rather than imply a number.
+      if (!workspaceId || !totalResults) { el.style.display = 'none'; _lastSendability = null; return; }
+
+      const mySeq = ++_sendSeq;
+      el.style.display = '';
+      el.textContent = '· checking sendable…';
+      el.style.color = '#94a3b8';
+      try {
+        const res = await fetch('/api/contacts/sendability', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            workspace_id: workspaceId,
+            workspace_name: (document.getElementById('clientFilter')?.selectedOptions?.[0]?.textContent || '').trim(),
+            // Same filter object the search used, minus paging — sendability
+            // is a property of the whole result set, not the visible page.
+            filters: (() => {
+              const f = { ...getFilterValues(0) };
+              delete f.limit; delete f.offset; delete f.sortBy; delete f.sortDir;
+              return f;
+            })(),
+          }),
+        });
+        const d = await res.json();
+        if (mySeq !== _sendSeq) return; // superseded by a newer search
+        if (!res.ok) throw new Error(d.error || 'failed');
+        _lastSendability = d;
+
+        const n = d.sendableTotal;
+        const approx = d.estimated ? '~' : '';
+        el.textContent = `· ${approx}${n.toLocaleString()} sendable`;
+        // Red when nothing can go out — that is the case this was built for.
+        el.style.color = n === 0 ? '#dc2626' : (n < d.total / 2 ? '#d97706' : '#16a34a');
+      } catch (e) {
+        if (mySeq !== _sendSeq) return;
+        el.textContent = '· sendable: unavailable';
+        el.style.color = '#94a3b8';
+        _lastSendability = null;
+      }
+    }
+
+    // Full breakdown, so "0 sendable" is never a mystery.
+    function showSendabilityBreakdown() {
+      const d = _lastSendability;
+      if (!d) return;
+      const rows = Object.entries(d.reasons)
+        .filter(([, v]) => v > 0)
+        .sort((a, b) => b[1] - a[1])
+        .map(([k, v]) => {
+          const label = (typeof SKIP_LABELS !== 'undefined' && SKIP_LABELS[k]) || k;
+          const scaled = d.estimated ? Math.round(v * (d.total / d.checked)) : v;
+          return `${label}: ${scaled.toLocaleString()}`;
+        });
+      const head = d.estimated
+        ? `Checked a ${d.checked.toLocaleString()} sample of ${d.total.toLocaleString()}; figures below are scaled.`
+        : `Checked all ${d.checked.toLocaleString()}.`;
+      showMessage(
+        `${d.sendableTotal.toLocaleString()} sendable of ${d.total.toLocaleString()}. ${head}\n` +
+        (rows.length ? 'Blocked by — ' + rows.join(' · ') : 'Nothing blocked.'),
+        d.sendableTotal === 0 ? 'error' : 'success'
+      );
     }
 
     function setSearchLoading(isLoading) {
