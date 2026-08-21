@@ -18247,6 +18247,9 @@ async function autopilotTick({ dry = false, force = false } = {}) {
       const entry = { campaign_id: campaignId, campaign_name: cfg.campaign_name || campaignId, actions: [] };
       try {
         const state = await apCampaignState(cfg.workspace_id, campaignId, cfg, s);
+        // Warm the dashboard cache: the hourly tick already paid for this
+        // measurement, so the next page view should not pay for it again.
+        _apStateCache.set(campaignId, { at: Date.now(), state });
         entry.runwayDays = state.runwayDays;
         entry.worstProvider = state.worstProvider;
         entry.providers = state.providers;
@@ -18383,17 +18386,66 @@ app.post('/api/autopilot/campaigns', requireAdmin, (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Live state for the dashboard. Each campaign costs ~10 PlusVibe calls, so this
-// is on-demand only — never on a page-poll timer.
+// Measuring one campaign costs ~30 PlusVibe calls, and pvApi serialises every
+// call behind a 600ms global gap, so a campaign takes ~18s and they cannot
+// overlap. Enrol five and the page sat blank for a minute and a half, then
+// threw the work away on the next render. Cache the per-campaign result so
+// repeat views are instant and only genuinely stale campaigns are re-measured.
+const AP_STATE_TTL_MS = 10 * 60 * 1000;   // stock moves on the hour, not the second
+const _apStateCache = new Map();          // campaign_id -> { at, state }
+const _apStateInflight = new Map();       // campaign_id -> Promise (dedupe concurrent viewers)
+
+function apCachedState(cid) {
+  const hit = _apStateCache.get(cid);
+  return hit && (Date.now() - hit.at) < AP_STATE_TTL_MS ? hit : null;
+}
+
+async function apStateFor(cid, cfg, s, { force = false } = {}) {
+  if (!force) {
+    const hit = apCachedState(cid);
+    if (hit) return { ...hit.state, cachedAt: new Date(hit.at).toISOString(), cached: true };
+  }
+  // Two viewers (or a viewer and the cron) must not both pay the 18s.
+  if (_apStateInflight.has(cid)) return _apStateInflight.get(cid);
+  const p = (async () => {
+    try {
+      const state = await apCampaignState(cfg.workspace_id, cid, cfg, s);
+      _apStateCache.set(cid, { at: Date.now(), state });
+      return { ...state, cachedAt: new Date().toISOString(), cached: false };
+    } finally { _apStateInflight.delete(cid); }
+  })();
+  _apStateInflight.set(cid, p);
+  return p;
+}
+
+// Live state for the dashboard.
+//   (default)        → cached where fresh, measured where not
+//   ?refresh=1       → force re-measure
+//   ?campaign_id=X   → just that one (the page fetches these in parallel so
+//                      each row appears as soon as it is ready)
+//   ?cached_only=1   → return instantly with whatever is cached; uncached
+//                      campaigns come back as pending:true placeholders
 app.get('/api/autopilot/state', requireSession, async (req, res) => {
   try {
     const s = autopilotSettings();
     const cfgs = autopilotCampaigns();
     const only = req.query.campaign_id;
+    const force = req.query.refresh === '1';
+    const cachedOnly = req.query.cached_only === '1';
     const out = [];
     for (const [cid, cfg] of Object.entries(cfgs)) {
       if (only && cid !== only) continue;
-      try { out.push(await apCampaignState(cfg.workspace_id, cid, cfg, s)); }
+      if (cachedOnly) {
+        const hit = apCachedState(cid);
+        out.push(hit
+          ? { ...hit.state, cachedAt: new Date(hit.at).toISOString(), cached: true }
+          : { campaign_id: cid, campaign_name: cfg.campaign_name || cid,
+              workspace_name: cfg.workspace_name || cfg.workspace_id,
+              enabled: !!cfg.enabled, filter: cfg.filter || null,
+              providers: {}, pending: true });
+        continue;
+      }
+      try { out.push(await apStateFor(cid, cfg, s, { force })); }
       catch (e) { out.push({ campaign_id: cid, campaign_name: cfg.campaign_name || cid, error: e.message }); }
     }
     out.sort((a, b) => (a.runwayDays ?? 9e9) - (b.runwayDays ?? 9e9));

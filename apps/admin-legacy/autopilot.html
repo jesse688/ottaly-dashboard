@@ -67,7 +67,8 @@
       <div class="page-title">Campaign Autopilot</div>
       <div class="sub">Keeps each campaign stocked <b>per recipient provider</b>, forecasts when it runs dry, and flags reply-health problems.</div>
     </div>
-    <button class="btn ghost" onclick="loadState()" id="refreshBtn">↻ Refresh</button>
+    <button class="btn ghost" onclick="loadState(true)" id="refreshBtn">↻ Refresh</button>
+    <span id="loadProgress" class="sub"></span>
     <button class="btn ghost" onclick="run(true)" id="dryBtn">Dry run</button>
     <button class="btn" onclick="run(false)" id="runBtn">Run now</button>
     <span id="runStatus" class="sub"></span>
@@ -174,25 +175,70 @@ async function saveSettings() {
     if (r.error) throw new Error(r.error);
     SETTINGS = r.settings;
     el.textContent = 'Saved ' + new Date().toLocaleTimeString();
-    loadState();
+    // Thresholds change how the SAME measurements are judged, not the
+    // measurements themselves — re-render, don't re-measure.
+    render();
   } catch (e) { el.textContent = 'Failed: ' + e.message; }
 }
 
-async function loadState() {
-  document.getElementById('refreshBtn').disabled = true;
-  document.getElementById('tableWrap').innerHTML = '<div class="loading">Reading PlusVibe — one pass per campaign…</div>';
+// Measuring a campaign takes ~18s (PlusVibe calls are serialised behind a
+// global 600ms gap), so waiting for all of them before drawing anything left
+// the page blank for minutes. Draw immediately from cache, then fill each row
+// in as its own request lands — a slow campaign never holds up a fast one.
+async function loadState(force) {
+  const btn = document.getElementById('refreshBtn');
+  btn.disabled = true;
   try {
-    const r = await fetch('/api/autopilot/state').then(r => r.json());
-    if (r.error) throw new Error(r.error);
-    STATE = r; SETTINGS = r.settings;
     CFGS = await fetch('/api/autopilot/campaigns').then(r=>r.json()).then(x=>x.campaigns||{});
+
+    // 1. Instant paint from whatever the server already has.
+    const first = await fetch('/api/autopilot/state?cached_only=1').then(r => r.json());
+    if (first.error) throw new Error(first.error);
+    STATE = first; SETTINGS = first.settings;
     render();
+
+    // 2. Fetch anything stale (or everything, on a forced refresh) in parallel,
+    //    re-rendering as each one arrives.
+    const todo = (STATE.campaigns || [])
+      .filter(c => force || c.pending || c.error)
+      .map(c => c.campaign_id);
+    if (!todo.length) return;
+
+    let done = 0;
+    setProgress(done, todo.length);
+    await Promise.all(todo.map(async cid => {
+      try {
+        const r = await fetch(`/api/autopilot/state?campaign_id=${encodeURIComponent(cid)}`
+          + (force ? '&refresh=1' : '')).then(r => r.json());
+        const fresh = (r.campaigns || [])[0];
+        if (fresh) {
+          const i = STATE.campaigns.findIndex(x => x.campaign_id === cid);
+          if (i >= 0) STATE.campaigns[i] = fresh; else STATE.campaigns.push(fresh);
+        }
+      } catch (e) {
+        const i = STATE.campaigns.findIndex(x => x.campaign_id === cid);
+        if (i >= 0) STATE.campaigns[i] = { ...STATE.campaigns[i], pending: false, error: e.message };
+      }
+      setProgress(++done, todo.length);
+      render();
+    }));
   } catch (e) {
     document.getElementById('tableWrap').innerHTML = `<div class="empty">Failed to load: ${esc(e.message)}</div>`;
-  } finally { document.getElementById('refreshBtn').disabled = false; }
+  } finally {
+    btn.disabled = false;
+    setProgress(0, 0);
+  }
+}
+
+function setProgress(done, total) {
+  const el = document.getElementById('loadProgress');
+  if (!el) return;
+  el.textContent = total && done < total ? `measuring ${done}/${total}…` : '';
 }
 
 function render() {
+  // Callable before the first load lands (e.g. saving settings early).
+  if (!STATE || !SETTINGS) return;
   const cs = STATE.campaigns || [];
   const crit = cs.filter(c => c.runwayDays != null && c.runwayDays < (SETTINGS.topUpBelowDays||2)).length;
   const alerted = cs.filter(c => (c.alerts||[]).length).length;
@@ -225,6 +271,10 @@ function render() {
 
   const rows = cs.map(c => {
     if (c.error) return `<tr><td>${esc(c.campaign_name)}</td><td colspan="18" class="muted">Error: ${esc(c.error)}</td></tr>`;
+    if (c.pending) return `<tr><td><b>${esc(c.campaign_name)}</b></td>
+      <td class="muted">${esc(c.workspace_name||'')}</td>
+      <td><input type="checkbox" ${c.enabled?'checked':''} disabled></td>
+      <td colspan="15" class="muted">measuring — reading PlusVibe…</td></tr>`;
     const cells = B.map(b => {
       const p = c.providers[b] || {};
       const low = p.belowFloor || (p.runwayDays != null && p.runwayDays < (SETTINGS.topUpBelowDays||2));
@@ -261,16 +311,32 @@ function render() {
     + `<b>Audience</b> is the Contacts filter captured when you enrolled; autopilot never picks its own — re-capture on Contacts to change it. Last run: <b>${esc(lr)}</b>.`;
 }
 
+// Floors and the on/off switch are cheap config writes. They must NOT trigger a
+// reload: re-fetching state made the row vanish and reappear (and on a forced
+// path, re-paid the 18s measurement) for what is a one-field change. Patch the
+// row we already hold and re-render from memory instead.
 async function setFloor(cid, bucket, val) {
   const cfg = CFGS[cid] || {};
   const floors = Object.assign({ google:0, microsoft:0, other:0 }, cfg.floors || {});
   floors[bucket] = Math.max(0, parseInt(val, 10) || 0);
-  await postCfg({ campaign_id: cid, workspace_id: cfg.workspace_id, enabled: cfg.enabled, floors });
+  const ok = await postCfg({ campaign_id: cid, workspace_id: cfg.workspace_id, enabled: cfg.enabled, floors });
+  if (!ok) return;
+  const row = (STATE.campaigns || []).find(c => c.campaign_id === cid);
+  if (row && row.providers && row.providers[bucket]) {
+    const p = row.providers[bucket];
+    p.floor = floors[bucket];
+    p.belowFloor = p.floor > 0 && p.remaining < p.floor;
+  }
+  render();
 }
 async function setEnabled(cid, on) {
   const cfg = CFGS[cid] || {};
   const ok = await postCfg({ campaign_id: cid, workspace_id: cfg.workspace_id, enabled: on, floors: cfg.floors });
-  loadState();   // reload either way so a refused toggle snaps back visually
+  const row = (STATE.campaigns || []).find(c => c.campaign_id === cid);
+  // On refusal (e.g. no captured filter) keep the stored value so the checkbox
+  // snaps back to reality rather than showing a state the server rejected.
+  if (row) row.enabled = ok ? on : !!(CFGS[cid] || {}).enabled;
+  render();
   return ok;
 }
 async function postCfg(body) {
