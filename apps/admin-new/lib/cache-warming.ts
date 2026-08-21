@@ -306,6 +306,11 @@ const TTL_COMBO_OLD_MS = 7 * 24 * 60 * 60 * 1000 // settled days: weekly is plen
 // moment it ends froze it mid-fill (this is why the page showed 50 replies where
 // PV's own API had 59). Treat anything inside the settle window as still-moving.
 const COMBO_SETTLE_DAYS = 14
+// A workspace that has sent nothing today, and already has a complete set of 9
+// combo rows for today, is re-checked hourly rather than every 30 min. Measured:
+// only 5 of 40 active workspaces send on a given day, so the other 35 were
+// re-reading zeros twice an hour and crowding out the real backlog.
+const IDLE_TODAY_TTL_MS = 60 * 60 * 1000
 function comboTtlFor(date: string, today: string): number {
   if (date === today) return TTL_COMBO_TODAY_MS
   const ageDays = Math.floor(
@@ -328,32 +333,94 @@ async function ensureComboTable(): Promise<void> {
   comboTableReady = true
 }
 
+// Which ws+date pairs actually SENT anything, from perf_cache_daily (already
+// warmed, and the source PV itself agrees with -- it totalled 71,437 for
+// Aug 17-20, exactly PV's figure, while combo had 48,669).
+//
+// Combo used to walk every active workspace x every date regardless. Measured:
+// 280 ws-days per cycle, of which only 99 had sends -- so 194 (~65%) spent 9 PV
+// calls each fetching guaranteed zeros. With MAX_PAIRS_PER_PASS=12 that waste
+// kept the backlog permanently ahead of the drain rate, so the matrix was never
+// complete and its totals always fell short of PV. A day with no sends has no
+// combos worth measuring.
+async function comboDaysWithSends(dates: string[]): Promise<Set<string> | null> {
+  if (!dates.length) return new Set()
+  try {
+    const res = await pool.query(
+      `SELECT ws_id, date FROM perf_cache_daily
+        WHERE date = ANY($1::text[]) AND COALESCE((data->>'sent')::bigint, 0) > 0`,
+      [dates],
+    )
+    return new Set(res.rows.map((r) => `${r.ws_id}|${r.date}`))
+  } catch (err) {
+    // Fail OPEN: fall back to warming everything rather than silently
+    // warming nothing if this lookup breaks.
+    console.error('[cache-warming] comboDaysWithSends failed, warming all:', err)
+    return null
+  }
+}
+
 async function ensureComboDaily(wsIds: string[], dates: string[]): Promise<void> {
   await ensureComboTable()
   const today = dateStr(new Date())
+  // Today is still accumulating and perf_cache may not show its sends yet, so
+  // it is never eligible for skipping.
+  const withSends = await comboDaysWithSends(dates.filter((d) => d !== today))
+  // Workspaces with any sends recorded for today, used to back off idle ones.
+  const sentToday = dates.includes(today) ? await comboDaysWithSends([today]) : null
+  const sentTodayWs = sentToday
+    ? new Set([...sentToday].map((k) => k.split('|')[0]))
+    : null
 
   // Freshness is judged on the OLDEST data row, and the '_' sentinel is excluded.
   // Two bugs lived here: the sentinel is re-stamped on every pass, so MAX() over
   // all rows was always fresh and real data never refreshed again; and MAX() over
   // data rows would let one lucky cell mask eight stale ones. MIN() over data
   // rows only means a ws+date refreshes while ANY of its cells is stale.
+  // ONE query for the whole grid instead of one per ws-day. This loop used to
+  // issue wsIds x dates round trips (measured 280) purely to decide what to
+  // fetch, before a single PV call was made.
+  const stateRes = await pool.query(
+    `SELECT ws_id, date, MIN(saved_at) AS saved_at, COUNT(*) AS n
+       FROM combo_daily_stats
+      WHERE ws_id = ANY($1::text[]) AND date = ANY($2::text[]) AND provider <> '_'
+      GROUP BY ws_id, date`,
+    [wsIds, dates],
+  )
+  const state = new Map<string, { savedAt: number; n: number }>()
+  for (const r of stateRes.rows) {
+    state.set(`${r.ws_id}|${r.date}`, {
+      savedAt: r.saved_at ? Number(r.saved_at) : 0,
+      n: Number(r.n || 0),
+    })
+  }
+
   const needsFetch: Array<{ wsId: string; date: string; savedAt: number }> = []
   for (const wsId of wsIds) {
     if (deadWorkspaces.has(wsId)) continue
     for (const date of dates) {
+      const key = `${wsId}|${date}`
+      // Skip ws-days that provably sent nothing. `withSends` is null only when
+      // the lookup failed, in which case nothing is skipped.
+      if (withSends && date !== today && !withSends.has(key)) continue
+      // TODAY is never skipped on send history (it is still accumulating), but
+      // re-fetching all 40 workspaces every 30 min is its own flood -- measured,
+      // only 5 of 40 actually sent today. Once a workspace has a COMPLETE set of
+      // 9 rows for today and still shows no sends anywhere, re-asking PV every
+      // half hour just re-reads zeros. Refresh it hourly instead; the moment it
+      // sends anything, sentToday flips and it returns to the 30-min cadence.
+      if (date === today && sentTodayWs && !sentTodayWs.has(wsId)) {
+        const c = state.get(key)
+        if (c && c.n >= ESP_VALUES.length ** 2 && Date.now() - c.savedAt < IDLE_TODAY_TTL_MS) continue
+      }
       const ttl = comboTtlFor(date, today)
-      const res = await pool.query(
-        `SELECT MIN(saved_at) AS saved_at, COUNT(*) AS n
-           FROM combo_daily_stats
-          WHERE ws_id = $1 AND date = $2 AND provider <> '_'`,
-        [wsId, date],
-      )
-      const savedAt = res.rows[0]?.saved_at
-      const n = Number(res.rows[0]?.n || 0)
+      const cur = state.get(key)
+      const savedAt = cur?.savedAt || 0
+      const n = cur?.n || 0
       // n < 9 means some combos were never stored (see the zero-cell fix below),
       // so the day is incomplete regardless of how recently it was touched.
-      if (!savedAt || n < ESP_VALUES.length ** 2 || Date.now() - Number(savedAt) > ttl) {
-        needsFetch.push({ wsId, date, savedAt: savedAt ? Number(savedAt) : 0 })
+      if (!savedAt || n < ESP_VALUES.length ** 2 || Date.now() - savedAt > ttl) {
+        needsFetch.push({ wsId, date, savedAt })
       }
     }
   }
