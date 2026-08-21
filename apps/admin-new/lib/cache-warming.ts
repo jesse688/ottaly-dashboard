@@ -444,6 +444,14 @@ async function ensureComboDaily(wsIds: string[], dates: string[]): Promise<void>
   // comfortably inside the 15-min interval with room for retries. The old cap
   // of 120 (1,080 calls) is what triggered the 429 storm. Oldest-stale-first
   // so nothing starves; the next pass takes the rest.
+  // Wall-clock budget for one pass. Per-request timeouts alone do not bound a
+  // pass: 12 ws-days x 9 calls, each with up to 6 retries (2+4+8+16+30+30s of
+  // backoff plus a 20s timeout), can run for many minutes under a 429 storm.
+  // Stopping cleanly at the budget leaves the remaining work queued for the
+  // next tick -- which is exactly what the incomplete-first ordering is for --
+  // instead of holding the lock indefinitely.
+  const COMBO_PASS_BUDGET_MS = 8 * 60 * 1000
+  const passDeadline = Date.now() + COMBO_PASS_BUDGET_MS
   const MAX_PAIRS_PER_PASS = 12
   // INCOMPLETE DAYS FIRST, then oldest-stale.
   //
@@ -512,6 +520,12 @@ async function ensureComboDaily(wsIds: string[], dates: string[]): Promise<void>
   // One ws+date at a time; its 9 combos fetched with modest concurrency. Keeps
   // total PV load bounded (needsFetch is usually just today for active ws).
   for (const { wsId, date } of queue) {
+    if (Date.now() > passDeadline) {
+      console.warn(
+        `[cache-warming] combo: pass budget exhausted, deferring the rest to the next tick`,
+      )
+      break
+    }
     const pairs: Array<{ provider: string; recp: string }> = []
     for (const provider of ESP_VALUES) for (const recp of ESP_VALUES) pairs.push({ provider, recp })
 
@@ -564,16 +578,43 @@ async function ensureComboDaily(wsIds: string[], dates: string[]): Promise<void>
 // same serialised PV gate and pushing each other into 429 backoff. Declared
 // above both users: `let` is not hoisted, so referencing it from an earlier
 // line would be a TDZ error at runtime.
-let comboWarmInFlight = false
+// On globalThis, like the other shared state: Next instantiates this module
+// once per entry bundle, so a module-level flag would give each copy its own
+// lock (and each could run its own concurrent pass).
+//
+// Stores a TIMESTAMP, not a boolean, so the lock can EXPIRE. A boolean that is
+// only cleared in `finally` is unrecoverable if a pass never returns -- a PV
+// call wedged in long 429 backoff leaves the flag stuck true and that
+// instance's combo warm is dead for the life of the process. Observed exactly
+// that: perf_cache_daily was writing every few seconds while combo had not
+// written for 10+ minutes. If a pass exceeds the stale timeout we assume it
+// died and allow a new one.
+// Must be LARGER than the worst-case HEALTHY pass, or we reclaim a lock that is
+// legitimately held and start a second concurrent pass -- the opposite of the
+// fix. A pass is bounded by COMBO_PASS_BUDGET_MS below; this sits comfortably
+// above it so only a genuinely wedged pass is ever reclaimed.
+const COMBO_LOCK_STALE_MS = 12 * 60 * 1000
+function comboLockHeld(): boolean {
+  const g = globalThis as Record<string, unknown>
+  const startedAt = g.__ottalyComboWarmAt as number | undefined
+  if (!startedAt) return false
+  if (Date.now() - startedAt > COMBO_LOCK_STALE_MS) {
+    console.warn('[cache-warming] combo lock stale (>10 min), reclaiming')
+    return false
+  }
+  return true
+}
+const comboLockTake = () => { (globalThis as Record<string, unknown>).__ottalyComboWarmAt = Date.now() }
+const comboLockFree = () => { delete (globalThis as Record<string, unknown>).__ottalyComboWarmAt }
 
 export async function warmComboCache(): Promise<void> {
   // Same guard as warmComboDates: a pass can now run longer than the 15-min
   // interval, so the timer must not stack a second one on top of the first.
-  if (comboWarmInFlight) {
+  if (comboLockHeld()) {
     console.log('[cache-warming] combo warm already running, skipping this tick')
     return
   }
-  comboWarmInFlight = true
+  comboLockTake()
   try {
     const wsIds = await getActiveWorkspaces()
     if (!wsIds.length) return
@@ -585,7 +626,7 @@ export async function warmComboCache(): Promise<void> {
   } catch (err) {
     console.error('[cache-warming] combo warm failed:', err instanceof Error ? err.message : err)
   } finally {
-    comboWarmInFlight = false
+    comboLockFree()
   }
 }
 
@@ -593,15 +634,15 @@ export async function warmComboCache(): Promise<void> {
 // combo-analysis route so a requested window is filled even if the background
 // interval hasn't covered it yet.
 export async function warmComboDates(dates: string[]): Promise<void> {
-  if (comboWarmInFlight) return
-  comboWarmInFlight = true
+  if (comboLockHeld()) return
+  comboLockTake()
   try {
     const wsIds = await getActiveWorkspaces()
     if (wsIds.length) await ensureComboDaily(wsIds, dates)
   } catch (err) {
     console.error('[cache-warming] warmComboDates failed:', err instanceof Error ? err.message : err)
   } finally {
-    comboWarmInFlight = false
+    comboLockFree()
   }
 }
 
