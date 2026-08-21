@@ -441,7 +441,10 @@ async function run(dry) {
     el.textContent = msg;
     el.title = JSON.stringify(r, null, 1);   // full result on hover, for diagnosis
     console.log('[autopilot] run result', r);
-    if (!dry) loadState(true);
+    // The tick already measured every campaign and warmed the server cache, so
+    // a forced reload here would re-measure the lot and was a big part of what
+    // tipped PlusVibe into 429s. Read the warm cache instead.
+    if (!dry) loadState(false);
   } catch (e) {
     el.textContent = 'Failed: ' + e.message;
   } finally {

@@ -17975,7 +17975,12 @@ async function apProviderCounts(wsId, campaignId) {
 // Instead we page CONTACTED leads, which carry both `mx` and `last_sent_at`,
 // and count real sends per provider inside the window. Verified live: a
 // campaign whose stock was 92% Microsoft had a send mix of 65/22/13.
-const AP_SENT_MAX_PAGES = 40;   // 4,000 recent sends is ample for a rate
+// A send RATE only needs a representative sample, not the full history. At 40
+// pages this scan alone was ~30 of the ~33 calls per campaign, which is what
+// drove PlusVibe into sustained 429s once two campaigns were enrolled and the
+// page re-measured after every run. 8 pages (800 most-recent sends) gives the
+// same provider split to within a point or two at a quarter of the cost.
+const AP_SENT_MAX_PAGES = 8;
 
 async function apSendsByProvider(wsId, campaignId, days) {
   const since = Date.now() - days * 86400000;
@@ -18509,7 +18514,15 @@ app.get('/api/autopilot/state', requireSession, async (req, res) => {
         continue;
       }
       try { out.push(await apStateFor(cid, cfg, s, { force })); }
-      catch (e) { out.push({ campaign_id: cid, campaign_name: cfg.campaign_name || cid, error: e.message }); }
+      catch (e) {
+        // A rate-limited refresh must not destroy numbers we already have.
+        // Serve the last good measurement, flagged stale, rather than a row of
+        // errors — the counts are still the best information available.
+        const stale = _apStateCache.get(cid);
+        out.push(stale
+          ? { ...stale.state, cachedAt: new Date(stale.at).toISOString(), cached: true, staleError: e.message }
+          : { campaign_id: cid, campaign_name: cfg.campaign_name || cid, error: e.message });
+      }
     }
     out.sort((a, b) => (a.runwayDays ?? 9e9) - (b.runwayDays ?? 9e9));
     res.json({ settings: s, windowOpen: apInWindow(s), lastRun: apLoadRunState(), campaigns: out });
