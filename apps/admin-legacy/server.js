@@ -16326,6 +16326,11 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
     const targetCampLc = campaignName.toLowerCase();
     const departed = await getDepartedEmails(db);
 
+    // When the caller is about to SELECT (not just display a count), it needs
+    // the actual ids that pass — otherwise "select all" re-selects the blocked
+    // ones and the push silently discards them again.
+    const wantIds = body.return_ids === true;
+    const sendableIds = [];
     let sendable = 0;
     for (const c of contacts) {
       // Deliverability. Mirrors the push: loose accepts anything not invalid,
@@ -16384,6 +16389,7 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
       // Cross-client spacing (vertical collision → burst gap → density ceiling).
       if (!crossClientGuard(c, skipped)) continue;
       sendable++;
+      if (wantIds) sendableIds.push(c.id);
     }
 
     const checked = contacts.length;
@@ -16400,6 +16406,7 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
       sendableTotal: estimated ? Math.round(total * rate) : sendable,
       estimated,
       reasons: skipped,
+      ...(wantIds ? { ids: sendableIds } : {}),
     });
   } catch (e) {
     console.error('[sendability]', e);

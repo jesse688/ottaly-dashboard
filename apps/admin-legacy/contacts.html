@@ -1599,6 +1599,15 @@
                   Select all <span style="font-size:11px;color:#6b7280;background:#f3f4f6;padding:1px 6px;border-radius:10px;" id="selAllCount">0</span>
                 </label>
               </div>
+              <!-- Selecting contacts the push will only throw away is the bug
+                   this closes: the badge said 734 sendable while "select all"
+                   still selected 2,086, so 1,352 were discarded at push time. -->
+              <div style="border-top:1px solid #f3f4f6;margin-top:4px;padding-top:8px;">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;" title="Runs the push guards and keeps only contacts that would actually send">
+                  <input type="checkbox" id="selSendableOnly" checked>
+                  <span>Sendable only <span style="font-size:11px;color:#6b7280;">(skip blocked)</span></span>
+                </label>
+              </div>
               <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:4px;">
                 <button class="btn btn-secondary" style="padding:6px 14px;font-size:12px;" onclick="closeSelectPopover()">Cancel</button>
                 <button class="btn btn-primary" style="padding:6px 14px;font-size:12px;background:#dcff5b;color:#1f2937;border:none;" onclick="applySelectPopover()">Apply</button>
@@ -4236,6 +4245,37 @@
       }
     }
 
+    // Ids that survive the push guards, for the current filter. Returns a Set,
+    // or null if the check could not run — callers must treat null as "unknown"
+    // and select everything rather than silently selecting nothing.
+    async function fetchSendableIds(sample) {
+      const workspaceId = (document.getElementById('clientFilter') || {}).value || '';
+      if (!workspaceId) return null;
+      try {
+        const f = { ...getFilterValues(0) };
+        delete f.limit; delete f.offset; delete f.sortBy; delete f.sortDir;
+        const res = await fetch('/api/contacts/sendability', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            workspace_id: workspaceId,
+            workspace_name: (document.getElementById('clientFilter')?.selectedOptions?.[0]?.textContent || '').trim(),
+            filters: f,
+            return_ids: true,
+            // Cover at least what is being selected, within the server cap.
+            sample: Math.min(Math.max(parseInt(sample, 10) || 5000, 5000), 20000),
+          }),
+        });
+        const d = await res.json();
+        if (!res.ok || !Array.isArray(d.ids)) return null;
+        // The guard checks a bounded sample. If it could not cover everything
+        // being selected, filtering would drop contacts it simply never looked
+        // at — worse than not filtering. Bail out and let the caller select all.
+        if (d.estimated) return null;
+        return new Set(d.ids);
+      } catch { return null; }
+    }
+
     // Full breakdown, so "0 sendable" is never a mystery.
     function showSendabilityBreakdown() {
       const d = _lastSendability;
@@ -4470,10 +4510,21 @@
       const maxPerCoOn = document.getElementById('selMaxPerCo').checked;
       const maxPerCo = maxPerCoOn ? Math.max(1, parseInt(document.getElementById('selMaxPerCoValue').value, 10) || 1) : 0;
 
+      const sendableOnly = document.getElementById('selSendableOnly')?.checked
+        && !!(document.getElementById('clientFilter') || {}).value;
+
       if (mode === 'page') {
-        document.querySelectorAll('.contact-checkbox').forEach(cb => _selectedIds.add(cb.dataset.id));
+        const ids = [...document.querySelectorAll('.contact-checkbox')].map(cb => cb.dataset.id);
+        let keep = ids;
+        if (sendableOnly) {
+          const ok = await fetchSendableIds(ids.length);
+          if (ok) keep = ids.filter(id => ok.has(id));
+        }
+        keep.forEach(id => _selectedIds.add(id));
         syncRowCheckboxes(); updatePushButton(); closeSelectPopover();
-        showMessage(`${_selectedIds.size.toLocaleString()} selected`, 'success');
+        const dropped = ids.length - keep.length;
+        showMessage(`${_selectedIds.size.toLocaleString()} selected`
+          + (dropped > 0 ? ` · skipped ${dropped.toLocaleString()} blocked` : ''), 'success');
         return;
       }
 
@@ -4497,11 +4548,22 @@
         if (maxPerCo) filters.maxPerCompany = String(maxPerCo);
         const r = await fetch(`/api/contacts/search?${new URLSearchParams(filters)}`);
         const data = await r.json();
-        for (const c of (data.contacts || [])) _selectedIds.add(c.id);
+        let rows = data.contacts || [];
+        let dropped = 0;
+        if (sendableOnly) {
+          const ok = await fetchSendableIds(n);
+          if (ok) {
+            const before = rows.length;
+            rows = rows.filter(c => ok.has(c.id));
+            dropped = before - rows.length;
+          }
+        }
+        for (const c of rows) _selectedIds.add(c.id);
         syncRowCheckboxes();
         updatePushButton();
         closeSelectPopover();
-        showMessage(`${_selectedIds.size.toLocaleString()} selected${maxPerCo ? ` · max ${maxPerCo}/company` : ''}`, 'success');
+        showMessage(`${_selectedIds.size.toLocaleString()} selected${maxPerCo ? ` · max ${maxPerCo}/company` : ''}`
+          + (dropped > 0 ? ` · skipped ${dropped.toLocaleString()} blocked` : ''), 'success');
       } catch (err) {
         showMessage('Select failed: ' + err.message, 'error');
       } finally {
