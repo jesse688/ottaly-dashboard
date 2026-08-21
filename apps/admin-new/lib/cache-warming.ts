@@ -395,7 +395,7 @@ async function ensureComboDaily(wsIds: string[], dates: string[]): Promise<void>
     })
   }
 
-  const needsFetch: Array<{ wsId: string; date: string; savedAt: number }> = []
+  const needsFetch: Array<{ wsId: string; date: string; savedAt: number; incomplete: boolean }> = []
   for (const wsId of wsIds) {
     if (deadWorkspaces.has(wsId)) continue
     for (const date of dates) {
@@ -419,8 +419,9 @@ async function ensureComboDaily(wsIds: string[], dates: string[]): Promise<void>
       const n = cur?.n || 0
       // n < 9 means some combos were never stored (see the zero-cell fix below),
       // so the day is incomplete regardless of how recently it was touched.
-      if (!savedAt || n < ESP_VALUES.length ** 2 || Date.now() - savedAt > ttl) {
-        needsFetch.push({ wsId, date, savedAt })
+      const incomplete = n < ESP_VALUES.length ** 2
+      if (!savedAt || incomplete || Date.now() - savedAt > ttl) {
+        needsFetch.push({ wsId, date, savedAt, incomplete })
       }
     }
   }
@@ -432,7 +433,23 @@ async function ensureComboDaily(wsIds: string[], dates: string[]): Promise<void>
   // of 120 (1,080 calls) is what triggered the 429 storm. Oldest-stale-first
   // so nothing starves; the next pass takes the rest.
   const MAX_PAIRS_PER_PASS = 12
-  let queue = [...needsFetch].sort((a, b) => a.savedAt - b.savedAt)
+  // INCOMPLETE DAYS FIRST, then oldest-stale.
+  //
+  // Sorting purely by savedAt starved exactly the rows that needed fixing. A
+  // ws-day with 4 of its 9 combos written carries a RECENT savedAt (from that
+  // partial write), so it sorted to the BACK, while today's 40 workspaces --
+  // re-expiring every 30 min -- refilled the 12 slots on every pass. Measured
+  // on dev: 41 ws-days sat incomplete for Aug 17-20 while the warmer wrote 20
+  // rows in 10 minutes, all of them for TODAY. The backlog could never be
+  // reached, so the matrix stayed short of PV permanently.
+  //
+  // A day missing cells is strictly more broken than a complete day that is
+  // merely stale: the stale one still renders correct (if slightly old)
+  // numbers, the incomplete one under-reports its totals. Fix those first.
+  let queue = [...needsFetch].sort((a, b) => {
+    if (a.incomplete !== b.incomplete) return a.incomplete ? -1 : 1
+    return a.savedAt - b.savedAt
+  })
   if (queue.length > MAX_PAIRS_PER_PASS) {
     console.log(
       `[cache-warming] combo: ${queue.length} stale ws-date pairs, capping this pass at ${MAX_PAIRS_PER_PASS}`,
