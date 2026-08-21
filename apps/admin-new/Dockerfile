@@ -16,7 +16,7 @@ COPY --from=deps /app/node_modules ./node_modules
 # code from a "successful" build -- admin-legacy carries the same guard for the
 # same reason. Bump CACHEBUST (any new value) to force this layer, and every
 # layer after it, to rebuild.
-ARG CACHEBUST=2026-08-21-5
+ARG CACHEBUST=2026-08-21-6
 COPY apps/admin-new .
 
 # Stamp the build. /api/healthz already reports `sha`, but nothing ever set it,
