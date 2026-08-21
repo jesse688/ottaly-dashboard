@@ -18243,7 +18243,18 @@ async function autopilotTick({ dry = false, force = false } = {}) {
   try {
     const cfgs = autopilotCampaigns();
     for (const [campaignId, cfg] of Object.entries(cfgs)) {
-      if (!cfg || !cfg.enabled || !cfg.workspace_id) continue;
+      if (!cfg || !cfg.workspace_id) continue;
+      // A campaign that is switched off used to vanish from the result with no
+      // explanation, so a run over one armed and one unarmed campaign looked
+      // like "nothing happened". Report it instead of silently skipping.
+      if (!cfg.enabled) {
+        result.campaigns.push({
+          campaign_id: campaignId,
+          campaign_name: cfg.campaign_name || campaignId,
+          actions: [{ type: 'skip', reason: 'not switched on' }],
+        });
+        continue;
+      }
       const entry = { campaign_id: campaignId, campaign_name: cfg.campaign_name || campaignId, actions: [] };
       try {
         const state = await apCampaignState(cfg.workspace_id, campaignId, cfg, s);

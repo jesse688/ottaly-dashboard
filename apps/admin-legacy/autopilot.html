@@ -406,19 +406,49 @@ function filterSummary(f) {
   return `<span class="muted" title="${esc(JSON.stringify(f, null, 1))}">${esc(parts.join(' · '))}</span>`;
 }
 
+// A tick re-measures every campaign from PlusVibe (~18s each) — deliberately,
+// because acting on stale counts could push to a campaign that is already full.
+// So it can take a minute, and the old version showed a bare "Running…" with no
+// indication of progress or of what happened, which read as "nothing happened".
 async function run(dry) {
   const el = document.getElementById('runStatus');
+  const n = (STATE && STATE.campaigns ? STATE.campaigns.length : 0) || 1;
   document.getElementById('runBtn').disabled = true;
   document.getElementById('dryBtn').disabled = true;
-  el.textContent = dry ? 'Dry run…' : 'Running…';
+
+  const t0 = Date.now();
+  const tick = setInterval(() => {
+    const secs = Math.round((Date.now() - t0) / 1000);
+    el.textContent = `${dry ? 'Dry run' : 'Running'}… ${secs}s — measuring ${n} campaign${n === 1 ? '' : 's'} live from PlusVibe (~18s each)`;
+  }, 1000);
+  el.textContent = `${dry ? 'Dry run' : 'Running'}… measuring ${n} campaign${n === 1 ? '' : 's'} live from PlusVibe (~18s each)`;
+
   try {
-    const r = await fetch('/api/autopilot/run' + (dry?'?dry=1':''), { method:'POST' }).then(r=>r.json());
+    const r = await fetch('/api/autopilot/run' + (dry ? '?dry=1' : ''), { method: 'POST' }).then(r => r.json());
     if (r.error) throw new Error(r.error);
-    const acts = (r.campaigns||[]).flatMap(c => (c.actions||[]).map(a => `${c.campaign_name}: ${a.type}${a.provider?' '+LABEL[a.provider]:''}${a.want?' ('+a.want+')':''}${a.reason?' — '+a.reason:''}${a.error?' — '+a.error:''}`));
-    el.textContent = (r.skipped ? 'Skipped: ' + r.skipped : (acts.length ? acts.join(' · ') : 'Nothing to do')) ;
-    if (!dry) loadState();
-  } catch (e) { el.textContent = 'Failed: ' + e.message; }
-  finally { document.getElementById('runBtn').disabled = false; document.getElementById('dryBtn').disabled = false; }
+    const acts = (r.campaigns || []).flatMap(c =>
+      (c.actions || []).map(a => `${c.campaign_name}: ${a.type}${a.provider ? ' ' + LABEL[a.provider] : ''}`
+        + `${a.want ? ' (' + a.want + ')' : ''}${a.reason ? ' — ' + a.reason : ''}${a.error ? ' — ' + a.error : ''}`));
+    const errs = (r.campaigns || []).filter(c => c.error).map(c => `${c.campaign_name}: ${c.error}`);
+    const took = Math.round((Date.now() - t0) / 1000);
+    let msg;
+    if (r.skipped) msg = 'Skipped: ' + r.skipped;
+    else if (acts.length || errs.length) msg = [...acts, ...errs].join(' · ');
+    // "Nothing to do" is a real answer, but on its own it looks like a failure.
+    // Say WHY nothing happened.
+    else msg = `Nothing to do — every provider is above its floor and has more than `
+             + `${SETTINGS.topUpBelowDays}d runway. (${took}s)`;
+    el.textContent = msg;
+    el.title = JSON.stringify(r, null, 1);   // full result on hover, for diagnosis
+    console.log('[autopilot] run result', r);
+    if (!dry) loadState(true);
+  } catch (e) {
+    el.textContent = 'Failed: ' + e.message;
+  } finally {
+    clearInterval(tick);
+    document.getElementById('runBtn').disabled = false;
+    document.getElementById('dryBtn').disabled = false;
+  }
 }
 
 (async function init(){ await loadSettings(); await loadState(); })();
