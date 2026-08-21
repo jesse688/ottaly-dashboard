@@ -1520,6 +1520,15 @@
         <div class="header-left">
           <div class="header-title">DataBase 1.0</div>
           <span class="total-badge"><span id="totalCount">0</span><span id="totalCountPlus"></span> total</span>
+          <!-- Sendable indicator. "N total" answers "who matches this filter";
+               this answers "who may we actually email" by running the real
+               push guards. They used to disagree silently — a filter showed
+               2,095 and the push pushed 0 — so it belongs next to the count
+               that misleads, not in the footer. -->
+          <span class="total-badge" id="sendableInfo"
+                style="display:none;cursor:pointer;margin-left:6px;"
+                onclick="showSendabilityBreakdown()"
+                title="Click for the full breakdown"></span>
           <div class="search-box" style="display:flex;flex-direction:column;gap:2px;">
             <div style="display:flex;align-items:center;gap:6px;">
               <div class="search-icon">&#9906;</div>
@@ -1766,13 +1775,6 @@
 
         <div class="pagination-bar">
           <span class="info-text" id="pageInfo">Showing 0 of 0</span>
-          <!-- Sendable indicator. The filter count answers "who matches"; this
-               answers "who may we actually email" by running the real push
-               guards. They used to disagree silently (2,095 shown, 0 pushed). -->
-          <span class="info-text" id="sendableInfo"
-                style="margin-left:12px;cursor:pointer;display:none;"
-                onclick="showSendabilityBreakdown()"
-                title="Click for the full breakdown"></span>
           <div id="pagination" style="display:flex;gap:4px;"></div>
         </div>
         </div><!-- end contactsTab -->
@@ -4191,7 +4193,7 @@
 
       const mySeq = ++_sendSeq;
       el.style.display = '';
-      el.textContent = '· checking sendable…';
+      el.textContent = 'checking…';
       el.style.color = '#94a3b8';
       try {
         const res = await fetch('/api/contacts/sendability', {
@@ -4216,12 +4218,12 @@
 
         const n = d.sendableTotal;
         const approx = d.estimated ? '~' : '';
-        el.textContent = `· ${approx}${n.toLocaleString()} sendable`;
+        el.textContent = `${approx}${n.toLocaleString()} sendable`;
         // Red when nothing can go out — that is the case this was built for.
         el.style.color = n === 0 ? '#dc2626' : (n < d.total / 2 ? '#d97706' : '#16a34a');
       } catch (e) {
         if (mySeq !== _sendSeq) return;
-        el.textContent = '· sendable: unavailable';
+        el.textContent = 'sendable: n/a';
         el.style.color = '#94a3b8';
         _lastSendability = null;
       }
