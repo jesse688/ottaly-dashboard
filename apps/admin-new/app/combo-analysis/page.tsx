@@ -481,17 +481,6 @@ export default function ComboAnalysisPage() {
     colWorst[to] = cells.reduce((a, b) => (pctNum(b.ooo, b.sent) < pctNum(a.ooo, a.sent) ? b : a))
   })
 
-  const qualified = rows.filter((r) => r.sent >= MIN_SENDS && !r.capped)
-  let best: ComboRow | null = null
-  let worst: ComboRow | null = null
-  if (qualified.length) {
-    // Ranked by index, not raw rate, so the winner isn't just whichever column
-    // happens to have the most out-of-office culture.
-    const scored = qualified.map((r) => ({ r, ix: oooIndex(r) ?? 0 }))
-    best = scored.reduce((a, b) => (b.ix > a.ix ? b : a)).r
-    worst = scored.reduce((a, b) => (b.ix < a.ix ? b : a)).r
-  }
-
   // Recommendation: within each recipient column, the sender with the best OOO
   // rate. Same recipients, same window → the only variable left is the sender.
   const REAL_TO = ['email_google', 'email_outlook', 'email_other']
@@ -515,45 +504,6 @@ export default function ComboAnalysisPage() {
     (x): x is { to: string; win: ComboRow; rr: number; second: ComboRow | null; secondRr: number | null } =>
       x !== null,
   )
-
-  function ComboCard({ r, label, variant }: { r: ComboRow; label: string; variant: 'winner' | 'loser' }) {
-    const oooRate = pctNum(r.ooo, r.sent)
-    const ix = oooIndex(r)
-    const rrHuman = ratePct(r.replies_human, r.sent, r.capped) ?? 0
-    const br = pctNum(r.bounces, r.sent)
-    return (
-      <div
-        className={cn(
-          'rounded-xl border bg-white p-4',
-          variant === 'winner' ? 'border-2 border-teal-600' : 'border-2 border-red-600'
-        )}
-      >
-        <div className="mb-2 text-[11px] font-bold uppercase tracking-wide text-gray-500">{label}</div>
-        <div className="mb-2 text-lg font-bold text-gray-900">
-          {fromLabel(r.from_type)} → {toLabel(r.to_type)}
-        </div>
-        <div className="flex flex-wrap items-baseline gap-3 text-xs text-gray-500">
-          <div>
-            <strong className="text-gray-900">{fmt(r.sent)}</strong> sends
-          </div>
-          <div title="Out-of-office / auto-reply rate — the infra signal this page ranks on">
-            <strong className={rrClass(oooRate)}>{oooRate.toFixed(2)}%</strong> OOO
-          </div>
-          {ix != null && (
-            <div title={`Versus the ${toLabel(r.to_type)} column average (${colBaseline[r.to_type].toFixed(2)}% OOO). 1.00 = par.`}>
-              <strong className={ixClass(ix)}>{ix.toFixed(2)}×</strong> vs column
-            </div>
-          )}
-          <div title="Bounce rate — cross-check. OOO down + bounce flat = seasonal; OOO down + bounce up = real problem.">
-            <strong className={brClass(br)}>{br.toFixed(2)}%</strong> bounce
-          </div>
-          <div className="text-gray-400" title="Human reply rate — lagging confirmation, copy-dependent. Not used for ranking.">
-            {rrHuman.toFixed(2)}% human
-          </div>
-        </div>
-      </div>
-    )
-  }
 
   return (
     <div className="mx-auto max-w-[1400px] px-6 py-6">
@@ -697,14 +647,6 @@ export default function ComboAnalysisPage() {
               )
             })}
           </div>
-        </div>
-      )}
-
-      {/* Best / Worst */}
-      {best && worst && (
-        <div className="mb-5 grid grid-cols-1 gap-4 md:grid-cols-2">
-          <ComboCard r={best} label="🏆 Best Combo" variant="winner" />
-          <ComboCard r={worst} label="⚠️ Worst Combo" variant="loser" />
         </div>
       )}
 

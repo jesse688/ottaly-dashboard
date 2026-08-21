@@ -147,21 +147,31 @@ export async function GET(req: NextRequest) {
       // always returns quickly. Today first; backfill past days with the budget.
       const MAX_INLINE = 64
       const gaps = [...todayGaps, ...pastGaps].slice(0, MAX_INLINE)
-      const deadline = Date.now() + 4000 // hard wall: never block the page > ~4s
+      const BUDGET_MS = 4000 // hard wall: never block the page > ~4s
       if (gaps.length) {
+        // The fan-out is raced against a single wall clock rather than checked
+        // only BETWEEN batches. pvFetch serializes on a global gate
+        // (PV_CONCURRENCY=1) and retries 429/5xx with backoff, so one batch can
+        // run for MINUTES — a between-batches check never gets to fire and the
+        // page hung forever on any range containing today. Whatever has landed
+        // when the budget expires is used; the rest stays cached/background-warmed.
+        const budget = new Promise<void>(r => setTimeout(r, BUDGET_MS))
         const CONC = 8
-        for (let i = 0; i < gaps.length; i += CONC) {
-          if (Date.now() > deadline) break
-          await Promise.allSettled(
-            gaps.slice(i, i + CONC).map(async ({ ws, date }) => {
-              const data = await fetchPvDay(ws, date)
-              if (!data) return
-              if (!perfByDateAndWs[ws]) perfByDateAndWs[ws] = {}
-              perfByDateAndWs[ws][date] = data
-              void upsertPerfDay(ws, date, data) // warm the cache for next read
-            }),
-          )
-        }
+        const fanOut = (async () => {
+          for (let i = 0; i < gaps.length; i += CONC) {
+            await Promise.allSettled(
+              gaps.slice(i, i + CONC).map(async ({ ws, date }) => {
+                const data = await fetchPvDay(ws, date)
+                if (!data) return
+                if (!perfByDateAndWs[ws]) perfByDateAndWs[ws] = {}
+                perfByDateAndWs[ws][date] = data
+                void upsertPerfDay(ws, date, data) // warm the cache for next read
+              }),
+            )
+          }
+        })()
+        // Never let a rejection escape; we only care that one of the two settles.
+        await Promise.race([fanOut.catch(() => {}), budget])
       }
     }
 
