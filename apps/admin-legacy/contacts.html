@@ -1628,6 +1628,11 @@
         <button class="btn btn-plusvibe" id="pushBtn" onclick="openPushModal()">
           🚀 Verify &amp; Push to PlusVibe
         </button>
+        <button class="btn btn-secondary" id="autopilotBtn" onclick="openAutopilotCapture()"
+                title="Keep a campaign topped up automatically using THESE filters. Autopilot never picks its own audience — it reuses this filter and only decides when and how many."
+                style="padding:5px 12px;font-size:12px;background:#1F6F78;color:#fff;border:none;font-weight:700;">
+          ♾️ Auto-push to campaign
+        </button>
       </div>
 
       <!-- CCOD ownership sweep progress (Land Registry + Companies House) -->
@@ -4933,6 +4938,70 @@
 
       // Load campaigns for this workspace immediately
       await loadPvCampaigns();
+    }
+
+    // ── Autopilot: capture THESE filters as a campaign's top-up audience ──────
+    // Autopilot decides WHEN and HOW MANY; it must never decide WHO. The
+    // audience is whatever filter is on screen right now, captured here and
+    // stored on the enrolment. Selection is irrelevant — autopilot re-runs the
+    // filter each night to find contacts that did not exist when you enrolled.
+    async function openAutopilotCapture() {
+      const clientSel = document.getElementById('clientFilter');
+      const wsId = clientSel?.value;
+      const wsName = clientSel?.options[clientSel.selectedIndex]?.dataset?.name
+                  || clientSel?.options[clientSel.selectedIndex]?.text || '';
+      if (!wsId) {
+        showMessage('Pick a client with "Filter for Client" first — autopilot needs to know whose campaign this is.', 'error');
+        return;
+      }
+
+      let camps = [];
+      try {
+        const r = await fetch('/api/pv/campaigns?workspace_id=' + encodeURIComponent(wsId)).then(r => r.json());
+        camps = Array.isArray(r) ? r : (r.campaigns || []);
+      } catch (e) {
+        showMessage('Could not load campaigns: ' + e.message, 'error');
+        return;
+      }
+      if (!camps.length) { showMessage('No campaigns found in this workspace', 'error'); return; }
+
+      const live = camps.filter(c => ['ACTIVE', 'PAUSED'].includes(String(c.status || '').toUpperCase()));
+      const pick = (live.length ? live : camps);
+      const choice = prompt(
+        'Auto-push to which campaign?\n\n' +
+        pick.map((c, i) => `${i + 1}. ${c.name || c.camp_name} [${c.status}]`).join('\n') +
+        '\n\nEnter a number:');
+      if (!choice) return;
+      const idx = parseInt(choice, 10) - 1;
+      const camp = pick[idx];
+      if (!camp) { showMessage('Not a valid choice', 'error'); return; }
+
+      const filter = getFilterSnapshot();
+      const nFilters = Object.values(filter).filter(v =>
+        v !== '' && v != null && !(Array.isArray(v) && !v.length)).length;
+      if (!nFilters && !confirm(
+        'No filters are set, so autopilot would draw from the ENTIRE contacts database for this campaign.\n\n' +
+        'That is almost certainly not what you want. Continue anyway?')) return;
+
+      try {
+        const r = await fetch('/api/autopilot/campaigns', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            campaign_id: camp.id || camp._id,
+            workspace_id: wsId,
+            workspace_name: wsName || wsId,
+            campaign_name: camp.name || camp.camp_name,
+            enabled: false,                   // enrol paused; you arm it on the Autopilot page
+            filter,
+            floors: { google: 200, microsoft: 200, other: 100 },
+          }),
+        }).then(r => r.json());
+        if (r.error) throw new Error(r.error);
+        showMessage(`Captured ${nFilters} filter${nFilters === 1 ? '' : 's'} for "${camp.name || camp.camp_name}". Enrolled but OFF — set floors and switch it on in Autopilot.`, 'success');
+        if (confirm('Open the Autopilot page now?')) window.open('/autopilot.html', '_blank');
+      } catch (e) {
+        showMessage('Could not enrol: ' + e.message, 'error');
+      }
     }
 
     // Toggle the push modal's campaign field between existing dropdown and new-name input.

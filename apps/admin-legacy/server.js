@@ -17829,6 +17829,599 @@ function getClientRules(workspaceId, workspaceName) {
 // Every window is operator-tunable via the Send Rules pane (app_meta →
 // push_guard_settings). Deliberately fail-safe: an unparseable stamp is
 // treated as "no record", but any stamp inside a window blocks the push.
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CAMPAIGN AUTOPILOT
+// ═══════════════════════════════════════════════════════════════════════════
+// Keeps enrolled campaigns stocked with leads PER RECIPIENT PROVIDER, forecasts
+// when each will run dry, and raises reply-health alerts.
+//
+// Why per-provider: a campaign reading "760 leads left" looks healthy, but the
+// measured split on a live campaign (2026-08-21) was 697 Microsoft / 15 Google /
+// 48 Other. ESP matching means a Google sender cannot use the Microsoft leads,
+// so those senders were dry that day while the campaign total looked fine. Every
+// count, floor and runway below is therefore per provider, and a campaign's
+// runway is the WORST of the three — never the average.
+//
+// Counts are MEASURED, never apportioned. PlusVibe stores each lead's own `mx`
+// value, so we page NOT_CONTACTED leads and tally it. Apportioning a total by a
+// push-time ratio is the same trap that made combo reply rates wrong.
+//
+// PlusVibe endpoints used (all verified live 2026-08-21 unless noted):
+//   GET  /lead/workspace-leads   ?campaign_id&status=NOT_CONTACTED&page&limit → mx
+//   GET  /campaign/stats         ?campaign_id&start_date&end_date  → sent/replied
+//   GET  /campaign/get/status    ?campaign_id                      → ACTIVE/PAUSED
+//   POST /campaign/pause         body {workspace_id, campaign_id}  (spec; unexercised)
+//   POST /campaign/launch        body {workspace_id, campaign_id}  (spec; unexercised)
+
+const AUTOPILOT_DEFAULTS = Object.freeze({
+  topUpBelowDays:      2,     // a provider under this many days triggers a top-up
+  targetDays:          7,     // top up enough to reach this much runway
+  minBatch:          100,     // don't bother queueing less than this
+  maxBatch:         2000,     // never dump the whole DB into one campaign
+  windowStartHour:    20,     // overnight window start (server local hour)
+  windowEndHour:       6,     // ...and end. Verification is slow + costly, so
+                              // routine top-ups run out of hours.
+  emergencyBelowDays:  0.5,   // this dry = top up now, any hour
+  silenceSends:      500,     // sends with zero replies → alert
+  collapsePct:        40,     // % fall vs baseline reply rate → alert
+  collapseMinSends:  300,     // ...but only once the window has this much volume
+  baselineDays:       30,     // baseline reply-rate lookback
+  recentDays:          7,     // recent reply-rate window
+});
+const AUTOPILOT_BOOLS = Object.freeze({ enabled: false, autoPause: false });
+
+// PlusVibe `mx` → our bucket. REGULAR_ACCOUNT is anything self-hosted; it is the
+// closest match to our email_other, not an exact synonym.
+const AP_MX_TO_BUCKET = Object.freeze({
+  GOOGLE_WORKSPACE: 'google', MICROSOFT365: 'microsoft', REGULAR_ACCOUNT: 'other',
+});
+// Bucket → the emailProviders token verify-and-push expects.
+const AP_BUCKET_TO_FILTER = Object.freeze({
+  google: 'email_google', microsoft: 'email_outlook', other: 'email_other',
+});
+const AP_BUCKETS = ['google', 'microsoft', 'other'];
+const AP_BUCKET_LABEL = Object.freeze({ google: 'Google', microsoft: 'Microsoft', other: 'Other' });
+
+function autopilotSettings() {
+  const out = { ...AUTOPILOT_DEFAULTS, ...AUTOPILOT_BOOLS };
+  if (!db) return out;
+  let saved = {};
+  try {
+    const row = db.prepare("SELECT value FROM app_meta WHERE key = 'autopilot_settings'").get();
+    if (row && row.value) saved = JSON.parse(row.value) || {};
+  } catch { saved = {}; }
+  for (const [k, fb] of Object.entries(AUTOPILOT_DEFAULTS)) out[k] = toPositiveNumber(saved[k], fb);
+  // Only an explicit true switches these on — a corrupt blob must never start
+  // pushing or pausing on its own.
+  for (const k of Object.keys(AUTOPILOT_BOOLS)) out[k] = saved[k] === true;
+  // windowEndHour may legitimately be 0 (midnight); toPositiveNumber would drop it.
+  if (Number.isInteger(saved.windowEndHour) && saved.windowEndHour >= 0 && saved.windowEndHour <= 23) {
+    out.windowEndHour = saved.windowEndHour;
+  }
+  return out;
+}
+
+function saveAutopilotSettings(incoming) {
+  const cur = autopilotSettings();
+  const next = {};
+  for (const [k, fb] of Object.entries(AUTOPILOT_DEFAULTS)) {
+    next[k] = (k in incoming) ? toPositiveNumber(incoming[k], cur[k] ?? fb) : cur[k];
+  }
+  if ('windowEndHour' in incoming) {
+    const v = parseInt(incoming.windowEndHour, 10);
+    if (Number.isInteger(v) && v >= 0 && v <= 23) next.windowEndHour = v;
+  }
+  for (const k of Object.keys(AUTOPILOT_BOOLS)) {
+    next[k] = (k in incoming) ? incoming[k] === true || incoming[k] === 'true' : cur[k];
+  }
+  db.prepare(`INSERT INTO app_meta (key, value) VALUES ('autopilot_settings', ?)
+              ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(JSON.stringify(next));
+  return next;
+}
+
+// Enrolled campaigns: { [campaign_id]: { workspace_id, workspace_name,
+//   campaign_name, enabled, floors: {google,microsoft,other}, push: {...} } }
+// `floors` are per-provider MINIMUM lead counts; 0 means "ignore this provider"
+// (a campaign that legitimately targets Microsoft only).
+function autopilotCampaigns() {
+  if (!db) return {};
+  try {
+    const row = db.prepare("SELECT value FROM app_meta WHERE key = 'autopilot_campaigns'").get();
+    return row && row.value ? (JSON.parse(row.value) || {}) : {};
+  } catch { return {}; }
+}
+function saveAutopilotCampaigns(obj) {
+  db.prepare(`INSERT INTO app_meta (key, value) VALUES ('autopilot_campaigns', ?)
+              ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(JSON.stringify(obj));
+}
+
+// ── Measured per-provider remaining ────────────────────────────────────────
+const AP_PAGE_LIMIT = 100;
+const AP_MAX_PAGES  = 80;   // 8,000 uncontacted leads is far beyond any real campaign
+
+async function apProviderCounts(wsId, campaignId) {
+  const counts = { google: 0, microsoft: 0, other: 0, unknown: 0 };
+  const seen = new Set();
+  let truncated = false;
+  for (let page = 1; page <= AP_MAX_PAGES; page++) {
+    const resp = await pvApi('/lead/workspace-leads', {
+      wsId, params: { campaign_id: campaignId, status: 'NOT_CONTACTED', limit: AP_PAGE_LIMIT, page },
+    });
+    const list = Array.isArray(resp) ? resp : (resp?.leads || resp?.data || []);
+    if (!list.length) break;
+    for (const l of list) {
+      // Paging tested clean, but a repeated _id would inflate counts and thereby
+      // SUPPRESS a needed top-up — the dangerous direction. Guard it.
+      const id = l._id || l.id || l.email;
+      if (id && seen.has(id)) continue;
+      if (id) seen.add(id);
+      const b = AP_MX_TO_BUCKET[l.mx];
+      if (b) counts[b]++; else counts.unknown++;
+    }
+    if (list.length < AP_PAGE_LIMIT) break;
+    if (page === AP_MAX_PAGES) truncated = true;
+  }
+  return { counts, total: seen.size, truncated };
+}
+
+// ── Burn rate ──────────────────────────────────────────────────────────────
+// MEASURED per provider, not apportioned. An earlier version split the
+// campaign's total sends by the CURRENT stock ratio; that is algebraically
+// useless — remaining/perDay then cancels to an identical runway for all three
+// providers, so the number could never show that Google was dry while Microsoft
+// was fine. Which is the entire point of the feature.
+//
+// Instead we page CONTACTED leads, which carry both `mx` and `last_sent_at`,
+// and count real sends per provider inside the window. Verified live: a
+// campaign whose stock was 92% Microsoft had a send mix of 65/22/13.
+const AP_SENT_MAX_PAGES = 40;   // 4,000 recent sends is ample for a rate
+
+async function apSendsByProvider(wsId, campaignId, days) {
+  const since = Date.now() - days * 86400000;
+  const sends = { google: 0, microsoft: 0, other: 0 };
+  const seen = new Set();
+  let scanned = 0, truncated = false;
+  for (let page = 1; page <= AP_SENT_MAX_PAGES; page++) {
+    const resp = await pvApi('/lead/workspace-leads', {
+      wsId, params: { campaign_id: campaignId, status: 'CONTACTED',
+                      limit: AP_PAGE_LIMIT, page, sort: 'last_sent_at', direction: 'desc' },
+    });
+    const list = Array.isArray(resp) ? resp : (resp?.leads || resp?.data || []);
+    if (!list.length) break;
+    let anyInWindow = false;
+    for (const l of list) {
+      const id = l._id || l.id || l.email;
+      if (id && seen.has(id)) continue;
+      if (id) seen.add(id);
+      scanned++;
+      const t = Date.parse(l.last_sent_at || l.modified_at || '');
+      if (!Number.isFinite(t) || t < since) continue;
+      anyInWindow = true;
+      const b = AP_MX_TO_BUCKET[l.mx];
+      if (b) sends[b]++;
+    }
+    if (list.length < AP_PAGE_LIMIT) break;
+    // Sorted newest-first, so once a whole page falls outside the window we are
+    // past the range. If the sort was ignored by the API this simply means we
+    // scan further, never that we undercount silently.
+    if (!anyInWindow && page > 1) break;
+    if (page === AP_SENT_MAX_PAGES) truncated = true;
+  }
+  return { sends, scanned, truncated };
+}
+
+function apDateStr(d) { return new Date(d).toISOString().slice(0, 10); }
+
+async function apCampaignStats(wsId, campaignId, days) {
+  const end = new Date();
+  const start = new Date(Date.now() - days * 86400000);
+  const resp = await pvApi('/campaign/stats', {
+    wsId, params: { campaign_id: campaignId, start_date: apDateStr(start), end_date: apDateStr(end) },
+  });
+  const arr = Array.isArray(resp) ? resp : (resp ? [resp] : []);
+  const row = arr.find(r => (r._id || r.campaign_id) === campaignId) || arr[0] || {};
+  return {
+    sent:     Number(row.sent_count || row.lead_contacted_count || 0),
+    replied:  Number(row.replied_count || 0),
+    bounced:  Number(row.bounced_count || 0),
+    leads:    Number(row.lead_count || 0),
+    status:   row.status || null,
+    name:     row.camp_name || null,
+  };
+}
+
+// Full per-campaign picture: remaining + runway per provider, worst-case runway,
+// and the reply-health verdict.
+async function apCampaignState(wsId, campaignId, cfg, settings) {
+  const s = settings || autopilotSettings();
+  const [{ counts, total, truncated }, sendMix, recent, baseline] = await Promise.all([
+    apProviderCounts(wsId, campaignId),
+    apSendsByProvider(wsId, campaignId, s.recentDays),
+    apCampaignStats(wsId, campaignId, s.recentDays),
+    apCampaignStats(wsId, campaignId, s.baselineDays),
+  ]);
+
+  const providers = {};
+  let worst = null;
+  for (const b of AP_BUCKETS) {
+    // Real sends for THIS provider in the window / window length.
+    const perDay = sendMix.sends[b] / Math.max(1, s.recentDays);
+    const floor = Number((cfg && cfg.floors && cfg.floors[b]) ?? 0);
+    // A provider with no stock AND no sends has no meaningful runway — report
+    // null ("no data") rather than 0 days, which would read as an emergency.
+    const runway = perDay > 0 ? counts[b] / perDay : null;
+    providers[b] = {
+      remaining: counts[b],
+      sentInWindow: sendMix.sends[b],
+      perDay: Math.round(perDay * 10) / 10,
+      runwayDays: runway == null ? null : Math.round(runway * 10) / 10,
+      floor,
+      belowFloor: floor > 0 && counts[b] < floor,
+      starved: counts[b] === 0 && perDay > 0,
+    };
+    if (runway != null && (worst == null || runway < worst.days)) worst = { provider: b, days: runway };
+  }
+
+  // Reply health. Both rules need volume before they can fire: a campaign at 2%
+  // that sends 50 mails and gets one fewer reply is not a collapse.
+  const recentRate   = recent.sent   > 0 ? recent.replied   / recent.sent   : null;
+  const baselineRate = baseline.sent > 0 ? baseline.replied / baseline.sent : null;
+  const alerts = [];
+  if (recent.sent >= s.silenceSends && recent.replied === 0) {
+    alerts.push({ kind: 'silence', severity: 'high',
+      message: `${recent.sent} sent in ${s.recentDays}d with zero replies` });
+  }
+  if (recentRate != null && baselineRate > 0 && recent.sent >= s.collapseMinSends) {
+    const dropPct = (1 - recentRate / baselineRate) * 100;
+    if (dropPct >= s.collapsePct) {
+      alerts.push({ kind: 'collapse', severity: 'high',
+        message: `Reply rate ${(recentRate * 100).toFixed(2)}% is ${dropPct.toFixed(0)}% below the ${s.baselineDays}d baseline of ${(baselineRate * 100).toFixed(2)}%`,
+        dropPct: Math.round(dropPct) });
+    }
+  }
+
+  return {
+    campaign_id: campaignId,
+    workspace_id: wsId,
+    campaign_name: (cfg && cfg.campaign_name) || recent.name || campaignId,
+    workspace_name: (cfg && cfg.workspace_name) || wsId,
+    status: recent.status,
+    providers,
+    unknownMx: counts.unknown,
+    totalRemaining: total,
+    truncated: truncated || sendMix.truncated,
+    worstProvider: worst ? worst.provider : null,
+    runwayDays: worst ? Math.round(worst.days * 10) / 10 : null,
+    dryDate: worst ? apDateStr(Date.now() + worst.days * 86400000) : null,
+    sent: recent.sent, replied: recent.replied,
+    replyRate: recentRate, baselineRate,
+    alerts,
+    enabled: !!(cfg && cfg.enabled),
+    filter: (cfg && cfg.filter) || null,
+    filterCapturedAt: (cfg && cfg.filter_captured_at) || null,
+  };
+}
+
+// ── Worker ─────────────────────────────────────────────────────────────────
+// One tick evaluates every enrolled campaign. Routine top-ups only run inside
+// the overnight window so verification doesn't compete with daytime work; a
+// provider below emergencyBelowDays is topped up whenever it is found.
+const AP_STATE_KEY = 'autopilot_last_run';
+let _apTickRunning = false;
+
+function apInWindow(s, now = new Date()) {
+  const h = now.getHours();
+  // Window may wrap midnight (20 → 6).
+  return s.windowStartHour <= s.windowEndHour
+    ? (h >= s.windowStartHour && h < s.windowEndHour)
+    : (h >= s.windowStartHour || h < s.windowEndHour);
+}
+
+function apLoadRunState() {
+  if (!db) return {};
+  try {
+    const r = db.prepare('SELECT value FROM app_meta WHERE key = ?').get(AP_STATE_KEY);
+    return r && r.value ? (JSON.parse(r.value) || {}) : {};
+  } catch { return {}; }
+}
+function apSaveRunState(st) {
+  try {
+    db.prepare(`INSERT INTO app_meta (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
+      .run(AP_STATE_KEY, JSON.stringify(st));
+  } catch (e) { console.warn('[autopilot] state save failed:', e.message); }
+}
+
+// Is a push job already in flight for this campaign? Queueing a second one
+// would double-push, so this is a hard skip rather than a warning.
+function apJobRunning(campaignId) {
+  for (const j of pushJobs.values()) {
+    if (j.campaign_id === campaignId &&
+        ['verifying', 'pushing', 'running', 'paused'].includes(j.status)) return j;
+  }
+  return null;
+}
+
+// Pick contact ids to top a provider up with.
+//
+// WHO gets pushed is decided by the operator on the Contacts page, never here.
+// The enrolment carries the filter snapshot captured there (cfg.filter), and
+// this only narrows it to the one provider that needs stock. An autopilot that
+// chose its own audience would push a solar client's campaign to any industry
+// in the DB the moment a second client existed.
+//
+// Selection goes through /api/contacts/sendability rather than SQL of our own:
+// that endpoint runs the SAME guard functions the push runs (cross-client
+// spacing, cooldown, departed, DNC, status gate) and returns the ids that
+// survive. Re-expressing those rules here is exactly how the filter count and
+// the push count drifted apart before — see the comment on that route.
+async function apSelectContacts(bucket, want, cfg, state) {
+  const filters = {
+    ...(cfg.filter || {}),
+    // Force the single provider being topped up, overriding whatever the
+    // captured snapshot had — the whole point of this call is one bucket.
+    // COMMA-SEPARATED STRING, not an array: _buildFilterClauses does
+    // `filters.emailProviders.split(',')` (db-postgres.js), so an array throws.
+    emailProviders: AP_BUCKET_TO_FILTER[bucket],
+  };
+  const r = await fetch(`http://127.0.0.1:${PORT}/api/contacts/sendability`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-admin-key': ADMIN_KEY },
+    body: JSON.stringify({
+      filters,
+      workspace_id: state.workspace_id,
+      workspace_name: state.workspace_name,
+      campaign_name: state.campaign_name,
+      return_ids: true,
+      // Sample only as many as we intend to push; the guards run per row, so
+      // asking for 20k to use 200 is pure cost.
+      sample: Math.max(1, Math.min(want, 20000)),
+      ...(cfg.allowedStatuses ? { allowedStatuses: cfg.allowedStatuses } : {}),
+      ...(cfg.loose === true ? { loose: true } : {}),
+    }),
+  });
+  if (!r.ok) throw new Error(`sendability HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  const out = await r.json();
+  const ids = Array.isArray(out.ids) ? out.ids : [];
+  return { ids: ids.slice(0, want), reasons: out.reasons || {}, sendable: out.sendable ?? ids.length };
+}
+
+// Fire the existing verify-and-push for one provider. We deliberately call the
+// proven endpoint rather than re-implementing the push: it already reserves
+// contacts before sending, applies every guard, and survives deploys.
+async function apQueuePush(state, bucket, want, cfg, settings) {
+  const { ids, reasons } = await apSelectContacts(bucket, want, cfg, state);
+  // No supply is a REPORTABLE state, not a silent no-op: it is the signal that
+  // this provider's pool is exhausted and needs sourcing, not more scheduling.
+  if (!ids.length) return { queued: 0, starved: true, reasons };
+  const body = {
+    contact_ids: ids,
+    workspace_id: state.workspace_id,
+    campaign_id: state.campaign_id,
+    workspace_name: state.workspace_name,
+    campaign_name: state.campaign_name,
+    emailProviders: AP_BUCKET_TO_FILTER[bucket],
+    ...(cfg.push || {}),
+  };
+  const r = await fetch(`http://127.0.0.1:${PORT}/api/contacts/verify-and-push`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-admin-key': ADMIN_KEY },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`verify-and-push HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  const out = await r.json();
+  return { queued: ids.length, job_id: out.job_id || out.id || null, starved: false };
+}
+
+async function apPauseCampaign(state) {
+  // Record what it was before we touch it, so a later resume can't "activate"
+  // something an operator had deliberately paused.
+  let prior = null;
+  try {
+    const st = await pvApi('/campaign/get/status', {
+      wsId: state.workspace_id, params: { campaign_id: state.campaign_id } });
+    prior = st?.status || null;
+  } catch (e) { console.warn('[autopilot] status read failed:', e.message); }
+  if (prior && prior !== 'ACTIVE') return { paused: false, prior, reason: 'not active' };
+  await pvApi('/campaign/pause', {
+    method: 'POST', wsId: state.workspace_id,
+    body: { workspace_id: state.workspace_id, campaign_id: state.campaign_id },
+  });
+  return { paused: true, prior };
+}
+
+async function autopilotTick({ dry = false, force = false } = {}) {
+  const s = autopilotSettings();
+  const result = { ran_at: new Date().toISOString(), enabled: s.enabled, dry, campaigns: [], errors: [] };
+  if (!s.enabled && !force) { result.skipped = 'autopilot disabled'; return result; }
+  if (_apTickRunning) { result.skipped = 'tick already running'; return result; }
+  _apTickRunning = true;
+  const windowOpen = apInWindow(s);
+  result.windowOpen = windowOpen;
+
+  try {
+    const cfgs = autopilotCampaigns();
+    for (const [campaignId, cfg] of Object.entries(cfgs)) {
+      if (!cfg || !cfg.enabled || !cfg.workspace_id) continue;
+      const entry = { campaign_id: campaignId, campaign_name: cfg.campaign_name || campaignId, actions: [] };
+      try {
+        const state = await apCampaignState(cfg.workspace_id, campaignId, cfg, s);
+        entry.runwayDays = state.runwayDays;
+        entry.worstProvider = state.worstProvider;
+        entry.providers = state.providers;
+        entry.alerts = state.alerts;
+
+        // 1. Reply-health guards.
+        for (const a of state.alerts) {
+          const text = `⚠️ Autopilot — *${state.campaign_name}* (${state.workspace_name}): ${a.message}`;
+          if (!dry) postBounceAlertToSlack(text).catch(() => {});
+          entry.actions.push({ type: 'alert', kind: a.kind, message: a.message });
+          if (a.kind === 'collapse' && s.autoPause && !dry) {
+            try {
+              const p = await apPauseCampaign(state);
+              entry.actions.push({ type: 'pause', ...p });
+              if (p.paused) postBounceAlertToSlack(`⏸️ Autopilot PAUSED *${state.campaign_name}* — ${a.message}`).catch(() => {});
+            } catch (e) { entry.actions.push({ type: 'pause', error: e.message }); }
+          }
+        }
+
+        // 2. Per-provider top-up. Each provider is judged on its own runway and
+        //    floor — the whole point of the feature.
+        const running = apJobRunning(campaignId);
+        if (!cfg.filter) {
+          // Belt-and-braces: the enrol route already refuses to enable without
+          // a filter, but a hand-edited app_meta blob must not become a push
+          // that draws from the entire contacts DB.
+          entry.actions.push({ type: 'skip', reason: 'no contact filter captured — cannot choose an audience' });
+        } else if (running) {
+          entry.actions.push({ type: 'skip', reason: `push job ${running.id} already ${running.status}` });
+        } else {
+          for (const b of AP_BUCKETS) {
+            const p = state.providers[b];
+            const floorHit = p.belowFloor;
+            const runwayHit = p.runwayDays != null && p.runwayDays < s.topUpBelowDays;
+            const emergency = p.runwayDays != null && p.runwayDays < s.emergencyBelowDays;
+            if (!floorHit && !runwayHit) continue;
+            if (!windowOpen && !emergency) {
+              entry.actions.push({ type: 'defer', provider: b, reason: 'outside overnight window',
+                runwayDays: p.runwayDays });
+              continue;
+            }
+            // Size the batch to reach targetDays, honouring the floor.
+            const byRunway = p.perDay > 0 ? Math.ceil(p.perDay * s.targetDays) - p.remaining : 0;
+            const byFloor  = p.floor > 0 ? p.floor - p.remaining : 0;
+            let want = Math.max(byRunway, byFloor, 0);
+            if (want < s.minBatch) want = s.minBatch;
+            want = Math.min(want, s.maxBatch);
+            if (dry) { entry.actions.push({ type: 'would-push', provider: b, want, emergency }); continue; }
+            try {
+              const q = await apQueuePush(state, b, want, cfg, s);
+              entry.actions.push({ type: q.starved ? 'starved' : 'push', provider: b, want, ...q });
+              if (q.starved) {
+                postBounceAlertToSlack(`🚱 Autopilot — *${state.campaign_name}*: no ${AP_BUCKET_LABEL[b]} contacts available to top up (${p.remaining} left, ${p.runwayDays ?? '?'}d runway)`).catch(() => {});
+              }
+              break; // one push per campaign per tick; next tick handles the rest
+            } catch (e) {
+              entry.actions.push({ type: 'push', provider: b, error: e.message });
+              result.errors.push(`${campaignId}/${b}: ${e.message}`);
+            }
+          }
+        }
+      } catch (e) {
+        entry.error = e.message;
+        result.errors.push(`${campaignId}: ${e.message}`);
+      }
+      result.campaigns.push(entry);
+    }
+    if (!dry) apSaveRunState({ at: result.ran_at, campaigns: result.campaigns.length, errors: result.errors.length });
+  } finally {
+    _apTickRunning = false;
+  }
+  return result;
+}
+
+// ── Autopilot HTTP surface ─────────────────────────────────────────────────
+app.get('/api/autopilot/settings', requireSession, (req, res) => {
+  res.json({ settings: autopilotSettings(), defaults: { ...AUTOPILOT_DEFAULTS, ...AUTOPILOT_BOOLS } });
+});
+
+app.post('/api/autopilot/settings', requireAdmin, (req, res) => {
+  try { res.json({ ok: true, settings: saveAutopilotSettings(req.body || {}) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/autopilot/campaigns', requireSession, (req, res) => {
+  res.json({ campaigns: autopilotCampaigns() });
+});
+
+// Enrol / update / remove one campaign. Body: { campaign_id, workspace_id,
+// campaign_name, workspace_name, enabled, floors:{google,microsoft,other},
+// filter } or { campaign_id, remove: true }.
+//
+// `filter` is the Contacts-page filter snapshot (getFilterSnapshot()) that
+// defines WHO this campaign may be topped up with. Absent on an update = keep
+// the stored one, so toggling a floor never silently widens the audience.
+app.post('/api/autopilot/campaigns', requireAdmin, (req, res) => {
+  const b = req.body || {};
+  if (!b.campaign_id) return res.status(400).json({ error: 'campaign_id required' });
+  try {
+    const all = autopilotCampaigns();
+    if (b.remove) {
+      delete all[b.campaign_id];
+    } else {
+      if (!b.workspace_id) return res.status(400).json({ error: 'workspace_id required' });
+      const prev = all[b.campaign_id] || {};
+      const floors = {};
+      for (const k of AP_BUCKETS) {
+        const v = parseInt((b.floors || {})[k], 10);
+        floors[k] = Number.isFinite(v) && v >= 0 ? v : ((prev.floors || {})[k] ?? 0);
+      }
+      // A campaign with no captured filter must never auto-push: without one
+      // the top-up would draw from the whole contacts DB regardless of client.
+      const filter = (b.filter && typeof b.filter === 'object') ? b.filter : (prev.filter || null);
+      const wantEnabled = b.enabled === true || b.enabled === 'true';
+      if (wantEnabled && !filter) {
+        return res.status(400).json({
+          error: 'This campaign has no contact filter yet. Set the filters on Contacts and use "Auto-push to campaign" to capture them before enabling.',
+        });
+      }
+      all[b.campaign_id] = {
+        ...prev,
+        workspace_id: b.workspace_id,
+        workspace_name: b.workspace_name || prev.workspace_name || b.workspace_id,
+        campaign_name: b.campaign_name || prev.campaign_name || b.campaign_id,
+        enabled: wantEnabled,
+        floors,
+        filter,
+        filter_captured_at: (b.filter && typeof b.filter === 'object')
+          ? new Date().toISOString() : (prev.filter_captured_at || null),
+      };
+    }
+    saveAutopilotCampaigns(all);
+    res.json({ ok: true, campaigns: all });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Live state for the dashboard. Each campaign costs ~10 PlusVibe calls, so this
+// is on-demand only — never on a page-poll timer.
+app.get('/api/autopilot/state', requireSession, async (req, res) => {
+  try {
+    const s = autopilotSettings();
+    const cfgs = autopilotCampaigns();
+    const only = req.query.campaign_id;
+    const out = [];
+    for (const [cid, cfg] of Object.entries(cfgs)) {
+      if (only && cid !== only) continue;
+      try { out.push(await apCampaignState(cfg.workspace_id, cid, cfg, s)); }
+      catch (e) { out.push({ campaign_id: cid, campaign_name: cfg.campaign_name || cid, error: e.message }); }
+    }
+    out.sort((a, b) => (a.runwayDays ?? 9e9) - (b.runwayDays ?? 9e9));
+    res.json({ settings: s, windowOpen: apInWindow(s), lastRun: apLoadRunState(), campaigns: out });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Manual run. ?dry=1 evaluates and reports without pushing, alerting or pausing.
+app.post('/api/autopilot/run', requireAdmin, async (req, res) => {
+  try {
+    res.json(await autopilotTick({
+      dry: req.query.dry === '1' || req.body?.dry === true,
+      force: true,
+    }));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Scheduler entry point (cron-job.org), mirroring /api/cron/bounce-alert.
+app.get('/api/cron/autopilot', async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  const s = decodeSession(req);
+  const okSession = s?.role === 'admin' || s?.role === 'manager' || req.headers['x-admin-key'] === ADMIN_KEY;
+  const okSecret = secret && req.query.secret === secret;
+  if (!okSecret && !okSession) return res.status(403).json({ error: 'forbidden (CRON_SECRET or sign in)' });
+  try { res.json(await autopilotTick({ dry: req.query.dry === '1' })); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 const PUSH_GUARD_DEFAULTS = Object.freeze({
   sameClientDays:      30,  // this client re-pushing their own contact
   sameVerticalMonths:   6,  // a different client in the same vertical

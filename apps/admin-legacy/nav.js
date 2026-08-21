@@ -21,6 +21,7 @@
       icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>',
       pages: [
         { href: 'campaigns.html',       label: 'Campaigns' },
+        { href: 'autopilot.html',       label: 'Autopilot' },
         { href: 'copy.html',            label: 'Copy Analytics' },
         { href: 'leads-analysis.html',  label: 'Leads Analysis' },
       ]
