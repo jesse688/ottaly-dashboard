@@ -458,11 +458,18 @@
       white-space: nowrap;
     }
 
+    /* This row carries 14+ controls. flex-shrink:0 with no wrap forced it wider
+       than the viewport, so everything past "Verify Providers" was clipped off
+       the right edge and unreachable — buttons cannot be scrolled to when the
+       page itself does not scroll horizontally. Wrap instead, and let it shrink. */
     .header-right {
       display: flex;
       gap: 8px;
       align-items: center;
-      flex-shrink: 0;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      min-width: 0;
+      flex: 1 1 auto;
     }
 
     /* ── Selection Bar ── */
@@ -4958,7 +4965,9 @@
       let camps = [];
       try {
         const r = await fetch('/api/pv/campaigns?workspace_id=' + encodeURIComponent(wsId)).then(r => r.json());
-        camps = Array.isArray(r) ? r : (r.campaigns || []);
+        if (r.error) throw new Error(r.error);
+        // /api/pv/campaigns responds { list: [...] } — not `campaigns`.
+        camps = Array.isArray(r) ? r : (r.list || r.campaigns || []);
       } catch (e) {
         showMessage('Could not load campaigns: ' + e.message, 'error');
         return;
