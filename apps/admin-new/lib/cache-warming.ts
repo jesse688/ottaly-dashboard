@@ -451,10 +451,38 @@ async function ensureComboDaily(wsIds: string[], dates: string[]): Promise<void>
     return a.savedAt - b.savedAt
   })
   if (queue.length > MAX_PAIRS_PER_PASS) {
+    // RESERVE half the pass for PAST days, so today can never monopolise it.
+    //
+    // Ordering alone is not enough, and this is measured, not theoretical:
+    // today re-expires every 30 min across every active workspace, so on a busy
+    // day it can fill all 12 slots by itself on every pass and the backlog is
+    // never reached -- which is exactly what kept `sent` pinned at 48,669
+    // against PlusVibe's 71,437. Taking a guaranteed share for past days makes
+    // the backlog drain regardless of how much churn today generates.
+    //
+    // Today still gets the other half, so live numbers stay fresh. If either
+    // side has nothing queued, the other takes the whole pass -- no slot is
+    // wasted once the backlog is clear.
+    const past = queue.filter((q) => q.date !== today)
+    const cur = queue.filter((q) => q.date === today)
+    const pastShare = Math.min(past.length, Math.floor(MAX_PAIRS_PER_PASS / 2))
+    const picked = [
+      ...past.slice(0, pastShare),
+      ...cur.slice(0, MAX_PAIRS_PER_PASS - pastShare),
+    ]
+    // If one side ran dry, backfill from whatever is left over.
+    if (picked.length < MAX_PAIRS_PER_PASS) {
+      const taken = new Set(picked.map((q) => `${q.wsId}|${q.date}`))
+      for (const q of queue) {
+        if (picked.length >= MAX_PAIRS_PER_PASS) break
+        if (!taken.has(`${q.wsId}|${q.date}`)) picked.push(q)
+      }
+    }
     console.log(
-      `[cache-warming] combo: ${queue.length} stale ws-date pairs, capping this pass at ${MAX_PAIRS_PER_PASS}`,
+      `[cache-warming] combo: ${queue.length} stale ws-date pairs, capping at ` +
+        `${MAX_PAIRS_PER_PASS} (${pastShare} reserved for past days, ${past.length} waiting)`,
     )
-    queue = queue.slice(0, MAX_PAIRS_PER_PASS)
+    queue = picked
   }
 
   // Log the SHAPE of the queue, not just its size. Which rows a pass chooses is
