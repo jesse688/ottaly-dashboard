@@ -30,8 +30,20 @@ RUN npm install --omit=dev
 # `COPY apps/admin-legacy/ ./` layer even when the commit changed, shipping
 # stale code on a "successful" build. Bumping CACHEBUST (any new value each
 # deploy) forces this layer — and everything after it — to rebuild.
-ARG CACHEBUST=2026-08-20-68
+ARG CACHEBUST=2026-08-20-69
 COPY apps/admin-legacy/ ./
+
+# Stamp the build so the running container can state WHICH code it is, exposed
+# on /healthz and /api/version. The old marker was a hand-edited string and
+# drifted immediately -- it still read a July value weeks later, so it
+# confirmed nothing. CACHEBUST already changes every deploy, so reusing it as
+# the build id costs nothing and cannot be forgotten.
+#
+# For the real SHA, set GIT_COMMIT in EasyPanel's build args:
+#   GIT_COMMIT=$(git rev-parse --short HEAD)
+ARG GIT_COMMIT=""
+ENV GIT_COMMIT=${GIT_COMMIT:-$CACHEBUST}
+ENV BUILT_AT=${CACHEBUST}
 
 EXPOSE 3000
 

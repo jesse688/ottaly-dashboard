@@ -3017,11 +3017,26 @@ app.get('/api/build-version', (req, res) => {
 
 // Liveness/readiness probe for Easypanel/uptime monitoring. No auth — 200 when
 // the process is up and Postgres answers SELECT 1, else 503.
-// Deploy marker — bump `build` on each change that needs verifying live, so
-// "is the fix deployed?" is a 2-second curl instead of a guess. No auth needed.
+// Deploy marker — answers "is my fix actually live?" in one request.
+//
+// This used to be a hand-maintained string, which meant it drifted: it still
+// read 'apollo-export-fix-2026-07-08e' weeks later, so it confirmed nothing.
+// GIT_COMMIT/BUILT_AT are injected at BUILD time (see Dockerfile), so they
+// cannot drift and cannot be forgotten.
+//
+// Why this matters: EasyPanel has been observed reporting a "successful" build
+// that finished in ONE SECOND and shipped no new code. Debugging behaviour
+// without first checking this wastes entire sessions -- it did exactly that on
+// 2026-08-21. Compare against `git rev-parse --short HEAD` BEFORE diagnosing
+// anything; if they differ, the fix is not running and there is nothing to
+// debug. No auth, so it works from anywhere.
 app.get('/api/version', (req, res) => {
   res.set('Cache-Control', 'no-store');
-  res.json({ build: 'apollo-export-fix-2026-07-08e', uptime: Math.round(process.uptime()) });
+  res.json({
+    commit: process.env.GIT_COMMIT || 'unknown',
+    builtAt: process.env.BUILT_AT || 'unknown',
+    uptime: Math.round(process.uptime()),
+  });
 });
 
 // Event-loop lag sampler. A timer set for 500ms that measures how late it
@@ -3043,7 +3058,15 @@ let _elLagMax = 0;
 
 app.get('/healthz', async (req, res) => {
   res.set('Cache-Control', 'no-store');
-  const health = { status: 'ok', uptime: Math.round(process.uptime()), db: 'unknown' };
+  // commit is here as well as /api/version because this is the endpoint that
+  // actually gets polled during an incident. Seeing the running commit next to
+  // the symptoms is what prevents diagnosing a build that was never deployed.
+  const health = {
+    status: 'ok',
+    commit: process.env.GIT_COMMIT || 'unknown',
+    uptime: Math.round(process.uptime()),
+    db: 'unknown',
+  };
   // Rejections survived rather than killed the process. A rising count with a
   // flat uptime means background jobs are failing quietly; a reset to 0 with a
   // low uptime means the process restarted.
