@@ -11,6 +11,12 @@ RUN npm install --legacy-peer-deps
 FROM base AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
+# Cache-bust the source COPY. EasyPanel's Docker cache has been observed reusing
+# an old `COPY apps/<app> ./` layer even when the commit changed, shipping stale
+# code from a "successful" build -- admin-legacy carries the same guard for the
+# same reason. Bump CACHEBUST (any new value) to force this layer, and every
+# layer after it, to rebuild.
+ARG CACHEBUST=2026-08-21-1
 COPY apps/admin-new .
 ENV NEXT_TELEMETRY_DISABLED=1
 # Suppress Sentry source-map upload during build (no auth token in CI)

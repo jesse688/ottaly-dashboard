@@ -457,7 +457,17 @@ async function ensureComboDaily(wsIds: string[], dates: string[]): Promise<void>
     queue = queue.slice(0, MAX_PAIRS_PER_PASS)
   }
 
-  console.log(`[cache-warming] combo: fetching ${queue.length} ws-date pairs × 9 combos`)
+  // Log the SHAPE of the queue, not just its size. Which rows a pass chooses is
+  // the thing that actually went wrong before (incomplete days starved behind
+  // stale ones), and "N pairs" alone cannot distinguish a healthy pass from one
+  // re-writing today forever. The BUILD marker makes it unambiguous from logs
+  // whether a deploy shipped this code at all.
+  const incCount = queue.filter((q) => q.incomplete).length
+  console.log(
+    `[cache-warming] combo[v3]: fetching ${queue.length} ws-date pairs × 9 combos ` +
+      `(${incCount} incomplete-first, ${queue.length - incCount} stale); ` +
+      `dates: ${[...new Set(queue.map((q) => q.date))].sort().join(',')}`,
+  )
 
   // One ws+date at a time; its 9 combos fetched with modest concurrency. Keeps
   // total PV load bounded (needsFetch is usually just today for active ws).
