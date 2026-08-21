@@ -18103,6 +18103,38 @@ async function apCampaignState(wsId, campaignId, cfg, settings) {
   };
 }
 
+// Measured push yield: of the contacts we hand verify-and-push, what fraction
+// actually reaches PlusVibe? Observed 81 of 200 (40%) on a real top-up — the
+// verifier drops risky/invalid rows and the guards drop the rest. Sizing a
+// batch to the raw gap therefore always undershoots, so a campaign crawls
+// toward its floor instead of reaching it.
+//
+// Measured per campaign from push_job_history, not assumed: a warm list and a
+// cold list have very different yields, and a fixed multiplier would over-push
+// the good one. Falls back to a conservative default until there is history.
+const AP_DEFAULT_YIELD = 0.5;
+const AP_MIN_YIELD = 0.15;   // never inflate more than ~6.7x
+const AP_YIELD_JOBS = 10;
+
+function apPushYield(campaignId) {
+  const sq = app.locals.sqliteDb;
+  if (!sq) return AP_DEFAULT_YIELD;
+  try {
+    const rows = sq.prepare(`
+      SELECT requested, pushed FROM push_job_history
+       WHERE campaign_id = ? AND status = 'completed' AND requested > 0
+       ORDER BY finished_at DESC LIMIT ?`).all(campaignId, AP_YIELD_JOBS);
+    if (!rows.length) return AP_DEFAULT_YIELD;
+    const req = rows.reduce((a, r) => a + Number(r.requested || 0), 0);
+    const got = rows.reduce((a, r) => a + Number(r.pushed || 0), 0);
+    if (req <= 0) return AP_DEFAULT_YIELD;
+    // A run that delivered nothing at all is usually a broken verifier or an
+    // exhausted pool, not a yield of 0 — clamp so we don't request the maximum
+    // on the back of one bad night.
+    return Math.min(1, Math.max(AP_MIN_YIELD, got / req));
+  } catch { return AP_DEFAULT_YIELD; }
+}
+
 // ── Worker ─────────────────────────────────────────────────────────────────
 // One tick evaluates every enrolled campaign. Routine top-ups only run inside
 // the overnight window so verification doesn't compete with daytime work; a
@@ -18307,16 +18339,26 @@ async function autopilotTick({ dry = false, force = false } = {}) {
                 runwayDays: p.runwayDays });
               continue;
             }
-            // Size the batch to reach targetDays, honouring the floor.
+            // Size the batch to reach targetDays, honouring the floor...
             const byRunway = p.perDay > 0 ? Math.ceil(p.perDay * s.targetDays) - p.remaining : 0;
             const byFloor  = p.floor > 0 ? p.floor - p.remaining : 0;
-            let want = Math.max(byRunway, byFloor, 0);
+            const gap = Math.max(byRunway, byFloor, 0);
+            // ...then inflate by the measured yield, because most of what we
+            // hand over never lands. Requesting the bare gap is why AP asked
+            // for 200 and gained 81.
+            const yieldRate = apPushYield(campaignId);
+            let want = Math.ceil(gap / yieldRate);
             if (want < s.minBatch) want = s.minBatch;
             want = Math.min(want, s.maxBatch);
-            if (dry) { entry.actions.push({ type: 'would-push', provider: b, want, emergency }); continue; }
+            if (dry) {
+              entry.actions.push({ type: 'would-push', provider: b, want, gap,
+                yield: Math.round(yieldRate * 100) / 100, emergency });
+              continue;
+            }
             try {
               const q = await apQueuePush(state, b, want, cfg, s);
-              entry.actions.push({ type: q.starved ? 'starved' : 'push', provider: b, want, ...q });
+              entry.actions.push({ type: q.starved ? 'starved' : 'push', provider: b, want, gap,
+                yield: Math.round(yieldRate * 100) / 100, ...q });
               if (q.starved) {
                 postBounceAlertToSlack(`🚱 Autopilot — *${state.campaign_name}*: no ${AP_BUCKET_LABEL[b]} contacts available to top up (${p.remaining} left, ${p.runwayDays ?? '?'}d runway)`).catch(() => {});
                 continue; // no supply here — try the next provider, don't waste the tick
