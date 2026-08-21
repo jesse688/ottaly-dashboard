@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Campaign Autopilot — Ottaly</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<style>
+  :root{--navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--green:#16a34a;--red:#dc2626;--amber:#d97706;--border:#E5E7EB;--card:#fff;--bg:#F8F9FC;--muted:#6B7280}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--navy-dark);min-height:100vh}
+  header{background:var(--navy-dark);padding:.75rem 2rem;border-bottom:3px solid var(--teal);display:flex;align-items:center;gap:2rem;position:sticky;top:0;z-index:200}
+  header nav{flex:1;min-width:0;overflow:hidden}
+  .page{max-width:1900px;margin:0 auto;padding:1.25rem 1rem}
+  .top-bar{display:flex;align-items:center;gap:1rem;margin-bottom:.75rem;flex-wrap:wrap}
+  .page-title{font-family:'Genos',sans-serif;font-size:1.25rem;font-weight:800;color:var(--navy-dark)}
+  .sub{font-size:11px;color:var(--muted)}
+  .btn{padding:8px 14px;border:1.5px solid var(--navy);background:var(--navy);color:#fff;border-radius:8px;font:600 13px Inter,sans-serif;cursor:pointer}
+  .btn.ghost{background:#fff;color:var(--navy)}
+  .btn:disabled{opacity:.5;cursor:default}
+  .summary{display:flex;gap:.5rem;margin-bottom:.85rem;flex-wrap:wrap}
+  .sum-card{background:var(--card);border:1px solid var(--border);border-top:2px solid var(--navy);border-radius:6px;padding:.45rem .9rem;flex:1;min-width:120px}
+  .sum-val{font-family:'Genos',sans-serif;font-size:1.4rem;font-weight:800;line-height:1}
+  .sum-label{font-size:10px;font-weight:500;color:var(--muted);margin-top:2px;text-transform:uppercase;letter-spacing:.3px}
+  .section{background:var(--card);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:1rem}
+  .section-head{padding:.5rem .8rem;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap}
+  .section-title{font-family:'Genos',sans-serif;font-size:.95rem;font-weight:800}
+  .section-sub{font-size:10.5px;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;font-size:11.5px}
+  th{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.25px;color:var(--muted);padding:.35rem .4rem;text-align:right;background:#FAFAFA;border-bottom:1px solid var(--border);white-space:nowrap}
+  th:first-child{text-align:left}
+  td{padding:.3rem .4rem;font-size:11.5px;border-bottom:1px solid #F3F4F6;text-align:right;font-weight:600;white-space:nowrap}
+  td:first-child{text-align:left}
+  tr:hover td{background:#F8F9FC}
+  .grp{border-left:1px solid var(--border)}
+  .pill{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.3px}
+  .pill-ok{background:#DCFCE7;color:var(--green)}
+  .pill-warn{background:#FEF3C7;color:var(--amber)}
+  .pill-crit{background:#FEE2E2;color:var(--red)}
+  .pill-off{background:#F3F4F6;color:var(--muted)}
+  .muted{color:var(--muted);font-weight:500}
+  .empty,.loading{text-align:center;padding:2.5rem 1rem;color:var(--muted);font-size:13px}
+  .settings{padding:.9rem}
+  .sgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:.7rem}
+  .fld label{display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:var(--muted);margin-bottom:3px}
+  .fld input[type=number]{width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font:600 12.5px Inter,sans-serif}
+  .fld .hint{font-size:10px;color:var(--muted);margin-top:3px;font-weight:400;line-height:1.35}
+  .toggles{display:flex;gap:1.5rem;flex-wrap:wrap;margin-top:.9rem;padding-top:.9rem;border-top:1px solid var(--border)}
+  .tg{display:flex;align-items:center;gap:.45rem;font-size:12.5px;font-weight:600}
+  .tg input{width:16px;height:16px;cursor:pointer}
+  .warnbox{background:#FEF3C7;border:1px solid #FDE68A;color:#92400E;padding:.5rem .7rem;border-radius:6px;font-size:11.5px;margin-top:.8rem;line-height:1.45}
+  .alertbox{background:#FEE2E2;border:1px solid #FECACA;color:#991B1B;padding:.45rem .7rem;border-radius:6px;font-size:11.5px;margin-bottom:.5rem}
+  .note{font-size:11.5px;color:var(--muted);padding:.75rem .9rem;background:#F8F9FC;border-top:1px solid var(--border);line-height:1.55}
+  .floor-in{width:62px;padding:3px 5px;border:1px solid var(--border);border-radius:5px;font:600 11.5px Inter,sans-serif;text-align:right}
+  @media(max-width:900px){.table-wrap{overflow-x:auto}table{min-width:1000px}}
+</style>
+</head>
+<body>
+<script src="/nav.js" defer></script>
+
+<div class="page">
+  <div class="top-bar">
+    <div>
+      <div class="page-title">Campaign Autopilot</div>
+      <div class="sub">Keeps each campaign stocked <b>per recipient provider</b>, forecasts when it runs dry, and flags reply-health problems.</div>
+    </div>
+    <button class="btn ghost" onclick="loadState()" id="refreshBtn">↻ Refresh</button>
+    <button class="btn ghost" onclick="run(true)" id="dryBtn">Dry run</button>
+    <button class="btn" onclick="run(false)" id="runBtn">Run now</button>
+    <span id="runStatus" class="sub"></span>
+  </div>
+
+  <div class="summary" id="summary" style="display:none">
+    <div class="sum-card"><div class="sum-val" id="sumEnrolled">—</div><div class="sum-label">Enrolled</div></div>
+    <div class="sum-card"><div class="sum-val" id="sumCrit" style="color:var(--red)">—</div><div class="sum-label">Running dry</div></div>
+    <div class="sum-card"><div class="sum-val" id="sumAlerts" style="color:var(--amber)">—</div><div class="sum-label">Reply alerts</div></div>
+    <div class="sum-card"><div class="sum-val" id="sumWindow">—</div><div class="sum-label">Top-up window</div></div>
+    <div class="sum-card"><div class="sum-val" id="sumMaster">—</div><div class="sum-label">Autopilot</div></div>
+  </div>
+
+  <div id="alerts"></div>
+
+  <div class="section">
+    <div class="section-head">
+      <div>
+        <div class="section-title">Enrolled Campaigns</div>
+        <div class="section-sub" id="stateSub">Runway is the <b>worst</b> provider, not the average — a campaign with plenty of Microsoft leads still stops if Google is empty.</div>
+      </div>
+      <button class="btn ghost" onclick="openAdd()">+ Add campaign</button>
+    </div>
+    <div class="table-wrap" id="tableWrap"><div class="loading">Loading…</div></div>
+    <div class="note" id="note"></div>
+  </div>
+
+  <div class="section">
+    <div class="section-head"><div class="section-title">Settings</div>
+      <button class="btn" onclick="saveSettings()" id="saveBtn">Save settings</button></div>
+    <div class="settings">
+      <div class="sgrid" id="sgrid"></div>
+      <div class="toggles">
+        <label class="tg"><input type="checkbox" id="tg_enabled"> Autopilot enabled
+          <span class="sub">(master switch — off means nothing is pushed)</span></label>
+        <label class="tg"><input type="checkbox" id="tg_autoPause"> Auto-pause on reply collapse
+          <span class="sub">(off = notify only)</span></label>
+      </div>
+      <div class="warnbox" id="pauseWarn" style="display:none">
+        <b>Auto-pause is on.</b> A reply-rate collapse will pause the campaign in PlusVibe for real. A false positive stops a paying client's sending, so leave this off until you have watched the alert fire correctly a few times. Resume is one click in PlusVibe.
+      </div>
+      <div id="saveStatus" class="sub" style="margin-top:.6rem"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const B = ['google','microsoft','other'];
+const LABEL = { google:'Google', microsoft:'Microsoft', other:'Other' };
+let STATE = null, SETTINGS = null, CFGS = {};
+
+const FIELDS = [
+  ['topUpBelowDays',    'Top up below (days)',   'A provider with less runway than this is queued for a top-up.'],
+  ['targetDays',        'Target runway (days)',  'Batch is sized to reach this many days of stock.'],
+  ['emergencyBelowDays','Emergency below (days)','This dry = top up immediately, ignoring the overnight window.'],
+  ['minBatch',          'Min batch',             'Never queue fewer contacts than this.'],
+  ['maxBatch',          'Max batch',             'Never queue more than this in one go.'],
+  ['windowStartHour',   'Window start (hour)',   'Routine top-ups only run inside this window, so verification stays off peak.'],
+  ['windowEndHour',     'Window end (hour)',     'May wrap midnight, e.g. 20 to 6.'],
+  ['recentDays',        'Recent window (days)',  'Used for send rate and current reply rate.'],
+  ['baselineDays',      'Baseline window (days)','Reply rate is compared against this longer window.'],
+  ['silenceSends',      'Silence threshold',     'Alert when this many sends produce zero replies.'],
+  ['collapsePct',       'Collapse drop (%)',     'Alert when the reply rate falls this far below baseline.'],
+  ['collapseMinSends',  'Collapse min sends',    'No collapse alert until the window has this much volume — stops low-volume noise.'],
+];
+
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = n => n == null ? '—' : Number(n).toLocaleString();
+const days = d => d == null ? '<span class="muted">no data</span>' : (d < 1 ? '<b>'+d.toFixed(1)+'d</b>' : d.toFixed(1)+'d');
+
+function runwayPill(d) {
+  if (d == null) return '<span class="pill pill-off">no data</span>';
+  if (d < 1)  return '<span class="pill pill-crit">'+d.toFixed(1)+'d</span>';
+  if (d < 3)  return '<span class="pill pill-warn">'+d.toFixed(1)+'d</span>';
+  return '<span class="pill pill-ok">'+d.toFixed(1)+'d</span>';
+}
+
+async function loadSettings() {
+  const r = await fetch('/api/autopilot/settings').then(r => r.json());
+  SETTINGS = r.settings;
+  document.getElementById('sgrid').innerHTML = FIELDS.map(([k,l,h]) =>
+    `<div class="fld"><label>${esc(l)}</label>
+       <input type="number" id="f_${k}" value="${esc(SETTINGS[k])}" step="any" min="0">
+       <div class="hint">${esc(h)}</div></div>`).join('');
+  document.getElementById('tg_enabled').checked   = !!SETTINGS.enabled;
+  document.getElementById('tg_autoPause').checked = !!SETTINGS.autoPause;
+  togglePauseWarn();
+  document.getElementById('tg_autoPause').onchange = togglePauseWarn;
+}
+function togglePauseWarn() {
+  document.getElementById('pauseWarn').style.display =
+    document.getElementById('tg_autoPause').checked ? 'block' : 'none';
+}
+
+async function saveSettings() {
+  const body = { enabled: document.getElementById('tg_enabled').checked,
+                 autoPause: document.getElementById('tg_autoPause').checked };
+  for (const [k] of FIELDS) body[k] = parseFloat(document.getElementById('f_'+k).value);
+  const el = document.getElementById('saveStatus');
+  el.textContent = 'Saving…';
+  try {
+    const r = await fetch('/api/autopilot/settings', { method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }).then(r=>r.json());
+    if (r.error) throw new Error(r.error);
+    SETTINGS = r.settings;
+    el.textContent = 'Saved ' + new Date().toLocaleTimeString();
+    loadState();
+  } catch (e) { el.textContent = 'Failed: ' + e.message; }
+}
+
+async function loadState() {
+  document.getElementById('refreshBtn').disabled = true;
+  document.getElementById('tableWrap').innerHTML = '<div class="loading">Reading PlusVibe — one pass per campaign…</div>';
+  try {
+    const r = await fetch('/api/autopilot/state').then(r => r.json());
+    if (r.error) throw new Error(r.error);
+    STATE = r; SETTINGS = r.settings;
+    CFGS = await fetch('/api/autopilot/campaigns').then(r=>r.json()).then(x=>x.campaigns||{});
+    render();
+  } catch (e) {
+    document.getElementById('tableWrap').innerHTML = `<div class="empty">Failed to load: ${esc(e.message)}</div>`;
+  } finally { document.getElementById('refreshBtn').disabled = false; }
+}
+
+function render() {
+  const cs = STATE.campaigns || [];
+  const crit = cs.filter(c => c.runwayDays != null && c.runwayDays < (SETTINGS.topUpBelowDays||2)).length;
+  const alerted = cs.filter(c => (c.alerts||[]).length).length;
+  document.getElementById('sumEnrolled').textContent = cs.length;
+  document.getElementById('sumCrit').textContent     = crit;
+  document.getElementById('sumAlerts').textContent   = alerted;
+  const w = document.getElementById('sumWindow');
+  w.textContent = STATE.windowOpen ? 'OPEN' : 'CLOSED';
+  w.style.color = STATE.windowOpen ? 'var(--green)' : 'var(--muted)';
+  const m = document.getElementById('sumMaster');
+  m.textContent = SETTINGS.enabled ? 'ON' : 'OFF';
+  m.style.color = SETTINGS.enabled ? 'var(--green)' : 'var(--red)';
+  document.getElementById('summary').style.display = 'flex';
+
+  document.getElementById('alerts').innerHTML = cs.flatMap(c =>
+    (c.alerts||[]).map(a => `<div class="alertbox"><b>${esc(c.campaign_name)}</b> — ${esc(a.message)}</div>`)
+  ).join('');
+
+  if (!cs.length) {
+    document.getElementById('tableWrap').innerHTML =
+      '<div class="empty">No campaigns enrolled yet. Use <b>+ Add campaign</b> to start.</div>';
+    document.getElementById('note').textContent = '';
+    return;
+  }
+
+  const head = `<tr>
+    <th>Campaign</th><th>Client</th><th>On</th>
+    ${B.map(b=>`<th class="grp">${LABEL[b]} left</th><th>/day</th><th>runway</th><th>floor</th>`).join('')}
+    <th class="grp">Worst</th><th>Dry by</th><th>Sent ${SETTINGS.recentDays}d</th><th>Reply%</th><th>Audience</th><th>Status</th></tr>`;
+
+  const rows = cs.map(c => {
+    if (c.error) return `<tr><td>${esc(c.campaign_name)}</td><td colspan="18" class="muted">Error: ${esc(c.error)}</td></tr>`;
+    const cells = B.map(b => {
+      const p = c.providers[b] || {};
+      const low = p.belowFloor || (p.runwayDays != null && p.runwayDays < (SETTINGS.topUpBelowDays||2));
+      return `<td class="grp" style="${low?'color:var(--red)':''}">${fmt(p.remaining)}</td>
+              <td class="muted">${p.perDay ?? '—'}</td>
+              <td>${runwayPill(p.runwayDays)}</td>
+              <td><input class="floor-in" type="number" min="0" value="${p.floor||0}"
+                    onchange="setFloor('${c.campaign_id}','${b}',this.value)"></td>`;
+    }).join('');
+    const rr = c.replyRate == null ? '—' : (c.replyRate*100).toFixed(2)+'%';
+    const status = !c.filter ? '<span class="pill pill-crit">needs filter</span>'
+      : !c.enabled ? '<span class="pill pill-off">paused</span>'
+      : (c.alerts||[]).length ? '<span class="pill pill-crit">alert</span>'
+      : (c.runwayDays != null && c.runwayDays < (SETTINGS.topUpBelowDays||2)) ? '<span class="pill pill-warn">topping up</span>'
+      : '<span class="pill pill-ok">ok</span>';
+    return `<tr>
+      <td><b>${esc(c.campaign_name)}</b>${c.truncated?' <span class="muted" title="Lead list hit the paging cap; counts are a floor, not exact">(capped)</span>':''}</td>
+      <td class="muted">${esc(c.workspace_name)}</td>
+      <td><input type="checkbox" ${c.enabled?'checked':''} onchange="setEnabled('${c.campaign_id}',this.checked)"></td>
+      ${cells}
+      <td class="grp">${c.worstProvider?LABEL[c.worstProvider]:'—'}</td>
+      <td>${c.dryDate?esc(c.dryDate):'<span class="muted">—</span>'}</td>
+      <td class="muted">${fmt(c.sent)}</td><td class="muted">${rr}</td>
+      <td style="text-align:left;max-width:280px;overflow:hidden;text-overflow:ellipsis">${filterSummary(c.filter)}</td>
+      <td>${status}</td></tr>`;
+  }).join('');
+
+  document.getElementById('tableWrap').innerHTML = `<table><thead>${head}</thead><tbody>${rows}</tbody></table>`;
+  const lr = STATE.lastRun && STATE.lastRun.at ? new Date(STATE.lastRun.at).toLocaleString() : 'never';
+  document.getElementById('note').innerHTML =
+    `Counts are measured from PlusVibe's own per-lead <code>mx</code> value, not estimated from a ratio. Send rate is real sends per provider over the last ${SETTINGS.recentDays} days. `
+    + `Top-ups run between <b>${SETTINGS.windowStartHour}:00</b> and <b>${SETTINGS.windowEndHour}:00</b>, except emergencies under ${SETTINGS.emergencyBelowDays}d. `
+    + `A top-up only queues contacts that exist — if a provider has no supply it reports <b>starved</b> instead. `
+    + `<b>Audience</b> is the Contacts filter captured when you enrolled; autopilot never picks its own — re-capture on Contacts to change it. Last run: <b>${esc(lr)}</b>.`;
+}
+
+async function setFloor(cid, bucket, val) {
+  const cfg = CFGS[cid] || {};
+  const floors = Object.assign({ google:0, microsoft:0, other:0 }, cfg.floors || {});
+  floors[bucket] = Math.max(0, parseInt(val, 10) || 0);
+  await postCfg({ campaign_id: cid, workspace_id: cfg.workspace_id, enabled: cfg.enabled, floors });
+}
+async function setEnabled(cid, on) {
+  const cfg = CFGS[cid] || {};
+  const ok = await postCfg({ campaign_id: cid, workspace_id: cfg.workspace_id, enabled: on, floors: cfg.floors });
+  loadState();   // reload either way so a refused toggle snaps back visually
+  return ok;
+}
+async function postCfg(body) {
+  const r = await fetch('/api/autopilot/campaigns', { method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }).then(r=>r.json());
+  if (r.error) { alert(r.error); return false; }
+  CFGS = r.campaigns || CFGS;
+  return true;
+}
+
+// Enrolment happens on Contacts, not here — the audience IS the filter you set
+// there, so a second filter editor on this page would only be a way for the two
+// to disagree.
+function openAdd() {
+  alert('Add a campaign from the Contacts page:\n\n'
+      + '1. Set the filters that define this campaign\'s audience\n'
+      + '2. Pick the client in "Filter for Client"\n'
+      + '3. Click "Auto-push to campaign"\n\n'
+      + 'It enrols switched OFF. Come back here to set floors and arm it.');
+  window.open('/contacts.html', '_blank');
+}
+
+function filterSummary(f) {
+  if (!f) return '<span class="pill pill-crit">no filter</span>';
+  const parts = [];
+  const add = (label, v) => {
+    if (v == null || v === '' || (Array.isArray(v) && !v.length)) return;
+    const s = Array.isArray(v) ? v.join(', ') : String(v);
+    parts.push(`${label}: ${s.length > 34 ? s.slice(0, 34) + '…' : s}`);
+  };
+  add('industry', f.industry); add('keywords', f.keywords);
+  add('seniority', f.seniority); add('title', f.jobTitle);
+  add('country', f.companyCountry || f.country); add('region', f.companyRegion);
+  add('county', f.companyCounty); add('SIC', f.sicCodes);
+  const named = ['industry','keywords','seniority','jobTitle','companyCountry','country',
+                 'companyRegion','companyCounty','sicCodes'];
+  const extra = Object.keys(f).filter(k => !named.includes(k)
+    && f[k] !== '' && f[k] != null && !(Array.isArray(f[k]) && !f[k].length)).length;
+  if (!parts.length && !extra) return '<span class="pill pill-warn">whole database</span>';
+  if (extra) parts.push(`+${extra} more`);
+  return `<span class="muted" title="${esc(JSON.stringify(f, null, 1))}">${esc(parts.join(' · '))}</span>`;
+}
+
+async function run(dry) {
+  const el = document.getElementById('runStatus');
+  document.getElementById('runBtn').disabled = true;
+  document.getElementById('dryBtn').disabled = true;
+  el.textContent = dry ? 'Dry run…' : 'Running…';
+  try {
+    const r = await fetch('/api/autopilot/run' + (dry?'?dry=1':''), { method:'POST' }).then(r=>r.json());
+    if (r.error) throw new Error(r.error);
+    const acts = (r.campaigns||[]).flatMap(c => (c.actions||[]).map(a => `${c.campaign_name}: ${a.type}${a.provider?' '+LABEL[a.provider]:''}${a.want?' ('+a.want+')':''}${a.reason?' — '+a.reason:''}${a.error?' — '+a.error:''}`));
+    el.textContent = (r.skipped ? 'Skipped: ' + r.skipped : (acts.length ? acts.join(' · ') : 'Nothing to do')) ;
+    if (!dry) loadState();
+  } catch (e) { el.textContent = 'Failed: ' + e.message; }
+  finally { document.getElementById('runBtn').disabled = false; document.getElementById('dryBtn').disabled = false; }
+}
+
+(async function init(){ await loadSettings(); await loadState(); })();
+</script>
+</body>
+</html>
