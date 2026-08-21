@@ -5000,14 +5000,26 @@
             workspace_id: wsId,
             workspace_name: wsName || wsId,
             campaign_name: camp.name || camp.camp_name,
-            enabled: false,                   // enrol paused; you arm it on the Autopilot page
+            enabled: true,                    // sending it here means you want it on
             filter,
             floors: { google: 200, microsoft: 200, other: 100 },
           }),
         }).then(r => r.json());
         if (r.error) throw new Error(r.error);
-        showMessage(`Captured ${nFilters} filter${nFilters === 1 ? '' : 's'} for "${camp.name || camp.camp_name}". Enrolled but OFF — set floors and switch it on in Autopilot.`, 'success');
-        if (confirm('Open the Autopilot page now?')) window.open('/autopilot.html', '_blank');
+        // The master switch gates everything, so say plainly whether this will
+        // actually run — "enrolled and armed" is misleading if it cannot fire.
+        let master = false;
+        try {
+          master = await fetch('/api/autopilot/settings')
+            .then(x => x.json()).then(x => !!(x.settings && x.settings.enabled));
+        } catch (_) {}
+        showMessage(
+          `Captured ${nFilters} filter${nFilters === 1 ? '' : 's'} for "${camp.name || camp.camp_name}" and switched it ON. `
+          + (master ? 'Autopilot will top it up automatically.'
+                    : 'NOTE: the Autopilot master switch is still off, so nothing runs yet — turn it on in Autopilot › Settings.'),
+          master ? 'success' : 'error');
+        if (!master && confirm('Open Autopilot now to turn the master switch on?')) window.open('/autopilot.html', '_blank');
+        else if (master && confirm('Open the Autopilot page to check floors?')) window.open('/autopilot.html', '_blank');
       } catch (e) {
         showMessage('Could not enrol: ' + e.message, 'error');
       }

@@ -230,6 +230,21 @@ async function loadState(force) {
   }
 }
 
+// One-click fix for the banner above: flips ONLY the master switch, leaving
+// auto-pause and every threshold exactly as they are.
+async function enableMaster() {
+  try {
+    const r = await fetch('/api/autopilot/settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    }).then(r => r.json());
+    if (r.error) throw new Error(r.error);
+    SETTINGS = r.settings;
+    document.getElementById('tg_enabled').checked = true;
+    render();
+  } catch (e) { alert('Could not turn autopilot on: ' + e.message); }
+}
+
 function setProgress(done, total) {
   const el = document.getElementById('loadProgress');
   if (!el) return;
@@ -253,7 +268,15 @@ function render() {
   m.style.color = SETTINGS.enabled ? 'var(--green)' : 'var(--red)';
   document.getElementById('summary').style.display = 'flex';
 
-  document.getElementById('alerts').innerHTML = cs.flatMap(c =>
+  // An armed campaign that cannot run is the most confusing state on this page:
+  // the row says ON, and nothing happens. Say so at the top, with a way to fix it.
+  const armedButBlocked = cs.filter(c => c.enabled).length;
+  const masterWarn = (!SETTINGS.enabled && armedButBlocked)
+    ? `<div class="alertbox" style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
+         <span><b>${armedButBlocked} campaign${armedButBlocked===1?' is':'s are'} switched on, but the Autopilot master switch is OFF</b> — nothing will be pushed.</span>
+         <button class="btn" style="padding:4px 10px;font-size:12px" onclick="enableMaster()">Turn autopilot on</button>
+       </div>` : '';
+  document.getElementById('alerts').innerHTML = masterWarn + cs.flatMap(c =>
     (c.alerts||[]).map(a => `<div class="alertbox"><b>${esc(c.campaign_name)}</b> — ${esc(a.message)}</div>`)
   ).join('');
 
@@ -285,11 +308,14 @@ function render() {
                     onchange="setFloor('${c.campaign_id}','${b}',this.value)"></td>`;
     }).join('');
     const rr = c.replyRate == null ? '—' : (c.replyRate*100).toFixed(2)+'%';
+    // "paused" read as "PlusVibe paused this campaign", which is alarming and
+    // wrong — this column only ever describes autopilot's own state.
     const status = !c.filter ? '<span class="pill pill-crit">needs filter</span>'
-      : !c.enabled ? '<span class="pill pill-off">paused</span>'
+      : !c.enabled ? '<span class="pill pill-off">not armed</span>'
+      : !SETTINGS.enabled ? '<span class="pill pill-warn" title="This campaign is armed, but the master switch at the bottom of Settings is off, so nothing runs.">armed · master off</span>'
       : (c.alerts||[]).length ? '<span class="pill pill-crit">alert</span>'
       : (c.runwayDays != null && c.runwayDays < (SETTINGS.topUpBelowDays||2)) ? '<span class="pill pill-warn">topping up</span>'
-      : '<span class="pill pill-ok">ok</span>';
+      : '<span class="pill pill-ok">running</span>';
     return `<tr>
       <td><b>${esc(c.campaign_name)}</b>${c.truncated?' <span class="muted" title="Lead list hit the paging cap; counts are a floor, not exact">(capped)</span>':''}</td>
       <td class="muted">${esc(c.workspace_name)}</td>
