@@ -16300,13 +16300,17 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
   const SAMPLE_CAP = Math.min(parseInt(body.sample || '5000', 10) || 5000, 20000);
 
   try {
-    // NB: searchContacts' first arg is the contacts-DB TENANT scope
-    // (req.workspaceId, e.g. 'ottaly-global') — NOT the PlusVibe workspace_id
-    // the guards target. Passing the PlusVibe id here matched zero rows and
-    // made the badge report "0 sendable of 0" on a 2,086-row filter.
+    // NB: searchContacts' first arg is the contacts-DB TENANT scope, NOT the
+    // PlusVibe workspace_id the guards target. Two separate mistakes lived
+    // here: passing the PlusVibe id (matched no rows), then reading
+    // req.workspaceId — which is set by setWorkspace middleware mounted on the
+    // CONTACTS ROUTER only, so it is undefined in this file. Resolve it the
+    // same way that middleware does, or the query scopes to undefined and the
+    // badge reports "unknown" on a filter that plainly has rows.
+    const tenantId = req.user?.workspace_id || req.headers['x-workspace-id'] || 'ottaly-global';
     const [contacts, total] = await Promise.all([
-      db.searchContacts(req.workspaceId, filters, SAMPLE_CAP, 0),
-      db.getContactsCount(req.workspaceId, filters),
+      db.searchContacts(tenantId, filters, SAMPLE_CAP, 0),
+      db.getContactsCount(tenantId, filters),
     ]);
 
     const skipped = {
