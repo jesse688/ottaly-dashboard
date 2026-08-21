@@ -2292,15 +2292,33 @@ class PostgresDatabase {
     });
 
     // Solar-qualification result (from the Solar page, persisted to solar_* columns).
+    // Each solar outcome as a standalone predicate so it can be required OR
+    // excluded. Exclusion is the useful half and was missing: "everything except
+    // the tenants and the roofs too small" is the natural way to widen a search
+    // without having to enumerate what you do want.
+    const SOLAR_PRED = {
+      prospect:      `solar_status = 'qualified'`,
+      roof_small:    `solar_stop_reason LIKE 'roof_too_small%'`,
+      tenant:        `solar_stop_reason = 'tenant'`,
+      already_solar: `solar_has_solar = 'yes'`,
+      checked:       `solar_checked_at IS NOT NULL`,
+      unchecked:     `solar_checked_at IS NULL`,
+    };
     safe('solarStatus', () => {
-      const v = filters.solarStatus;
-      if (!v) return;
-      if (v === 'prospect')          clauses.push(`solar_status = 'qualified'`);
-      else if (v === 'roof_small')   clauses.push(`solar_stop_reason LIKE 'roof_too_small%'`);
-      else if (v === 'tenant')       clauses.push(`solar_stop_reason = 'tenant'`);
-      else if (v === 'already_solar')clauses.push(`solar_has_solar = 'yes'`);
-      else if (v === 'checked')      clauses.push(`solar_checked_at IS NOT NULL`);
-      else if (v === 'unchecked')    clauses.push(`solar_checked_at IS NULL`);
+      const inc = String(filters.solarStatus || '').split(',').map(s => s.trim()).filter(Boolean);
+      const hits = inc.map(v => SOLAR_PRED[v]).filter(Boolean);
+      // Multiple includes OR together — "prospect or not yet checked" is one pool.
+      if (hits.length) clauses.push(`(${hits.join(' OR ')})`);
+    });
+    safe('solarStatusExclude', () => {
+      const exc = String(filters.solarStatusExclude || '').split(',').map(s => s.trim()).filter(Boolean);
+      for (const v of exc) {
+        const p = SOLAR_PRED[v];
+        // COALESCE first: a bare NOT(...) drops NULLs, and a contact never
+        // checked for solar has solar_stop_reason NULL — it must survive
+        // "exclude tenants" rather than being silently filtered out too.
+        if (p) clauses.push(`NOT COALESCE(${p}, false)`);
+      }
     });
     // Minimum solar system size (kWp) — e.g. only PPA-worthy 100kWp+ prospects.
     safe('solarMinKwp', () => {

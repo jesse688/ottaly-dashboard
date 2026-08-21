@@ -1316,15 +1316,25 @@
               <option value="checked">— Checked (any result)</option>
               <option value="unchecked">— Not yet checked</option>
             </select>
-            <select id="solarStatus" title="Solar qualification result from the Solar page (saved per contact).">
-              <option value="">☀️ Solar — all</option>
-              <option value="prospect">🎯 Solar prospect (qualified)</option>
-              <option value="roof_small">Roof too small</option>
-              <option value="tenant">Tenant (stopped)</option>
-              <option value="already_solar">Already has solar</option>
-              <option value="checked">— Checked (any result)</option>
-              <option value="unchecked">— Not yet checked</option>
-            </select>
+            <!-- Hidden inputs carry the comma-joined values; the grid drives them.
+                 Kept as #solarStatus so every existing path (URL hash, saved
+                 views, clearFilters, getFilterValues) works unchanged. -->
+            <input type="hidden" id="solarStatus"><input type="hidden" id="solarStatusExclude">
+            <details style="border:1px solid var(--line,#333);border-radius:6px;">
+              <summary id="solarSummary" style="cursor:pointer;font-size:12px;padding:4px 8px;">☀️ Solar — all</summary>
+              <div style="padding:6px 8px;border-top:1px solid var(--line,#333);">
+                <div style="display:grid;grid-template-columns:auto 26px 26px;gap:3px 8px;font-size:11px;align-items:center;">
+                  <span></span><span style="text-align:center;opacity:.7" title="Include">✅</span><span style="text-align:center;opacity:.7" title="Exclude">🚫</span>
+                  <span>🎯 Prospect (qualified)</span><input type="checkbox" class="solInc" value="prospect"><input type="checkbox" class="solExc" value="prospect">
+                  <span>Roof too small</span><input type="checkbox" class="solInc" value="roof_small"><input type="checkbox" class="solExc" value="roof_small">
+                  <span>Tenant (stopped)</span><input type="checkbox" class="solInc" value="tenant"><input type="checkbox" class="solExc" value="tenant">
+                  <span>Already has solar</span><input type="checkbox" class="solInc" value="already_solar"><input type="checkbox" class="solExc" value="already_solar">
+                  <span>— Checked (any result)</span><input type="checkbox" class="solInc" value="checked"><input type="checkbox" class="solExc" value="checked">
+                  <span>— Not yet checked</span><input type="checkbox" class="solInc" value="unchecked"><input type="checkbox" class="solExc" value="unchecked">
+                </div>
+                <div style="font-size:10px;opacity:.6;margin-top:5px;line-height:1.4">Includes OR together. Excludes always win.<br>Tick nothing = all.</div>
+              </div>
+            </details>
             <label style="display:flex;align-items:center;gap:5px;font-size:12px;" title="Only contacts whose estimated solar system is at least this many kWp.">
               ☀️ Min kWp <input type="number" id="solarMinKwp" min="0" step="10" placeholder="e.g. 100" style="width:70px;background:var(--card,#1a1a1a);color:inherit;border:1px solid var(--line,#333);border-radius:6px;padding:3px 6px;">
             </label>
@@ -2987,6 +2997,7 @@
         hasName: get('hasName'),
         hasCompany: get('hasCompany'),
         solarStatus: get('solarStatus'),
+        solarStatusExclude: get('solarStatusExclude'),
         solarMinKwp: get('solarMinKwp'),
         updatedAge: get('updatedAge'),
         worksRemote: document.getElementById('filterRemote')?.checked ? 'true' : '',
@@ -3538,7 +3549,7 @@
         def.selected.forEach(v => params.append(key, v));
         def.excluded.forEach(v => params.append(key + '!', v));
       });
-      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding','hasName','hasCompany','solarStatus','solarMinKwp','updatedAge',
+      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding','hasName','hasCompany','solarStatus','solarStatusExclude','solarMinKwp','updatedAge',
        'companyAgeBand','chVerified'].forEach(id => {
         const el = document.getElementById(id);
         if (el && el.value) params.append(id, el.value);
@@ -3647,7 +3658,7 @@
       // Reset everything, install the saved hash, then re-run the standard
       // restoration path so behaviour matches a bookmarked-URL reload.
       Object.keys(filterDefs).forEach(k => { filterDefs[k].selected = []; filterDefs[k].excluded = []; });
-      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding','hasName','hasCompany','solarStatus','solarMinKwp','updatedAge',
+      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding','hasName','hasCompany','solarStatus','solarStatusExclude','solarMinKwp','updatedAge',
        'companyAgeBand','chVerified'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
       ['emailGoogle','emailOutlook','emailOther','emailUnknown','filterRemote','filterExcludeRemote','filterExcludeDNC','filterNotExported','filterExportedOnly','filterSentToPV','filterNotSentToPV','filterSentToPV','filterNotSentToPV'].forEach(id => { const el = document.getElementById(id); if (el) el.checked = false; });
       if (typeof applyFilterDefaults === 'function') applyFilterDefaults();
@@ -3679,7 +3690,7 @@
         if (inc.length) { filterDefs[key].selected = inc; any = true; }
         if (exc.length) { filterDefs[key].excluded = exc; any = true; }
       });
-      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding','hasName','hasCompany','solarStatus','solarMinKwp','updatedAge',
+      ['globalSearch','company','status','ownsBuilding','ccodOwnsBuilding','hasName','hasCompany','solarStatus','solarStatusExclude','solarMinKwp','updatedAge',
        'companyAgeBand','chVerified'].forEach(id => {
         const v = params.get(id);
         const el = document.getElementById(id);
@@ -3838,6 +3849,46 @@
       applyFilterDefaults();
     }
     // Apply the configured defaults to the live filter controls.
+
+    // ── Solar include/exclude grid ────────────────────────────────────────
+    // The grid is the UI; #solarStatus / #solarStatusExclude are the values
+    // everything else already reads. syncSolarFromBoxes writes boxes -> inputs,
+    // syncSolarToBoxes writes inputs -> boxes (URL hash, saved views, Clear).
+    function _solLabel(v){ return ({prospect:'Prospect',roof_small:'Roof too small',
+      tenant:'Tenant',already_solar:'Has solar',checked:'Checked',unchecked:'Unchecked'})[v]||v; }
+    function syncSolarFromBoxes(){
+      const inc=[...document.querySelectorAll('.solInc:checked')].map(c=>c.value);
+      const exc=[...document.querySelectorAll('.solExc:checked')].map(c=>c.value);
+      const si=document.getElementById('solarStatus'), se=document.getElementById('solarStatusExclude');
+      if(si) si.value=inc.join(','); if(se) se.value=exc.join(',');
+      const sum=document.getElementById('solarSummary');
+      if(sum){
+        const parts=[];
+        if(inc.length) parts.push('✅ '+inc.map(_solLabel).join(', '));
+        if(exc.length) parts.push('🚫 '+exc.map(_solLabel).join(', '));
+        sum.textContent = parts.length ? '☀️ '+parts.join('  ') : '☀️ Solar — all';
+      }
+    }
+    function syncSolarToBoxes(){
+      const inc=new Set((document.getElementById('solarStatus')?.value||'').split(',').filter(Boolean));
+      const exc=new Set((document.getElementById('solarStatusExclude')?.value||'').split(',').filter(Boolean));
+      document.querySelectorAll('.solInc').forEach(c=>{c.checked=inc.has(c.value)});
+      document.querySelectorAll('.solExc').forEach(c=>{c.checked=exc.has(c.value)});
+      syncSolarFromBoxes();
+    }
+    document.addEventListener('change',e=>{
+      if(!e.target.classList) return;
+      if(e.target.classList.contains('solInc')||e.target.classList.contains('solExc')){
+        // Include and exclude of the same value cancel out — untick the other side.
+        const other = e.target.classList.contains('solInc') ? '.solExc' : '.solInc';
+        if(e.target.checked){
+          const t=document.querySelector(other+'[value="'+e.target.value+'"]');
+          if(t) t.checked=false;
+        }
+        syncSolarFromBoxes();
+      }
+    });
+
     function applyFilterDefaults() {
       // Default-exclude the configured bad gateways (Exclude mode).
       const excludeRadio = document.querySelector('input[name="gwMode"][value="exclude"]');
@@ -3853,6 +3904,7 @@
       if (hn) hn.value = 'first_only';
       const hc = document.getElementById('hasCompany');
       if (hc) hc.value = 'yes';
+      if (typeof syncSolarToBoxes === 'function') syncSolarToBoxes();
     }
     // Settings modal: edit which exclusions are applied by default (admin-wide).
     const _ALL_GATEWAYS = ['Mimecast','Barracuda','Proofpoint','Cisco Ironport','Sophos','Trend Micro','FortiMail','Forcepoint/Mailcontrol','Microsoft 365','Google Workspace','NO MX / unresolved'];
