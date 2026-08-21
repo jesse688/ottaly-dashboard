@@ -36,35 +36,47 @@ const PV_COOLDOWN_MS = 5000
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-let pvActive = 0
-let pvLastStart = 0
-// Timestamp until which ALL PV traffic holds off, set when any call sees a 429.
-let pvPausedUntil = 0
-const pvQueue: Array<() => void> = []
+// The gate's state lives on globalThis for the same reason the start flag does:
+// Next instantiates this module once per entry bundle, so module-level state
+// would give each copy its OWN limiter. Two limiters = double the request rate
+// PV actually sees, which is how a "1 concurrent, 400ms apart" gate still
+// produced constant 429s. One shared object means one real gate per process.
+interface PvGateState {
+  active: number
+  lastStart: number
+  pausedUntil: number
+  queue: Array<() => void>
+}
+const pvState: PvGateState = ((globalThis as Record<string, unknown>).__ottalyPvGate ??= {
+  active: 0,
+  lastStart: 0,
+  pausedUntil: 0,
+  queue: [],
+}) as PvGateState
 
 export function pvBackoffSignal(ms: number): void {
-  pvPausedUntil = Math.max(pvPausedUntil, Date.now() + ms)
+  pvState.pausedUntil = Math.max(pvState.pausedUntil, Date.now() + ms)
 }
 
 async function pvGate<T>(fn: () => Promise<T>): Promise<T> {
-  if (pvActive >= PV_CONCURRENCY) {
-    await new Promise<void>((resolve) => pvQueue.push(resolve))
+  if (pvState.active >= PV_CONCURRENCY) {
+    await new Promise<void>((resolve) => pvState.queue.push(resolve))
   }
-  pvActive++
+  pvState.active++
   try {
     // Respect a process-wide cooldown first, then the per-request spacing.
     for (;;) {
-      const waitFor = pvPausedUntil - Date.now()
+      const waitFor = pvState.pausedUntil - Date.now()
       if (waitFor <= 0) break
       await sleep(Math.min(waitFor, 10_000))
     }
-    const since = Date.now() - pvLastStart
+    const since = Date.now() - pvState.lastStart
     if (since < PV_MIN_GAP_MS) await sleep(PV_MIN_GAP_MS - since)
-    pvLastStart = Date.now()
+    pvState.lastStart = Date.now()
     return await fn()
   } finally {
-    pvActive--
-    pvQueue.shift()?.()
+    pvState.active--
+    pvState.queue.shift()?.()
   }
 }
 
@@ -622,11 +634,30 @@ export async function warmPerformanceCache(): Promise<void> {
   }
 }
 
-let isInitialized = false
-
+// Guard on globalThis, NOT a module-level variable.
+//
+// Next bundles the instrumentation entry and the API-route entry separately, so
+// this module gets instantiated TWICE in one process -- each copy with its own
+// module scope and therefore its own `isInitialized`. Both passed the old guard
+// and started their own timers, which the logs showed plainly:
+//   [cache-warming] interval started (perf 2 min, combo 2 min, new-lead 12 h)
+//   [cache-warming] interval started (perf 2 min, combo 2 min, new-lead 12 h)
+// with every subsequent line duplicated.
+//
+// That is what stalled the warm. Each copy has its OWN in-process PV rate
+// limiter (pvGate) and cannot see the other, so together they blow PlusVibe's
+// limit, both get 429'd, and spend most of the pass in backoff --
+// "PlusVibe 429, retry 5/6 in 30135ms" all over the logs. Across replicas it
+// multiplies again. globalThis is shared by every bundle in the process, so
+// only one set of timers can ever start.
+const WARM_FLAG = '__ottalyCacheWarmStarted'
 export async function startCacheWarmingInterval(): Promise<void> {
-  if (isInitialized) return
-  isInitialized = true
+  const g = globalThis as Record<string, unknown>
+  if (g[WARM_FLAG]) {
+    console.log('[cache-warming] interval already started in this process, skipping duplicate')
+    return
+  }
+  g[WARM_FLAG] = true
 
   // Warm immediately on startup (after a short delay to let DB connect)
   setTimeout(() => {
