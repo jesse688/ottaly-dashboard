@@ -325,6 +325,51 @@ async function pvWorkspaceLeads(wsId, opts = {}) {
 // normalises a single lead in place so one bad row can't poison a 100-lead
 // batch. Returns { lead, changed, reason } — `changed` flags an email rewrite
 // so the caller can stamp the DB; the cleaned address should be re-verified.
+// Add leads to a PlusVibe campaign and report how many ACTUALLY landed.
+//
+// Every call site used to do `await pvApi('/lead/add', …); pushed += batch.length`,
+// which counts what we SENT, not what PlusVibe accepted. Measured against the
+// live API on 2026-08-21:
+//
+//   new email       -> { total_sent: 1, leads_uploaded: 1 }
+//   already present -> { total_sent: 1, leads_uploaded: 0, duplicate_email_count: 0 }
+//
+// So a duplicate is dropped silently and even duplicate_email_count stays 0 —
+// `leads_uploaded` is the only field that tells the truth. That is why a
+// campaign sat at 84 leads while the UI happily reported "pushed 121" three
+// runs in a row: the contacts were already there.
+//
+// Returns { uploaded, sent, duplicates, alreadyInCampaign, invalid, skipped, raw }.
+async function pvAddLeads(wsId, campaignId, leads, opts = {}) {
+  if (!leads || !leads.length) {
+    return { uploaded: 0, sent: 0, duplicates: 0, alreadyInCampaign: 0, invalid: 0, skipped: 0, raw: null };
+  }
+  const body = {
+    workspace_id: wsId,
+    campaign_id: campaignId,
+    leads,
+    // Let PlusVibe drop leads it already holds instead of us paying to verify
+    // and send them first. Callers that genuinely want a re-add can opt out.
+    ...(opts.skipIfInWorkspace === false ? {} : { skip_if_in_workspace: true }),
+    ...(opts.overwrite ? { is_overwrite: true } : {}),
+  };
+  const r = await pvApi('/lead/add', { method: 'POST', wsId, body });
+  const n = (v) => Number(v || 0);
+  // leads_uploaded is authoritative. Fall back to total_sent only when the
+  // field is absent entirely (older/other responses), never when it is 0 —
+  // a real 0 is exactly the case we need to surface.
+  const uploaded = r && r.leads_uploaded != null ? n(r.leads_uploaded) : leads.length;
+  return {
+    uploaded,
+    sent: r && r.total_sent != null ? n(r.total_sent) : leads.length,
+    duplicates: n(r && r.duplicate_email_count),
+    alreadyInCampaign: n(r && r.already_in_campaign),
+    invalid: n(r && r.invalid_email_count),
+    skipped: n(r && r.skipped),
+    raw: r || null,
+  };
+}
+
 const PV_EMAIL_LOCAL_OK = /^[a-z0-9._%+\-]+$/i;
 function sanitizePvLead(lead) {
   const out = { ...lead };
@@ -16332,6 +16377,7 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
     const cooloffDate = sameClientCooloffDate();
     const today = new Date().toISOString().slice(0, 10);
     const targetCampLc = campaignName.toLowerCase();
+    const targetCampId = String(body.campaign_id || '').trim();
     const departed = await getDepartedEmails(db);
 
     const sendableIds = [];
@@ -16357,8 +16403,13 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
         pushed = Array.isArray(c.pushed_campaigns) ? c.pushed_campaigns
                : JSON.parse(c.pushed_campaigns || '[]');
       } catch { pushed = []; }
+      // Match on campaign_id FIRST: the id is stable, the name is not (a
+      // renamed campaign, or a caller that passes no name, silently defeated
+      // the name-only check and re-offered contacts PlusVibe already holds —
+      // which it then drops as duplicates without saying so).
       if (workspaceId && pushed.some(pc => pc.workspace_id === workspaceId
-          && (targetCampLc && String(pc.campaign_name || '').toLowerCase() === targetCampLc))) {
+          && ((targetCampId && pc.campaign_id === targetCampId)
+           || (targetCampLc && String(pc.campaign_name || '').toLowerCase() === targetCampLc)))) {
         skipped.alreadyInCampaign++; continue;
       }
       if (targetCampLc && c.last_campaign_name
@@ -16582,6 +16633,7 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
 
     const BATCH = 100;
     let pushed = 0;
+    let pvDuplicates = 0;   // sent to PV but already there — reported, not hidden
     for (let i = 0; i < leads.length; i += BATCH) {
       const batch = leads.slice(i, i + BATCH);
       // PlusVibe: top-level native fields (no custom_variables for industry/city/etc.)
@@ -16612,13 +16664,16 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
           return s.lead;
         });
       if (!pvLeadPayload.length) { continue; }
-      // PlusVibe batch add + campaign assignment in one call.
+      // PlusVibe batch add + campaign assignment in one call. Count what PV
+      // ACCEPTED, not what we sent — duplicates are dropped silently.
       try {
-        await pvApi('/lead/add', { method: 'POST', wsId: workspace_id, body: { workspace_id, campaign_id, leads: pvLeadPayload } });
-        pushed += pvLeadPayload.length;
+        const r = await pvAddLeads(workspace_id, campaign_id, pvLeadPayload);
+        pushed += r.uploaded;
+        pvDuplicates += (r.sent || pvLeadPayload.length) - r.uploaded;
       } catch (e) { console.warn('[pv-push] lead add failed:', e.message); }
     }
 
+    if (pvDuplicates > 0) skipped.alreadyInPlusVibe = pvDuplicates;
     res.json({ success: true, pushed, total: leads.length, skipped });
   } catch (err) {
     console.error('[PV Push]', err.message);
@@ -17155,8 +17210,8 @@ app.post('/api/bison/push-contacts', requireSession, async (req, res) => {
       const leads = slice.map(contactToBisonLead).filter(l => l.first_name && l.last_name);
       if (!leads.length) continue;
       try {
-        await pvApi('/lead/add', { method: 'POST', wsId: ws_id, body: { workspace_id: ws_id, campaign_id, leads } });
-        pushed += leads.length;
+        const addRes = await pvAddLeads(ws_id, campaign_id, leads);
+        pushed += addRes.uploaded;
       } catch (e) { console.warn('[pv-push] lead add failed:', e.message); }
     }
 
@@ -18210,6 +18265,9 @@ async function apSelectContacts(bucket, want, cfg, state) {
       workspace_id: state.workspace_id,
       workspace_name: state.workspace_name,
       campaign_name: state.campaign_name,
+      // The id is what the push stamp records, and it survives a rename —
+      // without it we keep re-offering contacts PlusVibe already holds.
+      campaign_id: state.campaign_id,
       return_ids: true,
       // Sample only as many as we intend to push; the guards run per row, so
       // asking for 20k to use 200 is pure cost.
@@ -20559,8 +20617,16 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
               return s.lead;
             });
           if (!pvLeadPayload.length) { continue; }
+          let lastAddUploaded = 0;
           try {
-            await pvApi('/lead/add', { method: 'POST', wsId: workspace_id, body: { workspace_id, campaign_id, leads: pvLeadPayload } });
+            const addRes = await pvAddLeads(workspace_id, campaign_id, pvLeadPayload);
+            // PlusVibe drops duplicates silently, so a slice can succeed and
+            // add nothing. Track what actually landed so the number the user
+            // sees is leads in the campaign, not leads we handed over.
+            lastAddUploaded  = addRes.uploaded;
+            job.pvUploaded   = (job.pvUploaded   || 0) + addRes.uploaded;
+            job.pvDuplicates = (job.pvDuplicates || 0) +
+              Math.max(0, (addRes.sent || pvLeadPayload.length) - addRes.uploaded);
           } catch (e) {
             // One bad lead must not abort the whole job — log this slice and
             // continue to the next batch instead of throwing out of pushLeads.
@@ -20590,9 +20656,11 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
               console.warn('[push] cleanedNames backfill failed:', err.message));
           }
 
-          // Count what was ACTUALLY sent to PV (post name-filter), not the raw
-          // slice size — otherwise job.pushed overstated when leads were filtered.
-          job.pushed += pvLeadPayload.length;
+          // Count what PlusVibe ACCEPTED, not what we handed it. A duplicate is
+          // dropped silently (leads_uploaded 0 with every other counter also 0),
+          // so counting the payload made the UI report "pushed 121" while the
+          // campaign gained 2. addRes is set in the try above.
+          job.pushed += lastAddUploaded;
           job.progress = Math.min(99, job.progress + 1);
         }
       };
@@ -21071,9 +21139,14 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
               return s.lead;
             });
           if (!pvPayload.length) { continue; }
-          // Batch add + campaign assignment in one call.
+          let lastAddUploaded = 0;
+          // Batch add + campaign assignment in one call. Count accepted, not sent.
           try {
-            await pvApi('/lead/add', { method: 'POST', wsId: workspace_id, body: { workspace_id, campaign_id, leads: pvPayload } });
+            const addRes = await pvAddLeads(workspace_id, campaign_id, pvPayload);
+            lastAddUploaded  = addRes.uploaded;
+            job.pvUploaded   = (job.pvUploaded   || 0) + addRes.uploaded;
+            job.pvDuplicates = (job.pvDuplicates || 0) +
+              Math.max(0, (addRes.sent || pvPayload.length) - addRes.uploaded);
           } catch (e) { console.warn('[pv-push] lead add failed:', e.message); }
           try {
             const ids = slice.map(c => c.id).filter(Boolean);
@@ -21085,7 +21158,7 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
             const toFlush = cleaningBackfills.splice(0, cleaningBackfills.length);
             db.bulkUpdateCleanedNames(toFlush).catch(err => console.warn('[push] cleanedNames backfill failed:', err.message));
           }
-          job.pushed += pvPayload.length; // actual sent count (post name-filter)
+          job.pushed += lastAddUploaded;  // what PV accepted, not what we sent
           job.progress = Math.min(99, job.progress + 1);
         }
       };
@@ -23222,8 +23295,8 @@ function scheduleAudienceScoring(pgdb) {
         return s.lead;
       });
       try {
-        await pvApi('/lead/add', { method: 'POST', wsId: workspace_id, body: { workspace_id, campaign_id, leads: slice } });
-        pushed += slice.length;
+        const addRes = await pvAddLeads(workspace_id, campaign_id, slice);
+        pushed += addRes.uploaded;
       } catch (e) {
         console.warn('[ch-push] create leads failed:', e.message);
       }
