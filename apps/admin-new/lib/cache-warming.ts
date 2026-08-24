@@ -248,12 +248,30 @@ async function ensurePerfCacheDaily(wsIds: string[], dates: string[]): Promise<v
     return
   }
 
-  console.log(`[cache-warming] fetching ${needsFetch.length} workspace-date pairs`)
+  // BUDGET. Every PV call is serialised by pvGate (1 at a time, 400ms floor),
+  // so an unbounded pass is not "8 concurrent" — it is N × ~400ms+ in a queue.
+  // Phase 2 asked for a whole month (~19 ws × 24 days ≈ 456 pairs) every 2
+  // minutes; the pass could never finish before the next tick, so passes piled
+  // up, PV answered 429 to everything, and the cells the Stats page actually
+  // renders (today) never got through. Newest dates first, hard cap per pass,
+  // and a wall clock — the remainder simply warms on a later tick.
+  needsFetch.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+  const MAX_PER_PASS = Number(process.env.WARM_MAX_PER_PASS ?? 40)
+  const PASS_BUDGET_MS = Number(process.env.WARM_PASS_BUDGET_MS ?? 90_000)
+  const passDeadline = Date.now() + PASS_BUDGET_MS
+  const capped = needsFetch.slice(0, MAX_PER_PASS)
+  console.log(
+    `[cache-warming] fetching ${capped.length} workspace-date pairs` +
+    (needsFetch.length > capped.length ? ` (${needsFetch.length - capped.length} deferred)` : ''),
+  )
 
-  // Fetch up to 8 concurrently (same as legacy)
   const CONC = 8
-  for (let i = 0; i < needsFetch.length; i += CONC) {
-    const batch = needsFetch.slice(i, i + CONC)
+  for (let i = 0; i < capped.length; i += CONC) {
+    if (Date.now() > passDeadline) {
+      console.warn(`[cache-warming] pass budget spent, deferring ${capped.length - i} pairs`)
+      break
+    }
+    const batch = capped.slice(i, i + CONC)
     const results = await Promise.allSettled(
       batch.map(async ({ wsId, date }) => {
         try {
@@ -646,7 +664,20 @@ export async function warmComboDates(dates: string[]): Promise<void> {
   }
 }
 
+// One perf pass at a time, process-wide. Without this a pass that runs longer
+// than the 2-minute tick overlaps the next one, and both queue behind the same
+// pvGate — which is how PV ended up answering 429 to nearly everything.
+const PERF_LOCK = '__ottalyPerfWarmAt'
+const PERF_LOCK_STALE_MS = 10 * 60 * 1000
+
 export async function warmPerformanceCache(): Promise<void> {
+  const g = globalThis as Record<string, unknown>
+  const startedAt = Number(g[PERF_LOCK] ?? 0)
+  if (startedAt && Date.now() - startedAt < PERF_LOCK_STALE_MS) {
+    console.log('[cache-warming] perf warm already running, skipping this tick')
+    return
+  }
+  g[PERF_LOCK] = Date.now()
   try {
     const wsIds = await getActiveWorkspaces()
     if (!wsIds.length) {
@@ -654,24 +685,17 @@ export async function warmPerformanceCache(): Promise<void> {
       return
     }
 
-    // Phase 1: last 7 days (unblock Stats page immediately)
-    const sevenDayDates = lastNDates(7)
-    await ensurePerfCacheDaily(wsIds, sevenDayDates)
-    console.log(`[cache-warming] phase 1 complete — 7 workspaces × 7 days`)
-
-    // Phase 2: full month (background)
-    const today = new Date()
-    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1)
-    const monthDates = []
-    let current = new Date(monthStart)
-    while (current <= today) {
-      monthDates.push(dateStr(current))
-      current.setDate(current.getDate() + 1)
-    }
-    await ensurePerfCacheDaily(wsIds, monthDates)
-    console.log(`[cache-warming] phase 2 complete — full month updated`)
+    // ONE bounded pass over a short recent window. There is no phase 2: refetching
+    // the whole month every 2 minutes is what starved today's cells of quota.
+    // Older days settle and are covered by TTL_OLD_MS (12h) — when one does fall
+    // stale it enters this same queue, newest-first, and warms on some later tick.
+    const WARM_DAYS = Number(process.env.WARM_DAYS ?? 3)
+    await ensurePerfCacheDaily(wsIds, lastNDates(WARM_DAYS))
+    console.log(`[cache-warming] perf pass complete — ${WARM_DAYS}d window`)
   } catch (err) {
     console.error('[cache-warming] failed:', err instanceof Error ? err.message : err)
+  } finally {
+    delete g[PERF_LOCK]
   }
 }
 
@@ -720,7 +744,9 @@ export async function startCacheWarmingInterval(): Promise<void> {
   // 220-day backlog. Passes are cheap when there's nothing stale (one indexed
   // count per ws-day), the in-flight guard means a long pass simply skips the
   // next tick, and pvGate caps actual PV traffic regardless of tick rate.
-  const COMBO_INTERVAL_MS = 2 * 60 * 1000
+  // Slower than perf, and offset from it: both drain the SAME serialised pvGate,
+  // so ticking them together just makes them queue behind each other.
+  const COMBO_INTERVAL_MS = Number(process.env.COMBO_INTERVAL_MS ?? 5 * 60 * 1000)
   setInterval(() => {
     warmComboCache().catch(() => {})
   }, COMBO_INTERVAL_MS)

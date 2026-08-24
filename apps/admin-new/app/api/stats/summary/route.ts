@@ -168,9 +168,11 @@ export async function GET(req: NextRequest) {
       // budget first; past days only use what is left over. Mixing them let a
       // wide range spend the budget on backfill and return today as 0.
       const gaps = [...todayGaps, ...pastGaps].slice(0, MAX_INLINE)
-      // Enough for a full client list at ~400ms/call serialized. The old 4s
-      // wall was shorter than one complete pass, so today never resolved.
-      const BUDGET_MS = Number(process.env.STATS_LIVEFILL_BUDGET_MS ?? 12000)
+      // With the background warmer no longer burning the PV quota (it refetched
+      // the whole month every 2 min and PV answered 429 to everything), today's
+      // cells arrive warm and the live-fill has little left to do. Keep the wall
+      // short so the page stays fast; anything unfilled warms on the next tick.
+      const BUDGET_MS = Number(process.env.STATS_LIVEFILL_BUDGET_MS ?? 5000)
       if (gaps.length) {
         // The fan-out is raced against a single wall clock rather than checked
         // only BETWEEN batches. pvFetch serializes on a global gate
