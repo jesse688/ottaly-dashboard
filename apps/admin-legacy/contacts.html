@@ -6114,7 +6114,9 @@
         if (!r.ok) { showMessage('Delete failed: ' + (data.error || r.status), 'error'); btn.disabled = false; return; }
         showMessage(`Deleted ${data.deleted.toLocaleString()} contacts`, 'success');
         cancelDeleteCsv();
-        setTimeout(() => { if (document.getElementById('contactsTab').style.display !== 'none') search(); }, 300);
+        // Same tab-guard bug as the import path: delete-from-CSV also only runs
+        // from the Import tab, so the guard skipped the refresh every time.
+        setTimeout(() => search(), 300);
       } catch (err) {
         showMessage('Delete failed: ' + err.message, 'error');
         btn.disabled = false;
