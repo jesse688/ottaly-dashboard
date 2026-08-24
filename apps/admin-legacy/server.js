@@ -19645,6 +19645,110 @@ const N2B_BULK_URL = 'https://connect.no2bounce.com/v2/n2b_validate_bulk';
 const { parse: parseCsvSync } = require('csv-parse/sync');
 const n2bParseCsv = (text) => parseCsvSync(text, { columns: true, skip_empty_lines: true, trim: true });
 
+// ── No2Bounce credit health ────────────────────────────────────────────────
+// Credit exhaustion is SILENT: n2bVerify returns {} and every catch-all contact
+// is left 'risky' and skipped from the push. The only surfacing was a warning on
+// the in-memory job object, which dies with the job — so an outage that ran for
+// days was invisible unless you happened to be watching a push at that moment.
+//
+// n2bHealth is the durable record. n2bVerify stamps it on every real run, and
+// the canary below probes independently so we learn about exhaustion even when
+// no push is running.
+const n2bHealth = {
+  lastOkAt: null,        // ISO — last time a submit was accepted
+  lastFailAt: null,      // ISO — last time a submit was rejected
+  lastError: null,       // human-readable reason for that rejection
+  outOfCredits: false,   // true when the last signal was a credit rejection
+  lastCheckAt: null,     // ISO — last time anything probed the API
+  skippedContacts: 0,    // catch-alls dropped since the last healthy run
+};
+
+function n2bMarkOk() {
+  n2bHealth.lastOkAt = new Date().toISOString();
+  n2bHealth.lastCheckAt = n2bHealth.lastOkAt;
+  if (n2bHealth.outOfCredits) {
+    console.log('[No2Bounce] credits recovered — submits accepted again');
+    postBounceAlertToSlack('\u2705 No2Bounce credits recovered \u2014 catch-all validation is running again.').catch(() => {});
+  }
+  n2bHealth.outOfCredits = false;
+  n2bHealth.lastError = null;
+  n2bHealth.skippedContacts = 0;
+}
+
+function n2bMarkFail(reason, { credits = false, skipped = 0 } = {}) {
+  const now = new Date().toISOString();
+  const firstTime = credits && !n2bHealth.outOfCredits;
+  n2bHealth.lastFailAt = now;
+  n2bHealth.lastCheckAt = now;
+  n2bHealth.lastError = reason;
+  n2bHealth.skippedContacts += skipped;
+  if (credits) n2bHealth.outOfCredits = true;
+  // Alert once on the transition, not on every subsequent failed batch — a busy
+  // push would otherwise fire a Slack message per batch for the same outage.
+  if (firstTime) {
+    postBounceAlertToSlack(
+      `\u26a0\ufe0f No2Bounce credits exhausted \u2014 catch-all contacts are being SKIPPED from pushes. ${reason}`
+    ).catch(() => {});
+  }
+}
+
+// Canary: submit one throwaway address to see whether credits are live. This is
+// the only reliable signal available — No2Bounce publishes no balance endpoint
+// (every candidate path returns API Gateway's "Missing Authentication Token",
+// which is what an undefined route returns), so an end-to-end submit IS the check.
+// Costs one credit per run; hourly is plenty.
+async function n2bCanary() {
+  if (!NO2BOUNCE_KEY) {
+    n2bMarkFail('NO2BOUNCE_KEY not set', {});
+    return { ok: false, reason: 'not configured' };
+  }
+  try {
+    const r = await fetch(N2B_BULK_URL, {
+      method: 'POST',
+      headers: { apitoken: NO2BOUNCE_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ emailList: ['canary@example.com'], catchall: true }),
+      signal: AbortSignal.timeout(30000)
+    });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok && d?.data?.trackingId) { n2bMarkOk(); return { ok: true, trackingId: d.data.trackingId }; }
+    const body = JSON.stringify(d || '');
+    const credits = /credit|quota|balance|insufficient/i.test(body);
+    // Take the first field that is actually a non-empty string: this API returns
+    // BOTH message and a null error, and `a || b` on those yields "msg" + "null".
+    const reason = [d?.message, d?.error].find(v => typeof v === 'string' && v.trim()) || `HTTP ${r.status}`;
+    n2bMarkFail(String(reason).slice(0, 200), { credits });
+    return { ok: false, reason, credits };
+  } catch (e) {
+    n2bMarkFail(`unreachable: ${e.message}`, {});
+    return { ok: false, reason: e.message };
+  }
+}
+
+// Read the current health record. Cheap, no API call — for dashboards/banners.
+app.get('/api/n2b/health', requireSession, (req, res) => {
+  res.json({ ...n2bHealth, configured: !!NO2BOUNCE_KEY });
+});
+
+// Run the canary now. Same auth shape as /api/cron/bounce-alert: CRON_SECRET for
+// scheduled callers, or an admin session for a manual "test" from the dashboard.
+//   GET /api/cron/n2b-canary?secret=$CRON_SECRET
+app.get('/api/cron/n2b-canary', async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  const s = decodeSession(req);
+  const okSession = s?.role === 'admin' || s?.role === 'manager' || req.headers['x-admin-key'] === ADMIN_KEY;
+  const okSecret = secret && req.query.secret === secret;
+  if (!okSecret && !okSession) return res.status(403).json({ error: 'forbidden (CRON_SECRET or sign in)' });
+  const result = await n2bCanary();
+  res.json({ ...result, health: n2bHealth });
+});
+
+// Hourly self-check so exhaustion surfaces without an external scheduler. Staggered
+// 5 min after boot so a restart storm doesn't burn credits on startup.
+setTimeout(() => {
+  n2bCanary().catch(() => {});
+  setInterval(() => { n2bCanary().catch(() => {}); }, 60 * 60 * 1000);
+}, 5 * 60 * 1000);
+
 async function n2bVerify(emails, jobRef) {
   if (!emails.length) return {};
   if (!NO2BOUNCE_KEY) {
@@ -19668,6 +19772,7 @@ async function n2bVerify(emails, jobRef) {
   } catch (e) {
     console.error('[No2Bounce] Submit error:', e.message);
     if (jobRef) jobRef.n2bWarning = `No2Bounce unreachable — ${emails.length} catch-all contacts left unverified and skipped.`;
+    n2bMarkFail(`unreachable: ${e.message}`, { skipped: emails.length });
     return {};
   }
   if (!submitResp.ok || !submitData?.data?.trackingId) {
@@ -19678,9 +19783,15 @@ async function n2bVerify(emails, jobRef) {
     if (jobRef) jobRef.n2bWarning = credits
       ? `No2Bounce credits exhausted — ${emails.length} catch-all contacts left unverified and skipped. Top up to recover them.`
       : `No2Bounce error — ${emails.length} catch-all contacts left unverified and skipped.`;
+    // Persist beyond this job object so the outage is still visible afterwards.
+    n2bMarkFail(
+      [submitData?.message, submitData?.error].find(v => typeof v === 'string' && v.trim()) || 'submit rejected',
+      { credits, skipped: emails.length }
+    );
     return {};
   }
   const trackingId = submitData.data.trackingId;
+  n2bMarkOk();
   console.log(`[No2Bounce] Submitted ${emails.length} emails, trackingId=${trackingId}`);
 
   // Poll for results (max 8 minutes, every 10 seconds)

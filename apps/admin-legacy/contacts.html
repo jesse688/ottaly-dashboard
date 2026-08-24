@@ -6030,7 +6030,11 @@
 
       const total = importQueue.filter(q=>q.status==='done').reduce((s,q)=>s+(q.result?.imported||0),0);
       showMessage(`Import complete — ${total.toLocaleString()} contacts added/updated`, 'success');
-      setTimeout(() => { if (document.getElementById('contactsTab').style.display !== 'none') search(); }, 500);
+      // Refresh regardless of which tab is showing. The old guard skipped the
+      // refresh whenever the import finished on the Import tab — which is the
+      // ONLY place an import can start — so the header counts silently kept
+      // the pre-import numbers and the new rows looked like they never landed.
+      setTimeout(() => search(), 500);
     }
 
     function updateImportProgressBar(pct, name) {
