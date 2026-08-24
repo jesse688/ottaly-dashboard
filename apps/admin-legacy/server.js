@@ -20331,6 +20331,67 @@ app.get('/api/cron/reply-facts', async (req, res) => {
   }
 });
 
+// "Why was this reply not turned into a fact?" — answers it directly instead of
+// guessing. Shows every reply held for one address, its category, whether that
+// category is inside the cron's scan window, and what the rules make of the
+// body. Read-only; added after alistair@logiclogicmagic.com replied "we rent in
+// a shared office" and no fact appeared.
+//   GET /api/cron/reply-facts/why?email=someone@example.com
+app.get('/api/cron/reply-facts/why', async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  const sess = decodeSession(req);
+  const okSession = sess?.role === 'admin' || sess?.role === 'manager' || req.headers['x-admin-key'] === ADMIN_KEY;
+  const okSecret = secret && req.query.secret === secret;
+  if (!okSecret && !okSession) return res.status(403).json({ error: 'forbidden (CRON_SECRET or sign in)' });
+
+  try {
+    const pgdb = req.app.locals.pgDb;
+    if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
+    const { extractWithRules } = require('./scripts/extract-reply-facts.js');
+    const email = String(req.query.email || '').trim().toLowerCase();
+    if (!email) return res.status(400).json({ error: 'email required' });
+
+    const SCANNED = ['not_interested', 'interested', 'question', 'other'];
+    const { rows } = await pgdb.query(
+      `SELECT id, category, folder, received_at, lead_email,
+              LEFT(body_preview, 400) AS preview,
+              (body_preview IS NULL) AS body_null
+         FROM unibox_replies
+        WHERE LOWER(lead_email) = $1
+        ORDER BY received_at DESC LIMIT 20`,
+      [email]
+    );
+
+    const replies = rows.map(r => {
+      const facts = r.preview ? extractWithRules(r.preview) : [];
+      const inScan = SCANNED.includes(String(r.category || ''));
+      return {
+        id: r.id,
+        received_at: r.received_at,
+        category: r.category,
+        folder: r.folder,
+        in_scan_window: inScan,
+        rules_would_find: facts.map(f => f.attribute + '=' + f.value),
+        blocked_reason: !inScan ? ("category '" + r.category + "' is not scanned")
+                      : r.body_null ? 'body_preview is NULL'
+                      : (!facts.length ? 'rules found nothing in this body' : null),
+        preview: r.preview,
+      };
+    });
+
+    const cats = await pgdb.query(
+      `SELECT category, COUNT(*)::int n FROM unibox_replies GROUP BY 1 ORDER BY n DESC`
+    );
+
+    res.json({ email, scanned_categories: SCANNED, replies_found: replies.length,
+               replies, category_totals: cats.rows });
+  } catch (err) {
+    console.error('[cron/reply-facts/why] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
 app.get('/api/contacts/verified-today', requireSession, async (req, res) => {
   try {
     const dbPg = req.app.locals.pgDb;
