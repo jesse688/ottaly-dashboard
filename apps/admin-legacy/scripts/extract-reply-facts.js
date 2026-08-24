@@ -45,7 +45,7 @@ const ONLY_PERSON_LEFT = has('--only-person-left');
 const GEMINI_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 // gemini-2.0/2.5-flash 404 on the current key; 3.x is what answers.
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
-const RULES_VERSION = 'rules-v2-2026-08-24';
+const RULES_VERSION = 'rules-v3-2026-08-24';
 
 // Only these categories are human replies. 71.5% of the table is warmup and
 // 22.5% is out-of-office — filtering first turns a 113k-row job into ~5k.
@@ -129,7 +129,12 @@ const RULES = [
   // The negative lookahead excludes "I have now left the office for the day",
   // which is an ordinary out-of-office, not someone leaving the company.
   { attribute: 'person_left', value: 'true',
-    re: /\bI\s+(?:have\s+(?:now\s+)?left|am\s+leaving|no\s+longer\s+work(?:ing)?)\b(?!\s+the\s+office\s+for\s+the\s+day)(?:\s+(?:at|for|from|the))?\b(?![^.!?\n]{0,20}\b(?:office for the day|today|this week|on holiday|on annual leave)\b)/i },
+    // The lookahead runs BEFORE the optional "at|for|from|the", or that group
+    // eats the "from" in "I no longer work from home" and the guard misses.
+    // Real case caught in the 2026-08-24 dry run: "I no longer work on Fridays"
+    // is a part-time notice, not a departure — writing it would have retired a
+    // live contact permanently.
+    re: /\bI\s+(?:have\s+(?:now\s+)?left|am\s+leaving|no\s+longer\s+work(?:ing)?)\b(?![^.!?\n]{0,30}\b(?:office for the day|today|this week|next week|on holiday|on annual leave|on (?:mon|tues|wednes|thurs|fri|satur|sun)days?|(?:mon|tues|wednes|thurs|fri|satur|sun)days?|part[- ]time|in the (?:morning|afternoon)|after \d|before \d|weekends?|flexibly|remotely|from home|at home)\b)(?:\s+(?:at|for|from|the))?\b/i },
   { attribute: 'has_supplier', value: 'true', vertical: 'coffee',
     re: /\b(?:we|already)\b[^.!?\n]{0,30}\b(?:have|got|use)\b[^.!?\n]{0,30}\b(?:coffee machines?|bean[- ]to[- ]cup|nespresso|coffee (?:supplier|provider))\b/i },
   { attribute: 'has_supplier', value: 'true', vertical: 'solar',
