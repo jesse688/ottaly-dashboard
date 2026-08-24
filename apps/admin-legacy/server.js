@@ -19687,6 +19687,8 @@ const n2bHealth = {
   outOfCredits: false,   // true when the last signal was a credit rejection
   lastCheckAt: null,     // ISO — last time anything probed the API
   skippedContacts: 0,    // catch-alls dropped since the last healthy run
+  lastCreditDebited: null, // credits charged by the last completed batch
+  lastTotalCredit: null,   // total the API reported alongside that batch
 };
 
 function n2bMarkOk() {
@@ -19820,8 +19822,15 @@ async function n2bVerify(emails, jobRef) {
   n2bMarkOk();
   console.log(`[No2Bounce] Submitted ${emails.length} emails, trackingId=${trackingId}`);
 
-  // Poll for results (max 8 minutes, every 10 seconds)
-  const maxWait = 8 * 60 * 1000;
+  // Poll every 10s. Measured: a 50-email batch completes in ~13s, so the old
+  // flat 8-minute ceiling was generous for normal batches — but it applied
+  // equally to a 6,000-email one, and a timeout returns {} and silently drops
+  // every catch-all. Scale it to the batch so large pushes cannot hit a limit
+  // that has nothing to do with how much work they asked for.
+  const maxWait = Math.min(
+    30 * 60 * 1000,
+    Math.max(8 * 60 * 1000, Math.ceil(emails.length / 200) * 60 * 1000)
+  );
   const pollInterval = 10000;
   const deadline = Date.now() + maxWait;
   let loggedShape = false;
@@ -19846,6 +19855,16 @@ async function n2bVerify(emails, jobRef) {
       if (overall !== 'completed' && overall !== 'complete') {
         console.log(`[No2Bounce] Still processing (${trackingId}) overallStatus="${data?.overallStatus || ''}"`);
         continue;
+      }
+
+      // The completed poll response carries real credit figures
+      // (creditDebited / totalCredit). Record them — this is the closest thing
+      // No2Bounce gives us to a balance, and it makes "did we actually pay for
+      // this batch" answerable after the fact.
+      if (typeof data?.creditDebited === 'number') {
+        n2bHealth.lastCreditDebited = data.creditDebited;
+        n2bHealth.lastTotalCredit = typeof data.totalCredit === 'number' ? data.totalCredit : null;
+        console.log(`[No2Bounce] credits debited=${data.creditDebited} total=${data.totalCredit ?? '?'}`);
       }
 
       // Done — per the spec, results live in a downloadable CSV at
@@ -19902,7 +19921,13 @@ async function n2bVerify(emails, jobRef) {
     }
   }
 
-  console.warn(`[No2Bounce] Timed out waiting for trackingId=${trackingId}`);
+  // A timeout is NOT a silent nothing: the caller leaves every catch-all as
+  // 'risky' and skips it, exactly as it would on credit exhaustion. Record it
+  // so the job panel and /api/n2b/health can tell the two apart.
+  const waitMin = Math.round(maxWait / 60000);
+  console.warn(`[No2Bounce] Timed out after ${waitMin}m waiting for trackingId=${trackingId} (${emails.length} emails)`);
+  if (jobRef) jobRef.n2bWarning = `No2Bounce did not finish within ${waitMin} minutes — ${emails.length} catch-all contacts left unverified and skipped.`;
+  n2bMarkFail(`timed out after ${waitMin}m on ${emails.length} emails`, { skipped: emails.length });
   return {};
 }
 
@@ -20576,7 +20601,14 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
   // of 36 bounced with verdicts averaging 52 days old; re-running the same list
   // through the verifier returned 11 invalid. Mailboxes get disabled constantly,
   // so 14 days keeps the credit saving on genuinely recent checks only.
-  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 14, emailProviders, excludeMicrosoft, loose, skipVerify } = req.body;
+  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 14, emailProviders, excludeMicrosoft, loose, skipVerify, use_n2b } = req.body;
+  // The UI has always SENT use_n2b; the server never read it, so the "Use
+  // No2Bounce to verify catch-alls" checkbox did nothing either way and its
+  // help text ("if unchecked, catch-alls are skipped entirely") described
+  // behaviour that did not exist. Honour it, defaulting to ON so existing
+  // callers that omit it keep validating catch-alls.
+  const useN2b = use_n2b === undefined ? true
+    : (use_n2b === true || use_n2b === 'true' || use_n2b === 1 || use_n2b === '1');
   if (!workspace_id || !campaign_id || !Array.isArray(contact_ids) || !contact_ids.length) {
     return res.status(400).json({ error: 'workspace_id, campaign_id and contact_ids required' });
   }
@@ -20622,6 +20654,7 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
     allowedProviders,
     allowedStatuses,
     loose: looseEffective,
+    useN2b,
     skipVerify: skipVerifyMode,
     excludeMicrosoft: excludeMicrosoft === 'true' || excludeMicrosoft === true,
     total: contact_ids.length,
@@ -21139,9 +21172,13 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
       // ── Phase 3: No2Bounce deeper validation of catch-all contacts ──
       const riskyContacts = contacts.filter(c => verifyResults[c.id] === 'risky');
       console.log(`[No2Bounce] Risky contacts found: ${riskyContacts.length} of ${contacts.length}`);
+      if (riskyContacts.length && !job.loose && job.useN2b === false) {
+        job.n2bWarning = `No2Bounce was turned off for this push — ${riskyContacts.length} catch-all contacts skipped. Tick "Use No2Bounce to verify catch-alls" to recover them.`;
+      }
       // Skip the slow No2Bounce catch-all stage for loose/engine pushes — risky
       // contacts push anyway in loose mode, so validating them just adds latency.
-      if (riskyContacts.length && !job.cancelled && !job.loose) {
+      // job.useN2b honours the push modal's checkbox (defaults true when absent).
+      if (riskyContacts.length && !job.cancelled && !job.loose && job.useN2b !== false) {
         job.status = 'n2b_verifying';
         job.n2bTotal = riskyContacts.length;
         job.n2bDone  = 0;
@@ -21589,7 +21626,9 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
         } catch (err) { console.warn('[verify] final catch-all propagation failed:', err.message); }
 
         const riskyContacts = contacts.filter(c => verifyResults[c.id] === 'risky');
-        if (riskyContacts.length && !job.loose) {
+        // Same gate as the main path, so a RESUMED job behaves identically —
+        // an inconsistency here would silently change behaviour on resume.
+        if (riskyContacts.length && !job.loose && job.useN2b !== false) {
           job.status = 'n2b_verifying';
           job.n2bTotal = riskyContacts.length;
           job.n2bDone  = 0;
