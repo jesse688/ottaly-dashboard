@@ -16393,11 +16393,12 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
       }
       if (c.do_not_contact) { skipped.dnc++; continue; }
       if (departed.has(String(c.email || '').toLowerCase())) { skipped.departed++; continue; }
-      // Name is required in BOTH modes. Bison 422s without first+last, so a
-      // nameless contact is not "unverified, will resolve at push time" — it is
-      // a guaranteed failure, and counting it as sendable would overstate the
-      // badge with contacts no push can ever deliver.
-      if (!(c.first_name && c.first_name.trim()) || !(c.last_name && c.last_name.trim())) {
+      // Name gate is a STALE Bison-era rule — we send via PlusVibe now, which
+      // accepts nameless leads, and the loose push path drops this gate for
+      // exactly that reason (engine leads are company inboxes: info@, admin@).
+      // The badge must mirror the push, so loose skips it here too. Keeping it
+      // on would under-count by every nameless contact the push would accept.
+      if (!loose && (!(c.first_name && c.first_name.trim()) || !(c.last_name && c.last_name.trim()))) {
         skipped.missingName++; continue;
       }
 
