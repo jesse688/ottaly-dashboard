@@ -20250,6 +20250,87 @@ app.get('/api/contacts/fact-options', requireSession, async (req, res) => {
   }
 });
 
+// Hourly rules-pass over replies that arrived since the last run.
+//
+// WHY THIS EXISTS: extraction was a manual script. The 2026-08-18 backfill ran
+// once and nothing has scanned a reply since, so every fact stated after that
+// date was silently lost — a lead writing "we rent in a shared office" still
+// showed "Nothing stated yet" on their contact card. A fact system nobody runs
+// is a fact system that does not work.
+//
+//   GET /api/cron/reply-facts?secret=$CRON_SECRET
+//   &hours=24   how far back to look (default 24, max 720)
+//   &dry=1      extract and report WITHOUT writing
+//
+// Rules only, deliberately: the pass is free, instant and high precision, so it
+// can run hourly without cost or quota. The LLM pass stays manual — it is
+// throttled to ~2s/call and would not finish inside a cron window.
+app.get('/api/cron/reply-facts', async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  const sess = decodeSession(req);
+  const okSession = sess?.role === 'admin' || sess?.role === 'manager' || req.headers['x-admin-key'] === ADMIN_KEY;
+  const okSecret = secret && req.query.secret === secret;
+  if (!okSecret && !okSession) return res.status(403).json({ error: 'forbidden (CRON_SECRET or sign in)' });
+
+  try {
+    const pgdb = req.app.locals.pgDb;
+    if (!pgdb) return res.status(503).json({ error: 'DB unavailable' });
+
+    // Same module the CLI uses, so the rules cannot drift between the two.
+    const { extractWithRules, RULES_VERSION } = require('./scripts/extract-reply-facts.js');
+
+    const hours = Math.min(720, Math.max(1, parseInt(req.query.hours, 10) || 24));
+    const dry   = req.query.dry === '1' || req.query.dry === 'true';
+
+    // Human categories only. Warmup is our own mailboxes talking to each other
+    // and OOO is noise for these attributes; departures have their own pass.
+    const { rows } = await pgdb.query(
+      `SELECT id, lead_email, received_at, body_preview
+         FROM unibox_replies
+        WHERE category IN ('not_interested','interested','question','other')
+          AND body_preview IS NOT NULL
+          AND lead_email IS NOT NULL AND lead_email <> ''
+          AND received_at >= NOW() - ($1 || ' hours')::interval
+        ORDER BY received_at DESC
+        LIMIT 5000`,
+      [String(hours)]
+    );
+
+    let kept = 0, wrote = 0;
+    const samples = [];
+    for (const r of rows) {
+      const email = String(r.lead_email).toLowerCase();
+      const domain = (email.split('@')[1] || '').toLowerCase();
+      if (!domain) continue;
+      for (const f of extractWithRules(r.body_preview)) {
+        kept++;
+        if (samples.length < 25) samples.push({ email, attribute: f.attribute, value: f.value, quote: f.quote.slice(0, 120) });
+        if (dry) continue;
+        // Idempotent: re-running corrects rows in place rather than duplicating.
+        const ins = await pgdb.query(
+          `INSERT INTO reply_facts
+             (lead_email, company_domain, attribute, value, vertical,
+              confidence, quote, source_reply_id, observed_at, extractor)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+           ON CONFLICT ON CONSTRAINT reply_facts_unique DO UPDATE SET
+             value = EXCLUDED.value, quote = EXCLUDED.quote,
+             confidence = EXCLUDED.confidence, extractor = EXCLUDED.extractor
+           RETURNING 1`,
+          [email, domain, f.attribute, f.value, f.vertical,
+           f.confidence, f.quote, r.id, r.received_at, RULES_VERSION]
+        );
+        wrote += ins.rowCount;
+      }
+    }
+
+    res.json({ ok: true, hours, dry, extractor: RULES_VERSION,
+               replies_scanned: rows.length, facts_found: kept, facts_written: wrote, samples });
+  } catch (err) {
+    console.error('[cron/reply-facts] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/contacts/verified-today', requireSession, async (req, res) => {
   try {
     const dbPg = req.app.locals.pgDb;

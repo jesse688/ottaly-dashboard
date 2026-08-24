@@ -45,7 +45,7 @@ const ONLY_PERSON_LEFT = has('--only-person-left');
 const GEMINI_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 // gemini-2.0/2.5-flash 404 on the current key; 3.x is what answers.
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
-const RULES_VERSION = 'rules-v1-2026-08-18';
+const RULES_VERSION = 'rules-v2-2026-08-24';
 
 // Only these categories are human replies. 71.5% of the table is warmup and
 // 22.5% is out-of-office — filtering first turns a 113k-row job into ~5k.
@@ -103,8 +103,21 @@ function cleanBody(raw) {
 const RULES = [
   { attribute: 'premises_tenure', value: 'serviced_office',
     re: /\b(?:we(?:'re| are)?|our (?:office|building)s? (?:is|are))[^.!?\n]{0,40}\b(?:in|at|use|using|based in|located in)\s+(?:a\s+|large\s+|the\s+)*serviced\s+offices?\b|\bwe\s+are\s+in\s+serviced\s+offices?\b/i },
+  // Owner-occupier. Tested BEFORE 'rented' because line ~159 keeps the first
+  // match per attribute, and "we own the freehold, we don't rent" must read as
+  // owned. This is the fact that actually qualifies a site for solar; nothing
+  // captured it before.
+  { attribute: 'premises_tenure', value: 'owned',
+    re: /\bwe\s+(?:do\s+)?own\s+(?:the|our|this|all)\s+(?:building|premises|office|site|property|freehold|unit)|\bwe(?:'re| are)\s+(?:the\s+)?(?:freeholder|owner[- ]occupiers?)\b|\bwe\s+own\s+(?:the\s+)?freehold\b|\bowner[- ]occupied\b/i },
+  // Rented/tenant. The previous version required a DEFINITE article before the
+  // noun ("the|our|this building"), so "We don't own a building or hold a long
+  // lease" — about as explicit as a prospect gets — never matched. It also had
+  // no pattern for tenants, leasehold, shared offices, landlords or subletting:
+  // 7 of 10 ordinary phrasings missed. `guard` blocks the inverse false
+  // positive, a serviced-office PROVIDER being read as an occupier.
   { attribute: 'premises_tenure', value: 'rented',
-    re: /\b(?:we|our company)\b[^.!?\n]{0,40}\b(?:do(?:n't| not)\s+own)\b[^.!?\n]{0,30}\b(?:the|our|this)\s+(?:building|premises|office|site|property)|\bwe\s+(?:only\s+)?(?:rent|lease)\b[^.!?\n]{0,30}\b(?:the|our|this|premises|building|office)|\bshort[- ]term lease\b/i },
+    re: /\b(?:we|our company)\b[^.!?\n]{0,40}\bdo(?:n't| not)\s+own\b[^.!?\n]{0,30}\b(?:a|an|the|our|this)?\s*(?:building|premises|office|site|property|freehold|unit)|\bwe\s+(?:only\s+)?(?:rent|lease|sublet)\b|\bwe(?:'re| are)\s+(?:the\s+|a\s+)?tenants?\b|\bwe(?:'re| are)\s+(?:currently\s+)?(?:in|based in|located in)\s+(?:a\s+|the\s+)?(?:shared|serviced|co[- ]?working|managed|rented|leased)\b|\b(?:leasehold|short[- ]term lease|rented (?:premises|property|office|unit|building))\b|\b(?:the|our)\s+landlord\b|\bdo(?:n't| not)\s+own\b[^.!?\n]{0,20}\broof\b/i,
+    guard: /\b(?:we (?:are|'re) a landlord|we lease (?:out|to)|our tenants|we rent out|serviced offices? (?:provider|specialist))\b/i },
   { attribute: 'no_premises', value: 'true',
     re: /\b(?:we(?:'re| are)?|company is)\s+(?:a\s+)?(?:fully\s+|predominantly\s+|primarily\s+)?remote(?:[- ]first| business| company| working)?\b|\bwe\s+(?:have\s+no|don't have an?)\s+office\b|\ball\s+(?:our\s+)?staff\s+work\s+from\s+home\b/i },
   { attribute: 'ceased_trading', value: 'true',
@@ -149,6 +162,9 @@ function extractWithRules(rawBody) {
     if (!m) continue;
     const sentence = sentenceAround(body, m.index);
     if (THIRD_PARTY.test(sentence)) continue;
+    // A provider/landlord describing what they SELL is not stating their own
+    // tenure (the Westminster Business Centre class of false positive).
+    if (rule.guard && rule.guard.test(body)) continue;
     if (rule.attribute === 'has_supplier' && NEGATED.test(sentence)) continue;
     let value = rule.value;
     if (rule.capture) {
@@ -277,6 +293,13 @@ async function writeFacts(rows) {
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────
+// Exported so the hourly cron endpoint can reuse the SAME rules the CLI uses —
+// one definition of what a fact is, not two that drift apart.
+module.exports = { extractWithRules, cleanBody, stripQuotedHistory, RULES, RULES_VERSION };
+
+// Only run the CLI job when invoked directly, never on require().
+if (require.main !== module) return;
+
 (async () => {
   if (USE_LLM && !GEMINI_KEY) {
     console.error('--llm needs GEMINI_API_KEY');
