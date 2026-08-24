@@ -191,6 +191,15 @@ const PV_WORKSPACES = [
   { pv: '6a353641e5488018209fc409', name: 'BlueHawk' },
   { pv: '6a35364d981ca441b3db8e5b', name: 'Hayes & Co' },
   { pv: '6a4b908c2e4ecfeb61a5951b', name: 'FirstVehicleFinance' },
+  // Added 2026-08-24. Hawthorne Energy had been sending since 2026-08-21 and
+  // collecting replies in PV, but was absent here — so the reply reconciler
+  // never polled its inbox, NOTHING from it ever reached unibox_replies, and
+  // no reply_facts could be extracted. Found when a lead wrote "We rent in a
+  // shared office" and /api/cron/reply-facts/why returned replies_found: 0.
+  // Ids confirmed live against the PV /workspaces endpoint, not the seed list.
+  { pv: '6a6920fadd1097091a1c7e58', name: 'Hawthorne Energy' },
+  { pv: '6a54af1e6cdb2c8556cbc64e', name: 'YorkshireVehicleFinance' },
+  { pv: '6a462b853c8bc15197e8b63b', name: 'ButterflyGoogle' },
 ];
 
 // Shim: code that did pvFetch('/workspaces') now calls this directly.
