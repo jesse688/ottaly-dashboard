@@ -47,6 +47,11 @@ interface Workspace {
 // env if a future window needs a different floor.
 const STATS_CUTOVER = process.env.STATS_CUTOVER_DATE ?? '2026-06-17'
 
+// How long a cached 'today' cell is trusted before we refetch it from PV.
+// Today climbs all day, so it must expire — but not on every single request,
+// which is what starved the live-fill budget and zeroed the page.
+const TODAY_TTL_MS = Number(process.env.STATS_TODAY_TTL_MS ?? 120000)
+
 // Enumerate inclusive YYYY-MM-DD strings from start..end, purely lexically (no
 // Date/timezone math) so it never re-introduces a UTC/London divergence.
 function enumerateDates(start: string, end: string, cap: number): string[] {
@@ -136,7 +141,20 @@ export async function GET(req: NextRequest) {
       const pastGaps: { ws: string; date: string }[] = []
       for (const ws of workspaceList) {
         for (const date of dates) {
-          if (date === todayStr) { todayGaps.push({ ws: ws.workspace_id, date }); continue }
+          if (date === todayStr) {
+            // Only refetch today when the cached cell is actually stale. It used
+            // to refetch unconditionally for EVERY workspace, which — behind a
+            // 1-at-a-time PV gate with a 400ms floor — needs ~15-20s for a full
+            // client list and could never finish inside the budget. The cells
+            // then stayed at 0 and the page showed no sends on a day that had
+            // them. A warm cell written seconds ago by the background warmer is
+            // better than a zero.
+            const sa = savedAt[ws.workspace_id]?.[date] ?? 0
+            const cached = perfByDateAndWs[ws.workspace_id]?.[date]
+            const fresh = sa > 0 && Date.now() - sa < TODAY_TTL_MS
+            if (!cached || !fresh) todayGaps.push({ ws: ws.workspace_id, date })
+            continue
+          }
           const sa = savedAt[ws.workspace_id]?.[date]
           const missing = perfByDateAndWs[ws.workspace_id]?.[date] === undefined
           const seeded = sa === 0
@@ -146,8 +164,13 @@ export async function GET(req: NextRequest) {
       // Cap total inline fetches and time-box the whole pass so the request
       // always returns quickly. Today first; backfill past days with the budget.
       const MAX_INLINE = 64
+      // Today's cells are what the default view renders, so they get the whole
+      // budget first; past days only use what is left over. Mixing them let a
+      // wide range spend the budget on backfill and return today as 0.
       const gaps = [...todayGaps, ...pastGaps].slice(0, MAX_INLINE)
-      const BUDGET_MS = 4000 // hard wall: never block the page > ~4s
+      // Enough for a full client list at ~400ms/call serialized. The old 4s
+      // wall was shorter than one complete pass, so today never resolved.
+      const BUDGET_MS = Number(process.env.STATS_LIVEFILL_BUDGET_MS ?? 12000)
       if (gaps.length) {
         // The fan-out is raced against a single wall clock rather than checked
         // only BETWEEN batches. pvFetch serializes on a global gate
