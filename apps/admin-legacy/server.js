@@ -16393,7 +16393,11 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
       }
       if (c.do_not_contact) { skipped.dnc++; continue; }
       if (departed.has(String(c.email || '').toLowerCase())) { skipped.departed++; continue; }
-      if (!loose && (!(c.first_name && c.first_name.trim()) || !(c.last_name && c.last_name.trim()))) {
+      // Name is required in BOTH modes. Bison 422s without first+last, so a
+      // nameless contact is not "unverified, will resolve at push time" — it is
+      // a guaranteed failure, and counting it as sendable would overstate the
+      // badge with contacts no push can ever deliver.
+      if (!(c.first_name && c.first_name.trim()) || !(c.last_name && c.last_name.trim())) {
         skipped.missingName++; continue;
       }
 

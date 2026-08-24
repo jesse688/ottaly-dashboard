@@ -1536,6 +1536,16 @@
                 style="display:none;cursor:pointer;margin-left:6px;"
                 onclick="showSendabilityBreakdown()"
                 title="Click for the full breakdown"></span>
+          <!-- Unverified contacts are NOT a dead end: push-with-verify verifies
+               them mid-push and sends the ones that come back clean. Counting
+               them as "blocked" made the badge read far lower than what a push
+               could actually deliver. This toggle counts them as sendable
+               (anything not already known-invalid), matching that push path. -->
+          <label id="looseSendableWrap" style="display:none;align-items:center;gap:4px;margin-left:6px;font-size:11px;color:#6b7280;cursor:pointer;white-space:nowrap;"
+                 title="Count unverified contacts as sendable — they get verified during a push with 'Verify emails before pushing' on.">
+            <input type="checkbox" id="looseSendable" style="accent-color:#3b82f6;width:13px;height:13px;margin:0;" onchange="onLooseSendableChange()">
+            count unverified
+          </label>
           <div class="search-box" style="display:flex;flex-direction:column;gap:2px;">
             <div style="display:flex;align-items:center;gap:6px;">
               <div class="search-icon">&#9906;</div>
@@ -4206,6 +4216,23 @@
     // Declared here, not next to fetchSendableIds: refreshSendability (above it)
     // clears this on every search, and a `let` further down would be in the
     // temporal dead zone at that point.
+    // Loose = count unverified as sendable (push-with-verify will verify them).
+    // Persisted so the choice survives a reload, like the other filter prefs.
+    function isLooseSendable() {
+      return !!document.getElementById('looseSendable')?.checked;
+    }
+    function onLooseSendableChange() {
+      try { localStorage.setItem('looseSendable', isLooseSendable() ? '1' : '0'); } catch {}
+      _sendableIdCache = { key: '', ids: null }; // mode changed → cached ids are stale
+      updateSendableInfo();
+    }
+    (function restoreLooseSendable() {
+      try {
+        const el = document.getElementById('looseSendable');
+        if (el && localStorage.getItem('looseSendable') === '1') el.checked = true;
+      } catch {}
+    })();
+
     let _sendableIdCache = { key: '', ids: null };
 
     async function refreshSendability() {
@@ -4214,7 +4241,13 @@
       const workspaceId = (document.getElementById('clientFilter') || {}).value || '';
       // The guards are all relative to a target client. Without one there is
       // no meaningful answer, so say nothing rather than imply a number.
-      if (!workspaceId || !totalResults) { el.style.display = 'none'; _lastSendability = null; return; }
+      const looseWrap = document.getElementById('looseSendableWrap');
+      if (!workspaceId || !totalResults) {
+        el.style.display = 'none';
+        if (looseWrap) looseWrap.style.display = 'none';
+        _lastSendability = null; return;
+      }
+      if (looseWrap) looseWrap.style.display = 'inline-flex';
 
       const mySeq = ++_sendSeq;
       _sendableIdCache = { key: '', ids: null }; // filter changed → ids are stale
@@ -4235,6 +4268,7 @@
               delete f.limit; delete f.offset; delete f.sortBy; delete f.sortDir;
               return f;
             })(),
+            loose: isLooseSendable(),
           }),
         });
         const d = await res.json();
@@ -4284,6 +4318,9 @@
             workspace_name: (document.getElementById('clientFilter')?.selectedOptions?.[0]?.textContent || '').trim(),
             filters: f,
             return_ids: true,
+            // Must match the badge's mode, or selecting "all sendable" would
+            // grab a different set than the number the user just read.
+            loose: isLooseSendable(),
             // Cover at least what is being selected, within the server cap.
             sample: Math.min(Math.max(parseInt(sample, 10) || 5000, 5000), 20000),
           }),
@@ -4319,9 +4356,12 @@
       const head = d.estimated
         ? `Checked a ${d.checked.toLocaleString()} sample of ${d.total.toLocaleString()}; figures below are scaled.`
         : `Checked all ${d.checked.toLocaleString()}.`;
+      const mode = isLooseSendable()
+        ? '\nCounting unverified as sendable — they get verified during a push with "Verify emails before pushing" on. Cooldown, do-not-contact and spacing rules still apply.'
+        : '';
       showMessage(
         `${d.sendableTotal.toLocaleString()} sendable of ${d.total.toLocaleString()}. ${head}\n` +
-        (rows.length ? 'Blocked by — ' + rows.join(' · ') : 'Nothing blocked.'),
+        (rows.length ? 'Blocked by — ' + rows.join(' · ') : 'Nothing blocked.') + mode,
         d.sendableTotal === 0 ? 'error' : 'success'
       );
     }
