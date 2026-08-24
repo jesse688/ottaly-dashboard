@@ -16330,8 +16330,12 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
   const workspaceName = String(body.workspace_name || '').trim();
   const campaignName  = String(body.campaign_name || '').trim();
   const filters       = body.filters && typeof body.filters === 'object' ? body.filters : {};
-  // Loose mirrors the push flag: engine leads only need "not invalid".
-  const loose = body.loose === true;
+  // Loose is the DEFAULT. Unverified is not a dead end — push-with-verify
+  // verifies mid-push and sends what comes back clean — so counting unverified
+  // as "blocked" made the badge read far below what a push could deliver
+  // (129 of 1,998 when 1,868 were merely unverified). Callers wanting the
+  // strict "already verified-safe" count must ask for it with loose:false.
+  const loose = body.loose !== false;
   // Mirrors the push modal's default pair; callers may pass their own buckets.
   const allowedStatuses = Array.isArray(body.allowedStatuses) && body.allowedStatuses.length
     ? body.allowedStatuses.map(x => String(x).toLowerCase())
@@ -16393,13 +16397,21 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
       }
       if (c.do_not_contact) { skipped.dnc++; continue; }
       if (departed.has(String(c.email || '').toLowerCase())) { skipped.departed++; continue; }
-      // Name gate is a STALE Bison-era rule — we send via PlusVibe now, which
-      // accepts nameless leads, and the loose push path drops this gate for
-      // exactly that reason (engine leads are company inboxes: info@, admin@).
-      // The badge must mirror the push, so loose skips it here too. Keeping it
-      // on would under-count by every nameless contact the push would accept.
-      if (!loose && (!(c.first_name && c.first_name.trim()) || !(c.last_name && c.last_name.trim()))) {
-        skipped.missingName++; continue;
+      // Name gate follows the hasName FILTER, not the loose flag. A missing name
+      // blocks by default — copy that greets nobody is worse than a smaller
+      // batch. The user opts in to nameless contacts by setting hasName to
+      // "all" ('') or "missing a name" ('no'), and then the gate steps aside.
+      // (PlusVibe itself accepts nameless leads, so this is a copy-quality
+      // choice, not a platform limit — which is why the filter can override it.)
+      const nameFilter = String(filters.hasName ?? 'first_only');
+      const nameOptional = nameFilter === '' || nameFilter === 'no';
+      if (!nameOptional) {
+        // 'yes' wants first AND last; 'first_only' (the default) needs only a
+        // first name — plenty of good leads are katie@ with no surname.
+        const hasFirst = !!(c.first_name && c.first_name.trim());
+        const hasLast  = !!(c.last_name  && c.last_name.trim());
+        const ok = nameFilter === 'yes' ? (hasFirst && hasLast) : hasFirst;
+        if (!ok) { skipped.missingName++; continue; }
       }
 
       // Already in this campaign (full history, then the legacy single field).
