@@ -20361,12 +20361,19 @@ app.get('/api/cron/reply-facts/why', async (req, res) => {
     if (!email) return res.status(400).json({ error: 'email required' });
 
     const SCANNED = ['not_interested', 'interested', 'question', 'other'];
+    // Search sender_email and the raw payload too, not just lead_email — a row
+    // can land with the address in a different column, and "not found" must
+    // mean "genuinely absent", not "absent from the one column I looked in".
     const { rows } = await pgdb.query(
-      `SELECT id, category, folder, received_at, lead_email,
+      `SELECT id, category, folder, received_at, lead_email, sender_email,
+              workspace_id,
               LEFT(body_preview, 400) AS preview,
               (body_preview IS NULL) AS body_null
          FROM unibox_replies
-        WHERE LOWER(lead_email) = $1
+        WHERE LOWER(COALESCE(lead_email,'')) = $1
+           OR LOWER(COALESCE(sender_email,'')) = $1
+           OR LOWER(COALESCE(raw->>'lead','')) = $1
+           OR LOWER(COALESCE(raw->>'from_address_email','')) = $1
         ORDER BY received_at DESC LIMIT 20`,
       [email]
     );
@@ -20392,8 +20399,18 @@ app.get('/api/cron/reply-facts/why', async (req, res) => {
       `SELECT category, COUNT(*)::int n FROM unibox_replies GROUP BY 1 ORDER BY n DESC`
     );
 
+    // Is this workspace ingesting AT ALL? A workspace absent here has never had
+    // a reply stored, which points at the reconciler, not at extraction.
+    const ws = await pgdb.query(
+      `SELECT workspace_id, COUNT(*)::int n, MAX(received_at) AS newest
+         FROM unibox_replies
+        WHERE received_at >= NOW() - INTERVAL '7 days'
+        GROUP BY 1 ORDER BY newest DESC NULLS LAST`
+    );
+
     res.json({ email, scanned_categories: SCANNED, replies_found: replies.length,
-               replies, category_totals: cats.rows });
+               replies, category_totals: cats.rows,
+               workspaces_ingesting_last_7d: ws.rows });
   } catch (err) {
     console.error('[cron/reply-facts/why] error:', err.message);
     res.status(500).json({ error: err.message });
