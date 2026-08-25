@@ -1560,6 +1560,8 @@
           <button id="pushHistoryBtn" class="btn btn-secondary" onclick="openPushHistory()" title="Every past push: how many contacts were requested, how the verifier graded them, how many actually reached PlusVibe, and which gate dropped the rest." style="font-size:12px;padding:7px 12px;">🕘 Push History</button>
           <button class="btn btn-primary" onclick="switchToImportTab()">Import CSV</button>
           <button class="btn" onclick="switchToImportTab(); setTimeout(() => document.getElementById('deleteCsvDropZone').scrollIntoView({behavior:'smooth'}), 100)" style="background:#dc2626;color:white;">Delete from CSV</button>
+          <button class="btn btn-secondary" id="dataExportBtn" onclick="startDataExport()" title="Download the contacts matching your current filters as a full CSV (all columns). Unlike Apollo Export this exports EVERY matching row regardless of verification status, and does NOT mark anything as exported to Apollo." style="background:#0f766e;color:#fff;font-weight:700;">⬇ Download CSV</button>
+          <label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#6b7280;cursor:pointer;" title="Restrict the download to verified-clean addresses only (safe / safe catch-all, not opted out, not hard-bounced). Off = everything matching your filters."><input type="checkbox" id="dataExportCleanOnly" style="accent-color:#0f766e"> verified only</label>
           <button class="btn btn-secondary" id="exportBtn" onclick="startApolloExport()">⬇ Apollo Export</button>
           <label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#6b7280;cursor:pointer;" title="Export ALL matching contacts (including unverified/risky) so Apollo can enrich & verify them, then send back. Off = only verified-clean (safe/safe_catchall) emails."><input type="checkbox" id="exportIncludeUnverified" style="accent-color:#8b5cf6"> Include unverified</label>
           <label style="display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#6b7280;cursor:pointer;" title="Export the Email column only. Apollo matches on the address alone, so name/company/website are just upload weight — a 436k-row file drops from ~32MB to ~9MB. Leave OFF if you want Apollo to UPDATE existing records rather than create new ones (that needs Apollo Contact Id)."><input type="checkbox" id="exportEmailOnly" style="accent-color:#8b5cf6"> Email only</label>
@@ -2126,6 +2128,27 @@
             💾 Save current filters to this campaign
           </label>
           <p style="font-size:11px;color:#9ca3af;margin:4px 0 0 26px;">Next time you search for more leads for this campaign, you can recall this filter from the sidebar.</p>
+        </div>
+
+        <!-- Send-rule override. For re-pushing contacts whose cooldown stamp
+             records a send that never really happened (e.g. the leads were
+             deleted in PlusVibe after the push). Deliberately noisy. -->
+        <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:14px;margin-top:10px;">
+          <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;font-size:13px;font-weight:600;color:#991b1b;">
+            <input type="checkbox" id="overrideSendRules" style="accent-color:#dc2626;width:16px;height:16px;margin-top:1px;"
+                   onchange="onOverrideSendRulesToggle()">
+            <span>🔓 Override send rules (ignore cooldown &amp; spacing)</span>
+          </label>
+          <p style="font-size:11px;color:#b91c1c;margin:6px 0 0 26px;line-height:1.5;">
+            Bypasses the same-client cooldown, the same-vertical lockout and the cross-client
+            spacing rules <strong>for this push only</strong>. Use when a push was lost after it was
+            recorded — the stamp says these contacts were emailed when they never were.
+            Everything else still applies (verification bucket, do-not-contact, bounced,
+            missing name/enrichment). Every override is logged.
+          </p>
+          <div id="overrideSendRulesWarn" style="display:none;font-size:11px;color:#7f1d1d;background:#fee2e2;border-radius:6px;padding:7px 9px;margin:8px 0 0 26px;">
+            ⚠️ Override is <strong>ON</strong> — contacts still inside their cooldown window will be pushed. Only do this if you know the earlier send did not land.
+          </div>
         </div>
 
         <div id="pushError" style="display:none;background:#fee2e2;color:#dc2626;padding:10px 14px;border-radius:6px;font-size:13px;margin-top:12px;"></div>
@@ -4235,6 +4258,8 @@
               delete f.limit; delete f.offset; delete f.sortBy; delete f.sortDir;
               return f;
             })(),
+            // Count what the push would actually accept, override included.
+            override_send_rules: isSendRuleOverrideOn(),
           }),
         });
         const d = await res.json();
@@ -4274,7 +4299,10 @@
         // Same client + same filter = same answer. Selecting twice, or
         // switching between "this page" and "select all", must not re-run the
         // guards over thousands of rows.
-        const key = workspaceId + '|' + JSON.stringify(f) + '|' + sample;
+        // The override changes which ids come back, so it belongs in the key —
+        // otherwise toggling it would serve the previous answer from cache.
+        const override = isSendRuleOverrideOn();
+        const key = workspaceId + '|' + JSON.stringify(f) + '|' + sample + '|' + override;
         if (_sendableIdCache.key === key && _sendableIdCache.ids) return _sendableIdCache.ids;
         const res = await fetch('/api/contacts/sendability', {
           method: 'POST',
@@ -4284,6 +4312,7 @@
             workspace_name: (document.getElementById('clientFilter')?.selectedOptions?.[0]?.textContent || '').trim(),
             filters: f,
             return_ids: true,
+            override_send_rules: override,
             // Cover at least what is being selected, within the server cap.
             sample: Math.min(Math.max(parseInt(sample, 10) || 5000, 5000), 20000),
           }),
@@ -5143,8 +5172,8 @@
       try {
         const endpoint = verifyFirst ? '/api/contacts/verify-and-push' : '/api/pv/push-contacts';
         const body = verifyFirst
-          ? { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, workspace_name: wsName, campaign_name: campName, include_risky: false, max_age_days: 14, emailProviders: pushProviders.join(','), excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '', use_n2b: useN2b, allowed_statuses: allowedStatuses }
-          : { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, campaign_name: campName, excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '', allowed_statuses: allowedStatuses };
+          ? { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, workspace_name: wsName, campaign_name: campName, include_risky: false, max_age_days: 14, emailProviders: pushProviders.join(','), excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '', use_n2b: useN2b, allowed_statuses: allowedStatuses, override_send_rules: isSendRuleOverrideOn() }
+          : { workspace_id: wsId, campaign_id: campId, contact_ids: contactIds, campaign_name: campName, workspace_name: wsName, excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '', allowed_statuses: allowedStatuses, override_send_rules: isSendRuleOverrideOn() };
 
         const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         const data = await r.json();
@@ -5561,6 +5590,26 @@
 
     function closePushModal() {
       document.getElementById('pushModal').classList.remove('active');
+      // Always reset the override. It is a per-push escape hatch, and a
+      // sticky checkbox would silently bypass the guards on the NEXT push
+      // too — the failure mode nobody would notice until a client complains.
+      const ov = document.getElementById('overrideSendRules');
+      if (ov && ov.checked) { ov.checked = false; onOverrideSendRulesToggle(); }
+    }
+
+    // Show/hide the "override is ON" banner and refresh the sendable badge,
+    // which is computed with the same guards and must agree with the push.
+    function onOverrideSendRulesToggle() {
+      const on = !!document.getElementById('overrideSendRules')?.checked;
+      const warn = document.getElementById('overrideSendRulesWarn');
+      if (warn) warn.style.display = on ? '' : 'none';
+      if (typeof refreshSendability === 'function') refreshSendability();
+    }
+
+    // Single source of truth for the flag, so every push path sends the same
+    // value and none can drift from the others.
+    function isSendRuleOverrideOn() {
+      return !!document.getElementById('overrideSendRules')?.checked;
     }
 
     // ── Push to PlusVibe ──────────────────────────────────────────
@@ -5797,6 +5846,7 @@
             excludeMicrosoft: document.getElementById('excludeMicrosoft')?.checked ? 'true' : '',
             use_n2b: useN2b,
             allowed_statuses: allowedStatuses,
+            override_send_rules: isSendRuleOverrideOn(),
             verify_only: true,
           })
         });
@@ -6909,6 +6959,94 @@
     loadCampaignFilterRecall();
 
     // ── Apollo Export ─────────────────────────────────────────────
+    // ── Download CSV (general data export) ────────────────────────
+    // "Give me what I'm looking at, as a spreadsheet." Sends the SAME filters
+    // as the visible list, exports every column, and — unlike the Apollo
+    // export — stamps nothing, so downloading a file never changes the
+    // not-exported-to-Apollo filter underneath you.
+    // Chained by the `after` id cursor: one file per request, more files only
+    // if the row/size cap is hit.
+    async function startDataExport() {
+      const btn = document.getElementById('dataExportBtn');
+      if (!btn || btn.disabled) return;
+      btn.disabled = true;
+      const origLabel = btn.textContent;
+      const cleanOnly = document.getElementById('dataExportCleanOnly')?.checked;
+
+      // "Max per company" is applied by the search's window function, which the
+      // export query does not implement — the file would quietly contain more
+      // rows per company than the table shows. Say so rather than hand over a
+      // file that disagrees with the screen.
+      if (window._maxPerCompany) {
+        const ok = confirm(
+          `Heads up: the "max ${window._maxPerCompany} per company" limit is NOT applied to this download.\n\n` +
+          `The CSV will contain every matching contact, including extra people at the same company.\n\n` +
+          `Download anyway?`
+        );
+        if (!ok) { btn.disabled = false; return; }
+      }
+
+      let after = '', fileNum = 1, totalRows = 0;
+      try {
+        while (true) {
+          btn.textContent = fileNum === 1 ? '⬇ Preparing…' : `⬇ File ${fileNum}…`;
+
+          const params = new URLSearchParams(getFilterValues(0));
+          // Paging/sorting are properties of the on-screen table, not of the
+          // export — the cursor drives the file boundaries instead.
+          params.delete('limit'); params.delete('offset');
+          params.delete('sortBy'); params.delete('sortDir');
+          if (after) params.set('after', after);
+          if (cleanOnly) params.set('cleanOnly', '1');
+
+          const r = await fetch(`/api/contacts/export-data?${params}`);
+          if (!r.ok) {
+            const errText = await r.text().catch(() => '');
+            showMessage(`Download failed (${r.status}): ${errText.slice(0, 200)}`, 'error');
+            break;
+          }
+
+          const hasMore    = r.headers.get('X-Has-More') === 'true';
+          const nextAfter  = r.headers.get('X-Next-After') || '';
+          const rowsInFile = parseInt(r.headers.get('X-Rows-In-File') || '0', 10);
+
+          if (rowsInFile > 0) {
+            const blob = await r.blob();
+            const stamp = new Date().toISOString().slice(0, 10);
+            const filename = `ottaly-contacts-${stamp}${fileNum > 1 ? `-${fileNum}` : ''}.csv`;
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = filename;
+            document.body.appendChild(a); a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            totalRows += rowsInFile;
+            fileNum++;
+            btn.textContent = `⬇ ${totalRows.toLocaleString()} rows…`;
+          }
+
+          // Stop on no-progress as well as no-more, so a stuck cursor can't
+          // spin this loop forever downloading the same file.
+          if (!hasMore || rowsInFile === 0 || !nextAfter || nextAfter === after) break;
+          after = nextAfter;
+          await new Promise(res => setTimeout(res, 800)); // gap between downloads
+        }
+
+        if (totalRows === 0) {
+          showMessage(cleanOnly
+            ? 'No verified-clean contacts match your filters. Untick "verified only" to download everything that matches.'
+            : 'No contacts match your filters to download.', 'error');
+        } else {
+          showMessage(`Downloaded ${totalRows.toLocaleString()} contacts in ${fileNum - 1} file${fileNum > 2 ? 's' : ''}`, 'success');
+        }
+      } catch (err) {
+        showMessage('Download error: ' + err.message, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = origLabel;
+      }
+    }
+
     async function startApolloExport() {
       const btn = document.getElementById('exportBtn');
       btn.disabled = true;

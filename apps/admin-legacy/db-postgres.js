@@ -2606,6 +2606,46 @@ class PostgresDatabase {
     return await this._runExportQuery(sql, args);
   }
 
+  // Columns for the general-purpose data export (the ⬇ Download CSV button).
+  // Deliberately NOT raw_data — that JSONB blob is what blew the statement
+  // timeout on the Apollo path, and none of it is readable in a spreadsheet.
+  static DATA_EXPORT_COLUMNS = [
+    'id','email','first_name','last_name','job_title','seniority','department',
+    'company_name','company_domain','industry','num_employees','keywords','technologies',
+    'phone','corporate_phone','company_phone','linkedin_url','company_linkedin_url',
+    'city','state','country','company_city','company_county','company_state','company_country',
+    'company_region','company_town','person_region','person_county','person_town',
+    'email_status','email_verified_at','mx_provider','status','source','tags',
+    'do_not_contact','works_remote','owns_building','ccod_owns_building','ccod_building_owner',
+    'ch_company_number','ch_postcode','company_status',
+    'last_campaign_name','last_emailed_at','email_count','bounced_at','bounce_type',
+    'last_reply_at','marked_as_lead_at','exported_to_apollo_at','imported_at','created_at',
+  ];
+
+  // Keyset-paginated FULL-ROW export for the generic data download. Unlike
+  // exportContactsPage (Apollo) this applies NO cleanliness guard: the point of
+  // the button is to get whatever the filters currently match, including
+  // unverified/risky rows, for analysis outside the app. The one thing it will
+  // not do is silently drop rows the user can see on screen.
+  //
+  // `cleanOnly` opts back IN to the verified-clean guard for the case where the
+  // file is going somewhere that will actually send to it.
+  async exportContactsData(workspaceId, filters = {}, limit = 50000, afterId = null, cleanOnly = false) {
+    const { clauses, params } = this._buildFilterClauses(filters);
+    const where = clauses.length ? ' AND ' + clauses.join(' AND ') : '';
+    const guard = cleanOnly ? PostgresDatabase.EXPORT_CLEAN_SQL : '';
+    const cols = PostgresDatabase.DATA_EXPORT_COLUMNS.join(', ');
+    let sql = `SELECT ${cols} FROM contacts WHERE workspace_id = $1${where}${guard}`;
+    const args = [workspaceId, ...params];
+    if (afterId) { sql += ` AND id > $${args.length + 1}`; args.push(afterId); }
+    sql += ` ORDER BY id LIMIT $${args.length + 1}`;
+    args.push(limit);
+    // Same dedicated-client + raised-timeout treatment as the Apollo export:
+    // a wide filter over a large table is a cold scan that outlives the pool's
+    // 45s statement_timeout.
+    return await this._runExportQuery(sql, args);
+  }
+
   // Run an export query on its own client with a 5-minute statement_timeout, then
   // reset the timeout before returning the client to the pool.
   async _runExportQuery(sql, args) {

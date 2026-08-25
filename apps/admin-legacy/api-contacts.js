@@ -901,6 +901,122 @@ module.exports = (db) => {
     }
   });
 
+  // GET /api/contacts/export-data — general-purpose CSV of the CURRENT filters.
+  //
+  // Distinct from /contacts/export, which exists to feed Apollo: that one forces
+  // the verified-clean guard, exports 6 fixed columns, and STAMPS every row as
+  // exported_to_apollo_at. None of that is wanted for "let me download what I'm
+  // looking at", and the stamp in particular is a side effect that would quietly
+  // corrupt the not-exported-to-Apollo filter. So this route:
+  //   - exports the full readable column set (DATA_EXPORT_COLUMNS)
+  //   - applies NO cleanliness guard by default (?cleanOnly=1 opts in)
+  //   - stamps nothing and mutates nothing
+  // Paginates by the same keyset cursor so a big filter downloads as several
+  // files instead of dying on one enormous query.
+  router.get('/contacts/export-data', async (req, res) => {
+    try {
+      const MAX_BYTES = 45 * 1024 * 1024;
+      const MAX_ROWS  = 50000;
+      const cleanOnly = req.query.cleanOnly === '1' || req.query.cleanOnly === 'true';
+
+      // Honour EVERY filter the contacts search understands. This list is
+      // deliberately WIDER than the Apollo export's: this button's whole
+      // promise is "download what I'm looking at", so a filter that is applied
+      // on screen but dropped here would hand back the wrong rows silently —
+      // the worst possible failure for an export. Keys must match
+      // _buildFilterClauses in db-postgres.js.
+      const EXPORT_FILTER_KEYS = [
+        'status','source','tags','company','website','email','phone','linkedinUrl','companyLinkedin',
+        'firstName','lastName','jobTitle','jobTitleExclude','seniority','department','subDepartments',
+        'industry','industryExclude','keywords','keywordsExclude','technologies','technologiesExclude',
+        'sicCodes','numEmployeesRanges','emailProviders','excludeMicrosoft','gateway','gatewayExclude',
+        'emailStatus','locationNeedsReview',
+        'city','cityExclude','state','stateExclude','country','countryExclude',
+        'companyCity','companyCityExclude','companyState','companyStateExclude',
+        'companyCountry','companyCountryExclude','companyCounty','companyCountyExclude',
+        'companyRegion','companyRegionExclude','companyTown','companyTownExclude',
+        'personRegion','personRegionExclude','personCounty','personCountyExclude',
+        'personTown','personTownExclude',
+        // Companies House / enrichment / provenance
+        'chStatus','chInsolvency','chCharges','chOverdue','chOnlyEnriched','chVerified',
+        'companyAgeBand','updatedAge','hasName','hasCompany',
+        // Ads, solar, building ownership
+        'adsRunsAds','adsMinCount','adsMaxCount','ownsBuilding','ccodOwnsBuilding',
+        'solarStatus','solarStatusExclude','solarMinKwp',
+        // Outreach state
+        'worksRemote','excludeRemote','excludeDNC','notExportedToApollo','exportedToApollo',
+        'sentToPV','notSentToPV','vertical','hasFact','excludeFact',
+      ];
+      // NB: maxPerCompany is intentionally absent. It is implemented in
+      // searchContacts' window-function branch, NOT in _buildFilterClauses, so
+      // forwarding it here would be silently ignored and the file would contain
+      // more rows per company than the screen showed. The UI warns instead.
+      const exportFilters = {};
+      for (const key of EXPORT_FILTER_KEYS) {
+        if (req.query[key]) exportFilters[key] = req.query[key];
+      }
+      // The search box is `q` on the wire but `search` in the filter builder.
+      if (req.query.q) exportFilters.search = req.query.q;
+      if (req.query.notExportedOnly === 'true') exportFilters.notExportedToApollo = 'true';
+      // Cooldown filter: only meaningful with a target workspace selected.
+      if (req.query.cooldownWorkspace) exportFilters.cooldownWorkspace = req.query.cooldownWorkspace;
+
+      if (!db.exportContactsData) {
+        return res.status(500).json({ error: 'Export not supported by this database driver' });
+      }
+
+      const after = req.query.after || null;
+      // Static on the Postgres driver class. Read defensively: a driver that
+      // implements exportContactsData but not the column list would otherwise
+      // throw on .join() and 500 with a confusing message.
+      const cols = db.constructor?.DATA_EXPORT_COLUMNS;
+      if (!Array.isArray(cols) || !cols.length) {
+        return res.status(500).json({ error: 'Export column list unavailable' });
+      }
+      const esc = v => {
+        if (v == null) return '';
+        // Dates arrive as JS Date objects; ISO keeps them sortable in a sheet.
+        const s = v instanceof Date ? v.toISOString() : String(v);
+        return (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r'))
+          ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+
+      // +1 probe row tells us whether another file is needed.
+      const page = await db.exportContactsData(req.workspaceId, exportFilters, MAX_ROWS + 1, after, cleanOnly);
+
+      const lines = ['﻿' + cols.join(',')]; // BOM so Excel reads UTF-8
+      let sizeBytes = Buffer.byteLength(lines[0], 'utf8');
+      let rowsExported = 0;
+      let lastId = after;
+      let sizeCut = false;
+
+      for (const row of page) {
+        if (rowsExported >= MAX_ROWS) break;
+        const line = cols.map(c => esc(row[c])).join(',');
+        const lineBytes = Buffer.byteLength(line, 'utf8') + 2;
+        if (sizeBytes + lineBytes > MAX_BYTES && rowsExported > 0) { sizeCut = true; break; }
+        lines.push(line);
+        sizeBytes += lineBytes;
+        rowsExported++;
+        lastId = row.id || lastId;
+      }
+
+      const hasMore = sizeCut || page.length > rowsExported;
+      const stamp = new Date().toISOString().slice(0, 10);
+
+      console.log(`[export-data] workspaceId=${req.workspaceId} rows=${rowsExported} hasMore=${hasMore} cleanOnly=${cleanOnly}`);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="ottaly-contacts-${stamp}.csv"`);
+      res.setHeader('X-Has-More', String(hasMore));
+      res.setHeader('X-Next-After', String(lastId || ''));
+      res.setHeader('X-Rows-In-File', String(rowsExported));
+      res.send(lines.join('\r\n'));
+    } catch (err) {
+      console.error('[export-data] Error:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // GET /api/contacts/:id — MUST be last (wildcard catches everything above)
   router.get('/contacts/:id', async (req, res) => {
     try {

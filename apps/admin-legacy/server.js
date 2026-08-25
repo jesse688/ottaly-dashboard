@@ -16385,9 +16385,14 @@ app.post('/api/contacts/sendability', requireSession, async (req, res) => {
       snoozed: 0,
     };
 
-    const crossClientGuard = buildCrossClientGuard(workspaceId, workspaceName);
+    // Mirror the push's override so the "sendable" badge and the Select-N
+    // popover count what the push would actually accept. Without this the
+    // badge keeps reporting contacts as blocked while the override push
+    // sends them — the two numbers MUST agree or the badge is a lie.
+    const overrideGuards = isGuardOverride(body.override_send_rules);
+    const crossClientGuard = buildCrossClientGuard(workspaceId, workspaceName, overrideGuards);
     const campaignVertical = detectVertical((campaignName || '') + ' ' + (workspaceName || ''), workspaceId);
-    const cooloffDate = sameClientCooloffDate();
+    const cooloffDate = sameClientCooloffDate(overrideGuards);
     const today = new Date().toISOString().slice(0, 10);
     const targetCampLc = campaignName.toLowerCase();
     const targetCampId = String(body.campaign_id || '').trim();
@@ -16547,10 +16552,12 @@ app.post('/api/pv/push-contacts', requireSession, async (req, res) => {
     // Same dedup/cooldown filter as /verify-and-push — per-workspace
     // 60-day cooldown + per-campaign skip. Verification is the caller's
     // job on this path (this endpoint is 'push without verify').
-    const cooloffDate = sameClientCooloffDate();
+    const overrideGuards = isGuardOverride(req.body.override_send_rules);
+    if (overrideGuards) logGuardOverride('push-contacts', req, { contacts: allContacts.length, ws: workspace_id, campaign: campaign_id });
+    const cooloffDate = sameClientCooloffDate(overrideGuards);
     const campaignNameLc = (req.body.campaign_name || '').toString().trim().toLowerCase();
     const skipped = { unsafe: 0, dnc: 0, cooldownWorkspace: 0, verticalCollision: 0, burstGap: 0, densityCeiling: 0, alreadyInCampaign: 0, missingEnrichment: 0, missingName: 0 };
-    const crossClientGuard = buildCrossClientGuard(workspace_id, req.body.workspace_name || '');
+    const crossClientGuard = buildCrossClientGuard(workspace_id, req.body.workspace_name || '', overrideGuards);
     // Status gate. The user picks which verification-result buckets to push via
     // the modal (allowed_statuses). Validate against the known vocabulary; default
     // to the safe pair when absent so existing callers are unchanged. NULL/empty
@@ -17084,13 +17091,13 @@ app.post('/api/admin/flag-free-domain-contacts', requireAdmin, async (req, res) 
 // `departed` is passed in rather than looked up here so this stays synchronous:
 // an empty set means "no block", so the caller must fetch it via
 // getDepartedEmails().
-function filterPushableContacts(allContacts, { cooldownWorkspaceId, campaignName, allowedStatuses, pushWorkspaceId, workspaceName, departed = new Set() }) {
-  const cooloffDate = sameClientCooloffDate();
+function filterPushableContacts(allContacts, { cooldownWorkspaceId, campaignName, allowedStatuses, pushWorkspaceId, workspaceName, departed = new Set(), overrideGuards = false }) {
+  const cooloffDate = sameClientCooloffDate(overrideGuards);
   const campaignNameLc = (campaignName || '').toString().trim().toLowerCase();
   const skipped = { unsafe: 0, dnc: 0, freeDomain: 0, cooldownWorkspace: 0, verticalCollision: 0, burstGap: 0, densityCeiling: 0, alreadyInCampaign: 0, missingEnrichment: 0, missingName: 0 };
   // Guard against the workspace actually being pushed to; cooldownWorkspaceId
   // is optional on this path, so fall back to it only when no target is given.
-  const crossClientGuard = buildCrossClientGuard(pushWorkspaceId || cooldownWorkspaceId || '', workspaceName || '');
+  const crossClientGuard = buildCrossClientGuard(pushWorkspaceId || cooldownWorkspaceId || '', workspaceName || '', overrideGuards);
   // Caller-chosen verification buckets; default to the safe pair when absent.
   const KNOWN_STATUSES = ['safe', 'safe_catchall', 'unknown', 'risky', 'invalid'];
   const validStatuses = Array.isArray(allowedStatuses)
@@ -17112,7 +17119,10 @@ function filterPushableContacts(allContacts, { cooldownWorkspaceId, campaignName
     if (campaignNameLc && c.last_campaign_name && c.last_campaign_name.toLowerCase() === campaignNameLc) {
       skipped.alreadyInCampaign++; return false;
     }
-    if (cooldownWorkspaceId) {
+    // cooloffDate is null when the cooldown is off or overridden. Without the
+    // null guard every real stamp compares >= null-coerced '' and blocks the
+    // whole push — the exact opposite of "cooldown disabled".
+    if (cooldownWorkspaceId && cooloffDate) {
       const emailed = typeof c.emailed_workspaces === 'string'
         ? JSON.parse(c.emailed_workspaces || '{}')
         : (c.emailed_workspaces || {});
@@ -17207,12 +17217,15 @@ app.post('/api/bison/push-contacts', requireSession, async (req, res) => {
     // cooldown_workspace_id was sent, leaving those pushes invisible to every
     // downstream cooldown.
     const guardWorkspaceId = cooldownWorkspaceId || ws_id;
+    const overrideGuards = isGuardOverride(req.body.override_send_rules);
     const { contacts, skipped } = filterPushableContacts(allContacts, {
       cooldownWorkspaceId, campaignName: req.body.campaign_name,
       allowedStatuses: req.body.allowed_statuses,
       pushWorkspaceId: guardWorkspaceId, workspaceName: req.body.workspace_name || '',
       departed: await getDepartedEmails(req.app.locals.pgDb),
+      overrideGuards,
     });
+    if (overrideGuards) logGuardOverride('pv-push', req, { contacts: allContacts.length, ws: guardWorkspaceId, campaign: campaign_id });
     console.log(`[pv-push] filtered ${allContacts.length} → ${contacts.length}`, skipped);
     if (contacts.length === 0) return res.json({ success: true, pushed: 0, total: 0, skipped });
 
@@ -18701,9 +18714,33 @@ function stampDaysAgo(days) {
 // switching the cross-client rules off leaves this baseline rule standing.
 // Call sites treat null as "no cooldown" — never as a date, because any real
 // stamp sorts >= '' and an empty string would block every push instead.
-function sameClientCooloffDate() {
+// `override` is the manual "ignore send rules" escape hatch (push modal). It
+// returns null — the same value the disabled path returns — so every call
+// site's existing `cooloffDate &&` check short-circuits and nothing is blocked
+// on same-client history. It exists for the case where a push was lost AFTER
+// the stamp was written (leads deleted in PlusVibe), so the stamp records a
+// send that never actually happened and the cooldown is guarding nothing.
+function sameClientCooloffDate(override = false) {
+  if (override) return null;
   const settings = pushGuardSettings();
   return settings.sameClientEnabled ? stampDaysAgo(settings.sameClientDays) : null;
+}
+
+// Truthy-parse for the override flag. Accepts the JSON boolean the modal sends
+// plus the string/number forms that arrive from query params and older callers,
+// matching how loose/skipVerify are parsed elsewhere. Anything else is false:
+// the guards must fail CLOSED, so a malformed value never disables them.
+function isGuardOverride(v) {
+  return v === true || v === 'true' || v === 1 || v === '1';
+}
+
+// Every override is logged. Bypassing the send rules is a deliberate, unusual
+// act — if a client later asks why they were emailed twice inside the window,
+// this line is the record of who did it and to how many contacts.
+function logGuardOverride(tag, req, detail = {}) {
+  const who = decodeSession(req)?.role || (req.headers['x-admin-key'] ? 'api-key' : 'unknown');
+  const bits = Object.entries(detail).map(([k, v]) => `${k}=${v}`).join(' ');
+  console.warn(`[${tag}] ⚠ SEND-RULE OVERRIDE by ${who} — ${bits}`);
 }
 
 function stampMonthsAgo(months) {
@@ -18731,7 +18768,11 @@ function parseEmailedWorkspaces(contact) {
 
 // Build the cross-client guard for one push target.
 // Returns (contact, skipped) => boolean, mutating `skipped` for reporting.
-function buildCrossClientGuard(workspaceId, workspaceName) {
+function buildCrossClientGuard(workspaceId, workspaceName, override = false) {
+  // Manual override → behave exactly as the master switch being off: every
+  // contact passes. Checked before pushGuardSettings() so the override can
+  // never be defeated by saved settings, and costs no lookup.
+  if (override) return () => true;
   const settings = pushGuardSettings();
   // Master switch off → every contact passes. Returned before any lookup so
   // the disabled path costs nothing and can't trip on a bad client_verticals row.
@@ -20601,7 +20642,7 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
   // of 36 bounced with verdicts averaging 52 days old; re-running the same list
   // through the verifier returned 11 invalid. Mailboxes get disabled constantly,
   // so 14 days keeps the credit saving on genuinely recent checks only.
-  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 14, emailProviders, excludeMicrosoft, loose, skipVerify, use_n2b } = req.body;
+  const { contact_ids, workspace_id, campaign_id, workspace_name, campaign_name, include_risky = false, max_age_days = 14, emailProviders, excludeMicrosoft, loose, skipVerify, use_n2b, override_send_rules } = req.body;
   // The UI has always SENT use_n2b; the server never read it, so the "Use
   // No2Bounce to verify catch-alls" checkbox did nothing either way and its
   // help text ("if unchecked, catch-alls are skipped entirely") described
@@ -20654,6 +20695,11 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
     allowedProviders,
     allowedStatuses,
     loose: looseEffective,
+    // Manual send-rule override. Deliberately NOT persisted to
+    // paused_push_jobs: a job resumed after a restart re-applies the guards
+    // rather than silently inheriting a bypass nobody remembers granting.
+    // Re-tick the box and push again if a resumed job needs it.
+    overrideGuards: isGuardOverride(override_send_rules),
     useN2b,
     skipVerify: skipVerifyMode,
     excludeMicrosoft: excludeMicrosoft === 'true' || excludeMicrosoft === true,
@@ -20664,6 +20710,7 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
     error: null
   };
   pushJobs.set(jobId, job);
+  if (job.overrideGuards) logGuardOverride('verify-and-push', req, { job: jobId, contacts: contact_ids.length, ws: workspace_id, campaign: campaign_id });
 
   // Persist to SQLite so Pause/Resume survives server restarts
   if (sq) {
@@ -20758,9 +20805,9 @@ app.post('/api/contacts/verify-and-push', requireSession, (req, res) => {
 
       // ── Shared filter constants ────────────────────────────────
       const campaignVertical = detectVertical((job.campaign_name || '') + ' ' + (job.workspace_name || ''), job.workspace_id);
-      const crossClientGuard = buildCrossClientGuard(job.workspace_id || '', job.workspace_name || '');
+      const crossClientGuard = buildCrossClientGuard(job.workspace_id || '', job.workspace_name || '', job.overrideGuards);
       const today        = new Date().toISOString().slice(0, 10);
-      const cooloffDate  = sameClientCooloffDate();
+      const cooloffDate  = sameClientCooloffDate(job.overrideGuards);
       const targetCampLc = (job.campaign_name || '').trim().toLowerCase();
       const departed     = await getDepartedEmails(db);
 
@@ -21357,9 +21404,9 @@ app.post('/api/contacts/push-jobs/:id/resume', requireSession, async (req, res) 
       const skipped = { unsafe: 0, dnc: 0, departed: 0, cooldownWorkspace: 0, verticalCollision: 0, burstGap: 0, densityCeiling: 0, alreadyInCampaign: 0, snoozed: 0 };
 
       const campaignVertical = detectVertical((job.campaign_name || '') + ' ' + (job.workspace_name || ''), job.workspace_id);
-      const crossClientGuard = buildCrossClientGuard(job.workspace_id || '', job.workspace_name || '');
+      const crossClientGuard = buildCrossClientGuard(job.workspace_id || '', job.workspace_name || '', job.overrideGuards);
       const today       = new Date().toISOString().slice(0, 10);
-      const cooloffDate = sameClientCooloffDate();
+      const cooloffDate = sameClientCooloffDate(job.overrideGuards);
       const targetCampLc = (job.campaign_name || '').trim().toLowerCase();
       const departed    = await getDepartedEmails(db);
 
