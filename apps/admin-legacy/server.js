@@ -162,8 +162,6 @@ const PV_WORKSPACES = [
   { pv: '6a0e29d0d004be93be3f33f2', name: 'Bubble' },
   { pv: '6a0cc49a4a80688441614dfb', name: 'MagnaMoney' },
   { pv: '69ffaf6904ca7138af16013a', name: 'Bruud' },
-  { pv: '69c43d1e07bf312ff0026643', name: 'GXI Furniture' },
-  { pv: '69c43d1407bf312ff0026642', name: 'GXI' },
   { pv: '6a19a054d42a3f59aac110d6', name: 'LVM' },
   { pv: '695259c3d6154e27d164bcf7', name: 'Indigo' },
   { pv: '699714b02f0830a7148fcf3e', name: 'Enviro' },
@@ -178,15 +176,20 @@ const PV_WORKSPACES = [
   // clients seed list. (BlueHawk/Bybo/Hayes/FirstVehicleFinance still need
   // their PV ids added — not present anywhere in code yet.)
   { pv: '693fc9d9fd3453ffb933c88c', name: 'FleetSauce' },
-  { pv: '695259ea8de377db7577dc46', name: 'JMC Accountants' },
   { pv: '69a9db287af7ef2854f57636', name: 'GGRS' },
-  { pv: '691ed9eaa1b5035dd42b4d86', name: 'Volancy' },
-  { pv: '695259b0d1677bc04d5a3aa8', name: 'Stribe' },
   { pv: '6964ec1b2364418165378b13', name: 'Rural & Country' },
-  { pv: '6964ec4f693ae16dcb15b9f7', name: 'TangerineTax' },
   // AIVI / V4One / FAIT removed — their seed-list PV ids return "Workspace id
   // does not belong to this user" (stale/invalid). Re-add with correct ids if
   // these become active clients.
+  //
+  // GXI / GXI Furniture / JMC Accountants / Volancy / Stribe / TangerineTax
+  // removed 2026-08-26 — confirmed against the LIVE PV /workspaces endpoint
+  // (not the seed list) that none of these six exist in PlusVibe any more,
+  // which is why every reconcile/mailbox-sync run logged "Workspace id does
+  // not belong to this user" for them. Historical rows already in
+  // unibox_replies/reply_facts from when they WERE real are untouched; this
+  // only stops future polling from wasting a call on a workspace that's gone.
+  // Re-add with a correct id if any of these becomes a real client again.
   { pv: '6a35364e981ca441b3db8e5c', name: 'Bybo Digital' },
   { pv: '6a353641e5488018209fc409', name: 'BlueHawk' },
   { pv: '6a35364d981ca441b3db8e5b', name: 'Hayes & Co' },
@@ -20460,19 +20463,36 @@ app.get('/api/cron/reply-facts', async (req, res) => {
     const dry   = req.query.dry === '1' || req.query.dry === 'true';
     const useLlm = req.query.llm !== '0' && req.query.llm !== 'false' && !!GEMINI_KEY;
     const LLM_BUDGET = Math.min(500, Math.max(0, parseInt(req.query.llmLimit, 10) || 300));
+    // Optional upper bound for paging through history OLDER than 30 days.
+    // hours/beforeHours=800/1520 scans the (800,1520] hours-ago window — the
+    // 720-hour cap on `hours` alone means every call scans the same most-recent
+    // 30 days no matter how large `hours` is set, so a historical backfill
+    // needs this second bound to actually reach further back. Absent for the
+    // normal hourly cron tick, which only ever wants "since last run".
+    const beforeHours = req.query.beforeHours ? Math.max(hours, parseInt(req.query.beforeHours, 10)) : null;
 
     // Human categories only. Warmup is our own mailboxes talking to each other
     // and OOO is noise for these attributes; departures have their own pass.
     const { rows } = await pgdb.query(
-      `SELECT id, lead_email, received_at, body_preview
-         FROM unibox_replies
-        WHERE category IN ('not_interested','interested','question','other')
-          AND body_preview IS NOT NULL
-          AND lead_email IS NOT NULL AND lead_email <> ''
-          AND received_at >= NOW() - ($1 || ' hours')::interval
-        ORDER BY received_at DESC
-        LIMIT 5000`,
-      [String(hours)]
+      beforeHours
+        ? `SELECT id, lead_email, received_at, body_preview
+             FROM unibox_replies
+            WHERE category IN ('not_interested','interested','question','other')
+              AND body_preview IS NOT NULL
+              AND lead_email IS NOT NULL AND lead_email <> ''
+              AND received_at >= NOW() - ($2 || ' hours')::interval
+              AND received_at <  NOW() - ($1 || ' hours')::interval
+            ORDER BY received_at DESC
+            LIMIT 5000`
+        : `SELECT id, lead_email, received_at, body_preview
+             FROM unibox_replies
+            WHERE category IN ('not_interested','interested','question','other')
+              AND body_preview IS NOT NULL
+              AND lead_email IS NOT NULL AND lead_email <> ''
+              AND received_at >= NOW() - ($1 || ' hours')::interval
+            ORDER BY received_at DESC
+            LIMIT 5000`,
+      beforeHours ? [String(hours), String(beforeHours)] : [String(hours)]
     );
 
     let kept = 0, wrote = 0, llmScanned = 0, llmKept = 0, llmRejected = 0, llmErrors = 0;
@@ -20550,7 +20570,7 @@ app.get('/api/cron/reply-facts', async (req, res) => {
       }
     }
 
-    res.json({ ok: true, hours, dry, useLlm, llmBudget: LLM_BUDGET,
+    res.json({ ok: true, hours, beforeHours, dry, useLlm, llmBudget: LLM_BUDGET,
                extractor: RULES_VERSION,
                replies_scanned: rows.length, facts_found: kept, facts_written: wrote,
                llm_scanned: llmScanned, llm_facts_kept: llmKept, llm_rejected: llmRejected, llm_errors: llmErrors,
