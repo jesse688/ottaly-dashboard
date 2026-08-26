@@ -118,7 +118,7 @@ function lastNDates(n: number): string[] {
   return dates
 }
 
-async function pvFetch(path: string): Promise<any> {
+export async function pvFetch(path: string): Promise<any> {
   return pvGate(async () => {
     const url = `${PV_BASE}${path}`
     // Retry 429/5xx with backoff. Previously a 429 threw straight out, the

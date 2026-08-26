@@ -2,7 +2,7 @@ import { type NextRequest, NextResponse } from 'next/server'
 import * as Sentry from '@sentry/nextjs'
 import pool from '@/lib/db'
 import { getActiveWorkspaceIds } from '@/lib/active-clients'
-import { fetchPvDay, upsertPerfDay } from '@/lib/cache-warming' // live-fill missing/stale cache cells
+import { fetchPvRanges, type PvDay } from '@/lib/pv-range'
 
 interface DayData {
   date: string
@@ -25,6 +25,7 @@ interface Workspace {
     oooReplies: number
     bounces: number
     contacted: number
+    uniqueContacted: number
     leads: number
     replyRate: number
     allReplyRate: number
@@ -37,22 +38,16 @@ interface Workspace {
   series: DayData[]
 }
 
-// FRESH-START CUTOVER: PlusVibe-clean data begins here. The Bison→PV transition
-// (2026-06-13..18) had near-zero/mixed sends and Bison-era rows skewed the numbers,
-// so stats only count data on/after this date. Change this one constant to adjust.
-//
-// 2026-06-23: lowered 19→17 so "Last 7 Days" is a TRUE 7-day window that aligns
-// with PV's own Last-7-Days view (which we reconcile against). With ~all sends
-// now PV-native, 17–18 Jun no longer carry meaningful Bison noise. Override per
-// env if a future window needs a different floor.
+// FRESH-START CUTOVER: PlusVibe-clean data begins here. Verified against PV on
+// 2026-08-26: sending ran to 12 Jun, then stopped dead 13–21 Jun (0 sends except
+// 19 on 15 Jun) and resumed 22 Jun. 2026-06-17 sits inside that dead zone, so
+// the window is Bison-free without clipping any real PV send-day.
 const STATS_CUTOVER = process.env.STATS_CUTOVER_DATE ?? '2026-06-17'
 
-// Enumerate inclusive YYYY-MM-DD strings from start..end, purely lexically (no
-// Date/timezone math) so it never re-introduces a UTC/London divergence.
+// Enumerate inclusive YYYY-MM-DD strings from start..end. Steps at UTC noon so
+// DST can never drop or duplicate a day; the emitted strings are slices.
 function enumerateDates(start: string, end: string, cap: number): string[] {
   const out: string[] = []
-  // Use UTC noon to step days safely without DST/tz drift, but only to ADVANCE;
-  // the emitted strings come from slicing, anchored on the input strings.
   let cur = new Date(`${start}T12:00:00Z`)
   const last = new Date(`${end}T12:00:00Z`)
   while (cur <= last && out.length < cap) {
@@ -75,17 +70,14 @@ export async function GET(req: NextRequest) {
   const start = rawStart < STATS_CUTOVER ? STATS_CUTOVER : rawStart
 
   try {
-    // Get active workspace list from workspace_stats
-    const wsQuery = `
-      SELECT DISTINCT workspace_id, workspace_name
-      FROM workspace_stats
-      WHERE workspace_id IS NOT NULL AND workspace_id != ''
-      ORDER BY workspace_id
-    `
-    const wsRes = await pool.query(wsQuery)
+    const wsRes = await pool.query(
+      `SELECT DISTINCT workspace_id, workspace_name
+         FROM workspace_stats
+        WHERE workspace_id IS NOT NULL AND workspace_id != ''
+        ORDER BY workspace_id`,
+    )
     let workspaceList = wsRes.rows as Array<{ workspace_id: string; workspace_name: string }>
 
-    // Apply workspace_ids filter if provided
     if (workspaceIds) {
       const ids = String(workspaceIds).split(',').filter(Boolean)
       workspaceList = workspaceList.filter(w => ids.includes(w.workspace_id))
@@ -94,100 +86,37 @@ export async function GET(req: NextRequest) {
     // Hide inactive clients (legacy is the source of truth). Fails open: if the
     // status list is unavailable, show all rather than blank the page.
     const activeIds = await getActiveWorkspaceIds()
-    if (activeIds) {
-      workspaceList = workspaceList.filter(w => activeIds.has(w.workspace_id))
-    }
+    if (activeIds) workspaceList = workspaceList.filter(w => activeIds.has(w.workspace_id))
 
-    // The inclusive list of YYYY-MM-DD strings in the requested window. Defined
-    // up front so the live-fill below knows exactly which cells to check.
     const dates = enumerateDates(start, end, 400)
 
-    // Query perf_cache_daily for the date range. Read saved_at so we can tell a
-    // REAL fetched row from a seeded-zero placeholder (saved_at=0) or a stale
-    // 'today' row — those must be live-filled from PV, not trusted.
-    const perfRes = await pool.query(
-      `SELECT ws_id, date, data, saved_at
-       FROM perf_cache_daily
-       WHERE date >= $1 AND date <= $2
-       ORDER BY date ASC`,
-      [start, end]
+    // ── THE SOURCE OF TRUTH ──────────────────────────────────────────────────
+    // One PV call per workspace for the WHOLE range. Sent, replies, OOO,
+    // bounces and contacted all come from the SAME response, so the numerator
+    // and the denominator are always measured over the same days.
+    //
+    // The previous implementation read `sent` from perf_cache_daily and replies
+    // from our unibox. When the cache was missing days — which it was, six of
+    // them for ButterflyEco in August alone — the denominator shrank while the
+    // numerator did not, and every rate on the page came out roughly double.
+    // No cache-warming tweak can fix that; only sharing one source can.
+    const { byWs, failed } = await fetchPvRanges(
+      workspaceList.map(w => w.workspace_id),
+      start,
+      end,
     )
 
-    const perfByDateAndWs: Record<string, Record<string, Record<string, number>>> = {}
-    const savedAt: Record<string, Record<string, number>> = {}
-    ;(perfRes.rows as Array<{ ws_id: string; date: string; data: Record<string, number> | null; saved_at: string | number | null }>).forEach(row => {
-      if (!perfByDateAndWs[row.ws_id]) { perfByDateAndWs[row.ws_id] = {}; savedAt[row.ws_id] = {} }
-      perfByDateAndWs[row.ws_id][row.date] = row.data || {}
-      savedAt[row.ws_id][row.date] = Number(row.saved_at) || 0
-    })
-
-    // LIVE-FILL: for every active workspace×date whose row is MISSING, seeded-
-    // zero (saved_at=0), or a STALE 'today' row, fetch it directly from PlusVibe
-    // now. This is the correctness guarantee: the dashboard equals live PV even
-    // if the background warm hasn't run / lost the race. Bounded + time-boxed.
-    {
-      const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London' }).format(new Date())
-      // PRIORITY 1: TODAY for every active workspace — the contested, climbing
-      // day that other writers corrupt. Always refetched (never trust cache).
-      // PRIORITY 2: missing/seeded PAST days — but only a small cap, so a wide
-      // 30D/90D range doesn't fan out to hundreds of blocking PV calls (which
-      // made the page hang / time out). Remaining gaps warm in the background.
-      const todayGaps: { ws: string; date: string }[] = []
-      const pastGaps: { ws: string; date: string }[] = []
-      for (const ws of workspaceList) {
-        for (const date of dates) {
-          if (date === todayStr) { todayGaps.push({ ws: ws.workspace_id, date }); continue }
-          const sa = savedAt[ws.workspace_id]?.[date]
-          const missing = perfByDateAndWs[ws.workspace_id]?.[date] === undefined
-          const seeded = sa === 0
-          if (missing || seeded) pastGaps.push({ ws: ws.workspace_id, date })
-        }
-      }
-      // Cap total inline fetches and time-box the whole pass so the request
-      // always returns quickly. Today first; backfill past days with the budget.
-      const MAX_INLINE = 64
-      const gaps = [...todayGaps, ...pastGaps].slice(0, MAX_INLINE)
-      const BUDGET_MS = 4000 // hard wall: never block the page > ~4s
-      if (gaps.length) {
-        // The fan-out is raced against a single wall clock rather than checked
-        // only BETWEEN batches. pvFetch serializes on a global gate
-        // (PV_CONCURRENCY=1) and retries 429/5xx with backoff, so one batch can
-        // run for MINUTES — a between-batches check never gets to fire and the
-        // page hung forever on any range containing today. Whatever has landed
-        // when the budget expires is used; the rest stays cached/background-warmed.
-        const budget = new Promise<void>(r => setTimeout(r, BUDGET_MS))
-        const CONC = 8
-        const fanOut = (async () => {
-          for (let i = 0; i < gaps.length; i += CONC) {
-            await Promise.allSettled(
-              gaps.slice(i, i + CONC).map(async ({ ws, date }) => {
-                const data = await fetchPvDay(ws, date)
-                if (!data) return
-                if (!perfByDateAndWs[ws]) perfByDateAndWs[ws] = {}
-                perfByDateAndWs[ws][date] = data
-                void upsertPerfDay(ws, date, data) // warm the cache for next read
-              }),
-            )
-          }
-        })()
-        // Never let a rejection escape; we only care that one of the two settles.
-        await Promise.race([fanOut.catch(() => {}), budget])
-      }
-    }
-
     // Leads are counted from esp_leads (label='INTERESTED') — the table the
-    // Unibox writes to when a reply is marked as a lead. PlusVibe itself does
-    // NOT show these as leads, so the old revenue_leads (PV-sourced) count
-    // missed Unibox-marked leads (e.g. LVM showed replies but 0 leads). Window
-    // on the lead date = COALESCE(first_replied_at, created_at, synced_at), so
-    // RTL/LPT share the same period as their denominators.
+    // Unibox writes to when a reply is marked as a lead. PlusVibe does NOT
+    // expose these, so this stays our own. Windowed on the lead date so RTL and
+    // LPT share the same period as their denominators.
     const leadsRes = await pool.query(
       `SELECT workspace_id, COUNT(*)::int AS n
-       FROM esp_leads
-       WHERE label = 'INTERESTED'
-         AND COALESCE(first_replied_at, created_at, synced_at)::date >= $1::date
-         AND COALESCE(first_replied_at, created_at, synced_at)::date <= $2::date
-       GROUP BY workspace_id`,
+         FROM esp_leads
+        WHERE label = 'INTERESTED'
+          AND COALESCE(first_replied_at, created_at, synced_at)::date >= $1::date
+          AND COALESCE(first_replied_at, created_at, synced_at)::date <= $2::date
+        GROUP BY workspace_id`,
       [start, end],
     )
     const leadsByWs: Record<string, number> = {}
@@ -195,116 +124,100 @@ export async function GET(req: NextRequest) {
       leadsByWs[r.workspace_id] = r.n
     })
 
-    // REPLIES from OUR unibox, counted by WHAT THE REPLY IS — not just "not warm-up"
-    // (that swept in inbound spam-to-mailbox / junk filed as 'other' and inflated
-    // the numbers). HUMAN = a genuine response (interested/question/not_interested/
-    // unsubscribe). OOO = ooo_auto_reply. 'other' and warm-up never count.
-    const uniRepliesRes = await pool.query(
-      `SELECT workspace_id,
-              COUNT(DISTINCT lower(lead_email)) FILTER (
-                WHERE COALESCE(admin_label, category) IN ('interested','question','not_interested','unsubscribe')
-              )::int AS human,
-              COUNT(DISTINCT lower(lead_email)) FILTER (
-                WHERE COALESCE(admin_label, category) = 'ooo_auto_reply'
-              )::int AS ooo
-         FROM unibox_replies
-        WHERE received_at::date >= $1::date AND received_at::date <= $2::date
-        GROUP BY workspace_id`,
-      [start, end],
-    )
-    const uniByWs: Record<string, { human: number; ooo: number }> = {}
-    ;(uniRepliesRes.rows as Array<{ workspace_id: string; human: number; ooo: number }>).forEach(r => {
-      uniByWs[r.workspace_id] = { human: Number(r.human) || 0, ooo: Number(r.ooo) || 0 }
-    })
-
-    // Build per-workspace stats
     const workspaces: Workspace[] = []
+    const failedNames: string[] = []
+
     for (const ws of workspaceList) {
-      const series: DayData[] = []
-      const totals = { sent: 0, replies: 0, posReplies: 0, oooReplies: 0, bounces: 0, contacted: 0, leads: 0 }
+      const range = byWs.get(ws.workspace_id)
+      if (!range) {
+        // Unknown, NOT zero. Recording zero here would shrink the agency-wide
+        // denominator and inflate every headline rate — the exact failure mode
+        // being fixed. Name it and leave it out of the maths entirely.
+        failedNames.push(ws.workspace_name || ws.workspace_id)
+        continue
+      }
 
-      for (const date of dates) {
-        const dayData = perfByDateAndWs[ws.workspace_id]?.[date] || {}
-        const day: DayData = {
+      // PV returns a row per day in range; index it so the series covers every
+      // requested date even where PV omitted a silent day.
+      const byDate = new Map<string, PvDay>()
+      for (const d of range.series) byDate.set(d.date, d)
+
+      const series: DayData[] = dates.map(date => {
+        const d = byDate.get(date)
+        return {
           date,
-          sent: Number(dayData.sent) || 0,
-          replies: Number(dayData.replies) || 0,
-          posReplies: Number(dayData.posReplies) || 0,
-          oooReplies: Number(dayData.oooReplies) || 0,
-          bounces: Number(dayData.bounces) || 0,
-          // People contacted (LPT denominator). Older cache rows predate this
-          // field; fall back to sent so LPT degrades gracefully, not to 0.
-          contacted: Number(dayData.contacted ?? dayData.sent) || 0,
-          leads: 0, // leads filled from revenue_leads below, not the perf cache
+          sent: d?.sent ?? 0,
+          replies: d?.replies ?? 0,
+          posReplies: d?.posReplies ?? 0,
+          oooReplies: d?.oooReplies ?? 0,
+          bounces: d?.bounces ?? 0,
+          contacted: d?.contacted ?? 0,
+          leads: 0, // leads are a window total from esp_leads, not per-day
         }
-        series.push(day)
-        totals.sent += day.sent
-        totals.replies += day.replies
-        totals.posReplies += day.posReplies
-        totals.oooReplies += day.oooReplies
-        totals.bounces += day.bounces
-        totals.contacted += day.contacted
-      }
-      // Leads = frozen revenue_leads count for this workspace in-window.
-      totals.leads = leadsByWs[ws.workspace_id] || 0
-      // Replies (Human RR) = genuine human responses from the unibox; OOO is its
-      // own bucket (feeds Reply Rate w/OOO). GREATER of PV vs unibox so we never
-      // under-report. 'other'/spam excluded — that was the inflation.
-      const u = uniByWs[ws.workspace_id]
-      if (u) {
-        totals.replies = Math.max(totals.replies, u.human)
-        totals.oooReplies = Math.max(totals.oooReplies, u.ooo)
-      }
+      })
 
+      const t = range.totals
+      const leads = leadsByWs[ws.workspace_id] || 0
       const days = dates.length || 1
+
       const w: Workspace = {
         workspace_id: ws.workspace_id,
         name: ws.workspace_name || ws.workspace_id,
         totals: {
-          ...totals,
-          // PROVEN via live PlusVibe (reconcile ?live=1): total_reply_count is
-          // the HUMAN/non-OOO count and total_ooo_reply_count is a SEPARATE
-          // bucket — live shows replies(6) < ooo(34), impossible if it included
-          // OOO. So:
-          //   Human RR           = replies / sent
-          //   Reply Rate (w/OOO) = (replies + ooo) / sent
-          replyRate: totals.sent > 0 ? totals.replies / totals.sent : 0,
+          sent: t.sent,
+          replies: t.replies,
+          posReplies: t.posReplies,
+          oooReplies: t.oooReplies,
+          bounces: t.bounces,
+          contacted: t.contacted,
+          uniqueContacted: t.uniqueContacted,
+          leads,
+          // PROVEN against live PV: total_reply_count is the HUMAN/non-OOO
+          // count and total_ooo_reply_count is a SEPARATE bucket.
+          //
+          // The DENOMINATOR is unique-contacted, not sent. Verified against
+          // PV's own published rates over three windows — dividing by
+          // total_unique_contacted_count reproduces reply_rate and
+          // reply_rate_with_ooo exactly (1.2/5.6, 1.3/6.0, 1.0/3.0), while
+          // dividing by sent is low in all six cases. Using `sent` here is what
+          // made a reply look rarer than PV reports it.
+          //   Human RR           = replies / uniqueContacted
+          //   Reply Rate (w/OOO) = (replies + ooo) / uniqueContacted
+          // Bounce is the exception: it genuinely divides by sent.
+          replyRate: t.uniqueContacted > 0 ? t.replies / t.uniqueContacted : 0,
           allReplyRate:
-            totals.sent > 0 ? (totals.replies + totals.oooReplies) / totals.sent : 0,
-          bounceRate: totals.sent > 0 ? totals.bounces / totals.sent : 0,
-          // RTL = Replies-To-Lead: human replies per lead. `replies` is already
-          // the human count (OOO is separate), so RTL = replies / leads.
-          rtl: totals.leads > 0 ? totals.replies / totals.leads : 0,
-          // LPT = Contacts-To-Lead: how many people contacted per lead
-          // (contacted ÷ leads). Lower is better. 'contacted' is people emailed
-          // (PV total_contacted_count), NOT total emails sent.
-          lpt: totals.leads > 0 ? totals.contacted / totals.leads : 0,
-          sendsPerDay: totals.sent / days,
-          repliesPerDay: totals.replies / days,
+            t.uniqueContacted > 0 ? (t.replies + t.oooReplies) / t.uniqueContacted : 0,
+          bounceRate: t.sent > 0 ? t.bounces / t.sent : 0,
+          // RTL = human replies per lead.
+          rtl: leads > 0 ? t.replies / leads : 0,
+          // LPT = people contacted per lead. `contacted` is PV's
+          // total_contacted_count (distinct people emailed), NOT emails sent.
+          lpt: leads > 0 ? t.contacted / leads : 0,
+          sendsPerDay: t.sent / days,
+          repliesPerDay: t.replies / days,
         },
         series,
       }
 
-      // Only include if has data
-      if (w.totals.sent > 0 || w.totals.leads > 0) {
-        workspaces.push(w)
-      }
+      if (w.totals.sent > 0 || w.totals.leads > 0) workspaces.push(w)
     }
 
-    // Sort by reply volume descending
     workspaces.sort((a, b) => b.totals.replies - a.totals.replies)
 
+    // `partial` is the page's instruction to HIDE rates rather than print a
+    // number computed from an incomplete denominator.
     return NextResponse.json({
       workspaces,
       dates,
       start,
       end,
-      partial: false,
+      partial: failed.length > 0,
+      failedCount: failed.length,
+      failedNames,
+      source: 'plusvibe',
       updatedAt: new Date().toISOString(),
     })
   } catch (err) {
-    // Capture to Sentry (not a silent console.error) and return an informative
-    // message the page can surface — never a blank "no data".
     Sentry.captureException(err, { tags: { tag: 'stats/summary' }, extra: { start, end } })
     const msg = err instanceof Error ? err.message : 'Failed to fetch stats'
     return NextResponse.json({ error: msg }, { status: 500 })
