@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Client Brief — Ottaly</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Genos:wght@700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ottaly.css">
+<style>
+  :root{--navy:#224388;--navy-dark:#050C29;--teal:#1F6F78;--green:#16a34a;--red:#dc2626;--amber:#d97706;--border:#E5E7EB;--card:#fff;--bg:#F8F9FC;--muted:#6B7280}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--navy-dark);min-height:100vh}
+  .page{max-width:900px;margin:0 auto;padding:1.25rem 1rem 4rem}
+  .top-bar{display:flex;align-items:center;gap:1rem;margin-bottom:.9rem;flex-wrap:wrap}
+  .page-title{font-family:'Genos',sans-serif;font-size:1.25rem;font-weight:800}
+  .sub{font-size:11px;color:var(--muted)}
+  .btn{padding:8px 14px;border:1.5px solid var(--navy);background:var(--navy);color:#fff;border-radius:8px;font:600 13px Inter,sans-serif;cursor:pointer}
+  .btn.ghost{background:#fff;color:var(--navy)}
+  .btn:disabled{opacity:.5;cursor:default}
+  .btn-sm{padding:5px 11px;font-size:12px;border-radius:6px}
+  select{padding:7px 10px;border:1px solid var(--border);border-radius:7px;font:600 13px Inter,sans-serif;background:#fff;min-width:15rem}
+
+  .meter{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:.7rem .9rem;margin-bottom:.9rem}
+  .meter-top{display:flex;align-items:baseline;gap:.6rem;margin-bottom:.45rem}
+  .meter-val{font-family:'Genos',sans-serif;font-size:1.5rem;font-weight:800;line-height:1}
+  .meter-bar{height:5px;background:#F3F4F6;border-radius:3px;overflow:hidden}
+  .meter-fill{height:100%;background:var(--green);border-radius:3px;transition:width .3s}
+  .meter-note{font-size:11.5px;color:var(--muted);margin-top:.4rem;line-height:1.5}
+
+  .fld{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:.75rem .9rem;margin-bottom:.6rem}
+  .fld label{display:block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.35px;color:var(--navy);margin-bottom:.15rem}
+  .fld .why{font-size:11px;color:var(--muted);margin-bottom:.4rem;line-height:1.45}
+  .fld textarea{width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font:400 12.5px/1.6 Inter,sans-serif;resize:vertical;min-height:4.5rem}
+  .fld textarea:focus{border-color:var(--navy);outline:none}
+
+  .lessons{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:.75rem .9rem;margin-top:1rem}
+  .lessons h3{font-family:'Genos',sans-serif;font-size:1rem;font-weight:800;margin-bottom:.15rem}
+  .lesson-row{display:flex;gap:.5rem;align-items:baseline;padding:.4rem 0;border-bottom:1px solid #F3F4F6;font-size:12.5px}
+  .lesson-row:last-child{border-bottom:none}
+  .lesson-txt{flex:1}
+  .lesson-meta{font-size:10.5px;color:var(--muted);white-space:nowrap}
+  .retire{border:none;background:none;color:var(--muted);cursor:pointer;font-size:11px;text-decoration:underline}
+  .empty{text-align:center;padding:2rem 1rem;color:var(--muted);font-size:12.5px}
+  .err{background:#FEE2E2;border:1px solid #FECACA;color:#991B1B;padding:.5rem .7rem;border-radius:6px;font-size:12px;margin-bottom:.6rem}
+  .ok{background:#DCFCE7;border:1px solid #BBF7D0;color:#166534;padding:.5rem .7rem;border-radius:6px;font-size:12px;margin-bottom:.6rem}
+</style>
+</head>
+<body>
+<script src="/nav.js" defer></script>
+
+<div class="page">
+  <div class="top-bar">
+    <div>
+      <div class="page-title">Client Brief</div>
+      <div class="sub">What the copy writer needs to know about this client. Fill it once; it improves every time you teach it something.</div>
+    </div>
+    <select id="ws" onchange="pick()"><option value="">Choose a client…</option></select>
+    <button class="btn" onclick="save()" id="saveBtn" disabled>Save</button>
+    <span id="status" class="sub"></span>
+  </div>
+
+  <div id="msg"></div>
+
+  <div id="body" style="display:none">
+    <div class="meter">
+      <div class="meter-top">
+        <span class="meter-val" id="mPct">0%</span>
+        <span class="sub" id="mState">brief is empty</span>
+      </div>
+      <div class="meter-bar"><div class="meter-fill" id="mFill" style="width:0"></div></div>
+      <div class="meter-note" id="mNote"></div>
+    </div>
+
+    <div class="fld">
+      <label for="offer">What they sell</label>
+      <div class="why">The actual service and what it does for the buyer. Not their marketing blurb.</div>
+      <textarea id="offer" placeholder="e.g. Fixed-fee accountancy for owner-managed UK companies turning over £250k-£2m. Year-end, VAT, payroll, and a quarterly call that flags tax they could have saved."></textarea>
+    </div>
+
+    <div class="fld">
+      <label for="icp">Who they want to reach</label>
+      <div class="why">Industry, size, region, job titles. The more exact, the less generic the copy.</div>
+      <textarea id="icp" placeholder="e.g. Owner-managers and FDs at UK construction and engineering firms, 10-60 staff, outside London. Usually already have an accountant they are lukewarm about."></textarea>
+    </div>
+
+    <div class="fld">
+      <label for="proof">Proof it can use</label>
+      <div class="why">Real numbers, named clients, results. Only what is written here will ever appear in an email — nothing is invented.</div>
+      <textarea id="proof" placeholder="e.g. Saved a 40-staff groundworks firm £18k in year one by restructuring how the directors drew income. 90+ UK clients. Averages a 4-day turnaround on year-end."></textarea>
+    </div>
+
+    <div class="fld">
+      <label for="objections">Objections that come back</label>
+      <div class="why">What people say when they say no. Good copy answers these before they are raised.</div>
+      <textarea id="objections" placeholder="e.g. 'We already have an accountant.' 'Switching sounds like hassle.' 'Too small to need this.' 'Your fee sounds high until you see what it replaces.'"></textarea>
+    </div>
+
+    <div class="fld">
+      <label for="voice">Voice rules</label>
+      <div class="why">How they sound, and what they never say. Be specific — 'professional' teaches nothing.</div>
+      <textarea id="voice" placeholder="e.g. Plain and direct, no jargon. Never 'partnership' or 'solutions'. Sign off as Chris, first name only. Never use exclamation marks. British spelling."></textarea>
+    </div>
+
+    <div class="fld">
+      <label for="disqualifiers">Not a fit, and never claim</label>
+      <div class="why">Who to avoid, and any claim that would be untrue or would get them in trouble.</div>
+      <textarea id="disqualifiers" placeholder="e.g. Not sole traders. Not regulated financial firms. Never say 'guaranteed savings' or imply we are their accountant already."></textarea>
+    </div>
+
+    <div class="lessons">
+      <h3>What you have taught it</h3>
+      <div class="sub">Added every time you change or reject a draft and say why. These beat the brief where they disagree.</div>
+      <div id="lessonList"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+let WS = '', LOADED = null;
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+const FIELDS = ['offer','icp','proof','objections','voice','disqualifiers'];
+const LABEL = { offer:'what they sell', icp:'who to reach', proof:'proof', objections:'objections', voice:'voice rules' };
+
+function msg(text, ok){
+  document.getElementById('msg').innerHTML = '<div class="' + (ok?'ok':'err') + '">' + esc(text) + '</div>';
+  if (ok) setTimeout(() => { document.getElementById('msg').innerHTML = ''; }, 4000);
+}
+
+async function loadClients(){
+  try {
+    const res = await fetch('/api/brief/clients');
+    const j = await res.json();
+    const list = j.clients || [];
+    const sel = document.getElementById('ws');
+    list.forEach(c => {
+      if (!c.workspace_id) return;
+      const o = document.createElement('option');
+      o.value = c.workspace_id;
+      // A tick beside the ones already written, so the gaps are obvious
+      // without opening each client in turn.
+      o.textContent = (c.has_brief ? '✓ ' : '· ') + (c.workspace_name || c.workspace_id);
+      sel.appendChild(o);
+    });
+  } catch (e) { msg('Could not load the client list: ' + e.message, false); }
+}
+
+async function pick(){
+  WS = document.getElementById('ws').value;
+  const body = document.getElementById('body');
+  document.getElementById('saveBtn').disabled = !WS;
+  if (!WS) { body.style.display = 'none'; return; }
+  body.style.display = '';
+  try {
+    const res = await fetch('/api/memory/' + encodeURIComponent(WS));
+    const j = await res.json();
+    LOADED = j.memory || {};
+    FIELDS.forEach(f => { document.getElementById(f).value = LOADED[f] || ''; });
+    paintMeter(j.completeness);
+    paintLessons(LOADED.lessons || []);
+  } catch (e) { msg('Could not load that brief: ' + e.message, false); }
+}
+
+function paintMeter(c){
+  if (!c) return;
+  document.getElementById('mPct').textContent = c.pct + '%';
+  document.getElementById('mFill').style.width = c.pct + '%';
+  document.getElementById('mFill').style.background = c.ready ? 'var(--green)' : 'var(--amber)';
+  document.getElementById('mState').textContent = c.ready ? 'ready to write from' : 'too thin to write from';
+  document.getElementById('mNote').textContent = c.missing.length
+    ? 'Still needs: ' + c.missing.map(m => LABEL[m] || m).join(', ') + '. A thin brief produces generic copy, so drafting is blocked until at least three sections are filled in.'
+    : 'Everything is filled in. Drafts will sound like this client rather than like a generic email.';
+}
+
+function paintLessons(rows){
+  const el = document.getElementById('lessonList');
+  if (!rows.length) {
+    el.innerHTML = '<div class="empty">Nothing yet. Every time you change or reject a draft and say why, it lands here.</div>';
+    return;
+  }
+  el.innerHTML = rows.map(l =>
+    '<div class="lesson-row">' +
+      '<span class="lesson-txt">' + esc(l.lesson) + '</span>' +
+      '<span class="lesson-meta">' + esc(l.author || '') + ' &middot; ' + esc((l.created_at || '').slice(0,10)) + '</span>' +
+    '</div>').join('');
+}
+
+async function save(){
+  if (!WS) return;
+  const btn = document.getElementById('saveBtn');
+  btn.disabled = true;
+  const payload = {};
+  FIELDS.forEach(f => { payload[f] = document.getElementById(f).value; });
+  try {
+    const res = await fetch('/api/memory/' + encodeURIComponent(WS), {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload)
+    });
+    const j = await res.json();
+    if (!res.ok) throw new Error(j.error || 'Save failed');
+    paintMeter(j.completeness);
+    msg('Saved.', true);
+  } catch (e) { msg(e.message, false); }
+  finally { btn.disabled = false; }
+}
+
+loadClients();
+</script>
+</body>
+</html>

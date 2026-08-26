@@ -18823,6 +18823,439 @@ function qScopeWorkspaces(req) {
   } catch { return null; }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// CLIENT MEMORY + COPY LOOP
+//
+// The memory file is what makes a draft sound like THIS client rather than
+// like a language model. It holds the durable things — offer, who it is for,
+// proof, objections, voice rules, disqualifiers — plus the LESSONS a CM
+// teaches it by editing and skipping drafts.
+//
+// Two deliberate constraints, both learned the hard way elsewhere:
+//
+//   Lessons are APPEND-ONLY and attributed. A model that rewrites its own
+//   brief will quietly drift, and when the copy goes bad six months later
+//   nobody can tell which edit did it. Every lesson keeps who said it and
+//   when, and a human can retire one.
+//
+//   Nothing is auto-extracted into the brief. The CM's own words are stored
+//   verbatim. Inferring "the lesson" from a diff sounds clever and is how you
+//   poison a brief with a typo fix promoted to a rule.
+// ═══════════════════════════════════════════════════════════════════════════
+
+db.exec(`CREATE TABLE IF NOT EXISTS client_memory (
+  workspace_id   TEXT PRIMARY KEY,
+  offer          TEXT,
+  icp            TEXT,
+  proof          TEXT,
+  objections     TEXT,
+  voice          TEXT,
+  disqualifiers  TEXT,
+  updated_by     TEXT,
+  updated_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+)`);
+
+db.exec(`CREATE TABLE IF NOT EXISTS client_memory_lessons (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  workspace_id TEXT NOT NULL,
+  lesson       TEXT NOT NULL,
+  source       TEXT,
+  draft_id     INTEGER,
+  author       TEXT,
+  active       INTEGER NOT NULL DEFAULT 1,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+)`);
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_lessons_ws ON client_memory_lessons(workspace_id, active)`); } catch {}
+
+db.exec(`CREATE TABLE IF NOT EXISTS copy_drafts (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  workspace_id   TEXT NOT NULL,
+  workspace_name TEXT,
+  campaign_id    TEXT,
+  campaign_name  TEXT,
+  reason         TEXT,
+  model          TEXT,
+  generated      TEXT NOT NULL,
+  edited         TEXT,
+  status         TEXT NOT NULL DEFAULT 'draft',
+  decided_by     TEXT,
+  decided_at     TEXT,
+  decision_note  TEXT,
+  pv_response    TEXT,
+  cost_usd       REAL DEFAULT 0,
+  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+)`);
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_drafts_status ON copy_drafts(status, created_at DESC)`); } catch {}
+
+function memoryFor(workspaceId) {
+  const m = db.prepare('SELECT * FROM client_memory WHERE workspace_id = ?').get(workspaceId) || { workspace_id: workspaceId };
+  const lessons = db.prepare(
+    `SELECT lesson, author, created_at FROM client_memory_lessons
+     WHERE workspace_id = ? AND active = 1 ORDER BY created_at DESC LIMIT 60`
+  ).all(workspaceId);
+  return { ...m, lessons };
+}
+
+// How complete is this brief? A thin brief produces generic copy, the CM
+// concludes the AI is useless in week one, and that first impression is close
+// to irreversible — so say so BEFORE drafting rather than after.
+function memoryCompleteness(m) {
+  const fields = ['offer', 'icp', 'proof', 'objections', 'voice'];
+  const filled = fields.filter(f => (m[f] || '').trim().length >= 20);
+  return {
+    pct: Math.round((filled.length / fields.length) * 100),
+    missing: fields.filter(f => !((m[f] || '').trim().length >= 20)),
+    ready: filled.length >= 3,
+  };
+}
+
+const COPY_SYSTEM_PROMPT = `You write cold outreach email sequences for a UK B2B lead generation agency.
+
+You are given a client brief and lessons their campaign manager has taught you. Follow both exactly. The lessons override the brief where they conflict — they are more recent and come from a human who saw the results.
+
+Hard rules:
+- Write for deliverability first. Plain text. No images, no links unless the brief asks, no attachments.
+- No spam-trigger phrasing: no "guaranteed", no ALL CAPS, no exclamation marks, no "act now", no fake urgency, no "quick question" as a subject.
+- Subject lines: lower case or sentence case, under 45 characters, specific, no clickbait.
+- Short. A first email is 60-110 words. Follow-ups are shorter still.
+- Sound like one person emailing another. No marketing voice, no "I hope this email finds you well", no "I wanted to reach out".
+- Never invent proof, numbers, case studies or client names. Use only what the brief supplies. If the brief has no proof, write without it.
+- British English.
+- Use {{first_name}} for the recipient's first name. Do not use any other merge field unless the brief names one.
+
+Each variation must take a genuinely different angle — a different reason to care, not the same email reworded. Two variations that differ only in phrasing are worthless for testing and read as templated to spam filters.
+
+Return ONLY valid JSON, no prose, no code fence:
+{"steps":[{"step":1,"wait_time":3,"variations":[{"variation":"A","name":"short label","subject":"...","body":"..."},{"variation":"B","name":"short label","subject":"...","body":"..."}]},{"step":2,"wait_time":3,"variations":[...]}]}
+
+Body is plain text with \\n for line breaks. Sign off with the sender name from the brief if given, otherwise no sign-off block.`;
+
+function buildCopyUserPrompt(m, opts) {
+  const L = [];
+  L.push(`Client: ${opts.workspace_name || m.workspace_id}`);
+  if (m.offer) L.push(`\nWhat they sell:\n${m.offer}`);
+  if (m.icp) L.push(`\nWho they want to reach:\n${m.icp}`);
+  if (m.proof) L.push(`\nProof they can use (use ONLY this, invent nothing):\n${m.proof}`);
+  if (m.objections) L.push(`\nObjections that come back:\n${m.objections}`);
+  if (m.voice) L.push(`\nVoice rules:\n${m.voice}`);
+  if (m.disqualifiers) L.push(`\nNot a fit / never claim:\n${m.disqualifiers}`);
+  if (m.lessons?.length) {
+    L.push(`\nLessons from their campaign manager (most recent first — these override the brief):`);
+    for (const l of m.lessons) L.push(`- ${l.lesson}`);
+  }
+  if (opts.avoid?.length) {
+    L.push(`\nAngles already used and now burnt — take a different one:`);
+    for (const a of opts.avoid) L.push(`- ${a}`);
+  }
+  if (opts.reason) L.push(`\nWhy new copy is needed: ${opts.reason}`);
+  L.push(`\nWrite ${opts.steps || 2} steps, ${opts.variations || 2} variations each.`);
+  return L.join('\n');
+}
+
+// Sonnet, not Haiku. This is the copy that decides whether a client's month
+// works — the price difference is noise against one bad sequence.
+const COPY_MODEL = process.env.COPY_MODEL || 'claude-sonnet-5';
+const SONNET_PRICE = { input: 3.00, output: 15.00, cache_write: 3.75, cache_read: 0.30 };
+
+async function generateCopyDraft({ workspaceId, workspaceName, campaignId, campaignName, reason, steps, variations }) {
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) throw new Error('ANTHROPIC_API_KEY is not set — cannot draft copy');
+  const m = memoryFor(workspaceId);
+  const done = memoryCompleteness(m);
+  if (!done.ready) {
+    throw new Error(`This client's brief is too thin to draft from (${done.pct}% complete, missing: ${done.missing.join(', ')}). Fill it in first — a thin brief produces generic copy.`);
+  }
+  // What has already been tried, so a redraft does not resurrect a burnt angle.
+  let avoid = [];
+  try {
+    avoid = db.prepare(
+      `SELECT DISTINCT json_extract(value, '$.name') AS n
+       FROM copy_drafts, json_each(json_extract(COALESCE(edited, generated), '$.steps'))
+       WHERE workspace_id = ? AND status = 'applied' LIMIT 12`
+    ).all(workspaceId).map(r => r.n).filter(Boolean);
+  } catch { /* best effort — an empty avoid list is fine */ }
+
+  const userPrompt = buildCopyUserPrompt({ ...m, workspace_name: workspaceName },
+    { workspace_name: workspaceName, reason, steps, variations, avoid });
+
+  const req = () => fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json', 'x-api-key': key,
+      'anthropic-version': '2023-06-01', 'anthropic-beta': 'prompt-caching-2024-07-31',
+    },
+    body: JSON.stringify({
+      model: COPY_MODEL, max_tokens: 3000,
+      system: [{ type: 'text', text: COPY_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
+      messages: [{ role: 'user', content: userPrompt }],
+    }),
+  });
+  let r = await req();
+  if (!r.ok && (r.status === 429 || r.status >= 500)) {
+    await new Promise(res => setTimeout(res, 2500));
+    r = await req();
+  }
+  if (!r.ok) throw new Error(`Claude ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  const j = await r.json();
+  const u = j?.usage || {};
+  const cost = ((u.input_tokens || 0) * SONNET_PRICE.input + (u.output_tokens || 0) * SONNET_PRICE.output +
+    (u.cache_creation_input_tokens || 0) * SONNET_PRICE.cache_write +
+    (u.cache_read_input_tokens || 0) * SONNET_PRICE.cache_read) / 1_000_000;
+  const text = (j?.content?.[0]?.text || '').replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+  let parsed;
+  try { parsed = JSON.parse(text); } catch { throw new Error('The model did not return usable JSON. Try again.'); }
+  const bad = validateSequence(parsed);
+  if (bad) throw new Error(`Draft rejected: ${bad}`);
+
+  const ins = db.prepare(`INSERT INTO copy_drafts
+    (workspace_id, workspace_name, campaign_id, campaign_name, reason, model, generated, cost_usd)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(workspaceId, workspaceName || null, campaignId || null, campaignName || null,
+         reason || null, COPY_MODEL, JSON.stringify(parsed), cost);
+  return { id: ins.lastInsertRowid, sequence: parsed, cost, completeness: done };
+}
+
+// Structural gate before anything reaches a human, let alone PlusVibe. Cheap,
+// and it catches the model's failure modes (empty body, missing subject, a
+// merge field nobody defined) without spending a CM's attention on them.
+function validateSequence(seq) {
+  if (!seq || !Array.isArray(seq.steps) || !seq.steps.length) return 'no steps';
+  for (const s of seq.steps) {
+    if (!Number.isFinite(s.step)) return 'a step has no number';
+    if (!Number.isFinite(s.wait_time) || s.wait_time < 1) return `step ${s.step} has an invalid wait time`;
+    if (!Array.isArray(s.variations) || !s.variations.length) return `step ${s.step} has no variations`;
+    for (const v of s.variations) {
+      if (!v.variation) return `step ${s.step} has a variation with no letter`;
+      if (!v.subject || !v.subject.trim()) return `step ${s.step}${v.variation} has no subject`;
+      if (!v.body || v.body.trim().length < 20) return `step ${s.step}${v.variation} has no real body`;
+      if (v.subject.length > 120) return `step ${s.step}${v.variation} subject is too long`;
+      const merge = String(v.body + v.subject).match(/\{\{\s*([a-z_]+)\s*\}\}/gi) || [];
+      for (const t of merge) {
+        if (!/first_name|last_name|company|company_name/i.test(t)) {
+          return `step ${s.step}${v.variation} uses ${t}, which may not exist on the lead`;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+// Clients this session may write briefs for. /api/my-clients is manager-only
+// and returns nothing for an admin, which would leave the brief page with an
+// empty dropdown for the person most likely to be filling briefs in.
+app.get('/api/brief/clients', requireSession, (req, res) => {
+  try {
+    const s = decodeSession(req);
+    const rows = (s?.role === 'admin')
+      ? db.prepare(`SELECT workspace_id, workspace_name FROM clients ORDER BY workspace_name`).all()
+      : db.prepare(`SELECT c.workspace_id, c.workspace_name
+                    FROM client_managers cm
+                    JOIN clients c ON c.workspace_id = cm.client_workspace_id
+                    WHERE cm.manager_name = ? AND (cm.end_date IS NULL OR cm.end_date > date('now'))
+                    ORDER BY c.workspace_name`).all(s?.name || '');
+    // Flag which briefs are already usable, so a CM can see at a glance where
+    // the gaps are instead of clicking through every client to find out.
+    const filled = new Set(db.prepare(
+      `SELECT workspace_id FROM client_memory
+       WHERE LENGTH(COALESCE(offer,'')) >= 20 AND LENGTH(COALESCE(icp,'')) >= 20`
+    ).all().map(r => r.workspace_id));
+    res.json({ clients: rows.map(r => ({ ...r, has_brief: filled.has(r.workspace_id) })) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Client memory HTTP surface ─────────────────────────────────────────────
+app.get('/api/memory/:workspaceId', requireSession, (req, res) => {
+  try {
+    const m = memoryFor(req.params.workspaceId);
+    res.json({ memory: m, completeness: memoryCompleteness(m) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/memory/:workspaceId', requireSession, (req, res) => {
+  try {
+    const s = decodeSession(req);
+    const ws = req.params.workspaceId;
+    const f = ['offer', 'icp', 'proof', 'objections', 'voice', 'disqualifiers'];
+    const vals = f.map(k => (req.body?.[k] ?? '').toString().slice(0, 8000));
+    db.prepare(`INSERT INTO client_memory (workspace_id, offer, icp, proof, objections, voice, disqualifiers, updated_by, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(workspace_id) DO UPDATE SET
+        offer=excluded.offer, icp=excluded.icp, proof=excluded.proof,
+        objections=excluded.objections, voice=excluded.voice,
+        disqualifiers=excluded.disqualifiers, updated_by=excluded.updated_by,
+        updated_at=datetime('now')`)
+      .run(ws, ...vals, s?.name || 'unknown');
+    const m = memoryFor(ws);
+    res.json({ ok: true, completeness: memoryCompleteness(m) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/memory/:workspaceId/lesson', requireSession, (req, res) => {
+  try {
+    const s = decodeSession(req);
+    const lesson = (req.body?.lesson || '').toString().trim().slice(0, 500);
+    if (!lesson) return res.status(400).json({ error: 'Say what the lesson is' });
+    db.prepare(`INSERT INTO client_memory_lessons (workspace_id, lesson, source, draft_id, author)
+      VALUES (?, ?, ?, ?, ?)`)
+      .run(req.params.workspaceId, lesson, req.body?.source || 'manual',
+           req.body?.draft_id || null, s?.name || 'unknown');
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Retire a lesson. Lessons are append-only, so this flips active rather than
+// deleting — the record of what was once believed stays readable.
+app.post('/api/memory/lesson/:id/retire', requireSession, (req, res) => {
+  try {
+    const r = db.prepare('UPDATE client_memory_lessons SET active = 0 WHERE id = ? AND active = 1').run(Number(req.params.id));
+    res.json({ ok: true, changed: r.changes });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Copy draft HTTP surface ────────────────────────────────────────────────
+app.post('/api/copy/draft', requireSession, async (req, res) => {
+  try {
+    const out = await generateCopyDraft({
+      workspaceId: req.body?.workspace_id,
+      workspaceName: req.body?.workspace_name,
+      campaignId: req.body?.campaign_id,
+      campaignName: req.body?.campaign_name,
+      reason: req.body?.reason,
+      steps: Math.min(Number(req.body?.steps) || 2, 5),
+      variations: Math.min(Number(req.body?.variations) || 2, 3),
+    });
+    res.json(out);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.get('/api/copy/drafts', requireSession, (req, res) => {
+  try {
+    const status = req.query.status || 'draft';
+    const rows = db.prepare(
+      `SELECT id, workspace_id, workspace_name, campaign_id, campaign_name, reason,
+              status, decided_by, decided_at, cost_usd, created_at,
+              COALESCE(edited, generated) AS sequence
+       FROM copy_drafts WHERE status = ? ORDER BY created_at DESC LIMIT 100`
+    ).all(status).map(r => ({ ...r, sequence: JSON.parse(r.sequence) }));
+    res.json({ rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Approve a draft: write it into PlusVibe, live.
+//
+// The whole safety model rests on this being deliberate, so it records whether
+// the CM changed anything before approving. If that ratio collapses toward
+// zero the approval step has become a rubber stamp and this is an unsupervised
+// autosender — see /api/copy/health.
+app.post('/api/copy/draft/:id/approve', requireSession, async (req, res) => {
+  const id = Number(req.params.id);
+  const s = decodeSession(req);
+  try {
+    const row = db.prepare('SELECT * FROM copy_drafts WHERE id = ?').get(id);
+    if (!row) return res.status(404).json({ error: 'No such draft' });
+    if (row.status !== 'draft') return res.status(409).json({ error: `Already ${row.status}` });
+    if (!row.campaign_id) return res.status(400).json({ error: 'This draft has no campaign to write to' });
+
+    const edited = req.body?.sequence ? JSON.stringify(req.body.sequence) : null;
+    if (edited) {
+      const bad = validateSequence(req.body.sequence);
+      if (bad) return res.status(400).json({ error: `Cannot send that: ${bad}` });
+    }
+    const finalSeq = JSON.parse(edited || row.generated);
+    const wasEdited = edited && edited !== row.generated;
+
+    // Claim the draft BEFORE calling PlusVibe. Two people hitting Approve, or
+    // one double-click, must not produce two writes into a live campaign.
+    const claim = db.prepare(
+      `UPDATE copy_drafts SET status = 'applying', decided_by = ?, decided_at = datetime('now'),
+       edited = COALESCE(?, edited) WHERE id = ? AND status = 'draft'`
+    ).run(s?.name || 'unknown', edited, id);
+    if (!claim.changes) return res.status(409).json({ error: 'Someone just approved this' });
+
+    try {
+      const pvBody = {
+        // Both required in the BODY per the API spec, even though pvApi also
+        // puts workspace_id on the query string.
+        workspace_id: row.workspace_id,
+        campaign_id: row.campaign_id,
+        sequences: finalSeq.steps.map(st => ({
+          step: st.step,
+          wait_time: st.wait_time,
+          variations: st.variations.map(v => ({
+            variation: v.variation,
+            name: v.name || `${st.step}${v.variation}`,
+            subject: v.subject,
+            // PlusVibe stores HTML. Plain text with newlines becomes one run-on
+            // paragraph, so convert here rather than asking the model for HTML
+            // (which invites styling we do not want in a cold email).
+            body: v.body.split(/\n{2,}/).map(p => `<p>${p.replace(/\n/g, '<br>')}</p>`).join(''),
+          })),
+        })),
+      };
+      const pvRes = await pvApi('/campaign/update/campaign', {
+        method: 'PATCH', wsId: row.workspace_id, body: pvBody,
+      });
+      db.prepare(`UPDATE copy_drafts SET status = 'applied', pv_response = ? WHERE id = ?`)
+        .run(JSON.stringify(pvRes || {}).slice(0, 4000), id);
+
+      // A CM's edit is the most valuable signal in the system, but inferring
+      // the lesson from a diff is how a brief gets poisoned. Ask for it in
+      // their words instead; store only what they actually wrote.
+      const lesson = (req.body?.lesson || '').toString().trim().slice(0, 500);
+      if (lesson) {
+        db.prepare(`INSERT INTO client_memory_lessons (workspace_id, lesson, source, draft_id, author)
+          VALUES (?, ?, 'edit', ?, ?)`).run(row.workspace_id, lesson, id, s?.name || 'unknown');
+      }
+      res.json({ ok: true, edited: !!wasEdited, lessonSaved: !!lesson });
+    } catch (e) {
+      // Put it back so the CM can retry rather than losing the draft.
+      db.prepare(`UPDATE copy_drafts SET status = 'draft', decided_by = NULL, decided_at = NULL WHERE id = ?`).run(id);
+      res.status(502).json({ error: `PlusVibe refused the write: ${e.message}` });
+    }
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/copy/draft/:id/reject', requireSession, (req, res) => {
+  try {
+    const s = decodeSession(req);
+    const note = (req.body?.note || '').toString().trim().slice(0, 500);
+    if (!note) return res.status(400).json({ error: 'Say what was wrong with it — that is what stops the next one being wrong the same way.' });
+    const r = db.prepare(`UPDATE copy_drafts SET status = 'rejected', decided_by = ?, decided_at = datetime('now'),
+      decision_note = ? WHERE id = ? AND status = 'draft'`).run(s?.name || 'unknown', note, Number(req.params.id));
+    if (!r.changes) return res.status(409).json({ error: 'That draft has already been decided' });
+    const row = db.prepare('SELECT workspace_id FROM copy_drafts WHERE id = ?').get(Number(req.params.id));
+    if (row) {
+      db.prepare(`INSERT INTO client_memory_lessons (workspace_id, lesson, source, draft_id, author)
+        VALUES (?, ?, 'reject', ?, ?)`).run(row.workspace_id, note, Number(req.params.id), s?.name || 'unknown');
+    }
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Is the approval gate real? Same question as the queue's, asked of copy —
+// where the blast radius is a client's live sending rather than a task list.
+app.get('/api/copy/health', requireSession, (req, res) => {
+  try {
+    const days = Math.min(Number(req.query.days) || 30, 120);
+    const since = `-${days} days`;
+    const d = db.prepare(`SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN status='applied' THEN 1 ELSE 0 END) AS applied,
+        SUM(CASE WHEN status='rejected' THEN 1 ELSE 0 END) AS rejected,
+        SUM(CASE WHEN status='applied' AND edited IS NOT NULL AND edited <> generated THEN 1 ELSE 0 END) AS applied_edited,
+        ROUND(SUM(cost_usd), 4) AS cost
+      FROM copy_drafts WHERE created_at > datetime('now', ?)`).get(since);
+    const applied = d?.applied || 0;
+    res.json({
+      days, ...d,
+      // Below ~10% with a decent sample means drafts are going out unread.
+      editRatePct: applied ? Math.round(((d.applied_edited || 0) / applied) * 1000) / 10 : null,
+      lessons: db.prepare(`SELECT COUNT(*) n FROM client_memory_lessons WHERE active = 1`).get()?.n || 0,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── CM Queue HTTP surface ──────────────────────────────────────────────────
 app.get('/api/queue', requireSession, (req, res) => {
   try {
